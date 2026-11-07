@@ -361,7 +361,7 @@ router.post("/split-video-episodes", async (req, res) => {
 
     const targetSeries = seriesId || "drama_project";
     const cleanSeries = sanitizeProjectName(targetSeries);
-    const targetDurationSec = Math.max(60, Number(durationMinutes || 20) * 60);
+    const targetDurationSec = Math.max(30, Number(durationMinutes || 1) * 60);
 
     const tempOutputDir = path.join(uploadsDir, "temp_splits", `split_${Date.now()}`);
     fs.mkdirSync(tempOutputDir, { recursive: true });

@@ -556,6 +556,7 @@ export default function App() {
               onVideoSelected={handleVideoSelected}
               onRemoveVideo={handleClearVideo}
               onClosePanel={() => setIsLeftPanelOpen(false)}
+              onRefreshSeries={series.refreshSeriesFromServer}
             />
           </div>
 

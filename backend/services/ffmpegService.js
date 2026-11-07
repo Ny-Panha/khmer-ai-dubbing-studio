@@ -2579,7 +2579,8 @@ async function splitVideoIntoEpisodes({
 
   while (currentStart < totalDuration) {
     const chunkDuration = Math.min(targetDurationSec, totalDuration - currentStart);
-    if (chunkDuration < 45 && chunks.length > 0) {
+    const minTailDuration = Math.min(15, targetDurationSec * 0.25);
+    if (chunkDuration < minTailDuration && chunks.length > 0) {
       const prev = chunks[chunks.length - 1];
       prev.duration += chunkDuration;
       prev.end = totalDuration;

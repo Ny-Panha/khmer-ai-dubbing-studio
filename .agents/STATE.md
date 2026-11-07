@@ -1,22 +1,30 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
-- **Environment**: Antigravity IDE (Bug Fix: ReferenceError in thumbnailUtils.js & videoId payload in splitVideoEpisodesApi)
-- **Timestamp**: 2026-11-07T23:18:00+07:00
+- **Environment**: Antigravity IDE (Bug Fix: Auto-Split Video duration options & tail chunk threshold)
+- **Timestamp**: 2026-11-07T23:25:00+07:00
 
 ## Summary of Completed Work
 
-### Error Resolutions
-1. **Uncaught ReferenceError: timeoutId is not defined**:
-   - In `frontend/src/utils/thumbnailUtils.js:82`: `v.onerror` called `clearTimeout(timeoutId)` which didn't exist in scope. Fixed to `clearTimeout(overallTimeout)` referencing the actual timer initialized on L48.
-2. **Auto-Split 400 Bad Request (videoPath or videoId is required)**:
-   - In `frontend/src/components/workspace/MediaPanel.jsx:130`: `handleExecuteSplit` was passing `sourceVideoPath` instead of `videoId`/`videoPath`, and `chunkDurationMinutes` instead of `durationMinutes`. Fixed to resolve `rawRef` from `selectedVideo` or `activeEpisode.video` and pass `videoId` and `videoPath`.
-   - In `frontend/src/services/api.js:524`: Made `splitVideoEpisodesApi` backward-compatible and robust against any combination of payload keys (`videoId`, `videoPath`, `sourceVideoPath`, `durationMinutes`, `chunkDurationMinutes`).
-3. **404 Not Found Analysis**:
-   - `404` for `/uploads/projects/series_.../ep_1_source.mp4`, `/api/video-thumbnails`, and `/api/audio/separation-status` occur because the video file was referenced in localStorage but does not exist on disk. Uploading a video file via the Media Panel restores normal operation.
+### Auto-Split Resolution
+1. **Root Cause Analysis**:
+   - The user uploaded video was `222.8s` (3 minutes 42 seconds).
+   - In the modal, `splitMinutes` was defaulting to `15` (15 minutes = 900 seconds), and minimum option was `5` minutes.
+   - Because video duration (222.8s) was smaller than 15 minutes (900s), FFmpeg correctly generated `Math.ceil(222.8 / 900) = 1` episode (`Splitting video (222.8s) into 1 episodes (15 min/ep)`), resulting in 1 episode.
+2. **Short Video Duration Options Added**:
+   - Added options: `1 នាទី`, `2 នាទី`, `3 នាទី`, `5 នាទី`, `10 នាទី`, `15 នាទី`, `20 នាទី`.
+   - Default set to `1` minute for testing short videos.
+   - Added live indicator showing: total video duration + estimated episodes to be produced (`នឹងកាត់បំបែកបាន: X ភាគ`).
+   - Added warning alert when the video is shorter than the selected episode duration.
+3. **Backend & FFmpeg Safe Chunking**:
+   - In `backend/services/ffmpegService.js`: Lowered tail merge threshold to `Math.min(15, targetDurationSec * 0.25)` so that 1-minute splits don't swallow a 40s tail chunk.
+   - In `backend/routes/videoRoutes.js`: Allowed `targetDurationSec` down to `30s` (`Math.max(30, ...)`).
+   - In `MediaPanel.jsx`: Immediately synced updated series into `localStorage` and called `onRefreshSeries()` upon successful split.
+   - Restarted backend server on `http://localhost:5000` to apply backend updates.
 
 ### Verification & Quality Acceptance
-- **Build**: `npm --prefix frontend run build` ➔ **PASS** (549ms, 0 errors).
+- **Build**: `npm --prefix frontend run build` ➔ **PASS** (596ms, 0 errors).
+- **Backend API**: Verified running on `http://localhost:5000`.
 
 ## Active Environment
 - **Backend API**: `http://localhost:5000` (Node.js/Express, online)
@@ -24,4 +32,4 @@
 - **Git Branch**: `main`
 
 ## Next Steps
-- Await Nha's review and approval.
+- User tests Auto-Split selecting 1 នាទី or 2 នាទី on the 03:42 video.

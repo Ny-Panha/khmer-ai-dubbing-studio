@@ -33,6 +33,7 @@ export default function MediaPanel({
   onRenameEpisode = null,
   onRenameSeries = null,
   onClosePanel = null,
+  onRefreshSeries = null,
 }) {
   const fileInputRef = useRef(null);
   const [isUploading, setIsUploading] = useState(false);
@@ -49,7 +50,7 @@ export default function MediaPanel({
 
   // Auto-split modal state
   const [showSplitModal, setShowSplitModal] = useState(false);
-  const [splitMinutes, setSplitMinutes] = useState(15);
+  const [splitMinutes, setSplitMinutes] = useState(1);
   const [isSplitting, setIsSplitting] = useState(false);
   const [splitError, setSplitError] = useState(null);
 
@@ -136,13 +137,29 @@ export default function MediaPanel({
     try {
       setIsSplitting(true);
       setSplitError(null);
-      await splitVideoEpisodesApi({
+      const res = await splitVideoEpisodesApi({
         videoId: rawRef,
         videoPath: selectedVideo?.videoPath || selectedVideo?.filePath,
         seriesId: activeSeries?.id || seriesId || 'drama_project',
-        durationMinutes: Number(splitMinutes) || 15,
+        durationMinutes: Number(splitMinutes) || 1,
       });
+
+      if (res?.series) {
+        // Update localStorage immediately so state survives
+        try {
+          const currentList = JSON.parse(localStorage.getItem('KHMER_AI_SERIES_LIST_V2') || '[]');
+          const updated = (currentList || []).map((s) => (s.id === res.series.id ? res.series : s));
+          localStorage.setItem('KHMER_AI_SERIES_LIST_V2', JSON.stringify(updated));
+          if (res.series.episodes?.[0]?.id) {
+            localStorage.setItem('KHMER_AI_ACTIVE_EPISODE_ID', res.series.episodes[0].id);
+          }
+        } catch (_) {}
+      }
+
       setShowSplitModal(false);
+      if (onRefreshSeries) {
+        await onRefreshSeries();
+      }
       window.location.reload();
     } catch (err) {
       console.error(err);
@@ -460,6 +477,19 @@ export default function MediaPanel({
                 ប្រព័ន្ធនឹងកាត់វីដេអូជាបំណែកៗដោយស្វ័យប្រវត្តិ តាមរយៈពេលដែលអ្នកកំណត់ និងបង្កើតភាគថ្មីៗក្នុង Series នេះ។
               </p>
 
+              {videoDurationSec > 0 && (
+                <div style={{ padding: '8px 12px', background: 'rgba(56, 189, 248, 0.08)', borderRadius: 6, border: '1px solid rgba(56, 189, 248, 0.2)', fontSize: '0.78rem' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                    <span style={{ color: '#94a3b8' }}>ប្រវែងវីដេអូសរុប:</span>
+                    <span style={{ color: '#38bdf8', fontWeight: 700 }}>{formatTimecode(videoDurationSec)} ({Math.round(videoDurationSec)}s)</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span style={{ color: '#94a3b8' }}>នឹងកាត់បំបែកបាន:</span>
+                    <span style={{ color: '#4ade80', fontWeight: 800 }}>{Math.max(1, Math.ceil(videoDurationSec / (splitMinutes * 60)))} ភាគ</span>
+                  </div>
+                </div>
+              )}
+
               <div>
                 <label style={{ display: 'block', fontSize: '0.74rem', color: '#cbd5e1', fontWeight: 700, marginBottom: 6 }}>
                   រយៈពេលក្នុងមួយភាគ (នាទី):
@@ -470,12 +500,21 @@ export default function MediaPanel({
                   className="media-series-input"
                   style={{ width: '100%' }}
                 >
+                  <option value={1}>1 នាទី (Short Clips / Test — 1 min)</option>
+                  <option value={2}>2 នាទី (Short Form — 2 min)</option>
+                  <option value={3}>3 នាទី (Micro Drama — 3 min)</option>
                   <option value={5}>5 នាទី (Short Form / TikTok Clips)</option>
                   <option value={10}>10 នាទី (Standard Short Drama)</option>
                   <option value={15}>15 នាទី (Standard Episode)</option>
                   <option value={20}>20 នាទី (Long Episode)</option>
                 </select>
               </div>
+
+              {videoDurationSec > 0 && videoDurationSec <= (splitMinutes * 60) && (
+                <div style={{ padding: '6px 10px', background: 'rgba(234, 179, 8, 0.1)', borderRadius: 6, color: '#facc15', fontSize: '0.74rem', lineHeight: 1.4 }}>
+                  ⚠️ ប្រវែងវីដេអូខ្លីជាង {splitMinutes} នាទី (នឹងចេញតែ ១ ភាគ)។ សូមជ្រើសរើសរយៈពេលខ្លីជាង (ឧ. ១ ឬ ២ នាទី) ដើម្បីកាត់ចេញច្រើនភាគ!
+                </div>
+              )}
 
               {splitError && (
                 <div style={{ padding: '8px 12px', background: 'rgba(239, 68, 68, 0.15)', borderRadius: 6, color: '#f87171', fontSize: '0.76rem' }}>
