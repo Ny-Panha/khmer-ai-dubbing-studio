@@ -430,10 +430,63 @@ export default function App() {
     }
   }, []);
 
-  const isAnyJobViewOpen = showJobDashboard || showGeminiRouteModal || leftTab === 'gemini-route' || leftTab === 'gemini_route';
+  const isAnyJobViewOpen = showJobDashboard || showGeminiRouteModal || leftTab === 'gemini-route' || leftTab === 'gemini_route' || currentStep === STEP_IDS.SCRIPT;
 
   // Render Pattern A Step Workspace (Steps 2-5 Bridge Wrappers)
   const renderStepWorkspace = () => {
+    if (currentStep === STEP_IDS.SCRIPT) {
+      return (
+        <ScriptPage
+          scriptData={scriptData}
+          setScriptData={setScriptData}
+          selectedVideo={media.selectedVideo}
+          videoMetadata={media.videoMetadata}
+          seriesId={series.seriesId}
+          episodeId={series.episodeId}
+          activeSeries={series.activeSeries}
+          activeEpisode={series.activeEpisode}
+          onSwitchEpisode={handleSwitchEpisode}
+          onRefreshSeries={series.refreshSeriesFromServer}
+          onOpenGeminiRoute={handleOpenGeminiRoute}
+          onAddSegment={handleAddSegmentAtTime}
+          selectedSegmentId={media.selectedSegmentId}
+          onSelectSegment={media.setSelectedSegmentId}
+          onUpdateScript={handleUpdateScript}
+          onUpdateSegments={handleUpdateTimelineSegments}
+          onUpdateSegmentText={handleUpdateSegmentText}
+          onRegenerateSegment={handleRegenerateSingleSegment}
+          onDeleteSegment={handleDeleteSegment}
+          onToggleDeliveryType={handleToggleDeliveryType}
+          onUpdateSpeakerVoice={handleUpdateSpeakerVoice}
+          onUpdateSegmentVoice={handleUpdateSegmentVoice}
+          speakerRegistry={speakerRegistry || EMPTY_OBJECT}
+          onAutoAlignNoOverlap={handleAutoAlignNoOverlap}
+          onResetToSourceTiming={handleResetToSourceTiming}
+          canUndo={undoRedo.canUndo}
+          canRedo={undoRedo.canRedo}
+          onUndo={handleUndo}
+          onRedo={handleRedo}
+          videoRef={videoRef}
+          currentTime={playback.currentTime}
+          duration={playback.duration}
+          isPlaying={playback.isPlaying}
+          onPlayPause={handlePlayPause}
+          onSeek={handleSeek}
+          onTimeUpdate={handleTimeUpdate}
+          onLoadedMetadata={handleLoadedMetadata}
+          onEnded={handleVideoEnded}
+          voiceSettings={voiceSettings || EMPTY_OBJECT}
+          onUpdateVoiceSettings={handleUpdateVoiceSettings}
+          fullAudioUrl={audio.fullAudioUrl}
+          audioGenerated={audio.audioGenerated}
+          audioOutdated={audio.audioOutdated}
+          onVideoSelected={handleVideoSelected}
+          videoClips={media.videoClips || EMPTY_CLIPS}
+          apiKey={persistence.apiKey}
+        />
+      );
+    }
+
     const suiteContent = (
       <>
         {/* Top 3-Column Suite: Left Tools | Video Monitor | Contextual Inspector */}
@@ -638,20 +691,6 @@ export default function App() {
       </>
     );
 
-    if (currentStep === STEP_IDS.SCRIPT) {
-      return (
-        <ScriptPage
-          scriptData={scriptData}
-          selectedVideo={media.selectedVideo}
-          videoMetadata={media.videoMetadata}
-          activeEpisode={series.activeEpisode}
-          onOpenGeminiRoute={handleOpenGeminiRoute}
-          onAddSegment={handleAddSegmentAtTime}
-        >
-          {suiteContent}
-        </ScriptPage>
-      );
-    }
     if (currentStep === STEP_IDS.VOICE) {
       return <VoicePage>{suiteContent}</VoicePage>;
     }
@@ -691,6 +730,7 @@ export default function App() {
           onTabChange={setLeftTab}
           onOpenJobDashboard={handleOpenJobDashboard}
           onOpenGeminiRoute={handleOpenGeminiRoute}
+          onNavigateToStep={handleSelectStep}
         />
 
         {/* Main Video Editing Workspace */}

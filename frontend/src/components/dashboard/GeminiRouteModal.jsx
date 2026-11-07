@@ -1015,7 +1015,7 @@ export default function GeminiRouteModal({
                   WebkitBackgroundClip: 'text',
                   WebkitTextFillColor: 'transparent',
                 }}>
-                  Gemini Multi-Key Route Studio
+                  GEMINI BATCH & KEYS CONSOLE
                 </h2>
                 <span style={{
                   fontSize: '0.68rem',
@@ -1515,7 +1515,7 @@ export default function GeminiRouteModal({
                 flexShrink: 0,
                 letterSpacing: '0.04em',
               }}>
-                {unscriptedCount === 0 && selectedEpIds.size > 0 ? 'RE-RUN' : unscriptedCount === 0 ? 'DONE' : 'STEP 1'}
+                {unscriptedCount === 0 && selectedEpIds.size > 1 ? 'RE-RUN BATCH' : unscriptedCount === 0 ? 'DONE' : 'STEP 2'}
               </span>
             </button>
 
@@ -1651,7 +1651,7 @@ export default function GeminiRouteModal({
                 flexShrink: 0,
                 letterSpacing: '0.04em',
               }}>
-                {isGeneratingBatchTTS ? `${ttsProgressPercent}%` : allSelectedAudioCompleted ? 'DONE' : 'STEP 2'}
+                {isGeneratingBatchTTS ? `${ttsProgressPercent}%` : allSelectedAudioCompleted ? 'DONE' : 'STEP 3'}
               </span>
             </button>
 
@@ -1783,7 +1783,7 @@ export default function GeminiRouteModal({
                 flexShrink: 0,
                 letterSpacing: '0.04em',
               }}>
-                {isSeparatingBatchDemucs ? `${demucsProgressPercent}%` : allSelectedDemucsCompleted ? 'DONE' : 'STEP 3'}
+                {isSeparatingBatchDemucs ? `${demucsProgressPercent}%` : allSelectedDemucsCompleted ? 'DONE' : 'STEP 4'}
               </span>
             </button>
             {isSeparatingBatchDemucs && (
