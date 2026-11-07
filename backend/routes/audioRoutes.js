@@ -484,7 +484,7 @@ router.post("/audio/separate", async (req, res) => {
     if (!inputVideoPath || !fs.existsSync(inputVideoPath)) {
       return res.status(404).json({ success: false, error: "Video file not found" });
     }
-    const sepRes = await audioSeparationService.separateAudio({ audioPath: inputVideoPath });
+    const sepRes = await audioSeparationService.separateAudio({ audioPath: inputVideoPath, model: 'htdemucs' });
     const relPath = path.relative(uploadsDir, sepRes.noVocalsPath).replace(/\\/g, "/");
     const noVocalsUrl = `/uploads/${relPath}`;
 
@@ -538,9 +538,10 @@ router.get("/audio/separation-progress", (req, res) => {
       progress: progressData ? progressData.progress : 0,
       status: progressData ? progressData.status : 'idle',
       message: progressData ? progressData.message : '',
+      model: progressData?.model || 'htdemucs',
     });
   } catch (err) {
-    return res.json({ success: true, progress: 0, status: 'idle' });
+    return res.json({ success: true, progress: 0, status: 'idle', model: 'htdemucs' });
   }
 });
 

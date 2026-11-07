@@ -66,7 +66,7 @@ export default function Navbar({
             className={`navbar-gemini-route-btn ${activeTab === 'gemini-route' ? 'active' : ''}`}
             title="Step 2: Translate & Script (Gemini Multi-Key Route)"
           >
-            <Cpu size={13} color="#38bdf8" />
+            <Cpu size={14} />
             <span>Gemini Route</span>
             <span className="gemini-badge-chip">4 Keys</span>
           </button>
@@ -80,17 +80,12 @@ export default function Navbar({
                 onOpenJobDashboard();
               }}
               className="navbar-gemini-route-btn"
-              style={{
-                background: 'rgba(16, 185, 129, 0.1)',
-                borderColor: 'rgba(16, 185, 129, 0.25)',
-                color: '#34d399',
-              }}
               title="Job Queue Dashboard (Production Pipeline Monitor)"
             >
-              <Cpu size={13} color="#34d399" />
+              <Cpu size={14} />
               <span>Jobs</span>
               {activeJobCount > 0 && (
-                <span className="gemini-badge-chip" style={{ background: '#10b981', color: '#090d16' }}>
+                <span className="gemini-badge-chip">
                   {activeJobCount}
                 </span>
               )}

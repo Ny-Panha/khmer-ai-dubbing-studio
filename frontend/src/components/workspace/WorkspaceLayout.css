@@ -1,4 +1,4 @@
-/* WorkspaceLayout.css — Clean Video Editor Layout (No Zone Borders, Full-Height Tint Steps) */
+/* WorkspaceLayout.css — Clean Video Editor Layout (FreeCut/OpenCut Anatomy) */
 
 .workspace-root {
   display: flex;
@@ -9,15 +9,15 @@
   min-height: 100vh;
   max-height: 100vh;
   overflow: hidden;
-  background: #080b11;
-  color: #f1f5f9;
+  background: var(--app);
+  color: var(--ink);
 }
 
-/* Full-Height Workspace Body: exactly calc(100vh - 48px navbar - 30px bottom strip) */
+/* Full-Height Workspace Body: exactly calc(100vh - 52px navbar - 32px bottom strip) */
 .workspace-body {
-  height: calc(100vh - 48px - 30px);
-  min-height: calc(100vh - 48px - 30px);
-  max-height: calc(100vh - 48px - 30px);
+  height: calc(100vh - 52px - 32px);
+  min-height: calc(100vh - 52px - 32px);
+  max-height: calc(100vh - 52px - 32px);
   flex: 1;
   display: flex;
   flex-direction: row;
@@ -26,30 +26,39 @@
   width: 100%;
 }
 
-/* 1. Left Rail (Tint step: #0d121f, NO zone border, full height bar) */
+/* 1. Left Rail (48px Icon Rail, Flush Panel Tint, Divider Line) */
 .workspace-rail-container {
-  flex-shrink: 0;
+  width: 48px;
+  min-width: 48px;
+  max-width: 48px;
+  flex: 0 0 48px;
   height: 100%;
-  background: #0d121f;
+  background: var(--panel);
+  border-right: 1px solid var(--line);
   z-index: 20;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* 2. Left Media Panel (320px Width, Flush Panel Tint, Divider Line) */
+.workspace-media-container {
+  width: 320px;
+  min-width: 320px;
+  max-width: 320px;
+  flex: 0 0 320px;
+  height: 100%;
+  background: var(--panel);
+  border-right: 1px solid var(--line);
+  overflow: hidden;
   transition: width 0.2s cubic-bezier(0.16, 1, 0.3, 1);
   display: flex;
   flex-direction: column;
-}
-
-/* 2. Left Media Panel (Tint step: #101726, NO zone border, full height bar) */
-.workspace-media-container {
-  flex-shrink: 0;
-  height: 100%;
-  background: #101726;
-  overflow: hidden;
-  transition: width 0.22s cubic-bezier(0.16, 1, 0.3, 1);
-  display: flex;
-  flex-direction: column;
   position: relative;
+  z-index: 15;
 }
 
-/* 3. Centre Working Column (Tint step: #0a0e18, NO zone border, stretches full height) */
+/* 3. Centre Working Column (App Background, Flush, Stretches Full Height) */
 .workspace-centre-container {
   flex: 1;
   min-width: 360px;
@@ -58,17 +67,18 @@
   flex-direction: column;
   min-height: 0;
   overflow: hidden;
-  background: #0a0e18;
+  background: var(--app);
   position: relative;
 }
 
-/* Video Player Monitor Section (Sizes to video, capped at ~46vh, centered, no letterbox void) */
+/* Video Player Monitor Section (Panel Tint, Artboard Centred, ThinSeekStrip Full Width) */
 .workspace-centre-player-section {
   display: flex;
   flex-direction: column;
-  align-items: stretch; /* Stretch children including ThinSeekStrip across full centre width */
+  align-items: stretch;
   justify-content: flex-start;
-  background: #060910;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
   flex-shrink: 0;
   position: relative;
   width: 100%;
@@ -82,7 +92,7 @@
   align-items: center;
   justify-content: center;
   overflow: hidden;
-  background: #04060b;
+  background: var(--panel);
   position: relative;
 }
 
@@ -98,6 +108,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  background: var(--panel) !important;
 }
 
 /* Centre Working Area: Flex-grows to fill all remaining height */
@@ -109,23 +120,26 @@
   height: 100%;
   overflow: hidden;
   position: relative;
-  background: #0a0e18;
+  background: var(--app);
   width: 100%;
 }
 
-/* 4. Right Panel (Tint step: #101726, Fixed Width 320px, NO zone border, stretches full height) */
+/* 4. Right Panel (Panel Tint, Fixed Width 320px, Divider Line, stretches full height) */
 .workspace-right-container {
   width: 320px;
   min-width: 320px;
+  max-width: 320px;
   flex: 0 0 320px;
   flex-shrink: 0;
   height: 100%;
-  background: #101726;
+  background: var(--panel);
+  border-left: 1px solid var(--line);
   display: flex;
   flex-direction: column;
   min-height: 0;
   overflow: hidden;
   position: relative;
+  z-index: 15;
 }
 
 .workspace-right-header {
@@ -135,7 +149,8 @@
   align-items: center;
   justify-content: space-between;
   flex-shrink: 0;
-  background: #101726;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
 }
 
 .workspace-right-body {
@@ -146,15 +161,41 @@
   flex-direction: column;
   gap: 10px;
   padding: 0 12px 16px 12px;
-  background: #101726;
+  background: var(--panel);
 }
 
 .workspace-quiet-label {
   font-size: 12px;
   font-weight: 500;
-  color: #64748b;
+  color: var(--ink-dim);
   text-transform: none;
   letter-spacing: normal;
+}
+
+.workspace-episode-overview-card {
+  background: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.workspace-status-badge {
+  font-family: var(--font-mono), monospace;
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--ink-dim);
+}
+
+.workspace-status-badge.is-done {
+  color: #10b981;
+  border-color: rgba(16, 185, 129, 0.4);
+  background: rgba(16, 185, 129, 0.08);
 }
 
 .workspace-inspector-section {
@@ -166,32 +207,32 @@
   min-height: 0;
 }
 
-/* Collapse Toggle Tab Handles */
+/* Collapse Toggle Tab Handles (Ghost Icon Button 36x36, Radius 6px) */
 .workspace-panel-toggle-btn {
   position: absolute;
-  top: 10px;
+  top: 8px;
   z-index: 30;
-  width: 22px;
-  height: 26px;
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  color: #94a3b8;
+  width: 36px;
+  height: 36px;
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--ink-dim);
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  border-radius: 4px;
+  border-radius: 6px;
   transition: all 0.15s ease;
 }
 
 .workspace-panel-toggle-btn:hover {
-  background: #38bdf8;
-  border-color: #38bdf8;
-  color: #04121f;
+  background: var(--muted);
+  border-color: var(--line);
+  color: var(--ink);
 }
 
 .workspace-panel-toggle-btn.left-toggle {
-  right: -11px;
+  left: 56px;
 }
 
 /* In-Flow Translate Form Panel (Point 4: Full-width of centre, flex-grows full height) */

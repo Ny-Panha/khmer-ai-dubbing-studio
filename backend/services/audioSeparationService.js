@@ -147,7 +147,7 @@ function executeDemucsWorker(options, targetDir, cleanKey) {
       onProgress = null,
     } = options;
 
-    activeSeparationProgress.set(cleanKey, { progress: 1, status: 'separating', message: 'Starting Demucs AI separation...' });
+    activeSeparationProgress.set(cleanKey, { progress: 1, status: 'separating', message: 'Starting Demucs AI separation...', model });
 
     const workerScript = path.join(__dirname, '../workers/demucs_worker.py');
     if (!fs.existsSync(workerScript)) {
@@ -199,7 +199,8 @@ function executeDemucsWorker(options, targetDir, cleanKey) {
           activeSeparationProgress.set(cleanKey, {
             progress: pct,
             status: 'separating',
-            message: `Demucs Separation: ${pct}%`
+            message: `Demucs Separation: ${pct}%`,
+            model,
           });
           console.log(`[AudioSeparation] ⏳ Demucs Progress: ${pct}%`);
           if (onProgress) {
@@ -231,7 +232,8 @@ function executeDemucsWorker(options, targetDir, cleanKey) {
       activeSeparationProgress.set(cleanKey, {
         progress: 100,
         status: 'completed',
-        message: 'Separation Completed 100%'
+        message: 'Separation Completed 100%',
+        model,
       });
       setTimeout(() => activeSeparationProgress.delete(cleanKey), 30000);
 

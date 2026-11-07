@@ -44,8 +44,7 @@ export default function App() {
   // Single Screen Workspace Mode ('import' | 'script' | 'voice' | 'demucs' | 'mix-export')
   const [workspaceMode, setWorkspaceMode] = useState(STEP_IDS.SCRIPT);
 
-  // Panel Collapsible States
-  const [isRailCollapsed, setIsRailCollapsed] = useState(false);
+  // Panel Collapsible State (Media Panel 320px)
   const [isLeftPanelOpen, setIsLeftPanelOpen] = useState(true);
 
   // Search in transcript
@@ -515,28 +514,29 @@ export default function App() {
 
         {/* Unified CapCut-Style Workspace Body */}
         <div className="workspace-body">
-          {/* 1. Left Rail (5 Stages Status List — Widen to 210px) */}
-          <div
-            className="workspace-rail-container"
-            style={{ width: isRailCollapsed ? 56 : 210 }}
-          >
+          {/* 1. Left Rail (48px Permanent Icon Rail) */}
+          <div className="workspace-rail-container">
             <StageRail
               currentMode={workspaceMode}
               onSelectMode={handleSelectMode}
               workflowState={workflowState}
               isGeneratingAudio={audio.isGeneratingAudio}
               audioProgress={audio.audioProgress}
-              isCollapsed={isRailCollapsed}
-              onToggleCollapse={() => setIsRailCollapsed((prev) => !prev)}
+              isSeparatingDemucs={isSeparatingAudio}
+              demucsProgress={separationProgress}
+              isRendering={render.isRendering}
+              renderProgress={render.renderProgress}
+              isGeneratingScript={script.isGeneratingScript}
+              scriptProgress={script.scriptProgress}
             />
           </div>
 
-          {/* 2. Left Media Panel (Collapsible) */}
+          {/* 2. Left Media Panel (320px Collapsible) */}
           <div
             className="workspace-media-container"
             style={{
-              width: isLeftPanelOpen ? 300 : 0,
-              minWidth: isLeftPanelOpen ? 300 : 0,
+              width: isLeftPanelOpen ? 320 : 0,
+              minWidth: isLeftPanelOpen ? 320 : 0,
               display: isLeftPanelOpen ? 'flex' : 'none',
             }}
           >
@@ -565,7 +565,6 @@ export default function App() {
             <button
               type="button"
               className="workspace-panel-toggle-btn left-toggle"
-              style={{ left: isRailCollapsed ? 56 : 210 }}
               onClick={() => setIsLeftPanelOpen(true)}
               title="បើក Media Panel ឡើងវិញ (Expand Media)"
             >
@@ -796,8 +795,46 @@ export default function App() {
                     settings={voiceSettings}
                   />
                 ) : (
-                  <div style={{ padding: '12px 14px', color: '#64748b', fontSize: 11, textAlign: 'center' }}>
-                    គ្មានការជ្រើសរើសឃ្លាសន្ទនា (No segment selected)
+                  /* Point 6: Inspector Never Blank — Episode Overview & Status */
+                  <div className="workspace-episode-overview-card">
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <span className="workspace-quiet-label">
+                        ព័ត៌មានភាគ (Episode Overview)
+                      </span>
+                      <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--ink-dim)' }}>
+                        #{series.activeEpisode?.episodeNumber || 1}
+                      </span>
+                    </div>
+
+                    <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {series.activeEpisode?.displayTitle || series.activeEpisode?.title || 'ភាគទី ១ (EP1)'}
+                    </div>
+
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--ink-dim)' }}>
+                      <span>{formatTimecode(playback.duration || media.videoMetadata?.duration || 0)}</span>
+                      <span>•</span>
+                      <span>{media.videoMetadata?.width ? `${media.videoMetadata.width}×${media.videoMetadata.height}` : '1920×1080'}</span>
+                      <span>•</span>
+                      <span>{segments.length} ឃ្លា</span>
+                    </div>
+
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 4 }}>
+                      <span className={`workspace-status-badge ${Boolean(media.selectedVideo) ? 'is-done' : ''}`}>
+                        Vid {Boolean(media.selectedVideo) ? '✓' : '—'}
+                      </span>
+                      <span className={`workspace-status-badge ${hasSegments ? 'is-done' : ''}`}>
+                        Scr {hasSegments ? '✓' : '—'}
+                      </span>
+                      <span className={`workspace-status-badge ${Boolean(series.activeEpisode?.audioGenerated) ? 'is-done' : ''}`}>
+                        Voice {Boolean(series.activeEpisode?.audioGenerated) ? '✓' : '—'}
+                      </span>
+                      <span className={`workspace-status-badge ${isCleanBgReady ? 'is-done' : ''}`}>
+                        BGM {isCleanBgReady ? '✓' : '—'}
+                      </span>
+                      <span className={`workspace-status-badge ${Boolean(render.renderedVideo) ? 'is-done' : ''}`}>
+                        Exp {Boolean(render.renderedVideo) ? '✓' : '—'}
+                      </span>
+                    </div>
                   </div>
                 )}
               </div>

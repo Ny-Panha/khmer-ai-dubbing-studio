@@ -1,12 +1,10 @@
 /* ==========================================================================
-   DragonDub AI Studio — Pro Studio Navbar (Linear & DaVinci Resolve Aesthetic)
+   DragonDub AI Studio — Pro Studio Navbar (52px, Clean Anatomy, FreeCut Ramp)
    ========================================================================== */
 .capcut-navbar {
-  height: 48px;
-  background: rgba(12, 17, 29, 0.96);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  height: 52px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -14,75 +12,74 @@
   user-select: none;
   z-index: 50;
   flex-shrink: 0;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.45);
+  box-shadow: none;
   gap: 12px;
 }
 
 /* Brand App Icon Mark */
 .concat-app-mark {
-  width: 28px;
-  height: 28px;
-  border-radius: 7px;
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
   background: linear-gradient(135deg, #0284c7 0%, #1e40af 100%);
   color: #ffffff;
   font-weight: 800;
-  font-size: 0.85rem;
+  font-size: 0.9rem;
   display: flex;
   align-items: center;
   justify-content: center;
   border: 1px solid rgba(56, 189, 248, 0.35);
-  box-shadow: 0 2px 8px rgba(2, 132, 199, 0.35);
   flex-shrink: 0;
   transition: transform 0.15s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 .concat-app-mark:hover {
-  transform: scale(1.06);
+  transform: scale(1.04);
 }
 
-/* Gemini Route Multi-Key Launcher Pill */
+/* Gemini Route Multi-Key Launcher Pill (Ghost Button 36px, Radius 6px) */
 .navbar-gemini-route-btn {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px 10px;
+  gap: 8px;
+  height: 36px;
+  padding: 0 12px;
   border-radius: 6px;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  color: #cbd5e1;
-  font-size: 0.74rem;
-  font-weight: 600;
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--ink-dim);
+  font-size: 13px;
+  font-weight: 500;
   cursor: pointer;
   transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);
   white-space: nowrap;
 }
 
 .navbar-gemini-route-btn:hover {
-  border-color: rgba(56, 189, 248, 0.45);
-  background: rgba(56, 189, 248, 0.1);
-  color: #38bdf8;
-  transform: translateY(-1px);
+  border-color: var(--line);
+  background: var(--muted);
+  color: var(--ink);
 }
 
 .navbar-gemini-route-btn:active {
-  transform: scale(0.96);
+  transform: scale(0.98);
 }
 
 .navbar-gemini-route-btn.active {
-  background: rgba(56, 189, 248, 0.15);
-  border-color: #38bdf8;
-  color: #38bdf8;
-  box-shadow: 0 0 12px rgba(56, 189, 248, 0.25);
+  background: var(--muted);
+  border-color: var(--primary-accent);
+  color: var(--primary-accent);
 }
 
 .gemini-badge-chip {
-  font-size: 0.62rem;
-  font-weight: 700;
-  padding: 1px 5px;
+  font-family: var(--font-mono), monospace;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 1px 6px;
   border-radius: 4px;
-  background: rgba(56, 189, 248, 0.15);
-  color: #38bdf8;
-  border: 1px solid rgba(56, 189, 248, 0.3);
+  background: var(--muted);
+  color: var(--ink-dim);
+  border: 1px solid var(--line);
 }
 
 /* Center: Floating Episode Capsule Track */
@@ -264,7 +261,7 @@
   border-color: #ef4444;
 }
 
-/* Right Actions Section */
+/* Right Actions Section (Ghost Controls + One Filled Export Button) */
 .navbar-right-actions {
   display: flex;
   align-items: center;
@@ -276,16 +273,18 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 0.72rem;
+  height: 36px;
+  font-size: 12px;
   font-weight: 500;
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  padding: 4px 10px;
+  background: transparent;
+  border: 1px solid var(--line);
+  padding: 0 12px;
   border-radius: 6px;
+  color: var(--ink-dim);
 }
 
 .status-chip.online {
-  color: #cbd5e1;
+  color: var(--ink-dim);
 }
 
 .status-chip.offline {
@@ -297,51 +296,59 @@
   height: 6px;
   border-radius: 50%;
   background: #10b981;
-  box-shadow: 0 0 6px #10b981;
 }
 
 .status-chip.offline .status-dot {
   background: #ef4444;
-  box-shadow: 0 0 6px #ef4444;
 }
 
 .api-key-btn {
+  height: 36px;
   border-radius: 6px;
-  padding: 4px 10px;
-  font-size: 0.72rem;
+  padding: 0 12px;
+  font-size: 12px;
   font-weight: 500;
   cursor: pointer;
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);
   font-family: inherit;
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--ink-dim);
+}
+
+.api-key-btn:hover {
+  background: var(--muted);
+  color: var(--ink);
+  border-color: var(--line);
 }
 
 .api-key-btn.configured {
-  background: rgba(16, 185, 129, 0.08);
-  border: 1px solid rgba(16, 185, 129, 0.25);
-  color: #34d399;
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--ink-dim);
 }
 
 .api-key-btn.configured:hover {
-  background: rgba(16, 185, 129, 0.16);
-  border-color: #34d399;
+  background: var(--muted);
+  color: var(--ink);
 }
 
 .api-key-btn.missing {
-  background: rgba(248, 113, 113, 0.1);
-  border: 1px solid rgba(248, 113, 113, 0.3);
+  background: transparent;
+  border: 1px solid #ef4444;
   color: #f87171;
 }
 
 .navbar-icon-btn {
-  width: 28px;
-  height: 28px;
+  width: 36px;
+  height: 36px;
   border-radius: 6px;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  color: #94a3b8;
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--ink-dim);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -350,38 +357,38 @@
 }
 
 .navbar-icon-btn:hover {
-  background: rgba(255, 255, 255, 0.08);
-  color: #ffffff;
-  border-color: rgba(255, 255, 255, 0.16);
+  background: var(--muted);
+  color: var(--ink);
+  border-color: var(--line);
 }
 
-/* Export CTA Button */
+/* Export CTA Button — The ONLY filled/accent button in the chrome */
 .navbar-export-btn {
-  background: linear-gradient(135deg, #0284c7 0%, #0369a1 100%);
+  background: #0284c7;
   color: #ffffff;
-  border: 1px solid rgba(56, 189, 248, 0.45);
-  border-radius: 7px;
-  padding: 5px 14px;
-  font-size: 0.76rem;
+  border: none;
+  border-radius: 6px;
+  height: 36px;
+  padding: 0 16px;
+  font-size: 13px;
   font-weight: 600;
-  letter-spacing: 0.01em;
   display: flex;
   align-items: center;
   gap: 6px;
   cursor: pointer;
   transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);
   font-family: inherit;
-  box-shadow: 0 2px 10px rgba(2, 132, 199, 0.35);
+  box-shadow: none;
 }
 
 .navbar-export-btn:hover:not(:disabled) {
-  background: linear-gradient(135deg, #0369a1 0%, #0284c7 100%);
-  box-shadow: 0 4px 14px rgba(56, 189, 248, 0.45);
+  background: #0369a1;
+  box-shadow: none;
   transform: translateY(-1px);
 }
 
 .navbar-export-btn:active:not(:disabled) {
-  transform: scale(0.96);
+  transform: scale(0.98);
 }
 
 .navbar-export-btn:disabled {
@@ -392,14 +399,14 @@
 }
 
 .navbar-export-btn.download-ready {
-  background: linear-gradient(135deg, #059669 0%, #10b981 100%);
+  background: #059669;
   color: #ffffff;
-  border: 1px solid rgba(52, 211, 153, 0.4);
+  border: none;
   text-decoration: none;
-  box-shadow: 0 2px 10px rgba(16, 185, 129, 0.35);
+  box-shadow: none;
 }
 
 .navbar-export-btn.download-ready:hover {
-  box-shadow: 0 4px 16px rgba(16, 185, 129, 0.5);
-  transform: translateY(-1px);
+  background: #10b981;
+  box-shadow: none;
 }

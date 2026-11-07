@@ -7,6 +7,7 @@ import { Terminal, ChevronDown, ChevronUp, CheckCircle2, Loader2, AlertCircle } 
  * and collapsible Live Console Terminal Drawer for Step 3 (Demucs AI Clean BGM & Vocal Separation).
  */
 export default function EpisodeDemucsProgressCard({ liveStats, ep, onKill }) {
+  const modelName = liveStats?.model || ep?.demucsModel || ep?.model || 'htdemucs';
   const targetPercent = Math.min(100, Math.max(0, liveStats?.percent ?? 5));
   const [smoothProgress, setSmoothProgress] = useState(targetPercent || 1);
   const [showConsole, setShowConsole] = useState(true);
@@ -96,7 +97,7 @@ export default function EpisodeDemucsProgressCard({ liveStats, ep, onKill }) {
               overflow: 'hidden',
               textOverflow: 'ellipsis',
             }}>
-              {isFailed ? 'សូមពិនិត្យមើល Console Logs ខាងក្រោម...' : (isDone ? 'Clean BGM & Sound Effects Isolated' : (liveStats?.message || 'AI Deep Learning Stem Separation (htdemucs_ft)...'))}
+              {isFailed ? 'សូមពិនិត្យមើល Console Logs ខាងក្រោម...' : (isDone ? 'Clean BGM & Sound Effects Isolated' : (liveStats?.message || `AI Deep Learning Stem Separation (${modelName})...`))}
             </div>
           </div>
         </div>
@@ -271,7 +272,7 @@ export default function EpisodeDemucsProgressCard({ liveStats, ep, onKill }) {
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <Terminal size={11} color={isFailed ? '#ef4444' : (isDone ? '#34d399' : '#38bdf8')} />
             <span style={{ fontSize: '0.64rem', fontWeight: 800, color: '#94a3b8', letterSpacing: '0.04em' }}>
-              CONSOLE LOGS (Demucs AI Model: htdemucs_ft)
+              CONSOLE LOGS (Demucs AI Model: {modelName})
             </span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>

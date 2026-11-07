@@ -251,20 +251,46 @@ export default function MediaPanel({
           </div>
         )}
 
-        {/* 3. Source Video Dropzone (Collapses to slim bar once loaded) */}
-        <div className="media-section-wrap">
-          <div className="media-section-title">
-            <HardDrive size={13} color="#38bdf8" />
-            <span>វីដេអូប្រភព — ភាគ #{activeEpisode?.episodeNumber || 1}</span>
-          </div>
+        {/* 3. Source Video Dropzone (Point 7: GONE once video is imported, replaced by slim ghost button) */}
+        {(episodes.length === 0 || !episodes.some(ep => ep.video?.videoId || ep.video?.videoUrl)) ? (
+          <div className="media-section-wrap">
+            <div className="media-section-title">
+              <HardDrive size={13} color="#38bdf8" />
+              <span>វីដេអូប្រភព</span>
+            </div>
 
-          <div
-            onDragOver={handleDragOver}
-            onDragLeave={handleDragLeave}
-            onDrop={handleDrop}
-            onClick={() => !isUploading && fileInputRef.current?.click()}
-            className={`media-dropzone-box ${isDragOver ? 'is-drag-over' : ''} ${hasVideo ? 'is-loaded' : ''}`}
-          >
+            <div
+              onDragOver={handleDragOver}
+              onDragLeave={handleDragLeave}
+              onDrop={handleDrop}
+              onClick={() => !isUploading && fileInputRef.current?.click()}
+              className={`media-dropzone-box ${isDragOver ? 'is-drag-over' : ''}`}
+            >
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="video/*"
+                onChange={handleFileChange}
+                style={{ display: 'none' }}
+                disabled={isUploading}
+              />
+
+              {isUploading ? (
+                <div className="media-dropzone-loading">
+                  <Loader2 size={20} className="animate-spin" color="#38bdf8" />
+                  <span>កំពុង Upload វីដេអូ...</span>
+                </div>
+              ) : (
+                <div className="media-dropzone-prompt">
+                  <FolderPlus size={22} color="#38bdf8" />
+                  <span className="media-prompt-primary">អូសទម្លាក់ ឬចុច Upload វីដេអូ</span>
+                  <span className="media-prompt-secondary">MP4, MKV, MOV, WebM</span>
+                </div>
+              )}
+            </div>
+          </div>
+        ) : (
+          <div className="media-add-video-wrap">
             <input
               ref={fileInputRef}
               type="file"
@@ -273,64 +299,28 @@ export default function MediaPanel({
               style={{ display: 'none' }}
               disabled={isUploading}
             />
-
-            {isUploading ? (
-              <div className="media-dropzone-loading">
-                <Loader2 size={20} className="animate-spin" color="#38bdf8" />
-                <span>កំពុង Upload វីដេអូ...</span>
-              </div>
-            ) : hasVideo ? (
-              /* Slim Loaded Card */
-              <div className="media-loaded-slim-bar" onClick={(e) => e.stopPropagation()}>
-                <div className="media-loaded-left">
-                  <FileVideo size={20} color="#38bdf8" style={{ flexShrink: 0 }} />
-                  <div className="media-loaded-text-col">
-                    <span className="media-loaded-name" title={displayTitle}>
-                      {displayTitle}
-                    </span>
-                    <div className="media-loaded-meta">
-                      {videoDurationSec > 0 && (
-                        <span>{formatTimecode(videoDurationSec)}</span>
-                      )}
-                      <span>•</span>
-                      <span>{videoMetadata?.width && videoMetadata?.height ? `${videoMetadata.width}x${videoMetadata.height}` : 'HD'}</span>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="media-loaded-actions">
-                  <button
-                    type="button"
-                    onClick={() => fileInputRef.current?.click()}
-                    className="media-slim-btn"
-                    title="ផ្លាស់ប្តូរវីដេអូ (Replace Video)"
-                  >
-                    <RefreshCw size={11} />
-                  </button>
-                  {onRemoveVideo && (
-                    <button
-                      type="button"
-                      onClick={onRemoveVideo}
-                      className="media-slim-btn danger"
-                      title="លុបវីដេអូចេញ (Remove)"
-                    >
-                      <Trash2 size={11} />
-                    </button>
-                  )}
-                </div>
-              </div>
-            ) : (
-              /* Compact Dropzone Empty Prompt */
-              <div className="media-dropzone-prompt">
-                <FolderPlus size={22} color="#38bdf8" />
-                <span className="media-prompt-primary">អូសទម្លាក់ ឬចុច Upload វីដេអូ</span>
-                <span className="media-prompt-secondary">MP4, MKV, MOV, WebM</span>
-              </div>
-            )}
+            <button
+              type="button"
+              onClick={() => !isUploading && fileInputRef.current?.click()}
+              className="media-add-video-ghost-btn"
+              title="បន្ថែមវីដេអូ (Add Video)"
+            >
+              {isUploading ? (
+                <>
+                  <Loader2 size={13} className="animate-spin" />
+                  <span>កំពុង Upload...</span>
+                </>
+              ) : (
+                <>
+                  <Plus size={13} />
+                  <span>+ បន្ថែមវីដេអូ (Add Video)</span>
+                </>
+              )}
+            </button>
           </div>
-        </div>
+        )}
 
-        {/* 4. Episodes List Section */}
+        {/* 4. Episodes List Section (Fills panel, drag-onto-list accepts files) */}
         <div className="media-section-wrap episodes-section">
           <div className="media-episodes-header">
             <div className="media-section-title">
@@ -343,7 +333,7 @@ export default function MediaPanel({
                 <button
                   type="button"
                   onClick={onCreateEpisode}
-                  className="media-mini-action-btn primary"
+                  className="media-mini-action-btn"
                   title="បន្ថែមភាគថ្មី (Add Episode)"
                 >
                   <Plus size={12} />
@@ -358,14 +348,19 @@ export default function MediaPanel({
                   className="media-mini-action-btn"
                   title="កាត់បំបែកភាគស្វ័យប្រវត្តិ"
                 >
-                  <Scissors size={11} color="#38bdf8" />
+                  <Scissors size={11} />
                   <span>Split</span>
                 </button>
               )}
             </div>
           </div>
 
-          <div className="media-episodes-scroll-list">
+          <div 
+            className="media-episodes-scroll-list"
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
+          >
             {episodes.map((ep, idx) => {
               const isSelected = ep.id === episodeId;
               const hasEpVideo = Boolean(ep.video?.videoId || ep.video?.videoUrl);

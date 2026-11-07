@@ -771,7 +771,7 @@ export default function GeminiRouteModal({
         };
         setDemucsLiveStats((prev) => ({
           ...prev,
-          [ep.id]: { percent: 5, isDone: false, logs: [initialLog], message: 'AI Deep Learning Stem Separation...' },
+          [ep.id]: { percent: 5, isDone: false, logs: [initialLog], message: 'AI Deep Learning Stem Separation...', model: 'htdemucs' },
         }));
 
         // Controlled polling loop at 2500ms with in-flight request lock
@@ -806,6 +806,7 @@ export default function GeminiRouteModal({
                     percent: dPct,
                     isDone: dpData.status === 'completed' || dPct >= 100,
                     message: dpData.message || 'Demucs Stem Separation...',
+                    model: dpData.model || 'htdemucs',
                     logs: curLogs.slice(-30),
                   },
                 };

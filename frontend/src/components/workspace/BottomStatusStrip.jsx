@@ -79,13 +79,13 @@ export default function BottomStatusStrip({
           title="Gemini Multi-Key Load Balancer Pool"
         >
           <Key size={11} color="#38bdf8" />
-          <span>Pool: 4/4 online • 60 RPM</span>
+          <span style={{ fontFamily: 'var(--font-mono)' }}>Pool: 4/4 online • 60 RPM</span>
         </span>
 
         {/* Active episode */}
-        <span className="bottom-status-tag" style={{ background: 'rgba(255, 255, 255, 0.05)', color: '#cbd5e1' }}>
+        <span className="bottom-status-tag" style={{ background: 'transparent', border: '1px solid var(--line)', color: 'var(--ink-dim)' }}>
           <Film size={10} color="#94a3b8" />
-          <span>{activeEpisode?.name || 'EP01'}</span>
+          <span style={{ fontFamily: 'var(--font-mono)' }}>{activeEpisode?.name || 'EP01'}</span>
         </span>
       </div>
     </footer>

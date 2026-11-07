@@ -1087,6 +1087,7 @@ function renderDubbedVideoWithDucking(options = {}) {
       try {
         const sepRes = await audioSeparationService.separateAudio({
           audioPath: inputVideoPath,
+          model: 'htdemucs',
           jobId: options.jobId || `render_demucs_${Date.now()}`,
         });
         if (!sepRes || !sepRes.noVocalsPath || !fs.existsSync(sepRes.noVocalsPath)) {

@@ -14,6 +14,15 @@
   --bg-elevated-panel: #1a243a;
   --bg-active-card: #202d48;
 
+  /* Clean Pass 3 — Measured Colour Ramp (FreeCut/OpenCut Anatomy) */
+  --floor: oklch(0.12 0.01 250);  /* lowest surface: seek strip track area */
+  --app:   oklch(0.15 0.01 250);  /* app background */
+  --panel: oklch(0.18 0.01 250);  /* side panels + centre panel */
+  --muted: oklch(0.20 0.01 250);  /* hover / inset rows */
+  --line:  oklch(0.25 0.01 250);  /* the ONLY border colour */
+  --ink:   oklch(0.95 0.01 250);
+  --ink-dim: oklch(0.60 0.01 250);
+
   /* Layer Depth Tokens */
   --layer-0: #090d16; /* Canvas Base */
   --layer-1: #0e1422; /* Main Suite Containers */
@@ -57,10 +66,10 @@
   --color-error: #EF4444;
   --color-warning: #F59E0B;
 
-  --radius-xs: 6px;
-  --radius-sm: 8px;
-  --radius-md: 12px;
-  --radius-lg: 16px;
+  --radius-xs: 4px;  /* small chips */
+  --radius-sm: 6px;  /* buttons, inputs */
+  --radius-md: 8px;  /* cards, modals — nothing rounder */
+  --radius-lg: 8px;
   --radius-full: 9999px;
 
   /* Subtle Clean Shadows */

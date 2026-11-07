@@ -190,7 +190,7 @@ try {
     Write-Host "`n[2/3] Starting Backend API (Port 5000)..." -ForegroundColor White
     $backendDir = Join-Path $RootDir "backend"
     Ensure-Dependencies -WorkingDir $backendDir -Name "Backend"
-    $backendCmd = "node --watch-path=server.js --watch-path=services --watch-path=models server.js"
+    $backendCmd = "node --watch-path=server.js --watch-path=routes --watch-path=services --watch-path=models server.js"
     $null = Start-DevProcess -Title "[Khmer AI Dubbing] Backend API" -WorkingDir $backendDir -Command $backendCmd
     Wait-ForBackend -Port 5000
 
