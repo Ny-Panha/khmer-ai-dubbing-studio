@@ -488,6 +488,7 @@ export default function App() {
               onDeleteEpisode={handleDeleteEpisode}
               onRenameEpisode={handleRenameEpisode}
               onRenameSeries={handleRenameSeries}
+              isWizardMode={currentStep === STEP_IDS.SCRIPT}
             />
           </div>
 
@@ -638,7 +639,18 @@ export default function App() {
     );
 
     if (currentStep === STEP_IDS.SCRIPT) {
-      return <ScriptPage>{suiteContent}</ScriptPage>;
+      return (
+        <ScriptPage
+          scriptData={scriptData}
+          selectedVideo={media.selectedVideo}
+          videoMetadata={media.videoMetadata}
+          activeEpisode={series.activeEpisode}
+          onOpenGeminiRoute={handleOpenGeminiRoute}
+          onAddSegment={handleAddSegmentAtTime}
+        >
+          {suiteContent}
+        </ScriptPage>
+      );
     }
     if (currentStep === STEP_IDS.VOICE) {
       return <VoicePage>{suiteContent}</VoicePage>;

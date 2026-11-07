@@ -79,6 +79,7 @@ function MediaLibrary({
   onRenameEpisode = null,
   onRenameSeries = null,
   apiKey = null,
+  isWizardMode = false,
 }) {
   const [dubbingMode, setDubbingMode] = useState('dialogue');
   const [recapStyle, setRecapStyle] = useState('story_recap');
@@ -314,50 +315,54 @@ function MediaLibrary({
     <div className="capcut-media-panel">
       {/* Navigation Tabs: 3 Clean Workflow Steps */}
       <div className="media-tabs-header">
-        <button
-          onClick={() => onTabChange && onTabChange('episodes')}
-          className={`media-tab-btn ${activeTab === 'episodes' ? 'active' : ''}`}
-          title="គ្រប់គ្រងភាគទាំងអស់ / Episodes Manager & Auto-Split"
-        >
-          <Layers size={13} />
-          <span>Episodes</span>
-          {activeSeries?.episodes?.length > 0 && (
-            <span className="tab-badge" style={{ background: 'rgba(76, 141, 255, 0.2)', color: 'var(--primary-accent)' }}>
-              {activeSeries.episodes.length}
-            </span>
-          )}
-        </button>
-        <button
-          onClick={() => onTabChange && onTabChange('media')}
-          className={`media-tab-btn ${activeTab === 'media' ? 'active' : ''}`}
-          title="វីដេអូដើម / Original Video File"
-        >
-          <Film size={14} />
-          <span>1. Video</span>
-          {selectedVideo && (
-            <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#34d399', marginLeft: 4 }} />
-          )}
-        </button>
+        {!isWizardMode && (
+          <>
+            <button
+              onClick={() => onTabChange && onTabChange('episodes')}
+              className={`media-tab-btn ${activeTab === 'episodes' ? 'active' : ''}`}
+              title="គ្រប់គ្រងភាគទាំងអស់ / Episodes Manager & Auto-Split"
+            >
+              <Layers size={13} />
+              <span>Episodes</span>
+              {activeSeries?.episodes?.length > 0 && (
+                <span className="tab-badge" style={{ background: 'rgba(76, 141, 255, 0.2)', color: 'var(--primary-accent)' }}>
+                  {activeSeries.episodes.length}
+                </span>
+              )}
+            </button>
+            <button
+              onClick={() => onTabChange && onTabChange('media')}
+              className={`media-tab-btn ${activeTab === 'media' ? 'active' : ''}`}
+              title="វីដេអូដើម / Original Video File"
+            >
+              <Film size={14} />
+              <span>1. Video</span>
+              {selectedVideo && (
+                <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#34d399', marginLeft: 4 }} />
+              )}
+            </button>
 
-        <button
-          onClick={() => onTabChange && onTabChange('script')}
-          className={`media-tab-btn ${activeTab === 'script' ? 'active' : ''}`}
-          title="AI Dialogue Translation & Recap Generator"
-        >
-          <Sparkles size={14} />
-          <span>2. Script</span>
-          {scriptData?.segments && (
-            <span className="tab-badge">{scriptData.segments.length}</span>
-          )}
-        </button>
+            <button
+              onClick={() => onTabChange && onTabChange('script')}
+              className={`media-tab-btn ${activeTab === 'script' ? 'active' : ''}`}
+              title="AI Dialogue Translation & Recap Generator"
+            >
+              <Sparkles size={14} />
+              <span>2. Script</span>
+              {scriptData?.segments && (
+                <span className="tab-badge">{scriptData.segments.length}</span>
+              )}
+            </button>
+          </>
+        )}
 
         <button
           onClick={() => onTabChange && onTabChange('subtitles')}
-          className={`media-tab-btn ${activeTab === 'subtitles' ? 'active' : ''}`}
+          className={`media-tab-btn ${activeTab === 'subtitles' || (isWizardMode && activeTab === 'script') ? 'active' : ''}`}
           title="Khmer Script & Subtitles Editor"
         >
           <Subtitles size={14} />
-          <span>3. Subs</span>
+          <span>{isWizardMode ? 'Script' : '3. Subs'}</span>
           {scriptData?.segments && (
             <span className="tab-badge">{scriptData.segments.length}</span>
           )}
@@ -406,7 +411,7 @@ function MediaLibrary({
         />
       )}
 
-      {activeTab === 'script' && (
+      {!isWizardMode && activeTab === 'script' && (
         <DubbingModeTab
           selectedVideo={selectedVideo}
           dubbingMode={dubbingMode}
@@ -436,7 +441,7 @@ function MediaLibrary({
         />
       )}
 
-      {activeTab === 'subtitles' && (
+      {(activeTab === 'subtitles' || (isWizardMode && activeTab === 'script')) && (
         <ScriptReviewTab
           scriptData={scriptData}
           handleBridgeGaps={handleBridgeGaps}
