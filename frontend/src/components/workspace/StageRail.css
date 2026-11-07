@@ -196,3 +196,46 @@
   color: #38bdf8;
   font-weight: 700;
 }
+
+/* Rail Bottom Footer: Anchors the full-height vertical bar */
+.stage-rail-footer {
+  margin-top: auto;
+  flex-shrink: 0;
+  height: 36px;
+  padding: 0 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-top: 1px solid rgba(255, 255, 255, 0.04);
+  background: rgba(0, 0, 0, 0.2);
+}
+
+.stage-rail-footer-text {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  user-select: none;
+}
+
+.stage-rail-footer-brand {
+  font-weight: 700;
+  color: #38bdf8;
+  opacity: 0.75;
+  font-size: 9px;
+  letter-spacing: 0.08em;
+}
+
+.stage-rail-footer-ver {
+  font-family: monospace;
+  font-size: 10px;
+  color: #475569;
+}
+
+.stage-rail-footer-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #38bdf8;
+  opacity: 0.5;
+}

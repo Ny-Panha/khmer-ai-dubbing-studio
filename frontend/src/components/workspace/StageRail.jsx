@@ -130,6 +130,18 @@ export default function StageRail({
           );
         })}
       </div>
+
+      {/* Rail Bottom Footer: Quiet Studio Info (Anchors full-height rail) */}
+      <div className="stage-rail-footer">
+        {!isCollapsed ? (
+          <div className="stage-rail-footer-text">
+            <span className="stage-rail-footer-brand">DRAGON DUB</span>
+            <span className="stage-rail-footer-ver">v2.5 Studio</span>
+          </div>
+        ) : (
+          <span className="stage-rail-footer-dot" title="Dragon Dub Studio v2.5" />
+        )}
+      </div>
     </nav>
   );
 }

@@ -56,18 +56,24 @@ export default function ThinSeekStrip({
 
   return (
     <div className="thin-seek-strip-container">
+      {/* Current Timecode (Pinned Left) */}
+      <span className="thin-seek-time-label left">
+        {formatTimecode(currentTime)}
+      </span>
+
+      {/* Scrubbing Track (Spans 100% of Centre Width) */}
       <div
         ref={trackRef}
         className="thin-seek-strip-track"
         onMouseDown={handleMouseDown}
         title="Scrub video timeline (Click or Drag to Seek)"
       >
-        {/* Dialogue Segment Ticks */}
+        {/* Dialogue Segment Ticks across Full Width */}
         {segments.map((seg, idx) => {
           const sSec = typeof seg.startSec === 'number' ? seg.startSec : parseTimeToSeconds(seg.start, 0);
           const eSec = typeof seg.endSec === 'number' ? seg.endSec : parseTimeToSeconds(seg.end, sSec + 3);
           const leftPct = Math.max(0, Math.min(100, (sSec / safeDuration) * 100));
-          const widthPct = Math.max(0.4, Math.min(100 - leftPct, ((eSec - sSec) / safeDuration) * 100));
+          const widthPct = Math.max(0.3, Math.min(100 - leftPct, ((eSec - sSec) / safeDuration) * 100));
           const isSelected = selectedSegmentId === seg.id || selectedSegmentId === idx;
 
           return (
@@ -95,11 +101,10 @@ export default function ThinSeekStrip({
         />
       </div>
 
-      {/* Timecode Indicators */}
-      <div className="thin-seek-time-row">
-        <span className="thin-seek-current-time">{formatTimecode(currentTime)}</span>
-        <span className="thin-seek-duration-time">{formatTimecode(safeDuration)}</span>
-      </div>
+      {/* Total Duration Timecode (Pinned Right) */}
+      <span className="thin-seek-time-label right">
+        {formatTimecode(safeDuration)}
+      </span>
     </div>
   );
 }

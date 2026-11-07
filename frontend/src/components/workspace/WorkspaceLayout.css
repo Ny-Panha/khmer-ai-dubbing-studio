@@ -1,4 +1,4 @@
-/* WorkspaceLayout.css — Clean Video Editor Layout (No Zone Borders, Tint Steps) */
+/* WorkspaceLayout.css — Clean Video Editor Layout (No Zone Borders, Full-Height Tint Steps) */
 
 .workspace-root {
   display: flex;
@@ -7,31 +7,37 @@
   height: 100vh;
   min-width: 100vw;
   min-height: 100vh;
+  max-height: 100vh;
   overflow: hidden;
   background: #080b11;
   color: #f1f5f9;
 }
 
+/* Full-Height Workspace Body: exactly calc(100vh - 48px navbar - 30px bottom strip) */
 .workspace-body {
+  height: calc(100vh - 48px - 30px);
+  min-height: calc(100vh - 48px - 30px);
+  max-height: calc(100vh - 48px - 30px);
   flex: 1;
   display: flex;
   flex-direction: row;
-  min-height: 0;
   overflow: hidden;
   position: relative;
   width: 100%;
 }
 
-/* 1. Left Rail (Tint step: #0d121f, NO zone border) */
+/* 1. Left Rail (Tint step: #0d121f, NO zone border, full height bar) */
 .workspace-rail-container {
   flex-shrink: 0;
   height: 100%;
   background: #0d121f;
   z-index: 20;
   transition: width 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  display: flex;
+  flex-direction: column;
 }
 
-/* 2. Left Media Panel (Tint step: #101726, NO zone border) */
+/* 2. Left Media Panel (Tint step: #101726, NO zone border, full height bar) */
 .workspace-media-container {
   flex-shrink: 0;
   height: 100%;
@@ -43,7 +49,7 @@
   position: relative;
 }
 
-/* 3. Centre Working Column (Tint step: #0a0e18, NO zone border) */
+/* 3. Centre Working Column (Tint step: #0a0e18, NO zone border, stretches full height) */
 .workspace-centre-container {
   flex: 1;
   min-width: 360px;
@@ -56,12 +62,12 @@
   position: relative;
 }
 
-/* Video Player Monitor Area (Point 3: Sizes to video, capped at ~46vh, centered, no letterbox void) */
+/* Video Player Monitor Section (Sizes to video, capped at ~46vh, centered, no letterbox void) */
 .workspace-centre-player-section {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  justify-content: center;
+  align-items: stretch; /* Stretch children including ThinSeekStrip across full centre width */
+  justify-content: flex-start;
   background: #060910;
   flex-shrink: 0;
   position: relative;
@@ -81,34 +87,41 @@
 }
 
 .workspace-centre-player-box .video-preview-wrapper,
-.workspace-centre-player-box .video-player-container {
+.workspace-centre-player-box .video-player-container,
+.workspace-centre-player-box .capcut-player-panel {
   height: 100% !important;
   width: 100% !important;
   max-height: 46vh !important;
   border: none !important;
   border-radius: 0 !important;
+  box-shadow: none !important;
   display: flex;
   align-items: center;
   justify-content: center;
 }
 
+/* Centre Working Area: Flex-grows to fill all remaining height */
 .workspace-centre-segments-section {
   flex: 1;
   display: flex;
   flex-direction: column;
   min-height: 0;
+  height: 100%;
   overflow: hidden;
   position: relative;
+  background: #0a0e18;
+  width: 100%;
 }
 
-/* 4. Right Panel (Tint step: #101726, NO zone border) */
+/* 4. Right Panel (Tint step: #101726, NO zone border, stretches full height) */
 .workspace-right-container {
   flex-shrink: 0;
   height: 100%;
   background: #101726;
   display: flex;
   flex-direction: column;
-  overflow-y: auto;
+  min-height: 0;
+  overflow: hidden;
   transition: width 0.22s cubic-bezier(0.16, 1, 0.3, 1);
   position: relative;
 }
@@ -120,6 +133,18 @@
   align-items: center;
   justify-content: space-between;
   flex-shrink: 0;
+  background: #101726;
+}
+
+.workspace-right-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 0 12px 16px 12px;
+  background: #101726;
 }
 
 .workspace-quiet-label {
@@ -171,27 +196,35 @@
   left: -11px;
 }
 
-/* In-Flow Translate Form Panel (Point 4: Full-width of centre, top-aligned, max-width ~720px) */
+/* In-Flow Translate Form Panel (Point 4: Full-width of centre, flex-grows full height) */
 .workspace-inflow-translate-panel {
   flex: 1;
+  min-height: 0;
+  height: 100%;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
   justify-content: flex-start;
-  padding: 20px 24px;
+  padding: 24px 28px;
   width: 100%;
+  background: #0a0e18;
+  box-sizing: border-box;
 }
 
-/* Episode Overview Table in Import mode (Point 3) */
+/* Episode Overview Table in Import mode (Point 3: Flex-grows full height) */
 .workspace-episodes-overview-wrap {
   flex: 1;
+  min-height: 0;
+  height: 100%;
   overflow-y: auto;
-  padding: 16px 20px;
+  padding: 20px 24px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 14px;
   width: 100%;
+  background: #0a0e18;
+  box-sizing: border-box;
 }
 
 .workspace-episodes-overview-header {

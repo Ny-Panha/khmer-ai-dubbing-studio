@@ -796,66 +796,68 @@ export default function App() {
               </button>
             </div>
 
-            {/* Top: Selected Segment Inspector */}
-            <div className="workspace-inspector-section">
-              {selectedSegment && hasSegments ? (
-                <ClipInspectorPanel
-                  isOpen={true}
-                  selectedSegment={selectedSegment}
-                  selectedSegmentIndex={selectedSegmentIndex}
-                  onSegmentTextChange={(text) => {
-                    if (handleUpdateSegmentText) {
-                      handleUpdateSegmentText(selectedSegment.id || selectedSegmentIndex, text);
-                    }
-                  }}
-                  onSegmentTextBlur={(text) => {
-                    if (handleUpdateSegmentText) {
-                      handleUpdateSegmentText(selectedSegment.id || selectedSegmentIndex, text, false, selectedSegmentIndex);
-                    }
-                  }}
-                  onSingleRegen={handleRegenerateSingleSegment}
-                  onClipVoiceChange={handleUpdateSegmentVoice}
-                  onUpdateSpeakerVoice={handleUpdateSpeakerVoice}
-                  onToggleDeliveryType={handleToggleDeliveryType}
-                  onDeleteSegment={handleDeleteSegment}
-                  currentTime={playback.currentTime}
-                  scriptData={scriptData}
-                  onSelectSegment={media.setSelectedSegmentId}
-                  settings={voiceSettings}
-                />
-              ) : (
-                <div style={{ padding: '12px 14px', color: '#64748b', fontSize: 11, textAlign: 'center' }}>
-                  គ្មានការជ្រើសរើសឃ្លាសន្ទនា (No segment selected)
-                </div>
-              )}
-            </div>
+            <div className="workspace-right-body">
+              {/* Top: Selected Segment Inspector */}
+              <div className="workspace-inspector-section">
+                {selectedSegment && hasSegments ? (
+                  <ClipInspectorPanel
+                    isOpen={true}
+                    selectedSegment={selectedSegment}
+                    selectedSegmentIndex={selectedSegmentIndex}
+                    onSegmentTextChange={(text) => {
+                      if (handleUpdateSegmentText) {
+                        handleUpdateSegmentText(selectedSegment.id || selectedSegmentIndex, text);
+                      }
+                    }}
+                    onSegmentTextBlur={(text) => {
+                      if (handleUpdateSegmentText) {
+                        handleUpdateSegmentText(selectedSegment.id || selectedSegmentIndex, text, false, selectedSegmentIndex);
+                      }
+                    }}
+                    onSingleRegen={handleRegenerateSingleSegment}
+                    onClipVoiceChange={handleUpdateSegmentVoice}
+                    onUpdateSpeakerVoice={handleUpdateSpeakerVoice}
+                    onToggleDeliveryType={handleToggleDeliveryType}
+                    onDeleteSegment={handleDeleteSegment}
+                    currentTime={playback.currentTime}
+                    scriptData={scriptData}
+                    onSelectSegment={media.setSelectedSegmentId}
+                    settings={voiceSettings}
+                  />
+                ) : (
+                  <div style={{ padding: '12px 14px', color: '#64748b', fontSize: 11, textAlign: 'center' }}>
+                    គ្មានការជ្រើសរើសឃ្លាសន្ទនា (No segment selected)
+                  </div>
+                )}
+              </div>
 
-            {/* Bottom: Contextual Stage Settings */}
-            <div className="workspace-stage-settings-section">
-              <StageSettingsPanel
-                workspaceMode={workspaceMode}
-                selectedVideo={media.selectedVideo}
-                videoMetadata={media.videoMetadata}
-                activeSeries={series.activeSeries}
-                activeEpisode={series.activeEpisode}
-                seriesGlossary={series.seriesGlossary}
-                voiceSettings={voiceSettings}
-                onUpdateVoiceSettings={setVoiceSettings}
-                voiceCatalog={audio.ttsVoiceCatalog}
-                isCleanBgReady={isCleanBgReady}
-                isSeparatingAudio={isSeparatingAudio}
-                separationProgress={separationProgress}
-                separationError={separationError}
-                onStartDemucsSeparation={handleStartDemucsSeparation}
-                onKillDemucs={handleKillDemucs}
-                onRenderVideo={handleRenderVideo}
-                isRendering={render.isRendering}
-                renderProgress={render.renderProgress}
-                renderStage={render.renderStage}
-                renderedVideo={render.renderedVideo}
-                audioGenerated={audio.audioGenerated}
-                previewAudioUrl={audio.fullAudioUrl}
-              />
+              {/* Bottom: Contextual Stage Settings */}
+              <div className="workspace-stage-settings-section">
+                <StageSettingsPanel
+                  workspaceMode={workspaceMode}
+                  selectedVideo={media.selectedVideo}
+                  videoMetadata={media.videoMetadata}
+                  activeSeries={series.activeSeries}
+                  activeEpisode={series.activeEpisode}
+                  seriesGlossary={series.seriesGlossary}
+                  voiceSettings={voiceSettings}
+                  onUpdateVoiceSettings={setVoiceSettings}
+                  voiceCatalog={audio.ttsVoiceCatalog}
+                  isCleanBgReady={isCleanBgReady}
+                  isSeparatingAudio={isSeparatingAudio}
+                  separationProgress={separationProgress}
+                  separationError={separationError}
+                  onStartDemucsSeparation={handleStartDemucsSeparation}
+                  onKillDemucs={handleKillDemucs}
+                  onRenderVideo={handleRenderVideo}
+                  isRendering={render.isRendering}
+                  renderProgress={render.renderProgress}
+                  renderStage={render.renderStage}
+                  renderedVideo={render.renderedVideo}
+                  audioGenerated={audio.audioGenerated}
+                  previewAudioUrl={audio.fullAudioUrl}
+                />
+              </div>
             </div>
           </div>
         </div>

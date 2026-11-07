@@ -993,16 +993,6 @@ function VideoPlayerPreview({
 
   return (
     <div className={`capcut-player-panel ${isFullscreen ? 'is-fullscreen-active' : ''}`} ref={containerRef}>
-      {/* Player Top Bar */}
-      <PlayerTopBar
-        renderedVideo={renderedVideo}
-        onResetToPreview={onResetToPreview || (() => setRenderedVideo && setRenderedVideo(null))}
-        selectedVideo={selectedVideo}
-        videoMeta={videoMeta}
-        toggleFullscreen={toggleFullscreen}
-        isFullscreen={isFullscreen}
-      />
-
       {/* Video View Canvas (Fixed 1920x1080 Landscape 16:9) */}
       <div className={`player-canvas-container is-full-view ${isFullscreen ? 'is-fullscreen' : ''}`}>
         <div
@@ -1262,6 +1252,10 @@ function VideoPlayerPreview({
         isPlaying={isPlaying}
         onPlayPause={onPlayPause}
         voiceSettings={voiceSettings}
+        toggleFullscreen={toggleFullscreen}
+        isFullscreen={isFullscreen}
+        renderedVideo={renderedVideo}
+        onResetToPreview={onResetToPreview || (() => setRenderedVideo && setRenderedVideo(null))}
       />
     </div>
   );
