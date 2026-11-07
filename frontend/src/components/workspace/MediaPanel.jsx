@@ -128,14 +128,19 @@ export default function MediaPanel({
 
   // Auto Split Handler
   const handleExecuteSplit = async () => {
-    if (!selectedVideo || !seriesId) return;
+    const rawRef = selectedVideo?.videoId || selectedVideo?.filePath || selectedVideo?.videoPath || activeEpisode?.video?.videoId || activeEpisode?.video?.filePath;
+    if (!rawRef) {
+      setSplitError('សូមជ្រើសរើស ឬផ្ទុកវីដេអូជាមុនសិន!');
+      return;
+    }
     try {
       setIsSplitting(true);
       setSplitError(null);
       await splitVideoEpisodesApi({
-        seriesId,
-        sourceVideoPath: selectedVideo.videoPath || selectedVideo.filePath,
-        chunkDurationMinutes: splitMinutes,
+        videoId: rawRef,
+        videoPath: selectedVideo?.videoPath || selectedVideo?.filePath,
+        seriesId: activeSeries?.id || seriesId || 'drama_project',
+        durationMinutes: Number(splitMinutes) || 15,
       });
       setShowSplitModal(false);
       window.location.reload();

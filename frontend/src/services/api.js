@@ -521,11 +521,25 @@ export async function cancelJobApi(jobId) {
 /**
  * Auto-Split a long video into episodes
  */
-export async function splitVideoEpisodesApi({ videoId, videoPath, seriesId, durationMinutes = 8 }) {
+export async function splitVideoEpisodesApi({
+  videoId,
+  videoPath,
+  sourceVideoPath,
+  seriesId,
+  durationMinutes = 8,
+  chunkDurationMinutes,
+}) {
+  const actualRef = videoId || videoPath || sourceVideoPath;
+  const actualDuration = Number(durationMinutes || chunkDurationMinutes) || 8;
   const res = await fetch('/api/split-video-episodes', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ videoId, videoPath, seriesId, durationMinutes }),
+    body: JSON.stringify({
+      videoId: actualRef,
+      videoPath: videoPath || sourceVideoPath || actualRef,
+      seriesId,
+      durationMinutes: actualDuration,
+    }),
   });
   return await parseResponseJson(res, 'Failed to auto-split video into episodes');
 }

@@ -79,7 +79,7 @@ export function generateVideoThumbnails(videoUrl, duration = 30, count = null) {
     };
 
     v.onerror = () => {
-      clearTimeout(timeoutId);
+      clearTimeout(overallTimeout);
       finish();
     };
   });
