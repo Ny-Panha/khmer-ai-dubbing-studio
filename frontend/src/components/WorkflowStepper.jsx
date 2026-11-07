@@ -1,23 +1,40 @@
 import React from 'react';
-import { Check, ChevronRight, Video, Sparkles, Mic, Sliders, Volume2, Loader2, Download } from 'lucide-react';
+import { Check, ChevronRight, Loader2, Sparkles, Lock } from 'lucide-react';
+import { WORKFLOW_STEPS, isStepReachable } from '../steps/registry';
 import './WorkflowStepper.css';
 
 /**
- * Chinese Drama Dubbing Workflow Stepper Header Component (MotionSites & GetLayers Style)
+ * Chinese Drama Dubbing Workflow Stepper (Pattern A Registry-Driven)
  */
 export default function WorkflowStepper({
-  leftTab,
-  onTabChange,
-  isStep1Done,
-  isStep2Done,
-  isStep3Done,
-  isStep4Done,
-  onGenerateAudio,
-  isGeneratingAudio,
+  currentStep = 'import',
+  onSelectStep = null,
+  workflowState = {},
+  isGeneratingAudio = false,
   audioProgress = 0,
-  audioStage = '',
-  hasSegments,
+  // Backward compatibility
+  leftTab = null,
+  onTabChange = null,
 }) {
+  const activeStepId = currentStep || (
+    leftTab === 'media' ? 'import' :
+    (leftTab === 'script' || leftTab === 'subtitles') ? 'script' :
+    leftTab === 'voice' ? 'voice' :
+    leftTab === 'mix' ? 'mix-export' : 'import'
+  );
+
+  const handleStepClick = (stepId) => {
+    if (onSelectStep) {
+      onSelectStep(stepId);
+    } else if (onTabChange) {
+      if (stepId === 'import') onTabChange('media');
+      else if (stepId === 'script') onTabChange('subtitles');
+      else if (stepId === 'voice') onTabChange('voice');
+      else if (stepId === 'demucs') onTabChange('script');
+      else if (stepId === 'mix-export') onTabChange('voice');
+    }
+  };
+
   return (
     <div className="workflow-stepper-bar">
       <span className="workflow-stepper-label">
@@ -25,91 +42,47 @@ export default function WorkflowStepper({
         <span>FLOW:</span>
       </span>
 
-      {/* Step 1: Import Drama */}
-      <button
-        type="button"
-        onClick={() => onTabChange && onTabChange('media')}
-        className={`workflow-step-btn ${leftTab === 'media' ? 'active' : ''} ${isStep1Done ? 'completed' : ''}`}
-        title="Step 1: Import Chinese Drama Video"
-      >
-        <span className="workflow-step-num">
-          {isStep1Done ? <Check size={10} strokeWidth={3} /> : '1'}
-        </span>
-        <Video size={12} />
-        <span>1. Import Video</span>
-      </button>
+      {WORKFLOW_STEPS.map((step, idx) => {
+        const isDone = step.isComplete(workflowState);
+        const reachable = isStepReachable(step.id, workflowState);
+        const isActive = activeStepId === step.id;
+        const gateReason = step.gateReason(workflowState);
+        const IconComponent = step.icon;
 
-      <span className="workflow-step-arrow"><ChevronRight size={12} /></span>
-
-      {/* Step 2: Translate & Script */}
-      <button
-        type="button"
-        onClick={() => onTabChange && onTabChange(isStep2Done ? 'subtitles' : 'script')}
-        className={`workflow-step-btn ${leftTab === 'script' || leftTab === 'subtitles' ? 'active' : ''} ${isStep2Done ? 'completed' : ''}`}
-        title="Step 2: AI Chinese Dialogue Translation or Drama Recap"
-      >
-        <span className="workflow-step-num">
-          {isStep2Done ? <Check size={10} strokeWidth={3} /> : '2'}
-        </span>
-        <Sparkles size={12} />
-        <span>2. Translate & Script</span>
-      </button>
-
-      <span className="workflow-step-arrow"><ChevronRight size={12} /></span>
-
-      {/* Step 3: Khmer Voice TTS */}
-      <button
-        type="button"
-        onClick={onGenerateAudio}
-        disabled={!hasSegments || isGeneratingAudio}
-        className={`workflow-step-btn ${isStep3Done ? 'completed' : ''} ${isGeneratingAudio ? 'active' : ''}`}
-        title="Step 3: Generate Khmer Voice (Microsoft Edge Neural TTS)"
-      >
-        <span className="workflow-step-num">
-          {isStep3Done ? <Check size={10} strokeWidth={3} /> : '3'}
-        </span>
-        {isGeneratingAudio ? (
-          <Loader2 size={12} className="animate-spin" style={{ color: '#34d399' }} />
-        ) : (
-          <Mic size={12} />
-        )}
-        <span>
-          3. Khmer Voice (TTS)
-          {isGeneratingAudio && audioProgress > 0 ? ` [${audioProgress}%]` : ''}
-        </span>
-      </button>
-
-      <span className="workflow-step-arrow"><ChevronRight size={12} /></span>
-
-      {/* Step 4: Demucs AI (Clean BGM) */}
-      <button
-        type="button"
-        onClick={() => onTabChange && onTabChange('script')}
-        className={`workflow-step-btn ${isStep4Done ? 'completed' : ''}`}
-        title="Step 4: Demucs AI Vocal Separation (កាត់សំឡេងចិន យក BGM/SFX)"
-      >
-        <span className="workflow-step-num">
-          {isStep4Done ? <Check size={10} strokeWidth={3} /> : '4'}
-        </span>
-        <Volume2 size={12} />
-        <span>4. Demucs AI</span>
-      </button>
-
-      <span className="workflow-step-arrow"><ChevronRight size={12} /></span>
-
-      {/* Step 5: Mix & Export */}
-      <button
-        type="button"
-        onClick={() => onTabChange && onTabChange('voice')}
-        className={`workflow-step-btn ${isStep4Done ? 'completed' : ''}`}
-        title="Step 5: Smart Audio Ducking & Final Render"
-      >
-        <span className="workflow-step-num">
-          5
-        </span>
-        <Sliders size={12} />
-        <span>5. Mix & Export</span>
-      </button>
+        return (
+          <React.Fragment key={step.id}>
+            {idx > 0 && (
+              <span className="workflow-step-arrow">
+                <ChevronRight size={12} />
+              </span>
+            )}
+            <button
+              type="button"
+              disabled={!reachable}
+              onClick={() => reachable && handleStepClick(step.id)}
+              className={`workflow-step-btn ${isActive ? 'active' : ''} ${isDone ? 'completed' : ''} ${!reachable ? 'is-disabled' : ''}`}
+              title={gateReason ? `${step.label} (${gateReason})` : step.label}
+              style={{
+                opacity: reachable ? 1 : 0.45,
+                cursor: reachable ? 'pointer' : 'not-allowed',
+              }}
+            >
+              <span className="workflow-step-num">
+                {isDone ? <Check size={10} strokeWidth={3} /> : (!reachable ? <Lock size={9} /> : step.number)}
+              </span>
+              {step.id === 'voice' && isGeneratingAudio ? (
+                <Loader2 size={12} className="animate-spin" style={{ color: '#34d399' }} />
+              ) : (
+                <IconComponent size={12} />
+              )}
+              <span>
+                {step.label}
+                {step.id === 'voice' && isGeneratingAudio && audioProgress > 0 ? ` [${audioProgress}%]` : ''}
+              </span>
+            </button>
+          </React.Fragment>
+        );
+      })}
     </div>
   );
 }

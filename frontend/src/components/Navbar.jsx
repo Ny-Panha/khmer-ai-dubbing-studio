@@ -65,6 +65,32 @@ export default function Navbar({
             <span>Gemini Route</span>
             <span className="gemini-badge-chip">4 Keys</span>
           </button>
+
+          {onOpenJobDashboard && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                onOpenJobDashboard();
+              }}
+              className="navbar-gemini-route-btn"
+              style={{
+                background: 'rgba(16, 185, 129, 0.1)',
+                borderColor: 'rgba(16, 185, 129, 0.25)',
+                color: '#34d399',
+              }}
+              title="Job Queue Dashboard (Production Pipeline Monitor)"
+            >
+              <Cpu size={13} color="#34d399" />
+              <span>Jobs</span>
+              {activeJobCount > 0 && (
+                <span className="gemini-badge-chip" style={{ background: '#10b981', color: '#090d16' }}>
+                  {activeJobCount}
+                </span>
+              )}
+            </button>
+          )}
         </div>
 
         {/* Center: Responsive Series & Episode Switcher (GetLayers.ai Layer 2 Capsule) */}

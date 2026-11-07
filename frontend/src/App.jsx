@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useMemo } from 'react';
 import Navbar from './components/Navbar';
 import JobDashboardModal from './components/dashboard/JobDashboardModal';
 import GeminiRouteModal from './components/dashboard/GeminiRouteModal';
@@ -9,6 +9,14 @@ import VoiceSettings from './components/VoiceSettings';
 import TimelineEditor from './components/TimelineEditor';
 import { loadSavedVoiceSettings } from './utils/projectStorage';
 import { JobQueueProvider } from './context/JobQueueContext';
+
+// Pattern A Step Components & Registry
+import { STEP_IDS } from './steps/registry';
+import ImportPage from './steps/import/ImportPage';
+import ScriptPage from './steps/script/ScriptPage';
+import VoicePage from './steps/voice/VoicePage';
+import DemucsPage from './steps/demucs/DemucsPage';
+import MixExportPage from './steps/mix-export/MixExportPage';
 
 // Hoisted immutable fallbacks (prevents prop churning and broken memoization)
 const EMPTY_SEGMENTS = Object.freeze([]);
@@ -29,6 +37,7 @@ import { useProjectPersistence } from './hooks/useProjectPersistence';
 import { useSeriesManager } from './hooks/useSeriesManager';
 
 export default function App() {
+  const [currentStep, setCurrentStep] = useState(STEP_IDS.IMPORT);
   const [leftTab, setLeftTab] = useState('media');
   const [showJobDashboard, setShowJobDashboard] = useState(false);
   const [showGeminiRouteModal, setShowGeminiRouteModal] = useState(false);
@@ -336,7 +345,45 @@ export default function App() {
   // Render & Media callbacks
   const handleRenderVideo = useCallback((...args) => renderRef.current.handleRenderVideo?.(...args), []);
   const handleClearVideo = useCallback((...args) => mediaRef.current.handleClearVideo?.(...args), []);
-  const handleImportClick = useCallback(() => setLeftTab('media'), []);
+  
+  // Step selection & navigation callback
+  const handleSelectStep = useCallback((stepId) => {
+    setCurrentStep(stepId);
+    if (stepId === STEP_IDS.IMPORT) {
+      setLeftTab('media');
+    } else if (stepId === STEP_IDS.SCRIPT) {
+      setLeftTab('subtitles');
+    } else if (stepId === STEP_IDS.VOICE) {
+      setLeftTab('voice');
+    } else if (stepId === STEP_IDS.DEMUCS) {
+      setLeftTab('subtitles');
+    } else if (stepId === STEP_IDS.MIX_EXPORT) {
+      setLeftTab('voice');
+    }
+  }, []);
+
+  const handleImportClick = useCallback(() => {
+    setCurrentStep(STEP_IDS.IMPORT);
+    setLeftTab('media');
+  }, []);
+
+  // Compute live workflow state for Step gates and completed badges
+  const workflowState = useMemo(() => ({
+    selectedVideo: media.selectedVideo,
+    activeEpisode: series.activeEpisode,
+    scriptData,
+    audioGenerated: audio.audioGenerated,
+    hasDemucs: Boolean(series.activeEpisode?.hasDemucs || series.activeEpisode?.cleanBgmPath),
+    isDemucsDone: Boolean(series.activeEpisode?.hasDemucs || series.activeEpisode?.cleanBgmPath),
+    cleanBgmPath: series.activeEpisode?.cleanBgmPath,
+    renderedVideo: render.renderedVideo,
+  }), [
+    media.selectedVideo,
+    series.activeEpisode,
+    scriptData,
+    audio.audioGenerated,
+    render.renderedVideo,
+  ]);
 
   // Script & Series callbacks
   const handleUpdateScript = useCallback((...args) => scriptRef.current.handleUpdateScript?.(...args), []);
@@ -385,6 +432,226 @@ export default function App() {
 
   const isAnyJobViewOpen = showJobDashboard || showGeminiRouteModal || leftTab === 'gemini-route' || leftTab === 'gemini_route';
 
+  // Render Pattern A Step Workspace (Steps 2-5 Bridge Wrappers)
+  const renderStepWorkspace = () => {
+    const suiteContent = (
+      <>
+        {/* Top 3-Column Suite: Left Tools | Video Monitor | Contextual Inspector */}
+        <div className="capcut-top-suite" ref={topSuiteRef}>
+          {/* 1. Left Panel: Media Library, AI Script, Subtitles */}
+          <div className="top-suite-col-left" style={{ width: leftPanelWidth }}>
+            <MediaLibrary
+              apiKey={persistence.apiKey}
+              selectedVideo={media.selectedVideo}
+              videoMetadata={media.videoMetadata}
+              videoThumbnails={media.videoThumbnails || EMPTY_ARRAY}
+              videoClips={media.videoClips || EMPTY_CLIPS}
+              mediaAssets={media.mediaAssets || EMPTY_ARRAY}
+              duration={playback.duration}
+              onAddClipToTimeline={handleAddClipToTimeline}
+              onVideoSelected={handleVideoSelected}
+              onRemoveVideo={handleClearVideo}
+              scriptData={scriptData}
+              onUpdateScript={handleUpdateScript}
+              onUpdateSegments={handleUpdateTimelineSegments}
+              onGenerateScript={handleGenerateScript}
+              isGeneratingScript={script.isGeneratingScript}
+              generatingEpisodeId={script.generatingEpisodeId}
+              scriptProgress={script.scriptProgress}
+              scriptStage={script.scriptStage}
+              scriptLogs={script.scriptLogs}
+              scriptError={script.scriptError}
+              activeTab={leftTab}
+              onTabChange={setLeftTab}
+              onNavigateToVoice={handleGenerateAudio}
+              isGeneratingAudio={audio.isGeneratingAudio}
+              generatingAudioEpisodeId={audio.generatingAudioEpisodeId}
+              audioProgress={audio.audioProgress}
+              audioStage={audio.audioStage}
+              onRegenerateSegment={handleRegenerateSingleSegment}
+              onUpdateSegmentText={handleUpdateSegmentText}
+              speakerRegistry={speakerRegistry || EMPTY_OBJECT}
+              onUpdateSpeakerVoice={handleUpdateSpeakerVoice}
+              onUpdateSegmentVoice={handleUpdateSegmentVoice}
+              onToggleDeliveryType={handleToggleDeliveryType}
+              selectedSegmentId={media.selectedSegmentId}
+              onSelectSegment={media.setSelectedSegmentId}
+              onDeleteSegment={handleDeleteSegment}
+              seriesList={series.seriesList}
+              activeSeries={series.activeSeries}
+              activeEpisode={series.activeEpisode}
+              seriesId={series.seriesId}
+              episodeId={series.episodeId}
+              seriesGlossary={series.seriesGlossary}
+              onSwitchEpisode={handleSwitchEpisode}
+              onCreateEpisode={handleCreateEpisode}
+              onDeleteEpisode={handleDeleteEpisode}
+              onRenameEpisode={handleRenameEpisode}
+              onRenameSeries={handleRenameSeries}
+            />
+          </div>
+
+          {/* Left Resizer Splitter (Drag Left / Right) */}
+          <div
+            className={`capcut-panel-splitter ${activeSplitter === 'left' ? 'is-active' : ''}`}
+            onMouseDown={(e) => handleStartSplitterDrag(e, 'left')}
+            title="Drag left or right to resize Media Library panel"
+          />
+
+          {/* 2. Center Panel: Video Preview Monitor */}
+          <div className="top-suite-col-center">
+            <VideoPlayerPreview
+              selectedVideo={media.selectedVideo}
+              seriesId={series.seriesId}
+              episodeId={series.episodeId}
+              scriptData={scriptData}
+              renderedVideo={render.renderedVideo}
+              setRenderedVideo={render.setRenderedVideo}
+              onResetToPreview={handleResetToPreview}
+              isRendering={render.isRendering}
+              onRenderVideo={handleRenderVideo}
+              videoRef={videoRef}
+              currentTime={playback.currentTime}
+              duration={playback.duration}
+              isPlaying={playback.isPlaying}
+              onPlayPause={handlePlayPause}
+              onSeek={handleSeek}
+              onTimeUpdate={handleTimeUpdate}
+              onLoadedMetadata={handleLoadedMetadata}
+              voiceSettings={voiceSettings || EMPTY_OBJECT}
+              onEnded={handleVideoEnded}
+              fullAudioUrl={audio.fullAudioUrl}
+              audioGenerated={audio.audioGenerated}
+              audioOutdated={audio.audioOutdated}
+              onImportClick={handleImportClick}
+              onVideoSelected={handleVideoSelected}
+              videoClips={media.videoClips || EMPTY_CLIPS}
+            />
+          </div>
+
+          {/* Right Resizer Splitter (Drag Left / Right) */}
+          <div
+            className={`capcut-panel-splitter ${activeSplitter === 'right' ? 'is-active' : ''}`}
+            onMouseDown={(e) => handleStartSplitterDrag(e, 'right')}
+            title="Drag left or right to resize Inspector panel"
+          />
+
+          {/* 3. Right Panel: Khmer Voice (TTS), Audio Ducking, Export Settings */}
+          <div className="top-suite-col-right" style={{ width: rightPanelWidth }}>
+            <VoiceSettings
+              settings={voiceSettings || EMPTY_OBJECT}
+              onUpdateSettings={handleUpdateVoiceSettings}
+              voiceCatalog={audio.ttsVoiceCatalog}
+              audioOutdated={audio.audioOutdated}
+              previewAudioUrl={
+                audio.fullAudioUrl || scriptData?.segments?.find((s) => s.audioUrl)?.audioUrl || null
+              }
+              onRenderVideo={handleRenderVideo}
+              isRendering={render.isRendering}
+              renderProgress={render.renderProgress}
+              renderStage={render.renderStage}
+              renderedVideo={render.renderedVideo}
+              selectedVideo={media.selectedVideo}
+              videoMetadata={media.videoMetadata}
+              duration={playback.duration}
+              selectedClip={media.selectedClip}
+              onSplitClip={handleSplitClip}
+              onDeleteClip={handleDeleteClip}
+              currentTime={playback.currentTime}
+              isPlaying={playback.isPlaying}
+              scriptData={scriptData}
+              onGenerateAudio={handleGenerateAudio}
+              isGeneratingAudio={audio.isGeneratingAudio}
+              audioProgress={audio.audioProgress}
+              audioStage={audio.audioStage}
+              audioGenerated={audio.audioGenerated}
+              onRegenerateSegment={handleRegenerateSingleSegment}
+              speakerRegistry={speakerRegistry || EMPTY_OBJECT}
+              onUpdateSpeakerVoice={handleUpdateSpeakerVoice}
+              onUpdateSegmentVoice={handleUpdateSegmentVoice}
+              onUpdateSegmentText={handleUpdateSegmentText}
+              onUpdateSegmentSpeed={audio.handleUpdateSegmentSpeed}
+              onToggleDeliveryType={handleToggleDeliveryType}
+              onSplitSegment={audio.handleSplitSegment}
+              onAutoSplitSegment={clips.handleAutoSplitSegment}
+              selectedSegmentId={media.selectedSegmentId}
+              onSelectSegment={media.setSelectedSegmentId}
+              onDeleteSegment={handleDeleteSegment}
+              onUpdateSegments={handleUpdateTimelineSegments}
+              onToggleMuteSegment={handleToggleMuteSegment}
+              onToggleMuteVideoClip={handleToggleMuteVideoClip}
+              onToggleMuteAllCuts={handleToggleMuteAllCuts}
+              videoClips={media.videoClips || EMPTY_CLIPS}
+              onUpdateScript={handleUpdateScript}
+            />
+          </div>
+        </div>
+
+        {/* Bottom Multi-Track Timeline */}
+        <div className="capcut-bottom-timeline">
+          <TimelineEditor
+            videoRef={videoRef}
+            activeTab={leftTab}
+            currentTime={playback.currentTime}
+            duration={playback.duration}
+            isPlaying={playback.isPlaying}
+            onSeek={handleSeek}
+            onPlayPause={handlePlayPause}
+            videoClips={media.videoClips || EMPTY_CLIPS}
+            activeClipId={media.activeClipId}
+            onSelectClip={handleSelectClip}
+            onUpdateClips={handleUpdateClips}
+            onSplitClip={handleSplitClip}
+            onDeleteClip={handleDeleteClip}
+            onDeleteSegment={handleDeleteSegment}
+            scriptSegments={scriptData?.segments || EMPTY_SEGMENTS}
+            onUpdateSegments={handleUpdateTimelineSegments}
+            onToggleMuteSegment={handleToggleMuteSegment}
+            onToggleMuteVideoClip={handleToggleMuteVideoClip}
+            onToggleMuteAllCuts={handleToggleMuteAllCuts}
+            onToggleDeliveryType={handleToggleDeliveryType}
+            speakerRegistry={speakerRegistry || EMPTY_OBJECT}
+            voiceSettings={voiceSettings || EMPTY_OBJECT}
+            onUpdateVoiceSettings={handleUpdateVoiceSettings}
+            audioGenerated={audio.audioGenerated}
+            selectedVideo={media.selectedVideo}
+            videoThumbnails={media.videoThumbnails || EMPTY_ARRAY}
+            selectedSegmentId={media.selectedSegmentId}
+            onSelectSegment={media.setSelectedSegmentId}
+            onAutoSplitVideo={handleAutoSplitVideo}
+            onResetFullVideo={handleResetFullVideo}
+            onBridgeGaps={handleBridgeGaps}
+            onAutoAlignNoOverlap={handleAutoAlignNoOverlap}
+            onResetToSourceTiming={handleResetToSourceTiming}
+            onAddSegment={handleAddSegmentAtTime}
+            canUndo={undoRedo.canUndo}
+            canRedo={undoRedo.canRedo}
+            onUndo={handleUndo}
+            onRedo={handleRedo}
+            onGenerateAudio={handleGenerateAudio}
+            isGeneratingAudio={audio.isGeneratingAudio}
+            onAddClipToTimeline={handleAddClipToTimeline}
+            mediaAssets={media.mediaAssets || EMPTY_ARRAY}
+          />
+        </div>
+      </>
+    );
+
+    if (currentStep === STEP_IDS.SCRIPT) {
+      return <ScriptPage>{suiteContent}</ScriptPage>;
+    }
+    if (currentStep === STEP_IDS.VOICE) {
+      return <VoicePage>{suiteContent}</VoicePage>;
+    }
+    if (currentStep === STEP_IDS.DEMUCS) {
+      return <DemucsPage>{suiteContent}</DemucsPage>;
+    }
+    if (currentStep === STEP_IDS.MIX_EXPORT) {
+      return <MixExportPage>{suiteContent}</MixExportPage>;
+    }
+    return suiteContent;
+  };
+
   return (
     <JobQueueProvider isAnyJobViewOpen={isAnyJobViewOpen}>
       <div className="capcut-app-container">
@@ -418,217 +685,38 @@ export default function App() {
         <main className="capcut-main-workspace">
           {/* Chinese Drama Dubbing Workflow Stepper Bar */}
           <WorkflowStepper
-            leftTab={leftTab}
-            onTabChange={setLeftTab}
-            isStep1Done={Boolean(media.selectedVideo?.videoId)}
-            isStep2Done={Boolean(scriptData?.segments?.length)}
-            isStep3Done={Boolean(audio.audioGenerated)}
-            isStep4Done={Boolean(audio.audioGenerated && voiceSettings.duckingVolume !== undefined)}
-            onGenerateAudio={handleGenerateAudio}
+            currentStep={currentStep}
+            onSelectStep={handleSelectStep}
+            workflowState={workflowState}
             isGeneratingAudio={audio.isGeneratingAudio}
             audioProgress={audio.audioProgress}
-            audioStage={audio.audioStage}
-            hasSegments={Boolean(scriptData?.segments?.length)}
+            leftTab={leftTab}
+            onTabChange={setLeftTab}
           />
 
-          {/* Top 3-Column Suite: Left Tools | Video Monitor | Contextual Inspector */}
-          <div className="capcut-top-suite" ref={topSuiteRef}>
-            {/* 1. Left Panel: Media Library, AI Script, Subtitles */}
-            <div className="top-suite-col-left" style={{ width: leftPanelWidth }}>
-              <MediaLibrary
-                apiKey={persistence.apiKey}
-                selectedVideo={media.selectedVideo}
-                videoMetadata={media.videoMetadata}
-                videoThumbnails={media.videoThumbnails || EMPTY_ARRAY}
-                videoClips={media.videoClips || EMPTY_CLIPS}
-                mediaAssets={media.mediaAssets || EMPTY_ARRAY}
-                duration={playback.duration}
-                onAddClipToTimeline={handleAddClipToTimeline}
-                onVideoSelected={handleVideoSelected}
-                onRemoveVideo={handleClearVideo}
-                scriptData={scriptData}
-                onUpdateScript={handleUpdateScript}
-                onUpdateSegments={handleUpdateTimelineSegments}
-                onGenerateScript={handleGenerateScript}
-                isGeneratingScript={script.isGeneratingScript}
-                generatingEpisodeId={script.generatingEpisodeId}
-                scriptProgress={script.scriptProgress}
-                scriptStage={script.scriptStage}
-                scriptLogs={script.scriptLogs}
-                scriptError={script.scriptError}
-                activeTab={leftTab}
-                onTabChange={setLeftTab}
-                onNavigateToVoice={handleGenerateAudio}
-                isGeneratingAudio={audio.isGeneratingAudio}
-                generatingAudioEpisodeId={audio.generatingAudioEpisodeId}
-                audioProgress={audio.audioProgress}
-                audioStage={audio.audioStage}
-                onRegenerateSegment={handleRegenerateSingleSegment}
-                onUpdateSegmentText={handleUpdateSegmentText}
-                speakerRegistry={speakerRegistry || EMPTY_OBJECT}
-                onUpdateSpeakerVoice={handleUpdateSpeakerVoice}
-                onUpdateSegmentVoice={handleUpdateSegmentVoice}
-                onToggleDeliveryType={handleToggleDeliveryType}
-                selectedSegmentId={media.selectedSegmentId}
-                onSelectSegment={media.setSelectedSegmentId}
-                onDeleteSegment={handleDeleteSegment}
-                seriesList={series.seriesList}
-                activeSeries={series.activeSeries}
-                activeEpisode={series.activeEpisode}
-                seriesId={series.seriesId}
-                episodeId={series.episodeId}
-                seriesGlossary={series.seriesGlossary}
-                onSwitchEpisode={handleSwitchEpisode}
-                onCreateEpisode={handleCreateEpisode}
-                onDeleteEpisode={handleDeleteEpisode}
-                onRenameEpisode={handleRenameEpisode}
-                onRenameSeries={handleRenameSeries}
-              />
-            </div>
-
-            {/* Left Resizer Splitter (Drag Left / Right) */}
-            <div
-              className={`capcut-panel-splitter ${activeSplitter === 'left' ? 'is-active' : ''}`}
-              onMouseDown={(e) => handleStartSplitterDrag(e, 'left')}
-              title="Drag left or right to resize Media Library panel"
-            />
-
-            {/* 2. Center Panel: Video Preview Monitor */}
-            <div className="top-suite-col-center">
-              <VideoPlayerPreview
-                selectedVideo={media.selectedVideo}
-                seriesId={series.seriesId}
-                episodeId={series.episodeId}
-                scriptData={scriptData}
-                renderedVideo={render.renderedVideo}
-                setRenderedVideo={render.setRenderedVideo}
-                onResetToPreview={handleResetToPreview}
-                isRendering={render.isRendering}
-                onRenderVideo={handleRenderVideo}
-                videoRef={videoRef}
-                currentTime={playback.currentTime}
-                duration={playback.duration}
-                isPlaying={playback.isPlaying}
-                onPlayPause={handlePlayPause}
-                onSeek={handleSeek}
-                onTimeUpdate={handleTimeUpdate}
-                onLoadedMetadata={handleLoadedMetadata}
-                voiceSettings={voiceSettings || EMPTY_OBJECT}
-                onEnded={handleVideoEnded}
-                fullAudioUrl={audio.fullAudioUrl}
-                audioGenerated={audio.audioGenerated}
-                audioOutdated={audio.audioOutdated}
-                onImportClick={handleImportClick}
-                onVideoSelected={handleVideoSelected}
-                videoClips={media.videoClips || EMPTY_CLIPS}
-              />
-            </div>
-
-            {/* Right Resizer Splitter (Drag Left / Right) */}
-            <div
-              className={`capcut-panel-splitter ${activeSplitter === 'right' ? 'is-active' : ''}`}
-              onMouseDown={(e) => handleStartSplitterDrag(e, 'right')}
-              title="Drag left or right to resize Inspector panel"
-            />
-
-            {/* 3. Right Panel: Khmer Voice (TTS), Audio Ducking, Export Settings */}
-            <div className="top-suite-col-right" style={{ width: rightPanelWidth }}>
-              <VoiceSettings
-                settings={voiceSettings || EMPTY_OBJECT}
-                onUpdateSettings={handleUpdateVoiceSettings}
-                voiceCatalog={audio.ttsVoiceCatalog}
-                audioOutdated={audio.audioOutdated}
-                previewAudioUrl={
-                  audio.fullAudioUrl || scriptData?.segments?.find((s) => s.audioUrl)?.audioUrl || null
-                }
-                onRenderVideo={handleRenderVideo}
-                isRendering={render.isRendering}
-                renderProgress={render.renderProgress}
-                renderStage={render.renderStage}
-                renderedVideo={render.renderedVideo}
-                selectedVideo={media.selectedVideo}
-                videoMetadata={media.videoMetadata}
-                duration={playback.duration}
-                selectedClip={media.selectedClip}
-                onSplitClip={handleSplitClip}
-                onDeleteClip={handleDeleteClip}
-                currentTime={playback.currentTime}
-                isPlaying={playback.isPlaying}
-                scriptData={scriptData}
-                onGenerateAudio={handleGenerateAudio}
-                isGeneratingAudio={audio.isGeneratingAudio}
-                audioProgress={audio.audioProgress}
-                audioStage={audio.audioStage}
-                audioGenerated={audio.audioGenerated}
-                onRegenerateSegment={handleRegenerateSingleSegment}
-                speakerRegistry={speakerRegistry || EMPTY_OBJECT}
-                onUpdateSpeakerVoice={handleUpdateSpeakerVoice}
-                onUpdateSegmentVoice={handleUpdateSegmentVoice}
-                onUpdateSegmentText={handleUpdateSegmentText}
-                onUpdateSegmentSpeed={audio.handleUpdateSegmentSpeed}
-                onToggleDeliveryType={handleToggleDeliveryType}
-                onSplitSegment={audio.handleSplitSegment}
-                onAutoSplitSegment={clips.handleAutoSplitSegment}
-                selectedSegmentId={media.selectedSegmentId}
-                onSelectSegment={media.setSelectedSegmentId}
-                onDeleteSegment={handleDeleteSegment}
-                onUpdateSegments={handleUpdateTimelineSegments}
-                onToggleMuteSegment={handleToggleMuteSegment}
-                onToggleMuteVideoClip={handleToggleMuteVideoClip}
-                onToggleMuteAllCuts={handleToggleMuteAllCuts}
-                videoClips={media.videoClips || EMPTY_CLIPS}
-                onUpdateScript={handleUpdateScript}
-              />
-            </div>
-          </div>
-
-          {/* Bottom Multi-Track Timeline */}
-          <div className="capcut-bottom-timeline">
-            <TimelineEditor
-              videoRef={videoRef}
-              activeTab={leftTab}
-              currentTime={playback.currentTime}
-              duration={playback.duration}
-              isPlaying={playback.isPlaying}
-              onSeek={handleSeek}
-              onPlayPause={handlePlayPause}
-              videoClips={media.videoClips || EMPTY_CLIPS}
-              activeClipId={media.activeClipId}
-              onSelectClip={handleSelectClip}
-              onUpdateClips={handleUpdateClips}
-              onSplitClip={handleSplitClip}
-              onDeleteClip={handleDeleteClip}
-              onDeleteSegment={handleDeleteSegment}
-              scriptSegments={scriptData?.segments || EMPTY_SEGMENTS}
-              onUpdateSegments={handleUpdateTimelineSegments}
-              onToggleMuteSegment={handleToggleMuteSegment}
-              onToggleMuteVideoClip={handleToggleMuteVideoClip}
-              onToggleMuteAllCuts={handleToggleMuteAllCuts}
-              onToggleDeliveryType={handleToggleDeliveryType}
-              speakerRegistry={speakerRegistry || EMPTY_OBJECT}
-              voiceSettings={voiceSettings || EMPTY_OBJECT}
-              onUpdateVoiceSettings={handleUpdateVoiceSettings}
-              audioGenerated={audio.audioGenerated}
+          {/* Pattern A Step Views */}
+          {currentStep === STEP_IDS.IMPORT ? (
+            <ImportPage
               selectedVideo={media.selectedVideo}
-              videoThumbnails={media.videoThumbnails || EMPTY_ARRAY}
-              selectedSegmentId={media.selectedSegmentId}
-              onSelectSegment={media.setSelectedSegmentId}
-              onAutoSplitVideo={handleAutoSplitVideo}
-              onResetFullVideo={handleResetFullVideo}
-              onBridgeGaps={handleBridgeGaps}
-              onAutoAlignNoOverlap={handleAutoAlignNoOverlap}
-              onResetToSourceTiming={handleResetToSourceTiming}
-              onAddSegment={handleAddSegmentAtTime}
-              canUndo={undoRedo.canUndo}
-              canRedo={undoRedo.canRedo}
-              onUndo={handleUndo}
-              onRedo={handleRedo}
-              onGenerateAudio={handleGenerateAudio}
-              isGeneratingAudio={audio.isGeneratingAudio}
-              onAddClipToTimeline={handleAddClipToTimeline}
-              mediaAssets={media.mediaAssets || EMPTY_ARRAY}
+              videoMetadata={media.videoMetadata}
+              onVideoSelected={handleVideoSelected}
+              onRemoveVideo={handleClearVideo}
+              seriesList={series.seriesList}
+              activeSeries={series.activeSeries}
+              activeEpisode={series.activeEpisode}
+              seriesId={series.seriesId}
+              episodeId={series.episodeId}
+              onSwitchEpisode={handleSwitchEpisode}
+              onCreateEpisode={handleCreateEpisode}
+              onDeleteEpisode={handleDeleteEpisode}
+              onRenameEpisode={handleRenameEpisode}
+              onRenameSeries={handleRenameSeries}
+              onResetAllEpisodes={handleResetAllEpisodes}
+              onNavigateToStep={handleSelectStep}
             />
-          </div>
+          ) : (
+            renderStepWorkspace()
+          )}
         </main>
 
         {/* DragonDub Production Job Queue Dashboard Modal (Phase 4.4) */}

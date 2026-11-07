@@ -1,0 +1,534 @@
+/* ==========================================================================
+   DragonDub AI Studio — Import Page (Pattern A Full-Page Layout)
+   ========================================================================== */
+
+.import-page-container {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  padding: 24px 32px;
+  background: #090d16;
+  overflow-y: auto;
+  gap: 24px;
+}
+
+/* Header: Series Box + Actions */
+.import-page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 20px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.import-series-box {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.import-series-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: rgba(56, 189, 248, 0.12);
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.import-series-info {
+  display: flex;
+  flex-direction: column;
+}
+
+.import-series-eyebrow {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: #38bdf8;
+  text-transform: uppercase;
+}
+
+.import-series-title {
+  font-size: 1.25rem;
+  font-weight: 800;
+  color: #f8fafc;
+  margin: 0;
+  line-height: 1.3;
+}
+
+/* Main Grid Layout */
+.import-page-grid {
+  display: grid;
+  grid-template-columns: 1.15fr 0.85fr;
+  gap: 24px;
+  flex: 1;
+  min-height: 0;
+}
+
+@media (max-width: 1024px) {
+  .import-page-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.import-dropzone-col,
+.import-episodes-col {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.import-card-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.86rem;
+  font-weight: 700;
+  color: #cbd5e1;
+}
+
+/* Big Hero Dropzone */
+.import-hero-dropzone {
+  flex: 1;
+  min-height: 380px;
+  border: 2px dashed rgba(255, 255, 255, 0.14);
+  border-radius: 16px;
+  background: rgba(14, 20, 34, 0.7);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.3);
+}
+
+.import-hero-dropzone:hover {
+  border-color: rgba(56, 189, 248, 0.45);
+  background: rgba(14, 20, 34, 0.95);
+  box-shadow: 0 12px 36px rgba(56, 189, 248, 0.1);
+}
+
+.import-hero-dropzone.drag-over {
+  border-color: #38bdf8;
+  background: rgba(56, 189, 248, 0.08);
+  transform: scale(1.008);
+}
+
+.import-hero-dropzone.has-video {
+  cursor: default;
+  border-style: solid;
+  border-color: rgba(255, 255, 255, 0.1);
+  background: #0e1422;
+}
+
+.import-dropzone-center {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 10px;
+}
+
+.import-dropzone-icon-bubble {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  background: rgba(56, 189, 248, 0.1);
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 8px;
+}
+
+.import-dropzone-primary-text {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: #f1f5f9;
+}
+
+.import-dropzone-sub-text {
+  font-size: 0.82rem;
+  color: #94a3b8;
+  max-width: 420px;
+  line-height: 1.45;
+}
+
+/* Video Loaded Card */
+.import-video-loaded-card {
+  width: 100%;
+  max-width: 540px;
+  background: #111827;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 14px;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 16px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+}
+
+.import-video-loaded-icon {
+  width: 64px;
+  height: 64px;
+  border-radius: 16px;
+  background: rgba(56, 189, 248, 0.12);
+  border: 1px solid rgba(56, 189, 248, 0.3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.import-video-name {
+  font-size: 1rem;
+  font-weight: 700;
+  color: #f8fafc;
+  word-break: break-all;
+  line-height: 1.4;
+}
+
+.import-video-meta-chips {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+
+.import-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-size: 0.74rem;
+  font-weight: 600;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: #cbd5e1;
+}
+
+.import-chip.success {
+  background: rgba(16, 185, 129, 0.12);
+  border-color: rgba(16, 185, 129, 0.25);
+  color: #34d399;
+}
+
+.import-video-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.import-proceed-btn {
+  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px 20px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #0284c7 0%, #0369a1 100%);
+  border: 1px solid #38bdf8;
+  color: #ffffff;
+  font-size: 0.90rem;
+  font-weight: 700;
+  cursor: pointer;
+  margin-top: 8px;
+  box-shadow: 0 4px 16px rgba(2, 132, 199, 0.4);
+  transition: all 0.18s ease;
+}
+
+.import-proceed-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 20px rgba(2, 132, 199, 0.6);
+  background: linear-gradient(135deg, #0369a1 0%, #0284c7 100%);
+}
+
+/* Episodes Column */
+.import-episodes-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.import-episodes-scroll-list {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-right: 4px;
+  max-height: calc(100vh - 220px);
+}
+
+.import-episode-card {
+  background: #0e1422;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  cursor: pointer;
+  transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.import-episode-card:hover {
+  background: #141c2e;
+  border-color: rgba(255, 255, 255, 0.16);
+}
+
+.import-episode-card.selected {
+  background: rgba(56, 189, 248, 0.08);
+  border-color: rgba(56, 189, 248, 0.4);
+  box-shadow: 0 4px 16px rgba(56, 189, 248, 0.12);
+}
+
+.import-episode-card-top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.import-episode-num-badge {
+  font-size: 0.76rem;
+  font-weight: 800;
+  color: #38bdf8;
+  background: rgba(56, 189, 248, 0.12);
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  border-radius: 6px;
+  padding: 2px 7px;
+  flex-shrink: 0;
+}
+
+.import-episode-title-area {
+  flex: 1;
+  min-width: 0;
+}
+
+.import-episode-title {
+  font-size: 0.90rem;
+  font-weight: 700;
+  color: #f1f5f9;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: block;
+}
+
+.import-episode-status-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.import-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 4px;
+  border: 1px solid transparent;
+}
+
+.import-status-pill.done {
+  background: rgba(16, 185, 129, 0.12);
+  border-color: rgba(16, 185, 129, 0.25);
+  color: #34d399;
+}
+
+.import-status-pill.pending {
+  background: rgba(255, 255, 255, 0.03);
+  border-color: rgba(255, 255, 255, 0.06);
+  color: #64748b;
+}
+
+/* Shared UI Components */
+.import-btn-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border-radius: 8px;
+  background: #0284c7;
+  border: 1px solid #38bdf8;
+  color: #ffffff;
+  font-size: 0.82rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.import-btn-primary:hover {
+  background: #0369a1;
+}
+
+.import-btn-primary.small {
+  padding: 3px 8px;
+  font-size: 0.74rem;
+}
+
+.import-btn-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: #cbd5e1;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.import-btn-secondary:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #ffffff;
+}
+
+.import-btn-secondary.small {
+  padding: 4px 10px;
+  font-size: 0.74rem;
+}
+
+.import-btn-ghost {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: transparent;
+  border: 1px solid transparent;
+  color: #94a3b8;
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.import-btn-ghost:hover {
+  color: #f1f5f9;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.import-btn-ghost.danger {
+  color: #f87171;
+}
+
+.import-btn-ghost.danger:hover {
+  background: rgba(239, 68, 68, 0.15);
+}
+
+.import-btn-ghost.small {
+  padding: 2px 6px;
+  font-size: 0.72rem;
+}
+
+.import-icon-btn {
+  background: transparent;
+  border: none;
+  color: #64748b;
+  cursor: pointer;
+  padding: 3px;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.12s ease;
+}
+
+.import-icon-btn:hover {
+  color: #f1f5f9;
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.import-icon-btn.danger:hover {
+  color: #f87171;
+  background: rgba(239, 68, 68, 0.15);
+}
+
+.import-input {
+  background: #0b101b;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  color: #f1f5f9;
+  padding: 6px 10px;
+  font-family: inherit;
+  font-size: 0.84rem;
+  outline: none;
+}
+
+.import-input:focus {
+  border-color: #38bdf8;
+  box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.2);
+}
+
+.import-error-banner {
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  color: #fca5a5;
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-size: 0.82rem;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.import-empty-state {
+  text-align: center;
+  padding: 40px 20px;
+  color: #64748b;
+  font-size: 0.84rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+/* Auto Split Modal */
+.import-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(4px);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+
+.import-modal-content {
+  background: #0e1422;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 14px;
+  padding: 24px;
+  width: 100%;
+  max-width: 440px;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.6);
+}
+
+.import-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
