@@ -1,0 +1,47 @@
+# Dependencies
+node_modules/
+*/node_modules/
+
+# Environment variables (Strict Protection)
+.env
+.env.*
+*.env
+backend/.env
+!.env.example
+!backend/.env.example
+
+# Temporary, Backups & Python Cache
+.backup_pre_fix_hang_audit/
+.git.worktree_bak
+output/
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Large Models & Binaries (>100MB exceeds GitHub limit)
+*.onnx
+
+# Build output
+dist/
+dist-ssr/
+build/
+
+# Uploads and temporary media
+backend/uploads/
+backend/backend/uploads/
+uploads/
+*.tmp
+*.mp4
+*.mp3
+*.wav
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# OS and Editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

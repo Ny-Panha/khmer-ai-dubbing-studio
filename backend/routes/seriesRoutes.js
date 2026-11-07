@@ -1,0 +1,94 @@
+const express = require("express");
+const fs = require("fs");
+const path = require("path");
+const { uploadsDir } = require("../utils/pathUtils");
+const {
+  getSeriesMetadata,
+  saveSeriesMetadata,
+  createNewEpisode,
+  deleteEpisode,
+} = require("../services/episodeService");
+
+const router = express.Router();
+
+router.get("/", (req, res) => {
+  try {
+    const projectsDir = path.join(uploadsDir, "projects");
+    if (!fs.existsSync(projectsDir)) return res.json({ success: true, series: [] });
+    const entries = fs.readdirSync(projectsDir, { withFileTypes: true });
+    const seriesList = [];
+    for (const ent of entries) {
+      if (ent.isDirectory()) {
+        try {
+          const meta = getSeriesMetadata(ent.name);
+          if (meta) {
+            seriesList.push(meta);
+          }
+        } catch (_) {}
+      }
+    }
+    res.json({ success: true, series: seriesList });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.post("/", (req, res) => {
+  try {
+    const { series } = req.body;
+    if (!series || !series.id) return res.status(400).json({ error: "series with id is required" });
+    const saved = saveSeriesMetadata(series);
+    res.json({ success: true, series: saved });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.get("/:seriesId", (req, res) => {
+  try {
+    const { seriesId } = req.params;
+    const series = getSeriesMetadata(seriesId);
+    res.json({ success: true, series });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.post("/:seriesId/episodes", async (req, res) => {
+  try {
+    const { seriesId } = req.params;
+    const { customTitle, requestedNumber } = req.body || {};
+    const newEp = await createNewEpisode(seriesId, { customTitle, requestedNumber });
+    res.json({ success: true, episode: newEp });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.delete("/:seriesId/episodes/:episodeId", (req, res) => {
+  try {
+    const { seriesId, episodeId } = req.params;
+    const result = deleteEpisode(seriesId, episodeId);
+    if (!result.success) {
+      return res.status(400).json(result);
+    }
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.post("/:seriesId/sync", (req, res) => {
+  try {
+    const { seriesId } = req.params;
+    const { series } = req.body || {};
+    if (!series) return res.status(400).json({ error: "series payload required" });
+    const saved = saveSeriesMetadata(series);
+    res.json({ success: true, series: saved });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+module.exports = router;
+

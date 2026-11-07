@@ -1,0 +1,46 @@
+.logo-overlay-root {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 18;
+  overflow: hidden;
+}
+
+.logo-overlay-item {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  user-select: none;
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+
+.logo-overlay-item img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  pointer-events: none;
+  user-select: none;
+}
+
+.logo-overlay-item.shape-circle {
+  border-radius: 50%;
+  overflow: hidden;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.75), 0 0 10px rgba(255, 215, 0, 0.35);
+  border: 2px solid rgba(255, 215, 0, 0.5);
+}
+
+.logo-overlay-item.shape-circle img {
+  border-radius: 50%;
+}
+
+.logo-overlay-item.shape-square {
+  border-radius: 6px;
+  overflow: hidden;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.6);
+}

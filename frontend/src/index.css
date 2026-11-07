@@ -1,0 +1,515 @@
+/* Khmer AI Dubbing Studio - Global Design System & Core Layout */
+/* Inspired by Tavola Clean Midnight Navy Design System (demo.codeandchill.store/tavola) */
+@import url('https://fonts.googleapis.com/css2?family=Battambang:wght@400;700&family=Inter:wght@400;500;600;700;800&family=Kantumruy+Pro:wght@400;500;600;700&display=swap');
+
+:root {
+  --font-sans: 'Inter', 'Kantumruy Pro', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-khmer: 'Kantumruy Pro', 'Battambang', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', Menlo, Monaco, Consolas, monospace;
+
+  /* Pro Dark Studio Palette (Linear & DaVinci Resolve Workstation Aesthetic) */
+  --bg-desktop: #090d16;
+  --bg-primary-panel: #0e1422;
+  --bg-secondary-panel: #141c2e;
+  --bg-elevated-panel: #1a243a;
+  --bg-active-card: #202d48;
+
+  /* Layer Depth Tokens */
+  --layer-0: #090d16; /* Canvas Base */
+  --layer-1: #0e1422; /* Main Suite Containers */
+  --layer-2: #141c2e; /* Interactive Cards & Sub-panels */
+  --layer-3: #1a243a; /* Modals, Floating Menus & Elevated Cards */
+  --layer-active: #202d48; /* Active Focus Surface */
+
+  /* Transitions */
+  --spring-ease: cubic-bezier(0.16, 1, 0.3, 1);
+  --spring-snappy: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --transition-fast: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+  --transition-normal: all 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+
+  --text-primary: #F8FAFC;
+  --text-secondary: #94A3B8;
+  --text-dim: #64748B;
+  --text-muted: #475569;
+
+  --border-subtle: rgba(255, 255, 255, 0.08);
+  --border-subtle-hover: rgba(255, 255, 255, 0.16);
+  --border-active: #38BDF8;
+
+  /* Studio Refined Accents */
+  --primary-accent: #38BDF8;       /* Electric Sky Blue */
+  --primary-accent-hover: #7DD3FC;
+  --accent-mint: #10B981;          /* Clean Emerald */
+  --accent-cyan: #38BDF8;          /* Studio Blue */
+  --accent-yellow: #F59E0B;        /* Warm Amber */
+  --accent-purple: #818CF8;        /* Refined Indigo */
+  --accent-mode-a: #38BDF8;
+  --accent-mode-b: #818CF8;
+
+  --timeline-playhead: #F43F5E;    /* Pro Editing Ruby Red */
+  --track-video: #38BDF8;
+  --track-audio: #10B981;
+  --voice-female: #F472B6;
+  --voice-male: #38BDF8;
+  --track-subtitle: #818CF8;
+
+  --color-success: #10B981;
+  --color-error: #EF4444;
+  --color-warning: #F59E0B;
+
+  --radius-xs: 6px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-full: 9999px;
+
+  /* Subtle Clean Shadows */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.45);
+  --shadow-lg: 0 12px 28px rgba(0, 0, 0, 0.55);
+  --glow-coral: 0 0 16px rgba(56, 189, 248, 0.25);
+  --glow-mint: 0 0 14px rgba(16, 185, 129, 0.25);
+  --glow-cyan: 0 0 14px rgba(56, 189, 248, 0.25);
+
+  /* Consistent 4px Spacing Scale */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+
+  /* Standardized Component Heights */
+  --h-control-sm: 28px;
+  --h-control-md: 34px;
+  --h-control-lg: 40px;
+
+  /* Typography Scale — Desktop readable (12px-18px) */
+  --text-xs: 0.75rem;    /* ~12px — metadata, badges */
+  --text-sm: 0.8125rem;  /* ~13px — secondary labels, status */
+  --text-body: 0.875rem; /* ~14px — body, inputs, tabs */
+  --text-md: 0.9375rem;  /* ~15px — panel titles, mode titles */
+  --text-lg: 1.0625rem;  /* ~17px — section headers */
+  --text-mono: 0.8125rem;/* ~13px — timecodes */
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  width: 100%;
+  height: 100%;
+  min-width: 100vw;
+  min-height: 100vh;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background-color: var(--bg-desktop);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: var(--text-body);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Custom Minimalist Desktop Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--bg-desktop);
+}
+::-webkit-scrollbar-thumb {
+  background: #1E2D4A;
+  border-radius: 6px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #2A3E66;
+}
+
+/* ==========================================================================
+   Main Workspace Layout Shell (Fluid 100vw x 100vh)
+   ========================================================================== */
+.capcut-app-root,
+.capcut-app-container {
+  display: flex;
+  flex-direction: column;
+  width: 100vw;
+  height: 100vh;
+  min-width: 100vw;
+  min-height: 100vh;
+  overflow: hidden;
+  background: var(--bg-desktop);
+}
+
+.capcut-main-workspace {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: calc(100vh - 46px);
+  overflow: hidden;
+  min-height: 0;
+}
+
+/* 3-Column Top Suite (Left Tools | Center Monitor | Right Inspector) with Floating Cards */
+.capcut-top-suite {
+  flex: 1;
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  gap: 8px;
+  padding: 6px 10px 8px 10px;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--bg-desktop);
+  position: relative;
+}
+
+.top-suite-col-left {
+  flex-shrink: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+.top-suite-col-center {
+  flex: 1;
+  min-width: 300px;
+  height: 100%;
+  overflow: hidden;
+}
+
+.top-suite-col-right {
+  flex-shrink: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* Draggable Panel Splitters */
+.capcut-panel-splitter {
+  width: 6px;
+  cursor: col-resize;
+  position: relative;
+  z-index: 25;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  user-select: none;
+  background: transparent;
+  transition: background-color 0.15s ease;
+}
+
+.capcut-panel-splitter::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: rgba(255, 255, 255, 0.05);
+  transition: all 0.15s ease;
+}
+
+.capcut-panel-splitter:hover::before,
+.capcut-panel-splitter.is-active::before {
+  width: 2px;
+  background: #FF8577;
+  box-shadow: 0 0 8px rgba(255, 133, 119, 0.7);
+}
+
+.capcut-panel-splitter:hover,
+.capcut-panel-splitter.is-active {
+  background: rgba(255, 133, 119, 0.06);
+}
+
+/* Universal High-Contrast Select Dropdowns */
+select,
+.capcut-select,
+.inspector-select {
+  background-color: var(--bg-secondary-panel) !important;
+  color: #FFFFFF !important;
+  border: 1px solid var(--border-subtle) !important;
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+  font-size: var(--text-sm);
+  font-family: var(--font-khmer), var(--font-sans);
+  cursor: pointer;
+  outline: none;
+  transition: border-color 0.15s ease;
+  line-height: 1.5;
+}
+
+select:hover,
+.capcut-select:hover,
+.inspector-select:hover {
+  border-color: var(--border-subtle-hover) !important;
+}
+
+select:focus,
+.capcut-select:focus,
+.inspector-select:focus {
+  border-color: var(--primary-accent) !important;
+  box-shadow: 0 0 0 2px rgba(255, 133, 119, 0.25) !important;
+}
+
+select option {
+  background-color: #141E33 !important;
+  color: #FFFFFF !important;
+  padding: 8px 10px;
+  font-family: var(--font-khmer), var(--font-sans);
+}
+
+select option:checked {
+  background-color: var(--primary-accent) !important;
+  color: #0B132B !important;
+  font-weight: 700;
+}
+
+select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Proper Khmer text rendering without subscript clipping */
+.khmer-text,
+[lang="km"],
+.caption-text,
+.live-subtitle-overlay {
+  font-family: var(--font-khmer);
+  line-height: 1.55;
+  text-rendering: optimizeLegibility;
+}
+
+.panel-title-tag {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+/* Common Badges */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+  font-size: 0.68rem;
+  font-weight: 700;
+}
+
+.badge-cyan {
+  background: rgba(56, 189, 248, 0.12);
+  color: #38BDF8;
+  border: 1px solid rgba(56, 189, 248, 0.25);
+}
+
+.badge-emerald {
+  background: rgba(52, 211, 153, 0.12);
+  color: #34D399;
+  border: 1px solid rgba(52, 211, 153, 0.25);
+}
+
+.badge-coral {
+  background: rgba(255, 133, 119, 0.12);
+  color: #FF8577;
+  border: 1px solid rgba(255, 133, 119, 0.25);
+}
+
+.btn-emerald {
+  background: var(--color-success);
+  color: #0B132B;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 6px 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-weight: 700;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.15s ease;
+}
+
+.btn-emerald:hover {
+  background: #4ADE80;
+  transform: translateY(-1px);
+}
+
+.btn-secondary {
+  background: var(--bg-secondary-panel);
+  color: var(--text-primary);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  padding: 6px 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  font-family: inherit;
+  font-size: var(--text-body);
+}
+
+.btn-secondary:hover {
+  background: var(--bg-elevated-panel);
+  border-color: var(--border-subtle-hover);
+}
+
+.btn-primary {
+  background: linear-gradient(135deg, #0284c7 0%, #0369a1 100%);
+  color: #ffffff;
+  border: 1px solid rgba(56, 189, 248, 0.4);
+  border-radius: var(--radius-sm);
+  padding: 6px 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+  font-family: inherit;
+  font-size: var(--text-sm);
+  box-shadow: 0 2px 8px rgba(2, 132, 199, 0.25);
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: linear-gradient(135deg, #0369a1 0%, #0284c7 100%);
+  border-color: #38bdf8;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(56, 189, 248, 0.35);
+}
+
+.btn-accent {
+  background: linear-gradient(135deg, #0284c7 0%, #0369a1 100%);
+  color: #ffffff;
+  border: 1px solid rgba(56, 189, 248, 0.3);
+  border-radius: var(--radius-sm);
+  padding: 6px 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.15s ease;
+}
+
+.btn-accent:hover {
+  background: #0284c7;
+  border-color: #38bdf8;
+}
+
+/* Modal Backdrop & Dialog */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(11, 19, 43, 0.85);
+  backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.modal-dialog {
+  background: var(--bg-primary-panel);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 20px 24px;
+  max-width: 460px;
+  width: 90%;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.75);
+}
+
+@keyframes pulseGlow {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.7; transform: scale(1.02); }
+}
+
+.pulse-glow {
+  animation: pulseGlow 1.5s infinite ease-in-out;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.animate-spin {
+  animation: spin 1s linear infinite;
+}
+
+/* ==========================================================================
+   MotionSites.ai & GetLayers.ai Global Utilities
+   ========================================================================== */
+
+/* Tactile Spring Buttons */
+.btn-tactile {
+  transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+  cursor: pointer;
+  user-select: none;
+}
+
+.btn-tactile:hover:not(:disabled) {
+  transform: translateY(-1px);
+  filter: brightness(1.08);
+}
+
+.btn-tactile:active:not(:disabled) {
+  transform: scale(0.96);
+  filter: brightness(0.95);
+}
+
+/* Floating Card Hover Elevation */
+.motion-lift {
+  transition: transform 0.18s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.18s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.18s ease;
+}
+
+.motion-lift:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
+/* GetLayers.ai Glass Surfaces */
+.glass-layer-1 {
+  background: var(--layer-1);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.glass-layer-2 {
+  background: var(--layer-2);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.glass-layer-3 {
+  background: rgba(32, 49, 86, 0.95);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6);
+}
+
+/* Modern Pill Badges */
+.glass-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 9999px;
+  padding: 3px 10px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: #CBD5E1;
+  transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.glass-pill:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.16);
+  color: #FFFFFF;
+}

@@ -1,0 +1,172 @@
+/* ==========================================================================
+   Anti-Theft Running Marquee & Watermark Overlay (Video Player Preview)
+   ========================================================================== */
+
+.anti-theft-overlay-root {
+  position: absolute;
+  left: 0;
+  right: 0;
+  width: 100%;
+  pointer-events: none;
+  z-index: 18;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 16:9 Landscape Video: Ribbon sits at the bottom inside the video */
+.anti-theft-overlay-root.pos-bottom.aspect-16-9,
+.anti-theft-overlay-root.pos-bottom {
+  bottom: 2%;
+}
+
+/* Native 9:16 Vertical Video */
+.anti-theft-overlay-root.pos-bottom.aspect-9-16-vertical,
+.anti-theft-overlay-root.pos-bottom.aspect-9-16 {
+  bottom: 12%;
+}
+
+/* When 16:9 landscape video is centered in 9:16 vertical canvas (Letterbox):
+   Bottom edge of 16:9 video is at exactly 34.2% from bottom of container.
+   Ribbon sits right at the bottom edge of the video frame! */
+.anti-theft-overlay-root.pos-bottom.aspect-9-16-letterbox {
+  bottom: 34.2%;
+}
+
+.anti-theft-overlay-root.pos-top.aspect-16-9,
+.anti-theft-overlay-root.pos-top {
+  top: 2%;
+}
+
+.anti-theft-overlay-root.pos-top.aspect-9-16-vertical,
+.anti-theft-overlay-root.pos-top.aspect-9-16 {
+  top: 8%;
+}
+
+.anti-theft-overlay-root.pos-top.aspect-9-16-letterbox {
+  top: 34.2%;
+}
+
+/* ==========================================================================
+   1. Static Copyright Watermark Badge
+   ========================================================================== */
+.anti-theft-watermark-badge {
+  font-family: var(--font-khmer), 'Kantumruy Pro', 'Khmer OS Battambang', 'Inter', system-ui, sans-serif;
+  font-weight: 700;
+  font-size: 0.76rem;
+  letter-spacing: 0.02em;
+  text-shadow: 0 1.5px 3px rgba(0, 0, 0, 0.95), 0 0 6px rgba(0, 0, 0, 0.7);
+  padding: 1.5px 8px;
+  pointer-events: none;
+  user-select: none;
+  white-space: nowrap;
+  line-height: 1.55;
+  transition: all 0.15s ease;
+}
+
+.anti-theft-watermark-badge.wm-above-ticker {
+  align-self: center;
+  margin-bottom: 3px;
+  text-align: center;
+}
+
+.anti-theft-overlay-root.pos-top .anti-theft-watermark-badge.wm-above-ticker {
+  order: 2;
+  margin-top: 3px;
+  margin-bottom: 0;
+}
+
+.anti-theft-watermark-badge.wm-top-right {
+  position: absolute;
+  top: -24px;
+  right: 14px;
+}
+
+.anti-theft-watermark-badge.wm-top-left {
+  position: absolute;
+  top: -24px;
+  left: 14px;
+}
+
+/* ==========================================================================
+   2. Semi-transparent Black Ribbon & Marquee Track
+   ========================================================================== */
+.anti-theft-marquee-ribbon {
+  width: 100%;
+  background: rgba(0, 0, 0, 0.70);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  border-top: 1px solid rgba(255, 255, 255, 0.14);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.14);
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  position: relative;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
+  padding: 3.5px 0;
+  min-height: 24px;
+  transition: all 0.15s ease;
+}
+
+.anti-theft-marquee-track {
+  display: inline-block;
+  white-space: nowrap;
+  font-family: var(--font-khmer), 'Kantumruy Pro', 'Khmer OS Battambang', 'Inter', system-ui, sans-serif;
+  font-weight: 700;
+  font-size: 0.74rem;
+  letter-spacing: 0.03em;
+  text-shadow: 0 1px 2.5px rgba(0, 0, 0, 0.85);
+  will-change: transform;
+  animation-name: antiTheftMarqueeScroll;
+  animation-timing-function: linear;
+  animation-iteration-count: infinite;
+  line-height: 1.55;
+  transition: all 0.15s ease;
+}
+
+@keyframes antiTheftMarqueeScroll {
+  0% {
+    transform: translateX(100vw);
+  }
+  100% {
+    transform: translateX(-100%);
+  }
+}
+
+/* ==========================================================================
+   3. Size Variations: Small (Compact), Medium (Normal), Large
+   ========================================================================== */
+.anti-theft-overlay-root.size-small .anti-theft-watermark-badge {
+  font-size: 0.68rem;
+  padding: 1px 6px;
+}
+.anti-theft-overlay-root.size-small .anti-theft-marquee-ribbon {
+  padding: 2.5px 0;
+  min-height: 22px;
+}
+.anti-theft-overlay-root.size-small .anti-theft-marquee-track {
+  font-size: 0.66rem;
+}
+
+.anti-theft-overlay-root.size-medium .anti-theft-watermark-badge {
+  font-size: 0.78rem;
+  padding: 1.5px 8px;
+}
+.anti-theft-overlay-root.size-medium .anti-theft-marquee-ribbon {
+  padding: 3.5px 0;
+  min-height: 26px;
+}
+.anti-theft-overlay-root.size-medium .anti-theft-marquee-track {
+  font-size: 0.76rem;
+}
+
+.anti-theft-overlay-root.size-large .anti-theft-watermark-badge {
+  font-size: 0.90rem;
+  padding: 2px 10px;
+}
+.anti-theft-overlay-root.size-large .anti-theft-marquee-ribbon {
+  padding: 5px 0;
+  min-height: 32px;
+}
+.anti-theft-overlay-root.size-large .anti-theft-marquee-track {
+  font-size: 0.88rem;
+}
