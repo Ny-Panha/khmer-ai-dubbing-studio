@@ -4,6 +4,7 @@ import { formatTimecode, parseTimeToSeconds, formatMinSec } from '../../utils/fo
 import { findAssociatedSegmentIndices } from '../../utils/timelineUtils';
 
 function TimelineTracksCanvas({
+  scrollContainerRef = null,
   totalWidth,
   pps,
   markers,
@@ -50,9 +51,56 @@ function TimelineTracksCanvas({
   onToggleMuteSegment = null,
   onToggleMuteVideoClip = null,
 }) {
+  const rootRef = React.useRef(null);
   const [internalDragOverTrack, setInternalDragOverTrack] = React.useState(null);
   const dragOverTrack = externalDragOverTrack !== null ? externalDragOverTrack : internalDragOverTrack;
   const setDragOverTrack = externalSetDragOverTrack || setInternalDragOverTrack;
+
+  // Timeline Windowing: compute visible time range based on scrollLeft + container width
+  const [visibleRange, setVisibleRange] = React.useState(() => ({
+    start: 0,
+    end: 180,
+  }));
+
+  React.useEffect(() => {
+    const container = scrollContainerRef?.current || rootRef.current?.parentElement;
+    if (!container) return;
+
+    let rafId = null;
+    const computeVisibleRange = () => {
+      const scrollLeft = container.scrollLeft || 0;
+      const clientWidth = container.clientWidth || 1200;
+      const safePps = pps > 0 ? pps : 45;
+
+      // Buffer ~3 seconds or 15% of viewport width
+      const bufferSec = Math.max(3.0, (clientWidth * 0.15) / safePps);
+      const start = Math.max(0, (scrollLeft / safePps) - bufferSec);
+      const end = ((scrollLeft + clientWidth) / safePps) + bufferSec;
+
+      setVisibleRange((prev) => {
+        if (Math.abs(prev.start - start) < 0.5 && Math.abs(prev.end - end) < 0.5) {
+          return prev;
+        }
+        return { start, end };
+      });
+    };
+
+    computeVisibleRange();
+
+    const onScrollOrResize = () => {
+      if (rafId) cancelAnimationFrame(rafId);
+      rafId = requestAnimationFrame(computeVisibleRange);
+    };
+
+    container.addEventListener('scroll', onScrollOrResize, { passive: true });
+    window.addEventListener('resize', onScrollOrResize, { passive: true });
+
+    return () => {
+      if (rafId) cancelAnimationFrame(rafId);
+      container.removeEventListener('scroll', onScrollOrResize);
+      window.removeEventListener('resize', onScrollOrResize);
+    };
+  }, [scrollContainerRef, pps]);
 
   // Smart Multi-Track Layer Allocation (Clean Dual-Track Layout)
   // Non-overlapping segments sit on Row 0 (Single straight line), overlapping dialogue flows cleanly into Row 1
@@ -761,19 +809,21 @@ function TimelineTracksCanvas({
   };
 
   return (
-    <div className="tracks-content" style={{ width: totalWidth, minWidth: totalWidth, position: 'relative' }}>
+    <div ref={rootRef} className="tracks-content" style={{ width: totalWidth, minWidth: totalWidth, position: 'relative' }}>
       {/* Ruler Line */}
       <div className="timeline-ruler">
-        {markers.map((sec) => (
-          <div
-            key={sec}
-            className="ruler-marker"
-            style={{ left: sec * pps }}
-          >
-            <div className="ruler-tick" />
-            <span className="ruler-time">{formatMinSec(sec)}</span>
-          </div>
-        ))}
+        {(markers || [])
+          .filter((sec) => sec >= (visibleRange.start - 5) && sec <= (visibleRange.end + 5))
+          .map((sec) => (
+            <div
+              key={sec}
+              className="ruler-marker"
+              style={{ left: sec * pps }}
+            >
+              <div className="ruler-tick" />
+              <span className="ruler-time">{formatMinSec(sec)}</span>
+            </div>
+          ))}
       </div>
 
       {/* CapCut Magnetic Snapping Guide Indicator Line */}
@@ -891,6 +941,14 @@ function TimelineTracksCanvas({
 
                 {videoClips && videoClips
                   .filter((clip) => (clip.trackRow || 0) === rIdx)
+                  .filter((clip, idx) => {
+                    const isDragging = dragState?.itemType === 'video' && (dragState?.id === clip.id || dragState?.index === idx);
+                    const isSelected = activeClipId === clip.id || (selectedSegmentId !== null && (clip.segmentId === selectedSegmentId || clip.segmentIndex === selectedSegmentId));
+                    if (isDragging || isSelected) return true;
+                    const cStart = clip.start || 0;
+                    const cEnd = clip.end || (cStart + 1);
+                    return cEnd >= visibleRange.start && cStart <= visibleRange.end;
+                  })
                   .map((clip, idx) => {
                     const realIdx = videoClips.findIndex(c => c.id === clip.id);
                     return renderVideoClip(clip, realIdx >= 0 ? realIdx : idx, trackKey, rIdx);
@@ -962,6 +1020,26 @@ function TimelineTracksCanvas({
                   if (activeSegmentRows[idx] !== rIdx) return null;
                   const hasAudio = Boolean(seg.audioUrl || seg.audioPath || seg.audioFile);
                   if (!hasAudio) return null;
+
+                  const isDragging = (dragState?.itemType === 'audio' || dragState?.itemType === 'subtitle') && dragState?.index === idx;
+                  const isSelected = Boolean(
+                    (activeClipId && videoClips?.some((c) => c.id === activeClipId && (c.segmentId === seg.id || c.segmentIndex === (idx + 1)))) ||
+                    (selectedSegmentId !== null && selectedSegmentId !== undefined && (
+                      (seg._uid && String(selectedSegmentId) === String(seg._uid)) || (seg.id !== undefined && seg.id !== null ? String(selectedSegmentId) === String(seg.id) : Number(selectedSegmentId) === idx)
+                    )) ||
+                    (selectedAudioId !== null && selectedAudioId !== undefined && (
+                      (seg._uid && String(selectedAudioId) === String(seg._uid)) || (seg.id !== undefined && seg.id !== null ? String(selectedAudioId) === String(seg.id) : Number(selectedAudioId) === idx)
+                    ))
+                  );
+
+                  if (!isDragging && !isSelected) {
+                    const vStart = (typeof seg.audioStartSec === 'number' && !isNaN(seg.audioStartSec)) ? seg.audioStartSec : parseTimeToSeconds(seg.start, idx * 4);
+                    const vEnd = (seg.userTrimmed && typeof seg.audioEndSec === 'number') ? seg.audioEndSec : (typeof seg.audioEndSec === 'number' && !isNaN(seg.audioEndSec) ? seg.audioEndSec : vStart + 3.0);
+                    if (vEnd < visibleRange.start || vStart > visibleRange.end) {
+                      return null;
+                    }
+                  }
+
                   return renderVoiceSegment(seg, idx);
                 })}
               </div>
@@ -1030,6 +1108,26 @@ function TimelineTracksCanvas({
                 {scriptSegments && scriptSegments.length > 0 && scriptSegments.map((seg, idx) => {
                   const subRow = (typeof seg.subTrackRow === 'number' && seg.subTrackRow >= 0) ? seg.subTrackRow : 0;
                   if (subRow !== rIdx) return null;
+
+                  const isDragging = (dragState?.itemType === 'audio' || dragState?.itemType === 'subtitle') && dragState?.index === idx;
+                  const isSelected = Boolean(
+                    (activeClipId && videoClips?.some((c) => c.id === activeClipId && (c.segmentId === seg.id || c.segmentIndex === (idx + 1)))) ||
+                    (selectedSegmentId !== null && selectedSegmentId !== undefined && (
+                      (seg._uid && String(selectedSegmentId) === String(seg._uid)) || (seg.id !== undefined && seg.id !== null ? String(selectedSegmentId) === String(seg.id) : Number(selectedSegmentId) === idx)
+                    )) ||
+                    (selectedSubId !== null && selectedSubId !== undefined && (
+                      (seg._uid && String(selectedSubId) === String(seg._uid)) || (seg.id !== undefined && seg.id !== null ? String(selectedSubId) === String(seg.id) : Number(selectedSubId) === idx)
+                    ))
+                  );
+
+                  if (!isDragging && !isSelected) {
+                    const sStart = (typeof seg.startSec === 'number' && !isNaN(seg.startSec)) ? seg.startSec : parseTimeToSeconds(seg.start, idx * 4);
+                    const sEnd = (typeof seg.endSec === 'number' && !isNaN(seg.endSec)) ? seg.endSec : parseTimeToSeconds(seg.end, sStart + 3.0);
+                    if (sEnd < visibleRange.start || sStart > visibleRange.end) {
+                      return null;
+                    }
+                  }
+
                   return renderSubSegment(seg, idx);
                 })}
               </div>

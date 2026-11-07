@@ -1293,6 +1293,7 @@ function TimelineEditor({
         />
 
         <TimelineTracksCanvas
+          scrollContainerRef={timelineBodyRef}
           totalWidth={totalWidth}
           pps={pps}
           markers={markers}

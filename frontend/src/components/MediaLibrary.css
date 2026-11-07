@@ -308,8 +308,6 @@
   border-radius: 8px;
   padding: 8px 10px;
   transition: all 0.15s ease;
-  content-visibility: auto;
-  contain-intrinsic-size: 0 120px;
 }
 
 .caption-item-card:hover {

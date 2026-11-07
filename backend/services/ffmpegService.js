@@ -64,9 +64,15 @@ function getVideoDimensionsFast(filePath) {
   return null;
 }
 
+const safeCliPathCache = new Map();
+
 function getSafeCliPath(targetPath) {
   if (process.platform !== "win32" || !targetPath) return targetPath;
   if (!/[^\x20-\x7E]/.test(targetPath)) return targetPath;
+
+  if (safeCliPathCache.has(targetPath)) {
+    return safeCliPathCache.get(targetPath);
+  }
 
   try {
     if (fs.existsSync(targetPath)) {
@@ -74,7 +80,10 @@ function getSafeCliPath(targetPath) {
         windowsHide: true,
         stdio: ["ignore", "pipe", "ignore"],
       }).toString().trim();
-      if (short && fs.existsSync(short)) return short;
+      if (short && fs.existsSync(short)) {
+        safeCliPathCache.set(targetPath, short);
+        return short;
+      }
     }
     const dir = path.dirname(targetPath);
     const base = path.basename(targetPath);
@@ -84,10 +93,13 @@ function getSafeCliPath(targetPath) {
         stdio: ["ignore", "pipe", "ignore"],
       }).toString().trim();
       if (shortDir && fs.existsSync(shortDir)) {
-        return path.join(shortDir, base);
+        const resolved = path.join(shortDir, base);
+        safeCliPathCache.set(targetPath, resolved);
+        return resolved;
       }
     }
   } catch (_) {}
+  safeCliPathCache.set(targetPath, targetPath);
   return targetPath;
 }
 

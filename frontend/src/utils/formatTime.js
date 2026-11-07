@@ -7,6 +7,4 @@ export {
   parseTimeToSeconds,
   formatMinSec,
   formatTimecode,
-  migrateSegmentTimestamps,
-  migrateProjectData,
 } from './timestampUtils.js';

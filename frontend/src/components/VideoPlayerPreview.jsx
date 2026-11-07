@@ -50,6 +50,8 @@ function VideoPlayerPreview({
   const fileInputRef = useRef(null);
   const activeSegmentAudiosRef = useRef({});
   const segmentAudioPoolRef = useRef({});
+  const currentTimeRef = useRef(currentTime);
+  currentTimeRef.current = currentTime;
   const isPlayPendingRef = useRef(false);
   const playStartTimeRef = useRef(0);
 
@@ -102,24 +104,31 @@ function VideoPlayerPreview({
     return audio;
   };
 
-  // Preload on-demand: proactively preload upcoming segments near playhead (-2s to +20s)
+  // Preload on-demand: proactively preload upcoming segments near playhead (-2s to +20s) with 2s throttle
   useEffect(() => {
     if (!hasSegmentAudios || !scriptData?.segments || scriptData.segments.length === 0) return;
-    const now = currentTimeRef.current || 0;
-    const upcoming = scriptData.segments
-      .filter((seg) => {
-        const s = (typeof seg.audioStartSec === 'number' && !isNaN(seg.audioStartSec)) ? seg.audioStartSec : (seg.startSec || 0);
-        return s >= (now - 2) && s <= (now + 20);
-      })
-      .slice(0, 6);
 
-    upcoming.forEach((seg) => {
-      const rawUrl = seg.audioUrl || (seg.audioPath ? `/uploads/${seg.audioPath.replace(/\\/g, '/').replace(/^.*uploads\//, '')}` : null);
-      if (rawUrl) {
-        getSegmentAudio(rawUrl);
-      }
-    });
-  }, [hasSegmentAudios, scriptData?.segments, currentTime]);
+    const preloadUpcoming = () => {
+      const now = currentTimeRef.current || 0;
+      const upcoming = scriptData.segments
+        .filter((seg) => {
+          const s = (typeof seg.audioStartSec === 'number' && !isNaN(seg.audioStartSec)) ? seg.audioStartSec : (seg.startSec || 0);
+          return s >= (now - 2) && s <= (now + 20);
+        })
+        .slice(0, 6);
+
+      upcoming.forEach((seg) => {
+        const rawUrl = seg.audioUrl || (seg.audioPath ? `/uploads/${seg.audioPath.replace(/\\/g, '/').replace(/^.*uploads\//, '')}` : null);
+        if (rawUrl) {
+          getSegmentAudio(rawUrl);
+        }
+      });
+    };
+
+    preloadUpcoming();
+    const interval = setInterval(preloadUpcoming, 2000);
+    return () => clearInterval(interval);
+  }, [hasSegmentAudios, scriptData?.segments]);
 
   const handleFileSelect = async (e) => {
     const file = e.target.files?.[0];
@@ -153,15 +162,20 @@ function VideoPlayerPreview({
     }
   };
 
-  const currentTimeRef = useRef(currentTime);
-  useEffect(() => {
-    currentTimeRef.current = currentTime;
-  }, [currentTime]);
-
   // Stop audio and reset playback state cleanly when switching episodes or projects
   useEffect(() => {
     isPlayPendingRef.current = false;
     stopAllSegmentAudios();
+    // Clear segment audio pool and pause cached audio elements
+    Object.values(segmentAudioPoolRef.current).forEach((audio) => {
+      try {
+        if (audio) {
+          audio.pause();
+          audio.src = '';
+        }
+      } catch (_) {}
+    });
+    segmentAudioPoolRef.current = {};
     if (recoveryManagerRef.current) {
       recoveryManagerRef.current.cancelPending();
     }

@@ -1,13 +1,6 @@
 import { useState, useEffect } from 'react';
 import { checkBackendHealth } from '../services/api';
-import { generateVideoThumbnails } from '../utils/thumbnailUtils';
-import { normalizeClips } from '../utils/timelineUtils';
-import { 
-  loadActiveProject, 
-  saveActiveProject, 
-  clearActiveProject, 
-  saveVoiceSettings 
-} from '../utils/projectStorage';
+import { saveVoiceSettings } from '../utils/projectStorage';
 
 /**
  * Custom hook to handle project state persistence (localStorage) and backend health checks

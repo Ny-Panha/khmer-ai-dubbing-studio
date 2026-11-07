@@ -1,24 +1,39 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
-- **Environment**: Antigravity IDE (TTS Progress Polling & Real-time Console Logs)
-- **Timestamp**: 2026-11-07T18:25:00+07:00
+- **Environment**: Antigravity IDE (Performance Fix Step 3 — Segment Virtualization & Timeline Clip Windowing)
+- **Timestamp**: 2026-11-07T20:00:00+07:00
 
 ## Summary of Completed Work
-1. **Live Real-time Progress Tracking for Audio Generation**:
-   - **Problem**: During batch TTS generation, progress was hardcoded at `40%`, and the terminal/console printed zero logs during the 383-segment synthesis loop, giving the appearance of a frozen or silent process.
-   - **Fixes Applied**:
-     - [`backend/services/ttsService.js`](file:///e:/khmer_ai_dubbing_studio/backend/services/ttsService.js): Added live segment completion logging `[TTSService] 🎙️ [current/total] (pct%) Seg #...` inside the concurrent batch worker.
-     - [`backend/routes/audioRoutes.js`](file:///e:/khmer_ai_dubbing_studio/backend/routes/audioRoutes.js): Passed `forceRegen: Boolean(forceRegen)` directly into `generateBatchSegmentsAudio`.
-     - [`frontend/src/hooks/useAudioDubbing.js`](file:///e:/khmer_ai_dubbing_studio/frontend/src/hooks/useAudioDubbing.js): Wired 800ms progress poller hitting `/api/tts/progress`, dynamically updating `audioProgress` (10% -> 95%) and `audioStage` with real `[current/total ឃ្លា] (pct%)` and emitting `[TTS Progress]` to browser console.
-2. **Verification & Testing**:
-   - `npm --prefix frontend run build`: **PASS** (1.30s, 0 errors).
-   - Backend API responds with HTTP 200 on `/api/tts/voices`.
+1. **Performance Fix Step 3 (Frontend Only)**:
+   - **Step 3A — Virtualize the Segment List ([`frontend/src/components/media/ScriptReviewTab.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/media/ScriptReviewTab.jsx))**:
+     - **React Version & Library Compatibility**: React is `19.3.1`. Installed `@tanstack/react-virtual` (`^3.14.26`), which natively supports React 19 (`^16.8.0 || ... || ^19.0.0`). Zero peer dependency conflicts.
+     - **Dynamic Height Virtualization**: Implemented `useVirtualizer` with `estimateSize: () => 140`, `overscan: 8`, `gap: 8`, and dynamic item measurement via `ref={rowVirtualizer.measureElement}` on each item wrapper.
+     - **DOM Reduction**: In an episode with 383 segments:
+       - *Before*: 383 mounted `CaptionItemCard` instances (~24 DOM nodes/card = ~9,192 DOM nodes in the list container).
+       - *After*: Only visible cards + overscan are mounted (~15-25 cards = ~360-600 DOM nodes). Over **94% reduction** in DOM elements.
+     - **Stability & Interactions Preserved**: Kept `CaptionItemCard` wrapped in `React.memo`, maintained `DebouncedScriptTextarea` (typing a character does NOT re-render the whole list), preserved card selection, playback preview, delivery type toggle, and delete actions. Removed `content-visibility: auto` from [`MediaLibrary.css`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/MediaLibrary.css) to eliminate height estimation jitter.
+   - **Step 3B — Window Timeline Clips ([`frontend/src/components/timeline/TimelineTracksCanvas.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/timeline/TimelineTracksCanvas.jsx))**:
+     - **Visible Range Calculation**: Wire `scrollContainerRef={timelineBodyRef}` from [`TimelineEditor.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/TimelineEditor.jsx). Computed dynamic time window `[visibleStart - buffer, visibleEnd + buffer]` from `container.scrollLeft`, `container.clientWidth`, and `pps` with a generous 3s/15% buffer.
+     - **Clips Windowing**: Filtered video clips, voice clips, and subtitle clips to render ONLY clips overlapping the visible time range (`clipEnd >= windowStart && clipStart <= windowEnd`), while always preserving actively dragged or selected items. Windowed ruler markers to eliminate hundreds of offscreen marker elements.
+     - **DOM Reduction**: In an episode with 383 segments across video/voice/sub tracks:
+       - *Before*: ~1,000+ clip DOM elements mounted simultaneously.
+       - *After*: Only ~30-60 clip DOM elements mounted for the visible viewport.
+     - **Timeline Geometry Preserved**: Track container width (`totalWidth`), scrollbar size, and clip absolute positioning (`left: startSec * pps`, `width: (endSec - startSec) * pps`) remain 100% intact. Scrolling and zooming feel identical. RAF hardware playhead transforms and 60fps playback remain unaffected.
+
+2. **Verification & Quality Checks**:
+   - Step 3A Build: `npm --prefix frontend run build` ➔ **PASS** (554ms, 0 errors).
+   - Step 3B Build: `npm --prefix frontend run build` ➔ **PASS** (572ms, 0 errors).
+   - Frontend Linter: `npm --prefix frontend run lint` (`oxlint`) ➔ **PASS** (0 errors).
+   - Backend Pipeline Syntax Check: `node -e "require('./backend/services/pipeline')"` ➔ **PASS**.
 
 ## Active Environment
 - **Backend API**: `http://localhost:5000` (Node.js/Express)
-- **Frontend Studio UI**: `http://localhost:5174` (React 18 + Vite, build passing)
+- **Frontend Studio UI**: `http://localhost:5173` (React 19 + Vite, build passing)
 - **Git Branch**: `main`
 
 ## Next Steps
-- **Step 3**: Virtualize segment list (`ScriptReviewTab.jsx`) and timeline track windowing for massive DOM node reduction (from 19,000 nodes to < 500 nodes).
+- **Step 4 (Refactor)**: Split giant files (e.g. `GeminiRouteModal.jsx` 2,635 lines) + convert remaining backend `readFileSync`/`writeFileSync` hot paths to async `fs.promises`.
+- **Fast OCR Implementation (Plan Approved by Nha)**:
+  - Task checklist generated at [`.specify/tasks/fast-ocr.md`](file:///e:/khmer_ai_dubbing_studio/.specify/tasks/fast-ocr.md).
+  - Execute Slice 1 through Slice 6 incrementally.

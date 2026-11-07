@@ -1,4 +1,5 @@
 import React from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import {
   Search, Play, Pause, RefreshCw, Trash2, Subtitles, AlertCircle, AlertTriangle,
   User, Mic, Volume2, Sparkles, Languages, Edit3, Check, CheckCircle2,
@@ -300,7 +301,7 @@ function ScriptReviewTab({
   searchQuery,
   setSearchQuery,
   speakerRegistry,
-  filteredSegments,
+  filteredSegments = [],
   selectedSegmentId,
   onSelectSegment,
   handleSegmentChange,
@@ -311,9 +312,23 @@ function ScriptReviewTab({
   handleDeleteSegment,
   onToggleDeliveryType = null,
 }) {
+  const parentRef = React.useRef(null);
+
+  const rowVirtualizer = useVirtualizer({
+    count: filteredSegments.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => 140,
+    overscan: 8,
+    gap: 8,
+    getItemKey: React.useCallback(
+      (index) => filteredSegments[index]?._uid || filteredSegments[index]?.id || index,
+      [filteredSegments]
+    ),
+  });
+
   return (
-    <div className="media-tab-content">
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, gap: 8 }}>
+    <div className="media-tab-content" style={{ overflow: 'hidden', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, gap: 8, flexShrink: 0 }}>
         <span style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--text-secondary)' }}>
           Segments ({scriptData?.segments?.length || 0})
         </span>
@@ -321,7 +336,7 @@ function ScriptReviewTab({
 
       {/* Search Bar */}
       {scriptData?.segments && scriptData.segments.length > 3 && (
-        <div style={{ position: 'relative', marginBottom: 10 }}>
+        <div style={{ position: 'relative', marginBottom: 10, flexShrink: 0 }}>
           <Search size={13} color="var(--text-dim)" style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)' }} />
           <input
             type="text"
@@ -334,34 +349,68 @@ function ScriptReviewTab({
         </div>
       )}
 
-      <div className="captions-list-container" style={{ display: 'flex', flexDirection: 'column', gap: 8, overflowX: 'hidden' }}>
+      <div
+        ref={parentRef}
+        className="captions-list-container"
+        style={{
+          flex: 1,
+          overflowY: 'auto',
+          overflowX: 'hidden',
+          minHeight: 0,
+          position: 'relative',
+        }}
+      >
         {filteredSegments.length > 0 ? (
-          filteredSegments.map((seg, idx) => {
-            const isSelected = Boolean(
-              selectedSegmentId !== null && (
-                (seg._uid && String(selectedSegmentId) === String(seg._uid)) ||
-                (seg.id !== undefined && seg.id !== null ? String(selectedSegmentId) === String(seg.id) : Number(selectedSegmentId) === idx)
-              )
-            );
-            const isPlaying = Boolean(playingSegmentId === (seg.id || idx));
+          <div
+            style={{
+              height: `${rowVirtualizer.getTotalSize()}px`,
+              width: '100%',
+              position: 'relative',
+            }}
+          >
+            {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+              const seg = filteredSegments[virtualRow.index];
+              const idx = virtualRow.index;
+              if (!seg) return null;
 
-            return (
-              <CaptionItemCard
-                key={seg._uid || `seg-review-${seg.id ?? idx}-${idx}`}
-                seg={seg}
-                idx={idx}
-                isSelected={isSelected}
-                isPlaying={isPlaying}
-                onSelectSegment={onSelectSegment}
-                handleSegmentChange={handleSegmentChange}
-                handleSegmentBlur={handleSegmentBlur}
-                handlePlayLine={handlePlayLine}
-                onRegenerateSegment={onRegenerateSegment}
-                handleDeleteSegment={handleDeleteSegment}
-                onToggleDeliveryType={onToggleDeliveryType}
-              />
-            );
-          })
+              const isSelected = Boolean(
+                selectedSegmentId !== null && (
+                  (seg._uid && String(selectedSegmentId) === String(seg._uid)) ||
+                  (seg.id !== undefined && seg.id !== null ? String(selectedSegmentId) === String(seg.id) : Number(selectedSegmentId) === idx)
+                )
+              );
+              const isPlaying = Boolean(playingSegmentId === (seg.id || idx));
+
+              return (
+                <div
+                  key={virtualRow.key}
+                  data-index={virtualRow.index}
+                  ref={rowVirtualizer.measureElement}
+                  style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    width: '100%',
+                    transform: `translateY(${virtualRow.start}px)`,
+                  }}
+                >
+                  <CaptionItemCard
+                    seg={seg}
+                    idx={idx}
+                    isSelected={isSelected}
+                    isPlaying={isPlaying}
+                    onSelectSegment={onSelectSegment}
+                    handleSegmentChange={handleSegmentChange}
+                    handleSegmentBlur={handleSegmentBlur}
+                    handlePlayLine={handlePlayLine}
+                    onRegenerateSegment={onRegenerateSegment}
+                    handleDeleteSegment={handleDeleteSegment}
+                    onToggleDeliveryType={onToggleDeliveryType}
+                  />
+                </div>
+              );
+            })}
+          </div>
         ) : (
           <div style={{ textAlign: 'center', padding: '30px 15px', color: 'var(--text-muted)', border: '1px dashed var(--border-subtle)', borderRadius: 'var(--radius-sm)' }}>
             <Subtitles size={28} color="var(--text-dim)" style={{ margin: '0 auto 10px', display: 'block' }} />

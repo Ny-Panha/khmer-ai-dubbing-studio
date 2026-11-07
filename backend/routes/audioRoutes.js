@@ -257,7 +257,8 @@ router.post("/generate-audio", async (req, res) => {
         try {
           const metaPath = path.join(uploadsDir, "projects", cleanSeries, "series.json");
           if (fs.existsSync(metaPath)) {
-            const seriesMeta = JSON.parse(fs.readFileSync(metaPath, "utf8"));
+            const fileContent = await fs.promises.readFile(metaPath, "utf8");
+            const seriesMeta = JSON.parse(fileContent);
             const targetEp = (seriesMeta.episodes || []).find((e) => String(e.id) === String(cleanEpisode));
             if (targetEp && targetEp.scriptData && Array.isArray(targetEp.scriptData.segments)) {
               const segIdx = targetEp.scriptData.segments.findIndex((s) => String(s.id) === String(updatedSegment.id));
@@ -272,7 +273,7 @@ router.post("/generate-audio", async (req, res) => {
               }
               targetEp.audioGenerated = true;
               targetEp.hasAudio = true;
-              fs.writeFileSync(metaPath, JSON.stringify(seriesMeta, null, 2), "utf8");
+              await fs.promises.writeFile(metaPath, JSON.stringify(seriesMeta, null, 2), "utf8");
             }
           }
         } catch (_) {}
@@ -303,14 +304,15 @@ router.post("/generate-audio", async (req, res) => {
           try {
             const metaPath = path.join(uploadsDir, "projects", cleanSeries, "series.json");
             if (fs.existsSync(metaPath)) {
-              const seriesMeta = JSON.parse(fs.readFileSync(metaPath, "utf8"));
+              const fileContent = await fs.promises.readFile(metaPath, "utf8");
+              const seriesMeta = JSON.parse(fileContent);
               const targetEp = (seriesMeta.episodes || []).find((e) => String(e.id) === String(cleanEpisode));
               if (targetEp && (!targetEp.audioGenerated || !targetEp.fullAudioUrl)) {
                 targetEp.audioGenerated = true;
                 targetEp.fullAudioUrl = relAudioUrl;
                 targetEp.fullAudioPath = fullAudioPath;
                 targetEp.hasAudio = true;
-                fs.writeFileSync(metaPath, JSON.stringify(seriesMeta, null, 2), "utf8");
+                await fs.promises.writeFile(metaPath, JSON.stringify(seriesMeta, null, 2), "utf8");
               }
             }
           } catch (_) {}
@@ -344,7 +346,8 @@ router.post("/generate-audio", async (req, res) => {
         try {
           const metaPath = path.join(uploadsDir, "projects", cleanSeries, "series.json");
           if (fs.existsSync(metaPath)) {
-            const seriesMeta = JSON.parse(fs.readFileSync(metaPath, "utf8"));
+            const fileContent = await fs.promises.readFile(metaPath, "utf8");
+            const seriesMeta = JSON.parse(fileContent);
             const targetEp = (seriesMeta.episodes || []).find((e) => String(e.id) === String(cleanEpisode));
             if (targetEp) {
               if (!targetEp.scriptData) targetEp.scriptData = {};
@@ -353,7 +356,7 @@ router.post("/generate-audio", async (req, res) => {
               targetEp.scriptData.totalSegments = updatedSegments.length;
               targetEp.audioGenerated = true;
               targetEp.hasAudio = true;
-              fs.writeFileSync(metaPath, JSON.stringify(seriesMeta, null, 2), "utf8");
+              await fs.promises.writeFile(metaPath, JSON.stringify(seriesMeta, null, 2), "utf8");
               console.log(`[TTS] Immediately persisted ${updatedSegments.length} segments with audio to series.json for episode ${cleanEpisode}`);
             }
           }
@@ -391,7 +394,8 @@ router.post("/generate-audio", async (req, res) => {
         try {
           const metaPath = path.join(uploadsDir, "projects", cleanSeries, "series.json");
           if (fs.existsSync(metaPath)) {
-            const seriesMeta = JSON.parse(fs.readFileSync(metaPath, "utf8"));
+            const fileContent = await fs.promises.readFile(metaPath, "utf8");
+            const seriesMeta = JSON.parse(fileContent);
             const targetEp = (seriesMeta.episodes || []).find((e) => String(e.id) === String(cleanEpisode));
             if (targetEp) {
               targetEp.audioGenerated = true;
@@ -400,7 +404,7 @@ router.post("/generate-audio", async (req, res) => {
                 targetEp.fullAudioUrl = relAudioUrl;
                 targetEp.fullAudioPath = fullAudioPath;
               }
-              fs.writeFileSync(metaPath, JSON.stringify(seriesMeta, null, 2), "utf8");
+              await fs.promises.writeFile(metaPath, JSON.stringify(seriesMeta, null, 2), "utf8");
               console.log(`[TTS] Auto-persisted audioGenerated=true in series.json for episode ${cleanEpisode}`);
             }
           }
@@ -492,14 +496,15 @@ router.post("/audio/separate", async (req, res) => {
       if (pSeriesId && pEpisodeId) {
         const metaPath = path.join(uploadsDir, "projects", pSeriesId, "series.json");
         if (fs.existsSync(metaPath)) {
-          const sMeta = JSON.parse(fs.readFileSync(metaPath, "utf8"));
+          const rawMeta = await fs.promises.readFile(metaPath, "utf8");
+          const sMeta = JSON.parse(rawMeta);
           const targetEp = (sMeta.episodes || []).find((e) => String(e.id) === String(pEpisodeId));
           if (targetEp) {
             targetEp.bgmAudioUrl = noVocalsUrl;
             targetEp.cleanBgmPath = sepRes.noVocalsPath;
             targetEp.isDemucsDone = true;
             targetEp.hasDemucs = true;
-            fs.writeFileSync(metaPath, JSON.stringify(sMeta, null, 2), "utf8");
+            await fs.promises.writeFile(metaPath, JSON.stringify(sMeta, null, 2), "utf8");
             console.log(`[AudioSeparation] ✅ Auto-persisted clean BGM into series.json for episode ${pEpisodeId}`);
           }
         }
@@ -515,6 +520,9 @@ router.post("/audio/separate", async (req, res) => {
       isCached: sepRes.isCached,
     });
   } catch (err) {
+    if (err.statusCode === 409 || err.status === 409 || err.code === 'DEMUCS_BUSY' || err.isBusy) {
+      return res.status(409).json({ success: false, busy: true, error: err.message });
+    }
     console.error("[AudioSeparation] Error handling /api/audio/separate:", err);
     return res.status(500).json({ success: false, error: err.message });
   }

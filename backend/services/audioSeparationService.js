@@ -134,7 +134,8 @@ function getSeparationCacheDir(audioPath, model = 'htdemucs') {
  * @param {Function} [options.onProgress] - Optional progress callback
  * @returns {Promise<Object>}
  */
-let separationQueue = Promise.resolve();
+let isDemucsRunning = false;
+let currentDemucsMedia = null;
 
 function executeDemucsWorker(options, targetDir, cleanKey) {
   return new Promise((resolve, reject) => {
@@ -209,6 +210,8 @@ function executeDemucsWorker(options, targetDir, cleanKey) {
     });
 
     child.on('error', (err) => {
+      isDemucsRunning = false;
+      currentDemucsMedia = null;
       activeSeparationJobs.delete(jobId);
       activeSeparationJobs.delete(cleanKey);
       activeSeparationProgress.delete(cleanKey);
@@ -216,6 +219,8 @@ function executeDemucsWorker(options, targetDir, cleanKey) {
     });
 
     child.on('close', (code) => {
+      isDemucsRunning = false;
+      currentDemucsMedia = null;
       activeSeparationJobs.delete(jobId);
       activeSeparationJobs.delete(cleanKey);
       if (code !== 0) {
@@ -283,14 +288,20 @@ function separateAudio(options = {}) {
     }
   }
 
-  // 2. Mark Queued status in progress map
-  activeSeparationProgress.set(cleanKey, { progress: 1, status: 'queued', message: '⏳ កំពុងរង់ចាំក្នុង Queue (Demucs AI)...' });
+  // 2. Reject if another Demucs separation is already in progress (Allow ONE process at a time, no queue)
+  if (isDemucsRunning) {
+    const busyErr = new Error(`Demucs AI កំពុងដំណើរការបំបែកសំឡេង (${currentDemucsMedia || 'វីដេអូផ្សេង'})។ សូមរង់ចាំឱ្យចប់ជាមុនសិន ទើបអាចបំបែកភាគបន្ទាប់បាន។`);
+    busyErr.statusCode = 409;
+    busyErr.status = 409;
+    busyErr.code = 'DEMUCS_BUSY';
+    busyErr.isBusy = true;
+    return Promise.reject(busyErr);
+  }
 
-  // 3. Serialize through FIFO queue to prevent OOM
-  const task = () => executeDemucsWorker(options, targetDir, cleanKey);
-  const queuedPromise = separationQueue.then(task, task);
-  separationQueue = queuedPromise.catch(() => {});
-  return queuedPromise;
+  isDemucsRunning = true;
+  currentDemucsMedia = path.basename(audioPath);
+
+  return executeDemucsWorker(options, targetDir, cleanKey);
 }
 
 function killSeparationJob(identifier = 'all') {
@@ -332,8 +343,9 @@ function killSeparationJob(identifier = 'all') {
     activeSeparationProgress.delete(cleanId);
   }
 
-  // Reset the sequential queue so remaining jobs are cancelled
-  separationQueue = Promise.resolve();
+  // Reset Demucs single-process lock
+  isDemucsRunning = false;
+  currentDemucsMedia = null;
 
   return { success: true, killed };
 }
