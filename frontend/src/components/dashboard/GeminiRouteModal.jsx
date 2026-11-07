@@ -110,6 +110,8 @@ export default function GeminiRouteModal({
   const [demucsCurrentEpTitle, setDemucsCurrentEpTitle] = useState('');
   const [demucsProgressPercent, setDemucsProgressPercent] = useState(0);
   const isDemucsCancelledRef = useRef(false);
+  const isTranslateCancelledRef = useRef(false);
+  const isTtsCancelledRef = useRef(false);
   const activeTimersRef = useRef(new Set());
 
   // Cleanup all running polling timers on modal unmount or when modal closes
@@ -123,6 +125,81 @@ export default function GeminiRouteModal({
       activeTimersRef.current.clear();
     };
   }, [isOpen]);
+
+  const handleKillTranslate = async (targetOrJob = null) => {
+    try {
+      isTranslateCancelledRef.current = true;
+      const jobId = targetOrJob?.jobId || targetOrJob?.id;
+      const targetEpId = targetOrJob?.episodeId || (targetOrJob && !targetOrJob.jobId ? targetOrJob.id : null);
+      await fetch('/api/jobs/kill', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jobId: jobId || undefined,
+          episodeId: targetEpId || undefined,
+          seriesId: activeSeries?.id || seriesId || undefined,
+          all: !targetOrJob,
+        }),
+      });
+      setIsStartingBatch(false);
+      setBatchError('🛑 បានបញ្ឈប់ (Kill) ដំណើរការ Translate ដោយជោគជ័យ!');
+      if (typeof onRefreshSeries === 'function') {
+        try { await onRefreshSeries(); } catch (_) {}
+      }
+    } catch (err) {
+      console.error('[Kill Translate] Error:', err);
+    }
+  };
+
+  const handleKillTTS = async (targetEp = null) => {
+    try {
+      isTtsCancelledRef.current = true;
+      const targetSeriesId = activeSeries?.id || seriesId;
+      await fetch('/api/tts/kill', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          seriesId: targetSeriesId,
+          episodeId: targetEp?.id || undefined,
+          all: !targetEp,
+        }),
+      });
+      if (targetEp) {
+        setActiveTtsEpisodeIds((prev) => {
+          const next = new Set(prev);
+          next.delete(targetEp.id);
+          return next;
+        });
+        if (activeTtsEpisodeId === targetEp.id) {
+          setActiveTtsEpisodeId(null);
+        }
+        setTtsLiveStats((prev) => ({
+          ...prev,
+          [targetEp.id]: {
+            ...(prev[targetEp.id] || {}),
+            isDone: false,
+            logs: [...(prev[targetEp.id]?.logs || []), {
+              time: new Date().toLocaleTimeString(),
+              progress: prev[targetEp.id]?.percent || 0,
+              message: '🛑 បានបញ្ឈប់ (Kill) ដំណើរការ TTS នៃភាគនេះ!',
+            }],
+          },
+        }));
+      } else {
+        activeTimersRef.current.forEach((t) => clearInterval(t));
+        activeTimersRef.current.clear();
+        setIsGeneratingBatchTTS(false);
+        setActiveTtsEpisodeId(null);
+        setActiveTtsEpisodeIds(new Set());
+        setBatchError('🛑 បានបញ្ឈប់ (Kill) ដំណើរការបង្កើតសំឡេង TTS ដោយជោគជ័យ!');
+      }
+      if (typeof onRefreshSeries === 'function') {
+        try { await onRefreshSeries(); } catch (_) {}
+      }
+    } catch (err) {
+      console.error('[Kill TTS] Error:', err);
+    }
+  };
 
   const handleKillDemucs = async (targetEp = null) => {
     try {
@@ -213,7 +290,6 @@ export default function GeminiRouteModal({
         seriesGlossary: activeSeries?.glossary,
         apiKey: apiKey || undefined,
       });
-      setPollInterval(1000);
     } catch (err) {
       setBatchError(err.message || 'ការ Retry បរាជ័យ');
     }
@@ -441,7 +517,6 @@ export default function GeminiRouteModal({
           await onRefreshSeries();
         } catch (_) {}
       }
-      setPollInterval(1000);
     } catch (err) {
       console.error(err);
       setBatchError(err.message || 'ការចាប់ផ្ដើម Translate បរាជ័យ');
@@ -1433,391 +1508,462 @@ export default function GeminiRouteModal({
             paddingTop: 4,
           }}>
             {/* ── 1. TRANSLATE ACTION (Step 2 - Subtitle & Translation / Re-Translate) ── */}
-            <button
-              type="button"
-              onClick={() => handleStartBatchTranslate(unscriptedCount === 0)}
-              disabled={isStartingBatch || selectedEpIds.size === 0}
-              className="btn-tactile"
-              style={{
-                position: 'relative',
-                padding: '11px 16px',
-                borderRadius: 14,
-                background: isStartingBatch
-                  ? '#131b2e'
-                  : (selectedEpIds.size === 0)
-                  ? 'rgba(255, 255, 255, 0.04)'
-                  : (unscriptedCount === 0)
-                  ? 'linear-gradient(135deg, rgba(245, 158, 11, 0.2) 0%, rgba(217, 119, 6, 0.3) 100%)'
-                  : 'linear-gradient(135deg, #0284c7 0%, #2563eb 50%, #4338ca 100%)',
-                border: (selectedEpIds.size === 0)
-                  ? '1px solid rgba(255, 255, 255, 0.08)'
-                  : (unscriptedCount === 0)
-                  ? '1px solid rgba(245, 158, 11, 0.5)'
-                  : '1px solid #38bdf8',
-                color: (selectedEpIds.size === 0) ? '#64748B' : (unscriptedCount === 0 ? '#FBBF24' : '#ffffff'),
-                fontWeight: 800,
-                cursor: (isStartingBatch || selectedEpIds.size === 0) ? 'not-allowed' : 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                gap: 10,
-                boxShadow: (selectedEpIds.size > 0 && !isStartingBatch)
-                  ? (unscriptedCount === 0 ? '0 4px 18px rgba(245, 158, 11, 0.25)' : '0 6px 20px rgba(2, 132, 199, 0.4)')
-                  : 'none',
-                transition: 'all 0.2s cubic-bezier(0.16, 1, 0.3, 1)',
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, textAlign: 'left' }}>
-                <div style={{
-                  width: 34,
-                  height: 34,
-                  borderRadius: 10,
-                  background: (unscriptedCount === 0) ? 'rgba(245, 158, 11, 0.2)' : 'rgba(255, 255, 255, 0.18)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  flexShrink: 0,
-                }}>
-                  {isStartingBatch ? (
-                    <Loader2 size={17} className="animate-spin" color="#38bdf8" />
-                  ) : unscriptedCount === 0 ? (
-                    <RotateCcw size={17} color="#FBBF24" />
-                  ) : (
-                    <Sparkles size={17} color="#ffffff" />
-                  )}
-                </div>
-                <div style={{ minWidth: 0 }}>
-                  <div style={{ fontSize: '0.82rem', fontWeight: 900, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                    {isStartingBatch
-                      ? 'កំពុងបញ្ជូន Translate...'
-                      : (unscriptedCount === 0 && selectedEpIds.size > 0)
-                      ? `🔄 Re-Translate ${selectedEpIds.size} ភាគ`
-                      : unscriptedCount === 0
-                      ? '✓ គ្រប់ភាគ Translate រួចរាល់ ១០០%'
-                      : `🚀 Translate ${selectedEpIds.size} ភាគ`}
-                  </div>
-                  <div style={{ fontSize: '0.68rem', color: (unscriptedCount === 0) ? '#FCD34D' : 'rgba(255, 255, 255, 0.8)', whiteSpace: 'nowrap' }}>
-                    {unscriptedCount === 0 && selectedEpIds.size > 0
-                      ? (dubbingMode === 'fast_ocr' ? '⚡ Fast OCR (Bypass Whisper)' : 'ចុចដើម្បី Translate ឡើងវិញ')
-                      : unscriptedCount === 0
-                      ? `គ្រប់ភាគ (${episodes.length}/${episodes.length}) មាន Script ពេញលេញ`
-                      : (dubbingMode === 'fast_ocr' ? '⚡ Fast Subtitle OCR (3-5x Faster)' : 'Gemini Multi-Key Route')}
-                  </div>
-                </div>
-              </div>
-              <span style={{
-                fontSize: '0.64rem',
-                fontWeight: 900,
-                background: (unscriptedCount === 0) ? 'rgba(245, 158, 11, 0.25)' : 'rgba(0, 0, 0, 0.35)',
-                color: (unscriptedCount === 0) ? '#FBBF24' : '#38bdf8',
-                padding: '2px 8px',
-                borderRadius: 9999,
-                border: (unscriptedCount === 0) ? '1px solid rgba(245, 158, 11, 0.4)' : '1px solid rgba(56, 189, 248, 0.3)',
-                flexShrink: 0,
-                letterSpacing: '0.04em',
-              }}>
-                {unscriptedCount === 0 && selectedEpIds.size > 1 ? 'RE-RUN BATCH' : unscriptedCount === 0 ? 'DONE' : 'STEP 2'}
-              </span>
-            </button>
-
-            {/* ── 2. KHMER AI VOICE ACTION (Step 3 - TTS Synthesis / Tavola Coral) ── */}
-            <button
-              type="button"
-              onClick={handleBatchGenerateTTS}
-              disabled={isGeneratingBatchTTS || isSeparatingBatchDemucs || isStartingBatch || selectedEpIds.size === 0}
-              className="btn-tactile"
-              style={{
-                position: 'relative',
-                overflow: 'hidden',
-                padding: '11px 16px',
-                borderRadius: 14,
-                background: isGeneratingBatchTTS
-                  ? 'linear-gradient(135deg, #182236 0%, #1e293b 100%)'
-                  : allSelectedAudioCompleted
-                  ? 'linear-gradient(135deg, rgba(16, 185, 129, 0.14) 0%, rgba(5, 150, 105, 0.22) 100%)'
-                  : (selectedEpIds.size === 0)
-                  ? 'rgba(255, 133, 119, 0.1)'
-                  : 'linear-gradient(135deg, #FF8577 0%, #f43f5e 100%)',
-                border: isGeneratingBatchTTS
-                  ? '1px solid rgba(255, 133, 119, 0.7)'
-                  : allSelectedAudioCompleted
-                  ? '1px solid rgba(16, 185, 129, 0.5)'
-                  : (selectedEpIds.size === 0)
-                  ? '1px solid rgba(255, 133, 119, 0.2)'
-                  : '1px solid #FF8577',
-                color: isGeneratingBatchTTS ? '#FF8577' : allSelectedAudioCompleted ? '#34d399' : '#0B132B',
-                fontWeight: 800,
-                cursor: (isGeneratingBatchTTS || isSeparatingBatchDemucs || isStartingBatch || selectedEpIds.size === 0) ? 'not-allowed' : 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                gap: 10,
-                boxShadow: (isGeneratingBatchTTS)
-                  ? '0 0 20px rgba(255, 133, 119, 0.3)'
-                  : allSelectedAudioCompleted
-                  ? '0 2px 14px rgba(16, 185, 129, 0.2)'
-                  : (selectedEpIds.size > 0)
-                  ? '0 6px 20px rgba(255, 133, 119, 0.38)'
-                  : 'none',
-                transition: 'all 0.2s cubic-bezier(0.16, 1, 0.3, 1)',
-              }}
-            >
-              {/* Realtime Progress Track within button during generation */}
-              {isGeneratingBatchTTS && (
-                <div style={{
-                  position: 'absolute',
-                  left: 0,
-                  bottom: 0,
-                  height: 3,
-                  width: `${Math.max(4, ttsProgressPercent)}%`,
-                  background: 'linear-gradient(90deg, #FF8577 0%, #f43f5e 100%)',
-                  boxShadow: '0 0 8px #FF8577',
-                  transition: 'width 0.3s ease',
-                }} />
-              )}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, textAlign: 'left' }}>
-                <div style={{
-                  width: 34,
-                  height: 34,
-                  borderRadius: 10,
-                  background: isGeneratingBatchTTS
-                    ? 'rgba(255, 133, 119, 0.22)'
-                    : allSelectedAudioCompleted
-                    ? 'rgba(16, 185, 129, 0.25)'
-                    : 'rgba(11, 19, 43, 0.2)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  flexShrink: 0,
-                }}>
-                  {isGeneratingBatchTTS ? (
-                    <Loader2 size={17} className="animate-spin" color="#FF8577" />
-                  ) : allSelectedAudioCompleted ? (
-                    <CheckCircle2 size={17} color="#34d399" />
-                  ) : (
-                    <Mic size={17} color={isGeneratingBatchTTS ? '#FF8577' : '#0B132B'} />
-                  )}
-                </div>
-                <div style={{ minWidth: 0 }}>
-                  <div style={{
-                    fontSize: '0.82rem',
-                    fontWeight: 900,
-                    whiteSpace: 'nowrap',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    color: isGeneratingBatchTTS ? '#f8fafc' : allSelectedAudioCompleted ? '#34d399' : '#0B132B',
-                  }}>
-                    {isGeneratingBatchTTS
-                      ? `🎙️ កំពុង TTS: ${ttsCurrentEpTitle}`
-                      : allSelectedAudioCompleted
-                      ? '✓ សំឡេងខ្មែរ AI រួចរាល់ ១០០%'
-                      : `🎙️ បង្កើតសំឡេងខ្មែរ AI (${unAudioSelectedEpisodes.length} ភាគនៅសល់)`}
-                  </div>
-                  <div style={{
-                    fontSize: '0.68rem',
-                    color: isGeneratingBatchTTS
-                      ? '#fca5a5'
-                      : allSelectedAudioCompleted
-                      ? '#6ee7b7'
-                      : 'rgba(11, 19, 43, 0.85)',
-                    whiteSpace: 'nowrap',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    fontWeight: 700,
-                  }}>
-                    {isGeneratingBatchTTS
-                      ? `${ttsLiveStats[activeTtsEpisodeId]?.current || 0}/${ttsLiveStats[activeTtsEpisodeId]?.total || '...'} ឃ្លា (${ttsLiveStats[activeTtsEpisodeId]?.percent || 0}%) • សរុប ${ttsProgressPercent}%`
-                      : allSelectedAudioCompleted
-                      ? `គ្រប់ភាគ (${selectedEpIds.size} ភាគ) មានសំឡេង Master ពេញលេញ`
-                      : 'រំលងភាគដែលធ្វើរួច • Edge-TTS'}
-                  </div>
-                </div>
-              </div>
-              <span style={{
-                fontSize: '0.64rem',
-                fontWeight: 900,
-                background: isGeneratingBatchTTS
-                  ? 'rgba(255, 133, 119, 0.25)'
-                  : allSelectedAudioCompleted
-                  ? 'rgba(16, 185, 129, 0.25)'
-                  : 'rgba(11, 19, 43, 0.15)',
-                color: isGeneratingBatchTTS ? '#FF8577' : allSelectedAudioCompleted ? '#34d399' : '#0B132B',
-                padding: '2px 8px',
-                borderRadius: 9999,
-                border: isGeneratingBatchTTS
-                  ? '1px solid rgba(255, 133, 119, 0.4)'
-                  : allSelectedAudioCompleted
-                  ? '1px solid rgba(16, 185, 129, 0.35)'
-                  : '1px solid rgba(11, 19, 43, 0.25)',
-                flexShrink: 0,
-                letterSpacing: '0.04em',
-              }}>
-                {isGeneratingBatchTTS ? `${ttsProgressPercent}%` : allSelectedAudioCompleted ? 'DONE' : 'STEP 3'}
-              </span>
-            </button>
-
-            {/* ── 3. DEMUCS VOCAL SEPARATION ACTION (Step 3 - AI Clean BGM) ── */}
-            <button
-              type="button"
-              onClick={handleBatchDemucsSeparation}
-              disabled={isSeparatingBatchDemucs || isGeneratingBatchTTS || isStartingBatch || selectedEpIds.size === 0}
-              className="btn-tactile"
-              style={{
-                position: 'relative',
-                overflow: 'hidden',
-                padding: '11px 16px',
-                borderRadius: 14,
-                background: isSeparatingBatchDemucs
-                  ? '#131b2e'
-                  : allSelectedDemucsCompleted
-                  ? 'linear-gradient(135deg, rgba(16, 185, 129, 0.14) 0%, rgba(5, 150, 105, 0.22) 100%)'
-                  : (selectedEpIds.size === 0)
-                  ? 'rgba(56, 189, 248, 0.04)'
-                  : 'linear-gradient(135deg, rgba(56, 189, 248, 0.12) 0%, rgba(14, 165, 233, 0.2) 100%)',
-                border: isSeparatingBatchDemucs
-                  ? '1px solid #38bdf8'
-                  : allSelectedDemucsCompleted
-                  ? '1px solid rgba(16, 185, 129, 0.5)'
-                  : (selectedEpIds.size === 0)
-                  ? '1px solid rgba(56, 189, 248, 0.18)'
-                  : '1px solid rgba(56, 189, 248, 0.5)',
-                color: isSeparatingBatchDemucs ? '#38bdf8' : allSelectedDemucsCompleted ? '#34d399' : '#38bdf8',
-                fontWeight: 800,
-                cursor: (isSeparatingBatchDemucs || isGeneratingBatchTTS || isStartingBatch || selectedEpIds.size === 0) ? 'not-allowed' : 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                gap: 10,
-                boxShadow: allSelectedDemucsCompleted
-                  ? '0 2px 14px rgba(16, 185, 129, 0.2)'
-                  : (selectedEpIds.size > 0 && !isSeparatingBatchDemucs)
-                  ? '0 4px 16px rgba(56, 189, 248, 0.22)'
-                  : isSeparatingBatchDemucs
-                  ? '0 0 16px rgba(56, 189, 248, 0.25)'
-                  : 'none',
-                transition: 'all 0.2s cubic-bezier(0.16, 1, 0.3, 1)',
-              }}
-            >
-              {/* Realtime Progress Track within button during separation */}
-              {isSeparatingBatchDemucs && (
-                <div style={{
-                  position: 'absolute',
-                  left: 0,
-                  bottom: 0,
-                  height: 3,
-                  width: `${Math.max(4, demucsProgressPercent)}%`,
-                  background: '#38bdf8',
-                  boxShadow: '0 0 8px #38bdf8',
-                  transition: 'width 0.3s ease',
-                }} />
-              )}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, textAlign: 'left' }}>
-                <div style={{
-                  width: 34,
-                  height: 34,
-                  borderRadius: 10,
-                  background: isSeparatingBatchDemucs
-                    ? 'rgba(56, 189, 248, 0.22)'
-                    : allSelectedDemucsCompleted
-                    ? 'rgba(16, 185, 129, 0.25)'
-                    : 'rgba(56, 189, 248, 0.16)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  flexShrink: 0,
-                }}>
-                  {isSeparatingBatchDemucs ? (
-                    <Loader2 size={17} className="animate-spin" color="#38bdf8" />
-                  ) : allSelectedDemucsCompleted ? (
-                    <CheckCircle2 size={17} color="#34d399" />
-                  ) : (
-                    <Volume2 size={17} color="#38bdf8" />
-                  )}
-                </div>
-                <div style={{ minWidth: 0 }}>
-                  <div style={{
-                    fontSize: '0.82rem',
-                    fontWeight: 900,
-                    whiteSpace: 'nowrap',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    color: isSeparatingBatchDemucs ? '#f8fafc' : allSelectedDemucsCompleted ? '#34d399' : '#f8fafc',
-                  }}>
-                    {isSeparatingBatchDemucs
-                      ? `🎧 កំពុងបំបែក: ${demucsCurrentEpTitle}`
-                      : allSelectedDemucsCompleted
-                      ? '✓ Demucs AI Clean BGM រួចរាល់ ១០០%'
-                      : `🎧 បំបែកសំឡេងដើម AI (${unDemucsSelectedEpisodes.length} ភាគនៅសល់)`}
-                  </div>
-                  <div style={{
-                    fontSize: '0.68rem',
-                    color: isSeparatingBatchDemucs ? '#7dd3fc' : allSelectedDemucsCompleted ? '#6ee7b7' : '#38bdf8',
-                    whiteSpace: 'nowrap',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                    fontWeight: 700,
-                  }}>
-                    {isSeparatingBatchDemucs
-                      ? `${demucsProgressPercent}% រួចរាល់`
-                      : allSelectedDemucsCompleted
-                      ? `គ្រប់ភាគ (${selectedEpIds.size} ភាគ) មាន Clean BGM ពេញលេញ`
-                      : 'រំលងភាគដែលធ្វើរួច • Demucs AI'}
-                  </div>
-                </div>
-              </div>
-              <span style={{
-                fontSize: '0.64rem',
-                fontWeight: 900,
-                background: isSeparatingBatchDemucs
-                  ? 'rgba(56, 189, 248, 0.25)'
-                  : allSelectedDemucsCompleted
-                  ? 'rgba(16, 185, 129, 0.25)'
-                  : 'rgba(56, 189, 248, 0.18)',
-                color: isSeparatingBatchDemucs ? '#38bdf8' : allSelectedDemucsCompleted ? '#34d399' : '#38bdf8',
-                padding: '2px 8px',
-                borderRadius: 9999,
-                border: isSeparatingBatchDemucs
-                  ? '1px solid rgba(56, 189, 248, 0.4)'
-                  : allSelectedDemucsCompleted
-                  ? '1px solid rgba(16, 185, 129, 0.35)'
-                  : '1px solid rgba(56, 189, 248, 0.35)',
-                flexShrink: 0,
-                letterSpacing: '0.04em',
-              }}>
-                {isSeparatingBatchDemucs ? `${demucsProgressPercent}%` : allSelectedDemucsCompleted ? 'DONE' : 'STEP 4'}
-              </span>
-            </button>
-            {isSeparatingBatchDemucs && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
               <button
                 type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  if (window.confirm('តើអ្នកពិតជាចង់បញ្ឈប់ (Kill) ដំណើរការបំបែកសំឡេង Demucs ទាំងអស់មែនទេ?')) {
-                    handleKillDemucs();
-                  }
-                }}
+                onClick={() => handleStartBatchTranslate(unscriptedCount === 0)}
+                disabled={isStartingBatch || selectedEpIds.size === 0}
                 className="btn-tactile"
                 style={{
-                  background: 'linear-gradient(135deg, rgba(239, 68, 68, 0.28) 0%, rgba(185, 28, 28, 0.45) 100%)',
-                  border: '1px solid rgba(239, 68, 68, 0.75)',
-                  boxShadow: '0 4px 15px rgba(239, 68, 68, 0.35)',
-                  color: '#fee2e2',
-                  padding: '9px 14px',
-                  borderRadius: 10,
-                  fontSize: '0.74rem',
+                  position: 'relative',
+                  padding: '11px 16px',
+                  borderRadius: 14,
+                  background: isStartingBatch
+                    ? '#131b2e'
+                    : (selectedEpIds.size === 0)
+                    ? 'rgba(255, 255, 255, 0.04)'
+                    : (unscriptedCount === 0)
+                    ? 'linear-gradient(135deg, rgba(245, 158, 11, 0.2) 0%, rgba(217, 119, 6, 0.3) 100%)'
+                    : 'linear-gradient(135deg, #0284c7 0%, #2563eb 50%, #4338ca 100%)',
+                  border: (selectedEpIds.size === 0)
+                    ? '1px solid rgba(255, 255, 255, 0.08)'
+                    : (unscriptedCount === 0)
+                    ? '1px solid rgba(245, 158, 11, 0.5)'
+                    : '1px solid #38bdf8',
+                  color: (selectedEpIds.size === 0) ? '#64748B' : (unscriptedCount === 0 ? '#FBBF24' : '#ffffff'),
                   fontWeight: 800,
-                  cursor: 'pointer',
+                  cursor: (isStartingBatch || selectedEpIds.size === 0) ? 'not-allowed' : 'pointer',
                   display: 'flex',
                   alignItems: 'center',
-                  gap: 6,
-                  whiteSpace: 'nowrap',
-                  transition: 'all 0.2s ease',
+                  justifyContent: 'space-between',
+                  gap: 10,
+                  boxShadow: (selectedEpIds.size > 0 && !isStartingBatch)
+                    ? (unscriptedCount === 0 ? '0 4px 18px rgba(245, 158, 11, 0.25)' : '0 6px 20px rgba(2, 132, 199, 0.4)')
+                    : 'none',
+                  transition: 'all 0.2s cubic-bezier(0.16, 1, 0.3, 1)',
                 }}
-                title="Kill Demucs Process"
               >
-                🛑 បញ្ឈប់ (Kill Demucs)
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, textAlign: 'left' }}>
+                  <div style={{
+                    width: 34,
+                    height: 34,
+                    borderRadius: 10,
+                    background: (unscriptedCount === 0) ? 'rgba(245, 158, 11, 0.2)' : 'rgba(255, 255, 255, 0.18)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    flexShrink: 0,
+                  }}>
+                    {isStartingBatch ? (
+                      <Loader2 size={17} className="animate-spin" color="#38bdf8" />
+                    ) : unscriptedCount === 0 ? (
+                      <RotateCcw size={17} color="#FBBF24" />
+                    ) : (
+                      <Sparkles size={17} color="#ffffff" />
+                    )}
+                  </div>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: '0.82rem', fontWeight: 900, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {isStartingBatch
+                        ? 'កំពុងបញ្ជូន Translate...'
+                        : (unscriptedCount === 0 && selectedEpIds.size > 0)
+                        ? `🔄 Re-Translate ${selectedEpIds.size} ភាគ`
+                        : unscriptedCount === 0
+                        ? '✓ គ្រប់ភាគ Translate រួចរាល់ ១០០%'
+                        : `🚀 Translate ${selectedEpIds.size} ភាគ`}
+                    </div>
+                    <div style={{ fontSize: '0.68rem', color: (unscriptedCount === 0) ? '#FCD34D' : 'rgba(255, 255, 255, 0.8)', whiteSpace: 'nowrap' }}>
+                      {unscriptedCount === 0 && selectedEpIds.size > 0
+                        ? (dubbingMode === 'fast_ocr' ? '⚡ Fast OCR (Bypass Whisper)' : 'ចុចដើម្បី Translate ឡើងវិញ')
+                        : unscriptedCount === 0
+                        ? `គ្រប់ភាគ (${episodes.length}/${episodes.length}) មាន Script ពេញលេញ`
+                        : (dubbingMode === 'fast_ocr' ? '⚡ Fast Subtitle OCR (3-5x Faster)' : 'Gemini Multi-Key Route')}
+                    </div>
+                  </div>
+                </div>
+                <span style={{
+                  fontSize: '0.64rem',
+                  fontWeight: 900,
+                  background: (unscriptedCount === 0) ? 'rgba(245, 158, 11, 0.25)' : 'rgba(0, 0, 0, 0.35)',
+                  color: (unscriptedCount === 0) ? '#FBBF24' : '#38bdf8',
+                  padding: '2px 8px',
+                  borderRadius: 9999,
+                  border: (unscriptedCount === 0) ? '1px solid rgba(245, 158, 11, 0.4)' : '1px solid rgba(56, 189, 248, 0.3)',
+                  flexShrink: 0,
+                  letterSpacing: '0.04em',
+                }}>
+                  {unscriptedCount === 0 && selectedEpIds.size > 1 ? 'RE-RUN BATCH' : unscriptedCount === 0 ? 'DONE' : 'STEP 2'}
+                </span>
               </button>
-            )}
+              {(isStartingBatch || (Array.isArray(activeJobs) && activeJobs.some((j) => (j.status === 'running' || j.status === 'queued') && (selectedEpIds.size === 0 || selectedEpIds.has(j.episodeId))))) && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (window.confirm('តើអ្នកពិតជាចង់បញ្ឈប់ (Kill) ដំណើរការ Translate ទាំងអស់មែនទេ?')) {
+                      handleKillTranslate();
+                    }
+                  }}
+                  className="btn-tactile"
+                  style={{
+                    background: 'linear-gradient(135deg, rgba(239, 68, 68, 0.28) 0%, rgba(185, 28, 28, 0.45) 100%)',
+                    border: '1px solid rgba(239, 68, 68, 0.75)',
+                    boxShadow: '0 4px 15px rgba(239, 68, 68, 0.35)',
+                    color: '#fee2e2',
+                    padding: '9px 14px',
+                    borderRadius: 10,
+                    fontSize: '0.74rem',
+                    fontWeight: 800,
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 6,
+                    whiteSpace: 'nowrap',
+                    transition: 'all 0.2s ease',
+                  }}
+                  title="Kill Translate Process"
+                >
+                  🛑 បញ្ឈប់ (Kill Translate)
+                </button>
+              )}
+            </div>
+
+            {/* ── 2. KHMER AI VOICE ACTION (Step 3 - TTS Synthesis / Tavola Coral) ── */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <button
+                type="button"
+                onClick={handleBatchGenerateTTS}
+                disabled={isGeneratingBatchTTS || isSeparatingBatchDemucs || isStartingBatch || selectedEpIds.size === 0}
+                className="btn-tactile"
+                style={{
+                  position: 'relative',
+                  overflow: 'hidden',
+                  padding: '11px 16px',
+                  borderRadius: 14,
+                  background: isGeneratingBatchTTS
+                    ? 'linear-gradient(135deg, #182236 0%, #1e293b 100%)'
+                    : allSelectedAudioCompleted
+                    ? 'linear-gradient(135deg, rgba(16, 185, 129, 0.14) 0%, rgba(5, 150, 105, 0.22) 100%)'
+                    : (selectedEpIds.size === 0)
+                    ? 'rgba(255, 133, 119, 0.1)'
+                    : 'linear-gradient(135deg, #FF8577 0%, #f43f5e 100%)',
+                  border: isGeneratingBatchTTS
+                    ? '1px solid rgba(255, 133, 119, 0.7)'
+                    : allSelectedAudioCompleted
+                    ? '1px solid rgba(16, 185, 129, 0.5)'
+                    : (selectedEpIds.size === 0)
+                    ? '1px solid rgba(255, 133, 119, 0.2)'
+                    : '1px solid #FF8577',
+                  color: isGeneratingBatchTTS ? '#FF8577' : allSelectedAudioCompleted ? '#34d399' : '#0B132B',
+                  fontWeight: 800,
+                  cursor: (isGeneratingBatchTTS || isSeparatingBatchDemucs || isStartingBatch || selectedEpIds.size === 0) ? 'not-allowed' : 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 10,
+                  boxShadow: (isGeneratingBatchTTS)
+                    ? '0 0 20px rgba(255, 133, 119, 0.3)'
+                    : allSelectedAudioCompleted
+                    ? '0 2px 14px rgba(16, 185, 129, 0.2)'
+                    : (selectedEpIds.size > 0)
+                    ? '0 6px 20px rgba(255, 133, 119, 0.38)'
+                    : 'none',
+                  transition: 'all 0.2s cubic-bezier(0.16, 1, 0.3, 1)',
+                }}
+              >
+                {/* Realtime Progress Track within button during generation */}
+                {isGeneratingBatchTTS && (
+                  <div style={{
+                    position: 'absolute',
+                    left: 0,
+                    bottom: 0,
+                    height: 3,
+                    width: `${Math.max(4, ttsProgressPercent)}%`,
+                    background: 'linear-gradient(90deg, #FF8577 0%, #f43f5e 100%)',
+                    boxShadow: '0 0 8px #FF8577',
+                    transition: 'width 0.3s ease',
+                  }} />
+                )}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, textAlign: 'left' }}>
+                  <div style={{
+                    width: 34,
+                    height: 34,
+                    borderRadius: 10,
+                    background: isGeneratingBatchTTS
+                      ? 'rgba(255, 133, 119, 0.22)'
+                      : allSelectedAudioCompleted
+                      ? 'rgba(16, 185, 129, 0.25)'
+                      : 'rgba(11, 19, 43, 0.2)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    flexShrink: 0,
+                  }}>
+                    {isGeneratingBatchTTS ? (
+                      <Loader2 size={17} className="animate-spin" color="#FF8577" />
+                    ) : allSelectedAudioCompleted ? (
+                      <CheckCircle2 size={17} color="#34d399" />
+                    ) : (
+                      <Mic size={17} color={isGeneratingBatchTTS ? '#FF8577' : '#0B132B'} />
+                    )}
+                  </div>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{
+                      fontSize: '0.82rem',
+                      fontWeight: 900,
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      color: isGeneratingBatchTTS ? '#f8fafc' : allSelectedAudioCompleted ? '#34d399' : '#0B132B',
+                    }}>
+                      {isGeneratingBatchTTS
+                        ? `🎙️ កំពុង TTS: ${ttsCurrentEpTitle}`
+                        : allSelectedAudioCompleted
+                        ? '✓ សំឡេងខ្មែរ AI រួចរាល់ ១០០%'
+                        : `🎙️ បង្កើតសំឡេងខ្មែរ AI (${unAudioSelectedEpisodes.length} ភាគនៅសល់)`}
+                    </div>
+                    <div style={{
+                      fontSize: '0.68rem',
+                      color: isGeneratingBatchTTS
+                        ? '#fca5a5'
+                        : allSelectedAudioCompleted
+                        ? '#6ee7b7'
+                        : 'rgba(11, 19, 43, 0.85)',
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      fontWeight: 700,
+                    }}>
+                      {isGeneratingBatchTTS
+                        ? `${ttsLiveStats[activeTtsEpisodeId]?.current || 0}/${ttsLiveStats[activeTtsEpisodeId]?.total || '...'} ឃ្លា (${ttsLiveStats[activeTtsEpisodeId]?.percent || 0}%) • សរុប ${ttsProgressPercent}%`
+                        : allSelectedAudioCompleted
+                        ? `គ្រប់ភាគ (${selectedEpIds.size} ភាគ) មានសំឡេង Master ពេញលេញ`
+                        : 'រំលងភាគដែលធ្វើរួច • Edge-TTS'}
+                    </div>
+                  </div>
+                </div>
+                <span style={{
+                  fontSize: '0.64rem',
+                  fontWeight: 900,
+                  background: isGeneratingBatchTTS
+                    ? 'rgba(255, 133, 119, 0.25)'
+                    : allSelectedAudioCompleted
+                    ? 'rgba(16, 185, 129, 0.25)'
+                    : 'rgba(11, 19, 43, 0.15)',
+                  color: isGeneratingBatchTTS ? '#FF8577' : allSelectedAudioCompleted ? '#34d399' : '#0B132B',
+                  padding: '2px 8px',
+                  borderRadius: 9999,
+                  border: isGeneratingBatchTTS
+                    ? '1px solid rgba(255, 133, 119, 0.4)'
+                    : allSelectedAudioCompleted
+                    ? '1px solid rgba(16, 185, 129, 0.35)'
+                    : '1px solid rgba(11, 19, 43, 0.25)',
+                  flexShrink: 0,
+                  letterSpacing: '0.04em',
+                }}>
+                  {isGeneratingBatchTTS ? `${ttsProgressPercent}%` : allSelectedAudioCompleted ? 'DONE' : 'STEP 3'}
+                </span>
+              </button>
+              {isGeneratingBatchTTS && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (window.confirm('តើអ្នកពិតជាចង់បញ្ឈប់ (Kill) ដំណើរការបង្កើតសំឡេង TTS ទាំងអស់មែនទេ?')) {
+                      handleKillTTS();
+                    }
+                  }}
+                  className="btn-tactile"
+                  style={{
+                    background: 'linear-gradient(135deg, rgba(239, 68, 68, 0.28) 0%, rgba(185, 28, 28, 0.45) 100%)',
+                    border: '1px solid rgba(239, 68, 68, 0.75)',
+                    boxShadow: '0 4px 15px rgba(239, 68, 68, 0.35)',
+                    color: '#fee2e2',
+                    padding: '9px 14px',
+                    borderRadius: 10,
+                    fontSize: '0.74rem',
+                    fontWeight: 800,
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 6,
+                    whiteSpace: 'nowrap',
+                    transition: 'all 0.2s ease',
+                  }}
+                  title="Kill TTS Process"
+                >
+                  🛑 បញ្ឈប់ (Kill TTS)
+                </button>
+              )}
+            </div>
+
+            {/* ── 3. DEMUCS VOCAL SEPARATION ACTION (Step 3 - AI Clean BGM) ── */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <button
+                type="button"
+                onClick={handleBatchDemucsSeparation}
+                disabled={isSeparatingBatchDemucs || isGeneratingBatchTTS || isStartingBatch || selectedEpIds.size === 0}
+                className="btn-tactile"
+                style={{
+                  position: 'relative',
+                  overflow: 'hidden',
+                  padding: '11px 16px',
+                  borderRadius: 14,
+                  background: isSeparatingBatchDemucs
+                    ? '#131b2e'
+                    : allSelectedDemucsCompleted
+                    ? 'linear-gradient(135deg, rgba(16, 185, 129, 0.14) 0%, rgba(5, 150, 105, 0.22) 100%)'
+                    : (selectedEpIds.size === 0)
+                    ? 'rgba(56, 189, 248, 0.04)'
+                    : 'linear-gradient(135deg, rgba(56, 189, 248, 0.12) 0%, rgba(14, 165, 233, 0.2) 100%)',
+                  border: isSeparatingBatchDemucs
+                    ? '1px solid #38bdf8'
+                    : allSelectedDemucsCompleted
+                    ? '1px solid rgba(16, 185, 129, 0.5)'
+                    : (selectedEpIds.size === 0)
+                    ? '1px solid rgba(56, 189, 248, 0.18)'
+                    : '1px solid rgba(56, 189, 248, 0.5)',
+                  color: isSeparatingBatchDemucs ? '#38bdf8' : allSelectedDemucsCompleted ? '#34d399' : '#38bdf8',
+                  fontWeight: 800,
+                  cursor: (isSeparatingBatchDemucs || isGeneratingBatchTTS || isStartingBatch || selectedEpIds.size === 0) ? 'not-allowed' : 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 10,
+                  boxShadow: allSelectedDemucsCompleted
+                    ? '0 2px 14px rgba(16, 185, 129, 0.2)'
+                    : (selectedEpIds.size > 0 && !isSeparatingBatchDemucs)
+                    ? '0 4px 16px rgba(56, 189, 248, 0.22)'
+                    : isSeparatingBatchDemucs
+                    ? '0 0 16px rgba(56, 189, 248, 0.25)'
+                    : 'none',
+                  transition: 'all 0.2s cubic-bezier(0.16, 1, 0.3, 1)',
+                }}
+              >
+                {/* Realtime Progress Track within button during separation */}
+                {isSeparatingBatchDemucs && (
+                  <div style={{
+                    position: 'absolute',
+                    left: 0,
+                    bottom: 0,
+                    height: 3,
+                    width: `${Math.max(4, demucsProgressPercent)}%`,
+                    background: '#38bdf8',
+                    boxShadow: '0 0 8px #38bdf8',
+                    transition: 'width 0.3s ease',
+                  }} />
+                )}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, textAlign: 'left' }}>
+                  <div style={{
+                    width: 34,
+                    height: 34,
+                    borderRadius: 10,
+                    background: isSeparatingBatchDemucs
+                      ? 'rgba(56, 189, 248, 0.22)'
+                      : allSelectedDemucsCompleted
+                      ? 'rgba(16, 185, 129, 0.25)'
+                      : 'rgba(56, 189, 248, 0.16)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    flexShrink: 0,
+                  }}>
+                    {isSeparatingBatchDemucs ? (
+                      <Loader2 size={17} className="animate-spin" color="#38bdf8" />
+                    ) : allSelectedDemucsCompleted ? (
+                      <CheckCircle2 size={17} color="#34d399" />
+                    ) : (
+                      <Volume2 size={17} color="#38bdf8" />
+                    )}
+                  </div>
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{
+                      fontSize: '0.82rem',
+                      fontWeight: 900,
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      color: isSeparatingBatchDemucs ? '#f8fafc' : allSelectedDemucsCompleted ? '#34d399' : '#f8fafc',
+                    }}>
+                      {isSeparatingBatchDemucs
+                        ? `🎧 កំពុងបំបែក: ${demucsCurrentEpTitle}`
+                        : allSelectedDemucsCompleted
+                        ? '✓ Demucs AI Clean BGM រួចរាល់ ១០០%'
+                        : `🎧 បំបែកសំឡេងដើម AI (${unDemucsSelectedEpisodes.length} ភាគនៅសល់)`}
+                    </div>
+                    <div style={{
+                      fontSize: '0.68rem',
+                      color: isSeparatingBatchDemucs ? '#7dd3fc' : allSelectedDemucsCompleted ? '#6ee7b7' : '#38bdf8',
+                      whiteSpace: 'nowrap',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      fontWeight: 700,
+                    }}>
+                      {isSeparatingBatchDemucs
+                        ? `${demucsProgressPercent}% រួចរាល់`
+                        : allSelectedDemucsCompleted
+                        ? `គ្រប់ភាគ (${selectedEpIds.size} ភាគ) មាន Clean BGM ពេញលេញ`
+                        : 'រំលងភាគដែលធ្វើរួច • Demucs AI'}
+                    </div>
+                  </div>
+                </div>
+                <span style={{
+                  fontSize: '0.64rem',
+                  fontWeight: 900,
+                  background: isSeparatingBatchDemucs
+                    ? 'rgba(56, 189, 248, 0.25)'
+                    : allSelectedDemucsCompleted
+                    ? 'rgba(16, 185, 129, 0.25)'
+                    : 'rgba(56, 189, 248, 0.18)',
+                  color: isSeparatingBatchDemucs ? '#38bdf8' : allSelectedDemucsCompleted ? '#34d399' : '#38bdf8',
+                  padding: '2px 8px',
+                  borderRadius: 9999,
+                  border: isSeparatingBatchDemucs
+                    ? '1px solid rgba(56, 189, 248, 0.4)'
+                    : allSelectedDemucsCompleted
+                    ? '1px solid rgba(16, 185, 129, 0.35)'
+                    : '1px solid rgba(56, 189, 248, 0.35)',
+                  flexShrink: 0,
+                  letterSpacing: '0.04em',
+                }}>
+                  {isSeparatingBatchDemucs ? `${demucsProgressPercent}%` : allSelectedDemucsCompleted ? 'DONE' : 'STEP 4'}
+                </span>
+              </button>
+              {isSeparatingBatchDemucs && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (window.confirm('តើអ្នកពិតជាចង់បញ្ឈប់ (Kill) ដំណើរការបំបែកសំឡេង Demucs ទាំងអស់មែនទេ?')) {
+                      handleKillDemucs();
+                    }
+                  }}
+                  className="btn-tactile"
+                  style={{
+                    background: 'linear-gradient(135deg, rgba(239, 68, 68, 0.28) 0%, rgba(185, 28, 28, 0.45) 100%)',
+                    border: '1px solid rgba(239, 68, 68, 0.75)',
+                    boxShadow: '0 4px 15px rgba(239, 68, 68, 0.35)',
+                    color: '#fee2e2',
+                    padding: '9px 14px',
+                    borderRadius: 10,
+                    fontSize: '0.74rem',
+                    fontWeight: 800,
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 6,
+                    whiteSpace: 'nowrap',
+                    transition: 'all 0.2s ease',
+                  }}
+                  title="Kill Demucs Process"
+                >
+                  🛑 បញ្ឈប់ (Kill Demucs)
+                </button>
+              )}
+            </div>
           </div>
         </div>
 
@@ -2086,6 +2232,7 @@ export default function GeminiRouteModal({
                           isQueued={isQueued}
                           isFailed={isFailed}
                           onRetry={() => handleRetryEpisode(ep)}
+                          onKill={() => handleKillTranslate(activeJob || ep)}
                         />
                       )}
 
@@ -2094,6 +2241,7 @@ export default function GeminiRouteModal({
                         <EpisodeTtsProgressCard
                           liveStats={ttsLiveStats[ep.id]}
                           ep={ep}
+                          onKill={() => handleKillTTS(ep)}
                         />
                       )}
 

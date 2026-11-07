@@ -140,7 +140,9 @@ export function createDefaultEpisode(episodeNumber = null, title = null, id = nu
     : getNextAvailableEpisodeNumber(existingEpisodes);
 
   const resolvedId = id || generateUniqueEpisodeId(resolvedNumber, existingEpisodes);
-  const resolvedTitle = title || `ភាគទី ${resolvedNumber} (EP${resolvedNumber})`;
+  const resolvedTitle = (typeof title === 'string' && title.trim())
+    ? title.trim()
+    : `ភាគទី ${resolvedNumber} (EP${resolvedNumber})`;
 
   return {
     id: resolvedId,
@@ -789,7 +791,8 @@ export function addNewEpisodeToSeries(seriesId, customTitle = null) {
   const series = list[sIdx];
   const existing = series.episodes || [];
   const nextNum = getNextAvailableEpisodeNumber(existing);
-  const newEp = createDefaultEpisode(nextNum, customTitle || `ភាគទី ${nextNum} (EP${nextNum})`, null, existing);
+  const safeTitle = (typeof customTitle === 'string' && customTitle.trim()) ? customTitle.trim() : null;
+  const newEp = createDefaultEpisode(nextNum, safeTitle || `ភាគទី ${nextNum} (EP${nextNum})`, null, existing);
 
   series.episodes = [...existing, newEp];
   list[sIdx] = series;

@@ -332,7 +332,7 @@ export default function MediaPanel({
               {onCreateEpisode && (
                 <button
                   type="button"
-                  onClick={onCreateEpisode}
+                  onClick={() => onCreateEpisode()}
                   className="media-mini-action-btn"
                   title="បន្ថែមភាគថ្មី (Add Episode)"
                 >

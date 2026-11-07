@@ -1,48 +1,42 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
-- **Environment**: Antigravity IDE (Demucs Separation Speed Diagnosis, Pinned `htdemucs`, and Truthful Model Label)
-- **Timestamp**: 2026-11-08T00:15:00+07:00
+- **Environment**: Antigravity IDE (Runtime Bug Fixes: pushUndoSnapshot, setPollInterval, circular JSON on Episode Creation, and Full Kill Controls)
+- **Timestamp**: 2026-11-08T00:26:00+07:00
 
 ## Summary of Completed Work
 
-### 1. Demucs Model & Hardware Diagnosis (Step 1)
-- **Diagnosed Backend Console Log**:
-  - Found console log line from Nha's EP1 run:
-    `[AudioSeparation] 🎧 Launching Demucs separation for: ep_1_source.mp4 (Model: htdemucs, Device: auto, Overlap: 0.25)`
-  - **REAL Model**: `htdemucs`
-  - **REAL Device**: `cpu` (PyTorch version `2.15.0+cpu` with `torch.cuda.is_available() == False`).
-  - **Root Cause of Slowness**: `htdemucs_ft` was **never** passed in the backend. In the pushed backend, every default was already `htdemucs`. The ~7%/min separation speed (~14 minutes total for 03:42 EP1) is pure single-model CPU speed running Demucs without GPU acceleration.
+### 1. Runtime Crash Fixes (4 Critical Defects Resolved)
+1. **`pushUndoSnapshot is not a function`** (`useClipOperations.js`):
+   - In `App.jsx`, `useClipOperations` was called with `pushHistory` instead of `pushUndoSnapshot`.
+   - Updated `useClipOperations.js` to accept both `pushUndoSnapshot` and `pushHistory` with a defensive fallback wrapper `pushUndoSnapshot = useCallback(...)`.
+   - Updated `App.jsx` to pass both parameters explicitly (`pushUndoSnapshot: undoRedo.pushHistory, pushHistory: undoRedo.pushHistory`).
+   - Fixes crashes on **Auto-Align timing** and **Reset to Source Timing**.
 
-### 2. Explicitly Pinned Model at All Call Sites (Step 2)
-- Added `model: 'htdemucs'` explicitly to both primary invocation points:
-  - [`backend/routes/audioRoutes.js`](file:///e:/khmer_ai_dubbing_studio/backend/routes/audioRoutes.js): Line ~487 (`separateAudio({ audioPath: inputVideoPath, model: 'htdemucs' })`).
-  - [`backend/services/ffmpegService.js`](file:///e:/khmer_ai_dubbing_studio/backend/services/ffmpegService.js): Line ~1088 (`separateAudio({ audioPath: inputVideoPath, model: 'htdemucs', jobId })`).
-  - Service and worker defaults maintained at `'htdemucs'`.
+2. **`setPollInterval is not defined`** (`GeminiRouteModal.jsx`):
+   - Removed obsolete `setPollInterval(1000)` calls on lines 293 and 521 in `GeminiRouteModal.jsx`.
+   - Job queue polling is handled via `JobQueueContext` / `useSharedJobQueue` without manual intervals.
+   - Fixes crash on **Start Batch Translate** and **Retry**.
 
-### 3. Two-Stems Output Verification (Step 3)
-- Verified [`backend/workers/demucs_worker.py`](file:///e:/khmer_ai_dubbing_studio/backend/workers/demucs_worker.py):
-  - Line 195 already specifies `--two-stems=vocals`.
-  - Output folder logic isolates `vocals.wav` and `no_vocals.wav` and copies them directly to `output_dir` (matching service cache checks).
+3. **`Converting circular structure to JSON`** (`projectStorage.js` & `MediaPanel.jsx`):
+   - In `MediaPanel.jsx:335`, `<button onClick={onCreateEpisode}>` passed the React `MouseEvent` (`e`) as the title argument.
+   - The event contained `target: HTMLSpanElement` with circular React Fiber references, causing `JSON.stringify` to blow up in `saveSeriesList`.
+   - Fixed `onClick={() => onCreateEpisode()}` in `MediaPanel.jsx`.
+   - Added string type guards (`typeof customTitle === 'string'`) in `useSeriesManager.js`, `createDefaultEpisode`, `addNewEpisodeToSeries`, and `App.jsx:handleCreateEpisode`.
 
-### 4. Truthful UI Model Label (Step 4)
-- [`frontend/src/components/dashboard/route-runners/EpisodeDemucsProgressCard.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/dashboard/route-runners/EpisodeDemucsProgressCard.jsx):
-  - Removed both hardcoded `htdemucs_ft` strings (lines ~99 and ~274).
-  - Dynamically computes `modelName = liveStats?.model || ep?.demucsModel || ep?.model || 'htdemucs'`.
-  - Terminal title now truthfully displays `CONSOLE LOGS (Demucs AI Model: {modelName})`.
-  - Dynamic message shows `AI Deep Learning Stem Separation ({modelName})...`.
-- Backend support:
-  - [`backend/services/audioSeparationService.js`](file:///e:/khmer_ai_dubbing_studio/backend/services/audioSeparationService.js): Included `model` in `activeSeparationProgress`.
-  - [`backend/routes/audioRoutes.js`](file:///e:/khmer_ai_dubbing_studio/backend/routes/audioRoutes.js): Included `model` in `/api/audio/separation-progress` response.
+4. **Health Check 502 / Backend Availability**:
+   - Backend online and active on port 5000 (`http://localhost:5000/api/health` returns status `ok`, 4 Gemini keys configured).
+   - Vite proxy verified on `http://localhost:5173/api/health` returning 200 OK.
 
-### 5. Verification & Cache Notes (Step 5)
-- **Separation Verification**:
-  - EP1 (03:42, 222.8s) run completed 100% in **14 minutes and 26 seconds** (866s wall-clock) at ~7.2%/min on CPU.
-  - Launch log confirmed: `(Model: htdemucs, Device: auto, Overlap: 0.25)`.
-  - API progress check returns `model: 'htdemucs'`.
-  - Cache directory computed with `model = 'htdemucs'` is saved at `uploads/cache/separation/0410e96ce17bdcf2538435006f208317/`.
-- **Frontend Build**: `npm --prefix frontend run build` ➔ **PASS** (574ms, 0 errors).
+### 2. Kill / Stop Buttons Integrated on All 3 Steps
+- **Step 1 (Translate)**: `🛑 បញ្ឈប់ (Kill Translate)` in top batch action bar and individual progress card (`EpisodeTranslateProgressCard.jsx`).
+- **Step 2 (TTS)**: `🛑 បញ្ឈប់ (Kill TTS)` in top batch action bar and individual progress card (`EpisodeTtsProgressCard.jsx`) backed by `POST /api/tts/kill`.
+- **Step 3 (Demucs)**: `🛑 បញ្ឈប់ (Kill Demucs)` maintained and active.
+
+### 3. Verification & Quality Acceptance
+- **Build**: `npm --prefix frontend run build` ➔ **PASS** (615ms, 0 errors).
 - **Backend API**: Verified online at `http://localhost:5000`.
+- **Proxy**: `http://localhost:5173/api/health` ➔ 200 OK.
 
 ## Active Environment
 - **Backend API**: `http://localhost:5000` (Node.js/Express, online)
@@ -50,6 +44,4 @@
 - **Git Branch**: `main`
 
 ## Next Steps
-- **PROMPT 1**: Fast OCR plan revision (incorporate speakerGender fallback, OCR dedupe/merge, external SRT full stack, re-translate safety, persist generationMode, and skip Stage 4/5 safely).
-- **PROMPT 4 / Performance Step 3**: Virtualize ScriptReviewTab segment list + window TimelineTracksCanvas clips.
-- Git HEAD: `a84b8edb2b8e18c640ee509b6713aa9cab1829c1` (pushed to `origin/main`).
+- Await Nha's test verification in browser (`http://localhost:5173`).

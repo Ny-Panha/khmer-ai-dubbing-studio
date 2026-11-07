@@ -6,7 +6,7 @@ import { Terminal, ChevronDown, ChevronUp, CheckCircle2, Loader2, AlertCircle } 
  * Dynamic 0% - 100% smooth runner, glowing coral progress bar, 4 visual milestones,
  * and collapsible Live Console Terminal Drawer for Step 2 (Khmer TTS Voice Studio).
  */
-export default function EpisodeTtsProgressCard({ liveStats, ep }) {
+export default function EpisodeTtsProgressCard({ liveStats, ep, onKill = null }) {
   const current = liveStats?.current || 0;
   const total = liveStats?.total || ep?.scriptData?.segments?.length || ep?.scriptData?.totalSegments || 1;
   const targetPercent = Math.min(100, Math.max(0, liveStats?.percent ?? Math.round((current / (total || 1)) * 100)));
@@ -109,31 +109,60 @@ export default function EpisodeTtsProgressCard({ liveStats, ep }) {
           </div>
         </div>
 
-        {/* Tabular Percentage */}
-        <div style={{
-          display: 'flex',
-          alignItems: 'baseline',
-          justifyContent: 'flex-end',
-          gap: 1,
-          background: 'rgba(0, 0, 0, 0.5)',
-          padding: '2px 8px',
-          borderRadius: 6,
-          border: `1px solid ${stateBorder}`,
-          flexShrink: 0,
-          marginLeft: 8,
-        }}>
-          <span style={{
-            fontSize: '1.25rem',
-            fontWeight: 900,
-            fontFamily: "'JetBrains Mono', 'Fira Code', 'Consolas', monospace",
-            fontVariantNumeric: 'tabular-nums',
-            color: stateColor,
-            textShadow: `0 0 12px ${stateColor}`,
-            letterSpacing: '-0.02em',
+        {/* Tabular Percentage & Kill Button */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0, marginLeft: 8 }}>
+          {!isDone && !isFailed && onKill && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (window.confirm('តើអ្នកពិតជាចង់បញ្ឈប់ (Kill) ដំណើរការ TTS នេះមែនទេ?')) {
+                  onKill(ep);
+                }
+              }}
+              title="Kill TTS Process"
+              style={{
+                background: 'rgba(239, 68, 68, 0.22)',
+                border: '1px solid rgba(239, 68, 68, 0.55)',
+                color: '#fca5a5',
+                padding: '4px 8px',
+                borderRadius: 6,
+                fontSize: '0.68rem',
+                fontWeight: 800,
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 4,
+                transition: 'all 0.15s ease',
+              }}
+            >
+              🛑 Kill
+            </button>
+          )}
+          <div style={{
+            display: 'flex',
+            alignItems: 'baseline',
+            justifyContent: 'flex-end',
+            gap: 1,
+            background: 'rgba(0, 0, 0, 0.5)',
+            padding: '2px 8px',
+            borderRadius: 6,
+            border: `1px solid ${stateBorder}`,
+            flexShrink: 0,
           }}>
-            {smoothProgress}
-          </span>
-          <span style={{ fontSize: '0.72rem', fontWeight: 800, color: stateColor }}>%</span>
+            <span style={{
+              fontSize: '1.25rem',
+              fontWeight: 900,
+              fontFamily: "'JetBrains Mono', 'Fira Code', 'Consolas', monospace",
+              fontVariantNumeric: 'tabular-nums',
+              color: stateColor,
+              textShadow: `0 0 12px ${stateColor}`,
+              letterSpacing: '-0.02em',
+            }}>
+              {smoothProgress}
+            </span>
+            <span style={{ fontSize: '0.72rem', fontWeight: 800, color: stateColor }}>%</span>
+          </div>
         </div>
       </div>
 

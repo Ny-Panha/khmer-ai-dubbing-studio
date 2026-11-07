@@ -517,6 +517,30 @@ export async function cancelJobApi(jobId) {
   return await parseResponseJson(res, `Failed to cancel job ${jobId}`);
 }
 
+/**
+ * Kill/Cancel Translate Job(s) by jobId, episodeId, or All
+ */
+export async function killTranslateJobApi({ jobId, seriesId, episodeId, all = false } = {}) {
+  const res = await fetch('/api/jobs/kill', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jobId, seriesId, episodeId, all }),
+  });
+  return await parseResponseJson(res, 'Failed to kill translate job');
+}
+
+/**
+ * Kill/Cancel Khmer AI Voice TTS Process
+ */
+export async function killTtsApi({ seriesId, episodeId, all = false } = {}) {
+  const res = await fetch('/api/tts/kill', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ seriesId, episodeId, all }),
+  });
+  return await parseResponseJson(res, 'Failed to kill TTS process');
+}
+
 
 /**
  * Auto-Split a long video into episodes

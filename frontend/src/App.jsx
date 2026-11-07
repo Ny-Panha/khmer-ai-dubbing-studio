@@ -262,6 +262,7 @@ export default function App() {
     currentTime: playback.currentTime,
     videoRef,
     pushHistory: undoRedo.pushHistory,
+    pushUndoSnapshot: undoRedo.pushHistory,
     scriptData,
     setScriptData,
     videoClips: media.videoClips,
@@ -428,7 +429,10 @@ export default function App() {
   // Script & Series callbacks
   const handleUpdateScript = useCallback((...args) => scriptRef.current.handleUpdateScript?.(...args), []);
   const handleSwitchEpisode = useCallback((...args) => seriesRef.current.handleSwitchEpisode?.(...args), []);
-  const handleCreateEpisode = useCallback((...args) => seriesRef.current.handleCreateEpisode?.(...args), []);
+  const handleCreateEpisode = useCallback((customTitle = null) => {
+    const safeTitle = typeof customTitle === 'string' ? customTitle : null;
+    return seriesRef.current.handleCreateEpisode?.(safeTitle);
+  }, []);
   const handleDeleteEpisode = useCallback((...args) => seriesRef.current.handleDeleteEpisode?.(...args), []);
   const handleRenameEpisode = useCallback((...args) => seriesRef.current.handleRenameEpisode?.(...args), []);
   const handleRenameSeries = useCallback((...args) => seriesRef.current.handleRenameSeries?.(...args), []);

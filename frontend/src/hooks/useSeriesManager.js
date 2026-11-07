@@ -402,12 +402,13 @@ export function useSeriesManager({
 
   // 2. Create and switch to a new episode
   const handleCreateEpisode = useCallback((customTitle = null) => {
+    const safeTitle = (typeof customTitle === 'string' && customTitle.trim()) ? customTitle.trim() : null;
     // 1. Save current episode
     const snapshot = getCurrentWorkspaceSnapshot();
     saveEpisodeState(activeSeriesIdState, activeEpisodeIdRef.current, snapshot);
 
     // 2. Add new episode to series
-    const newEp = addNewEpisodeToSeries(activeSeriesIdState, customTitle);
+    const newEp = addNewEpisodeToSeries(activeSeriesIdState, safeTitle);
     if (!newEp) return null;
 
     // 3. Reload list and switch to new episode

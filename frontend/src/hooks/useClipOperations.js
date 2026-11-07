@@ -32,7 +32,8 @@ export function useClipOperations({
   audioGenerated,
   setSelectedSegmentId,
   handleSeek,
-  pushUndoSnapshot,
+  pushUndoSnapshot: pushUndoSnapshotParam,
+  pushHistory,
   setFullAudioUrl,
   setFullAudioPath,
   syncAudioTimeoutRef,
@@ -40,6 +41,15 @@ export function useClipOperations({
   episodeId = null,
   setAudioOutdated = null,
 }) {
+  const pushUndoSnapshot = useCallback((...args) => {
+    if (typeof pushUndoSnapshotParam === 'function') {
+      return pushUndoSnapshotParam(...args);
+    }
+    if (typeof pushHistory === 'function') {
+      return pushHistory(...args);
+    }
+  }, [pushUndoSnapshotParam, pushHistory]);
+
   const getProjectName = () => selectedVideo?.projectName || selectedVideo?.title || selectedVideo?.name || selectedVideo?.fileName || '';
   const getVideoId = () => selectedVideo?.id || selectedVideo?.videoId || '';
 

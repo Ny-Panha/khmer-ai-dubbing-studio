@@ -15,6 +15,7 @@ const {
   validateVoiceId,
   generateSingleSegmentAudio,
   generateBatchSegmentsAudio,
+  cancelTtsJob,
   generateVoicePreview,
 } = require("../services/ttsService");
 const { detectSpeakerGender } = require("../models/speakerRegistry");
@@ -125,6 +126,21 @@ router.get("/tts/progress", async (req, res) => {
       episodeId: cleanEpisode,
     });
   } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * 3.1. Kill / Cancel Active TTS Synthesis Process
+ */
+router.post("/tts/kill", (req, res) => {
+  try {
+    const { seriesId, episodeId, all } = req.body || {};
+    const key = (all || (!seriesId && !episodeId)) ? 'all' : (episodeId ? `${seriesId || ''}:${episodeId}` : (seriesId || 'all'));
+    const result = cancelTtsJob(key);
+    return res.json({ success: true, result });
+  } catch (err) {
+    console.error("[TTS Kill] Error:", err);
     return res.status(500).json({ success: false, error: err.message });
   }
 });
@@ -337,6 +353,7 @@ router.post("/generate-audio", async (req, res) => {
         autoStretch,
         maxSpeed,
         speakerMap,
+        seriesId: cleanSeries,
         episodeId: cleanEpisode,
         forceRegen: Boolean(forceRegen),
       });

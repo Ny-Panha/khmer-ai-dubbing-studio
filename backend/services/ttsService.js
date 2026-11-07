@@ -680,6 +680,29 @@ async function generateSingleSegmentAudio(segment, uploadsDir, options = {}) {
   };
 }
 
+const activeTtsJobs = new Map();
+
+function cancelTtsJob(targetKey = 'all') {
+  let count = 0;
+  console.log(`[TTSService] 🛑 Kill TTS command received for: ${targetKey}`);
+  if (!targetKey || targetKey === 'all') {
+    for (const [key, state] of activeTtsJobs.entries()) {
+      state.aborted = true;
+      count++;
+    }
+    activeTtsJobs.clear();
+  } else {
+    for (const [key, state] of activeTtsJobs.entries()) {
+      if (key === targetKey || key.includes(targetKey)) {
+        state.aborted = true;
+        activeTtsJobs.delete(key);
+        count++;
+      }
+    }
+  }
+  return { cancelled: true, count };
+}
+
 /**
  * 4. បង្កើតសំឡេងសម្រាប់គ្រប់ឃ្លាទាំងអស់ (Batch Parallel Generation, Concurrency = 3 default)
  */
@@ -689,13 +712,21 @@ async function generateBatchSegmentsAudio(segments = [], uploadsDir, options = {
   const results = new Array(segments.length);
   let currentIndex = 0;
 
+  const jobKey = options.jobKey || (options.episodeId ? `${options.seriesId || ''}:${options.episodeId}` : 'default');
+  const jobState = { aborted: false };
+  activeTtsJobs.set(jobKey, jobState);
+
   console.log(
-    `[TTSService] 🎙️ ចាប់ផ្តើមបង្កើតសំឡេងខ្មែរចំនួន ${segments.length} ឃ្លា (Concurrency: ${concurrency})...`
+    `[TTSService] 🎙️ ចាប់ផ្តើមបង្កើតសំឡេងខ្មែរចំនួន ${segments.length} ឃ្លា (Concurrency: ${concurrency}, Job: ${jobKey})...`
   );
   const startTime = Date.now();
 
   async function worker() {
     while (currentIndex < segments.length) {
+      if (jobState.aborted || options.signal?.aborted) {
+        console.log(`[TTSService] 🛑 TTS Generation stopped/killed for ${jobKey}`);
+        break;
+      }
       const idx = currentIndex++;
       const seg = segments[idx];
 
@@ -744,11 +775,15 @@ async function generateBatchSegmentsAudio(segments = [], uploadsDir, options = {
     }
   }
 
-  const workers = Array.from(
-    { length: Math.min(concurrency, segments.length) },
-    () => worker()
-  );
-  await Promise.all(workers);
+  try {
+    const workers = Array.from(
+      { length: Math.min(concurrency, segments.length) },
+      () => worker()
+    );
+    await Promise.all(workers);
+  } finally {
+    activeTtsJobs.delete(jobKey);
+  }
 
   const succeededCount = results.filter((r) => r && r.audioUrl).length;
   const failedCount = results.filter((r) => r && r.error).length;
@@ -842,6 +877,7 @@ module.exports = {
   synthesizeWithGoogleFallback,
   generateSingleSegmentAudio,
   generateBatchSegmentsAudio,
+  cancelTtsJob,
   generateVoicePreview,
   generateKhmerSpeech,
   generateSingleSegmentSpeech,

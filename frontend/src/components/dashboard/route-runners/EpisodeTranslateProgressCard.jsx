@@ -12,6 +12,7 @@ export default function EpisodeTranslateProgressCard({
   isQueued,
   isFailed = false,
   onRetry = null,
+  onKill = null,
 }) {
   const targetProgress = isQueued
     ? 0
@@ -180,68 +181,99 @@ export default function EpisodeTranslateProgressCard({
           </div>
         </div>
 
-        {/* Counter or Retry Button on Failure */}
-        {isFailed ? (
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              if (typeof onRetry === 'function') onRetry();
-            }}
-            style={{
-              background: 'linear-gradient(135deg, rgba(239, 68, 68, 0.28) 0%, rgba(220, 38, 38, 0.45) 100%)',
-              border: '1px solid rgba(239, 68, 68, 0.65)',
-              color: '#ffffff',
-              borderRadius: 6,
-              padding: '4px 10px',
-              fontSize: '0.70rem',
-              fontWeight: 800,
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 5,
-              boxShadow: '0 0 14px rgba(239, 68, 68, 0.35)',
-              transition: 'all 0.15s ease',
-              flexShrink: 0,
-            }}
-            title="Retry ដំណើរការ Translation ឡើងវិញ"
-          >
-            <RotateCcw size={12} />
-            <span>Retry 🔄</span>
-          </button>
-        ) : (
-          <div style={{
-            display: 'flex',
-            alignItems: 'baseline',
-            justifyContent: 'flex-end',
-            gap: 1,
-            background: 'rgba(0, 0, 0, 0.5)',
-            padding: '2px 8px',
-            borderRadius: 6,
-            border: `1px solid ${stateBorder}`,
-            flexShrink: 0,
-            marginLeft: 8,
-          }}>
-            <span style={{
-              fontSize: '1.25rem',
-              fontWeight: 900,
-              fontFamily: "'JetBrains Mono', 'Fira Code', 'Consolas', monospace",
-              fontVariantNumeric: 'tabular-nums',
-              color: stateColor,
-              textShadow: `0 0 12px ${stateColor}`,
-              letterSpacing: '-0.02em',
-            }}>
-              {smoothProgress}
-            </span>
-            <span style={{
-              fontSize: '0.72rem',
-              fontWeight: 800,
-              color: stateColor,
-            }}>
-              %
-            </span>
-          </div>
-        )}
+        {/* Counter or Retry Button on Failure / Kill Button */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0, marginLeft: 8 }}>
+          {isFailed ? (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (typeof onRetry === 'function') onRetry();
+              }}
+              style={{
+                background: 'linear-gradient(135deg, rgba(239, 68, 68, 0.28) 0%, rgba(220, 38, 38, 0.45) 100%)',
+                border: '1px solid rgba(239, 68, 68, 0.65)',
+                color: '#ffffff',
+                borderRadius: 6,
+                padding: '4px 10px',
+                fontSize: '0.70rem',
+                fontWeight: 800,
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 5,
+                boxShadow: '0 0 14px rgba(239, 68, 68, 0.35)',
+                transition: 'all 0.15s ease',
+                flexShrink: 0,
+              }}
+              title="Retry ដំណើរការ Translation ឡើងវិញ"
+            >
+              <RotateCcw size={12} />
+              <span>Retry 🔄</span>
+            </button>
+          ) : (
+            <>
+              {!isDone && onKill && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (window.confirm('តើអ្នកពិតជាចង់បញ្ឈប់ (Kill) ដំណើរការ Translate នេះមែនទេ?')) {
+                      onKill(activeJob);
+                    }
+                  }}
+                  title="Kill Translate Process"
+                  style={{
+                    background: 'rgba(239, 68, 68, 0.22)',
+                    border: '1px solid rgba(239, 68, 68, 0.55)',
+                    color: '#fca5a5',
+                    padding: '4px 8px',
+                    borderRadius: 6,
+                    fontSize: '0.68rem',
+                    fontWeight: 800,
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 4,
+                    transition: 'all 0.15s ease',
+                  }}
+                >
+                  🛑 Kill
+                </button>
+              )}
+              <div style={{
+                display: 'flex',
+                alignItems: 'baseline',
+                justifyContent: 'flex-end',
+                gap: 1,
+                background: 'rgba(0, 0, 0, 0.5)',
+                padding: '2px 8px',
+                borderRadius: 6,
+                border: `1px solid ${stateBorder}`,
+                flexShrink: 0,
+              }}>
+                <span style={{
+                  fontSize: '1.25rem',
+                  fontWeight: 900,
+                  fontFamily: "'JetBrains Mono', 'Fira Code', 'Consolas', monospace",
+                  fontVariantNumeric: 'tabular-nums',
+                  color: stateColor,
+                  textShadow: `0 0 12px ${stateColor}`,
+                  letterSpacing: '-0.02em',
+                }}>
+                  {smoothProgress}
+                </span>
+                <span style={{
+                  fontSize: '0.72rem',
+                  fontWeight: 800,
+                  color: stateColor,
+                }}>
+                  %
+                </span>
+              </div>
+            </>
+          )}
+        </div>
       </div>
 
       {/* Glowing Progress Bar Track */}
