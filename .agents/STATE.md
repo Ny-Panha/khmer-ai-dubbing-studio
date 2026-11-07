@@ -1,63 +1,48 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
-- **Environment**: Antigravity IDE (Clean Pass 3 — Measured Workspace Anatomy of FreeCut/OpenCut Applied)
+- **Environment**: Antigravity IDE (Demucs Separation Speed Diagnosis, Pinned `htdemucs`, and Truthful Model Label)
 - **Timestamp**: 2026-11-08T00:15:00+07:00
 
 ## Summary of Completed Work
 
-### Clean Pass 3 Execution (7 Measured Architectural Specifications)
-1. **Colour Ramp (OKLCH Lightness Steps)**:
-   - Configured in `:root` inside `frontend/src/index.css`:
-     - `--floor: oklch(0.12 0.01 250);` (lowest surface: seek strip track)
-     - `--app: oklch(0.15 0.01 250);` (workspace background)
-     - `--panel: oklch(0.18 0.01 250);` (side panels + centre panel)
-     - `--muted: oklch(0.20 0.01 250);` (hover / inset rows)
-     - `--line: oklch(0.25 0.01 250);` (the ONLY border colour for dividers and interactive elements)
-     - `--ink: oklch(0.95 0.01 250);` & `--ink-dim: oklch(0.60 0.01 250);`
-   - Zones separated by value steps + 1px `var(--line)` divider ONLY where two same-value surfaces touch.
-   - Box-shadows removed from workspace zones; panels sit flush.
-   - Video artboard is pure black (`#000000`).
+### 1. Demucs Model & Hardware Diagnosis (Step 1)
+- **Diagnosed Backend Console Log**:
+  - Found console log line from Nha's EP1 run:
+    `[AudioSeparation] 🎧 Launching Demucs separation for: ep_1_source.mp4 (Model: htdemucs, Device: auto, Overlap: 0.25)`
+  - **REAL Model**: `htdemucs`
+  - **REAL Device**: `cpu` (PyTorch version `2.15.0+cpu` with `torch.cuda.is_available() == False`).
+  - **Root Cause of Slowness**: `htdemucs_ft` was **never** passed in the backend. In the pushed backend, every default was already `htdemucs`. The ~7%/min separation speed (~14 minutes total for 03:42 EP1) is pure single-model CPU speed running Demucs without GPU acceleration.
 
-2. **Geometry**:
-   - **Top Navbar**: Exactly 52px height.
-   - **StageRail**: Permanent 48px ICON RAIL (`width: 48px !important;`). 5 stage buttons (36×36, radius 6px) with icon, status dot/check overlay, tooltip = stage name, and active accent-tinted background. Wide labelled rail and collapse controls completely removed.
-   - **MediaPanel**: 320px fixed width (`flex: 0 0 320px;`). Collapses to 0 with single clean ghost toggle button at `left: 56px`.
-   - **Right Panel**: 320px fixed width (`flex: 0 0 320px;`). No header `>` chevron, no floating `<` reopen button.
-   - **Centre Column**: Flexible width, full-height fill maintained (`calc(100vh - 52px - 32px)`).
-   - **BottomStatusStrip**: Exactly 32px height.
+### 2. Explicitly Pinned Model at All Call Sites (Step 2)
+- Added `model: 'htdemucs'` explicitly to both primary invocation points:
+  - [`backend/routes/audioRoutes.js`](file:///e:/khmer_ai_dubbing_studio/backend/routes/audioRoutes.js): Line ~487 (`separateAudio({ audioPath: inputVideoPath, model: 'htdemucs' })`).
+  - [`backend/services/ffmpegService.js`](file:///e:/khmer_ai_dubbing_studio/backend/services/ffmpegService.js): Line ~1088 (`separateAudio({ audioPath: inputVideoPath, model: 'htdemucs', jobId })`).
+  - Service and worker defaults maintained at `'htdemucs'`.
 
-3. **Type & Radius Scale**:
-   - Base font preserved.
-   - Sizes: Panel label 500/12px (sentence case, Khmer first, NO all-caps anywhere), body 400/14px, panel heading 600/16px.
-   - ALL numeric readouts (timecodes, durations, counts, RPM, percentages) in monospace (`var(--font-mono)`) at 12px.
-   - Buttons: Height 36px, radius 6px; icon buttons 36×36, radius 6px.
-   - Radius scale: 4px small chips, 6px buttons/inputs, 8px cards/modals — nothing rounder.
+### 3. Two-Stems Output Verification (Step 3)
+- Verified [`backend/workers/demucs_worker.py`](file:///e:/khmer_ai_dubbing_studio/backend/workers/demucs_worker.py):
+  - Line 195 already specifies `--two-stems=vocals`.
+  - Output folder logic isolates `vocals.wav` and `no_vocals.wav` and copies them directly to `output_dir` (matching service cache checks).
 
-4. **One Filled Button**:
-   - Top-right **Export** button is the ONLY filled/accent button in the entire chrome.
-   - Chrome buttons (`Gemini Route`, `Jobs`, `+ ភាគ`, `Split`, panel toggles) styled as ghost (`transparent` bg, `var(--line)` border, `var(--ink-dim)` text, hover `var(--muted)`).
-   - Working area exception: Translate CTA (`✦ បង្កើត Script & បកប្រែ (Gemini Route)`) remains filled. Accent colour strictly reserved for Export, Translate CTA, playhead, active stage, and focus rings.
+### 4. Truthful UI Model Label (Step 4)
+- [`frontend/src/components/dashboard/route-runners/EpisodeDemucsProgressCard.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/dashboard/route-runners/EpisodeDemucsProgressCard.jsx):
+  - Removed both hardcoded `htdemucs_ft` strings (lines ~99 and ~274).
+  - Dynamically computes `modelName = liveStats?.model || ep?.demucsModel || ep?.model || 'htdemucs'`.
+  - Terminal title now truthfully displays `CONSOLE LOGS (Demucs AI Model: {modelName})`.
+  - Dynamic message shows `AI Deep Learning Stem Separation ({modelName})...`.
+- Backend support:
+  - [`backend/services/audioSeparationService.js`](file:///e:/khmer_ai_dubbing_studio/backend/services/audioSeparationService.js): Included `model` in `activeSeparationProgress`.
+  - [`backend/routes/audioRoutes.js`](file:///e:/khmer_ai_dubbing_studio/backend/routes/audioRoutes.js): Included `model` in `/api/audio/separation-progress` response.
 
-5. **Player Panel & Scrubber**:
-   - Centre preview sits as centred fixed-aspect black artboard (`#000000`, 16:9 aspect-ratio, radius 6px, border `1px solid var(--line)`) with 20px padding around it.
-   - Single transport row directly under artboard: monospace timecode left, step back/play/step forward centre, orig audio + fullscreen right.
-   - `ThinSeekStrip` directly under transport row spanning 100% full centre width with `background: var(--floor)` and border-top divider.
-
-6. **Inspector Never Blank**:
-   - When no segment is selected, top of right panel renders **Episode Overview Card** (`.workspace-episode-overview-card`) showing episode title, monospace duration (`03:42.82`), resolution (`1920×1080`), segment count (`0 ឃ្លា`), and status badges (`Vid`, `Scr`, `Voice`, `BGM`, `Exp`). Translation config & settings render below it.
-
-7. **Media Panel After Import**:
-   - Once >= 1 episode with video exists, large dropzone is GONE, replaced by slim `+ បន្ថែមវីដេអូ (Add Video)` ghost button at panel top. Episode list fills panel (drag-onto-list still accepts files). Big dropzone renders only when series has zero imported video.
-
-### Verification & Quality Acceptance
-- **Build**: `npm --prefix frontend run build` ➔ **PASS** (0 errors).
-- **Console Errors**: 0 errors in browser.
-- **Evidence Screenshots**:
-  - `screenshot-pass3-script-segments.png`: Full 1080p workspace with 48px icon rail, 320px media panel, centered artboard, full-width seek strip, segment cards, and 320px clip inspector.
-  - `screenshot-pass3-script-noscript.png`: Script mode with no script showing in-flow translate panel with filled translate CTA and non-blank episode overview inspector card.
-  - `screenshot-pass3-empty-series.png`: Empty series state showing full dropzone prompt in media panel.
-  - `screenshot-pass3-media-collapsed.png`: Collapsed media panel showing 48px icon rail and clean single reopen toggle button at `left: 56px`.
+### 5. Verification & Cache Notes (Step 5)
+- **Separation Verification**:
+  - EP1 (03:42, 222.8s) run completed 100% in **14 minutes and 26 seconds** (866s wall-clock) at ~7.2%/min on CPU.
+  - Launch log confirmed: `(Model: htdemucs, Device: auto, Overlap: 0.25)`.
+  - API progress check returns `model: 'htdemucs'`.
+  - Cache directory computed with `model = 'htdemucs'` is saved at `uploads/cache/separation/0410e96ce17bdcf2538435006f208317/`.
+- **Frontend Build**: `npm --prefix frontend run build` ➔ **PASS** (574ms, 0 errors).
+- **Backend API**: Verified online at `http://localhost:5000`.
 
 ## Active Environment
 - **Backend API**: `http://localhost:5000` (Node.js/Express, online)
@@ -65,4 +50,4 @@
 - **Git Branch**: `main`
 
 ## Next Steps
-- Await Nha's review and approval of Clean Pass 3.
+- Staged and pushed changes to GitHub repository.
