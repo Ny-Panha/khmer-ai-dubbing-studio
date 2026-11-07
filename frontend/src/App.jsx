@@ -20,7 +20,7 @@ import ClipInspectorPanel from './components/voice/ClipInspectorPanel';
 import './components/workspace/WorkspaceLayout.css';
 
 // Icons for overview card
-import { Film, Sparkles, ChevronLeft, ChevronRight, Layers, AlertTriangle } from 'lucide-react';
+import { Film, Sparkles, ChevronRight, Layers, AlertTriangle } from 'lucide-react';
 import { formatTimecode } from './utils/formatTime';
 
 // Hoisted immutable fallbacks (prevents prop churning and broken memoization)
@@ -47,7 +47,6 @@ export default function App() {
   // Panel Collapsible States
   const [isRailCollapsed, setIsRailCollapsed] = useState(false);
   const [isLeftPanelOpen, setIsLeftPanelOpen] = useState(true);
-  const [isRightPanelOpen, setIsRightPanelOpen] = useState(true);
 
   // Search in transcript
   const [transcriptSearch, setTranscriptSearch] = useState('');
@@ -758,42 +757,13 @@ export default function App() {
             </div>
           </div>
 
-          {/* Floating Button to re-open Right Panel when collapsed */}
-          {!isRightPanelOpen && (
-            <button
-              type="button"
-              className="workspace-panel-toggle-btn right-toggle"
-              style={{ right: 0 }}
-              onClick={() => setIsRightPanelOpen(true)}
-              title="បើក Inspector & Settings Panel (Expand)"
-            >
-              <ChevronLeft size={14} />
-            </button>
-          )}
-
-          {/* 4. RIGHT PANEL: Inspector (Top) + Stage Settings (Bottom) */}
-          <div
-            className="workspace-right-container"
-            style={{
-              width: isRightPanelOpen ? 320 : 0,
-              minWidth: isRightPanelOpen ? 320 : 0,
-              display: isRightPanelOpen ? 'flex' : 'none',
-            }}
-          >
-            {/* Header: Quiet label, no ALL-CAPS bar */}
+          {/* 4. RIGHT PANEL: Inspector (Top) + Stage Settings (Bottom) — Fixed 320px */}
+          <div className="workspace-right-container">
+            {/* Header: Quiet label, no collapse button */}
             <div className="workspace-right-header">
               <span className="workspace-quiet-label">
                 ការកំណត់ (Inspector & Settings)
               </span>
-              <button
-                type="button"
-                className="workspace-toolbar-btn icon-only"
-                style={{ padding: '2px 5px', border: 'none', background: 'transparent' }}
-                onClick={() => setIsRightPanelOpen(false)}
-                title="បង្រួម Right Panel (Collapse)"
-              >
-                <ChevronRight size={14} color="#64748b" />
-              </button>
             </div>
 
             <div className="workspace-right-body">

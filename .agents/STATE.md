@@ -1,39 +1,34 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
-- **Environment**: Antigravity IDE (Clean Pass 2 — Full-Height Fill, Full-Width Seek Strip & Border Elimination)
-- **Timestamp**: 2026-11-07T22:55:00+07:00
+- **Environment**: Antigravity IDE (Removal of Right-Panel Collapse Controls — Fixed 320px Inspector & Settings)
+- **Timestamp**: 2026-11-07T23:09:00+07:00
 
 ## Summary of Completed Work
 
-### Clean Pass 2 Execution (Resolution of 3 Core Defects)
-1. **FULL-HEIGHT FILL (Eliminated Mid-Screen Cutoffs & Floating Look)**:
-   - Root workspace body explicitly sized to `calc(100vh - 48px - 30px)` (`display: flex; flex-direction: row; min-height: 0; overflow: hidden;`).
-   - **StageRail**: Added bottom quiet footer block (`DRAGON DUB v2.5 Studio`) anchored with `margin-top: auto` so the `#0d121f` background tint runs the 100% full height.
-   - **MediaPanel**: Wrapped with internal scroll handling where `.media-section-wrap.episodes-section` and `.media-episodes-scroll-list` flex-grow (`flex: 1; min-height: 0; overflow-y: auto`), allowing the `#101726` background tint to stretch down to the bottom status bar without cutoff.
-   - **Centre Column**: Player area sizes cleanly to video; ThinSeekStrip spans full width; bottom segment list / in-flow translate panel / episodes overview table flex-grows to fill all remaining height (`#0a0e18` background tint runs 100% down to bottom).
-   - **Right Panel**: Wrapped in `.workspace-right-body` (`flex: 1; min-height: 0; overflow-y: auto; background: #101726;`) so sections stack from the top while `#101726` runs the full height.
-
-2. **SEEK STRIP FULL WIDTH (Spans 100% with Non-Overlapping Labels)**:
-   - `ThinSeekStrip`: Container re-architected to `width: 100% !important; height: 28px !important; display: flex !important; flex-direction: row !important; align-items: center !important;`.
-   - Timecode labels pinned to extremities: Current time on far left (`00:00.00`, 58px width) and duration on far right (`22:20.00`, 58px width).
-   - Track spans 100% of the middle area (`flex: 1`), distributing segment ticks across the full centre width.
-   - Verified at both 1920px and 1366px screen resolutions — zero text overlap, seamless scrubbing.
-
-3. **FINISH CLEAN PASS 1 AUDIT (Border & Bar Elimination)**:
-   - Entirely removed `<PlayerTopBar>` from the DOM; video monitor canvas starts flush at the top with NO title bar and NO "PLAYER MONITOR" label.
-   - Integrated Fullscreen button (and optional rendered video badge) directly into `PlayerBottomBar` on the right.
-   - Removed 1px card border, 12px border radius, and box-shadow from `.capcut-player-panel`.
-   - Audited and confirmed removal of visible 1px borders surrounding all 5 workspace zones (StageRail, MediaPanel, centre column, right inspector panel, bottom status strip).
+### Right-Panel Collapse Controls Removal (Fixed Width 320px)
+1. **Header Collapse Button Deleted**:
+   - Removed `<button>` containing `<ChevronRight size={14} color="#64748b" />` from `.workspace-right-header` in `frontend/src/App.jsx`.
+   - Header keeps only the clean quiet label: `ការកំណត់ (Inspector & Settings)`.
+2. **Floating Reopen Button Deleted**:
+   - Removed `<button className="workspace-panel-toggle-btn right-toggle">` containing `<ChevronLeft size={14} />` from `frontend/src/App.jsx`.
+   - Removed `.workspace-panel-toggle-btn.right-toggle` CSS rule from `frontend/src/components/workspace/WorkspaceLayout.css`.
+3. **Fixed 320px Width Applied**:
+   - `.workspace-right-container`: Explicitly styled with `width: 320px; min-width: 320px; flex: 0 0 320px;` unconditionally in `WorkspaceLayout.css`.
+   - Eliminated `isRightPanelOpen` state variable and all conditionals depending on it.
+4. **Left Side Untouched**:
+   - Left-toggle button (`<ChevronRight size={14} />` at `L567`), StageRail collapse/expand, and MediaPanel close button (`PanelLeftClose`) remain fully functional and intact.
 
 ### Verification & Quality Acceptance
-- **Build**: `npm --prefix frontend run build` ➔ **PASS** (602ms, 0 errors).
+- **Build**: `npm --prefix frontend run build` ➔ **PASS** (579ms, 0 errors).
+- **Automated Playwright Verification**:
+  - Right Panel Width verified at exactly 320px.
+  - Right Header collapse button check: `false` (no button present).
+  - Floating right toggle button check: `false` (no button present).
+  - Left panel collapse/expand confirmed working: Left floating toggle button appears upon MediaPanel close and reopens cleanly; right panel remains solidly anchored at 320px.
 - **Screenshot Evidence (Artifact Directory: `C:\Users\nhastar\.gemini\antigravity\brain\0ecba6af-7642-4551-8d6b-1c88186a6633\`)**:
-  - `screenshot-clean2-script-editor-1920.png`: Full 1080p Script mode with 383 segments, full-width seek strip, no player bar, full-height column fills.
-  - `screenshot-clean2-script-editor-1366.png`: 1366x768 verification confirming seek strip width, non-overlapping time labels, and full-height fill.
-  - `screenshot-clean2-script-noscript-1920.png`: Script mode with 0 segments showing top-left aligned in-flow translate panel with full-height background fill.
-  - `screenshot-clean2-import-mode-1920.png`: Import mode displaying comprehensive Episodes Overview table stretching full height under player.
-  - `screenshot-clean2-collapsed-1920.png`: Collapsed panels view with ultra-wide canvas and full-width seek strip.
+  - `screenshot-right-fixed-1920.png`: Full 1080p workspace with fixed 320px right panel, clean quiet header, no chevron buttons.
+  - `screenshot-right-fixed-left-collapsed-1920.png`: Verification showing left panel collapsed while right panel stays fixed at 320px.
 
 ## Active Environment
 - **Backend API**: `http://localhost:5000` (Node.js/Express, online)
@@ -41,4 +36,4 @@
 - **Git Branch**: `main`
 
 ## Next Steps
-- Await Nha's review and approval of Clean Pass 2.
+- Await Nha's review and approval.

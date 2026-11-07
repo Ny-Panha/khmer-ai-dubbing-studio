@@ -113,8 +113,11 @@
   width: 100%;
 }
 
-/* 4. Right Panel (Tint step: #101726, NO zone border, stretches full height) */
+/* 4. Right Panel (Tint step: #101726, Fixed Width 320px, NO zone border, stretches full height) */
 .workspace-right-container {
+  width: 320px;
+  min-width: 320px;
+  flex: 0 0 320px;
   flex-shrink: 0;
   height: 100%;
   background: #101726;
@@ -122,7 +125,6 @@
   flex-direction: column;
   min-height: 0;
   overflow: hidden;
-  transition: width 0.22s cubic-bezier(0.16, 1, 0.3, 1);
   position: relative;
 }
 
@@ -190,10 +192,6 @@
 
 .workspace-panel-toggle-btn.left-toggle {
   right: -11px;
-}
-
-.workspace-panel-toggle-btn.right-toggle {
-  left: -11px;
 }
 
 /* In-Flow Translate Form Panel (Point 4: Full-width of centre, flex-grows full height) */
