@@ -1,11 +1,17 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
-- **Environment**: Antigravity IDE (Performance Fix Step 3 — Segment Virtualization & Timeline Clip Windowing)
-- **Timestamp**: 2026-11-07T20:00:00+07:00
+- **Environment**: Antigravity IDE (Discrepancy Cleanup & Sync Push)
+- **Timestamp**: 2026-11-07T20:08:00+07:00
 
 ## Summary of Completed Work
-1. **Performance Fix Step 3 (Frontend Only)**:
+1. **Dead Code Cleanup (Discrepancy Resolution — Commit `153e947`)**:
+   - **Deleted Unused Assets**: Removed leftover scaffold assets [`frontend/src/assets/hero.png`](file:///e:/khmer_ai_dubbing_studio/frontend/src/assets/hero.png), [`frontend/src/assets/react.svg`](file:///e:/khmer_ai_dubbing_studio/frontend/src/assets/react.svg), and [`frontend/src/assets/vite.svg`](file:///e:/khmer_ai_dubbing_studio/frontend/src/assets/vite.svg).
+   - **Deleted Dead Timeline Functions**: Removed 3 unused exported functions in [`frontend/src/utils/timelineUtils.js`](file:///e:/khmer_ai_dubbing_studio/frontend/src/utils/timelineUtils.js) (0 callers across repo): `pixelToTime`, `timeToPixel`, and `calculateTimelineGaps`.
+   - **Verification**: `npm --prefix frontend run build` PASS (1.39s, 0 errors).
+   - **Pushed to GitHub**: Pushed to `origin/main` (commit `153e947`).
+
+2. **Performance Fix Step 3 (Frontend Only — Commit `673bca6`)**:
    - **Step 3A — Virtualize the Segment List ([`frontend/src/components/media/ScriptReviewTab.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/media/ScriptReviewTab.jsx))**:
      - **React Version & Library Compatibility**: React is `19.3.1`. Installed `@tanstack/react-virtual` (`^3.14.26`), which natively supports React 19 (`^16.8.0 || ... || ^19.0.0`). Zero peer dependency conflicts.
      - **Dynamic Height Virtualization**: Implemented `useVirtualizer` with `estimateSize: () => 140`, `overscan: 8`, `gap: 8`, and dynamic item measurement via `ref={rowVirtualizer.measureElement}` on each item wrapper.
