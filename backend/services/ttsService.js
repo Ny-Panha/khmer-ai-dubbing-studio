@@ -725,6 +725,9 @@ async function generateBatchSegmentsAudio(segments = [], uploadsDir, options = {
           maxSpeed,
           ...options,
         });
+        const completedCount = results.filter(Boolean).length;
+        const pct = Math.round((completedCount / segments.length) * 100);
+        console.log(`[TTSService] 🎙️ [${completedCount}/${segments.length}] (${pct}%) Seg #${seg.id || idx + 1}: "${text.substring(0, 30)}..." [${results[idx]?.voiceId || 'Neural'}]`);
       } catch (err) {
         console.error(`[TTSService] ❌ បរាជ័យឃ្លា #${seg.id || idx + 1}:`, err.message);
         results[idx] = {

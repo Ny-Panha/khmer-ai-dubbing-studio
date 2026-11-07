@@ -836,14 +836,36 @@ const FALLBACK_VOICE_CATALOG = {
         };
       });
 
-      setAudioProgress(40);
-      setAudioStage('2/3 Microsoft Edge Neural AI កំពុងបង្កើតសំឡេងខ្មែរ (Parallel Bounded Concurrency)...');
+      setAudioProgress(10);
+      setAudioStage(`2/3 Microsoft Edge Neural AI កំពុងបង្កើតសំឡេងខ្មែរ (0/${sanitizedSegments.length})...`);
 
       const dramaName = selectedVideo?.fileName
         ? selectedVideo.fileName.replace(/\.[^/.]+$/, '').trim()
         : (scriptData?.title || 'drama_project');
       const targetEpisodeId = episodeId;
       const targetSeriesId = seriesId;
+
+      // Start live progress poller to track real percentage & segment count from backend
+      if (audioProgressTimerRef.current) {
+        clearInterval(audioProgressTimerRef.current);
+      }
+      if (targetSeriesId && targetEpisodeId) {
+        audioProgressTimerRef.current = setInterval(async () => {
+          try {
+            const pRes = await fetch(`/api/tts/progress?seriesId=${encodeURIComponent(targetSeriesId)}&episodeId=${encodeURIComponent(targetEpisodeId)}&total=${sanitizedSegments.length}`);
+            const pData = await pRes.json();
+            if (pData && pData.success && typeof pData.current === 'number') {
+              const currentCount = pData.current;
+              const totalCount = pData.total || sanitizedSegments.length;
+              const pct = totalCount > 0 ? Math.min(95, Math.max(10, Math.round((currentCount / totalCount) * 85) + 10)) : 10;
+              setAudioProgress(pct);
+              const realPct = totalCount > 0 ? Math.round((currentCount / totalCount) * 100) : 0;
+              setAudioStage(`2/3 Microsoft Edge Neural AI: [${currentCount}/${totalCount} ឃ្លា] (${realPct}%)...`);
+              console.log(`[TTS Progress] 🎙️ ${currentCount}/${totalCount} (${realPct}%) ${pData.lastFile || ''}`);
+            }
+          } catch (_) {}
+        }, 800);
+      }
 
       const result = await generateAudioApi({
         segments: sanitizedSegments,
@@ -856,6 +878,11 @@ const FALLBACK_VOICE_CATALOG = {
         episodeId: targetEpisodeId,
         forceRegen,
       });
+
+      if (audioProgressTimerRef.current) {
+        clearInterval(audioProgressTimerRef.current);
+        audioProgressTimerRef.current = null;
+      }
 
       setAudioProgress(85);
       setAudioStage('3/3 កំពុង Syncing Master Narration Timeline...');

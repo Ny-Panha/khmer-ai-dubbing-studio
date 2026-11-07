@@ -1,24 +1,19 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
-- **Environment**: Antigravity IDE (Re-TTS Button Execution & forceRegen Fix)
-- **Timestamp**: 2026-11-07T18:19:00+07:00
+- **Environment**: Antigravity IDE (TTS Progress Polling & Real-time Console Logs)
+- **Timestamp**: 2026-11-07T18:25:00+07:00
 
 ## Summary of Completed Work
-1. **Re-TTS Execution & Cache Bypass Fix (Option A)**:
-   - **Root Cause**: Backend `/api/generate-audio` had a fast-path cache skip (`if (!forceRegen && fs.existsSync(fullAudioPath))`) returning instantly (`alreadyCompleted: true`) because `forceRegen` was never forwarded from frontend. In addition, the button passed browser click events directly into `handleGenerateAudio`.
-   - **Files Fixed**:
-     - [`frontend/src/services/api.js`](file:///e:/khmer_ai_dubbing_studio/frontend/src/services/api.js): Added `forceRegen: isObject && params.forceRegen !== undefined ? Boolean(params.forceRegen) : false` to `generateAudioApi` payload.
-     - [`frontend/src/hooks/useAudioDubbing.js`](file:///e:/khmer_ai_dubbing_studio/frontend/src/hooks/useAudioDubbing.js): Sanitized `overrideParams` against browser SyntheticEvents, calculated `forceRegen` defaulting to `true` when re-synthesizing existing audio, and passed `forceRegen` to `generateAudioApi`.
-     - [`frontend/src/components/media/DubbingModeTab.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/media/DubbingModeTab.jsx): Updated button `onClick` to pass `{ forceRegen: Boolean(hasExistingAudio) }`, swapped icon to `RefreshCw` when existing audio is ready to clearly convey regeneration.
-2. **STEP 1 — Memoize Heavy Panels + Stabilize Props from App.jsx**:
-   - Wrapped [`TimelineEditor.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/TimelineEditor.jsx), [`VideoPlayerPreview.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/VideoPlayerPreview.jsx), and [`ScriptReviewTab.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/media/ScriptReviewTab.jsx) in `React.memo`.
-   - Stabilized all props and handlers from [`App.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/App.jsx).
-3. **STEP 2 — Single Jobs Poller Only**:
-   - Created [`JobQueueContext.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/context/JobQueueContext.jsx) as single source of truth for background jobs (`useJobQueue`).
-   - Deleted duplicate `setInterval(fetchJobsListApi, 1500)` pollers in `GeminiRouteTab.jsx` and `GeminiRouteModal.jsx`.
-4. **Verification & Testing**:
-   - `npm --prefix frontend run build`: **PASS** (1.46s, 0 errors).
+1. **Live Real-time Progress Tracking for Audio Generation**:
+   - **Problem**: During batch TTS generation, progress was hardcoded at `40%`, and the terminal/console printed zero logs during the 383-segment synthesis loop, giving the appearance of a frozen or silent process.
+   - **Fixes Applied**:
+     - [`backend/services/ttsService.js`](file:///e:/khmer_ai_dubbing_studio/backend/services/ttsService.js): Added live segment completion logging `[TTSService] 🎙️ [current/total] (pct%) Seg #...` inside the concurrent batch worker.
+     - [`backend/routes/audioRoutes.js`](file:///e:/khmer_ai_dubbing_studio/backend/routes/audioRoutes.js): Passed `forceRegen: Boolean(forceRegen)` directly into `generateBatchSegmentsAudio`.
+     - [`frontend/src/hooks/useAudioDubbing.js`](file:///e:/khmer_ai_dubbing_studio/frontend/src/hooks/useAudioDubbing.js): Wired 800ms progress poller hitting `/api/tts/progress`, dynamically updating `audioProgress` (10% -> 95%) and `audioStage` with real `[current/total ឃ្លា] (pct%)` and emitting `[TTS Progress]` to browser console.
+2. **Verification & Testing**:
+   - `npm --prefix frontend run build`: **PASS** (1.30s, 0 errors).
+   - Backend API responds with HTTP 200 on `/api/tts/voices`.
 
 ## Active Environment
 - **Backend API**: `http://localhost:5000` (Node.js/Express)

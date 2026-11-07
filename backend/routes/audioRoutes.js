@@ -336,6 +336,7 @@ router.post("/generate-audio", async (req, res) => {
         maxSpeed,
         speakerMap,
         episodeId: cleanEpisode,
+        forceRegen: Boolean(forceRegen),
       });
 
       // Save updated segments to series.json IMMEDIATELY so individual segment playback and inspector work!
