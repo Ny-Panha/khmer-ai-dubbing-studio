@@ -1,27 +1,14 @@
-import React, { useState, useRef, useCallback, useMemo, useEffect } from 'react';
+import React, { useState, useRef, useCallback } from 'react';
 import Navbar from './components/Navbar';
 import JobDashboardModal from './components/dashboard/JobDashboardModal';
 import GeminiRouteModal from './components/dashboard/GeminiRouteModal';
+import WorkflowStepper from './components/WorkflowStepper';
+import MediaLibrary from './components/MediaLibrary';
 import VideoPlayerPreview from './components/VideoPlayerPreview';
+import VoiceSettings from './components/VoiceSettings';
+import TimelineEditor from './components/TimelineEditor';
 import { loadSavedVoiceSettings } from './utils/projectStorage';
 import { JobQueueProvider } from './context/JobQueueContext';
-
-// Workspace Architecture Components
-import { STEP_IDS } from './steps/registry';
-import StageRail from './components/workspace/StageRail';
-import MediaPanel from './components/workspace/MediaPanel';
-import StageSettingsPanel from './components/workspace/StageSettingsPanel';
-import WorkspaceToolbar from './components/workspace/WorkspaceToolbar';
-import BottomStatusStrip from './components/workspace/BottomStatusStrip';
-import InlineTranslatePanel from './components/workspace/InlineTranslatePanel';
-import ThinSeekStrip from './steps/script/ThinSeekStrip';
-import TranscriptSegmentList from './features/segment-list/TranscriptSegmentList';
-import ClipInspectorPanel from './components/voice/ClipInspectorPanel';
-import './components/workspace/WorkspaceLayout.css';
-
-// Icons for overview card
-import { Film, Sparkles, ChevronRight, Layers, AlertTriangle } from 'lucide-react';
-import { formatTimecode } from './utils/formatTime';
 
 // Hoisted immutable fallbacks (prevents prop churning and broken memoization)
 const EMPTY_SEGMENTS = Object.freeze([]);
@@ -30,6 +17,7 @@ const EMPTY_OBJECT = Object.freeze({});
 const EMPTY_ARRAY = Object.freeze([]);
 
 // Custom Architectural Hooks (Modularized for clean maintainability & debugging)
+import { useResizablePanels } from './hooks/useResizablePanels';
 import { useWorkspaceMedia } from './hooks/useWorkspaceMedia';
 import { useUndoRedo } from './hooks/useUndoRedo';
 import { useVideoPlayback } from './hooks/useVideoPlayback';
@@ -41,24 +29,6 @@ import { useProjectPersistence } from './hooks/useProjectPersistence';
 import { useSeriesManager } from './hooks/useSeriesManager';
 
 export default function App() {
-  // Single Screen Workspace Mode ('import' | 'script' | 'voice' | 'demucs' | 'mix-export')
-  const [workspaceMode, setWorkspaceMode] = useState(STEP_IDS.SCRIPT);
-
-  // Panel Collapsible State (Media Panel 320px)
-  const [isLeftPanelOpen, setIsLeftPanelOpen] = useState(true);
-
-  // Search in transcript
-  const [transcriptSearch, setTranscriptSearch] = useState('');
-
-  // Re-translate Overwrite confirmation modal state
-  const [showConfirmRetranslate, setShowConfirmRetranslate] = useState(false);
-
-  // Demucs Separation State
-  const [isCleanBgReady, setIsCleanBgReady] = useState(false);
-  const [isSeparatingAudio, setIsSeparatingAudio] = useState(false);
-  const [separationProgress, setSeparationProgress] = useState(0);
-  const [separationError, setSeparationError] = useState(null);
-
   const [leftTab, setLeftTab] = useState('media');
   const [showJobDashboard, setShowJobDashboard] = useState(false);
   const [showGeminiRouteModal, setShowGeminiRouteModal] = useState(false);
@@ -70,6 +40,7 @@ export default function App() {
   const [fullAudioPath, setFullAudioPath] = useState(null);
   const [fullAudioUrl, setFullAudioUrl] = useState(null);
 
+  const topSuiteRef = useRef(null);
   const videoRef = useRef(null);
   const activeRequestRef = useRef({
     requestId: null,
@@ -88,7 +59,7 @@ export default function App() {
   const seriesRef = useRef({});
   const clipsRef = useRef({});
 
-  // Stable ref-delegated callbacks
+  // Stable ref-delegated callbacks (prevents infinite render loops & unnecessary effect runs)
   const handleSetDuration = useCallback((dur) => playbackRef.current.setDuration?.(dur), []);
   const handleSetCurrentTime = useCallback((t) => playbackRef.current.setCurrentTime?.(t), []);
   const handleSetRenderedVideo = useCallback((v) => renderRef.current.setRenderedVideo?.(v), []);
@@ -96,7 +67,15 @@ export default function App() {
   const handleSetScriptError = useCallback((err) => scriptRef.current.setScriptError?.(err), []);
   const handleSetIsGeneratingScript = useCallback((gen) => scriptRef.current.setIsGeneratingScript?.(gen), []);
 
-  // 1. Workspace Media Hook (Videos, Clips, Thumbnails, and Selection)
+  // 1. Resizable 3-Column Panels Hook
+  const {
+    leftPanelWidth,
+    rightPanelWidth,
+    activeSplitter,
+    handleStartSplitterDrag
+  } = useResizablePanels(topSuiteRef);
+
+  // 2. Workspace Media Hook (Videos, Clips, Thumbnails, and Selection)
   const media = useWorkspaceMedia({
     activeRequestRef,
     duration: playbackRef.current.duration || 0,
@@ -111,171 +90,228 @@ export default function App() {
     setAudioOutdated,
     setFullAudioPath,
     setFullAudioUrl,
-  });
-
-  // 2. Undo / Redo History Hook
-  const undoRedo = useUndoRedo({
-    scriptData,
-    setScriptData,
-  });
-
-  // 3. Video Playback & Seek Hook
-  const playback = useVideoPlayback({
-    videoRef,
-    selectedVideo: media.selectedVideo,
-    videoClips: media.videoClips,
-    selectedClip: media.selectedClip,
-    activeClipId: media.activeClipId,
-    setActiveClipId: media.setActiveClipId,
-    setSelectedSegmentId: media.setSelectedSegmentId,
-    renderedVideo: renderRef.current.renderedVideo,
-    scriptData,
-  });
-  playbackRef.current = playback;
-
-  // 4. Series Manager Hook
-  const series = useSeriesManager({
-    selectedVideo: media.selectedVideo,
-    videoMetadata: media.videoMetadata,
-    scriptData,
-    renderedVideo: renderRef.current.renderedVideo,
-    fullAudioPath,
-    speakerRegistry,
-    voiceSettings,
-    videoClips: media.videoClips,
-    videoThumbnails: media.videoThumbnails,
-    setScriptData,
-    setRenderedVideo: handleSetRenderedVideo,
-    setFullAudioPath,
-    setFullAudioUrl,
-    setSpeakerRegistry,
-    setVoiceSettings,
-    setSelectedVideo: media.setSelectedVideo,
-    setVideoMetadata: media.setVideoMetadata,
-    setVideoClips: media.setVideoClips,
-    setVideoThumbnails: media.setVideoThumbnails,
-    setAudioGenerated,
-    setAudioOutdated,
-    clearHistory: handleClearHistory,
-    setCurrentTime: handleSetCurrentTime,
-    setDuration: handleSetDuration,
-    setSelectedSegmentId: media.setSelectedSegmentId,
-    setActiveClipId: media.setActiveClipId,
-    audioProgressTimerRef: audioRef.current.audioProgressTimerRef,
-    activeRequestRef,
-    setLeftTab,
-  });
-
-  // 5. Project Persistence & API Key Hook
-  const persistence = useProjectPersistence({
-    activeRequestRef,
-    selectedVideo: media.selectedVideo,
-    activeSeries: series.activeSeries,
-    activeEpisode: series.activeEpisode,
-    scriptData,
-    speakerRegistry,
-    voiceSettings,
-    videoClips: media.videoClips,
-    videoThumbnails: media.videoThumbnails,
-    duration: playback.duration,
-    currentTime: playback.currentTime,
-    renderedVideo: renderRef.current.renderedVideo,
-    fullAudioPath,
-    fullAudioUrl,
-    audioGenerated,
-    audioOutdated,
-    setScriptData,
-    setSpeakerRegistry,
-    setVoiceSettings,
-    setSelectedVideo: media.setSelectedVideo,
-    setVideoMetadata: media.setVideoMetadata,
-    setVideoClips: media.setVideoClips,
-    setVideoThumbnails: media.setVideoThumbnails,
-    setAudioGenerated,
-    setAudioOutdated,
-    setFullAudioPath,
-    setFullAudioUrl,
-    setDuration: handleSetDuration,
-    setCurrentTime: handleSetCurrentTime,
-    setSelectedSegmentId: media.setSelectedSegmentId,
-    setActiveClipId: media.setActiveClipId,
-    setRenderedVideo: handleSetRenderedVideo,
-    handleSaveEpisodeBackground: series.handleSaveEpisodeBackground,
-    isWizardMode: true,
-  });
-
-  // 6. AI Dubbing & TTS Generation Hook
-  const audio = useAudioDubbing({
-    scriptData,
-    setScriptData,
-    pushHistory: undoRedo.pushHistory,
-    voiceSettings,
-    setVoiceSettings,
-    speakerRegistry,
-    setSpeakerRegistry,
-    setAudioGenerated,
-    setAudioOutdated,
-    setFullAudioPath,
-    setFullAudioUrl,
-    selectedVideo: media.selectedVideo,
-    seriesId: series.seriesId,
-    episodeId: series.episodeId,
-    activeSeries: series.activeSeries,
-    handleSaveEpisodeBackground: series.handleSaveEpisodeBackground,
-    activeRequestRef,
-  });
-
-  // 7. Video Rendering Hook
-  const render = useVideoRender({
-    selectedVideo: media.selectedVideo,
-    videoMetadata: media.videoMetadata,
-    scriptData,
-    voiceSettings,
-    seriesId: series.seriesId,
-    episodeId: series.episodeId,
-    activeSeries: series.activeSeries,
-    handleSaveEpisodeBackground: series.handleSaveEpisodeBackground,
-  });
-
-  // 8. Script Generation Workflow Hook
-  const script = useScriptWorkflow({
-    selectedVideo: media.selectedVideo,
-    activeSeries: series.activeSeries,
-    seriesId: series.seriesId,
-    episodeId: series.episodeId,
-    seriesGlossary: series.seriesGlossary,
-    apiKey: persistence.apiKey,
-    setScriptData,
-    setSpeakerRegistry,
-    setLeftTab,
-    pushHistory: undoRedo.pushHistory,
-    clearHistory: handleClearHistory,
     setScriptError: handleSetScriptError,
     setIsGeneratingScript: handleSetIsGeneratingScript,
-    activeRequestRef,
-    onNavigateToStep: (stepId) => setWorkspaceMode(stepId),
   });
 
-  // 9. Timeline Clip Operations Hook
-  const clips = useClipOperations({
-    duration: playback.duration,
-    currentTime: playback.currentTime,
-    videoRef,
-    pushHistory: undoRedo.pushHistory,
-    pushUndoSnapshot: undoRedo.pushHistory,
+  // 3. Multi-Episode & Series Manager Hook
+  const series = useSeriesManager({
+    selectedVideo: media.selectedVideo,
+    setSelectedVideo: media.setSelectedVideo,
+    videoMetadata: media.videoMetadata,
+    setVideoMetadata: media.setVideoMetadata,
     scriptData,
     setScriptData,
+    speakerRegistry,
+    setSpeakerRegistry,
+    setLeftTab,
+    audioGenerated,
+    setAudioGenerated,
+    audioOutdated,
+    setAudioOutdated,
+    fullAudioPath,
+    setFullAudioPath,
+    fullAudioUrl,
+    setFullAudioUrl,
+    duration: playbackRef.current.duration || 0,
+    setDuration: handleSetDuration,
     videoClips: media.videoClips,
     setVideoClips: media.setVideoClips,
     activeClipId: media.activeClipId,
     setActiveClipId: media.setActiveClipId,
     selectedSegmentId: media.selectedSegmentId,
     setSelectedSegmentId: media.setSelectedSegmentId,
+    renderedVideo: renderRef.current.renderedVideo || null,
+    setRenderedVideo: handleSetRenderedVideo,
+    voiceSettings,
+    setVoiceSettings,
+    setVideoThumbnails: media.setVideoThumbnails,
+    setMediaAssets: media.setMediaAssets,
+    setCurrentTime: handleSetCurrentTime,
+    activeRequestRef,
+    clearHistory: handleClearHistory,
+    audioProgressTimerRef: audioRef.current.audioProgressTimerRef,
+  });
+
+  // 4. Undo / Redo Stack Management Hook
+  const undoRedo = useUndoRedo({
+    videoClips: media.videoClips,
+    setVideoClips: media.setVideoClips,
+    scriptData,
+    setScriptData,
+    activeClipId: media.activeClipId,
+    setActiveClipId: media.setActiveClipId,
+  });
+  undoRedoRef.current = undoRedo;
+
+  // 5. Video Playback & Time Tracking Hook
+  const playback = useVideoPlayback({
+    videoRef,
+    videoClips: media.videoClips,
+    setVideoClips: media.setVideoClips,
+    renderedVideo: renderRef.current.renderedVideo || null,
+    selectedVideo: media.selectedVideo,
+    selectedClip: media.selectedClip,
+    activeClipId: media.activeClipId,
+    setActiveClipId: media.setActiveClipId,
+    setSelectedSegmentId: media.setSelectedSegmentId,
+    scriptData,
+  });
+  playbackRef.current = playback;
+
+  // 6. Audio Dubbing (Edge TTS & Timeline Synchronizer) Hook
+  const audio = useAudioDubbing({
+    scriptData,
+    setScriptData,
+    speakerRegistry,
+    setSpeakerRegistry,
+    voiceSettings,
+    setVoiceSettings,
+    videoRef,
+    setIsPlaying: playback.setIsPlaying,
+    setSelectedSegmentId: media.setSelectedSegmentId,
+    selectedVideo: media.selectedVideo,
+    seriesId: series.seriesId,
+    episodeId: series.episodeId,
+    activeSeries: series.activeSeries,
+    handleSaveEpisodeBackground: series.handleSaveEpisodeBackground,
+    onSaveEpisodeBackground: series.handleSaveEpisodeBackground,
+    activeRequestRef,
+    pushHistory: undoRedo.pushHistory || undoRedo.pushUndoSnapshot,
+    audioGenerated,
+    setAudioGenerated,
+    audioOutdated,
+    setAudioOutdated,
+    fullAudioPath,
+    setFullAudioPath,
+    fullAudioUrl,
+    setFullAudioUrl,
+  });
+  audioRef.current = audio;
+
+  // 7. Final Video Export & Rendering Hook
+  const render = useVideoRender({
+    selectedVideo: media.selectedVideo,
+    videoMetadata: media.videoMetadata,
+    audioGenerated: audio.audioGenerated,
+    speakerRegistry,
+    voiceSettings,
+    scriptData,
+    videoClips: media.videoClips,
+    fullAudioPath: audio.fullAudioPath,
+    videoRef,
+    setIsPlaying: playback.setIsPlaying,
+    seriesId: series.seriesId,
+    episodeId: series.episodeId,
+    activeSeries: series.activeSeries,
+    handleSaveEpisodeBackground: series.handleSaveEpisodeBackground,
+    setAudioOutdated: audio.setAudioOutdated,
+  });
+  renderRef.current = render;
+
+  // 8. AI Script Generation & Gemini Workflow Hook
+  const script = useScriptWorkflow({
+    selectedVideo: media.selectedVideo,
+    apiKey: persistenceRef.current.apiKey || '',
+    scriptData,
+    setScriptData,
+    speakerRegistry,
+    setSpeakerRegistry,
+    setAudioGenerated: audio.setAudioGenerated,
+    setAudioOutdated: audio.setAudioOutdated,
+    setFullAudioPath: audio.setFullAudioPath,
+    setFullAudioUrl: audio.setFullAudioUrl,
+    setSelectedSegmentId: media.setSelectedSegmentId,
+    duration: playback.duration,
+    videoRef,
+    setVideoClips: media.setVideoClips,
+    setActiveClipId: media.setActiveClipId,
+    activeRequestRef,
+    activeSeries: series.activeSeries,
+    seriesId: series.seriesId,
+    episodeId: series.episodeId,
+    seriesGlossary: series.seriesGlossary,
+    onSaveEpisodeBackground: series.handleSaveEpisodeBackground,
+    onNavigateToTab: setLeftTab,
+    setLeftTab,
+    pushHistory: undoRedo.pushHistory,
+    clearHistory: handleClearHistory,
+    setScriptError: handleSetScriptError,
+    setIsGeneratingScript: handleSetIsGeneratingScript,
+  });
+  scriptRef.current = script;
+
+  // 9. Multi-Clip Timeline Editing Operations Hook
+  const clips = useClipOperations({
+    videoClips: media.videoClips,
+    setVideoClips: media.setVideoClips,
+    activeClipId: media.activeClipId,
+    setActiveClipId: media.setActiveClipId,
+    duration: playback.duration,
+    setDuration: playback.setDuration,
+    currentTime: playback.currentTime,
+    selectedVideo: media.selectedVideo,
+    videoRef,
+    scriptData,
+    setScriptData,
+    speakerRegistry,
+    setSpeakerRegistry,
+    audioGenerated: audio.audioGenerated,
+    selectedSegmentId: media.selectedSegmentId,
+    setSelectedSegmentId: media.setSelectedSegmentId,
+    handleSeek: playback.handleSeek,
+    pushHistory: undoRedo.pushHistory,
+    pushUndoSnapshot: undoRedo.pushHistory,
+    setFullAudioUrl: audio.setFullAudioUrl,
+    setFullAudioPath: audio.setFullAudioPath,
+    syncAudioTimeoutRef: audio.syncAudioTimeoutRef,
+    seriesId: series.seriesId,
+    episodeId: series.episodeId,
+    setAudioOutdated: audio.setAudioOutdated,
     renderedVideo: render.renderedVideo,
     setRenderedVideo: render.setRenderedVideo,
     voiceSettings,
     setVoiceSettings,
     setVideoThumbnails: media.setVideoThumbnails,
+  });
+
+  // 10. Project State Auto-Save & LocalStorage Persistence Hook
+  const persistence = useProjectPersistence({
+    activeRequestRef,
+    selectedVideo: media.selectedVideo,
+    setSelectedVideo: media.setSelectedVideo,
+    videoMetadata: media.videoMetadata,
+    setVideoMetadata: media.setVideoMetadata,
+    scriptData,
+    setScriptData,
+    speakerRegistry,
+    setSpeakerRegistry,
+    voiceSettings,
+    setVoiceSettings,
+    videoClips: media.videoClips,
+    setVideoClips: media.setVideoClips,
+    videoThumbnails: media.videoThumbnails,
+    setVideoThumbnails: media.setVideoThumbnails,
+    duration: playback.duration,
+    setDuration: playback.setDuration,
+    currentTime: playback.currentTime,
+    setCurrentTime: handleSetCurrentTime,
+    renderedVideo: render.renderedVideo,
+    setRenderedVideo: handleSetRenderedVideo,
+    fullAudioPath: audio.fullAudioPath,
+    setFullAudioPath: audio.setFullAudioPath,
+    fullAudioUrl: audio.fullAudioUrl,
+    setFullAudioUrl: audio.setFullAudioUrl,
+    audioGenerated: audio.audioGenerated,
+    setAudioGenerated: audio.setAudioGenerated,
+    audioOutdated: audio.audioOutdated,
+    setAudioOutdated: audio.setAudioOutdated,
+    selectedSegmentId: media.selectedSegmentId,
+    setSelectedSegmentId: media.setSelectedSegmentId,
+    activeClipId: media.activeClipId,
+    setActiveClipId: media.setActiveClipId,
+    handleSaveEpisodeBackground: series.handleSaveEpisodeBackground,
+    isWizardMode: false,
   });
   persistenceRef.current = persistence;
 
@@ -289,13 +325,26 @@ export default function App() {
   scriptRef.current = script;
   clipsRef.current = clips;
 
-  // Stable callbacks
+  // Stable callbacks for TimelineEditor
+  const handleSelectClip = useCallback((...args) => clipsRef.current.handleSelectClip?.(...args), []);
+  const handleUpdateClips = useCallback((...args) => clipsRef.current.handleUpdateClips?.(...args), []);
+  const handleSplitClip = useCallback((...args) => clipsRef.current.handleSplitClip?.(...args), []);
+  const handleDeleteClip = useCallback((...args) => clipsRef.current.handleDeleteClip?.(...args), []);
   const handleDeleteSegment = useCallback((...args) => clipsRef.current.handleDeleteSegment?.(...args), []);
   const handleUpdateTimelineSegments = useCallback((...args) => clipsRef.current.handleUpdateTimelineSegments?.(...args), []);
-  const handleToggleDeliveryType = useCallback((...args) => audioRef.current.handleToggleDeliveryType?.(...args), []);
+  const handleToggleMuteSegment = useCallback((...args) => clipsRef.current.handleToggleMuteSegment?.(...args), []);
+  const handleToggleMuteVideoClip = useCallback((...args) => clipsRef.current.handleToggleMuteVideoClip?.(...args), []);
+  const handleToggleMuteAllCuts = useCallback((...args) => clipsRef.current.handleToggleMuteAllCuts?.(...args), []);
+  const handleAutoSplitVideo = useCallback((...args) => clipsRef.current.handleAutoSplitVideo?.(...args), []);
+  const handleResetFullVideo = useCallback((...args) => clipsRef.current.handleResetFullVideo?.(...args), []);
+  const handleBridgeGaps = useCallback((...args) => clipsRef.current.handleBridgeGaps?.(...args), []);
   const handleAutoAlignNoOverlap = useCallback((...args) => clipsRef.current.handleAutoAlignNoOverlap?.(...args), []);
   const handleResetToSourceTiming = useCallback((...args) => clipsRef.current.handleResetToSourceTiming?.(...args), []);
   const handleAddSegmentAtTime = useCallback((...args) => clipsRef.current.handleAddSegmentAtTime?.(...args), []);
+  const handleAddClipToTimeline = useCallback((t, asset) => {
+    const curTime = typeof t === 'number' ? t : (playbackRef.current.currentTime || 0);
+    mediaRef.current.handleAddClipToTimeline?.(curTime, asset);
+  }, []);
 
   // Undo / Redo callbacks
   const handleUndo = useCallback((...args) => undoRedoRef.current.handleUndo?.(...args), []);
@@ -303,6 +352,7 @@ export default function App() {
 
   // Audio Dubbing callbacks
   const handleGenerateAudio = useCallback((...args) => audioRef.current.handleGenerateAudio?.(...args), []);
+  const handleToggleDeliveryType = useCallback((...args) => audioRef.current.handleToggleDeliveryType?.(...args), []);
   const handleUpdateVoiceSettings = useCallback((...args) => audioRef.current.handleUpdateVoiceSettings?.(...args), []);
   const handleRegenerateSingleSegment = useCallback((...args) => audioRef.current.handleRegenerateSingleSegment?.(...args), []);
   const handleUpdateSegmentText = useCallback((...args) => audioRef.current.handleUpdateSegmentText?.(...args), []);
@@ -319,115 +369,11 @@ export default function App() {
   // Render & Media callbacks
   const handleRenderVideo = useCallback((...args) => renderRef.current.handleRenderVideo?.(...args), []);
   const handleClearVideo = useCallback((...args) => mediaRef.current.handleClearVideo?.(...args), []);
-
-  // Mode Selection Callback
-  const handleSelectMode = useCallback((modeId) => {
-    setWorkspaceMode(modeId);
-  }, []);
-
-  // Check Demucs status whenever selected video changes
-  useEffect(() => {
-    if (!media.selectedVideo) {
-      setIsCleanBgReady(false);
-      return;
-    }
-    const videoRefName = media.selectedVideo?.videoUrl || media.selectedVideo?.filePath || media.selectedVideo?.fileName || media.selectedVideo?.name;
-    if (!videoRefName) return;
-
-    fetch('/api/audio/separation-status', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ videoPath: videoRefName }),
-    })
-      .then((res) => res.json())
-      .then((data) => {
-        if (data && data.success && data.available) {
-          setIsCleanBgReady(true);
-        } else {
-          setIsCleanBgReady(false);
-        }
-      })
-      .catch(() => setIsCleanBgReady(false));
-  }, [media.selectedVideo]);
-
-  // Demucs Separation Trigger
-  const handleStartDemucsSeparation = useCallback(async () => {
-    if (!media.selectedVideo || isSeparatingAudio) return;
-    const videoRefName = media.selectedVideo?.videoUrl || media.selectedVideo?.filePath || media.selectedVideo?.fileName || media.selectedVideo?.name;
-    if (!videoRefName) return;
-
-    setIsSeparatingAudio(true);
-    setSeparationProgress(1);
-    setSeparationError(null);
-
-    let pollInterval = null;
-    try {
-      pollInterval = setInterval(async () => {
-        try {
-          const pRes = await fetch(`/api/audio/separation-progress?videoPath=${encodeURIComponent(videoRefName)}`);
-          const pData = await pRes.json();
-          if (pData && pData.success && typeof pData.progress === 'number' && pData.progress > 0) {
-            setSeparationProgress(pData.progress);
-          }
-        } catch (_) {}
-      }, 700);
-
-      const res = await fetch('/api/audio/separate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ videoPath: videoRefName }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (res.ok && data.success && data.noVocalsUrl) {
-        setSeparationProgress(100);
-        setIsCleanBgReady(true);
-        window.dispatchEvent(new CustomEvent('demucs-separation-ready', {
-          detail: { noVocalsUrl: data.noVocalsUrl }
-        }));
-      } else {
-        throw new Error(data.error || (res.status === 409 ? 'Demucs AI កំពុងដំណើរការបំបែកសំឡេង (...)។ សូមរង់ចាំឱ្យចប់ជាមុនសិន ទើបអាចបំបែកភាគបន្ទាប់បាន។' : 'ការបំបែកសំឡេង Demucs ជួបបញ្ហា'));
-      }
-    } catch (err) {
-      console.error('[App] Demucs Separation error:', err);
-      setSeparationError(err.message || 'ការបំបែកសំឡេង Demucs ជួបបញ្ហា');
-    } finally {
-      if (pollInterval) clearInterval(pollInterval);
-      setIsSeparatingAudio(false);
-    }
-  }, [media.selectedVideo, isSeparatingAudio]);
-
-  // Demucs Kill Trigger
-  const handleKillDemucs = useCallback(async () => {
-    try {
-      await fetch('/api/audio/separate-kill', { method: 'POST' });
-      setIsSeparatingAudio(false);
-      setSeparationError('បានបញ្ឈប់ដំណើរការ Demucs AI');
-    } catch (err) {
-      console.error('[App] Kill Demucs error:', err);
-    }
-  }, []);
-
-  // Compute live workflow state for Step gates and completed badges
-  const workflowState = useMemo(() => ({
-    selectedVideo: media.selectedVideo,
-    activeEpisode: series.activeEpisode,
-    scriptData,
-    audioGenerated: audio.audioGenerated,
-    hasDemucs: isCleanBgReady || Boolean(series.activeEpisode?.hasDemucs || series.activeEpisode?.cleanBgmPath),
-    isDemucsDone: isCleanBgReady || Boolean(series.activeEpisode?.hasDemucs || series.activeEpisode?.cleanBgmPath),
-    cleanBgmPath: series.activeEpisode?.cleanBgmPath,
-    renderedVideo: render.renderedVideo,
-  }), [
-    media.selectedVideo,
-    series.activeEpisode,
-    scriptData,
-    audio.audioGenerated,
-    isCleanBgReady,
-    render.renderedVideo,
-  ]);
+  const handleImportClick = useCallback(() => setLeftTab('media'), []);
 
   // Script & Series callbacks
   const handleUpdateScript = useCallback((...args) => scriptRef.current.handleUpdateScript?.(...args), []);
+  const handleGenerateScript = useCallback((...args) => scriptRef.current.handleGenerateScript?.(...args), []);
   const handleSwitchEpisode = useCallback((...args) => seriesRef.current.handleSwitchEpisode?.(...args), []);
   const handleCreateEpisode = useCallback((customTitle = null) => {
     const safeTitle = typeof customTitle === 'string' ? customTitle : null;
@@ -444,13 +390,18 @@ export default function App() {
   const handleOpenGeminiRoute = useCallback(() => setShowGeminiRouteModal(true), []);
   const handleCloseGeminiRoute = useCallback(() => setShowGeminiRouteModal(false), []);
 
-  // Video Selected Callback
+  // Immediate episode workspace reset upon loading new video (prevents inheriting stale script/audio)
   const handleVideoSelected = useCallback((vid) => {
     mediaRef.current.handleVideoLoaded?.(vid);
     if (seriesRef.current.episodeId && seriesRef.current.handleSaveEpisodeBackground) {
       seriesRef.current.handleSaveEpisodeBackground(seriesRef.current.episodeId, {
         video: vid,
         scriptData: null,
+        speakerRegistry: EMPTY_OBJECT,
+        audioGenerated: false,
+        audioOutdated: false,
+        fullAudioPath: null,
+        fullAudioUrl: null,
         renderedVideo: null,
       });
     }
@@ -468,27 +419,9 @@ export default function App() {
     }
   }, []);
 
-  // Derived transcript segments & metrics
-  const segments = scriptData?.segments || EMPTY_SEGMENTS;
-  const hasSegments = segments.length > 0;
-
-  const selectedSegment = useMemo(() => {
-    if (media.selectedSegmentId === null || media.selectedSegmentId === undefined) return segments[0] || null;
-    return segments.find((s, idx) => s.id === media.selectedSegmentId || idx === media.selectedSegmentId) || segments[0] || null;
-  }, [segments, media.selectedSegmentId]);
-
-  const selectedSegmentIndex = useMemo(() => {
-    if (!selectedSegment) return -1;
-    return segments.findIndex((s) => s.id === selectedSegment.id);
-  }, [segments, selectedSegment]);
-
-  const overCount = useMemo(() => {
-    return segments.filter((s) => typeof s.audioDurationSec === 'number' && typeof s.durationSec === 'number' && s.audioDurationSec > (s.durationSec + 0.3)).length;
-  }, [segments]);
-
   return (
     <JobQueueProvider isAnyJobViewOpen={true}>
-      <div className="workspace-root">
+      <div className="capcut-app-container">
         {/* Top Application Navbar */}
         <Navbar
           apiKey={persistence.apiKey}
@@ -513,384 +446,229 @@ export default function App() {
           onTabChange={setLeftTab}
           onOpenJobDashboard={handleOpenJobDashboard}
           onOpenGeminiRoute={handleOpenGeminiRoute}
-          onNavigateToStep={handleSelectMode}
         />
 
-        {/* Unified CapCut-Style Workspace Body */}
-        <div className="workspace-body">
-          {/* 1. Left Rail (48px Permanent Icon Rail) */}
-          <div className="workspace-rail-container">
-            <StageRail
-              currentMode={workspaceMode}
-              onSelectMode={handleSelectMode}
-              workflowState={workflowState}
-              isGeneratingAudio={audio.isGeneratingAudio}
-              audioProgress={audio.audioProgress}
-              isSeparatingDemucs={isSeparatingAudio}
-              demucsProgress={separationProgress}
-              isRendering={render.isRendering}
-              renderProgress={render.renderProgress}
-              isGeneratingScript={script.isGeneratingScript}
-              scriptProgress={script.scriptProgress}
-            />
-          </div>
+        {/* Main Video Editing Workspace */}
+        <main className="capcut-main-workspace">
+          {/* Chinese Drama Dubbing Workflow Stepper Bar */}
+          <WorkflowStepper
+            leftTab={leftTab}
+            onTabChange={setLeftTab}
+            isStep1Done={Boolean(media.selectedVideo?.videoId)}
+            isStep2Done={Boolean(scriptData?.segments?.length)}
+            isStep3Done={Boolean(audio.audioGenerated)}
+            isStep4Done={Boolean(audio.audioGenerated && voiceSettings.duckingVolume !== undefined)}
+            onGenerateAudio={handleGenerateAudio}
+            isGeneratingAudio={audio.isGeneratingAudio}
+            audioProgress={audio.audioProgress}
+            audioStage={audio.audioStage}
+            hasSegments={Boolean(scriptData?.segments?.length)}
+          />
 
-          {/* 2. Left Media Panel (320px Collapsible) */}
-          <div
-            className="workspace-media-container"
-            style={{
-              width: isLeftPanelOpen ? 320 : 0,
-              minWidth: isLeftPanelOpen ? 320 : 0,
-              display: isLeftPanelOpen ? 'flex' : 'none',
-            }}
-          >
-            <MediaPanel
-              seriesList={series.seriesList}
-              activeSeries={series.activeSeries}
-              activeEpisode={series.activeEpisode}
-              seriesId={series.seriesId}
-              episodeId={series.episodeId}
-              onSwitchEpisode={handleSwitchEpisode}
-              onCreateEpisode={handleCreateEpisode}
-              onDeleteEpisode={handleDeleteEpisode}
-              onRenameEpisode={handleRenameEpisode}
-              onRenameSeries={handleRenameSeries}
-              selectedVideo={media.selectedVideo}
-              videoMetadata={media.videoMetadata}
-              onVideoSelected={handleVideoSelected}
-              onRemoveVideo={handleClearVideo}
-              onClosePanel={() => setIsLeftPanelOpen(false)}
-              onRefreshSeries={series.refreshSeriesFromServer}
-            />
-          </div>
-
-          {/* Floating Button to re-open Media Panel when collapsed */}
-          {!isLeftPanelOpen && (
-            <button
-              type="button"
-              className="workspace-panel-toggle-btn left-toggle"
-              onClick={() => setIsLeftPanelOpen(true)}
-              title="បើក Media Panel ឡើងវិញ (Expand Media)"
-            >
-              <ChevronRight size={14} />
-            </button>
-          )}
-
-          {/* 3. CENTRE WORKING COLUMN (Always Mounted, Never Unmounts) */}
-          <div className="workspace-centre-container">
-            {/* Top Video Player Monitor & Seek Strip */}
-            <div className="workspace-centre-player-section">
-              <div className="workspace-centre-player-box">
-                <VideoPlayerPreview
-                  selectedVideo={media.selectedVideo}
-                  seriesId={series.seriesId}
-                  episodeId={series.episodeId}
-                  scriptData={scriptData}
-                  renderedVideo={render.renderedVideo}
-                  setRenderedVideo={render.setRenderedVideo}
-                  onResetToPreview={handleResetToPreview}
-                  isRendering={render.isRendering}
-                  onRenderVideo={handleRenderVideo}
-                  videoRef={videoRef}
-                  currentTime={playback.currentTime}
-                  duration={playback.duration}
-                  isPlaying={playback.isPlaying}
-                  onPlayPause={handlePlayPause}
-                  onSeek={handleSeek}
-                  onTimeUpdate={handleTimeUpdate}
-                  onLoadedMetadata={handleLoadedMetadata}
-                  voiceSettings={voiceSettings || EMPTY_OBJECT}
-                  onEnded={handleVideoEnded}
-                  fullAudioUrl={audio.fullAudioUrl}
-                  audioGenerated={audio.audioGenerated}
-                  audioOutdated={audio.audioOutdated}
-                  onImportClick={() => setIsLeftPanelOpen(true)}
-                  onVideoSelected={handleVideoSelected}
-                  videoClips={media.videoClips || EMPTY_CLIPS}
-                />
-              </div>
-
-              {/* Persistent Thin Seek Strip */}
-              <ThinSeekStrip
-                currentTime={playback.currentTime}
+          {/* Top 3-Column Suite: Left Tools | Video Monitor | Contextual Inspector */}
+          <div className="capcut-top-suite" ref={topSuiteRef}>
+            {/* 1. Left Panel: Media Library, AI Script, Subtitles */}
+            <div className="top-suite-col-left" style={{ width: leftPanelWidth }}>
+              <MediaLibrary
+                apiKey={persistence.apiKey}
+                selectedVideo={media.selectedVideo}
+                videoMetadata={media.videoMetadata}
+                videoThumbnails={media.videoThumbnails || EMPTY_ARRAY}
+                videoClips={media.videoClips || EMPTY_CLIPS}
+                mediaAssets={media.mediaAssets || EMPTY_ARRAY}
                 duration={playback.duration}
-                segments={segments}
+                onAddClipToTimeline={handleAddClipToTimeline}
+                onVideoSelected={handleVideoSelected}
+                onRemoveVideo={handleClearVideo}
+                scriptData={scriptData}
+                onUpdateScript={handleUpdateScript}
+                onUpdateSegments={handleUpdateTimelineSegments}
+                onGenerateScript={handleGenerateScript}
+                isGeneratingScript={script.isGeneratingScript}
+                generatingEpisodeId={script.generatingEpisodeId}
+                scriptProgress={script.scriptProgress}
+                scriptStage={script.scriptStage}
+                scriptLogs={script.scriptLogs}
+                scriptError={script.scriptError}
+                activeTab={leftTab}
+                onTabChange={setLeftTab}
+                onNavigateToVoice={handleGenerateAudio}
+                isGeneratingAudio={audio.isGeneratingAudio}
+                generatingAudioEpisodeId={audio.generatingAudioEpisodeId}
+                audioProgress={audio.audioProgress}
+                audioStage={audio.audioStage}
+                onRegenerateSegment={handleRegenerateSingleSegment}
+                onUpdateSegmentText={handleUpdateSegmentText}
+                speakerRegistry={speakerRegistry || EMPTY_OBJECT}
+                onUpdateSpeakerVoice={handleUpdateSpeakerVoice}
+                onUpdateSegmentVoice={handleUpdateSegmentVoice}
+                onToggleDeliveryType={handleToggleDeliveryType}
                 selectedSegmentId={media.selectedSegmentId}
-                onSeek={handleSeek}
                 onSelectSegment={media.setSelectedSegmentId}
+                onDeleteSegment={handleDeleteSegment}
+                seriesList={series.seriesList}
+                activeSeries={series.activeSeries}
+                activeEpisode={series.activeEpisode}
+                seriesId={series.seriesId}
+                episodeId={series.episodeId}
+                seriesGlossary={series.seriesGlossary}
+                onSwitchEpisode={handleSwitchEpisode}
+                onCreateEpisode={handleCreateEpisode}
+                onDeleteEpisode={handleDeleteEpisode}
+                onRenameEpisode={handleRenameEpisode}
+                onRenameSeries={handleRenameSeries}
               />
             </div>
 
-            {/* Bottom Working Area: Dynamic based on mode and segment presence */}
-            <div className="workspace-centre-segments-section">
-              {workspaceMode === 'import' ? (
-                /* Point 3: Episode Overview Summary of all episodes in Import mode (No floating card) */
-                <div className="workspace-episodes-overview-wrap">
-                  <div className="workspace-episodes-overview-header">
-                    <span style={{ fontSize: 13, fontWeight: 600, color: '#f1f5f9' }}>
-                      សង្ខេបស្ថានភាពភាគទាំងអស់ (Episodes Overview)
-                    </span>
-                    <span style={{ fontSize: 12, color: '#64748b' }}>
-                      {(series.activeSeries?.episodes || []).length} ភាគសរុប
-                    </span>
-                  </div>
+            {/* Left Resizer Splitter (Drag Left / Right) */}
+            <div
+              className={`capcut-panel-splitter ${activeSplitter === 'left' ? 'is-active' : ''}`}
+              onMouseDown={(e) => handleStartSplitterDrag(e, 'left')}
+              title="Drag left or right to resize Media Library panel"
+            />
 
-                  <table className="workspace-overview-table">
-                    <thead>
-                      <tr>
-                        <th>ភាគ (Episode)</th>
-                        <th>វីដេអូ (Video)</th>
-                        <th>Script</th>
-                        <th>Voice (TTS)</th>
-                        <th>Demucs (BGM)</th>
-                        <th>Export</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {(series.activeSeries?.episodes || []).map((ep, idx) => {
-                        const isSelected = ep.id === series.episodeId;
-                        const hasEpVideo = Boolean(ep.video?.videoId || ep.video?.videoUrl);
-                        const hasEpScript = Boolean((ep.scriptData?.segments && ep.scriptData.segments.length > 0) || ep.scriptData?.hasScript);
-                        const hasEpVoice = Boolean(ep.audioGenerated && !ep.audioOutdated);
-                        const hasEpDemucs = Boolean(ep.hasDemucs || ep.cleanBgmPath);
-                        const hasEpExport = Boolean(ep.renderedVideo);
-                        const epNum = ep.episodeNumber || (idx + 1);
+            {/* 2. Center Panel: Video Preview Monitor */}
+            <div className="top-suite-col-center">
+              <VideoPlayerPreview
+                selectedVideo={media.selectedVideo}
+                seriesId={series.seriesId}
+                episodeId={series.episodeId}
+                scriptData={scriptData}
+                renderedVideo={render.renderedVideo}
+                setRenderedVideo={render.setRenderedVideo}
+                onResetToPreview={handleResetToPreview}
+                isRendering={render.isRendering}
+                onRenderVideo={handleRenderVideo}
+                videoRef={videoRef}
+                currentTime={playback.currentTime}
+                duration={playback.duration}
+                isPlaying={playback.isPlaying}
+                onPlayPause={handlePlayPause}
+                onSeek={handleSeek}
+                onTimeUpdate={handleTimeUpdate}
+                onLoadedMetadata={handleLoadedMetadata}
+                voiceSettings={voiceSettings || EMPTY_OBJECT}
+                onEnded={handleVideoEnded}
+                fullAudioUrl={audio.fullAudioUrl}
+                audioGenerated={audio.audioGenerated}
+                audioOutdated={audio.audioOutdated}
+                onImportClick={handleImportClick}
+                onVideoSelected={handleVideoSelected}
+                videoClips={media.videoClips || EMPTY_CLIPS}
+              />
+            </div>
 
-                        return (
-                          <tr
-                            key={ep.id}
-                            onClick={() => handleSwitchEpisode?.(ep.id)}
-                            className={`workspace-overview-row ${isSelected ? 'is-active' : ''}`}
-                          >
-                            <td style={{ fontWeight: 600, color: isSelected ? '#38bdf8' : '#e2e8f0' }}>
-                              EP {epNum} {ep.displayTitle || ep.title ? `— ${ep.displayTitle || ep.title}` : ''}
-                            </td>
-                            <td>
-                              {hasEpVideo ? (
-                                <span style={{ color: '#22c55e', fontSize: 11 }}>✓ {formatTimecode(ep.video?.duration || 0)}</span>
-                              ) : (
-                                <span style={{ color: '#64748b' }}>—</span>
-                              )}
-                            </td>
-                            <td>
-                              {hasEpScript ? (
-                                <span style={{ color: '#a855f7', fontSize: 11 }}>✓ {ep.scriptData?.segments?.length || ep.scriptData?.totalSegments || 'Ready'} ឃ្លា</span>
-                              ) : (
-                                <span style={{ color: '#64748b' }}>—</span>
-                              )}
-                            </td>
-                            <td>
-                              {hasEpVoice ? (
-                                <span style={{ color: '#38bdf8', fontSize: 11 }}>✓ Ready</span>
-                              ) : (
-                                <span style={{ color: '#64748b' }}>—</span>
-                              )}
-                            </td>
-                            <td>
-                              {hasEpDemucs ? (
-                                <span style={{ color: '#10b981', fontSize: 11 }}>✓ Clean</span>
-                              ) : (
-                                <span style={{ color: '#64748b' }}>—</span>
-                              )}
-                            </td>
-                            <td>
-                              {hasEpExport ? (
-                                <span style={{ color: '#10b981', fontSize: 11 }}>✓ Exported</span>
-                              ) : (
-                                <span style={{ color: '#64748b' }}>—</span>
-                              )}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              ) : hasSegments ? (
-                <>
-                  <WorkspaceToolbar
-                    workspaceMode={workspaceMode}
-                    segmentsCount={segments.length}
-                    overCount={overCount}
-                    searchQuery={transcriptSearch}
-                    onSearchChange={setTranscriptSearch}
-                    onReTranslateClick={() => setShowConfirmRetranslate(true)}
-                    onAutoAlign={handleAutoAlignNoOverlap}
-                    onResetTiming={handleResetToSourceTiming}
-                    onAddSegment={handleAddSegmentAtTime}
-                    canUndo={undoRedo.canUndo}
-                    canRedo={undoRedo.canRedo}
-                    onUndo={handleUndo}
-                    onRedo={handleRedo}
-                    onOpenKeyModal={handleOpenGeminiRoute}
-                    onGenerateAllVoice={handleGenerateAudio}
-                    isGeneratingAudio={audio.isGeneratingAudio}
-                    audioProgress={audio.audioProgress}
-                    isCleanBgReady={isCleanBgReady}
-                    onRenderVideo={handleRenderVideo}
-                    isRendering={render.isRendering}
-                    renderProgress={render.renderProgress}
-                  />
+            {/* Right Resizer Splitter (Drag Left / Right) */}
+            <div
+              className={`capcut-panel-splitter ${activeSplitter === 'right' ? 'is-active' : ''}`}
+              onMouseDown={(e) => handleStartSplitterDrag(e, 'right')}
+              title="Drag left or right to resize Inspector panel"
+            />
 
-                  <TranscriptSegmentList
-                    segments={segments}
-                    selectedSegmentId={media.selectedSegmentId}
-                    onSelectSegment={media.setSelectedSegmentId}
-                    onUpdateSegments={handleUpdateTimelineSegments}
-                    onUpdateScript={handleUpdateScript}
-                    onRegenerateSegment={handleRegenerateSingleSegment}
-                    onDeleteSegment={handleDeleteSegment}
-                    onToggleDeliveryType={handleToggleDeliveryType}
-                    searchQuery={transcriptSearch}
-                  />
-                </>
-              ) : (
-                /* Inline Translate Run Panel when in other modes with no segments (In-Flow) */
-                <InlineTranslatePanel
-                  selectedVideo={media.selectedVideo}
-                  videoMetadata={media.videoMetadata}
-                  activeSeries={series.activeSeries}
-                  activeEpisode={series.activeEpisode}
-                  seriesId={series.seriesId}
-                  episodeId={series.episodeId}
-                  onRefreshSeries={series.refreshSeriesFromServer}
-                  onOpenGeminiRoute={handleOpenGeminiRoute}
-                  apiKey={persistence.apiKey}
-                />
-              )}
+            {/* 3. Right Panel: Khmer Voice (TTS), Audio Ducking, Export Settings */}
+            <div className="top-suite-col-right" style={{ width: rightPanelWidth }}>
+              <VoiceSettings
+                settings={voiceSettings || EMPTY_OBJECT}
+                onUpdateSettings={handleUpdateVoiceSettings}
+                voiceCatalog={audio.ttsVoiceCatalog}
+                audioOutdated={audio.audioOutdated}
+                previewAudioUrl={
+                  audio.fullAudioUrl || scriptData?.segments?.find((s) => s.audioUrl)?.audioUrl || null
+                }
+                onRenderVideo={handleRenderVideo}
+                isRendering={render.isRendering}
+                renderProgress={render.renderProgress}
+                renderStage={render.renderStage}
+                renderedVideo={render.renderedVideo}
+                selectedVideo={media.selectedVideo}
+                videoMetadata={media.videoMetadata}
+                duration={playback.duration}
+                selectedClip={media.selectedClip}
+                onSplitClip={handleSplitClip}
+                onDeleteClip={handleDeleteClip}
+                currentTime={playback.currentTime}
+                isPlaying={playback.isPlaying}
+                scriptData={scriptData}
+                onGenerateAudio={handleGenerateAudio}
+                isGeneratingAudio={audio.isGeneratingAudio}
+                audioProgress={audio.audioProgress}
+                audioStage={audio.audioStage}
+                audioGenerated={audio.audioGenerated}
+                onRegenerateSegment={handleRegenerateSingleSegment}
+                speakerRegistry={speakerRegistry || EMPTY_OBJECT}
+                onUpdateSpeakerVoice={handleUpdateSpeakerVoice}
+                onUpdateSegmentVoice={handleUpdateSegmentVoice}
+                onUpdateSegmentText={handleUpdateSegmentText}
+                onUpdateSegmentSpeed={audio.handleUpdateSegmentSpeed}
+                onToggleDeliveryType={handleToggleDeliveryType}
+                onSplitSegment={audio.handleSplitSegment}
+                onAutoSplitSegment={clips.handleAutoSplitSegment}
+                selectedSegmentId={media.selectedSegmentId}
+                onSelectSegment={media.setSelectedSegmentId}
+                onDeleteSegment={handleDeleteSegment}
+                onUpdateSegments={handleUpdateTimelineSegments}
+                onToggleMuteSegment={handleToggleMuteSegment}
+                onToggleMuteVideoClip={handleToggleMuteVideoClip}
+                onToggleMuteAllCuts={handleToggleMuteAllCuts}
+                videoClips={media.videoClips || EMPTY_CLIPS}
+                onUpdateScript={handleUpdateScript}
+              />
             </div>
           </div>
 
-          {/* 4. RIGHT PANEL: Inspector (Top) + Stage Settings (Bottom) — Fixed 320px */}
-          <div className="workspace-right-container">
-            {/* Header: Quiet label, no collapse button */}
-            <div className="workspace-right-header">
-              <span className="workspace-quiet-label">
-                ការកំណត់ (Inspector & Settings)
-              </span>
-            </div>
-
-            <div className="workspace-right-body">
-              {/* Top: Selected Segment Inspector */}
-              <div className="workspace-inspector-section">
-                {selectedSegment && hasSegments ? (
-                  <ClipInspectorPanel
-                    isOpen={true}
-                    selectedSegment={selectedSegment}
-                    selectedSegmentIndex={selectedSegmentIndex}
-                    onSegmentTextChange={(text) => {
-                      if (handleUpdateSegmentText) {
-                        handleUpdateSegmentText(selectedSegment.id || selectedSegmentIndex, text);
-                      }
-                    }}
-                    onSegmentTextBlur={(text) => {
-                      if (handleUpdateSegmentText) {
-                        handleUpdateSegmentText(selectedSegment.id || selectedSegmentIndex, text, false, selectedSegmentIndex);
-                      }
-                    }}
-                    onSingleRegen={handleRegenerateSingleSegment}
-                    onClipVoiceChange={handleUpdateSegmentVoice}
-                    onUpdateSpeakerVoice={handleUpdateSpeakerVoice}
-                    onToggleDeliveryType={handleToggleDeliveryType}
-                    onDeleteSegment={handleDeleteSegment}
-                    currentTime={playback.currentTime}
-                    scriptData={scriptData}
-                    onSelectSegment={media.setSelectedSegmentId}
-                    settings={voiceSettings}
-                  />
-                ) : (
-                  /* Point 6: Inspector Never Blank — Episode Overview & Status */
-                  <div className="workspace-episode-overview-card">
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                      <span className="workspace-quiet-label">
-                        ព័ត៌មានភាគ (Episode Overview)
-                      </span>
-                      <span style={{ fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--ink-dim)' }}>
-                        #{series.activeEpisode?.episodeNumber || 1}
-                      </span>
-                    </div>
-
-                    <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--ink)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                      {series.activeEpisode?.displayTitle || series.activeEpisode?.title || 'ភាគទី ១ (EP1)'}
-                    </div>
-
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontFamily: 'var(--font-mono)', fontSize: 12, color: 'var(--ink-dim)' }}>
-                      <span>{formatTimecode(playback.duration || media.videoMetadata?.duration || 0)}</span>
-                      <span>•</span>
-                      <span>{media.videoMetadata?.width ? `${media.videoMetadata.width}×${media.videoMetadata.height}` : '1920×1080'}</span>
-                      <span>•</span>
-                      <span>{segments.length} ឃ្លា</span>
-                    </div>
-
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 4 }}>
-                      <span className={`workspace-status-badge ${Boolean(media.selectedVideo) ? 'is-done' : ''}`}>
-                        Vid {Boolean(media.selectedVideo) ? '✓' : '—'}
-                      </span>
-                      <span className={`workspace-status-badge ${hasSegments ? 'is-done' : ''}`}>
-                        Scr {hasSegments ? '✓' : '—'}
-                      </span>
-                      <span className={`workspace-status-badge ${Boolean(series.activeEpisode?.audioGenerated) ? 'is-done' : ''}`}>
-                        Voice {Boolean(series.activeEpisode?.audioGenerated) ? '✓' : '—'}
-                      </span>
-                      <span className={`workspace-status-badge ${isCleanBgReady ? 'is-done' : ''}`}>
-                        BGM {isCleanBgReady ? '✓' : '—'}
-                      </span>
-                      <span className={`workspace-status-badge ${Boolean(render.renderedVideo) ? 'is-done' : ''}`}>
-                        Exp {Boolean(render.renderedVideo) ? '✓' : '—'}
-                      </span>
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* Bottom: Contextual Stage Settings */}
-              <div className="workspace-stage-settings-section">
-                <StageSettingsPanel
-                  workspaceMode={workspaceMode}
-                  selectedVideo={media.selectedVideo}
-                  videoMetadata={media.videoMetadata}
-                  activeSeries={series.activeSeries}
-                  activeEpisode={series.activeEpisode}
-                  seriesGlossary={series.seriesGlossary}
-                  voiceSettings={voiceSettings}
-                  onUpdateVoiceSettings={setVoiceSettings}
-                  voiceCatalog={audio.ttsVoiceCatalog}
-                  isCleanBgReady={isCleanBgReady}
-                  isSeparatingAudio={isSeparatingAudio}
-                  separationProgress={separationProgress}
-                  separationError={separationError}
-                  onStartDemucsSeparation={handleStartDemucsSeparation}
-                  onKillDemucs={handleKillDemucs}
-                  onRenderVideo={handleRenderVideo}
-                  isRendering={render.isRendering}
-                  renderProgress={render.renderProgress}
-                  renderStage={render.renderStage}
-                  renderedVideo={render.renderedVideo}
-                  audioGenerated={audio.audioGenerated}
-                  previewAudioUrl={audio.fullAudioUrl}
-                />
-              </div>
-            </div>
+          {/* Bottom Multi-Track Timeline */}
+          <div className="capcut-bottom-timeline">
+            <TimelineEditor
+              videoRef={videoRef}
+              activeTab={leftTab}
+              currentTime={playback.currentTime}
+              duration={playback.duration}
+              isPlaying={playback.isPlaying}
+              onSeek={handleSeek}
+              onPlayPause={handlePlayPause}
+              videoClips={media.videoClips || EMPTY_CLIPS}
+              activeClipId={media.activeClipId}
+              onSelectClip={handleSelectClip}
+              onUpdateClips={handleUpdateClips}
+              onSplitClip={handleSplitClip}
+              onDeleteClip={handleDeleteClip}
+              onDeleteSegment={handleDeleteSegment}
+              scriptSegments={scriptData?.segments || EMPTY_SEGMENTS}
+              onUpdateSegments={handleUpdateTimelineSegments}
+              onToggleMuteSegment={handleToggleMuteSegment}
+              onToggleMuteVideoClip={handleToggleMuteVideoClip}
+              onToggleMuteAllCuts={handleToggleMuteAllCuts}
+              onToggleDeliveryType={handleToggleDeliveryType}
+              speakerRegistry={speakerRegistry || EMPTY_OBJECT}
+              voiceSettings={voiceSettings || EMPTY_OBJECT}
+              onUpdateVoiceSettings={handleUpdateVoiceSettings}
+              audioGenerated={audio.audioGenerated}
+              selectedVideo={media.selectedVideo}
+              videoThumbnails={media.videoThumbnails || EMPTY_ARRAY}
+              selectedSegmentId={media.selectedSegmentId}
+              onSelectSegment={media.setSelectedSegmentId}
+              onAutoSplitVideo={handleAutoSplitVideo}
+              onResetFullVideo={handleResetFullVideo}
+              onBridgeGaps={handleBridgeGaps}
+              onAutoAlignNoOverlap={handleAutoAlignNoOverlap}
+              onResetToSourceTiming={handleResetToSourceTiming}
+              onAddSegment={handleAddSegmentAtTime}
+              canUndo={undoRedo.canUndo}
+              canRedo={undoRedo.canRedo}
+              onUndo={handleUndo}
+              onRedo={handleRedo}
+              onGenerateAudio={handleGenerateAudio}
+              isGeneratingAudio={audio.isGeneratingAudio}
+              onAddClipToTimeline={handleAddClipToTimeline}
+              mediaAssets={media.mediaAssets || EMPTY_ARRAY}
+            />
           </div>
-        </div>
+        </main>
 
-        {/* 5. Live Bottom Status Strip (~32px) */}
-        <BottomStatusStrip
-          activeEpisode={series.activeEpisode}
-          segmentsCount={segments.length}
-          overCount={overCount}
-          isGeneratingAudio={audio.isGeneratingAudio}
-          audioProgress={audio.audioProgress}
-          isSeparatingAudio={isSeparatingAudio}
-          separationProgress={separationProgress}
-          isRendering={render.isRendering}
-          renderProgress={render.renderProgress}
-          onOpenJobDashboard={handleOpenJobDashboard}
-          onOpenKeyModal={handleOpenGeminiRoute}
-        />
-
-        {/* Modals */}
+        {/* DragonDub Production Job Queue Dashboard Modal (Phase 4.4) */}
         <JobDashboardModal isOpen={showJobDashboard} onClose={handleCloseJobDashboard} />
+
+        {/* DragonDub Gemini Multi-Key Route Studio Modal (Clean Full Dashboard) */}
         <GeminiRouteModal
           isOpen={showGeminiRouteModal}
           onClose={handleCloseGeminiRoute}
@@ -903,45 +681,6 @@ export default function App() {
           onRefreshSeries={series.refreshSeriesFromServer}
           apiKey={persistence.apiKey}
         />
-
-        {/* Re-Translate Overwrite Confirmation Modal */}
-        {showConfirmRetranslate && (
-          <div className="script-confirm-modal-overlay" onClick={() => setShowConfirmRetranslate(false)}>
-            <div className="script-confirm-modal-box" onClick={(e) => e.stopPropagation()}>
-              <h3 className="script-confirm-title">
-                <AlertTriangle size={18} />
-                <span>បញ្ជាក់ការ Re-Translate (Confirm Overwrite)</span>
-              </h3>
-              <p className="script-confirm-desc">
-                ⚠️ ដំណើរការនេះនឹងលុប Script និង Subtitle ដែលបានកែប្រែដោយដៃចោល ហើយបង្កើត Subtitle ថ្មីឡើងវិញ។
-                <br /><br />
-                • Script ចាស់នឹងត្រូវ Auto-Backup ទុកក្នុង folder backups។
-                <br />
-                • តើអ្នកពិតជាចង់បន្តមែនទេ?
-              </p>
-              <div className="script-confirm-actions">
-                <button
-                  type="button"
-                  className="script-confirm-cancel-btn"
-                  onClick={() => setShowConfirmRetranslate(false)}
-                >
-                  បោះបង់ (Cancel)
-                </button>
-                <button
-                  type="button"
-                  className="script-confirm-ok-btn"
-                  onClick={() => {
-                    setShowConfirmRetranslate(false);
-                    // Switch to script mode to run re-translation
-                    setWorkspaceMode(STEP_IDS.SCRIPT);
-                  }}
-                >
-                  បាទ/ចាស, Re-Translate ឥឡូវនេះ
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
       </div>
     </JobQueueProvider>
   );

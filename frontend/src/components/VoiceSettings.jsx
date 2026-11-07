@@ -709,7 +709,7 @@ export default function VoiceSettings({
         <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
           <Sliders size={14} color="var(--primary-accent)" />
           <span className="panel-title-tag">
-            AUDIO & EXPORT INSPECTOR
+            ការកំណត់សំឡេង & Export (Inspector)
           </span>
         </div>
         {audioGenerated && (

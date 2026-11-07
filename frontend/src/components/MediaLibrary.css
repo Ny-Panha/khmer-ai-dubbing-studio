@@ -1,36 +1,38 @@
-/* Left Panel - Media & Creative Tools (Pro Studio Palette) */
+/* Left Panel - Media & Creative Tools (Clean Pass 3 Tokens) */
 .capcut-media-panel {
-  background: #0e1422;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 12px;
+  background: var(--panel);
+  border: none;
+  border-radius: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
   height: 100%;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  box-shadow: none;
 }
 
 .media-tabs-header {
   display: flex;
-  height: 38px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-  background: #090d16;
+  height: 42px;
+  border-bottom: 1px solid var(--line);
+  background: var(--floor);
   flex-shrink: 0;
-  padding: 3px;
-  gap: 3px;
-  border-radius: 12px 12px 0 0;
+  padding: 3px 4px;
+  gap: 4px;
+  border-radius: 0;
+  align-items: center;
 }
 
 .media-tab-btn {
   flex: 1;
   min-width: 0;
+  height: 36px;
   background: transparent;
   border: 1px solid transparent;
   border-radius: 6px;
-  color: #94a3b8;
-  font-size: 0.72rem;
+  color: var(--ink-dim);
+  font-size: 12px;
   font-weight: 500;
-  padding: 4px 6px;
+  padding: 0 8px;
   white-space: nowrap;
   display: flex;
   align-items: center;
@@ -48,31 +50,34 @@
 }
 
 .media-tab-btn:hover {
-  color: #f1f5f9;
-  background: rgba(255, 255, 255, 0.04);
+  color: var(--ink);
+  background: var(--muted);
 }
 
 .media-tab-btn.active {
-  color: #38bdf8;
-  background: rgba(56, 189, 248, 0.12);
-  border-color: rgba(56, 189, 248, 0.3);
+  color: var(--primary-accent);
+  background: var(--muted);
+  border-color: var(--line);
   font-weight: 600;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
+  box-shadow: none;
 }
 
 .tab-badge {
-  background: rgba(255, 255, 255, 0.08);
-  color: #94a3b8;
-  padding: 1px 5px;
+  background: var(--muted);
+  color: var(--ink-dim);
+  padding: 1px 6px;
   border-radius: 4px;
-  font-size: 0.60rem;
-  font-weight: 700;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px solid var(--line);
   flex-shrink: 0;
 }
 
 .media-tab-btn.active .tab-badge {
-  background: rgba(56, 189, 248, 0.22);
-  color: #7dd3fc;
+  background: var(--muted);
+  color: var(--primary-accent);
+  border-color: var(--primary-accent);
 }
 
 .media-tab-content {
@@ -82,7 +87,7 @@
   display: flex;
   flex-direction: column;
   gap: 10px;
-  background: #0e1422;
+  background: var(--panel);
 }
 
 .episodes-tab-container {

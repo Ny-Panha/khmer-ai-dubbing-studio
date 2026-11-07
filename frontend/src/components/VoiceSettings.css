@@ -1,13 +1,13 @@
-/* Right Panel - Contextual Inspector (Pro Studio Palette) */
+/* Right Panel - Contextual Inspector (Clean Pass 3 Tokens) */
 .capcut-inspector-panel {
-  background: #0e1422;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 12px;
+  background: var(--panel);
+  border: none;
+  border-radius: 0;
   display: flex;
   flex-direction: column;
   overflow-y: auto;
   height: 100%;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  box-shadow: none;
 }
 
 .inspector-header {
@@ -15,12 +15,20 @@
   align-items: center;
   justify-content: space-between;
   gap: 6px;
-  padding: 6px 14px;
-  height: 38px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-  background: #090d16;
+  padding: 0 14px;
+  height: 42px;
+  border-bottom: 1px solid var(--line);
+  background: var(--floor);
   flex-shrink: 0;
-  border-radius: 12px 12px 0 0;
+  border-radius: 0;
+}
+
+.panel-title-tag {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink-dim);
+  text-transform: none;
+  letter-spacing: 0;
 }
 
 .inspector-content {
@@ -28,35 +36,34 @@
   display: flex;
   flex-direction: column;
   gap: 10px;
-  background: #0e1422;
+  background: var(--panel);
 }
 
 .inspector-card-group {
-  background: #111827;
-  border: 1px solid rgba(255, 255, 255, 0.07);
-  border-radius: 8px;
+  background: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 6px;
   padding: 10px;
 }
 
 .section-label {
-  font-size: 0.68rem;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: #94a3b8;
+  font-size: 12px;
+  font-weight: 500;
+  text-transform: none;
+  color: var(--ink-dim);
   display: block;
   margin-bottom: 6px;
 }
 
 /* Inspector Select & Dropdown Styling — High Contrast & Khmer Typography */
 .inspector-select {
-  background-color: #090d16 !important;
-  color: #f8fafc !important;
+  background-color: var(--floor) !important;
+  color: var(--ink) !important;
   font-family: 'Kantumruy Pro', 'Battambang', system-ui, sans-serif !important;
-  font-size: 0.80rem !important;
+  font-size: 13px !important;
   font-weight: 500 !important;
   line-height: 1.6 !important;
-  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+  border: 1px solid var(--line) !important;
   border-radius: 6px !important;
   padding: 6px 10px !important;
   outline: none;

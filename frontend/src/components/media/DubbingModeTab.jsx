@@ -41,6 +41,7 @@ export default function DubbingModeTab({
   const [narratorGender, setNarratorGender] = useState('male');
   const [selectedGenre, setSelectedGenre] = useState(scriptData?.genre || scriptData?.detectedGenre || 'auto');
   const [showRegenerateForm, setShowRegenerateForm] = useState(false);
+  const [showConfirmRetranslate, setShowConfirmRetranslate] = useState(false);
   const [isSeparatingAudio, setIsSeparatingAudio] = useState(false);
   const [separationProgress, setSeparationProgress] = useState(0);
   const [isCleanBgReady, setIsCleanBgReady] = useState(false);
@@ -1234,6 +1235,10 @@ export default function DubbingModeTab({
           type="button"
           onClick={() => {
             if (!isThisEpisodeGeneratingScript && selectedVideo) {
+              if (hasExistingScript) {
+                setShowConfirmRetranslate(true);
+                return;
+              }
               handleTriggerScript({ narratorGender, genre: selectedGenre });
             }
           }}
@@ -1352,6 +1357,93 @@ export default function DubbingModeTab({
             <RefreshCw size={11} />
             <span>ព្យាយាមម្ដងទៀត (Retry)</span>
           </button>
+        </div>
+      )}
+
+      {/* Re-Translate Overwrite Confirmation Modal */}
+      {showConfirmRetranslate && (
+        <div
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: 'rgba(0, 0, 0, 0.75)',
+            backdropFilter: 'blur(4px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 9999,
+          }}
+          onClick={() => setShowConfirmRetranslate(false)}
+        >
+          <div
+            style={{
+              background: 'var(--panel)',
+              border: '1px solid var(--line)',
+              borderRadius: 8,
+              padding: '20px 24px',
+              maxWidth: 440,
+              width: '90%',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 12,
+              boxShadow: '0 20px 40px rgba(0,0,0,0.6)',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 style={{ display: 'flex', alignItems: 'center', gap: 8, margin: 0, fontSize: '14px', color: 'var(--ink)', fontWeight: 600 }}>
+              <AlertCircle size={18} color="var(--color-warning)" />
+              <span>បញ្ជាក់ការ Re-Translate (Confirm Overwrite)</span>
+            </h3>
+            <p style={{ margin: 0, fontSize: '13px', color: 'var(--ink-dim)', lineHeight: 1.5 }}>
+              ⚠️ ដំណើរការនេះនឹងលុប Script និង Subtitle ដែលបានកែប្រែដោយដៃចោល ហើយបង្កើត Subtitle ថ្មីឡើងវិញ។
+              <br /><br />
+              • Script ចាស់នឹងត្រូវ Auto-Backup ទុកក្នុង folder backups។
+              <br />
+              • តើអ្នកពិតជាចង់បន្តមែនទេ?
+            </p>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 8 }}>
+              <button
+                type="button"
+                onClick={() => setShowConfirmRetranslate(false)}
+                style={{
+                  height: 36,
+                  padding: '0 14px',
+                  borderRadius: 6,
+                  border: '1px solid var(--line)',
+                  background: 'transparent',
+                  color: 'var(--ink-dim)',
+                  cursor: 'pointer',
+                  fontSize: 12,
+                  fontWeight: 500,
+                }}
+              >
+                បោះបង់ (Cancel)
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowConfirmRetranslate(false);
+                  handleTriggerScript({ narratorGender, genre: selectedGenre });
+                }}
+                style={{
+                  height: 36,
+                  padding: '0 16px',
+                  borderRadius: 6,
+                  border: 'none',
+                  background: '#0284c7',
+                  color: '#ffffff',
+                  cursor: 'pointer',
+                  fontSize: 12,
+                  fontWeight: 600,
+                }}
+              >
+                បាទ/ចាស, Re-Translate ឥឡូវនេះ
+              </button>
+            </div>
+          </div>
         </div>
       )}
 

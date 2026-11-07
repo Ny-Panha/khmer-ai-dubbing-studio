@@ -30,7 +30,6 @@ export default function Navbar({
   onOpenJobDashboard = null,
   onOpenGeminiRoute = null,
   activeJobCount = 0,
-  onNavigateToStep = null,
 }) {
   const [showKeyModal, setShowKeyModal] = useState(false);
   const [showShortcutsModal, setShowShortcutsModal] = useState(false);
@@ -56,15 +55,10 @@ export default function Navbar({
             onClick={(e) => {
               e.preventDefault();
               e.stopPropagation();
-              if (onNavigateToStep) {
-                onNavigateToStep('script');
-              } else {
-                if (onOpenGeminiRoute) onOpenGeminiRoute();
-                if (onTabChange) onTabChange('gemini-route');
-              }
+              if (onOpenGeminiRoute) onOpenGeminiRoute();
             }}
-            className={`navbar-gemini-route-btn ${activeTab === 'gemini-route' ? 'active' : ''}`}
-            title="Step 2: Translate & Script (Gemini Multi-Key Route)"
+            className="navbar-gemini-route-btn"
+            title="Gemini Multi-Key Route Console (Batch & Key Pool)"
           >
             <Cpu size={14} />
             <span>Gemini Route</span>

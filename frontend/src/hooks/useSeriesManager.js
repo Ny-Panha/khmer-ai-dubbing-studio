@@ -237,28 +237,28 @@ export function useSeriesManager({
       applyEpisodeToWorkspace(episode);
     }
 
-    // Server-truth hydration: sync latest metadata from server (e.g. cleared renderedVideo, updated episodes)
-    if (series?.id) {
-      fetch(`/api/series/${series.id}`)
-        .then((res) => res.json())
-        .then((data) => {
-          if (data?.success && data.series) {
-            const serverSeries = data.series;
-            setSeriesList((prevList) => {
-              const updated = (prevList || []).map((s) => (s.id === serverSeries.id ? serverSeries : s));
-              try {
-                saveSeriesList(updated);
-              } catch (_) {}
-              return updated;
-            });
-            const activeServerEp = (serverSeries.episodes || []).find((e) => e.id === episode?.id);
-            if (activeServerEp) {
-              applyEpisodeToWorkspace(activeServerEp);
+    // Server-truth hydration: sync latest series and episodes from server
+    fetch('/api/series')
+      .then((res) => res.json())
+      .then((data) => {
+        if (data?.success && Array.isArray(data.series) && data.series.length > 0) {
+          const serverList = data.series;
+          setSeriesList(serverList);
+          try {
+            saveSeriesList(serverList);
+          } catch (_) {}
+          const targetSeries = serverList.find((s) => s.id === series?.id) || serverList[0];
+          if (targetSeries) {
+            setActiveSeriesIdState(targetSeries.id);
+            const targetEp = (targetSeries.episodes || []).find((e) => e.id === episode?.id) || targetSeries.episodes?.[0];
+            if (targetEp) {
+              setActiveEpisodeIdState(targetEp.id);
+              applyEpisodeToWorkspace(targetEp);
             }
           }
-        })
-        .catch(() => {});
-    }
+        }
+      })
+      .catch(() => {});
 
     // Mark initialization complete after workspace states settle
     const timer = setTimeout(() => {
