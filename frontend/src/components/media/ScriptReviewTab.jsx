@@ -293,7 +293,7 @@ const CaptionItemCard = React.memo(function CaptionItemCard({
   );
 });
 
-export default function ScriptReviewTab({
+function ScriptReviewTab({
   scriptData,
   handleBridgeGaps,
   handleAddSegment,
@@ -377,3 +377,5 @@ export default function ScriptReviewTab({
     </div>
   );
 }
+
+export default React.memo(ScriptReviewTab);

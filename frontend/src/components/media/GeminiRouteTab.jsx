@@ -4,7 +4,8 @@ import {
   XCircle, Check, Clock, Film, Layers, ShieldCheck, ArrowRight, Loader2,
   Terminal, ChevronDown, ChevronUp
 } from 'lucide-react';
-import { startGenerationJob, fetchJobsListApi } from '../../services/api';
+import { startGenerationJob } from '../../services/api';
+import { useSharedJobQueue } from '../../context/JobQueueContext';
 import { formatTimecode } from '../../utils/formatTime';
 
 /**
@@ -385,29 +386,8 @@ export default function GeminiRouteTab({
   const [batchError, setBatchError] = useState(null);
   const [batchSuccess, setBatchSuccess] = useState(null);
 
-  // Background jobs state
-  const [activeJobs, setActiveJobs] = useState([]);
-  const [pollInterval, setPollInterval] = useState(1500);
-
-  // Poll active jobs
-  useEffect(() => {
-    let isMounted = true;
-    const fetchStatus = async () => {
-      try {
-        const res = await fetchJobsListApi({ filter: 'all' });
-        if (isMounted && res && res.success) {
-          setActiveJobs(res.jobs || []);
-        }
-      } catch (_) {}
-    };
-
-    fetchStatus();
-    const interval = setInterval(fetchStatus, pollInterval);
-    return () => {
-      isMounted = false;
-      clearInterval(interval);
-    };
-  }, [pollInterval]);
+  // Single-source-of-truth job queue from JobQueueContext (Zero duplicate polling)
+  const { jobs: activeJobs = [] } = useSharedJobQueue();
 
   // Map of active running jobs per episodeId
   const jobsByEpisodeId = useMemo(() => {

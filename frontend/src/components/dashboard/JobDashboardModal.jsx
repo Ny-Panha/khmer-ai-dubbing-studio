@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { useJobQueue } from './useJobQueue';
+import { useSharedJobQueue } from '../../context/JobQueueContext';
 import JobQueueList from './JobQueueList';
 
 export default function JobDashboardModal({ isOpen, onClose }) {
@@ -19,7 +19,7 @@ export default function JobDashboardModal({ isOpen, onClose }) {
     retryJob,
     cancelJob,
     refreshJobs,
-  } = useJobQueue({ enabled: Boolean(isOpen) });
+  } = useSharedJobQueue();
 
   // Handle ESC key to close modal
   useEffect(() => {

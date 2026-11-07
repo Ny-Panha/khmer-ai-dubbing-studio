@@ -457,7 +457,11 @@ export default function DubbingModeTab({
 
             {onNavigateToVoice && (
               <button
-                onClick={onNavigateToVoice}
+                type="button"
+                onClick={(e) => {
+                  e.preventDefault();
+                  onNavigateToVoice({ forceRegen: Boolean(hasExistingAudio) });
+                }}
                 disabled={isThisEpisodeGeneratingAudio}
                 className="btn-tactile"
                 style={{
@@ -490,7 +494,11 @@ export default function DubbingModeTab({
                         {hasExistingAudio ? 'បង្កើតសំឡេង AI ឡើងវិញ (Re-TTS)' : 'បង្កើតសំឡេងខ្មែរ AI (Generate TTS)'}
                       </span>
                     </div>
-                    <ArrowRight size={14} style={{ flexShrink: 0 }} />
+                    {hasExistingAudio ? (
+                      <RefreshCw size={14} style={{ flexShrink: 0 }} />
+                    ) : (
+                      <ArrowRight size={14} style={{ flexShrink: 0 }} />
+                    )}
                   </>
                 )}
               </button>

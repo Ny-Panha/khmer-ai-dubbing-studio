@@ -59,20 +59,51 @@ export function useJobQueue(options = {}) {
     }
   }, [filter]);
 
-  // Start polling fallback
+  // Stop fallback polling timer safely
+  const stopPollingFallback = useCallback(() => {
+    if (pollingTimerRef.current) {
+      clearInterval(pollingTimerRef.current);
+      pollingTimerRef.current = null;
+    }
+  }, []);
+
+  // Start polling fallback (3000ms minimum, active only when enabled and document visible)
   const startPollingFallback = useCallback(() => {
-    if (pollingTimerRef.current) clearInterval(pollingTimerRef.current);
+    stopPollingFallback();
     setConnectionMode('polling');
     setIsConnected(false);
+
+    if (!enabled || (typeof document !== 'undefined' && document.hidden)) {
+      return;
+    }
 
     // Initial immediate fetch
     refreshJobs();
 
-    // Poll every 3 seconds
+    // Poll at 3000ms minimum
     pollingTimerRef.current = setInterval(() => {
+      if (typeof document !== 'undefined' && document.hidden) return;
       refreshJobs();
     }, 3000);
-  }, [refreshJobs]);
+  }, [enabled, refreshJobs, stopPollingFallback]);
+
+  // Pause fallback polling when document is hidden (visibilitychange), resume when visible
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        stopPollingFallback();
+      } else if (enabled && connectionMode === 'polling') {
+        startPollingFallback();
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [enabled, connectionMode, startPollingFallback, stopPollingFallback]);
 
   // Connect to SSE stream
   useEffect(() => {
@@ -81,10 +112,7 @@ export function useJobQueue(options = {}) {
         eventSourceRef.current.close();
         eventSourceRef.current = null;
       }
-      if (pollingTimerRef.current) {
-        clearInterval(pollingTimerRef.current);
-        pollingTimerRef.current = null;
-      }
+      stopPollingFallback();
       return;
     }
     isMountedRef.current = true;
@@ -105,11 +133,8 @@ export function useJobQueue(options = {}) {
           setIsConnected(true);
           setConnectionMode('sse');
           setError(null);
-          // If polling was running, clear it
-          if (pollingTimerRef.current) {
-            clearInterval(pollingTimerRef.current);
-            pollingTimerRef.current = null;
-          }
+          // If polling was running, clear it: SSE connected = no interval at all
+          stopPollingFallback();
         });
 
         es.addEventListener('init', (e) => {
@@ -176,10 +201,7 @@ export function useJobQueue(options = {}) {
         eventSourceRef.current.close();
         eventSourceRef.current = null;
       }
-      if (pollingTimerRef.current) {
-        clearInterval(pollingTimerRef.current);
-        pollingTimerRef.current = null;
-      }
+      stopPollingFallback();
       if (reconnectTimeout) {
         clearTimeout(reconnectTimeout);
       }

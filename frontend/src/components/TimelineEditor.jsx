@@ -9,7 +9,7 @@ import './TimelineEditor.css';
 
 const TRACK_HEADER_WIDTH = 150;
 
-export default function TimelineEditor({
+function TimelineEditor({
   videoRef = null,
   currentTime = 0,
   duration = 0,
@@ -1350,3 +1350,5 @@ export default function TimelineEditor({
     </div>
   );
 }
+
+export default React.memo(TimelineEditor);

@@ -11,7 +11,7 @@ import AntiTheftOverlay from './player/AntiTheftOverlay';
 import LogoOverlay from './player/LogoOverlay';
 import './VideoPlayerPreview.css';
 
-export default function VideoPlayerPreview({
+function VideoPlayerPreview({
   selectedVideo,
   seriesId,
   episodeId,
@@ -1252,3 +1252,5 @@ export default function VideoPlayerPreview({
     </div>
   );
 }
+
+export default React.memo(VideoPlayerPreview);

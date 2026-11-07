@@ -291,11 +291,12 @@ export async function generateAudioApi(params) {
   const videoId = isObject ? params.videoId : undefined;
   const seriesId = isObject ? params.seriesId : undefined;
   const episodeId = isObject ? params.episodeId : undefined;
+  const forceRegen = isObject && params.forceRegen !== undefined ? Boolean(params.forceRegen) : false;
 
   const res = await fetch('/api/generate-audio', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ segments, voiceId, speed, speakerMap, projectName, videoId, seriesId, episodeId }),
+    body: JSON.stringify({ segments, voiceId, speed, speakerMap, projectName, videoId, seriesId, episodeId, forceRegen }),
   });
 
   const data = await parseResponseJson(res, 'Failed to generate audio speech with TTS');

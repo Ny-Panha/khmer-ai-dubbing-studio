@@ -4,7 +4,8 @@ import {
   ArrowRight, Loader2, Terminal, ChevronDown, ChevronUp, X, RefreshCw,
   RotateCcw, FileText, CheckCheck, Activity, Layers, Mic, Volume2
 } from 'lucide-react';
-import { startGenerationJob, fetchJobsListApi, fetchGeminiKeysStatusApi } from '../../services/api';
+import { startGenerationJob, fetchGeminiKeysStatusApi } from '../../services/api';
+import { useSharedJobQueue } from '../../context/JobQueueContext';
 import { formatTimecode } from '../../utils/formatTime';
 
 // 3 Dedicated Route Progress Runners (Step 1: Translate, Step 2: Khmer TTS, Step 3: Demucs)
@@ -111,13 +112,17 @@ export default function GeminiRouteModal({
   const isDemucsCancelledRef = useRef(false);
   const activeTimersRef = useRef(new Set());
 
-  // Cleanup all running polling timers on modal unmount or close
+  // Cleanup all running polling timers on modal unmount or when modal closes
   useEffect(() => {
+    if (!isOpen) {
+      activeTimersRef.current.forEach((t) => clearInterval(t));
+      activeTimersRef.current.clear();
+    }
     return () => {
       activeTimersRef.current.forEach((t) => clearInterval(t));
       activeTimersRef.current.clear();
     };
-  }, []);
+  }, [isOpen]);
 
   const handleKillDemucs = async (targetEp = null) => {
     try {
@@ -140,9 +145,8 @@ export default function GeminiRouteModal({
     }
   };
 
-  // Background jobs state
-  const [activeJobs, setActiveJobs] = useState([]);
-  const [pollInterval, setPollInterval] = useState(1500);
+  // Single-source-of-truth job queue from JobQueueContext (Zero duplicate polling)
+  const { jobs: activeJobs = [] } = useSharedJobQueue();
 
   // Gemini Keys Quota & Rate Limit Health State
   const [keysHealth, setKeysHealth] = useState(null);
@@ -179,26 +183,7 @@ export default function GeminiRouteModal({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isOpen, onClose]);
 
-  // Poll active jobs
-  useEffect(() => {
-    if (!isOpen) return;
-    let isMounted = true;
-    const fetchStatus = async () => {
-      try {
-        const res = await fetchJobsListApi({ filter: 'all' });
-        if (isMounted && res && res.success) {
-          setActiveJobs(res.jobs || []);
-        }
-      } catch (_) {}
-    };
 
-    fetchStatus();
-    const interval = setInterval(fetchStatus, pollInterval);
-    return () => {
-      isMounted = false;
-      clearInterval(interval);
-    };
-  }, [isOpen, pollInterval]);
 
   // Map of latest job per episodeId (tracks running, queued, completed, and failed states)
   const jobsByEpisodeId = useMemo(() => {

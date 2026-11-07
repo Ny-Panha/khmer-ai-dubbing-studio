@@ -773,8 +773,14 @@ const FALLBACK_VOICE_CATALOG = {
       return;
     }
 
-    const activeVoiceId = overrideParams.voiceId || voiceSettings.voiceId || 'km-KH-PisethNeural';
-    const activeSpeed = overrideParams.speed || voiceSettings.speed || 'normal';
+    const isEvent = Boolean(overrideParams && (overrideParams.nativeEvent || overrideParams._reactName || typeof overrideParams.preventDefault === 'function'));
+    const cleanParams = isEvent ? {} : (overrideParams || {});
+
+    const activeVoiceId = cleanParams.voiceId || voiceSettings.voiceId || 'km-KH-PisethNeural';
+    const activeSpeed = cleanParams.speed || voiceSettings.speed || 'normal';
+    const forceRegen = cleanParams.forceRegen !== undefined
+      ? Boolean(cleanParams.forceRegen)
+      : Boolean(scriptData.segments.some((s) => s.audioUrl || s.audioPath || s.audioFile));
 
     if (videoRef?.current && !videoRef.current.paused) {
       videoRef.current.pause();
@@ -848,6 +854,7 @@ const FALLBACK_VOICE_CATALOG = {
         videoId: selectedVideo?.videoId,
         seriesId: targetSeriesId,
         episodeId: targetEpisodeId,
+        forceRegen,
       });
 
       setAudioProgress(85);

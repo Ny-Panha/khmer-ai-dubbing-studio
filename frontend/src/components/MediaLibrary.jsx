@@ -28,6 +28,8 @@ const RECAP_PRESETS = [
   },
 ];
 
+const EMPTY_SEGMENTS = Object.freeze([]);
+
 function MediaLibrary({
   selectedVideo,
   videoMetadata,
@@ -234,7 +236,7 @@ function MediaLibrary({
     });
   }, [scriptData, onUpdateScript]);
 
-  const handleAddSegment = () => {
+  const handleAddSegment = useCallback(() => {
     const last = scriptData?.segments?.[scriptData.segments.length - 1];
     const newId = (scriptData?.segments?.length || 0) + 1;
     const startSec = last
@@ -256,9 +258,9 @@ function MediaLibrary({
       ...scriptData,
       segments: [...(scriptData?.segments || []), newSegment],
     });
-  };
+  }, [scriptData, onUpdateScript]);
 
-  const handleDeleteSegment = (segIdOrIdx) => {
+  const handleDeleteSegment = useCallback((segIdOrIdx) => {
     if (onDeleteSegment) {
       onDeleteSegment(segIdOrIdx);
       return;
@@ -272,9 +274,9 @@ function MediaLibrary({
         segments: updated,
       });
     }
-  };
+  }, [onDeleteSegment, scriptData, onUpdateSegments, onUpdateScript]);
 
-  const handlePlayLine = (url, segId) => {
+  const handlePlayLine = useCallback((url, segId) => {
     if (!url) return;
     if (playingSegmentId === segId && audioRef.current && !audioRef.current.paused) {
       audioRef.current.pause();
@@ -294,10 +296,10 @@ function MediaLibrary({
     });
     a.onended = () => setPlayingSegmentId(null);
     a.onerror = () => setPlayingSegmentId(null);
-  };
+  }, [playingSegmentId]);
 
   const filteredSegments = useMemo(() => {
-    if (!scriptData?.segments) return [];
+    if (!scriptData?.segments) return EMPTY_SEGMENTS;
     if (!searchQuery.trim()) return scriptData.segments;
     const q = searchQuery.toLowerCase();
     return scriptData.segments.filter((seg) => {
