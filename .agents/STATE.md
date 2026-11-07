@@ -50,4 +50,6 @@
 - **Git Branch**: `main`
 
 ## Next Steps
-- Staged and pushed changes to GitHub repository.
+- **PROMPT 1**: Fast OCR plan revision (incorporate speakerGender fallback, OCR dedupe/merge, external SRT full stack, re-translate safety, persist generationMode, and skip Stage 4/5 safely).
+- **PROMPT 4 / Performance Step 3**: Virtualize ScriptReviewTab segment list + window TimelineTracksCanvas clips.
+- Git HEAD: `a84b8edb2b8e18c640ee509b6713aa9cab1829c1` (pushed to `origin/main`).
