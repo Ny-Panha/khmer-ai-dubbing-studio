@@ -17,31 +17,6 @@ export function getPixelsPerSecond(zoom = 1) {
 }
 
 /**
- * Convert pixel offset to timeline time in seconds
- * @param {number} pixelX 
- * @param {number} zoom 
- * @param {number} [headerOffset=150] 
- * @returns {number}
- */
-export function pixelToTime(pixelX, zoom = 1, headerOffset = 0) {
-  const pps = getPixelsPerSecond(zoom);
-  const adjusted = Math.max(0, pixelX - headerOffset);
-  return parseFloat((adjusted / pps).toFixed(3));
-}
-
-/**
- * Convert timeline time in seconds to pixel offset
- * @param {number} timeSec 
- * @param {number} zoom 
- * @param {number} [headerOffset=0] 
- * @returns {number}
- */
-export function timeToPixel(timeSec, zoom = 1, headerOffset = 0) {
-  const pps = getPixelsPerSecond(zoom);
-  return Math.max(0, timeSec) * pps + headerOffset;
-}
-
-/**
  * Normalize and validate a single clip, ensuring canonical numeric timestamps
  * and backward compatibility with legacy saved projects.
  * @param {Object} clip 
@@ -520,32 +495,6 @@ export function deleteSegmentByIdOrIndex(segments, segIdOrIdx) {
       id: newIdx + 1,
       segmentId: newIdx + 1,
     }));
-}
-
-/**
- * Calculate gaps between clips on the timeline
- * @param {Array} clips 
- * @param {number} [totalDuration=0] 
- * @returns {Array<{ start: number, end: number, duration: number }>}
- */
-export function calculateTimelineGaps(clips = [], totalDuration = 0) {
-  if (!Array.isArray(clips) || clips.length === 0) return [];
-  const sorted = [...clips].sort((a, b) => a.start - b.start);
-  const gaps = [];
-
-  for (let i = 0; i < sorted.length - 1; i++) {
-    const cur = sorted[i];
-    const next = sorted[i + 1];
-    if (next.start - cur.end > 0.05) {
-      gaps.push({
-        start: cur.end,
-        end: next.start,
-        duration: parseFloat((next.start - cur.end).toFixed(3)),
-      });
-    }
-  }
-
-  return gaps;
 }
 
 /**
