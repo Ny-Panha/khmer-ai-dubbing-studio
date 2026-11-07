@@ -149,18 +149,15 @@ export default function MediaPanel({
 
   return (
     <aside className="media-panel" aria-label="Media Library & Episodes">
-      {/* 1. Panel Header */}
+      {/* 1. Panel Header: Quiet label, no ALL-CAPS bar */}
       <div className="media-panel-header">
-        <div className="media-panel-header-title">
-          <Film size={14} color="#38bdf8" />
-          <span>MEDIA & EPISODES</span>
-        </div>
+        <span className="media-panel-quiet-label">មេឌៀ និងភាគរឿង (Media & Episodes)</span>
         {onClosePanel && (
           <button
             type="button"
             className="media-panel-close-btn"
             onClick={onClosePanel}
-            title="បិទ Media Panel (Collapse)"
+            title="បង្រួម Media Panel (Collapse)"
           >
             <PanelLeftClose size={14} />
           </button>
@@ -171,7 +168,7 @@ export default function MediaPanel({
         {/* 2. Series Header Box */}
         <div className="media-series-box">
           <div className="media-series-eyebrow">
-            <span>DRAMA SERIES</span>
+            <span>រឿងភាគ (Series)</span>
             <span className="media-series-count">{episodes.length} ភាគ</span>
           </div>
 
@@ -405,6 +402,15 @@ export default function MediaPanel({
                       )}
                     </div>
                   </div>
+
+                  {/* Optional Video Metadata Subline on Selected Row (Point 7) */}
+                  {isSelected && hasEpVideo && (
+                    <div style={{ fontSize: 11, color: '#64748b', padding: '0 2px' }}>
+                      {ep.video?.resolution ? `${ep.video.resolution} • ` : ''}
+                      {formatTimecode(ep.video?.duration || (selectedVideo?.duration) || 0)}
+                      {ep.video?.fps ? ` • ${ep.video.fps}fps` : ''}
+                    </div>
+                  )}
 
                   {/* Status Pills Strip */}
                   <div className="media-ep-status-pills">

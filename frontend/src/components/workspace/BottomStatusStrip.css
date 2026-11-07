@@ -1,13 +1,12 @@
 .bottom-status-strip {
-  height: 32px;
-  background: #080c14;
-  border-top: 1px solid #1e293b;
+  height: 30px;
+  background: #060910;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 12px;
-  font-size: 0.72rem;
-  color: #94a3b8;
+  padding: 0 14px;
+  font-size: 12px;
+  color: #64748b;
   flex-shrink: 0;
   z-index: 10;
   user-select: none;
@@ -18,30 +17,30 @@
 .bottom-status-right {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
 }
 
 .status-indicator-dot {
-  width: 7px;
-  height: 7px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   display: inline-block;
 }
 
 .status-indicator-dot.online {
   background: #22c55e;
-  box-shadow: 0 0 6px rgba(34, 197, 94, 0.6);
+  box-shadow: 0 0 6px rgba(34, 197, 94, 0.5);
 }
 
 .status-indicator-dot.busy {
   background: #38bdf8;
-  box-shadow: 0 0 6px rgba(56, 189, 248, 0.6);
+  box-shadow: 0 0 6px rgba(56, 189, 248, 0.5);
   animation: pulse-dot 1.2s infinite;
 }
 
 .status-indicator-dot.warning {
   background: #f59e0b;
-  box-shadow: 0 0 6px rgba(245, 158, 11, 0.6);
+  box-shadow: 0 0 6px rgba(245, 158, 11, 0.5);
 }
 
 @keyframes pulse-dot {
@@ -51,13 +50,14 @@
 }
 
 .bottom-status-link {
-  color: #cbd5e1;
+  color: #94a3b8;
   text-decoration: none;
   cursor: pointer;
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
   transition: color 0.15s ease;
+  font-size: 12px;
 }
 
 .bottom-status-link:hover {
@@ -67,11 +67,11 @@
 .bottom-status-tag {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  padding: 1px 6px;
-  border-radius: 3px;
-  background: #0f172a;
-  border: 1px solid #1e293b;
-  font-size: 0.68rem;
+  gap: 5px;
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 11px;
   font-family: monospace;
 }

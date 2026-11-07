@@ -1,68 +1,51 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
-- **Environment**: Antigravity IDE (Single-Screen CapCut-Style Workspace Rework)
-- **Timestamp**: 2026-11-07T21:55:00+07:00
+- **Environment**: Antigravity IDE (Clean Pass — Visual & Skin Cleanup for Single-Screen CapCut-Style Workspace)
+- **Timestamp**: 2026-11-07T22:42:00+07:00
 
 ## Summary of Completed Work
 
-### 1. Architectural Pivot: Single-Screen Workspace (Supersedes 5-Page Wizard Shell)
-Per Nha's decision, the 5-page wizard shell was replaced with ONE unified CapCut-style workspace screen with collapsible panels. Phases 1 & 2 content work is preserved and re-homed. The horizontal stepper is no longer navigation; stages are switched via the vertical Left Rail without unmounting centre components.
+### Clean Pass Visual Overhaul (Nha's 8-Point Directive)
+Converted workspace skin from admin dashboard aesthetic to native pro video editor (CapCut-style):
 
-### 2. Workspace Panel Architecture
+1. **KILL THE BOXES (Zero 1px Zone Borders & Zero ALL-CAPS Bars)**:
+   - Removed visible 1px borders surrounding workspace zones (`StageRail`, `MediaPanel`, `WorkspaceLayout`, `StageSettingsPanel`, `BottomStatusStrip`).
+   - Deleted all ALL-CAPS bars app-wide (`STAGES`, `MEDIA & EPISODES`, `PLAYER MONITOR`, `INSPECTOR & SETTINGS`, `DRAMA SERIES`).
+   - Separated zones strictly through background tint stepping (`#080b11` root, `#0d121f` stage rail, `#101726` media & inspector panels, `#0a0e18` centre workspace, `#060910` player monitor & bottom status).
+   - Retained borders strictly on interactive elements (buttons, inputs, episode rows, segment cards).
+2. **ONE EPISODE SWITCHER (Clean Top Navbar)**:
+   - Removed the center `.navbar-center-container` (series tag, episode chips, add episode button) from `Navbar.jsx`.
+   - Episode switching and series naming now live solely in the `MediaPanel`.
+   - Navbar retains only essential studio controls: Logo, Gemini Route (4 Keys badge), Jobs, FFmpeg/API health, and Export CTA.
+3. **CENTRE FITS CONTENT & EPISODE OVERVIEW**:
+   - Player monitor height capped at `max-height: 46vh; min-height: 180px;`, centered with zero letterbox void.
+   - In `Import` mode (`workspaceMode === 'import'`), under the player renders a comprehensive **Episodes Overview** status table (Episode, Video duration, Script count, Voice readiness, Clean BGM, Export status).
+   - Removed the floating "Switch to Script" card (StageRail handles all mode transitions).
+4. **TRANSLATE FORM IN-FLOW (Script Mode with No Script)**:
+   - In Script mode with 0 segments, the translate view is aligned top-left with the list area (`max-width: 720px`), rendering naturally in-flow rather than as a floating centered popup.
+   - Preserves all mode options (`Mode A: សន្ទនា 1:1`, `Mode B: សង្ខេបរឿង`), auto-selected episode, and one primary CTA button.
+5. **KEY POOL IN ONE PLACE**:
+   - Removed redundant Key Pool strip inside the translate form; replaced with quiet inline text: `Key Pool: 4/4 online • Manage Keys`.
+   - Full Key Pool status stays exclusively in `BottomStatusStrip` with small badge in top Navbar.
+6. **STAGE RAIL LABELS NEVER TRUNCATE**:
+   - Widened expanded StageRail to `210px` with multi-line natural wrapping (`white-space: normal`).
+   - Replaced "STAGES" header with quiet label: `ដំណាក់កាល (Stages)`.
+   - Locked stages rendered dimmed (`opacity: 0.45; filter: grayscale(0.4);`) with lock icon.
+7. **RIGHT PANEL PRIORITY**:
+   - In Import mode: Video Metadata moved into a quiet disclosure (`<details className="stage-details-disclosure">`) in StageSettings.
+   - Top section always shows selected segment inspector or quiet placeholder (`គ្មានការជ្រើសរើសឃ្លាសន្ទនា (No segment selected)`).
+8. **TYPE QUIET-DOWN & UNIFIED 12PX LABELS**:
+   - Normalized all headers to 12px normal case, Khmer first.
+   - Removed duplicate segment count / OVER pills from BottomStatusStrip; kept exclusively in `WorkspaceToolbar`.
 
-#### Top Bar & Left Rail
-- **Navbar ([`frontend/src/components/Navbar.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/Navbar.jsx))**:
-  - Series + episode selector, Gemini keys badge (clicking navigates directly to Script mode), Jobs queue modal, and Export button.
-- **StageRail ([`frontend/src/components/workspace/StageRail.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/workspace/StageRail.jsx))**:
-  - Vertical 5-stage status rail (1. Import, 2. Script, 3. Voice, 4. Demucs, 5. Mix & Export).
-  - Collapsible between ~190px and ~56px icon-only mode.
-  - Clicking any stage triggers `onSelectMode(step.id)` to switch `workspaceMode` without page unmount.
-  - Stages are always clickable to view; gate status/lock icons indicate action availability.
-
-#### Left Panel (Media Library & Series Manager)
-- **MediaPanel ([`frontend/src/components/workspace/MediaPanel.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/workspace/MediaPanel.jsx))**:
-  - Width ~300px, collapsible to 0px with expand/collapse handle buttons.
-  - Series title box & inline renaming.
-  - Source Video Dropzone: automatically collapses to a slim bar (showing filename, duration, resolution, change, and remove buttons) once a video is loaded.
-  - Scrollable episode list with real-time status pills (`Vid`, `Scr`, `Voice`, `BGM`, `Exp`).
-  - Add Episode, Rename, Delete, and Auto-Split modal (`splitVideoEpisodesApi`).
-
-#### Centre Working Column (Always Mounted, Zero Unmount)
-- **VideoPlayerPreview ([`frontend/src/components/VideoPlayerPreview.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/VideoPlayerPreview.jsx))**:
-  - Fixed on top of centre column inside `.workspace-centre-player-box`.
-  - NEVER unmounts during mode switches; video playback, playhead, and audio continue uninterrupted.
-- **ThinSeekStrip ([`frontend/src/steps/script/ThinSeekStrip.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/steps/script/ThinSeekStrip.jsx))**:
-  - Mounted directly under the video player for timeline scrubbing, segment ticks, and active playhead position.
-- **Bottom Working Area**:
-  - When segments exist: renders **`WorkspaceToolbar`** (Re-Translate with safety confirmation modal, Auto-Align, Reset Timing, Add Line, Undo/Redo, Search, segment count, OVER timing badge, Key Pool status, and batch actions) + **`TranscriptSegmentList`** (virtualized with `@tanstack/react-virtual`, card text editing, timestamps, speaker/gender chips, delivery mode, audio preview, regeneration, and `⚠️ OVER` badge).
-  - When in Script mode with 0 segments: renders **`InlineTranslatePanel`** with mode selector, single-click CTA button, 5-stage live progress bar, and Quota Manager.
-  - When in Import mode with 0 segments: renders Episode Overview / Welcome Card with direct CTA to switch to Script mode.
-
-#### Right Panel (Inspector & Contextual Stage Settings)
-- Width ~320px, collapsible to 0px with expand/collapse handle buttons.
-- **Top: ClipInspectorPanel ([`frontend/src/components/voice/ClipInspectorPanel.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/voice/ClipInspectorPanel.jsx))**:
-  - Inspects and edits the selected segment: Khmer text, start/end time, delivery type, single TTS regeneration, voice selection, and speed.
-- **Bottom: StageSettingsPanel ([`frontend/src/components/workspace/StageSettingsPanel.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/workspace/StageSettingsPanel.jsx))**:
-  - Contextual configuration based on `workspaceMode`:
-    - `import`: Video technical metadata (resolution, duration, fps, file size) & active episode summary.
-    - `script`: Translation mode configuration (Mode A 1:1 Dialogue vs Mode B Story Recap) & Series Glossary preview (characters & terms).
-    - `voice`: Edge TTS voice catalog (Piseth, Sreymom), speech speed slider, voice volume, BGM ducking volume, and audition test listen button.
-    - `demucs`: Demucs AI vocal separation controls, live progress (1-100%), kill process button (`POST /api/audio/separate-kill`), Clean BGM status badge, and prominent handling for HTTP 409 busy alerts (`Demucs AI កំពុងដំណើរការបំបែកសំឡេង...`).
-    - `mix-export`: Audio ducking controls, Subtitle burn-in toggle & styles (Title Banner, CapCut Pill, Cinema Soft), video aspect ratio (16:9, 9:16, 1:1), and primary Render & Export Video CTA.
-
-#### Bottom Strip (~32px)
-- **BottomStatusStrip ([`frontend/src/components/workspace/BottomStatusStrip.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/workspace/BottomStatusStrip.jsx))**:
-  - Left: Background Job Queue status (`Idle • Ready` or live running stage with worker ID).
-  - Center: Realtime local activity badges (TTS synthesizing %, Demucs AI separation %, FFmpeg rendering %).
-  - Right: Segment count (`💬 3 segments`), OVER warning count (`⚠️ 1 OVER`), Key Pool health (`Pool: 4/4 online • 60 RPM`), and active episode badge (`EP01`).
-
-### 3. Verification & Quality Acceptance
-- **Build**: `npm --prefix frontend run build` ➔ **PASS** (2.32s, 0 errors).
+### Verification & Quality Acceptance
+- **Build**: `npm --prefix frontend run build` ➔ **PASS** (650ms, 0 errors).
 - **Screenshot Evidence (Artifact Directory: `C:\Users\nhastar\.gemini\antigravity\brain\0ecba6af-7642-4551-8d6b-1c88186a6633\`)**:
-  - `screenshot-shell-script-mode.png` (167 KB): Full workspace in Script mode with all panels open (StageRail, MediaPanel, Centre Player + Seek Strip + TranscriptSegmentList, Right Inspector + StageSettings).
-  - `screenshot-shell-voice-mode.png` (135 KB): Full workspace in Voice mode with TTS toolbar, Edge TTS voice settings, and OVER warning badge.
-  - `screenshot-shell-collapsed.png` (75 KB): Both Left Media Panel and Right Inspector Panel collapsed, providing wide-screen editing canvas.
+  - `screenshot-clean-script-editor.png`: Clean Script mode with loaded segments, no zone borders, no PLAYER MONITOR bar, clean toolbar & virtualized list.
+  - `screenshot-clean-script-noscript.png`: Clean Script mode with 0 segments, featuring top-left aligned in-flow translate panel with quiet Key Pool line.
+  - `screenshot-clean-import-mode.png`: Clean Import mode displaying comprehensive Episode Overview table under player, quiet inspector.
+  - `screenshot-clean-collapsed.png`: Ultra-wide view with StageRail icon-only (56px) and both Media & Inspector panels collapsed.
 
 ## Active Environment
 - **Backend API**: `http://localhost:5000` (Node.js/Express, online)
@@ -70,4 +53,4 @@ Per Nha's decision, the 5-page wizard shell was replaced with ONE unified CapCut
 - **Git Branch**: `main`
 
 ## Next Steps
-- Await Nha's review and approval of the single-screen CapCut-style workspace shell.
+- Await Nha's approval on the Clean Pass visual overhaul.

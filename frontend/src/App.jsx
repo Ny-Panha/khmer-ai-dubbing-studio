@@ -516,10 +516,10 @@ export default function App() {
 
         {/* Unified CapCut-Style Workspace Body */}
         <div className="workspace-body">
-          {/* 1. Left Rail (5 Stages Status List) */}
+          {/* 1. Left Rail (5 Stages Status List — Widen to 210px) */}
           <div
             className="workspace-rail-container"
-            style={{ width: isRailCollapsed ? 56 : 190 }}
+            style={{ width: isRailCollapsed ? 56 : 210 }}
           >
             <StageRail
               currentMode={workspaceMode}
@@ -565,7 +565,7 @@ export default function App() {
             <button
               type="button"
               className="workspace-panel-toggle-btn left-toggle"
-              style={{ left: isRailCollapsed ? 56 : 190 }}
+              style={{ left: isRailCollapsed ? 56 : 210 }}
               onClick={() => setIsLeftPanelOpen(true)}
               title="បើក Media Panel ឡើងវិញ (Expand Media)"
             >
@@ -620,7 +620,90 @@ export default function App() {
 
             {/* Bottom Working Area: Dynamic based on mode and segment presence */}
             <div className="workspace-centre-segments-section">
-              {hasSegments ? (
+              {workspaceMode === 'import' ? (
+                /* Point 3: Episode Overview Summary of all episodes in Import mode (No floating card) */
+                <div className="workspace-episodes-overview-wrap">
+                  <div className="workspace-episodes-overview-header">
+                    <span style={{ fontSize: 13, fontWeight: 600, color: '#f1f5f9' }}>
+                      សង្ខេបស្ថានភាពភាគទាំងអស់ (Episodes Overview)
+                    </span>
+                    <span style={{ fontSize: 12, color: '#64748b' }}>
+                      {(series.activeSeries?.episodes || []).length} ភាគសរុប
+                    </span>
+                  </div>
+
+                  <table className="workspace-overview-table">
+                    <thead>
+                      <tr>
+                        <th>ភាគ (Episode)</th>
+                        <th>វីដេអូ (Video)</th>
+                        <th>Script</th>
+                        <th>Voice (TTS)</th>
+                        <th>Demucs (BGM)</th>
+                        <th>Export</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(series.activeSeries?.episodes || []).map((ep, idx) => {
+                        const isSelected = ep.id === series.episodeId;
+                        const hasEpVideo = Boolean(ep.video?.videoId || ep.video?.videoUrl);
+                        const hasEpScript = Boolean((ep.scriptData?.segments && ep.scriptData.segments.length > 0) || ep.scriptData?.hasScript);
+                        const hasEpVoice = Boolean(ep.audioGenerated && !ep.audioOutdated);
+                        const hasEpDemucs = Boolean(ep.hasDemucs || ep.cleanBgmPath);
+                        const hasEpExport = Boolean(ep.renderedVideo);
+                        const epNum = ep.episodeNumber || (idx + 1);
+
+                        return (
+                          <tr
+                            key={ep.id}
+                            onClick={() => handleSwitchEpisode?.(ep.id)}
+                            className={`workspace-overview-row ${isSelected ? 'is-active' : ''}`}
+                          >
+                            <td style={{ fontWeight: 600, color: isSelected ? '#38bdf8' : '#e2e8f0' }}>
+                              EP {epNum} {ep.displayTitle || ep.title ? `— ${ep.displayTitle || ep.title}` : ''}
+                            </td>
+                            <td>
+                              {hasEpVideo ? (
+                                <span style={{ color: '#22c55e', fontSize: 11 }}>✓ {formatTimecode(ep.video?.duration || 0)}</span>
+                              ) : (
+                                <span style={{ color: '#64748b' }}>—</span>
+                              )}
+                            </td>
+                            <td>
+                              {hasEpScript ? (
+                                <span style={{ color: '#a855f7', fontSize: 11 }}>✓ {ep.scriptData?.segments?.length || ep.scriptData?.totalSegments || 'Ready'} ឃ្លា</span>
+                              ) : (
+                                <span style={{ color: '#64748b' }}>—</span>
+                              )}
+                            </td>
+                            <td>
+                              {hasEpVoice ? (
+                                <span style={{ color: '#38bdf8', fontSize: 11 }}>✓ Ready</span>
+                              ) : (
+                                <span style={{ color: '#64748b' }}>—</span>
+                              )}
+                            </td>
+                            <td>
+                              {hasEpDemucs ? (
+                                <span style={{ color: '#10b981', fontSize: 11 }}>✓ Clean</span>
+                              ) : (
+                                <span style={{ color: '#64748b' }}>—</span>
+                              )}
+                            </td>
+                            <td>
+                              {hasEpExport ? (
+                                <span style={{ color: '#10b981', fontSize: 11 }}>✓ Exported</span>
+                              ) : (
+                                <span style={{ color: '#64748b' }}>—</span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              ) : hasSegments ? (
                 <>
                   <WorkspaceToolbar
                     workspaceMode={workspaceMode}
@@ -658,8 +741,8 @@ export default function App() {
                     searchQuery={transcriptSearch}
                   />
                 </>
-              ) : workspaceMode === 'script' ? (
-                /* Inline Translate Run Panel when in Script mode with no segments */
+              ) : (
+                /* Inline Translate Run Panel when in other modes with no segments (In-Flow) */
                 <InlineTranslatePanel
                   selectedVideo={media.selectedVideo}
                   videoMetadata={media.videoMetadata}
@@ -671,49 +754,6 @@ export default function App() {
                   onOpenGeminiRoute={handleOpenGeminiRoute}
                   apiKey={persistence.apiKey}
                 />
-              ) : (
-                /* Overview Card for other modes when no segments are available */
-                <div className="workspace-inline-translate-wrapper">
-                  <div className="workspace-overview-card">
-                    <div className="workspace-overview-header">
-                      <div className="workspace-overview-icon">
-                        <Film size={24} />
-                      </div>
-                      <div>
-                        <h3 className="workspace-overview-title">
-                          {series.activeEpisode?.name || 'EP01'} — {series.activeSeries?.title || 'Chinese Drama'}
-                        </h3>
-                        <p className="workspace-overview-desc">
-                          {media.selectedVideo
-                            ? `វីដេអូបានផ្ទុករួចរាល់ (${formatTimecode(playback.duration)}) • រង់ចាំការបង្កើត Script និងបកប្រែ`
-                            : 'សូមជ្រើសរើស ឬទម្លាក់វីដេអូនៅផ្ទាំង MEDIA ខាងឆ្វេង ដើម្បីចាប់ផ្តើម។'}
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="workspace-overview-actions">
-                      <button
-                        type="button"
-                        className="workspace-toolbar-btn primary"
-                        style={{ padding: '8px 16px', fontSize: '0.82rem' }}
-                        onClick={() => setWorkspaceMode(STEP_IDS.SCRIPT)}
-                      >
-                        <Sparkles size={14} />
-                        <span>✦ បន្តទៅបកប្រែ Script (Switch to Script)</span>
-                      </button>
-                      {!isLeftPanelOpen && (
-                        <button
-                          type="button"
-                          className="workspace-toolbar-btn"
-                          style={{ padding: '8px 14px', fontSize: '0.82rem' }}
-                          onClick={() => setIsLeftPanelOpen(true)}
-                        >
-                          <span>បើកផ្ទាំង Media Panel</span>
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                </div>
               )}
             </div>
           </div>
@@ -740,34 +780,25 @@ export default function App() {
               display: isRightPanelOpen ? 'flex' : 'none',
             }}
           >
-            {/* Header with Collapse Button */}
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                padding: '8px 12px',
-                borderBottom: '1px solid #1e293b',
-                background: '#090d16',
-              }}
-            >
-              <span style={{ fontSize: '0.74rem', fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase' }}>
-                Inspector & Settings
+            {/* Header: Quiet label, no ALL-CAPS bar */}
+            <div className="workspace-right-header">
+              <span className="workspace-quiet-label">
+                ការកំណត់ (Inspector & Settings)
               </span>
               <button
                 type="button"
                 className="workspace-toolbar-btn icon-only"
                 style={{ padding: '2px 5px', border: 'none', background: 'transparent' }}
                 onClick={() => setIsRightPanelOpen(false)}
-                title="បិទ Right Panel (Collapse)"
+                title="បង្រួម Right Panel (Collapse)"
               >
-                <ChevronRight size={14} color="#94a3b8" />
+                <ChevronRight size={14} color="#64748b" />
               </button>
             </div>
 
             {/* Top: Selected Segment Inspector */}
             <div className="workspace-inspector-section">
-              {selectedSegment ? (
+              {selectedSegment && hasSegments ? (
                 <ClipInspectorPanel
                   isOpen={true}
                   selectedSegment={selectedSegment}
@@ -793,8 +824,8 @@ export default function App() {
                   settings={voiceSettings}
                 />
               ) : (
-                <div style={{ textAlign: 'center', padding: '24px 12px', color: '#64748b', fontSize: '0.78rem' }}>
-                  <p>ចុចលើឃ្លាសន្ទនាណាមួយដើម្បីពិនិត្យ និងកំណត់សំឡេង (Click segment to inspect)</p>
+                <div style={{ padding: '12px 14px', color: '#64748b', fontSize: 11, textAlign: 'center' }}>
+                  គ្មានការជ្រើសរើសឃ្លាសន្ទនា (No segment selected)
                 </div>
               )}
             </div>

@@ -70,12 +70,11 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 6px 14px;
-  height: 38px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
-  background: #090d16;
+  padding: 4px 10px;
+  height: 28px;
+  border-bottom: none;
+  background: transparent;
   flex-shrink: 0;
-  border-radius: 12px 12px 0 0;
 }
 
 .player-control-btn {

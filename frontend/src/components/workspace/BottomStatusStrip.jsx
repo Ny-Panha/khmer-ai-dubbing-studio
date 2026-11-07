@@ -1,12 +1,10 @@
 import React from 'react';
 import { useSharedJobQueue } from '../../context/JobQueueContext';
-import { AlertTriangle, Key, Film, Mic, Music, Clapperboard } from 'lucide-react';
+import { Key, Film, Mic, Music, Clapperboard } from 'lucide-react';
 import './BottomStatusStrip.css';
 
 export default function BottomStatusStrip({
   activeEpisode = null,
-  segmentsCount = 0,
-  overCount = 0,
   isGeneratingAudio = false,
   audioProgress = 0,
   isSeparatingAudio = false,
@@ -53,38 +51,27 @@ export default function BottomStatusStrip({
       {/* Center: Realtime Local Audio/Demucs/Render Activity */}
       <div className="bottom-status-center">
         {isGeneratingAudio && (
-          <span className="bottom-status-tag" style={{ borderColor: '#38bdf8', color: '#7dd3fc' }}>
+          <span className="bottom-status-tag" style={{ borderColor: 'rgba(56, 189, 248, 0.3)', color: '#7dd3fc' }}>
             <Mic size={11} color="#38bdf8" />
             <span>TTS Synthesizing: {audioProgress}%</span>
           </span>
         )}
         {isSeparatingAudio && (
-          <span className="bottom-status-tag" style={{ borderColor: '#f59e0b', color: '#fcd34d' }}>
+          <span className="bottom-status-tag" style={{ borderColor: 'rgba(245, 158, 11, 0.3)', color: '#fcd34d' }}>
             <Music size={11} color="#f59e0b" />
             <span>Demucs AI Separation: {separationProgress}%</span>
           </span>
         )}
         {isRendering && (
-          <span className="bottom-status-tag" style={{ borderColor: '#22c55e', color: '#86efac' }}>
+          <span className="bottom-status-tag" style={{ borderColor: 'rgba(34, 197, 94, 0.3)', color: '#86efac' }}>
             <Clapperboard size={11} color="#22c55e" />
             <span>FFmpeg Exporting: {renderProgress}%</span>
           </span>
         )}
       </div>
 
-      {/* Right: Counters, Key pool, Active episode */}
+      {/* Right: Key pool & Active episode (Segment count and OVER stay in toolbar only) */}
       <div className="bottom-status-right">
-        {/* Total segments */}
-        <span>💬 {segmentsCount} segments</span>
-
-        {/* Over Count */}
-        {overCount > 0 && (
-          <span style={{ color: '#f59e0b', display: 'flex', alignItems: 'center', gap: 3 }}>
-            <AlertTriangle size={11} />
-            <span>{overCount} OVER</span>
-          </span>
-        )}
-
         {/* Gemini Key Pool */}
         <span
           className="bottom-status-link"
@@ -96,7 +83,7 @@ export default function BottomStatusStrip({
         </span>
 
         {/* Active episode */}
-        <span className="bottom-status-tag" style={{ background: '#1e293b', color: '#f1f5f9' }}>
+        <span className="bottom-status-tag" style={{ background: 'rgba(255, 255, 255, 0.05)', color: '#cbd5e1' }}>
           <Film size={10} color="#94a3b8" />
           <span>{activeEpisode?.name || 'EP01'}</span>
         </span>

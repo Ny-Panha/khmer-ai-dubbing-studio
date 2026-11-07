@@ -1,13 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import {
-  Film, Sparkles, Layers, AlertTriangle, CheckCircle2,
-  RefreshCw, Play, Info
+  Film, Sparkles, AlertTriangle, RefreshCw
 } from 'lucide-react';
 import { fetchGeminiKeysStatusApi, startGenerationJob } from '../../services/api';
 import { formatTimecode } from '../../utils/formatTime';
 import { useSharedJobQueue } from '../../context/JobQueueContext';
 import './WorkspaceLayout.css';
-import '../../steps/script/ScriptPage.css';
 
 const STAGE_LABELS = {
   1: '1/5 Ingest Video & Extract Audio (SenseVoice + Fast OCR)',
@@ -62,7 +60,6 @@ export default function InlineTranslatePanel({
   const [narratorGender, setNarratorGender] = useState('male');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState(null);
-  const [showConfirmRetranslate, setShowConfirmRetranslate] = useState(false);
 
   const handleExecuteTranslate = async (force = false) => {
     const rawVideoRef = selectedVideo?.videoPath || selectedVideo?.videoId || selectedVideo?.fileName || activeEpisode?.video?.videoPath || activeEpisode?.video?.videoId;
@@ -95,7 +92,6 @@ export default function InlineTranslatePanel({
       setSubmitError(err.message || 'បរាជ័យក្នុងការចាប់ផ្ដើម Translate');
     } finally {
       setIsSubmitting(false);
-      setShowConfirmRetranslate(false);
     }
   };
 
@@ -115,157 +111,180 @@ export default function InlineTranslatePanel({
   const displayResolution = videoMetadata?.width && videoMetadata?.height ? `${videoMetadata.width}x${videoMetadata.height}` : 'HD 1080p';
   const epNum = activeEpisode?.episodeNumber || (activeEpisode?.id ? String(activeEpisode.id).replace(/\D/g, '') : '1');
 
-  // If a job is currently running, show live progress card
+  // If a job is currently running, show in-flow progress
   if (isJobRunning) {
     const progress = activeJob.progress || 0;
     const stageNum = activeJob.stageNumber || (progress < 25 ? 1 : progress < 50 ? 2 : progress < 70 ? 3 : progress < 90 ? 4 : 5);
     const stageLabel = activeJob.currentStage || STAGE_LABELS[stageNum] || 'កំពុងដំណើរការ Pipeline...';
 
     return (
-      <div className="workspace-inline-translate-wrapper">
-        <div className="script-inline-run-card" style={{ maxWidth: 640 }}>
-          <div className="script-key-status-strip">
-            <div className="script-key-status-left">
-              <span className="script-key-status-dot pulse" />
-              <span>Job #{activeJob.jobId} • {activeJob.seriesId || 'Series'} / {activeJob.episodeId}</span>
-            </div>
-            <span style={{ fontSize: '0.72rem', color: '#38bdf8', fontWeight: 600 }}>
-              {activeJob.workerId ? `Worker #${activeJob.workerId}` : 'Gemini AI Worker'}
+      <div className="workspace-inflow-translate-panel">
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 14, width: '100%', maxWidth: 720 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <span style={{ fontSize: 12, color: '#64748b' }}>
+              Job #{activeJob.jobId} • {activeJob.workerId ? `Worker #${activeJob.workerId}` : 'Gemini AI'}
+            </span>
+            <span style={{ fontSize: 13, fontWeight: 700, color: '#38bdf8' }}>
+              {progress}%
             </span>
           </div>
 
-          <div style={{ padding: '20px 0', display: 'flex', flexDirection: 'column', gap: 14 }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <RefreshCw size={18} className="script-spin-icon" color="#38bdf8" />
-                <span style={{ fontSize: '0.92rem', fontWeight: 700, color: '#f8fafc' }}>
-                  {stageLabel}
-                </span>
-              </div>
-              <span style={{ fontSize: '1.1rem', fontWeight: 800, color: '#38bdf8' }}>
-                {progress}%
-              </span>
-            </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <RefreshCw size={15} className="spin-icon" color="#38bdf8" />
+            <span style={{ fontSize: 13, fontWeight: 600, color: '#f8fafc' }}>
+              {stageLabel}
+            </span>
+          </div>
 
-            <div className="script-progress-track">
-              <div className="script-progress-bar" style={{ width: `${Math.max(5, progress)}%` }} />
-            </div>
+          <div className="stage-progress-bar-bg" style={{ height: 6 }}>
+            <div className="stage-progress-bar-fill" style={{ width: `${Math.max(5, progress)}%` }} />
+          </div>
 
-            <div className="script-stage-list">
-              {[1, 2, 3, 4, 5].map((num) => {
-                const isDone = stageNum > num || progress === 100;
-                const isCurrent = stageNum === num && progress < 100;
-                return (
-                  <div key={num} className={`script-stage-step ${isDone ? 'done' : isCurrent ? 'current' : 'pending'}`}>
-                    <span className="script-stage-number">{isDone ? '✓' : num}</span>
-                    <span className="script-stage-text">{STAGE_LABELS[num]}</span>
-                  </div>
-                );
-              })}
-            </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 4 }}>
+            {[1, 2, 3, 4, 5].map((num) => {
+              const isDone = stageNum > num || progress === 100;
+              const isCurrent = stageNum === num && progress < 100;
+              return (
+                <div
+                  key={num}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    fontSize: 12,
+                    color: isDone ? '#22c55e' : isCurrent ? '#38bdf8' : '#475569',
+                    fontWeight: isCurrent ? 600 : 400,
+                  }}
+                >
+                  <span style={{ width: 16, textAlign: 'center', fontFamily: 'monospace' }}>
+                    {isDone ? '✓' : num}
+                  </span>
+                  <span>{STAGE_LABELS[num]}</span>
+                </div>
+              );
+            })}
           </div>
         </div>
       </div>
     );
   }
 
-  // No script yet and not running: Focused Generate Card
+  // In-flow translate form (full-width-of-centre, top-aligned, max-width ~720px)
   return (
-    <div className="workspace-inline-translate-wrapper">
-      <div className="script-inline-run-card" style={{ maxWidth: 640 }}>
-        {/* Key Pool Strip */}
-        <div className="script-key-status-strip">
-          <div className="script-key-status-left">
-            <span className="script-key-status-dot" />
-            <span>Key Pool: {keyStatus.online}/{keyStatus.total} online • {keyStatus.rpm} RPM</span>
-          </div>
-          <button
-            type="button"
-            className="script-key-manage-btn"
-            onClick={onOpenGeminiRoute}
-            title="គ្រប់គ្រង Gemini Keys & Quotas"
+    <div className="workspace-inflow-translate-panel">
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 16, width: '100%', maxWidth: 720 }}>
+        {/* Episode Summary In-Flow */}
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+          <div
+            style={{
+              width: 38,
+              height: 38,
+              borderRadius: 8,
+              background: 'rgba(56, 189, 248, 0.08)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              flexShrink: 0,
+            }}
           >
-            Manage Keys
-          </button>
-        </div>
-
-        {/* Video / Episode Summary */}
-        <div className="script-summary-row">
-          <div className="script-summary-icon">
-            <Film size={26} color="#38bdf8" />
+            <Film size={20} color="#38bdf8" />
           </div>
-          <div className="script-summary-info">
-            <div className="script-summary-eyebrow">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#64748b' }}>
               <span>ភាគទី {epNum}</span>
               <span>•</span>
               <span>{displayDuration}</span>
               <span>•</span>
               <span>{displayResolution}</span>
             </div>
-            <h2 className="script-summary-title" title={displayTitle}>
+            <h3 style={{ margin: 0, fontSize: 15, fontWeight: 600, color: '#f1f5f9' }}>
               {displayTitle}
-            </h2>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 2 }}>
-              <span style={{ fontSize: '0.72rem', color: '#fbbf24', fontWeight: 600 }}>
-                ⚠️ មិនទាន់មាន Script (No Script Yet)
-              </span>
-            </div>
+            </h3>
+            <span style={{ fontSize: 12, color: '#f59e0b', marginTop: 2 }}>
+              មិនទាន់មាន Script (No script yet)
+            </span>
           </div>
         </div>
 
         {/* Translation Mode & Genre options */}
-        <div className="script-options-grid">
-          <div className="script-option-field">
-            <label className="script-option-label">របៀបបកប្រែ (Translate Mode):</label>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <label style={{ fontSize: 12, fontWeight: 500, color: '#94a3b8' }}>
+              របៀបបកប្រែ (Translate Mode):
+            </label>
             <select
               value={dubbingMode}
               onChange={(e) => setDubbingMode(e.target.value)}
-              className="script-select-input"
+              className="stage-select"
             >
-              <option value="dialogue">Mode A: សន្ទនា 1:1 (Chinese Dialogue 1:1)</option>
-              <option value="recap">Mode B: សម្រាយសាច់រឿង (Story Recap / Narration)</option>
+              <option value="dialogue">Mode A: សន្ទនា 1:1 (Dialogue 1:1)</option>
+              <option value="recap">Mode B: សម្រាយសាច់រឿង (Story Recap)</option>
               <option value="fast_ocr">⚡ Fast Subtitle OCR (3-5x Faster)</option>
             </select>
           </div>
 
-          <div className="script-option-field">
-            <label className="script-option-label">ប្រភេទរឿង (Genre):</label>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <label style={{ fontSize: 12, fontWeight: 500, color: '#94a3b8' }}>
+              ប្រភេទរឿង (Genre):
+            </label>
             <select
               value={genre}
               onChange={(e) => setGenre(e.target.value)}
-              className="script-select-input"
+              className="stage-select"
             >
               <option value="auto">✨ Auto (ស្គាល់ស្វ័យប្រវត្តិ)</option>
-              <option value="ancient">🏛️ បុរាណចិន / Xianxia</option>
-              <option value="modern">🏙️ សម័យទំនើប / CEO</option>
-              <option value="action">⚔️ Action / សងសឹក</option>
-              <option value="comedy">🎭 កំប្លែង / គ្រួសារ</option>
+              <option value="ancient">🏛️ បុរាណចិន (Ancient / Xianxia)</option>
+              <option value="modern">🏙️ សម័យទំនើប (Modern / Drama)</option>
+              <option value="action">⚔️ សកម្មភាព (Action)</option>
+              <option value="comedy">🎭 កំប្លែង (Comedy)</option>
             </select>
           </div>
         </div>
 
+        {/* Quiet Key Pool line (Point 5) */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: '#64748b' }}>
+          <span>Key Pool: {keyStatus.online}/{keyStatus.total} online</span>
+          <span style={{ color: '#334155' }}>•</span>
+          <button
+            type="button"
+            onClick={onOpenGeminiRoute}
+            style={{
+              background: 'none',
+              border: 'none',
+              padding: 0,
+              fontSize: 12,
+              color: '#38bdf8',
+              cursor: 'pointer',
+              textDecoration: 'underline',
+            }}
+          >
+            Manage Keys
+          </button>
+        </div>
+
         {submitError && (
-          <div style={{ padding: '8px 12px', background: 'rgba(239, 68, 68, 0.12)', border: '1px solid rgba(239, 68, 68, 0.3)', borderRadius: 6, color: '#f87171', fontSize: '0.78rem' }}>
+          <div style={{ padding: '8px 12px', background: 'rgba(239, 68, 68, 0.12)', border: '1px solid rgba(239, 68, 68, 0.3)', borderRadius: 6, color: '#f87171', fontSize: 12 }}>
             {submitError}
           </div>
         )}
 
         {/* 1-Click Action Button */}
-        <div className="script-actions-section" style={{ marginTop: 8 }}>
+        <div>
           <button
             type="button"
-            className="script-primary-run-btn"
+            className="stage-btn-primary"
+            style={{ width: 'auto', minWidth: 260, padding: '10px 20px', fontSize: 13 }}
             disabled={isSubmitting}
             onClick={() => handleExecuteTranslate(false)}
           >
             {isSubmitting ? (
               <>
-                <RefreshCw size={15} className="script-spin-icon" />
+                <RefreshCw size={14} className="spin-icon" />
                 <span>កំពុងបញ្ជូនទៅកាន់ Job Queue...</span>
               </>
             ) : (
               <>
-                <Sparkles size={16} />
+                <Sparkles size={15} />
                 <span>✦ បង្កើត Script & បកប្រែ (Gemini Route)</span>
               </>
             )}

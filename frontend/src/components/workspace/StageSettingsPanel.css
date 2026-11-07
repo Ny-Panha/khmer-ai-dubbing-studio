@@ -1,62 +1,78 @@
+/* StageSettingsPanel.css — Clean Video Editor Settings (No Zone Borders, Tint Steps) */
+
 .stage-settings-panel {
   display: flex;
   flex-direction: column;
   gap: 14px;
-  padding: 12px 14px 20px 14px;
+  padding: 12px 14px 24px 14px;
   color: #cbd5e1;
-  font-size: 0.82rem;
+  font-size: 12px;
 }
 
-.stage-settings-card {
-  background: #0f172a;
-  border: 1px solid #1e293b;
-  border-radius: 8px;
-  padding: 12px;
+.stage-settings-section {
   display: flex;
   flex-direction: column;
   gap: 10px;
 }
 
-.stage-settings-title {
+.stage-section-quiet-title {
   display: flex;
   align-items: center;
-  gap: 7px;
-  font-size: 0.8rem;
-  font-weight: 700;
-  color: #e2e8f0;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #94a3b8;
+  text-transform: none;
+  letter-spacing: normal;
   margin: 0;
-  padding-bottom: 6px;
-  border-bottom: 1px solid #1e293b;
+  padding-bottom: 2px;
+}
+
+/* Technical Details Disclosure (Point 7) */
+.stage-details-disclosure {
+  background: rgba(255, 255, 255, 0.02);
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+
+.stage-details-summary {
+  font-size: 11px;
+  color: #64748b;
+  cursor: pointer;
+  user-select: none;
+  outline: none;
+}
+
+.stage-details-summary:hover {
+  color: #94a3b8;
 }
 
 .stage-meta-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 8px;
+  gap: 6px;
 }
 
 .stage-meta-item {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  background: #090d16;
-  padding: 6px 8px;
-  border-radius: 6px;
-  border: 1px solid #1e293b;
+  background: rgba(0, 0, 0, 0.25);
+  padding: 5px 7px;
+  border-radius: 5px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
 }
 
 .stage-meta-label {
-  font-size: 0.65rem;
+  font-size: 10px;
   color: #64748b;
   text-transform: uppercase;
   font-weight: 600;
 }
 
 .stage-meta-value {
-  font-size: 0.78rem;
-  color: #f1f5f9;
+  font-size: 11px;
+  color: #e2e8f0;
   font-weight: 500;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -66,13 +82,13 @@
 .stage-control-group {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 5px;
 }
 
 .stage-control-label {
-  font-size: 0.72rem;
+  font-size: 12px;
   color: #94a3b8;
-  font-weight: 600;
+  font-weight: 500;
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -82,10 +98,10 @@
 .stage-input {
   width: 100%;
   padding: 6px 9px;
-  font-size: 0.78rem;
+  font-size: 12px;
   background: #090d16;
-  border: 1px solid #334155;
-  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 5px;
   color: #f8fafc;
   outline: none;
   transition: border-color 0.15s ease;
@@ -114,24 +130,23 @@
   gap: 6px;
   width: 100%;
   padding: 8px 12px;
-  font-size: 0.8rem;
+  font-size: 12px;
   font-weight: 600;
   color: #04121f;
   background: linear-gradient(135deg, #38bdf8 0%, #0284c7 100%);
   border: none;
-  border-radius: 6px;
+  border-radius: 5px;
   cursor: pointer;
-  box-shadow: 0 2px 6px rgba(2, 132, 199, 0.3);
+  box-shadow: 0 2px 6px rgba(2, 132, 199, 0.25);
   transition: all 0.15s ease;
 }
 
 .stage-btn-primary:hover:not(:disabled) {
   background: linear-gradient(135deg, #7dd3fc 0%, #0369a1 100%);
-  box-shadow: 0 3px 10px rgba(2, 132, 199, 0.45);
 }
 
 .stage-btn-primary:disabled {
-  opacity: 0.5;
+  opacity: 0.45;
   cursor: not-allowed;
   box-shadow: none;
 }
@@ -143,25 +158,24 @@
   gap: 6px;
   width: 100%;
   padding: 7px 10px;
-  font-size: 0.76rem;
+  font-size: 12px;
   font-weight: 600;
   color: #fca5a5;
-  background: rgba(239, 68, 68, 0.15);
-  border: 1px solid rgba(239, 68, 68, 0.35);
-  border-radius: 6px;
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  border-radius: 5px;
   cursor: pointer;
   transition: all 0.15s ease;
 }
 
 .stage-btn-danger:hover {
-  background: rgba(239, 68, 68, 0.28);
-  border-color: rgba(239, 68, 68, 0.6);
+  background: rgba(239, 68, 68, 0.25);
 }
 
 .stage-progress-bar-bg {
   width: 100%;
-  height: 6px;
-  background: #1e293b;
+  height: 5px;
+  background: rgba(255, 255, 255, 0.08);
   border-radius: 3px;
   overflow: hidden;
 }
@@ -178,26 +192,26 @@
   align-items: flex-start;
   gap: 8px;
   padding: 8px 10px;
-  border-radius: 6px;
-  font-size: 0.74rem;
+  border-radius: 5px;
+  font-size: 12px;
   line-height: 1.4;
 }
 
 .stage-alert-warning {
-  background: rgba(245, 158, 11, 0.12);
-  border: 1px solid rgba(245, 158, 11, 0.35);
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid rgba(245, 158, 11, 0.25);
   color: #fcd34d;
 }
 
 .stage-alert-info {
-  background: rgba(56, 189, 248, 0.1);
-  border: 1px solid rgba(56, 189, 248, 0.25);
+  background: rgba(56, 189, 248, 0.08);
+  border: 1px solid rgba(56, 189, 248, 0.2);
   color: #bae6fd;
 }
 
 .stage-alert-success {
-  background: rgba(34, 197, 94, 0.12);
-  border: 1px solid rgba(34, 197, 94, 0.35);
+  background: rgba(34, 197, 94, 0.1);
+  border: 1px solid rgba(34, 197, 94, 0.25);
   color: #86efac;
 }
 
@@ -205,10 +219,10 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  background: #1e293b;
-  border: 1px solid #334155;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
   color: #94a3b8;
-  padding: 3px 7px;
+  padding: 2px 6px;
   border-radius: 4px;
-  font-size: 0.7rem;
+  font-size: 11px;
 }

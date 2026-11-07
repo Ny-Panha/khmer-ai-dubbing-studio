@@ -1,10 +1,9 @@
-/* StageRail.css — Pro Workstation Left Rail */
+/* StageRail.css — Clean Video Editor Left Rail (No Zone Borders, Tint Steps) */
 .stage-rail {
-  width: 190px;
+  width: 210px;
   height: 100%;
   flex-shrink: 0;
-  background: var(--bg-primary-panel, #0e1422);
-  border-right: 1px solid rgba(255, 255, 255, 0.07);
+  background: #0d121f;
   display: flex;
   flex-direction: column;
   transition: width 0.2s cubic-bezier(0.16, 1, 0.3, 1);
@@ -17,13 +16,13 @@
   width: 56px;
 }
 
+/* Header: Quiet label, no ALL-CAPS bar, no heavy bottom border */
 .stage-rail-header {
-  height: 40px;
-  padding: 0 10px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  height: 42px;
+  padding: 0 12px;
   display: flex;
   align-items: center;
-  justifyContent: center;
+  justify-content: center;
   flex-shrink: 0;
 }
 
@@ -31,35 +30,29 @@
   width: 100%;
   display: flex;
   align-items: center;
-  justifyContent: space-between;
+  justify-content: space-between;
 }
 
-.stage-rail-title-wrap {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.stage-rail-title {
-  font-size: 0.68rem;
-  font-weight: 800;
-  color: #94a3b8;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+.stage-rail-quiet-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: #64748b;
+  text-transform: none;
+  letter-spacing: normal;
 }
 
 .stage-rail-collapse-btn,
 .stage-rail-expand-btn {
   background: transparent;
   border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 6px;
+  border-radius: 5px;
   color: #94a3b8;
   cursor: pointer;
   display: flex;
   align-items: center;
-  justifyContent: center;
-  width: 26px;
-  height: 26px;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
   transition: all 0.15s ease;
 }
 
@@ -72,10 +65,10 @@
 
 .stage-rail-list {
   flex: 1;
-  padding: 8px 6px;
+  padding: 6px 8px;
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 4px;
   overflow-y: auto;
   overflow-x: hidden;
 }
@@ -83,16 +76,17 @@
 .stage-rail-item {
   position: relative;
   width: 100%;
-  height: 42px;
-  border-radius: 8px;
+  min-height: 40px;
+  height: auto;
+  border-radius: 6px;
   border: 1px solid transparent;
   background: transparent;
-  color: #cbd5e1;
+  color: #94a3b8;
   cursor: pointer;
   display: flex;
   align-items: center;
-  gap: 9px;
-  padding: 0 10px;
+  gap: 8px;
+  padding: 6px 8px;
   text-align: left;
   transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);
 }
@@ -101,44 +95,54 @@
   padding: 0;
   justify-content: center;
   gap: 0;
+  min-height: 38px;
 }
 
 .stage-rail-item:hover {
   background: rgba(255, 255, 255, 0.04);
-  color: #f8fafc;
-  border-color: rgba(255, 255, 255, 0.06);
+  color: #f1f5f9;
 }
 
 .stage-rail-item.is-active {
-  background: rgba(56, 189, 248, 0.12);
-  border-color: rgba(56, 189, 248, 0.35);
+  background: rgba(56, 189, 248, 0.1);
   color: #38bdf8;
-  font-weight: 700;
+  font-weight: 600;
+}
+
+/* Dimmed locked stages */
+.stage-rail-item.is-gated {
+  opacity: 0.45;
+  filter: grayscale(0.4);
+}
+
+.stage-rail-item.is-gated:hover {
+  opacity: 0.65;
+  filter: grayscale(0.1);
 }
 
 .stage-rail-active-pill {
   position: absolute;
   left: 0;
-  top: 8px;
-  bottom: 8px;
+  top: 6px;
+  bottom: 6px;
   width: 3px;
   background: #38bdf8;
   border-radius: 0 3px 3px 0;
-  box-shadow: 0 0 8px #38bdf8;
+  box-shadow: 0 0 8px rgba(56, 189, 248, 0.6);
 }
 
 .stage-rail-badge {
-  width: 22px;
-  height: 22px;
-  border-radius: 6px;
-  background: rgba(0, 0, 0, 0.35);
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.3);
   border: 1px solid rgba(255, 255, 255, 0.08);
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
   font-size: 0.68rem;
-  font-weight: 800;
+  font-weight: 700;
 }
 
 .stage-rail-item.is-done .stage-rail-badge {
@@ -151,14 +155,14 @@
 }
 
 .stage-rail-number {
-  color: #94a3b8;
-  font-family: var(--font-mono, monospace);
+  color: #64748b;
+  font-family: monospace;
 }
 
 .stage-rail-icon {
   display: flex;
   align-items: center;
-  justifyContent: center;
+  justify-content: center;
   color: inherit;
   flex-shrink: 0;
 }
@@ -172,43 +176,23 @@
   min-width: 0;
   display: flex;
   align-items: center;
-  justifyContent: space-between;
+  justify-content: space-between;
   gap: 6px;
 }
 
+/* Labels wrap naturally, 12px, normal case, NO truncation/ellipsis */
 .stage-rail-label {
-  font-size: 0.74rem;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  font-family: var(--font-khmer, sans-serif);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: normal;
+  line-height: 1.25;
+  overflow: visible;
+  text-overflow: clip;
 }
 
 .stage-rail-progress-text {
-  font-size: 0.64rem;
-  font-family: var(--font-mono, monospace);
+  font-size: 0.65rem;
+  font-family: monospace;
   color: #38bdf8;
-  font-weight: 800;
-}
-
-.stage-rail-gate-hint {
-  font-size: 0.60rem;
-  color: #64748b;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.stage-rail-footer {
-  padding: 8px 12px;
-  border-top: 1px solid rgba(255, 255, 255, 0.05);
-  display: flex;
-  align-items: center;
-  justifyContent: center;
-}
-
-.stage-rail-footer-text {
-  font-size: 0.62rem;
-  color: #475569;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
+  font-weight: 700;
 }

@@ -131,7 +131,7 @@ export default function WorkspaceToolbar({
                 ) : (
                   <>
                     <Mic size={13} />
-                    <span>✦ Generate All Voice ({segmentsCount} ឃ្លា)</span>
+                    <span>✦ បង្កើតសំឡេង (Generate Voice)</span>
                   </>
                 )}
               </button>
@@ -187,7 +187,7 @@ export default function WorkspaceToolbar({
                 ) : (
                   <>
                     <Clapperboard size={13} />
-                    <span>✦ Render & Export Video</span>
+                    <span>✦ Render វីដេអូ (Export)</span>
                   </>
                 )}
               </button>

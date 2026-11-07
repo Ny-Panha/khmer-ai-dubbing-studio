@@ -1,19 +1,18 @@
 import React from 'react';
 import { 
-  Check, Lock, Loader2, ChevronLeft, ChevronRight, Layers,
-  PanelLeftClose, PanelLeftOpen, Sparkles
+  Check, Lock, Loader2, PanelLeftClose, PanelLeftOpen
 } from 'lucide-react';
 import { WORKFLOW_STEPS, isStepReachable } from '../../steps/registry';
 import './StageRail.css';
 
 /**
- * StageRail (Left Rail ~200px, collapsible to ~56px icon strip)
+ * StageRail (Left Rail ~210px, collapsible to ~56px icon strip)
  * Vertical status list of the 5 production stages.
  * Clicking a stage does NOT change pages: it switches the WORKSPACE MODE.
  * All stages are ALWAYS clickable to view.
  */
 export default function StageRail({
-  activeMode = 'script',
+  currentMode = 'script',
   onSelectMode = null,
   workflowState = {},
   isGeneratingAudio = false,
@@ -32,14 +31,11 @@ export default function StageRail({
       className={`stage-rail ${isCollapsed ? 'is-collapsed' : ''}`}
       aria-label="Production Stages"
     >
-      {/* Rail Top Header */}
+      {/* Rail Top Header: Quiet Khmer label + Collapse button */}
       <div className="stage-rail-header">
         {!isCollapsed ? (
           <div className="stage-rail-header-content">
-            <div className="stage-rail-title-wrap">
-              <Sparkles size={12} color="#38BDF8" />
-              <span className="stage-rail-title">STAGES</span>
-            </div>
+            <span className="stage-rail-quiet-label">ដំណាក់កាល (Stages)</span>
             <button
               type="button"
               className="stage-rail-collapse-btn"
@@ -67,7 +63,7 @@ export default function StageRail({
           const isDone = step.isComplete(workflowState);
           const reachable = isStepReachable(step.id, workflowState);
           const gateReason = step.gateReason(workflowState);
-          const isActive = activeMode === step.id;
+          const isActive = currentMode === step.id;
           const IconComponent = step.icon;
 
           // Check if this specific stage is currently in an active background worker
@@ -110,7 +106,7 @@ export default function StageRail({
                 ) : isDone ? (
                   <Check size={12} strokeWidth={3} color="#10B981" />
                 ) : !reachable ? (
-                  <Lock size={10} color="#94A3B8" />
+                  <Lock size={11} color="#64748b" />
                 ) : (
                   <span className="stage-rail-number">{step.number}</span>
                 )}
@@ -121,15 +117,12 @@ export default function StageRail({
                 <IconComponent size={14} />
               </div>
 
-              {/* Label & Progress (Hidden when collapsed) */}
+              {/* Label & Progress (Hidden when collapsed) — Never truncate */}
               {!isCollapsed && (
                 <div className="stage-rail-info">
                   <span className="stage-rail-label">{step.titleKm || step.label}</span>
                   {isRunningStage && stageProgress > 0 && (
                     <span className="stage-rail-progress-text">{stageProgress}%</span>
-                  )}
-                  {!reachable && gateReason && (
-                    <span className="stage-rail-gate-hint">Locked</span>
                   )}
                 </div>
               )}
@@ -137,13 +130,6 @@ export default function StageRail({
           );
         })}
       </div>
-
-      {/* Rail Footer (Optional Quick Info) */}
-      {!isCollapsed && (
-        <div className="stage-rail-footer">
-          <span className="stage-rail-footer-text">Single-Screen Flow</span>
-        </div>
-      )}
     </nav>
   );
 }

@@ -1,8 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import {
   FileVideo, Subtitles, Mic, Music, Clapperboard,
-  CheckCircle2, AlertTriangle, AlertCircle, Info, Sparkles,
-  Play, Pause, RefreshCw, Square, Sliders, Layers, Volume2
+  CheckCircle2, AlertTriangle, Info,
+  Play, Pause, RefreshCw, Square, ChevronDown
 } from 'lucide-react';
 import { formatTimecode } from '../../utils/formatTime';
 import './StageSettingsPanel.css';
@@ -91,43 +91,50 @@ export default function StageSettingsPanel({
 
       return (
         <div className="stage-settings-panel">
-          <div className="stage-settings-card">
-            <h4 className="stage-settings-title">
-              <FileVideo size={14} color="#38bdf8" />
-              <span>ព័ត៌មានលម្អិតវីដេអូ (Video Metadata)</span>
-            </h4>
-            <div className="stage-meta-grid">
-              <div className="stage-meta-item">
-                <span className="stage-meta-label">Resolution</span>
-                <span className="stage-meta-value">{width} × {height}</span>
+          <div className="stage-settings-section">
+            <span className="stage-section-quiet-title">
+              <FileVideo size={13} color="#38bdf8" />
+              <span>ព័ត៌មានភាគ (Episode Info)</span>
+            </span>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 4 }}>
+              <div style={{ fontSize: 13, fontWeight: 600, color: '#f1f5f9' }}>
+                {activeEpisode?.name || 'EP01'} — {activeSeries?.title || 'រឿងភាគ'}
               </div>
-              <div className="stage-meta-item">
-                <span className="stage-meta-label">Duration</span>
-                <span className="stage-meta-value">{formatTimecode(dur)}</span>
-              </div>
-              <div className="stage-meta-item">
-                <span className="stage-meta-label">Frame Rate</span>
-                <span className="stage-meta-value">{fps} fps</span>
-              </div>
-              <div className="stage-meta-item">
-                <span className="stage-meta-label">File Size</span>
-                <span className="stage-meta-value">{sizeMb}</span>
+              <div style={{ fontSize: 12, color: '#64748b' }}>
+                {selectedVideo ? `${selectedVideo.name || 'video.mp4'} • ${formatTimecode(dur)}` : 'មិនទាន់មានវីដេអូ'}
               </div>
             </div>
 
-            <div className="stage-control-group" style={{ marginTop: 6 }}>
-              <span className="stage-control-label">ភាគបច្ចុប្បន្ន (Active Episode)</span>
-              <div className="stage-meta-item" style={{ background: '#090d16' }}>
-                <span className="stage-meta-value" style={{ fontWeight: 600, color: '#38bdf8' }}>
-                  {activeEpisode?.name || 'EP01'} — {activeSeries?.title || 'Chinese Drama'}
-                </span>
+            {/* Quiet Details Disclosure for Video Technical Metadata (Point 7) */}
+            <details className="stage-details-disclosure" style={{ marginTop: 10 }}>
+              <summary className="stage-details-summary">
+                <span>ព័ត៌មានបច្ចេកទេសវីដេអូ (Video Technical Details)</span>
+              </summary>
+              <div className="stage-meta-grid" style={{ marginTop: 8 }}>
+                <div className="stage-meta-item">
+                  <span className="stage-meta-label">Resolution</span>
+                  <span className="stage-meta-value">{width} × {height}</span>
+                </div>
+                <div className="stage-meta-item">
+                  <span className="stage-meta-label">Duration</span>
+                  <span className="stage-meta-value">{formatTimecode(dur)}</span>
+                </div>
+                <div className="stage-meta-item">
+                  <span className="stage-meta-label">Frame Rate</span>
+                  <span className="stage-meta-value">{fps} fps</span>
+                </div>
+                <div className="stage-meta-item">
+                  <span className="stage-meta-label">File Size</span>
+                  <span className="stage-meta-value">{sizeMb}</span>
+                </div>
               </div>
-            </div>
+            </details>
 
-            <div className="stage-alert-banner stage-alert-info">
-              <Info size={14} style={{ flexShrink: 0, marginTop: 2 }} />
+            <div className="stage-alert-banner stage-alert-info" style={{ marginTop: 10 }}>
+              <Info size={13} style={{ flexShrink: 0, marginTop: 1 }} />
               <span>
-                អ្នកអាចជ្រើសរើស ឬទម្លាក់វីដេអូថ្មីនៅផ្ទាំង <strong>MEDIA</strong> ខាងឆ្វេង ដើម្បីចាប់ផ្តើមបំប្លែងរឿងភាគ។
+                អ្នកអាចជ្រើសរើស ឬទម្លាក់វីដេអូថ្មីនៅផ្ទាំង <strong>មេឌៀ (Media)</strong> ខាងឆ្វេង។
               </span>
             </div>
           </div>
@@ -141,30 +148,27 @@ export default function StageSettingsPanel({
 
       return (
         <div className="stage-settings-panel">
-          <div className="stage-settings-card">
-            <h4 className="stage-settings-title">
-              <Subtitles size={14} color="#a855f7" />
+          <div className="stage-settings-section">
+            <span className="stage-section-quiet-title">
+              <Subtitles size={13} color="#a855f7" />
               <span>ការកំណត់ការបកប្រែ (Translation Config)</span>
-            </h4>
+            </span>
 
-            <div className="stage-control-group">
+            <div className="stage-control-group" style={{ marginTop: 6 }}>
               <label className="stage-control-label">
-                <span>ម៉ូដបកប្រែ (Dubbing Translation Mode)</span>
+                ម៉ូដបកប្រែ (Dubbing Translation Mode):
               </label>
               <select
                 className="stage-select"
                 value={voiceSettings?.translationMode || 'mode-a'}
                 onChange={(e) => handleSettingChange('translationMode', e.target.value)}
               >
-                <option value="mode-a">Mode A: Pure Dialogue Dubbing (បញ្ចូលសំឡេងតួអង្គសុទ្ធ)</option>
-                <option value="mode-b">Mode B: Contextual Narration (បញ្ចូលសំឡេងរៀបរាប់ដំណើររឿង)</option>
+                <option value="mode-a">Mode A: សន្ទនា 1:1 (Dialogue 1:1)</option>
+                <option value="mode-b">Mode B: សម្រាយសាច់រឿង (Story Recap)</option>
               </select>
             </div>
 
             <div className="stage-control-group">
-              <label className="stage-control-label">
-                <span>Auto-Align ពេលវេលាសន្ទនា (Strict Timing Sync)</span>
-              </label>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0' }}>
                 <input
                   type="checkbox"
@@ -173,26 +177,26 @@ export default function StageSettingsPanel({
                   onChange={(e) => handleSettingChange('autoAlignTimings', e.target.checked)}
                   style={{ accentColor: '#38bdf8' }}
                 />
-                <label htmlFor="auto-align-timing-chk" style={{ fontSize: '0.76rem', color: '#cbd5e1', cursor: 'pointer' }}>
-                  តម្រឹមម៉ោងកុំឱ្យជាន់គ្នា និងចងភ្ជាប់តាម Subtitle ដើម
+                <label htmlFor="auto-align-timing-chk" style={{ fontSize: 12, color: '#cbd5e1', cursor: 'pointer' }}>
+                  Auto-Align ពេលវេលាសន្ទនា (Strict Timing Sync)
                 </label>
               </div>
             </div>
 
             <div className="stage-control-group" style={{ marginTop: 4 }}>
-              <span className="stage-control-label">
+              <div className="stage-control-label">
                 <span>តួអង្គក្នុងរឿង (Series Characters & Glossary)</span>
                 <span className="stage-glossary-badge">{characters.length + terms.length} items</span>
-              </span>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, maxHeight: 110, overflowY: 'auto', padding: 4 }}>
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, maxHeight: 110, overflowY: 'auto', padding: 2 }}>
                 {characters.length === 0 && terms.length === 0 ? (
-                  <span style={{ fontSize: '0.72rem', color: '#64748b', fontStyle: 'italic' }}>
+                  <span style={{ fontSize: 12, color: '#64748b', fontStyle: 'italic' }}>
                     មិនទាន់មានឈ្មោះតួអង្គក្នុង Glossary នៅឡើយ
                   </span>
                 ) : (
                   <>
                     {characters.map((c, i) => (
-                      <span key={i} className="stage-glossary-badge" style={{ borderColor: '#818cf8', color: '#c7d2fe' }}>
+                      <span key={i} className="stage-glossary-badge" style={{ borderColor: 'rgba(129, 140, 248, 0.3)', color: '#c7d2fe' }}>
                         👤 {c.chinese || c.name}: {c.khmer || c.khmerName || 'តួអង្គ'}
                       </span>
                     ))}
@@ -223,13 +227,13 @@ export default function StageSettingsPanel({
 
       return (
         <div className="stage-settings-panel">
-          <div className="stage-settings-card">
-            <h4 className="stage-settings-title">
-              <Mic size={14} color="#38bdf8" />
+          <div className="stage-settings-section">
+            <span className="stage-section-quiet-title">
+              <Mic size={13} color="#38bdf8" />
               <span>ការកំណត់សំឡេង (Edge Khmer TTS)</span>
-            </h4>
+            </span>
 
-            <div className="stage-control-group">
+            <div className="stage-control-group" style={{ marginTop: 6 }}>
               <span className="stage-control-label">សំឡេងអ្នករៀបរាប់គោល (Master Voice)</span>
               <select
                 className="stage-select"
@@ -247,7 +251,7 @@ export default function StageSettingsPanel({
             <div className="stage-control-group">
               <div className="stage-control-label">
                 <span>ល្បឿននិយាយ (Speech Speed)</span>
-                <span style={{ color: '#38bdf8', fontWeight: 700 }}>{speechRate.toFixed(2)}x</span>
+                <span style={{ color: '#38bdf8', fontWeight: 600 }}>{speechRate.toFixed(2)}x</span>
               </div>
               <div className="stage-slider-row">
                 <input
@@ -265,7 +269,7 @@ export default function StageSettingsPanel({
             <div className="stage-control-group">
               <div className="stage-control-label">
                 <span>កម្រិតសំឡេងខ្មែរ (Khmer Voice Volume)</span>
-                <span style={{ color: '#38bdf8', fontWeight: 700 }}>{Math.round(khmerVol * 100)}%</span>
+                <span style={{ color: '#38bdf8', fontWeight: 600 }}>{Math.round(khmerVol * 100)}%</span>
               </div>
               <div className="stage-slider-row">
                 <input
@@ -282,8 +286,8 @@ export default function StageSettingsPanel({
 
             <div className="stage-control-group">
               <div className="stage-control-label">
-                <span>Smart Ducking ភ្លេង BGM (ពេលមានសំឡេងខ្មែរ)</span>
-                <span style={{ color: '#818cf8', fontWeight: 700 }}>{Math.round(duckingVol * 100)}%</span>
+                <span>Smart Ducking ភ្លេង BGM</span>
+                <span style={{ color: '#818cf8', fontWeight: 600 }}>{Math.round(duckingVol * 100)}%</span>
               </div>
               <div className="stage-slider-row">
                 <input
@@ -301,7 +305,7 @@ export default function StageSettingsPanel({
             <button
               type="button"
               className="stage-btn-primary"
-              style={{ background: '#1e293b', color: '#e2e8f0', border: '1px solid #334155', boxShadow: 'none' }}
+              style={{ background: 'rgba(255, 255, 255, 0.05)', color: '#cbd5e1', border: '1px solid rgba(255, 255, 255, 0.1)', boxShadow: 'none' }}
               onClick={handleTestListenVoice}
             >
               {isPlayingTestVoice ? <Pause size={13} color="#38bdf8" /> : <Play size={13} color="#38bdf8" />}
@@ -315,34 +319,34 @@ export default function StageSettingsPanel({
     case 'demucs': {
       return (
         <div className="stage-settings-panel">
-          <div className="stage-settings-card">
-            <h4 className="stage-settings-title">
-              <Music size={14} color="#f59e0b" />
+          <div className="stage-settings-section">
+            <span className="stage-section-quiet-title">
+              <Music size={13} color="#f59e0b" />
               <span>បំបែកសំឡេងដើម (Demucs AI Vocal Split)</span>
-            </h4>
+            </span>
 
             {/* Status Indicator */}
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <span style={{ fontSize: '0.74rem', color: '#94a3b8' }}>ស្ថានភាព BGM ដើម:</span>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 6 }}>
+              <span style={{ fontSize: 12, color: '#94a3b8' }}>ស្ថានភាព BGM ដើម:</span>
               {isCleanBgReady ? (
-                <span className="stage-glossary-badge" style={{ borderColor: 'rgba(34, 197, 94, 0.4)', color: '#86efac', background: 'rgba(34, 197, 94, 0.1)' }}>
-                  <CheckCircle2 size={11} color="#22c55e" /> Clean BGM រួចរាល់ 100%
+                <span className="stage-glossary-badge" style={{ borderColor: 'rgba(34, 197, 94, 0.3)', color: '#86efac' }}>
+                  <CheckCircle2 size={11} color="#22c55e" /> Clean BGM 100%
                 </span>
               ) : isSeparatingAudio ? (
-                <span className="stage-glossary-badge" style={{ borderColor: 'rgba(56, 189, 248, 0.4)', color: '#7dd3fc', background: 'rgba(56, 189, 248, 0.1)' }}>
-                  <RefreshCw size={11} className="spin" /> កំពុងបំបែក {separationProgress}%
+                <span className="stage-glossary-badge" style={{ borderColor: 'rgba(56, 189, 248, 0.3)', color: '#7dd3fc' }}>
+                  <RefreshCw size={11} className="spin-icon" /> កំពុងបំបែក {separationProgress}%
                 </span>
               ) : (
-                <span className="stage-glossary-badge" style={{ borderColor: 'rgba(245, 158, 11, 0.4)', color: '#fcd34d', background: 'rgba(245, 158, 11, 0.1)' }}>
-                  <Volume2 size={11} color="#f59e0b" /> សំឡេងដើម (Raw Audio)
+                <span className="stage-glossary-badge" style={{ borderColor: 'rgba(245, 158, 11, 0.3)', color: '#fcd34d' }}>
+                  សំឡេងដើម (Raw Audio)
                 </span>
               )}
             </div>
 
             {/* Progress Bar when running */}
             {isSeparatingAudio && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem', color: '#38bdf8' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 6 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#38bdf8' }}>
                   <span>Demucs AI កំពុងកាត់សំឡេងចិន...</span>
                   <span>{separationProgress}%</span>
                 </div>
@@ -354,8 +358,8 @@ export default function StageSettingsPanel({
 
             {/* Error / HTTP 409 alert banner */}
             {separationError && (
-              <div className="stage-alert-banner stage-alert-warning">
-                <AlertTriangle size={15} style={{ flexShrink: 0, marginTop: 2 }} />
+              <div className="stage-alert-banner stage-alert-warning" style={{ marginTop: 6 }}>
+                <AlertTriangle size={14} style={{ flexShrink: 0, marginTop: 1 }} />
                 <div>
                   <strong style={{ display: 'block', marginBottom: 2 }}>ដំណឹងពីប្រព័ន្ធ (System Alert):</strong>
                   <span>{separationError}</span>
@@ -364,29 +368,31 @@ export default function StageSettingsPanel({
             )}
 
             {/* Main Action Buttons */}
-            {!isSeparatingAudio ? (
-              <button
-                type="button"
-                className="stage-btn-primary"
-                onClick={onStartDemucsSeparation}
-                disabled={!selectedVideo || isSeparatingAudio}
-              >
-                <Music size={14} />
-                <span>{isCleanBgReady ? 'បំបែកម្តងទៀត (Re-Separate Demucs)' : '✦ បំបែកសំឡេងដើម (Demucs AI)'}</span>
-              </button>
-            ) : (
-              <button
-                type="button"
-                className="stage-btn-danger"
-                onClick={onKillDemucs}
-              >
-                <Square size={13} />
-                <span>⏹ បញ្ឈប់ការបំបែក (Kill Demucs Process)</span>
-              </button>
-            )}
+            <div style={{ marginTop: 8 }}>
+              {!isSeparatingAudio ? (
+                <button
+                  type="button"
+                  className="stage-btn-primary"
+                  onClick={onStartDemucsSeparation}
+                  disabled={!selectedVideo || isSeparatingAudio}
+                >
+                  <Music size={13} />
+                  <span>{isCleanBgReady ? 'បំបែកម្តងទៀត (Re-Separate Demucs)' : '✦ បំបែកសំឡេងដើម (Demucs AI)'}</span>
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  className="stage-btn-danger"
+                  onClick={onKillDemucs}
+                >
+                  <Square size={13} />
+                  <span>⏹ បញ្ឈប់ការបំបែក (Kill Demucs Process)</span>
+                </button>
+              )}
+            </div>
 
-            <div className="stage-alert-banner stage-alert-info" style={{ marginTop: 4 }}>
-              <Info size={13} style={{ flexShrink: 0, marginTop: 2 }} />
+            <div className="stage-alert-banner stage-alert-info" style={{ marginTop: 8 }}>
+              <Info size={13} style={{ flexShrink: 0, marginTop: 1 }} />
               <span>
                 Demucs AI នឹងបំបែកសំឡេងនិយាយតួអង្គចិនចេញ ដោយរក្សាទុកភ្លេងកំដរ (BGM) និងសំឡេងបែបផែន (SFX) ដើមច្បាស់កម្រិត Studio។
               </span>
@@ -403,14 +409,14 @@ export default function StageSettingsPanel({
 
       return (
         <div className="stage-settings-panel">
-          <div className="stage-settings-card">
-            <h4 className="stage-settings-title">
-              <Clapperboard size={14} color="#22c55e" />
-              <span>ការកំណត់ Render & Export (CapCut Pro Style)</span>
-            </h4>
+          <div className="stage-settings-section">
+            <span className="stage-section-quiet-title">
+              <Clapperboard size={13} color="#22c55e" />
+              <span>ការកំណត់ Export (Video Render & Export)</span>
+            </span>
 
             {/* Video Aspect Ratio */}
-            <div className="stage-control-group">
+            <div className="stage-control-group" style={{ marginTop: 6 }}>
               <span className="stage-control-label">ទម្រង់វីដេអូ (Aspect Ratio)</span>
               <select
                 className="stage-select"
@@ -433,7 +439,7 @@ export default function StageSettingsPanel({
                   onChange={(e) => handleSettingChange('burnSubtitles', e.target.checked)}
                   style={{ accentColor: '#22c55e' }}
                 />
-                <label htmlFor="burn-subtitles-chk" style={{ fontSize: '0.78rem', color: '#f1f5f9', fontWeight: 600, cursor: 'pointer' }}>
+                <label htmlFor="burn-subtitles-chk" style={{ fontSize: 12, color: '#f1f5f9', fontWeight: 500, cursor: 'pointer' }}>
                   ដុត Subtitle ខ្មែរចូលក្នុងវីដេអូ (Burn Subtitles)
                 </label>
               </div>
@@ -448,7 +454,7 @@ export default function StageSettingsPanel({
                   value={subStyle}
                   onChange={(e) => handleSettingChange('subtitleStyle', e.target.value)}
                 >
-                  <option value="banner">⬛ Title Banner (ប្រអប់ខ្មៅស្អាត CapCut Pro - បាំង Sub ដើមបានល្អ)</option>
+                  <option value="banner">⬛ Title Banner (ប្រអប់ខ្មៅ CapCut Style)</option>
                   <option value="pill">🏷️ CapCut Pill (ប្រអប់មូលថ្លា Modern)</option>
                   <option value="cinema">🎬 Cinema Soft (ស្រមោលអក្សរទន់)</option>
                 </select>
@@ -458,7 +464,7 @@ export default function StageSettingsPanel({
             {/* Rendering Progress display */}
             {isRendering && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 4 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.7rem', color: '#22c55e' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#22c55e' }}>
                   <span>{renderStage || 'FFmpeg កំពុង Render វីដេអូ...'}</span>
                   <span>{renderProgress}%</span>
                 </div>
@@ -475,28 +481,29 @@ export default function StageSettingsPanel({
             )}
 
             {/* Primary Render Button */}
-            <button
-              type="button"
-              className="stage-btn-primary"
-              style={{
-                background: 'linear-gradient(135deg, #22c55e 0%, #15803d 100%)',
-                boxShadow: '0 2px 8px rgba(34, 197, 94, 0.35)',
-                marginTop: 6
-              }}
-              onClick={onRenderVideo}
-              disabled={isRendering || !selectedVideo}
-            >
-              <Clapperboard size={14} color="#ffffff" />
-              <span style={{ color: '#ffffff', fontWeight: 700 }}>
-                {isRendering ? 'កំពុង Render វីដេអូ...' : '✦ Render & Export Video'}
-              </span>
-            </button>
+            <div style={{ marginTop: 8 }}>
+              <button
+                type="button"
+                className="stage-btn-primary"
+                style={{
+                  background: 'linear-gradient(135deg, #16a34a 0%, #15803d 100%)',
+                  boxShadow: '0 2px 8px rgba(34, 197, 94, 0.35)',
+                }}
+                onClick={onRenderVideo}
+                disabled={isRendering || !selectedVideo}
+              >
+                <Clapperboard size={14} color="#ffffff" />
+                <span style={{ color: '#ffffff', fontWeight: 600 }}>
+                  {isRendering ? 'កំពុង Render វីដេអូ...' : '✦ Render & Export Video'}
+                </span>
+              </button>
+            </div>
 
             {renderedVideo && (
-              <div className="stage-alert-banner stage-alert-success" style={{ marginTop: 4 }}>
-                <CheckCircle2 size={14} style={{ flexShrink: 0, marginTop: 2 }} />
+              <div className="stage-alert-banner stage-alert-success" style={{ marginTop: 8 }}>
+                <CheckCircle2 size={13} style={{ flexShrink: 0, marginTop: 1 }} />
                 <span>
-                  វីដេអូ Render រួចរាល់! អ្នកអាចទស្សនានៅផ្ទាំង Monitor កណ្តាល ឬ Download ទុកបាន។
+                  វីដេអូ Render រួចរាល់! អ្នកអាចទស្សនានៅផ្ទាំង Monitor ឬ Download ទុកបាន។
                 </span>
               </div>
             )}

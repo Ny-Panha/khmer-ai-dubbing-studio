@@ -16,13 +16,6 @@ export function PlayerTopBar({
   return (
     <div className="player-top-bar">
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-          <Video size={13} color="var(--accent-cyan)" />
-          <span className="panel-title-tag">
-            PLAYER MONITOR
-          </span>
-        </div>
-
         {renderedVideo && (
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <button
