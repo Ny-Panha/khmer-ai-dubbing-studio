@@ -348,7 +348,7 @@ router.post("/split-video-episodes", async (req, res) => {
       res.setTimeout(0);
     }
 
-    const { videoPath, videoId, seriesId, durationMinutes = 1, episodeCount, replaceEpisodes = true } = req.body;
+    const { videoPath, videoId, seriesId, durationMinutes, durationSeconds, episodeCount, replaceEpisodes = true } = req.body;
     const rawVideoRef = videoPath || videoId;
     if (!rawVideoRef) {
       return res.status(400).json({ success: false, error: "videoPath or videoId is required" });
@@ -364,12 +364,14 @@ router.post("/split-video-episodes", async (req, res) => {
 
     let targetDurationSec;
     if (episodeCount && Number(episodeCount) > 1) {
-      targetDurationSec = Math.max(15, totalDuration / Number(episodeCount));
+      targetDurationSec = Math.max(10, totalDuration / Number(episodeCount));
+    } else if (durationSeconds && Number(durationSeconds) > 0) {
+      targetDurationSec = Math.max(10, Number(durationSeconds));
     } else {
-      targetDurationSec = Math.max(30, Number(durationMinutes || 1) * 60);
+      targetDurationSec = Math.max(15, Number(durationMinutes || 1) * 60);
       // Auto-fallback: if video duration is shorter than or equal to target duration, split in half!
       if (totalDuration > 30 && targetDurationSec >= totalDuration) {
-        targetDurationSec = Math.max(15, totalDuration / 2);
+        targetDurationSec = Math.max(10, totalDuration / 2);
       }
     }
 

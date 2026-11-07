@@ -50,7 +50,9 @@ export default function MediaPanel({
 
   // Auto-split modal state
   const [showSplitModal, setShowSplitModal] = useState(false);
-  const [splitMinutes, setSplitMinutes] = useState(1);
+  const [splitMode, setSplitMode] = useState('count'); // 'count' | 'duration'
+  const [splitCount, setSplitCount] = useState(11);
+  const [splitSeconds, setSplitSeconds] = useState(20);
   const [isSplitting, setIsSplitting] = useState(false);
   const [splitError, setSplitError] = useState(null);
 
@@ -141,7 +143,8 @@ export default function MediaPanel({
         videoId: rawRef,
         videoPath: selectedVideo?.videoPath || selectedVideo?.filePath,
         seriesId: activeSeries?.id || seriesId || 'drama_project',
-        durationMinutes: Number(splitMinutes) || 1,
+        episodeCount: splitMode === 'count' ? Number(splitCount) : undefined,
+        durationSeconds: splitMode === 'duration' ? Number(splitSeconds) : undefined,
       });
 
       if (res?.series) {
@@ -485,42 +488,122 @@ export default function MediaPanel({
                 ប្រព័ន្ធនឹងកាត់វីដេអូជាបំណែកៗដោយស្វ័យប្រវត្តិ តាមរយៈពេលដែលអ្នកកំណត់ និងបង្កើតភាគថ្មីៗក្នុង Series នេះ។
               </p>
 
+              {/* Mode Selector Tabs */}
+              <div style={{ display: 'flex', gap: 6, background: '#0a0e18', padding: 3, borderRadius: 6, border: '1px solid rgba(255, 255, 255, 0.06)' }}>
+                <button
+                  type="button"
+                  onClick={() => setSplitMode('count')}
+                  style={{
+                    flex: 1,
+                    padding: '6px 10px',
+                    fontSize: '0.74rem',
+                    fontWeight: splitMode === 'count' ? 700 : 500,
+                    background: splitMode === 'count' ? '#1e293b' : 'transparent',
+                    color: splitMode === 'count' ? '#38bdf8' : '#94a3b8',
+                    border: 'none',
+                    borderRadius: 4,
+                    cursor: 'pointer',
+                    transition: 'all 0.15s ease',
+                  }}
+                >
+                  កាត់តាមចំនួនភាគ (By Episodes)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSplitMode('duration')}
+                  style={{
+                    flex: 1,
+                    padding: '6px 10px',
+                    fontSize: '0.74rem',
+                    fontWeight: splitMode === 'duration' ? 700 : 500,
+                    background: splitMode === 'duration' ? '#1e293b' : 'transparent',
+                    color: splitMode === 'duration' ? '#38bdf8' : '#94a3b8',
+                    border: 'none',
+                    borderRadius: 4,
+                    cursor: 'pointer',
+                    transition: 'all 0.15s ease',
+                  }}
+                >
+                  កាត់តាមរយៈពេល (Seconds / Minutes)
+                </button>
+              </div>
+
               {videoDurationSec > 0 && (
                 <div style={{ padding: '8px 12px', background: 'rgba(56, 189, 248, 0.08)', borderRadius: 6, border: '1px solid rgba(56, 189, 248, 0.2)', fontSize: '0.78rem' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                    <span style={{ color: '#94a3b8' }}>ប្រវែងវីដេអូសរុប:</span>
+                    <span style={{ color: '#94a3b8' }}>ប្រវែងវីដេអូដើម:</span>
                     <span style={{ color: '#38bdf8', fontWeight: 700 }}>{formatTimecode(videoDurationSec)} ({Math.round(videoDurationSec)}s)</span>
                   </div>
                   <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                     <span style={{ color: '#94a3b8' }}>នឹងកាត់បំបែកបាន:</span>
-                    <span style={{ color: '#4ade80', fontWeight: 800 }}>{Math.max(1, Math.ceil(videoDurationSec / (splitMinutes * 60)))} ភាគ</span>
+                    <span style={{ color: '#4ade80', fontWeight: 800 }}>
+                      {splitMode === 'count'
+                        ? `${splitCount} ភាគ (ក្នុងមួយភាគ ~${Math.round(videoDurationSec / Math.max(1, splitCount))}s)`
+                        : `${Math.max(1, Math.ceil(videoDurationSec / splitSeconds))} ភាគ`}
+                    </span>
                   </div>
                 </div>
               )}
 
-              <div>
-                <label style={{ display: 'block', fontSize: '0.74rem', color: '#cbd5e1', fontWeight: 700, marginBottom: 6 }}>
-                  រយៈពេលក្នុងមួយភាគ (នាទី):
-                </label>
-                <select
-                  value={splitMinutes}
-                  onChange={(e) => setSplitMinutes(Number(e.target.value))}
-                  className="media-series-input"
-                  style={{ width: '100%' }}
-                >
-                  <option value={1}>1 នាទី (Short Clips / Test — 1 min)</option>
-                  <option value={2}>2 នាទី (Short Form — 2 min)</option>
-                  <option value={3}>3 នាទី (Micro Drama — 3 min)</option>
-                  <option value={5}>5 នាទី (Short Form / TikTok Clips)</option>
-                  <option value={10}>10 នាទី (Standard Short Drama)</option>
-                  <option value={15}>15 នាទី (Standard Episode)</option>
-                  <option value={20}>20 នាទី (Long Episode)</option>
-                </select>
-              </div>
-
-              {videoDurationSec > 0 && videoDurationSec <= (splitMinutes * 60) && (
-                <div style={{ padding: '6px 10px', background: 'rgba(234, 179, 8, 0.1)', borderRadius: 6, color: '#facc15', fontSize: '0.74rem', lineHeight: 1.4 }}>
-                  ⚠️ ប្រវែងវីដេអូខ្លីជាង {splitMinutes} នាទី (នឹងចេញតែ ១ ភាគ)។ សូមជ្រើសរើសរយៈពេលខ្លីជាង (ឧ. ១ ឬ ២ នាទី) ដើម្បីកាត់ចេញច្រើនភាគ!
+              {splitMode === 'count' ? (
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.74rem', color: '#cbd5e1', fontWeight: 700, marginBottom: 6 }}>
+                    ចំនួនភាគដែលចង់បាន (Episode Count):
+                  </label>
+                  <input
+                    type="number"
+                    min={2}
+                    max={100}
+                    value={splitCount}
+                    onChange={(e) => setSplitCount(Math.max(2, Number(e.target.value) || 2))}
+                    className="media-series-input"
+                    style={{ width: '100%', marginBottom: 8 }}
+                  />
+                  {/* Quick Preset Pills */}
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    {[2, 4, 6, 10, 11].map((cnt) => (
+                      <button
+                        key={cnt}
+                        type="button"
+                        onClick={() => setSplitCount(cnt)}
+                        style={{
+                          padding: '4px 10px',
+                          fontSize: '0.74rem',
+                          fontWeight: splitCount === cnt ? 700 : 500,
+                          background: splitCount === cnt ? '#0284c7' : '#1e293b',
+                          color: splitCount === cnt ? '#fff' : '#94a3b8',
+                          border: '1px solid rgba(255,255,255,0.08)',
+                          borderRadius: 4,
+                          cursor: 'pointer',
+                        }}
+                      >
+                        {cnt} ភាគ
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : (
+                <div>
+                  <label style={{ display: 'block', fontSize: '0.74rem', color: '#cbd5e1', fontWeight: 700, marginBottom: 6 }}>
+                    រយៈពេលក្នុងមួយភាគ (Seconds / Minutes):
+                  </label>
+                  <select
+                    value={splitSeconds}
+                    onChange={(e) => setSplitSeconds(Number(e.target.value))}
+                    className="media-series-input"
+                    style={{ width: '100%' }}
+                  >
+                    <option value={20}>20 វិនាទី (20s / Shorts — បាន ១១ ភាគ)</option>
+                    <option value={30}>30 វិនាទី (30s / TikTok — បាន ៧ ភាគ)</option>
+                    <option value={45}>45 វិនាទី (45s / Reels — បាន ៥ ភាគ)</option>
+                    <option value={60}>60 វិនាទី (1 នាទី — បាន ៤ ភាគ)</option>
+                    <option value={111}>111 វិនាទី (ពាក់កណ្តាល — បាន ២ ភាគ)</option>
+                    <option value={120}>120 វិនាទី (2 នាទី — បាន ២ ភាគ)</option>
+                    <option value={300}>300 វិនាទី (5 នាទី)</option>
+                    <option value={600}>600 វិនាទី (10 នាទី)</option>
+                    <option value={900}>900 វិនាទី (15 នាទី)</option>
+                    <option value={1200}>1200 វិនាទី (20 នាទី)</option>
+                  </select>
                 </div>
               )}
 

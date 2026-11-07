@@ -526,12 +526,12 @@ export async function splitVideoEpisodesApi({
   videoPath,
   sourceVideoPath,
   seriesId,
-  durationMinutes = 1,
+  durationMinutes,
   chunkDurationMinutes,
+  durationSeconds,
   episodeCount,
 }) {
   const actualRef = videoId || videoPath || sourceVideoPath;
-  const actualDuration = Number(durationMinutes || chunkDurationMinutes) || 1;
   const res = await fetch('/api/split-video-episodes', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -539,7 +539,8 @@ export async function splitVideoEpisodesApi({
       videoId: actualRef,
       videoPath: videoPath || sourceVideoPath || actualRef,
       seriesId,
-      durationMinutes: actualDuration,
+      durationMinutes: durationMinutes ? Number(durationMinutes) : (chunkDurationMinutes ? Number(chunkDurationMinutes) : undefined),
+      durationSeconds: durationSeconds ? Number(durationSeconds) : undefined,
       episodeCount: episodeCount ? Number(episodeCount) : undefined,
     }),
   });
