@@ -303,6 +303,58 @@ router.post("/:jobId/retry", (req, res) => {
   }
 });
 
+router.post("/cancel", (req, res) => {
+  try {
+    const { jobId, episodeId, seriesId, all } = req.body || {};
+    if (jobId) {
+      cancelJobRenderProcess(jobId);
+      const job = cancelJob(jobId);
+      return res.json({ success: true, cancelledJobs: job ? [job] : [] });
+    }
+    const jobs = getAllJobs();
+    const cancelled = [];
+    for (const j of jobs) {
+      if (j.status === 'running' || j.status === 'queued' || j.status === 'processing') {
+        if (episodeId && String(j.episodeId) !== String(episodeId)) continue;
+        if (seriesId && String(j.seriesId) !== String(seriesId)) continue;
+        cancelJobRenderProcess(j.jobId);
+        const c = cancelJob(j.jobId);
+        if (c) cancelled.push(c);
+      }
+    }
+    return res.json({ success: true, count: cancelled.length, cancelledJobs: cancelled });
+  } catch (err) {
+    console.error("[Job Cancel] Error:", err);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.post("/kill", (req, res) => {
+  try {
+    const { jobId, episodeId, seriesId, all } = req.body || {};
+    if (jobId) {
+      cancelJobRenderProcess(jobId);
+      const job = cancelJob(jobId);
+      return res.json({ success: true, cancelledJobs: job ? [job] : [] });
+    }
+    const jobs = getAllJobs();
+    const cancelled = [];
+    for (const j of jobs) {
+      if (j.status === 'running' || j.status === 'queued' || j.status === 'processing') {
+        if (episodeId && String(j.episodeId) !== String(episodeId)) continue;
+        if (seriesId && String(j.seriesId) !== String(seriesId)) continue;
+        cancelJobRenderProcess(j.jobId);
+        const c = cancelJob(j.jobId);
+        if (c) cancelled.push(c);
+      }
+    }
+    return res.json({ success: true, count: cancelled.length, cancelledJobs: cancelled });
+  } catch (err) {
+    console.error("[Job Kill] Error:", err);
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 router.post("/:jobId/cancel", (req, res) => {
   const { jobId } = req.params;
   cancelJobRenderProcess(jobId);
