@@ -153,6 +153,14 @@ export default function MediaPanel({
           if (res.series.episodes?.[0]?.id) {
             localStorage.setItem('KHMER_AI_ACTIVE_EPISODE_ID', res.series.episodes[0].id);
           }
+          if (res.series.episodes?.[0]) {
+            localStorage.setItem('KHMER_AI_ACTIVE_PROJECT_V3', JSON.stringify({
+              video: res.series.episodes[0].video,
+              seriesId: res.series.id,
+              episodeId: res.series.episodes[0].id,
+              scriptData: null,
+            }));
+          }
         } catch (_) {}
       }
 

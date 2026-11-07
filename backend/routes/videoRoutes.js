@@ -348,7 +348,7 @@ router.post("/split-video-episodes", async (req, res) => {
       res.setTimeout(0);
     }
 
-    const { videoPath, videoId, seriesId, durationMinutes = 20, replaceEpisodes = true } = req.body;
+    const { videoPath, videoId, seriesId, durationMinutes = 1, episodeCount, replaceEpisodes = true } = req.body;
     const rawVideoRef = videoPath || videoId;
     if (!rawVideoRef) {
       return res.status(400).json({ success: false, error: "videoPath or videoId is required" });
@@ -359,9 +359,22 @@ router.post("/split-video-episodes", async (req, res) => {
       return res.status(404).json({ success: false, error: "Source video not found: " + rawVideoRef });
     }
 
+    const meta = await getVideoMetadata(inputVideoPath);
+    const totalDuration = meta?.duration || 0;
+
+    let targetDurationSec;
+    if (episodeCount && Number(episodeCount) > 1) {
+      targetDurationSec = Math.max(15, totalDuration / Number(episodeCount));
+    } else {
+      targetDurationSec = Math.max(30, Number(durationMinutes || 1) * 60);
+      // Auto-fallback: if video duration is shorter than or equal to target duration, split in half!
+      if (totalDuration > 30 && targetDurationSec >= totalDuration) {
+        targetDurationSec = Math.max(15, totalDuration / 2);
+      }
+    }
+
     const targetSeries = seriesId || "drama_project";
     const cleanSeries = sanitizeProjectName(targetSeries);
-    const targetDurationSec = Math.max(30, Number(durationMinutes || 1) * 60);
 
     const tempOutputDir = path.join(uploadsDir, "temp_splits", `split_${Date.now()}`);
     fs.mkdirSync(tempOutputDir, { recursive: true });

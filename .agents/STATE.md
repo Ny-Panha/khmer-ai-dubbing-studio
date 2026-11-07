@@ -1,30 +1,26 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
-- **Environment**: Antigravity IDE (Bug Fix: Auto-Split Video duration options & tail chunk threshold)
-- **Timestamp**: 2026-11-07T23:25:00+07:00
+- **Environment**: Antigravity IDE (Auto-Split Video Safe Halving & Fallback for Short Videos)
+- **Timestamp**: 2026-11-07T23:30:00+07:00
 
 ## Summary of Completed Work
 
-### Auto-Split Resolution
-1. **Root Cause Analysis**:
-   - The user uploaded video was `222.8s` (3 minutes 42 seconds).
-   - In the modal, `splitMinutes` was defaulting to `15` (15 minutes = 900 seconds), and minimum option was `5` minutes.
-   - Because video duration (222.8s) was smaller than 15 minutes (900s), FFmpeg correctly generated `Math.ceil(222.8 / 900) = 1` episode (`Splitting video (222.8s) into 1 episodes (15 min/ep)`), resulting in 1 episode.
-2. **Short Video Duration Options Added**:
-   - Added options: `1 នាទី`, `2 នាទី`, `3 នាទី`, `5 នាទី`, `10 នាទី`, `15 នាទី`, `20 នាទី`.
-   - Default set to `1` minute for testing short videos.
-   - Added live indicator showing: total video duration + estimated episodes to be produced (`នឹងកាត់បំបែកបាន: X ភាគ`).
-   - Added warning alert when the video is shorter than the selected episode duration.
-3. **Backend & FFmpeg Safe Chunking**:
-   - In `backend/services/ffmpegService.js`: Lowered tail merge threshold to `Math.min(15, targetDurationSec * 0.25)` so that 1-minute splits don't swallow a 40s tail chunk.
-   - In `backend/routes/videoRoutes.js`: Allowed `targetDurationSec` down to `30s` (`Math.max(30, ...)`).
-   - In `MediaPanel.jsx`: Immediately synced updated series into `localStorage` and called `onRefreshSeries()` upon successful split.
-   - Restarted backend server on `http://localhost:5000` to apply backend updates.
+### Auto-Split Safe Fallback for Short Videos
+1. **Issue Identified from Server Logs**:
+   - The user's browser sent `5 min/ep` (`durationMinutes: 5`).
+   - The source video was only `222.9s` (3.7 minutes).
+   - Because `222.9s < 300s` (5 minutes), FFmpeg generated only 1 episode.
+2. **Auto-Fallback Implementation in Backend**:
+   - In `backend/routes/videoRoutes.js`: If `targetDurationSec >= totalDuration` (i.e. the chosen split duration is longer than the video itself), the backend now automatically splits the video in half (`targetDurationSec = totalDuration / 2`). This guarantees that whenever a user triggers Auto-Split, it will produce at least 2 episodes.
+   - Also added support for `episodeCount` in `videoRoutes.js` and `splitVideoEpisodesApi`.
+   - In `MediaPanel.jsx`: Updated `KHMER_AI_ACTIVE_PROJECT_V3` immediately on split completion to ensure workspace binds to the newly split EP1.
+3. **Backend Service Restart**:
+   - Backend process on port 5000 restarted and verified online with the updated endpoint logic.
 
 ### Verification & Quality Acceptance
-- **Build**: `npm --prefix frontend run build` ➔ **PASS** (596ms, 0 errors).
-- **Backend API**: Verified running on `http://localhost:5000`.
+- **Build**: `npm --prefix frontend run build` ➔ **PASS** (599ms, 0 errors).
+- **Backend API**: Running on `http://localhost:5000`.
 
 ## Active Environment
 - **Backend API**: `http://localhost:5000` (Node.js/Express, online)
@@ -32,4 +28,4 @@
 - **Git Branch**: `main`
 
 ## Next Steps
-- User tests Auto-Split selecting 1 នាទី or 2 នាទី on the 03:42 video.
+- User tests Auto-Split again on the browser.
