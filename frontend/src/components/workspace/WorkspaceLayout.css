@@ -1,0 +1,231 @@
+/* WorkspaceLayout.css — Single Screen CapCut-Style Workspace */
+
+.workspace-root {
+  display: flex;
+  flex-direction: column;
+  width: 100vw;
+  height: 100vh;
+  min-width: 100vw;
+  min-height: 100vh;
+  overflow: hidden;
+  background: #080c14;
+  color: #f1f5f9;
+}
+
+.workspace-body {
+  flex: 1;
+  display: flex;
+  flex-direction: row;
+  min-height: 0;
+  overflow: hidden;
+  position: relative;
+  width: 100%;
+}
+
+/* 1. Left Rail (Stages 1-5 Status) */
+.workspace-rail-container {
+  flex-shrink: 0;
+  height: 100%;
+  border-right: 1px solid #1e293b;
+  background: #090d16;
+  z-index: 20;
+  transition: width 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* 2. Left Media Panel (Collapsible) */
+.workspace-media-container {
+  flex-shrink: 0;
+  height: 100%;
+  border-right: 1px solid #1e293b;
+  background: #0b1120;
+  overflow: hidden;
+  transition: width 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+/* 3. Centre Working Column (Always mounted, never unmounts) */
+.workspace-centre-container {
+  flex: 1;
+  min-width: 360px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  background: #090d16;
+  position: relative;
+}
+
+.workspace-centre-player-section {
+  display: flex;
+  flex-direction: column;
+  background: #05080f;
+  border-bottom: 1px solid #1e293b;
+  flex-shrink: 0;
+  position: relative;
+}
+
+.workspace-centre-player-box {
+  height: 240px;
+  max-height: 270px;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background: #020408;
+  position: relative;
+}
+
+.workspace-centre-player-box .video-preview-wrapper,
+.workspace-centre-player-box .video-player-container {
+  height: 100% !important;
+  width: 100% !important;
+  max-height: 100% !important;
+  border: none !important;
+  border-radius: 0 !important;
+}
+
+.workspace-centre-segments-section {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  position: relative;
+}
+
+/* 4. Right Panel (Collapsible) */
+.workspace-right-container {
+  flex-shrink: 0;
+  height: 100%;
+  border-left: 1px solid #1e293b;
+  background: #0b1120;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  transition: width 0.22s cubic-bezier(0.16, 1, 0.3, 1);
+  position: relative;
+}
+
+.workspace-inspector-section {
+  flex-shrink: 0;
+  border-bottom: 1px solid #1e293b;
+}
+
+.workspace-stage-settings-section {
+  flex: 1;
+  min-height: 0;
+}
+
+/* Collapse Toggle Tab Handles */
+.workspace-panel-toggle-btn {
+  position: absolute;
+  top: 10px;
+  z-index: 30;
+  width: 22px;
+  height: 28px;
+  background: #1e293b;
+  border: 1px solid #334155;
+  color: #94a3b8;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  border-radius: 4px;
+  transition: all 0.15s ease;
+}
+
+.workspace-panel-toggle-btn:hover {
+  background: #38bdf8;
+  border-color: #38bdf8;
+  color: #04121f;
+}
+
+.workspace-panel-toggle-btn.left-toggle {
+  right: -11px;
+}
+
+.workspace-panel-toggle-btn.right-toggle {
+  left: -11px;
+}
+
+/* Draggable Splitter */
+.workspace-splitter {
+  width: 5px;
+  cursor: col-resize;
+  position: relative;
+  z-index: 25;
+  flex-shrink: 0;
+  background: transparent;
+  transition: background-color 0.15s ease;
+}
+
+.workspace-splitter:hover,
+.workspace-splitter.is-active {
+  background: rgba(56, 189, 248, 0.4);
+}
+
+/* Inline translate card inside centre column when no segments */
+.workspace-inline-translate-wrapper {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 16px;
+  background: #090d16;
+}
+
+.workspace-overview-card {
+  max-width: 620px;
+  width: 100%;
+  background: #0f172a;
+  border: 1px solid #1e293b;
+  border-radius: 12px;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+.workspace-overview-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.workspace-overview-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  background: rgba(56, 189, 248, 0.12);
+  border: 1px solid rgba(56, 189, 248, 0.3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #38bdf8;
+}
+
+.workspace-overview-title {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: #f8fafc;
+  margin: 0;
+}
+
+.workspace-overview-desc {
+  font-size: 0.8rem;
+  color: #94a3b8;
+  line-height: 1.5;
+  margin: 0;
+}
+
+.workspace-overview-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}

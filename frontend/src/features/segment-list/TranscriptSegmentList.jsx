@@ -82,6 +82,8 @@ const TranscriptItemCard = React.memo(function TranscriptItemCard({
   const speakerGender = seg.speakerGender || seg.voiceGender || 'unknown';
   const isFemale = speakerGender.toLowerCase() === 'female';
   const isMale = speakerGender.toLowerCase() === 'male';
+  const isOver = typeof seg.audioDurationSec === 'number' && typeof seg.durationSec === 'number' && seg.audioDurationSec > (seg.durationSec + 0.3);
+  const overDiff = isOver ? (seg.audioDurationSec - seg.durationSec).toFixed(1) : null;
 
   return (
     <div
@@ -130,6 +132,17 @@ const TranscriptItemCard = React.memo(function TranscriptItemCard({
           >
             {seg.deliveryType === 'inner_thought' ? '💭 ក្នុងចិត្ត' : '💬 ធម្មតា'}
           </span>
+
+          {/* OVER Timing Warning Chip */}
+          {isOver && (
+            <span
+              className="transcript-delivery-chip"
+              style={{ background: 'rgba(245, 158, 11, 0.15)', borderColor: 'rgba(245, 158, 11, 0.4)', color: '#fcd34d', fontWeight: 600 }}
+              title={`សំឡេង (${seg.audioDurationSec.toFixed(1)}s) លើសរយៈពេលសន្ទនាដើម (${seg.durationSec.toFixed(1)}s)`}
+            >
+              ⚠️ +{overDiff}s OVER
+            </span>
+          )}
         </div>
 
         {/* Action Buttons */}
