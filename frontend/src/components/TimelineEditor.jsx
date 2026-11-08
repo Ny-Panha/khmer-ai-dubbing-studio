@@ -66,8 +66,25 @@ function TimelineEditor({
   const [autoCenter, setAutoCenter] = useState(true);
   const isNativeDraggingRef = useRef(false);
 
-  // Subtitles Track should only display when in Step 2: Dubbing Mode & Script or when subtitles exist
-  const showSubtitles = activeTab === 'script' || activeTab === 'subtitles' || (scriptSegments && scriptSegments.length > 0);
+  // Persistent toggle for Subtitles Track visibility on timeline (Default on first run: OFF)
+  const [showSubtitlesTrack, setShowSubtitlesTrack] = useState(() => {
+    try {
+      const saved = localStorage.getItem('TIMELINE_SHOW_SUBTITLES');
+      if (saved !== null) {
+        return saved === 'true';
+      }
+    } catch (_) {}
+    return false; // Default state on first run: OFF
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('TIMELINE_SHOW_SUBTITLES', String(showSubtitlesTrack));
+    } catch (_) {}
+  }, [showSubtitlesTrack]);
+
+  // Subtitles Track display: strictly controlled by user's show/hide toggle (VIEW ONLY)
+  const showSubtitles = Boolean(showSubtitlesTrack);
 
   const [dragOverTrack, setDragOverTrack] = useState(null);
   const [userVideoTrackCount, setUserVideoTrackCount] = useState(1);
@@ -1281,6 +1298,8 @@ function TimelineEditor({
         onAddSegment={onAddSegment}
         snappingEnabled={snappingEnabled}
         setSnappingEnabled={setSnappingEnabled}
+        showSubtitlesTrack={showSubtitlesTrack}
+        setShowSubtitlesTrack={setShowSubtitlesTrack}
         voiceSettings={voiceSettings}
         onUpdateVoiceSettings={onUpdateVoiceSettings}
         zoom={zoom}

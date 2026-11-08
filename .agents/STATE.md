@@ -1,51 +1,43 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
-- **Environment**: Antigravity IDE (Removed all silent episode-split defaults & strictly explicit user-driven splitting)
-- **Timestamp**: 2026-11-08T14:45:00+07:00
+- **Environment**: Antigravity IDE (Implemented Subtitle Track Show/Hide Toggle on Timeline)
+- **Timestamp**: 2026-11-08T14:52:00+07:00
 
-## Latest Update: Explicit Episode Splitting & Zero Silent Defaults
+## Latest Update: Subtitle Track Show/Hide Toggle on Timeline (`Subs ON / Subs OFF`)
 
-### 1. Problem & Architecture Violation Addressed
-- Previously, uploading a video or opening split tools would auto-assume silent fallback defaults:
-  1. `MediaUploadTab.jsx`: `splitMinutes` initialized to 20, fallback `targetMins = customMinutes || splitMinutes || 20`, sending `durationMinutes: Number(targetMins) || 20`.
-  2. `EpisodesTab.jsx`: `splitMinutes` initialized to 20, sending `durationMinutes: Number(splitMinutes) || 8` (inconsistent fallback).
-  3. `backend/routes/videoRoutes.js`: fallback `durationMinutes || 1`, silent split-in-half branch if `target >= totalDuration`, and `replaceEpisodes` defaulting to `true` (overwriting existing episodes).
-  4. `backend/services/ffmpegService.js`: default parameter `targetDurationSec = 480` (8 minutes).
+### 1. Architectural Intent & User Workflow
+- **Context**: In Khmer Dubbing Studio, dialogue text is created and refined in the Script tab; audio synthesis and mixing happen on the timeline.
+- **Problem**: When focusing on audio mixing and voice alignment, subtitle text clips on the timeline created visual noise and consumed vertical screen real estate.
+- **Solution**: A clean view-only toggle on `TimelineToolbar` allows toggling subtitle tracks on/off on demand.
 
-### 2. Required Behavior & Fixes Implemented
-- **Default State**: By default there is NOTHING — an uploaded video is exactly ONE episode unless the user explicitly chooses to split it.
-- **Both Split UIs (`MediaUploadTab.jsx` and `EpisodesTab.jsx`)**:
-  - `splitValue` initialized to `''` (empty string).
-  - Dual Mode support: Split by Minutes (នាទី/ភាគ) or Split by Episode Count (ចំនួនភាគសរុប).
-  - Split button is strictly disabled (`disabled={!isValidSplit || isSplitting}`) until user enters a valid value > 0 (or >= 2 for episode count).
-  - Estimated-episode preview box ONLY appears when a valid value > 0 is typed, computed directly from the REAL duration of the video.
-  - Preset chips (`[5, 10, 15, 20, 30]` min or `[2, 3, 5, 10]` eps) only fill the input visibly upon active click (no auto-apply).
-  - `replaceEpisodes` defaults to `false`. Explicit checkbox provided: unchecked appends new chunks to existing episodes; checked replaces.
-  - Removed hardcoded 20-minute action button from `MediaUploadTab` long-video banner.
-- **Frontend API Service (`api.js`)**:
-  - `splitVideoEpisodesApi` forwards `replaceEpisodes: Boolean(replaceEpisodes)` and eliminates any fallback numbers.
-- **Backend API (`backend/routes/videoRoutes.js`)**:
-  - `POST /api/split-video-episodes` strictly validates that user chose either `episodeCount >= 2` or positive duration.
-  - If neither is provided, rejects with status `400` and message `"user must choose episode count or minutes"`.
-  - Deleted the silent `durationMinutes || 1` fallback and deleted the silent split-in-half branch.
-  - `replaceEpisodes` defaults to `false`: `currentSeries.episodes = shouldReplace ? builtEpisodes : [...existing, ...builtEpisodes]`.
-- **Backend Service (`backend/services/ffmpegService.js`)**:
-  - `splitVideoIntoEpisodes`: removed `targetDurationSec = 480` default parameter and added strict assertion throwing if `<= 0`.
+### 2. Implementation Specifications
+1. **Toggle in TimelineToolbar**:
+   - Positioned in `TimelineToolbar.jsx` directly next to the Snap toggle (`Magnet Snap`).
+   - Styled identically to toolbar tools (`className="timeline-pill-tool tool-magnet (active)"`).
+   - Clean text button displaying `Subs ON` (when active) and `Subs OFF` (when hidden). No pill container, no new icon set.
+2. **OFF State Rendering Behavior**:
+   - When OFF, both SUBTITLES 1 and SUBTITLES 2 rows (track headers in `TimelineTrackHeaders.jsx` and track lanes in `TimelineTracksCanvas.jsx`) completely disappear.
+   - The timeline vertically shrinks to `VIDEO` / `VOICE 1` / `VOICE 2` / `CLEAN BGM`.
+   - When ON, both subtitle rows and text clips restore to their exact timeline positions.
+3. **Persistence & Default State**:
+   - Default state on first run is strictly **OFF** (`false`) per user preference.
+   - Persisted in `localStorage` under `TIMELINE_SHOW_SUBTITLES`, surviving page reloads and episode switches.
+4. **VIEW ONLY Hard Boundary**:
+   - Subtitle segment data (`scriptSegments`, `scriptData.segments`) is never mutated.
+   - VideoPlayerPreview subtitle overlay and audio alignment algorithms (`onAutoAlignNoOverlap`, `onResetToSourceTiming`) remain completely unaffected.
+   - Video render & export pipeline (`renderDubbedVideoWithDucking`, `renderVideoApi`) continues to burn subtitles into final MP4 exports regardless of timeline track visibility.
 
 ### 3. Verification Evidence
-1. **Unit & Integration Suite**:
-   - `node --test backend/tests/*.test.js` ➔ **48/48 PASS** (0 failures, 1 skipped).
-   - Created dedicated test suite `backend/tests/episode_split_defaults.test.js` validating static audits, missing parameter rejection, 400 responses, and service error assertions.
-2. **End-to-End Split Flow Verification**:
-   - Initial uploaded video (no split) ➔ exactly 1 episode.
-   - Split request with empty body `{}` ➔ returns 400.
-   - Split request with `{ videoId }` but no duration/count ➔ returns 400 ("user must choose episode count or minutes").
-   - Split 3 episodes with `replaceEpisodes: false` ➔ exactly 3 episodes from real duration appended (1 old + 3 new = 4 episodes).
-   - Re-run split 2 episodes without replace ➔ old episodes intact (4 old + 2 new = 6 episodes).
-   - Re-run split 2 episodes with `replaceEpisodes: true` ➔ existing episodes replaced (exactly 2 episodes).
-3. **Frontend Production Build**:
-   - `npm --prefix frontend run build` ➔ **PASS** (1.35s, 0 errors).
+- **Unit & Static Architecture Suite**:
+  - `node --test backend/tests/*.test.js` ➔ **49/49 PASS** (0 failures, 1 skipped).
+  - Test file `backend/tests/timeline_subtitles_toggle.test.js` verified:
+    1. `localStorage` reading, initial default `false` (OFF), and persistence effect.
+    2. Toolbar text button presence and `Subs ON` / `Subs OFF` text rendering.
+    3. Absence of subtitle headers and lanes when `showSubtitles` is false.
+    4. VIEW-ONLY boundary: `VideoPlayerPreview` and `videoRoutes` export pipeline do not read timeline toggle state.
+- **Frontend Production Build**:
+  - `npm --prefix frontend run build` ➔ **PASS** (1.30s, 0 errors).
 
 ## Active Environment
 - **Backend API**: `http://localhost:5000` (Node.js/Express)
@@ -53,4 +45,4 @@
 - **Git Branch**: `main`
 
 ## Next Steps
-- Ready for full production dubbing and episode management in Studio.
+- Full production voice dubbing and video export testing with hidden/shown subtitle tracks.

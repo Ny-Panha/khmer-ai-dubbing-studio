@@ -26,6 +26,8 @@ export default function TimelineToolbar({
   onResetToSourceTiming = null,
   snappingEnabled = true,
   setSnappingEnabled = null,
+  showSubtitlesTrack = false,
+  setShowSubtitlesTrack = null,
   onAddSegment = null,
   voiceSettings,
   onUpdateVoiceSettings,
@@ -186,6 +188,17 @@ export default function TimelineToolbar({
             >
               <Magnet size={12} />
               <span>{snappingEnabled ? 'Snap ON' : 'Snap OFF'}</span>
+            </button>
+          )}
+
+          {setShowSubtitlesTrack && (
+            <button
+              type="button"
+              onClick={() => setShowSubtitlesTrack(prev => !prev)}
+              className={`timeline-pill-tool ${showSubtitlesTrack ? 'tool-magnet active' : 'tool-magnet'}`}
+              title={showSubtitlesTrack ? "Subtitles Track: ON (ចុចដើម្បីលាក់បន្ទាត់ Subtitles)" : "Subtitles Track: OFF (ចុចដើម្បីបង្ហាញបន្ទាត់ Subtitles)"}
+            >
+              <span>{showSubtitlesTrack ? 'Subs ON' : 'Subs OFF'}</span>
             </button>
           )}
         </div>
