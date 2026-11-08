@@ -356,6 +356,12 @@ function TimelineEditor({
 
   const selectedSegmentIdRef = useRef(selectedSegmentId);
   const lastSyncedInspectorIdRef = useRef(selectedSegmentId);
+  const lastPlayheadSegKeyRef = useRef(null);
+  const followSyncSkippedDueToEditingRef = useRef(false);
+  const scriptSegmentsRef = useRef(scriptSegments);
+  scriptSegmentsRef.current = scriptSegments;
+  const onSelectSegmentRef = useRef(onSelectSegment);
+  onSelectSegmentRef.current = onSelectSegment;
   const lastUserSelectTimeRef = useRef(0);
   const scrubRafRef = useRef(null);
   const pendingScrubTimeRef = useRef(null);
@@ -385,42 +391,111 @@ function TimelineEditor({
     }
   }, []);
 
-  // Auto-follow playhead line |: Update selected segment when playhead is settled (not during playback or scrubbing)
-  useEffect(() => {
-    if (!scriptSegments || scriptSegments.length === 0 || !Number.isFinite(currentTime) || dragState || isScrubbing || isScrubbingRef.current || isPlaying) return;
-
-    // Guard: Do not change selection if user is actively typing in a text field or textarea in the Inspector
-    const isEditingText = Boolean(
-      typeof document !== 'undefined' &&
-      document.activeElement &&
-      (document.activeElement.tagName === 'TEXTAREA' || document.activeElement.tagName === 'INPUT') &&
-      (document.activeElement.closest?.('.top-suite-col-right') || document.activeElement.closest?.('.inspector-card-group') || document.activeElement.closest?.('.clip-inspector-panel'))
+  // Helper to check if user is actively typing in a text field or textarea in the Inspector
+  const isEditingInspectorText = useCallback(() => {
+    if (typeof document === 'undefined') return false;
+    const active = document.activeElement;
+    if (!active) return false;
+    const isText = active.tagName === 'TEXTAREA' || active.tagName === 'INPUT';
+    return Boolean(
+      isText && (active.closest?.('.top-suite-col-right') || active.closest?.('.inspector-card-group') || active.closest?.('.clip-inspector-panel'))
     );
-    if (isEditingText) return;
+  }, []);
+
+  // Auto-follow playhead line |: Update selected segment and Inspector when playhead moves across speaking segments
+  // Runs both during playback and when seeking/paused; preserves manual click selection until playhead crosses into next segment
+  useEffect(() => {
+    if (!scriptSegments || scriptSegments.length === 0 || !Number.isFinite(currentTime) || dragState || isScrubbing || isScrubbingRef.current) return;
+
+    const isEditingText = isEditingInspectorText();
 
     // Resolve segment at currentTime using deterministic boundary logic
     const activeSeg = resolveSegmentAtTime(scriptSegments, currentTime);
 
     if (activeSeg) {
       const segKey = activeSeg._uid || (activeSeg.id !== undefined && activeSeg.id !== null ? activeSeg.id : scriptSegments.indexOf(activeSeg));
-      
-      // Update local timeline highlights so user sees what is playing/active
-      if (String(selectedSegmentIdRef.current) !== String(segKey)) {
-        selectedSegmentIdRef.current = segKey;
-        setSelectedAudioId(segKey);
-        setSelectedSubId(segKey);
-      }
+      const isNewSegment = String(segKey) !== String(lastPlayheadSegKeyRef.current);
 
-      // Sync Inspector to current playhead segment (both during playback and when paused)
-      if (String(lastSyncedInspectorIdRef.current) !== String(segKey)) {
-        lastSyncedInspectorIdRef.current = segKey;
-        if (onSelectSegment) {
-          onSelectSegment(segKey);
+      if (isNewSegment) {
+        // Guard: Do not change selection if user is actively typing in a text field or textarea in the Inspector
+        if (isEditingText) {
+          followSyncSkippedDueToEditingRef.current = true;
+          return;
+        }
+
+        lastPlayheadSegKeyRef.current = segKey;
+
+        // Update local timeline highlights so user sees what is playing/active
+        if (String(selectedSegmentIdRef.current) !== String(segKey)) {
+          selectedSegmentIdRef.current = segKey;
+          setSelectedAudioId(segKey);
+          setSelectedSubId(segKey);
+        }
+
+        // Sync Inspector to current playhead segment (both during playback and when paused)
+        if (String(lastSyncedInspectorIdRef.current) !== String(segKey)) {
+          lastSyncedInspectorIdRef.current = segKey;
+          if (onSelectSegment) {
+            onSelectSegment(segKey);
+          }
         }
       }
+    } else {
+      // In gaps, clear playhead anchor so when next segment begins it is recognized as a new segment
+      lastPlayheadSegKeyRef.current = null;
     }
     // In gaps, preserve current selection so Inspector never disappears unexpectedly
-  }, [currentTime, scriptSegments, dragState, isScrubbing, isPlaying, onSelectSegment]);
+  }, [currentTime, scriptSegments, dragState, isScrubbing, isPlaying, onSelectSegment, isEditingInspectorText]);
+
+  // Catch-up after editing: If follow-sync was skipped because user was typing in the Inspector,
+  // catch up to the current playhead segment on blur/focusout even while paused
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+
+    const handleFocusOut = (e) => {
+      const target = e.target;
+      if (!target || (target.tagName !== 'TEXTAREA' && target.tagName !== 'INPUT')) return;
+      if (!(target.closest?.('.top-suite-col-right') || target.closest?.('.inspector-card-group') || target.closest?.('.clip-inspector-panel'))) {
+        return;
+      }
+
+      // Small delay (50ms) to allow activeElement to settle in case focus moved to another Inspector input
+      setTimeout(() => {
+        if (isEditingInspectorText()) return;
+
+        if (followSyncSkippedDueToEditingRef.current) {
+          followSyncSkippedDueToEditingRef.current = false;
+
+          const currentT = Number.isFinite(currentTimeRef.current) ? currentTimeRef.current : 0;
+          const currentSegs = scriptSegmentsRef.current || [];
+          const activeSeg = resolveSegmentAtTime(currentSegs, currentT);
+
+          if (activeSeg) {
+            const segKey = activeSeg._uid || (activeSeg.id !== undefined && activeSeg.id !== null ? activeSeg.id : currentSegs.indexOf(activeSeg));
+            lastPlayheadSegKeyRef.current = segKey;
+
+            if (String(selectedSegmentIdRef.current) !== String(segKey)) {
+              selectedSegmentIdRef.current = segKey;
+              setSelectedAudioId(segKey);
+              setSelectedSubId(segKey);
+            }
+
+            if (String(lastSyncedInspectorIdRef.current) !== String(segKey)) {
+              lastSyncedInspectorIdRef.current = segKey;
+              if (onSelectSegmentRef.current) {
+                onSelectSegmentRef.current(segKey);
+              }
+            }
+          }
+        }
+      }, 50);
+    };
+
+    document.addEventListener('focusout', handleFocusOut);
+    return () => {
+      document.removeEventListener('focusout', handleFocusOut);
+    };
+  }, [isEditingInspectorText]);
 
   const totalDuration = React.useMemo(() => {
     const clipsMax = (videoClips || []).reduce((max, c) => Math.max(max, Number(c.end) || 0), 0);
@@ -508,6 +583,7 @@ function TimelineEditor({
     if (isLocked) return;
 
     const segKey = seg._uid || (seg.id !== undefined && seg.id !== null ? seg.id : idx);
+    followSyncSkippedDueToEditingRef.current = false;
     selectedSegmentIdRef.current = segKey;
     lastSyncedInspectorIdRef.current = segKey;
     lastUserSelectTimeRef.current = Date.now();
@@ -553,6 +629,7 @@ function TimelineEditor({
     if (isLocked) return;
 
     const subKey = seg._uid || (seg.id !== undefined && seg.id !== null ? seg.id : idx);
+    followSyncSkippedDueToEditingRef.current = false;
     selectedSegmentIdRef.current = subKey;
     lastSyncedInspectorIdRef.current = subKey;
     lastUserSelectTimeRef.current = Date.now();
@@ -601,6 +678,7 @@ function TimelineEditor({
     const isLocked = Boolean(lockedTracks[`video_${clipRow}`] || (clipRow === 0 && lockedTracks.video));
     if (isLocked) return;
 
+    followSyncSkippedDueToEditingRef.current = false;
     lastUserSelectTimeRef.current = Date.now();
     setLastSelectedType('video');
     if (onSelectClip) onSelectClip(clip.id);
@@ -1003,18 +1081,14 @@ function TimelineEditor({
         // Ensure final pointer seek is committed synchronously to Player
         performScrub(finalTime);
 
-        const isEditingText = Boolean(
-          typeof document !== 'undefined' &&
-          document.activeElement &&
-          (document.activeElement.tagName === 'TEXTAREA' || document.activeElement.tagName === 'INPUT') &&
-          (document.activeElement.closest?.('.top-suite-col-right') || document.activeElement.closest?.('.inspector-card-group') || document.activeElement.closest?.('.clip-inspector-panel'))
-        );
+        const isEditingText = isEditingInspectorText();
 
         if (!isEditingText) {
           const matchedSeg = resolveSegmentAtTime(scriptSegments, finalTime);
           if (matchedSeg) {
             const segKey = matchedSeg._uid || (matchedSeg.id !== undefined && matchedSeg.id !== null ? matchedSeg.id : scriptSegments.indexOf(matchedSeg));
             selectedSegmentIdRef.current = segKey;
+            lastPlayheadSegKeyRef.current = segKey;
             setSelectedAudioId(segKey);
             setSelectedSubId(segKey);
             if (String(lastSyncedInspectorIdRef.current) !== String(segKey)) {
@@ -1024,6 +1098,7 @@ function TimelineEditor({
           } else {
             // Gap: No dialogue segment at final playhead time
             selectedSegmentIdRef.current = null;
+            lastPlayheadSegKeyRef.current = null;
             setSelectedAudioId(null);
             setSelectedSubId(null);
             if (lastSyncedInspectorIdRef.current !== null) {

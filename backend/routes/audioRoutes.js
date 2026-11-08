@@ -205,6 +205,21 @@ router.post("/generate-audio", async (req, res) => {
 
     // ករណីទី 1: Single Segment Regeneration (1-Click Inspector)
     if (segment && typeof segment === "object") {
+      const rawText = segment.khmer || segment.khmerText || segment.khmerTranslatedText || segment.text || "";
+      const textToSpeak = typeof rawText === "string" ? rawText.trim() : "";
+      if (!textToSpeak) {
+        const segNum = segment.index || segment.id || "";
+        const emptyMsg = segNum
+          ? `Segment #${segNum} គ្មានអត្ថបទខ្មែរទេ — សូមបកប្រែ ឬវាយអត្ថបទសិន`
+          : "គ្មានអត្ថបទខ្មែរទេ — សូមបកប្រែ ឬវាយអត្ថបទសិន";
+        console.warn(`[TTS 400 Guard] ${emptyMsg}`);
+        return res.status(400).json({
+          success: false,
+          error: emptyMsg,
+          message: emptyMsg,
+        });
+      }
+
       const segGender = segment.voiceGender || segment.gender || segment.speakerGender || detectSpeakerGender(segment.speaker, segment.gender, segment.khmer || segment.khmerText);
       const requestedVoice = req.body.voiceId || voiceId;
       const targetVoice = requestedVoice
@@ -446,6 +461,9 @@ router.post("/generate-audio", async (req, res) => {
     res.status(400).json({ success: false, error: "សូមបញ្ជូន segment ឬ segments!" });
   } catch (err) {
     console.error("TTS Error:", err);
+    if (err.message && (err.message.includes("Empty text") || err.message.includes("ទទេ"))) {
+      return res.status(400).json({ success: false, error: err.message, message: err.message });
+    }
     res.status(500).json({ success: false, error: err.message });
   }
 });
