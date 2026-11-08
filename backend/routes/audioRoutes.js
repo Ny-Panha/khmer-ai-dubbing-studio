@@ -297,6 +297,9 @@ router.post("/generate-audio", async (req, res) => {
                 targetEp.scriptData.segments[segIdx] = {
                   ...targetEp.scriptData.segments[segIdx],
                   ...updatedSegment,
+                  audioOffset: 0,
+                  audioTrimmed: false,
+                  userTrimmed: false,
                 };
               }
               if (fullAudioUrl) {

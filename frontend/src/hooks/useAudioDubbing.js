@@ -226,6 +226,9 @@ const FALLBACK_VOICE_CATALOG = {
         const finalSegments = [...newSegments];
         finalSegments[segIdx] = {
           ...regenerated,
+          audioOffset: 0,
+          audioTrimmed: false,
+          userTrimmed: false,
           speed: newSpeed,
           userCustomSpeed: true,
           audioOutdated: false,
@@ -577,6 +580,9 @@ const FALLBACK_VOICE_CATALOG = {
           const merged = {
             ...currentItem,
             ...regenerated,
+            audioOffset: 0,
+            audioTrimmed: false,
+            userTrimmed: false,
             audioUrl: cacheBustedUrl,
             khmer: newText,
             khmerText: newText,
@@ -1067,6 +1073,9 @@ const FALLBACK_VOICE_CATALOG = {
         const merged = {
           ...currentItem,
           ...updatedSeg,
+          audioOffset: 0,
+          audioTrimmed: false,
+          userTrimmed: false,
           khmer: textToUse,
           khmerText: textToUse,
           khmerTranslatedText: textToUse,

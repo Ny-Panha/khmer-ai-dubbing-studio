@@ -1227,7 +1227,6 @@ function renderDubbedVideoWithDucking(options = {}) {
         const label = `v${inputIndex}`;
 
         let segDur = Number(seg.duration || seg.audioDurationSec || 2.5);
-        const audioOffset = typeof seg.audioOffset === "number" && !isNaN(seg.audioOffset) ? seg.audioOffset : 0;
         let trimDur = null;
         if (seg.audioTrimmed && typeof seg.audioEndSec === "number" && typeof seg.audioStartSec === "number" && seg.audioEndSec > seg.audioStartSec) {
           trimDur = Math.max(0.1, parseFloat((seg.audioEndSec - seg.audioStartSec).toFixed(3)));
@@ -1236,6 +1235,8 @@ function renderDubbedVideoWithDucking(options = {}) {
           trimDur = seg.audioDurationSec;
           segDur = trimDur;
         }
+        const rawOffset = typeof seg.audioOffset === "number" && !isNaN(seg.audioOffset) ? seg.audioOffset : 0;
+        const audioOffset = (trimDur && rawOffset >= trimDur) ? 0 : Math.max(0, rawOffset);
 
         const segEnd = segStart + segDur;
         const nextOverlap = validSegments.slice(index + 1).find((next) => {
@@ -1947,11 +1948,12 @@ function createSynchronizedNarrationAudio(segments, outputAudioPath, options = {
       const secVal = resolveSegmentStartSec(validSegs[0], 0);
       const startMs = Math.max(0, Math.round(secVal * 1000));
       const seg0 = validSegs[0];
-      const audioOffset = typeof seg0.audioOffset === "number" && !isNaN(seg0.audioOffset) ? seg0.audioOffset : 0;
+      const rawOffset = typeof seg0.audioOffset === "number" && !isNaN(seg0.audioOffset) ? seg0.audioOffset : 0;
       let dur = typeof seg0.audioDurationSec === "number" && !isNaN(seg0.audioDurationSec) ? seg0.audioDurationSec : (typeof seg0.durSec === "number" ? seg0.durSec : null);
       if (seg0.audioTrimmed && typeof seg0.audioEndSec === "number" && typeof seg0.audioStartSec === "number" && seg0.audioEndSec > seg0.audioStartSec) {
         dur = Math.max(0.1, parseFloat((seg0.audioEndSec - seg0.audioStartSec).toFixed(3)));
       }
+      const audioOffset = (dur && rawOffset >= dur) ? 0 : Math.max(0, rawOffset);
       let trimPrefix = "";
       if (dur > 0 && (seg0.audioTrimmed || seg0.userTrimmed || audioOffset > 0)) {
         trimPrefix = `atrim=start=${audioOffset}:duration=${dur},asetpts=PTS-STARTPTS,`;
@@ -2007,8 +2009,9 @@ function createSynchronizedNarrationAudio(segments, outputAudioPath, options = {
             const startMs = Math.max(0, Math.round(seg.startSec * 1000));
             const nextOverlap = preparedSegs.slice(idx + 1).find((next) => next.startSec > seg.startSec && next.startSec < seg.endSec);
             let filterChain = "";
-            const audioOffset = typeof seg.audioOffset === "number" && !isNaN(seg.audioOffset) ? seg.audioOffset : 0;
+            const rawOffset = typeof seg.audioOffset === "number" && !isNaN(seg.audioOffset) ? seg.audioOffset : 0;
             const dur = typeof seg.durSec === "number" && !isNaN(seg.durSec) ? seg.durSec : null;
+            const audioOffset = (dur && rawOffset >= dur) ? 0 : Math.max(0, rawOffset);
 
             let trimPrefix = "";
             if (dur > 0 && (seg.audioTrimmed || seg.userTrimmed || audioOffset > 0)) {

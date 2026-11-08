@@ -1,8 +1,36 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
-- **Environment**: Antigravity IDE (Timeline Audio Strict No-Overlap Clamp & Edge Snapping)
-- **Timestamp**: 2026-11-08T19:44:00+07:00
+- **Environment**: Antigravity IDE (Regenerated Split Segment Audio Playback Fix - audioOffset Reset & Clamping)
+- **Timestamp**: 2026-11-08T20:02:00+07:00
+
+## Latest Update: Regenerate Audio on Split Segment Audio Offset Reset & Zero-Playback Guard
+
+### Problem Description
+- **Symptom**: After splitting a segment on the timeline, Segment #2 was assigned an `audioOffset` (e.g. `3.83`s) to slice from the parent's audio file.
+- When Nha clicked "Generate ឡើងវិញ" (regenerate audio) on Segment #2, a fresh TTS audio file (`ep_ep_2_seg_2_...mp3`, duration `3.672`s) was generated starting from `0.00`s.
+- However, neither `useAudioDubbing.js`, `audioRoutes.js`, nor `ttsService.js` reset `audioOffset: 0` or `audioTrimmed: false`.
+- As a result:
+  1. `VideoPlayerPreview.jsx` sought the player to `3.83s` inside a `3.672s` file, immediately hitting EOF and pausing into complete silence.
+  2. `createSynchronizedNarrationAudio` in `ffmpegService.js` ran `atrim=start=3.83:duration=3.672`, generating 0 bytes of narration audio.
+  3. Video export also trimmed starting from `3.83s`, rendering silent audio in the final exported video.
+
+### Root Cause & Resolution
+1. **Reset on Regeneration (`backend/services/ttsService.js`)**:
+   - In `generateSingleSegmentAudio`, explicitly reset `audioOffset: 0`, `audioTrimmed: false`, `userTrimmed: false`.
+2. **Backend Route Persistence (`backend/routes/audioRoutes.js`)**:
+   - In `series.json` update handler, persist `audioOffset: 0, audioTrimmed: false, userTrimmed: false` for the updated segment.
+3. **Frontend Dubbing Hook (`frontend/src/hooks/useAudioDubbing.js`)**:
+   - In `handleRegenerateSingleSegment`, `handleAutoRegenerateSegmentAudio`, and `handleChangeSpeed`, explicitly set `audioOffset: 0, audioTrimmed: false, userTrimmed: false` on the merged segment.
+4. **Defensive Player & FFmpeg Clamping (`frontend/src/components/VideoPlayerPreview.jsx`, `backend/services/ffmpegService.js`)**:
+   - If `audioOffset >= audioDurationSec`, defensively clamp `audioOffset` to `0` so stale/corrupted offset data can never cause silent playback or trimmed empty audio in player or export.
+5. **Project EP2 Data Fixed & Master Narration Resynced**:
+   - Updated `backend/uploads/projects/series_1793898268958/series.json` EP2 Segment #2 with `audioOffset: 0`, `audioTrimmed: false`.
+   - Successfully re-synced `ep_2_narration_khmer.mp3` with all 502 segments.
+
+### Verification & Tests
+- `backend/tests/regenerate_split_audio_offset_reset.test.js` ➔ 3 passed, 0 failed.
+- `npm --prefix frontend run build` ➔ Vite build succeeded in 1.40s.
 
 ## Latest Update: Strict Audio No-Overlap Clamp & Magnetic Edge Snapping on Timeline Tracks
 

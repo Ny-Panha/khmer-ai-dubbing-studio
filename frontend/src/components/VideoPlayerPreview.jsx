@@ -379,7 +379,9 @@ function VideoPlayerPreview({
 
       const effectiveVol = isOverlappedByNext ? parseFloat((targetVol * 0.50).toFixed(2)) : targetVol;
 
-      const segAudioOffset = (typeof seg.audioOffset === 'number' && !isNaN(seg.audioOffset)) ? seg.audioOffset : 0;
+      const rawOffset = (typeof seg.audioOffset === 'number' && !isNaN(seg.audioOffset)) ? seg.audioOffset : 0;
+      // Stale offset safety guard: if offset >= segDur, clip was newly regenerated or offset is invalid -> fallback to 0
+      const segAudioOffset = (segDur > 0 && rawOffset >= segDur) ? 0 : Math.max(0, rawOffset);
       const segAudioEndLimit = (isTrimmed && typeof seg.audioDurationSec === 'number')
         ? (segAudioOffset + seg.audioDurationSec)
         : (isTrimmed && typeof seg.audioEndSec === 'number' && typeof seg.audioStartSec === 'number'

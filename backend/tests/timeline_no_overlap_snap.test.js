@@ -111,3 +111,4 @@ test('Timeline Simulation: Audio clips on the same track never overlap and snap 
   assert.equal(rightViolentDrag.newEnd, 6.00, 'Clip #2 right edge must clamp to Clip #3 start (6.00)');
   assert.equal(rightViolentDrag.newStart, parseFloat((6.00 - clip2Dur).toFixed(2)));
 });
+
