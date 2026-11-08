@@ -44,3 +44,4 @@ test('Timeline Subtitles Toggle: Static Architecture & VIEW-ONLY Boundary Audit'
   assert.ok(!routesCode.includes('TIMELINE_SHOW_SUBTITLES'), 'Backend render pipeline must NOT read timeline toggle state');
   assert.ok(routesCode.includes('burnSubtitles: Boolean(burnSubtitles)'), 'Backend export pipeline burns subtitles regardless of timeline track visibility');
 });
+

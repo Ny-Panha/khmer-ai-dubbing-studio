@@ -17,7 +17,8 @@ export const DEFAULT_VOICE_SETTINGS = {
   burnSubtitles: true,
   subtitleColor: 'white',
   subtitleSize: 'medium',
-  aspectRatio: '16:9',
+  aspectRatio: null,
+  verticalStyle: 'pad',
   enableAntiTheft: false,
   marqueeText: '«ហាមផុសបន្ត • សូមឱ្យតម្លៃលើការខិតខំរបស់ម្ចាស់ដើម»',
   marqueeSpeed: 'normal',
@@ -35,6 +36,22 @@ export const DEFAULT_VOICE_SETTINGS = {
   logoShape: 'circle',
   logoMargin: 20,
 };
+
+/**
+ * Determine default export aspect ratio based on source video dimensions.
+ * Portrait (height > width) -> '9:16'
+ * Landscape (width > height) -> '16:9'
+ * Square (width === height) -> '1:1'
+ * Returns null if dimensions are missing/invalid.
+ */
+export function resolveDefaultAspectRatio(width, height) {
+  const w = Number(width) || 0;
+  const h = Number(height) || 0;
+  if (!w || !h) return null;
+  if (h > w) return '9:16';
+  if (w > h) return '16:9';
+  return '1:1';
+}
 
 /**
  * Load saved voice settings from localStorage
@@ -826,44 +843,48 @@ export function deleteEpisodeFromSeries(seriesId, episodeId) {
   if (sIdx === -1) return false;
 
   const series = list[sIdx];
-  if ((series.episodes || []).length <= 1) {
-    return false;
-  }
 
-  series.episodes = series.episodes.filter((e) => String(e.id) !== String(episodeId));
+  series.episodes = (series.episodes || []).filter((e) => String(e.id) !== String(episodeId));
 
-  // Renumber remaining episodes sequentially (1..N)
-  series.episodes.forEach((ep, idx) => {
-    const newNum = idx + 1;
-    const oldNum = ep.episodeNumber;
-    ep.episodeNumber = newNum;
+  // If the only episode was deleted, create a fresh empty EP1 so the series remains valid
+  if (series.episodes.length === 0) {
+    const freshEp = createDefaultEpisode(1, 'ភាគទី ១ (EP1)', null, []);
+    series.episodes = [freshEp];
+    setActiveEpisodeId(freshEp.id);
+  } else {
+    // Renumber remaining episodes sequentially (1..N)
+    series.episodes.forEach((ep, idx) => {
+      const newNum = idx + 1;
+      const oldNum = ep.episodeNumber;
+      ep.episodeNumber = newNum;
 
-    const isGeneric = !ep.title ||
-      new RegExp(`^ភាគទី\\s*${oldNum}\\s*\\(EP${oldNum}\\)$`, 'i').test(ep.title.trim()) ||
-      /^ភាគទី\s*[\d០-៩]+\s*\(EP[\d០-៩]+\)$/i.test(ep.title.trim()) ||
-      /^\(EP[\d០-៩]+\)$/i.test(ep.title.trim()) ||
-      /^ភាគទី\s*[\d០-៩]+$/i.test(ep.title.trim()) ||
-      /^Episode\s*[\d]+$/i.test(ep.title.trim());
+      const isGeneric = !ep.title ||
+        new RegExp(`^ភាគទី\\s*${oldNum}\\s*\\(EP${oldNum}\\)$`, 'i').test(ep.title.trim()) ||
+        /^ភាគទី\s*[\d០-៩]+\s*\(EP[\d០-៩]+\)$/i.test(ep.title.trim()) ||
+        /^\(EP[\d០-៩]+\)$/i.test(ep.title.trim()) ||
+        /^ភាគទី\s*[\d០-៩]+$/i.test(ep.title.trim()) ||
+        /^Episode\s*[\d]+$/i.test(ep.title.trim());
 
-    if (isGeneric) {
-      ep.title = `ភាគទី ${newNum} (EP${newNum})`;
-      ep.displayTitle = ep.title;
-    } else if (typeof ep.title === 'string' && /^(?:ភាគទី|ភាគ|EP|Episode)\s*[:#\s]*\d+\s*[:\-\s]*/i.test(ep.title)) {
-      const rest = ep.title.replace(/^(?:ភាគទី|ភាគ|EP|Episode)\s*[:#\s]*\d+\s*[:\-\s]*/i, '').trim();
-      ep.title = `ភាគទី ${newNum}: ${rest}`;
-      if (ep.displayTitle) {
-        const restDisplay = ep.displayTitle.replace(/^(?:ភាគទី|ភាគ|EP|Episode)\s*[:#\s]*\d+\s*[:\-\s]*/i, '').trim();
-        ep.displayTitle = `ភាគទី ${newNum}: ${restDisplay}`;
+      if (isGeneric) {
+        ep.title = `ភាគទី ${newNum} (EP${newNum})`;
+        ep.displayTitle = ep.title;
+      } else if (typeof ep.title === 'string' && /^(?:ភាគទី|ភាគ|EP|Episode)\s*[:#\s]*\d+\s*[:\-\s]*/i.test(ep.title)) {
+        const rest = ep.title.replace(/^(?:ភាគទី|ភាគ|EP|Episode)\s*[:#\s]*\d+\s*[:\-\s]*/i, '').trim();
+        ep.title = `ភាគទី ${newNum}: ${rest}`;
+        if (ep.displayTitle) {
+          const restDisplay = ep.displayTitle.replace(/^(?:ភាគទី|ភាគ|EP|Episode)\s*[:#\s]*\d+\s*[:\-\s]*/i, '').trim();
+          ep.displayTitle = `ភាគទី ${newNum}: ${restDisplay}`;
+        }
       }
+    });
+
+    if (String(getActiveEpisodeId()) === String(episodeId)) {
+      setActiveEpisodeId(series.episodes[0].id);
     }
-  });
+  }
 
   list[sIdx] = series;
   saveSeriesList(list);
-
-  if (String(getActiveEpisodeId()) === String(episodeId)) {
-    setActiveEpisodeId(series.episodes[0].id);
-  }
 
   // Background sync delete on backend
   try {

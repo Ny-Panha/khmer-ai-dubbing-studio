@@ -72,6 +72,8 @@ async function previewAndExport({
     outputPath: assPath,
     textColor: exportOptions.subtitleColor || '#FFFFFF',
     fontSize: exportOptions.subtitleSize || 52,
+    aspectRatio: exportOptions.aspectRatio || '16:9',
+    verticalStyle: exportOptions.verticalStyle || 'pad',
   });
 
   generateSrtFile(segments, srtPath);
@@ -109,7 +111,11 @@ async function previewAndExport({
         srtSubtitlePath: srtPath,
         textColor: exportOptions.subtitleColor || '#FFFFFF',
         fontSize: exportOptions.subtitleSize || 52,
+        aspectRatio: exportOptions.aspectRatio || '16:9',
+        verticalStyle: exportOptions.verticalStyle || 'pad',
       },
+      aspectRatio: exportOptions.aspectRatio,
+      verticalStyle: exportOptions.verticalStyle || 'pad',
       burnSubtitles: exportOptions.burnSubtitles !== false,
       bgVolume: exportOptions.bgVolume ?? exportOptions.duckingVolume ?? 0.15,
       duckingVolume: exportOptions.duckingVolume ?? exportOptions.bgVolume ?? 0.15,

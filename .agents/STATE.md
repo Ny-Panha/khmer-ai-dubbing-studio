@@ -1,48 +1,78 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
-- **Environment**: Antigravity IDE (Stage 3 Change-Driven & Double-Read Subtitle Detection)
-- **Timestamp**: 2026-11-08T16:32:00+07:00
+- **Environment**: Antigravity IDE (Export Format Follows Source Video + 9:16 Full-Bleed Center Crop)
+- **Timestamp**: 2026-11-08T16:55:00+07:00
 
-## Latest Update: Change-Driven Sampling & Double-Read Verification for Stage 3 Subtitles
+## Latest Update: Export Format Follows Source Video & Full-Bleed 9:16 Crop Style
 
-### 1. User Intent & Problem
-- **Core Problem**: Previously, `stage3_extractChineseSubtitles.js` sampled frames at a fixed ~0.75s-1.0s grid and read each frame once via Gemini Vision.
-  - Short cues (~0.6s - 1.0s) were sampled once; single-read errors flowed unverified into translation (especially in fast_ocr mode where no cross-checking existed).
-  - Fixed-interval sampling wasted API calls on static scenes and lacked precise boundary alignment.
-- **Goals**:
-  - **STEP 1 — Change-Driven Sampling**: Local FFmpeg pre-pass (zero API calls) extracting bottom 30% strip at ~5 fps (`crop=iw:ih*0.3:0:ih*0.7`, `scale=128:32`, `format=gray`). Subtitle band (`rows 8..28, cols 16..112`) identifies change points. Candidate frames sampled shortly after change points (`sampleASec`) + mid-cue (`sampleBSec`) + baseline safety net (drops on static scenes).
-  - **STEP 2 — Double-Read Verification**: Each cue's text is verified across two frames (`sampleASec` and `sampleBSec`). If equivalent (`areChineseTextsEquivalent`) $\to$ accept with `ocrConfidence: 'high'`. If disagreement $\to$ tie-break read (`sampleTieSec`). If still unresolved $\to$ preserve majority/first read and flag with `ocrConfidence: 'low'`, `reviewNeeded: true`, `ocrDisagreement: true` (never silently hide disagreements).
-  - **STEP 3 — Boundaries from Change Points**: Cue `[startSec, endSec]` snap directly to detected change points ($\pm 0.00$s drift on Ep2), followed by continuous deduplication.
+### 1. Step 0 Trace & Findings
+- **Data Flow Trace**:
+  - `stage2_analyzeSourceMedia.js` extracts `{ width, height, aspectRatio, resolution }` via `getVideoMetadata(inputVideoPath)`.
+  - `episodePipelineOrchestrator.js` attaches `mediaAnalysis` to checkpoints and persists `metadata: { width, height, resolution, fps, durationSec }` and `video: { width, height, resolution }` in `series.json`.
+  - `backend/routes/videoRoutes.js` (`/api/video-metadata` and `/api/split-video-episodes`) extracts and returns probed `width, height, resolution` instead of hardcoded 1080p.
+  - `frontend/src/hooks/useWorkspaceMedia.js` queries `/api/video-metadata` and sets `selectedVideo` and `videoMetadata` with probed `{ width, height, resolution }`.
+  - `frontend/src/hooks/useSeriesManager.js` preserves `width, height, resolution` on `episode.video` and `episode.metadata`.
+  - Exact paths used: `videoMetadata.width/height`, `selectedVideo.width/height`, `activeEpisode.metadata.width/height`, `activeEpisode.video.width/height`.
 
-### 2. Implementation Modifications
-1. **`backend/services/ffmpegService.js`**:
-   - Upgraded `extractSubtitleDifferenceGrid` with generous crop `crop=iw:ih*0.3:0:ih*0.7`, `scale=128:32`, `fps=5.0`, computing both full-strip `diff` and centered subtitle band `subDiff`.
-   - Exported `detectSubtitleChangePoints(inputVideoPath, startSec, durationSec, fps = 5.0)` returning `{ changePoints, cueStates, frameDiffs }` with candidate cues having `sampleASec`, `sampleBSec`, and `sampleTieSec`.
-2. **`backend/services/pipeline/stages/stage3_extractChineseSubtitles.js`**:
-   - Integrated `detectSubtitleChangePoints` into the pre-pass.
-   - Candidate frame scheduling prioritizing `sampleASec` and `sampleBSec` per candidate cue with safe gap deduplication (`minGap = 0.12s`), plus baseline safety net for unsampled gaps and sparse anchors on static scenes.
-   - Implemented Step 2 Double-Read verification with tie-break batch execution on disagreement.
-   - Preserved `ocrConfidence`, `reviewNeeded`, `ocrDisagreement`, `uncertainOcr` throughout `visualSegments` and `deduplicateFastOcrCues`.
-3. **`backend/tests/stage3_change_driven_double_read.test.js`**:
-   - Created formal test suite verifying change-point calculation, double-read equivalence/rejection, short cue (<0.8s) discovery, and flag propagation in `deduplicateFastOcrCues`.
+### 2. Implementation Summary
+1. **Frontend (`frontend/src/`)**:
+   - `utils/projectStorage.js`:
+     - Changed default `aspectRatio: '16:9'` to `aspectRatio: null`, added `verticalStyle: 'pad'`.
+     - Exported `resolveDefaultAspectRatio(width, height)`:
+       - `height > width` $\to$ `'9:16'` (portrait)
+       - `width > height` $\to$ `'16:9'` (landscape)
+       - `width === height` $\to$ `'1:1'` (square)
+       - Missing/zero $\to$ `null` (triggers last-resort fallback with warning).
+   - `services/api.js`:
+     - In `renderVideoApi`, removed blanket `'16:9'` default. Defaults to `null`, resolves dynamically from source dimensions, falls back to `'16:9'` with console warning only if metadata missing.
+   - `hooks/useVideoRender.js`:
+     - Resolves `effectiveAspectRatio` from source video metadata or active episode metadata. Passes `aspectRatio` and `verticalStyle` to `/api/render-video`.
+   - `components/voice/ExportSettingsPanel.jsx`:
+     - Receives `videoMetadata` and `activeEpisode`.
+     - Displays explainable source hint next to Aspect Ratio dropdown: `Source: 1080×1920 — vertical` or `Source: 1920×1080 — horizontal`.
+     - Displays conditional **Vertical Framing Style** selector when `effectiveAspectRatio === '9:16'`:
+       - `Pad — black bars, full frame visible` (default cinema letterbox)
+       - `Crop — full-bleed center crop` (full phone screen, no bars).
+   - `components/VoiceSettings.jsx` & `App.jsx`:
+     - Wired `videoMetadata` and `activeEpisode` props down to `ExportSettingsPanel`.
 
-### 3. Verification Evidence & Metrics
-- **Known Ep2 Window 00:39 - 00:48 (10.0s window, 38.0s - 48.0s)**:
-  - All 6 ground-truth dialogue cues detected with **$\Delta = 0.00$s** boundary drift:
-    1. `老子要`: detected=[39.80s - 41.20s], target=[39.80s - 41.20s] ($\Delta\text{start}=0.00$s, $\Delta\text{end}=0.00$s)
-    2. `你凭什么`: detected=[41.20s - 42.20s], target=[41.20s - 42.20s] ($\Delta\text{start}=0.00$s, $\Delta\text{end}=0.00$s)
-    3. `替一个伪神者`: detected=[42.20s - 42.80s], target=[42.20s - 42.80s] ($\Delta\text{start}=0.00$s, $\Delta\text{end}=0.00$s, Duration: 0.60s < 0.8s!)
-    4. `挑战神堂`: detected=[42.80s - 43.80s], target=[42.80s - 43.80s] ($\Delta\text{start}=0.00$s, $\Delta\text{end}=0.00$s)
-    5. `凭什么`: detected=[43.80s - 45.20s], target=[43.80s - 45.20s] ($\Delta\text{start}=0.00$s, $\Delta\text{end}=0.00$s)
-    6. `凭他是老子的崽`: detected=[45.20s - 46.80s], target=[45.20s - 46.80s] ($\Delta\text{start}=0.00$s, $\Delta\text{end}=0.00$s)
-  - Ground Truth Accuracy: **6/6 (100% PASS)**.
-  - Short Cue (<0.8s) Verified: `"替一个伪神者"` at [42.20s - 42.80s] (0.60s preserved, not clamped).
-- **Frame Counts Before / After on Test Episode (Ep 2, 187.338s)**:
-  - **Old Method**: 150 frames (single read, fixed-interval grid).
-  - **New Change-Driven Method**: 178 frames (118.7% of baseline, strictly within $\le 120\%$ limit; drops by $>75\%$ on static scenes).
-- **Backend Test Suite**:
-  - `node --test backend/tests/*.test.js` ➔ **52/52 PASS** (0 failures, 1 skipped).
+2. **Backend (`backend/`)**:
+   - `services/ffmpegService.js`:
+     - In `renderDubbedVideoWithDucking`:
+       - Resolves `targetAspectRatio` from `sourceDimensions` when not explicitly specified (no manual select).
+       - In `9:16` Crop mode: applies `scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920:(in_w-1080)/2:(in_h-1920)/2,setsar=1`.
+       - In `9:16` Pad mode: applies `scale=1080:-2:force_original_aspect_ratio=decrease,pad=1080:1920:(1080-iw)/2:(1920-ih)/2:color=black,setsar=1`.
+       - In `16:9` manual override on vertical source: applies `scale=-2:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(1920-iw)/2:(1080-ih)/2:color=black,setsar=1`.
+       - In `1:1` manual override: applies `scale=1080:1080:force_original_aspect_ratio=decrease,pad=1080:1080:(1080-iw)/2:(1080-ih)/2:color=black,setsar=1`.
+       - Dynamically checks `isVideoFiltered` to prevent `Streamcopy requested for output stream fed from a complex filtergraph` error.
+       - Adjusts watermark logo topMargin in 9:16 pad mode (`656 + baseMargin`) vs crop mode (`baseMargin`).
+     - In `generateKhmerAssSubtitleFile`:
+       - In `9:16` Crop mode or naturally vertical video: uses `PlayResX: 1080, PlayResY: 1920`, `effFontSize = 44`, `effMarginV = 130` (or 180 when marquee is bottom). Subtitle bounding box sits safely inside the 1080-width canvas with 60px side margins, never cut at sides.
+       - In `9:16` Pad mode with landscape source: keeps `effMarginV = 720` to center subtitles on the letterbox video band.
+   - `routes/videoRoutes.js`:
+     - In `/api/render-video`: Reads `rawAspectRatio` and `verticalStyle`. Auto-detects aspect ratio from video metadata if omitted or empty.
+     - In `/api/split-video-episodes`: Uses probed metadata width/height instead of hardcoded 1920x1080.
+
+### 3. Verification Results (a)-(e)
+All 5 required verification scenarios tested end-to-end with FFmpeg and ffprobe:
+- **(a) Vertical source episode, no manual select**:
+  - Source: 1080×1920 vertical video
+  - Export: **1080×1920** (DAR 9:16) — **PASS**
+- **(b) Landscape source, no manual select**:
+  - Source: 1920×1080 Ep2 landscape video
+  - Export: **1920×1080** (DAR 16:9) — **PASS**
+- **(c) Landscape source + 9:16 Pad**:
+  - Export: **1080×1920** with top & bottom black cinema bars, full frame visible — **PASS**
+- **(d) Landscape source + 9:16 Crop**:
+  - Export: **1080×1920** full-bleed (zero black bars), frame centre-filled, Khmer subtitle burned at 00:41 with pristine readability inside safe margins — **PASS**
+- **(e) Manual select overrides source default**:
+  - (e1) Vertical source + manual 16:9 $\to$ **1920×1080** (pillarbox pad) — **PASS**
+  - (e2) Landscape source + manual 9:16 $\to$ **1080×1920** (center crop) — **PASS**
+
+### 4. Test Suite & Build Status
+- **Frontend Build**: `npm --prefix frontend run build` ➔ **PASS** (0 errors, 1.05s).
+- **Backend Test Suite**: `node --test backend/tests/*.test.js` ➔ **54 PASS, 0 FAIL, 1 SKIPPED**.
 
 ## Active Environment
 - **Backend API**: `http://localhost:5000` (Node.js/Express)
@@ -50,4 +80,4 @@
 - **Git Branch**: `main`
 
 ## Next Steps
-- Production pipeline test with full dubbing workflow (Stage 1 to Stage 10) on newly imported series episodes.
+- Production pipeline test with full dubbing workflow on diverse portrait/landscape drama episodes.

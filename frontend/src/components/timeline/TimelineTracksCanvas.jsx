@@ -1,7 +1,8 @@
 import React from 'react';
-import { Upload, Volume2, VolumeX } from 'lucide-react';
+import { Upload, Volume2, VolumeX, Film } from 'lucide-react';
 import { formatTimecode, parseTimeToSeconds, formatMinSec } from '../../utils/formatTime';
 import { findAssociatedSegmentIndices } from '../../utils/timelineUtils';
+import { uploadVideoFile } from '../../services/api';
 
 function TimelineTracksCanvas({
   scrollContainerRef = null,
@@ -50,11 +51,41 @@ function TimelineTracksCanvas({
   setDragOverTrack: externalSetDragOverTrack = null,
   onToggleMuteSegment = null,
   onToggleMuteVideoClip = null,
+  onImportClick = null,
+  onVideoSelected = null,
+  seriesId = null,
+  episodeId = null,
 }) {
   const rootRef = React.useRef(null);
+  const videoFileInputRef = React.useRef(null);
   const [internalDragOverTrack, setInternalDragOverTrack] = React.useState(null);
   const dragOverTrack = externalDragOverTrack !== null ? externalDragOverTrack : internalDragOverTrack;
   const setDragOverTrack = externalSetDragOverTrack || setInternalDragOverTrack;
+
+  const handleTriggerImport = () => {
+    if (videoFileInputRef.current) {
+      videoFileInputRef.current.click();
+    } else if (onImportClick) {
+      onImportClick();
+    }
+  };
+
+  const handleDirectVideoUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const vidObj = await uploadVideoFile(file, { seriesId, episodeId });
+      if (onVideoSelected) {
+        onVideoSelected(vidObj);
+      }
+    } catch (err) {
+      console.error('Timeline video upload failed:', err);
+    } finally {
+      if (videoFileInputRef.current) {
+        videoFileInputRef.current.value = '';
+      }
+    }
+  };
 
   // Timeline Windowing: compute visible time range based on scrollLeft + container width
   const [visibleRange, setVisibleRange] = React.useState(() => ({
@@ -621,7 +652,17 @@ function TimelineTracksCanvas({
   };
 
   return (
-    <div ref={rootRef} className="tracks-content" style={{ width: totalWidth, minWidth: totalWidth, position: 'relative' }}>
+    <div 
+      ref={rootRef} 
+      className="tracks-content" 
+      style={{ 
+        width: selectedVideo ? Math.max(totalWidth, 1200) : '100%', 
+        minWidth: '100%', 
+        minHeight: '100%',
+        flex: 1, 
+        position: 'relative' 
+      }}
+    >
       {/* Ruler Line (12px mono time labels spaced >= 100px, minor ticks quieter than major) */}
       <div className="timeline-ruler">
         {(markers || [])
@@ -676,316 +717,354 @@ function TimelineTracksCanvas({
         </div>
       )}
 
-      {/* Empty State when no video is uploaded */}
-      {!selectedVideo ? (
-        <div className="timeline-empty-state">
-          <Upload size={16} color="var(--accent-cyan)" />
-          <span>Import a video file to activate multi-track timeline and clip editing</span>
-        </div>
-      ) : (
-        <>
-          {/* Multi-Track Video Lanes (CapCut Desktop Video Rows) */}
-          {Array.from({ length: Math.max(1, videoRowCount) }).map((_, rIdx) => {
-            const trackKey = `video_${rIdx}`;
-            const isHidden = Boolean(hiddenTracks[trackKey] || (rIdx === 0 && hiddenTracks.video));
-            const isDragOver = dragOverTrack === trackKey || (rIdx === 0 && dragOverTrack === 'video');
+      {/* Multi-Track Video Lanes (CapCut Desktop Video Rows) */}
+      {Array.from({ length: Math.max(1, videoRowCount) }).map((_, rIdx) => {
+        const trackKey = `video_${rIdx}`;
+        const isHidden = Boolean(hiddenTracks[trackKey] || (rIdx === 0 && hiddenTracks.video));
+        const isDragOver = dragOverTrack === trackKey || (rIdx === 0 && dragOverTrack === 'video');
 
-            return (
+        return (
+          <div 
+            key={`video-lane-${rIdx}`}
+            className={`track-lane video-lane ${rIdx > 0 ? 'video-lane-sub' : ''} ${isDragOver ? 'is-drag-over' : ''}`}
+            data-track-type="video"
+            data-track-row={rIdx}
+            data-track-key={trackKey}
+            onDragOver={(e) => {
+              e.preventDefault();
+              e.dataTransfer.dropEffect = 'copy';
+              if (dragOverTrack !== trackKey) {
+                setDragOverTrack(trackKey);
+              }
+            }}
+            onDragLeave={(e) => {
+              if (e.currentTarget.contains(e.relatedTarget)) return;
+              setDragOverTrack(null);
+            }}
+            onDrop={async (e) => {
+              e.preventDefault();
+              setDragOverTrack(null);
+
+              // Allow direct file drop if dropped from OS
+              const files = e.dataTransfer?.files;
+              if (files && files.length > 0 && files[0].type.startsWith('video/')) {
+                try {
+                  const vidObj = await uploadVideoFile(files[0], { seriesId, episodeId });
+                  if (onVideoSelected) {
+                    onVideoSelected(vidObj);
+                  }
+                } catch (err) {
+                  console.error('Timeline video drop failed:', err);
+                }
+                return;
+              }
+
+              const rect = e.currentTarget.getBoundingClientRect();
+              const dropPixelX = Math.max(0, e.clientX - rect.left);
+              let dropTime = Math.max(0, dropPixelX / pps);
+
+              if (dropTime < 0.6 || (!videoClips || videoClips.length === 0)) {
+                dropTime = 0;
+              } else if (videoClips && videoClips.length > 0) {
+                for (const c of videoClips) {
+                  if (Math.abs(dropTime - c.end) < 0.6) {
+                    dropTime = c.end;
+                    break;
+                  }
+                }
+              }
+
+              const textData = e.dataTransfer ? e.dataTransfer.getData("text/plain") : null;
+              let dragData = null;
+              try {
+                const raw = e.dataTransfer ? e.dataTransfer.getData("application/json") : null;
+                if (raw) dragData = JSON.parse(raw);
+              } catch (err) {}
+
+              const fallback = window.__activeDraggedTimelineItem;
+              const finalData = dragData || fallback;
+              const finalId = textData || finalData?.clipId || finalData?.segId || finalData?.id;
+
+              if (handleMoveVideoToTrack) {
+                handleMoveVideoToTrack(finalId, trackKey, dropTime, finalData);
+              }
+            }}
+            style={{ 
+              width: selectedVideo ? totalWidth : '100%',
+              minWidth: '100%',
+              opacity: isHidden ? 0.2 : 1, 
+              pointerEvents: isHidden ? 'none' : 'auto',
+              borderBottom: '1px solid rgba(255, 255, 255, 0.06)',
+            }}
+          >
+            {/* Drop Visual Helper Badge */}
+            {isDragOver && (
+              <div className="track-drop-indicator-badge">
+                <span>Drop to place on VIDEO {rIdx + 1}</span>
+              </div>
+            )}
+
+            {!selectedVideo && rIdx === 0 ? (
               <div 
-                key={`video-lane-${rIdx}`}
-                className={`track-lane video-lane ${rIdx > 0 ? 'video-lane-sub' : ''} ${isDragOver ? 'is-drag-over' : ''}`}
-                data-track-type="video"
-                data-track-row={rIdx}
-                data-track-key={trackKey}
-                onDragOver={(e) => {
-                  e.preventDefault();
-                  e.dataTransfer.dropEffect = 'copy';
-                  if (dragOverTrack !== trackKey) {
-                    setDragOverTrack(trackKey);
-                  }
-                }}
-                onDragLeave={(e) => {
-                  if (e.currentTarget.contains(e.relatedTarget)) return;
-                  setDragOverTrack(null);
-                }}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  setDragOverTrack(null);
-                  const rect = e.currentTarget.getBoundingClientRect();
-                  const dropPixelX = Math.max(0, e.clientX - rect.left);
-                  let dropTime = Math.max(0, dropPixelX / pps);
-
-                  if (dropTime < 0.6 || (!videoClips || videoClips.length === 0)) {
-                    dropTime = 0;
-                  } else if (videoClips && videoClips.length > 0) {
-                    for (const c of videoClips) {
-                      if (Math.abs(dropTime - c.end) < 0.6) {
-                        dropTime = c.end;
-                        break;
-                      }
-                    }
-                  }
-
-                  const textData = e.dataTransfer ? e.dataTransfer.getData("text/plain") : null;
-                  let dragData = null;
-                  try {
-                    const raw = e.dataTransfer ? e.dataTransfer.getData("application/json") : null;
-                    if (raw) dragData = JSON.parse(raw);
-                  } catch (err) {}
-
-                  const fallback = window.__activeDraggedTimelineItem;
-                  const finalData = dragData || fallback;
-                  const finalId = textData || finalData?.clipId || finalData?.segId || finalData?.id;
-
-                  if (handleMoveVideoToTrack) {
-                    handleMoveVideoToTrack(finalId, trackKey, dropTime, finalData);
-                  }
-                }}
-                style={{ 
-                  width: totalWidth,
-                  minWidth: totalWidth,
-                  opacity: isHidden ? 0.2 : 1, 
-                  pointerEvents: isHidden ? 'none' : 'auto',
-                  borderBottom: '1px solid rgba(255, 255, 255, 0.06)',
-                }}
+                className="empty-timeline-video-dropzone"
+                onClick={handleTriggerImport}
+                title="ចុចដើម្បីបញ្ចូលវីដេអូ ឬទម្លាក់ File វីដេអូមកទីនេះ (+ Import Video)"
               >
-                {/* Drop Visual Helper Badge */}
-                {isDragOver && (
-                  <div className="track-drop-indicator-badge">
-                    <span>Drop to place on VIDEO {rIdx + 1}</span>
-                  </div>
-                )}
-
-                {videoClips && videoClips
-                  .filter((clip) => (clip.trackRow || 0) === rIdx)
-                  .filter((clip, idx) => {
-                    const isDragging = dragState?.itemType === 'video' && (dragState?.id === clip.id || dragState?.index === idx);
-                    const isSelected = activeClipId === clip.id || (selectedSegmentId !== null && (clip.segmentId === selectedSegmentId || clip.segmentIndex === selectedSegmentId));
-                    if (isDragging || isSelected) return true;
-                    const cStart = clip.start || 0;
-                    const cEnd = clip.end || (cStart + 1);
-                    return cEnd >= visibleRange.start && cStart <= visibleRange.end;
-                  })
-                  .map((clip, idx) => {
-                    const realIdx = videoClips.findIndex(c => c.id === clip.id);
-                    return renderVideoClip(clip, realIdx >= 0 ? realIdx : idx, trackKey, rIdx);
-                  })}
+                <input
+                  ref={videoFileInputRef}
+                  type="file"
+                  accept="video/*"
+                  onChange={handleDirectVideoUpload}
+                  style={{ display: 'none' }}
+                />
+                <Film size={14} color="#38BDF8" />
+                <span>+ បញ្ចូលវីដេអូ ឬទម្លាក់ Video មកទីនេះ (+ Import Video)</span>
               </div>
-            );
-          })}
+            ) : (
+              videoClips && videoClips
+                .filter((clip) => (clip.trackRow || 0) === rIdx)
+                .filter((clip, idx) => {
+                  const isDragging = dragState?.itemType === 'video' && (dragState?.id === clip.id || dragState?.index === idx);
+                  const isSelected = activeClipId === clip.id || (selectedSegmentId !== null && (clip.segmentId === selectedSegmentId || clip.segmentIndex === selectedSegmentId));
+                  if (isDragging || isSelected) return true;
+                  const cStart = clip.start || 0;
+                  const cEnd = clip.end || (cStart + 1);
+                  return cEnd >= visibleRange.start && cStart <= visibleRange.end;
+                })
+                .map((clip, idx) => {
+                  const realIdx = videoClips.findIndex(c => c.id === clip.id);
+                  return renderVideoClip(clip, realIdx >= 0 ? realIdx : idx, trackKey, rIdx);
+                })
+            )}
+          </div>
+        );
+      })}
 
-          {/* Khmer AI Voice Tracks (Dynamic Unlimited Rows / No Limit) */}
-          {audioGenerated && Array.from({ length: voiceRowCount }).map((_, rIdx) => {
-            const trackKey = `voice_${rIdx}`;
-            const isHidden = Boolean(hiddenTracks[trackKey] || (rIdx === 0 && hiddenTracks.voice));
-            const isDragOver = dragOverTrack === trackKey;
+      {/* Khmer AI Voice Tracks (CapCut Dual-Voice Tracks) */}
+      {Array.from({ length: Math.min(2, Math.max(2, voiceRowCount || 2)) }).map((_, rIdx) => {
+        const trackKey = `voice_${rIdx}`;
+        const isHidden = Boolean(hiddenTracks[trackKey] || (rIdx === 0 && hiddenTracks.voice));
+        const isDragOver = dragOverTrack === trackKey;
+        const laneVoiceSegments = (scriptSegments || []).filter((seg, idx) => {
+          if (activeSegmentRows[idx] !== rIdx) return false;
+          return Boolean(seg.audioUrl || seg.audioPath || seg.audioFile);
+        });
 
-            return (
-              <div 
-                key={`voice-lane-${rIdx}`}
-                className={`track-lane voice-lane ${rIdx > 0 ? 'voice-lane-sub' : ''} ${isDragOver ? 'is-drag-over' : ''}`}
-                data-track-type="voice"
-                data-track-row={rIdx}
-                data-track-key={trackKey}
-                onDragOver={(e) => {
-                  e.preventDefault();
-                  e.dataTransfer.dropEffect = 'copy';
-                  if (dragOverTrack !== trackKey) {
-                    setDragOverTrack(trackKey);
-                  }
-                }}
-                onDragLeave={(e) => {
-                  if (e.currentTarget.contains(e.relatedTarget)) return;
-                  setDragOverTrack(null);
-                }}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  setDragOverTrack(null);
-                  const rect = e.currentTarget.getBoundingClientRect();
-                  const dropPixelX = Math.max(0, e.clientX - rect.left);
-                  const dropTime = Math.max(0, dropPixelX / pps);
+        return (
+          <div 
+            key={`voice-lane-${rIdx}`}
+            className={`track-lane voice-lane ${rIdx > 0 ? 'voice-lane-sub' : ''} ${isDragOver ? 'is-drag-over' : ''}`}
+            data-track-type="voice"
+            data-track-row={rIdx}
+            data-track-key={trackKey}
+            onDragOver={(e) => {
+              e.preventDefault();
+              e.dataTransfer.dropEffect = 'copy';
+              if (dragOverTrack !== trackKey) {
+                setDragOverTrack(trackKey);
+              }
+            }}
+            onDragLeave={(e) => {
+              if (e.currentTarget.contains(e.relatedTarget)) return;
+              setDragOverTrack(null);
+            }}
+            onDrop={(e) => {
+              e.preventDefault();
+              setDragOverTrack(null);
+              const rect = e.currentTarget.getBoundingClientRect();
+              const dropPixelX = Math.max(0, e.clientX - rect.left);
+              const dropTime = Math.max(0, dropPixelX / pps);
 
-                  const textData = e.dataTransfer ? e.dataTransfer.getData("text/plain") : null;
-                  let dragData = null;
-                  try {
-                    const raw = e.dataTransfer ? e.dataTransfer.getData("application/json") : null;
-                    if (raw) dragData = JSON.parse(raw);
-                  } catch (err) {}
+              const textData = e.dataTransfer ? e.dataTransfer.getData("text/plain") : null;
+              let dragData = null;
+              try {
+                const raw = e.dataTransfer ? e.dataTransfer.getData("application/json") : null;
+                if (raw) dragData = JSON.parse(raw);
+              } catch (err) {}
 
-                  const fallback = window.__activeDraggedTimelineItem;
-                  const finalData = dragData || fallback;
-                  const finalId = textData || finalData?.clipId || finalData?.segId || finalData?.id;
+              const fallback = window.__activeDraggedTimelineItem;
+              const finalData = dragData || fallback;
+              const finalId = textData || finalData?.clipId || finalData?.segId || finalData?.id;
 
-                  if (handleMoveVideoToTrack) {
-                    handleMoveVideoToTrack(finalId, trackKey, dropTime, finalData);
-                  }
-                }}
-                style={{ 
-                  width: totalWidth,
-                  minWidth: totalWidth,
-                  opacity: isHidden ? 0.2 : 1, 
-                  pointerEvents: isHidden ? 'none' : 'auto',
-                  borderBottom: '1px solid rgba(255, 255, 255, 0.06)',
-                }}
-              >
-                {isDragOver && (
-                  <div className="track-drop-indicator-badge voice">
-                    <span>Drop to place on VOICE {rIdx + 1} (A{rIdx + 1})</span>
-                  </div>
-                )}
-                {scriptSegments && scriptSegments.length > 0 && scriptSegments.map((seg, idx) => {
-                  if (activeSegmentRows[idx] !== rIdx) return null;
-                  const hasAudio = Boolean(seg.audioUrl || seg.audioPath || seg.audioFile);
-                  if (!hasAudio) return null;
-
-                  const isDragging = (dragState?.itemType === 'audio' || dragState?.itemType === 'subtitle') && dragState?.index === idx;
-                  const isSelected = Boolean(
-                    (activeClipId && videoClips?.some((c) => c.id === activeClipId && (c.segmentId === seg.id || c.segmentIndex === (idx + 1)))) ||
-                    (selectedSegmentId !== null && selectedSegmentId !== undefined && (
-                      (seg._uid && String(selectedSegmentId) === String(seg._uid)) || (seg.id !== undefined && seg.id !== null ? String(selectedSegmentId) === String(seg.id) : Number(selectedSegmentId) === idx)
-                    )) ||
-                    (selectedAudioId !== null && selectedAudioId !== undefined && (
-                      (seg._uid && String(selectedAudioId) === String(seg._uid)) || (seg.id !== undefined && seg.id !== null ? String(selectedAudioId) === String(seg.id) : Number(selectedAudioId) === idx)
-                    ))
-                  );
-
-                  if (!isDragging && !isSelected) {
-                    const vStart = (typeof seg.audioStartSec === 'number' && !isNaN(seg.audioStartSec)) ? seg.audioStartSec : parseTimeToSeconds(seg.start, idx * 4);
-                    const vEnd = ((seg.audioTrimmed || seg.userTrimmed) && typeof seg.audioEndSec === 'number') ? seg.audioEndSec : (typeof seg.audioEndSec === 'number' && !isNaN(seg.audioEndSec) ? seg.audioEndSec : vStart + 3.0);
-                    if (vEnd < visibleRange.start || vStart > visibleRange.end) {
-                      return null;
-                    }
-                  }
-
-                  return renderVoiceSegment(seg, idx);
-                })}
+              if (handleMoveVideoToTrack) {
+                handleMoveVideoToTrack(finalId, trackKey, dropTime, finalData);
+              }
+            }}
+            style={{ 
+              width: selectedVideo ? totalWidth : '100%',
+              minWidth: '100%',
+              opacity: isHidden ? 0.2 : 1, 
+              pointerEvents: isHidden ? 'none' : 'auto',
+              borderBottom: '1px solid rgba(255, 255, 255, 0.06)',
+            }}
+          >
+            {isDragOver && (
+              <div className="track-drop-indicator-badge voice">
+                <span>Drop to place on VOICE {rIdx + 1} (A{rIdx + 1})</span>
               </div>
-            );
-          })}
+            )}
+            {(!audioGenerated || laneVoiceSegments.length === 0) ? (
+              <span className="empty-lane-placeholder-text">VOICE {rIdx + 1} (Khmer AI Voice Track)</span>
+            ) : (
+              scriptSegments.map((seg, idx) => {
+                if (activeSegmentRows[idx] !== rIdx) return null;
+                const hasAudio = Boolean(seg.audioUrl || seg.audioPath || seg.audioFile);
+                if (!hasAudio) return null;
 
-          {/* Subtitles Tracks: shown when in Step 2 (Dubbing Mode & Script) or when subtitles exist */}
-          {showSubtitles && Array.from({ length: subRowCount }).map((_, rIdx) => {
-            const trackKey = `subs_${rIdx}`;
-            const isHidden = Boolean(hiddenTracks[trackKey] || (rIdx === 0 && hiddenTracks.subs));
-            const isDragOver = dragOverTrack === trackKey;
+                const isDragging = (dragState?.itemType === 'audio' || dragState?.itemType === 'subtitle') && dragState?.index === idx;
+                const isSelected = Boolean(
+                  (activeClipId && videoClips?.some((c) => c.id === activeClipId && (c.segmentId === seg.id || c.segmentIndex === (idx + 1)))) ||
+                  (selectedSegmentId !== null && selectedSegmentId !== undefined && (
+                    (seg._uid && String(selectedSegmentId) === String(seg._uid)) || (seg.id !== undefined && seg.id !== null ? String(selectedSegmentId) === String(seg.id) : Number(selectedSegmentId) === idx)
+                  )) ||
+                  (selectedAudioId !== null && selectedAudioId !== undefined && (
+                    (seg._uid && String(selectedAudioId) === String(seg._uid)) || (seg.id !== undefined && seg.id !== null ? String(selectedAudioId) === String(seg.id) : Number(selectedAudioId) === idx)
+                  ))
+                );
 
-            return (
-              <div 
-                key={`sub-lane-${rIdx}`}
-                className={`track-lane subtitle-lane ${rIdx > 0 ? 'subtitle-lane-sub' : ''} ${isDragOver ? 'is-drag-over' : ''}`}
-                data-track-type="subs"
-                data-track-row={rIdx}
-                data-track-key={trackKey}
-                onDragOver={(e) => {
-                  e.preventDefault();
-                  e.dataTransfer.dropEffect = 'copy';
-                  if (dragOverTrack !== trackKey) {
-                    setDragOverTrack(trackKey);
+                if (!isDragging && !isSelected) {
+                  const vStart = (typeof seg.audioStartSec === 'number' && !isNaN(seg.audioStartSec)) ? seg.audioStartSec : parseTimeToSeconds(seg.start, idx * 4);
+                  const vEnd = ((seg.audioTrimmed || seg.userTrimmed) && typeof seg.audioEndSec === 'number') ? seg.audioEndSec : (typeof seg.audioEndSec === 'number' && !isNaN(seg.audioEndSec) ? seg.audioEndSec : vStart + 3.0);
+                  if (vEnd < visibleRange.start || vStart > visibleRange.end) {
+                    return null;
                   }
-                }}
-                onDragLeave={(e) => {
-                  if (e.currentTarget.contains(e.relatedTarget)) return;
-                  setDragOverTrack(null);
-                }}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  setDragOverTrack(null);
-                  const rect = e.currentTarget.getBoundingClientRect();
-                  const dropPixelX = Math.max(0, e.clientX - rect.left);
-                  const dropTime = Math.max(0, dropPixelX / pps);
+                }
 
-                  const textData = e.dataTransfer ? e.dataTransfer.getData("text/plain") : null;
-                  let dragData = null;
-                  try {
-                    const raw = e.dataTransfer ? e.dataTransfer.getData("application/json") : null;
-                    if (raw) dragData = JSON.parse(raw);
-                  } catch (err) {}
+                return renderVoiceSegment(seg, idx);
+              })
+            )}
+          </div>
+        );
+      })}
 
-                  const fallback = window.__activeDraggedTimelineItem;
-                  const finalData = dragData || fallback;
-                  const finalId = textData || finalData?.clipId || finalData?.segId || finalData?.id;
+      {/* Subtitles Tracks: shown when in Step 2 (Dubbing Mode & Script) or when subtitles exist */}
+      {showSubtitles && Array.from({ length: subRowCount }).map((_, rIdx) => {
+        const trackKey = `subs_${rIdx}`;
+        const isHidden = Boolean(hiddenTracks[trackKey] || (rIdx === 0 && hiddenTracks.subs));
+        const isDragOver = dragOverTrack === trackKey;
+        const hasSubSegments = Boolean(scriptSegments && scriptSegments.length > 0);
 
-                  if (handleMoveVideoToTrack) {
-                    handleMoveVideoToTrack(finalId, trackKey, dropTime, finalData);
-                  }
-                }}
-                style={{ 
-                  width: totalWidth,
-                  minWidth: totalWidth,
-                  opacity: isHidden ? 0.2 : 1, 
-                  pointerEvents: isHidden ? 'none' : 'auto',
-                  borderBottom: '1px solid rgba(255, 255, 255, 0.06)',
-                }}
-              >
-                {isDragOver && (
-                  <div className="track-drop-indicator-badge sub">
-                    <span>Drop to place on SUBTITLES {rIdx + 1} (T{rIdx + 1})</span>
-                  </div>
-                )}
-                {scriptSegments && scriptSegments.length > 0 && scriptSegments.map((seg, idx) => {
-                  const subRow = (typeof seg.subTrackRow === 'number' && seg.subTrackRow >= 0) ? seg.subTrackRow : 0;
-                  if (subRow !== rIdx) return null;
+        return (
+          <div 
+            key={`sub-lane-${rIdx}`}
+            className={`track-lane subtitle-lane ${rIdx > 0 ? 'subtitle-lane-sub' : ''} ${isDragOver ? 'is-drag-over' : ''}`}
+            data-track-type="subs"
+            data-track-row={rIdx}
+            data-track-key={trackKey}
+            onDragOver={(e) => {
+              e.preventDefault();
+              e.dataTransfer.dropEffect = 'copy';
+              if (dragOverTrack !== trackKey) {
+                setDragOverTrack(trackKey);
+              }
+            }}
+            onDragLeave={(e) => {
+              if (e.currentTarget.contains(e.relatedTarget)) return;
+              setDragOverTrack(null);
+            }}
+            onDrop={(e) => {
+              e.preventDefault();
+              setDragOverTrack(null);
+              const rect = e.currentTarget.getBoundingClientRect();
+              const dropPixelX = Math.max(0, e.clientX - rect.left);
+              const dropTime = Math.max(0, dropPixelX / pps);
 
-                  const isDragging = (dragState?.itemType === 'audio' || dragState?.itemType === 'subtitle') && dragState?.index === idx;
-                  const isSelected = Boolean(
-                    (activeClipId && videoClips?.some((c) => c.id === activeClipId && (c.segmentId === seg.id || c.segmentIndex === (idx + 1)))) ||
-                    (selectedSegmentId !== null && selectedSegmentId !== undefined && (
-                      (seg._uid && String(selectedSegmentId) === String(seg._uid)) || (seg.id !== undefined && seg.id !== null ? String(selectedSegmentId) === String(seg.id) : Number(selectedSegmentId) === idx)
-                    )) ||
-                    (selectedSubId !== null && selectedSubId !== undefined && (
-                      (seg._uid && String(selectedSubId) === String(seg._uid)) || (seg.id !== undefined && seg.id !== null ? String(selectedSubId) === String(seg.id) : Number(selectedSubId) === idx)
-                    ))
-                  );
+              const textData = e.dataTransfer ? e.dataTransfer.getData("text/plain") : null;
+              let dragData = null;
+              try {
+                const raw = e.dataTransfer ? e.dataTransfer.getData("application/json") : null;
+                if (raw) dragData = JSON.parse(raw);
+              } catch (err) {}
 
-                  if (!isDragging && !isSelected) {
-                    const sStart = (typeof seg.startSec === 'number' && !isNaN(seg.startSec)) ? seg.startSec : parseTimeToSeconds(seg.start, idx * 4);
-                    const sEnd = (typeof seg.endSec === 'number' && !isNaN(seg.endSec)) ? seg.endSec : parseTimeToSeconds(seg.end, sStart + 3.0);
-                    if (sEnd < visibleRange.start || sStart > visibleRange.end) {
-                      return null;
-                    }
-                  }
+              const fallback = window.__activeDraggedTimelineItem;
+              const finalData = dragData || fallback;
+              const finalId = textData || finalData?.clipId || finalData?.segId || finalData?.id;
 
-                  return renderSubSegment(seg, idx);
-                })}
+              if (handleMoveVideoToTrack) {
+                handleMoveVideoToTrack(finalId, trackKey, dropTime, finalData);
+              }
+            }}
+            style={{ 
+              width: selectedVideo ? totalWidth : '100%',
+              minWidth: '100%',
+              opacity: isHidden ? 0.2 : 1, 
+              pointerEvents: isHidden ? 'none' : 'auto',
+              borderBottom: '1px solid rgba(255, 255, 255, 0.06)',
+            }}
+          >
+            {isDragOver && (
+              <div className="track-drop-indicator-badge sub">
+                <span>Drop to place on SUBTITLES {rIdx + 1} (T{rIdx + 1})</span>
               </div>
-            );
-          })}
+            )}
+            {!hasSubSegments ? (
+              <span className="empty-lane-placeholder-text">SUBTITLES {rIdx + 1}</span>
+            ) : (
+              scriptSegments.map((seg, idx) => {
+                const subRow = (typeof seg.subTrackRow === 'number' && seg.subTrackRow >= 0) ? seg.subTrackRow : 0;
+                if (subRow !== rIdx) return null;
 
-          {/* Clean BGM Track Lane (Height: 40px) */}
-          {selectedVideo && totalDuration > 0 && (
-            <div 
-              className="track-lane clean-bgm-lane"
-              data-track-type="clean-bgm"
-              style={{ 
-                width: totalWidth,
-                minWidth: totalWidth,
-                height: 40,
-                opacity: hiddenTracks?.cleanBgm ? 0.2 : 1, 
-                pointerEvents: hiddenTracks?.cleanBgm ? 'none' : 'auto',
-                borderBottom: '1px solid oklch(0.25 0.01 250)',
-              }}
-            >
-              <div
-                className="clean-bgm-block"
-                style={{
-                  left: 0,
-                  width: Math.max(2, totalDuration * pps - 2),
-                  top: 4,
-                  height: 32,
-                }}
-                title={`CLEAN BGM [0.0s - ${totalDuration.toFixed(1)}s]`}
-              >
-                {totalDuration * pps >= 32 && (
-                  <div className="clip-label-line">
-                    <span className="clip-label-text">CLEAN BGM</span>
-                  </div>
-                )}
-                <div className="clip-content-row clean-bgm-content-row" />
+                const isDragging = (dragState?.itemType === 'audio' || dragState?.itemType === 'subtitle') && dragState?.index === idx;
+                const isSelected = Boolean(
+                  (activeClipId && videoClips?.some((c) => c.id === activeClipId && (c.segmentId === seg.id || c.segmentIndex === (idx + 1)))) ||
+                  (selectedSegmentId !== null && selectedSegmentId !== undefined && (
+                    (seg._uid && String(selectedSegmentId) === String(seg._uid)) || (seg.id !== undefined && seg.id !== null ? String(selectedSegmentId) === String(seg.id) : Number(selectedSegmentId) === idx)
+                  )) ||
+                  (selectedSubId !== null && selectedSubId !== undefined && (
+                    (seg._uid && String(selectedSubId) === String(seg._uid)) || (seg.id !== undefined && seg.id !== null ? String(selectedSubId) === String(seg.id) : Number(selectedSubId) === idx)
+                  ))
+                );
+
+                if (!isDragging && !isSelected) {
+                  const sStart = (typeof seg.startSec === 'number' && !isNaN(seg.startSec)) ? seg.startSec : parseTimeToSeconds(seg.start, idx * 4);
+                  const sEnd = (typeof seg.endSec === 'number' && !isNaN(seg.endSec)) ? seg.endSec : parseTimeToSeconds(seg.end, sStart + 3.0);
+                  if (sEnd < visibleRange.start || sStart > visibleRange.end) {
+                    return null;
+                  }
+                }
+
+                return renderSubSegment(seg, idx);
+              })
+            )}
+          </div>
+        );
+      })}
+
+      {/* Clean BGM Track Lane (Height: 40px) */}
+      <div 
+        className="track-lane clean-bgm-lane"
+        data-track-type="clean-bgm"
+        style={{ 
+          width: selectedVideo ? totalWidth : '100%',
+          minWidth: '100%',
+          height: 40,
+          opacity: hiddenTracks?.cleanBgm ? 0.2 : 1, 
+          pointerEvents: hiddenTracks?.cleanBgm ? 'none' : 'auto',
+          borderBottom: '1px solid oklch(0.25 0.01 250)',
+        }}
+      >
+        {selectedVideo && totalDuration > 0 ? (
+          <div
+            className="clean-bgm-block"
+            style={{
+              left: 0,
+              width: Math.max(2, totalDuration * pps - 2),
+              top: 4,
+              height: 32,
+            }}
+            title={`CLEAN BGM [0.0s - ${totalDuration.toFixed(1)}s]`}
+          >
+            {totalDuration * pps >= 32 && (
+              <div className="clip-label-line">
+                <span className="clip-label-text">CLEAN BGM</span>
               </div>
-            </div>
-          )}
-        </>
-      )}
+            )}
+            <div className="clip-content-row clean-bgm-content-row" />
+          </div>
+        ) : (
+          <span className="empty-lane-placeholder-text">CLEAN BGM (Background Music & SFX Track)</span>
+        )}
+      </div>
     </div>
   );
 }
@@ -1019,6 +1098,7 @@ function areTimelineTracksCanvasPropsEqual(prev, next) {
   if (prev.showSubtitles !== next.showSubtitles) return false;
   if (prev.snapLineTime !== next.snapLineTime) return false;
   if (prev.selectedVideo !== next.selectedVideo) return false;
+  if (prev.seriesId !== next.seriesId || prev.episodeId !== next.episodeId) return false;
 
   return true;
 }

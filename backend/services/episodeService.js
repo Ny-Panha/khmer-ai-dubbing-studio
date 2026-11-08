@@ -314,43 +314,46 @@ function deleteEpisode(seriesId, episodeId) {
   const cleanEp = sanitizeEpisodeId(episodeId);
 
   const series = getSeriesMetadata(cleanSeries);
-  if ((series.episodes || []).length <= 1) {
-    return { success: false, error: 'Cannot delete the only remaining episode in a series.' };
-  }
-
-  const targetEp = series.episodes.find((e) => String(e.id) === cleanEp);
+  const targetEp = (series.episodes || []).find((e) => String(e.id) === cleanEp);
   if (!targetEp) {
     return { success: false, error: `Episode ${cleanEp} not found in series ${cleanSeries}.` };
   }
 
   // Filter out the deleted episode from metadata
-  series.episodes = series.episodes.filter((e) => String(e.id) !== cleanEp);
+  series.episodes = (series.episodes || []).filter((e) => String(e.id) !== cleanEp);
 
-  // Renumber remaining episodes sequentially (1..N)
-  series.episodes.forEach((ep, idx) => {
-    const newNum = idx + 1;
-    const oldNum = ep.episodeNumber;
-    ep.episodeNumber = newNum;
+  // If the only episode was deleted, create a fresh clean EP1 so the series remains valid
+  if (series.episodes.length === 0) {
+    const defaultEp = createEpisode(1, 'ភាគទី 1 (EP1)', null, []);
+    series.episodes = [defaultEp];
+    ensureEpisodeDirectories(cleanSeries, defaultEp.id);
+  } else {
+    // Renumber remaining episodes sequentially (1..N)
+    series.episodes.forEach((ep, idx) => {
+      const newNum = idx + 1;
+      const oldNum = ep.episodeNumber;
+      ep.episodeNumber = newNum;
 
-    const isGeneric = !ep.title || 
-      new RegExp(`^ភាគទី\\s*${oldNum}\\s*\\(EP${oldNum}\\)$`, 'i').test(ep.title.trim()) ||
-      /^ភាគទី\s*[\d០-៩]+\s*\(EP[\d០-៩]+\)$/i.test(ep.title.trim()) ||
-      /^\(EP[\d០-៩]+\)$/i.test(ep.title.trim()) ||
-      /^ភាគទី\s*[\d០-៩]+$/i.test(ep.title.trim()) ||
-      /^Episode\s*[\d]+$/i.test(ep.title.trim());
+      const isGeneric = !ep.title || 
+        new RegExp(`^ភាគទី\\s*${oldNum}\\s*\\(EP${oldNum}\\)$`, 'i').test(ep.title.trim()) ||
+        /^ភាគទី\s*[\d០-៩]+\s*\(EP[\d០-៩]+\)$/i.test(ep.title.trim()) ||
+        /^\(EP[\d០-៩]+\)$/i.test(ep.title.trim()) ||
+        /^ភាគទី\s*[\d០-៩]+$/i.test(ep.title.trim()) ||
+        /^Episode\s*[\d]+$/i.test(ep.title.trim());
 
-    if (isGeneric) {
-      ep.title = `ភាគទី ${newNum} (EP${newNum})`;
-      ep.displayTitle = ep.title;
-    } else if (typeof ep.title === 'string' && /^(?:ភាគទី|ភាគ|EP|Episode)\s*[:#\s]*\d+\s*[:\-\s]*/i.test(ep.title)) {
-      const rest = ep.title.replace(/^(?:ភាគទី|ភាគ|EP|Episode)\s*[:#\s]*\d+\s*[:\-\s]*/i, '').trim();
-      ep.title = `ភាគទី ${newNum}: ${rest}`;
-      if (ep.displayTitle) {
-        const restDisplay = ep.displayTitle.replace(/^(?:ភាគទី|ភាគ|EP|Episode)\s*[:#\s]*\d+\s*[:\-\s]*/i, '').trim();
-        ep.displayTitle = `ភាគទី ${newNum}: ${restDisplay}`;
+      if (isGeneric) {
+        ep.title = `ភាគទី ${newNum} (EP${newNum})`;
+        ep.displayTitle = ep.title;
+      } else if (typeof ep.title === 'string' && /^(?:ភាគទី|ភាគ|EP|Episode)\s*[:#\s]*\d+\s*[:\-\s]*/i.test(ep.title)) {
+        const rest = ep.title.replace(/^(?:ភាគទី|ភាគ|EP|Episode)\s*[:#\s]*\d+\s*[:\-\s]*/i, '').trim();
+        ep.title = `ភាគទី ${newNum}: ${rest}`;
+        if (ep.displayTitle) {
+          const restDisplay = ep.displayTitle.replace(/^(?:ភាគទី|ភាគ|EP|Episode)\s*[:#\s]*\d+\s*[:\-\s]*/i, '').trim();
+          ep.displayTitle = `ភាគទី ${newNum}: ${restDisplay}`;
+        }
       }
-    }
-  });
+    });
+  }
 
   saveSeriesMetadata(series);
 

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import {
   Clapperboard, Subtitles, Loader2, Download, Copy, Check, ChevronUp, ChevronDown, CheckCircle2, ShieldCheck, Image, Upload
 } from 'lucide-react';
+import { resolveDefaultAspectRatio } from '../../utils/projectStorage';
 
 export default function ExportSettingsPanel({
   isOpen,
@@ -13,6 +14,8 @@ export default function ExportSettingsPanel({
   renderProgress = 0,
   renderStage = '',
   selectedVideo,
+  videoMetadata = null,
+  activeEpisode = null,
   audioGenerated,
   previewAudioUrl,
   renderedVideo,
@@ -21,6 +24,15 @@ export default function ExportSettingsPanel({
 }) {
   const [internalProgress, setInternalProgress] = useState(0);
   const [internalStage, setInternalStage] = useState('');
+
+  const srcW = Number(videoMetadata?.width || selectedVideo?.width || activeEpisode?.metadata?.width || activeEpisode?.video?.width) || 0;
+  const srcH = Number(videoMetadata?.height || selectedVideo?.height || activeEpisode?.metadata?.height || activeEpisode?.video?.height) || 0;
+  const defaultAspectRatio = resolveDefaultAspectRatio(srcW, srcH) || '16:9';
+  const effectiveAspectRatio = settings?.aspectRatio || defaultAspectRatio;
+  const effectiveVerticalStyle = settings?.verticalStyle || 'pad';
+  const sourceHint = (srcW > 0 && srcH > 0)
+    ? `Source: ${srcW}×${srcH} — ${srcH > srcW ? 'vertical' : (srcW > srcH ? 'horizontal' : 'square')}`
+    : 'Source: 16:9 (fallback)';
 
   // Fallback animation timer to guarantee smooth 0 -> 100% progress during video export
   useEffect(() => {
@@ -99,20 +111,48 @@ export default function ExportSettingsPanel({
         <>
           {/* Video Aspect Ratio Selector */}
           <div style={{ marginBottom: 12 }}>
-            <span style={{ fontSize: '0.72rem', color: 'var(--text-dim)', display: 'block', marginBottom: 4, fontWeight: 600 }}>
-              ទម្រង់វីដេអូ Export (Aspect Ratio)
-            </span>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+              <span style={{ fontSize: '0.72rem', color: 'var(--text-dim)', fontWeight: 600 }}>
+                ទម្រង់វីដេអូ Export (Aspect Ratio)
+              </span>
+              <span style={{ fontSize: '0.68rem', color: 'var(--primary-accent)', fontWeight: 500 }} title="ទំហំវីដេអូដើម">
+                {sourceHint}
+              </span>
+            </div>
             <select
-              value={settings?.aspectRatio || '16:9'}
+              value={effectiveAspectRatio}
               onChange={(e) => onSettingChange('aspectRatio', e.target.value)}
               className="inspector-select"
               style={{ width: '100%', padding: '6px 8px', fontSize: '0.78rem' }}
             >
-              <option value="16:9"> 16:9 (YouTube)</option>
-              <option value="9:16"> 9:16 (TikTok / Reels / Shorts)</option>
-              <option value="1:1"> 1:1 (Instagram / Facebook Post)</option>
+              <option value="16:9">16:9 (Landscape / YouTube)</option>
+              <option value="9:16">9:16 (Portrait / TikTok / Reels / Shorts)</option>
+              <option value="1:1">1:1 (Square / Instagram / Facebook Post)</option>
             </select>
           </div>
+
+          {/* 9:16 Vertical Style Choice */}
+          {effectiveAspectRatio === '9:16' && (
+            <div style={{ marginBottom: 12, padding: '8px 10px', background: 'var(--card-bg-subtle, rgba(255,255,255,0.03))', borderRadius: 6, border: '1px solid var(--border-color, rgba(255,255,255,0.08))' }}>
+              <span style={{ fontSize: '0.72rem', color: 'var(--text-dim)', display: 'block', marginBottom: 4, fontWeight: 600 }}>
+                ម៉ូដ 9:16 (Vertical Framing Style)
+              </span>
+              <select
+                value={effectiveVerticalStyle}
+                onChange={(e) => onSettingChange('verticalStyle', e.target.value)}
+                className="inspector-select"
+                style={{ width: '100%', padding: '6px 8px', fontSize: '0.78rem' }}
+              >
+                <option value="pad">Pad — black bars, full frame visible</option>
+                <option value="crop">Crop — full-bleed center crop</option>
+              </select>
+              <span style={{ fontSize: '0.66rem', color: 'var(--text-dim)', display: 'block', marginTop: 4 }}>
+                {effectiveVerticalStyle === 'crop'
+                  ? 'ពង្រីកពេញអេក្រង់ទូរស័ព្ទ (1080×1920) គ្មានគែមខ្មៅ (Center-crop)'
+                  : 'រក្សាទម្រង់ដើមទាំងមូល ដោយដាក់គែមខ្មៅលើក្រោម (Cinema black bars)'}
+              </span>
+            </div>
+          )}
 
           {/* Subtitle Burn Switch */}
           <label className="checkbox-container" style={{ marginBottom: settings?.burnSubtitles ? 10 : 12 }}>

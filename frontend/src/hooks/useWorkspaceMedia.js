@@ -149,6 +149,15 @@ export function useWorkspaceMedia({
     try {
       const meta = await getMetaWithRetry();
       setVideoMetadata(meta);
+      if (meta) {
+        setSelectedVideo((prev) => (prev ? {
+          ...prev,
+          width: meta.width || prev.width,
+          height: meta.height || prev.height,
+          resolution: meta.resolution || prev.resolution,
+          durationSec: meta.durationSec || prev.durationSec,
+        } : prev));
+      }
       if (meta?.durationSec) {
         const realDur = meta.durationSec;
         if (setDuration) setDuration((prev) => Math.max(prev || 0, realDur));

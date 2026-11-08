@@ -437,21 +437,19 @@ export default function EpisodesTab({
                     </button>
                   )}
 
-                  {episodes.length > 1 && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (window.confirm(`តើអ្នកប្រាកដជាចង់លុប ${ep.title} នេះមែនទេ?`)) {
-                          onDeleteEpisode && onDeleteEpisode(ep.id);
-                        }
-                      }}
-                      className="btn-danger-ghost"
-                      style={{ padding: 4 }}
-                      title="Delete this episode"
-                    >
-                      <Trash2 size={12} />
-                    </button>
-                  )}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (window.confirm(`តើអ្នកប្រាកដជាចង់លុប ${ep.title} នេះមែនទេ?`)) {
+                        onDeleteEpisode && onDeleteEpisode(ep.id);
+                      }
+                    }}
+                    className="btn-danger-ghost"
+                    style={{ padding: 4 }}
+                    title="Delete this episode"
+                  >
+                    <Trash2 size={12} />
+                  </button>
                 </div>
               </div>
 

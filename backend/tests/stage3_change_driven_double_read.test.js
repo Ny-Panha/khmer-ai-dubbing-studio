@@ -96,3 +96,4 @@ test('Stage 3 Fast OCR Mode: deduplicateFastOcrCues preserves ocrConfidence, rev
   assert.equal(deduped[1].ocrDisagreement, true);
   assert.equal(deduped[1].uncertainOcr, true);
 });
+

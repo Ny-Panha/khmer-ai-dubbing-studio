@@ -636,6 +636,7 @@ function generateKhmerAssSubtitleFile({
   subtitleStyle = "banner",
   marginV = null,
   aspectRatio = "16:9",
+  verticalStyle = "pad",
   antiTheft = null,
   totalDuration = null,
   sourceDimensions = null,
@@ -652,8 +653,15 @@ function generateKhmerAssSubtitleFile({
   if (aspectRatio === "9:16") {
     playResX = 1080;
     playResY = 1920;
-    effFontSize = fontSize || 48; // Clean, non-overlapping size for mobile (TikTok/Reels)
-    effMarginV = marginV || 720; // Centered at y=1200 - sits snugly and covers foreign/Chinese subtitles 100%
+    const isSourcePortrait = Boolean(sourceDimensions && sourceDimensions.height > sourceDimensions.width);
+    effFontSize = fontSize || (verticalStyle === "crop" || isSourcePortrait ? 44 : 48);
+    if (verticalStyle === "crop" || isSourcePortrait) {
+      // Full-bleed 9:16 crop or naturally vertical video: subtitles sit near the bottom of the full frame
+      effMarginV = marginV || (isAntiTheftActive && marqueePos === "bottom" ? 180 : 130);
+    } else {
+      // Pad mode with landscape source: Centered at y=1200 - sits snugly on padded letterbox video
+      effMarginV = marginV || 720;
+    }
   } else if (aspectRatio === "1:1") {
     playResX = 1080;
     playResY = 1080;
@@ -712,10 +720,10 @@ function generateKhmerAssSubtitleFile({
     let watermarkY = ribbonY - 14;
 
     if (aspectRatio === "9:16") {
-      // 9:16 Frame (1080x1920). Centered landscape video is dynamically detected:
-      let vTop = 656;
-      let vBottom = 1264;
-      if (sourceDimensions && sourceDimensions.width > 0 && sourceDimensions.height > 0) {
+      // 9:16 Frame (1080x1920).
+      let vTop = verticalStyle === "crop" ? 0 : 656;
+      let vBottom = verticalStyle === "crop" ? 1920 : 1264;
+      if (verticalStyle !== "crop" && sourceDimensions && sourceDimensions.width > 0 && sourceDimensions.height > 0) {
         const srcRatio = sourceDimensions.width / sourceDimensions.height;
         let scaledH = Math.round(1080 / srcRatio);
         if (scaledH % 2 !== 0) scaledH += 1;
@@ -1066,6 +1074,7 @@ function renderDubbedVideoWithDucking(options = {}) {
   const subtitleOptions = options.subtitleOptions || (options.subtitlePath ? { assSubtitlePath: options.subtitlePath } : {});
   const subtitleStyle = subtitleOptions?.subtitleStyle || options?.subtitleStyle || "banner";
   const aspectRatio = options.aspectRatio || null;
+  const verticalStyle = options.verticalStyle || subtitleOptions?.verticalStyle || "pad";
   const videoClips = options.videoClips || [];
   const antiTheft = options.antiTheft || null;
   const logoSettings = options.logoSettings || null;
@@ -1319,7 +1328,21 @@ function renderDubbedVideoWithDucking(options = {}) {
     // បង្កើត .ass Subtitle និង Anti-theft Marquee ហើយ Burn លើវីដេអូ (CapCut Style 9:16 Blur Background ឬ 16:9)
     let tempAssPath = null;
     let videoMapArg = baseVideoSource.startsWith("[v_") ? baseVideoSource : "0:v:0";
-    const targetAspectRatio = subtitleOptions.aspectRatio || aspectRatio || "16:9";
+    const sourceDimensions = getVideoDimensionsFast(inputVideoPath);
+
+    let targetAspectRatio = subtitleOptions.aspectRatio || aspectRatio;
+    if (!targetAspectRatio) {
+      if (sourceDimensions && sourceDimensions.height > sourceDimensions.width) {
+        targetAspectRatio = "9:16";
+      } else if (sourceDimensions && sourceDimensions.width === sourceDimensions.height && sourceDimensions.width > 0) {
+        targetAspectRatio = "1:1";
+      } else if (sourceDimensions && sourceDimensions.width > sourceDimensions.height) {
+        targetAspectRatio = "16:9";
+      } else {
+        console.warn("[FFmpegService] ⚠️ Source dimensions missing, falling back to 16:9 aspectRatio");
+        targetAspectRatio = "16:9";
+      }
+    }
     const hasAntiTheft = Boolean(antiTheft && (antiTheft.enabled || antiTheft.enableAntiTheft));
     const shouldBurnAss = Boolean(burnSubtitles || hasAntiTheft);
 
@@ -1338,8 +1361,6 @@ function renderDubbedVideoWithDucking(options = {}) {
         calculatedDuration = Math.max(...validSegments.map((s) => Number(s.endSeconds || (s.startSeconds + s.duration) || 0)));
       }
 
-      const sourceDimensions = getVideoDimensionsFast(inputVideoPath);
-
       generateKhmerAssSubtitleFile({
         segments: burnSubtitles ? validSegments : [],
         outputPath: tempAssPath,
@@ -1350,6 +1371,7 @@ function renderDubbedVideoWithDucking(options = {}) {
         subtitleStyle,
         marginV: subtitleOptions.marginV ? Number(subtitleOptions.marginV) : null,
         aspectRatio: targetAspectRatio,
+        verticalStyle,
         antiTheft: hasAntiTheft ? antiTheft : null,
         totalDuration: calculatedDuration > 0 ? calculatedDuration : null,
         sourceDimensions,
@@ -1358,19 +1380,55 @@ function renderDubbedVideoWithDucking(options = {}) {
       const assFilter = buildAssSubtitleVideoFilter(tempAssPath);
 
       if (targetAspectRatio === "9:16") {
-        // Professional TikTok/Reels Style: Clean Black Cinema Canvas (Matching Preview 100%) + Centered Video + Subtitles
+        if (verticalStyle === "crop") {
+          // Full-bleed center crop: scale to FILL 1080x1920, center-crop, no black bars
+          filterComplexParts.push(
+            `${baseVideoSource}scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920:(in_w-1080)/2:(in_h-1920)/2,setsar=1[base_vert]`,
+            `[base_vert]${assFilter}[final_video]`
+          );
+        } else {
+          // Pad mode: Clean Black Cinema Canvas + Centered Video + Subtitles
+          filterComplexParts.push(
+            `${baseVideoSource}scale=1080:-2:force_original_aspect_ratio=decrease,pad=1080:1920:(1080-iw)/2:(1920-ih)/2:color=black,setsar=1[base_vert]`,
+            `[base_vert]${assFilter}[final_video]`
+          );
+        }
+      } else if (targetAspectRatio === "16:9" && sourceDimensions && sourceDimensions.height > sourceDimensions.width) {
+        // Vertical source manually exported to 16:9 landscape canvas
         filterComplexParts.push(
-          `${baseVideoSource}scale=1080:-2:force_original_aspect_ratio=decrease,pad=1080:1920:(1080-iw)/2:(1920-ih)/2:color=black[base_vert]`,
-          `[base_vert]${assFilter}[final_video]`
+          `${baseVideoSource}scale=-2:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(1920-iw)/2:(1080-ih)/2:color=black,setsar=1[base_land]`,
+          `[base_land]${assFilter}[final_video]`
+        );
+      } else if (targetAspectRatio === "1:1") {
+        // 1:1 Square Canvas
+        filterComplexParts.push(
+          `${baseVideoSource}scale=1080:1080:force_original_aspect_ratio=decrease,pad=1080:1080:(1080-iw)/2:(1080-ih)/2:color=black,setsar=1[base_sq]`,
+          `[base_sq]${assFilter}[final_video]`
         );
       } else {
         filterComplexParts.push(`${baseVideoSource}${assFilter}[final_video]`);
       }
       videoMapArg = "[final_video]";
     } else if (targetAspectRatio === "9:16") {
-      // 9:16 Clean Black Canvas without subtitles or anti-theft
+      // 9:16 Canvas without subtitles or anti-theft
+      if (verticalStyle === "crop") {
+        filterComplexParts.push(
+          `${baseVideoSource}scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920:(in_w-1080)/2:(in_h-1920)/2,setsar=1[final_video]`
+        );
+      } else {
+        filterComplexParts.push(
+          `${baseVideoSource}scale=1080:-2:force_original_aspect_ratio=decrease,pad=1080:1920:(1080-iw)/2:(1920-ih)/2:color=black,setsar=1[final_video]`
+        );
+      }
+      videoMapArg = "[final_video]";
+    } else if (targetAspectRatio === "16:9" && sourceDimensions && sourceDimensions.height > sourceDimensions.width) {
       filterComplexParts.push(
-        `${baseVideoSource}scale=1080:-2:force_original_aspect_ratio=decrease,pad=1080:1920:(1080-iw)/2:(1920-ih)/2:color=black[final_video]`
+        `${baseVideoSource}scale=-2:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(1920-iw)/2:(1080-ih)/2:color=black,setsar=1[final_video]`
+      );
+      videoMapArg = "[final_video]";
+    } else if (targetAspectRatio === "1:1") {
+      filterComplexParts.push(
+        `${baseVideoSource}scale=1080:1080:force_original_aspect_ratio=decrease,pad=1080:1080:(1080-iw)/2:(1080-ih)/2:color=black,setsar=1[final_video]`
       );
       videoMapArg = "[final_video]";
     }
@@ -1382,7 +1440,7 @@ function renderDubbedVideoWithDucking(options = {}) {
       const scaledH = scaledW;
       const opacity = Math.max(0.1, Math.min(1.0, Number(logoSettings.opacity || logoSettings.logoOpacity) || 0.9));
       const baseMargin = Math.max(10, Math.min(100, Math.round((Number(logoSettings.margin || logoSettings.logoMargin) || 20) * 1.5)));
-      const topMargin = targetAspectRatio === "9:16" ? (656 + baseMargin) : baseMargin;
+      const topMargin = (targetAspectRatio === "9:16" && verticalStyle !== "crop") ? (656 + baseMargin) : baseMargin;
       const sideMargin = baseMargin;
       const margin = baseMargin;
       const shape = logoSettings.shape || logoSettings.logoShape || "circle";
@@ -1434,7 +1492,8 @@ function renderDubbedVideoWithDucking(options = {}) {
 
     args.push("-map", videoMapArg, "-map", "[final_audio]");
 
-    if (!burnSubtitles && !hasLogo && targetAspectRatio !== "9:16" && !hasCustomCuts) {
+    const isVideoFiltered = (videoMapArg !== "0:v:0" && videoMapArg !== "[0:v:0]");
+    if (!burnSubtitles && !hasLogo && !isVideoFiltered && !hasCustomCuts) {
       args.push("-c:v", "copy");
     } else {
       if (checkQsvSupport()) {
@@ -2079,9 +2138,13 @@ function renderDubbedVideo(params) {
       bgVolume: params.duckingVolume ?? 0.15,
       khmerVolume: params.khmerVolume ?? 1.3,
       burnSubtitles: Boolean(params.burnSubtitles),
+      aspectRatio: params.aspectRatio,
+      verticalStyle: params.verticalStyle || "pad",
       subtitleOptions: {
         textColor: params.subtitleColor === "yellow" ? "#FFE600" : "#FFFFFF",
         fontSize: params.subtitleSize === "large" ? 64 : params.subtitleSize === "small" ? 42 : 52,
+        aspectRatio: params.aspectRatio,
+        verticalStyle: params.verticalStyle || "pad",
       },
       videoClips: params.videoClips || [],
     }).then((res) => res.outputVideoPath);

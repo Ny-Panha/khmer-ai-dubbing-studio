@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Sliders, CheckCircle2 } from 'lucide-react';
+import { Sliders } from 'lucide-react';
 import { parseTimeToSeconds } from '../utils/timestampUtils';
 import { previewVoiceApi } from '../services/api';
 
@@ -49,6 +49,8 @@ export default function VoiceSettings({
   renderStage = '',
   renderedVideo,
   selectedVideo,
+  videoMetadata = null,
+  activeEpisode = null,
   selectedClip = null,
   onSplitClip,
   onDeleteClip,
@@ -77,7 +79,6 @@ export default function VoiceSettings({
   onToggleMuteAllCuts = null,
   videoClips = [],
   onToggleDeliveryType = null,
-  videoMetadata = null,
   duration = 0,
 }) {
   const [isPlayingTest, setIsPlayingTest] = useState(false);
@@ -230,6 +231,28 @@ export default function VoiceSettings({
       setRegenStatusMap((prev) => ({ ...prev, [segKey]: 'text_updated' }));
     }
   }, [scriptData, onUpdateSegmentText]);
+
+  const handleSegmentChineseChange = useCallback((segIdx, newChineseText) => {
+    if (!scriptData?.segments) return;
+    const targetSeg = scriptData.segments[segIdx];
+    if (!targetSeg) return;
+
+    if (onUpdateScript) {
+      const updated = [...scriptData.segments];
+      updated[segIdx] = {
+        ...updated[segIdx],
+        originalChineseText: newChineseText,
+        chineseText: newChineseText,
+        originalText: newChineseText,
+        original: newChineseText,
+        chinese: newChineseText,
+      };
+      onUpdateScript({
+        ...scriptData,
+        segments: updated,
+      });
+    }
+  }, [scriptData, onUpdateScript]);
 
   const handleClipVoiceChange = useCallback(async (segIdOrIndex, newVoiceId, targetIndex = null) => {
     if (onUpdateSegmentVoice) {
@@ -712,12 +735,6 @@ export default function VoiceSettings({
             ការកំណត់សំឡេង & Export (Inspector)
           </span>
         </div>
-        {audioGenerated && (
-          <span style={{ fontSize: '0.72rem', color: 'var(--color-success)', display: 'flex', alignItems: 'center', gap: 4, fontWeight: 600 }}>
-            <CheckCircle2 size={12} />
-            Audio Synced
-          </span>
-        )}
       </div>
 
       <div className="inspector-content">
@@ -730,6 +747,7 @@ export default function VoiceSettings({
           selectedClip={selectedClip}
           onSegmentTextChange={handleSegmentTextChange}
           onSegmentTextBlur={handleSegmentTextBlur}
+          onSegmentChineseChange={handleSegmentChineseChange}
           onSingleRegen={handleSingleRegen}
           regeneratingId={regeneratingId}
           regenStatus={regenStatusMap[String(selectedSegment?.id ?? selectedSegmentIndex)] || selectedSegment?.textStatus}
@@ -778,6 +796,8 @@ export default function VoiceSettings({
           renderProgress={renderProgress}
           renderStage={renderStage}
           selectedVideo={selectedVideo}
+          videoMetadata={videoMetadata}
+          activeEpisode={activeEpisode}
           audioGenerated={audioGenerated}
           previewAudioUrl={previewAudioUrl}
           renderedVideo={renderedVideo}

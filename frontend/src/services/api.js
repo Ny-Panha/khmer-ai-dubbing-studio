@@ -425,7 +425,9 @@ export async function renderVideoApi({
   subtitleColor = 'white',
   subtitleSize = 'medium',
   subtitleStyle = 'banner',
-  aspectRatio = '16:9',
+  aspectRatio = null,
+  verticalStyle = 'pad',
+  sourceDimensions = null,
   subtitleOptions = {},
   voiceId = 'km-KH-PisethNeural',
   speed = 'normal',
@@ -434,6 +436,18 @@ export async function renderVideoApi({
   logoSettings = null,
   videoTitle = null,
 }) {
+  let effectiveAspectRatio = aspectRatio;
+  if (!effectiveAspectRatio) {
+    const w = Number(sourceDimensions?.width) || 0;
+    const h = Number(sourceDimensions?.height) || 0;
+    if (w && h) {
+      effectiveAspectRatio = h > w ? '9:16' : (w > h ? '16:9' : '1:1');
+    } else {
+      console.warn('[renderVideoApi] Source video metadata genuinely missing dimensions, falling back to 16:9 last-resort.');
+      effectiveAspectRatio = '16:9';
+    }
+  }
+
   const res = await fetch('/api/render-video', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -453,8 +467,13 @@ export async function renderVideoApi({
       subtitleColor,
       subtitleSize,
       subtitleStyle,
-      aspectRatio,
-      subtitleOptions,
+      aspectRatio: effectiveAspectRatio,
+      verticalStyle: verticalStyle || 'pad',
+      subtitleOptions: {
+        ...subtitleOptions,
+        aspectRatio: effectiveAspectRatio,
+        verticalStyle: verticalStyle || 'pad',
+      },
       voiceId,
       speed,
       speakerMap,

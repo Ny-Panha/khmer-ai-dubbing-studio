@@ -131,6 +131,7 @@ export default function App() {
     setCurrentTime: handleSetCurrentTime,
     activeRequestRef,
     clearHistory: handleClearHistory,
+    handleClearVideo: media.handleClearVideo,
     audioProgressTimerRef: audioRef.current.audioProgressTimerRef,
   });
 
@@ -194,6 +195,7 @@ export default function App() {
   const render = useVideoRender({
     selectedVideo: media.selectedVideo,
     videoMetadata: media.videoMetadata,
+    activeEpisode: series.activeEpisode,
     audioGenerated: audio.audioGenerated,
     speakerRegistry,
     voiceSettings,
@@ -432,6 +434,7 @@ export default function App() {
           isRendering={render.isRendering}
           renderProgress={render.renderProgress}
           selectedVideo={media.selectedVideo}
+          videoMetadata={media.videoMetadata}
           renderedVideo={render.renderedVideo}
           activeSeries={series.activeSeries}
           activeEpisode={series.activeEpisode}
@@ -678,6 +681,10 @@ export default function App() {
               isGeneratingAudio={audio.isGeneratingAudio}
               onAddClipToTimeline={handleAddClipToTimeline}
               mediaAssets={media.mediaAssets || EMPTY_ARRAY}
+              onImportClick={handleImportClick}
+              onVideoSelected={handleVideoSelected}
+              seriesId={series.seriesId}
+              episodeId={series.episodeId}
             />
           </div>
         </main>

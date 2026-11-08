@@ -1,11 +1,14 @@
 import { useState } from 'react';
 import { renderVideoApi } from '../services/api';
+import { resolveDefaultAspectRatio } from '../utils/projectStorage';
 
 /**
  * Custom hook to manage final video export and FFmpeg rendering
  */
 export function useVideoRender({
   selectedVideo,
+  videoMetadata = null,
+  activeEpisode = null,
   audioGenerated,
   speakerRegistry,
   voiceSettings,
@@ -16,6 +19,9 @@ export function useVideoRender({
   setIsPlaying,
   seriesId = null,
   episodeId = null,
+  activeSeries = null,
+  handleSaveEpisodeBackground = null,
+  setAudioOutdated = null,
 }) {
   const [renderedVideo, setRenderedVideo] = useState(null);
   const [isRendering, setIsRendering] = useState(false);
@@ -104,6 +110,24 @@ export function useVideoRender({
         margin: Number(voiceSettings.logoMargin) || 20,
       };
 
+      // Resolve effective export aspect ratio:
+      // 1. User manual select in voiceSettings.aspectRatio takes precedence.
+      // 2. Otherwise default from source dimensions (9:16 portrait, 16:9 landscape, 1:1 square).
+      // 3. Last-resort 16:9 only if source dimensions are genuinely missing.
+      const srcW = Number(videoMetadata?.width || selectedVideo?.width || activeEpisode?.metadata?.width || activeEpisode?.video?.width) || 0;
+      const srcH = Number(videoMetadata?.height || selectedVideo?.height || activeEpisode?.metadata?.height || activeEpisode?.video?.height) || 0;
+      const defaultRatio = resolveDefaultAspectRatio(srcW, srcH);
+
+      let effectiveAspectRatio = voiceSettings.aspectRatio;
+      if (!effectiveAspectRatio) {
+        if (defaultRatio) {
+          effectiveAspectRatio = defaultRatio;
+        } else {
+          console.warn('[useVideoRender] Source video metadata genuinely missing dimensions, falling back to 16:9 last-resort.');
+          effectiveAspectRatio = '16:9';
+        }
+      }
+
       const result = await renderVideoApi({
         videoId: selectedVideo.videoId,
         projectName: dramaName,
@@ -120,7 +144,9 @@ export function useVideoRender({
         subtitleColor: voiceSettings.subtitleColor,
         subtitleSize: voiceSettings.subtitleSize,
         subtitleStyle: voiceSettings.subtitleStyle || 'banner',
-        aspectRatio: voiceSettings.aspectRatio || '16:9',
+        aspectRatio: effectiveAspectRatio,
+        verticalStyle: voiceSettings.verticalStyle || 'pad',
+        sourceDimensions: srcW && srcH ? { width: srcW, height: srcH } : null,
         voiceId: activeVoiceId,
         speed: activeSpeed,
         speakerMap,

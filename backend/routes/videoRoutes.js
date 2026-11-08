@@ -209,7 +209,17 @@ router.post("/render-video", async (req, res) => {
       safeExportTitle.toLowerCase() !== "drama_project"
     );
 
-    const targetAspectRatio = subtitleOptions.aspectRatio || req.body.aspectRatio || "16:9";
+    const rawAspectRatio = subtitleOptions.aspectRatio || req.body.aspectRatio || req.body.voiceSettings?.aspectRatio;
+    let targetAspectRatio = rawAspectRatio;
+    if (!targetAspectRatio) {
+      if (meta?.width && meta?.height) {
+        targetAspectRatio = meta.height > meta.width ? "9:16" : (meta.width > meta.height ? "16:9" : "1:1");
+      } else {
+        console.warn("[RenderVideo] Source video metadata genuinely missing dimensions, falling back to 16:9 last-resort");
+        targetAspectRatio = "16:9";
+      }
+    }
+    const verticalStyle = subtitleOptions.verticalStyle || req.body.verticalStyle || req.body.voiceSettings?.verticalStyle || "pad";
     const ratioSuffix = targetAspectRatio === "9:16" && !safeExportTitle.includes("9-16")
       ? " [9-16 TikTok Reels]"
       : (targetAspectRatio === "1:1" && !safeExportTitle.includes("1-1") ? " [1-1 Square]" : "");
@@ -246,6 +256,7 @@ router.post("/render-video", async (req, res) => {
       outlineColor: subtitleOptions.outlineColor || "#000000",
       subtitleStyle: subtitleOptions.subtitleStyle || req.body?.subtitleStyle || subtitleStyle || "banner",
       aspectRatio: targetAspectRatio,
+      verticalStyle,
       marginV: subtitleOptions.marginV || null,
     };
 
@@ -288,6 +299,7 @@ router.post("/render-video", async (req, res) => {
         burnSubtitles: Boolean(burnSubtitles),
         subtitleOptions: finalSubOptions,
         aspectRatio: targetAspectRatio,
+        verticalStyle,
         videoClips,
         antiTheft: antiTheft || req.body?.voiceSettings?.antiTheft || null,
         logoSettings: resolvedLogoPath ? {
@@ -354,14 +366,6 @@ router.post("/split-video-episodes", async (req, res) => {
       return res.status(400).json({ success: false, error: "videoPath or videoId is required" });
     }
 
-    const inputVideoPath = resolveMediaFile(rawVideoRef);
-    if (!inputVideoPath || !fs.existsSync(inputVideoPath)) {
-      return res.status(404).json({ success: false, error: "Source video not found: " + rawVideoRef });
-    }
-
-    const meta = await getVideoMetadata(inputVideoPath);
-    const totalDuration = meta?.duration || 0;
-
     const epCountNum = (episodeCount !== undefined && episodeCount !== null && episodeCount !== "") ? Number(episodeCount) : null;
     const durMinNum = (durationMinutes !== undefined && durationMinutes !== null && durationMinutes !== "") ? Number(durationMinutes) : null;
     const durSecNum = (durationSeconds !== undefined && durationSeconds !== null && durationSeconds !== "") ? Number(durationSeconds) : null;
@@ -376,6 +380,14 @@ router.post("/split-video-episodes", async (req, res) => {
         error: "user must choose episode count or minutes"
       });
     }
+
+    const inputVideoPath = resolveMediaFile(rawVideoRef);
+    if (!inputVideoPath || !fs.existsSync(inputVideoPath)) {
+      return res.status(404).json({ success: false, error: "Source video not found: " + rawVideoRef });
+    }
+
+    const meta = await getVideoMetadata(inputVideoPath);
+    const totalDuration = meta?.duration || 0;
 
     let targetDurationSec;
     if (hasValidEpCount) {
@@ -442,16 +454,18 @@ router.post("/split-video-episodes", async (req, res) => {
           videoUrl: epVideoUrl,
           videoPath: epVideoDestPath,
           durationSec: chunk.duration,
+          width: meta?.width || 1920,
+          height: meta?.height || 1080,
           sizeMB: parseFloat((fileStatSize / (1024 * 1024)).toFixed(2)),
           size: (fileStatSize / (1024 * 1024)).toFixed(1) + " MB",
         },
         metadata: {
           duration: chunk.duration,
           durationSec: chunk.duration,
-          width: 1920,
-          height: 1080,
-          resolution: "1920x1080",
-          hasAudio: true,
+          width: meta?.width || 1920,
+          height: meta?.height || 1080,
+          resolution: meta?.resolution || (meta?.width ? `${meta.width}x${meta.height}` : "1920x1080"),
+          hasAudio: meta?.hasAudio !== false,
         },
         scriptData: null,
         speakerRegistry: {},

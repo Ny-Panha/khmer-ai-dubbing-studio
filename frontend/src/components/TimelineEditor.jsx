@@ -51,6 +51,10 @@ function TimelineEditor({
   onAddClipToTimeline = null,
   mediaAssets = [],
   activeTab = 'media',
+  onImportClick = null,
+  onVideoSelected = null,
+  seriesId = null,
+  episodeId = null,
 }) {
   const [zoom, setZoom] = useState(1);
   const [selectedSubId, setSelectedSubId] = useState(null);
@@ -1258,8 +1262,9 @@ function TimelineEditor({
   }, [pps]);
 
   const markers = React.useMemo(() => {
-    if (totalDuration <= 0) return [];
-    const maxMarkerSec = Math.ceil(totalDuration) + Math.ceil(1000 / pps);
+    // Standard CapCut timeline: if empty, display clean 60s default ruler timeline
+    const effectiveDur = totalDuration > 0 ? totalDuration : 60;
+    const maxMarkerSec = Math.ceil(effectiveDur) + Math.ceil(1000 / pps);
     const arr = [];
     const step = minorStepSec;
     for (let s = 0; s <= maxMarkerSec; s += step) {
@@ -1387,6 +1392,10 @@ function TimelineEditor({
             window.__activeDraggedTimelineItem = null;
             setDragState(null);
           }}
+          onImportClick={onImportClick}
+          onVideoSelected={onVideoSelected}
+          seriesId={seriesId}
+          episodeId={episodeId}
         />
       </div>
     </div>

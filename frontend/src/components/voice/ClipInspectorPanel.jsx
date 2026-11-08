@@ -3,7 +3,7 @@ import React, { useState } from 'react';
 import {
   Mic, Edit3, Sparkles, Loader2, Scissors, CheckCircle2,
   Volume2, VolumeX, RefreshCw, Trash2, AlertCircle, Pause,
-  Copy, Check, UserCheck, User, HelpCircle
+  Copy, Check
 } from 'lucide-react';
 import { isLongKhmerSubtitle } from '../../utils/khmerTextSplitter';
 import { retranslateSegmentApi } from '../../services/api';
@@ -40,9 +40,9 @@ export default function ClipInspectorPanel({
   onUpdateSpeakerVoice = null,
   onAutoSplitSegment = null,
   onToggleDeliveryType = null,
+  onSegmentChineseChange = null,
 }) {
   const [copiedChinese, setCopiedChinese] = useState(false);
-  const [appliedToSpeaker, setAppliedToSpeaker] = useState(false);
   const [isRetranslating, setIsRetranslating] = useState(false);
   const [retranslateData, setRetranslateData] = useState(null);
   const retranslateCacheRef = React.useRef({});
@@ -50,6 +50,16 @@ export default function ClipInspectorPanel({
   const originalChinese = selectedSegment?.originalChineseText || selectedSegment?.chineseText || selectedSegment?.originalText || selectedSegment?.original || selectedSegment?.chinese || '';
   const khmerText = selectedSegment?.khmerTranslatedText || selectedSegment?.khmer || selectedSegment?.khmerText || '';
   const currentSegKey = selectedSegment ? String(selectedSegment.id ?? selectedSegmentIndex) : '';
+
+  // Local Chinese state with debouncing for direct editing
+  const [localChineseText, setLocalChineseText] = useState(originalChinese);
+  const localChineseTextRef = React.useRef(originalChinese);
+  localChineseTextRef.current = localChineseText;
+  const chineseDebounceTimerRef = React.useRef(null);
+  const lastCommittedChineseRef = React.useRef(originalChinese);
+  const prevPropChineseTextRef = React.useRef(originalChinese);
+  const onSegmentChineseChangeRef = React.useRef(onSegmentChineseChange);
+  onSegmentChineseChangeRef.current = onSegmentChineseChange;
 
   // Local text state with debouncing: typing updates in <1ms without re-rendering all segments across the app!
   const [localKhmerText, setLocalKhmerText] = useState(khmerText);
@@ -74,6 +84,14 @@ export default function ClipInspectorPanel({
         onSegmentTextChangeRef.current(selectedSegmentIndexRef.current, localKhmerTextRef.current);
       }
     }
+    if (chineseDebounceTimerRef.current) {
+      clearTimeout(chineseDebounceTimerRef.current);
+      chineseDebounceTimerRef.current = null;
+      if (localChineseTextRef.current !== lastCommittedChineseRef.current && onSegmentChineseChangeRef.current) {
+        lastCommittedChineseRef.current = localChineseTextRef.current;
+        onSegmentChineseChangeRef.current(selectedSegmentIndexRef.current, localChineseTextRef.current);
+      }
+    }
   }, []);
 
   React.useEffect(() => {
@@ -84,6 +102,12 @@ export default function ClipInspectorPanel({
       localKhmerTextRef.current = khmerText;
       lastCommittedTextRef.current = khmerText;
       prevPropKhmerTextRef.current = khmerText;
+
+      setLocalChineseText(originalChinese);
+      localChineseTextRef.current = originalChinese;
+      lastCommittedChineseRef.current = originalChinese;
+      prevPropChineseTextRef.current = originalChinese;
+
       setRetranslateData(retranslateCacheRef.current[currentSegKey] || null);
     }
   }, [currentSegKey, flushPendingCommit]);
@@ -105,7 +129,15 @@ export default function ClipInspectorPanel({
         lastCommittedTextRef.current = khmerText;
       }
     }
-  }, [khmerText, currentSegKey]);
+    if (selectedSegment && originalChinese !== prevPropChineseTextRef.current) {
+      prevPropChineseTextRef.current = originalChinese;
+      if (!chineseDebounceTimerRef.current && localChineseTextRef.current === lastCommittedChineseRef.current) {
+        setLocalChineseText(originalChinese);
+        localChineseTextRef.current = originalChinese;
+        lastCommittedChineseRef.current = originalChinese;
+      }
+    }
+  }, [khmerText, originalChinese, currentSegKey]);
 
   // Find corresponding video clip for this segment
   const associatedClip = React.useMemo(() => {
@@ -235,6 +267,34 @@ export default function ClipInspectorPanel({
     }
   };
 
+  const handleChineseTextChange = (e) => {
+    const val = e.target.value;
+    setLocalChineseText(val);
+    localChineseTextRef.current = val;
+    if (chineseDebounceTimerRef.current) {
+      clearTimeout(chineseDebounceTimerRef.current);
+    }
+    chineseDebounceTimerRef.current = setTimeout(() => {
+      chineseDebounceTimerRef.current = null;
+      lastCommittedChineseRef.current = val;
+      if (onSegmentChineseChangeRef.current) {
+        onSegmentChineseChangeRef.current(selectedSegmentIndexRef.current, val);
+      }
+    }, 350);
+  };
+
+  const handleChineseTextBlur = (e) => {
+    if (chineseDebounceTimerRef.current) {
+      clearTimeout(chineseDebounceTimerRef.current);
+      chineseDebounceTimerRef.current = null;
+    }
+    const val = e.target.value;
+    if (val !== lastCommittedChineseRef.current && onSegmentChineseChangeRef.current) {
+      lastCommittedChineseRef.current = val;
+      onSegmentChineseChangeRef.current(selectedSegmentIndexRef.current, val);
+    }
+  };
+
   const handleKhmerTextChange = (e) => {
     const val = e.target.value;
     setLocalKhmerText(val);
@@ -260,10 +320,11 @@ export default function ClipInspectorPanel({
 
   // ✨ AI In-App Re-Translation handler (1-Click classical drama options)
   const handleAiRetranslate = async () => {
-    if (!originalChinese || isRetranslating) return;
+    const textToTranslate = (localChineseText || originalChinese || '').trim();
+    if (!textToTranslate || isRetranslating) return;
     setIsRetranslating(true);
     try {
-      const res = await retranslateSegmentApi(originalChinese, {
+      const res = await retranslateSegmentApi(textToTranslate, {
         speaker: selectedSegment?.speaker,
         gender: selectedSegment?.gender || selectedSegment?.speakerGender,
       });
@@ -309,36 +370,10 @@ export default function ClipInspectorPanel({
     }
   };
 
-  // Pipeline status computation: Transcribing → Translating → Speaker Review → Generating Khmer Voice → Ready (or Error)
-  const getPipelineStatus = () => {
-    if (isError) return { step: -1, label: 'Error', color: '#ef4444' };
-    if (isGenerating) return { step: 3, label: 'Generating Khmer Voice', color: '#38bdf8' };
-    if (selectedSegment.translationStatus === 'transcribing') return { step: 0, label: 'Transcribing', color: '#fbbf24' };
-    if (selectedSegment.translationStatus === 'translating') return { step: 1, label: 'Translating', color: '#fbbf24' };
-    if (selectedSegment.translationStatus === 'review_needed' || (!khmerText && originalChinese)) {
-      return { step: 2, label: 'Speaker Review (Needs Translation)', color: '#f59e0b' };
-    }
-    if (isTextUpdated || selectedSegment.audioOutdated) {
-      return { step: 2, label: 'Speaker Review (Edited)', color: '#f59e0b' };
-    }
-    if (selectedSegment.audioUrl || selectedSegment.ttsStatus === 'ready' || isVoiceUpdated) {
-      return { step: 4, label: 'Ready', color: '#22c55e' };
-    }
-    return { step: 2, label: 'Speaker Review', color: '#38bdf8' };
-  };
-
-  const pipeline = getPipelineStatus();
-  const pipelineSteps = [
-    { num: 1, name: 'ASR', title: '1. Transcribe (ASR)' },
-    { num: 2, name: 'Script', title: '2. Translate & Script' },
-    { num: 3, name: 'Review', title: '3. Speaker Review' },
-    { num: 4, name: 'Voice', title: '4. Khmer Voice (TTS)' },
-    { num: 5, name: 'Ready', title: '5. Synchronized & Ready' },
-  ];
-
   const handleCopyChinese = () => {
-    if (originalChinese) {
-      navigator.clipboard?.writeText(originalChinese);
+    const textToCopy = (localChineseText || originalChinese || '').trim();
+    if (textToCopy) {
+      navigator.clipboard?.writeText(textToCopy);
       setCopiedChinese(true);
       setTimeout(() => setCopiedChinese(false), 2000);
     }
@@ -359,14 +394,6 @@ export default function ClipInspectorPanel({
   const isSreymomActive = segVoiceId.includes('Sreymom') || (!segVoiceId.includes('Piseth') && detectedGender === 'female');
   const effectiveVoiceId = isSreymomActive ? 'km-KH-SreymomNeural' : 'km-KH-PisethNeural';
 
-  const handleApplyVoiceToAllSegments = (targetVoiceId) => {
-    if (onUpdateSpeakerVoice && speakerId) {
-      onUpdateSpeakerVoice(speakerId, targetVoiceId, selectedSegment.speed || 'normal');
-      setAppliedToSpeaker(true);
-      setTimeout(() => setAppliedToSpeaker(false), 2500);
-    }
-  };
-
   return (
     <div className="inspector-card-group">
       <div style={{
@@ -375,63 +402,8 @@ export default function ClipInspectorPanel({
           borderRadius: 6,
           padding: '10px',
         }}>
-          {/* Pro Pipeline Stage Tracker */}
-          <div style={{
-            marginBottom: 10,
-            padding: '8px 10px',
-            background: 'rgba(0, 0, 0, 0.25)',
-            borderRadius: 6,
-            border: '1px solid rgba(255, 255, 255, 0.07)'
-          }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-              <span style={{ fontSize: '0.68rem', color: '#94a3b8', fontWeight: 600 }}>
-                Status Pipeline:
-              </span>
-              <span style={{
-                fontSize: '0.66rem',
-                color: pipeline.color,
-                fontWeight: 600,
-                background: `${pipeline.color}15`,
-                padding: '2px 7px',
-                borderRadius: 4,
-                border: `1px solid ${pipeline.color}33`
-              }}>
-                {pipeline.label}
-              </span>
-            </div>
-            {/* Sleek Segmented Pipeline Bar */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 4, background: 'rgba(255, 255, 255, 0.03)', padding: '3px', borderRadius: 5, border: '1px solid rgba(255, 255, 255, 0.05)' }}>
-              {pipelineSteps.map((s, idx) => {
-                const isActive = pipeline.step === idx;
-                const isDone = pipeline.step > idx;
-                return (
-                  <div
-                    key={s.num}
-                    style={{
-                      flex: 1,
-                      textAlign: 'center',
-                      padding: '3px 0',
-                      borderRadius: 4,
-                      background: isActive ? 'rgba(56, 189, 248, 0.18)' : (isDone ? 'rgba(16, 185, 129, 0.12)' : 'transparent'),
-                      border: `1px solid ${isActive ? 'rgba(56, 189, 248, 0.4)' : (isDone ? 'rgba(16, 185, 129, 0.25)' : 'transparent')}`,
-                      fontSize: '0.64rem',
-                      color: isActive ? '#38bdf8' : (isDone ? '#34d399' : '#64748b'),
-                      fontWeight: (isActive || isDone) ? 600 : 400,
-                      whiteSpace: 'nowrap',
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      transition: 'all 0.15s ease'
-                    }}
-                    title={s.title || `${s.num}. ${s.name}`}
-                  >
-                    {s.name}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
 
-          {/* 1. Original Chinese Dialogue Display */}
+          {/* Dialogue & Translation Card (Chinese Source + Khmer Target) */}
           <div style={{
             marginBottom: 10,
             padding: '8px 10px',
@@ -439,12 +411,13 @@ export default function ClipInspectorPanel({
             borderRadius: 6,
             border: '1px solid rgba(255, 255, 255, 0.1)'
           }}>
+            {/* 1. Chinese Original Header */}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
               <label style={{ fontSize: '0.72rem', color: '#38bdf8', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 5 }}>
-                <span>🇨🇳</span>
+                <span style={{ background: 'rgba(56, 189, 248, 0.15)', border: '1px solid rgba(56, 189, 248, 0.3)', padding: '1px 5px', borderRadius: 3, fontSize: '0.62rem', fontWeight: 800 }}>CN</span>
                 <span>អត្ថបទដើមចិន (Original):</span>
               </label>
-              {originalChinese && (
+              {(localChineseText || originalChinese) && (
                 <button
                   type="button"
                   onClick={handleCopyChinese}
@@ -469,22 +442,31 @@ export default function ClipInspectorPanel({
                 </button>
               )}
             </div>
-            <div style={{
-              fontSize: '0.86rem',
-              color: originalChinese ? '#f3f4f6' : 'var(--text-dim)',
-              lineHeight: 1.5,
-              wordBreak: 'break-word',
-              fontStyle: originalChinese ? 'normal' : 'italic',
-              background: 'rgba(0, 0, 0, 0.25)',
-              padding: '6px 8px',
-              borderRadius: 4,
-              border: '1px solid rgba(255, 255, 255, 0.05)'
-            }}>
-              {originalChinese || 'គ្មានអត្ថបទដើមចិន (No Chinese text transcribed)'}
-            </div>
+            <textarea
+              rows={2}
+              value={localChineseText}
+              onChange={handleChineseTextChange}
+              onBlur={handleChineseTextBlur}
+              placeholder="បញ្ចូល ឬកែសម្រួលអត្ថបទដើមចិននៅទីនេះ..."
+              style={{
+                width: '100%',
+                boxSizing: 'border-box',
+                fontSize: '0.86rem',
+                color: '#f3f4f6',
+                lineHeight: 1.5,
+                background: 'rgba(0, 0, 0, 0.25)',
+                padding: '6px 8px',
+                borderRadius: 4,
+                border: '1px solid rgba(255, 255, 255, 0.08)',
+                outline: 'none',
+                resize: 'vertical',
+                fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Microsoft YaHei", sans-serif',
+                transition: 'all 0.2s ease',
+              }}
+            />
 
             {/* AI Re-Translation Action Button (Clean, 1-Line, Never Squished) */}
-            {originalChinese && (
+            {(localChineseText || originalChinese) && (
               <div style={{ marginTop: 6, display: 'flex', justifyContent: 'flex-end' }}>
                 <button
                   type="button"
@@ -512,75 +494,19 @@ export default function ClipInspectorPanel({
                 </button>
               </div>
             )}
-          </div>
 
-          {/* 2. Speaker & Gender Classification Metadata */}
-          <div style={{
-            marginBottom: 10,
-            padding: '7px 9px',
-            background: 'rgba(0, 0, 0, 0.35)',
-            borderRadius: 6,
-            border: '1px solid rgba(255, 255, 255, 0.08)'
-          }}>
-            <div style={{ marginBottom: 6 }}>
-              <span style={{ fontSize: '0.72rem', color: 'var(--text-dim)', fontWeight: 600 }}>
-                តួអង្គ និងភេទ (Speaker & Gender):
-              </span>
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-                <span style={{ fontSize: '0.74rem', color: '#ffffff', fontWeight: 700 }}>
-                  {speakerName}
-                </span>
-                {/* Gender Badge with Confidence */}
-                <span style={{
-                  fontSize: '0.68rem',
-                  padding: '2px 7px',
-                  borderRadius: 4,
-                  fontWeight: 700,
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 4,
-                  background: detectedGender === 'female'
-                    ? 'rgba(244, 114, 182, 0.2)'
-                    : (detectedGender === 'male' ? 'rgba(56, 189, 248, 0.2)' : 'rgba(245, 158, 11, 0.2)'),
-                  color: detectedGender === 'female'
-                    ? '#f472b6'
-                    : (detectedGender === 'male' ? '#38bdf8' : '#fbbf24'),
-                  border: `1px solid ${detectedGender === 'female' ? 'rgba(244, 114, 182, 0.5)' : (detectedGender === 'male' ? 'rgba(56, 189, 248, 0.5)' : 'rgba(245, 158, 11, 0.5)')}`
-                }}>
-                  {detectedGender === 'female' ? (
-                    <>
-                      <User size={11} strokeWidth={2.4} />
-                      <span>ស្រី (Female)</span>
-                    </>
-                  ) : (detectedGender === 'male' ? (
-                    <>
-                      <User size={11} strokeWidth={2.4} />
-                      <span>ប្រុស (Male)</span>
-                    </>
-                  ) : (
-                    <>
-                      <HelpCircle size={11} />
-                      <span>មិនទាន់ច្បាស់ (Unknown)</span>
-                    </>
-                  ))}
-                  {detectedGender !== 'unknown' && genderConfidence !== null && genderConfidence > 50 && (
-                    <span style={{ fontSize: '0.62rem', opacity: 0.85 }}>({genderConfidence}%)</span>
-                  )}
-                </span>
-              </div>
+            {/* Subtle Gradient Divider between Chinese Source & Khmer Target */}
+            <div style={{
+              height: 1,
+              background: 'linear-gradient(90deg, rgba(56, 189, 248, 0.25) 0%, rgba(255, 255, 255, 0.08) 50%, rgba(56, 189, 248, 0.25) 100%)',
+              margin: '10px 0'
+            }} />
 
-              
-            </div>
-          </div>
-
-          {/* 3. Khmer Subtitle Text (Editable right in Inspector) */}
-          <div style={{ marginBottom: 10 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 5 }}>
-              <label style={{ fontSize: '0.74rem', color: '#ffffff', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 5 }}>
-                <Edit3 size={12} color="var(--accent-cyan)" />
-                <span>🇰🇭 អត្ថបទបកប្រែខ្មែរ (Translation):</span>
+            {/* 2. Khmer Translation Header */}
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+              <label style={{ fontSize: '0.72rem', color: '#38bdf8', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 5 }}>
+                <span style={{ background: 'rgba(56, 189, 248, 0.15)', border: '1px solid rgba(56, 189, 248, 0.3)', padding: '1px 5px', borderRadius: 3, fontSize: '0.62rem', fontWeight: 800 }}>KH</span>
+                <span>អត្ថបទបកប្រែខ្មែរ (Translation):</span>
               </label>
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                 {isGenerating && (
@@ -623,16 +549,16 @@ export default function ClipInspectorPanel({
                     boxSizing: 'border-box',
                     fontSize: '0.84rem',
                     color: '#ffffff',
-                    background: 'rgba(0, 0, 0, 0.45)',
+                    background: 'rgba(0, 0, 0, 0.25)',
                     border: isGenerating
-                      ? '1.5px solid #38bdf8'
-                      : (isError ? '1.5px solid #ef4444' : (isVoiceUpdated ? '1.5px solid #22c55e' : (isTextUpdated ? '1.5px solid #f59e0b' : '1px solid rgba(76, 141, 255, 0.35)'))),
+                      ? '1px solid #38bdf8'
+                      : (isError ? '1px solid #ef4444' : (isVoiceUpdated ? '1px solid #22c55e' : (isTextUpdated ? '1px solid rgba(245, 158, 11, 0.65)' : '1px solid rgba(255, 255, 255, 0.08)'))),
                     boxShadow: isGenerating
-                      ? '0 0 10px rgba(56, 189, 248, 0.35)'
-                      : (isVoiceUpdated ? '0 0 8px rgba(34, 197, 94, 0.3)' : 'none'),
-                    borderRadius: 6,
-                    padding: '8px 10px',
-                    lineHeight: 1.6,
+                      ? '0 0 10px rgba(56, 189, 248, 0.25)'
+                      : (isVoiceUpdated ? '0 0 8px rgba(34, 197, 94, 0.25)' : 'none'),
+                    borderRadius: 4,
+                    padding: '6px 8px',
+                    lineHeight: 1.5,
                     outline: 'none',
                     resize: 'vertical',
                     fontFamily: 'var(--font-khmer), -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
@@ -675,7 +601,7 @@ export default function ClipInspectorPanel({
                             padding: '6px 8px',
                             background: 'rgba(30, 26, 46, 0.85)',
                             border: '1px solid rgba(168, 85, 247, 0.25)',
-                            borderRadius: 5,
+                            borderRadius: 4,
                             color: '#f1f5f9',
                             fontSize: '0.78rem',
                             textAlign: 'left',
@@ -784,7 +710,7 @@ export default function ClipInspectorPanel({
                       fontSize: '0.72rem',
                       background: 'linear-gradient(135deg, #0284c7, #2563eb)',
                       border: 'none',
-                      borderRadius: 5,
+                      borderRadius: 4,
                       color: '#ffffff',
                       cursor: 'pointer',
                       fontWeight: 600,
@@ -964,34 +890,6 @@ export default function ClipInspectorPanel({
                     <span>👩 ស្រី</span>
                   </button>
                 </div>
-
-                {/* Apply to All Dialogue of this Speaker Button */}
-                {onUpdateSpeakerVoice && speakerId && (
-                  <button
-                    type="button"
-                    onClick={() => handleApplyVoiceToAllSegments(effectiveVoiceId)}
-                    style={{
-                      width: '100%',
-                      padding: '5px 8px',
-                      fontSize: '0.68rem',
-                      borderRadius: 4,
-                      border: '1px dashed rgba(76, 141, 255, 0.35)',
-                      background: appliedToSpeaker ? 'rgba(34, 197, 94, 0.18)' : 'rgba(76, 141, 255, 0.08)',
-                      color: appliedToSpeaker ? '#4ade80' : 'var(--text-secondary)',
-                      cursor: 'pointer',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      gap: 5,
-                      fontWeight: 600,
-                      transition: 'all 0.2s ease'
-                    }}
-                    title={`កំណត់សំឡេងនេះចំពោះឃ្លាទាំងអស់របស់ ${speakerName}`}
-                  >
-                    {appliedToSpeaker ? <Check size={12} /> : <UserCheck size={12} />}
-                    <span>{appliedToSpeaker ? `បានអនុវត្តចំពោះឃ្លាទាំងអស់របស់ ${speakerName}!` : `អនុវត្តសំឡេងនេះចំពោះរាល់ឃ្លារបស់ "${speakerName}"`}</span>
-                  </button>
-                )}
               </div>
 
               {/* Speaker & Audio Status */}

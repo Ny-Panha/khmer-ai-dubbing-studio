@@ -16,7 +16,8 @@ export default function TimelineTrackHeaders({
   selectedVideo = null,
   scriptSegments = [],
 }) {
-  const showVoice = audioGenerated || (scriptSegments && scriptSegments.length > 0);
+  // Option 1 CapCut style: Always show standard multi-track headers (VIDEO, VOICE 1, VOICE 2, CLEAN BGM)
+  const effectiveVoiceRowCount = Math.min(2, Math.max(2, voiceRowCount || 2));
 
   return (
     <div className="track-headers-column">
@@ -64,7 +65,7 @@ export default function TimelineTrackHeaders({
       })}
 
       {/* Khmer AI Voice Tracks (Height: 48px) */}
-      {showVoice && Array.from({ length: Math.min(2, Math.max(1, voiceRowCount)) }).map((_, rIdx) => {
+      {Array.from({ length: effectiveVoiceRowCount }).map((_, rIdx) => {
         const trackKey = `voice_${rIdx}`;
         const trackLabel = `VOICE ${rIdx + 1}`;
         const isLocked = Boolean(lockedTracks[trackKey] || (rIdx === 0 && lockedTracks.voice));
@@ -158,33 +159,31 @@ export default function TimelineTrackHeaders({
       })}
 
       {/* Clean BGM Track (Height: 40px) */}
-      {selectedVideo && (
-        <div className="track-header clean-bgm-track-hdr">
-          <div className="track-title-box">
-            <span className="track-title-text" title="CLEAN BGM">
-              CLEAN BGM
-            </span>
-          </div>
-          <div className="track-mini-icons">
-            <button 
-              type="button" 
-              className={`track-ctrl-mini-btn ${mutedTracks.cleanBgm ? 'is-active-mute' : ''}`}
-              onClick={() => setMutedTracks(p => ({ ...p, cleanBgm: !p.cleanBgm }))}
-              title={mutedTracks.cleanBgm ? "Unmute CLEAN BGM" : "Mute CLEAN BGM"}
-            >
-              {mutedTracks.cleanBgm ? <VolumeX size={10} /> : <Volume2 size={10} />}
-            </button>
-            <button 
-              type="button" 
-              className={`track-ctrl-mini-btn ${lockedTracks.cleanBgm ? 'is-active-lock' : ''}`}
-              onClick={() => setLockedTracks(p => ({ ...p, cleanBgm: !p.cleanBgm }))}
-              title={lockedTracks.cleanBgm ? "Unlock CLEAN BGM" : "Lock CLEAN BGM"}
-            >
-              <Lock size={10} />
-            </button>
-          </div>
+      <div className="track-header clean-bgm-track-hdr">
+        <div className="track-title-box">
+          <span className="track-title-text" title="CLEAN BGM">
+            CLEAN BGM
+          </span>
         </div>
-      )}
+        <div className="track-mini-icons">
+          <button 
+            type="button" 
+            className={`track-ctrl-mini-btn ${mutedTracks.cleanBgm ? 'is-active-mute' : ''}`}
+            onClick={() => setMutedTracks(p => ({ ...p, cleanBgm: !p.cleanBgm }))}
+            title={mutedTracks.cleanBgm ? "Unmute CLEAN BGM" : "Mute CLEAN BGM"}
+          >
+            {mutedTracks.cleanBgm ? <VolumeX size={10} /> : <Volume2 size={10} />}
+          </button>
+          <button 
+            type="button" 
+            className={`track-ctrl-mini-btn ${lockedTracks.cleanBgm ? 'is-active-lock' : ''}`}
+            onClick={() => setLockedTracks(p => ({ ...p, cleanBgm: !p.cleanBgm }))}
+            title={lockedTracks.cleanBgm ? "Unlock CLEAN BGM" : "Lock CLEAN BGM"}
+          >
+            <Lock size={10} />
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

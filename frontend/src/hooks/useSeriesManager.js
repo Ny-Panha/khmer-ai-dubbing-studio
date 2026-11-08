@@ -57,6 +57,7 @@ export function useSeriesManager({
   setLeftTab,
   activeRequestRef,
   clearHistory,
+  handleClearVideo,
 }) {
   const [seriesList, setSeriesList] = useState(loadSeriesList);
   const [activeSeriesIdState, setActiveSeriesIdState] = useState(getActiveSeriesId);
@@ -68,6 +69,8 @@ export function useSeriesManager({
 
   // Initialization flag: prevents auto-save effect from wiping localStorage on initial mount
   const isInitializedRef = useRef(false);
+  // Transition guard: prevents debounced auto-save from writing stale workspace state during episode switch/delete
+  const isTransitioningRef = useRef(false);
 
   const activeSeries = seriesList.find((s) => s.id === activeSeriesIdState) || seriesList[0] || null;
   const activeEpisode = (activeSeries?.episodes || []).find((e) => e.id === activeEpisodeIdState) || activeSeries?.episodes?.[0] || null;
@@ -94,12 +97,40 @@ export function useSeriesManager({
     setVideoThumbnails,
     setLeftTab,
     clearHistory,
+    handleClearVideo,
   };
 
   // Helper to apply an episode state to the React workspace (stable reference)
   const applyEpisodeToWorkspace = useCallback((ep) => {
     if (!ep) return;
     const cb = callbacksRef.current;
+
+    // If episode has no video yet (e.g. freshly created or reset episode), purge workspace cleanly
+    if (!ep.video) {
+      if (cb.handleClearVideo) {
+        cb.handleClearVideo();
+      } else {
+        if (cb.setSelectedVideo) cb.setSelectedVideo(null);
+        if (cb.setVideoMetadata) cb.setVideoMetadata(null);
+        if (cb.setScriptData) cb.setScriptData(null);
+        if (cb.setSpeakerRegistry) cb.setSpeakerRegistry({});
+        if (cb.setAudioGenerated) cb.setAudioGenerated(false);
+        if (cb.setAudioOutdated) cb.setAudioOutdated(false);
+        if (cb.setFullAudioPath) cb.setFullAudioPath(null);
+        if (cb.setFullAudioUrl) cb.setFullAudioUrl(null);
+        if (cb.setDuration) cb.setDuration(0);
+        if (cb.setCurrentTime) cb.setCurrentTime(0);
+        if (cb.setVideoClips) cb.setVideoClips([]);
+        if (cb.setActiveClipId) cb.setActiveClipId(null);
+        if (cb.setSelectedSegmentId) cb.setSelectedSegmentId(null);
+        if (cb.setRenderedVideo) cb.setRenderedVideo(null);
+        if (cb.setMediaAssets) cb.setMediaAssets([]);
+        if (cb.setVideoThumbnails) cb.setVideoThumbnails([]);
+        if (cb.clearHistory) cb.clearHistory();
+        if (cb.setLeftTab) cb.setLeftTab('media');
+      }
+      return;
+    }
 
     if (cb.setSelectedVideo) {
       cb.setSelectedVideo(ep.video || null);
@@ -278,10 +309,19 @@ export function useSeriesManager({
         storageFilename: selectedVideo.storageFilename,
         videoUrl: selectedVideo.videoUrl,
         videoPath: selectedVideo.videoPath,
+        width: selectedVideo.width || videoMetadata?.width,
+        height: selectedVideo.height || videoMetadata?.height,
+        resolution: selectedVideo.resolution || videoMetadata?.resolution,
         size: selectedVideo.size,
         sizeBytes: selectedVideo.sizeBytes,
       } : null,
-      metadata: videoMetadata,
+      metadata: videoMetadata || (selectedVideo?.width ? {
+        width: selectedVideo.width,
+        height: selectedVideo.height,
+        resolution: selectedVideo.resolution,
+        duration: duration || selectedVideo.durationSec,
+        durationSec: duration || selectedVideo.durationSec,
+      } : null),
       scriptData,
       speakerRegistry,
       audioGenerated,
@@ -316,8 +356,10 @@ export function useSeriesManager({
   useEffect(() => {
     // Guard against running auto-persist before initial workspace restore is complete
     if (!isInitializedRef.current) return;
+    if (isTransitioningRef.current) return;
     if (!activeSeriesIdState || !activeEpisodeIdState) return;
     const timer = setTimeout(() => {
+      if (isTransitioningRef.current) return;
       const snapshot = getCurrentWorkspaceSnapshot();
       saveEpisodeState(activeSeriesIdState, activeEpisodeIdState, snapshot);
     }, 400);
@@ -428,9 +470,15 @@ export function useSeriesManager({
   ]);
 
   // 3. Delete an episode
-  const handleDeleteEpisode = useCallback((targetEpisodeId) => {
+  const handleDeleteEpisode = useCallback(async (targetEpisodeId) => {
+    isTransitioningRef.current = true;
+    const isDeletingActive = String(targetEpisodeId) === String(activeEpisodeIdRef.current);
+
     const success = deleteEpisodeFromSeries(activeSeriesIdState, targetEpisodeId);
-    if (!success) return;
+    if (!success) {
+      isTransitioningRef.current = false;
+      return;
+    }
 
     const updatedList = loadSeriesList();
     setSeriesList(updatedList);
@@ -440,8 +488,36 @@ export function useSeriesManager({
     activeEpisodeIdRef.current = activeEpId;
 
     const s = updatedList.find((item) => item.id === activeSeriesIdState) || updatedList[0];
-    const newActiveEp = s.episodes.find((e) => e.id === activeEpId) || s.episodes[0];
-    applyEpisodeToWorkspace(newActiveEp);
+    const newActiveEp = (s?.episodes || []).find((e) => e.id === activeEpId) || s?.episodes?.[0];
+
+    // If deleting active episode or target has no video, clear workspace media immediately
+    if (isDeletingActive || !newActiveEp?.video) {
+      if (callbacksRef.current.handleClearVideo) {
+        callbacksRef.current.handleClearVideo();
+      }
+    }
+
+    if (newActiveEp) {
+      applyEpisodeToWorkspace(newActiveEp);
+    }
+
+    // Sync with backend API
+    try {
+      await fetch(`/api/series/${activeSeriesIdState}/episodes/${targetEpisodeId}`, {
+        method: 'DELETE',
+      });
+      const res = await fetch(`/api/series/${activeSeriesIdState}`);
+      const data = await res.json();
+      if (data?.success && data.series) {
+        setSeriesList((prevList) =>
+          (prevList || []).map((ser) => (ser.id === data.series.id ? data.series : ser))
+        );
+      }
+    } catch (_) {}
+
+    setTimeout(() => {
+      isTransitioningRef.current = false;
+    }, 400);
   }, [activeSeriesIdState, applyEpisodeToWorkspace]);
 
   // 4. Rename an episode
