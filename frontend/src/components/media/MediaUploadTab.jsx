@@ -68,6 +68,7 @@ export default function MediaUploadTab({
         videoId: rawRef,
         videoPath: selectedVideo?.videoPath,
         seriesId: activeSeries?.id || seriesId || selectedVideo?.seriesId || 'drama_project',
+        episodeId: activeEpisode?.id || selectedVideo?.episodeId,
         durationMinutes: splitMode === 'minutes' ? parsedVal : undefined,
         episodeCount: splitMode === 'episodes' ? parsedVal : undefined,
         replaceEpisodes: Boolean(replaceEpisodes),

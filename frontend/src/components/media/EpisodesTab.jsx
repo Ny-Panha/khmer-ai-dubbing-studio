@@ -74,6 +74,7 @@ export default function EpisodesTab({
       const res = await splitVideoEpisodesApi({
         videoId: rawRef,
         seriesId: activeSeries?.id || seriesId || 'drama_project',
+        episodeId: activeEpisode?.id || selectedVideo?.episodeId,
         durationMinutes: splitMode === 'minutes' ? parsedVal : undefined,
         episodeCount: splitMode === 'episodes' ? parsedVal : undefined,
         replaceEpisodes: Boolean(replaceEpisodes),

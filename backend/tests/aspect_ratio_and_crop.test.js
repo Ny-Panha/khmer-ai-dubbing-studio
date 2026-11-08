@@ -147,3 +147,4 @@ test('Aspect Ratio & 9:16 Framing: End-to-end render verification (a)-(e)', asyn
   assert.equal(probeE2.width, 1080);
   assert.equal(probeE2.height, 1920);
 });
+

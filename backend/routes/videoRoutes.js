@@ -348,6 +348,74 @@ router.post("/render-video", async (req, res) => {
 });
 
 /**
+ * Robustly matches an episode whose video corresponds to the split input video.
+ * Checks canonical filesystem paths, resolveMediaFile results, normalized URL/rel paths, and episodeId.
+ */
+function findSourceEpisodeIndex(existingEpisodes = [], rawVideoRef, inputVideoPath, targetEpisodeId = null) {
+  if (!Array.isArray(existingEpisodes) || existingEpisodes.length === 0) return -1;
+
+  // 1. Direct ID match if caller provided episodeId
+  if (targetEpisodeId) {
+    const cleanTargetId = String(targetEpisodeId).trim().toLowerCase();
+    const idIdx = existingEpisodes.findIndex(e => e && String(e.id).toLowerCase() === cleanTargetId);
+    if (idIdx !== -1) return idIdx;
+  }
+
+  const resolvedInputCanonical = inputVideoPath ? path.resolve(inputVideoPath).toLowerCase() : null;
+
+  const normalizeRef = (val) => {
+    if (!val || typeof val !== "string") return "";
+    return val
+      .split("?")[0]
+      .split("#")[0]
+      .replace(/^[/\\]?uploads[/\\]?/i, "")
+      .replace(/\\/g, "/")
+      .toLowerCase()
+      .trim();
+  };
+
+  const normRaw = normalizeRef(rawVideoRef);
+  const normInput = inputVideoPath ? normalizeRef(inputVideoPath) : "";
+
+  for (let i = 0; i < existingEpisodes.length; i++) {
+    const ep = existingEpisodes[i];
+    if (!ep) continue;
+
+    const candidateRefs = [
+      ep.sourceVideoPath,
+      ep.video?.videoPath,
+      ep.videoFile,
+      ep.video?.videoId,
+      ep.video?.videoUrl,
+      ep.video?.fileName,
+      ep.video?.storageFilename,
+    ].filter(Boolean);
+
+    // 2. Canonical absolute path matching (safest across platform/casing)
+    if (resolvedInputCanonical) {
+      for (const ref of candidateRefs) {
+        try {
+          const resolved = resolveMediaFile(ref) || (path.isAbsolute(ref) ? ref : null);
+          if (resolved && path.resolve(resolved).toLowerCase() === resolvedInputCanonical) {
+            return i;
+          }
+        } catch (_) {}
+      }
+    }
+
+    // 3. Normalized relative path / videoId matching
+    for (const ref of candidateRefs) {
+      const normCandidate = normalizeRef(ref);
+      if (normCandidate && (normCandidate === normRaw || normCandidate === normInput)) {
+        return i;
+      }
+    }
+  }
+
+  return -1;
+}
+
+/**
  * 4. Auto-Split Long Video (1-2 Hours) into Episodes
  */
 router.post("/split-video-episodes", async (req, res) => {
@@ -360,7 +428,7 @@ router.post("/split-video-episodes", async (req, res) => {
       res.setTimeout(0);
     }
 
-    const { videoPath, videoId, seriesId, durationMinutes, durationSeconds, episodeCount, replaceEpisodes = false } = req.body;
+    const { videoPath, videoId, seriesId, episodeId, durationMinutes, durationSeconds, episodeCount, replaceEpisodes = false } = req.body;
     const rawVideoRef = videoPath || videoId;
     if (!rawVideoRef) {
       return res.status(400).json({ success: false, error: "videoPath or videoId is required" });
@@ -415,30 +483,68 @@ router.post("/split-video-episodes", async (req, res) => {
     const existing = currentSeries.episodes || [];
     const shouldReplace = Boolean(replaceEpisodes);
 
+    // 1. Identify source episode: the entry whose video IS the split input
+    const sourceIndex = findSourceEpisodeIndex(existing, rawVideoRef, inputVideoPath, episodeId);
+    const sourceEpisodeFound = sourceIndex !== -1;
+
+    // 2. Partition existing episodes around source:
+    // When shouldReplace is false, we keep other existing episodes excluding the source episode.
+    // When shouldReplace is true, existing episodes are completely replaced by chunks.
+    const keptBefore = (sourceEpisodeFound && !shouldReplace)
+      ? existing.slice(0, sourceIndex)
+      : (!sourceEpisodeFound && !shouldReplace ? existing : []);
+    const keptAfter = (sourceEpisodeFound && !shouldReplace)
+      ? existing.slice(sourceIndex + 1)
+      : [];
+
+    const keptEpisodes = [...keptBefore, ...keptAfter];
+    const occupiedIds = new Set(keptEpisodes.map((e) => String(e.id).toLowerCase()));
+    const usedChunkIds = new Set();
+
     const builtEpisodes = [];
-    const baseIndex = shouldReplace ? 0 : existing.length;
 
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i];
-      const epNum = baseIndex + i + 1;
-      const epId = `ep_${epNum}`;
+      // Target display index:
+      const epDisplayNum = (sourceEpisodeFound ? sourceIndex : keptBefore.length) + i + 1;
+
+      // Assign chunk episode ID avoiding any collision with kept episodes
+      let epId = null;
+      const candidatePrefId = `ep_${epDisplayNum}`;
+      if (!occupiedIds.has(candidatePrefId.toLowerCase()) && !usedChunkIds.has(candidatePrefId.toLowerCase())) {
+        epId = candidatePrefId;
+      } else {
+        let n = 1;
+        while (occupiedIds.has(`ep_${n}`.toLowerCase()) || usedChunkIds.has(`ep_${n}`.toLowerCase())) {
+          n++;
+        }
+        epId = `ep_${n}`;
+      }
+      usedChunkIds.add(epId.toLowerCase());
+
       const { videoDir } = ensureEpisodeDirectories(cleanSeries, epId);
-      const epVideoFilename = `${cleanSeries}_${epId}_source.mp4`;
-      const epVideoDestPath = path.join(videoDir, epVideoFilename);
+      let epVideoFilename = `${cleanSeries}_${epId}_source.mp4`;
+      let epVideoDestPath = path.join(videoDir, epVideoFilename);
+
+      // Guard: Never overwrite the source input video file on disk
+      if (inputVideoPath && path.resolve(epVideoDestPath).toLowerCase() === path.resolve(inputVideoPath).toLowerCase()) {
+        epVideoFilename = `${cleanSeries}_${epId}_chunk_source.mp4`;
+        epVideoDestPath = path.join(videoDir, epVideoFilename);
+      }
 
       // Copy chunk to isolated episode video folder
       fs.copyFileSync(chunk.outputPath, epVideoDestPath);
       try { fs.unlinkSync(chunk.outputPath); } catch (_) {}
 
       const epVideoUrl = `/uploads/projects/${cleanSeries}/episodes/${epId}/video/${epVideoFilename}`;
-      const epTitle = `ភាគទី ${epNum} (EP${epNum})`;
+      const epTitle = `ភាគទី ${epDisplayNum} (EP${epDisplayNum})`;
 
       let fileStatSize = 0;
       try { fileStatSize = fs.statSync(epVideoDestPath).size; } catch (_) {}
 
       const epObj = {
         id: epId,
-        episodeNumber: epNum,
+        episodeNumber: epDisplayNum,
         title: epTitle,
         displayTitle: epTitle,
         status: "uploaded",
@@ -448,7 +554,7 @@ router.post("/split-video-episodes", async (req, res) => {
         video: {
           videoId: `projects/${cleanSeries}/episodes/${epId}/video/${epVideoFilename}`,
           fileName: epVideoFilename,
-          originalFilename: `${cleanSeries}_EP${epNum}.mp4`,
+          originalFilename: `${cleanSeries}_EP${epDisplayNum}.mp4`,
           displayTitle: epTitle,
           storageFilename: epVideoFilename,
           videoUrl: epVideoUrl,
@@ -483,21 +589,60 @@ router.post("/split-video-episodes", async (req, res) => {
 
     try { fs.rmdirSync(tempOutputDir); } catch (_) {}
 
-    currentSeries.episodes = shouldReplace ? builtEpisodes : [...existing, ...builtEpisodes];
+    // Construct final episodes list:
+    // If source episode was found, chunks replace the source episode at its former index
+    const finalEpisodes = sourceEpisodeFound
+      ? (shouldReplace ? builtEpisodes : [...keptBefore, ...builtEpisodes, ...keptAfter])
+      : (shouldReplace ? builtEpisodes : [...existing, ...builtEpisodes]);
+
+    // Renumber display numbering (episodeNumber) 1..N across the final array
+    for (let idx = 0; idx < finalEpisodes.length; idx++) {
+      const ep = finalEpisodes[idx];
+      const newNum = idx + 1;
+      const oldNum = ep.episodeNumber;
+      ep.episodeNumber = newNum;
+
+      // Update generic titles to match new sequential number
+      const isGeneric = !ep.title ||
+        new RegExp(`^ភាគទី\\s*${oldNum}\\s*\\(EP${oldNum}\\)$`, 'i').test(ep.title.trim()) ||
+        /^ភាគទី\s*[\d០-៩]+\s*\(EP[\d០-៩]+\)$/i.test(ep.title.trim()) ||
+        /^\(EP[\d០-៩]+\)$/i.test(ep.title.trim());
+
+      if (isGeneric) {
+        ep.title = `ភាគទី ${newNum} (EP${newNum})`;
+        ep.displayTitle = ep.title;
+      } else if (typeof ep.title === 'string' && /^(?:ភាគទី|ភាគ|EP|Episode)\s*[:#\s]*\d+\s*[:\-\s]*/i.test(ep.title)) {
+        const rest = ep.title.replace(/^(?:ភាគទី|ភាគ|EP|Episode)\s*[:#\s]*\d+\s*[:\-\s]*/i, '').trim();
+        ep.title = `ភាគទី ${newNum}: ${rest}`;
+        if (ep.displayTitle) {
+          const restDisplay = ep.displayTitle.replace(/^(?:ភាគទី|ភាគ|EP|Episode)\s*[:#\s]*\d+\s*[:\-\s]*/i, '').trim();
+          ep.displayTitle = `ភាគទី ${newNum}: ${restDisplay}`;
+        }
+      }
+    }
+
+    currentSeries.episodes = finalEpisodes;
     saveSeriesMetadata(currentSeries);
 
-    console.log(`[Split Endpoint] ✅ Successfully split video into ${builtEpisodes.length} episodes for "${cleanSeries}"`);
+    const totalSeriesCount = currentSeries.episodes.length;
+    console.log(`[Split Endpoint] ✅ Successfully split video into ${builtEpisodes.length} episodes for "${cleanSeries}" (Series total: ${totalSeriesCount} episodes, source replaced: ${sourceEpisodeFound})`);
+
     res.json({
       success: true,
-      message: `បានកាត់បំបែកវីដេអូជា ${builtEpisodes.length} ភាគជោគជ័យ! (${(targetDurationSec / 60).toFixed(0)} នាទី/ភាគ)`,
+      message: `បានកាត់បំបែកវីដេអូជា ${builtEpisodes.length} ភាគជោគជ័យ! សរុបក្នុងរឿងមាន ${totalSeriesCount} ភាគ (${(targetDurationSec / 60).toFixed(0)} នាទី/ភាគ)`,
       episodes: builtEpisodes,
       series: currentSeries,
+      totalEpisodes: totalSeriesCount,
+      chunkCount: builtEpisodes.length,
+      sourceReplaced: sourceEpisodeFound,
     });
   } catch (err) {
     console.error("[Split Video Error]:", err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
+
+router.findSourceEpisodeIndex = findSourceEpisodeIndex;
 
 module.exports = router;
 

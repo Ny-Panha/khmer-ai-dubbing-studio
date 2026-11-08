@@ -1,78 +1,44 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
-- **Environment**: Antigravity IDE (Export Format Follows Source Video + 9:16 Full-Bleed Center Crop)
-- **Timestamp**: 2026-11-08T16:55:00+07:00
+- **Environment**: Antigravity IDE (Episode Split Source Replacement & Safe Re-Indexing)
+- **Timestamp**: 2026-11-08T17:08:00+07:00
 
-## Latest Update: Export Format Follows Source Video & Full-Bleed 9:16 Crop Style
+## Latest Update: Split Replaces Source Episode & Safe Sequential Re-Indexing
 
-### 1. Step 0 Trace & Findings
-- **Data Flow Trace**:
-  - `stage2_analyzeSourceMedia.js` extracts `{ width, height, aspectRatio, resolution }` via `getVideoMetadata(inputVideoPath)`.
-  - `episodePipelineOrchestrator.js` attaches `mediaAnalysis` to checkpoints and persists `metadata: { width, height, resolution, fps, durationSec }` and `video: { width, height, resolution }` in `series.json`.
-  - `backend/routes/videoRoutes.js` (`/api/video-metadata` and `/api/split-video-episodes`) extracts and returns probed `width, height, resolution` instead of hardcoded 1080p.
-  - `frontend/src/hooks/useWorkspaceMedia.js` queries `/api/video-metadata` and sets `selectedVideo` and `videoMetadata` with probed `{ width, height, resolution }`.
-  - `frontend/src/hooks/useSeriesManager.js` preserves `width, height, resolution` on `episode.video` and `episode.metadata`.
-  - Exact paths used: `videoMetadata.width/height`, `selectedVideo.width/height`, `activeEpisode.metadata.width/height`, `activeEpisode.video.width/height`.
+### 1. Problem & Root Cause
+- **Problem**: Previously, uploading a full-length video (e.g. 03:29:16) created `ep_1`. Running Auto-Split in default mode (`replaceEpisodes = false`) appended chunks after `existing`, turning 11 chunks into `ep_2..ep_12` alongside `ep_1` (total 12 episodes) instead of replacing `ep_1` with the 11 chunks.
+- **Specification**:
+  - The episode whose video IS the split input is the split's SOURCE — its chunks always take its place at its index, regardless of `replaceEpisodes`.
+  - `replaceEpisodes = false` governs only the OTHER existing episodes (`keptBefore` and `keptAfter` preserved).
+  - `replaceEpisodes = true` replaces all episodes with chunks.
+  - Zero disk deletion of source video: the original source video stays on disk where upload stored it; only metadata record is replaced.
+  - Chunk IDs avoid ID and folder collisions with kept episodes; display numbering `episodeNumber` follows final array order 1..N with generic title healing.
+  - Success message and response report final episode count of the series (`សរុបក្នុងរឿងមាន N ភាគ`).
 
-### 2. Implementation Summary
-1. **Frontend (`frontend/src/`)**:
-   - `utils/projectStorage.js`:
-     - Changed default `aspectRatio: '16:9'` to `aspectRatio: null`, added `verticalStyle: 'pad'`.
-     - Exported `resolveDefaultAspectRatio(width, height)`:
-       - `height > width` $\to$ `'9:16'` (portrait)
-       - `width > height` $\to$ `'16:9'` (landscape)
-       - `width === height` $\to$ `'1:1'` (square)
-       - Missing/zero $\to$ `null` (triggers last-resort fallback with warning).
-   - `services/api.js`:
-     - In `renderVideoApi`, removed blanket `'16:9'` default. Defaults to `null`, resolves dynamically from source dimensions, falls back to `'16:9'` with console warning only if metadata missing.
-   - `hooks/useVideoRender.js`:
-     - Resolves `effectiveAspectRatio` from source video metadata or active episode metadata. Passes `aspectRatio` and `verticalStyle` to `/api/render-video`.
-   - `components/voice/ExportSettingsPanel.jsx`:
-     - Receives `videoMetadata` and `activeEpisode`.
-     - Displays explainable source hint next to Aspect Ratio dropdown: `Source: 1080×1920 — vertical` or `Source: 1920×1080 — horizontal`.
-     - Displays conditional **Vertical Framing Style** selector when `effectiveAspectRatio === '9:16'`:
-       - `Pad — black bars, full frame visible` (default cinema letterbox)
-       - `Crop — full-bleed center crop` (full phone screen, no bars).
-   - `components/VoiceSettings.jsx` & `App.jsx`:
-     - Wired `videoMetadata` and `activeEpisode` props down to `ExportSettingsPanel`.
+### 2. Implementation Modifications
+1. **`backend/routes/videoRoutes.js`**:
+   - Added `findSourceEpisodeIndex(existingEpisodes, rawVideoRef, inputVideoPath, targetEpisodeId)` matching canonical filesystem paths via `path.resolve` & `resolveMediaFile`, normalized video relative paths/URLs, and explicit `episodeId`.
+   - Partitioned existing episodes into `keptBefore` and `keptAfter` around `sourceIndex` when `sourceEpisodeFound && !shouldReplace`.
+   - Guaranteed chunk episode IDs (`epId`) do not collide with any kept episode IDs (`occupiedIds`).
+   - Guarded chunk video destination paths against overwriting `inputVideoPath` on disk.
+   - Inserted chunks at the source episode's former index: `finalEpisodes = [...keptBefore, ...builtEpisodes, ...keptAfter]`.
+   - Renumbered sequential display numbering `episodeNumber` (1..N) and healed auto-generated generic titles.
+   - Success response reports `totalEpisodes: currentSeries.episodes.length` and Khmer message `សរុបក្នុងរឿងមាន ${totalSeriesCount} ភាគ`.
+   - Exported `router.findSourceEpisodeIndex = findSourceEpisodeIndex`.
+2. **`frontend/src/services/api.js`**:
+   - Updated `splitVideoEpisodesApi` to accept and transmit `episodeId` in the JSON request body.
+3. **`frontend/src/components/media/MediaUploadTab.jsx` & `frontend/src/components/media/EpisodesTab.jsx`**:
+   - Passed `episodeId: activeEpisode?.id || selectedVideo?.episodeId` to `splitVideoEpisodesApi`.
+   - Alert messages display final total episode count directly to user.
+4. **`backend/tests/episode_split_source_replace.test.js`**:
+   - Unit test for `findSourceEpisodeIndex` matching by canonical path, videoId, and episodeId.
+   - **Scenario 1 Verification**: 1 long video in fresh series split into 11 chunks $\to$ series has EXACTLY 11 episodes, EP1 is the first chunk, no episode has full-video duration, source video file on disk preserved, all 11 chunks valid.
+   - **Scenario 2 Verification**: 3 real episodes (`ep_1`, `ep_2`, `ep_3`), split `ep_2` with append mode $\to$ `ep_2` replaced at position 2, `ep_1` and `ep_3` video files on disk are 100% byte-identical, no ID collision, total 5 episodes.
 
-2. **Backend (`backend/`)**:
-   - `services/ffmpegService.js`:
-     - In `renderDubbedVideoWithDucking`:
-       - Resolves `targetAspectRatio` from `sourceDimensions` when not explicitly specified (no manual select).
-       - In `9:16` Crop mode: applies `scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920:(in_w-1080)/2:(in_h-1920)/2,setsar=1`.
-       - In `9:16` Pad mode: applies `scale=1080:-2:force_original_aspect_ratio=decrease,pad=1080:1920:(1080-iw)/2:(1920-ih)/2:color=black,setsar=1`.
-       - In `16:9` manual override on vertical source: applies `scale=-2:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(1920-iw)/2:(1080-ih)/2:color=black,setsar=1`.
-       - In `1:1` manual override: applies `scale=1080:1080:force_original_aspect_ratio=decrease,pad=1080:1080:(1080-iw)/2:(1080-ih)/2:color=black,setsar=1`.
-       - Dynamically checks `isVideoFiltered` to prevent `Streamcopy requested for output stream fed from a complex filtergraph` error.
-       - Adjusts watermark logo topMargin in 9:16 pad mode (`656 + baseMargin`) vs crop mode (`baseMargin`).
-     - In `generateKhmerAssSubtitleFile`:
-       - In `9:16` Crop mode or naturally vertical video: uses `PlayResX: 1080, PlayResY: 1920`, `effFontSize = 44`, `effMarginV = 130` (or 180 when marquee is bottom). Subtitle bounding box sits safely inside the 1080-width canvas with 60px side margins, never cut at sides.
-       - In `9:16` Pad mode with landscape source: keeps `effMarginV = 720` to center subtitles on the letterbox video band.
-   - `routes/videoRoutes.js`:
-     - In `/api/render-video`: Reads `rawAspectRatio` and `verticalStyle`. Auto-detects aspect ratio from video metadata if omitted or empty.
-     - In `/api/split-video-episodes`: Uses probed metadata width/height instead of hardcoded 1920x1080.
-
-### 3. Verification Results (a)-(e)
-All 5 required verification scenarios tested end-to-end with FFmpeg and ffprobe:
-- **(a) Vertical source episode, no manual select**:
-  - Source: 1080×1920 vertical video
-  - Export: **1080×1920** (DAR 9:16) — **PASS**
-- **(b) Landscape source, no manual select**:
-  - Source: 1920×1080 Ep2 landscape video
-  - Export: **1920×1080** (DAR 16:9) — **PASS**
-- **(c) Landscape source + 9:16 Pad**:
-  - Export: **1080×1920** with top & bottom black cinema bars, full frame visible — **PASS**
-- **(d) Landscape source + 9:16 Crop**:
-  - Export: **1080×1920** full-bleed (zero black bars), frame centre-filled, Khmer subtitle burned at 00:41 with pristine readability inside safe margins — **PASS**
-- **(e) Manual select overrides source default**:
-  - (e1) Vertical source + manual 16:9 $\to$ **1920×1080** (pillarbox pad) — **PASS**
-  - (e2) Landscape source + manual 9:16 $\to$ **1080×1920** (center crop) — **PASS**
-
-### 4. Test Suite & Build Status
-- **Frontend Build**: `npm --prefix frontend run build` ➔ **PASS** (0 errors, 1.05s).
-- **Backend Test Suite**: `node --test backend/tests/*.test.js` ➔ **54 PASS, 0 FAIL, 1 SKIPPED**.
+### 3. Verification & Evidence
+- **Backend Tests**: `node --test backend/tests/*.test.js` ➔ **58 tests: 57 passed, 1 skipped, 0 failed**.
+- **Frontend Build**: `npm --prefix frontend run build` ➔ **PASS in 982ms**.
 
 ## Active Environment
 - **Backend API**: `http://localhost:5000` (Node.js/Express)
@@ -80,4 +46,4 @@ All 5 required verification scenarios tested end-to-end with FFmpeg and ffprobe:
 - **Git Branch**: `main`
 
 ## Next Steps
-- Production pipeline test with full dubbing workflow on diverse portrait/landscape drama episodes.
+- Production verification with multi-hour uploaded drama series.

@@ -11,6 +11,7 @@ backend/.env
 !backend/.env.example
 
 # Temporary, Backups & Python Cache
+.agents/scratch/
 .backup_pre_fix_hang_audit/
 .git.worktree_bak
 output/
