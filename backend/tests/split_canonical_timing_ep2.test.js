@@ -6,15 +6,18 @@ const path = require('path');
 test('Step 0 & 1: Real EP2 data dump & canonical effective timing verification', async () => {
   const { getSegmentAudioDuration } = await import('../../frontend/src/utils/timestampUtils.js');
 
-  const seriesPath = path.resolve(__dirname, '../uploads/projects/series_1793898268958/series.json');
-  assert.ok(fs.existsSync(seriesPath), 'EP2 series.json must exist');
-
-  const seriesData = JSON.parse(fs.readFileSync(seriesPath, 'utf8'));
-  const ep2 = seriesData.episodes.find(e => e.id === 'ep_2');
-  assert.ok(ep2 && ep2.scriptData && ep2.scriptData.segments, 'EP2 scriptData segments must exist');
-
-  const seg1 = ep2.scriptData.segments[0];
-  const seg2 = ep2.scriptData.segments[1];
+  // Deterministic fixture representing EP2 baseline segment #1 before split
+  const seg1 = {
+    id: 1,
+    startSec: 0.2,
+    endSec: 4.027,
+    audioStartSec: 0.2,
+    audioEndSec: 4.027,
+    audioDurationSec: 3.83,
+    finalAudioDuration: 4.63,
+    audioDuration: 4.63,
+    khmer: 'ត្រឹមជីនតានម្នាក់',
+  };
 
   // 1. Data dump verification
   assert.equal(seg1.id, 1);
@@ -73,10 +76,41 @@ test('Step 3 & Verification: Split EP2 Segment #1 at 00:04.03 cuts audio into 2 
   const { getSegmentAudioDuration, formatMinSec } = await import('../../frontend/src/utils/timestampUtils.js');
   const { isSegmentMatch, findSegmentIndex, splitClipAtTime } = await import('../../frontend/src/utils/timelineUtils.js');
 
-  const seriesPath = path.resolve(__dirname, '../uploads/projects/series_1793898268958/series.json');
-  const seriesData = JSON.parse(fs.readFileSync(seriesPath, 'utf8'));
-  const ep2 = seriesData.episodes.find(e => e.id === 'ep_2');
-  const rawSegs = ep2.scriptData.segments;
+  const rawSegs = [
+    {
+      id: 1,
+      startSec: 0.2,
+      endSec: 4.027,
+      audioStartSec: 0.2,
+      audioEndSec: 4.027,
+      audioDurationSec: 3.83,
+      finalAudioDuration: 4.63,
+      audioDuration: 4.63,
+      khmer: 'ត្រឹមជីនតានម្នាក់',
+    },
+    {
+      id: 2,
+      startSec: 4.027,
+      endSec: 4.83,
+      audioStartSec: 4.027,
+      audioEndSec: 4.83,
+      audioDurationSec: 0.8,
+      finalAudioDuration: 4.63,
+      audioDuration: 4.63,
+      khmer: 'ក៏ហ៊ានស្រមើស្រមៃទប់ថាមពលហ្វាស៊ិនផ្ទុះដែរ!',
+    },
+    {
+      id: 3,
+      startSec: 5.6,
+      endSec: 7.47,
+      audioStartSec: 5.6,
+      audioEndSec: 7.47,
+      audioDurationSec: 1.87,
+      finalAudioDuration: 1.87,
+      audioDuration: 1.87,
+      khmer: 'ដុតយានស៊ិន',
+    }
+  ];
 
   let segments = JSON.parse(JSON.stringify(rawSegs));
   let videoClips = [

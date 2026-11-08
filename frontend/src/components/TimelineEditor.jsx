@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { formatMinSec } from '../utils/timestampUtils';
+import { formatMinSec, getSegmentAudioDuration } from '../utils/timestampUtils';
 import { getPixelsPerSecond, trimClip, moveClip, syncSegmentsWithMovedClip, deleteSegmentByIdOrIndex, resolveSegmentAtTime } from '../utils/timelineUtils';
 
 import TimelineToolbar from './timeline/TimelineToolbar';
@@ -106,9 +106,13 @@ function TimelineEditor({
       const rawStart = (typeof seg.audioStartSec === 'number' && !isNaN(seg.audioStartSec))
         ? seg.audioStartSec 
         : (typeof seg.startSec === 'number' && !isNaN(seg.startSec) ? seg.startSec : idx * 4);
-      const rawEnd = (typeof seg.audioEndSec === 'number' && !isNaN(seg.audioEndSec))
+      const isTrimmed = Boolean(seg.audioTrimmed || seg.userTrimmed);
+      const slotStart = (typeof seg.startSec === 'number' && !isNaN(seg.startSec)) ? seg.startSec : rawStart;
+      const slotEnd = (typeof seg.endSec === 'number' && !isNaN(seg.endSec)) ? seg.endSec : slotStart + 3.0;
+      const audioDur = getSegmentAudioDuration(seg, seg.audioDurationSec || 2.5);
+      const rawEnd = (isTrimmed && typeof seg.audioEndSec === 'number' && !isNaN(seg.audioEndSec))
         ? seg.audioEndSec 
-        : (typeof seg.endSec === 'number' && !isNaN(seg.endSec) ? seg.endSec : rawStart + (seg.audioDurationSec || 2.5));
+        : Math.max(slotEnd, rawStart + audioDur);
 
       // If user explicitly shifted and set trackRow to 0 or 1, respect it
       if (typeof seg.trackRow === 'number' && seg.userShifted) {
@@ -142,6 +146,22 @@ function TimelineEditor({
       calculatedSubRows: 1, // Subtitles always sit on 1 unified continuous track
     };
   }, [scriptSegments]);
+
+  // Canonical timing helper for adjacent clip collision prevention and magnetic edge snapping
+  const getSegEffectiveRange = useCallback((seg, idx) => {
+    if (!seg) return { start: 0, end: 0 };
+    const rawStart = (typeof seg.audioStartSec === 'number' && !isNaN(seg.audioStartSec))
+      ? seg.audioStartSec 
+      : (typeof seg.startSec === 'number' && !isNaN(seg.startSec) ? seg.startSec : (idx * 4));
+    const slotStart = (typeof seg.startSec === 'number' && !isNaN(seg.startSec)) ? seg.startSec : rawStart;
+    const slotEnd = (typeof seg.endSec === 'number' && !isNaN(seg.endSec)) ? seg.endSec : slotStart + 3.0;
+    const isTrimmed = Boolean(seg.audioTrimmed || seg.userTrimmed);
+    const audioDur = getSegmentAudioDuration(seg, seg.audioDurationSec || 2.5);
+    const rawEnd = (isTrimmed && typeof seg.audioEndSec === 'number' && !isNaN(seg.audioEndSec))
+      ? seg.audioEndSec
+      : Math.max(slotEnd, rawStart + audioDur);
+    return { start: rawStart, end: rawEnd };
+  }, []);
 
   // Multi-Track Track Counts (Capped to max 2 voice tracks for clean layout)
   const [userVoiceTrackCount, setUserVoiceTrackCount] = useState(1);
@@ -738,7 +758,56 @@ function TimelineEditor({
           let newEnd = newStart + clipDur;
           let currentSnapTime = null;
 
-          if (snappingEnabled && !e.shiftKey) {
+          if (dragState.itemType === 'audio' && scriptSegments && scriptSegments.length > 0) {
+            const curRow = segmentRows[dragState.index] ?? (scriptSegments[dragState.index]?.trackRow || 0);
+            let prevBound = 0;
+            let nextBound = Infinity;
+
+            for (let i = 0; i < scriptSegments.length; i++) {
+              if (i === dragState.index) continue;
+              const other = scriptSegments[i];
+              const otherRow = segmentRows[i] ?? (other.trackRow || 0);
+              if (otherRow !== curRow) continue;
+
+              const range = getSegEffectiveRange(other, i);
+              if (range.end <= dragState.origStart + 0.05) {
+                if (range.end > prevBound) prevBound = range.end;
+              } else if (range.start >= dragState.origEnd - 0.05) {
+                if (range.start < nextBound) nextBound = range.start;
+              } else {
+                if (range.start < dragState.origStart && range.end > prevBound) {
+                  prevBound = range.end;
+                }
+                if (range.end > dragState.origEnd && range.start < nextBound) {
+                  nextBound = range.start;
+                }
+              }
+            }
+
+            // 1. Magnetic edge snapping to adjacent clips on same track
+            if (snappingEnabled && !e.shiftKey) {
+              const snapThreshold = Math.min(0.2, Math.max(0.06, 8 / pps));
+              if (Math.abs(newStart - prevBound) < snapThreshold) {
+                newStart = prevBound;
+                newEnd = newStart + clipDur;
+                currentSnapTime = prevBound;
+              } else if (nextBound !== Infinity && Math.abs(newEnd - nextBound) < snapThreshold) {
+                newEnd = nextBound;
+                newStart = Math.max(prevBound, newEnd - clipDur);
+                currentSnapTime = nextBound;
+              }
+            }
+
+            // 2. Strict No-Overlap Clamp on the same track (Edge-to-edge ||)
+            if (newStart < prevBound) {
+              newStart = prevBound;
+              newEnd = newStart + clipDur;
+            }
+            if (nextBound !== Infinity && newEnd > nextBound) {
+              newEnd = nextBound;
+              newStart = Math.max(prevBound, newEnd - clipDur);
+            }
+          } else if (snappingEnabled && !e.shiftKey) {
             // CapCut Precision Snapping: subtle 8px window (~0.1s), NOT a violent 0.6s jump!
             const snapThreshold = Math.min(0.2, Math.max(0.06, 8 / pps));
             const currentLiveTime = currentTimeRef.current || 0;
@@ -827,10 +896,41 @@ function TimelineEditor({
             setDragOverTrack(null);
           }
         } else if (dragState.mode === 'trim-left') {
-          const newStart = Math.min(dragState.origEnd - 0.4, Math.max(0, dragState.origStart + deltaSec));
+          let minAllowedStart = 0;
+          if (dragState.itemType === 'audio' && scriptSegments && scriptSegments.length > 0) {
+            const curRow = segmentRows[dragState.index] ?? (scriptSegments[dragState.index]?.trackRow || 0);
+            for (let i = 0; i < scriptSegments.length; i++) {
+              if (i === dragState.index) continue;
+              const other = scriptSegments[i];
+              const otherRow = segmentRows[i] ?? (other.trackRow || 0);
+              if (otherRow !== curRow) continue;
+              const range = getSegEffectiveRange(other, i);
+              if (range.end <= dragState.origStart + 0.05 && range.end > minAllowedStart) {
+                minAllowedStart = range.end;
+              }
+            }
+          }
+          const newStart = Math.min(dragState.origEnd - 0.4, Math.max(minAllowedStart, dragState.origStart + deltaSec));
           setDragState(prev => prev ? ({ ...prev, hasMoved: true, currentStart: newStart }) : null);
         } else if (dragState.mode === 'trim-right') {
-          const newEnd = Math.max(dragState.origStart + 0.4, dragState.origEnd + deltaSec);
+          let maxAllowedEnd = Infinity;
+          if (dragState.itemType === 'audio' && scriptSegments && scriptSegments.length > 0) {
+            const curRow = segmentRows[dragState.index] ?? (scriptSegments[dragState.index]?.trackRow || 0);
+            for (let i = 0; i < scriptSegments.length; i++) {
+              if (i === dragState.index) continue;
+              const other = scriptSegments[i];
+              const otherRow = segmentRows[i] ?? (other.trackRow || 0);
+              if (otherRow !== curRow) continue;
+              const range = getSegEffectiveRange(other, i);
+              if (range.start >= dragState.origEnd - 0.05 && range.start < maxAllowedEnd) {
+                maxAllowedEnd = range.start;
+              }
+            }
+          }
+          let newEnd = Math.max(dragState.origStart + 0.4, dragState.origEnd + deltaSec);
+          if (maxAllowedEnd !== Infinity && newEnd > maxAllowedEnd) {
+            newEnd = maxAllowedEnd;
+          }
           setDragState(prev => prev ? ({ ...prev, hasMoved: true, currentEnd: newEnd }) : null);
         }
     };
@@ -965,6 +1065,54 @@ function TimelineEditor({
               if (finalTargetRow >= userVoiceTrackCount) {
                 setUserVoiceTrackCount(finalTargetRow + 1);
               }
+
+              // Enforce strict no-overlap clamp on final target row (Edge-to-edge ||)
+              let prevBound = 0;
+              let nextBound = Infinity;
+              for (let i = 0; i < updated.length; i++) {
+                if (i === segIdx) continue;
+                const other = updated[i];
+                const otherRow = segmentRows[i] ?? (other.trackRow || 0);
+                if (otherRow !== finalTargetRow) continue;
+                const range = getSegEffectiveRange(other, i);
+                if (range.end <= dragState.origStart + 0.05) {
+                  if (range.end > prevBound) prevBound = range.end;
+                } else if (range.start >= dragState.origEnd - 0.05) {
+                  if (range.start < nextBound) nextBound = range.start;
+                } else {
+                  if (range.start < dragState.origStart && range.end > prevBound) prevBound = range.end;
+                  if (range.end > dragState.origEnd && range.start < nextBound) nextBound = range.start;
+                }
+              }
+
+              if (newStart < prevBound) {
+                newStart = prevBound;
+                if (dragState.mode === 'move') {
+                  const dur = Math.max(0.4, dragState.origEnd - dragState.origStart);
+                  newEnd = parseFloat((newStart + dur).toFixed(2));
+                }
+              }
+              if (nextBound !== Infinity && newEnd > nextBound) {
+                newEnd = nextBound;
+                if (dragState.mode === 'move') {
+                  const dur = Math.max(0.4, dragState.origEnd - dragState.origStart);
+                  newStart = Math.max(prevBound, parseFloat((newEnd - dur).toFixed(2)));
+                }
+              }
+
+              if (dragState.mode === 'trim-left' || dragState.mode === 'trim-right') {
+                updatedSeg.audioTrimmed = true;
+                updatedSeg.userTrimmed = true;
+              }
+
+              updatedSeg.start = formatMinSec(newStart);
+              updatedSeg.end = formatMinSec(newEnd);
+              updatedSeg.startSec = newStart;
+              updatedSeg.endSec = newEnd;
+              updatedSeg.audioStart = formatMinSec(newStart);
+              updatedSeg.audioEnd = formatMinSec(newEnd);
+              updatedSeg.audioStartSec = newStart;
+              updatedSeg.audioEndSec = newEnd;
             } else if (dragState.itemType === 'subtitle') {
               const curSubRow = (typeof seg.subTrackRow === 'number' && seg.subTrackRow >= 0) ? seg.subTrackRow : 0;
               let finalSubTargetRow = curSubRow;

@@ -1,10 +1,18 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
-- **Environment**: Antigravity IDE (ClipInspectorPanel isKhmerEmpty Scope Fix & Canonical Split)
-- **Timestamp**: 2026-11-08T19:31:00+07:00
+- **Environment**: Antigravity IDE (Timeline Audio Strict No-Overlap Clamp & Edge Snapping)
+- **Timestamp**: 2026-11-08T19:44:00+07:00
 
-## Latest Update: Split Uses Exact Canvas Segment End & Inspector Scope Fix
+## Latest Update: Strict Audio No-Overlap Clamp & Magnetic Edge Snapping on Timeline Tracks
+
+### Feature: Audio Dragging Strict No-Overlap Clamp (`[#1] || [#2]`)
+- **Problem**: When dragging audio clips horizontally on the same line (Track Row 0), moving a clip near an adjacent clip allowed it to slide directly over/into the neighboring clip (visual overlap bug shown in user screenshot #1).
+- **Solution**:
+  1. **Strict No-Overlap Clamp**: Added `prevBound` (max end of predecessor clips on same row) and `nextBound` (min start of successor clips on same row). When dragging, `newStart` is clamped to `Math.max(prevBound, newStart)` and `newEnd` is clamped to `Math.min(nextBound, newEnd)` — preventing overlap completely! Clips rigidly meet edge-to-edge (`||`) as requested by Nha (screenshot #2).
+  2. **Magnetic Edge Snapping**: When a dragged audio clip approaches `prevBound` or `nextBound` within snap window (~0.15s), it magnetically snaps to the adjacent clip's edge and renders the vertical snap line.
+  3. **Trimming Guard**: `trim-left` cannot expand past `prevBound`; `trim-right` cannot expand past `nextBound`.
+  4. **Drop Persistence**: On mouse up, `updatedSeg` clamps to `finalTargetRow` boundaries before firing `onUpdateSegments`.
 
 ### Hotfix: ClipInspectorPanel `isKhmerEmpty` ReferenceError Resolved
 - **Problem**: When rendering `<ClipInspectorPanel>`, `isKhmerEmpty` was evaluated at line 726/780/817 before being declared in component scope, triggering `Uncaught ReferenceError: isKhmerEmpty is not defined`.
