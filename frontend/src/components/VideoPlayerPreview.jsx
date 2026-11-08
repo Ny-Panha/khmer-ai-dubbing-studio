@@ -350,6 +350,7 @@ function VideoPlayerPreview({
         ? existingAudio.duration
         : segDur;
       const effectiveSegDur = Math.max(segDur, trueAudioDuration);
+      const isTrimmed = Boolean(seg.audioTrimmed || seg.userTrimmed);
       const effectiveSegEnd = (isTrimmed && typeof seg.audioEndSec === 'number')
         ? seg.audioEndSec
         : Math.max((typeof seg.audioEndSec === 'number' && !isNaN(seg.audioEndSec) ? seg.audioEndSec : 0), segStart + effectiveSegDur);
