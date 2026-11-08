@@ -95,9 +95,9 @@ function TimelineEditor({
 
   // Dynamic Multi-Track Layer Allocation (Clean Pro CapCut Dual-Track Layout)
   // Consolidates dialogue onto Row 0 (single clean straight line); overlaps drop cleanly into Row 1
-  const { segmentRows, calculatedVoiceRows, calculatedSubRows } = React.useMemo(() => {
+  const { segmentRows, calculatedVoiceRows, highestUsedVoiceRow = 0, calculatedSubRows } = React.useMemo(() => {
     if (!scriptSegments || scriptSegments.length === 0) {
-      return { segmentRows: [], calculatedVoiceRows: 1, calculatedSubRows: 1 };
+      return { segmentRows: [], calculatedVoiceRows: 1, highestUsedVoiceRow: 0, calculatedSubRows: 1 };
     }
 
     const rowEndTimes = [0, 0];

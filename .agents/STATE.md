@@ -1,8 +1,20 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
-- **Environment**: Antigravity IDE (Unlimited Voice Lanes — Free Vertical Drag & Drop & Dynamic Lane Creation)
-- **Timestamp**: 2026-11-08T20:30:00+07:00
+- **Environment**: Antigravity IDE (Hotfix: Destructure highestUsedVoiceRow in TimelineEditor)
+- **Timestamp**: 2026-11-08T20:37:00+07:00
+
+## Latest Update: Hotfix ReferenceError `highestUsedVoiceRow`
+
+### Problem Description
+- `TimelineEditor.jsx:141/190 Uncaught ReferenceError: highestUsedVoiceRow is not defined`:
+  `highestUsedVoiceRow` was returned from the `useMemo` block but was not destructured at line 98 (`const { segmentRows, calculatedVoiceRows, calculatedSubRows } = React.useMemo(...)`).
+- When evaluating `voiceRowCount` at line 188, `highestUsedVoiceRow` threw a `ReferenceError` crashing `<TimelineEditor>`.
+
+### Resolution
+- Destructured `highestUsedVoiceRow = 0` directly from `useMemo` at line 98 and added default fallback in empty-segments guard.
+- Vite build passed (`dist/assets/index-F-rtDZtK.js`).
+- Full test suite passed (16/16 PASS).
 
 ## Latest Update: Unlimited Voice Lanes & Dynamic Vertical Drop
 
