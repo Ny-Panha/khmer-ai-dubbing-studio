@@ -42,11 +42,15 @@ export function useClipOperations({
   setAudioOutdated = null,
 }) {
   const pushUndoSnapshot = useCallback((...args) => {
-    if (typeof pushUndoSnapshotParam === 'function') {
-      return pushUndoSnapshotParam(...args);
-    }
-    if (typeof pushHistory === 'function') {
-      return pushHistory(...args);
+    try {
+      if (typeof pushUndoSnapshotParam === 'function') {
+        return pushUndoSnapshotParam(...args);
+      }
+      if (typeof pushHistory === 'function') {
+        return pushHistory(...args);
+      }
+    } catch (err) {
+      console.warn('[useClipOperations] pushUndoSnapshot helper failure:', err);
     }
   }, [pushUndoSnapshotParam, pushHistory]);
 
@@ -381,7 +385,11 @@ export function useClipOperations({
       return;
     }
 
-    pushUndoSnapshot(videoClips, currentSegments);
+    try {
+      pushUndoSnapshot(videoClips, currentSegments);
+    } catch (err) {
+      console.warn('[useClipOperations] pushUndoSnapshot failed in handleAutoAlignNoOverlap:', err);
+    }
 
     // 1. Calculate canonical video duration
     const totalDur = Number(
@@ -449,7 +457,11 @@ export function useClipOperations({
     const currentSegments = scriptData?.segments;
     if (!Array.isArray(currentSegments) || currentSegments.length === 0) return;
 
-    pushUndoSnapshot(videoClips, currentSegments);
+    try {
+      pushUndoSnapshot(videoClips, currentSegments);
+    } catch (err) {
+      console.warn('[useClipOperations] pushUndoSnapshot failed in handleResetToSourceTiming:', err);
+    }
     const totalDur = Number(duration || videoRef?.current?.duration || selectedVideo?.duration || 0);
     const resetSegs = resetSegmentsToSourceTiming(currentSegments, totalDur);
 

@@ -1,6 +1,30 @@
 import { useState, useCallback } from 'react';
 
 /**
+ * Cycle-safe deep clone helper.
+ * Uses JSON.stringify with a replacer tracking seen objects via WeakSet.
+ * Replaces circular repeats with undefined (dropped from objects),
+ * and drops functions/undefined as standard JSON does.
+ * Snapshots are structurally identical for acyclic data.
+ */
+export function safeClone(value) {
+  if (value === undefined || value === null) return value;
+  const seen = new WeakSet();
+  const jsonString = JSON.stringify(value, (key, val) => {
+    if (typeof val === 'function') return undefined;
+    if (typeof val === 'object' && val !== null) {
+      if (seen.has(val)) {
+        return undefined; // Replace circular repeat with undefined
+      }
+      seen.add(val);
+    }
+    return val;
+  });
+  if (jsonString === undefined) return undefined;
+  return JSON.parse(jsonString);
+}
+
+/**
  * Custom hook to manage timeline undo and redo history snapshots
  */
 export function useUndoRedo({
@@ -20,8 +44,8 @@ export function useUndoRedo({
     const activeIdToSave = customActiveClipId !== undefined ? customActiveClipId : activeClipId;
 
     const snapshot = {
-      videoClips: JSON.parse(JSON.stringify(clipsToSave || [])),
-      segments: JSON.parse(JSON.stringify(segsToSave || [])),
+      videoClips: safeClone(clipsToSave || []),
+      segments: safeClone(segsToSave || []),
       activeClipId: activeIdToSave,
     };
 
@@ -37,8 +61,8 @@ export function useUndoRedo({
 
       // Save current state into redo stack
       const currentSnapshot = {
-        videoClips: JSON.parse(JSON.stringify(videoClips || [])),
-        segments: JSON.parse(JSON.stringify(scriptData?.segments || [])),
+        videoClips: safeClone(videoClips || []),
+        segments: safeClone(scriptData?.segments || []),
         activeClipId,
       };
       setRedoStack((prevRedo) => [...prevRedo.slice(-30), currentSnapshot]);
@@ -66,8 +90,8 @@ export function useUndoRedo({
 
       // Save current state into undo stack
       const currentSnapshot = {
-        videoClips: JSON.parse(JSON.stringify(videoClips || [])),
-        segments: JSON.parse(JSON.stringify(scriptData?.segments || [])),
+        videoClips: safeClone(videoClips || []),
+        segments: safeClone(scriptData?.segments || []),
         activeClipId,
       };
       setUndoStack((prevUndo) => [...prevUndo.slice(-30), currentSnapshot]);
@@ -98,6 +122,7 @@ export function useUndoRedo({
     canUndo: undoStack.length > 0,
     canRedo: redoStack.length > 0,
     pushUndoSnapshot,
+    pushHistory: pushUndoSnapshot,
     handleUndo,
     handleRedo,
     clearHistory,

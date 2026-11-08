@@ -154,7 +154,7 @@ export default function TimelineToolbar({
           {onAutoAlignNoOverlap && (
             <button
               type="button"
-              onClick={onAutoAlignNoOverlap}
+              onClick={() => onAutoAlignNoOverlap && onAutoAlignNoOverlap()}
               className="timeline-pill-tool tool-purple"
               title="🪄 Auto-Align Voice: តម្រៀបសំឡេងតាម Track រៀងៗខ្លួនមិនឱ្យជាន់គ្នា"
               disabled={!scriptSegments || scriptSegments.length <= 1}
@@ -167,7 +167,7 @@ export default function TimelineToolbar({
           {onResetToSourceTiming && (
             <button
               type="button"
-              onClick={onResetToSourceTiming}
+              onClick={() => onResetToSourceTiming && onResetToSourceTiming()}
               className="timeline-pill-tool tool-amber"
               title="⏮️ Reset to Original Video Timing: កំណត់គ្រប់ឃ្លាឱ្យត្រឡប់ទៅម៉ោងដើម (0% Drift)"
               disabled={!scriptSegments || scriptSegments.length === 0}

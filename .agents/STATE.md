@@ -1,57 +1,50 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
-- **Environment**: Antigravity IDE (Timeline Clean Spec — FreeCut/OpenCut Anatomy)
-- **Timestamp**: 2026-11-08T10:41:00+07:00
+- **Environment**: Antigravity IDE (Fix Auto-Align / Reset Timing Dying on Click — Cycle-Safe Snapshots)
+- **Timestamp**: 2026-11-08T11:01:00+07:00
 
 ## Summary of Completed Work
 
-### 1. FreeCut/OpenCut Anatomy Applied to Timeline
-- **Anatomy & Presentation ONLY**: Playback, drag, trim, snap, and windowing logic remain untouched.
-- **1. Clip Anatomy**:
-  - Every clip structured as **ONE label line** (12px, weight 500, single line truncate) + **ONE content row**.
-  - **Zero icons inside clips**: Removed lock, speaker, badge, and avatar icons from voice, subtitle, and video clips.
-  - **Voice clip label**: `"#N ប្រុស"` / `"#N ស្រី"` (+ OVER marker as text `" +0.4s"` in label when over). Content row: per-clip waveform bars.
-  - **Subtitle clip**: Segment text as label line (no separate `#` badge) over a flat content row.
-  - **Video clip**: Clean title over tiled filmstrip frames (`object-fit: cover`, never stretched).
-- **2. Shape & Spacing**:
-  - Row-filling rectangles with `border-radius: 6px`.
-  - 2px gap between adjacent clips (`width = Math.max(2, (endSec - startSec) * pps - 2)`).
-  - 4px vertical inset in track rows (e.g., Video 60px row -> 52px clip; Voice/Subs 48px rows -> 40px clips; Clean BGM 40px row -> 32px clip).
-  - Zero pill shapes; removed all `box-shadow` glows from clips.
-- **3. Low Chroma OKLCH Colours**:
-  - Video clip bg: `oklch(0.40 0.04 250)`
-  - Voice male bg: `oklch(0.32 0.05 250)`
-  - Voice female bg: `oklch(0.32 0.05 350)`
-  - Subtitle bg: `oklch(0.35 0.02 290)`
-  - Clean BGM bg: `oklch(0.22 0.02 302)`
-  - 1px border `oklch(0.25 0.01 250)` with subtle vertical gradient within own hue.
-  - Gender carried by label text (`ប្រុស`/`ស្រី`).
-  - OVER clips: label text highlighted in mark-out red `oklch(0.61 0.22 29)` — clip bg does not change.
-- **4. Single Signal Colour (App Blue Accent)**:
-  - App accent (blue `#38BDF8`) is the ONLY signal colour.
-  - Selection: 2px solid accent outline (inset via `outline-offset: -2px`) + trim handles visible only on selected clip.
-  - Playhead: 2px accent line with small top handle.
-  - Deleted red selection outline, red playhead line, and red time flag badge.
-- **5. Fixed 112px Track Headers**:
-  - Fixed 112px wide, full untruncated names (`VIDEO`, `VOICE 1`, `VOICE 2`, `SUBTITLES`, `CLEAN BGM`).
-  - 11-12px labels with exactly 2 mini toggles per header (mute/lock or eye/lock).
-  - Row heights: VIDEO 60px, VOICE rows 48px, SUBTITLES 48px, CLEAN BGM 40px.
-  - Separated by tonal step (floor `oklch(0.12 0 0)`, header `oklch(0.14 0.01 250)`) + 1px `oklch(0.25 0.01 250)` divider.
-- **6. Ruler Spacing**:
-  - Time labels in 12px mono, spaced at least ~100px apart across all zoom levels (`00:00`, `00:05`, `00:10` etc.).
-  - Minor ticks visibly quieter than major ticks.
-- **7. Zoom Cut-offs**:
-  - Clips narrower than 5px render as flat colour slivers (no label, no waveform).
-  - Labels render only when clip width >= 4 characters (>=32px).
-  - Viewport windowing maintained as-is.
+### 1. Root Cause Analysis & Reproduction (Step 1)
+- **Investigation & Finding**:
+  - In `useClipOperations.js`, `handleAutoAlignNoOverlap` (~L378) and `handleResetToSourceTiming` (~L448) call `pushUndoSnapshot(videoClips, currentSegments)` first before executing.
+  - In `useUndoRedo.js` (L17-28), snapshots were cloned using `JSON.parse(JSON.stringify(...))`. If any clip or segment object contained circular structures (such as React `MouseEvent` with `target: HTMLSpanElement` and React Fiber internals, as seen in commit `d1217f8`), it threw `TypeError: Converting circular structure to JSON`, crashing the entire handler before alignment or reset could execute.
+  - Furthermore, in `App.jsx`, `useClipOperations` was being passed `pushUndoSnapshot: undoRedo.pushHistory` (which was `undefined` because `useUndoRedo` returns `pushUndoSnapshot`), rendering snapshots a no-op and breaking undo after alignment.
 
-### 2. Verification & Visual Evidence
-- **Build**: `npm --prefix frontend run build` ➔ **PASS** (1.31s, 0 errors).
-- **Screenshots Captured**:
-  - `timeline_default_zoom.png`: FreeCut anatomy with 60+ loaded segments at default zoom.
-  - `timeline_zoomed_in.png`: Zoomed-in timeline displaying waveforms, `#N ប្រុស/ស្រី` labels, OVER tags in mark-out red, and accent selection trim handles.
-  - Full-screen references: `timeline_default_zoom_full.png`, `timeline_zoomed_in_full.png`.
+### 2. Cycle-Safe Snapshots Helper (Step 2)
+- Added `safeClone(value)` in [`frontend/src/hooks/useUndoRedo.js`](file:///e:/khmer_ai_dubbing_studio/frontend/src/hooks/useUndoRedo.js):
+  - Uses `JSON.stringify` with a replacer tracking seen objects via `WeakSet`.
+  - Replaces circular repeats with `undefined` (which JSON drops from objects) and drops functions/undefined.
+  - For acyclic data, snapshots are 100% structurally identical to normal JSON cloning.
+  - Applied `safeClone` at all 6 stringify sites in `useUndoRedo.js`:
+    1. push `videoClips` (L47)
+    2. push `segments` (L48)
+    3. undo `videoClips` (L64)
+    4. undo `segments` (L65)
+    5. redo `videoClips` (L93)
+    6. redo `segments` (L94)
+  - Also added `pushHistory: pushUndoSnapshot` alias to `useUndoRedo` return object for backwards compatibility.
+
+### 3. Belt & Braces Try/Catch Protection (Step 3)
+- In [`frontend/src/hooks/useClipOperations.js`](file:///e:/khmer_ai_dubbing_studio/frontend/src/hooks/useClipOperations.js):
+  - Wrapped `pushUndoSnapshot` call in `handleAutoAlignNoOverlap` in `try / catch (err)` that logs a warning and allows alignment to proceed uninterrupted.
+  - Wrapped `pushUndoSnapshot` call in `handleResetToSourceTiming` in `try / catch (err)` that logs a warning and allows timing reset to proceed uninterrupted.
+  - Wrapped internal `pushUndoSnapshot` callback in `useClipOperations.js` with `try / catch` so no caller can crash from undo snapshot dispatching.
+
+### 4. Source Disconnect & Event Bleed Fixes (Step 4)
+- [`frontend/src/App.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/App.jsx):
+  - Corrected props passed to `useClipOperations` and `useAudioDubbing`: `pushUndoSnapshot: undoRedo.pushUndoSnapshot` and `pushHistory: undoRedo.pushUndoSnapshot`.
+- [`frontend/src/components/timeline/TimelineToolbar.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/timeline/TimelineToolbar.jsx):
+  - Wrapped `onClick` for both Auto-Align and Reset Timing buttons in zero-arg arrow functions (`() => onAutoAlignNoOverlap && onAutoAlignNoOverlap()`) so React `MouseEvent` (`e`) is never forwarded into timeline clip/segment handlers.
+
+### 5. Verification & Visual Evidence
+- **Build**: `npm --prefix frontend run build` ➔ **PASS** (1.71s, 0 errors).
+- **Playwright Full Suite on EP1 (60+ voice files)**:
+  - **Auto-Align**: Visibly re-lays voice clips, `canUndo` becomes `true`, clicking Undo restores pre-click state cleanly.
+  - **Reset Timing**: Restores source timing, `canUndo` becomes `true`, clicking Undo restores pre-click state cleanly.
+  - **Delete & Undo**: Selecting voice segment and deleting removes clip, `canUndo` becomes `true`, clicking Undo restores deleted segment.
+  - **Console**: Verified **0 console errors** (completely clean).
 
 ## Active Environment
 - **Backend API**: `http://localhost:5000` (Node.js/Express, online)
