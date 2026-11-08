@@ -66,6 +66,11 @@ export function useScriptWorkflow({
     const targetEpisodeId = episodeId;
     const targetSeriesId = seriesId;
     const mode = typeof params === 'object' && params.mode ? params.mode : 'dialogue';
+    const generationMode = typeof params === 'object' && params.generationMode
+      ? params.generationMode
+      : (mode === 'fast_ocr' ? 'fast_ocr' : 'standard');
+    const force = typeof params === 'object' && Boolean(params.force);
+    const confirmed = typeof params === 'object' && Boolean(params.confirmed);
     const recapStyle = mode === 'dialogue'
       ? 'standard'
       : (typeof params === 'object' && params.recapStyle ? params.recapStyle : 'story_recap');
@@ -123,6 +128,7 @@ export function useScriptWorkflow({
           videoId: targetVideoId,
           videoFileName: targetFileName,
           mode,
+          generationMode,
           recapStyle,
           narratorGender,
           genre,
@@ -131,6 +137,8 @@ export function useScriptWorkflow({
           seriesId: targetSeriesId,
           episodeId: targetEpisodeId,
           seriesGlossary,
+          force,
+          confirmed,
         });
 
         if (jobInit && jobInit.jobId) {
@@ -261,6 +269,7 @@ export function useScriptWorkflow({
         response = await generateScriptApi({
           videoId: targetVideoId,
           mode,
+          generationMode,
           recapStyle,
           narratorGender,
           genre,
@@ -270,6 +279,8 @@ export function useScriptWorkflow({
           seriesId: targetSeriesId,
           episodeId: targetEpisodeId,
           seriesGlossary,
+          force,
+          confirmed,
           signal: abortController.signal,
         });
       }

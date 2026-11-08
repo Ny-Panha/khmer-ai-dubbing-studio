@@ -3,7 +3,7 @@ const { createSmartGenAIClient } = require('../geminiKeyManager');
 const { PIPELINE_STAGES, PIPELINE_STATUS, GENERATION_MODES } = require('./pipelineTypes');
 const { ingestEpisode } = require('./stages/stage1_ingestEpisode');
 const { analyzeSourceMedia } = require('./stages/stage2_analyzeSourceMedia');
-const { extractChineseSubtitles } = require('./stages/stage3_extractChineseSubtitles');
+const { extractChineseSubtitles, deduplicateFastOcrCues } = require('./stages/stage3_extractChineseSubtitles');
 const { analyzeDialogueAudio } = require('./stages/stage4_analyzeDialogueAudio');
 const { reconcileTimelineEvidence } = require('./stages/stage5_reconcileTimelineEvidence');
 const { generateModeSpecificScript } = require('./stages/stage6_generateModeSpecificScript');
@@ -175,7 +175,7 @@ async function runDubbingPipeline({
       });
     }
 
-    inputSegmentsForScript = ocrResult.visualSegments || [];
+    inputSegmentsForScript = deduplicateFastOcrCues(ocrResult.visualSegments || [], narratorGender);
   } else {
     // Stage 4: Analyze Dialogue Audio & Diarization
     report('analyzeDialogueAudio', 50, 'កំពុងស្រង់ & វិភាគសំឡេងសន្ទនាចិនដើម និងភេទសំឡេង (Audio Diarization)...');
@@ -328,6 +328,7 @@ async function runDubbingPipeline({
           const ep = series.episodes.find((e) => e.id === ingestResult.episodeId);
           if (ep) {
             ep.scriptData = resultPayload;
+            ep.generationMode = mode;
             ep.status = 'translated';
           }
         }

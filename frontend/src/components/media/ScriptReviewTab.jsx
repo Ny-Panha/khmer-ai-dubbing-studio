@@ -140,6 +140,27 @@ const CaptionItemCard = React.memo(function CaptionItemCard({
             </span>
           )}
 
+          {/* Unverified Fast OCR Speaker Warning */}
+          {(seg.speakerSource === 'ocr_only' || seg.unverifiedSpeaker) && (
+            <span
+              style={{
+                fontSize: '0.62rem',
+                fontWeight: 700,
+                color: '#f59e0b',
+                background: 'rgba(245, 158, 11, 0.15)',
+                border: '1px solid rgba(245, 158, 11, 0.35)',
+                padding: '1px 5px',
+                borderRadius: 4,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 2,
+              }}
+              title="Speaker unverified (Fast OCR mode without ASR diarization)"
+            >
+              speaker?
+            </span>
+          )}
+
           {/* Voice Actor Chip */}
           <span style={{
             fontSize: '0.62rem',

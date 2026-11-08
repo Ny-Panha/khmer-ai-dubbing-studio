@@ -32,7 +32,8 @@ router.post("/generate", async (req, res) => {
       videoPath,
       videoId,
       videoFileName,
-      mode = "dialogue",
+      mode: rawMode = "dialogue",
+      generationMode: rawGenMode,
       customPrompt = "",
       narratorGender = "male",
       genre = "auto",
@@ -45,6 +46,9 @@ router.post("/generate", async (req, res) => {
       overlapSec = 2,
     } = req.body;
 
+    const generationMode = rawGenMode || (rawMode === 'fast_ocr' ? 'fast_ocr' : 'standard');
+    const mode = generationMode === 'fast_ocr' ? GENERATION_MODES.FAST_OCR : rawMode;
+
     const rawVideoRef = videoPath || (videoFileName ? (path.isAbsolute(videoFileName) ? videoFileName : path.join(uploadsDir, videoFileName)) : null) || videoId;
     const resolvedVideoPath = rawVideoRef ? resolveMediaFile(rawVideoRef) : null;
 
@@ -53,50 +57,71 @@ router.post("/generate", async (req, res) => {
     }
 
     // Anti-duplication Guard & Re-Translate Safety
-    if (!req.body.force) {
-      const seriesMeta = getSeriesMetadata(seriesId);
-      const targetEp = (seriesMeta?.episodes || []).find((e) => String(e.id) === String(episodeId));
-      if (targetEp?.scriptData?.segments?.length > 0) {
-        console.log(`[Job Dispatch] ⚡ Episode ${episodeId} in series ${seriesId} already completed (${targetEp.scriptData.segments.length} segments). Skipping redundant translation.`);
-        return res.json({
-          success: true,
+    const seriesMeta = getSeriesMetadata(seriesId);
+    const targetEp = (seriesMeta?.episodes || []).find((e) => String(e.id) === String(episodeId));
+    const hasExistingSegments = Boolean(targetEp?.scriptData?.segments?.length > 0);
+
+    if (hasExistingSegments) {
+      if (!req.body.force || (req.body.confirmed !== true && req.body.force !== true)) {
+        console.log(`[Job Dispatch] ⚡ Episode ${episodeId} in series ${seriesId} already completed (${targetEp.scriptData.segments.length} segments). Re-translation requires confirmation.`);
+        return res.status(409).json({
+          success: false,
+          requireConfirmation: true,
           alreadyCompleted: true,
-          message: `ភាគ ${episodeId} បាន Translate រួចរាល់ហើយ (${targetEp.scriptData.segments.length} ឃ្លា)។ មិនចាំបាច់ Translate ឡើងវិញទេ។`,
+          error: `ភាគ ${episodeId} បាន Translate រួចរាល់ហើយ (${targetEp.scriptData.segments.length} ឃ្លា)។ ការ Translate ឡើងវិញតម្រូវឱ្យមានការបញ្ជាក់ (Confirmation required)។`,
           episodeId,
           segmentsCount: targetEp.scriptData.segments.length,
         });
       }
-    } else {
-      // Re-Translate safety backup
-      try {
-        const seriesMeta = getSeriesMetadata(seriesId);
-        const targetEp = (seriesMeta?.episodes || []).find((e) => String(e.id) === String(episodeId));
-        if (targetEp?.scriptData?.segments?.length > 0) {
-          const backupsDir = path.join(
-            uploadsDir,
-            'projects',
-            String(seriesId).replace(/[/\\?%*:|"<>]/g, '_'),
-            'episodes',
-            String(episodeId).replace(/[/\\?%*:|"<>]/g, '_'),
-            'backups'
-          );
-          if (!fs.existsSync(backupsDir)) {
-            fs.mkdirSync(backupsDir, { recursive: true });
-          }
-          const backupFileName = `script_backup_${Date.now()}.json`;
-          fs.writeFileSync(path.join(backupsDir, backupFileName), JSON.stringify(targetEp.scriptData, null, 2), 'utf8');
-          console.log(`[Job Dispatch] 🛡️ Re-Translate Safety: Backed up existing script to ${backupFileName}`);
 
-          const existingBackups = fs.readdirSync(backupsDir).filter((f) => f.startsWith('script_backup_') && f.endsWith('.json')).sort();
-          if (existingBackups.length > 5) {
-            for (let i = 0; i < existingBackups.length - 5; i++) {
-              try { fs.unlinkSync(path.join(backupsDir, existingBackups[i])); } catch (_) {}
-            }
+      // STEP 5: Re-Translate Safety — snapshot episode's scriptData AND series.json before overwriting
+      try {
+        const seriesCleanId = String(seriesId).replace(/[/\\?%*:|"<>]/g, '_');
+        const episodeCleanId = String(episodeId).replace(/[/\\?%*:|"<>]/g, '_');
+        const seriesDir = path.join(uploadsDir, 'projects', seriesCleanId);
+        const episodeDir = path.join(seriesDir, 'episodes', episodeCleanId);
+        const backupsDir = path.join(episodeDir, 'backups');
+
+        if (!fs.existsSync(backupsDir)) {
+          fs.mkdirSync(backupsDir, { recursive: true });
+        }
+        const now = Date.now();
+        // 1. Snapshot episode scriptData
+        const epBackupName = `script_backup_${now}.json`;
+        const epBackupPath = path.join(backupsDir, epBackupName);
+        fs.writeFileSync(epBackupPath, JSON.stringify(targetEp.scriptData, null, 2), 'utf8');
+
+        // 2. Snapshot series.json
+        const seriesJsonPath = path.join(seriesDir, 'series.json');
+        if (fs.existsSync(seriesJsonPath)) {
+          const seriesBackupPath = path.join(seriesDir, `series.json.backup_${now}`);
+          fs.copyFileSync(seriesJsonPath, seriesBackupPath);
+          console.log(`[Job Dispatch] 🛡️ Snapshot series.json backed up to ${seriesBackupPath}`);
+        } else if (seriesMeta) {
+          const seriesBackupPath = path.join(seriesDir, `series.json.backup_${now}`);
+          fs.writeFileSync(seriesBackupPath, JSON.stringify(seriesMeta, null, 2), 'utf8');
+        }
+
+        console.log(`[Job Dispatch] 🛡️ Re-Translate Safety: Backed up script to ${epBackupName}`);
+
+        const existingBackups = fs.readdirSync(backupsDir).filter((f) => f.startsWith('script_backup_') && f.endsWith('.json')).sort();
+        if (existingBackups.length > 5) {
+          for (let i = 0; i < existingBackups.length - 5; i++) {
+            try { fs.unlinkSync(path.join(backupsDir, existingBackups[i])); } catch (_) {}
           }
         }
       } catch (backupErr) {
-        console.warn(`[Job Dispatch] Warning: Could not create script backup:`, backupErr.message);
+        console.error(`[Job Dispatch] ❌ FATAL: Re-Translate backup failed:`, backupErr.message);
+        return res.status(500).json({
+          success: false,
+          error: `Re-Translate Safety Error: Could not create required backups before overwriting (${backupErr.message}). Operation refused.`,
+        });
       }
+    }
+
+    if (targetEp) {
+      targetEp.generationMode = generationMode;
+      saveSeriesMetadata(seriesMeta);
     }
 
     const availableKeys = extractAllGeminiKeys(apiKey);

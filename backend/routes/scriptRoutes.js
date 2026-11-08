@@ -10,6 +10,10 @@ const {
 } = require("../services/geminiService");
 const { runDubbingPipeline } = require("../services/pipeline");
 const { productionJobQueue } = require("../services/pipeline/productionJobQueue");
+const { GENERATION_MODES } = require("../services/pipeline/pipelineTypes");
+const { getSeriesMetadata, saveSeriesMetadata } = require("../services/episodeService");
+const { parseSrtContent, parseJsonContent } = require("../utils/subtitleParser");
+const { deduplicateFastOcrCues } = require("../services/pipeline/stages/stage3_extractChineseSubtitles");
 
 const router = express.Router();
 
@@ -31,7 +35,8 @@ router.post("/generate-script", async (req, res) => {
       videoPath,
       videoId,
       videoFileName,
-      mode = "dialogue",
+      mode: rawMode = "dialogue",
+      generationMode: rawGenMode,
       recapStyle = "standard",
       customPrompt = "",
       narratorGender = "male",
@@ -46,6 +51,9 @@ router.post("/generate-script", async (req, res) => {
       seriesGlossary,
       jobId,
     } = req.body;
+
+    const generationMode = rawGenMode || (rawMode === 'fast_ocr' ? 'fast_ocr' : 'standard');
+    const mode = generationMode === 'fast_ocr' ? GENERATION_MODES.FAST_OCR : rawMode;
 
     const availableKeys = extractAllGeminiKeys(apiKey);
     if (availableKeys.length === 0) {
@@ -230,6 +238,151 @@ router.post("/dubbing/retranslate-all", async (req, res) => {
   } catch (err) {
     console.error("[API] /api/dubbing/retranslate-all error:", err.message);
     res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * STEP 4: Subtitle Import endpoint (.srt / .json)
+ * Parses external subtitles, validates line by line, deduplicates via deduplicateFastOcrCues,
+ * translates to Khmer, and attaches to the target episode.
+ */
+router.post("/dubbing/import-subtitles", async (req, res) => {
+  try {
+    const {
+      fileContent,
+      fileType = "srt",
+      seriesId = "series_default",
+      episodeId = "ep_1",
+      defaultGender = "male",
+      apiKey,
+      force = false,
+      confirmed = false,
+    } = req.body;
+
+    if (!fileContent || typeof fileContent !== "string" || !fileContent.trim()) {
+      return res.status(400).json({
+        success: false,
+        validationErrors: ["File content is empty or invalid."],
+        error: "សូមជ្រើសរើស File Subtitle (.srt ឬ .json) ដែលមានទិន្នន័យត្រឹមត្រូវ!",
+      });
+    }
+
+    // 1. Parse Subtitle
+    const isJson = fileType === "json" || fileContent.trim().startsWith("{") || fileContent.trim().startsWith("[");
+    const parseResult = isJson
+      ? parseJsonContent(fileContent, GENERATION_MODES.FAST_OCR)
+      : parseSrtContent(fileContent, GENERATION_MODES.FAST_OCR);
+
+    // If parsing produced 0 segments or fatal errors, return detailed validation errors
+    if (!parseResult.success || !Array.isArray(parseResult.segments) || parseResult.segments.length === 0) {
+      return res.status(400).json({
+        success: false,
+        validationErrors: parseResult.warnings?.length > 0
+          ? parseResult.warnings
+          : ["File parsing produced 0 valid subtitle cues."],
+        error: "ការអាន File Subtitle បរាជ័យ — សូមពិនិត្យ timecodes និង format!",
+      });
+    }
+
+    // 2. Re-Translate Safety Check if Episode already has segments
+    const seriesMeta = getSeriesMetadata(seriesId);
+    const targetEp = (seriesMeta?.episodes || []).find((e) => String(e.id) === String(episodeId));
+    if (targetEp?.scriptData?.segments?.length > 0) {
+      if (!force || (confirmed !== true && force !== true)) {
+        return res.status(409).json({
+          success: false,
+          requireConfirmation: true,
+          validationErrors: parseResult.warnings || [],
+          error: `ភាគ ${episodeId} មាន Script រួចហើយ (${targetEp.scriptData.segments.length} ឃ្លា)។ ការ Import ថ្មីនឹង overwrite ទិន្នន័យចាស់ សូមបញ្ជាក់ជាមុន!`,
+          alreadyCompleted: true,
+          episodeId,
+          segmentsCount: targetEp.scriptData.segments.length,
+        });
+      }
+
+      // Snapshot backups before overwrite
+      try {
+        const seriesCleanId = String(seriesId).replace(/[/\\?%*:|"<>]/g, '_');
+        const episodeCleanId = String(episodeId).replace(/[/\\?%*:|"<>]/g, '_');
+        const seriesDir = path.join(uploadsDir, 'projects', seriesCleanId);
+        const episodeDir = path.join(seriesDir, 'episodes', episodeCleanId);
+        const backupsDir = path.join(episodeDir, 'backups');
+        if (!fs.existsSync(backupsDir)) {
+          fs.mkdirSync(backupsDir, { recursive: true });
+        }
+        const now = Date.now();
+        fs.writeFileSync(path.join(backupsDir, `script_backup_${now}.json`), JSON.stringify(targetEp.scriptData, null, 2), 'utf8');
+
+        const seriesJsonPath = path.join(seriesDir, 'series.json');
+        if (fs.existsSync(seriesJsonPath)) {
+          const seriesBackupPath = path.join(seriesDir, `series.json.backup_${now}`);
+          fs.copyFileSync(seriesJsonPath, seriesBackupPath);
+        } else if (seriesMeta) {
+          const seriesBackupPath = path.join(seriesDir, `series.json.backup_${now}`);
+          fs.writeFileSync(seriesBackupPath, JSON.stringify(seriesMeta, null, 2), 'utf8');
+        }
+      } catch (backupErr) {
+        return res.status(500).json({
+          success: false,
+          error: `Re-Translate Safety Error: Could not create required backups (${backupErr.message}). Import refused.`,
+        });
+      }
+    }
+
+    // 3. Fast OCR Deduplication & Normalization
+    const dedupedCues = deduplicateFastOcrCues(parseResult.segments, defaultGender);
+    if (dedupedCues.length === 0) {
+      return res.status(400).json({
+        success: false,
+        validationErrors: ["All subtitle cues were dropped during deduplication."],
+        error: "រកមិនឃើញអត្ថបទចិនត្រឹមត្រូវក្នុង File Subtitle នេះឡើយ!",
+      });
+    }
+
+    // 4. Batch Translate Chinese Text to Khmer
+    let finalizedSegments = dedupedCues;
+    const availableKeys = extractAllGeminiKeys(apiKey);
+    const keyToUse = availableKeys.length > 0 ? availableKeys.join(',') : undefined;
+
+    if (keyToUse) {
+      try {
+        finalizedSegments = await retranslateBatchDialogues(dedupedCues, keyToUse, {
+          narratorGender: defaultGender,
+        });
+      } catch (transErr) {
+        console.warn(`[SubtitleImport] Batch translation warning: ${transErr.message}. Keeping raw segments.`);
+      }
+    }
+
+    // 5. Persist to Episode & series.json
+    if (targetEp) {
+      targetEp.scriptData = {
+        mode: GENERATION_MODES.FAST_OCR,
+        generationMode: 'fast_ocr',
+        source: 'imported_subtitles',
+        segments: finalizedSegments,
+        updatedAt: Date.now(),
+      };
+      targetEp.generationMode = 'fast_ocr';
+      targetEp.status = 'translated';
+      saveSeriesMetadata(seriesMeta);
+    }
+
+    return res.json({
+      success: true,
+      message: `Import Subtitle ជោគជ័យ! (${finalizedSegments.length} ឃ្លា)`,
+      count: finalizedSegments.length,
+      segments: finalizedSegments,
+      validationErrors: parseResult.warnings || [],
+      warnings: parseResult.warnings || [],
+    });
+  } catch (err) {
+    console.error("[API] /api/dubbing/import-subtitles error:", err);
+    res.status(500).json({
+      success: false,
+      error: `Import Subtitle បរាជ័យ: ${err.message}`,
+      validationErrors: [err.message],
+    });
   }
 });
 

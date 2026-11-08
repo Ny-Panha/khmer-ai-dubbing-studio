@@ -577,9 +577,135 @@ Return JSON ONLY matching this schema:
   return result;
 }
 
+/**
+ * Deduplicate raw OCR cues for Fast OCR mode and external subtitle imports.
+ * Drops chunk-boundary repeats (equivalent CN text within 0.3s or overlapping).
+ * Merges truly continuous duplicates of the same text by extending endSec.
+ * Applies Fast OCR speaker/gender defaults: speakerSource: 'ocr_only', unverifiedSpeaker: true.
+ *
+ * @param {Array<object>} rawCues
+ * @param {string} [defaultGender='male']
+ * @returns {Array<object>}
+ */
+function deduplicateFastOcrCues(rawCues = [], defaultGender = 'male') {
+  if (!Array.isArray(rawCues) || rawCues.length === 0) return [];
+
+  const sorted = [...rawCues].sort((a, b) => (a.startSec || 0) - (b.startSec || 0));
+  const deduped = [];
+
+  const defGen = (defaultGender || 'male').toLowerCase() === 'female' ? 'female' : 'male';
+  const defVoice = defGen === 'female' ? 'km-KH-SreymomNeural' : 'km-KH-PisethNeural';
+  const defVoiceLabel = defGen === 'female' ? 'ស្រីមុំ (Sreymom)' : 'ពិសិដ្ឋ (Piseth)';
+  const defAvatar = defGen === 'female' ? '👩' : '👨';
+  const defColor = defGen === 'female' ? '#ec4899' : '#3b82f6';
+
+  for (const cue of sorted) {
+    const cueText = String(cue.originalChineseText || cue.chineseText || cue.text || '').trim();
+    if (!cueText) continue;
+
+    const cStart = parseFloat(Number(cue.startSec || 0).toFixed(2));
+    const cEnd = parseFloat(Number(cue.endSec || cStart + 1.25).toFixed(2));
+
+    if (deduped.length === 0) {
+      deduped.push({
+        ...cue,
+        startSec: cStart,
+        endSec: cEnd,
+        duration: parseFloat(Math.max(0.6, cEnd - cStart).toFixed(2)),
+        originalChineseText: cueText,
+        chineseText: cueText,
+        source: 'visual_ocr',
+        evidenceSource: 'visual_ocr',
+        evidenceType: 'visual_only',
+      });
+      continue;
+    }
+
+    const prev = deduped[deduped.length - 1];
+    const prevText = String(prev.originalChineseText || prev.chineseText || '').trim();
+    const isEq = areChineseTextsEquivalent(prevText, cueText);
+
+    if (isEq) {
+      const timeDiff = cStart - prev.startSec;
+      const isChunkBoundaryRepeat = (Math.abs(timeDiff) <= 0.3) || (cStart < prev.endSec);
+      const isContinuous = (cStart <= prev.endSec + 0.35);
+
+      if (isContinuous || isChunkBoundaryRepeat) {
+        if (cEnd > prev.endSec) {
+          prev.endSec = parseFloat(Number(cEnd).toFixed(2));
+          prev.duration = parseFloat(Math.max(0.6, prev.endSec - prev.startSec).toFixed(2));
+        }
+        continue;
+      }
+    }
+
+    deduped.push({
+      ...cue,
+      startSec: cStart,
+      endSec: cEnd,
+      duration: parseFloat(Math.max(0.6, cEnd - cStart).toFixed(2)),
+      originalChineseText: cueText,
+      chineseText: cueText,
+      source: 'visual_ocr',
+      evidenceSource: 'visual_ocr',
+      evidenceType: 'visual_only',
+    });
+  }
+
+  return deduped.map((seg, idx) => {
+    const isUserOverridden = Boolean(seg.userOverridden);
+    const resolvedGender = isUserOverridden ? (seg.voiceGender || defGen) : defGen;
+    const resolvedVoice = isUserOverridden ? (seg.voiceId || defVoice) : defVoice;
+
+    return {
+      ...seg,
+      id: idx + 1,
+      segmentId: idx + 1,
+      start: formatSecondsToTimecode(seg.startSec).substring(0, 5),
+      end: formatSecondsToTimecode(seg.endSec).substring(0, 5),
+      startTime: formatSecondsToTimecode(seg.startSec).substring(0, 5),
+      endTime: formatSecondsToTimecode(seg.endSec).substring(0, 5),
+      sourceStartSec: seg.startSec,
+      sourceEndSec: seg.endSec,
+      speechStartSec: seg.startSec,
+      speechEndSec: seg.endSec,
+      speechDuration: seg.duration,
+      availableSlotDuration: seg.duration,
+      slotDuration: seg.duration,
+
+      // STEP 3: Speaker/gender WITHOUT ASR
+      speakerSource: 'ocr_only',
+      unverifiedSpeaker: true,
+      genderConfidence: null,
+      voiceGender: resolvedGender,
+      gender: resolvedGender,
+      speakerGender: resolvedGender.toUpperCase(),
+      speaker: 'តួអង្គ',
+      speakerName: 'តួអង្គ',
+      speakerId: `spk_ocr_${idx + 1}`,
+      voiceId: resolvedVoice,
+      khmerVoiceId: resolvedVoice,
+      voice: resolvedVoice,
+      voiceLabel: defVoiceLabel,
+      avatar: defAvatar,
+      badgeColor: defColor,
+
+      audioUrl: null,
+      audioFile: null,
+      audioFileName: null,
+      audioPath: null,
+      audioDurationSec: 0,
+      rawAudioDur: 0,
+      ttsStatus: 'pending',
+      status: 'needs_translation',
+    };
+  });
+}
+
 module.exports = {
   extractChineseSubtitles,
   normalizeChineseChars,
   areChineseTextsEquivalent,
   generateBaseSamplingGrid,
+  deduplicateFastOcrCues,
 };

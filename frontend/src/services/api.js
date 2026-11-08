@@ -213,6 +213,7 @@ export async function uploadVideoFile(file, options = {}) {
 export async function generateScriptApi({ 
   videoId, 
   mode = 'dialogue', 
+  generationMode = 'standard',
   recapStyle = 'standard', 
   narratorGender = 'male',
   genre = 'auto',
@@ -224,6 +225,8 @@ export async function generateScriptApi({
   seriesId,
   episodeId,
   seriesGlossary,
+  force = false,
+  confirmed = false,
   signal 
 }) {
   const res = await fetch('/api/generate-script', {
@@ -233,6 +236,7 @@ export async function generateScriptApi({
     body: JSON.stringify({
       videoId,
       mode,
+      generationMode,
       recapStyle,
       narratorGender,
       genre,
@@ -244,6 +248,8 @@ export async function generateScriptApi({
       seriesId,
       episodeId,
       seriesGlossary,
+      force,
+      confirmed,
     }),
   });
 
@@ -508,6 +514,36 @@ export async function retranslateSegmentApi(chineseText, context = {}) {
  * @param {string} [episodeId]
  * @param {Object} [options]
  */
+/**
+ * STEP 4: Import Subtitles (.srt / .json)
+ */
+export async function importSubtitlesApi({
+  fileContent,
+  fileType = 'srt',
+  seriesId,
+  episodeId,
+  defaultGender = 'male',
+  apiKey,
+  force = false,
+  confirmed = false,
+}) {
+  const res = await fetch('/api/dubbing/import-subtitles', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      fileContent,
+      fileType,
+      seriesId,
+      episodeId,
+      defaultGender,
+      apiKey,
+      force,
+      confirmed,
+    }),
+  });
+  return await parseResponseJson(res, 'Failed to import subtitles');
+}
+
 /**
  * Start Background Dubbing Pipeline Job (Async / Non-blocking)
  */

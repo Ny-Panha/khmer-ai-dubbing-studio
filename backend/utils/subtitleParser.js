@@ -13,21 +13,24 @@ const { createCanonicalSegment, parseTimeToSeconds, GENERATION_MODES } = require
  * @returns {number}
  */
 function parseSrtTimestamp(timeStr = '') {
-  if (!timeStr || typeof timeStr !== 'string') return 0;
+  if (!timeStr || typeof timeStr !== 'string') return NaN;
   const clean = timeStr.trim().replace(',', '.');
   const parts = clean.split(':');
   if (parts.length === 3) {
-    const hours = parseFloat(parts[0]) || 0;
-    const mins = parseFloat(parts[1]) || 0;
-    const secs = parseFloat(parts[2]) || 0;
+    const hours = parseFloat(parts[0]);
+    const mins = parseFloat(parts[1]);
+    const secs = parseFloat(parts[2]);
+    if (isNaN(hours) || isNaN(mins) || isNaN(secs)) return NaN;
     return parseFloat((hours * 3600 + mins * 60 + secs).toFixed(2));
   }
   if (parts.length === 2) {
-    const mins = parseFloat(parts[0]) || 0;
-    const secs = parseFloat(parts[1]) || 0;
+    const mins = parseFloat(parts[0]);
+    const secs = parseFloat(parts[1]);
+    if (isNaN(mins) || isNaN(secs)) return NaN;
     return parseFloat((mins * 60 + secs).toFixed(2));
   }
-  return parseFloat(clean) || 0;
+  const val = parseFloat(clean);
+  return isNaN(val) ? NaN : parseFloat(val.toFixed(2));
 }
 
 /**
@@ -81,8 +84,13 @@ function parseSrtContent(srtText = '', mode = GENERATION_MODES.FAST_OCR) {
     const startSec = parseSrtTimestamp(timeParts[0]);
     let endSec = parseSrtTimestamp(timeParts[1]);
 
-    if (isNaN(startSec) || isNaN(endSec) || endSec <= startSec) {
-      endSec = startSec + 1.5;
+    if (isNaN(startSec) || startSec < 0) {
+      warnings.push(`Block ${bIdx + 1} skipped: invalid start timestamp "${timeParts[0]}".`);
+      continue;
+    }
+
+    if (isNaN(endSec) || endSec <= startSec) {
+      endSec = parseFloat((startSec + 1.5).toFixed(2));
       warnings.push(`Block ${bIdx + 1}: end time adjusted from "${timeParts[1]}" to ${endSec}s.`);
     }
 
@@ -108,6 +116,7 @@ function parseSrtContent(srtText = '', mode = GENERATION_MODES.FAST_OCR) {
     return {
       success: false,
       segments: [],
+      validationErrors: warnings.length > 0 ? warnings : ['No valid subtitle segments could be parsed from SRT.'],
       warnings: warnings.length > 0 ? warnings : ['No valid subtitle segments could be parsed from SRT.'],
     };
   }
@@ -120,6 +129,7 @@ function parseSrtContent(srtText = '', mode = GENERATION_MODES.FAST_OCR) {
   return {
     success: true,
     segments: canonicalSegments,
+    validationErrors: warnings,
     warnings,
     count: canonicalSegments.length,
   };
@@ -146,11 +156,13 @@ function parseJsonContent(jsonInput, mode = GENERATION_MODES.FAST_OCR) {
       parsedArray = jsonInput.segments || jsonInput.subtitles || jsonInput.items;
     }
   } catch (err) {
-    return { success: false, segments: [], warnings: [`JSON parse error: ${err.message}`] };
+    const errMsg = `JSON parse error: ${err.message}`;
+    return { success: false, segments: [], validationErrors: [errMsg], warnings: [errMsg] };
   }
 
   if (!Array.isArray(parsedArray) || parsedArray.length === 0) {
-    return { success: false, segments: [], warnings: ['JSON does not contain a valid array of subtitle segments.'] };
+    const errMsg = 'JSON does not contain a valid array of subtitle segments.';
+    return { success: false, segments: [], validationErrors: [errMsg], warnings: [errMsg] };
   }
 
   const rawSegments = [];
@@ -182,7 +194,12 @@ function parseJsonContent(jsonInput, mode = GENERATION_MODES.FAST_OCR) {
   }
 
   if (rawSegments.length === 0) {
-    return { success: false, segments: [], warnings: ['No valid items found in JSON.'] };
+    return {
+      success: false,
+      segments: [],
+      validationErrors: warnings.length > 0 ? warnings : ['No valid items found in JSON.'],
+      warnings: warnings.length > 0 ? warnings : ['No valid items found in JSON.'],
+    };
   }
 
   const canonicalSegments = rawSegments.map((raw, idx) =>
@@ -192,6 +209,7 @@ function parseJsonContent(jsonInput, mode = GENERATION_MODES.FAST_OCR) {
   return {
     success: true,
     segments: canonicalSegments,
+    validationErrors: warnings,
     warnings,
     count: canonicalSegments.length,
   };

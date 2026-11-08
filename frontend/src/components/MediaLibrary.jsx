@@ -154,13 +154,17 @@ function MediaLibrary({
 
   const handleTriggerScript = (options = {}) => {
     if (!selectedVideo?.videoId) return;
+    const targetGenMode = options?.generationMode || (dubbingMode === 'fast_ocr' ? 'fast_ocr' : 'standard');
     onGenerateScript({
       videoId: selectedVideo.videoId,
-      mode: dubbingMode,
+      mode: targetGenMode === 'fast_ocr' ? 'fast_ocr' : dubbingMode,
+      generationMode: targetGenMode,
       recapStyle: dubbingMode === 'dialogue' ? 'standard' : (recapStyle || 'story_recap'),
       narratorGender: options?.narratorGender || 'male',
       genre: options?.genre || 'auto',
       customPrompt: promptInput.trim(),
+      force: Boolean(options?.force),
+      confirmed: Boolean(options?.confirmed),
     });
   };
 
@@ -431,6 +435,7 @@ function MediaLibrary({
           audioStage={audioStage}
           episodeId={episodeId}
           seriesId={seriesId}
+          activeEpisode={activeEpisode}
           onUpdateScript={onUpdateScript}
         />
       )}

@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { GENERATION_MODES } = require('./pipelineTypes');
-const { extractChineseSubtitles, areChineseTextsEquivalent } = require('./stages/stage3_extractChineseSubtitles');
+const { extractChineseSubtitles, areChineseTextsEquivalent, deduplicateFastOcrCues } = require('./stages/stage3_extractChineseSubtitles');
 const { analyzeDialogueAudio } = require('./stages/stage4_analyzeDialogueAudio');
 const { reconcileTimelineEvidence } = require('./stages/stage5_reconcileTimelineEvidence');
 const { generateModeSpecificScript } = require('./stages/stage6_generateModeSpecificScript');
@@ -216,7 +216,7 @@ async function runChunkedDubbingPipeline({
     } catch (_) {}
 
     const chunkHash = crypto.createHash('md5')
-      .update(`${videoPath}${videoSignature}_${chunk.startSec}_${chunk.endSec}_${modelName}`)
+      .update(`${videoPath}${videoSignature}_${chunk.startSec}_${chunk.endSec}_${modelName}_${mode}`)
       .digest('hex');
     const chunkFile = path.join(chunkCacheDir, `chunk_${chunkHash}.json`);
 
@@ -258,7 +258,7 @@ async function runChunkedDubbingPipeline({
 
       if (mode === GENERATION_MODES.FAST_OCR) {
         console.log(`[ChunkOrchestrator] ⚡ Fast OCR Mode: Skipping Stage 4 (ASR) & Stage 5 (Reconcile) for Chunk ${cIdx + 1}`);
-        chunkSegments = ocrResult.visualSegments || [];
+        chunkSegments = deduplicateFastOcrCues(ocrResult.visualSegments || [], narratorGender);
         visualOnlyCount = chunkSegments.length;
         fusedCount = 0;
       } else {
@@ -336,7 +336,9 @@ async function runChunkedDubbingPipeline({
 
   // 4. Global Stitching and Boundary Deduplication
   report('stitching', 72, 'កំពុងផ្គុំ និងផ្ទៀងផ្ទាត់ព្រំប្រទល់ Chunk ទាំងអស់ (Global Timeline Stitching)...');
-  const stitchedSegments = stitchAndDeduplicateSegments(allChunkSegments);
+  const stitchedSegments = mode === GENERATION_MODES.FAST_OCR
+    ? deduplicateFastOcrCues(allChunkSegments, narratorGender)
+    : stitchAndDeduplicateSegments(allChunkSegments);
   console.log(`[ChunkOrchestrator] Global stitching complete: ${stitchedSegments.length} total unified segments.`);
 
   // 5. Stage 6: Mode-Specific Script Generation
@@ -479,6 +481,7 @@ async function runChunkedDubbingPipeline({
             segments: finalizedSegments,
             updatedAt: Date.now(),
           };
+          targetEp.generationMode = mode;
           saveSeriesMetadata(series);
           console.log(`[ChunkOrchestrator] ✅ Persisted ${finalizedSegments.length} script segments to series.json for ${ingestResult.episodeId}`);
         }

@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
-  Sparkles, Languages, BookOpen, Loader2, AlertCircle, ArrowRight, CheckCircle2, Mic, Volume2, Film, RefreshCw, ChevronDown, ChevronUp, Settings2, FileText, Check, Terminal
+  Sparkles, Languages, BookOpen, Loader2, AlertCircle, ArrowRight, CheckCircle2, Mic, Volume2, Film, RefreshCw, ChevronDown, ChevronUp, Settings2, FileText, Check, Terminal, FileUp
 } from 'lucide-react';
+import { importSubtitlesApi } from '../../services/api';
 
 const GENRE_OPTIONS = [
   { id: 'auto', label: '✨ Auto (ស្គាល់ស្វ័យប្រវត្តិ)', hint: 'AI វិភាគ Audio + OCR កំណត់ប្រភេទរឿងស្វ័យប្រវត្តិ' },
@@ -36,8 +37,20 @@ export default function DubbingModeTab({
   audioStage = '',
   episodeId = null,
   seriesId = null,
+  activeEpisode = null,
   onUpdateScript = null,
 }) {
+  const [generationMode, setGenerationMode] = useState(
+    activeEpisode?.generationMode ||
+    activeEpisode?.scriptData?.generationMode ||
+    scriptData?.generationMode ||
+    'standard'
+  );
+  const [isImportingSubtitles, setIsImportingSubtitles] = useState(false);
+  const [importErrors, setImportErrors] = useState([]);
+  const [importSuccess, setImportSuccess] = useState(null);
+  const fileInputRef = useRef(null);
+
   const [narratorGender, setNarratorGender] = useState('male');
   const [selectedGenre, setSelectedGenre] = useState(scriptData?.genre || scriptData?.detectedGenre || 'auto');
   const [showRegenerateForm, setShowRegenerateForm] = useState(false);
@@ -48,6 +61,69 @@ export default function DubbingModeTab({
   const [separationError, setSeparationError] = useState(null);
   const hasExistingScript = Boolean(scriptData?.segments && scriptData.segments.length > 0);
   const hasExistingAudio = Boolean(scriptData?.segments?.some(s => s.audioUrl || s.audioPath || s.audioFile));
+
+  useEffect(() => {
+    const detectedMode =
+      activeEpisode?.generationMode ||
+      activeEpisode?.scriptData?.generationMode ||
+      scriptData?.generationMode;
+    if (detectedMode) {
+      setGenerationMode(detectedMode);
+    }
+  }, [activeEpisode?.generationMode, activeEpisode?.scriptData?.generationMode, scriptData?.generationMode]);
+
+  const handleImportSubtitleFile = async (file) => {
+    if (!file) return;
+    setImportErrors([]);
+    setImportSuccess(null);
+    setIsImportingSubtitles(true);
+
+    try {
+      const reader = new FileReader();
+      reader.onload = async (e) => {
+        try {
+          const content = e.target.result;
+          const ext = file.name.split('.').pop().toLowerCase();
+          const fileType = ext === 'json' ? 'json' : 'srt';
+
+          const res = await importSubtitlesApi({
+            fileContent: content,
+            fileType,
+            seriesId: seriesId || 'drama_project',
+            episodeId: episodeId || 'ep_1',
+            defaultGender: narratorGender,
+            force: true,
+            confirmed: true,
+          });
+
+          if (res.success && res.segments) {
+            setImportSuccess(`Import ជោគជ័យ ${res.count || res.segments.length} ឃ្លា!`);
+            setGenerationMode('fast_ocr');
+            if (onUpdateScript) {
+              onUpdateScript({
+                ...(scriptData || {}),
+                mode: 'fast_ocr',
+                generationMode: 'fast_ocr',
+                segments: res.segments,
+              });
+            }
+          }
+          if (res.validationErrors?.length > 0) {
+            setImportErrors(res.validationErrors);
+          }
+        } catch (err) {
+          const errList = err.data?.validationErrors || [err.message || 'Import Subtitle failed'];
+          setImportErrors(errList);
+        } finally {
+          setIsImportingSubtitles(false);
+        }
+      };
+      reader.readAsText(file, 'utf-8');
+    } catch (err) {
+      setImportErrors([err.message || 'Failed to read file']);
+      setIsImportingSubtitles(false);
+    }
+  };
 
   useEffect(() => {
     if (scriptData?.genre) {
@@ -395,6 +471,15 @@ export default function DubbingModeTab({
 
             {/* Badges */}
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginBottom: 12 }}>
+              {generationMode === 'fast_ocr' ? (
+                <span style={{ fontSize: '11px', fontWeight: 700, background: 'rgba(234, 179, 8, 0.15)', color: '#eab308', padding: '2px 8px', borderRadius: 4, border: '1px solid rgba(234, 179, 8, 0.35)' }}>
+                  ⚡ Fast OCR
+                </span>
+              ) : (
+                <span style={{ fontSize: '11px', fontWeight: 600, background: 'rgba(147, 51, 234, 0.12)', color: '#c084fc', padding: '2px 8px', borderRadius: 4, border: '1px solid rgba(147, 51, 234, 0.3)' }}>
+                  🎯 Standard
+                </span>
+              )}
               <span style={{ fontSize: '11px', background: 'rgba(255, 255, 255, 0.04)', color: '#cbd5e1', padding: '2px 8px', borderRadius: 4, border: '1px solid rgba(255, 255, 255, 0.08)' }}>
                 {dubbingMode === 'dialogue' ? '🗣️ Mode A: សន្ទនាតួអង្គ' : '🎬 Mode B: សម្រាយរឿង'}
               </span>
@@ -677,6 +762,126 @@ export default function DubbingModeTab({
               </button>
             </div>
           )}
+
+          {/* Generation Mode Toggle (Standard vs Fast OCR) */}
+          <div style={{ background: 'rgba(0, 0, 0, 0.25)', padding: '10px 12px', borderRadius: 8, border: '1px solid rgba(255, 255, 255, 0.08)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+              <label style={{ fontSize: '11px', color: '#cbd5e1', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                ល្បឿន & របៀប Pipeline (Generation Mode)
+              </label>
+              <span style={{
+                fontSize: '10px',
+                color: generationMode === 'fast_ocr' ? '#eab308' : '#c084fc',
+                fontWeight: 700,
+                background: generationMode === 'fast_ocr' ? 'rgba(234, 179, 8, 0.12)' : 'rgba(192, 132, 252, 0.12)',
+                padding: '2px 7px',
+                borderRadius: 4,
+                border: `1px solid ${generationMode === 'fast_ocr' ? 'rgba(234, 179, 8, 0.3)' : 'rgba(192, 132, 252, 0.3)'}`
+              }}>
+                {generationMode === 'fast_ocr' ? '⚡ Fast OCR កំពុងជ្រើស' : '🎯 Standard កំពុងជ្រើស'}
+              </span>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 8 }}>
+              <button
+                type="button"
+                onClick={() => setGenerationMode('standard')}
+                style={{
+                  padding: '8px 10px',
+                  borderRadius: 6,
+                  border: generationMode === 'standard' ? '1.5px solid #a855f7' : '1px solid rgba(255, 255, 255, 0.08)',
+                  background: generationMode === 'standard' ? 'rgba(147, 51, 234, 0.2)' : 'rgba(15, 23, 42, 0.6)',
+                  color: generationMode === 'standard' ? '#f1f5f9' : '#94a3b8',
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                }}
+              >
+                <div style={{ fontSize: '11.5px', fontWeight: 700, color: generationMode === 'standard' ? '#c084fc' : '#f1f5f9' }}>
+                  🎯 Standard Mode
+                </div>
+                <div style={{ fontSize: '10px', color: '#94a3b8', marginTop: 2 }}>
+                  Full 10-Stage (OCR + ASR Diarization + Reconcile)
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setGenerationMode('fast_ocr')}
+                style={{
+                  padding: '8px 10px',
+                  borderRadius: 6,
+                  border: generationMode === 'fast_ocr' ? '1.5px solid #eab308' : '1px solid rgba(255, 255, 255, 0.08)',
+                  background: generationMode === 'fast_ocr' ? 'rgba(234, 179, 8, 0.15)' : 'rgba(15, 23, 42, 0.6)',
+                  color: generationMode === 'fast_ocr' ? '#f1f5f9' : '#94a3b8',
+                  cursor: 'pointer',
+                  textAlign: 'left',
+                }}
+              >
+                <div style={{ fontSize: '11.5px', fontWeight: 700, color: generationMode === 'fast_ocr' ? '#eab308' : '#f1f5f9' }}>
+                  ⚡ Fast OCR Mode
+                </div>
+                <div style={{ fontSize: '10px', color: '#94a3b8', marginTop: 2 }}>
+                  Direct Subtitles (OCR ➡️ Translate, 1 Cue = 1 Segment)
+                </div>
+              </button>
+            </div>
+
+            {/* Import .srt / .json Button */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingTop: 8, borderTop: '1px solid rgba(255, 255, 255, 0.06)' }}>
+              <span style={{ fontSize: '10.5px', color: '#94a3b8' }}>មាន Subtitle ស្រាប់? (Import Subtitles):</span>
+              <div>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".srt,.json"
+                  style={{ display: 'none' }}
+                  onChange={(e) => {
+                    const file = e.target.files?.[0];
+                    if (file) handleImportSubtitleFile(file);
+                    e.target.value = '';
+                  }}
+                />
+                <button
+                  type="button"
+                  disabled={isImportingSubtitles}
+                  onClick={() => fileInputRef.current?.click()}
+                  style={{
+                    padding: '4px 10px',
+                    borderRadius: 5,
+                    fontSize: '11px',
+                    fontWeight: 600,
+                    background: 'rgba(56, 189, 248, 0.12)',
+                    color: '#38bdf8',
+                    border: '1px solid rgba(56, 189, 248, 0.3)',
+                    cursor: isImportingSubtitles ? 'not-allowed' : 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 5,
+                  }}
+                >
+                  {isImportingSubtitles ? <Loader2 size={12} className="spin" /> : <FileText size={12} />}
+                  <span>Import .srt / .json</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Import Feedback */}
+            {importSuccess && (
+              <div style={{ marginTop: 8, padding: '6px 10px', borderRadius: 4, background: 'rgba(16, 185, 129, 0.15)', border: '1px solid rgba(16, 185, 129, 0.3)', color: '#34d399', fontSize: '10.5px' }}>
+                ✓ {importSuccess}
+              </div>
+            )}
+            {importErrors.length > 0 && (
+              <div style={{ marginTop: 8, padding: '8px 10px', borderRadius: 4, background: 'rgba(239, 68, 68, 0.12)', border: '1px solid rgba(239, 68, 68, 0.3)', color: '#f87171', fontSize: '10.5px' }}>
+                <div style={{ fontWeight: 700, marginBottom: 4 }}>⚠️ បញ្ហាពេល Import Subtitle (Validation Errors):</div>
+                <ul style={{ margin: 0, paddingLeft: 16 }}>
+                  {importErrors.map((err, i) => (
+                    <li key={i}>{err}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
 
         {/* 1. Mode A / Mode B Selection */}
         <div>
@@ -1239,7 +1444,7 @@ export default function DubbingModeTab({
                 setShowConfirmRetranslate(true);
                 return;
               }
-              handleTriggerScript({ narratorGender, genre: selectedGenre });
+              handleTriggerScript({ narratorGender, genre: selectedGenre, generationMode });
             }
           }}
           disabled={isThisEpisodeGeneratingScript || !selectedVideo}
@@ -1335,7 +1540,7 @@ export default function DubbingModeTab({
             type="button"
             onClick={() => {
               if (!isThisEpisodeGeneratingScript && selectedVideo) {
-                handleTriggerScript({ narratorGender, genre: selectedGenre });
+                handleTriggerScript({ narratorGender, genre: selectedGenre, generationMode });
               }
             }}
             disabled={isThisEpisodeGeneratingScript || !selectedVideo}
@@ -1426,7 +1631,7 @@ export default function DubbingModeTab({
                 type="button"
                 onClick={() => {
                   setShowConfirmRetranslate(false);
-                  handleTriggerScript({ narratorGender, genre: selectedGenre });
+                  handleTriggerScript({ narratorGender, genre: selectedGenre, generationMode, force: true, confirmed: true });
                 }}
                 style={{
                   height: 36,

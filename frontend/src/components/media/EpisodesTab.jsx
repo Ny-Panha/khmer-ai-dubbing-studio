@@ -518,6 +518,47 @@ export default function EpisodesTab({
                   <span>{hasVideo ? 'Video Ready' : 'No Video'}</span>
                 </span>
 
+                {/* Generation Mode Badge */}
+                {ep.generationMode === 'fast_ocr' || ep.scriptData?.generationMode === 'fast_ocr' ? (
+                  <span
+                    style={{
+                      fontSize: '0.68rem',
+                      fontWeight: 700,
+                      padding: '2px 6px',
+                      borderRadius: 3,
+                      background: 'rgba(234, 179, 8, 0.15)',
+                      color: '#eab308',
+                      border: '1px solid rgba(234, 179, 8, 0.35)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 3,
+                    }}
+                    title="Fast OCR Mode (Stage 3 ➡️ Translation)"
+                  >
+                    ⚡ Fast OCR
+                  </span>
+                ) : (
+                  (hasScript || ep.generationMode === 'standard' || ep.scriptData?.generationMode === 'standard') && (
+                    <span
+                      style={{
+                        fontSize: '0.68rem',
+                        fontWeight: 600,
+                        padding: '2px 6px',
+                        borderRadius: 3,
+                        background: 'rgba(147, 51, 234, 0.12)',
+                        color: '#c084fc',
+                        border: '1px solid rgba(147, 51, 234, 0.3)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 3,
+                      }}
+                      title="Standard Mode (Full 10-Stage Pipeline)"
+                    >
+                      🎯 Standard
+                    </span>
+                  )
+                )}
+
                 <span
                   style={{
                     fontSize: '0.68rem',
