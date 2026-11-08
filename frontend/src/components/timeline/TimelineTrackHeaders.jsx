@@ -16,8 +16,8 @@ export default function TimelineTrackHeaders({
   selectedVideo = null,
   scriptSegments = [],
 }) {
-  // Option 1 CapCut style: Always show standard multi-track headers (VIDEO, VOICE 1, VOICE 2, CLEAN BGM)
-  const effectiveVoiceRowCount = Math.min(2, Math.max(2, voiceRowCount || 2));
+  // Dynamic Unlimited Voice Lanes: Always render headers for all available/empty voice lanes
+  const effectiveVoiceRowCount = Math.max(2, voiceRowCount || 2);
 
   return (
     <div className="track-headers-column">

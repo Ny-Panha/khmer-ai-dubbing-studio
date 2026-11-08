@@ -1,8 +1,35 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
-- **Environment**: Antigravity IDE (Regenerated Split Segment Audio Playback Fix - audioOffset Reset & Clamping)
-- **Timestamp**: 2026-11-08T20:02:00+07:00
+- **Environment**: Antigravity IDE (Unlimited Voice Lanes — Free Vertical Drag & Drop & Dynamic Lane Creation)
+- **Timestamp**: 2026-11-08T20:30:00+07:00
+
+## Latest Update: Unlimited Voice Lanes & Dynamic Vertical Drop
+
+### Implementation Highlights
+1. **Dynamic Lane Count Calculation**:
+   - `voiceLaneCount = Math.max(2, highestUsedVoiceRow + 2, userVoiceTrackCount || 1, draggingVoiceTargetRow + 1)`.
+   - Formula ensures all used voice lanes are rendered plus ONE always-empty drop lane at the bottom.
+   - Removed `Math.min(1, ...)` and `Math.min(2, ...)` clamps in `TimelineEditor.jsx`, `TimelineTracksCanvas.jsx`, `TimelineTrackHeaders.jsx`, and `timelineUtils.js` — a segment's `trackRow` can now be any integer $\ge 0$.
+2. **Vertical Drop & Track Creation**:
+   - Dragging a voice clip down to lane $N$ assigns `seg.trackRow = N`, `seg.trackId = 'voice-' + (N + 1)`, and `seg.userShifted = true`.
+   - The drop always succeeds and never snaps back to the original lane.
+   - Dropping onto the bottom empty lane immediately turns it into the used lane and spawns a new empty lane below it on the next render.
+   - Drag-over highlight badges dynamically show `"Drop to create VOICE {n}"` when hovering an empty/new lane, and `"Drop to place on VOICE {n}"` for existing lanes.
+3. **Sticky Manual Placement in Auto-Align**:
+   - In `autoAlignVoiceSegments` (`timelineUtils.js`), segments with `userShifted: true` preserve their exact `trackRow` without being renumbered or shifted up to empty lanes.
+   - Non-userShifted segments continue packing across lanes 0 and 1.
+4. **Cross-Lane Drop Stand (Requirement 4)**:
+   - When dropping across lanes (`curSegRow !== finalTargetRow`), the drop stands at the dropped position even if it overlaps an existing clip on the target lane.
+   - Horizontal time-clamping and magnetic edge snapping (`||`) remain active when moving horizontally within the same lane.
+5. **Full Playback, Mix & Export Support**:
+   - `VideoPlayerPreview.jsx` and `ffmpegService.js` iterate through all valid segments regardless of `trackRow`, ensuring audio from lanes $\ge 2$ is never silenced or omitted.
+   - Verified persistence round-trip of `trackRow` and `userShifted` on EP2.
+
+### Verification & Automated Tests
+- `backend/tests/timeline_unlimited_voice_lanes.test.js` ➔ 5 passed, 0 failed.
+- Full regression suite (16 tests across all timeline & split modules) ➔ 16 passed, 0 failed.
+- Vite build (`npm --prefix frontend run build`) ➔ SUCCESS (1.37s).
 
 ## Latest Update: Regenerate Audio on Split Segment Audio Offset Reset & Zero-Playback Guard
 

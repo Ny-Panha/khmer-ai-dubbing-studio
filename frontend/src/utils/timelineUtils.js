@@ -921,7 +921,7 @@ export function autoAlignVoiceSegments(segments = [], totalDuration = 0, options
     // or if trimming would cut > 40% of previous clip's audio.
     let targetRow = 0;
     if (typeof seg.trackRow === 'number' && seg.userShifted) {
-      targetRow = Math.min(1, Math.max(0, seg.trackRow));
+      targetRow = Math.max(0, seg.trackRow);
     } else {
       const end0 = trackLastEnds[0] || 0;
       const end1 = trackLastEnds[1] || 0;
@@ -1044,7 +1044,7 @@ export function autoAlignVoiceSegments(segments = [], totalDuration = 0, options
       rawAudioDur: effectiveDur,
       audioTrimmed: Boolean(cleanSeg.audioTrimmed),
       trackRow: targetRow,
-      trackId: targetRow === 0 ? 'voice-1' : 'voice-2',
+      trackId: `voice-${targetRow + 1}`,
       subTrackRow: targetSubRow,
       subTrackId: `subs-${targetSubRow + 1}`,
       start: formatMinSec(targetStart),
@@ -1142,7 +1142,7 @@ export function resetSegmentsToSourceTiming(segments = [], totalDuration = 0) {
       finalAudioDuration: hasAudio ? audioDur : seg.finalAudioDuration,
       audioDuration: hasAudio ? audioDur : seg.audioDuration,
       trackRow: targetRow,
-      trackId: targetRow === 0 ? 'voice-1' : 'voice-2',
+      trackId: `voice-${targetRow + 1}`,
       subTrackRow: targetSubRow,
       subTrackId: `subs-${targetSubRow + 1}`,
       start: formatMinSec(safeStart),

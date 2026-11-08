@@ -163,7 +163,7 @@ function TimelineTracksCanvas({
         : Math.max(slotEnd, rawStart + realAudioDuration);
 
       if (typeof seg.trackRow === 'number') {
-        const r = Math.min(1, Math.max(0, seg.trackRow));
+        const r = Math.max(0, seg.trackRow);
         endTimes[r] = Math.max(endTimes[r] || 0, rawEnd);
         return r;
       }
@@ -840,11 +840,16 @@ function TimelineTracksCanvas({
         );
       })}
 
-      {/* Khmer AI Voice Tracks (CapCut Dual-Voice Tracks) */}
-      {Array.from({ length: Math.min(2, Math.max(2, voiceRowCount || 2)) }).map((_, rIdx) => {
+      {/* Khmer AI Voice Tracks (Unlimited Voice Lanes) */}
+      {Array.from({ length: Math.max(2, voiceRowCount || 2) }).map((_, rIdx) => {
         const trackKey = `voice_${rIdx}`;
         const isHidden = Boolean(hiddenTracks[trackKey] || (rIdx === 0 && hiddenTracks.voice));
         const isDragOver = dragOverTrack === trackKey;
+        const highestUsedVoiceRow = (scriptSegments || []).reduce((max, s) => {
+          const r = (typeof s.trackRow === 'number' && s.trackRow >= 0) ? s.trackRow : 0;
+          return Math.max(max, r);
+        }, 0);
+        const isNewLane = rIdx > highestUsedVoiceRow;
         const laneVoiceSegments = (scriptSegments || []).filter((seg, idx) => {
           if (activeSegmentRows[idx] !== rIdx) return false;
           return Boolean(seg.audioUrl || seg.audioPath || seg.audioFile);
@@ -900,7 +905,7 @@ function TimelineTracksCanvas({
           >
             {isDragOver && (
               <div className="track-drop-indicator-badge voice">
-                <span>Drop to place on VOICE {rIdx + 1} (A{rIdx + 1})</span>
+                <span>{isNewLane ? `Drop to create VOICE ${rIdx + 1}` : `Drop to place on VOICE ${rIdx + 1} (A${rIdx + 1})`}</span>
               </div>
             )}
             {(!audioGenerated || laneVoiceSegments.length === 0) ? (

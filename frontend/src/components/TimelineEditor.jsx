@@ -114,9 +114,9 @@ function TimelineEditor({
         ? seg.audioEndSec 
         : Math.max(slotEnd, rawStart + audioDur);
 
-      // If user explicitly shifted and set trackRow to 0 or 1, respect it
-      if (typeof seg.trackRow === 'number' && seg.userShifted) {
-        const userR = Math.min(1, Math.max(0, seg.trackRow));
+      // If user explicitly shifted and set trackRow, respect it completely (any integer >= 0)
+      if (typeof seg.trackRow === 'number' && (seg.userShifted || seg.trackRow >= 2)) {
+        const userR = Math.max(0, seg.trackRow);
         rowEndTimes[userR] = Math.max(rowEndTimes[userR] || 0, rawEnd);
         return userR;
       }
@@ -137,12 +137,17 @@ function TimelineEditor({
       return pickRow;
     });
 
-    const hasRow1 = rows.some(r => r === 1);
-    const voiceCount = hasRow1 ? 2 : 1;
+    const maxSegmentTrackRow = (scriptSegments || []).reduce((max, s) => {
+      const r = (typeof s.trackRow === 'number' && s.trackRow >= 0) ? s.trackRow : 0;
+      return Math.max(max, r);
+    }, 0);
+    const maxCalculatedRow = rows.reduce((max, r) => Math.max(max, r), 0);
+    const highestUsedVoiceRow = Math.max(maxSegmentTrackRow, maxCalculatedRow);
 
     return {
       segmentRows: rows,
-      calculatedVoiceRows: voiceCount,
+      calculatedVoiceRows: highestUsedVoiceRow + 1,
+      highestUsedVoiceRow,
       calculatedSubRows: 1, // Subtitles always sit on 1 unified continuous track
     };
   }, [scriptSegments]);
@@ -163,7 +168,7 @@ function TimelineEditor({
     return { start: rawStart, end: rawEnd };
   }, []);
 
-  // Multi-Track Track Counts (Capped to max 2 voice tracks for clean layout)
+  // Multi-Track Track Counts (Dynamic Unlimited Voice Lanes)
   const [userVoiceTrackCount, setUserVoiceTrackCount] = useState(1);
   const [userSubTrackCount, setUserSubTrackCount] = useState(1);
 
@@ -173,7 +178,19 @@ function TimelineEditor({
     ? ((videoClips?.find(c => c.id === dragState.id)?.trackRow || 0) + Math.max(1, Math.round((dragState.currentY || 0) / 52)))
     : 0;
   const videoRowCount = Math.max(userVideoTrackCount, maxVideoRow + 1, draggingTargetRow + 1, 1);
-  const voiceRowCount = Math.min(2, Math.max(userVoiceTrackCount, calculatedVoiceRows, 1));
+
+  // Dynamic Unlimited Voice Lanes: voiceLaneCount = max(2, highest trackRow among episode's segments + 2)
+  // (all used lanes plus ONE always-empty drop lane at the bottom)
+  const isDraggingVoiceDown = dragState?.itemType === 'audio' && dragState?.mode === 'move' && (dragState?.currentY > 20);
+  const draggingVoiceTargetRow = isDraggingVoiceDown
+    ? ((segmentRows[dragState.index] ?? (scriptSegments?.[dragState.index]?.trackRow || 0)) + Math.max(1, Math.round((dragState.currentY || 0) / 48)))
+    : 0;
+  const voiceRowCount = Math.max(
+    2,
+    highestUsedVoiceRow + 2,
+    userVoiceTrackCount || 1,
+    draggingVoiceTargetRow + 1
+  );
   const maxSubRow = (scriptSegments || []).reduce((max, s) => Math.max(max, (typeof s.subTrackRow === 'number' && s.subTrackRow >= 0) ? s.subTrackRow : 0), 0);
   const isDraggingSubDown = dragState?.itemType === 'subtitle' && dragState?.mode === 'move' && (dragState?.currentY > 20);
   const draggingSubTargetRow = isDraggingSubDown 
@@ -330,7 +347,7 @@ function TimelineEditor({
         const updated = [...scriptSegments];
         updated[segIdx] = {
           ...seg,
-          ...(trackType === 'subs' ? { subTrackRow: trackRow } : { trackRow: trackRow }),
+          ...(trackType === 'subs' ? { subTrackRow: trackRow, subTrackId: `subs-${trackRow + 1}` } : { trackRow: trackRow, trackId: `voice-${trackRow + 1}` }),
           startSec: safeTime,
           endSec: parseFloat((safeTime + dur).toFixed(2)),
           start: formatMinSec(safeTime),
@@ -760,52 +777,56 @@ function TimelineEditor({
 
           if (dragState.itemType === 'audio' && scriptSegments && scriptSegments.length > 0) {
             const curRow = segmentRows[dragState.index] ?? (scriptSegments[dragState.index]?.trackRow || 0);
-            let prevBound = 0;
-            let nextBound = Infinity;
+            const isHoveringOtherLane = Math.abs(deltaY) > 20;
 
-            for (let i = 0; i < scriptSegments.length; i++) {
-              if (i === dragState.index) continue;
-              const other = scriptSegments[i];
-              const otherRow = segmentRows[i] ?? (other.trackRow || 0);
-              if (otherRow !== curRow) continue;
+            if (!isHoveringOtherLane) {
+              let prevBound = 0;
+              let nextBound = Infinity;
 
-              const range = getSegEffectiveRange(other, i);
-              if (range.end <= dragState.origStart + 0.05) {
-                if (range.end > prevBound) prevBound = range.end;
-              } else if (range.start >= dragState.origEnd - 0.05) {
-                if (range.start < nextBound) nextBound = range.start;
-              } else {
-                if (range.start < dragState.origStart && range.end > prevBound) {
-                  prevBound = range.end;
-                }
-                if (range.end > dragState.origEnd && range.start < nextBound) {
-                  nextBound = range.start;
+              for (let i = 0; i < scriptSegments.length; i++) {
+                if (i === dragState.index) continue;
+                const other = scriptSegments[i];
+                const otherRow = segmentRows[i] ?? (other.trackRow || 0);
+                if (otherRow !== curRow) continue;
+
+                const range = getSegEffectiveRange(other, i);
+                if (range.end <= dragState.origStart + 0.05) {
+                  if (range.end > prevBound) prevBound = range.end;
+                } else if (range.start >= dragState.origEnd - 0.05) {
+                  if (range.start < nextBound) nextBound = range.start;
+                } else {
+                  if (range.start < dragState.origStart && range.end > prevBound) {
+                    prevBound = range.end;
+                  }
+                  if (range.end > dragState.origEnd && range.start < nextBound) {
+                    nextBound = range.start;
+                  }
                 }
               }
-            }
 
-            // 1. Magnetic edge snapping to adjacent clips on same track
-            if (snappingEnabled && !e.shiftKey) {
-              const snapThreshold = Math.min(0.2, Math.max(0.06, 8 / pps));
-              if (Math.abs(newStart - prevBound) < snapThreshold) {
+              // 1. Magnetic edge snapping to adjacent clips on same track
+              if (snappingEnabled && !e.shiftKey) {
+                const snapThreshold = Math.min(0.2, Math.max(0.06, 8 / pps));
+                if (Math.abs(newStart - prevBound) < snapThreshold) {
+                  newStart = prevBound;
+                  newEnd = newStart + clipDur;
+                  currentSnapTime = prevBound;
+                } else if (nextBound !== Infinity && Math.abs(newEnd - nextBound) < snapThreshold) {
+                  newEnd = nextBound;
+                  newStart = Math.max(prevBound, newEnd - clipDur);
+                  currentSnapTime = nextBound;
+                }
+              }
+
+              // 2. Strict No-Overlap Clamp on the same track (Edge-to-edge ||)
+              if (newStart < prevBound) {
                 newStart = prevBound;
                 newEnd = newStart + clipDur;
-                currentSnapTime = prevBound;
-              } else if (nextBound !== Infinity && Math.abs(newEnd - nextBound) < snapThreshold) {
+              }
+              if (nextBound !== Infinity && newEnd > nextBound) {
                 newEnd = nextBound;
                 newStart = Math.max(prevBound, newEnd - clipDur);
-                currentSnapTime = nextBound;
               }
-            }
-
-            // 2. Strict No-Overlap Clamp on the same track (Edge-to-edge ||)
-            if (newStart < prevBound) {
-              newStart = prevBound;
-              newEnd = newStart + clipDur;
-            }
-            if (nextBound !== Infinity && newEnd > nextBound) {
-              newEnd = nextBound;
-              newStart = Math.max(prevBound, newEnd - clipDur);
             }
           } else if (snappingEnabled && !e.shiftKey) {
             // CapCut Precision Snapping: subtle 8px window (~0.1s), NOT a violent 0.6s jump!
@@ -885,8 +906,13 @@ function TimelineEditor({
           } else if (deltaY > 20 && dragState.itemType === 'audio') {
             const curSeg = scriptSegments?.[dragState.index];
             const curRow = segmentRows[dragState.index] ?? (curSeg?.trackRow || 0);
-            const rowShift = Math.max(1, Math.round(deltaY / 44));
+            const rowShift = Math.max(1, Math.round(deltaY / 48));
             setDragOverTrack(`voice_${curRow + rowShift}`);
+          } else if (deltaY < -20 && dragState.itemType === 'audio') {
+            const curSeg = scriptSegments?.[dragState.index];
+            const curRow = segmentRows[dragState.index] ?? (curSeg?.trackRow || 0);
+            const rowShift = Math.min(-1, Math.round(deltaY / 48));
+            setDragOverTrack(`voice_${Math.max(0, curRow + rowShift)}`);
           } else if (deltaY > 20 && dragState.itemType === 'subtitle') {
             const curSeg = scriptSegments?.[dragState.index];
             const curRow = (typeof curSeg?.subTrackRow === 'number' && curSeg.subTrackRow >= 0) ? curSeg.subTrackRow : 0;
@@ -1053,50 +1079,55 @@ function TimelineEditor({
                 finalTargetRow = targetRow;
               } else if (liveDeltaY < -20 && curSegRow > 0) {
                 // Dragged up
-                const rowShift = Math.min(-1, Math.round(liveDeltaY / 44));
+                const rowShift = Math.min(-1, Math.round(liveDeltaY / 48));
                 finalTargetRow = Math.max(0, curSegRow + rowShift);
               } else if (liveDeltaY > 20) {
                 // Dragged down
-                const rowShift = Math.max(1, Math.round(liveDeltaY / 44));
+                const rowShift = Math.max(1, Math.round(liveDeltaY / 48));
                 finalTargetRow = curSegRow + rowShift;
               }
 
               updatedSeg.trackRow = finalTargetRow;
+              updatedSeg.trackId = `voice-${finalTargetRow + 1}`;
+              updatedSeg.userShifted = true;
               if (finalTargetRow >= userVoiceTrackCount) {
                 setUserVoiceTrackCount(finalTargetRow + 1);
               }
 
-              // Enforce strict no-overlap clamp on final target row (Edge-to-edge ||)
-              let prevBound = 0;
-              let nextBound = Infinity;
-              for (let i = 0; i < updated.length; i++) {
-                if (i === segIdx) continue;
-                const other = updated[i];
-                const otherRow = segmentRows[i] ?? (other.trackRow || 0);
-                if (otherRow !== finalTargetRow) continue;
-                const range = getSegEffectiveRange(other, i);
-                if (range.end <= dragState.origStart + 0.05) {
-                  if (range.end > prevBound) prevBound = range.end;
-                } else if (range.start >= dragState.origEnd - 0.05) {
-                  if (range.start < nextBound) nextBound = range.start;
-                } else {
-                  if (range.start < dragState.origStart && range.end > prevBound) prevBound = range.end;
-                  if (range.end > dragState.origEnd && range.start < nextBound) nextBound = range.start;
+              // Enforce strict no-overlap clamp on final target row for horizontal moves within the same lane (Edge-to-edge ||)
+              // If dropped onto a different lane, the drop stands at the dropped position even if it overlaps (Requirement 4)
+              if (curSegRow === finalTargetRow) {
+                let prevBound = 0;
+                let nextBound = Infinity;
+                for (let i = 0; i < updated.length; i++) {
+                  if (i === segIdx) continue;
+                  const other = updated[i];
+                  const otherRow = segmentRows[i] ?? (other.trackRow || 0);
+                  if (otherRow !== finalTargetRow) continue;
+                  const range = getSegEffectiveRange(other, i);
+                  if (range.end <= dragState.origStart + 0.05) {
+                    if (range.end > prevBound) prevBound = range.end;
+                  } else if (range.start >= dragState.origEnd - 0.05) {
+                    if (range.start < nextBound) nextBound = range.start;
+                  } else {
+                    if (range.start < dragState.origStart && range.end > prevBound) prevBound = range.end;
+                    if (range.end > dragState.origEnd && range.start < nextBound) nextBound = range.start;
+                  }
                 }
-              }
 
-              if (newStart < prevBound) {
-                newStart = prevBound;
-                if (dragState.mode === 'move') {
-                  const dur = Math.max(0.4, dragState.origEnd - dragState.origStart);
-                  newEnd = parseFloat((newStart + dur).toFixed(2));
+                if (newStart < prevBound) {
+                  newStart = prevBound;
+                  if (dragState.mode === 'move') {
+                    const dur = Math.max(0.4, dragState.origEnd - dragState.origStart);
+                    newEnd = parseFloat((newStart + dur).toFixed(2));
+                  }
                 }
-              }
-              if (nextBound !== Infinity && newEnd > nextBound) {
-                newEnd = nextBound;
-                if (dragState.mode === 'move') {
-                  const dur = Math.max(0.4, dragState.origEnd - dragState.origStart);
-                  newStart = Math.max(prevBound, parseFloat((newEnd - dur).toFixed(2)));
+                if (nextBound !== Infinity && newEnd > nextBound) {
+                  newEnd = nextBound;
+                  if (dragState.mode === 'move') {
+                    const dur = Math.max(0.4, dragState.origEnd - dragState.origStart);
+                    newStart = Math.max(prevBound, parseFloat((newEnd - dur).toFixed(2)));
+                  }
                 }
               }
 
