@@ -454,6 +454,75 @@ export function deleteClipById(clips, clipId, options = {}) {
 }
 
 /**
+ * Test if a segment matches a target identifier (by _uid, id, segmentId, or index).
+ * Uses the exact predicate aligned with TimelineTracksCanvas (L246).
+ *
+ * @param {Object} seg - Segment object
+ * @param {string|number} key - Identifier to match (_uid, id, segmentId, or index)
+ * @param {number} [idx] - 0-based array index of the segment
+ * @returns {boolean}
+ */
+export function isSegmentMatch(seg, key, idx) {
+  if (key === null || key === undefined || !seg) return false;
+  const keyStr = String(key).trim();
+  // 1. Direct _uid match
+  if (seg._uid && String(seg._uid) === keyStr) return true;
+  // 2. Direct id match or index match if id not set
+  if (seg.id !== undefined && seg.id !== null) {
+    if (String(seg.id) === keyStr) return true;
+  } else if (typeof idx === 'number' && Number(key) === idx) {
+    return true;
+  }
+  // 3. SegmentId match
+  if (seg.segmentId !== undefined && seg.segmentId !== null && String(seg.segmentId) === keyStr) {
+    return true;
+  }
+  // 4. Index match fallback when key is numeric
+  if (typeof idx === 'number' && (Number(key) === idx || keyStr === String(idx))) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Find the index of a segment matching key (_uid, id, segmentId, or numeric index).
+ *
+ * @param {Array} segments
+ * @param {string|number} key
+ * @returns {number} Index of segment or -1
+ */
+export function findSegmentIndex(segments, key) {
+  if (!Array.isArray(segments) || segments.length === 0 || key === null || key === undefined) {
+    return -1;
+  }
+  const keyStr = String(key).trim();
+  // 1. First priority: Match by unique identifiers (_uid, id, segmentId)
+  let targetIndex = segments.findIndex((s, idx) => {
+    if (s._uid && String(s._uid) === keyStr) return true;
+    if (s.id !== undefined && s.id !== null && String(s.id) === keyStr) return true;
+    if (s.segmentId !== undefined && s.segmentId !== null && String(s.segmentId) === keyStr) return true;
+    return false;
+  });
+
+  // 2. Second priority: If key was passed as a number, check 0-based array index
+  if (targetIndex === -1 && typeof key === 'number' && !isNaN(key)) {
+    if (key >= 0 && key < segments.length) {
+      targetIndex = key;
+    }
+  }
+
+  // 3. Third priority: String numeric index fallback
+  if (targetIndex === -1 && /^\d+$/.test(keyStr)) {
+    const num = parseInt(keyStr, 10);
+    if (num >= 0 && num < segments.length) {
+      targetIndex = num;
+    }
+  }
+
+  return targetIndex;
+}
+
+/**
  * Delete a script segment by explicit ID or fallback index, and re-index sequentially.
  * @param {Array} segments
  * @param {string|number} segIdOrIdx
@@ -463,30 +532,7 @@ export function deleteSegmentByIdOrIndex(segments, segIdOrIdx) {
   if (!Array.isArray(segments) || segments.length === 0) return [];
   if (segIdOrIdx === null || segIdOrIdx === undefined) return segments;
 
-  const targetStr = String(segIdOrIdx).trim();
-
-  // 1. First priority: Match by unique identifiers (_uid, id, or segmentId)
-  let targetIndex = segments.findIndex((s) => {
-    if (s._uid && String(s._uid) === targetStr) return true;
-    if (s.id !== undefined && s.id !== null && String(s.id) === targetStr) return true;
-    if (s.segmentId !== undefined && s.segmentId !== null && String(s.segmentId) === targetStr) return true;
-    return false;
-  });
-
-  // 2. Second priority: If segIdOrIdx was passed as a number, check 0-based array index
-  if (targetIndex === -1 && typeof segIdOrIdx === 'number' && !isNaN(segIdOrIdx)) {
-    if (segIdOrIdx >= 0 && segIdOrIdx < segments.length) {
-      targetIndex = segIdOrIdx;
-    }
-  }
-
-  // 3. Third priority: String numeric index fallback
-  if (targetIndex === -1 && /^\d+$/.test(targetStr)) {
-    const num = parseInt(targetStr, 10);
-    if (num >= 0 && num < segments.length) {
-      targetIndex = num;
-    }
-  }
+  const targetIndex = findSegmentIndex(segments, segIdOrIdx);
 
   if (targetIndex === -1) {
     console.warn('[deleteSegmentByIdOrIndex] Segment not found for key:', segIdOrIdx);

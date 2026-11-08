@@ -3,6 +3,8 @@ import {
   splitClipAtTime,
   deleteClipById,
   deleteSegmentByIdOrIndex,
+  isSegmentMatch,
+  findSegmentIndex,
   autoSplitVideoBySegments,
   bridgeClipGaps,
   autoAlignVoiceSegments,
@@ -63,41 +65,7 @@ export function useClipOperations({
     const targetTime = typeof splitTime === 'number' && !isNaN(splitTime) ? splitTime : 0;
     const roundedSplit = parseFloat(targetTime.toFixed(3));
 
-    // 1. Check if a dialogue / voice / subtitle segment is targeted or selected
     const segments = scriptData?.segments || [];
-    let targetSegIdx = -1;
-
-    // Check by targetId or selectedSegmentId first
-    const activeSegKey = targetId !== null && targetId !== undefined ? targetId : selectedSegmentId;
-    if (activeSegKey !== null && activeSegKey !== undefined) {
-      targetSegIdx = segments.findIndex((s, idx) => {
-        const matchesKey = String(s.id) === String(activeSegKey) || idx === Number(activeSegKey);
-        if (!matchesKey) return false;
-        const sStart = typeof s.audioStartSec === 'number' && !isNaN(s.audioStartSec)
-          ? s.audioStartSec
-          : (typeof s.startSec === 'number' ? s.startSec : parseTimeToSeconds(s.start, 0));
-        const sEnd = typeof s.audioEndSec === 'number' && !isNaN(s.audioEndSec)
-          ? s.audioEndSec
-          : (typeof s.endSec === 'number' ? s.endSec : parseTimeToSeconds(s.end, sStart + 3.0));
-        return roundedSplit > sStart + 0.05 && roundedSplit < sEnd - 0.05;
-      });
-    }
-
-    // If not found by active key, check if any segment intersects splitTime
-    let anyIntersectingSegIdx = -1;
-    if (targetSegIdx === -1 && segments.length > 0) {
-      anyIntersectingSegIdx = segments.findIndex((s) => {
-        const sStart = typeof s.audioStartSec === 'number' && !isNaN(s.audioStartSec)
-          ? s.audioStartSec
-          : (typeof s.startSec === 'number' ? s.startSec : parseTimeToSeconds(s.start, 0));
-        const sEnd = typeof s.audioEndSec === 'number' && !isNaN(s.audioEndSec)
-          ? s.audioEndSec
-          : (typeof s.endSec === 'number' ? s.endSec : parseTimeToSeconds(s.end, sStart + 3.0));
-        return roundedSplit > sStart + 0.05 && roundedSplit < sEnd - 0.05;
-      });
-    }
-
-    // 2. Check if a video clip is targeted or selected or intersects splitTime
     let currentClips = videoClips;
     if (!currentClips || currentClips.length === 0 || (currentClips.length === 1 && currentClips[0].end <= currentClips[0].start)) {
       currentClips = [
@@ -105,23 +73,25 @@ export function useClipOperations({
       ];
     }
 
-    const videoSplitResult = splitClipAtTime(currentClips, roundedSplit, totalDur, activeClipId);
+    const getSegTiming = (s) => {
+      const sStart = typeof s.audioStartSec === 'number' && !isNaN(s.audioStartSec)
+        ? s.audioStartSec
+        : (typeof s.startSec === 'number' && !isNaN(s.startSec) ? s.startSec : parseTimeToSeconds(s.start, 0));
+      const sEnd = typeof s.audioEndSec === 'number' && !isNaN(s.audioEndSec)
+        ? s.audioEndSec
+        : (typeof s.endSec === 'number' && !isNaN(s.endSec) ? s.endSec : parseTimeToSeconds(s.end, sStart + 3.0));
+      return { sStart, sEnd };
+    };
 
-    // If an explicit segment was targeted/selected, prioritize splitting the segment
-    const shouldSplitSegment = targetSegIdx !== -1 || (anyIntersectingSegIdx !== -1 && !videoSplitResult);
-    const finalSegIdx = targetSegIdx !== -1 ? targetSegIdx : anyIntersectingSegIdx;
+    const isInsideSeg = (s) => {
+      const { sStart, sEnd } = getSegTiming(s);
+      return roundedSplit > sStart + 0.05 && roundedSplit < sEnd - 0.05;
+    };
 
-    let hasSplitAnything = false;
-
-    // Split Segment
-    if (finalSegIdx >= 0 && (shouldSplitSegment || !activeClipId)) {
-      const targetSeg = segments[finalSegIdx];
-      const sStart = typeof targetSeg.audioStartSec === 'number' && !isNaN(targetSeg.audioStartSec)
-        ? targetSeg.audioStartSec
-        : (typeof targetSeg.startSec === 'number' ? targetSeg.startSec : parseTimeToSeconds(targetSeg.start, 0));
-      const sEnd = typeof targetSeg.audioEndSec === 'number' && !isNaN(targetSeg.audioEndSec)
-        ? targetSeg.audioEndSec
-        : (typeof targetSeg.endSec === 'number' ? targetSeg.endSec : parseTimeToSeconds(targetSeg.end, sStart + 3.0));
+    // Helper: Execute segment split logic (reused for (a) and (c))
+    const executeSplitSegment = (splitSegIdx) => {
+      const targetSeg = segments[splitSegIdx];
+      const { sStart, sEnd } = getSegTiming(targetSeg);
       const dur = Math.max(0.2, sEnd - sStart);
 
       // Intelligent text splitting for Khmer & English
@@ -181,7 +151,7 @@ export function useClipOperations({
       const dur1 = parseFloat((roundedSplit - sStart).toFixed(2));
       const dur2 = parseFloat((sEnd - roundedSplit).toFixed(2));
 
-      const uid1 = `seg_${Date.now()}_a_${Math.random().toString(36).substr(2, 4)}`;
+      const uid1 = targetSeg._uid ? `${targetSeg._uid}_a` : `seg_${Date.now()}_a_${Math.random().toString(36).substr(2, 4)}`;
       const uid2 = `seg_${Date.now()}_b_${Math.random().toString(36).substr(2, 4)}`;
       const hasAudio = Boolean(targetSeg.audioGenerated || targetSeg.audioFile || targetSeg.audioUrl);
       const origOffset = typeof targetSeg.audioOffset === 'number' && !isNaN(targetSeg.audioOffset) ? targetSeg.audioOffset : 0;
@@ -254,42 +224,94 @@ export function useClipOperations({
       };
 
       const nextSegments = [...segments];
-      nextSegments.splice(finalSegIdx, 1, seg1, seg2);
+      nextSegments.splice(splitSegIdx, 1, seg1, seg2);
       const reindexed = nextSegments.map((item, idx) => ({
         ...item,
         id: idx + 1,
         segmentId: idx + 1,
       }));
 
-      pushUndoSnapshot(videoSplitResult ? videoSplitResult.newClips : currentClips, segments);
-      setScriptData(prev => prev ? ({ ...prev, segments: reindexed }) : null);
+      // Snapshot with current uncut videoClips to preserve unbroken video state
+      pushUndoSnapshot(currentClips, segments);
+      setScriptData((prev) => (prev ? { ...prev, segments: reindexed } : null));
       if (setSelectedSegmentId) setSelectedSegmentId(uid2);
 
       // Re-sync timeline narration audio
       if (audioGenerated && syncTimelineAudioApi) {
         if (syncAudioTimeoutRef?.current) clearTimeout(syncAudioTimeoutRef.current);
-        syncTimelineAudioApi(reindexed, getProjectName(), getVideoId(), episodeId, seriesId).then(res => {
+        syncTimelineAudioApi(reindexed, getProjectName(), getVideoId(), episodeId, seriesId).then((res) => {
           if (res?.fullAudioUrl && setFullAudioUrl) {
             setFullAudioUrl(`${res.fullAudioUrl.split('?')[0]}?t=${Date.now()}`);
             if (setFullAudioPath) setFullAudioPath(res.fullAudioPath);
           }
-        }).catch(err => console.warn('Audio sync after segment split error:', err.message));
+        }).catch((err) => console.warn('Audio sync after segment split error:', err.message));
       }
 
-      hasSplitAnything = true;
+      return true;
+    };
+
+    const isTargetingVideoClip = Boolean(
+      targetId && currentClips.some((c) => c.id === targetId)
+    );
+
+    // (a) if selectedSegmentId matches a segment and the playhead is strictly inside it -> split THAT segment, never the video
+    let selectedSegIdx = -1;
+    if (!isTargetingVideoClip) {
+      const activeSegKey = targetId !== null && targetId !== undefined ? targetId : selectedSegmentId;
+      if (activeSegKey !== null && activeSegKey !== undefined && segments.length > 0) {
+        selectedSegIdx = segments.findIndex((s, idx) => isSegmentMatch(s, activeSegKey, idx) && isInsideSeg(s));
+        if (selectedSegIdx === -1) {
+          const fallbackIdx = findSegmentIndex(segments, activeSegKey);
+          if (fallbackIdx !== -1 && isInsideSeg(segments[fallbackIdx])) {
+            selectedSegIdx = fallbackIdx;
+          }
+        }
+      }
     }
 
-    // Split Video Clip if video clip was targeted/intersected (razor cut both tracks at playhead)
-    if (videoSplitResult) {
-      if (!hasSplitAnything) {
+    if (selectedSegIdx !== -1) {
+      return executeSplitSegment(selectedSegIdx);
+    }
+
+    // (b) else if a video clip is explicitly active and the playhead is inside it -> split the video (current behaviour preserved)
+    const activeVideoId = isTargetingVideoClip ? targetId : activeClipId;
+    let explicitVideoClip = null;
+    if (activeVideoId) {
+      explicitVideoClip = currentClips.find(
+        (c) => c.id === activeVideoId && roundedSplit > (c.start + 0.05) && roundedSplit < (c.end - 0.05)
+      );
+    }
+
+    if (explicitVideoClip) {
+      const videoSplitResult = splitClipAtTime(currentClips, roundedSplit, totalDur, activeVideoId);
+      if (videoSplitResult) {
         pushUndoSnapshot(currentClips, segments);
+        setVideoClips(videoSplitResult.newClips);
+        setActiveClipId(videoSplitResult.activeClipId);
+        return true;
       }
-      setVideoClips(videoSplitResult.newClips);
-      setActiveClipId(videoSplitResult.activeClipId);
-      hasSplitAnything = true;
     }
 
-    return hasSplitAnything;
+    // (c) else if any segment intersects the playhead -> split it
+    let anyIntersectingSegIdx = -1;
+    if (segments.length > 0) {
+      anyIntersectingSegIdx = segments.findIndex((s) => isInsideSeg(s));
+    }
+
+    if (anyIntersectingSegIdx !== -1) {
+      return executeSplitSegment(anyIntersectingSegIdx);
+    }
+
+    // (d) else split the video at the playhead
+    const fallbackVideoSplit = splitClipAtTime(currentClips, roundedSplit, totalDur, null);
+    if (fallbackVideoSplit) {
+      pushUndoSnapshot(currentClips, segments);
+      setVideoClips(fallbackVideoSplit.newClips);
+      setActiveClipId(fallbackVideoSplit.activeClipId);
+      return true;
+    }
+
+    return false;
   };
 
   // CapCut-style Auto-Split Video by Subtitles/Dialogue
@@ -523,9 +545,11 @@ export function useClipOperations({
   };
 
   // Delete Clip Tool
-  const handleDeleteClip = (clipId) => {
+  const handleDeleteClip = (clipId = null) => {
+    const targetClipId = clipId !== null && clipId !== undefined ? clipId : activeClipId;
+    if (!targetClipId) return;
     pushUndoSnapshot(videoClips);
-    const updated = deleteClipById(videoClips, clipId, { allowEmpty: true });
+    const updated = deleteClipById(videoClips, targetClipId, { allowEmpty: true });
     setVideoClips(updated);
     setActiveClipId(updated[0]?.id || null);
   };
@@ -540,10 +564,14 @@ export function useClipOperations({
   };
 
   // Delete a Subtitle Segment
-  const handleDeleteSegment = async (segIdOrIdx) => {
+  const handleDeleteSegment = async (segIdOrIdx = null) => {
     if (!scriptData?.segments) return;
+    const targetKey = segIdOrIdx !== null && segIdOrIdx !== undefined ? segIdOrIdx : selectedSegmentId;
+    if (targetKey === null || targetKey === undefined) return;
+
     pushUndoSnapshot(videoClips, scriptData.segments);
-    const updated = deleteSegmentByIdOrIndex(scriptData.segments, segIdOrIdx);
+    const updated = deleteSegmentByIdOrIndex(scriptData.segments, targetKey);
+    if (updated === scriptData.segments) return;
 
     if (syncAudioTimeoutRef?.current) clearTimeout(syncAudioTimeoutRef.current);
 
@@ -706,12 +734,14 @@ export function useClipOperations({
   };
 
   // Toggle Mute / Unmute for a single video clip (Mute Original Audio)
-  const handleToggleMuteVideoClip = (clipId) => {
+  const handleToggleMuteVideoClip = (clipId = null) => {
     if (!videoClips || videoClips.length === 0) return;
+    const targetClipId = clipId !== null && clipId !== undefined ? clipId : activeClipId;
+    if (!targetClipId) return;
     pushUndoSnapshot(videoClips, scriptData?.segments || []);
 
     const updated = videoClips.map((c) => {
-      if (c.id === clipId) {
+      if (c.id === targetClipId) {
         return {
           ...c,
           isMuted: !c.isMuted,
@@ -724,14 +754,15 @@ export function useClipOperations({
   };
 
   // Toggle Mute / Unmute for a single voice segment
-  const handleToggleMuteSegment = (segIdOrIdx) => {
+  const handleToggleMuteSegment = (segIdOrIdx = null) => {
     if (!scriptData?.segments || scriptData.segments.length === 0) return;
+    const targetKey = segIdOrIdx !== null && segIdOrIdx !== undefined ? segIdOrIdx : selectedSegmentId;
+    if (targetKey === null || targetKey === undefined) return;
+
     pushUndoSnapshot(videoClips, scriptData.segments);
 
     const updated = scriptData.segments.map((seg, idx) => {
-      const isTarget = (seg.id !== undefined && seg.id !== null)
-        ? String(seg.id) === String(segIdOrIdx)
-        : idx === Number(segIdOrIdx);
+      const isTarget = isSegmentMatch(seg, targetKey, idx);
       if (isTarget) {
         return {
           ...seg,
@@ -764,9 +795,10 @@ export function useClipOperations({
     const activeSegKey = targetId !== null && targetId !== undefined ? targetId : selectedSegmentId;
     if (activeSegKey === null || activeSegKey === undefined || segments.length === 0) return;
 
-    const targetIdx = segments.findIndex((s, idx) =>
-      String(s.id) === String(activeSegKey) || idx === Number(activeSegKey)
-    );
+    let targetIdx = segments.findIndex((s, idx) => isSegmentMatch(s, activeSegKey, idx));
+    if (targetIdx === -1) {
+      targetIdx = findSegmentIndex(segments, activeSegKey);
+    }
     if (targetIdx === -1) return;
 
     const targetSeg = segments[targetIdx];

@@ -1186,7 +1186,10 @@ function TimelineEditor({
         onPlayPause();
       } else if (e.code === 'KeyB' && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
-        if (onSplitClip) onSplitClip(currentTime, selectedSegKey || activeClipId);
+        const activeSplitTarget = lastSelectedType === 'video'
+          ? (activeClipId || selectedSegKey)
+          : (selectedSegKey || activeClipId);
+        if (onSplitClip) onSplitClip(currentTime, activeSplitTarget);
       } else if ((e.code === 'KeyZ' && (e.ctrlKey || e.metaKey)) && !e.shiftKey) {
         e.preventDefault();
         if (onUndo && canUndo) onUndo();
@@ -1362,7 +1365,12 @@ function TimelineEditor({
         onUndo={onUndo}
         canRedo={canRedo}
         onRedo={onRedo}
-        onSplitClip={(time) => onSplitClip && onSplitClip(time, selectedSegKey || activeClipId)}
+        onSplitClip={(time) => {
+          const activeSplitTarget = lastSelectedType === 'video'
+            ? (activeClipId || selectedSegKey)
+            : (selectedSegKey || activeClipId);
+          if (onSplitClip) onSplitClip(time, activeSplitTarget);
+        }}
         currentTime={currentTime}
         handleDeleteSelected={handleDeleteSelected}
         canDelete={canDelete}

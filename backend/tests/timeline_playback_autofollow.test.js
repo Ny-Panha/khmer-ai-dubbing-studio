@@ -153,3 +153,4 @@ test('Playback Auto-Follow: State Machine & Transition Simulation', () => {
   runAutoFollowTick(41.0, false);
   assert.equal(selectedSegmentId, 'seg_4', 'When playhead enters next segment, follow resumes and selects seg_4');
 });
+

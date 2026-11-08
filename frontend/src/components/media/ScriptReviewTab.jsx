@@ -85,6 +85,10 @@ const CaptionItemCard = React.memo(function CaptionItemCard({
         : seg.audioDurationSec));
   const isOverflow = (typeof naturalAudioDur === 'number' && naturalAudioDur > (segDuration + 0.3)) || Boolean(seg.audioTrimmed);
 
+  const khmerText = (seg.khmer || seg.khmerText || seg.khmerTranslatedText || '').trim();
+  const isTextEmpty = !khmerText;
+  const isReviewNeeded = Boolean(seg.reviewNeeded || seg.uncertainOcr || seg.ocrDisagreement || isTextEmpty);
+
   return (
     <div
       onClick={() => onSelectSegment && onSelectSegment(seg._uid || (seg.id !== undefined && seg.id !== null ? seg.id : idx))}
@@ -92,6 +96,9 @@ const CaptionItemCard = React.memo(function CaptionItemCard({
       style={{
         padding: '8px 10px',
         cursor: 'pointer',
+        borderLeft: isTextEmpty
+          ? '3px solid #ef4444'
+          : (isReviewNeeded ? '3px solid #f59e0b' : undefined),
       }}
     >
       {/* Clean Card Header */}
@@ -187,9 +194,43 @@ const CaptionItemCard = React.memo(function CaptionItemCard({
             <span style={{ fontSize: '0.62rem', color: '#d8b4fe', background: 'rgba(168, 85, 247, 0.15)', border: '1px dashed #c084fc', padding: '1px 5px', borderRadius: 4, fontWeight: 600 }} title="និយាយក្នុងចិត្ត">
               💭 ក្នុងចិត្ត
             </span>
-          ) : (!seg.khmerTranslatedText && !seg.khmer && !seg.khmerText) ? (
-            <span style={{ fontSize: '0.62rem', color: '#fbbf24', background: 'rgba(245, 158, 11, 0.15)', border: '1px solid rgba(245, 158, 11, 0.3)', padding: '1px 5px', borderRadius: 4, fontWeight: 600 }} title="ត្រូវការបកប្រែ">
-              Review
+          ) : isTextEmpty ? (
+            <span
+              style={{
+                fontSize: '0.62rem',
+                color: '#ef4444',
+                background: 'rgba(239, 68, 68, 0.15)',
+                border: '1px solid rgba(239, 68, 68, 0.4)',
+                padding: '1px 6px',
+                borderRadius: 4,
+                fontWeight: 700,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 3,
+              }}
+              title="ខ្វះអត្ថបទខ្មែរ — សូមបកប្រែ ឬវាយអត្ថបទ (Missing Khmer text)"
+            >
+              <AlertCircle size={10} />
+              <span>ខ្វះអត្ថបទ</span>
+            </span>
+          ) : isReviewNeeded ? (
+            <span
+              style={{
+                fontSize: '0.62rem',
+                color: '#f59e0b',
+                background: 'rgba(245, 158, 11, 0.15)',
+                border: '1px solid rgba(245, 158, 11, 0.4)',
+                padding: '1px 6px',
+                borderRadius: 4,
+                fontWeight: 700,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 3,
+              }}
+              title="ត្រូវពិនិត្យឡើងវិញ (Review needed)"
+            >
+              <AlertTriangle size={10} />
+              <span>Review</span>
             </span>
           ) : seg.audioOutdated ? (
             <span style={{ fontSize: '0.62rem', color: '#fbbf24', display: 'inline-flex', alignItems: 'center', gap: 2 }} title="Text updated, needs audio regen">
@@ -251,13 +292,23 @@ const CaptionItemCard = React.memo(function CaptionItemCard({
           {onRegenerateSegment && (
             <button
               type="button"
+              disabled={isTextEmpty}
               onClick={(e) => {
                 e.stopPropagation();
+                if (isTextEmpty) return;
                 onRegenerateSegment(seg.id || idx);
               }}
-              className="icon-action-btn"
-              style={{ color: seg.audioOutdated ? '#fbbf24' : '#64748b' }}
-              title="Regenerate single line audio"
+              className={`icon-action-btn ${isTextEmpty ? 'disabled' : ''}`}
+              style={{
+                color: isTextEmpty ? 'rgba(255, 255, 255, 0.2)' : (seg.audioOutdated ? '#fbbf24' : '#64748b'),
+                cursor: isTextEmpty ? 'not-allowed' : 'pointer',
+                opacity: isTextEmpty ? 0.35 : 1,
+              }}
+              title={
+                isTextEmpty
+                  ? "មិនអាចបង្កើតសំឡេងបានទេ — គ្មានអត្ថបទខ្មែរ (Missing text)"
+                  : "Regenerate single line audio"
+              }
             >
               <RefreshCw size={11} />
             </button>
@@ -341,25 +392,103 @@ function ScriptReviewTab({
   onToggleDeliveryType = null,
 }) {
   const parentRef = React.useRef(null);
+  const [filterMode, setFilterMode] = React.useState('all'); // 'all' | 'missing'
+
+  const totalSegments = scriptData?.segments || [];
+  const missingTextCount = React.useMemo(() => {
+    return totalSegments.filter((seg) => {
+      const txt = (seg.khmer || seg.khmerText || seg.khmerTranslatedText || '').trim();
+      return !txt;
+    }).length;
+  }, [totalSegments]);
+
+  const displayedSegments = React.useMemo(() => {
+    if (filterMode === 'missing') {
+      return filteredSegments.filter((seg) => {
+        const txt = (seg.khmer || seg.khmerText || seg.khmerTranslatedText || '').trim();
+        return !txt;
+      });
+    }
+    return filteredSegments;
+  }, [filteredSegments, filterMode]);
 
   const rowVirtualizer = useVirtualizer({
-    count: filteredSegments.length,
+    count: displayedSegments.length,
     getScrollElement: () => parentRef.current,
     estimateSize: () => 140,
     overscan: 8,
     gap: 8,
     getItemKey: React.useCallback(
-      (index) => filteredSegments[index]?._uid || filteredSegments[index]?.id || index,
-      [filteredSegments]
+      (index) => displayedSegments[index]?._uid || displayedSegments[index]?.id || index,
+      [displayedSegments]
     ),
   });
 
   return (
     <div className="media-tab-content" style={{ overflow: 'hidden', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, gap: 8, flexShrink: 0 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8, gap: 8, flexShrink: 0 }}>
         <span style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--text-secondary)' }}>
           Segments ({scriptData?.segments?.length || 0})
         </span>
+
+        {/* Filter Chips: ទាំងអស់ vs ខ្វះអត្ថបទ (Missing text) */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <button
+            type="button"
+            onClick={() => setFilterMode('all')}
+            style={{
+              padding: '2px 8px',
+              fontSize: '0.70rem',
+              borderRadius: 12,
+              border: '1px solid',
+              borderColor: filterMode === 'all' ? 'var(--primary-accent, #6366f1)' : 'rgba(255, 255, 255, 0.12)',
+              background: filterMode === 'all' ? 'rgba(99, 102, 241, 0.2)' : 'transparent',
+              color: filterMode === 'all' ? '#fff' : 'var(--text-dim)',
+              cursor: 'pointer',
+              fontWeight: filterMode === 'all' ? 700 : 400,
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 4,
+            }}
+          >
+            <span>ទាំងអស់</span>
+            <span style={{ opacity: 0.75, fontSize: '0.64rem' }}>({filteredSegments.length})</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setFilterMode('missing')}
+            style={{
+              padding: '2px 8px',
+              fontSize: '0.70rem',
+              borderRadius: 12,
+              border: '1px solid',
+              borderColor: filterMode === 'missing' ? '#ef4444' : (missingTextCount > 0 ? 'rgba(239, 68, 68, 0.4)' : 'rgba(255, 255, 255, 0.12)'),
+              background: filterMode === 'missing' ? 'rgba(239, 68, 68, 0.25)' : (missingTextCount > 0 ? 'rgba(239, 68, 68, 0.08)' : 'transparent'),
+              color: filterMode === 'missing' ? '#fca5a5' : (missingTextCount > 0 ? '#ef4444' : 'var(--text-dim)'),
+              cursor: 'pointer',
+              fontWeight: filterMode === 'missing' ? 700 : 400,
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 4,
+            }}
+            title="បង្ហាញតែឃ្លាដែលគ្មានអត្ថបទខ្មែរ (Missing text)"
+          >
+            <AlertCircle size={10} />
+            <span>ខ្វះអត្ថបទ</span>
+            <span
+              style={{
+                fontSize: '0.64rem',
+                background: missingTextCount > 0 ? 'rgba(239, 68, 68, 0.35)' : 'rgba(255, 255, 255, 0.1)',
+                padding: '0 4px',
+                borderRadius: 8,
+                fontWeight: 700,
+              }}
+            >
+              {missingTextCount}
+            </span>
+          </button>
+        </div>
       </div>
 
       {/* Search Bar */}
@@ -388,7 +517,7 @@ function ScriptReviewTab({
           position: 'relative',
         }}
       >
-        {filteredSegments.length > 0 ? (
+        {displayedSegments.length > 0 ? (
           <div
             style={{
               height: `${rowVirtualizer.getTotalSize()}px`,
@@ -397,17 +526,21 @@ function ScriptReviewTab({
             }}
           >
             {rowVirtualizer.getVirtualItems().map((virtualRow) => {
-              const seg = filteredSegments[virtualRow.index];
-              const idx = virtualRow.index;
+              const seg = displayedSegments[virtualRow.index];
               if (!seg) return null;
+
+              const effectiveIdx = scriptData?.segments
+                ? scriptData.segments.findIndex((s, i) => (s._uid && seg._uid && s._uid === seg._uid) || (s.id !== undefined && s.id !== null ? String(s.id) === String(seg.id) : i === virtualRow.index))
+                : virtualRow.index;
+              const targetIdx = effectiveIdx >= 0 ? effectiveIdx : virtualRow.index;
 
               const isSelected = Boolean(
                 selectedSegmentId !== null && (
                   (seg._uid && String(selectedSegmentId) === String(seg._uid)) ||
-                  (seg.id !== undefined && seg.id !== null ? String(selectedSegmentId) === String(seg.id) : Number(selectedSegmentId) === idx)
+                  (seg.id !== undefined && seg.id !== null ? String(selectedSegmentId) === String(seg.id) : Number(selectedSegmentId) === targetIdx)
                 )
               );
-              const isPlaying = Boolean(playingSegmentId === (seg.id || idx));
+              const isPlaying = Boolean(playingSegmentId === (seg.id || targetIdx));
 
               return (
                 <div
@@ -424,7 +557,7 @@ function ScriptReviewTab({
                 >
                   <CaptionItemCard
                     seg={seg}
-                    idx={idx}
+                    idx={targetIdx}
                     isSelected={isSelected}
                     isPlaying={isPlaying}
                     onSelectSegment={onSelectSegment}
@@ -438,6 +571,16 @@ function ScriptReviewTab({
                 </div>
               );
             })}
+          </div>
+        ) : filterMode === 'missing' ? (
+          <div style={{ textAlign: 'center', padding: '30px 15px', color: 'var(--text-muted)', border: '1px dashed rgba(34, 197, 94, 0.3)', borderRadius: 'var(--radius-sm)', background: 'rgba(34, 197, 94, 0.04)' }}>
+            <CheckCircle2 size={28} color="#22c55e" style={{ margin: '0 auto 10px', display: 'block' }} />
+            <div style={{ fontSize: '0.84rem', fontWeight: 600, color: '#4ade80', marginBottom: 4 }}>
+              គ្មានឃ្លាណាដែលខ្វះអត្ថបទទេ
+            </div>
+            <p style={{ fontSize: '0.76rem', margin: 0, color: 'var(--text-dim)' }}>
+              គ្រប់ឃ្លាទាំងអស់មានអត្ថបទខ្មែររួចរាល់ហើយ! (All segments have Khmer text)
+            </p>
           </div>
         ) : (
           <div style={{ textAlign: 'center', padding: '30px 15px', color: 'var(--text-muted)', border: '1px dashed var(--border-subtle)', borderRadius: 'var(--radius-sm)' }}>

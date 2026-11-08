@@ -836,8 +836,27 @@ const FALLBACK_VOICE_CATALOG = {
         };
       });
 
+      // 1. Guard against empty-text segments in batch generation
+      const validSegments = sanitizedSegments.filter((seg) => {
+        const txt = (seg.khmer || seg.khmerText || seg.khmerTranslatedText || '').trim();
+        return Boolean(txt);
+      });
+      const skippedEmptyCount = sanitizedSegments.length - validSegments.length;
+
+      if (validSegments.length === 0) {
+        const alertMsg = 'មិនមានឃ្លាណាដែលមានអត្ថបទខ្មែរសម្រាប់បង្កើតសំឡេងទេ! សូមបកប្រែ ឬវាយអត្ថបទជាមុនសិន។';
+        alert(alertMsg);
+        setIsGeneratingAudio(false);
+        setGeneratingAudioEpisodeId(null);
+        return;
+      }
+
       setAudioProgress(10);
-      setAudioStage(`2/3 Microsoft Edge Neural AI កំពុងបង្កើតសំឡេងខ្មែរ (0/${sanitizedSegments.length})...`);
+      setAudioStage(
+        skippedEmptyCount > 0
+          ? `2/3 Microsoft Edge Neural AI កំពុងបង្កើតសំឡេង (0/${validSegments.length} ឃ្លា, រំលង ${skippedEmptyCount} ឃ្លាខ្វះអត្ថបទ)...`
+          : `2/3 Microsoft Edge Neural AI កំពុងបង្កើតសំឡេងខ្មែរ (0/${validSegments.length})...`
+      );
 
       const dramaName = selectedVideo?.fileName
         ? selectedVideo.fileName.replace(/\.[^/.]+$/, '').trim()
@@ -852,11 +871,11 @@ const FALLBACK_VOICE_CATALOG = {
       if (targetSeriesId && targetEpisodeId) {
         audioProgressTimerRef.current = setInterval(async () => {
           try {
-            const pRes = await fetch(`/api/tts/progress?seriesId=${encodeURIComponent(targetSeriesId)}&episodeId=${encodeURIComponent(targetEpisodeId)}&total=${sanitizedSegments.length}`);
+            const pRes = await fetch(`/api/tts/progress?seriesId=${encodeURIComponent(targetSeriesId)}&episodeId=${encodeURIComponent(targetEpisodeId)}&total=${validSegments.length}`);
             const pData = await pRes.json();
             if (pData && pData.success && typeof pData.current === 'number') {
               const currentCount = pData.current;
-              const totalCount = pData.total || sanitizedSegments.length;
+              const totalCount = pData.total || validSegments.length;
               const pct = totalCount > 0 ? Math.min(95, Math.max(10, Math.round((currentCount / totalCount) * 85) + 10)) : 10;
               setAudioProgress(pct);
               const realPct = totalCount > 0 ? Math.round((currentCount / totalCount) * 100) : 0;
@@ -868,7 +887,7 @@ const FALLBACK_VOICE_CATALOG = {
       }
 
       const result = await generateAudioApi({
-        segments: sanitizedSegments,
+        segments: validSegments,
         voiceId: activeVoiceId,
         speed: activeSpeed,
         speakerMap,
@@ -887,13 +906,16 @@ const FALLBACK_VOICE_CATALOG = {
       setAudioProgress(85);
       setAudioStage('3/3 កំពុង Syncing Master Narration Timeline...');
 
+      const updatedMap = new Map((result.segments || []).map((s) => [String(s.id), s]));
+      const mergedSegments = (scriptData?.segments || []).map((s) => updatedMap.get(String(s.id)) || s);
+
       // Episode switch protection: If user switched episodes during generation,
       // DO NOT attach EP1 audio to EP2 workspace! Save to background store instead.
       if (targetEpisodeId && targetEpisodeId !== activeTtsEpisodeRef.current) {
         console.log(`[Stale TTS Guard] Dropping audio state overwrite for episode ${targetEpisodeId} (active is ${activeTtsEpisodeRef.current})`);
         if (onSaveEpisodeBackground) {
           onSaveEpisodeBackground(targetEpisodeId, {
-            scriptData: { ...scriptData, segments: result.segments },
+            scriptData: { ...scriptData, segments: mergedSegments },
             fullAudioPath: result.fullAudioPath,
             fullAudioUrl: result.fullAudioUrl,
             audioGenerated: true,
@@ -904,12 +926,18 @@ const FALLBACK_VOICE_CATALOG = {
       }
 
       setAudioProgress(100);
-      setAudioStage('✅ បង្កើតសំឡេងខ្មែរ AI ជោគជ័យ 100%!');
+      const summaryMsg = skippedEmptyCount > 0
+        ? `✅ បង្កើតសំឡេង AI ជោគជ័យ ${validSegments.length} ឃ្លា (រំលង ${skippedEmptyCount} ឃ្លាដែលខ្វះអត្ថបទ)!`
+        : `✅ បង្កើតសំឡេងខ្មែរ AI ជោគជ័យ ${validSegments.length} ឃ្លា (100%)!`;
+      setAudioStage(summaryMsg);
 
-      setScriptData((prev) => ({
-        ...prev,
-        segments: result.segments,
-      }));
+      setScriptData((prev) => {
+        if (!prev?.segments) return prev;
+        return {
+          ...prev,
+          segments: prev.segments.map((s) => updatedMap.get(String(s.id)) || s),
+        };
+      });
       setFullAudioPath(result.fullAudioPath);
       setFullAudioUrl(result.fullAudioUrl);
       setAudioGenerated(true);
@@ -944,14 +972,40 @@ const FALLBACK_VOICE_CATALOG = {
     if (segIdx === -1) return null;
 
     const baseSeg = scriptData.segments[segIdx];
+    const segNum = baseSeg.index || baseSeg.episodeNumber || (segIdx + 1);
+
+    // Compute textToUse FIRST
+    const rawCandidate = (typeof overrideText === 'string')
+      ? overrideText
+      : (baseSeg.khmer || baseSeg.khmerText || baseSeg.khmerTranslatedText || '');
+    const textToUse = typeof rawCandidate === 'string' ? rawCandidate.trim() : '';
+
+    // Guard: If empty after trim, refuse gracefully without calling the API
+    if (!textToUse) {
+      const emptyMsg = `Segment #${segNum} គ្មានអត្ថបទខ្មែរទេ — សូមបកប្រែ ឬវាយអត្ថបទសិន`;
+      console.warn(`[TTS Guard] ${emptyMsg}`);
+      alert(emptyMsg);
+
+      if (setSelectedSegmentId) {
+        setSelectedSegmentId(baseSeg.id ?? segIdx);
+      }
+
+      // Select / focus that segment's text in the Inspector so the user lands exactly where the fix happens
+      setTimeout(() => {
+        const el = document.getElementById('inspector-khmer-textarea') || document.querySelector('textarea[placeholder*="ភាសាខ្មែរ"]');
+        if (el) {
+          el.focus();
+          el.select?.();
+        }
+      }, 60);
+
+      return null;
+    }
+
     const segKey = String(baseSeg?.id ?? segIdx);
 
     const currentSeq = (segmentRegenSeqRef.current[segKey] || 0) + 1;
     segmentRegenSeqRef.current[segKey] = currentSeq;
-
-    const textToUse = (typeof overrideText === 'string' && overrideText.trim())
-      ? overrideText.trim()
-      : (baseSeg.khmer || baseSeg.khmerText || baseSeg.khmerTranslatedText || '');
 
     const targetSeg = {
       ...baseSeg,

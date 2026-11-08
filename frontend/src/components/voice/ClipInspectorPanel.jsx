@@ -539,6 +539,7 @@ export default function ClipInspectorPanel({
               </div>
             </div>
                 <textarea
+                  id="inspector-khmer-textarea"
                   rows={3}
                   value={localKhmerText}
                   onChange={handleKhmerTextChange}
@@ -1162,26 +1163,46 @@ export default function ClipInspectorPanel({
                 </button>
 
                 {/* 2. Regenerate Button */}
-                <button
-                  type="button"
-                  onClick={() => onSingleRegen(selectedSegment.id || selectedSegmentIndex, selectedSegmentIndex, localKhmerText)}
-                  disabled={regeneratingId === (selectedSegment.id || selectedSegmentIndex)}
-                  className={selectedSegment.audioUrl ? "btn-secondary" : "btn-primary"}
-                  style={{ flex: 1, minWidth: '110px', padding: '7px 8px', fontSize: '0.74rem', justifyContent: 'center' }}
-                  title="Regenerate speech for this segment"
-                >
-                  {regeneratingId === (selectedSegment.id || selectedSegmentIndex) ? (
-                    <>
-                      <Loader2 size={13} className="pulse-glow" />
-                      <span>កំពុងបង្កើត...</span>
-                    </>
-                  ) : (
-                    <>
-                      <RefreshCw size={13} />
-                      <span>{selectedSegment.audioUrl ? 'Generate ឡើងវិញ' : 'Generate ឃ្លានេះ'}</span>
-                    </>
-                  )}
-                </button>
+                {(() => {
+                  const isKhmerEmpty = !localKhmerText?.trim();
+                  const isRegenerating = regeneratingId === (selectedSegment.id || selectedSegmentIndex);
+                  const isDisabled = isRegenerating || isKhmerEmpty;
+
+                  return (
+                    <button
+                      type="button"
+                      onClick={() => !isKhmerEmpty && onSingleRegen(selectedSegment.id || selectedSegmentIndex, selectedSegmentIndex, localKhmerText)}
+                      disabled={isDisabled}
+                      className={selectedSegment.audioUrl ? "btn-secondary" : "btn-primary"}
+                      style={{
+                        flex: 1,
+                        minWidth: '110px',
+                        padding: '7px 8px',
+                        fontSize: '0.74rem',
+                        justifyContent: 'center',
+                        opacity: isKhmerEmpty ? 0.45 : 1,
+                        cursor: isKhmerEmpty ? 'not-allowed' : 'pointer',
+                      }}
+                      title={
+                        isKhmerEmpty
+                          ? "មិនអាចបង្កើតសំឡេងបានទេ — គ្មានអត្ថបទខ្មែរ (Missing text)"
+                          : "Regenerate speech for this segment"
+                      }
+                    >
+                      {isRegenerating ? (
+                        <>
+                          <Loader2 size={13} className="pulse-glow" />
+                          <span>កំពុងបង្កើត...</span>
+                        </>
+                      ) : (
+                        <>
+                          <RefreshCw size={13} />
+                          <span>{selectedSegment.audioUrl ? 'Generate ឡើងវិញ' : 'Generate ឃ្លានេះ'}</span>
+                        </>
+                      )}
+                    </button>
+                  );
+                })()}
 
                 {/* 3. Split Segment at Playhead */}
                 {onSplitClip && (
