@@ -81,7 +81,34 @@ function generateBaseSamplingGrid(durationSec, stepSec = 0.75, startOffsetSec = 
 const CASCADE_VISION_MODELS = ['gemini-3.5-flash-lite', 'gemini-2.5-flash', 'gemini-3.5-flash'];
 
 /**
- * Helper: Call Gemini Vision with multi-model cascade and exponential backoff retry on 429 / 503
+ * Checks if an OCR vision error is retryable / temporary (429, 503, 504 Deadline Exceeded, timeouts).
+ */
+function isRetryableVisionError(err) {
+  if (!err) return false;
+  const status = err.status || err.statusCode;
+  const msg = String(err.message || err.toString() || '').toUpperCase();
+  return (
+    status === 429 ||
+    status === 503 ||
+    status === 504 ||
+    msg.includes('429') ||
+    msg.includes('503') ||
+    msg.includes('504') ||
+    msg.includes('RESOURCE_EXHAUSTED') ||
+    msg.includes('EXHAUSTED') ||
+    msg.includes('QUOTA') ||
+    msg.includes('RATE LIMIT') ||
+    msg.includes('TOO MANY REQUESTS') ||
+    msg.includes('HIGH DEMAND') ||
+    msg.includes('DEADLINE_EXCEEDED') ||
+    msg.includes('GATEWAY TIMEOUT') ||
+    msg.includes('ETIMEDOUT') ||
+    msg.includes('TIMEOUT')
+  );
+}
+
+/**
+ * Helper: Call Gemini Vision with multi-model cascade and exponential backoff retry on 429 / 503 / 504
  */
 async function callGeminiVisionWithRetry(aiClient, modelName, contents, maxRetries = 2) {
   const modelsToTry = [modelName, ...CASCADE_VISION_MODELS.filter((m) => m !== modelName)];
@@ -103,17 +130,12 @@ async function callGeminiVisionWithRetry(aiClient, modelName, contents, maxRetri
       } catch (err) {
         lastErr = err;
         attempt++;
-        const isQuotaOrBusy = err.message && (
-          err.message.includes('429') ||
-          err.message.includes('503') ||
-          err.message.includes('RESOURCE_EXHAUSTED') ||
-          err.message.includes('High Demand')
-        );
-        if (!isQuotaOrBusy) {
+        const isRetryable = isRetryableVisionError(err);
+        if (!isRetryable) {
           throw err;
         }
         if (attempt >= maxRetries) {
-          console.warn(`[Stage 3 OCR] Model ${currentModel} hit 429/busy. Falling back to alternative cascade model...`);
+          console.warn(`[Stage 3 OCR] Model ${currentModel} hit 429/503/504/timeout (${err.message}). Falling back to alternative cascade model...`);
           break;
         }
         const backoffMs = Math.min(8000, 2000 * attempt);
@@ -122,7 +144,7 @@ async function callGeminiVisionWithRetry(aiClient, modelName, contents, maxRetri
     }
   }
 
-  throw lastErr || new Error('All cascade Gemini models exceeded quota/rate limits (429)');
+  throw lastErr || new Error('All cascade Gemini models exceeded quota/rate limits or timed out (429/503/504)');
 }
 
 /**
@@ -387,7 +409,8 @@ Return JSON ONLY matching this schema:
       } catch (geminiErr) {
         retriesCount++;
         lastBatchError = geminiErr.message;
-        console.warn(`[Stage 3 Extract Subtitles] Batch OCR call failed at ${batch[0].timestampSec}s:`, geminiErr.message);
+        console.error(`[Stage 3 Extract Subtitles] ❌ Batch OCR call failed at ${batch[0].timestampSec}s after full model cascade:`, geminiErr.message);
+        throw new Error(`[Stage 3 Batch Failure] Batch at ${batch[0].timestampSec}s failed after cascade: ${geminiErr.message}`);
       }
     }
 
@@ -918,4 +941,6 @@ module.exports = {
   areChineseTextsEquivalent,
   generateBaseSamplingGrid,
   deduplicateFastOcrCues,
+  isRetryableVisionError,
+  callGeminiVisionWithRetry,
 };

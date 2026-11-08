@@ -53,38 +53,134 @@ function extractAllGeminiKeys(customInput = null) {
 }
 
 let globalStaggerIndex = 0;
+const globalInvalidKeys = new Set();
+
+/**
+ * Checks if an error is an authentication / invalid key error (401 / 403).
+ */
+function isAuthOrInvalidKeyError(err) {
+  if (!err) return false;
+  const status = err.status || err.statusCode;
+  const msg = String(err.message || err.toString() || '').toLowerCase();
+  return (
+    status === 401 ||
+    status === 403 ||
+    msg.includes('401') ||
+    msg.includes('403') ||
+    msg.includes('unauthenticated') ||
+    msg.includes('api key not valid') ||
+    msg.includes('api_key_invalid') ||
+    msg.includes('access_token_type_unsupported') ||
+    msg.includes('permission_denied')
+  );
+}
+
+/**
+ * Checks if an error is a temporary rate limit or quota error (429 / 503).
+ * Note: 401/403 are explicitly NOT treated as quota/rate limits.
+ */
+function isQuotaOrRateLimitError(err) {
+  if (!err) return false;
+  if (isAuthOrInvalidKeyError(err)) return false;
+  const status = err.status || err.statusCode;
+  const msg = String(err.message || err.toString() || '').toLowerCase();
+  return (
+    status === 429 ||
+    status === 503 ||
+    msg.includes('429') ||
+    msg.includes('503') ||
+    msg.includes('resource_exhausted') ||
+    msg.includes('quota') ||
+    msg.includes('rate limit') ||
+    msg.includes('too many requests') ||
+    msg.includes('high demand') ||
+    msg.includes('fetch failed') ||
+    msg.includes('network') ||
+    msg.includes('econnreset') ||
+    msg.includes('etimedout') ||
+    msg.includes('timeout') ||
+    msg.includes('socket hang up')
+  );
+}
+
+function markKeyAsInvalid(key, statusOrReason = 401) {
+  if (!key) return;
+  globalInvalidKeys.add(key);
+}
+
+function isKeyInvalid(key) {
+  return globalInvalidKeys.has(key);
+}
+
+function getGlobalInvalidKeys() {
+  return globalInvalidKeys;
+}
+
+function resetInvalidKeys() {
+  globalInvalidKeys.clear();
+}
 
 class GeminiKeyPool {
   constructor(initialKeyInput = null) {
-    this.keys = extractAllGeminiKeys(initialKeyInput);
-    if (this.keys.length > 0 && !initialKeyInput) {
-      this.currentIndex = (globalStaggerIndex++) % this.keys.length;
+    const rawKeys = extractAllGeminiKeys(initialKeyInput);
+    this.allKeysWithIndex = rawKeys.map((k, idx) => ({ key: k, originalNum: idx + 1 }));
+    this.clientCache = new Map(); // key -> GoogleGenAI instance
+    this.currentIndex = 0;
+
+    const active = this.getActiveKeys();
+    if (active.length > 0 && !initialKeyInput) {
+      this.currentIndex = (globalStaggerIndex++) % active.length;
     } else {
       this.currentIndex = 0;
     }
-    this.clientCache = new Map(); // key -> GoogleGenAI instance
 
-    if (this.keys.length > 0) {
-      console.log(`[GeminiKeyPool] 🔑 Loaded ${this.keys.length} active Gemini API key(s) in pool (Active: Key #${this.currentIndex + 1}).`);
+    if (active.length > 0) {
+      console.log(`[GeminiKeyPool] 🔑 Loaded ${active.length} active Gemini API key(s) in pool (Active: Key #${active[this.currentIndex].originalNum}).`);
+    } else if (this.allKeysWithIndex.length > 0) {
+      console.warn(`[GeminiKeyPool] ⚠️ All ${this.allKeysWithIndex.length} Gemini API keys are marked invalid.`);
     }
   }
 
+  getActiveKeys() {
+    return this.allKeysWithIndex.filter((item) => !globalInvalidKeys.has(item.key));
+  }
+
+  get keys() {
+    return this.getActiveKeys().map((item) => item.key);
+  }
+
   getKeyCount() {
-    return this.keys.length;
+    return this.getActiveKeys().length;
+  }
+
+  getTotalKeyCount() {
+    return this.allKeysWithIndex.length;
   }
 
   getCurrentIndex() {
     return this.currentIndex;
   }
 
+  getCurrentKeyInfo() {
+    const active = this.getActiveKeys();
+    if (active.length === 0) return null;
+    if (this.currentIndex >= active.length) {
+      this.currentIndex = 0;
+    }
+    return active[this.currentIndex];
+  }
+
   getCurrentKey() {
-    if (this.keys.length === 0) return null;
-    return this.keys[this.currentIndex];
+    const info = this.getCurrentKeyInfo();
+    return info ? info.key : null;
   }
 
   getCurrentClient() {
     const key = this.getCurrentKey();
     if (!key) {
+      if (this.allKeysWithIndex.length > 0 && this.getActiveKeys().length === 0) {
+        throw new Error('[GeminiKeyPool] 🚨 All Gemini API keys in pool are INVALID (401/403 Unauthenticated/Forbidden). Cannot proceed.');
+      }
       throw new Error('មិនរកឃើញ GEMINI_API_KEY ទេ! សូមបញ្ចូលក្នុង .env ឬក្នុង Settings នៃកម្មវិធី។');
     }
 
@@ -99,107 +195,142 @@ class GeminiKeyPool {
     return this.clientCache.get(key);
   }
 
-  rotateKey(reason = 'Rate limit / 429') {
-    if (this.keys.length <= 1) return this.getCurrentKey();
+  markKeyInvalid(key, statusOrReason = 401) {
+    if (!key) return;
+    const isNew = !globalInvalidKeys.has(key);
+    globalInvalidKeys.add(key);
 
-    const oldIndex = this.currentIndex;
-    this.currentIndex = (this.currentIndex + 1) % this.keys.length;
+    const item = this.allKeysWithIndex.find((i) => i.key === key);
+    const keyNum = item ? item.originalNum : '?';
+    const active = this.getActiveKeys();
+    const remaining = active.length;
+
+    if (isNew) {
+      console.warn(`[GeminiKeyPool] ❌ Key #${keyNum} invalid (${statusOrReason || 401}) — removed from pool, ${remaining} keys remaining`);
+    }
+
+    if (active.length > 0) {
+      this.currentIndex = this.currentIndex % active.length;
+    } else {
+      this.currentIndex = 0;
+    }
+
+    return remaining;
+  }
+
+  rotateKey(reason = 'Rate limit / 429') {
+    const active = this.getActiveKeys();
+    if (active.length === 0) return null;
+    if (active.length === 1) return active[0].key;
+
+    const oldKeyInfo = active[this.currentIndex % active.length];
+    this.currentIndex = (this.currentIndex + 1) % active.length;
+    const newKeyInfo = active[this.currentIndex];
 
     console.warn(
-      `[GeminiKeyPool] 🔄 Key #${oldIndex + 1} hit quota or limit (${reason}). ` +
-      `Switched to Key #${this.currentIndex + 1} of ${this.keys.length}.`
+      `[GeminiKeyPool] 🔄 Key #${oldKeyInfo.originalNum} hit quota or limit (${reason}). ` +
+      `Switched to Key #${newKeyInfo.originalNum} of ${this.allKeysWithIndex.length} (${active.length} active remaining).`
     );
 
-    return this.getCurrentKey();
+    return newKeyInfo.key;
   }
 }
 
 /**
  * Creates a smart GenAI client wrapper that transparently auto-rotates
- * to the next key when a 429 / Quota / Resource Exhausted error occurs.
+ * to the next key when a 429 / Quota / Resource Exhausted error occurs,
+ * and permanently disables invalid 401/403 keys from the rotation.
  */
 function createSmartGenAIClient(initialKeyInput = null) {
   const pool = new GeminiKeyPool(initialKeyInput);
   if (pool.getKeyCount() === 0) {
+    if (pool.getTotalKeyCount() > 0) {
+      throw new Error('[GeminiKeyPool] 🚨 All Gemini API keys in pool are INVALID (401/403 Unauthenticated/Forbidden). Cannot proceed.');
+    }
     throw new Error('មិនរកឃើញ GEMINI_API_KEY ទេ! សូមបញ្ចូលក្នុង .env ឬក្នុង Settings នៃកម្មវិធី។');
-  }
-
-  function isQuotaOrRateLimitError(err) {
-    if (!err) return false;
-    const msg = String(err.message || err.toString() || '').toLowerCase();
-    const status = err.status || err.statusCode;
-    return (
-      status === 429 ||
-      status === 503 ||
-      status === 401 ||
-      status === 403 ||
-      msg.includes('429') ||
-      msg.includes('503') ||
-      msg.includes('401') ||
-      msg.includes('403') ||
-      msg.includes('unauthenticated') ||
-      msg.includes('access_token_type_unsupported') ||
-      msg.includes('resource_exhausted') ||
-      msg.includes('quota') ||
-      msg.includes('rate limit') ||
-      msg.includes('too many requests') ||
-      msg.includes('high demand') ||
-      msg.includes('fetch failed') ||
-      msg.includes('network') ||
-      msg.includes('econnreset') ||
-      msg.includes('etimedout') ||
-      msg.includes('timeout') ||
-      msg.includes('socket hang up')
-    );
   }
 
   // Dynamic Models Proxy
   const modelsProxy = {
     async generateContent(args) {
-      const totalKeys = pool.getKeyCount();
       let lastErr = null;
+      let quotaAttempts = 0;
 
-      // Try across all keys in pool if rate-limited
-      for (let attempt = 0; attempt < Math.max(1, totalKeys); attempt++) {
+      while (pool.getKeyCount() > 0) {
+        const currentKey = pool.getCurrentKey();
         try {
           const client = pool.getCurrentClient();
           return await client.models.generateContent(args);
         } catch (err) {
           lastErr = err;
-          if (isQuotaOrRateLimitError(err) && totalKeys > 1) {
+
+          // 1. Permanent Auth/Invalid Key Failure (401 / 403)
+          if (isAuthOrInvalidKeyError(err)) {
+            const status = err.status || err.statusCode || 401;
+            const remaining = pool.markKeyInvalid(currentKey, status);
+            if (remaining === 0) {
+              throw new Error(`[GeminiKeyPool] 🚨 All Gemini API keys in pool are INVALID (${status} Unauthenticated/Forbidden). Cannot proceed.`);
+            }
+            // Immediately retry with next valid key without delay
+            continue;
+          }
+
+          // 2. Temporary Quota / Rate Limit (429 / 503)
+          if (isQuotaOrRateLimitError(err) && pool.getKeyCount() > 1) {
+            quotaAttempts++;
+            if (quotaAttempts >= pool.getKeyCount() * 2) {
+              // Cycled through all active keys on quota
+              throw err;
+            }
             pool.rotateKey(err.message || '429 Quota Exceeded');
-            // Small pause before next key attempt
             await new Promise((r) => setTimeout(r, 600));
             continue;
           }
+
           throw err;
         }
       }
-      throw lastErr;
+      throw lastErr || new Error('[GeminiKeyPool] 🚨 All Gemini API keys in pool are INVALID (401/403). Cannot proceed.');
     },
   };
 
   // Dynamic Files Proxy
   const filesProxy = {
     async upload(args) {
-      const totalKeys = pool.getKeyCount();
       let lastErr = null;
+      let quotaAttempts = 0;
 
-      for (let attempt = 0; attempt < Math.max(1, totalKeys); attempt++) {
+      while (pool.getKeyCount() > 0) {
+        const currentKey = pool.getCurrentKey();
         try {
           const client = pool.getCurrentClient();
           return await client.files.upload(args);
         } catch (err) {
           lastErr = err;
-          if (isQuotaOrRateLimitError(err) && totalKeys > 1) {
+
+          if (isAuthOrInvalidKeyError(err)) {
+            const status = err.status || err.statusCode || 401;
+            const remaining = pool.markKeyInvalid(currentKey, status);
+            if (remaining === 0) {
+              throw new Error(`[GeminiKeyPool] 🚨 All Gemini API keys in pool are INVALID (${status} Unauthenticated/Forbidden). Cannot proceed.`);
+            }
+            continue;
+          }
+
+          if (isQuotaOrRateLimitError(err) && pool.getKeyCount() > 1) {
+            quotaAttempts++;
+            if (quotaAttempts >= pool.getKeyCount() * 2) {
+              throw err;
+            }
             pool.rotateKey(err.message || '429 Quota on file upload');
             await new Promise((r) => setTimeout(r, 600));
             continue;
           }
+
           throw err;
         }
       }
-      throw lastErr;
+      throw lastErr || new Error('[GeminiKeyPool] 🚨 All Gemini API keys in pool are INVALID (401/403). Cannot proceed.');
     },
     async delete(args) {
       const client = pool.getCurrentClient();
@@ -210,10 +341,11 @@ function createSmartGenAIClient(initialKeyInput = null) {
   // Dynamic Interactions Proxy (e.g. gemini-3.5-transcribe)
   const interactionsProxy = {
     async create(args) {
-      const totalKeys = pool.getKeyCount();
       let lastErr = null;
+      let quotaAttempts = 0;
 
-      for (let attempt = 0; attempt < Math.max(1, totalKeys); attempt++) {
+      while (pool.getKeyCount() > 0) {
+        const currentKey = pool.getCurrentKey();
         try {
           const client = pool.getCurrentClient();
           if (client.interactions && typeof client.interactions.create === 'function') {
@@ -222,15 +354,30 @@ function createSmartGenAIClient(initialKeyInput = null) {
           throw new Error('Interactions API not available on native client instance');
         } catch (err) {
           lastErr = err;
-          if (isQuotaOrRateLimitError(err) && totalKeys > 1) {
+
+          if (isAuthOrInvalidKeyError(err)) {
+            const status = err.status || err.statusCode || 401;
+            const remaining = pool.markKeyInvalid(currentKey, status);
+            if (remaining === 0) {
+              throw new Error(`[GeminiKeyPool] 🚨 All Gemini API keys in pool are INVALID (${status} Unauthenticated/Forbidden). Cannot proceed.`);
+            }
+            continue;
+          }
+
+          if (isQuotaOrRateLimitError(err) && pool.getKeyCount() > 1) {
+            quotaAttempts++;
+            if (quotaAttempts >= pool.getKeyCount() * 2) {
+              throw err;
+            }
             pool.rotateKey(err.message || '429 Quota on interactions');
             await new Promise((r) => setTimeout(r, 600));
             continue;
           }
+
           throw err;
         }
       }
-      throw lastErr;
+      throw lastErr || new Error('[GeminiKeyPool] 🚨 All Gemini API keys in pool are INVALID (401/403). Cannot proceed.');
     },
   };
 
@@ -254,4 +401,10 @@ module.exports = {
   extractAllGeminiKeys,
   GeminiKeyPool,
   createSmartGenAIClient,
+  isAuthOrInvalidKeyError,
+  isQuotaOrRateLimitError,
+  markKeyAsInvalid,
+  isKeyInvalid,
+  getGlobalInvalidKeys,
+  resetInvalidKeys,
 };

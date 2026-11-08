@@ -239,76 +239,93 @@ async function runChunkedDubbingPipeline({
     }
 
     if (!isChunkReused) {
-      // 1. Stage 3 Visual OCR for this chunk (1.8s step = ~5 API calls per chunk, perfectly safe for 15 RPM)
-      report(
-        'chunkOCR',
-        Math.min(70, Math.round(chunkPercent + (1 / chunks.length) * 15)),
-        `Chunk ${cIdx + 1}/${chunks.length}: កំពុងស្កេនអក្សរចិនលើរូបភាព (Vision OCR)...`
-      );
-      const ocrResult = await extractChineseSubtitles({
-        videoPath,
-        durationSec: chunk.durationSec,
-        aiClient,
-        modelName,
-        baseStepSec: 1.8,
-        startOffsetSec: chunk.startSec,
-      });
-
-      checkAbort();
-
-      if (mode === GENERATION_MODES.FAST_OCR) {
-        console.log(`[ChunkOrchestrator] ⚡ Fast OCR Mode: Skipping Stage 4 (ASR) & Stage 5 (Reconcile) for Chunk ${cIdx + 1}`);
-        chunkSegments = deduplicateFastOcrCues(ocrResult.visualSegments || [], narratorGender);
-        visualOnlyCount = chunkSegments.length;
-        fusedCount = 0;
-      } else {
-        // 2. Stage 4 Audio Diarization for this chunk
+      try {
+        // 1. Stage 3 Visual OCR for this chunk (1.8s step = ~5 API calls per chunk, perfectly safe for 15 RPM)
         report(
-          'chunkASR',
-          Math.min(70, Math.round(chunkPercent + (1 / chunks.length) * 35)),
-          `Chunk ${cIdx + 1}/${chunks.length}: កំពុងស្ដាប់សំឡេងតួអង្គចិន (Gemini ASR Audio)...`
+          'chunkOCR',
+          Math.min(70, Math.round(chunkPercent + (1 / chunks.length) * 15)),
+          `Chunk ${cIdx + 1}/${chunks.length}: កំពុងស្កេនអក្សរចិនលើរូបភាព (Vision OCR)...`
         );
-        const audioAnalysis = await analyzeDialogueAudio({
+        const ocrResult = await extractChineseSubtitles({
           videoPath,
           durationSec: chunk.durationSec,
           aiClient,
           modelName,
+          baseStepSec: 1.8,
           startOffsetSec: chunk.startSec,
         });
 
         checkAbort();
 
-        // 3. Stage 5 Reconcile chunk visual & audio
-        report(
-          'chunkReconcile',
-          Math.min(70, Math.round(chunkPercent + (1 / chunks.length) * 50)),
-          `Chunk ${cIdx + 1}/${chunks.length}: ផ្គូផ្គងអក្សរ និងសំឡេង (Reconciling Timeline)...`
-        );
-        const chunkReconciliation = await reconcileTimelineEvidence({
-          visualSegments: ocrResult.visualSegments,
-          audioSegments: audioAnalysis.audioSegments,
-          rawObservations: ocrResult.rawObservations,
-          durationSec: chunk.durationSec,
-        });
+        if (mode === GENERATION_MODES.FAST_OCR) {
+          console.log(`[ChunkOrchestrator] ⚡ Fast OCR Mode: Skipping Stage 4 (ASR) & Stage 5 (Reconcile) for Chunk ${cIdx + 1}`);
+          chunkSegments = deduplicateFastOcrCues(ocrResult.visualSegments || [], narratorGender);
+          visualOnlyCount = chunkSegments.length;
+          fusedCount = 0;
+        } else {
+          // 2. Stage 4 Audio Diarization for this chunk
+          report(
+            'chunkASR',
+            Math.min(70, Math.round(chunkPercent + (1 / chunks.length) * 35)),
+            `Chunk ${cIdx + 1}/${chunks.length}: កំពុងស្ដាប់សំឡេងតួអង្គចិន (Gemini ASR Audio)...`
+          );
+          const audioAnalysis = await analyzeDialogueAudio({
+            videoPath,
+            durationSec: chunk.durationSec,
+            aiClient,
+            modelName,
+            startOffsetSec: chunk.startSec,
+          });
 
-        chunkSegments = chunkReconciliation.reconciledSegments || [];
-        visualOnlyCount = chunkReconciliation.reconciliationMeta?.visualOnlyCount || 0;
-        fusedCount = chunkReconciliation.reconciliationMeta?.fusedSegmentsCount || 0;
+          checkAbort();
+
+          // 3. Stage 5 Reconcile chunk visual & audio
+          report(
+            'chunkReconcile',
+            Math.min(70, Math.round(chunkPercent + (1 / chunks.length) * 50)),
+            `Chunk ${cIdx + 1}/${chunks.length}: ផ្គូផ្គងអក្សរ និងសំឡេង (Reconciling Timeline)...`
+          );
+          const chunkReconciliation = await reconcileTimelineEvidence({
+            visualSegments: ocrResult.visualSegments,
+            audioSegments: audioAnalysis.audioSegments,
+            rawObservations: ocrResult.rawObservations,
+            durationSec: chunk.durationSec,
+          });
+
+          chunkSegments = chunkReconciliation.reconciledSegments || [];
+          visualOnlyCount = chunkReconciliation.reconciliationMeta?.visualOnlyCount || 0;
+          fusedCount = chunkReconciliation.reconciliationMeta?.fusedSegmentsCount || 0;
+        }
+
+        // Persist validated chunk result to disk for instant resumption
+        try {
+          fs.writeFileSync(chunkFile, JSON.stringify({
+            chunkIndex: chunk.chunkIndex,
+            startSec: chunk.startSec,
+            endSec: chunk.endSec,
+            segments: chunkSegments,
+            visualOnlyCount,
+            fusedCount,
+            videoSignature,
+            savedAt: Date.now(),
+          }, null, 2), 'utf8');
+        } catch (_) {}
+      } catch (chunkErr) {
+        console.error(`[ChunkOrchestrator] ❌ Chunk ${cIdx + 1}/${chunks.length} failed: ${chunkErr.message}`);
+        if (jobId) {
+          updateChunk(jobId, chunk.chunkIndex, {
+            status: 'failed',
+            error: chunkErr.message,
+            failedAt: Date.now(),
+          });
+          updateJob(jobId, {
+            status: 'failed',
+            error: `Chunk ${cIdx + 1}/${chunks.length} failed: ${chunkErr.message}`,
+            failedChunkIndex: chunk.chunkIndex,
+          });
+        }
+        throw new Error(`[ChunkOrchestrator] Chunk ${cIdx + 1}/${chunks.length} (start: ${chunk.startSec}s) failed: ${chunkErr.message}`);
       }
-
-      // Persist validated chunk result to disk for instant resumption
-      try {
-        fs.writeFileSync(chunkFile, JSON.stringify({
-          chunkIndex: chunk.chunkIndex,
-          startSec: chunk.startSec,
-          endSec: chunk.endSec,
-          segments: chunkSegments,
-          visualOnlyCount,
-          fusedCount,
-          videoSignature,
-          savedAt: Date.now(),
-        }, null, 2), 'utf8');
-      } catch (_) {}
     }
 
     allChunkSegments.push(...chunkSegments);

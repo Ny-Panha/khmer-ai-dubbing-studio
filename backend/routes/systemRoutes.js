@@ -11,7 +11,12 @@ const {
   resolveMediaFile,
   decodeMultipartFilename,
 } = require("../utils/pathUtils");
-const { extractAllGeminiKeys } = require("../services/geminiKeyManager");
+const {
+  extractAllGeminiKeys,
+  isKeyInvalid,
+  markKeyAsInvalid,
+  getGlobalInvalidKeys,
+} = require("../services/geminiKeyManager");
 const { CASCADE_MODELS } = require("../services/pipeline");
 
 const router = express.Router();
@@ -46,12 +51,15 @@ const upload = multer({
  */
 router.get("/health", (req, res) => {
   const keys = extractAllGeminiKeys();
+  const invalidKeys = getGlobalInvalidKeys();
+  const activeKeys = keys.filter((k) => !invalidKeys.has(k));
   res.json({
     status: "ok",
     app: "Khmer AI Video Dubbing Studio API",
     version: "2.0.0",
-    geminiConfigured: keys.length > 0,
-    activeKeysCount: keys.length,
+    geminiConfigured: activeKeys.length > 0,
+    activeKeysCount: activeKeys.length,
+    totalKeysCount: keys.length,
     models: CASCADE_MODELS,
   });
 });
@@ -67,9 +75,24 @@ router.get("/gemini/keys-status", async (req, res) => {
       return res.json({ success: true, keys: [], totalRPM: 0, activeCount: 0 });
     }
 
+    const invalidKeys = getGlobalInvalidKeys();
+
     const checks = await Promise.all(
       keys.map(async (key, idx) => {
         const masked = key.length > 8 ? `...${key.slice(-4)}` : '****';
+        if (invalidKeys.has(key)) {
+          return {
+            keyNum: idx + 1,
+            masked,
+            status: "invalid",
+            badge: "401 Key ខុស",
+            code: 401,
+            latencyMs: 0,
+            isRateLimited: false,
+            isInvalid: true,
+          };
+        }
+
         const start = Date.now();
         try {
           const controller = new AbortController();
@@ -103,6 +126,7 @@ router.get("/gemini/keys-status", async (req, res) => {
               isInvalid: false,
             };
           } else if (response.status === 401 || response.status === 403) {
+            markKeyAsInvalid(key, response.status);
             return {
               keyNum: idx + 1,
               masked,
@@ -126,21 +150,22 @@ router.get("/gemini/keys-status", async (req, res) => {
             };
           }
         } catch (fetchErr) {
+          const isDead = invalidKeys.has(key);
           return {
             keyNum: idx + 1,
             masked,
-            status: "ready_standby",
-            badge: "15 RPM Ready",
+            status: isDead ? "invalid" : "ready_standby",
+            badge: isDead ? "401 Key ខុស" : "15 RPM Ready",
             code: 0,
             latencyMs: Date.now() - start,
             isRateLimited: false,
-            isInvalid: false,
+            isInvalid: isDead,
           };
         }
       })
     );
 
-    const activeCount = checks.filter((c) => c.status === "ready" || c.status === "ready_standby").length;
+    const activeCount = checks.filter((c) => (c.status === "ready" || c.status === "ready_standby") && !c.isInvalid).length;
     res.json({
       success: true,
       totalKeys: keys.length,

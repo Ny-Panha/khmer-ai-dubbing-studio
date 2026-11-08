@@ -1,8 +1,50 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
-- **Environment**: Antigravity IDE (Episode Split Source Replacement & Safe Re-Indexing)
-- **Timestamp**: 2026-11-08T17:08:00+07:00
+- **Environment**: Antigravity IDE (GeminiKeyPool 401 Disabling & 504 Deadline Exceeded Resilience)
+- **Timestamp**: 2026-11-08T17:49:00+07:00
+
+## Latest Update: Gemini Key Pool Dead Key Disabling (401/403) & 504 Timeout Resilience
+
+### 1. Problem & Root Cause
+- **Dead Key Cycling**: `GeminiKeyPool` treated 401/403 auth errors as temporary quota errors, continually cycling back to dead keys (#1 and #2) and wasting rotation attempts while valid keys were in 429 cooldowns.
+- **Untruthful Status**: UI displayed all keys as "Ready" (including dead keys) because key status defaulted to standby on fetch errors and did not track runtime invalidation.
+- **504 Timeouts**: `callGeminiVisionWithRetry` in Stage 3 only checked for 429/503. On 504 `DEADLINE_EXCEEDED`, it immediately threw without retry or model cascade.
+- **Corrupted Chunk Cache**: In `stage3_extractChineseSubtitles.js`, batch failures were caught and logged as warnings, dropping frames silently while the chunk was saved to disk cache and marked `completed`.
+
+### 2. Implementation Modifications
+1. **`backend/services/geminiKeyManager.js`**:
+   - Separated `isAuthOrInvalidKeyError(err)` (401, 403, unauthenticated, invalid key) from `isQuotaOrRateLimitError(err)` (429, 503, quota, rate limit).
+   - Added process-level `globalInvalidKeys` set and `markKeyInvalid(key, statusOrReason)`.
+   - On 401/403, permanently disables key for process lifetime, removes it from active rotation, and logs:
+     `[GeminiKeyPool] ❌ Key #N invalid (401) — removed from pool, M keys remaining`.
+   - Never retries an invalid key. Fails fast with explicit error if all keys in pool become invalid.
+   - Preserves 429 quota rotate + 600ms retry-after behavior.
+2. **`backend/routes/systemRoutes.js`**:
+   - `/health`: `activeKeysCount` strictly reflects valid non-invalid keys.
+   - `/gemini/keys-status`: Instantly returns `status: "invalid"`, `badge: "401 Key ខុស"`, `isInvalid: true` for known invalid keys; marks keys invalid on 401/403 responses; calculates `activeCount` exclusively from non-invalid ready keys.
+3. **`backend/services/pipeline/stages/stage3_extractChineseSubtitles.js`**:
+   - Added `isRetryableVisionError(err)` recognizing 429, 503, 504, `DEADLINE_EXCEEDED`, `GATEWAY TIMEOUT`, `ETIMEDOUT`, `TIMEOUT`.
+   - `callGeminiVisionWithRetry` cascades across alternative models (`gemini-3.5-flash-lite` -> `gemini-2.5-flash` -> `gemini-3.5-flash`) on 504 timeouts with backoff.
+   - In `executeVisionBatch`, unrecoverable batch failure throws an explicit error rather than silently swallowing it.
+4. **`backend/services/pipeline/chunkOrchestrator.js`**:
+   - Wrapped chunk execution in try/catch; unrecoverable Stage 3 failure marks chunk as failed, logs clear error line, and throws with chunk index/timestamp.
+   - Completed prior chunks are safely preserved in disk cache (`chunk_<hash>.json`), so subsequent job re-runs automatically resume at the failed chunk.
+5. **`backend/tests/gemini_key_pool_and_504_retry.test.js`**:
+   - Unit tests covering 401 dead key elimination, log format assertion, fast failure on total pool death, 429 preservation, 504 cascade recovery, and unrecoverable cascade chunk failure.
+
+### 3. Verification & Evidence
+- **New Unit Suite**: `node --test backend/tests/gemini_key_pool_and_504_retry.test.js` ➔ **7 passed, 0 failed**.
+- **Full Backend Suite**: `node --test backend/tests/*.test.js` ➔ **65 tests: 64 passed, 1 skipped, 0 failed**.
+- **Frontend Build**: `npm --prefix frontend run build` ➔ **PASS in 968ms**.
+
+## Active Environment
+- **Backend API**: `http://localhost:5000` (Node.js/Express)
+- **Frontend Studio UI**: `http://localhost:5173` (React 19 + Vite)
+- **Git Branch**: `main`
+
+## Next Steps
+- Production verification with full episode dubbing jobs under API quota constraints.
 
 ## Latest Update: Split Replaces Source Episode & Safe Sequential Re-Indexing
 
