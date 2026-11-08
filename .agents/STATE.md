@@ -1,8 +1,25 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
-- **Environment**: Antigravity IDE (Fix: True Center Auto-Follow Playhead)
-- **Timestamp**: 2026-11-08T20:56:00+07:00
+- **Environment**: Antigravity IDE (Fix: Auto-Heal Truncated Video Track Duration to Full Episode)
+- **Timestamp**: 2026-11-08T21:10:00+07:00
+
+## Latest Update: Auto-Heal Truncated Video Track to Full Episode Duration
+
+### Problem Description
+- **Symptom**: In EP2 (duration 20:00mn / 1200s), audio dialogue clips stretched all the way to 20mn, but the VIDEO track clip (`8958_EP2.mp4`) ended prematurely at 00:20s, leaving the video track empty/black from 00:20s to 20:00mn.
+- **Root Cause**:
+  - If a workspace had a cached or trimmed single video clip of 20-30s in `localStorage`, `normalizeClips` and episode initialization preserved the clip without auto-stretching it to match the true episode duration (`epDur` = 1200s).
+
+### Resolution
+1. **Auto-Heal on Episode Load & Workspace Init**:
+   - In `useSeriesManager.js` and `useWorkspaceMedia.js`, added an auto-heal guard: if an episode has only 1 video clip starting at 0, and its duration is truncated (`end < epDur - 5s`), it automatically heals and stretches the clip to cover the full episode duration (`epDur = 1200s`).
+2. **Explicit Toolbar Restore**:
+   - Reminded user of the `[ Full Video ]` toolbar button which immediately recalculates `totalDur` (1200s) and restores the video track to full continuous length.
+
+### Verification
+- `npm --prefix frontend run build` ➔ PASS (1.56s).
+- `node --test backend/tests/timeline_*.test.js` ➔ 10/10 PASS.
 
 ## Latest Update: True Center Auto-Follow Playhead (CapCut / Premiere Style)
 

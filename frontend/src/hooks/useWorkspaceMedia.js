@@ -181,6 +181,16 @@ export function useWorkspaceMedia({
               },
             ];
           }
+          if (prevClips.length === 1 && prevClips[0].start === 0 && realDur > 60 && prevClips[0].end < realDur - 5) {
+            return [
+              {
+                ...prevClips[0],
+                end: realDur,
+                sourceEnd: realDur,
+                duration: realDur,
+              },
+            ];
+          }
           return prevClips.map((c) => {
             if (c.id === initialClipId) {
               const clipLen = realDur;

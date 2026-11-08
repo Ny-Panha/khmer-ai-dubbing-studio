@@ -191,7 +191,16 @@ export function useSeriesManager({
           }
         ]);
       } else {
-        cb.setVideoClips(normalizeClips(existingClips, epDur));
+        const normalized = normalizeClips(existingClips, epDur);
+        // Auto-heal single truncated video clip: if there is only 1 uncut clip starting at 0,
+        // but its end is way shorter than the episode duration (e.g. truncated at 20s-30s instead of 1200s),
+        // stretch it to cover the full episode duration so the video track never runs out!
+        if (normalized.length === 1 && normalized[0].start === 0 && epDur > 60 && normalized[0].end < epDur - 5) {
+          normalized[0].end = epDur;
+          normalized[0].sourceEnd = epDur;
+          normalized[0].duration = epDur;
+        }
+        cb.setVideoClips(normalized);
       }
     }
     if (cb.setActiveClipId) {
