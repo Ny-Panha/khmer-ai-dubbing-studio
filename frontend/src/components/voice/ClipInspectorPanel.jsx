@@ -255,6 +255,7 @@ export default function ClipInspectorPanel({
     return null;
   }
 
+  const isKhmerEmpty = !localKhmerText?.trim();
   const isGenerating = regeneratingId === (selectedSegment.id || selectedSegmentIndex) || regenStatus === 'generating' || selectedSegment.textStatus === 'generating';
   const isVoiceUpdated = !isGenerating && (regenStatus === 'voice_updated' || (selectedSegment.textStatus === 'voice_updated' && regenStatus !== 'error'));
   const isError = !isGenerating && !isVoiceUpdated && (regenStatus === 'error' || (selectedSegment.textStatus === 'error' && !selectedSegment.audioUrl));
