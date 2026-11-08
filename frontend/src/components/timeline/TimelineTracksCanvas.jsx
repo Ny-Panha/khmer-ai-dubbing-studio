@@ -119,11 +119,12 @@ function TimelineTracksCanvas({
           : ((typeof seg.audioDurationSec === 'number' && !isNaN(seg.audioDurationSec))
             ? seg.audioDurationSec
             : 2.5));
-      const rawEnd = (seg.userTrimmed && typeof seg.audioEndSec === 'number')
+      const isTrimmed = Boolean(seg.audioTrimmed || seg.userTrimmed);
+      const rawEnd = (isTrimmed && typeof seg.audioEndSec === 'number')
         ? seg.audioEndSec
         : Math.max((typeof seg.audioEndSec === 'number' && !isNaN(seg.audioEndSec) ? seg.audioEndSec : 0), rawStart + rawAudioDur);
 
-      if (typeof seg.trackRow === 'number' && seg.userShifted) {
+      if (typeof seg.trackRow === 'number') {
         const r = Math.min(1, Math.max(0, seg.trackRow));
         endTimes[r] = Math.max(endTimes[r] || 0, rawEnd);
         return r;
@@ -172,7 +173,8 @@ function TimelineTracksCanvas({
         : ((typeof seg.audioDurationSec === 'number' && !isNaN(seg.audioDurationSec))
           ? seg.audioDurationSec
           : 2.5));
-    const rawEnd = (seg.userTrimmed && typeof seg.audioEndSec === 'number')
+    const isTrimmed = Boolean(seg.audioTrimmed || seg.userTrimmed);
+    const rawEnd = (isTrimmed && typeof seg.audioEndSec === 'number')
       ? seg.audioEndSec
       : Math.max((typeof seg.audioEndSec === 'number' && !isNaN(seg.audioEndSec) ? seg.audioEndSec : 0), rawStart + rawAudioDur);
 
@@ -220,12 +222,20 @@ function TimelineTracksCanvas({
     const slotEnd = (typeof seg.endSec === 'number' && !isNaN(seg.endSec)) ? seg.endSec : parseTimeToSeconds(seg.end, slotStart + 3.0);
     const slotDur = Math.max(0.1, slotEnd - slotStart);
     const clipDur = Math.max(0.1, endSec - startSec);
-    const overSec = (seg.audioDurationSec || clipDur) - slotDur;
-    const isOver = overSec >= 0.15;
+    const naturalAudioDur = (typeof seg.rawAudioDur === 'number' && seg.rawAudioDur > 0)
+      ? seg.rawAudioDur
+      : ((typeof seg.finalAudioDuration === 'number' && seg.finalAudioDuration > 0)
+        ? seg.finalAudioDuration
+        : ((typeof seg.audioDuration === 'number' && seg.audioDuration > 0)
+          ? seg.audioDuration
+          : (seg.audioDurationSec || clipDur)));
+    const overSec = naturalAudioDur - slotDur;
+    const isOver = overSec >= 0.15 || Boolean(seg.audioTrimmed && overSec > 0.05);
     const overMarker = isOver ? ` +${overSec.toFixed(1)}s` : '';
+    const trimMarker = (seg.audioTrimmed || seg.userTrimmed) ? ' ✂' : '';
 
-    // Voice clip label: "#N ប្រុស" / "#N ស្រី" (+ OVER marker as text " +0.4s" in the label when over)
-    const voiceLabel = `#${idx + 1} ${isFemale ? 'ស្រី' : 'ប្រុស'}${overMarker}`;
+    // Voice clip label: "#N ប្រុស" / "#N ស្រី" (+ OVER marker as text " +0.4s" in the label when over, + " ✂" when trimmed)
+    const voiceLabel = `#${idx + 1} ${isFemale ? 'ស្រី' : 'ប្រុស'}${overMarker}${trimMarker}`;
 
     const isSliver = audioWidth < 5;
     const canRenderLabel = audioWidth >= 32;
@@ -834,7 +844,7 @@ function TimelineTracksCanvas({
 
                   if (!isDragging && !isSelected) {
                     const vStart = (typeof seg.audioStartSec === 'number' && !isNaN(seg.audioStartSec)) ? seg.audioStartSec : parseTimeToSeconds(seg.start, idx * 4);
-                    const vEnd = (seg.userTrimmed && typeof seg.audioEndSec === 'number') ? seg.audioEndSec : (typeof seg.audioEndSec === 'number' && !isNaN(seg.audioEndSec) ? seg.audioEndSec : vStart + 3.0);
+                    const vEnd = ((seg.audioTrimmed || seg.userTrimmed) && typeof seg.audioEndSec === 'number') ? seg.audioEndSec : (typeof seg.audioEndSec === 'number' && !isNaN(seg.audioEndSec) ? seg.audioEndSec : vStart + 3.0);
                     if (vEnd < visibleRange.start || vStart > visibleRange.end) {
                       return null;
                     }

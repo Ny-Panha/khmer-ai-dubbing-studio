@@ -740,7 +740,35 @@ export function resolveSegmentAtTime(segments, targetTime) {
 }
 
 /**
+ * Helper to determine source subtitle end timing for collision analysis
+ */
+function getSourceSubtitleEnd(s) {
+  if (!s) return 0;
+  const start = (typeof s._canonicalStart === 'number' && !isNaN(s._canonicalStart))
+    ? s._canonicalStart
+    : ((typeof s.sourceStartSec === 'number' && !isNaN(s.sourceStartSec))
+      ? s.sourceStartSec
+      : (typeof s.startSec === 'number' && !isNaN(s.startSec) ? s.startSec : 0));
+
+  if (typeof s.speechEndSec === 'number' && !isNaN(s.speechEndSec) && s.speechEndSec > start) {
+    return s.speechEndSec;
+  }
+  const slot = (typeof s.slotDuration === 'number' && s.slotDuration > 0)
+    ? s.slotDuration
+    : (typeof s.availableSlotDuration === 'number' && s.availableSlotDuration > 0 ? s.availableSlotDuration : null);
+  if (slot !== null) {
+    return parseFloat((start + slot).toFixed(2));
+  }
+  if (typeof s.sourceEndSec === 'number' && !isNaN(s.sourceEndSec) && s.sourceEndSec > start) {
+    return s.sourceEndSec;
+  }
+  return start + 2.0;
+}
+
+/**
  * Smart Slot-Bounded Auto-Align Voice Segments (Zero Cumulative Drift)
+ * - Eliminates voice stacking/overlapping on Track A1 by resolving Khmer audio overruns on Lane 0
+ * - Clamps previous clip's audioEndSec when subtitle slots do not genuinely overlap (cut <= 40%)
  * - Anchors every segment back to its canonical `sourceStartSec` first (heals drifted #88-#98 clips).
  * - Limits maximum forward shift to `maxShiftSec` (default 0.35s) so dialogue NEVER drifts off-scene.
  * - Clamps strictly within `totalDuration` so no clips ever overflow past the end of the video.
@@ -824,6 +852,7 @@ export function autoAlignVoiceSegments(segments = [], totalDuration = 0, options
   const trackLastEnds = { 0: 0, 1: 0 };
   const subTrackLastEnds = { 0: 0, 1: 0, 2: 0 };
   const aligned = [];
+  let lastLane0Idx = -1;
 
   for (let i = 0; i < deduplicated.length; i++) {
     const seg = deduplicated[i];
@@ -835,20 +864,64 @@ export function autoAlignVoiceSegments(segments = [], totalDuration = 0, options
     }
 
     // Determine target track row dynamically:
-    // Keep dialogue on Row 0 (single straight line). Drop down to Row 1 ONLY if there is an audio collision:
+    // Overwrite semantics: When segment N collides with previous Lane 0 clip ONLY because previous audio
+    // overruns N's start (subtitle slots themselves do NOT genuinely overlap), resolve on Lane 0 by clamping
+    // previous clip's audioEndSec to N's start (if cut <= 40%). Drop to VOICE 2 ONLY if genuine subtitle overlap
+    // or if trimming would cut > 40% of previous clip's audio.
     let targetRow = 0;
     if (typeof seg.trackRow === 'number' && seg.userShifted) {
       targetRow = Math.min(1, Math.max(0, seg.trackRow));
     } else {
       const end0 = trackLastEnds[0] || 0;
       const end1 = trackLastEnds[1] || 0;
+      const currHasAudio = Boolean(seg.audioFile || seg.audioUrl || seg.audioPath);
+
       if (baseStart >= end0 - 0.05) {
         targetRow = 0;
-      } else if (baseStart >= end1 - 0.05) {
-        targetRow = 1;
       } else {
-        // Both tracks have slight overlap: pick the track that ends earliest
-        targetRow = end0 <= end1 ? 0 : 1;
+        let resolvedOnLane0 = false;
+        if (currHasAudio && lastLane0Idx >= 0) {
+          const prevLane0 = aligned[lastLane0Idx];
+          const prevHasAudio = Boolean(prevLane0?.audioFile || prevLane0?.audioUrl || prevLane0?.audioPath);
+
+          if (prevHasAudio) {
+            const prevSrcEnd = getSourceSubtitleEnd(prevLane0);
+            const genuineSubtitleOverlap = baseStart < (prevSrcEnd - 0.05);
+
+            const origAudioDur = (typeof prevLane0.rawAudioDur === 'number' && prevLane0.rawAudioDur > 0)
+              ? prevLane0.rawAudioDur
+              : ((typeof prevLane0.finalAudioDuration === 'number' && prevLane0.finalAudioDuration > 0)
+                ? prevLane0.finalAudioDuration
+                : ((typeof prevLane0.audioDurationSec === 'number' && prevLane0.audioDurationSec > 0)
+                  ? prevLane0.audioDurationSec
+                  : (prevLane0.audioEndSec - prevLane0.audioStartSec)));
+
+            const cutDur = prevLane0.audioEndSec - baseStart;
+            const cutRatio = (origAudioDur > 0 && cutDur > 0) ? (cutDur / origAudioDur) : 0;
+
+            if (!genuineSubtitleOverlap && cutRatio <= 0.40 && baseStart > prevLane0.audioStartSec + 0.1) {
+              prevLane0.audioEndSec = parseFloat(baseStart.toFixed(2));
+              prevLane0.endSec = prevLane0.audioEndSec;
+              const newDur = parseFloat(Math.max(0.1, prevLane0.audioEndSec - prevLane0.audioStartSec).toFixed(2));
+              prevLane0.audioDurationSec = newDur;
+              prevLane0.duration = newDur;
+              prevLane0.audioTrimmed = true;
+              prevLane0.end = formatMinSec(prevLane0.audioEndSec);
+              prevLane0.audioEnd = formatMinSec(prevLane0.audioEndSec);
+              trackLastEnds[0] = prevLane0.audioEndSec;
+              targetRow = 0;
+              resolvedOnLane0 = true;
+            }
+          }
+        }
+
+        if (!resolvedOnLane0) {
+          if (baseStart >= end1 - 0.05) {
+            targetRow = 1;
+          } else {
+            targetRow = end0 <= end1 ? 0 : 1;
+          }
+        }
       }
     }
 
@@ -866,11 +939,15 @@ export function autoAlignVoiceSegments(segments = [], totalDuration = 0, options
     }
 
     // Determine audio duration
-    const rawAudioDur = (typeof seg.audioDurationSec === 'number' && seg.audioDurationSec > 0.1)
-      ? seg.audioDurationSec
-      : ((typeof seg.audioDuration === 'number' && seg.audioDuration > 0.1)
-        ? seg.audioDuration
-        : (seg._canonicalEnd - seg._canonicalStart));
+    const rawAudioDur = (typeof seg.rawAudioDur === 'number' && seg.rawAudioDur > 0.1)
+      ? seg.rawAudioDur
+      : ((typeof seg.finalAudioDuration === 'number' && seg.finalAudioDuration > 0.1)
+        ? seg.finalAudioDuration
+        : ((typeof seg.audioDurationSec === 'number' && seg.audioDurationSec > 0.1)
+          ? seg.audioDurationSec
+          : ((typeof seg.audioDuration === 'number' && seg.audioDuration > 0.1)
+            ? seg.audioDuration
+            : (seg._canonicalEnd - seg._canonicalStart))));
 
     let effectiveDur = Math.max(0.35, rawAudioDur);
     let recommendedPlaybackRate = 1.0;
@@ -883,6 +960,11 @@ export function autoAlignVoiceSegments(segments = [], totalDuration = 0, options
 
     const finalDur = parseFloat(Math.max(0.30, finalEndSec - targetStart).toFixed(2));
     trackLastEnds[targetRow] = finalEndSec;
+
+    // Track last Lane 0 index
+    if (targetRow === 0) {
+      lastLane0Idx = aligned.length;
+    }
 
     // Determine subtitle track row dynamically (multi-track lane allocation to eliminate subtitle collisions)
     let targetSubRow = 0;
@@ -918,6 +1000,8 @@ export function autoAlignVoiceSegments(segments = [], totalDuration = 0, options
       audioStartSec: targetStart,
       audioEndSec: finalEndSec,
       audioDurationSec: finalDur,
+      rawAudioDur: effectiveDur,
+      audioTrimmed: Boolean(cleanSeg.audioTrimmed),
       trackRow: targetRow,
       trackId: targetRow === 0 ? 'voice-1' : 'voice-2',
       subTrackRow: targetSubRow,
@@ -967,15 +1051,17 @@ export function resetSegmentsToSourceTiming(segments = [], totalDuration = 0) {
     const safeEnd = hasValidVideoEnd ? Math.min(totalDuration, Math.max(safeStart + 0.4, rawSrcEnd)) : rawSrcEnd;
     const dur = parseFloat((safeEnd - safeStart).toFixed(2));
 
-    // Preserve actual generated audio duration if audio exists (never squash audio to subtitle slot)
+    // Preserve natural generated audio duration if audio exists (never squash audio to subtitle slot)
     const hasAudio = Boolean(seg.audioFile || seg.audioPath || seg.audioUrl);
-    const audioDur = hasAudio && typeof seg.finalAudioDuration === 'number' && seg.finalAudioDuration > 0
-      ? seg.finalAudioDuration
-      : (hasAudio && typeof seg.audioDuration === 'number' && seg.audioDuration > 0
-        ? seg.audioDuration
-        : (hasAudio && typeof seg.audioDurationSec === 'number' && seg.audioDurationSec > 0
-          ? seg.audioDurationSec
-          : dur));
+    const audioDur = hasAudio && typeof seg.rawAudioDur === 'number' && seg.rawAudioDur > 0
+      ? seg.rawAudioDur
+      : (hasAudio && typeof seg.finalAudioDuration === 'number' && seg.finalAudioDuration > 0
+        ? seg.finalAudioDuration
+        : (hasAudio && typeof seg.audioDuration === 'number' && seg.audioDuration > 0
+          ? seg.audioDuration
+          : (hasAudio && typeof seg.audioDurationSec === 'number' && seg.audioDurationSec > 0
+            ? seg.audioDurationSec
+            : dur)));
     const audioEndSec = parseFloat((safeStart + audioDur).toFixed(2));
 
     // Keep all dialogue on Row 0 (single clean straight line). Drop to Row 1 ONLY if collision occurs:
@@ -1018,6 +1104,8 @@ export function resetSegmentsToSourceTiming(segments = [], totalDuration = 0) {
       audioStartSec: parseFloat(safeStart.toFixed(2)),
       audioEndSec: audioEndSec,
       audioDurationSec: audioDur,
+      rawAudioDur: hasAudio ? audioDur : undefined,
+      audioTrimmed: false,
       finalAudioDuration: hasAudio ? audioDur : seg.finalAudioDuration,
       audioDuration: hasAudio ? audioDur : seg.audioDuration,
       trackRow: targetRow,

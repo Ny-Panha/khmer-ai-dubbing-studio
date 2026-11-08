@@ -107,3 +107,75 @@ test('autoAlignVoiceSegments: prevents simultaneous multi-track voice overlap an
   assert.equal(aligned[1].audioStartSec, 133.75, 'Dialogue onset must stay anchored to video mouth movement (0% drift)');
 });
 
+test('autoAlignVoiceSegments: resolves over-long audio on Lane 0 by clamping previous audioEndSec without shifting N', () => {
+  // Scenario matching real episode segments #17, #18, #19:
+  // #17: 39.91 to 42.02 (speech), audio is 3.69s (overrunning to 43.60)
+  // #18: 42.50 to 43.60, audio is 1.25s
+  // #19: 43.60 to 47.29, audio is 3.69s
+  const segments = [
+    {
+      id: 17,
+      startSec: 39.91,
+      endSec: 43.60,
+      sourceStartSec: 39.91,
+      sourceEndSec: 43.60,
+      speechStartSec: 39.91,
+      speechEndSec: 42.02,
+      slotDuration: 2.59,
+      audioDurationSec: 3.69,
+      audioFile: 'ep_1_seg_17.mp3',
+    },
+    {
+      id: 18,
+      startSec: 42.50,
+      endSec: 43.75,
+      sourceStartSec: 42.50,
+      sourceEndSec: 43.75,
+      slotDuration: 1.10,
+      audioDurationSec: 1.25,
+      audioFile: 'ep_1_seg_18.mp3',
+    },
+    {
+      id: 19,
+      startSec: 43.60,
+      endSec: 47.29,
+      sourceStartSec: 43.60,
+      sourceEndSec: 47.29,
+      speechStartSec: 43.60,
+      speechEndSec: 47.29,
+      slotDuration: 6.77,
+      audioDurationSec: 3.69,
+      audioFile: 'ep_1_seg_19.mp3',
+    },
+  ];
+
+  const aligned = autoAlignVoiceSegments(segments, 180.0);
+
+  // Both #17 and #18 sit on Lane 0 (VOICE 1), not dropped to VOICE 2!
+  assert.equal(aligned[0].trackRow, 0, '#17 must stay on VOICE 1');
+  assert.equal(aligned[1].trackRow, 0, '#18 must sit on VOICE 1 instead of dropping to VOICE 2');
+  assert.equal(aligned[2].trackRow, 0, '#19 must sit on VOICE 1');
+
+  // #17 audioEndSec is clamped to #18 startSec (42.50)
+  assert.equal(aligned[0].audioEndSec, 42.50);
+  assert.equal(aligned[0].audioTrimmed, true, '#17 must be marked audioTrimmed');
+
+  // #18 starts at exact 42.50 (never shifted forward)
+  assert.equal(aligned[1].audioStartSec, 42.50);
+  assert.equal(aligned[1].startSec, 42.50);
+
+  // #18 audioEndSec is clamped to #19 startSec (43.60)
+  assert.equal(aligned[1].audioEndSec, 43.60);
+  assert.equal(aligned[1].audioTrimmed, true, '#18 must be marked audioTrimmed');
+
+  // #19 starts at exact 43.60
+  assert.equal(aligned[2].audioStartSec, 43.60);
+  assert.equal(aligned[2].audioTrimmed, false, '#19 is not trimmed');
+
+  // Verify Reset Timing restores source timing and drops #18 to VOICE 2
+  const resetSegs = resetSegmentsToSourceTiming(aligned, 180.0);
+  assert.equal(resetSegs[0].audioTrimmed, false, '#17 audioTrimmed must be reset');
+  assert.equal(resetSegs[1].trackRow, 1, 'Reset timing restores #18 to VOICE 2 as in source');
+});
+
+

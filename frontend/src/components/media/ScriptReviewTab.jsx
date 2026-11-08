@@ -76,7 +76,14 @@ const CaptionItemCard = React.memo(function CaptionItemCard({
   const startSec = typeof seg.startSec === 'number' ? seg.startSec : parseTimeToSeconds(seg.start, 0);
   const endSec = typeof seg.endSec === 'number' ? seg.endSec : parseTimeToSeconds(seg.end, startSec + 3.0);
   const segDuration = Math.max(0.1, endSec - startSec);
-  const isOverflow = typeof seg.audioDurationSec === 'number' && seg.audioDurationSec > (segDuration + 0.3);
+  const naturalAudioDur = (typeof seg.rawAudioDur === 'number' && seg.rawAudioDur > 0)
+    ? seg.rawAudioDur
+    : ((typeof seg.finalAudioDuration === 'number' && seg.finalAudioDuration > 0)
+      ? seg.finalAudioDuration
+      : ((typeof seg.audioDuration === 'number' && seg.audioDuration > 0)
+        ? seg.audioDuration
+        : seg.audioDurationSec));
+  const isOverflow = (typeof naturalAudioDur === 'number' && naturalAudioDur > (segDuration + 0.3)) || Boolean(seg.audioTrimmed);
 
   return (
     <div
@@ -287,7 +294,7 @@ const CaptionItemCard = React.memo(function CaptionItemCard({
       {isOverflow && (
         <div style={{ fontSize: '0.68rem', color: 'var(--color-warning)', marginTop: 4, display: 'flex', alignItems: 'center', gap: 4 }}>
           <AlertCircle size={11} />
-          <span>Speech duration ({seg.audioDurationSec.toFixed(1)}s) exceeds slot ({segDuration.toFixed(1)}s)</span>
+          <span>Speech duration ({(naturalAudioDur || seg.audioDurationSec || 0).toFixed(1)}s) exceeds slot ({segDuration.toFixed(1)}s){seg.audioTrimmed ? ' (Trimmed ✂)' : ''}</span>
         </div>
       )}
     </div>

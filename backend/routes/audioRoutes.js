@@ -617,8 +617,10 @@ router.post("/sync-audio", async (req, res) => {
           audioPath: foundAudioPath,
           audioStartSec: secVal,
           startSec: secVal,
+          audioEndSec: typeof s.audioEndSec === "number" ? s.audioEndSec : undefined,
           audioDurationSec: s.audioDurationSec || s.audioDuration || 2.5,
           audioOffset: typeof s.audioOffset === "number" && !isNaN(s.audioOffset) ? s.audioOffset : 0,
+          audioTrimmed: Boolean(s.audioTrimmed),
         };
       })
       .filter(Boolean);
@@ -641,7 +643,14 @@ router.post("/sync-audio", async (req, res) => {
     }
 
     const fingerprint = crypto.createHash("sha256")
-      .update(JSON.stringify(syncSegs.map((s) => ({ id: s.id, t: s.audioStartSec, p: s.audioPath }))))
+      .update(JSON.stringify(syncSegs.map((s) => ({
+        id: s.id,
+        t: s.audioStartSec,
+        e: s.audioEndSec,
+        dur: s.audioDurationSec,
+        trimmed: Boolean(s.audioTrimmed),
+        p: s.audioPath
+      }))))
       .digest("hex").slice(0, 16);
 
     const metaPath = `${fullAudioPath}.meta.json`;

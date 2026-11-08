@@ -301,7 +301,8 @@ function VideoPlayerPreview({
         : ((typeof seg.audioDuration === 'number' && seg.audioDuration > 0)
           ? seg.audioDuration
           : ((typeof seg.audioDurationSec === 'number' && !isNaN(seg.audioDurationSec)) ? seg.audioDurationSec : 2.5));
-      const effectiveEnd = (seg.userTrimmed && typeof seg.audioEndSec === 'number')
+      const isTrimmed = Boolean(seg.audioTrimmed || seg.userTrimmed);
+      const effectiveEnd = (isTrimmed && typeof seg.audioEndSec === 'number')
         ? seg.audioEndSec
         : Math.max((typeof seg.audioEndSec === 'number' && !isNaN(seg.audioEndSec) ? seg.audioEndSec : 0), s + rawAudioDur);
       return now >= (s - 0.2) && now < (effectiveEnd + 0.3);
@@ -349,7 +350,7 @@ function VideoPlayerPreview({
         ? existingAudio.duration
         : segDur;
       const effectiveSegDur = Math.max(segDur, trueAudioDuration);
-      const effectiveSegEnd = (seg.userTrimmed && typeof seg.audioEndSec === 'number')
+      const effectiveSegEnd = (isTrimmed && typeof seg.audioEndSec === 'number')
         ? seg.audioEndSec
         : Math.max((typeof seg.audioEndSec === 'number' && !isNaN(seg.audioEndSec) ? seg.audioEndSec : 0), segStart + effectiveSegDur);
 
@@ -371,9 +372,11 @@ function VideoPlayerPreview({
       const effectiveVol = isOverlappedByNext ? parseFloat((targetVol * 0.50).toFixed(2)) : targetVol;
 
       const segAudioOffset = (typeof seg.audioOffset === 'number' && !isNaN(seg.audioOffset)) ? seg.audioOffset : 0;
-      const segAudioEndLimit = (seg.userTrimmed && typeof seg.audioDurationSec === 'number')
+      const segAudioEndLimit = (isTrimmed && typeof seg.audioDurationSec === 'number')
         ? (segAudioOffset + seg.audioDurationSec)
-        : null;
+        : (isTrimmed && typeof seg.audioEndSec === 'number' && typeof seg.audioStartSec === 'number'
+          ? (segAudioOffset + (seg.audioEndSec - seg.audioStartSec))
+          : null);
 
       if (inRange) {
         const expectedOffset = segAudioOffset + Math.max(0, now - segStart);
