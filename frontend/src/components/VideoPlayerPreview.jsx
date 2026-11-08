@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { Video, Upload, Loader2, AlertCircle } from 'lucide-react';
-import { parseTimeToSeconds } from '../utils/formatTime';
+import { parseTimeToSeconds } from '../utils/timestampUtils';
 import { mapSourceToTimelineTime } from '../utils/timelineUtils';
 import { uploadVideoFile } from '../services/api';
 import { createAudioRecoveryManager } from '../utils/audioAutoRecovery';
@@ -296,15 +296,20 @@ function VideoPlayerPreview({
     const nearbySegs = segments.map((seg, idx) => ({ seg, idx })).filter(({ seg }) => {
       if (seg.muted || seg.isMuted) return false;
       const s = (typeof seg.audioStartSec === 'number' && !isNaN(seg.audioStartSec)) ? seg.audioStartSec : (seg.startSec || 0);
-      const rawAudioDur = (typeof seg.finalAudioDuration === 'number' && seg.finalAudioDuration > 0)
-        ? seg.finalAudioDuration
-        : ((typeof seg.audioDuration === 'number' && seg.audioDuration > 0)
-          ? seg.audioDuration
-          : ((typeof seg.audioDurationSec === 'number' && !isNaN(seg.audioDurationSec)) ? seg.audioDurationSec : 2.5));
+      const slotEnd = (typeof seg.endSec === 'number' && !isNaN(seg.endSec)) ? seg.endSec : (s + 3.0);
+      const rawAudioDur = (typeof seg.originalAudioDuration === 'number' && seg.originalAudioDuration > 0)
+        ? seg.originalAudioDuration
+        : ((typeof seg.rawAudioDur === 'number' && seg.rawAudioDur > 0)
+          ? seg.rawAudioDur
+          : ((typeof seg.finalAudioDuration === 'number' && seg.finalAudioDuration > 0)
+            ? seg.finalAudioDuration
+            : ((typeof seg.audioDuration === 'number' && seg.audioDuration > 0)
+              ? seg.audioDuration
+              : ((typeof seg.audioDurationSec === 'number' && !isNaN(seg.audioDurationSec)) ? seg.audioDurationSec : 2.5))));
       const isTrimmed = Boolean(seg.audioTrimmed || seg.userTrimmed);
       const effectiveEnd = (isTrimmed && typeof seg.audioEndSec === 'number')
         ? seg.audioEndSec
-        : Math.max((typeof seg.audioEndSec === 'number' && !isNaN(seg.audioEndSec) ? seg.audioEndSec : 0), s + rawAudioDur);
+        : Math.max(slotEnd, s + rawAudioDur);
       return now >= (s - 0.2) && now < (effectiveEnd + 0.3);
     });
 
@@ -343,17 +348,19 @@ function VideoPlayerPreview({
             ? seg.audioDurationSec
             : 2.5));
 
-      // CRITICAL: Determine true audio end boundary
-      // Allow audio to play to its full natural sentence completion unless explicitly trimmed by user
+      // CRITICAL: Determine true audio end boundary (STEP 2B)
+      const slotStart = (typeof seg.startSec === 'number' && !isNaN(seg.startSec)) ? seg.startSec : segStart;
+      const slotEnd = (typeof seg.endSec === 'number' && !isNaN(seg.endSec)) ? seg.endSec : (slotStart + 3.0);
       const existingAudio = activeSegmentAudiosRef.current[segKey]?.audio;
       const trueAudioDuration = (existingAudio && existingAudio.duration && !isNaN(existingAudio.duration) && existingAudio.duration > 0.2)
         ? existingAudio.duration
-        : segDur;
-      const effectiveSegDur = Math.max(segDur, trueAudioDuration);
+        : ((typeof seg.originalAudioDuration === 'number' && seg.originalAudioDuration > 0)
+          ? seg.originalAudioDuration
+          : ((typeof seg.rawAudioDur === 'number' && seg.rawAudioDur > 0) ? seg.rawAudioDur : segDur));
       const isTrimmed = Boolean(seg.audioTrimmed || seg.userTrimmed);
       const effectiveSegEnd = (isTrimmed && typeof seg.audioEndSec === 'number')
         ? seg.audioEndSec
-        : Math.max((typeof seg.audioEndSec === 'number' && !isNaN(seg.audioEndSec) ? seg.audioEndSec : 0), segStart + effectiveSegDur);
+        : Math.max(slotEnd, segStart + trueAudioDuration);
 
       const inRange = now >= (segStart - 0.02) && now < effectiveSegEnd;
 
@@ -930,17 +937,14 @@ function VideoPlayerPreview({
   const indexedSegments = React.useMemo(() => {
     if (!scriptData?.segments || scriptData.segments.length === 0) return [];
     return scriptData.segments.map((seg) => {
+      // STEP 2B: subtitle clip = segment's own [startSec, endSec] only
       const s = (typeof seg.startSec === 'number' && !isNaN(seg.startSec))
         ? seg.startSec
-        : ((typeof seg.audioStartSec === 'number' && !isNaN(seg.audioStartSec))
-          ? seg.audioStartSec
-          : parseTimeToSeconds(seg.start ?? seg.startTime, 0));
+        : parseTimeToSeconds(seg.start ?? seg.startTime, 0);
 
       let e = (typeof seg.endSec === 'number' && !isNaN(seg.endSec))
         ? seg.endSec
-        : ((typeof seg.audioEndSec === 'number' && !isNaN(seg.audioEndSec))
-          ? seg.audioEndSec
-          : parseTimeToSeconds(seg.end ?? seg.endTime, s + (seg.audioDurationSec || 2.5)));
+        : parseTimeToSeconds(seg.end ?? seg.endTime, s + 2.5);
 
       if (isNaN(e) || e <= s || (e - s) < 0.6) {
         const textLen = String(seg.khmer || seg.khmerText || seg.khmerTranslatedText || seg.original || '').trim().length || 8;

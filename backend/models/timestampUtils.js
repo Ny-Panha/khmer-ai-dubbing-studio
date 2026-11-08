@@ -366,6 +366,39 @@ function migrateProjectData(projectData = {}) {
   };
 }
 
+/**
+ * Check if a segment has generated or assigned audio
+ * @param {Object} seg
+ * @returns {boolean}
+ */
+function hasSegmentAudio(seg) {
+  return Boolean(seg?.audioFile || seg?.audioPath || seg?.audioUrl);
+}
+
+/**
+ * Canonical helper to retrieve valid audio duration from a segment
+ * Resolves across originalAudioDuration, rawAudioDur, finalAudioDuration, audioDuration, and audioDurationSec
+ * @param {Object} seg 
+ * @param {number} [fallback=0]
+ * @returns {number}
+ */
+function getSegmentAudioDuration(seg, fallback = 0) {
+  if (!seg || typeof seg !== 'object') return fallback;
+  const candidates = [
+    seg.originalAudioDuration,
+    seg.rawAudioDur,
+    seg.finalAudioDuration,
+    seg.audioDuration,
+    seg.audioDurationSec,
+  ];
+  for (const c of candidates) {
+    if (typeof c === 'number' && Number.isFinite(c) && c > 0) {
+      return parseFloat(c.toFixed(2));
+    }
+  }
+  return fallback;
+}
+
 module.exports = {
   SCHEMA_VERSION,
   parseTimestampToSeconds,
@@ -375,4 +408,6 @@ module.exports = {
   formatTimecode,
   migrateSegmentTimestamps,
   migrateProjectData,
+  hasSegmentAudio,
+  getSegmentAudioDuration,
 };

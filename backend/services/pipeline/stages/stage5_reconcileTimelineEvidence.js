@@ -407,8 +407,12 @@ async function reconcileTimelineEvidence({
         target.speakerId = aSeg.speakerId || target.speakerId;
         target.voiceGender = aSeg.audioGender || aSeg.acousticGender || target.voiceGender;
         target.genderConfidence = aSeg.acousticConfidence || aSeg.audioConfidence || target.genderConfidence;
+        
+        // STEP 2A: Visual cue boundary preservation. A segment must never expand across subsequent OCR cue boundaries.
         target.startSec = parseFloat(Math.min(target.startSec, aSeg.startSec).toFixed(2));
-        target.endSec = parseFloat(Math.max(target.endSec, aSeg.endSec).toFixed(2));
+        const nextVisual = merged.slice(overlappingIdx + 1).find(m => m.startSec > target.startSec && (m.evidenceSource === 'visual_ocr' || m.evidenceType === 'visual_only'));
+        const maxAllowedEnd = nextVisual ? Math.min(aSeg.endSec, nextVisual.startSec) : aSeg.endSec;
+        target.endSec = parseFloat(Math.max(target.endSec, Math.min(target.endSec + 0.5, maxAllowedEnd)).toFixed(2));
         target.duration = parseFloat(Math.max(0.6, target.endSec - target.startSec).toFixed(2));
         target.sourceStartSec = target.startSec;
         target.sourceEndSec = target.endSec;
@@ -478,7 +482,13 @@ async function reconcileTimelineEvidence({
   // បើមាន Segment ច្រើនចាប់ផ្ដើមនៅវិនាទីជាន់គ្នា (±0.3s) ឱ្យរក្សាតែមួយ (មាន confidence ខ្ពស់ជាង)
   const preDeduplicated = [];
   for (const seg of merged) {
-    const existing = preDeduplicated.find((s) => Math.abs(s.startSec - seg.startSec) <= 0.3);
+    const existing = preDeduplicated.find((s) => {
+      if (Math.abs(s.startSec - seg.startSec) > 0.3) return false;
+      const s1 = String(s.originalChineseText || '').trim();
+      const s2 = String(seg.originalChineseText || '').trim();
+      if (!s1 || !s2) return true;
+      return areChineseTextsEquivalent(s1, s2);
+    });
     if (existing) {
       // Keep the one with higher confidence or longer duration
       if ((seg.confidence || 0) > (existing.confidence || 0) ||

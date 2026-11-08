@@ -179,6 +179,17 @@ async function generateSegmentTTS({
         seg.audioPath = existingAudioPath;
         seg.audioFile = path.basename(existingAudioPath);
         seg.audioUrl = toPublicAudioUrl(existingAudioPath);   // សម្រាប់ចំណុចទី 2 (Existing Audio)
+        try {
+          const realDur = await getMediaDuration(existingAudioPath);
+          if (typeof realDur === 'number' && realDur > 0) {
+            seg.audioDurationSec = realDur;
+            seg.finalAudioDuration = realDur;
+            seg.rawAudioDur = realDur;
+            seg.originalAudioDuration = realDur;
+            const startSec = typeof seg.audioStartSec === 'number' ? seg.audioStartSec : (seg.startSec || 0);
+            seg.audioEndSec = parseFloat((startSec + realDur).toFixed(2));
+          }
+        } catch (_) {}
         seg.ttsStatus = 'ready';
         seg.audioOutdated = false;
         results[idx] = seg;

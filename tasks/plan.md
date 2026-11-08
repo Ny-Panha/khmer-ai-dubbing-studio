@@ -1,89 +1,39 @@
-# /agents-design — Full Studio Modern UI/UX Master Plan
+# Implementation Plan: Diagnose & Fix Voice/Khmer Subtitle Timing Mismatch vs CN Cues
 
-## 1. Executive Summary & Design Vision
-Transformation of **DragonDub AI Studio** into a world-class, professional audio-video workstation UI, synthesizing the aesthetics and interaction models of three premier design inspirations:
-- **MotionSites.ai**: Tactile micro-motion, smooth spring transitions (`cubic-bezier(0.16, 1, 0.3, 1)`), snappy hover depth, and active button depressions (`scale(0.96)`).
-- **WebsitePrompts.ai**: Clean modern layout hierarchy, minimal typography, balanced whitespace, and purposeful contrast without visual clutter.
-- **GetLayers.ai**: 4-tier component depth system (Canvas → Suite Panel → Elevated Card → Floating Glass Capsule), subtle borders (`rgba(255, 255, 255, 0.07)`), and soft ambient shadows.
+## Overview
+Resolve the timing mismatch between audio voice clips, Khmer subtitles, and burned-in Chinese video cues in `khmer-ai-dubbing-studio`.
+Diagnosis of segment window 00:39-00:48 on Episode 2 (`series_1793898268958`) revealed a dual root cause:
+1. **DATA Layer (Stage 5 Reconciliation)**: The Reconcile stage merged distinct visual OCR cues across speaker and text boundaries into bloated ASR blocks (swallowing "老子要" [40.0-41.25] and "你凭什么" [41.25-42.5] into Segment #17, and swallowing "凭什么" [43.75-45.0] and "凭他是老子的崽" [45.0-46.25] into Segment #19).
+2. **PIPELINE / DATA Layer (Stage 9 TTS Re-use)**: When reusing existing audio files, `stage9_generateSegmentTTS.js` omitted `getMediaDuration()`, leaving `audioDurationSec` set to the inherited slot duration (3.69s) rather than the true MP3 duration (1.872s).
+3. **RENDER Layer (`TimelineTracksCanvas` & `VideoPlayerPreview`)**: Voice clip box end, waveform bounds, and OVER badge (`+1.1s`) derived width and offsets from bloated duration fields instead of the real audio duration.
 
----
+## Architecture Decisions
+- **Decision 1 (Stage 5 Boundary Enforcement)**: In `stage5_reconcileTimelineEvidence.js`, visual OCR cue boundaries are primary anchors. A segment must NEVER cross an OCR cue boundary where the cue text or speaker changes. Long ASR sentences must be partitioned across the intersecting visual cues rather than expanding a visual cue to swallow adjacent cues.
+- **Decision 2 (Stage 9 Audio Integrity)**: In `stage9_generateSegmentTTS.js`, whenever existing audio is reused (`canReuseExisting`), always probe the true media duration via `getMediaDuration` to guarantee `audioDurationSec` and `finalAudioDuration` reflect exact MP3 duration.
+- **Decision 3 (Render Normalization & Waveform Alignment)**:
+  - Voice clip box = `[audioStartSec, max(slotEnd, audioStartSec + realAudioDuration)]`
+  - Waveform peaks inside the voice clip box must be mapped to `realAudioDuration` (or if box extends to slotEnd, the waveform only spans the actual audio duration portion with zero stretching).
+  - Subtitle clip = segment's own `[startSec, endSec]`.
+- **Decision 4 (OVER Truthfulness)**:
+  - OVER badge must strictly equal `realAudioDuration - (endSec - startSec)`. If `realAudioDuration <= slotDur`, no positive OVER badge is rendered.
 
-## 2. The 4-Tier Layer Depth Architecture (GetLayers.ai System)
+## Task List & Checkpoints
 
-```text
-┌────────────────────────────────────────────────────────────────────────┐
-│ Layer 3: Floating Action Bar / Modals / Active Tooltips (z-50)         │
-│          Background: #203156 / #273D6B | Blur: 12px | Glow: Coral/Cyan│
-├────────────────────────────────────────────────────────────────────────┤
-│ Layer 2: Interactive Cards / Timeline Clips / Toolbars (z-20)          │
-│          Background: #192744 | Border: rgba(255,255,255,0.08)          │
-├────────────────────────────────────────────────────────────────────────┤
-│ Layer 1: Major Suite Containers (Media, Player, Inspector) (z-10)       │
-│          Background: #141E33 | Border: rgba(255,255,255,0.06)          │
-├────────────────────────────────────────────────────────────────────────┤
-│ Layer 0: Root Desktop Canvas Backdrop (z-0)                            │
-│          Background: #0B132B (Deep Midnight Navy)                      │
-└────────────────────────────────────────────────────────────────────────┘
-```
+### Phase 1: Step 1 Dump & Analysis
+- [x] Dump numbers for segments #16-#20 from stored episode data.
+- [x] Dump raw OCR visual cue list for window 00:39 - 00:48.
+- [x] Classify layer fault: Confirmed **Branch (A) DATA** (OCR cue swallowing) + **Branch (B) RENDER** (waveform & duration derivation).
 
----
+### Phase 2: Pipeline Fixes (Step 2A)
+- [ ] Task 1: Update `stage5_reconcileTimelineEvidence.js` to ensure visual OCR cue boundaries are never swallowed by ASR blocks.
+- [ ] Task 2: Update `stage9_generateSegmentTTS.js` so `canReuseExisting` always probes true audio duration via `getMediaDuration`.
 
-## 3. Micro-Interactions & Physics Easing (MotionSites.ai System)
+### Phase 3: Render Fixes & Truthful OVER Badge (Step 2B & Step 3)
+- [ ] Task 3: In `TimelineTracksCanvas.jsx` and `VideoPlayerPreview.jsx`, ensure voice box = `[audioStartSec, max(slotEnd, audioStartSec + realAudioDuration)]` and waveform bars map to `realAudioDuration`.
+- [ ] Task 4: In `TimelineTracksCanvas.jsx`, unify OVER badge formula: `realAudioDuration - (slotEnd - slotStart)`.
+- [ ] Task 5: Retime / synchronize Episode 2 data so segments #16-#20 reflect true cues and real audio duration.
 
-- **Hover Transition**: `all 0.15s cubic-bezier(0.16, 1, 0.3, 1)`
-- **Hover Lift**: `transform: translateY(-1px); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4)`
-- **Active Click**: `transform: scale(0.96)`
-- **Modal Entry**: `opacity: 0 -> 1; transform: scale(0.98) -> scale(1) (200ms ease-out)`
-- **Pill State Switching**: Fluid tab background sliding without layout shift
-
----
-
-## 4. Typography & Spacing Standard (WebsitePrompts.ai System)
-
-- **Khmer Font Stack**: `'Kantumruy Pro', 'Battambang', system-ui, sans-serif` (optimal line-height `1.55` to prevent diacritic clipping).
-- **English / Numeric Font Stack**: `'Plus Jakarta Sans', 'Inter', system-ui, sans-serif` for labels; `JetBrains Mono` or `monospace` for timecodes.
-- **Hierarchy Scale**:
-  - H1 / Suite Titles: `0.95rem` / `font-bold` / `#F8FAFC`
-  - Body / Subtitles: `0.78rem` / `font-medium` / `#CBD5E1`
-  - Meta Labels / Badges: `0.65rem` / `font-semibold` / `#94A3B8`
-- **Zero-Clutter Rule**: Replace heavy solid borders with subtle `1px solid rgba(255, 255, 255, 0.07)` and generous 12px–16px padding.
-
----
-
-## 5. Implementation Roadmap (Phases & Slices)
-
-### Phase 1: Global Motion & Layer Tokens (Core Foundation)
-- Update `frontend/src/index.css` with 4-tier layer tokens, spring animations, and unified typography utilities.
-
-### Phase 2: Top Suite — Floating Navbar & Workflow Stepper
-- [Navbar.jsx](file:///c:/Users/nhastar/Desktop/khmer_ai_dubbing_studio/frontend/src/components/Navbar.jsx)
-- [WorkflowStepper.jsx](file:///c:/Users/nhastar/Desktop/khmer_ai_dubbing_studio/frontend/src/components/WorkflowStepper.jsx)
-
-### Phase 3: Left Suite — Media Library & Episode Cards
-- [MediaLibrary.jsx](file:///c:/Users/nhastar/Desktop/khmer_ai_dubbing_studio/frontend/src/components/MediaLibrary.jsx)
-- [EpisodesTab.jsx](file:///c:/Users/nhastar/Desktop/khmer_ai_dubbing_studio/frontend/src/components/media/EpisodesTab.jsx)
-- [DubbingModeTab.jsx](file:///c:/Users/nhastar/Desktop/khmer_ai_dubbing_studio/frontend/src/components/media/DubbingModeTab.jsx)
-- [ScriptReviewTab.jsx](file:///c:/Users/nhastar/Desktop/khmer_ai_dubbing_studio/frontend/src/components/media/ScriptReviewTab.jsx)
-
-### Phase 4: Center Stage — Video Player & Overlay Controls
-- [VideoPlayerPreview.jsx](file:///c:/Users/nhastar/Desktop/khmer_ai_dubbing_studio/frontend/src/components/VideoPlayerPreview.jsx)
-- [PlayerControls.jsx](file:///c:/Users/nhastar/Desktop/khmer_ai_dubbing_studio/frontend/src/components/player/PlayerControls.jsx)
-
-### Phase 5: Right Suite — Voice Inspector & Export Panels
-- [VoiceSettings.jsx](file:///c:/Users/nhastar/Desktop/khmer_ai_dubbing_studio/frontend/src/components/VoiceSettings.jsx)
-- [CharacterVoicesPanel.jsx](file:///c:/Users/nhastar/Desktop/khmer_ai_dubbing_studio/frontend/src/components/voice/CharacterVoicesPanel.jsx)
-- [AudioDuckingPanel.jsx](file:///c:/Users/nhastar/Desktop/khmer_ai_dubbing_studio/frontend/src/components/voice/AudioDuckingPanel.jsx)
-- [ExportSettingsPanel.jsx](file:///c:/Users/nhastar/Desktop/khmer_ai_dubbing_studio/frontend/src/components/voice/ExportSettingsPanel.jsx)
-
-### Phase 6: Popups & Modals — Gemini Multi-Key Route Studio
-- [GeminiRouteModal.jsx](file:///c:/Users/nhastar/Desktop/khmer_ai_dubbing_studio/frontend/src/components/dashboard/GeminiRouteModal.jsx)
-- [JobDashboardModal.jsx](file:///c:/Users/nhastar/Desktop/khmer_ai_dubbing_studio/frontend/src/components/dashboard/JobDashboardModal.jsx)
-
----
-
-## 6. Verification & Quality Gates (5-Axis Review)
-1. **Visual Accuracy**: Inspect in real browser at `http://localhost:5173`.
-2. **Interactive States**: Every button and card must have `:hover`, `:active`, and `:disabled` feedback.
-3. **Responsive Spacing**: No unintended horizontal scrollbars or clipping.
-4. **Zero Broken Logic**: State, API calls, and audio-video sync remain 100% functional.
-5. **Clean Production Build**: `npm --prefix frontend run build` must compile with 0 errors.
+### Phase 4: Verification, State Sync & Commit
+- [ ] Checkpoint: Play 00:39 -> 00:48 in browser. Verify subtitle matches CN cue changes, waveform fills box correctly, and no artificial collision stacking occurs.
+- [ ] Update `.agents/STATE.md`.
+- [ ] Git commit and push to `origin/main`.

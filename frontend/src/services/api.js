@@ -645,3 +645,49 @@ export async function fetchGeminiKeysStatusApi({ signal } = {}) {
   const res = await fetch('/api/gemini/keys-status', { signal });
   return await parseResponseJson(res, 'Failed to fetch Gemini keys status');
 }
+
+/**
+ * Synchronize series state with backend server
+ * @param {Object} series
+ */
+export async function syncSeriesApi(series) {
+  if (!series?.id) return { success: false };
+  try {
+    const res = await fetch(`/api/series/${series.id}/sync`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ series }),
+    });
+    if (res.status === 502 || !res.ok) {
+      notifyBackendOffline();
+    } else {
+      notifyBackendOnline();
+    }
+    return await parseResponseJson(res, `Failed to sync series ${series.id}`);
+  } catch (err) {
+    if (/ECONNREFUSED|unreachable|Failed to fetch|NetworkError/i.test(err?.message || '')) {
+      notifyBackendOffline();
+    }
+    throw err;
+  }
+}
+
+/**
+ * Delete an episode from a series on backend
+ * @param {string} seriesId
+ * @param {string} episodeId
+ */
+export async function deleteEpisodeApi(seriesId, episodeId) {
+  if (!seriesId || !episodeId) return { success: false };
+  try {
+    const res = await fetch(`/api/series/${seriesId}/episodes/${episodeId}`, {
+      method: 'DELETE',
+    });
+    return await parseResponseJson(res, `Failed to delete episode ${episodeId}`);
+  } catch (err) {
+    if (/ECONNREFUSED|unreachable|Failed to fetch|NetworkError/i.test(err?.message || '')) {
+      notifyBackendOffline();
+    }
+    throw err;
+  }
+}

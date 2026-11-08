@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { formatMinSec } from '../utils/formatTime';
+import { formatMinSec } from '../utils/timestampUtils';
 import { getPixelsPerSecond, trimClip, moveClip, syncSegmentsWithMovedClip, deleteSegmentByIdOrIndex, resolveSegmentAtTime } from '../utils/timelineUtils';
 
 import TimelineToolbar from './timeline/TimelineToolbar';

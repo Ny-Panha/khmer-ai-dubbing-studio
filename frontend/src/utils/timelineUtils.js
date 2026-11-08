@@ -1,4 +1,9 @@
-import { parseTimeToSeconds, formatMinSec } from './formatTime.js';
+import {
+  parseTimeToSeconds,
+  formatMinSec,
+  getSegmentAudioDuration,
+  hasSegmentAudio,
+} from './timestampUtils.js';
 
 /**
  * Timeline mathematical and non-linear editing (NLE) data manipulation utilities
@@ -888,13 +893,10 @@ export function autoAlignVoiceSegments(segments = [], totalDuration = 0, options
             const prevSrcEnd = getSourceSubtitleEnd(prevLane0);
             const genuineSubtitleOverlap = baseStart < (prevSrcEnd - 0.05);
 
-            const origAudioDur = (typeof prevLane0.rawAudioDur === 'number' && prevLane0.rawAudioDur > 0)
-              ? prevLane0.rawAudioDur
-              : ((typeof prevLane0.finalAudioDuration === 'number' && prevLane0.finalAudioDuration > 0)
-                ? prevLane0.finalAudioDuration
-                : ((typeof prevLane0.audioDurationSec === 'number' && prevLane0.audioDurationSec > 0)
-                  ? prevLane0.audioDurationSec
-                  : (prevLane0.audioEndSec - prevLane0.audioStartSec)));
+            const origAudioDur = getSegmentAudioDuration(
+              prevLane0,
+              Math.max(0, (prevLane0.audioEndSec || 0) - (prevLane0.audioStartSec || 0))
+            );
 
             const cutDur = prevLane0.audioEndSec - baseStart;
             const cutRatio = (origAudioDur > 0 && cutDur > 0) ? (cutDur / origAudioDur) : 0;
@@ -939,15 +941,8 @@ export function autoAlignVoiceSegments(segments = [], totalDuration = 0, options
     }
 
     // Determine audio duration
-    const rawAudioDur = (typeof seg.rawAudioDur === 'number' && seg.rawAudioDur > 0.1)
-      ? seg.rawAudioDur
-      : ((typeof seg.finalAudioDuration === 'number' && seg.finalAudioDuration > 0.1)
-        ? seg.finalAudioDuration
-        : ((typeof seg.audioDurationSec === 'number' && seg.audioDurationSec > 0.1)
-          ? seg.audioDurationSec
-          : ((typeof seg.audioDuration === 'number' && seg.audioDuration > 0.1)
-            ? seg.audioDuration
-            : (seg._canonicalEnd - seg._canonicalStart))));
+    const fallbackSubtitleSpan = Math.max(0.35, (seg._canonicalEnd || 0) - (seg._canonicalStart || 0));
+    const rawAudioDur = getSegmentAudioDuration(seg, fallbackSubtitleSpan);
 
     let effectiveDur = Math.max(0.35, rawAudioDur);
     let recommendedPlaybackRate = 1.0;
@@ -1052,16 +1047,8 @@ export function resetSegmentsToSourceTiming(segments = [], totalDuration = 0) {
     const dur = parseFloat((safeEnd - safeStart).toFixed(2));
 
     // Preserve natural generated audio duration if audio exists (never squash audio to subtitle slot)
-    const hasAudio = Boolean(seg.audioFile || seg.audioPath || seg.audioUrl);
-    const audioDur = hasAudio && typeof seg.rawAudioDur === 'number' && seg.rawAudioDur > 0
-      ? seg.rawAudioDur
-      : (hasAudio && typeof seg.finalAudioDuration === 'number' && seg.finalAudioDuration > 0
-        ? seg.finalAudioDuration
-        : (hasAudio && typeof seg.audioDuration === 'number' && seg.audioDuration > 0
-          ? seg.audioDuration
-          : (hasAudio && typeof seg.audioDurationSec === 'number' && seg.audioDurationSec > 0
-            ? seg.audioDurationSec
-            : dur)));
+    const hasAudio = hasSegmentAudio(seg);
+    const audioDur = hasAudio ? getSegmentAudioDuration(seg, dur) : dur;
     const audioEndSec = parseFloat((safeStart + audioDur).toFixed(2));
 
     // Keep all dialogue on Row 0 (single clean straight line). Drop to Row 1 ONLY if collision occurs:

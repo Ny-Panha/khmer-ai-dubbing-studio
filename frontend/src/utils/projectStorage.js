@@ -1,5 +1,5 @@
-import { SCHEMA_VERSION } from './formatTime.js';
-import { notifyBackendOffline, notifyBackendOnline } from '../services/api';
+import { SCHEMA_VERSION } from './timestampUtils.js';
+import { syncSeriesApi, deleteEpisodeApi } from '../services/api.js';
 
 export const STORAGE_SERIES_LIST_KEY = 'KHMER_AI_SERIES_LIST_V2';
 export const STORAGE_ACTIVE_SERIES_ID_KEY = 'KHMER_AI_ACTIVE_SERIES_ID';
@@ -613,23 +613,7 @@ export function extractSeriesName(title) {
  */
 export function syncSeriesToBackend(series) {
   if (!series?.id) return;
-  fetch(`/api/series/${series.id}/sync`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ series }),
-  })
-    .then((res) => {
-      if (res.status === 502 || !res.ok) {
-        notifyBackendOffline();
-      } else {
-        notifyBackendOnline();
-      }
-    })
-    .catch((err) => {
-      if (/ECONNREFUSED|unreachable|Failed to fetch|NetworkError/i.test(err?.message || '')) {
-        notifyBackendOffline();
-      }
-    });
+  syncSeriesApi(series).catch(() => {});
 }
 
 /**
@@ -883,9 +867,7 @@ export function deleteEpisodeFromSeries(seriesId, episodeId) {
 
   // Background sync delete on backend
   try {
-    fetch(`/api/series/${series.id}/episodes/${episodeId}`, {
-      method: 'DELETE',
-    }).catch(() => {});
+    deleteEpisodeApi(series.id, episodeId).catch(() => {});
     syncSeriesToBackend(series);
   } catch (_) {}
 

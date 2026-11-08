@@ -1,10 +1,63 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
-- **Environment**: Antigravity IDE (Fix isTrimmed ReferenceError & Verify Generate-Script Backend Stability)
-- **Timestamp**: 2026-11-08T12:45:00+07:00
+- **Environment**: Antigravity IDE (Diagnosed & Fixed Voice/Khmer Subtitle Timing Mismatch vs CN Cues)
+- **Timestamp**: 2026-11-08T13:32:00+07:00
 
-## Summary of Completed Work
+## Latest Update: CN Cue Synchronization, Waveform Truthfulness & Overrun Fix
+### 1. Step 1 Diagnosis Findings & Number Dump
+- **Layer Classification**: **Branch (A) DATA** (Stage 5 Reconcile swallowed discrete visual cues) + **Branch (B) RENDER** (waveform & duration derivation).
+- **Numbers for Segments #16-#20**:
+  | Seg ID | startSec | endSec | audioStartSec | audioEndSec | audioDurationSec | sourceStartSec/sourceEndSec | True MP3 Dur |
+  | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+  | #16 | 37.00 | 39.23 | 37.00 | 39.23 | 2.23s | 37.00 / 39.23 | 2.23s |
+  | #17 | 39.91 | 42.50 | 39.91 | 41.78 | 1.872s | 39.91 / 42.50 | 1.872s |
+  | #18 | 42.50 | 43.60 | 42.50 | 44.73 | 2.232s | 42.50 / 43.60 | 2.232s |
+  | #19 | 43.60 | 47.29 | 44.75 | 46.98 | 2.232s | 43.60 / 47.29 | 2.232s |
+  | #20 | 50.37 | 53.39 | 50.37 | 53.39 | 3.02s | 50.37 / 53.39 | 3.02s |
+- **Raw OCR Visual Cues for Window 00:39 - 00:48**:
+  - `36.25 - 38.75` (2.50s): "神明不要的孩子" [Male / Priest]
+  - `40.00 - 41.25` (1.25s): "老子要" [Male / Father]
+  - `41.25 - 42.50` (1.25s): "你凭什么" [Male / Priest]
+  - `42.50 - 43.75` (1.25s): "挑战神堂" [Male / Priest]
+  - `43.75 - 45.00` (1.25s): "凭什么" [Male / Priest]
+  - `45.00 - 46.25` (1.25s): "凭他是老子的崽" [Male / Father]
+
+### 2. Implementation Summary
+1. **Stage 5 Reconcile Boundary Preservation (`stage5_reconcileTimelineEvidence.js`)**:
+   - Visual OCR cues are discrete anchors. A segment is clamped to `nextVisual.startSec` so long ASR sentences cannot expand across visual boundaries.
+   - Pre-deduplication now requires text equivalence (`areChineseTextsEquivalent`), preventing visual cues with different text or speakers from being dropped as false duplicates.
+2. **Stage 9 TTS Duration Integrity (`stage9_generateSegmentTTS.js`)**:
+   - In `canReuseExisting`, always calls `getMediaDuration` so `audioDurationSec`, `finalAudioDuration`, and `audioEndSec` reflect true MP3 file duration rather than inherited slot length.
+3. **Render Box & Waveform Alignment (`TimelineTracksCanvas.jsx` & `VideoPlayerPreview.jsx`)**:
+   - Voice clip box = `[audioStartSec, max(slotEnd, audioStartSec + realAudioDuration)]`.
+   - Waveform bars mapped to `realAudioDuration` so no empty tail or artificial stretching occurs.
+   - Live subtitles strictly use segment dialogue slot `[startSec, endSec]`, never leaking `audioEndSec`.
+   - OVER badge truthful formula: `realAudioDuration - (slotEnd - slotStart)`.
+4. **Episode 2 Stored Data Synchronized (`series.json`)**:
+   - Corrected #17, #18, #19 to their probed MP3 durations (1.872s, 2.232s, 2.232s).
+   - Segments #16-#20 now flow sequentially on Lane 0 (VOICE 1) without unnecessary collision stacking.
+
+### 3. Verification Evidence
+- `node --test backend/tests/*.test.js` ➔ **38/38 PASS** (0 failures).
+- `npm --prefix frontend run build` ➔ **PASS** (617ms).
+- Playback window 00:39 -> 00:48: Subtitles change strictly on cue boundaries, waveform maps to true audio duration, and no artificial stacking occurs.
+
+## Previous Session Summary
+1. **Decoupled Network I/O from Local Storage (`projectStorage.js` & `api.js`)**:
+   - Added `syncSeriesApi(series)` and `deleteEpisodeApi(seriesId, episodeId)` into [`frontend/src/services/api.js`](file:///e:/khmer_ai_dubbing_studio/frontend/src/services/api.js) with unified 502 offline detection and status tracking.
+   - Refactored [`frontend/src/utils/projectStorage.js`](file:///e:/khmer_ai_dubbing_studio/frontend/src/utils/projectStorage.js) to delegate through `api.js` client functions rather than raw, unhandled `fetch` calls.
+2. **Eliminated Pass-through Proxy Wrapper (`formatTime.js`)**:
+   - Re-routed all component imports (`MediaLibrary.jsx`, `TimelineEditor.jsx`, `VideoPlayerPreview.jsx`, `VoiceSettings.jsx`, `useAudioDubbing.js`, `useClipOperations.js`, `projectStorage.js`, `timelineUtils.js`) directly to [`frontend/src/utils/timestampUtils.js`](file:///e:/khmer_ai_dubbing_studio/frontend/src/utils/timestampUtils.js).
+3. **Single Canonical Audio Duration Resolver**:
+   - Added canonical `getSegmentAudioDuration(seg, fallback)` and `hasSegmentAudio(seg)` in `timestampUtils.js`.
+   - Replaced fragile, duplicated 5-level ternary cascades across [`frontend/src/utils/timelineUtils.js`](file:///e:/khmer_ai_dubbing_studio/frontend/src/utils/timelineUtils.js) (`alignVoiceClipsNoOverlap` and `resetSegmentsToSourceTiming`).
+4. **Verification & Zero Regressions**:
+   - `npm --prefix frontend run build` ➔ **PASS** (1.00s, 0 errors).
+   - `node --test backend/tests/auto_align_voice.test.js` ➔ **3/3 PASS** (76ms).
+   - `node --test backend/tests/phase1_translation_boundary.test.js` ➔ **7/7 PASS** (1.98s).
+
+## Previous Session Summary
 
 ### 1. Bug 1: `isTrimmed` ReferenceError in Preview Sync Loop (Fixed & Verified)
 - **Problem**: Playing preview with trimmed segments threw `Uncaught ReferenceError: isTrimmed is not defined at VideoPlayerPreview.jsx:353` inside `syncLoop` (requestAnimationFrame).

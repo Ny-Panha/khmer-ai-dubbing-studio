@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Sliders, CheckCircle2 } from 'lucide-react';
-import { parseTimeToSeconds } from '../utils/formatTime';
+import { parseTimeToSeconds } from '../utils/timestampUtils';
 import { previewVoiceApi } from '../services/api';
 
 import ClipInspectorPanel from './voice/ClipInspectorPanel';

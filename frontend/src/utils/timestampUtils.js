@@ -167,6 +167,39 @@ export function formatTimecode(sec, includeHours = false) {
 }
 
 /**
+ * Check if a segment has generated or assigned audio
+ * @param {Object} seg
+ * @returns {boolean}
+ */
+export function hasSegmentAudio(seg) {
+  return Boolean(seg?.audioFile || seg?.audioPath || seg?.audioUrl);
+}
+
+/**
+ * Canonical helper to retrieve valid audio duration from a segment
+ * Resolves across rawAudioDur, finalAudioDuration, audioDuration, and audioDurationSec
+ * @param {Object} seg 
+ * @param {number} [fallback=0]
+ * @returns {number}
+ */
+export function getSegmentAudioDuration(seg, fallback = 0) {
+  if (!seg || typeof seg !== 'object') return fallback;
+  const candidates = [
+    seg.originalAudioDuration,
+    seg.rawAudioDur,
+    seg.finalAudioDuration,
+    seg.audioDuration,
+    seg.audioDurationSec,
+  ];
+  for (const c of candidates) {
+    if (typeof c === 'number' && Number.isFinite(c) && c > 0) {
+      return parseFloat(c.toFixed(2));
+    }
+  }
+  return fallback;
+}
+
+/**
  * Safely migrate and normalize segment timestamps to canonical representation (Schema V2)
  * Preserves source timing, legitimate gaps, and overlapping dialogue.
  * 

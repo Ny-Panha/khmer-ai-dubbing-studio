@@ -112,17 +112,24 @@ function TimelineTracksCanvas({
       const rawStart = (typeof seg.audioStartSec === 'number' && !isNaN(seg.audioStartSec))
         ? seg.audioStartSec 
         : parseTimeToSeconds(seg.start, idx * 4);
-      const rawAudioDur = (typeof seg.finalAudioDuration === 'number' && seg.finalAudioDuration > 0)
-        ? seg.finalAudioDuration
-        : ((typeof seg.audioDuration === 'number' && seg.audioDuration > 0)
-          ? seg.audioDuration
-          : ((typeof seg.audioDurationSec === 'number' && !isNaN(seg.audioDurationSec))
-            ? seg.audioDurationSec
-            : 2.5));
+      const slotStart = (typeof seg.startSec === 'number' && !isNaN(seg.startSec)) ? seg.startSec : parseTimeToSeconds(seg.start, idx * 4);
+      const slotEnd = (typeof seg.endSec === 'number' && !isNaN(seg.endSec)) ? seg.endSec : parseTimeToSeconds(seg.end, slotStart + 3.0);
+      const realAudioDuration = (typeof seg.originalAudioDuration === 'number' && seg.originalAudioDuration > 0)
+        ? seg.originalAudioDuration
+        : ((typeof seg.rawAudioDur === 'number' && seg.rawAudioDur > 0)
+          ? seg.rawAudioDur
+          : ((typeof seg.finalAudioDuration === 'number' && seg.finalAudioDuration > 0)
+            ? seg.finalAudioDuration
+            : ((typeof seg.audioDuration === 'number' && seg.audioDuration > 0)
+              ? seg.audioDuration
+              : ((typeof seg.audioDurationSec === 'number' && !isNaN(seg.audioDurationSec))
+                ? seg.audioDurationSec
+                : 2.5))));
       const isTrimmed = Boolean(seg.audioTrimmed || seg.userTrimmed);
+      // STEP 2B: voice clip box = [audioStartSec, max(slotEnd, audioStartSec + realAudioDuration)]
       const rawEnd = (isTrimmed && typeof seg.audioEndSec === 'number')
         ? seg.audioEndSec
-        : Math.max((typeof seg.audioEndSec === 'number' && !isNaN(seg.audioEndSec) ? seg.audioEndSec : 0), rawStart + rawAudioDur);
+        : Math.max(slotEnd, rawStart + realAudioDuration);
 
       if (typeof seg.trackRow === 'number') {
         const r = Math.min(1, Math.max(0, seg.trackRow));
@@ -166,17 +173,24 @@ function TimelineTracksCanvas({
     const rawStart = (typeof seg.audioStartSec === 'number' && !isNaN(seg.audioStartSec))
       ? seg.audioStartSec 
       : parseTimeToSeconds(seg.start, idx * 4);
-    const rawAudioDur = (typeof seg.finalAudioDuration === 'number' && seg.finalAudioDuration > 0)
-      ? seg.finalAudioDuration
-      : ((typeof seg.audioDuration === 'number' && seg.audioDuration > 0)
-        ? seg.audioDuration
-        : ((typeof seg.audioDurationSec === 'number' && !isNaN(seg.audioDurationSec))
-          ? seg.audioDurationSec
-          : 2.5));
+    const slotStart = (typeof seg.startSec === 'number' && !isNaN(seg.startSec)) ? seg.startSec : parseTimeToSeconds(seg.start, idx * 4);
+    const slotEnd = (typeof seg.endSec === 'number' && !isNaN(seg.endSec)) ? seg.endSec : parseTimeToSeconds(seg.end, slotStart + 3.0);
+    const realAudioDuration = (typeof seg.originalAudioDuration === 'number' && seg.originalAudioDuration > 0)
+      ? seg.originalAudioDuration
+      : ((typeof seg.rawAudioDur === 'number' && seg.rawAudioDur > 0)
+        ? seg.rawAudioDur
+        : ((typeof seg.finalAudioDuration === 'number' && seg.finalAudioDuration > 0)
+          ? seg.finalAudioDuration
+          : ((typeof seg.audioDuration === 'number' && seg.audioDuration > 0)
+            ? seg.audioDuration
+            : ((typeof seg.audioDurationSec === 'number' && !isNaN(seg.audioDurationSec))
+              ? seg.audioDurationSec
+              : 2.5))));
     const isTrimmed = Boolean(seg.audioTrimmed || seg.userTrimmed);
+    // STEP 2B: voice clip box = [audioStartSec, max(slotEnd, audioStartSec + realAudioDuration)]
     const rawEnd = (isTrimmed && typeof seg.audioEndSec === 'number')
       ? seg.audioEndSec
-      : Math.max((typeof seg.audioEndSec === 'number' && !isNaN(seg.audioEndSec) ? seg.audioEndSec : 0), rawStart + rawAudioDur);
+      : Math.max(slotEnd, rawStart + realAudioDuration);
 
     const isClipMovingAssociated = dragState?.itemType === 'video' && dragState?.mode === 'move' && associatedClipSegIndices.has(idx);
     const clipMoveDelta = isClipMovingAssociated ? (dragState.currentStart - dragState.origStart) : 0;
@@ -217,19 +231,9 @@ function TimelineTracksCanvas({
     const isSreymom = activeVoiceId.includes('Sreymom') || activeVoiceId === 'km';
     const isFemale = isExplicitFemale || (isSreymom && !isExplicitMale);
 
-    // Duration OVER calculation
-    const slotStart = (typeof seg.startSec === 'number' && !isNaN(seg.startSec)) ? seg.startSec : parseTimeToSeconds(seg.start, idx * 4);
-    const slotEnd = (typeof seg.endSec === 'number' && !isNaN(seg.endSec)) ? seg.endSec : parseTimeToSeconds(seg.end, slotStart + 3.0);
+    // STEP 3: OVER truthfulness. overSec = realAudioDuration - (slotEnd - slotStart)
     const slotDur = Math.max(0.1, slotEnd - slotStart);
-    const clipDur = Math.max(0.1, endSec - startSec);
-    const naturalAudioDur = (typeof seg.rawAudioDur === 'number' && seg.rawAudioDur > 0)
-      ? seg.rawAudioDur
-      : ((typeof seg.finalAudioDuration === 'number' && seg.finalAudioDuration > 0)
-        ? seg.finalAudioDuration
-        : ((typeof seg.audioDuration === 'number' && seg.audioDuration > 0)
-          ? seg.audioDuration
-          : (seg.audioDurationSec || clipDur)));
-    const overSec = naturalAudioDur - slotDur;
+    const overSec = parseFloat((realAudioDuration - slotDur).toFixed(2));
     const isOver = overSec >= 0.15 || Boolean(seg.audioTrimmed && overSec > 0.05);
     const overMarker = isOver ? ` +${overSec.toFixed(1)}s` : '';
     const trimMarker = (seg.audioTrimmed || seg.userTrimmed) ? ' ✂' : '';
@@ -304,11 +308,17 @@ function TimelineTracksCanvas({
                 )}
               </div>
 
-              {/* Row 2: Content Row (Existing per-clip waveform peaks) */}
+              {/* Row 2: Content Row (Waveform peaks mapped strictly to REAL audio duration, no empty tail, no stretching) */}
               <div className="clip-content-row voice-content-row">
                 {audioWidth >= 20 && (
-                  <div className="voice-waveform-bars">
-                    {Array.from({ length: Math.min(40, Math.max(4, Math.floor((audioWidth - 10) / 6))) }).map((_, wIdx) => {
+                  <div
+                    className="voice-waveform-bars"
+                    style={{
+                      width: `${Math.min(audioWidth, Math.max(16, (realAudioDuration * pps) - 2))}px`,
+                      maxWidth: '100%',
+                    }}
+                  >
+                    {Array.from({ length: Math.min(40, Math.max(4, Math.floor(((realAudioDuration * pps) - 10) / 6))) }).map((_, wIdx) => {
                       const pattern = [30, 65, 90, 45, 80, 100, 55, 35, 75, 85, 40, 70, 25, 60, 80, 95, 50, 65, 35, 85];
                       const hPercent = pattern[wIdx % pattern.length];
                       return (
@@ -348,16 +358,13 @@ function TimelineTracksCanvas({
 
   const renderSubSegment = (seg, idx) => {
     const isDragging = (dragState?.itemType === 'audio' || dragState?.itemType === 'subtitle') && dragState?.index === idx;
+    // STEP 2B: subtitle clip = segment's own [startSec, endSec] only
     const rawStart = (typeof seg.startSec === 'number' && !isNaN(seg.startSec))
       ? seg.startSec
-      : ((typeof seg.audioStartSec === 'number' && !isNaN(seg.audioStartSec))
-        ? seg.audioStartSec
-        : parseTimeToSeconds(seg.start, idx * 4));
+      : parseTimeToSeconds(seg.start, idx * 4);
     const rawEnd = (typeof seg.endSec === 'number' && !isNaN(seg.endSec))
       ? seg.endSec
-      : ((typeof seg.audioEndSec === 'number' && !isNaN(seg.audioEndSec))
-        ? seg.audioEndSec
-        : parseTimeToSeconds(seg.end, rawStart + (seg.audioDurationSec || 3.0)));
+      : parseTimeToSeconds(seg.end, rawStart + 2.5);
 
     const isClipMovingAssociated = dragState?.itemType === 'video' && dragState?.mode === 'move' && associatedClipSegIndices.has(idx);
     const clipMoveDelta = isClipMovingAssociated ? (dragState.currentStart - dragState.origStart) : 0;

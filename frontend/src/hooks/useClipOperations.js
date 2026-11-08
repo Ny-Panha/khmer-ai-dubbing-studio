@@ -8,7 +8,7 @@ import {
   autoAlignVoiceSegments,
   resetSegmentsToSourceTiming,
 } from '../utils/timelineUtils';
-import { parseTimeToSeconds, formatTimecode, formatMinSec } from '../utils/formatTime';
+import { parseTimeToSeconds, formatTimecode, formatMinSec } from '../utils/timestampUtils';
 import { splitKhmerTextIntoHalves, splitSegmentIntoNaturalSentences } from '../utils/khmerTextSplitter';
 import { buildSpeakerRegistry } from '../utils/speakerUtils';
 import { syncTimelineAudioApi, notifyBackendOffline, notifyBackendOnline } from '../services/api';

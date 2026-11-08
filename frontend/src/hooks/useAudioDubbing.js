@@ -6,7 +6,7 @@ import {
   fetchTtsVoices 
 } from '../services/api';
 import { getSpeakerId, detectSpeakerGender } from '../utils/speakerUtils';
-import { formatTimecode, parseTimeToSeconds } from '../utils/formatTime';
+import { formatTimecode, parseTimeToSeconds } from '../utils/timestampUtils';
 import { splitKhmerTextIntoHalves } from '../utils/khmerTextSplitter';
 
 /**
