@@ -615,8 +615,19 @@ export async function splitVideoEpisodesApi({
   chunkDurationMinutes,
   durationSeconds,
   episodeCount,
+  replaceEpisodes = false,
 }) {
   const actualRef = videoId || videoPath || sourceVideoPath;
+  const parsedMin = (durationMinutes !== undefined && durationMinutes !== null && durationMinutes !== '')
+    ? Number(durationMinutes)
+    : ((chunkDurationMinutes !== undefined && chunkDurationMinutes !== null && chunkDurationMinutes !== '') ? Number(chunkDurationMinutes) : undefined);
+  const parsedSec = (durationSeconds !== undefined && durationSeconds !== null && durationSeconds !== '')
+    ? Number(durationSeconds)
+    : undefined;
+  const parsedCount = (episodeCount !== undefined && episodeCount !== null && episodeCount !== '')
+    ? Number(episodeCount)
+    : undefined;
+
   const res = await fetch('/api/split-video-episodes', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -624,9 +635,10 @@ export async function splitVideoEpisodesApi({
       videoId: actualRef,
       videoPath: videoPath || sourceVideoPath || actualRef,
       seriesId,
-      durationMinutes: durationMinutes ? Number(durationMinutes) : (chunkDurationMinutes ? Number(chunkDurationMinutes) : undefined),
-      durationSeconds: durationSeconds ? Number(durationSeconds) : undefined,
-      episodeCount: episodeCount ? Number(episodeCount) : undefined,
+      durationMinutes: parsedMin,
+      durationSeconds: parsedSec,
+      episodeCount: parsedCount,
+      replaceEpisodes: Boolean(replaceEpisodes),
     }),
   });
   return await parseResponseJson(res, 'Failed to auto-split video into episodes');

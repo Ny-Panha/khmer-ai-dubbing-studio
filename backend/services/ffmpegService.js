@@ -2575,10 +2575,13 @@ async function applyInnerThoughtAudioEffect({
  */
 async function splitVideoIntoEpisodes({
   inputVideoPath,
-  targetDurationSec = 480, // Default 8 minutes
+  targetDurationSec,
   outputDir,
   filePrefix = "ep",
 }) {
+  if (!targetDurationSec || Number(targetDurationSec) <= 0) {
+    throw new Error("targetDurationSec must be specified and greater than 0");
+  }
   if (!fs.existsSync(inputVideoPath)) {
     throw new Error("Input video file does not exist: " + inputVideoPath);
   }

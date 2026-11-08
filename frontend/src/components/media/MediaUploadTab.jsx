@@ -23,7 +23,9 @@ export default function MediaUploadTab({
   episodeId = null,
 }) {
   const [showSplitModal, setShowSplitModal] = useState(false);
-  const [splitMinutes, setSplitMinutes] = useState(20);
+  const [splitMode, setSplitMode] = useState('minutes'); // 'minutes' | 'episodes'
+  const [splitValue, setSplitValue] = useState(''); // starts empty: no preset/default
+  const [replaceEpisodes, setReplaceEpisodes] = useState(false); // default: false (append, never silent replace)
   const [isSplitting, setIsSplitting] = useState(false);
   const [splitError, setSplitError] = useState(null);
 
@@ -31,13 +33,31 @@ export default function MediaUploadTab({
   const hasVideo = Boolean(selectedVideo?.videoId || selectedVideo?.videoUrl);
   const displayTitle = selectedVideo?.displayTitle || selectedVideo?.originalFilename || selectedVideo?.fileName || 'វីដេអូភាគ (Episode Video)';
 
-  const estimatedEpisodes = activeDuration > 0 ? Math.ceil(activeDuration / (splitMinutes * 60)) : 1;
+  const parsedVal = parseFloat(splitValue);
+  const isValidSplit = !isNaN(parsedVal) && (
+    splitMode === 'minutes' ? parsedVal > 0 : (parsedVal >= 2 && Number.isInteger(parsedVal))
+  );
 
-  const handleAutoSplit = async (customMinutes = null) => {
-    const targetMins = customMinutes || splitMinutes || 20;
+  const estimatedEpisodes = isValidSplit && activeDuration > 0
+    ? (splitMode === 'minutes' ? Math.ceil(activeDuration / (parsedVal * 60)) : parsedVal)
+    : null;
+
+  const estimatedDurPerEp = isValidSplit && activeDuration > 0
+    ? (splitMode === 'minutes' ? Math.round(parsedVal * 60) : Math.round(activeDuration / parsedVal))
+    : null;
+
+  const handleAutoSplit = async () => {
     const rawRef = selectedVideo?.videoPath || selectedVideo?.videoId || selectedVideo?.videoUrl || activeEpisode?.video?.videoPath || activeEpisode?.video?.videoId || activeEpisode?.videoFile || activeEpisode?.sourceVideoPath;
     if (!rawRef) {
       alert('សូម Import ឬ ជ្រើសរើសវីដេអូជាមុនសិន!');
+      return;
+    }
+
+    if (!isValidSplit) {
+      const msg = splitMode === 'minutes'
+        ? 'សូមបញ្ចូលចំនួននាទីដែលត្រឹមត្រូវ (> 0)!'
+        : 'សូមបញ្ចូលចំនួនភាគដែលត្រឹមត្រូវ (យ៉ាងតិច ២ ភាគ)!';
+      setSplitError(msg);
       return;
     }
 
@@ -48,7 +68,9 @@ export default function MediaUploadTab({
         videoId: rawRef,
         videoPath: selectedVideo?.videoPath,
         seriesId: activeSeries?.id || seriesId || selectedVideo?.seriesId || 'drama_project',
-        durationMinutes: Number(targetMins) || 20,
+        durationMinutes: splitMode === 'minutes' ? parsedVal : undefined,
+        episodeCount: splitMode === 'episodes' ? parsedVal : undefined,
+        replaceEpisodes: Boolean(replaceEpisodes),
       });
 
       alert(`🎉 ${res.message || 'បានកាត់បំបែកវីដេអូជាភាគៗជោគជ័យ!'}`);
@@ -274,7 +296,10 @@ export default function MediaUploadTab({
               {/* Auto-Split Button */}
               <button
                 type="button"
-                onClick={() => setShowSplitModal(true)}
+                onClick={() => {
+                  setSplitError(null);
+                  setShowSplitModal(true);
+                }}
                 disabled={isSplitting || isUploading}
                 className="btn-tactile"
                 style={{
@@ -300,7 +325,7 @@ export default function MediaUploadTab({
                   e.currentTarget.style.borderColor = 'rgba(56, 189, 248, 0.4)';
                   e.currentTarget.style.background = 'rgba(56, 189, 248, 0.12)';
                 }}
-                title="កាត់ចែកវីដេអូជាភាគៗ ២០ នាទី / ភាគ"
+                title="កាត់បំបែកវីដេអូជាភាគៗ (Split into Episodes)"
               >
                 {isSplitting ? (
                   <>
@@ -310,7 +335,7 @@ export default function MediaUploadTab({
                 ) : (
                   <>
                     <Scissors size={13} />
-                    <span>កាត់ជាភាគ ២០ នាទី</span>
+                    <span>កាត់បំបែកភាគ (Split Video)</span>
                   </>
                 )}
               </button>
@@ -336,23 +361,25 @@ export default function MediaUploadTab({
                       ⚡ វីដេអូវែង ({formatTimecode(activeDuration)})
                     </span>
                   </div>
-                  <span style={{ fontSize: '0.68rem', color: '#38bdf8', background: 'rgba(56, 189, 248, 0.12)', border: '1px solid rgba(56, 189, 248, 0.25)', padding: '2px 6px', borderRadius: 4, fontWeight: 700 }}>
-                    ~{Math.ceil(activeDuration / 1200)} ភាគ (២០ នាទី/ភាគ)
-                  </span>
                 </div>
 
-                <div style={{ display: 'flex', gap: 6 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                  <span style={{ fontSize: '0.72rem', color: '#94a3b8' }}>
+                    វីដេអូនេះមានប្រវែងវែង។ អ្នកអាចកាត់បំបែកជាភាគៗតាមចំនួនភាគ ឬនាទីដែលអ្នកចង់បាន។
+                  </span>
                   <button
                     type="button"
-                    onClick={() => handleAutoSplit(20)}
+                    onClick={() => {
+                      setSplitError(null);
+                      setShowSplitModal(true);
+                    }}
                     disabled={isSplitting}
                     style={{
-                      flex: 1,
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'center',
                       gap: 6,
-                      padding: '7px 10px',
+                      padding: '7px 12px',
                       background: 'linear-gradient(135deg, #0284c7, #0369a1)',
                       border: '1px solid #38bdf8',
                       borderRadius: 5,
@@ -360,38 +387,11 @@ export default function MediaUploadTab({
                       fontSize: '0.74rem',
                       fontWeight: 700,
                       cursor: isSplitting ? 'not-allowed' : 'pointer',
+                      whiteSpace: 'nowrap',
                     }}
                   >
-                    {isSplitting ? (
-                      <>
-                        <Loader2 size={13} className="animate-spin" />
-                        <span>កំពុងកាត់ចែក (Fast Copy)...</span>
-                      </>
-                    ) : (
-                      <>
-                        <Scissors size={13} />
-                        <span>✂️ កាត់ជាភាគ ២០ នាទី ឥឡូវនេះ</span>
-                      </>
-                    )}
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => setShowSplitModal(true)}
-                    disabled={isSplitting}
-                    style={{
-                      padding: '7px 10px',
-                      background: 'rgba(255, 255, 255, 0.05)',
-                      border: '1px solid rgba(255, 255, 255, 0.15)',
-                      borderRadius: 5,
-                      color: '#cbd5e1',
-                      fontSize: '0.72rem',
-                      fontWeight: 600,
-                      cursor: 'pointer',
-                    }}
-                    title="ជ្រើសរើសប្រវែងនាទីផ្សេងទៀត"
-                  >
-                    ជម្រើស...
+                    <Scissors size={13} />
+                    <span>✂️ កាត់បំបែកជាភាគ (Split)</span>
                   </button>
                 </div>
               </div>
@@ -539,7 +539,7 @@ export default function MediaUploadTab({
               border: '1px solid rgba(56, 189, 248, 0.4)',
               borderRadius: 12,
               padding: 20,
-              maxWidth: 440,
+              maxWidth: 460,
               width: '100%',
               display: 'flex',
               flexDirection: 'column',
@@ -551,7 +551,7 @@ export default function MediaUploadTab({
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#38bdf8' }}>
               <Scissors size={20} />
               <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 700, color: '#f8fafc' }}>
-                Auto-Split វីដេអូវែងជាភាគៗ (EP1, EP2...)
+                Auto-Split វីដេអូជាភាគៗ (Split into Episodes)
               </h3>
             </div>
 
@@ -559,62 +559,185 @@ export default function MediaUploadTab({
               បច្ចេកវិទ្យា <strong>Fast Lossless Stream Copy</strong> ជួយកាត់ចែកវីដេអូវែងជា Episode (EP1, EP2, EP3...) ក្នុងពេលត្រឹមតែ <strong>5-10 វិនាទីប៉ុណ្ណោះ</strong> ដោយមិនខូចគុណភាពរូបភាព!
             </p>
 
+            {/* Split Mode Selector (Minutes vs Episode Count) */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+              <button
+                type="button"
+                onClick={() => {
+                  setSplitMode('minutes');
+                  setSplitError(null);
+                }}
+                style={{
+                  padding: '7px 10px',
+                  borderRadius: 6,
+                  fontSize: '0.78rem',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  border: splitMode === 'minutes' ? '1.5px solid #38bdf8' : '1px solid rgba(255,255,255,0.1)',
+                  background: splitMode === 'minutes' ? 'rgba(56, 189, 248, 0.15)' : 'rgba(255,255,255,0.03)',
+                  color: splitMode === 'minutes' ? '#38bdf8' : '#94a3b8',
+                  transition: 'all 0.15s ease',
+                }}
+              >
+                ⏱️ តាមនាទី (Minutes)
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setSplitMode('episodes');
+                  setSplitError(null);
+                }}
+                style={{
+                  padding: '7px 10px',
+                  borderRadius: 6,
+                  fontSize: '0.78rem',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  border: splitMode === 'episodes' ? '1.5px solid #38bdf8' : '1px solid rgba(255,255,255,0.1)',
+                  background: splitMode === 'episodes' ? 'rgba(56, 189, 248, 0.15)' : 'rgba(255,255,255,0.03)',
+                  color: splitMode === 'episodes' ? '#38bdf8' : '#94a3b8',
+                  transition: 'all 0.15s ease',
+                }}
+              >
+                🎬 តាមចំនួនភាគ (Episodes)
+              </button>
+            </div>
+
+            {/* Value Input (Starts Empty — Never Defaults Silently) */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
               <label style={{ fontSize: '0.78rem', fontWeight: 600, color: '#cbd5e1' }}>
-                កំណត់ប្រវែងក្នុង 1 ភាគ (នាទី / Episode):
+                {splitMode === 'minutes'
+                  ? 'កំណត់ប្រវែងក្នុង 1 ភាគ (នាទី / Episode):'
+                  : 'កំណត់ចំនួនភាគដែលត្រូវកាត់បំបែក (Episode Count):'}
               </label>
-              <div style={{ display: 'flex', gap: 8 }}>
-                {[5, 10, 15, 20, 30].map((m) => (
+
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <input
+                  type="number"
+                  min={splitMode === 'minutes' ? '0.5' : '2'}
+                  step={splitMode === 'minutes' ? '0.5' : '1'}
+                  value={splitValue}
+                  onChange={(e) => {
+                    setSplitValue(e.target.value);
+                    setSplitError(null);
+                  }}
+                  placeholder={splitMode === 'minutes' ? 'ឧ. 15 (វាយបញ្ចូលចំនួននាទី...)' : 'ឧ. 3 (វាយបញ្ចូលចំនួនភាគ...)'}
+                  style={{
+                    flex: 1,
+                    background: '#1e293b',
+                    border: '1px solid rgba(56, 189, 248, 0.3)',
+                    borderRadius: 6,
+                    padding: '8px 12px',
+                    fontSize: '0.84rem',
+                    color: '#f8fafc',
+                    outline: 'none',
+                  }}
+                  autoFocus
+                />
+                <span style={{ fontSize: '0.78rem', color: '#94a3b8', whiteSpace: 'nowrap' }}>
+                  {splitMode === 'minutes' ? 'នាទី / ភាគ' : 'ភាគសរុប'}
+                </span>
+              </div>
+
+              {/* Optional Preset Chips (Only fill field on active user click, no auto-apply) */}
+              <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+                {(splitMode === 'minutes' ? [5, 10, 15, 20, 30] : [2, 3, 5, 10]).map((m) => (
                   <button
                     key={m}
                     type="button"
-                    onClick={() => setSplitMinutes(m)}
+                    onClick={() => {
+                      setSplitValue(String(m));
+                      setSplitError(null);
+                    }}
                     style={{
                       flex: 1,
-                      padding: '6px 0',
-                      fontSize: '0.78rem',
+                      padding: '5px 0',
+                      fontSize: '0.74rem',
                       fontWeight: 700,
-                      borderRadius: 6,
-                      border: splitMinutes === m ? '1.5px solid #38bdf8' : '1px solid #334155',
-                      background: splitMinutes === m ? '#0284c7' : '#1e293b',
-                      color: splitMinutes === m ? '#ffffff' : '#94a3b8',
+                      borderRadius: 5,
+                      border: splitValue === String(m) ? '1.5px solid #38bdf8' : '1px solid #334155',
+                      background: splitValue === String(m) ? '#0284c7' : '#1e293b',
+                      color: splitValue === String(m) ? '#ffffff' : '#94a3b8',
                       cursor: 'pointer',
                       transition: 'all 0.15s ease',
                     }}
                   >
-                    {m} នាទី
+                    {m} {splitMode === 'minutes' ? 'នាទី' : 'ភាគ'}
                   </button>
                 ))}
               </div>
             </div>
 
-            {/* Estimated Episodes Calculation Box */}
-            <div
+            {/* Estimated Episodes Calculation Box (ONLY appears when a valid value > 0 is typed) */}
+            {isValidSplit && activeDuration > 0 && (
+              <div
+                style={{
+                  background: 'rgba(56, 189, 248, 0.08)',
+                  border: '1px solid rgba(56, 189, 248, 0.25)',
+                  borderRadius: 8,
+                  padding: '10px 12px',
+                  fontSize: '0.76rem',
+                  color: '#e2e8f0',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 4,
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', color: '#38bdf8', fontWeight: 700 }}>
+                  <span>ប្រវែងវីដេអូសរុប៖ {formatTimecode(activeDuration)}</span>
+                  <span>{splitMode === 'minutes' ? `កាត់ម្ដង៖ ${parsedVal} នាទី` : `ចំនួនភាគ៖ ${parsedVal} ភាគ`}</span>
+                </div>
+                <div style={{ color: '#cbd5e1', fontSize: '0.72rem' }}>
+                  {splitMode === 'minutes'
+                    ? `👉 នឹងបង្កើតបានចំនួន ~${estimatedEpisodes} ភាគ (${formatTimecode(activeDuration / (estimatedEpisodes || 1))} / ភាគ) ស្វ័យប្រវត្ត។`
+                    : `👉 នឹងបង្កើតបានចំនួន ${parsedVal} ភាគ (~${formatTimecode(estimatedDurPerEp || 0)} / ភាគ) ស្វ័យប្រវត្ត។`}
+                </div>
+              </div>
+            )}
+
+            {/* Replace Episodes Checkbox (Default: FALSE) */}
+            <label
               style={{
-                background: 'rgba(56, 189, 248, 0.08)',
-                border: '1px solid rgba(56, 189, 248, 0.25)',
-                borderRadius: 8,
-                padding: '10px 12px',
-                fontSize: '0.76rem',
-                color: '#e2e8f0',
                 display: 'flex',
-                flexDirection: 'column',
-                gap: 4,
+                alignItems: 'flex-start',
+                gap: 8,
+                cursor: 'pointer',
+                background: 'rgba(255, 255, 255, 0.03)',
+                border: '1px solid rgba(255, 255, 255, 0.08)',
+                borderRadius: 6,
+                padding: '8px 10px',
               }}
             >
-              <div style={{ display: 'flex', justifyContent: 'space-between', color: '#38bdf8', fontWeight: 700 }}>
-                <span>ប្រវែងវីដេអូសរុប៖ {activeDuration > 0 ? formatTimecode(activeDuration) : '00:00:00'}</span>
-                <span>កាត់ម្ដង៖ {splitMinutes} នាទី</span>
+              <input
+                type="checkbox"
+                checked={replaceEpisodes}
+                onChange={(e) => setReplaceEpisodes(e.target.checked)}
+                style={{ marginTop: 2, cursor: 'pointer' }}
+              />
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                <span style={{ fontSize: '0.76rem', fontWeight: 700, color: '#f1f5f9' }}>
+                  ជំនួសភាគចាស់ៗទាំងអស់ (Replace existing episodes)
+                </span>
+                <span style={{ fontSize: '0.68rem', color: '#94a3b8' }}>
+                  ប្រសិនបើមិនធីកទេ ភាគថ្មីៗដែលកាត់បាន នឹងត្រូវបន្ថែមបន្តបន្ទាប់ពីភាគចាស់ (Append to existing episodes)
+                </span>
               </div>
-              <div style={{ color: '#cbd5e1', fontSize: '0.72rem' }}>
-                👉 នឹងបង្កើតបានចំនួន <strong>~{estimatedEpisodes} ភាគ</strong> (EP1 ដល់ EP{estimatedEpisodes}) ស្វ័យប្រវត្ត។
-              </div>
-            </div>
+            </label>
 
+            {splitError && (
+              <div style={{ fontSize: '0.74rem', color: '#f87171', background: 'rgba(248, 113, 113, 0.12)', border: '1px solid rgba(248, 113, 113, 0.3)', padding: '6px 10px', borderRadius: 6 }}>
+                ⚠️ {splitError}
+              </div>
+            )}
+
+            {/* Modal Actions */}
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 4 }}>
               <button
                 type="button"
-                onClick={() => setShowSplitModal(false)}
+                onClick={() => {
+                  setShowSplitModal(false);
+                  setSplitError(null);
+                }}
                 disabled={isSplitting}
                 style={{
                   padding: '7px 14px',
@@ -632,20 +755,23 @@ export default function MediaUploadTab({
               <button
                 type="button"
                 onClick={() => handleAutoSplit()}
-                disabled={isSplitting}
+                disabled={!isValidSplit || isSplitting}
                 style={{
                   padding: '7px 16px',
-                  background: 'linear-gradient(135deg, #0284c7, #0369a1)',
-                  border: '1px solid #38bdf8',
+                  background: isValidSplit
+                    ? 'linear-gradient(135deg, #0284c7, #0369a1)'
+                    : 'rgba(255, 255, 255, 0.08)',
+                  border: isValidSplit ? '1px solid #38bdf8' : '1px solid rgba(255, 255, 255, 0.1)',
                   borderRadius: 6,
-                  color: '#ffffff',
+                  color: isValidSplit ? '#ffffff' : '#64748b',
                   fontSize: '0.78rem',
                   fontWeight: 700,
                   display: 'flex',
                   alignItems: 'center',
                   gap: 6,
-                  cursor: isSplitting ? 'not-allowed' : 'pointer',
-                  boxShadow: '0 2px 8px rgba(2, 132, 199, 0.3)',
+                  cursor: (isValidSplit && !isSplitting) ? 'pointer' : 'not-allowed',
+                  boxShadow: isValidSplit ? '0 2px 8px rgba(2, 132, 199, 0.3)' : 'none',
+                  opacity: isValidSplit ? 1 : 0.6,
                 }}
               >
                 {isSplitting ? (
@@ -653,10 +779,16 @@ export default function MediaUploadTab({
                     <Loader2 size={14} className="animate-spin" />
                     <span>កំពុងកាត់ចែកភាគ...</span>
                   </>
+                ) : !isValidSplit ? (
+                  <span>បញ្ចូលតម្លៃដើម្បីកាត់បំបែក (Enter value)</span>
                 ) : (
                   <>
                     <Scissors size={14} />
-                    <span>កាត់បំបែកឥឡូវនេះ ({splitMinutes} នាទី)</span>
+                    <span>
+                      {splitMode === 'minutes'
+                        ? `កាត់បំបែកជាភាគ (${parsedVal} នាទី/ភាគ)`
+                        : `កាត់បំបែកជា ${parsedVal} ភាគ`}
+                    </span>
                   </>
                 )}
               </button>

@@ -374,6 +374,7 @@ function MediaLibrary({
           activeEpisode={activeEpisode}
           selectedVideo={selectedVideo}
           videoMetadata={videoMetadata}
+          duration={duration}
           seriesId={seriesId}
           episodeId={episodeId}
           seriesGlossary={seriesGlossary}

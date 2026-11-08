@@ -348,7 +348,7 @@ router.post("/split-video-episodes", async (req, res) => {
       res.setTimeout(0);
     }
 
-    const { videoPath, videoId, seriesId, durationMinutes, durationSeconds, episodeCount, replaceEpisodes = true } = req.body;
+    const { videoPath, videoId, seriesId, durationMinutes, durationSeconds, episodeCount, replaceEpisodes = false } = req.body;
     const rawVideoRef = videoPath || videoId;
     if (!rawVideoRef) {
       return res.status(400).json({ success: false, error: "videoPath or videoId is required" });
@@ -362,17 +362,28 @@ router.post("/split-video-episodes", async (req, res) => {
     const meta = await getVideoMetadata(inputVideoPath);
     const totalDuration = meta?.duration || 0;
 
+    const epCountNum = (episodeCount !== undefined && episodeCount !== null && episodeCount !== "") ? Number(episodeCount) : null;
+    const durMinNum = (durationMinutes !== undefined && durationMinutes !== null && durationMinutes !== "") ? Number(durationMinutes) : null;
+    const durSecNum = (durationSeconds !== undefined && durationSeconds !== null && durationSeconds !== "") ? Number(durationSeconds) : null;
+
+    const hasValidEpCount = epCountNum !== null && !isNaN(epCountNum) && epCountNum >= 2;
+    const hasValidDurSec = durSecNum !== null && !isNaN(durSecNum) && durSecNum > 0;
+    const hasValidDurMin = durMinNum !== null && !isNaN(durMinNum) && durMinNum > 0;
+
+    if (!hasValidEpCount && !hasValidDurSec && !hasValidDurMin) {
+      return res.status(400).json({
+        success: false,
+        error: "user must choose episode count or minutes"
+      });
+    }
+
     let targetDurationSec;
-    if (episodeCount && Number(episodeCount) > 1) {
-      targetDurationSec = Math.max(10, totalDuration / Number(episodeCount));
-    } else if (durationSeconds && Number(durationSeconds) > 0) {
-      targetDurationSec = Math.max(10, Number(durationSeconds));
+    if (hasValidEpCount) {
+      targetDurationSec = Math.max(10, totalDuration / epCountNum);
+    } else if (hasValidDurSec) {
+      targetDurationSec = Math.max(10, durSecNum);
     } else {
-      targetDurationSec = Math.max(15, Number(durationMinutes || 1) * 60);
-      // Auto-fallback: if video duration is shorter than or equal to target duration, split in half!
-      if (totalDuration > 30 && targetDurationSec >= totalDuration) {
-        targetDurationSec = Math.max(10, totalDuration / 2);
-      }
+      targetDurationSec = Math.max(10, durMinNum * 60);
     }
 
     const targetSeries = seriesId || "drama_project";
@@ -390,7 +401,7 @@ router.post("/split-video-episodes", async (req, res) => {
 
     const currentSeries = getSeriesMetadata(cleanSeries) || { id: cleanSeries, title: "រឿងភាគ", episodes: [] };
     const existing = currentSeries.episodes || [];
-    const shouldReplace = replaceEpisodes || existing.length <= 1;
+    const shouldReplace = Boolean(replaceEpisodes);
 
     const builtEpisodes = [];
     const baseIndex = shouldReplace ? 0 : existing.length;
