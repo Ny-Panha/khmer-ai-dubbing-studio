@@ -186,8 +186,9 @@ function TimelineTracksCanvas({
       ? dragState.currentEnd 
       : (isClipMovingAssociated ? Math.max(0.3, rawEnd + clipMoveDelta) : rawEnd);
 
+    // 2px gap between adjacent clips
     const audioLeft = startSec * pps;
-    const audioWidth = Math.max(50, (endSec - startSec) * pps);
+    const audioWidth = Math.max(2, (endSec - startSec) * pps - 2);
     const segKey = seg._uid || (seg.id !== undefined && seg.id !== null ? seg.id : idx);
     const isAssociatedWithClip = Boolean(
       activeClipId && videoClips?.some((c) => c.id === activeClipId && (c.segmentId === seg.id || c.segmentIndex === (idx + 1)))
@@ -211,13 +212,23 @@ function TimelineTracksCanvas({
       (speakerRegistry && (speakerRegistry[seg.speakerId]?.voiceId || speakerRegistry[speakerName]?.voiceId)) || 
       (isExplicitFemale ? 'km-KH-SreymomNeural' : (isExplicitMale ? 'km-KH-PisethNeural' : (voiceSettings?.voiceId || 'km-KH-PisethNeural')));
 
-    const isPiseth = activeVoiceId.includes('Piseth');
     const isSreymom = activeVoiceId.includes('Sreymom') || activeVoiceId === 'km';
     const isFemale = isExplicitFemale || (isSreymom && !isExplicitMale);
-    const isMale = !isFemale;
-    const avatar = isFemale ? '👩' : '👨';
-    const isMuted = Boolean(seg.muted || seg.isMuted);
-    const isThought = seg.deliveryType === 'inner_thought';
+
+    // Duration OVER calculation
+    const slotStart = (typeof seg.startSec === 'number' && !isNaN(seg.startSec)) ? seg.startSec : parseTimeToSeconds(seg.start, idx * 4);
+    const slotEnd = (typeof seg.endSec === 'number' && !isNaN(seg.endSec)) ? seg.endSec : parseTimeToSeconds(seg.end, slotStart + 3.0);
+    const slotDur = Math.max(0.1, slotEnd - slotStart);
+    const clipDur = Math.max(0.1, endSec - startSec);
+    const overSec = (seg.audioDurationSec || clipDur) - slotDur;
+    const isOver = overSec >= 0.15;
+    const overMarker = isOver ? ` +${overSec.toFixed(1)}s` : '';
+
+    // Voice clip label: "#N ប្រុស" / "#N ស្រី" (+ OVER marker as text " +0.4s" in the label when over)
+    const voiceLabel = `#${idx + 1} ${isFemale ? 'ស្រី' : 'ប្រុស'}${overMarker}`;
+
+    const isSliver = audioWidth < 5;
+    const canRenderLabel = audioWidth >= 32;
 
     return (
       <React.Fragment key={`voice-wrap-${seg._uid || `${seg.id ?? idx}-${idx}`}`}>
@@ -226,9 +237,7 @@ function TimelineTracksCanvas({
             className="video-clip-ghost"
             style={{
               left: dragState.origStart * pps,
-              width: Math.max(50, (dragState.origEnd - dragState.origStart) * pps),
-              borderColor: isFemale ? '#f472b6' : '#0284c7',
-              background: isFemale ? 'rgba(244, 114, 182, 0.12)' : 'rgba(2, 132, 199, 0.12)',
+              width: Math.max(2, (dragState.origEnd - dragState.origStart) * pps - 2),
             }}
           />
         )}
@@ -247,42 +256,20 @@ function TimelineTracksCanvas({
             }
             onSeek(startSec);
           }}
-          className={`voice-segment-block ${isFemale ? 'female-voice' : 'male-voice'} ${isSelected ? 'selected' : ''} ${isMuted ? 'is-muted-clip' : ''}`}
+          className={`voice-segment-block ${isFemale ? 'voice-female' : 'voice-male'} ${isSelected ? 'selected' : ''} ${isSliver ? 'clip-sliver' : ''}`}
           style={{
             cursor: isDragging ? 'grabbing' : 'grab',
             left: audioLeft,
             width: audioWidth,
             zIndex: isDragging ? 100 : (isSelected ? 20 : 5),
-            top: '3px',
-            height: '38px',
             transform: isDragging && dragState?.mode === 'move' && typeof dragState?.currentY === 'number' ? `translateY(${dragState.currentY}px)` : undefined,
             transition: isDragging ? 'none' : undefined,
             pointerEvents: isDragging && dragState?.mode === 'move' ? 'none' : 'auto',
-            ...(isMuted ? {
-              opacity: 0.55,
-              filter: 'grayscale(0.65)',
-              borderStyle: 'dashed',
-              borderColor: '#f87171',
-              background: 'linear-gradient(180deg, #241419 0%, #170d10 100%)',
-            } : (isThought ? {
-              borderStyle: 'dashed',
-              borderWidth: '1.5px',
-              borderColor: isSelected ? '#ffffff' : (isFemale ? '#e879f9' : '#c084fc'),
-              background: isSelected 
-                ? (isFemale ? 'linear-gradient(180deg, #581c87 0%, #3b0764 100%)' : 'linear-gradient(180deg, #4c1d95 0%, #2e1065 100%)')
-                : (isFemale ? 'linear-gradient(180deg, #3b0764 0%, #1e0b2b 100%)' : 'linear-gradient(180deg, #2e1065 0%, #1e1b4b 100%)'),
-              boxShadow: isSelected ? '0 0 10px rgba(168, 85, 247, 0.45)' : 'none',
-            } : (isFemale ? {
-              background: isSelected 
-                ? 'linear-gradient(180deg, #4c1834 0%, #290d1d 100%)' 
-                : 'linear-gradient(180deg, #381427 0%, #1f0b17 100%)',
-              borderColor: isSelected ? '#ffffff' : '#f472b6',
-            } : {}))),
           }}
-          title={`[${formatMinSec(startSec)} - ${formatMinSec(endSec)}] #${idx + 1} ${speakerName || 'អ្នកនិយាយ'} • ${isFemale ? 'ស្រី (Sreymom)' : 'ប្រុស (Piseth)'} (${(endSec - startSec).toFixed(1)}s)${isMuted ? ' [🔇 MUTED]' : ''}\n"${seg.khmer || ''}"\nDrag to move, click 🔇 to mute/unmute`}
+          title={`[${formatMinSec(startSec)} - ${formatMinSec(endSec)}] ${voiceLabel}\n"${seg.khmer || ''}"`}
         >
-          {/* Left Trim Handle */}
-          {isSelected && (
+          {/* Left Trim Handle - visible only on selected clip */}
+          {isSelected && !isSliver && (
             <div 
               className="clip-trim-handle left"
               draggable={false}
@@ -290,136 +277,48 @@ function TimelineTracksCanvas({
                 e.stopPropagation();
                 handleAudioMouseDown(e, seg, idx, 'trim-left');
               }}
-              onDragStart={(e) => {
-                e.stopPropagation();
-                e.preventDefault();
-              }}
               title="Drag to trim start"
             >
               <div className="trim-handle-grip" />
             </div>
           )}
 
-          <div className="voice-seg-content">
-            <span 
-              className="voice-seg-avatar" 
-              style={{ 
-                background: isFemale ? 'rgba(244, 114, 182, 0.2)' : 'rgba(56, 189, 248, 0.18)', 
-                padding: '1px 3px', 
-                borderRadius: 3 
-              }} 
-              title={isFemale ? 'តួស្រី (Sreymom)' : 'តួប្រុស (Piseth)'}
-            >
-              {avatar}
-            </span>
-
-            {isThought && (
-              <span 
-                style={{ 
-                  fontSize: '0.72rem', 
-                  marginRight: 2,
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                }} 
-                title="💭 និយាយក្នុងចិត្ត (Inner Thought Reverb)"
-              >
-                💭
-              </span>
-            )}
-
-            {/* Mini Segment Mute Button */}
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                if (onToggleMuteSegment) onToggleMuteSegment(segKey);
-              }}
-              title={isMuted ? "បានបិទសំឡេង (Muted) - ចុចដើម្បីបើកសំឡេងវិញ" : "ចុចដើម្បីបិទសំឡេងឃ្លានេះ (Mute Clip)"}
-              style={{
-                background: isMuted ? 'rgba(239, 68, 68, 0.35)' : 'rgba(255, 255, 255, 0.08)',
-                border: `1px solid ${isMuted ? 'rgba(239, 68, 68, 0.7)' : 'rgba(255, 255, 255, 0.15)'}`,
-                borderRadius: 3,
-                padding: '1px 3px',
-                cursor: 'pointer',
-                display: 'inline-flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                marginLeft: 1,
-                marginRight: 2,
-                flexShrink: 0,
-                transition: 'all 0.15s ease',
-              }}
-            >
-              {isMuted ? <VolumeX size={10} color="#f87171" /> : <Volume2 size={10} color={isFemale ? '#f472b6' : '#38bdf8'} />}
-            </button>
-
-            <span className="voice-seg-title" style={{ 
-              color: isMuted ? '#94a3b8' : (isFemale ? '#fbcfe8' : '#bae6fd'),
-              textDecoration: isMuted ? 'line-through' : 'none',
-            }}>
-              #{idx + 1} {speakerName || 'អ្នកនិយាយ'}
-            </span>
-            {isMuted ? (
-              <span style={{
-                fontSize: '0.58rem',
-                fontWeight: 800,
-                padding: '1px 4px',
-                borderRadius: 3,
-                background: 'rgba(239, 68, 68, 0.25)',
-                color: '#f87171',
-                border: '1px solid rgba(239, 68, 68, 0.5)',
-                lineHeight: '13px',
-                flexShrink: 0,
-              }}>
-                MUTED
-              </span>
-            ) : (
-              <span 
-                style={{
-                  fontSize: '0.62rem',
-                  fontWeight: 700,
-                  padding: '1px 4px',
-                  borderRadius: 3,
-                  background: isFemale ? 'rgba(244, 114, 182, 0.25)' : 'rgba(56, 189, 248, 0.22)',
-                  color: isFemale ? '#f472b6' : '#38bdf8',
-                  border: `1px solid ${isFemale ? 'rgba(244, 114, 182, 0.45)' : 'rgba(56, 189, 248, 0.4)'}`,
-                  lineHeight: '13px',
-                  flexShrink: 0,
-                }}
-              >
-                {isFemale ? 'ស្រី' : 'ប្រុស'}
-              </span>
-            )}
-            <span style={{ fontSize: '0.6rem', color: '#94a3b8', fontFamily: 'monospace', flexShrink: 0 }}>
-              ({(endSec - startSec).toFixed(1)}s)
-            </span>
-
-            {audioWidth > 70 && (
-              <div className="voice-waveform-mini">
-                {Array.from({ length: Math.min(22, Math.max(5, Math.floor((audioWidth - 60) / 10))) }).map((_, wIdx) => {
-                  const pattern = [35, 75, 95, 45, 80, 100, 60, 40, 85, 90, 50, 75, 30, 65, 85, 100, 55, 70, 40, 90];
-                  const hPercent = pattern[wIdx % pattern.length];
-                  return (
-                    <span
-                      key={wIdx}
-                      style={{
-                        display: 'inline-block',
-                        width: 2,
-                        height: `${hPercent}%`,
-                        background: isFemale ? 'rgba(244, 114, 182, 0.7)' : 'rgba(56, 189, 248, 0.7)',
-                        borderRadius: 1,
-                        margin: '0 1px',
-                        flexShrink: 0,
-                      }}
-                    />
-                  );
-                })}
+          {!isSliver && (
+            <>
+              {/* Row 1: Label Line (12px, 500, single line truncate) */}
+              <div className="clip-label-line">
+                {canRenderLabel && (
+                  <span className={`clip-label-text ${isOver ? 'is-over' : ''}`}>
+                    {voiceLabel}
+                  </span>
+                )}
               </div>
-            )}
-          </div>
 
-          {/* Right Trim Handle */}
-          {isSelected && (
+              {/* Row 2: Content Row (Existing per-clip waveform peaks) */}
+              <div className="clip-content-row voice-content-row">
+                {audioWidth >= 20 && (
+                  <div className="voice-waveform-bars">
+                    {Array.from({ length: Math.min(40, Math.max(4, Math.floor((audioWidth - 10) / 6))) }).map((_, wIdx) => {
+                      const pattern = [30, 65, 90, 45, 80, 100, 55, 35, 75, 85, 40, 70, 25, 60, 80, 95, 50, 65, 35, 85];
+                      const hPercent = pattern[wIdx % pattern.length];
+                      return (
+                        <span
+                          key={wIdx}
+                          className="waveform-bar"
+                          style={{
+                            height: `${hPercent}%`,
+                          }}
+                        />
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+
+          {/* Right Trim Handle - visible only on selected clip */}
+          {isSelected && !isSliver && (
             <div 
               className="clip-trim-handle right"
               draggable={false}
@@ -427,20 +326,9 @@ function TimelineTracksCanvas({
                 e.stopPropagation();
                 handleAudioMouseDown(e, seg, idx, 'trim-right');
               }}
-              onDragStart={(e) => {
-                e.stopPropagation();
-                e.preventDefault();
-              }}
               title="Drag to trim end"
             >
               <div className="trim-handle-grip" />
-            </div>
-          )}
-
-          {/* Live Drag Tooltip */}
-          {isDragging && (
-            <div className="timeline-drag-tooltip">
-              {avatar} {speakerName || 'Voice'}: {formatTimecode(startSec)} - {formatTimecode(endSec)} ({(endSec - startSec).toFixed(1)}s)
             </div>
           )}
         </div>
@@ -471,8 +359,9 @@ function TimelineTracksCanvas({
       ? dragState.currentEnd 
       : (isClipMovingAssociated ? Math.max(0.3, rawEnd + clipMoveDelta) : rawEnd);
 
+    // 2px gap between adjacent clips
     const subLeft = startSec * pps;
-    const subWidth = Math.max(35, (endSec - startSec) * pps);
+    const subWidth = Math.max(2, (endSec - startSec) * pps - 2);
     const subKey = seg._uid || (seg.id !== undefined && seg.id !== null ? seg.id : idx);
     const isAssociatedWithClip = Boolean(
       activeClipId && videoClips?.some((c) => c.id === activeClipId && (c.segmentId === seg.id || c.segmentIndex === (idx + 1)))
@@ -487,6 +376,9 @@ function TimelineTracksCanvas({
       ))
     );
 
+    const isSliver = subWidth < 5;
+    const canRenderLabel = subWidth >= 32;
+
     return (
       <React.Fragment key={`sub-wrap-${seg._uid || `${seg.id ?? idx}-${idx}`}`}>
         {isDragging && (
@@ -494,9 +386,7 @@ function TimelineTracksCanvas({
             className="video-clip-ghost"
             style={{
               left: dragState.origStart * pps,
-              width: Math.max(35, (dragState.origEnd - dragState.origStart) * pps),
-              borderColor: '#9333ea',
-              background: 'rgba(147, 51, 234, 0.12)',
+              width: Math.max(2, (dragState.origEnd - dragState.origStart) * pps - 2),
             }}
           />
         )}
@@ -515,22 +405,20 @@ function TimelineTracksCanvas({
             }
             onSeek(startSec);
           }}
-          className={`subtitle-segment-block ${isSelected ? 'selected' : ''}`}
+          className={`subtitle-segment-block ${isSelected ? 'selected' : ''} ${isSliver ? 'clip-sliver' : ''}`}
           style={{
             cursor: isDragging ? 'grabbing' : 'grab',
             left: subLeft,
             width: subWidth,
             zIndex: isDragging ? 100 : (isSelected ? 20 : 5),
-            top: '3px',
-            height: '36px',
             transform: isDragging && dragState?.mode === 'move' && typeof dragState?.currentY === 'number' ? `translateY(${dragState.currentY}px)` : undefined,
             transition: isDragging ? 'none' : undefined,
             pointerEvents: isDragging && dragState?.mode === 'move' ? 'none' : 'auto',
           }}
-          title={`[${formatMinSec(startSec)} - ${formatMinSec(endSec)}] #${idx + 1} ${seg.khmer}\nClick to inspect & change voice, handles to trim`}
+          title={`[${formatMinSec(startSec)} - ${formatMinSec(endSec)}] ${seg.khmer || seg.text || ''}`}
         >
-          {/* Left Trim Handle */}
-          {isSelected && (
+          {/* Left Trim Handle - only when selected */}
+          {isSelected && !isSliver && (
             <div 
               className="clip-trim-handle left"
               draggable={false}
@@ -538,22 +426,30 @@ function TimelineTracksCanvas({
                 e.stopPropagation();
                 handleSubMouseDown(e, seg, idx, 'trim-left');
               }}
-              onDragStart={(e) => {
-                e.stopPropagation();
-                e.preventDefault();
-              }}
               title="Drag to trim start time"
             >
               <div className="trim-handle-grip" />
             </div>
           )}
 
-          <span className="sub-seg-text" style={{ padding: isSelected ? '0 8px' : '0' }}>
-            #{idx + 1} {seg.khmer}
-          </span>
+          {!isSliver && (
+            <>
+              {/* Row 1: Label line (segment text as label line, no separate # badge) */}
+              <div className="clip-label-line">
+                {canRenderLabel && (
+                  <span className="clip-label-text">
+                    {seg.khmer || seg.text || ''}
+                  </span>
+                )}
+              </div>
 
-          {/* Right Trim Handle */}
-          {isSelected && (
+              {/* Row 2: Content row (flat content row) */}
+              <div className="clip-content-row sub-content-row" />
+            </>
+          )}
+
+          {/* Right Trim Handle - only when selected */}
+          {isSelected && !isSliver && (
             <div 
               className="clip-trim-handle right"
               draggable={false}
@@ -561,20 +457,9 @@ function TimelineTracksCanvas({
                 e.stopPropagation();
                 handleSubMouseDown(e, seg, idx, 'trim-right');
               }}
-              onDragStart={(e) => {
-                e.stopPropagation();
-                e.preventDefault();
-              }}
               title="Drag to trim end time"
             >
               <div className="trim-handle-grip" />
-            </div>
-          )}
-
-          {/* Live Drag Tooltip */}
-          {isDragging && (
-            <div className="timeline-drag-tooltip">
-              #{idx + 1}: {formatTimecode(startSec)} - {formatTimecode(endSec)} ({(endSec - startSec).toFixed(1)}s)
             </div>
           )}
         </div>
@@ -587,11 +472,17 @@ function TimelineTracksCanvas({
     const startSec = isDragging ? dragState.currentStart : clip.start;
     const endSec = isDragging ? dragState.currentEnd : clip.end;
 
-    const clipWidth = Math.max(30, (endSec - startSec) * pps);
+    // 2px gap between adjacent clips
+    const clipWidth = Math.max(2, (endSec - startSec) * pps - 2);
     const clipLeft = startSec * pps;
     const isAssociatedWithSeg = selectedSegmentId !== null && (clip.segmentId === selectedSegmentId || clip.segmentIndex === selectedSegmentId);
     const isSelected = activeClipId === clip.id || isAssociatedWithSeg;
-    const isSubOrVoice = trackKey.startsWith('subs') || trackKey.startsWith('voice');
+
+    const isSliver = clipWidth < 5;
+    const canRenderLabel = clipWidth >= 32;
+    const cleanName = (clip.name || 'Video Clip')
+      .replace(/\s*\(\d+(\.\d+)?s\)/g, '')
+      .trim();
 
     return (
       <React.Fragment key={clip.id}>
@@ -600,7 +491,7 @@ function TimelineTracksCanvas({
             className="video-clip-ghost"
             style={{
               left: dragState.origStart * pps,
-              width: Math.max(30, (dragState.origEnd - dragState.origStart) * pps),
+              width: Math.max(2, (dragState.origEnd - dragState.origStart) * pps - 2),
             }}
           />
         )}
@@ -622,7 +513,7 @@ function TimelineTracksCanvas({
               if (onSelectSegment) onSelectSegment(null);
             }
           }}
-          className={`video-clip-block ${clip.isDialogue ? 'dialogue-slice' : (clip.isDialogue === false ? 'gap-slice' : '')} ${clip.isMuted ? 'is-muted-clip' : ''} ${isSelected ? 'selected' : ''} ${isDragging ? 'is-dragging' : ''} ${isSubOrVoice ? 'is-cross-track' : ''}`}
+          className={`video-clip-block ${isSelected ? 'selected' : ''} ${isDragging ? 'is-dragging' : ''} ${isSliver ? 'clip-sliver' : ''}`}
           style={{
             cursor: isDragging ? 'grabbing' : 'grab',
             left: clipLeft,
@@ -631,17 +522,11 @@ function TimelineTracksCanvas({
             transform: isDragging && dragState?.currentY ? `translateY(${dragState.currentY}px)` : undefined,
             transition: isDragging ? 'none' : undefined,
             pointerEvents: isDragging ? 'none' : 'auto',
-            ...(isSubOrVoice ? {
-              height: '36px',
-              top: '3px',
-              background: 'linear-gradient(180deg, #1e1b4b 0%, #0f172a 100%)',
-              borderColor: isSelected ? '#ffffff' : '#818cf8',
-            } : {})
           }}
-          title={`${clip.name} [${startSec.toFixed(1)}s - ${endSec.toFixed(1)}s] • Drag to move (horizontally & vertically) or handles to trim`}
+          title={`${clip.name} [${startSec.toFixed(1)}s - ${endSec.toFixed(1)}s]`}
         >
-          {/* Left Trim Handle */}
-          {isSelected && (
+          {/* Left Trim Handle - only when selected */}
+          {isSelected && !isSliver && (
             <div 
               className="clip-trim-handle left"
               draggable={false}
@@ -649,137 +534,58 @@ function TimelineTracksCanvas({
                 e.stopPropagation();
                 handleVideoMouseDown(e, clip, idx, 'trim-left');
               }}
-              onDragStart={(e) => {
-                e.stopPropagation();
-                e.preventDefault();
-              }}
               title="Drag to trim start"
             >
               <div className="trim-handle-grip" />
             </div>
           )}
 
-          {(() => {
-            const cleanName = (clip.name || 'Video Clip')
-              .replace(/\s*\(\d+(\.\d+)?s\)/g, '')
-              .trim();
-            const durText = `${(endSec - startSec).toFixed(1)}s`;
-            const isShort = clipWidth < 75;
-            const frameCount = Math.max(1, Math.min(80, Math.ceil(clipWidth / 56)));
-
-            return (
-              <>
-                <div className="clip-header" style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                  <button
-                    type="button"
-                    className="video-clip-mute-btn"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      if (onToggleMuteVideoClip) onToggleMuteVideoClip(clip.id);
-                    }}
-                    title={clip.isMuted ? "បានបិទសំឡេងដើម (Muted) - ចុចដើម្បីបើកវិញ" : "ចុចដើម្បីបិទសំឡេងដើមនៃ Clip នេះ (Mute Video Audio)"}
-                    style={{
-                      background: clip.isMuted ? 'rgba(239, 68, 68, 0.35)' : 'rgba(0, 0, 0, 0.45)',
-                      border: clip.isMuted ? '1px solid #ef4444' : '1px solid rgba(255, 255, 255, 0.25)',
-                      borderRadius: '3px',
-                      padding: '1px 3px',
-                      cursor: 'pointer',
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      lineHeight: 1,
-                      flexShrink: 0,
-                      transition: 'all 0.15s ease',
-                      zIndex: 5,
-                    }}
-                  >
-                    {clip.isMuted ? <VolumeX size={10} color="#f87171" /> : <Volume2 size={10} color="#a5f3fc" />}
-                  </button>
-
-                  <span className="clip-name" title={`${cleanName} (${durText})`} style={{ textDecoration: clip.isMuted ? 'line-through' : 'none', opacity: clip.isMuted ? 0.75 : 1 }}>
+          {!isSliver && (
+            <>
+              {/* Row 1: Label line (12px, 500, single line truncate, zero icons) */}
+              <div className="clip-label-line">
+                {canRenderLabel && (
+                  <span className="clip-label-text" title={`${cleanName} (${(endSec - startSec).toFixed(1)}s)`}>
                     {cleanName}
                   </span>
-                  {!isShort && (
-                    <span className="clip-timecode" style={{ opacity: clip.isMuted ? 0.6 : 1 }}>
-                      {formatTimecode(endSec - startSec)}
-                    </span>
-                  )}
-                </div>
+                )}
+              </div>
 
-                {!isSubOrVoice ? (
-                  <div className="clip-filmstrip-row" style={{ opacity: clip.isMuted ? 0.5 : 1 }}>
-                    {videoThumbnails && videoThumbnails.length > 0 ? (
-                      (() => {
-                        const getThumbUrl = (item) => (item ? (typeof item === 'string' ? item : item.url) : null);
-                        const clipSrcStart = typeof clip.sourceStart === 'number' ? clip.sourceStart : startSec;
-                        const clipSrcEnd = typeof clip.sourceEnd === 'number' ? clip.sourceEnd : endSec;
-                        const clipDur = Math.max(0.2, clipSrcEnd - clipSrcStart);
-                        const safeTotalDur = Math.max(1, totalDuration || 30);
-                        const numCells = frameCount;
-                        return Array.from({ length: numCells }).map((_, fIdx) => {
-                          const cellTime = clipSrcStart + (numCells > 1 ? (fIdx / (numCells - 1)) * clipDur : 0);
-                          const timeRatio = Math.max(0, Math.min(0.999, cellTime / safeTotalDur));
-                          const thumbIdx = Math.min(videoThumbnails.length - 1, Math.floor(timeRatio * videoThumbnails.length));
-                          const thumbSrc = getThumbUrl(videoThumbnails[thumbIdx]);
-                          return (
-                            <div key={fIdx} className="filmstrip-thumb-cell">
-                              {thumbSrc ? (
-                                <img src={thumbSrc} alt="frame" className="filmstrip-img" loading="lazy" decoding="async" />
-                              ) : (
-                                <div className="filmstrip-placeholder-pattern" />
-                              )}
-                            </div>
-                          );
-                        });
-                      })()
-                    ) : (
-                      <div className="filmstrip-placeholder-pattern" />
-                    )}
-                  </div>
+              {/* Row 2: Content row (filmstrip tiles: tile, never stretch) */}
+              <div className="clip-content-row filmstrip-content-row">
+                {videoThumbnails && videoThumbnails.length > 0 ? (
+                  (() => {
+                    const getThumbUrl = (item) => (item ? (typeof item === 'string' ? item : item.url) : null);
+                    const clipSrcStart = typeof clip.sourceStart === 'number' ? clip.sourceStart : startSec;
+                    const clipSrcEnd = typeof clip.sourceEnd === 'number' ? clip.sourceEnd : endSec;
+                    const clipDur = Math.max(0.2, clipSrcEnd - clipSrcStart);
+                    const safeTotalDur = Math.max(1, totalDuration || 30);
+                    const frameCount = Math.max(1, Math.min(80, Math.ceil(clipWidth / 56)));
+                    return Array.from({ length: frameCount }).map((_, fIdx) => {
+                      const cellTime = clipSrcStart + (frameCount > 1 ? (fIdx / (frameCount - 1)) * clipDur : 0);
+                      const timeRatio = Math.max(0, Math.min(0.999, cellTime / safeTotalDur));
+                      const thumbIdx = Math.min(videoThumbnails.length - 1, Math.floor(timeRatio * videoThumbnails.length));
+                      const thumbSrc = getThumbUrl(videoThumbnails[thumbIdx]);
+                      return (
+                        <div key={fIdx} className="filmstrip-thumb-cell">
+                          {thumbSrc ? (
+                            <img src={thumbSrc} alt="frame" className="filmstrip-img" loading="lazy" decoding="async" />
+                          ) : (
+                            <div className="filmstrip-placeholder-pattern" />
+                          )}
+                        </div>
+                      );
+                    });
+                  })()
                 ) : (
-                  <div className="clip-filmstrip-row" style={{ height: 16 }}>
-                    {videoThumbnails && videoThumbnails.length > 0 && (
-                      (() => {
-                        const getThumbUrl = (item) => (item ? (typeof item === 'string' ? item : item.url) : null);
-                        const clipSrcStart = typeof clip.sourceStart === 'number' ? clip.sourceStart : startSec;
-                        const clipSrcEnd = typeof clip.sourceEnd === 'number' ? clip.sourceEnd : endSec;
-                        const clipDur = Math.max(0.2, clipSrcEnd - clipSrcStart);
-                        const safeTotalDur = Math.max(1, totalDuration || 30);
-                        const numCells = Math.min(40, frameCount);
-                        return Array.from({ length: numCells }).map((_, fIdx) => {
-                          const cellTime = clipSrcStart + (numCells > 1 ? (fIdx / (numCells - 1)) * clipDur : 0);
-                          const timeRatio = Math.max(0, Math.min(0.999, cellTime / safeTotalDur));
-                          const thumbIdx = Math.min(videoThumbnails.length - 1, Math.floor(timeRatio * videoThumbnails.length));
-                          const thumbSrc = getThumbUrl(videoThumbnails[thumbIdx]);
-                          return (
-                            <div key={fIdx} className="filmstrip-thumb-cell" style={{ height: 16 }}>
-                              {thumbSrc && <img src={thumbSrc} alt="frame" className="filmstrip-img" style={{ height: 16 }} />}
-                            </div>
-                          );
-                        });
-                      })()
-                    )}
-                  </div>
+                  <div className="filmstrip-placeholder-pattern" />
                 )}
+              </div>
+            </>
+          )}
 
-                <div className="clip-audio-wave-bottom" style={{ opacity: clip.isMuted ? 0.15 : 0.7 }}>
-                  <div className="clip-wave-dots" />
-                </div>
-
-                {isSelected && clipWidth > 130 && !isSubOrVoice && (
-                  <div className="clip-footer">
-                    <span>{startSec.toFixed(1)}s - {endSec.toFixed(1)}s</span>
-                    {typeof clip.sourceStart === 'number' && Math.abs(clip.sourceStart - startSec) > 0.05 && (
-                      <span className="clip-src-badge">[Src: {clip.sourceStart.toFixed(1)}s]</span>
-                    )}
-                  </div>
-                )}
-              </>
-            );
-          })()}
-
-          {/* Right Trim Handle */}
-          {isSelected && (
+          {/* Right Trim Handle - only when selected */}
+          {isSelected && !isSliver && (
             <div 
               className="clip-trim-handle right"
               draggable={false}
@@ -787,20 +593,9 @@ function TimelineTracksCanvas({
                 e.stopPropagation();
                 handleVideoMouseDown(e, clip, idx, 'trim-right');
               }}
-              onDragStart={(e) => {
-                e.stopPropagation();
-                e.preventDefault();
-              }}
               title="Drag to trim end"
             >
               <div className="trim-handle-grip" />
-            </div>
-          )}
-
-          {/* Live Drag Tooltip */}
-          {isDragging && (
-            <div className="timeline-drag-tooltip">
-              {formatTimecode(startSec)} - {formatTimecode(endSec)} ({(endSec - startSec).toFixed(1)}s)
             </div>
           )}
         </div>
@@ -810,23 +605,30 @@ function TimelineTracksCanvas({
 
   return (
     <div ref={rootRef} className="tracks-content" style={{ width: totalWidth, minWidth: totalWidth, position: 'relative' }}>
-      {/* Ruler Line */}
+      {/* Ruler Line (12px mono time labels spaced >= 100px, minor ticks quieter than major) */}
       <div className="timeline-ruler">
         {(markers || [])
-          .filter((sec) => sec >= (visibleRange.start - 5) && sec <= (visibleRange.end + 5))
-          .map((sec) => (
-            <div
-              key={sec}
-              className="ruler-marker"
-              style={{ left: sec * pps }}
-            >
-              <div className="ruler-tick" />
-              <span className="ruler-time">{formatMinSec(sec)}</span>
-            </div>
-          ))}
+          .filter((m) => {
+            const sec = typeof m === 'number' ? m : m.time;
+            return sec >= (visibleRange.start - 5) && sec <= (visibleRange.end + 5);
+          })
+          .map((m) => {
+            const sec = typeof m === 'number' ? m : m.time;
+            const isMajor = typeof m === 'object' ? m.isMajor : (sec % 2 === 0);
+            return (
+              <div
+                key={sec}
+                className={`ruler-marker ${isMajor ? 'major' : 'minor'}`}
+                style={{ left: sec * pps }}
+              >
+                <div className={`ruler-tick ${isMajor ? 'major' : 'minor'}`} />
+                {isMajor && <span className="ruler-time">{formatMinSec(sec)}</span>}
+              </div>
+            );
+          })}
       </div>
 
-      {/* CapCut Magnetic Snapping Guide Indicator Line */}
+      {/* Magnetic Snapping Guide Indicator Line (1px accent blue, no neon glow) */}
       {snapLineTime !== null && (
         <div 
           className="timeline-snap-line"
@@ -834,7 +636,7 @@ function TimelineTracksCanvas({
         />
       )}
 
-      {/* Red Playhead Line with timecode badge */}
+      {/* App Accent (Blue) Playhead Line (2px line + small top accent handle, no red time flag) */}
       {selectedVideo && totalDuration > 0 && (
         <div 
           ref={playheadRef}
@@ -852,9 +654,7 @@ function TimelineTracksCanvas({
               setIsScrubbing(true);
               handleScrub(e);
             }}
-          >
-            <span ref={playheadTimeTextRef}>{formatMinSec(currentTime)}</span>
-          </div>
+          />
           <div className="playhead-line" />
         </div>
       )}
@@ -1133,6 +933,40 @@ function TimelineTracksCanvas({
               </div>
             );
           })}
+
+          {/* Clean BGM Track Lane (Height: 40px) */}
+          {selectedVideo && totalDuration > 0 && (
+            <div 
+              className="track-lane clean-bgm-lane"
+              data-track-type="clean-bgm"
+              style={{ 
+                width: totalWidth,
+                minWidth: totalWidth,
+                height: 40,
+                opacity: hiddenTracks?.cleanBgm ? 0.2 : 1, 
+                pointerEvents: hiddenTracks?.cleanBgm ? 'none' : 'auto',
+                borderBottom: '1px solid oklch(0.25 0.01 250)',
+              }}
+            >
+              <div
+                className="clean-bgm-block"
+                style={{
+                  left: 0,
+                  width: Math.max(2, totalDuration * pps - 2),
+                  top: 4,
+                  height: 32,
+                }}
+                title={`CLEAN BGM [0.0s - ${totalDuration.toFixed(1)}s]`}
+              >
+                {totalDuration * pps >= 32 && (
+                  <div className="clip-label-line">
+                    <span className="clip-label-text">CLEAN BGM</span>
+                  </div>
+                )}
+                <div className="clip-content-row clean-bgm-content-row" />
+              </div>
+            </div>
+          )}
         </>
       )}
     </div>
@@ -1156,6 +990,7 @@ function areTimelineTracksCanvasPropsEqual(prev, next) {
   if (prev.selectedAudioId !== next.selectedAudioId) return false;
   if (prev.selectedSubId !== next.selectedSubId) return false;
   if (prev.pps !== next.pps) return false;
+  if (prev.markers !== next.markers) return false;
   if (prev.totalDuration !== next.totalDuration) return false;
   if (prev.totalWidth !== next.totalWidth) return false;
   if (prev.hiddenTracks !== next.hiddenTracks) return false;

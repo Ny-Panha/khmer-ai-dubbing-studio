@@ -7,7 +7,7 @@ import TimelineTrackHeaders from './timeline/TimelineTrackHeaders';
 import TimelineTracksCanvas from './timeline/TimelineTracksCanvas';
 import './TimelineEditor.css';
 
-const TRACK_HEADER_WIDTH = 150;
+const TRACK_HEADER_WIDTH = 112;
 
 function TimelineEditor({
   videoRef = null,
@@ -60,9 +60,9 @@ function TimelineEditor({
   const [dragState, setDragState] = useState(null);
   const [snappingEnabled, setSnappingEnabled] = useState(true);
   const [snapLineTime, setSnapLineTime] = useState(null);
-  const [lockedTracks, setLockedTracks] = useState({ video: false, voice: false, subs: false });
-  const [hiddenTracks, setHiddenTracks] = useState({ video: false, voice: false, subs: false });
-  const [mutedTracks, setMutedTracks] = useState({ video: false, voice: false, subs: false });
+  const [lockedTracks, setLockedTracks] = useState({ video: false, voice: false, subs: false, cleanBgm: false });
+  const [hiddenTracks, setHiddenTracks] = useState({ video: false, voice: false, subs: false, cleanBgm: false });
+  const [mutedTracks, setMutedTracks] = useState({ video: false, voice: false, subs: false, cleanBgm: false });
   const [autoCenter, setAutoCenter] = useState(true);
   const isNativeDraggingRef = useRef(false);
 
@@ -1222,16 +1222,36 @@ function TimelineEditor({
     }
   }, [currentTime, isPlaying, autoCenter, pps, isScrubbing, dragState]);
 
-  const stepSec = zoom >= 1.5 ? 1 : zoom >= 1 ? 2 : 5;
+  // Ruler tick step calculation to guarantee labels spaced at least ~100px apart
+  const { majorStepSec, minorStepSec } = React.useMemo(() => {
+    const minSecFor100px = 100 / Math.max(1, pps);
+    if (minSecFor100px <= 1) {
+      return { majorStepSec: 1, minorStepSec: 0.5 };
+    }
+    if (minSecFor100px <= 2) {
+      return { majorStepSec: 2, minorStepSec: 1 };
+    }
+    if (minSecFor100px <= 5) {
+      return { majorStepSec: 5, minorStepSec: 1 };
+    }
+    if (minSecFor100px <= 10) {
+      return { majorStepSec: 10, minorStepSec: 2 };
+    }
+    return { majorStepSec: 30, minorStepSec: 5 };
+  }, [pps]);
+
   const markers = React.useMemo(() => {
     if (totalDuration <= 0) return [];
     const maxMarkerSec = Math.ceil(totalDuration) + Math.ceil(1000 / pps);
     const arr = [];
-    for (let s = 0; s <= maxMarkerSec; s += stepSec) {
-      arr.push(s);
+    const step = minorStepSec;
+    for (let s = 0; s <= maxMarkerSec; s += step) {
+      const rounded = parseFloat(s.toFixed(2));
+      const isMajor = Math.abs(rounded % majorStepSec) < 0.001;
+      arr.push({ time: rounded, isMajor });
     }
     return arr;
-  }, [totalDuration, pps, stepSec]);
+  }, [totalDuration, pps, majorStepSec, minorStepSec]);
 
   const playheadX = currentTime * pps;
 
@@ -1290,6 +1310,8 @@ function TimelineEditor({
           voiceRowCount={voiceRowCount}
           subRowCount={subRowCount}
           showSubtitles={showSubtitles}
+          selectedVideo={selectedVideo}
+          scriptSegments={scriptSegments}
         />
 
         <TimelineTracksCanvas

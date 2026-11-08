@@ -1,60 +1,57 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
-- **Environment**: Antigravity IDE (Classic Suite Restoration & Workspace Shell Retirement)
-- **Timestamp**: 2026-11-08T00:58:00+07:00
+- **Environment**: Antigravity IDE (Timeline Clean Spec — FreeCut/OpenCut Anatomy)
+- **Timestamp**: 2026-11-08T10:41:00+07:00
 
 ## Summary of Completed Work
 
-### 1. Classic Suite UI Restored (Nha's Decision)
-- **Reversal from Single-Screen Workspace**: Restored the classic 3-column suite as the primary application UI (`App.jsx` structure as of `c3b10ea` adapted to current hooks):
-  - **Navbar**: Brand mark + Gemini Route console launcher (with 4 Keys badge) + Job queue launcher + API Key config + Only filled Export button.
-  - **WorkflowStepper (FLOW Stepper)**: Restored classic status display (Flow: 1. Import video ➔ 2. Translate & script ➔ 3. Khmer voice (TTS) ➔ 4. Demucs AI ➔ 5. Mix & export).
-  - **Top 3-Column Suite**:
-    - **Left Column**: Resizable `MediaLibrary` with 4 classic tabs (`Episodes`, `1. Video`, `2. Script`, `3. Subs` [virtualized `ScriptReviewTab`]).
-    - **Centre Column**: `VideoPlayerPreview` with player monitor canvas, playhead scrubber, and fullscreen preview.
-    - **Right Column**: Resizable `VoiceSettings` (Audio & Export inspector) with ClipInspector, AudioDucking, and ExportSettings.
-  - **Bottom Column**: `TimelineEditor` multi-track editor (video track, audio track, subtitle track, clip split/delete, undo/redo, auto-align).
+### 1. FreeCut/OpenCut Anatomy Applied to Timeline
+- **Anatomy & Presentation ONLY**: Playback, drag, trim, snap, and windowing logic remain untouched.
+- **1. Clip Anatomy**:
+  - Every clip structured as **ONE label line** (12px, weight 500, single line truncate) + **ONE content row**.
+  - **Zero icons inside clips**: Removed lock, speaker, badge, and avatar icons from voice, subtitle, and video clips.
+  - **Voice clip label**: `"#N ប្រុស"` / `"#N ស្រី"` (+ OVER marker as text `" +0.4s"` in label when over). Content row: per-clip waveform bars.
+  - **Subtitle clip**: Segment text as label line (no separate `#` badge) over a flat content row.
+  - **Video clip**: Clean title over tiled filmstrip frames (`object-fit: cover`, never stretched).
+- **2. Shape & Spacing**:
+  - Row-filling rectangles with `border-radius: 6px`.
+  - 2px gap between adjacent clips (`width = Math.max(2, (endSec - startSec) * pps - 2)`).
+  - 4px vertical inset in track rows (e.g., Video 60px row -> 52px clip; Voice/Subs 48px rows -> 40px clips; Clean BGM 40px row -> 32px clip).
+  - Zero pill shapes; removed all `box-shadow` glows from clips.
+- **3. Low Chroma OKLCH Colours**:
+  - Video clip bg: `oklch(0.40 0.04 250)`
+  - Voice male bg: `oklch(0.32 0.05 250)`
+  - Voice female bg: `oklch(0.32 0.05 350)`
+  - Subtitle bg: `oklch(0.35 0.02 290)`
+  - Clean BGM bg: `oklch(0.22 0.02 302)`
+  - 1px border `oklch(0.25 0.01 250)` with subtle vertical gradient within own hue.
+  - Gender carried by label text (`ប្រុស`/`ស្រី`).
+  - OVER clips: label text highlighted in mark-out red `oklch(0.61 0.22 29)` — clip bg does not change.
+- **4. Single Signal Colour (App Blue Accent)**:
+  - App accent (blue `#38BDF8`) is the ONLY signal colour.
+  - Selection: 2px solid accent outline (inset via `outline-offset: -2px`) + trim handles visible only on selected clip.
+  - Playhead: 2px accent line with small top handle.
+  - Deleted red selection outline, red playhead line, and red time flag badge.
+- **5. Fixed 112px Track Headers**:
+  - Fixed 112px wide, full untruncated names (`VIDEO`, `VOICE 1`, `VOICE 2`, `SUBTITLES`, `CLEAN BGM`).
+  - 11-12px labels with exactly 2 mini toggles per header (mute/lock or eye/lock).
+  - Row heights: VIDEO 60px, VOICE rows 48px, SUBTITLES 48px, CLEAN BGM 40px.
+  - Separated by tonal step (floor `oklch(0.12 0 0)`, header `oklch(0.14 0.01 250)`) + 1px `oklch(0.25 0.01 250)` divider.
+- **6. Ruler Spacing**:
+  - Time labels in 12px mono, spaced at least ~100px apart across all zoom levels (`00:00`, `00:05`, `00:10` etc.).
+  - Minor ticks visibly quieter than major ticks.
+- **7. Zoom Cut-offs**:
+  - Clips narrower than 5px render as flat colour slivers (no label, no waveform).
+  - Labels render only when clip width >= 4 characters (>=32px).
+  - Viewport windowing maintained as-is.
 
-### 2. Single Translate Flow Preserved
-- **Audited `DubbingModeTab` vs `GeminiRouteTab`**:
-  - Kept `DubbingModeTab` as the single translate surface for the episode in the classic suite (Mode A dialogue vs Mode B recap, prompt/genre, live 0%-100% runner, console terminal logs, Demucs/TTS triggers).
-  - Removed duplicate `GeminiRouteTab` from the suite tabs entirely.
-  - `GeminiRouteModal` retained exclusively as the dedicated **BATCH & KEYS CONSOLE** (batch translation + Gemini key pool management).
-  - Preserved single shared job queue (`JobQueueContext` / `useSharedJobQueue`) with zero duplicate polling.
-
-### 3. Re-Translate Overwrite Confirmation Enforced
-- Integrated overwrite-confirmation dialog into `DubbingModeTab` whenever generating/re-translating an episode that already has an existing script.
-- Warns user before wiping edits, explains auto-backup, and requires explicit confirmation.
-
-### 4. Clean Pass 3 Design Tokens Applied
-- Applied OKLCH measured ramp: `--floor`, `--app`, `--panel`, `--muted`, `--line`, `--ink`, `--ink-dim`.
-- Type scale: Labels 500/12px sentence case (no ALL-CAPS bars), body 400/14px, numbers in mono 12px (`var(--font-mono)`).
-- Buttons: 36px height, `border-radius: 6px` (`var(--radius-sm)`), ghost-by-default with `var(--line)`, with Export as the only filled chrome button (+ translate CTA inside its panel).
-- Zone separation: Value step + 1px `var(--line)` only, zero floating cards/shadows on outer workspace zones.
-
-### 5. Retired Shell Deleted (Clean Repo)
-Deleted 25 obsolete files (all recoverable from git history `5e46f19`, `ed2cc5e`):
-- `components/workspace/`: `StageRail.jsx`, `StageRail.css`, `MediaPanel.jsx`, `MediaPanel.css`, `StageSettingsPanel.jsx`, `StageSettingsPanel.css`, `BottomStatusStrip.jsx`, `BottomStatusStrip.css`, `InlineTranslatePanel.jsx`, `WorkspaceToolbar.jsx`, `WorkspaceToolbar.css`, `WorkspaceLayout.css`
-- `steps/`: `registry.js`, `demucs/DemucsPage.jsx`, `import/ImportPage.jsx`, `import/ImportPage.css`, `mix-export/MixExportPage.jsx`, `script/ScriptPage.jsx`, `script/ScriptPage.css`, `script/ThinSeekStrip.jsx`, `script/ThinSeekStrip.css`, `voice/VoicePage.jsx`
-- `features/segment-list/`: `TranscriptSegmentList.jsx`, `TranscriptSegmentList.css`
-- `components/media/`: `GeminiRouteTab.jsx`
-
-### 6. Full Real Flow Verification & Evidence
-- **Build**: `npm --prefix frontend run build` ➔ **PASS** (1.81s, 0 errors).
-- **Backend API**: Verified online at `http://localhost:5000` (4 active Gemini keys).
-- **Vite Proxy**: Verified online at `http://localhost:5173`.
-- **Full End-to-End Test (Playwright)**:
-  1. Loaded classic suite with 3-column layout + timeline editor (`classic_main_screen.png`).
-  2. Selected episode and opened 2. Script tab with DubbingModeTab.
-  3. Re-translate overwrite confirmation dialog verified and confirmed.
-  4. Script translation runner executed with live progress and terminal logs (`translate_running.png`).
-  5. Script segments loaded into virtualized `ScriptReviewTab`.
-  6. Edited segment text and committed successfully.
-  7. Single segment TTS voice regeneration executed and verified (`voice_generated.png`).
-  8. Demucs vocal separation status checked.
-  9. Video preview playback tested with audio synchronization.
-  10. Export settings and Export button verified reachable.
+### 2. Verification & Visual Evidence
+- **Build**: `npm --prefix frontend run build` ➔ **PASS** (1.31s, 0 errors).
+- **Screenshots Captured**:
+  - `timeline_default_zoom.png`: FreeCut anatomy with 60+ loaded segments at default zoom.
+  - `timeline_zoomed_in.png`: Zoomed-in timeline displaying waveforms, `#N ប្រុស/ស្រី` labels, OVER tags in mark-out red, and accent selection trim handles.
+  - Full-screen references: `timeline_default_zoom_full.png`, `timeline_zoomed_in_full.png`.
 
 ## Active Environment
 - **Backend API**: `http://localhost:5000` (Node.js/Express, online)
