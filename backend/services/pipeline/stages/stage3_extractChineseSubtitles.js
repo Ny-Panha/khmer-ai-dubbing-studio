@@ -1,7 +1,12 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { extractFramesStreaming, extractFramesAtTimestamps, extractSubtitleDifferenceGrid } = require('../../ffmpegService');
+const {
+  extractFramesStreaming,
+  extractFramesAtTimestamps,
+  extractSubtitleDifferenceGrid,
+  detectSubtitleChangePoints,
+} = require('../../ffmpegService');
 const { formatSecondsToTimecode } = require('../pipelineTypes');
 
 function getOcrCachePath(videoPath, startOffsetSec = 0, durationSec = 0, modelName = '') {
@@ -164,35 +169,111 @@ async function extractChineseSubtitles({
   fs.mkdirSync(tempDir, { recursive: true });
 
   const rawObservations = [];
+  const evaluatedCueStates = [];
   let apiCallsCount = 0;
   let retriesCount = 0;
   let lastBatchError = null;
 
   try {
-    // 1. Fast subtitle area difference grid using lightweight FFmpeg filter (~1s)
-    const diffGrid = await extractSubtitleDifferenceGrid(videoPath, startOffsetSec, durationSec, 1.5).catch(() => []);
+    // 1. STEP 1: Change-driven sampling pre-pass (local FFmpeg pixel-diff, zero API calls)
+    const { changePoints = [], cueStates = [], frameDiffs = [] } = await detectSubtitleChangePoints(
+      videoPath,
+      startOffsetSec,
+      durationSec,
+      5.0
+    ).catch((preErr) => {
+      console.warn('[Stage 3 Extract Subtitles] Pre-pass change point detection failed, falling back to grid:', preErr.message);
+      return { changePoints: [], cueStates: [], frameDiffs: [] };
+    });
+
     const diffMap = new Map();
-    for (const d of diffGrid) {
+    for (const d of frameDiffs) {
       diffMap.set(d.timestampSec, d);
     }
 
-    // 2. Fast Streaming Extraction of 360p candidate frames
-    const effectiveStep = Math.max(1.0, baseStepSec || 1.2);
-    const fps = Math.min(2.0, Math.max(0.8, parseFloat((1 / effectiveStep).toFixed(2))));
-    let extractedFrames = [];
+    // Schedule candidate frame timestamps:
+    // (a) One frame shortly AFTER each change point (sampleASec) + mid-cue frame (sampleBSec)
+    // (b) 0.75s baseline safety net deduplicated by timestamp (drops on static scenes)
+    const scheduled = new Set();
+    const candidateTimestamps = [];
+    const safeStartSec = Math.max(0, Number(startOffsetSec) || 0);
+    const endSec = durationSec > 0 ? safeStartSec + durationSec : (cueStates.length > 0 ? cueStates[cueStates.length - 1].endSec : safeStartSec + 10);
 
+    function trySchedule(t, reason, minGap = 0.12) {
+      const rounded = parseFloat(Number(t).toFixed(2));
+      if (rounded < safeStartSec || rounded > endSec) return false;
+      for (const ex of scheduled) {
+        if (Math.abs(ex - rounded) < minGap) return false;
+      }
+      scheduled.add(rounded);
+      candidateTimestamps.push({ timestampSec: rounded, reason });
+      return true;
+    }
+
+    // (a) Change-point frames & mid-cue frames
+    if (cueStates.length > 0) {
+      for (const cs of cueStates) {
+        trySchedule(cs.sampleASec, `cue_${cs.cueIndex}_sampleA`, 0.12);
+        trySchedule(cs.sampleBSec, `cue_${cs.cueIndex}_sampleB`, 0.12);
+      }
+    } else {
+      // Fallback: use raw changePoints if cueStates empty
+      for (const cp of changePoints) {
+        trySchedule(cp.timestampSec + 0.10, 'cp_onset', 0.12);
+      }
+    }
+
+    // (b) Baseline safety net (0.75s grid deduplicated)
+    const effectiveStep = Math.max(0.5, Number(baseStepSec) || 0.75);
+    let curTime = safeStartSec === 0 ? 0.5 : safeStartSec + 0.3;
+    const stepDiff = 0.2; // 5 fps pre-pass step
+
+    while (curTime < endSec) {
+      const rounded = parseFloat(curTime.toFixed(2));
+      let isCovered = false;
+      for (const ex of scheduled) {
+        if (Math.abs(ex - rounded) <= 0.40) {
+          isCovered = true;
+          break;
+        }
+      }
+
+      if (!isCovered) {
+        const idx = Math.round((curTime - safeStartSec) / stepDiff);
+        const nearDiffs = frameDiffs.slice(Math.max(0, idx - 2), Math.min(frameDiffs.length, idx + 3));
+        const maxNearDiff = nearDiffs.reduce((m, d) => Math.max(m, d.subDiff || d.diff || 0), 0);
+
+        if (maxNearDiff >= 8.0 || frameDiffs.length === 0) {
+          trySchedule(rounded, 'baseline_active', 0.20);
+        } else {
+          // Static scene: drop frame count! Sparse anchor only if gap >= 4.0s
+          let hasRecentAnchor = false;
+          for (const ex of scheduled) {
+            if (Math.abs(ex - rounded) < 4.0) {
+              hasRecentAnchor = true;
+              break;
+            }
+          }
+          if (!hasRecentAnchor) {
+            trySchedule(rounded, 'baseline_static_sparse', 0.20);
+          }
+        }
+      }
+      curTime += effectiveStep;
+    }
+
+    // Sort candidate frame timestamps chronologically
+    candidateTimestamps.sort((a, b) => a.timestampSec - b.timestampSec);
+    const sortedTimes = candidateTimestamps.map((c) => c.timestampSec);
+
+    // 2. Extract candidate frames at scheduled timestamps
+    let extractedFrames = [];
     try {
-      extractedFrames = await extractFramesStreaming(
-        videoPath,
-        startOffsetSec,
-        durationSec,
-        fps,
-        tempDir
-      );
-    } catch (streamErr) {
-      console.warn('[Stage 3 Extract Subtitles] Streaming extraction failed, falling back to timestamp extraction:', streamErr.message);
-      const candidateTimes = generateBaseSamplingGrid(durationSec, effectiveStep, startOffsetSec);
-      extractedFrames = await extractFramesAtTimestamps(videoPath, candidateTimes, tempDir);
+      extractedFrames = await extractFramesAtTimestamps(videoPath, sortedTimes, tempDir);
+    } catch (extractErr) {
+      console.warn('[Stage 3 Extract Subtitles] Timestamp extraction error, attempting streaming fallback:', extractErr.message);
+      const fps = Math.min(2.0, Math.max(0.8, parseFloat((1 / effectiveStep).toFixed(2))));
+      extractedFrames = await extractFramesStreaming(videoPath, safeStartSec, durationSec, fps, tempDir);
     }
 
     if (!extractedFrames || extractedFrames.length === 0) {
@@ -204,56 +285,30 @@ async function extractChineseSubtitles({
       };
     }
 
-    // 3. Filter useful frames for Gemini Vision:
-    // Anchor frames (~1.8s) + all frames where subtitle area changed significantly
-    const framesToAnalyze = [];
-    for (let fIdx = 0; fIdx < extractedFrames.length; fIdx++) {
-      const f = extractedFrames[fIdx];
-      const diffObj = diffMap.get(f.timestampSec);
-      const isAnchor = fIdx === 0 || fIdx === extractedFrames.length - 1 || (fIdx % 2 === 0);
-      const isChange = diffObj ? diffObj.isChange : true;
+    const framesToAnalyze = extractedFrames;
+    console.log(`[Stage 3 Extract Subtitles] Detected ${changePoints.length} change points (${cueStates.length} candidate cue states). Prioritized ${framesToAnalyze.length} candidate frames for Vision OCR`);
 
-      if (isAnchor || isChange) {
-        framesToAnalyze.push(f);
-      }
-    }
-
-    console.log(`[Stage 3 Extract Subtitles] Extracted ${extractedFrames.length} frames, prioritized ${framesToAnalyze.length} candidate frames for Vision OCR`);
-
-    // 4. Batch frames (15 frames per call) to Gemini Vision with Bounded Concurrency (2 batches at a time)
-    const BATCH_SIZE = 15;
-    const batchList = [];
-    for (let i = 0; i < framesToAnalyze.length; i += BATCH_SIZE) {
-      batchList.push(framesToAnalyze.slice(i, i + BATCH_SIZE));
-    }
-
-    const CONCURRENCY = 2;
-    for (let bIdx = 0; bIdx < batchList.length; bIdx += CONCURRENCY) {
-      const activeBatches = batchList.slice(bIdx, bIdx + CONCURRENCY);
-
-      await Promise.all(
-        activeBatches.map(async (batch) => {
-          const contents = [];
-
-          for (const item of batch) {
-            if (fs.existsSync(item.filePath)) {
-              const imgBuffer = fs.readFileSync(item.filePath);
-              contents.push({
-                text: `[FRAME_TIMESTAMP: ${item.timestampSec.toFixed(2)}s | Timecode: ${formatSecondsToTimecode(item.timestampSec)}]`,
-              });
-              contents.push({
-                inlineData: {
-                  mimeType: 'image/jpeg',
-                  data: imgBuffer.toString('base64'),
-                },
-              });
-            }
-          }
-
-          if (contents.length === 0) return;
-
+    // Helper: Build Vision OCR prompt contents
+    function buildVisionBatchContents(batch) {
+      const contents = [];
+      for (const item of batch) {
+        if (fs.existsSync(item.filePath)) {
+          const imgBuffer = fs.readFileSync(item.filePath);
           contents.push({
-            text: `You are an expert Chinese Video & Drama OCR engine.
+            text: `[FRAME_TIMESTAMP: ${item.timestampSec.toFixed(2)}s | Timecode: ${formatSecondsToTimecode(item.timestampSec)}]`,
+          });
+          contents.push({
+            inlineData: {
+              mimeType: 'image/jpeg',
+              data: imgBuffer.toString('base64'),
+            },
+          });
+        }
+      }
+      if (contents.length === 0) return null;
+
+      contents.push({
+        text: `You are an expert Chinese Video & Drama OCR engine.
 Analyze these ${batch.length} sequential video frames at the specified timestamps.
 
 TASK:
@@ -284,75 +339,202 @@ Return JSON ONLY matching this schema:
     }
   ]
 }`,
-          });
+      });
+      return contents;
+    }
 
-          try {
-            apiCallsCount++;
-            const resp = await callGeminiVisionWithRetry(aiClient, modelName, contents);
-            const rawText = typeof resp.text === 'function' ? resp.text() : resp.text;
-            if (rawText) {
-              const clean = rawText.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
-              const parsed = JSON.parse(clean);
-              const frames = Array.isArray(parsed.frames) ? parsed.frames : [];
+    // Helper: Execute a batch call and push parsed frame observations
+    async function executeVisionBatch(batch) {
+      const contents = buildVisionBatchContents(batch);
+      if (!contents) return;
 
-              for (let fIdx = 0; fIdx < frames.length; fIdx++) {
-                const f = frames[fIdx];
-                const fallbackTime = batch[fIdx] ? batch[fIdx].timestampSec : 0;
-                const tSec = typeof f.timestampSec === 'number' && !isNaN(f.timestampSec)
-                  ? parseFloat(f.timestampSec.toFixed(2))
-                  : fallbackTime;
+      try {
+        apiCallsCount++;
+        const resp = await callGeminiVisionWithRetry(aiClient, modelName, contents);
+        const rawText = typeof resp.text === 'function' ? resp.text() : resp.text;
+        if (rawText) {
+          const clean = rawText.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+          const parsed = JSON.parse(clean);
+          const frames = Array.isArray(parsed.frames) ? parsed.frames : [];
 
-                const cText = String(f.chineseText || '').trim();
-                const hasCleanText = Boolean(f.hasText && normalizeChineseChars(cText).length > 0);
-                const rawGender = String(f.speakerGender || 'unknown').toLowerCase();
-                const validGender = rawGender === 'female' ? 'female' : (rawGender === 'male' ? 'male' : 'unknown');
-                const conf = typeof f.genderConfidence === 'number' && !isNaN(f.genderConfidence)
-                  ? Math.min(1.0, Math.max(0.0, f.genderConfidence))
-                  : (validGender === 'unknown' ? 0.5 : 0.85);
+          for (let fIdx = 0; fIdx < batch.length; fIdx++) {
+            const fallbackTime = batch[fIdx].timestampSec;
+            const f = frames[fIdx] || {};
+            const tSec = typeof f.timestampSec === 'number' && !isNaN(f.timestampSec)
+              ? parseFloat(f.timestampSec.toFixed(2))
+              : fallbackTime;
 
-                rawObservations.push({
-                  timestampSec: tSec,
-                  hasText: hasCleanText,
-                  chineseText: hasCleanText ? cText : '',
-                  position: f.position || 'bottom_subtitle',
-                  isSharp: f.isSharp !== false,
-                  speakerGender: validGender,
-                  genderConfidence: conf,
-                });
-              }
-            }
-          } catch (geminiErr) {
-            retriesCount++;
-            lastBatchError = geminiErr.message;
-            console.warn(`[Stage 3 Extract Subtitles] Batch OCR call failed at ${batch[0].timestampSec}s:`, geminiErr.message);
+            const cText = String(f.chineseText || '').trim();
+            const hasCleanText = Boolean(f.hasText && normalizeChineseChars(cText).length > 0);
+            const rawGender = String(f.speakerGender || 'unknown').toLowerCase();
+            const validGender = rawGender === 'female' ? 'female' : (rawGender === 'male' ? 'male' : 'unknown');
+            const conf = typeof f.genderConfidence === 'number' && !isNaN(f.genderConfidence)
+              ? Math.min(1.0, Math.max(0.0, f.genderConfidence))
+              : (validGender === 'unknown' ? 0.5 : 0.85);
+
+            rawObservations.push({
+              timestampSec: fallbackTime,
+              reportedSec: tSec,
+              hasText: hasCleanText,
+              chineseText: hasCleanText ? cText : '',
+              position: f.position || 'bottom_subtitle',
+              isSharp: f.isSharp !== false,
+              speakerGender: validGender,
+              genderConfidence: conf,
+            });
           }
-        })
-      );
+        }
+      } catch (geminiErr) {
+        retriesCount++;
+        lastBatchError = geminiErr.message;
+        console.warn(`[Stage 3 Extract Subtitles] Batch OCR call failed at ${batch[0].timestampSec}s:`, geminiErr.message);
+      }
+    }
+
+    // 3. Batch frames (15 frames per call) to Gemini Vision with Bounded Concurrency (2 batches at a time)
+    const BATCH_SIZE = 15;
+    const batchList = [];
+    for (let i = 0; i < framesToAnalyze.length; i += BATCH_SIZE) {
+      batchList.push(framesToAnalyze.slice(i, i + BATCH_SIZE));
+    }
+
+    const CONCURRENCY = 2;
+    for (let bIdx = 0; bIdx < batchList.length; bIdx += CONCURRENCY) {
+      const activeBatches = batchList.slice(bIdx, bIdx + CONCURRENCY);
+      await Promise.all(activeBatches.map((batch) => executeVisionBatch(batch)));
 
       if (bIdx + CONCURRENCY < batchList.length) {
         await new Promise((r) => setTimeout(r, 400));
       }
     }
 
-    // 5. Interpolate observations for visually stable unanalyzed frames so timing resolution is complete
-    for (const f of extractedFrames) {
-      const existing = rawObservations.find((o) => Math.abs(o.timestampSec - f.timestampSec) < 0.2);
-      if (!existing && rawObservations.length > 0) {
-        const closest = rawObservations.reduce((prev, curr) => {
-          return Math.abs(curr.timestampSec - f.timestampSec) < Math.abs(prev.timestampSec - f.timestampSec) ? curr : prev;
-        }, rawObservations[0]);
+    // Sort observations chronologically
+    rawObservations.sort((a, b) => a.timestampSec - b.timestampSec);
 
-        if (closest && Math.abs(closest.timestampSec - f.timestampSec) <= 1.5) {
-          rawObservations.push({
-            timestampSec: f.timestampSec,
-            hasText: closest.hasText,
-            chineseText: closest.chineseText,
-            position: closest.position,
-            isSharp: closest.isSharp,
-            speakerGender: closest.speakerGender || 'unknown',
-            genderConfidence: closest.genderConfidence || 0.5,
-            interpolated: true,
+    // Fast lookup helper to find observation closest to timestamp
+    function getObservation(targetT) {
+      let closest = null;
+      let minD = 999;
+      for (const obs of rawObservations) {
+        const d = Math.abs(obs.timestampSec - targetT);
+        if (d < minD) {
+          minD = d;
+          closest = obs;
+        }
+      }
+      return minD <= 0.35 ? closest : { timestampSec: targetT, hasText: false, chineseText: '' };
+    }
+
+    // 4. STEP 2: Double-Read Verification per Candidate Cue State
+    evaluatedCueStates.length = 0;
+    const statesNeedingTieBreak = [];
+
+    if (cueStates.length > 0) {
+      for (const cs of cueStates) {
+        const obsA = getObservation(cs.sampleASec);
+        const obsB = getObservation(cs.sampleBSec);
+
+        const hasA = Boolean(obsA && obsA.hasText && obsA.chineseText);
+        const hasB = Boolean(obsB && obsB.hasText && obsB.chineseText);
+        const textA = hasA ? obsA.chineseText : '';
+        const textB = hasB ? obsB.chineseText : '';
+
+        // If neither frame contained text, this state is non-dialogue (motion or silence)
+        if (!hasA && !hasB) {
+          continue;
+        }
+
+        // If both reads have text and are equivalent -> ACCEPT with high confidence
+        if (hasA && hasB && areChineseTextsEquivalent(textA, textB)) {
+          const resolvedText = textA.length >= textB.length ? textA : textB;
+          evaluatedCueStates.push({
+            ...cs,
+            originalChineseText: resolvedText,
+            chineseText: resolvedText,
+            ocrConfidence: 'high',
+            reviewNeeded: false,
+            ocrDisagreement: false,
+            uncertainOcr: false,
+            genderVotes: {
+              [obsA.speakerGender || 'unknown']: 1,
+              [obsB.speakerGender || 'unknown']: (obsA.speakerGender === obsB.speakerGender ? 2 : 1),
+            },
           });
+        } else {
+          // Disagreement (either one frame had text and one didn't, or different texts)
+          statesNeedingTieBreak.push({
+            cueState: cs,
+            obsA,
+            obsB,
+          });
+        }
+      }
+
+      // Execute tie-break read if any disagreements occurred
+      if (statesNeedingTieBreak.length > 0) {
+        console.log(`[Stage 3 OCR] Executing tie-break verification for ${statesNeedingTieBreak.length} candidate cue states...`);
+        const tieTimes = statesNeedingTieBreak.map((n) => n.cueState.sampleTieSec);
+        let tieFrames = [];
+        try {
+          tieFrames = await extractFramesAtTimestamps(videoPath, tieTimes, tempDir);
+        } catch (_) {
+          tieFrames = [];
+        }
+
+        if (tieFrames.length > 0) {
+          await executeVisionBatch(tieFrames);
+        }
+
+        // Resolve each disagreement using tie-break read
+        for (const item of statesNeedingTieBreak) {
+          const { cueState: cs, obsA, obsB } = item;
+          const obsTie = getObservation(cs.sampleTieSec);
+
+          const textA = (obsA && obsA.hasText) ? obsA.chineseText : '';
+          const textB = (obsB && obsB.hasText) ? obsB.chineseText : '';
+          const textTie = (obsTie && obsTie.hasText) ? obsTie.chineseText : '';
+
+          let resolvedText = '';
+          let ocrConfidence = 'high';
+          let reviewNeeded = false;
+          let ocrDisagreement = false;
+          let uncertainOcr = false;
+
+          // Check pairwise majority
+          if (textTie && textB && areChineseTextsEquivalent(textTie, textB)) {
+            // Majority (2 of 3) votes for Sample B
+            resolvedText = textB.length >= textTie.length ? textB : textTie;
+          } else if (textTie && textA && areChineseTextsEquivalent(textTie, textA)) {
+            // Majority (2 of 3) votes for Sample A
+            resolvedText = textA.length >= textTie.length ? textA : textTie;
+          } else if (textA && textB && areChineseTextsEquivalent(textA, textB)) {
+            resolvedText = textA.length >= textB.length ? textA : textB;
+          } else {
+            // Still unresolved! Keep majority / first non-empty read BUT flag as low confidence
+            resolvedText = textA || textB || textTie;
+            ocrConfidence = 'low';
+            reviewNeeded = true;
+            ocrDisagreement = true;
+            uncertainOcr = true;
+          }
+
+          if (resolvedText) {
+            const votes = { male: 0, female: 0, unknown: 0 };
+            [obsA, obsB, obsTie].forEach((o) => {
+              if (o && o.speakerGender) votes[o.speakerGender] = (votes[o.speakerGender] || 0) + 1;
+            });
+
+            evaluatedCueStates.push({
+              ...cs,
+              originalChineseText: resolvedText,
+              chineseText: resolvedText,
+              ocrConfidence,
+              reviewNeeded,
+              ocrDisagreement,
+              uncertainOcr,
+              genderVotes: votes,
+            });
+          }
         }
       }
     }
@@ -367,9 +549,6 @@ Return JSON ONLY matching this schema:
       }
     } catch (_) {}
   }
-
-  // Sort observations chronologically
-  rawObservations.sort((a, b) => a.timestampSec - b.timestampSec);
 
   function resolveGenderFromVotes(genderVotes = {}) {
     const mCount = genderVotes.male || 0;
@@ -388,7 +567,6 @@ Return JSON ONLY matching this schema:
       resolvedConfidence = parseFloat((mCount / Math.max(1, total)).toFixed(2));
     }
 
-    // Fallback voice rule: female -> female voice, male/unknown -> male voice (never block TTS)
     const voiceGender = resolvedGender === 'female' ? 'female' : 'male';
     const khmerVoiceId = voiceGender === 'female' ? 'km-KH-SreymomNeural' : 'km-KH-PisethNeural';
 
@@ -402,72 +580,71 @@ Return JSON ONLY matching this schema:
     };
   }
 
-  // Group continuous frame observations into visual candidate segments
+  // STEP 3: Boundaries from change points & Deduplication
   const visualSegments = [];
-  let currentSegment = null;
 
-  for (let i = 0; i < rawObservations.length; i++) {
-    const obs = rawObservations[i];
-    if (!obs.hasText) {
-      if (currentSegment) {
-        // Text disappeared: close segment
-        const endSec = parseFloat(obs.timestampSec.toFixed(2));
-        const dur = Math.max(0.8, parseFloat((endSec - currentSegment.startSec).toFixed(2)));
-        const genderData = resolveGenderFromVotes(currentSegment.genderVotes);
-        visualSegments.push({
-          ...currentSegment,
-          endSec: parseFloat((currentSegment.startSec + dur).toFixed(2)),
-          duration: parseFloat(dur.toFixed(2)),
-          lastObservedSec: currentSegment.lastObservedSec,
-          verifiedDisappearance: true,
-          ...genderData,
-        });
-        currentSegment = null;
+  if (evaluatedCueStates && evaluatedCueStates.length > 0) {
+    evaluatedCueStates.sort((a, b) => a.startSec - b.startSec);
+
+    // Pass 2: Merge adjacent states with equivalent Chinese text
+    for (const cue of evaluatedCueStates) {
+      if (visualSegments.length === 0) {
+        visualSegments.push({ ...cue });
+        continue;
       }
-      continue;
-    }
+      const prev = visualSegments[visualSegments.length - 1];
+      const isAdjacent = (cue.startSec - prev.endSec) <= 0.35;
+      const isEquivalent = areChineseTextsEquivalent(prev.originalChineseText, cue.originalChineseText);
 
-    if (!currentSegment) {
-      // New text segment begins
-      const startSec = parseFloat(obs.timestampSec.toFixed(2));
-      const genderVotes = { male: 0, female: 0, unknown: 0 };
-      if (obs.speakerGender) genderVotes[obs.speakerGender] = (genderVotes[obs.speakerGender] || 0) + 1;
-
-      currentSegment = {
-        originalChineseText: obs.chineseText,
-        startSec,
-        lastObservedSec: startSec,
-        position: obs.position,
-        isSharp: obs.isSharp,
-        frameCount: 1,
-        source: 'visual_ocr',
-        genderVotes,
-      };
-    } else {
-      // Check continuation of existing line vs new dialogue line
-      const isContinuation = areChineseTextsEquivalent(obs.chineseText, currentSegment.originalChineseText);
-      if (isContinuation) {
-        currentSegment.lastObservedSec = parseFloat(obs.timestampSec.toFixed(2));
-        currentSegment.frameCount++;
-        if (obs.chineseText.length > currentSegment.originalChineseText.length) {
-          currentSegment.originalChineseText = obs.chineseText;
+      if (isAdjacent && isEquivalent) {
+        prev.endSec = Math.max(prev.endSec, cue.endSec);
+        prev.duration = parseFloat((prev.endSec - prev.startSec).toFixed(2));
+        if (cue.originalChineseText.length > prev.originalChineseText.length) {
+          prev.originalChineseText = cue.originalChineseText;
+          prev.chineseText = cue.originalChineseText;
         }
-        if (obs.speakerGender) {
-          currentSegment.genderVotes[obs.speakerGender] = (currentSegment.genderVotes[obs.speakerGender] || 0) + 1;
+        if (cue.ocrConfidence === 'low') {
+          prev.ocrConfidence = 'low';
+          prev.reviewNeeded = true;
+          prev.ocrDisagreement = true;
+          prev.uncertainOcr = true;
+        }
+        if (cue.genderVotes) {
+          for (const [k, v] of Object.entries(cue.genderVotes)) {
+            prev.genderVotes[k] = (prev.genderVotes[k] || 0) + v;
+          }
         }
       } else {
-        // Text changed to a different subtitle line
-        const endSec = parseFloat(obs.timestampSec.toFixed(2));
-        const dur = Math.max(0.8, parseFloat((endSec - currentSegment.startSec).toFixed(2)));
-        const genderData = resolveGenderFromVotes(currentSegment.genderVotes);
-        visualSegments.push({
-          ...currentSegment,
-          endSec: parseFloat((currentSegment.startSec + dur).toFixed(2)),
-          duration: parseFloat(dur.toFixed(2)),
-          verifiedDisappearance: true,
-          ...genderData,
-        });
+        visualSegments.push({ ...cue });
+      }
+    }
+  } else {
+    // Fallback: Group continuous frame observations if cueStates was empty
+    let currentSegment = null;
+    for (let i = 0; i < rawObservations.length; i++) {
+      const obs = rawObservations[i];
+      if (!obs.hasText) {
+        if (currentSegment) {
+          const endSec = parseFloat(obs.timestampSec.toFixed(2));
+          const dur = Math.max(0.6, parseFloat((endSec - currentSegment.startSec).toFixed(2)));
+          const genderData = resolveGenderFromVotes(currentSegment.genderVotes);
+          visualSegments.push({
+            ...currentSegment,
+            endSec: parseFloat((currentSegment.startSec + dur).toFixed(2)),
+            duration: dur,
+            verifiedDisappearance: true,
+            ocrConfidence: 'high',
+            reviewNeeded: false,
+            ocrDisagreement: false,
+            uncertainOcr: false,
+            ...genderData,
+          });
+          currentSegment = null;
+        }
+        continue;
+      }
 
+      if (!currentSegment) {
         const startSec = parseFloat(obs.timestampSec.toFixed(2));
         const genderVotes = { male: 0, female: 0, unknown: 0 };
         if (obs.speakerGender) genderVotes[obs.speakerGender] = (genderVotes[obs.speakerGender] || 0) + 1;
@@ -482,70 +659,92 @@ Return JSON ONLY matching this schema:
           source: 'visual_ocr',
           genderVotes,
         };
+      } else {
+        const isContinuation = areChineseTextsEquivalent(obs.chineseText, currentSegment.originalChineseText);
+        if (isContinuation) {
+          currentSegment.lastObservedSec = parseFloat(obs.timestampSec.toFixed(2));
+          currentSegment.frameCount++;
+          if (obs.chineseText.length > currentSegment.originalChineseText.length) {
+            currentSegment.originalChineseText = obs.chineseText;
+          }
+          if (obs.speakerGender) {
+            currentSegment.genderVotes[obs.speakerGender] = (currentSegment.genderVotes[obs.speakerGender] || 0) + 1;
+          }
+        } else {
+          const endSec = parseFloat(obs.timestampSec.toFixed(2));
+          const dur = Math.max(0.6, parseFloat((endSec - currentSegment.startSec).toFixed(2)));
+          const genderData = resolveGenderFromVotes(currentSegment.genderVotes);
+          visualSegments.push({
+            ...currentSegment,
+            endSec: parseFloat((currentSegment.startSec + dur).toFixed(2)),
+            duration: dur,
+            verifiedDisappearance: true,
+            ocrConfidence: 'high',
+            reviewNeeded: false,
+            ocrDisagreement: false,
+            uncertainOcr: false,
+            ...genderData,
+          });
+
+          const startSec = parseFloat(obs.timestampSec.toFixed(2));
+          const genderVotes = { male: 0, female: 0, unknown: 0 };
+          if (obs.speakerGender) genderVotes[obs.speakerGender] = (genderVotes[obs.speakerGender] || 0) + 1;
+
+          currentSegment = {
+            originalChineseText: obs.chineseText,
+            startSec,
+            lastObservedSec: startSec,
+            position: obs.position,
+            isSharp: obs.isSharp,
+            frameCount: 1,
+            source: 'visual_ocr',
+            genderVotes,
+          };
+        }
       }
+    }
+
+    if (currentSegment) {
+      const estimatedEnd = currentSegment.lastObservedSec > currentSegment.startSec
+        ? parseFloat((currentSegment.lastObservedSec + baseStepSec).toFixed(2))
+        : parseFloat((currentSegment.startSec + 1.2).toFixed(2));
+      const dur = Math.max(0.6, parseFloat((estimatedEnd - currentSegment.startSec).toFixed(2)));
+      const genderData = resolveGenderFromVotes(currentSegment.genderVotes);
+      visualSegments.push({
+        ...currentSegment,
+        endSec: parseFloat((currentSegment.startSec + dur).toFixed(2)),
+        duration: dur,
+        verifiedDisappearance: currentSegment.frameCount > 1,
+        ocrConfidence: 'high',
+        reviewNeeded: false,
+        ocrDisagreement: false,
+        uncertainOcr: false,
+        ...genderData,
+      });
     }
   }
 
-  // Close trailing active segment
-  if (currentSegment) {
-    const estimatedEnd = currentSegment.lastObservedSec > currentSegment.startSec
-      ? parseFloat((currentSegment.lastObservedSec + baseStepSec).toFixed(2))
-      : parseFloat((currentSegment.startSec + 1.5).toFixed(2));
-    const dur = Math.max(0.8, parseFloat((estimatedEnd - currentSegment.startSec).toFixed(2)));
-    const genderData = resolveGenderFromVotes(currentSegment.genderVotes);
-    visualSegments.push({
-      ...currentSegment,
-      endSec: parseFloat((currentSegment.startSec + dur).toFixed(2)),
-      duration: parseFloat(dur.toFixed(2)),
-      verifiedDisappearance: currentSegment.frameCount > 1,
-      ...genderData,
-    });
-  }
-
-  // Pass 2: Merge consecutive segments with identical/near-identical Chinese text (deduplication)
-  const deduplicatedSegments = [];
-  for (let i = 0; i < visualSegments.length; i++) {
-    const seg = visualSegments[i];
-    if (deduplicatedSegments.length === 0) {
-      deduplicatedSegments.push({ ...seg });
-      continue;
-    }
-    const prev = deduplicatedSegments[deduplicatedSegments.length - 1];
-    const isAdjacent = (seg.startSec - prev.endSec) <= 1.0;
-    const isTextMatch = areChineseTextsEquivalent(seg.originalChineseText, prev.originalChineseText);
-
-    if (isAdjacent && isTextMatch) {
-      // Merge into prev
-      prev.endSec = Math.max(prev.endSec, seg.endSec);
-      prev.duration = parseFloat((prev.endSec - prev.startSec).toFixed(2));
-      if (seg.originalChineseText.length > prev.originalChineseText.length) {
-        prev.originalChineseText = seg.originalChineseText;
-      }
-      prev.frameCount = (prev.frameCount || 1) + (seg.frameCount || 1);
-      if (prev.voiceGender === 'male' && prev.genderConfidence < 0.6 && seg.genderConfidence >= 0.7) {
-        prev.speakerGender = seg.speakerGender;
-        prev.voiceGender = seg.voiceGender;
-        prev.gender = seg.gender;
-        prev.khmerVoiceId = seg.khmerVoiceId;
-        prev.genderConfidence = seg.genderConfidence;
-      }
-    } else {
-      deduplicatedSegments.push({ ...seg });
-    }
-  }
-
-  // Finalize segments with minimum duration 0.8s and valid timecodes
-  const finalizedVisualSegments = deduplicatedSegments.map((s, idx) => {
-    const dur = Math.max(0.8, parseFloat((s.endSec - s.startSec).toFixed(2)));
+  // Finalize segments with valid timecodes, gender resolution, and minimum duration 0.5s (supports short cues <0.8s)
+  const finalizedVisualSegments = visualSegments.map((s, idx) => {
+    const rawDur = parseFloat((s.endSec - s.startSec).toFixed(2));
+    const dur = Math.max(0.5, rawDur);
     const endSec = parseFloat((s.startSec + dur).toFixed(2));
+    const genderData = resolveGenderFromVotes(s.genderVotes);
+
     return {
       ...s,
       id: idx + 1,
       segmentId: idx + 1,
       endSec,
       duration: dur,
-      uncertainOcr: false,
-      reviewNeeded: false,
+      originalChineseText: s.originalChineseText || s.chineseText || '',
+      chineseText: s.originalChineseText || s.chineseText || '',
+      ocrConfidence: s.ocrConfidence || 'high',
+      reviewNeeded: Boolean(s.reviewNeeded),
+      ocrDisagreement: Boolean(s.ocrDisagreement),
+      uncertainOcr: Boolean(s.uncertainOcr || s.ocrConfidence === 'low'),
+      source: 'visual_ocr',
+      ...genderData,
     };
   });
 
@@ -635,6 +834,12 @@ function deduplicateFastOcrCues(rawCues = [], defaultGender = 'male') {
           prev.endSec = parseFloat(Number(cEnd).toFixed(2));
           prev.duration = parseFloat(Math.max(0.6, prev.endSec - prev.startSec).toFixed(2));
         }
+        if (cue.ocrConfidence === 'low') {
+          prev.ocrConfidence = 'low';
+          prev.reviewNeeded = true;
+          prev.ocrDisagreement = true;
+          prev.uncertainOcr = true;
+        }
         continue;
       }
     }
@@ -672,6 +877,11 @@ function deduplicateFastOcrCues(rawCues = [], defaultGender = 'male') {
       speechDuration: seg.duration,
       availableSlotDuration: seg.duration,
       slotDuration: seg.duration,
+
+      ocrConfidence: seg.ocrConfidence || 'high',
+      reviewNeeded: Boolean(seg.reviewNeeded),
+      ocrDisagreement: Boolean(seg.ocrDisagreement),
+      uncertainOcr: Boolean(seg.uncertainOcr || seg.ocrConfidence === 'low'),
 
       // STEP 3: Speaker/gender WITHOUT ASR
       speakerSource: 'ocr_only',

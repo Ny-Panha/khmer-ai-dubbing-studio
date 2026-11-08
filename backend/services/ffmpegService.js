@@ -2409,15 +2409,18 @@ function extractFramesStreaming(inputVideoPath, startSec = 0, durationSec = 0, f
 }
 
 /**
- * Fast subtitle area difference grid extractor using raw 64x16 grayscale thumbnails.
- * Runs in ~1-2s for a 150-300s chunk and returns average pixel difference between consecutive intervals.
- * Used for local image comparison to prioritize useful frames around subtitle changes without missing content.
+ * Fast subtitle area difference grid extractor using raw grayscale thumbnails.
+ * Extracts small bottom-strip thumbnails at ~5 fps with generous crop (bottom 30% of frame, full width).
+ * Computes average full-strip difference as well as subtitle band difference (rows 8-28, cols 16-112).
+ * Runs completely locally with FFmpeg in ~1-2s per chunk with zero API calls.
  */
-function extractSubtitleDifferenceGrid(inputVideoPath, startSec = 0, durationSec = 0, fps = 1.5) {
+function extractSubtitleDifferenceGrid(inputVideoPath, startSec = 0, durationSec = 0, fps = 5.0) {
   return new Promise((resolve) => {
     if (!inputVideoPath || !fs.existsSync(inputVideoPath)) return resolve([]);
     const safeInputPath = getSafeCliPath(inputVideoPath);
     const safeStartSec = Math.max(0, Number(startSec) || 0);
+    const scaleW = 128;
+    const scaleH = 32;
 
     const args = ['-y', '-ss', safeStartSec.toFixed(3)];
     if (durationSec > 0) {
@@ -2427,7 +2430,7 @@ function extractSubtitleDifferenceGrid(inputVideoPath, startSec = 0, durationSec
       '-i', safeInputPath,
       '-an', '-sn',
       '-threads', '4',
-      '-vf', `fps=${fps},crop=iw:ih*0.25:0:ih*0.75,scale=64:16,format=gray`,
+      '-vf', `fps=${fps},crop=iw:ih*0.3:0:ih*0.7,scale=${scaleW}:${scaleH},format=gray`,
       '-f', 'rawvideo',
       '-pix_fmt', 'gray',
       '-'
@@ -2438,7 +2441,7 @@ function extractSubtitleDifferenceGrid(inputVideoPath, startSec = 0, durationSec
     proc.stdout.on('data', (d) => chunks.push(d));
     proc.on('close', () => {
       const buf = Buffer.concat(chunks);
-      const frameSize = 64 * 16;
+      const frameSize = scaleW * scaleH;
       const count = Math.floor(buf.length / frameSize);
       const step = 1 / fps;
       const diffs = [];
@@ -2446,26 +2449,110 @@ function extractSubtitleDifferenceGrid(inputVideoPath, startSec = 0, durationSec
       for (let i = 0; i < count; i++) {
         const t = parseFloat((safeStartSec + i * step).toFixed(2));
         if (i === 0) {
-          diffs.push({ timestampSec: t, diff: 99.0, isChange: true });
+          diffs.push({ timestampSec: t, diff: 0, subDiff: 0, isChange: false });
           continue;
         }
         const fPrev = buf.subarray((i - 1) * frameSize, i * frameSize);
         const fCurr = buf.subarray(i * frameSize, (i + 1) * frameSize);
         let sum = 0;
-        for (let p = 0; p < frameSize; p++) {
-          sum += Math.abs(fPrev[p] - fCurr[p]);
+        let subSum = 0;
+        let subPixels = 0;
+
+        for (let r = 0; r < scaleH; r++) {
+          for (let c = 0; c < scaleW; c++) {
+            const p = r * scaleW + c;
+            const d = Math.abs(fPrev[p] - fCurr[p]);
+            sum += d;
+            if (r >= 8 && r <= 28 && c >= 16 && c <= 112) {
+              subSum += d;
+              subPixels++;
+            }
+          }
         }
         const avg = sum / frameSize;
+        const subAvg = subPixels > 0 ? subSum / subPixels : avg;
         diffs.push({
           timestampSec: t,
           diff: parseFloat(avg.toFixed(2)),
-          isChange: avg > 18.0,
+          subDiff: parseFloat(subAvg.toFixed(2)),
+          isChange: subAvg >= 14.0 || avg >= 18.0,
         });
       }
       resolve(diffs);
     });
     proc.on('error', () => resolve([]));
   });
+}
+
+/**
+ * Change-driven subtitle onset and candidate cue state detector.
+ * Performs a fast local pre-pass (zero API calls) using consecutive strip pixel diffs.
+ * Every detected change point starts a candidate cue state with sampleASec (onset) and sampleBSec (mid-cue).
+ *
+ * @param {string} inputVideoPath
+ * @param {number} startSec
+ * @param {number} durationSec
+ * @param {number} [fps=5.0]
+ * @returns {Promise<{ changePoints: Array, cueStates: Array, frameDiffs: Array }>}
+ */
+async function detectSubtitleChangePoints(inputVideoPath, startSec = 0, durationSec = 0, fps = 5.0) {
+  const diffs = await extractSubtitleDifferenceGrid(inputVideoPath, startSec, durationSec, fps);
+  if (!diffs || diffs.length === 0) {
+    return { changePoints: [], cueStates: [], frameDiffs: [] };
+  }
+
+  const changePoints = [];
+  const minPeakDist = 0.55; // ensures cues down to 0.5s are preserved
+
+  for (let i = 1; i < diffs.length - 1; i++) {
+    const prev = diffs[i - 1].subDiff;
+    const curr = diffs[i].subDiff;
+    const next = diffs[i + 1].subDiff;
+
+    const isPeak = (curr >= 14.0 && curr >= prev && curr >= next);
+    const isSharpRise = (curr >= 18.0 && curr > prev * 1.35);
+
+    if (isPeak || isSharpRise) {
+      const last = changePoints[changePoints.length - 1];
+      if (!last || (diffs[i].timestampSec - last.timestampSec) >= minPeakDist) {
+        changePoints.push(diffs[i]);
+      } else if (curr > last.subDiff) {
+        changePoints[changePoints.length - 1] = diffs[i];
+      }
+    }
+  }
+
+  // Construct candidate cue states between consecutive change points
+  const safeStart = Math.max(0, Number(startSec) || 0);
+  const endSec = durationSec > 0 ? safeStart + durationSec : (diffs[diffs.length - 1].timestampSec + 0.2);
+
+  const cpTimes = changePoints.map((c) => c.timestampSec);
+  if (cpTimes.length === 0 || cpTimes[0] > safeStart + 0.5) {
+    cpTimes.unshift(parseFloat(safeStart.toFixed(2)));
+  }
+  if (cpTimes[cpTimes.length - 1] < endSec - 0.4) {
+    cpTimes.push(parseFloat(endSec.toFixed(2)));
+  }
+
+  const cueStates = [];
+  for (let i = 0; i < cpTimes.length - 1; i++) {
+    const cStart = cpTimes[i];
+    const cEnd = cpTimes[i + 1];
+    const dur = parseFloat((cEnd - cStart).toFixed(2));
+    if (dur >= 0.25) {
+      cueStates.push({
+        cueIndex: cueStates.length + 1,
+        startSec: cStart,
+        endSec: cEnd,
+        duration: dur,
+        sampleASec: parseFloat((cStart + Math.min(0.12, dur * 0.25)).toFixed(2)),
+        sampleBSec: parseFloat(((cStart + cEnd) / 2).toFixed(2)),
+        sampleTieSec: parseFloat((cStart + dur * 0.75).toFixed(2)),
+      });
+    }
+  }
+
+  return { changePoints, cueStates, frameDiffs: diffs };
 }
 
 /**
@@ -2785,6 +2872,7 @@ module.exports = {
   extractFramesAtTimestamps,
   extractFramesStreaming,
   extractSubtitleDifferenceGrid,
+  detectSubtitleChangePoints,
   getMediaDuration,
   buildAtempoFilter,
   autoStretchTtsAudio,
