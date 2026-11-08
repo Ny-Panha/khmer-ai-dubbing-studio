@@ -1,10 +1,14 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
-- **Environment**: Antigravity IDE (Canonical Split Timing Alignment & Non-Silent Split Guard)
-- **Timestamp**: 2026-11-08T19:30:00+07:00
+- **Environment**: Antigravity IDE (ClipInspectorPanel isKhmerEmpty Scope Fix & Canonical Split)
+- **Timestamp**: 2026-11-08T19:31:00+07:00
 
-## Latest Update: Split Uses Exact Canvas Segment End & Never Fails Silently
+## Latest Update: Split Uses Exact Canvas Segment End & Inspector Scope Fix
+
+### Hotfix: ClipInspectorPanel `isKhmerEmpty` ReferenceError Resolved
+- **Problem**: When rendering `<ClipInspectorPanel>`, `isKhmerEmpty` was evaluated at line 726/780/817 before being declared in component scope, triggering `Uncaught ReferenceError: isKhmerEmpty is not defined`.
+- **Fix**: Declared `const isKhmerEmpty = !localKhmerText?.trim();` at top of component body (line 258) alongside other status derivations (`isGenerating`, `isError`, etc.). Build and unit tests pass.
 
 ### 1. STEP 0 — Data Confirmation & Field Comparison Table (EP2 Segments #1 and #2)
 
