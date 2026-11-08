@@ -63,6 +63,7 @@ export default function VoiceSettings({
   audioStage = '',
   audioGenerated = false,
   onRegenerateSegment = null,
+  onTranslateSegment = null,
   speakerRegistry = {},
   onUpdateSpeakerVoice = null,
   onUpdateSegmentVoice = null,
@@ -749,6 +750,7 @@ export default function VoiceSettings({
           onSegmentTextBlur={handleSegmentTextBlur}
           onSegmentChineseChange={handleSegmentChineseChange}
           onSingleRegen={handleSingleRegen}
+          onTranslateSegment={onTranslateSegment}
           regeneratingId={regeneratingId}
           regenStatus={regenStatusMap[String(selectedSegment?.id ?? selectedSegmentIndex)] || selectedSegment?.textStatus}
           onSplitSegment={onSplitSegment}

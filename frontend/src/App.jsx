@@ -358,6 +358,7 @@ export default function App() {
   const handleToggleDeliveryType = useCallback((...args) => audioRef.current.handleToggleDeliveryType?.(...args), []);
   const handleUpdateVoiceSettings = useCallback((...args) => audioRef.current.handleUpdateVoiceSettings?.(...args), []);
   const handleRegenerateSingleSegment = useCallback((...args) => audioRef.current.handleRegenerateSingleSegment?.(...args), []);
+  const handleTranslateSingleSegment = useCallback((...args) => audioRef.current.handleTranslateSingleSegment?.(...args), []);
   const handleUpdateSegmentText = useCallback((...args) => audioRef.current.handleUpdateSegmentText?.(...args), []);
   const handleUpdateSpeakerVoice = useCallback((...args) => audioRef.current.handleUpdateSpeakerVoice?.(...args), []);
   const handleUpdateSegmentVoice = useCallback((...args) => audioRef.current.handleUpdateSegmentVoice?.(...args), []);
@@ -518,6 +519,7 @@ export default function App() {
                 audioProgress={audio.audioProgress}
                 audioStage={audio.audioStage}
                 onRegenerateSegment={handleRegenerateSingleSegment}
+                onTranslateSegment={handleTranslateSingleSegment}
                 onUpdateSegmentText={handleUpdateSegmentText}
                 speakerRegistry={speakerRegistry || EMPTY_OBJECT}
                 onUpdateSpeakerVoice={handleUpdateSpeakerVoice}
@@ -615,6 +617,7 @@ export default function App() {
                 audioStage={audio.audioStage}
                 audioGenerated={audio.audioGenerated}
                 onRegenerateSegment={handleRegenerateSingleSegment}
+                onTranslateSegment={handleTranslateSingleSegment}
                 speakerRegistry={speakerRegistry || EMPTY_OBJECT}
                 onUpdateSpeakerVoice={handleUpdateSpeakerVoice}
                 onUpdateSegmentVoice={handleUpdateSegmentVoice}

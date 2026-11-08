@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { parseTimeToSeconds } from '../../utils/formatTime';
 import { cleanKhmerText } from '../../utils/cleanKhmer';
+import { retranslateSegmentApi } from '../../services/api';
 
 function DebouncedScriptTextarea({ value, onChange, onBlur, placeholder, className, style, rows = 2 }) {
   const [localVal, setLocalVal] = React.useState(value || '');
@@ -70,9 +71,11 @@ const CaptionItemCard = React.memo(function CaptionItemCard({
   handleSegmentBlur,
   handlePlayLine,
   onRegenerateSegment,
+  onTranslateSegment,
   handleDeleteSegment,
   onToggleDeliveryType,
 }) {
+  const [isTranslating, setIsTranslating] = React.useState(false);
   const startSec = typeof seg.startSec === 'number' ? seg.startSec : parseTimeToSeconds(seg.start, 0);
   const endSec = typeof seg.endSec === 'number' ? seg.endSec : parseTimeToSeconds(seg.end, startSec + 3.0);
   const segDuration = Math.max(0.1, endSec - startSec);
@@ -88,6 +91,41 @@ const CaptionItemCard = React.memo(function CaptionItemCard({
   const khmerText = (seg.khmer || seg.khmerText || seg.khmerTranslatedText || '').trim();
   const isTextEmpty = !khmerText;
   const isReviewNeeded = Boolean(seg.reviewNeeded || seg.uncertainOcr || seg.ocrDisagreement || isTextEmpty);
+
+  const handleTranslateLine = async (e) => {
+    e.stopPropagation();
+    if (isTranslating) return;
+    const textToTranslate = (seg.chineseText || seg.originalChineseText || seg.originalText || seg.original || '').trim();
+    if (!textToTranslate) {
+      alert(`Segment #${idx + 1} មិនមានអត្ថបទចិនដើមសម្រាប់បកប្រែទេ!`);
+      return;
+    }
+    setIsTranslating(true);
+    try {
+      if (onTranslateSegment) {
+        await onTranslateSegment(seg.id ?? idx, idx);
+      } else {
+        const res = await retranslateSegmentApi(textToTranslate, {
+          speaker: seg.speaker,
+          gender: seg.voiceGender || seg.speakerGender || seg.gender,
+        });
+        if (res && Array.isArray(res.options) && res.options.length > 0) {
+          const best = cleanKhmerText(res.options[0].text);
+          if (best) {
+            handleSegmentChange(idx, 'khmer', best);
+            if (handleSegmentBlur) {
+              handleSegmentBlur(idx, best);
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.error('[Card] Failed to translate line:', err);
+      alert(`បរាជ័យក្នុងការបកប្រែ: ${err.message}`);
+    } finally {
+      setIsTranslating(false);
+    }
+  };
 
   return (
     <div
@@ -289,6 +327,42 @@ const CaptionItemCard = React.memo(function CaptionItemCard({
             </button>
           )}
 
+          {/* One-Click Remedy: Translate this line */}
+          {isTextEmpty && (
+            <button
+              type="button"
+              disabled={isTranslating}
+              onClick={handleTranslateLine}
+              style={{
+                padding: '2px 8px',
+                fontSize: '0.68rem',
+                borderRadius: 4,
+                border: 'none',
+                background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
+                color: '#ffffff',
+                fontWeight: 700,
+                cursor: isTranslating ? 'not-allowed' : 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 4,
+                boxShadow: '0 1px 4px rgba(99, 102, 241, 0.35)',
+              }}
+              title="បកប្រែឃ្លានេះតាមរយៈ AI (Translate this line)"
+            >
+              {isTranslating ? (
+                <>
+                  <Loader2 size={10} className="animate-spin" />
+                  <span>កំពុងបកប្រែ...</span>
+                </>
+              ) : (
+                <>
+                  <Sparkles size={10} />
+                  <span>បកប្រែឃ្លានេះ</span>
+                </>
+              )}
+            </button>
+          )}
+
           {onRegenerateSegment && (
             <button
               type="button"
@@ -388,6 +462,7 @@ function ScriptReviewTab({
   handlePlayLine,
   playingSegmentId,
   onRegenerateSegment,
+  onTranslateSegment = null,
   handleDeleteSegment,
   onToggleDeliveryType = null,
 }) {
@@ -565,6 +640,7 @@ function ScriptReviewTab({
                     handleSegmentBlur={handleSegmentBlur}
                     handlePlayLine={handlePlayLine}
                     onRegenerateSegment={onRegenerateSegment}
+                    onTranslateSegment={onTranslateSegment}
                     handleDeleteSegment={handleDeleteSegment}
                     onToggleDeliveryType={onToggleDeliveryType}
                   />

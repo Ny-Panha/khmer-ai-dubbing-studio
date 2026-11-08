@@ -621,11 +621,14 @@ export default function GeminiRouteModal({
           return;
         }
 
+        const emptySegsCount = segs.filter(s => !String(s.khmer || s.khmerText || s.khmerTranslatedText || '').trim()).length;
+        const validSegsCount = segs.length - emptySegsCount;
         const totalExpectedSegs = segs.length;
+        const skippedNote = emptySegsCount > 0 ? ` (រំលង ${emptySegsCount} ឃ្លា គ្មានអត្ថបទ)` : '';
         const initialLog = {
           time: new Date().toLocaleTimeString(),
           progress: 0,
-          message: `🎙️ ចាប់ផ្ដើមដំណើរការបង្កើតសំឡេងខ្មែរ AI (${totalExpectedSegs} ឃ្លា) តាមរយៈ km-KH-PisethNeural...`,
+          message: `🎙️ ចាប់ផ្ដើមដំណើរការបង្កើតសំឡេងខ្មែរ AI (${validSegsCount}/${totalExpectedSegs} ឃ្លា${skippedNote}) តាមរយៈ km-KH-PisethNeural...`,
         };
         setTtsLiveStats((prev) => ({
           ...prev,
@@ -718,12 +721,17 @@ export default function GeminiRouteModal({
           if (res.ok && data.success) {
             newlyCompletedCount++;
             setCompletedTtsEpIds((prev) => new Set([...prev, ep.id]));
+            const skippedEmpty = typeof data.skippedEmptyCount === 'number'
+              ? data.skippedEmptyCount
+              : segs.filter(s => !String(s.khmer || s.khmerText || s.khmerTranslatedText || '').trim()).length;
+            const validCount = typeof data.validCount === 'number' ? data.validCount : (segs.length - skippedEmpty);
+            const skippedMsg = skippedEmpty > 0 ? ` (រំលង ${skippedEmpty} ឃ្លា គ្មានអត្ថបទ)` : '';
             setTtsLiveStats((prev) => {
               const currentLogs = [...(prev[ep.id]?.logs || [])];
               currentLogs.push({
                 time: new Date().toLocaleTimeString(),
                 progress: 100,
-                message: `🎉 សំឡេងខ្មែរ AI និង Master Narration សម្រេចជោគជ័យ ១០០%!`,
+                message: `🎉 សំឡេងខ្មែរ AI (${validCount} ឃ្លា) និង Master Narration សម្រេចជោគជ័យ${skippedMsg}!`,
               });
               return {
                 ...prev,

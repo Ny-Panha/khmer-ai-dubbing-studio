@@ -341,6 +341,13 @@ export async function generateAudioApi(params) {
  * @param {string|Object} [options='normal'] - speed string or { speed, voiceId, projectName, videoId, seriesId, episodeId }
  */
 export async function generateSingleSegmentAudio(segment, options = 'normal') {
+  const rawText = segment?.khmer || segment?.khmerText || segment?.khmerTranslatedText || segment?.text || '';
+  if (!rawText || !String(rawText).trim()) {
+    const segNum = segment?.index || segment?.id || '';
+    const err = new Error(segNum ? `Segment #${segNum} គ្មានអត្ថបទខ្មែរទេ — សូមបកប្រែ ឬវាយអត្ថបទសិន` : 'គ្មានអត្ថបទខ្មែរទេ — សូមបកប្រែ ឬវាយអត្ថបទសិន');
+    err.status = 400;
+    throw err;
+  }
   const isObj = typeof options === 'object' && options !== null;
   const speed = isObj ? (options.speed || 'normal') : (options || 'normal');
   const voiceId = isObj ? (options.voiceId || 'km-KH-PisethNeural') : 'km-KH-PisethNeural';

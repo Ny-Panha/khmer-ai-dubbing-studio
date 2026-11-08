@@ -17,6 +17,7 @@ export default function ClipInspectorPanel({
   onSegmentTextChange,
   onSegmentTextBlur,
   onSingleRegen,
+  onTranslateSegment,
   regeneratingId,
   regenStatus,
   onSplitSegment,
@@ -344,7 +345,86 @@ export default function ClipInspectorPanel({
     }
   };
 
-  // 1-Click apply AI translation option directly to text & auto-regen speech
+  // ✨ One-Click AI Translation Remedy for Missing-Text Segments
+  const handleTranslateThisLine = async () => {
+    const textToTranslate = (localChineseText || originalChinese || selectedSegment?.chineseText || selectedSegment?.originalText || selectedSegment?.original || '').trim();
+    if (!textToTranslate || isRetranslating) {
+      if (!textToTranslate) {
+        alert('មិនមានអត្ថបទចិនដើមសម្រាប់បកប្រែឡើយ!');
+      }
+      return;
+    }
+    setIsRetranslating(true);
+    try {
+      let bestText = null;
+      let resOptions = null;
+
+      if (onTranslateSegment && selectedSegment) {
+        const updated = await onTranslateSegment(selectedSegment.id || selectedSegmentIndex, selectedSegmentIndex);
+        if (updated) {
+          bestText = updated.khmer || updated.khmerText || updated.khmerTranslatedText;
+        }
+      }
+
+      if (!bestText) {
+        const res = await retranslateSegmentApi(textToTranslate, {
+          speaker: selectedSegment?.speaker,
+          gender: selectedSegment?.gender || selectedSegment?.speakerGender,
+        });
+        if (res && Array.isArray(res.options) && res.options.length > 0) {
+          bestText = cleanKhmerText(res.options[0].text);
+          resOptions = res;
+        }
+      }
+
+      if (bestText) {
+        if (debounceTimerRef.current) {
+          clearTimeout(debounceTimerRef.current);
+          debounceTimerRef.current = null;
+        }
+        setLocalKhmerText(bestText);
+        localKhmerTextRef.current = bestText;
+        lastCommittedTextRef.current = bestText;
+        prevPropKhmerTextRef.current = bestText;
+
+        if (selectedSegment) {
+          delete selectedSegment.regenError;
+          selectedSegment.khmer = bestText;
+          selectedSegment.khmerText = bestText;
+          selectedSegment.khmerTranslatedText = bestText;
+          selectedSegment.audioOutdated = true;
+          selectedSegment.textStatus = 'text_updated';
+          selectedSegment.reviewNeeded = false;
+          selectedSegment.ttsStatus = 'pending';
+          if (Array.isArray(selectedSegment.validationErrors)) {
+            selectedSegment.validationErrors = selectedSegment.validationErrors.filter((e) => !e.includes('មិនទាន់មានអត្ថបទបកប្រែ'));
+          }
+        }
+
+        if (onSegmentTextChange) {
+          onSegmentTextChange(selectedSegmentIndex, bestText);
+        }
+        if (onSegmentTextBlur) {
+          onSegmentTextBlur(selectedSegmentIndex, bestText);
+        }
+
+        if (resOptions) {
+          const sanitizedRes = {
+            ...resOptions,
+            note: cleanKhmerText(resOptions.note),
+            options: resOptions.options.map((opt) => ({ ...opt, text: cleanKhmerText(opt.text) })),
+          };
+          setRetranslateData(sanitizedRes);
+          retranslateCacheRef.current[currentSegKey] = sanitizedRes;
+        }
+      }
+    } catch (err) {
+      console.error('[Inspector] Translate line failed:', err);
+      alert(`បរាជ័យក្នុងការបកប្រែ: ${err.message}`);
+    } finally {
+      setIsRetranslating(false);
+    }
+  };
   const handleApplyOption = (newText) => {
     const cleanText = cleanKhmerText(newText);
     if (!cleanText) return;
@@ -642,27 +722,62 @@ export default function ClipInspectorPanel({
                 )}
 
 
-                {/* Missing / Review translation alert */}
-                {(!khmerText && originalChinese) && (
+                {/* One-Click Missing Text Remedy */}
+                {isKhmerEmpty && (
                   <div style={{
-                    marginTop: 6,
-                    padding: '5px 8px',
-                    background: 'rgba(245, 158, 11, 0.15)',
-                    border: '1px solid rgba(245, 158, 11, 0.4)',
-                    borderRadius: 5,
+                    marginTop: 8,
+                    marginBottom: 4,
+                    padding: '8px 10px',
+                    background: 'rgba(239, 68, 68, 0.12)',
+                    border: '1px solid rgba(239, 68, 68, 0.4)',
+                    borderRadius: 6,
                     display: 'flex',
                     alignItems: 'center',
-                    gap: 6,
-                    fontSize: '0.72rem',
-                    color: '#fbbf24'
+                    justifyContent: 'space-between',
+                    gap: 8,
                   }}>
-                    <AlertCircle size={12} color="#fbbf24" style={{ flexShrink: 0 }} />
-                    <span>ឃ្លានេះត្រូវការពិនិត្យ (Missing Khmer translation) — សូមបំពេញការបកប្រែជាភាសាខ្មែរខាងលើ!</span>
+                    <span style={{ fontSize: '0.72rem', color: '#fca5a5', display: 'flex', alignItems: 'center', gap: 5 }}>
+                      <AlertCircle size={13} color="#ef4444" style={{ flexShrink: 0 }} />
+                      <span>គ្មានអត្ថបទខ្មែរទេ — សូមបកប្រែឃ្លានេះ</span>
+                    </span>
+                    <button
+                      type="button"
+                      disabled={isRetranslating}
+                      onClick={handleTranslateThisLine}
+                      style={{
+                        padding: '4px 10px',
+                        fontSize: '0.72rem',
+                        background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
+                        color: '#ffffff',
+                        border: 'none',
+                        borderRadius: 4,
+                        cursor: isRetranslating ? 'not-allowed' : 'pointer',
+                        fontWeight: 700,
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 4,
+                        whiteSpace: 'nowrap',
+                        boxShadow: '0 2px 6px rgba(99, 102, 241, 0.35)',
+                      }}
+                      title="បកប្រែឃ្លានេះតាមរយៈ AI (Translate this line)"
+                    >
+                      {isRetranslating ? (
+                        <>
+                          <Loader2 size={12} className="animate-spin" />
+                          <span>កំពុងបកប្រែ...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Sparkles size={12} />
+                          <span>បកប្រែឃ្លានេះ</span>
+                        </>
+                      )}
+                    </button>
                   </div>
                 )}
 
-                {/* Error Banner with Retry Button */}
-                {isError && (
+                {/* Error Banner with Retry Button (Only when text is present) */}
+                {isError && !isKhmerEmpty && (
                   <div style={{
                     marginTop: 6,
                     padding: '6px 10px',
@@ -699,7 +814,7 @@ export default function ClipInspectorPanel({
                 )}
 
                 {/* Manual 1-click Regen Button when outdated or text edited */}
-                {(selectedSegment.audioOutdated || isTextUpdated) && !isError && (
+                {(selectedSegment.audioOutdated || isTextUpdated) && !isError && !isKhmerEmpty && (
                   <button
                     type="button"
                     onClick={() => onSingleRegen(selectedSegment.id || selectedSegmentIndex, selectedSegmentIndex, localKhmerText)}
@@ -1162,17 +1277,50 @@ export default function ClipInspectorPanel({
                   )}
                 </button>
 
-                {/* 2. Regenerate Button */}
-                {(() => {
-                  const isKhmerEmpty = !localKhmerText?.trim();
+                {/* 2. Regenerate Button or One-Click Translate Remedy */}
+                {isKhmerEmpty ? (
+                  <button
+                    type="button"
+                    onClick={handleTranslateThisLine}
+                    disabled={isRetranslating}
+                    className="btn-primary"
+                    style={{
+                      flex: 1,
+                      minWidth: '110px',
+                      padding: '7px 8px',
+                      fontSize: '0.74rem',
+                      justifyContent: 'center',
+                      background: 'linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)',
+                      color: '#ffffff',
+                      border: 'none',
+                      cursor: isRetranslating ? 'not-allowed' : 'pointer',
+                      fontWeight: 700,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 5,
+                      boxShadow: '0 2px 8px rgba(99, 102, 241, 0.35)',
+                    }}
+                    title="បកប្រែឃ្លានេះជាភាសាខ្មែរតាមរយៈ AI (Translate this line) — មិនអាចបង្កើតសំឡេងបានទេ — គ្មានអត្ថបទខ្មែរ (Missing text)"
+                  >
+                    {isRetranslating ? (
+                      <>
+                        <Loader2 size={13} className="pulse-glow" />
+                        <span>កំពុងបកប្រែ...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles size={13} />
+                        <span>បកប្រែឃ្លានេះ</span>
+                      </>
+                    )}
+                  </button>
+                ) : (() => {
                   const isRegenerating = regeneratingId === (selectedSegment.id || selectedSegmentIndex);
-                  const isDisabled = isRegenerating || isKhmerEmpty;
-
                   return (
                     <button
                       type="button"
-                      onClick={() => !isKhmerEmpty && onSingleRegen(selectedSegment.id || selectedSegmentIndex, selectedSegmentIndex, localKhmerText)}
-                      disabled={isDisabled}
+                      onClick={() => onSingleRegen(selectedSegment.id || selectedSegmentIndex, selectedSegmentIndex, localKhmerText)}
+                      disabled={isRegenerating}
                       className={selectedSegment.audioUrl ? "btn-secondary" : "btn-primary"}
                       style={{
                         flex: 1,
@@ -1180,14 +1328,9 @@ export default function ClipInspectorPanel({
                         padding: '7px 8px',
                         fontSize: '0.74rem',
                         justifyContent: 'center',
-                        opacity: isKhmerEmpty ? 0.45 : 1,
-                        cursor: isKhmerEmpty ? 'not-allowed' : 'pointer',
+                        cursor: 'pointer',
                       }}
-                      title={
-                        isKhmerEmpty
-                          ? "មិនអាចបង្កើតសំឡេងបានទេ — គ្មានអត្ថបទខ្មែរ (Missing text)"
-                          : "Regenerate speech for this segment"
-                      }
+                      title="Regenerate speech for this segment"
                     >
                       {isRegenerating ? (
                         <>

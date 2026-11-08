@@ -50,6 +50,7 @@ function MediaLibrary({
   audioProgress = 0,
   audioStage = '',
   onRegenerateSegment,
+  onTranslateSegment = null,
   onUpdateSegmentText = null,
   speakerRegistry = {},
   onUpdateSpeakerVoice = null,
@@ -457,6 +458,7 @@ function MediaLibrary({
           handlePlayLine={handlePlayLine}
           playingSegmentId={playingSegmentId}
           onRegenerateSegment={onRegenerateSegment}
+          onTranslateSegment={onTranslateSegment}
           handleDeleteSegment={handleDeleteSegment}
           onToggleDeliveryType={onToggleDeliveryType}
         />

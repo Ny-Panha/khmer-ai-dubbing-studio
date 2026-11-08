@@ -325,6 +325,29 @@ router.post("/generate-audio", async (req, res) => {
       const fullAudioFilename = isEpisode ? `${cleanEpisode}_narration_khmer.mp3` : `${cleanName}_narration_khmer.mp3`;
       const fullAudioPath = path.join(audioDir, fullAudioFilename);
 
+      const hasAnyText = segments.some((s) => {
+        const raw = s.khmer || s.khmerText || s.khmerTranslatedText || s.text || "";
+        return Boolean(typeof raw === "string" && raw.trim());
+      });
+
+      if (!hasAnyText) {
+        console.warn(`[TTS] Batch audio request has 0 segments with text (${segments.length} segments skipped).`);
+        return res.json({
+          success: true,
+          projectName: cleanSeries,
+          seriesId: cleanSeries,
+          episodeId: cleanEpisode,
+          voiceId,
+          speed,
+          fullAudioUrl: null,
+          fullAudioPath: null,
+          segments: segments.map((s) => ({ ...s, ttsStatus: "empty_text", audioGenerated: false, audioOutdated: true })),
+          skippedEmptyCount: segments.length,
+          validCount: 0,
+          summaryMessage: `រំលង ${segments.length} ឃ្លា (គ្មានអត្ថបទ)`,
+        });
+      }
+
       // Fast Path: If master narration audio already exists and forceRegen is false, return immediately without re-rendering!
       if (!forceRegen && fs.existsSync(fullAudioPath) && fs.statSync(fullAudioPath).size > 1000) {
         const relAudioUrl = isEpisode
@@ -348,6 +371,15 @@ router.post("/generate-audio", async (req, res) => {
             }
           } catch (_) {}
         }
+        const mappedSegments = segments.map((s) => {
+          const raw = s.khmer || s.khmerText || s.khmerTranslatedText || s.text || "";
+          if (!raw.trim()) {
+            return { ...s, ttsStatus: "empty_text", audioGenerated: false, audioOutdated: true };
+          }
+          return s;
+        });
+        const skippedEmptyCount = mappedSegments.filter((s) => s.ttsStatus === "empty_text").length;
+        const validCount = mappedSegments.length - skippedEmptyCount;
         return res.json({
           success: true,
           alreadyCompleted: true,
@@ -358,7 +390,10 @@ router.post("/generate-audio", async (req, res) => {
           speed,
           fullAudioUrl: relAudioUrl,
           fullAudioPath,
-          segments,
+          segments: mappedSegments,
+          skippedEmptyCount,
+          validCount,
+          summaryMessage: skippedEmptyCount > 0 ? `ជោគជ័យ ${validCount} ឃ្លា (រំលង ${skippedEmptyCount} ឃ្លា គ្មានអត្ថបទ)` : `ជោគជ័យ ${validCount} ឃ្លា (100%)`,
         });
       }
 
@@ -383,13 +418,18 @@ router.post("/generate-audio", async (req, res) => {
             const targetEp = (seriesMeta.episodes || []).find((e) => String(e.id) === String(cleanEpisode));
             if (targetEp) {
               if (!targetEp.scriptData) targetEp.scriptData = {};
-              targetEp.scriptData.segments = updatedSegments;
+              if (Array.isArray(targetEp.scriptData.segments) && targetEp.scriptData.segments.length > updatedSegments.length) {
+                const updatedMap = new Map(updatedSegments.map((s) => [String(s.id ?? s.index), s]));
+                targetEp.scriptData.segments = targetEp.scriptData.segments.map((s) => updatedMap.get(String(s.id ?? s.index)) || s);
+              } else {
+                targetEp.scriptData.segments = updatedSegments;
+              }
               targetEp.scriptData.hasScript = true;
-              targetEp.scriptData.totalSegments = updatedSegments.length;
+              targetEp.scriptData.totalSegments = targetEp.scriptData.segments.length;
               targetEp.audioGenerated = true;
               targetEp.hasAudio = true;
               await fs.promises.writeFile(metaPath, JSON.stringify(seriesMeta, null, 2), "utf8");
-              console.log(`[TTS] Immediately persisted ${updatedSegments.length} segments with audio to series.json for episode ${cleanEpisode}`);
+              console.log(`[TTS] Immediately persisted ${targetEp.scriptData.segments.length} segments with audio to series.json for episode ${cleanEpisode}`);
             }
           }
         } catch (saveErr) {
@@ -445,6 +485,12 @@ router.post("/generate-audio", async (req, res) => {
         }
       }
 
+      const skippedEmptyCount = updatedSegments.filter(s => s.ttsStatus === 'empty_text' || !((s.khmer || s.khmerText || s.khmerTranslatedText || s.text || '').trim())).length;
+      const validGeneratedCount = updatedSegments.length - skippedEmptyCount;
+      const summaryMessage = skippedEmptyCount > 0
+        ? `ជោគជ័យ ${validGeneratedCount} ឃ្លា (រំលង ${skippedEmptyCount} ឃ្លា គ្មានអត្ថបទ)`
+        : `ជោគជ័យ ${validGeneratedCount} ឃ្លា (100%)`;
+
       return res.json({
         success: true,
         projectName: cleanSeries,
@@ -455,6 +501,9 @@ router.post("/generate-audio", async (req, res) => {
         fullAudioUrl: fs.existsSync(fullAudioPath) ? relAudioUrl : null,
         fullAudioPath: fs.existsSync(fullAudioPath) ? fullAudioPath : null,
         segments: updatedSegments,
+        skippedEmptyCount,
+        validCount: validGeneratedCount,
+        summaryMessage,
       });
     }
 

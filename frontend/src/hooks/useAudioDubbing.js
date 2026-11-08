@@ -3,11 +3,13 @@ import {
   generateAudioApi, 
   generateSingleSegmentAudio, 
   syncTimelineAudioApi, 
-  fetchTtsVoices 
+  fetchTtsVoices,
+  retranslateSegmentApi,
 } from '../services/api';
 import { getSpeakerId, detectSpeakerGender } from '../utils/speakerUtils';
 import { formatTimecode, parseTimeToSeconds } from '../utils/timestampUtils';
 import { splitKhmerTextIntoHalves } from '../utils/khmerTextSplitter';
+import { cleanKhmerText } from '../utils/cleanKhmer';
 
 /**
  * Custom hook to manage all Khmer AI Speech synthesis, voice switching, and audio sync
@@ -209,7 +211,8 @@ const FALLBACK_VOICE_CATALOG = {
       segments: newSegments,
     }));
 
-    if (autoRegen) {
+    const currentKhmerText = (updatedSeg.khmer || updatedSeg.khmerText || updatedSeg.khmerTranslatedText || '').trim();
+    if (autoRegen && currentKhmerText) {
       try {
         const regenerated = await generateSingleSegmentAudio(updatedSeg, {
           speed: newSpeed,
@@ -317,7 +320,8 @@ const FALLBACK_VOICE_CATALOG = {
       segments: newSegments,
     }));
 
-    if (autoRegen) {
+    const currentKhmerText = (updatedSeg.khmer || updatedSeg.khmerText || updatedSeg.khmerTranslatedText || '').trim();
+    if (autoRegen && currentKhmerText) {
       try {
         const regenerated = await generateSingleSegmentAudio(updatedSeg, {
           speed: activeSpeed,
@@ -407,7 +411,8 @@ const FALLBACK_VOICE_CATALOG = {
       segments: newSegments,
     }));
 
-    if (autoRegen) {
+    const currentKhmerText = (updatedSeg.khmer || updatedSeg.khmerText || updatedSeg.khmerTranslatedText || '').trim();
+    if (autoRegen && currentKhmerText) {
       try {
         const regenerated = await generateSingleSegmentAudio(updatedSeg, {
           speed: activeSpeed,
@@ -927,7 +932,7 @@ const FALLBACK_VOICE_CATALOG = {
 
       setAudioProgress(100);
       const summaryMsg = skippedEmptyCount > 0
-        ? `✅ បង្កើតសំឡេង AI ជោគជ័យ ${validSegments.length} ឃ្លា (រំលង ${skippedEmptyCount} ឃ្លាដែលខ្វះអត្ថបទ)!`
+        ? `✅ បង្កើតសំឡេង AI ជោគជ័យ ${validSegments.length} ឃ្លា (រំលង ${skippedEmptyCount} ឃ្លា គ្មានអត្ថបទ)!`
         : `✅ បង្កើតសំឡេងខ្មែរ AI ជោគជ័យ ${validSegments.length} ឃ្លា (100%)!`;
       setAudioStage(summaryMsg);
 
@@ -1148,6 +1153,75 @@ const FALLBACK_VOICE_CATALOG = {
     setVoiceSettings(newSettings);
   };
 
+  // ✨ One-Click AI Translation Remedy for Missing-Text Segments
+  const handleTranslateSingleSegment = async (segIdOrIndex, targetIndex = null) => {
+    if (!scriptData?.segments) return null;
+    const segIdx = typeof targetIndex === 'number' && targetIndex >= 0 && targetIndex < scriptData.segments.length
+      ? targetIndex
+      : scriptData.segments.findIndex((s, idx) =>
+          s.id === segIdOrIndex || idx === segIdOrIndex ||
+          String(s.id) === String(segIdOrIndex) || String(idx) === String(segIdOrIndex)
+        );
+    if (segIdx === -1) return null;
+
+    const targetSeg = scriptData.segments[segIdx];
+    const textToTranslate = (targetSeg.chineseText || targetSeg.originalChineseText || targetSeg.originalText || targetSeg.original || '').trim();
+    if (!textToTranslate) {
+      alert(`Segment #${targetSeg.id || segIdx + 1} មិនមានអត្ថបទចិនដើមសម្រាប់បកប្រែទេ!`);
+      return null;
+    }
+
+    try {
+      console.log(`[Translate Segment] Retranslating segment #${targetSeg.id || segIdx + 1} ("${textToTranslate}")...`);
+      const res = await retranslateSegmentApi(textToTranslate, {
+        speaker: targetSeg.speaker,
+        gender: targetSeg.voiceGender || targetSeg.speakerGender || targetSeg.gender,
+      });
+
+      if (res && Array.isArray(res.options) && res.options.length > 0) {
+        const bestText = cleanKhmerText(res.options[0].text);
+        if (bestText) {
+          const nextSegs = [...scriptData.segments];
+          const updated = {
+            ...targetSeg,
+            khmer: bestText,
+            khmerText: bestText,
+            khmerTranslatedText: bestText,
+            audioOutdated: true,
+            textStatus: 'text_updated',
+            reviewNeeded: false,
+            ttsStatus: 'pending',
+          };
+          delete updated.regenError;
+          if (Array.isArray(updated.validationErrors)) {
+            updated.validationErrors = updated.validationErrors.filter((e) => !e.includes('មិនទាន់មានអត្ថបទបកប្រែ'));
+          }
+          nextSegs[segIdx] = updated;
+
+          setScriptData((prev) => ({
+            ...prev,
+            segments: nextSegs,
+          }));
+
+          if (onUpdateSegments) {
+            onUpdateSegments(nextSegs, false, true);
+          } else if (onUpdateScript) {
+            onUpdateScript({
+              ...scriptData,
+              segments: nextSegs,
+            });
+          }
+
+          return updated;
+        }
+      }
+    } catch (err) {
+      console.error('[Translate Segment] Failed:', err);
+      alert(`បរាជ័យក្នុងការបកប្រែឃ្លា #${targetSeg.id || segIdx + 1}: ${err.message}`);
+    }
+    return null;
+  };
+
   return {
     isGeneratingAudio,
     generatingAudioEpisodeId,
@@ -1170,6 +1244,7 @@ const FALLBACK_VOICE_CATALOG = {
     handleUpdateSegmentText,
     handleUpdateSegmentSpeed,
     handleRegenerateSingleSegment,
+    handleTranslateSingleSegment,
     handleSplitSegment,
     handleUpdateSpeakerVoice,
     handleToggleDeliveryType,

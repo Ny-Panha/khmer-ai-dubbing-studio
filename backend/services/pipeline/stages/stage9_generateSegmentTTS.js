@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { generateSingleSegmentSpeech } = require('../../ttsService');
+const { generateSingleSegmentSpeech, cleanTextForTts } = require('../../ttsService');
 const { getMediaDuration } = require('../../ffmpegService');
 const {
   loadSegmentLedger,
@@ -77,6 +77,7 @@ async function generateSegmentTTS({
   let generatedCount = 0;
   let reusedCount = 0;
   let failedCount = 0;
+  let skippedEmptyCount = 0;
   let currentIndex = 0;
   let isInterrupted = false;
 
@@ -98,11 +99,13 @@ async function generateSegmentTTS({
 
       const idx = currentIndex++;
       const seg = { ...segments[idx] };
-      const khmerText = String(seg.khmerTranslatedText || seg.khmerText || seg.khmer || '').trim();
+      const rawKhmer = String(seg.khmerTranslatedText || seg.khmerText || seg.khmer || '');
+      const khmerText = cleanTextForTts ? cleanTextForTts(rawKhmer) : rawKhmer.trim();
 
       if (!khmerText) {
-        seg.ttsStatus = 'pending';
+        seg.ttsStatus = 'empty_text';
         results[idx] = seg;
+        skippedEmptyCount++;
         continue;
       }
 
@@ -349,6 +352,7 @@ async function generateSegmentTTS({
       generatedCount,
       reusedCount,
       failedCount,
+      skippedEmptyCount,
     },
   };
 }

@@ -731,7 +731,8 @@ async function generateBatchSegmentsAudio(segments = [], uploadsDir, options = {
       const seg = segments[idx];
 
       const text = seg.khmer || seg.khmerText || seg.khmerTranslatedText || seg.text || "";
-      if (!text || !String(text).trim()) {
+      const cleanedTextToSpeak = cleanTextForTts(text);
+      if (!cleanedTextToSpeak) {
         results[idx] = {
           ...seg,
           audioUrl: null,
@@ -758,18 +759,25 @@ async function generateBatchSegmentsAudio(segments = [], uploadsDir, options = {
         });
         const completedCount = results.filter(Boolean).length;
         const pct = Math.round((completedCount / segments.length) * 100);
-        console.log(`[TTSService] 🎙️ [${completedCount}/${segments.length}] (${pct}%) Seg #${seg.id || idx + 1}: "${text.substring(0, 30)}..." [${results[idx]?.voiceId || 'Neural'}]`);
+        console.log(`[TTSService] 🎙️ [${completedCount}/${segments.length}] (${pct}%) Seg #${seg.id || idx + 1}: "${cleanedTextToSpeak.substring(0, 30)}..." [${results[idx]?.voiceId || 'Neural'}]`);
       } catch (err) {
-        console.error(`[TTSService] ❌ បរាជ័យឃ្លា #${seg.id || idx + 1}:`, err.message);
+        const isEmptyErr = err.message && (err.message.includes("Empty text") || err.message.includes("ទទេ"));
+        if (isEmptyErr) {
+          console.warn(`[TTSService] ⚠️ រំលងឃ្លា #${seg.id || idx + 1} (គ្មានអត្ថបទខ្មែរ)`);
+        } else {
+          console.error(`[TTSService] ❌ បរាជ័យឃ្លា #${seg.id || idx + 1}:`, err.message);
+        }
         results[idx] = {
           ...seg,
           audioUrl: null,
           audioPath: null,
           audioFile: null,
           audioGenerated: false,
-          ttsStatus: "error",
-          status: "tts_error",
-          error: err.message,
+          audioDuration: 0,
+          audioDurationSec: 0,
+          ttsStatus: isEmptyErr ? "empty_text" : "error",
+          status: isEmptyErr ? "empty_text" : "tts_error",
+          error: isEmptyErr ? null : err.message,
         };
       }
     }

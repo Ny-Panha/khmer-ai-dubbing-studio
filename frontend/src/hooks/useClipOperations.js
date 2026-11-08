@@ -10,10 +10,57 @@ import {
   autoAlignVoiceSegments,
   resetSegmentsToSourceTiming,
 } from '../utils/timelineUtils';
-import { parseTimeToSeconds, formatTimecode, formatMinSec } from '../utils/timestampUtils';
+import { parseTimeToSeconds, formatTimecode, formatMinSec, getSegmentAudioDuration } from '../utils/timestampUtils';
 import { splitKhmerTextIntoHalves, splitSegmentIntoNaturalSentences } from '../utils/khmerTextSplitter';
 import { buildSpeakerRegistry } from '../utils/speakerUtils';
 import { syncTimelineAudioApi, notifyBackendOffline, notifyBackendOnline } from '../services/api';
+
+/**
+ * Lightweight, non-intrusive floating in-app toast for timeline feedback (e.g. split guard)
+ */
+function showInAppToast(message, durationMs = 2800) {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('timeline:toast', { detail: { message } }));
+  }
+  if (typeof document === 'undefined') return;
+  let toast = document.getElementById('timeline-split-toast');
+  if (!toast) {
+    toast = document.createElement('div');
+    toast.id = 'timeline-split-toast';
+    toast.setAttribute('role', 'status');
+    toast.setAttribute('aria-live', 'polite');
+    toast.style.position = 'fixed';
+    toast.style.bottom = '32px';
+    toast.style.left = '50%';
+    toast.style.transform = 'translateX(-50%) translateY(0)';
+    toast.style.backgroundColor = 'rgba(24, 24, 27, 0.96)';
+    toast.style.color = '#f4f4f5';
+    toast.style.padding = '10px 20px';
+    toast.style.borderRadius = '9999px';
+    toast.style.fontSize = '13.5px';
+    toast.style.fontWeight = '500';
+    toast.style.fontFamily = "'Kantumruy Pro', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
+    toast.style.boxShadow = '0 12px 30px -4px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(255, 255, 255, 0.15)';
+    toast.style.backdropFilter = 'blur(12px)';
+    toast.style.webkitBackdropFilter = 'blur(12px)';
+    toast.style.zIndex = '99999';
+    toast.style.display = 'flex';
+    toast.style.alignItems = 'center';
+    toast.style.gap = '8px';
+    toast.style.pointerEvents = 'none';
+    toast.style.transition = 'opacity 0.22s cubic-bezier(0.16, 1, 0.3, 1), transform 0.22s cubic-bezier(0.16, 1, 0.3, 1)';
+    document.body.appendChild(toast);
+  }
+  toast.innerHTML = `<span style="font-size:15px;line-height:1;">✂️</span><span>${message}</span>`;
+  toast.style.opacity = '1';
+  toast.style.transform = 'translateX(-50%) translateY(0)';
+
+  if (toast._timer) clearTimeout(toast._timer);
+  toast._timer = setTimeout(() => {
+    toast.style.opacity = '0';
+    toast.style.transform = 'translateX(-50%) translateY(8px)';
+  }, durationMs);
+}
 
 /**
  * Custom hook to handle multi-clip timeline editing operations (split, cut, bridge, re-sync)
@@ -74,24 +121,48 @@ export function useClipOperations({
     }
 
     const getSegTiming = (s) => {
-      const sStart = typeof s.audioStartSec === 'number' && !isNaN(s.audioStartSec)
+      if (!s) return { sStart: 0, sEnd: 0, effectiveStart: 0, effectiveEnd: 0 };
+      const isTrimmed = Boolean(s.audioTrimmed || s.userTrimmed);
+      const effectiveStart = typeof s.audioStartSec === 'number' && !isNaN(s.audioStartSec)
         ? s.audioStartSec
         : (typeof s.startSec === 'number' && !isNaN(s.startSec) ? s.startSec : parseTimeToSeconds(s.start, 0));
-      const sEnd = typeof s.audioEndSec === 'number' && !isNaN(s.audioEndSec)
-        ? s.audioEndSec
-        : (typeof s.endSec === 'number' && !isNaN(s.endSec) ? s.endSec : parseTimeToSeconds(s.end, sStart + 3.0));
-      return { sStart, sEnd };
+      const slotEnd = typeof s.endSec === 'number' && !isNaN(s.endSec)
+        ? s.endSec
+        : parseTimeToSeconds(s.end, effectiveStart + 3.0);
+      const audioDur = getSegmentAudioDuration(s, 0);
+
+      let effectiveEnd;
+      if (isTrimmed && typeof s.audioEndSec === 'number' && !isNaN(s.audioEndSec)) {
+        effectiveEnd = s.audioEndSec;
+      } else {
+        const candidates = [slotEnd, effectiveStart + audioDur];
+        if (typeof s.audioEndSec === 'number' && !isNaN(s.audioEndSec)) {
+          candidates.push(s.audioEndSec);
+        }
+        effectiveEnd = Math.max(...candidates);
+      }
+
+      return {
+        sStart: effectiveStart,
+        sEnd: effectiveEnd,
+        effectiveStart,
+        effectiveEnd,
+      };
     };
 
-    const isInsideSeg = (s) => {
-      const { sStart, sEnd } = getSegTiming(s);
-      return roundedSplit > sStart + 0.05 && roundedSplit < sEnd - 0.05;
+    const isInsideSeg = (s, allowSeamEnd = false) => {
+      if (!s) return false;
+      const { effectiveStart, effectiveEnd } = getSegTiming(s);
+      const endLimit = allowSeamEnd ? effectiveEnd : effectiveEnd - 0.05;
+      return roundedSplit > effectiveStart + 0.05 && roundedSplit < endLimit;
     };
 
     // Helper: Execute segment split logic (reused for (a) and (c))
     const executeSplitSegment = (splitSegIdx) => {
       const targetSeg = segments[splitSegIdx];
-      const { sStart, sEnd } = getSegTiming(targetSeg);
+      const { effectiveStart, effectiveEnd } = getSegTiming(targetSeg);
+      const sStart = effectiveStart;
+      const sEnd = effectiveEnd;
       const dur = Math.max(0.2, sEnd - sStart);
 
       // Intelligent text splitting for Khmer & English
@@ -169,6 +240,12 @@ export function useClipOperations({
         audioEndSec: roundedSplit,
         audioOffset: origOffset,
         audioDurationSec: dur1,
+        finalAudioDuration: dur1,
+        audioDuration: dur1,
+        originalAudioDuration: dur1,
+        rawAudioDur: dur1,
+        audioTrimmed: true,
+        userTrimmed: true,
         khmer: part1,
         khmerText: part1,
         khmerTranslatedText: part1,
@@ -203,6 +280,12 @@ export function useClipOperations({
         audioEndSec: sEnd,
         audioOffset: parseFloat((origOffset + dur1).toFixed(2)),
         audioDurationSec: dur2,
+        finalAudioDuration: dur2,
+        audioDuration: dur2,
+        originalAudioDuration: dur2,
+        rawAudioDur: dur2,
+        audioTrimmed: true,
+        userTrimmed: true,
         khmer: part2,
         khmerText: part2,
         khmerTranslatedText: part2,
@@ -259,10 +342,10 @@ export function useClipOperations({
     if (!isTargetingVideoClip) {
       const activeSegKey = targetId !== null && targetId !== undefined ? targetId : selectedSegmentId;
       if (activeSegKey !== null && activeSegKey !== undefined && segments.length > 0) {
-        selectedSegIdx = segments.findIndex((s, idx) => isSegmentMatch(s, activeSegKey, idx) && isInsideSeg(s));
+        selectedSegIdx = segments.findIndex((s, idx) => isSegmentMatch(s, activeSegKey, idx) && isInsideSeg(s, true));
         if (selectedSegIdx === -1) {
           const fallbackIdx = findSegmentIndex(segments, activeSegKey);
-          if (fallbackIdx !== -1 && isInsideSeg(segments[fallbackIdx])) {
+          if (fallbackIdx !== -1 && isInsideSeg(segments[fallbackIdx], true)) {
             selectedSegIdx = fallbackIdx;
           }
         }
@@ -295,7 +378,7 @@ export function useClipOperations({
     // (c) else if any segment intersects the playhead -> split it
     let anyIntersectingSegIdx = -1;
     if (segments.length > 0) {
-      anyIntersectingSegIdx = segments.findIndex((s) => isInsideSeg(s));
+      anyIntersectingSegIdx = segments.findIndex((s) => isInsideSeg(s, false));
     }
 
     if (anyIntersectingSegIdx !== -1) {
@@ -310,6 +393,44 @@ export function useClipOperations({
       setActiveClipId(fallbackVideoSplit.activeClipId);
       return true;
     }
+
+    // STEP 2: When no branch matches (no segment, no video clip at the playhead), show brief in-app toast in Khmer
+    // and log the playhead time + nearest segment boundaries to the console.
+    let nearestPrev = null;
+    let nearestNext = null;
+    let minPrevDist = Infinity;
+    let minNextDist = Infinity;
+
+    for (let i = 0; i < segments.length; i++) {
+      const s = segments[i];
+      const timing = getSegTiming(s);
+      if (timing.effectiveEnd <= roundedSplit) {
+        const dist = roundedSplit - timing.effectiveEnd;
+        if (dist < minPrevDist) {
+          minPrevDist = dist;
+          nearestPrev = { index: i, id: s.id, start: timing.effectiveStart, end: timing.effectiveEnd, distSec: parseFloat(dist.toFixed(3)) };
+        }
+      }
+      if (timing.effectiveStart >= roundedSplit) {
+        const dist = timing.effectiveStart - roundedSplit;
+        if (dist < minNextDist) {
+          minNextDist = dist;
+          nearestNext = { index: i, id: s.id, start: timing.effectiveStart, end: timing.effectiveEnd, distSec: parseFloat(dist.toFixed(3)) };
+        }
+      }
+    }
+
+    console.warn(`[Split] ⚠️ គ្មាន clip នៅត្រង់ playhead ទេ (playhead=${roundedSplit.toFixed(3)}s). Nearest segment boundaries:`, {
+      playhead: roundedSplit,
+      nearestPrevSegment: nearestPrev,
+      nearestNextSegment: nearestNext,
+      totalSegments: segments.length,
+      activeTargetId: targetId,
+      selectedSegmentId,
+      activeClipId,
+    });
+
+    showInAppToast('គ្មាន clip នៅត្រង់ playhead ទេ — ដាក់ playhead ឲ្យនៅកណ្ដាល clip');
 
     return false;
   };
