@@ -265,7 +265,7 @@ export default function TimelineToolbar({
               type="button"
               onClick={handleCenterPlayhead}
               className={`timeline-icon-tool ${autoCenter ? 'tool-locate active' : ''}`}
-              title={autoCenter ? "Center Playhead (Tracking ON - click to center now)" : "Center Playhead (Focus current time)"}
+              title={autoCenter ? "Auto-Center ON (Playhead នៅចំកណ្ដាលជានិច្ច - ចុចដើម្បីបិទ ឬតម្រឹម)" : "Auto-Center OFF (ចុចដើម្បីដាក់ Playhead ចំកណ្ដាល & Auto Follow)"}
             >
               <LocateFixed size={12} />
             </button>

@@ -554,10 +554,28 @@ function TimelineEditor({
     const container = timelineBodyRef.current;
     const clientWidth = container.clientWidth;
     if (clientWidth <= 0) return;
-    const targetScroll = Math.max(0, (currentTime * pps + TRACK_HEADER_WIDTH) - (clientWidth / 2));
-    container.scrollTo({ left: targetScroll, behavior: 'smooth' });
-    setAutoCenter(true);
-  }, [currentTime, pps]);
+    const activeTime = (videoRef?.current && !isNaN(videoRef.current.currentTime)) ? videoRef.current.currentTime : currentTime;
+    const targetScroll = Math.max(0, (activeTime * pps + TRACK_HEADER_WIDTH) - (clientWidth / 2));
+
+    const currentScreenX = TRACK_HEADER_WIDTH + (activeTime * pps) - container.scrollLeft;
+    const isAtCenter = Math.abs(currentScreenX - (clientWidth / 2)) < 15;
+
+    if (autoCenter && isAtCenter) {
+      setAutoCenter(false);
+    } else {
+      container.scrollTo({ left: targetScroll, behavior: 'smooth' });
+      setAutoCenter(true);
+    }
+  }, [currentTime, pps, autoCenter, videoRef]);
+
+  // If user explicitly scrolls horizontally with wheel / touchpad, disable autoCenter so it doesn't fight the user
+  const handleTimelineWheel = useCallback((e) => {
+    if (Math.abs(e.deltaX) > 3 || (e.shiftKey && Math.abs(e.deltaY) > 3)) {
+      if (autoCenter) {
+        setAutoCenter(false);
+      }
+    }
+  }, [autoCenter]);
 
   const performScrub = useCallback((newTime) => {
     onSeek(newTime);
@@ -1442,24 +1460,20 @@ function TimelineEditor({
           playheadTimeTextRef.current.textContent = formatMinSec(tlTime);
         }
 
-        // Smart Professional Auto-Follow Viewport Bounds (CapCut/Premiere Style)
-        // Eliminates 60fps forced layout thrashing: only scrolls when playhead nears viewport edge!
+        // Smart Professional Auto-Follow Viewport Bounds (Center-Lock Style)
+        // Keeps playhead locked at 50% viewport center once it advances past the center line
         if (autoCenter && timelineBodyRef.current && !isScrubbing && !dragState) {
           const container = timelineBodyRef.current;
           const clientWidth = container.clientWidth;
           if (clientWidth > 0) {
             const screenX = (currentX + TRACK_HEADER_WIDTH) - container.scrollLeft;
-            // Only scroll when playhead reaches near the right edge (85% width) or jumps off left edge
-            const rightThreshold = clientWidth - 120;
-            const leftThreshold = TRACK_HEADER_WIDTH + 20;
+            const rightThreshold = clientWidth / 2;
 
             if (screenX > rightThreshold) {
-              // Smooth page-forward: brings playhead back to comfortable left 30% position
-              const targetScroll = Math.round(Math.max(0, (currentX + TRACK_HEADER_WIDTH) - (clientWidth * 0.30)));
-              container.scrollTo({ left: targetScroll, behavior: 'smooth' });
-            } else if (screenX < leftThreshold) {
-              const targetScroll = Math.round(Math.max(0, (currentX + TRACK_HEADER_WIDTH) - (clientWidth * 0.30)));
+              const targetScroll = Math.round((currentX + TRACK_HEADER_WIDTH) - (clientWidth / 2));
               container.scrollLeft = targetScroll;
+            } else if (screenX < TRACK_HEADER_WIDTH) {
+              container.scrollLeft = 0;
             }
           }
         }
@@ -1483,7 +1497,7 @@ function TimelineEditor({
     }
   }, [currentTime, pps, isPlaying]);
 
-  // 2. When seeking while paused: if the playhead jumps off-screen, smoothly center it
+  // 2. When seeking while paused: center the playhead smoothly at 50% viewport width
   useEffect(() => {
     if (isPlaying || !autoCenter || !timelineBodyRef.current || isScrubbing || dragState) return;
 
@@ -1491,12 +1505,9 @@ function TimelineEditor({
     const clientWidth = container.clientWidth;
     if (clientWidth <= 0) return;
 
-    const currentScreenX = TRACK_HEADER_WIDTH + (currentTime * pps) - container.scrollLeft;
-    const isOutOfView = currentScreenX < TRACK_HEADER_WIDTH + 30 || currentScreenX > clientWidth - 40;
-
-    if (isOutOfView) {
-      const targetScroll = Math.max(0, (currentTime * pps + TRACK_HEADER_WIDTH) - (clientWidth / 2));
-      container.scrollLeft = targetScroll;
+    const targetScroll = Math.max(0, (currentTime * pps + TRACK_HEADER_WIDTH) - (clientWidth / 2));
+    if (Math.abs(container.scrollLeft - targetScroll) > 4) {
+      container.scrollTo({ left: targetScroll, behavior: 'smooth' });
     }
   }, [currentTime, isPlaying, autoCenter, pps, isScrubbing, dragState]);
 
@@ -1583,6 +1594,7 @@ function TimelineEditor({
         className="timeline-scroll-area" 
         ref={timelineBodyRef}
         onMouseDown={handleBackgroundMouseDown}
+        onWheel={handleTimelineWheel}
       >
         <TimelineTrackHeaders
           lockedTracks={lockedTracks}

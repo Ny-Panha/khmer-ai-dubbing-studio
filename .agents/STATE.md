@@ -1,20 +1,31 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
-- **Environment**: Antigravity IDE (Hotfix: Destructure highestUsedVoiceRow in TimelineEditor)
-- **Timestamp**: 2026-11-08T20:37:00+07:00
+- **Environment**: Antigravity IDE (Fix: True Center Auto-Follow Playhead)
+- **Timestamp**: 2026-11-08T20:56:00+07:00
 
-## Latest Update: Hotfix ReferenceError `highestUsedVoiceRow`
+## Latest Update: True Center Auto-Follow Playhead (CapCut / Premiere Style)
 
 ### Problem Description
-- `TimelineEditor.jsx:141/190 Uncaught ReferenceError: highestUsedVoiceRow is not defined`:
-  `highestUsedVoiceRow` was returned from the `useMemo` block but was not destructured at line 98 (`const { segmentRows, calculatedVoiceRows, calculatedSubRows } = React.useMemo(...)`).
-- When evaluating `voiceRowCount` at line 188, `highestUsedVoiceRow` threw a `ReferenceError` crashing `<TimelineEditor>`.
+- **Symptom**: User saw the Auto-Center button enabled (active cyan), but the playhead remained stuck at ~00:14 on the far right of the timeline instead of staying centered in the middle (~00:08).
+- **Root Cause**:
+  1. *Paused / Seek Effect*: `TimelineEditor.jsx` had a strict `if (isOutOfView)` check (`currentScreenX < 30 || currentScreenX > clientWidth - 40`). When paused at 00:14, the playhead was still technically on screen, so `isOutOfView` evaluated to `false` and refused to center the playhead!
+  2. *Playback Loop*: RAF playback scroll loop used `rightThreshold = clientWidth - 120` and paged forward to `clientWidth * 0.30` (30% from the left, instead of 50% Center).
+  3. *Locate Fixed Button*: Clicking the Auto-Center button only called `handleCenterPlayhead` without toggling or allowing free inspection when scrolling manually.
 
 ### Resolution
-- Destructured `highestUsedVoiceRow = 0` directly from `useMemo` at line 98 and added default fallback in empty-segments guard.
-- Vite build passed (`dist/assets/index-F-rtDZtK.js`).
-- Full test suite passed (16/16 PASS).
+1. **Paused / Seek / Clip Selection Auto-Center**:
+   - In `TimelineEditor.jsx`, removed the restrictive `isOutOfView` check. When `autoCenter` is enabled and the video is paused, seeking, or a segment is clicked, the timeline smoothly scrolls to center the playhead at 50% viewport width (`(currentTime * pps + TRACK_HEADER_WIDTH) - clientWidth / 2`).
+2. **Playback Center Follow (Center Lock)**:
+   - When `autoCenter` is enabled during playback, once the playhead crosses the horizontal center (`screenX > rightThreshold` where `rightThreshold = clientWidth / 2`), the timeline smoothly scrolls underneath it, keeping the playhead centered at 50% width.
+3. **Smart User Inspection & Toggle**:
+   - Added `handleTimelineWheel`: When the user deliberately scrolls horizontally (wheel / trackpad) to inspect other clips, `autoCenter` safely disables (`false`) so the viewport doesn't fight the user.
+   - Clicking the Locate button (`handleCenterPlayhead`) instantly re-centers to the playhead and re-enables `autoCenter = true` (or toggles off if already centered).
+   - Updated tooltip in `TimelineToolbar.jsx`.
+
+### Verification
+- `node --test backend/tests/timeline_*.test.js` ➔ 10/10 PASS.
+- `npm --prefix frontend run build` ➔ Clean build in 1.45s.
 
 ## Latest Update: Unlimited Voice Lanes & Dynamic Vertical Drop
 
