@@ -1,104 +1,80 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
-- **Environment**: Antigravity IDE (Diagnosed & Fixed Voice/Khmer Subtitle Timing Mismatch vs CN Cues)
-- **Timestamp**: 2026-11-08T13:32:00+07:00
+- **Environment**: Antigravity IDE (Repaired Already-Merged Segments in Stored Series Data)
+- **Timestamp**: 2026-11-08T13:52:00+07:00
 
-## Latest Update: CN Cue Synchronization, Waveform Truthfulness & Overrun Fix
-### 1. Step 1 Diagnosis Findings & Number Dump
-- **Layer Classification**: **Branch (A) DATA** (Stage 5 Reconcile swallowed discrete visual cues) + **Branch (B) RENDER** (waveform & duration derivation).
-- **Numbers for Segments #16-#20**:
-  | Seg ID | startSec | endSec | audioStartSec | audioEndSec | audioDurationSec | sourceStartSec/sourceEndSec | True MP3 Dur |
-  | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-  | #16 | 37.00 | 39.23 | 37.00 | 39.23 | 2.23s | 37.00 / 39.23 | 2.23s |
-  | #17 | 39.91 | 42.50 | 39.91 | 41.78 | 1.872s | 39.91 / 42.50 | 1.872s |
-  | #18 | 42.50 | 43.60 | 42.50 | 44.73 | 2.232s | 42.50 / 43.60 | 2.232s |
-  | #19 | 43.60 | 47.29 | 44.75 | 46.98 | 2.232s | 43.60 / 47.29 | 2.232s |
-  | #20 | 50.37 | 53.39 | 50.37 | 53.39 | 3.02s | 50.37 / 53.39 | 3.02s |
-- **Raw OCR Visual Cues for Window 00:39 - 00:48**:
-  - `36.25 - 38.75` (2.50s): "神明不要的孩子" [Male / Priest]
-  - `40.00 - 41.25` (1.25s): "老子要" [Male / Father]
-  - `41.25 - 42.50` (1.25s): "你凭什么" [Male / Priest]
-  - `42.50 - 43.75` (1.25s): "挑战神堂" [Male / Priest]
-  - `43.75 - 45.00` (1.25s): "凭什么" [Male / Priest]
-  - `45.00 - 46.25` (1.25s): "凭他是老子的崽" [Male / Father]
+## Latest Update: Stored Merged Segment Split & Normalization (`series_1793898268958`)
 
-### 2. Implementation Summary
-1. **Stage 5 Reconcile Boundary Preservation (`stage5_reconcileTimelineEvidence.js`)**:
-   - Visual OCR cues are discrete anchors. A segment is clamped to `nextVisual.startSec` so long ASR sentences cannot expand across visual boundaries.
-   - Pre-deduplication now requires text equivalence (`areChineseTextsEquivalent`), preventing visual cues with different text or speakers from being dropped as false duplicates.
-2. **Stage 9 TTS Duration Integrity (`stage9_generateSegmentTTS.js`)**:
-   - In `canReuseExisting`, always calls `getMediaDuration` so `audioDurationSec`, `finalAudioDuration`, and `audioEndSec` reflect true MP3 file duration rather than inherited slot length.
-3. **Render Box & Waveform Alignment (`TimelineTracksCanvas.jsx` & `VideoPlayerPreview.jsx`)**:
-   - Voice clip box = `[audioStartSec, max(slotEnd, audioStartSec + realAudioDuration)]`.
-   - Waveform bars mapped to `realAudioDuration` so no empty tail or artificial stretching occurs.
-   - Live subtitles strictly use segment dialogue slot `[startSec, endSec]`, never leaking `audioEndSec`.
-   - OVER badge truthful formula: `realAudioDuration - (slotEnd - slotStart)`.
-4. **Episode 2 Stored Data Synchronized (`series.json`)**:
-   - Corrected #17, #18, #19 to their probed MP3 durations (1.872s, 2.232s, 2.232s).
-   - Segments #16-#20 now flow sequentially on Lane 0 (VOICE 1) without unnecessary collision stacking.
+### 1. Step 1 Audit & Pre-Repair Report
+- **Backup Created**: `backend/uploads/projects/series_1793898268958/series.json.backup_1794120551355` (362,921 bytes)
+- **Per-Episode Scan Results**:
+  - `ep_1`: 0 segments in stored script data (Clean / No merges).
+  - `ep_2`: 79 stored segments audited against 85 OCR visual cues from cache (`ocr_ep_2_source_mp4_71824768_1794072552097_0_187_gemini-3.5-flash-lite.json`).
+- **Detected Merged Segments in Ep2**:
+  1. **Segment #17** `[39.91s - 42.50s]` (Parent text: "凭什么", Speaker: "តួស្រី"):
+     - **Spanned Cue 1** `[40.00s - 41.25s]`: "老子要" (Male / Father Chu Kuangren)
+     - **Spanned Cue 2** `[41.25s - 42.50s]`: "你凭什么" (Male / Priest)
+  2. **Segment #19** `[43.60s - 47.29s]` (Parent text: "凭他是老子的崽", Speaker: "តួស្រី"):
+     - **Spanned Cue 1** `[43.75s - 45.00s]`: "凭什么" (Male / Priest)
+     - **Spanned Cue 2** `[45.00s - 46.25s]`: "凭他是老子的崽" (Male / Father Chu Kuangren)
 
-### 3. Verification Evidence
-- `node --test backend/tests/*.test.js` ➔ **38/38 PASS** (0 failures).
-- `npm --prefix frontend run build` ➔ **PASS** (617ms).
-- Playback window 00:39 -> 00:48: Subtitles change strictly on cue boundaries, waveform maps to true audio duration, and no artificial stacking occurs.
+### 2. Step 2 Split Repair Implementation
+Each merged parent segment was split cleanly at the internal cue boundary:
+- **Segment #17 Split**:
+  - **Child 1 (Seg #17)** `[39.91s - 41.25s]` (1.34s):
+    - CN Source: "老子要"
+    - Retranslated Khmer: "អញយក"
+    - Speaker / Voice: "តួប្រុស" (male, `km-KH-PisethNeural`)
+    - Kept parent `_uid`: `seg_17_1794116729754_dvciv`
+    - Audio cleared: `ttsStatus: "pending"`, `audioFile: null`, `audioDurationSec: 0`
+  - **Child 2 (Seg #18)** `[41.25s - 42.50s]` (1.25s):
+    - CN Source: "你凭什么"
+    - Retranslated Khmer: "ឯងជាអ្នកណាបានជាហ៊ាន?"
+    - Speaker / Voice: "តួប្រុស" (male, `km-KH-PisethNeural`)
+    - Fresh `_uid`: `seg_17_1794120665235_r1dj9`
+    - Audio cleared: `ttsStatus: "pending"`, `audioFile: null`, `audioDurationSec: 0`
+- **Segment #18 Preservation**:
+  - Unchanged: Old #18 `[42.50s - 43.60s]` "挑战神堂" (Khmer: "ប្រឈមនឹងវិហារព្រះ") shifted sequentially to display index **#19**, retaining its original audio and timing byte-identically.
+- **Segment #19 Split**:
+  - **Child 1 (Seg #20)** `[43.60s - 45.00s]` (1.40s):
+    - CN Source: "凭什么"
+    - Retranslated Khmer: "ផ្អែកលើស្អី?"
+    - Speaker / Voice: "តួប្រុស" (male, `km-KH-PisethNeural`)
+    - Kept parent `_uid`: `seg_19_1794116729754_xmysk`
+    - Audio cleared: `ttsStatus: "pending"`, `audioFile: null`, `audioDurationSec: 0`
+  - **Child 2 (Seg #21)** `[45.00s - 47.29s]` (2.29s):
+    - CN Source: "凭他是老子的崽"
+    - Retranslated Khmer: "ទោះវាជាកូនអញក៏ដោយ"
+    - Speaker / Voice: "តួប្រុស" (male, `km-KH-PisethNeural`)
+    - Fresh `_uid`: `seg_19_1794120675802_48w2e`
+    - Audio cleared: `ttsStatus: "pending"`, `audioFile: null`, `audioDurationSec: 0`
+- **Sequential Renumbering**:
+  - All 81 segments sequentially renumbered `id: 1..81` and `segmentId: 1..81`.
+  - Stored segments in `ep_2` updated from 79 to 81.
 
-## Previous Session Summary
-1. **Decoupled Network I/O from Local Storage (`projectStorage.js` & `api.js`)**:
-   - Added `syncSeriesApi(series)` and `deleteEpisodeApi(seriesId, episodeId)` into [`frontend/src/services/api.js`](file:///e:/khmer_ai_dubbing_studio/frontend/src/services/api.js) with unified 502 offline detection and status tracking.
-   - Refactored [`frontend/src/utils/projectStorage.js`](file:///e:/khmer_ai_dubbing_studio/frontend/src/utils/projectStorage.js) to delegate through `api.js` client functions rather than raw, unhandled `fetch` calls.
-2. **Eliminated Pass-through Proxy Wrapper (`formatTime.js`)**:
-   - Re-routed all component imports (`MediaLibrary.jsx`, `TimelineEditor.jsx`, `VideoPlayerPreview.jsx`, `VoiceSettings.jsx`, `useAudioDubbing.js`, `useClipOperations.js`, `projectStorage.js`, `timelineUtils.js`) directly to [`frontend/src/utils/timestampUtils.js`](file:///e:/khmer_ai_dubbing_studio/frontend/src/utils/timestampUtils.js).
-3. **Single Canonical Audio Duration Resolver**:
-   - Added canonical `getSegmentAudioDuration(seg, fallback)` and `hasSegmentAudio(seg)` in `timestampUtils.js`.
-   - Replaced fragile, duplicated 5-level ternary cascades across [`frontend/src/utils/timelineUtils.js`](file:///e:/khmer_ai_dubbing_studio/frontend/src/utils/timelineUtils.js) (`alignVoiceClipsNoOverlap` and `resetSegmentsToSourceTiming`).
-4. **Verification & Zero Regressions**:
-   - `npm --prefix frontend run build` ➔ **PASS** (1.00s, 0 errors).
-   - `node --test backend/tests/auto_align_voice.test.js` ➔ **3/3 PASS** (76ms).
-   - `node --test backend/tests/phase1_translation_boundary.test.js` ➔ **7/7 PASS** (1.98s).
-
-## Previous Session Summary
-
-### 1. Bug 1: `isTrimmed` ReferenceError in Preview Sync Loop (Fixed & Verified)
-- **Problem**: Playing preview with trimmed segments threw `Uncaught ReferenceError: isTrimmed is not defined at VideoPlayerPreview.jsx:353` inside `syncLoop` (requestAnimationFrame).
-- **Root Cause**: In [`frontend/src/components/VideoPlayerPreview.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/VideoPlayerPreview.jsx), `isTrimmed` was defined at L304 inside the `nearbySegs.filter(...)` callback, but was referenced at L353, L375, and L377 inside the subsequent `nearbySegs.forEach(...)` callback where it was out of scope.
-- **Fix**: Added per-segment declaration `const isTrimmed = Boolean(seg.audioTrimmed || seg.userTrimmed);` right before `effectiveSegEnd` inside the `forEach` callback. Audited the full file and confirmed zero other out-of-scope uses exist.
-- **Verification Evidence**:
-  - Loaded `series_1793898268958` EP 1 with trimmed segments `#17 ✂` and `#18 ✂`.
-  - Seeked preview to `40.0s` and played through to `45.0s` across the trimmed boundaries.
-  - Video playhead reached `44.96s` smoothly.
-  - Console captured **0 ReferenceErrors** and **0 unhandled errors**.
-  - Evidence screenshot: [`preview_playback_verified.png`](file:///C:/Users/nhastar/.gemini/antigravity/brain/6ac10be3-1a63-456e-8d37-a5ad1ac624ae/preview_playback_verified.png).
-
-### 2. Bug 2: Generate-Script Backend Diagnosis & Stability Verification
-- **Diagnosis & Stack Trace Findings**:
-  - The `WORKER_INTERRUPTED` error (`job_1794115891810_27bd3cf0`) occurred when task-1657 was cancelled during development while `ep_2` was processing in `chunkASR`. On the subsequent server startup, `backend/services/pipeline/recoveryEngine.js` marked the dangling job:
-    ```json
-    {
-      "status": "failed",
-      "error": "WORKER_INTERRUPTED",
-      "stageMessage": "ការងារត្រូវបានរំខានដោយសារ Server បាន Restart ឬ Worker បានដាច់ (Worker Interrupted)"
-    }
-    ```
-  - When the frontend received `WORKER_INTERRUPTED`, [`frontend/src/hooks/useScriptWorkflow.js`](file:///e:/khmer_ai_dubbing_studio/frontend/src/hooks/useScriptWorkflow.js) (L255-261) triggered its fallback to direct synchronous generation (`generateScriptApi`).
-  - At that exact moment, the replacement backend instance had crashed with `EADDRINUSE: address already in use 0.0.0.0:5000` because Windows had not yet released port 5000, causing Vite proxy to emit `ECONNRESET` / 502 ("Backend server is temporarily unreachable").
-- **Verification & Endurance Test**:
-  - Started the unified stack using `npm run dev`.
-  - Executed `POST /api/jobs/generate` for `ep_2` (187.34s action drama video):
-    - Vision OCR: 85 visual segments
-    - Local SenseVoice-Small ASR: 30 Chinese speech segments ($0.00 cost)
-    - Timeline Evidence Reconciliation: 79 reconciled segments
-    - Mode A Faithful Translation: 79 lines translated across 4 batches via Gemini 3.5 Flash
-    - Subtitle Validation & Timing Check: 100% verified, `.ass` generated
-    - Saved to `series.json`: 79 script segments persisted
-    - Final Status: `completed` (100% progress, 0 errors)
-  - **Verdict**: Backend process survived continuously with **0 crashes, 0 unhandled rejections, and 0 hangs**. Port 5000 and 5173 remained online and healthy throughout the entire multi-stage pipeline run.
+### 3. Step 3 Verification & Integrity Diff
+- **Segments #1 - #16**: 100% byte/field identical to backup.
+- **Segments #22 - #81** (old #20 - #79): 100% timing, text, and audio identical to backup.
+- **Timeline Window `00:39 - 00:48` Normalized**:
+  | Seg ID | Time Range | Duration | Chinese Source | Khmer Translation | Speaker / Voice | TTS Status |
+  | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+  | #16 | 37.00s - 39.23s | 2.23s | 神明不要的孩子 | ក្មេងដែលព្រះមិនយក | តួប្រុស (`Piseth`) | ready |
+  | #17 | 39.91s - 41.25s | 1.34s | 老子要 | អញយក | តួប្រុស (`Piseth`) | pending |
+  | #18 | 41.25s - 42.50s | 1.25s | 你凭什么 | ឯងជាអ្នកណាបានជាហ៊ាន? | តួប្រុស (`Piseth`) | pending |
+  | #19 | 42.50s - 43.60s | 1.10s | 挑战神堂 | ប្រឈមនឹងវិហារព្រះ | តួអង្គផ្សេង (`Piseth`) | ready |
+  | #20 | 43.60s - 45.00s | 1.40s | 凭什么 | ផ្អែកលើស្អី? | តួប្រុស (`Piseth`) | pending |
+  | #21 | 45.00s - 47.29s | 2.29s | 凭他是老子的崽 | ទោះវាជាកូនអញក៏ដោយ | តួប្រុស (`Piseth`) | pending |
+  | #22 | 50.37s - 53.39s | 3.02s | 小孩子打架我们不管 | ក្មេងវាយគ្នាពួកយើងមិនខ្វល់ទេ | តួស្រី (`Sreymom`) | ready |
+- **Regression Testing**:
+  - `node --test backend/tests/*.test.js` ➔ **38/38 PASS** (0 failures).
+  - `npm --prefix frontend run build` ➔ **PASS** (600ms, 0 errors).
+  - Created reusable CLI utility: [`backend/scripts/repairMergedSegments.js`](file:///e:/khmer_ai_dubbing_studio/backend/scripts/repairMergedSegments.js).
 
 ## Active Environment
-- **Startup Command**: `npm run dev` (Starts BOTH Backend on port 5000 and Frontend on port 5173 with `concurrently`)
 - **Backend API**: `http://localhost:5000` (Node.js/Express, online)
 - **Frontend Studio UI**: `http://localhost:5173` (React 19 + Vite, online)
 - **Git Branch**: `main`
 
 ## Next Steps
-- Await Nha's review and approval.
+- Generate TTS audio for the 4 newly created child segments (#17, #18, #20, #21) when user desires or trigger via Studio UI.
