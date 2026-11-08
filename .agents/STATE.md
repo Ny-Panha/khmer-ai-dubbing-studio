@@ -1,59 +1,67 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
-- **Environment**: Antigravity IDE (Fix Stacked/Overlapping Dialogue — Audio Clamping & Trim-Aware Mix)
-- **Timestamp**: 2026-11-08T11:35:00+07:00
+- **Environment**: Antigravity IDE (Fix Recurring "Backend Down" 502 / Offline Notification & One-Command Dev Startup)
+- **Timestamp**: 2026-11-08T12:30:00+07:00
 
 ## Summary of Completed Work
 
-### 1. Step 0 Diagnosis Report
-- **(a) Audio Trimming in Mix Paths**:
-  - **Pre-rendered master narration track (`createSynchronizedNarrationAudio` in `backend/services/ffmpegService.js`)**: Audio was placed **WHOLE** without `atrim`! In lines 1874-1881 and 1930-1956, `trimPrefix` was only constructed if `seg.audioOffset` was defined. For standard frontend segments, `audioOffset` was undefined, so `trimPrefix` remained empty and `durSec` used the whole probed file duration `audioDurationSec`.
-  - **Fallback mix path (`renderDubbedVideoWithDucking` lines 1208-1243)**: Audio was placed **WHOLE**! Zero `atrim` filter was present before `adelay + amix`.
-- **(b) `atempo` Stretch Cap**:
-  - In `backend/services/ttsService.js` (L376, L533-534): `maxSpeed` defaults to `1.35x`. However, stretching only occurs when `ratio > 1.02 && ratio <= 1.30`. Lines with > 30% overrun were NOT stretched at all and played at 1.0x (OVER).
-  - In `backend/services/ffmpegService.js` (`autoStretchTtsAudio` L433, L518): `maxSpeed` defaults to `1.35x`, capping speed stretch at 1.35x.
+### 1. Step 1 Diagnosis Report (Crash vs Never Started)
+- **Diagnosis Verdict**: Both **never started** (forgotten due to missing root script) and **watch restart collision (`EADDRINUSE`)**.
+- **Root Cause Analysis**:
+  1. **Root package script omitted**: Previously, the repository lacked a root-level `package.json`. Developers or agents starting only the frontend with `npm --prefix frontend run dev` left the backend unstarted. When Vite's proxy (`frontend/vite.config.js`) attempted to proxy `/api/sync-audio` or `/api/series/:id/sync` to `http://127.0.0.1:5000`, it caught `ECONNREFUSED` and returned HTTP 502:
+     `{"success":false,"error":"Backend server is temporarily unreachable (ECONNREFUSED). Please verify backend is running on port 5000."}`
+  2. **Node `--watch` Socket Release Lag**: When running `npm --prefix backend run dev` (`node --watch-path=... server.js`), file edits triggered Node watch restarts. Because `backend/server.js` lacked graceful termination and retry handling, Windows socket release delays resulted in:
+     ```
+     [CRITICAL] Uncaught Exception: Error: listen EADDRINUSE: address already in use 0.0.0.0:5000
+         at Server.setupListenHandle [as _listen2] (node:net:2390:16)
+         at listenInCluster (node:net:2499:12)
+     ```
+     leaving the backend in `Completed running 'server.js'. Waiting for file changes before restarting...` without listening on port 5000.
+  3. **Fix in `backend/server.js`**: Added socket retry mechanism (5 retries with 500ms backoff on `EADDRINUSE`) and graceful `SIGINT`/`SIGTERM` process shutdown.
 
-### 2. Step 1: Overwrite Semantics in `autoAlignVoiceSegments`
-- In [`frontend/src/utils/timelineUtils.js`](file:///e:/khmer_ai_dubbing_studio/frontend/src/utils/timelineUtils.js):
-  - Added `getSourceSubtitleEnd(s)` helper checking `speechEndSec`, `slotDuration`/`availableSlotDuration`, and `sourceEndSec`.
-  - When segment N collides with previous Lane 0 clip ONLY because previous audio overruns N's start:
-    - Verifies subtitle slots themselves do not genuinely overlap in source timing (`N.startSec >= prevLane0.sourceSubtitleEnd - 0.05`).
-    - Calculates cut duration `prevLane0.audioEndSec - N.startSec` and ratio `cutDur / origAudioDur`.
-    - If `cutRatio <= 0.40`: resolves on Lane 0 by clamping `prevLane0.audioEndSec = N.startSec`, updating its `duration`/`audioDurationSec`, setting `audioTrimmed: true`, and keeping segment N on VOICE 1 (`targetRow = 0`) at its exact start time (0% drift, never shifted forward).
-    - Drops to VOICE 2 (Lane 1) ONLY when subtitle slots genuinely overlap (e.g. #12 vs #13 visual card) or when trim cut > 40%.
-    - Updated `resetSegmentsToSourceTiming` to reset `audioTrimmed: false` and restore natural audio duration.
+### 2. Step 2: One-Command Startup
+- Created root [`package.json`](file:///e:/khmer_ai_dubbing_studio/package.json) with `concurrently`:
+  - `"dev"`: `concurrently -n "BACKEND,FRONTEND" -c "blue,green" "npm --prefix backend run dev" "npm --prefix frontend run dev"`
+  - `"start"`: `concurrently -n "BACKEND,FRONTEND" -c "blue,green" "npm --prefix backend start" "npm --prefix frontend run dev"`
+  - `"dev:backend"`: `npm --prefix backend run dev`
+  - `"dev:frontend"`: `npm --prefix frontend run dev`
+  - `"build"`: `npm --prefix frontend run build`
+  - `"test"`: `npm --prefix backend test`
+- Running `npm run dev` now starts both Backend (port 5000) and Frontend (port 5173) together with unified, color-coded logging.
 
-### 3. Step 2: Mix Honours the Trim
-- In [`backend/services/ffmpegService.js`](file:///e:/khmer_ai_dubbing_studio/backend/services/ffmpegService.js):
-  - In `createSynchronizedNarrationAudio` (single-segment and `mixBatch`): calculates `trimDur` from `seg.audioTrimmed`, `seg.userTrimmed`, or clamped `audioEndSec - audioStartSec`. Applies `atrim=start=${audioOffset}:duration=${trimDur},asetpts=PTS-STARTPTS,` so trimmed tails are never heard under the next line.
-  - In `renderDubbedVideoWithDucking` fallback path: adds `trimFilter` before `aformat`, `volume`, and `adelay`.
-- In [`backend/routes/audioRoutes.js`](file:///e:/khmer_ai_dubbing_studio/backend/routes/audioRoutes.js):
-  - Mapped `audioTrimmed: Boolean(s.audioTrimmed)` and `audioEndSec: s.audioEndSec` in `/api/sync-audio`.
-  - Updated cache fingerprint to include `audioTrimmed` and `audioEndSec`, guaranteeing cache invalidation when a segment is trimmed.
+### 3. Step 3: Visible Failure Banner / Toast in UI
+- **Event-Driven Offline Notification**:
+  - In [`frontend/src/services/api.js`](file:///e:/khmer_ai_dubbing_studio/frontend/src/services/api.js): Added `notifyBackendOffline()` and `notifyBackendOnline()` custom DOM event emitters. `parseResponseJson` and `syncTimelineAudioApi` dispatch `backend-offline` on 502 or network failure, and `backend-online` on 200 OK.
+  - In [`frontend/src/utils/projectStorage.js`](file:///e:/khmer_ai_dubbing_studio/frontend/src/utils/projectStorage.js): Created `syncSeriesToBackend(series)` helper replacing individual fetch calls, dispatching offline/online events for series state synchronization.
+  - In [`frontend/src/hooks/useClipOperations.js`](file:///e:/khmer_ai_dubbing_studio/frontend/src/hooks/useClipOperations.js): Integrated offline/online notifications into `handleAutoAlignNoOverlap`, `handleResetToSourceTiming`, `handleSplitClip`, `executeSync`, `handleToggleMuteSegment`, and `handleAutoSplitSegment`.
+  - In [`frontend/src/hooks/useProjectPersistence.js`](file:///e:/khmer_ai_dubbing_studio/frontend/src/hooks/useProjectPersistence.js): Listens to `backend-offline` and `backend-online`. Instantly updates `isBackendOnline` (driving Navbar chip) and `backendOfflineBanner`.
+  - In [`frontend/src/App.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/App.jsx): Renders dismissible top warning banner:
+    `"Backend offline — ការផ្លាស់ប្ដូររក្សាទុកតែក្នុងម៉ាស៊ីននេះសិន (changes saved locally only)"` with an `✕` dismiss button.
+  - In [`frontend/src/index.css`](file:///e:/khmer_ai_dubbing_studio/frontend/src/index.css): Added `.backend-offline-banner` amber warning styling and smooth transition animation.
+- **Resilience**: The Auto-Align and Reset Timing operations continue running locally without interruption; only user-facing feedback is updated.
 
-### 4. Step 3: Visible Flag & Preview Sync
-- In [`frontend/src/components/timeline/TimelineTracksCanvas.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/timeline/TimelineTracksCanvas.jsx):
-  - Trimmed voice clip label gains `" ✂"` suffix: `#N ប្រុស ✂` / `#N ស្រី +0.4s ✂` (text only, 0 new icons/pills per clean spec).
-  - Respects `audioTrimmed` so clip width ends exactly at clamped `audioEndSec`.
-  - In `internalSegmentRows`, respects `typeof seg.trackRow === 'number'` and `audioTrimmed` without artificially pushing clips to lane 1.
-- In [`frontend/src/components/media/ScriptReviewTab.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/media/ScriptReviewTab.jsx):
-  - Preserves duration OVER alert / badge when `audioTrimmed` is true so users know which lines to shorten or re-generate.
-- In [`frontend/src/components/VideoPlayerPreview.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/VideoPlayerPreview.jsx):
-  - Stops preview playback cleanly at `audioEndSec` when trimmed (`segAudioEndLimit`), preventing tail audio bleed during real-time preview.
-
-### 5. Verification Evidence
-- **Real Episode 1 Test (`series_1793898268958` EP1)**:
-  - **Before Auto-Align**: `#17 ស្រី +1.1s (track 0)`, `#18 ប្រុស (track 1)`, `#19 ស្រី (track 0)`.
-  - **After Auto-Align**: `#17 ស្រី +1.1s ✂ (track 0)`, `#18 ប្រុស +0.1s ✂ (track 0)`, `#19 ស្រី (track 0)`. All 3 sit on VOICE 1!
-  - **Undo**: Restores pre-align state with `#18` on track 1.
-  - **Reset Timing**: Restores source timing with `#18` on track 1.
-  - **Export Mix**: Master narration track generated via `createSynchronizedNarrationAudio` with `atrim` cuts; 0 tail bleed.
-  - **Unit Tests**: `node --test backend/tests/auto_align_voice.test.js` ➔ **3/3 PASS** (0.15s).
-  - **Frontend Build**: `npm --prefix frontend run build` ➔ **PASS** (1.29s, 0 errors).
-  - **Console**: Verified **0 console errors**.
+### 4. Verification Evidence
+1. **With Backend Stopped**:
+   - Clicked "Auto-Align" in browser:
+     - Header status chip immediately showed `Backend Offline` in red.
+     - Dismissible warning banner appeared at top-center: `"Backend offline — ការផ្លាស់ប្ដូររក្សាទុកតែក្នុងម៉ាស៊ីននេះសិន (changes saved locally only)"`.
+     - Console: Zero unhandled red errors (only the expected warning notice).
+     - Timeline: Clips remained cleanly aligned locally.
+     - Dismiss button (`✕`): Clicking dismiss hid the banner.
+     - Evidence screenshot: [`backend_offline_banner.png`](file:///C:/Users/nhastar/.gemini/antigravity/brain/6ac10be3-1a63-456e-8d37-a5ad1ac624ae/backend_offline_banner.png).
+2. **With Backend Started via Single Command (`npm run dev`)**:
+   - Clicked "Auto-Align":
+     - `/api/sync-audio` returned HTTP `200 OK`.
+     - Header status chip showed `FFmpeg Online` in green.
+     - Backend offline banner automatically cleared.
+     - Evidence screenshot: [`backend_online_sync.png`](file:///C:/Users/nhastar/.gemini/antigravity/brain/6ac10be3-1a63-456e-8d37-a5ad1ac624ae/backend_online_sync.png).
+3. **Build & Tests**:
+   - `npm --prefix frontend run build` ➔ **PASS** (1.41s, 0 errors).
+   - `node --test backend/tests/auto_align_voice.test.js` ➔ **3/3 PASS** (0.15s).
 
 ## Active Environment
+- **Startup Command**: `npm run dev` (Starts BOTH Backend on port 5000 and Frontend on port 5173 with `concurrently`)
 - **Backend API**: `http://localhost:5000` (Node.js/Express, online)
 - **Frontend Studio UI**: `http://localhost:5173` (React 19 + Vite, online)
 - **Git Branch**: `main`

@@ -72,13 +72,40 @@ if (require.main === module) {
     console.warn("[Server Startup] ⚠️ Crash recovery warning:", recErr.message);
   }
 
-  server = app.listen(PORT, "0.0.0.0", () => {
-    console.log(`🚀 Khmer AI Dubbing Backend running on http://localhost:${PORT}`);
-  });
-  server.requestTimeout = 0;
-  server.setTimeout(0);
-  server.keepAliveTimeout = 1800000;
-  server.headersTimeout = 1800000;
+  const startListen = (retries = 5) => {
+    server = app.listen(PORT, "0.0.0.0", () => {
+      console.log(`🚀 Khmer AI Dubbing Backend running on http://localhost:${PORT}`);
+    });
+    server.requestTimeout = 0;
+    server.setTimeout(0);
+    server.keepAliveTimeout = 1800000;
+    server.headersTimeout = 1800000;
+
+    server.on("error", (err) => {
+      if (err.code === "EADDRINUSE" && retries > 0) {
+        console.warn(`[Server] Port ${PORT} busy (EADDRINUSE), retrying in 500ms (${retries} retries left)...`);
+        setTimeout(() => {
+          startListen(retries - 1);
+        }, 500);
+      } else {
+        console.error("[CRITICAL] Server listen error:", err);
+      }
+    });
+  };
+
+  startListen();
+
+  const handleShutdown = () => {
+    if (server) {
+      server.close(() => {
+        process.exit(0);
+      });
+    } else {
+      process.exit(0);
+    }
+  };
+  process.on("SIGINT", handleShutdown);
+  process.on("SIGTERM", handleShutdown);
 }
 
 module.exports = { app, server, isSafeUploadPath, safeDecodeURI, resolveMediaFile };

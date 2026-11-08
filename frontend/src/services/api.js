@@ -2,6 +2,18 @@
  * REST API Client for Khmer AI Dubbing Studio Backend
  */
 
+export function notifyBackendOffline() {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('backend-offline'));
+  }
+}
+
+export function notifyBackendOnline() {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('backend-online'));
+  }
+}
+
 /**
  * Safely parse JSON responses from backend or handle proxy errors (like 502 Bad Gateway)
  * @param {Response} res
@@ -22,6 +34,7 @@ async function parseResponseJson(res, defaultErrMsg = 'Request failed') {
     } catch {
       // Response is not JSON (e.g. 502 Bad Gateway HTML or empty string from proxy)
       if (res.status === 502) {
+        notifyBackendOffline();
         const error = new Error('Backend server is temporarily unreachable or restarting (502 Bad Gateway). Please check if backend is running.');
         error.status = 502;
         throw error;
@@ -35,6 +48,9 @@ async function parseResponseJson(res, defaultErrMsg = 'Request failed') {
   }
 
   if (!res.ok) {
+    if (res.status === 502) {
+      notifyBackendOffline();
+    }
     let rawError = data?.error;
     if (rawError === 'fetch failed' || rawError?.startsWith('fetch failed')) {
       rawError = 'ការតភ្ជាប់ទៅកាន់ Google Gemini AI បរាជ័យ (Network / Gemini API fetch failed)។ សូមពិនិត្យការតភ្ជាប់អ៊ីនធឺណិត ឬ API Key។';
@@ -453,12 +469,21 @@ export async function renderVideoApi({
  * @param {string} [seriesId]
  */
 export async function syncTimelineAudioApi(segments, projectName, videoId, episodeId = null, seriesId = null) {
-  const res = await fetch('/api/sync-audio', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ segments, projectName, videoId, episodeId, seriesId }),
-  });
-  return await parseResponseJson(res, 'Failed to re-sync timeline audio');
+  try {
+    const res = await fetch('/api/sync-audio', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ segments, projectName, videoId, episodeId, seriesId }),
+    });
+    const data = await parseResponseJson(res, 'Failed to re-sync timeline audio');
+    notifyBackendOnline();
+    return data;
+  } catch (err) {
+    if (err.status === 502 || /ECONNREFUSED|unreachable|Failed to fetch|NetworkError/i.test(err?.message || '')) {
+      notifyBackendOffline();
+    }
+    throw err;
+  }
 }
 
 /**

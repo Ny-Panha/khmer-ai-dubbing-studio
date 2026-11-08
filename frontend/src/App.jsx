@@ -1,4 +1,5 @@
 import React, { useState, useRef, useCallback } from 'react';
+import { AlertTriangle, X } from 'lucide-react';
 import Navbar from './components/Navbar';
 import JobDashboardModal from './components/dashboard/JobDashboardModal';
 import GeminiRouteModal from './components/dashboard/GeminiRouteModal';
@@ -447,6 +448,22 @@ export default function App() {
           onOpenJobDashboard={handleOpenJobDashboard}
           onOpenGeminiRoute={handleOpenGeminiRoute}
         />
+
+        {/* Backend Offline Dismissible Warning Banner / Toast */}
+        {persistence.backendOfflineBanner && (
+          <div className="backend-offline-banner" role="alert">
+            <AlertTriangle size={16} style={{ color: '#F59E0B', flexShrink: 0 }} />
+            <span>Backend offline — ការផ្លាស់ប្ដូររក្សាទុកតែក្នុងម៉ាស៊ីននេះសិន (changes saved locally only)</span>
+            <button
+              type="button"
+              onClick={() => persistence.setBackendOfflineBanner(false)}
+              aria-label="Dismiss banner"
+              title="Dismiss"
+            >
+              <X size={14} />
+            </button>
+          </div>
+        )}
 
         {/* Main Video Editing Workspace */}
         <main className="capcut-main-workspace">

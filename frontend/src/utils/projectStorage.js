@@ -1,4 +1,5 @@
 import { SCHEMA_VERSION } from './formatTime.js';
+import { notifyBackendOffline, notifyBackendOnline } from '../services/api';
 
 export const STORAGE_SERIES_LIST_KEY = 'KHMER_AI_SERIES_LIST_V2';
 export const STORAGE_ACTIVE_SERIES_ID_KEY = 'KHMER_AI_ACTIVE_SERIES_ID';
@@ -608,6 +609,30 @@ export function extractSeriesName(title) {
 }
 
 /**
+ * Helper to sync series state to backend with offline detection
+ */
+export function syncSeriesToBackend(series) {
+  if (!series?.id) return;
+  fetch(`/api/series/${series.id}/sync`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ series }),
+  })
+    .then((res) => {
+      if (res.status === 502 || !res.ok) {
+        notifyBackendOffline();
+      } else {
+        notifyBackendOnline();
+      }
+    })
+    .catch((err) => {
+      if (/ECONNREFUSED|unreachable|Failed to fetch|NetworkError/i.test(err?.message || '')) {
+        notifyBackendOffline();
+      }
+    });
+}
+
+/**
  * Save specific episode state into series list in localStorage
  */
 export function saveEpisodeState(seriesId, episodeId, stateData) {
@@ -766,11 +791,7 @@ export function saveEpisodeState(seriesId, episodeId, stateData) {
 
     // Background sync to backend for server-side persistence
     try {
-      fetch(`/api/series/${series.id}/sync`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ series }),
-      }).catch(() => {});
+      syncSeriesToBackend(series);
     } catch (_) {}
 
     return list;
@@ -800,11 +821,7 @@ export function addNewEpisodeToSeries(seriesId, customTitle = null) {
 
   // Background sync to backend for server-side persistence
   try {
-    fetch(`/api/series/${series.id}/sync`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ series }),
-    }).catch(() => {});
+    syncSeriesToBackend(series);
   } catch (_) {}
 
   return newEp;
@@ -869,11 +886,7 @@ export function deleteEpisodeFromSeries(seriesId, episodeId) {
     fetch(`/api/series/${series.id}/episodes/${episodeId}`, {
       method: 'DELETE',
     }).catch(() => {});
-    fetch(`/api/series/${series.id}/sync`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ series }),
-    }).catch(() => {});
+    syncSeriesToBackend(series);
   } catch (_) {}
 
   return true;

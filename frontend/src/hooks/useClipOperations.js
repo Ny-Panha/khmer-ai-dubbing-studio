@@ -11,7 +11,7 @@ import {
 import { parseTimeToSeconds, formatTimecode, formatMinSec } from '../utils/formatTime';
 import { splitKhmerTextIntoHalves, splitSegmentIntoNaturalSentences } from '../utils/khmerTextSplitter';
 import { buildSpeakerRegistry } from '../utils/speakerUtils';
-import { syncTimelineAudioApi } from '../services/api';
+import { syncTimelineAudioApi, notifyBackendOffline, notifyBackendOnline } from '../services/api';
 
 /**
  * Custom hook to handle multi-clip timeline editing operations (split, cut, bridge, re-sync)
@@ -432,9 +432,13 @@ export function useClipOperations({
         if (syncRes?.fullAudioPath && typeof setFullAudioPath === 'function') {
           setFullAudioPath(syncRes.fullAudioPath);
         }
+        notifyBackendOnline();
       }
     } catch (err) {
       console.warn('[useClipOperations] Auto-align audio sync notice:', err.message);
+      if (err.status === 502 || /ECONNREFUSED|unreachable|Failed to fetch|NetworkError/i.test(err?.message || '')) {
+        notifyBackendOffline();
+      }
     }
   }, [
     scriptData,
@@ -486,9 +490,13 @@ export function useClipOperations({
         if (syncRes?.fullAudioPath && typeof setFullAudioPath === 'function') {
           setFullAudioPath(syncRes.fullAudioPath);
         }
+        notifyBackendOnline();
       }
     } catch (err) {
       console.warn('[useClipOperations] Reset timing audio sync notice:', err.message);
+      if (err.status === 502 || /ECONNREFUSED|unreachable|Failed to fetch|NetworkError/i.test(err?.message || '')) {
+        notifyBackendOffline();
+      }
     }
   }, [
     scriptData,
