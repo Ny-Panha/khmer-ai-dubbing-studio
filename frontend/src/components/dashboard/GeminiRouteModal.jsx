@@ -903,24 +903,87 @@ export default function GeminiRouteModal({
         activeTimersRef.current.add(demucsPollTimer);
 
         try {
-          const res = await fetch('/api/audio/separate', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ 
-              videoPath: videoRef,
-              seriesId: activeSeries?.id || seriesId,
-              episodeId: ep.id,
-            }),
-          });
+          let sepResult = null;
+          let postErrorMsg = null;
+
+          try {
+            const res = await fetch('/api/audio/separate', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                videoPath: videoRef,
+                seriesId: activeSeries?.id || seriesId,
+                episodeId: ep.id,
+              }),
+            });
+            if (isDemucsCancelledRef.current) {
+              clearInterval(demucsPollTimer);
+              break;
+            }
+            const data = await res.json().catch(() => ({}));
+            if (res.ok && data.success) {
+              sepResult = data;
+            } else if (res.status !== 502) {
+              postErrorMsg = data.error || 'Server error';
+            }
+          } catch (postNetErr) {
+            const isTransientDisconnect =
+              postNetErr?.name === 'TypeError' ||
+              /failed to fetch|network|reset|empty/i.test(postNetErr?.message || '');
+            if (!isTransientDisconnect) {
+              postErrorMsg = postNetErr.message || 'Network error';
+            }
+          }
+
+          // Recover seamlessly if browser connection dropped transiently while backend Demucs continues running
+          if (!sepResult && !postErrorMsg && !isDemucsCancelledRef.current) {
+            let consecutiveErrors = 0;
+            while (!sepResult && !postErrorMsg && !isDemucsCancelledRef.current) {
+              await new Promise((r) => setTimeout(r, 2000));
+              if (isDemucsCancelledRef.current) break;
+              try {
+                const dpRes = await fetch(`/api/audio/separation-progress?videoPath=${encodeURIComponent(videoRef)}`);
+                const dpData = await dpRes.json().catch(() => ({}));
+                consecutiveErrors = 0;
+                if (dpData.status === 'separating') continue;
+                if (dpData.status === 'completed' && dpData.noVocalsUrl) {
+                  sepResult = { success: true, noVocalsUrl: dpData.noVocalsUrl, noVocalsPath: dpData.noVocalsPath };
+                  break;
+                }
+                if (dpData.status === 'error') {
+                  postErrorMsg = dpData.error || dpData.message || 'Demucs failed';
+                  break;
+                }
+                const stRes = await fetch('/api/audio/separation-status', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ videoPath: videoRef }),
+                });
+                const stData = await stRes.json().catch(() => ({}));
+                if (stRes.ok && stData.success && stData.available && stData.noVocalsUrl) {
+                  sepResult = { success: true, noVocalsUrl: stData.noVocalsUrl, noVocalsPath: stData.noVocalsPath };
+                } else {
+                  postErrorMsg = 'Connection lost during separation';
+                }
+                break;
+              } catch (_) {
+                consecutiveErrors++;
+                if (consecutiveErrors >= 4) {
+                  postErrorMsg = 'Backend server unreachable';
+                  break;
+                }
+              }
+            }
+          }
+
           clearInterval(demucsPollTimer);
           if (isDemucsCancelledRef.current) {
             break;
           }
-          const data = await res.json().catch(() => ({}));
-          if (res.ok && data.success) {
+          if (sepResult && sepResult.success) {
             separatedCount++;
-            ep.bgmAudioUrl = data.noVocalsUrl;
-            ep.cleanBgmPath = data.noVocalsPath;
+            ep.bgmAudioUrl = sepResult.noVocalsUrl;
+            ep.cleanBgmPath = sepResult.noVocalsPath;
             ep.isDemucsDone = true;
             ep.hasDemucs = true;
             setCompletedDemucsEpIds((prev) => new Set([...prev, ep.id]));
@@ -941,7 +1004,7 @@ export default function GeminiRouteModal({
               },
             }));
           } else {
-            console.error(`[Batch Demucs] Failed for ${ep.id}:`, data.error);
+            console.error(`[Batch Demucs] Failed for ${ep.id}:`, postErrorMsg);
             setDemucsLiveStats((prev) => ({
               ...prev,
               [ep.id]: {
@@ -952,7 +1015,7 @@ export default function GeminiRouteModal({
                   {
                     time: new Date().toLocaleTimeString(),
                     progress: prev[ep.id]?.percent || 5,
-                    message: `❌ បរាជ័យក្នុងការបំបែកសំឡេង: ${data.error || 'Server error'}`,
+                    message: `❌ បរាជ័យក្នុងការបំបែកសំឡេង: ${postErrorMsg || 'Server error'}`,
                   },
                 ],
               },

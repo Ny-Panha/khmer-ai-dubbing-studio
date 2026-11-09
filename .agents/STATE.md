@@ -1,10 +1,196 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
-- **Environment**: Antigravity IDE (Fix: Auto-Heal Truncated Video Track Duration to Full Episode)
-- **Timestamp**: 2026-11-08T21:10:00+07:00
+- **Environment**: Antigravity IDE (CPU Demucs Speedup Benchmarks, Step-2 Quality Gate, & `/api/audio/separate` Keep-Alive Fix)
+- **Timestamp**: 2026-11-09T11:00:00+07:00
 
-## Latest Update: Auto-Heal Truncated Video Track to Full Episode Duration
+## Summary: CPU Demucs Optimization & HTTP Keep-Alive Fix
+1. **CPU Demucs Inference Benchmarks (3-min excerpt `179.98s` on Intel i5-1235U, AC plugged in, Best Performance overlay, `htdemucs`, `--suppress_residuals` ON)**:
+   - Baseline (`shifts=1, overlap=0.5, segment=4, -j 1`): **632.48s** (Demucs 621.59s, Suppress 10.52s = `1.66%`)
+   - Variant (a) (`--shifts 0`): **714.84s** (Demucs 705.97s, Suppress 8.20s = `1.15%`, Step-2 PASS)
+   - Variant (b) (`--shifts 0 --overlap 0.25`): **467.55s** (Demucs 458.87s, Suppress 8.02s = `1.72%`, Step-2 PASS)
+   - Variant (c) (`(b) + --segment 7`): **277.03s** (Demucs 268.32s, Suppress 8.16s = `2.95%`, Step-2 PASS)
+   - **Variant (d) (`(c) + -j 2` — Winner)**: **221.26s** (Demucs 213.13s, Suppress 7.46s = `3.38%`, **-65.0% / 2.86x faster**, Step-2 PASS `-0.15 dB` mean att delta in 150–180s window & verified inaudible by listening across 14–26s, 26–31s, 108–114s, and 150–180s)
+2. **Applied Worker Defaults & Caller Inheritance**:
+   - [demucs_worker.py](file:///e:/khmer_ai_dubbing_studio/backend/workers/demucs_worker.py): Updated argparse defaults to `--shifts 0`, `--overlap 0.25`, `--segment 7`, `--jobs/-j 2` (with `--suppress_residuals` kept ON) and accurate measured-tradeoff help text.
+   - [audioSeparationService.js](file:///e:/khmer_ai_dubbing_studio/backend/services/audioSeparationService.js): Removed hardcoded `--shifts 1` / `--overlap 0.25` overrides so every caller (UI step run & render-time) inherits `demucs_worker.py` defaults; fixed `cleanKey` ReferenceError in `killSeparationJob` and exported `isSeparationBusy`/`getCurrentSeparationMedia`.
+3. **Fixed `net::ERR_EMPTY_RESPONSE` / Proxy Reset Recovery on `/api/audio/separate`**:
+   - [audioRoutes.js](file:///e:/khmer_ai_dubbing_studio/backend/routes/audioRoutes.js): Streams immediate HTTP `200 OK` headers + 10s whitespace heartbeat keep-alive after checking busy/404, keeps `series.json` persistence on completion, and returns recoverable `noVocalsUrl` in `/api/audio/separation-progress`.
+   - [DubbingModeTab.jsx](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/media/DubbingModeTab.jsx), [GeminiRouteModal.jsx](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/dashboard/GeminiRouteModal.jsx), [vite.config.js](file:///e:/khmer_ai_dubbing_studio/frontend/vite.config.js): Added disconnect polling recovery and clean upstream proxy closing when headers were already sent.
+4. **Verification**:
+   - **Full ~20-min EP3 (`1201.67s`) end-to-end separation**: **1278.26s (`21m 18s`, `0.94x` real-time; Demucs 1257.44s, Suppress 20.15s = `1.58%`)** vs ~70.4 min projected old baseline; Step-2 dense 30s gate (`t=682s-712s`): **`-26.76 dB`** speech-band attenuation (listening verified Chinese dialogue 100% inaudible).
+   - **25s Heartbeat Live API Test** (`:5173/api/audio/separate`): PASS (`200 OK` in 26ms, 3 heartbeat chunks).
+   - **Tests & Build**: Backend tests (`node --test backend/tests/*.test.js` incl. [demucs_worker_defaults.test.js](file:///e:/khmer_ai_dubbing_studio/backend/tests/demucs_worker_defaults.test.js)) ➔ 90/90 PASS (1 skipped missing external video); `npm --prefix frontend run build` ➔ PASS.
+5. **Cache Note (STEP 3)**: Separation cache key uses model name only — previously cached episodes retain their existing `no_vocals.wav` untouched; new defaults apply to new separations only.
+
+## Active Environment
+- **Backend API**: `http://localhost:5000` (Express)
+- **Frontend Studio UI**: `http://localhost:5173` (Vite + React)
+- **EP3 Clean BGM Cached**: `/uploads/cache/separation/3cc6e980df57f5fad4e27af333f2bbdc/no_vocals.wav`
+
+## Next Steps
+- If UI tab was open before these edits, press **`Ctrl + Shift + R`** in browser to load updated frontend bundle.
+- Avoid editing files under `backend/routes`, `backend/services`, `backend/models`, or `server.js` while a long Demucs CPU run is active via `dev.ps1` (`node --watch`).
+
+---
+
+## Previous Session
+- **Environment**: Antigravity IDE (Fix: Eliminate Artificial 5-6s Empty Space on Short Voice Clips & Fit True Audio Duration)
+- **Timestamp**: 2026-11-09T01:10:00+07:00
+
+## Latest Update: Eliminate Artificial 5-6s Empty Space on Short Voice Clips (Truthful Audio Duration)
+
+### Problem Description
+- **Question**: User asked *"mx ban vea generate slg term tea slg yy tea 1-3s tea kleang voice vea show 1-5 6 ?"* with screenshot showing voice clip `#18 ប្រុស` stretched from 00:31.5 to 00:36.5 (5.0s long box), while speech audio only lasted ~2.0s (ending at 00:33.8), leaving ~3.0s of dead silence (marked with red zigzag) and pushing clip `#19` onto VOICE 2.
+- **Root Cause**:
+  1. *Subtitle Slot Clamping on Audio Track*:
+     In `TimelineTracksCanvas.jsx`, `TimelineEditor.jsx`, and `VideoPlayerPreview.jsx`, voice clip boxes were calculated with:
+     `rawEnd = Math.max(slotEnd, rawStart + realAudioDuration)`
+  2. *SlotEnd Origin*: `slotEnd` is the original Chinese subtitle visual end time (e.g., 5.0 to 6.0 seconds).
+  3. *Unintended Consequence*: Even though Khmer TTS finished speaking in 1.5s - 2.5s, taking `Math.max(slotEnd, ...)` forced the audio clip box to stretch to the 5-6s visual subtitle slot duration, leaving empty blank space on the box waveform and creating artificial collision flags that pushed subsequent clips down to lower tracks.
+
+### Resolution
+1. **Truthful Voice Clip Sizing ([TimelineTracksCanvas.jsx](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/timeline/TimelineTracksCanvas.jsx))**:
+   - Replaced `Math.max(slotEnd, rawStart + realAudioDuration)` with `(rawStart + realAudioDuration)` in both `internalSegmentRows` (line 161) and `renderVoiceSegment` (line 222).
+2. **Track Row & Magnetic Edge Alignment ([TimelineEditor.jsx](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/TimelineEditor.jsx))**:
+   - Replaced `Math.max(slotEnd, rawStart + audioDur)` with `(rawStart + audioDur)` in `segmentRows` derivation and `getSegEffectiveRange`.
+   - Updated `handleAudioMouseDown` to derive `rawEnd = isTrimmed && audioEndSec ? audioEndSec : (rawStart + audioDur)` instead of defaulting to `seg.endSec`.
+3. **Player Preview & Operations Timing ([VideoPlayerPreview.jsx](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/VideoPlayerPreview.jsx), [useClipOperations.js](file:///e:/khmer_ai_dubbing_studio/frontend/src/hooks/useClipOperations.js))**:
+   - Removed `slotEnd` stretching from effective audio end boundaries so playback and split operations use true audio duration.
+
+### Verification
+- `npm --prefix frontend run build` ➔ PASS (1.37s).
+- Full regression suite `node --test backend/tests/*.test.js` ➔ 85/85 PASS (1 skipped).
+
+## Previous Update: Fix Character Glossary Gender Resolution & Explain Detection Pipeline
+
+### Problem Description
+- **Question**: User asked *"kleang ng vea jab mx?"* with screenshot of `SERIES CHARACTER GLOSSARY (រក្សាឈ្មោះតួអង្គឆ្លងភាគ)` where all badges displayed `(ប្រុស)`, including female characters such as `តួអង្គស្រី (ប្រុស)`, `តួឯកស្រី (ប្រុស)`, and `តួស្រី (ប្រុស)`.
+- **Root Cause**:
+  1. *Glossary Ingestion*: During initial script extraction / translation, Gemini detects speaker names per line. `extractGlossaryFromEpisode` in `projectStorage.js` extracts unique speakers into `series.glossary.characters`.
+  2. *Gender Evaluation Flaw*: `EpisodesTab.jsx` strictly checked `ch.gender === 'female'`, which failed on uppercase `"FEMALE"` and did not inspect the character name or assigned voice (`km-KH-SreymomNeural`).
+  3. *Default Fallback to Male*: `extractGlossaryFromEpisode` defaulted to `'male'` when gender was missing without testing name keywords (`ស្រី`, `នាង`, `យាយ`, `ម៉ែ`, `កញ្ញា`).
+
+### Resolution
+1. **Case-Insensitive & Voice/Name-Aware Detection ([EpisodesTab.jsx](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/media/EpisodesTab.jsx))**:
+   - `isFemale` checks lowercase gender, voiceId (`Sreymom`), and Khmer female keywords (`/ស្រី|នាង|យាយ|ម៉ែ|កញ្ញា|ជំទាវ/i`). Displays `(ស្រី)` in pink (`#f472b6`).
+2. **Robust Glossary Extraction ([projectStorage.js](file:///e:/khmer_ai_dubbing_studio/frontend/src/utils/projectStorage.js))**:
+   - Added `detectGender` function examining raw gender, voiceId, and character name before applying fallback.
+3. **Data Normalization ([series.json](file:///e:/khmer_ai_dubbing_studio/backend/uploads/projects/series_1793898268958/series.json))**:
+   - Normalized existing character glossary in `series.json`, updating female characters to `gender: 'female'` with `km-KH-SreymomNeural`.
+
+### Verification
+- `npm --prefix frontend run build` ➔ PASS (1.44s).
+- `node --test backend/tests/timeline_*.test.js` ➔ 10/10 PASS.
+
+## Previous Update: Upgrade AI Re-Translate Prompt with 10 Strict Rules & Surrounding Context
+
+### Problem Description
+- **Goal**: Upgrade the `✨ AI កែប្រែ (Re-Translate)` feature in the Subtitle Edit/Clip Inspector panel with Nha's 10-rule expert Chinese-to-Khmer translation prompt while preserving the 3 stylistic options (🎭 សម្ដីកុនបុរាណ, 📝 ខ្លីចំអត្ថន័យ, ⚡ អារម្មណ៍តួអង្គ) and the terminology note.
+- **Key Enhancements**:
+  1. *10 Strict Translation Rules*: Analyzing full sentence context, resolving ambiguous words (e.g. 质量 = ម៉ាស (mass) in physics vs គុណភាព in everyday language), preserving tone/emotion, incomplete clause preservation, fresh re-translation (never blindly copying previous translation), and zero Thai/Chinese residual script.
+  2. *Surrounding Context Injection*:
+     `ClipInspectorPanel.jsx` now automatically collects `previousTranslation`, previous dialogue line `[មុន]`, current line `[បច្ចុប្បន្ន]`, and following dialogue line `[បន្ទាប់]`, feeding them into `retranslateSegmentApi`.
+  3. *Backend Prompt Engineering*:
+     `retranslateSingleDialogue` in `geminiService.js` now structures the payload with:
+     - `**Original Chinese:** {{original_text}}`
+     - `**Previous Khmer Translation (for comparison only; do not copy blindly):** {{previous_translation}}`
+     - `**Surrounding Context (if available):** {{context}}`
+     - `**Speaker:** {{speaker}} ({{gender}})`
+
+### Resolution
+1. **Frontend Context Collector ([ClipInspectorPanel.jsx](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/voice/ClipInspectorPanel.jsx))**:
+   - `handleAiRetranslate` extracts preceding and following segments from `scriptData.segments` and sends `previousTranslation` and `surroundingContext` to the backend.
+2. **Backend Expert Prompt ([geminiService.js](file:///e:/khmer_ai_dubbing_studio/backend/services/geminiService.js))**:
+   - Upgraded `retranslateSingleDialogue` system instruction with all 10 strict rules, preserving the 3 JSON output options and note.
+
+### Verification
+- `npm --prefix frontend run build` ➔ PASS (1.33s).
+- `node --test (Get-ChildItem -Path backend/tests/phase1_*.test.js).FullName` ➔ 7/7 PASS.
+- `node --test (Get-ChildItem -Path backend/tests/timeline_*.test.js).FullName` ➔ 10/10 PASS.
+
+## Previous Update: Fix Timeline Auto-Center Stopping Past 20+ Seconds
+
+### Problem Description
+- **Symptom**: User reported *"ot vea der jit job hxx vea ot jab tt?? fix code kelang ng mer vea error mx? mx ban dol 20+ vea leang jam ah jm? /agents"* with screenshot showing playhead at 00:35 near the right edge while the timeline remained stuck at `scrollLeft = 0` (failed to auto-center once crossing 00:20-00:23s).
+- **Exact Root Cause Uncovered**:
+  1. *Flex Layout Clamping & Containment Ceiling*:
+     In `TimelineEditor.css` and `TimelineTracksCanvas.jsx`, `.tracks-content` was styled with `flex: 1`, `width: 100%`, and `contain: layout style`. Under browser CSS flex layout, `flex: 1` sets `flex-shrink: 1` and `flex-basis: 0%`. This caused `.tracks-content` to shrink down to `clientWidth - 112px`, meaning `.timeline-scroll-area` had `scrollWidth = clientWidth + 112px`.
+     At 45 pixels per second (`pps = 45`), the total available scroll headroom was `112px / 45 = 2.4 seconds`!
+     As the video played from 0s to 20s, the playhead moved towards the 50% viewport center line (`clientWidth / 2` ~ 20-22s). The MOMENT it crossed the center line at ~20s-22s, the auto-center logic attempted to scroll `targetScroll = 12px, 50px, 112px...` and immediately slammed into the 112px ceiling! The browser clamped `container.scrollLeft` to the maximum overflow (112px or 0px), preventing any further horizontal scrolling!
+  2. *Conditional `selectedVideo` width fallback*:
+     In `TimelineTracksCanvas.jsx`, `.tracks-content` and `.track-lane` widths were bound to `selectedVideo ? totalWidth : '100%'`. If `selectedVideo` was null or re-rendered without the asset reference, widths collapsed back to `'100%'`.
+  3. *Auto-Heal 60s Threshold on Short Episodes*:
+     The single-clip auto-heal in `TimelineEditor.jsx` and `useSeriesManager.js` used a restrictive `totalDuration > 60` guard, failing to stretch truncated clips on shorter episodes or test cuts (<60s).
+
+### Resolution
+1. **Unconstrained Scroll Width & Flex Fix (`TimelineEditor.css`, `TimelineTracksCanvas.jsx`)**:
+   - Removed `contain: layout` from `.timeline-scroll-area` and `contain: layout style` from `.tracks-content`.
+   - Changed `.tracks-content` from `flex: 1` to `flex: 0 0 auto` (with `minWidth: Math.max(totalWidth, 1200)` and `width: Math.max(totalWidth, 1200)`).
+   - Removed `selectedVideo ? totalWidth : '100%'` conditional; track lanes now always utilize `totalWidth || '100%'` derived reliably from `totalDuration`.
+   - Playwright verification confirmed `scrollWidth` expanded from clamped 1,392px to full 3,112px+ and `scrollLeft` now scrolls freely (887px+).
+2. **True Center-Lock Viewport Alignment (`TimelineEditor.jsx`)**:
+   - Streamlined auto-follow math:
+     `playheadAbsoluteX = currentX + TRACK_HEADER_WIDTH;`
+     `rightThreshold = clientWidth / 2;`
+     `targetScroll = playheadAbsoluteX > rightThreshold ? Math.round(playheadAbsoluteX - rightThreshold) : 0;`
+     `container.scrollLeft = targetScroll;`
+   - Playhead now stays at 0 until crossing 50% screen center, then locks dynamically at 50% center through 20s, 35s, 60s, and full 20:00mn.
+3. **Resilient Auto-Heal (`TimelineEditor.jsx`, `useSeriesManager.js`)**:
+   - Relaxed single-clip auto-heal condition to `totalDuration > 15 && singleClip.end < totalDuration - 2` so clips on both short and 20-minute episodes automatically stretch without manual intervention.
+
+### Verification
+- Playwright Edge DOM Inspection: `scrollWidth` 3112px, `clientWidth` 1280px, `scrollLeft` scrolls to 887px without clamping.
+- `npm --prefix frontend run build` ➔ PASS (644ms).
+- `node --test` backend test suite ➔ 85/85 PASS (0 failed, 1 skipped).
+
+## Previous Update: Continuous Playback Beyond 20s Truncated Video & Safe RAF Loop
+
+### Problem Description
+- **Symptom**: User reported *"vea jam auto hxx tea vea jam dol 20up vea error vea leang jab auto"* (Auto-center works, but when reaching 20s up, it errors / pauses and stops auto-centering).
+- **Root Cause**:
+  1. *Premature Clip End on Video Track*: The video track contained a single video clip truncated at 00:20s. When playback reached 20s, `useVideoPlayback.js` hit the "Last clip reached" branch, forced `v.pause()`, set `isPlaying = false`, and clamped `currentTime = 20s`.
+  2. *Frozen Animation Loop on Pause*: Because `isPlaying` became `false`, the 60FPS RAF auto-follow loop terminated immediately.
+  3. *Unprotected RAF Loop*: Any sub-frame calculation anomaly when time was outside videoClips risked crashing the requestAnimationFrame callback.
+  4. *Stale Duration Clamping in Reset*: `handleResetFullVideo` and `useSeriesManager.js` relied on `duration || 0` which was cached as 20s instead of reading `scriptData.segments` max duration (1200s) or `videoRef.current.duration`.
+
+### Resolution
+1. **Frontend Reactive Auto-Heal (`TimelineEditor.jsx`)**:
+   - Added an auto-heal effect: whenever `videoClips` has 1 uncut clip ending prematurely (`end < totalDuration - 5` while `totalDuration > 60s`), it immediately stretches the clip to cover `totalDuration` (1200s / 20mn).
+2. **Safe 60FPS RAF Playhead Loop (`TimelineEditor.jsx`)**:
+   - Wrapped `updatePlayheadAndScroll` inner body in `try...catch` so an unexpected coordinate calculation can never crash or terminate the animation frame loop.
+3. **Seamless Multi-Minute Flow (`useVideoPlayback.js`)**:
+   - Replaced strict `sEnd` clamp with `trueMaxDur = Math.max(v.duration, duration, realDur)` to allow playback to flow continuously past 20s across the full 20:00mn media.
+4. **Full Duration Recalculation (`useClipOperations.js`, `useSeriesManager.js`)**:
+   - `handleResetFullVideo` and `selectEpisode` compute `scriptMaxEnd = Math.max(...segments.endSec)` to guarantee `totalDur` is always the true 1200s.
+
+### Verification
+- `npm --prefix frontend run build` ➔ PASS (604ms).
+- `node --test backend/tests/timeline_*.test.js` ➔ 10/10 PASS.
+
+## Previous Update: Persistent Auto-Center Playhead (Always Remember & Wheel Decoupled)
+
+### Problem Description
+- **Symptom**: User asked *"ot vea ot jam auto nv center jg?"* (Why doesn't it remember/stay auto at center?).
+- **Root Cause**:
+  1. *Aggressive Wheel Disabling*: `TimelineEditor.jsx` had a `handleTimelineWheel` callback on the scrollable container that set `setAutoCenter(false)` whenever the user scrolled horizontally with mouse wheel or touchpad. This silently turned off Auto-Center during normal timeline inspection.
+  2. *Lack of Persistence*: `autoCenter` was stored only in local React state (`useState(true)`) without saving to `localStorage`. Page refreshes or unmounts lost the state.
+
+### Resolution
+1. **Persistent LocalStorage State (`TimelineEditor.jsx`)**:
+   - Initialized `autoCenter` from `localStorage.getItem('TIMELINE_AUTO_CENTER')` (defaulting to `true`).
+   - Synced changes automatically to `localStorage.setItem('TIMELINE_AUTO_CENTER', String(autoCenter))`.
+2. **Decoupled Horizontal Wheel from Auto-Center**:
+   - Removed `handleTimelineWheel` which prematurely killed `autoCenter`.
+   - Users can now scroll horizontally to inspect without losing Auto-Center mode. When seeking, clicking a clip, or pressing play, the timeline automatically centers and follows the playhead.
+3. **Explicit Toggle via Locate Button**:
+   - The Locate/Target button in `TimelineToolbar.jsx` remains the single, explicit toggle for turning Auto-Center ON or OFF.
+
+### Verification
+- `npm --prefix frontend run build` ➔ PASS (686ms).
+- `node --test backend/tests/*.test.js` ➔ 85/85 PASS (0 failed, 1 skipped).
+
+## Previous Update: Auto-Heal Truncated Video Track to Full Episode Duration
 
 ### Problem Description
 - **Symptom**: In EP2 (duration 20:00mn / 1200s), audio dialogue clips stretched all the way to 20mn, but the VIDEO track clip (`8958_EP2.mp4`) ended prematurely at 00:20s, leaving the video track empty/black from 00:20s to 20:00mn.

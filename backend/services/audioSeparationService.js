@@ -11,15 +11,28 @@ const { spawn } = require('child_process');
 const activeSeparationJobs = new Map();
 const activeSeparationProgress = new Map();
 
+function normalizeSeparationKey(mediaRef) {
+  if (!mediaRef) return '';
+  return path.basename(String(mediaRef).split('?')[0].split('#')[0]).toLowerCase();
+}
+
 function getSeparationProgress(mediaRef) {
   if (!mediaRef) return null;
-  const cleanBase = path.basename(String(mediaRef).split('?')[0].split('#')[0]).toLowerCase();
+  const cleanBase = normalizeSeparationKey(mediaRef);
   for (const [key, val] of activeSeparationProgress.entries()) {
     if (key.includes(cleanBase) || cleanBase.includes(key)) {
       return val;
     }
   }
   return null;
+}
+
+function isSeparationBusy() {
+  return Boolean(isDemucsRunning);
+}
+
+function getCurrentSeparationMedia() {
+  return currentDemucsMedia;
 }
 
 /**
@@ -155,22 +168,37 @@ function executeDemucsWorker(options, targetDir, cleanKey) {
     }
 
     const pythonBin = resolvePythonBinary();
-    const overlap = String(options.overlap || 0.25);
-    const shifts = String(options.shifts || 1);
     const args = [
       workerScript,
       '--audio', audioPath,
       '--output_dir', targetDir,
       '--model', model,
       '--device', device,
-      '--overlap', overlap,
-      '--shifts', shifts,
     ];
+    if (options.shifts !== undefined && options.shifts !== null) {
+      args.push('--shifts', String(options.shifts));
+    }
+    if (options.overlap !== undefined && options.overlap !== null) {
+      args.push('--overlap', String(options.overlap));
+    }
+    if (options.segment !== undefined && options.segment !== null) {
+      args.push('--segment', String(options.segment));
+    }
+    if (options.jobs !== undefined && options.jobs !== null) {
+      args.push('--jobs', String(options.jobs));
+    }
     if (options.suppressResiduals !== false) {
       args.push('--suppress_residuals');
     }
 
-    console.log(`[AudioSeparation] 🎧 Launching Demucs separation for: ${path.basename(audioPath)} (Model: ${model}, Device: ${device}, Overlap: ${overlap})`);
+    const optSummary = [
+      options.shifts !== undefined ? `Shifts: ${options.shifts}` : null,
+      options.overlap !== undefined ? `Overlap: ${options.overlap}` : null,
+      options.segment !== undefined ? `Segment: ${options.segment}` : null,
+      options.jobs !== undefined ? `Jobs: ${options.jobs}` : null,
+    ].filter(Boolean).join(', ') || 'Worker defaults (shifts=0, overlap=0.25, segment=7, j=2)';
+
+    console.log(`[AudioSeparation] 🎧 Launching Demucs separation for: ${path.basename(audioPath)} (Model: ${model}, Device: ${device}, ${optSummary})`);
     if (onProgress) onProgress({ phase: 'starting', progress: 5, message: 'Launching Demucs Audio Separation AI...' });
 
     const child = spawn(pythonBin, args, {
@@ -215,7 +243,18 @@ function executeDemucsWorker(options, targetDir, cleanKey) {
       currentDemucsMedia = null;
       activeSeparationJobs.delete(jobId);
       activeSeparationJobs.delete(cleanKey);
-      activeSeparationProgress.delete(cleanKey);
+      activeSeparationProgress.set(cleanKey, {
+        progress: 0,
+        status: 'error',
+        error: err.message,
+        message: err.message,
+        model,
+      });
+      setTimeout(() => {
+        if (activeSeparationProgress.get(cleanKey)?.status === 'error') {
+          activeSeparationProgress.delete(cleanKey);
+        }
+      }, 60000);
       reject(err);
     });
 
@@ -225,17 +264,21 @@ function executeDemucsWorker(options, targetDir, cleanKey) {
       activeSeparationJobs.delete(jobId);
       activeSeparationJobs.delete(cleanKey);
       if (code !== 0) {
-        activeSeparationProgress.delete(cleanKey);
-        return reject(new Error(`Demucs worker exited with code ${code}: ${stderrData || stdoutData}`));
+        const errMsg = `Demucs worker exited with code ${code}: ${stderrData || stdoutData}`;
+        activeSeparationProgress.set(cleanKey, {
+          progress: 0,
+          status: 'error',
+          error: errMsg,
+          message: errMsg,
+          model,
+        });
+        setTimeout(() => {
+          if (activeSeparationProgress.get(cleanKey)?.status === 'error') {
+            activeSeparationProgress.delete(cleanKey);
+          }
+        }, 60000);
+        return reject(new Error(errMsg));
       }
-
-      activeSeparationProgress.set(cleanKey, {
-        progress: 100,
-        status: 'completed',
-        message: 'Separation Completed 100%',
-        model,
-      });
-      setTimeout(() => activeSeparationProgress.delete(cleanKey), 30000);
 
       try {
         const lines = stdoutData.trim().split('\n');
@@ -243,16 +286,41 @@ function executeDemucsWorker(options, targetDir, cleanKey) {
         const parsed = JSON.parse(lastLine);
 
         if (parsed.status === 'success') {
+          activeSeparationProgress.set(cleanKey, {
+            progress: 100,
+            status: 'completed',
+            message: 'Separation Completed 100%',
+            model,
+            noVocalsPath: parsed.noVocalsPath,
+            processingTimeSec: parsed.processingTimeSec,
+          });
+          setTimeout(() => activeSeparationProgress.delete(cleanKey), 300000);
           console.log(`[AudioSeparation] ✅ Separation successful in ${parsed.processingTimeSec}s (Vocals: ${(parsed.vocalsSizeBytes / 1024 / 1024).toFixed(1)}MB, No-Vocals: ${(parsed.noVocalsSizeBytes / 1024 / 1024).toFixed(1)}MB)`);
           resolve({
             ...parsed,
             isCached: false,
           });
         } else {
-          reject(new Error(parsed.message || 'Demucs returned non-success status'));
+          const msg = parsed.message || 'Demucs returned non-success status';
+          activeSeparationProgress.set(cleanKey, {
+            progress: 0,
+            status: 'error',
+            error: msg,
+            message: msg,
+            model,
+          });
+          reject(new Error(msg));
         }
       } catch (parseErr) {
-        reject(new Error(`Failed to parse Demucs output: ${parseErr.message}. Output was: ${stdoutData.substring(0, 200)}`));
+        const msg = `Failed to parse Demucs output: ${parseErr.message}. Output was: ${stdoutData.substring(0, 200)}`;
+        activeSeparationProgress.set(cleanKey, {
+          progress: 0,
+          status: 'error',
+          error: msg,
+          message: msg,
+          model,
+        });
+        reject(new Error(msg));
       }
     });
   });
@@ -334,7 +402,7 @@ function killSeparationJob(identifier = 'all') {
     activeSeparationJobs.clear();
     activeSeparationProgress.clear();
   } else {
-    const cleanId = cleanKey(identifier);
+    const cleanId = normalizeSeparationKey(identifier);
     const proc = activeSeparationJobs.get(identifier) || activeSeparationJobs.get(cleanId);
     if (proc) {
       terminateProcess(proc);
@@ -363,15 +431,14 @@ function os_mkdir_p(dir) {
 }
 
 // Ensure any active separation workers are killed on server shutdown or nodemon restart
-process.on('exit', () => {
-  try { killSeparationJob('all'); } catch (_) {}
-});
-process.on('SIGINT', () => {
-  try { killSeparationJob('all'); } catch (_) {}
-});
-process.on('SIGTERM', () => {
-  try { killSeparationJob('all'); } catch (_) {}
-});
+const cleanupActiveSeparations = () => {
+  if (activeSeparationJobs.size > 0 || isDemucsRunning) {
+    try { killSeparationJob('all'); } catch (_) {}
+  }
+};
+process.on('exit', cleanupActiveSeparations);
+process.on('SIGINT', cleanupActiveSeparations);
+process.on('SIGTERM', cleanupActiveSeparations);
 
 module.exports = {
   separateAudio,
@@ -379,5 +446,7 @@ module.exports = {
   cancelSeparationJob,
   getSeparationCacheDir,
   getSeparationProgress,
+  isSeparationBusy,
+  getCurrentSeparationMedia,
 };
 

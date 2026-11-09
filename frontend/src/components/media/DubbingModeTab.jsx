@@ -180,20 +180,83 @@ export default function DubbingModeTab({
         } catch (_) {}
       }, 700);
 
-      const res = await fetch('/api/audio/separate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ videoPath: videoRefName }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (res.ok && data.success && data.noVocalsUrl) {
+      let resultData = null;
+      try {
+        const res = await fetch('/api/audio/separate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ videoPath: videoRefName }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && data.success && data.noVocalsUrl) {
+          resultData = data;
+        } else if (res.status !== 502) {
+          throw new Error(data.error || 'ការបំបែកសំឡេង Demucs ជួបបញ្ហា');
+        }
+      } catch (fetchErr) {
+        // Recover seamlessly via progress/status polling if browser socket dropped while backend Demucs continues
+        const isTransientDisconnect =
+          fetchErr?.name === 'TypeError' ||
+          /failed to fetch|network|reset|empty/i.test(fetchErr?.message || '');
+        if (!isTransientDisconnect) {
+          throw fetchErr;
+        }
+      }
+
+      // If POST connection dropped transiently while backend is still separating, keep polling until completion
+      if (!resultData) {
+        let consecutiveNetErrors = 0;
+        while (!resultData) {
+          await new Promise((r) => setTimeout(r, 1500));
+          try {
+            const pRes = await fetch(`/api/audio/separation-progress?videoPath=${encodeURIComponent(videoRefName)}`);
+            const pData = await pRes.json().catch(() => ({}));
+            consecutiveNetErrors = 0;
+            if (pData.status === 'separating') {
+              if (typeof pData.progress === 'number' && pData.progress > 0) {
+                setSeparationProgress(pData.progress);
+              }
+              continue;
+            }
+            if (pData.status === 'completed' && pData.noVocalsUrl) {
+              resultData = { success: true, noVocalsUrl: pData.noVocalsUrl };
+              break;
+            }
+            if (pData.status === 'error') {
+              throw new Error(pData.error || pData.message || 'ការបំបែកសំឡេង Demucs ជួបបញ្ហា');
+            }
+          } catch (pollErr) {
+            if (pollErr.message && !/failed to fetch|network/i.test(pollErr.message)) {
+              throw pollErr;
+            }
+            consecutiveNetErrors++;
+            if (consecutiveNetErrors >= 4) {
+              throw new Error('Backend server is temporarily unreachable. សូមផ្ទៀងផ្ទាត់ Server រួចចុចម្ដងទៀត។');
+            }
+            continue;
+          }
+
+          // Progress status became idle — verify cached stem availability via /audio/separation-status
+          const sRes = await fetch('/api/audio/separation-status', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ videoPath: videoRefName }),
+          });
+          const sData = await sRes.json().catch(() => ({}));
+          if (sRes.ok && sData.success && sData.available && sData.noVocalsUrl) {
+            resultData = { success: true, noVocalsUrl: sData.noVocalsUrl };
+            break;
+          }
+          throw new Error('ការភ្ជាប់ទៅ Backend ត្រូវបានកាត់ផ្ដាច់។ សូមផ្ទៀងផ្ទាត់ Server រួចចុចម្ដងទៀត។');
+        }
+      }
+
+      if (resultData?.noVocalsUrl) {
         setSeparationProgress(100);
         setIsCleanBgReady(true);
         window.dispatchEvent(new CustomEvent('demucs-separation-ready', {
-          detail: { noVocalsUrl: data.noVocalsUrl }
+          detail: { noVocalsUrl: resultData.noVocalsUrl }
         }));
-      } else {
-        throw new Error(data.error || (res.status === 502 ? 'Backend connection dropped. សូមផ្ទៀងផ្ទាត់ Server រួចចុចម្ដងទៀត។' : 'ការបំបែកសំឡេង Demucs ជួបបញ្ហា'));
       }
     } catch (err) {
       console.error('[DubbingModeTab] Separation error:', err);

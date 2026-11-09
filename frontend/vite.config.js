@@ -103,6 +103,8 @@ export default defineConfig({
                 success: false,
                 error: `Backend server is temporarily unreachable (${err.code || err.message}). Please verify backend is running on port 5000.`
               }));
+            } else if (res && !res.writableEnded && typeof res.end === 'function') {
+              res.end();
             }
           });
         },
@@ -122,6 +124,8 @@ export default defineConfig({
                 success: false,
                 error: `Media upload/file proxy error (${err.code || err.message}).`
               }));
+            } else if (res && !res.writableEnded && typeof res.end === 'function') {
+              res.end();
             }
           });
         },

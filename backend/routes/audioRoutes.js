@@ -13,6 +13,7 @@ const {
   SUPPORTED_VOICES,
   getSupportedVoices,
   validateVoiceId,
+  speedToEdgeRate,
   generateSingleSegmentAudio,
   generateBatchSegmentsAudio,
   cancelTtsJob,
@@ -163,7 +164,9 @@ router.post("/generate-audio", async (req, res) => {
       segment,
       segments,
       voiceId = "km-KH-PisethNeural",
-      speed = "normal",
+      speed: rawBodySpeed,
+      rate: rawBodyRate,
+      userCustomSpeed: rawBodyUserCustomSpeed,
       autoStretch = true,
       maxSpeed = 1.45,
       speakerMap = {},
@@ -173,6 +176,9 @@ router.post("/generate-audio", async (req, res) => {
       seriesId,
       episodeId,
     } = req.body;
+    const hasBodySpeed = rawBodySpeed !== undefined && rawBodySpeed !== null && rawBodySpeed !== "";
+    const hasBodyRate = rawBodyRate !== undefined && rawBodyRate !== null && rawBodyRate !== "";
+    const speed = hasBodySpeed ? rawBodySpeed : (hasBodyRate ? rawBodyRate : "normal");
 
     let extractedSeries = null;
     let extractedEpisode = null;
@@ -232,7 +238,27 @@ router.post("/generate-audio", async (req, res) => {
       const deliveryOverride = Boolean(req.body.deliveryOverride !== undefined ? req.body.deliveryOverride : segment.deliveryOverride);
       const effectConfig = req.body.effectConfig || segment.effectConfig || null;
 
-      console.log(`[TTS] Regenerating single segment #${segment.id} [${deliveryType}] with voice ${targetVoice}${cleanEpisode ? ` [Episode: ${cleanEpisode}]` : ""}...`);
+      const segOwnRawSpeed = (segment.speed !== undefined && segment.speed !== null && segment.speed !== "")
+        ? segment.speed
+        : (segment.rate !== undefined && segment.rate !== null && segment.rate !== "" ? segment.rate : undefined);
+      const requestedSpeedRaw = hasBodyRate
+        ? rawBodyRate
+        : (hasBodySpeed ? rawBodySpeed : segOwnRawSpeed);
+      const speedInfo = speedToEdgeRate(requestedSpeedRaw);
+      if (speedInfo.provided && !speedInfo.valid) {
+        console.warn(`[TTS] ⚠️ Route /generate-audio single segment #${segment.id || "N/A"} requested speed ${JSON.stringify(speedInfo.requested)} cannot be applied (${speedInfo.reason})`);
+      }
+      const resolvedRate = speedInfo.valid ? speedInfo.rate : "+0%";
+      const hasExplicitUserSpeed = rawBodyUserCustomSpeed !== undefined
+        ? Boolean(rawBodyUserCustomSpeed)
+        : Boolean(speedInfo.isCustomNonDefault || segment.userCustomSpeed);
+      const resolvedSegSpeed = (speedInfo.valid && speedInfo.provided)
+        ? (typeof speedInfo.requested === "string" && speedInfo.requested.trim().toLowerCase() === "normal"
+          ? "normal"
+          : (speedInfo.numericSpeed ?? 1.0))
+        : (segment.speed ?? "normal");
+
+      console.log(`[TTS] Regenerating single segment #${segment.id} [${deliveryType}] with voice ${targetVoice}, rate=${resolvedRate} (requestedSpeed=${requestedSpeedRaw ?? "default"}, userCustomSpeed=${hasExplicitUserSpeed})${cleanEpisode ? ` [Episode: ${cleanEpisode}]` : ""}...`);
       const updatedSegment = await generateSingleSegmentAudio(
         {
           ...segment,
@@ -246,12 +272,17 @@ router.post("/generate-audio", async (req, res) => {
           deliveryOverride,
           audioEffect,
           effectConfig,
+          speed: resolvedSegSpeed,
+          userCustomSpeed: hasExplicitUserSpeed,
           episodeId: cleanEpisode,
         },
         audioDir,
         {
           autoStretch,
           maxSpeed,
+          rate: speedInfo.valid ? resolvedRate : undefined,
+          speed: speedInfo.provided ? requestedSpeedRaw : undefined,
+          userCustomSpeed: hasExplicitUserSpeed,
           forceVoice: isManual,
           voiceId: targetVoice,
           deliveryType,
@@ -260,6 +291,7 @@ router.post("/generate-audio", async (req, res) => {
           effectConfig,
           forceRegen: Boolean(forceRegen),
           episodeId: cleanEpisode,
+          ...(speedInfo.provided && !speedInfo.valid ? { _suppressInvalidSpeedLog: true } : {}),
         }
       );
 
@@ -351,8 +383,14 @@ router.post("/generate-audio", async (req, res) => {
         });
       }
 
-      // Fast Path: If master narration audio already exists and forceRegen is false, return immediately without re-rendering!
-      if (!forceRegen && fs.existsSync(fullAudioPath) && fs.statSync(fullAudioPath).size > 1000) {
+      // Fast Path: If master narration audio already exists and forceRegen is false, return immediately without re-rendering
+      // (unless segments are marked outdated or have an unapplied custom speed rate change).
+      const hasOutdatedOrSpeedChange = segments.some((s) => {
+        if (s.audioOutdated) return true;
+        const ownInfo = speedToEdgeRate(s.speed ?? s.rate);
+        return Boolean((s.userCustomSpeed || ownInfo.isCustomNonDefault) && s.ttsRate && ownInfo.valid && s.ttsRate !== ownInfo.rate);
+      });
+      if (!forceRegen && !hasOutdatedOrSpeedChange && fs.existsSync(fullAudioPath) && fs.statSync(fullAudioPath).size > 1000) {
         const relAudioUrl = isEpisode
           ? `/uploads/projects/${cleanSeries}/episodes/${cleanEpisode}/audio/${fullAudioFilename}`
           : `/uploads/projects/${cleanName}/audio/${fullAudioFilename}`;
@@ -400,11 +438,20 @@ router.post("/generate-audio", async (req, res) => {
         });
       }
 
-      console.log(`[TTS] Batch generating audio for ${segments.length} segments in ${cleanSeries}${cleanEpisode ? ` [Episode: ${cleanEpisode}]` : ""}...`);
+      const batchRequestedSpeed = hasBodyRate ? rawBodyRate : (hasBodySpeed ? rawBodySpeed : undefined);
+      const batchSpeedInfo = speedToEdgeRate(batchRequestedSpeed);
+      if (batchSpeedInfo.provided && !batchSpeedInfo.valid) {
+        console.warn(`[TTS] ⚠️ Route /generate-audio batch requested speed ${JSON.stringify(batchSpeedInfo.requested)} cannot be applied (${batchSpeedInfo.reason})`);
+      }
+
+      console.log(`[TTS] Batch generating audio for ${segments.length} segments in ${cleanSeries}${cleanEpisode ? ` [Episode: ${cleanEpisode}]` : ""} (batchSpeed=${batchRequestedSpeed ?? "default"}, batchRate=${batchSpeedInfo.valid ? batchSpeedInfo.rate : "INVALID"})...`);
       const updatedSegments = await generateBatchSegmentsAudio(segments, audioDir, {
         concurrency: 3,
         autoStretch,
         maxSpeed,
+        speed: hasBodySpeed ? rawBodySpeed : undefined,
+        rate: hasBodyRate ? rawBodyRate : undefined,
+        userCustomSpeed: rawBodyUserCustomSpeed !== undefined ? Boolean(rawBodyUserCustomSpeed) : undefined,
         speakerMap,
         seriesId: cleanSeries,
         episodeId: cleanEpisode,
@@ -564,6 +611,19 @@ router.post("/audio/separate", async (req, res) => {
   if (typeof res.setTimeout === "function") {
     res.setTimeout(0);
   }
+
+  let heartbeatTimer = null;
+  let streamStarted = false;
+
+  const stopHeartbeat = () => {
+    if (heartbeatTimer) {
+      clearInterval(heartbeatTimer);
+      heartbeatTimer = null;
+    }
+  };
+
+  res.on("close", stopHeartbeat);
+
   try {
     const { videoPath, videoFileName, videoId } = req.body;
     const rawVideoRef = videoPath || videoId || videoFileName;
@@ -571,11 +631,49 @@ router.post("/audio/separate", async (req, res) => {
     if (!inputVideoPath || !fs.existsSync(inputVideoPath)) {
       return res.status(404).json({ success: false, error: "Video file not found" });
     }
+
+    // Check busy lock before streaming 200 keep-alive headers so 409 conflict remains an immediate HTTP 409 JSON response
+    if (typeof audioSeparationService.isSeparationBusy === "function" && audioSeparationService.isSeparationBusy()) {
+      const activeMedia = typeof audioSeparationService.getCurrentSeparationMedia === "function"
+        ? audioSeparationService.getCurrentSeparationMedia()
+        : null;
+      return res.status(409).json({
+        success: false,
+        busy: true,
+        error: `Demucs AI កំពុងដំណើរការបំបែកសំឡេង (${activeMedia || 'វីដេអូផ្សេង'})។ សូមរង់ចាំឱ្យចប់ជាមុនសិន ទើបអាចបំបែកភាគបន្ទាប់បាន។`,
+      });
+    }
+
+    // Start chunked 200 keep-alive stream (whitespace newlines before final JSON payload)
+    // to prevent net::ERR_EMPTY_RESPONSE / Vite 502 idle header timeouts during long CPU Demucs runs.
+    res.status(200);
+    res.setHeader("Content-Type", "application/json; charset=utf-8");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("X-Accel-Buffering", "no");
+    if (typeof res.flushHeaders === "function") {
+      res.flushHeaders();
+    }
+    res.write(" \n");
+    streamStarted = true;
+
+    heartbeatTimer = setInterval(() => {
+      if (!res.writableEnded && !res.destroyed) {
+        try {
+          res.write(" \n");
+        } catch (_) {
+          stopHeartbeat();
+        }
+      } else {
+        stopHeartbeat();
+      }
+    }, 10000);
+
     const sepRes = await audioSeparationService.separateAudio({ audioPath: inputVideoPath, model: 'htdemucs' });
+    stopHeartbeat();
     const relPath = path.relative(uploadsDir, sepRes.noVocalsPath).replace(/\\/g, "/");
     const noVocalsUrl = `/uploads/${relPath}`;
 
-    // Auto-persist Clean BGM into series.json for episode tracking
+    // Auto-persist Clean BGM into series.json for episode tracking (even if client socket closed mid-run)
     try {
       const match = inputVideoPath.match(/projects[/\\]([^/\\]+)[/\\]episodes[/\\]([^/\\]+)/);
       const pSeriesId = (match && match[1]) || req.body.seriesId;
@@ -600,18 +698,31 @@ router.post("/audio/separate", async (req, res) => {
       console.warn("[AudioSeparation] Could not auto-persist to series.json:", saveErr.message);
     }
 
-    return res.json({
-      success: true,
-      noVocalsUrl,
-      noVocalsPath: sepRes.noVocalsPath,
-      isCached: sepRes.isCached,
-    });
+    if (!res.writableEnded && !res.destroyed) {
+      return res.end(JSON.stringify({
+        success: true,
+        noVocalsUrl,
+        noVocalsPath: sepRes.noVocalsPath,
+        isCached: sepRes.isCached,
+      }));
+    }
   } catch (err) {
-    if (err.statusCode === 409 || err.status === 409 || err.code === 'DEMUCS_BUSY' || err.isBusy) {
+    stopHeartbeat();
+    if (!streamStarted && (err.statusCode === 409 || err.status === 409 || err.code === 'DEMUCS_BUSY' || err.isBusy)) {
       return res.status(409).json({ success: false, busy: true, error: err.message });
     }
     console.error("[AudioSeparation] Error handling /api/audio/separate:", err);
-    return res.status(500).json({ success: false, error: err.message });
+    if (!res.writableEnded && !res.destroyed) {
+      const payload = JSON.stringify({
+        success: false,
+        busy: Boolean(err.isBusy || err.status === 409),
+        error: err.message,
+      });
+      if (streamStarted) {
+        return res.end(payload);
+      }
+      return res.status(500).json({ success: false, error: err.message });
+    }
   }
 });
 
@@ -620,12 +731,21 @@ router.get("/audio/separation-progress", (req, res) => {
     const { videoPath, videoFileName, videoId } = req.query;
     const rawVideoRef = videoPath || videoId || videoFileName;
     const progressData = audioSeparationService.getSeparationProgress(rawVideoRef);
+    let noVocalsUrl = null;
+    const noVocalsPath = progressData?.noVocalsPath || null;
+    if (noVocalsPath && fs.existsSync(noVocalsPath)) {
+      const relPath = path.relative(uploadsDir, noVocalsPath).replace(/\\/g, "/");
+      noVocalsUrl = `/uploads/${relPath}`;
+    }
     return res.json({
       success: true,
       progress: progressData ? progressData.progress : 0,
       status: progressData ? progressData.status : 'idle',
       message: progressData ? progressData.message : '',
+      error: progressData?.error || null,
       model: progressData?.model || 'htdemucs',
+      noVocalsUrl,
+      noVocalsPath,
     });
   } catch (err) {
     return res.json({ success: true, progress: 0, status: 'idle', model: 'htdemucs' });
