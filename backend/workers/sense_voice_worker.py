@@ -35,6 +35,8 @@ def parse_args():
     parser.add_argument("--min_silence", type=float, default=0.45, help="VAD min silence duration in seconds")
     parser.add_argument("--min_speech", type=float, default=0.25, help="VAD min speech duration in seconds")
     parser.add_argument("--max_speech", type=float, default=6.5, help="VAD max single segment duration in seconds")
+    parser.add_argument("--num_threads", type=int, default=2, help="Recognizer ONNX thread count (1-4)")
+    parser.add_argument("--vad_threads", type=int, default=1, help="VAD ONNX thread count (1-2)")
     return parser.parse_args()
 
 
@@ -76,6 +78,7 @@ def ensure_wav_16k_mono(audio_path):
 
     cmd = [
         "ffmpeg", "-y", "-i", audio_path,
+        "-threads", "1",
         "-vn", "-ar", "16000", "-ac", "1",
         "-c:a", "pcm_s16le", temp_wav_path
     ]
@@ -134,10 +137,12 @@ def main():
             raise FileNotFoundError(f"Silero VAD model not found in {model_dir}")
 
         # 1. Initialize Recognizer
+        num_threads = max(1, min(4, int(getattr(args, "num_threads", 2) or 2)))
+        vad_threads = max(1, min(2, int(getattr(args, "vad_threads", 1) or 1)))
         recognizer = sherpa_onnx.OfflineRecognizer.from_sense_voice(
             model=model_file,
             tokens=tokens_file,
-            num_threads=4,
+            num_threads=num_threads,
             language=args.language,
             use_itn=True,
         )
@@ -154,7 +159,7 @@ def main():
         vad_config = sherpa_onnx.VadModelConfig(
             silero_vad=silero_config,
             sample_rate=16000,
-            num_threads=2,
+            num_threads=vad_threads,
         )
         vad = sherpa_onnx.VoiceActivityDetector(vad_config, buffer_size_in_seconds=60)
 

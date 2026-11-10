@@ -4,7 +4,17 @@ try {
 } catch (_) {}
 
 const { GoogleGenAI, Type } = require("@google/genai");
-const { createSmartGenAIClient } = require("./geminiKeyManager");
+const {
+  createSmartGenAIClient,
+  extractAllGeminiKeys,
+  isAuthOrInvalidKeyError,
+  isQuotaOrRateLimitError,
+} = require("./geminiKeyManager");
+const {
+  DUBBING_CASCADE_MODELS,
+  isUsableDubbingModel,
+} = require("./geminiModelCatalog");
+const { geminiQuotaTracker } = require("./geminiQuotaTracker");
 const fs = require("fs");
 const path = require("path");
 
@@ -51,30 +61,123 @@ const KHMER_DUBBING_BASE_SYSTEM_PROMPT = `
 `;
 
 /**
- * បញ្ជីម៉ូដែលផ្លូវការរបស់ Google AI Studio (ដាក់ gemini-3.5-flash-lite និង gemini-3.1-flash-lite ជាអាទិភាពទី ១ លឿន Quota ធំ និងស្ថិរភាពខ្ពស់)
+ * បញ្ជីម៉ូដែលផ្លូវការរបស់ Google AI Studio (ប្រើ Shared Catalog គ្រប់ Model ដែលអាច Translate & Dubbing បាន)
  */
-const DEFAULT_MODELS = [
-  "gemini-3.5-flash-lite",
-  "gemini-3.1-flash-lite",
-  "gemini-3.5-flash",
-  "gemini-3.6-flash",
-  "gemini-3.8-flash",
-  "gemini-flash-latest",
-];
+const DEFAULT_MODELS = DUBBING_CASCADE_MODELS;
 
 /**
- * ត្រួតពិនិត្យ និងជ្រើសរើសម៉ូដែលដែលមានសុពលភាព
+ * ត្រួតពិនិត្យ និងជ្រើសរើសម៉ូដែលដែលមានសុពលភាព (គាំទ្រ preferredModel ពី UI ស្វ័យប្រវត្តិ)
  */
 function resolveValidModelName(requestedModel = "") {
   const clean = String(requestedModel || "").trim();
-  if (DEFAULT_MODELS.includes(clean)) {
+  if (clean && clean !== "auto" && isUsableDubbingModel(clean)) {
     return clean;
   }
-  return DEFAULT_MODELS[0];
+  return geminiQuotaTracker.getPreferredPrimaryModel(DEFAULT_MODELS[0]);
 }
 
 function getGeminiClient(customApiKey) {
   return createSmartGenAIClient(customApiKey);
+}
+
+/**
+ * Checks whether an error warrants cascading to the next fallback Gemini model
+ * (429 quota/rate limit, 503 overload, 504 deadline exceeded, 404 retired/missing model, network timeout).
+ * Auth/invalid-key errors (401/403) and malformed request errors (400) fail fast instead of cascading.
+ */
+function isModelFallbackEligibleError(err) {
+  if (!err) return false;
+  if (isAuthOrInvalidKeyError(err)) return false;
+  if (isQuotaOrRateLimitError(err)) return true;
+
+  const status = err.status || err.statusCode;
+  const msg = String(err.message || err.toString() || "").toLowerCase();
+  return (
+    status === 404 ||
+    status === 504 ||
+    msg.includes("404") ||
+    msg.includes("504") ||
+    msg.includes("not_found") ||
+    msg.includes("not found") ||
+    msg.includes("no longer available") ||
+    msg.includes("deadline_exceeded") ||
+    msg.includes("deadline expired") ||
+    msg.includes("gateway timeout")
+  );
+}
+
+/**
+ * Invokes `ai.models.generateContent` starting with `primaryModel` and cascading through
+ * remaining `models` whenever a model hits 429 quota, 503 overload, 504 timeout, or 404 deprecation.
+ */
+async function generateContentWithModelFallback(
+  ai,
+  primaryModel,
+  buildPayload,
+  { models = DEFAULT_MODELS, logTag = "Gemini", timeoutMs = 25000 } = {}
+) {
+  let orderedModels = [];
+  const seen = new Set();
+  for (const m of [primaryModel, ...(Array.isArray(models) ? models : DEFAULT_MODELS)]) {
+    const clean = String(m || "").trim();
+    if (clean && !seen.has(clean)) {
+      seen.add(clean);
+      orderedModels.push(clean);
+    }
+  }
+  if (models === DEFAULT_MODELS) {
+    orderedModels = geminiQuotaTracker.prioritizeAvailableModels(orderedModels, extractAllGeminiKeys());
+  }
+
+  let lastErr = null;
+  for (let i = 0; i < orderedModels.length; i++) {
+    const currentModel = orderedModels[i];
+    let timer = null;
+    try {
+      const payload = typeof buildPayload === "function" ? buildPayload(currentModel) : buildPayload;
+      const callPromise = ai.models.generateContent({
+        model: currentModel,
+        ...payload,
+      });
+
+      let response;
+      if (Number.isFinite(timeoutMs) && timeoutMs > 0) {
+        const timeoutPromise = new Promise((_, reject) => {
+          timer = setTimeout(() => {
+            const timeoutErr = new Error(`Timeout ${Math.round(timeoutMs / 1000)}s on ${currentModel}`);
+            timeoutErr.status = 504;
+            reject(timeoutErr);
+          }, timeoutMs);
+          if (typeof timer.unref === "function") timer.unref();
+        });
+        response = await Promise.race([callPromise, timeoutPromise]);
+      } else {
+        response = await callPromise;
+      }
+
+      return { response, modelUsed: currentModel };
+    } catch (err) {
+      lastErr = err;
+      const safeMsg = String(err?.message || err || "")
+        .replace(/key=[a-zA-Z0-9_\-]+/gi, "key=[REDACTED]")
+        .slice(0, 180);
+
+      if (!isModelFallbackEligibleError(err)) {
+        throw err;
+      }
+
+      const hasNext = i < orderedModels.length - 1;
+      if (hasNext) {
+        console.warn(
+          `[GeminiService] ⚠️ [${logTag}] Model ${currentModel} failed (${safeMsg}). Falling back to ${orderedModels[i + 1]}...`
+        );
+      }
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  throw lastErr || new Error("Gemini API failed across all cascade models");
 }
 
 function parseTimeToSeconds(timeStr) {
@@ -1119,6 +1222,7 @@ function sanitizeKhmerDialogue(str = "", fallbackSource = "") {
 
 /**
  * ✨ AI Single Segment Re-Translation with 3 Classical Cinema Options
+ * Powered by DragonDub AI Expert Chinese-to-Khmer Subtitle Translator Rules
  */
 async function retranslateSingleDialogue(chineseText, customApiKey = null, context = {}) {
   const cleanChinese = String(chineseText || "").trim();
@@ -1126,13 +1230,37 @@ async function retranslateSingleDialogue(chineseText, customApiKey = null, conte
     throw new Error("អត្ថបទចិនមិនអាចទទេបានឡើយ (Chinese text cannot be empty)");
   }
 
-  const ai = getGeminiClient(customApiKey);
-  const modelToUse = resolveValidModelName(context.modelName || "gemini-3.5-flash-lite");
+  const ai = context.aiClient || getGeminiClient(customApiKey);
+  const modelToUse = resolveValidModelName(context.modelName);
 
-  const systemPrompt = `អ្នកគឺជាអ្នកដឹកនាំការបញ្ចូលសំឡេង និងជាអ្នកជំនាញបកប្រែកុនភាគចិន-ខ្មែរអាជីព (Cinema-Grade Chinese to Khmer Dubbing Translator)។
-ភារកិច្ចរបស់អ្នកគឺបកប្រែប្រយោគចិនដែលបានផ្តល់ឱ្យ ជាភាសាខ្មែរសម្រាប់បញ្ចូលសំឡេងកុនភាគ (សម័យទំនើប, CEO, បុរាណ, យុទ្ធសិល្ប៍, Action, មនោសញ្ចេតនា ឬកំប្លែង) ឱ្យត្រូវន័យដើម ១០០% តាមបរិបទ និងពិរោះរស់រវើក។
+  const previousTranslation = (context.previousTranslation || context.previous_translation || "").trim();
+  const surroundingContext = (context.context || context.surroundingContext || "").trim();
+  const speakerInfo = context.speaker ? `${context.speaker}${context.gender ? ` (${context.gender})` : ""}` : "";
 
-សូមផ្តល់ជម្រើសជាទម្រង់ JSON ដូចខាងក្រោម៖
+  const systemPrompt = `You are an expert Chinese-to-Khmer subtitle and movie dubbing translator for DragonDub AI.
+
+**TASK: RE-TRANSLATE THE ORIGINAL CHINESE TEXT INTO NATURAL, ACCURATE KHMER.**
+
+Follow these 10 rules strictly:
+1. Always analyze the full meaning of the Chinese sentence before translating.
+2. Resolve ambiguous Chinese words using context, subject matter, surrounding dialogue, and scene meaning. Never translate word-by-word without understanding the context.
+3. Preserve the original meaning, intention, emotion, tone, and technical terminology (e.g. 质量 = ម៉ាស (mass) ក្នុងបរិបទវិទ្យាសាស្ត្រ ឬរូបវិទ្យា, 能量 = ថាមពល).
+4. Use natural Khmer spoken language suitable for movie dubbing and subtitles.
+5. Keep the translation concise, clear, and easy for Khmer viewers to understand.
+6. Do not add explanations, invented information, or meanings that do not exist in the original.
+7. If the original sentence is incomplete, preserve its incomplete meaning instead of guessing the missing part.
+8. If multiple meanings are possible and context is insufficient, choose the most contextually supported meaning. Do not pretend uncertain meanings are confirmed.
+9. **IMPORTANT: Every re-translation must generate a fresh, accurate translation. Do not blindly reuse or copy the existing/previous Khmer translation.**
+10. Check the final Khmer sentence for grammar, spelling, fluency, and semantic accuracy.
+
+CRITICAL LANGUAGE MANDATES:
+- ហាមដាច់ខាតកុំឱ្យសល់តួអក្សរចិន (Chinese Hanzi \\u4E00-\\u9FFF) នៅក្នុងអត្ថបទបកប្រែខ្មែរ "text" (100% Khmer Script Only)! រាល់ពាក្យកម្រិតថាមពល ក្បាច់គុន (ឧ. 金丹 ➜ ជីនតាន, 化神 ➜ ហ្វាស៊ិន, 元神 ➜ យានស៊ិន) ត្រូវតែសរសេរជាសូរសព្ទអក្សរខ្មែរ!
+- ⚠️ ហាមដាច់ខាត ១០០% កុំបញ្ចេញតួអក្សរថៃ (Thai Script \\u0E00-\\u0E7F) ឬឡាវសូម្បីតែ ១ តួអក្សរ! ត្រូវសរសេរជាអក្សរខ្មែរសុទ្ធសាធ ១០០%!
+- ត្រូវគោរពចំនួនលេខ និងបរិបទឱ្យបានត្រឹមត្រូវ ១០០% (ឧ. 三 = ៣ ហាមបកជា ២)!
+- ពាក្យជេរ ឬពាក្យហៅ (ឧ. 臭猴子) ត្រូវបកជាខ្មែរ (អាស្វាស្អុយ, អាស្វាចង្រៃ, អាស្វាខូច) ហាមបកជាថៃ (ไอ้...) ជាដាច់ខាត!
+- ពាក្យបញ្ជា (ឧ. 滚出来) ត្រូវបកជាខ្មែរ (ចេញមក, ឆាប់ចេញមក, ចេញមុខមកភ្លាម) ហាមបកជាថៃ (ออกมา...) ជាដាច់ខាត!
+
+Please provide 3 distinctive stylistic options and a brief terminology note in JSON format:
 {
   "chinese": "អត្ថបទចិនដើម",
   "options": [
@@ -1152,17 +1280,8 @@ async function retranslateSingleDialogue(chineseText, customApiKey = null, conte
       "text": "សម្ដីតួអង្គបញ្ចេញអារម្មណ៍ ឌឺដង កំហឹង ឬចោទសួរ"
     }
   ],
-  "note": "ចំណាំខ្លី ១ ឃ្លាអំពីពាក្យគន្លឹះពិសេសបើមាន (ឧ. 神风 = ខ្យល់ទេវតា)"
-}
-
-ច្បាប់តឹងរ៉ឹងបំផុត (CRITICAL LANGUAGE MANDATE):
-- ហាមដាច់ខាតកុំបកប្រែពាក្យមួយៗបែប Google Translate!
-- ត្រូវគោរពចំនួនលេខឱ្យបានត្រឹមត្រូវ (ឧ. 三 = ៣ ហាមបកជា ២, 吹不死 = ផ្លុំមិនស្លាប់ ហាមបកជាសម្លាប់)!
-- ⚠️ ហាមដាច់ខាតកុំឱ្យសល់តួអក្សរចិន (Chinese Hanzi \u4E00-\u9FFF) នៅក្នុងអត្ថបទបកប្រែខ្មែរ "text" (100% Khmer Script Only)! រាល់ពាក្យកម្រិតថាមពល ក្បាច់គុន (ឧ. 金丹 ➜ ជីនតាន, 化神 ➜ ហ្វាស៊ិន, 元神 ➜ យានស៊ិន) ត្រូវតែសរសេរជាសូរសព្ទអក្សរខ្មែរ ហាមទុកតួអក្សរចិន!
-- ⚠️ ហាមដាច់ខាត ១០០% កុំបញ្ចេញតួអក្សរថៃ (Thai Script \u0E00-\u0E7F) ឬឡាវសូម្បីតែ ១ តួអក្សរ! ត្រូវសរសេរជាអក្សរខ្មែរសុទ្ធសាធ ១០០%!
-- ពាក្យជេរ ឬពាក្យហៅ (ឧ. 臭猴子) ត្រូវបកជាខ្មែរ (អាស្វាស្អុយ, អាស្វាចង្រៃ, អាស្វាខូច) ហាមបកជាថៃ (ไอ้...) ជាដាច់ខាត!
-- ពាក្យបញ្ជា (ឧ. 滚出来) ត្រូវបកជាខ្មែរ (ចេញមក, ឆាប់ចេញមក, ចេញមុខមកភ្លាម) ហាមបកជាថៃ (ออกมา...) ជាដាច់ខាត!
-- បញ្ចេញលទ្ធផលជា JSON សុទ្ធសាធ។`;
+  "note": "ចំណាំខ្លី ១ ឃ្លាអំពីពាក្យគន្លឹះពិសេស ឬបរិបទវិទ្យាសាស្ត្រ/ក្បាច់គុន (ឧ. 质量 = ម៉ាស ក្នុងបរិបទរូបវិទ្យា E=mc^2)"
+}`;
 
   const RETRANSLATE_SCHEMA = {
     type: Type.OBJECT,
@@ -1186,18 +1305,38 @@ async function retranslateSingleDialogue(chineseText, customApiKey = null, conte
   };
 
   try {
-    const res = await ai.models.generateContent({
-      model: modelToUse,
-      contents: [`សូមបកប្រែប្រយោគចិននេះ៖\n"${cleanChinese}"`],
-      config: {
-        systemInstruction: systemPrompt,
-        temperature: 0.3,
-        responseMimeType: "application/json",
-        responseSchema: RETRANSLATE_SCHEMA,
-      },
-    });
+    let promptContent = `**Original Chinese:** ${cleanChinese}`;
+    if (previousTranslation) {
+      promptContent += `\n**Previous Khmer Translation (for comparison only; do not copy blindly):** ${previousTranslation}`;
+    }
+    if (surroundingContext) {
+      promptContent += `\n**Surrounding Context (if available):** ${surroundingContext}`;
+    }
+    if (speakerInfo) {
+      promptContent += `\n**Speaker:** ${speakerInfo}`;
+    }
 
-    const parsed = safeParseOrRepairJson(res.text || "");
+    const { response: res, modelUsed } = await generateContentWithModelFallback(
+      ai,
+      modelToUse,
+      () => ({
+        contents: [promptContent],
+        config: {
+          systemInstruction: systemPrompt,
+          temperature: 0.3,
+          responseMimeType: "application/json",
+          responseSchema: RETRANSLATE_SCHEMA,
+        },
+      }),
+      {
+        models: context.fallbackModels || DEFAULT_MODELS,
+        logTag: "retranslateSingleDialogue",
+        timeoutMs: context.timeoutMs ?? 25000,
+      }
+    );
+
+    const rawText = typeof res?.text === "function" ? res.text() : (res?.text || "");
+    const parsed = safeParseOrRepairJson(rawText);
     if (parsed && Array.isArray(parsed.options) && parsed.options.length > 0) {
       parsed.options = parsed.options.map((opt) => ({
         ...opt,
@@ -1206,15 +1345,16 @@ async function retranslateSingleDialogue(chineseText, customApiKey = null, conte
       if (parsed.note) {
         parsed.note = sanitizeKhmerDialogue(parsed.note, "");
       }
-      return parsed;
+      return { ...parsed, modelUsed };
     }
     return {
       chinese: cleanChinese,
       options: [
-        { style: "classical", label: "🎭 សម្ដីកុនបុរាណ", text: sanitizeKhmerDialogue(res.text?.trim() || cleanChinese, cleanChinese) },
+        { style: "classical", label: "🎭 សម្ដីកុនបុរាណ", text: sanitizeKhmerDialogue(rawText.trim() || cleanChinese, cleanChinese) },
         { style: "compact", label: "📝 ខ្លីចំអត្ថន័យ", text: cleanChinese },
       ],
       note: "",
+      modelUsed,
     };
   } catch (err) {
     console.error("[GeminiService] retranslateSingleDialogue error:", err.message);
@@ -1310,8 +1450,8 @@ function detectDuplicateTranslations(segments = []) {
 async function retranslateBatchDialogues(segments, customApiKey = null, options = {}) {
   if (!Array.isArray(segments) || segments.length === 0) return segments;
 
-  const ai = getGeminiClient(customApiKey);
-  const modelToUse = resolveValidModelName(options.modelName || "gemini-3.5-flash-lite");
+  const ai = options.aiClient || getGeminiClient(customApiKey);
+  const modelToUse = resolveValidModelName(options.modelName);
 
   const BATCH_SIZE = 25;
   const updatedSegments = [...segments];
@@ -1371,17 +1511,26 @@ ${JSON.stringify(inputLines, null, 2)}
 ]`;
 
     try {
-      const res = await ai.models.generateContent({
-        model: modelToUse,
-        contents: [batchPrompt],
-        config: {
-          systemInstruction: KHMER_DUBBING_BASE_SYSTEM_PROMPT,
-          temperature: 0.25,
-          responseMimeType: "application/json",
-        },
-      });
+      const { response: res } = await generateContentWithModelFallback(
+        ai,
+        modelToUse,
+        () => ({
+          contents: [batchPrompt],
+          config: {
+            systemInstruction: KHMER_DUBBING_BASE_SYSTEM_PROMPT,
+            temperature: 0.25,
+            responseMimeType: "application/json",
+          },
+        }),
+        {
+          models: options.fallbackModels || DEFAULT_MODELS,
+          logTag: "retranslateBatchDialogues",
+          timeoutMs: options.timeoutMs ?? 45000,
+        }
+      );
 
-      const parsed = safeParseOrRepairJson(res.text || "");
+      const rawText = typeof res?.text === "function" ? res.text() : (res?.text || "");
+      const parsed = safeParseOrRepairJson(rawText);
       if (Array.isArray(parsed)) {
         parsed.forEach((item) => {
           const matchIdx = updatedSegments.findIndex((s) => s.id === item.id || String(s.id) === String(item.id));
@@ -1430,6 +1579,8 @@ module.exports = {
   sanitizeSubtitleDuration,
   retranslateSingleDialogue,
   retranslateBatchDialogues,
+  isModelFallbackEligibleError,
+  generateContentWithModelFallback,
   sanitizeKhmerDialogue,
   computeKhmerSimilarity,
   detectDuplicateTranslations,

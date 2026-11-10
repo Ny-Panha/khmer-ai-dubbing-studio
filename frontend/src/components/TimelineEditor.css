@@ -254,7 +254,6 @@
   user-select: none;
   min-height: 0;
   scroll-behavior: auto;
-  contain: layout;
   will-change: scroll-position;
 }
 
@@ -408,10 +407,8 @@
   position: relative;
   display: flex;
   flex-direction: column;
-  flex: 1;
+  flex-shrink: 0;
   min-width: 100%;
-  width: 100%;
-  contain: layout style;
   background: oklch(0.12 0 0);
 }
 
@@ -727,6 +724,28 @@
   height: 40px;
   background: linear-gradient(180deg, oklch(0.34 0.05 350) 0%, oklch(0.30 0.05 350) 100%);
   cursor: grab;
+}
+
+/* Pending / Draft Voice Clip (+ ឃ្លា added without generated audio yet) */
+.voice-segment-block.is-pending-audio {
+  background: linear-gradient(180deg, rgba(14, 116, 144, 0.28) 0%, rgba(15, 23, 42, 0.72) 100%);
+  border: 1.5px dashed rgba(56, 189, 248, 0.6);
+}
+
+.voice-segment-block.voice-female.is-pending-audio,
+.voice-segment-block.female-voice.is-pending-audio {
+  background: linear-gradient(180deg, rgba(190, 24, 93, 0.28) 0%, rgba(15, 23, 42, 0.72) 100%);
+  border: 1.5px dashed rgba(244, 114, 182, 0.6);
+}
+
+.voice-draft-hint {
+  font-size: 10px;
+  color: oklch(0.76 0.02 250);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0.82;
+  padding: 0 2px;
 }
 
 .voice-segment-block:hover {

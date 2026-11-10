@@ -1,14 +1,23 @@
 import React, { useState, useRef, useCallback } from 'react';
 import { AlertTriangle, X } from 'lucide-react';
 import Navbar from './components/Navbar';
+import ErrorBoundary from './components/common/ErrorBoundary';
 import JobDashboardModal from './components/dashboard/JobDashboardModal';
 import GeminiRouteModal from './components/dashboard/GeminiRouteModal';
+import GeminiQuotaModal from './components/dashboard/GeminiQuotaModal';
 import WorkflowStepper from './components/WorkflowStepper';
 import MediaLibrary from './components/MediaLibrary';
 import VideoPlayerPreview from './components/VideoPlayerPreview';
 import VoiceSettings from './components/VoiceSettings';
 import TimelineEditor from './components/TimelineEditor';
-import { loadSavedVoiceSettings } from './utils/projectStorage';
+import {
+  loadSavedVoiceSettings,
+  saveVoiceSettings,
+  saveEpisodeState,
+  resolveDefaultAspectRatio,
+  isRenderedRatioMismatch,
+} from './utils/projectStorage';
+import { isSegmentMatch, resolveVoiceClipStartSec } from './utils/timelineUtils';
 import { JobQueueProvider } from './context/JobQueueContext';
 
 // Hoisted immutable fallbacks (prevents prop churning and broken memoization)
@@ -33,6 +42,7 @@ export default function App() {
   const [leftTab, setLeftTab] = useState('media');
   const [showJobDashboard, setShowJobDashboard] = useState(false);
   const [showGeminiRouteModal, setShowGeminiRouteModal] = useState(false);
+  const [showGeminiQuotaModal, setShowGeminiQuotaModal] = useState(false);
   const [scriptData, setScriptData] = useState(null);
   const [speakerRegistry, setSpeakerRegistry] = useState({});
   const [voiceSettings, setVoiceSettings] = useState(loadSavedVoiceSettings);
@@ -40,9 +50,11 @@ export default function App() {
   const [audioOutdated, setAudioOutdated] = useState(false);
   const [fullAudioPath, setFullAudioPath] = useState(null);
   const [fullAudioUrl, setFullAudioUrl] = useState(null);
+  const [timelineFocusRequest, setTimelineFocusRequest] = useState(null);
 
   const topSuiteRef = useRef(null);
   const videoRef = useRef(null);
+  const focusNonceRef = useRef(0);
   const activeRequestRef = useRef({
     requestId: null,
     videoId: null,
@@ -59,6 +71,10 @@ export default function App() {
   const mediaRef = useRef({});
   const seriesRef = useRef({});
   const clipsRef = useRef({});
+  const scriptDataRef = useRef(scriptData);
+  scriptDataRef.current = scriptData;
+  const voiceSettingsRef = useRef(voiceSettings);
+  voiceSettingsRef.current = voiceSettings;
 
   // Stable ref-delegated callbacks (prevents infinite render loops & unnecessary effect runs)
   const handleSetDuration = useCallback((dur) => playbackRef.current.setDuration?.(dur), []);
@@ -135,6 +151,19 @@ export default function App() {
     audioProgressTimerRef: audioRef.current.audioProgressTimerRef,
   });
 
+  const srcW = Number(media.videoMetadata?.width || media.selectedVideo?.width || series.activeEpisode?.metadata?.width || series.activeEpisode?.video?.width) || 0;
+  const srcH = Number(media.videoMetadata?.height || media.selectedVideo?.height || series.activeEpisode?.metadata?.height || series.activeEpisode?.video?.height) || 0;
+  const currentAspectRatio = voiceSettings?.aspectRatio || resolveDefaultAspectRatio(srcW, srcH) || '16:9';
+
+  const prevRawRendered = renderRef.current.renderedVideo || null;
+  const playbackEffectiveRenderedVideo = isRenderedRatioMismatch(
+    prevRawRendered,
+    currentAspectRatio,
+    { width: srcW, height: srcH }
+  )
+    ? null
+    : prevRawRendered;
+
   // 4. Undo / Redo Stack Management Hook
   const undoRedo = useUndoRedo({
     videoClips: media.videoClips,
@@ -151,7 +180,7 @@ export default function App() {
     videoRef,
     videoClips: media.videoClips,
     setVideoClips: media.setVideoClips,
-    renderedVideo: renderRef.current.renderedVideo || null,
+    renderedVideo: playbackEffectiveRenderedVideo,
     selectedVideo: media.selectedVideo,
     selectedClip: media.selectedClip,
     activeClipId: media.activeClipId,
@@ -199,6 +228,7 @@ export default function App() {
     audioGenerated: audio.audioGenerated,
     speakerRegistry,
     voiceSettings,
+    voiceSettingsRef,
     scriptData,
     videoClips: media.videoClips,
     fullAudioPath: audio.fullAudioPath,
@@ -209,6 +239,7 @@ export default function App() {
     activeSeries: series.activeSeries,
     handleSaveEpisodeBackground: series.handleSaveEpisodeBackground,
     setAudioOutdated: audio.setAudioOutdated,
+    refreshSeriesFromServer: series.refreshSeriesFromServer,
   });
   renderRef.current = render;
 
@@ -356,7 +387,38 @@ export default function App() {
   // Audio Dubbing callbacks
   const handleGenerateAudio = useCallback((...args) => audioRef.current.handleGenerateAudio?.(...args), []);
   const handleToggleDeliveryType = useCallback((...args) => audioRef.current.handleToggleDeliveryType?.(...args), []);
-  const handleUpdateVoiceSettings = useCallback((...args) => audioRef.current.handleUpdateVoiceSettings?.(...args), []);
+  const handleUpdateVoiceSettings = useCallback((newSettings) => {
+    const prevRatio = voiceSettingsRef.current?.aspectRatio || null;
+    if (newSettings && typeof newSettings === 'object') {
+      voiceSettingsRef.current = newSettings;
+    }
+    audioRef.current.handleUpdateVoiceSettings?.(newSettings);
+    if (newSettings?.aspectRatio && newSettings.aspectRatio !== prevRatio) {
+      saveVoiceSettings(newSettings);
+      const patch = { voiceSettings: newSettings };
+      const sId = seriesRef.current.seriesId;
+      const eId = seriesRef.current.episodeId;
+      if (sId && eId) {
+        saveEpisodeState(sId, eId, patch);
+        seriesRef.current.handleSaveEpisodeBackground?.(eId, patch);
+      }
+    }
+  }, []);
+
+  const handleAspectRatioChange = useCallback((nextRatio) => {
+    if (!nextRatio) return;
+    const updated = { ...(voiceSettingsRef.current || {}), aspectRatio: nextRatio };
+    voiceSettingsRef.current = updated;
+    setVoiceSettings(updated);
+    saveVoiceSettings(updated);
+    const patch = { voiceSettings: updated };
+    const sId = seriesRef.current.seriesId;
+    const eId = seriesRef.current.episodeId;
+    if (sId && eId) {
+      saveEpisodeState(sId, eId, patch);
+      seriesRef.current.handleSaveEpisodeBackground?.(eId, patch);
+    }
+  }, []);
   const handleRegenerateSingleSegment = useCallback((...args) => audioRef.current.handleRegenerateSingleSegment?.(...args), []);
   const handleTranslateSingleSegment = useCallback((...args) => audioRef.current.handleTranslateSingleSegment?.(...args), []);
   const handleUpdateSegmentText = useCallback((...args) => audioRef.current.handleUpdateSegmentText?.(...args), []);
@@ -369,6 +431,55 @@ export default function App() {
   const handleTimeUpdate = useCallback((...args) => playbackRef.current.handleTimeUpdate?.(...args), []);
   const handleLoadedMetadata = useCallback((...args) => playbackRef.current.handleLoadedMetadata?.(...args), []);
   const handleVideoEnded = useCallback((...args) => playbackRef.current.handleVideoEnded?.(...args), []);
+
+  // Selecting a segment from left "3. Subs" behaves like clicking that clip on the VOICE timeline track:
+  // selects card/Inspector, syncs activeClipId, seeks playhead + video preview, and centers timeline view (no autoplay).
+  const handleSelectSegmentFromScript = useCallback((segKey, segObj = null, idxHint = null) => {
+    mediaRef.current.setSelectedSegmentId?.(segKey);
+    if (segKey === null || segKey === undefined) return;
+
+    const segs = scriptDataRef.current?.segments || EMPTY_SEGMENTS;
+    let resolvedIdx = Number.isInteger(idxHint) && idxHint >= 0 && idxHint < segs.length ? idxHint : -1;
+    let targetSeg = segObj && typeof segObj === 'object' ? segObj : (resolvedIdx >= 0 ? segs[resolvedIdx] : null);
+
+    if (!targetSeg && segs.length > 0) {
+      resolvedIdx = segs.findIndex((s, i) => isSegmentMatch(s, segKey, i));
+      if (resolvedIdx >= 0) {
+        targetSeg = segs[resolvedIdx];
+      }
+    } else if (targetSeg && resolvedIdx === -1 && segs.length > 0) {
+      resolvedIdx = segs.findIndex((s) => s === targetSeg);
+      if (resolvedIdx === -1) {
+        resolvedIdx = segs.findIndex((s, i) => isSegmentMatch(s, segKey, i));
+      }
+    }
+
+    if (!targetSeg) return;
+
+    const currentClips = mediaRef.current.videoClips || EMPTY_CLIPS;
+    if (mediaRef.current.setActiveClipId) {
+      const matchClip = currentClips.find(
+        (c) =>
+          (targetSeg.id !== undefined && targetSeg.id !== null && c.segmentId === targetSeg.id) ||
+          (resolvedIdx >= 0 && c.segmentIndex === resolvedIdx + 1)
+      );
+      mediaRef.current.setActiveClipId(matchClip ? matchClip.id : null);
+    }
+
+    const rawStartSec = resolveVoiceClipStartSec(targetSeg, resolvedIdx >= 0 ? resolvedIdx : 0);
+    const playbackDur = playbackRef.current.duration || 0;
+    const realVideoDur = videoRef.current?.duration || 0;
+    const maxDur = Math.max(playbackDur > 0 ? playbackDur : 0, realVideoDur > 0 ? realVideoDur : 0);
+    const seekSec = maxDur > 0 ? Math.max(0, Math.min(maxDur, rawStartSec)) : Math.max(0, rawStartSec);
+
+    playbackRef.current.handleSeek?.(seekSec);
+    focusNonceRef.current += 1;
+    setTimelineFocusRequest({
+      segKey,
+      timeSec: seekSec,
+      nonce: focusNonceRef.current,
+    });
+  }, []);
 
   // Render & Media callbacks
   const handleRenderVideo = useCallback((...args) => renderRef.current.handleRenderVideo?.(...args), []);
@@ -393,6 +504,8 @@ export default function App() {
   const handleCloseJobDashboard = useCallback(() => setShowJobDashboard(false), []);
   const handleOpenGeminiRoute = useCallback(() => setShowGeminiRouteModal(true), []);
   const handleCloseGeminiRoute = useCallback(() => setShowGeminiRouteModal(false), []);
+  const handleOpenGeminiQuota = useCallback(() => setShowGeminiQuotaModal(true), []);
+  const handleCloseGeminiQuota = useCallback(() => setShowGeminiQuotaModal(false), []);
 
   // Immediate episode workspace reset upon loading new video (prevents inheriting stale script/audio)
   const handleVideoSelected = useCallback((vid) => {
@@ -416,12 +529,25 @@ export default function App() {
     if (renderRef.current.setRenderedVideo) {
       renderRef.current.setRenderedVideo(null);
     }
-    if (seriesRef.current.episodeId && seriesRef.current.handleSaveEpisodeBackground) {
-      seriesRef.current.handleSaveEpisodeBackground(seriesRef.current.episodeId, {
+    const sId = seriesRef.current.seriesId;
+    const eId = seriesRef.current.episodeId;
+    if (sId && eId) {
+      saveEpisodeState(sId, eId, { renderedVideo: null });
+    }
+    if (eId && seriesRef.current.handleSaveEpisodeBackground) {
+      seriesRef.current.handleSaveEpisodeBackground(eId, {
         renderedVideo: null,
       });
     }
   }, []);
+
+  const effectiveRenderedVideo = isRenderedRatioMismatch(
+    render.renderedVideo,
+    currentAspectRatio,
+    { width: srcW, height: srcH }
+  )
+    ? null
+    : render.renderedVideo;
 
   return (
     <JobQueueProvider isAnyJobViewOpen={true}>
@@ -436,7 +562,7 @@ export default function App() {
           renderProgress={render.renderProgress}
           selectedVideo={media.selectedVideo}
           videoMetadata={media.videoMetadata}
-          renderedVideo={render.renderedVideo}
+          renderedVideo={effectiveRenderedVideo}
           activeSeries={series.activeSeries}
           activeEpisode={series.activeEpisode}
           seriesId={series.seriesId}
@@ -451,6 +577,11 @@ export default function App() {
           onTabChange={setLeftTab}
           onOpenJobDashboard={handleOpenJobDashboard}
           onOpenGeminiRoute={handleOpenGeminiRoute}
+          onOpenGeminiQuota={handleOpenGeminiQuota}
+          isGeminiRouteActive={showGeminiRouteModal}
+          isGeminiQuotaActive={showGeminiQuotaModal}
+          currentAspectRatio={currentAspectRatio}
+          onAspectRatioChange={handleAspectRatioChange}
         />
 
         {/* Backend Offline Dismissible Warning Banner / Toast */}
@@ -526,7 +657,7 @@ export default function App() {
                 onUpdateSegmentVoice={handleUpdateSegmentVoice}
                 onToggleDeliveryType={handleToggleDeliveryType}
                 selectedSegmentId={media.selectedSegmentId}
-                onSelectSegment={media.setSelectedSegmentId}
+                onSelectSegment={handleSelectSegmentFromScript}
                 onDeleteSegment={handleDeleteSegment}
                 seriesList={series.seriesList}
                 activeSeries={series.activeSeries}
@@ -539,6 +670,7 @@ export default function App() {
                 onDeleteEpisode={handleDeleteEpisode}
                 onRenameEpisode={handleRenameEpisode}
                 onRenameSeries={handleRenameSeries}
+                onRefreshSeries={series.refreshSeriesFromServer}
               />
             </div>
 
@@ -553,10 +685,11 @@ export default function App() {
             <div className="top-suite-col-center">
               <VideoPlayerPreview
                 selectedVideo={media.selectedVideo}
+                videoMetadata={media.videoMetadata}
                 seriesId={series.seriesId}
                 episodeId={series.episodeId}
                 scriptData={scriptData}
-                renderedVideo={render.renderedVideo}
+                renderedVideo={effectiveRenderedVideo}
                 setRenderedVideo={render.setRenderedVideo}
                 onResetToPreview={handleResetToPreview}
                 isRendering={render.isRendering}
@@ -601,9 +734,14 @@ export default function App() {
                 isRendering={render.isRendering}
                 renderProgress={render.renderProgress}
                 renderStage={render.renderStage}
-                renderedVideo={render.renderedVideo}
+                renderedVideo={effectiveRenderedVideo}
                 selectedVideo={media.selectedVideo}
                 videoMetadata={media.videoMetadata}
+                activeEpisode={series.activeEpisode}
+                activeSeries={series.activeSeries}
+                seriesId={series.seriesId}
+                episodeId={series.episodeId}
+                batchRender={render.batchRender}
                 duration={playback.duration}
                 selectedClip={media.selectedClip}
                 onSplitClip={handleSplitClip}
@@ -670,6 +808,7 @@ export default function App() {
               videoThumbnails={media.videoThumbnails || EMPTY_ARRAY}
               selectedSegmentId={media.selectedSegmentId}
               onSelectSegment={media.setSelectedSegmentId}
+              timelineFocusRequest={timelineFocusRequest}
               onAutoSplitVideo={handleAutoSplitVideo}
               onResetFullVideo={handleResetFullVideo}
               onBridgeGaps={handleBridgeGaps}
@@ -693,21 +832,40 @@ export default function App() {
         </main>
 
         {/* DragonDub Production Job Queue Dashboard Modal (Phase 4.4) */}
-        <JobDashboardModal isOpen={showJobDashboard} onClose={handleCloseJobDashboard} />
+        <ErrorBoundary inline name="Job Dashboard" onReset={handleCloseJobDashboard}>
+          <JobDashboardModal isOpen={showJobDashboard} onClose={handleCloseJobDashboard} />
+        </ErrorBoundary>
 
-        {/* DragonDub Gemini Multi-Key Route Studio Modal (Clean Full Dashboard) */}
-        <GeminiRouteModal
-          isOpen={showGeminiRouteModal}
-          onClose={handleCloseGeminiRoute}
-          activeSeries={series.activeSeries}
-          activeEpisode={series.activeEpisode}
-          seriesId={series.seriesId}
-          episodeId={series.episodeId}
-          onSwitchEpisode={handleSwitchEpisode}
-          onTabChange={setLeftTab}
-          onRefreshSeries={series.refreshSeriesFromServer}
-          apiKey={persistence.apiKey}
-        />
+        {/* DragonDub Batch Generate Studio Modal (Separated Clean Workflow) */}
+        <ErrorBoundary inline name="Gemini Route" onReset={handleCloseGeminiRoute}>
+          <GeminiRouteModal
+            isOpen={showGeminiRouteModal}
+            onClose={handleCloseGeminiRoute}
+            onOpenQuotaModal={handleOpenGeminiQuota}
+            activeSeries={series.activeSeries}
+            activeEpisode={series.activeEpisode}
+            seriesId={series.seriesId}
+            episodeId={series.episodeId}
+            onSwitchEpisode={handleSwitchEpisode}
+            onTabChange={setLeftTab}
+            onRefreshSeries={series.refreshSeriesFromServer}
+            apiKey={persistence.apiKey}
+            voiceSettings={voiceSettings || EMPTY_OBJECT}
+            currentAspectRatio={currentAspectRatio}
+            onAspectRatioChange={handleAspectRatioChange}
+            isRendering={render.isRendering}
+            batchRender={render.batchRender}
+          />
+        </ErrorBoundary>
+
+        {/* DragonDub Dedicated Gemini Keys & Model Quota Modal */}
+        <ErrorBoundary inline name="Gemini Quota" onReset={handleCloseGeminiQuota}>
+          <GeminiQuotaModal
+            isOpen={showGeminiQuotaModal}
+            onClose={handleCloseGeminiQuota}
+            onOpenBatchModal={handleOpenGeminiRoute}
+          />
+        </ErrorBoundary>
       </div>
     </JobQueueProvider>
   );

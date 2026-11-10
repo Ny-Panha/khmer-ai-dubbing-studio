@@ -308,6 +308,7 @@ export function useScriptWorkflow({
               mode: response.data.mode || mode,
               segments: bgSegsWithVoices,
               speakerRegistry: bgRegistry,
+              updatedAt: Date.now(),
             },
             speakerRegistry: bgRegistry,
           });
@@ -334,6 +335,7 @@ export function useScriptWorkflow({
         mode: returnedData.mode || mode,
         segments: segmentsWithVoices,
         speakerRegistry: freshRegistry,
+        updatedAt: Date.now(),
       };
 
       // 4. Update the active workspace
@@ -407,7 +409,8 @@ export function useScriptWorkflow({
       const updatedReg = buildSpeakerRegistry(newScript.segments, speakerRegistry);
       setSpeakerRegistry(updatedReg);
     }
-    setScriptData(sanitizeScriptData(newScript));
+    const stampedScript = newScript ? { ...newScript, updatedAt: Date.now() } : newScript;
+    setScriptData(sanitizeScriptData(stampedScript));
   };
 
   return {

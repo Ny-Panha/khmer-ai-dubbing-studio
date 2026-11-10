@@ -19,6 +19,7 @@ const express = require("express");
 const cors = require("cors");
 const { uploadsDir, isSafeUploadPath, safeDecodeURI, resolveMediaFile } = require("./utils/pathUtils.js");
 const { productionJobQueue } = require("./services/pipeline/productionJobQueue.js");
+const { ensurePipelineWorkerRegistered } = require("./services/pipeline/jobWorker.js");
 
 // Middlewares & Modular Route Handlers
 const mediaStreamMiddleware = require("./middleware/mediaStream.js");
@@ -72,6 +73,9 @@ if (require.main === module) {
     console.warn("[Server Startup] ⚠️ Crash recovery warning:", recErr.message);
   }
 
+  // Register canonical pipeline worker BEFORE listening so queued/recovered jobs start cleanly in worker slots
+  ensurePipelineWorkerRegistered(productionJobQueue);
+
   const startListen = (retries = 5) => {
     server = app.listen(PORT, "0.0.0.0", () => {
       console.log(`🚀 Khmer AI Dubbing Backend running on http://localhost:${PORT}`);
@@ -95,11 +99,33 @@ if (require.main === module) {
 
   startListen();
 
+  let isShuttingDown = false;
   const handleShutdown = () => {
+    if (isShuttingDown) return;
+    isShuttingDown = true;
+
+    if (typeof jobRoutes.closeAllJobStreams === "function") {
+      jobRoutes.closeAllJobStreams();
+    }
+
     if (server) {
+      const forceExitTimer = setTimeout(() => {
+        process.exit(0);
+      }, 800);
+      if (typeof forceExitTimer.unref === "function") {
+        forceExitTimer.unref();
+      }
+
       server.close(() => {
+        clearTimeout(forceExitTimer);
         process.exit(0);
       });
+      if (typeof server.closeIdleConnections === "function") {
+        server.closeIdleConnections();
+      }
+      if (typeof server.closeAllConnections === "function") {
+        server.closeAllConnections();
+      }
     } else {
       process.exit(0);
     }

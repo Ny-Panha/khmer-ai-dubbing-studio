@@ -5,6 +5,8 @@ export default function LogoOverlay({
   voiceSettings = {},
   renderedVideo = null,
   aspectRatio = '16:9',
+  verticalStyle = 'pad',
+  videoMeta = null,
 }) {
   const {
     enableLogo = false,
@@ -27,9 +29,9 @@ export default function LogoOverlay({
   const margin = Math.round(Math.max(5, Math.min(80, Number(logoMargin) || 20)) * scaleFactor);
   const shapeClass = logoShape === 'circle' ? 'shape-circle' : 'shape-square';
 
-  // In 9:16 letterbox (16:9 video centered vertically):
+  // In 9:16 letterbox (16:9 video centered vertically, pad mode):
   // Video top edge is at ~34.2% from top, bottom edge is at ~34.2% from bottom.
-  const is916Letterbox = aspectRatio === '9:16';
+  const is916Letterbox = aspectRatio === '9:16' && verticalStyle !== 'crop' && (!videoMeta?.ratio || videoMeta.ratio > 1.2);
   const topOffset = is916Letterbox ? `calc(34.2% + ${margin}px)` : `${margin}px`;
   const bottomOffset = is916Letterbox ? `calc(34.2% + ${margin}px)` : `${margin}px`;
 

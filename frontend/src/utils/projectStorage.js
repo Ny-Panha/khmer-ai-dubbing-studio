@@ -54,14 +54,101 @@ export function resolveDefaultAspectRatio(width, height) {
 }
 
 /**
+ * Infer the aspect ratio of an exported/rendered video object or URL.
+ */
+export function inferRenderedAspectRatio(renderedVideo, fallbackDims = null, fallbackRatio = '16:9') {
+  if (!renderedVideo) return null;
+  if (typeof renderedVideo === 'object' && renderedVideo.aspectRatio) {
+    return renderedVideo.aspectRatio;
+  }
+  const ref = String(
+    typeof renderedVideo === 'string'
+      ? renderedVideo
+      : (renderedVideo.outputFilename || renderedVideo.outputVideoUrl || renderedVideo.videoUrl || '')
+  );
+  if (ref.includes('[9-16') || ref.includes('9-16 TikTok')) return '9:16';
+  if (ref.includes('[1-1') || ref.includes('1-1 Square')) return '1:1';
+  if (fallbackDims?.width && fallbackDims?.height) {
+    return resolveDefaultAspectRatio(fallbackDims.width, fallbackDims.height) || fallbackRatio;
+  }
+  return fallbackRatio;
+}
+
+export function sanitizeRenderedVideo(renderedVideo) {
+  if (!renderedVideo) return null;
+  const refs = typeof renderedVideo === 'string'
+    ? [renderedVideo]
+    : [
+        renderedVideo.outputVideoUrl,
+        renderedVideo.videoUrl,
+        renderedVideo.downloadUrl,
+        renderedVideo.outputFilename,
+      ];
+  const hasMockRef = refs.some(
+    (ref) => typeof ref === 'string' && /(?:^|\/|\\)mock_(?:render|16-9|9-16|1-1)/i.test(ref.trim())
+  );
+  if (hasMockRef) return null;
+  if (typeof renderedVideo === 'string') {
+    return renderedVideo.trim() ? renderedVideo : null;
+  }
+  const hasAnyUrl = Boolean(
+    renderedVideo.outputVideoUrl || renderedVideo.videoUrl || renderedVideo.downloadUrl
+  );
+  return hasAnyUrl ? renderedVideo : null;
+}
+
+/**
+ * Determine whether an episode's existing renderedVideo contradicts an explicit/target aspect ratio.
+ */
+export function isRenderedRatioMismatch(renderedVideo, targetAspectRatio, fallbackDims = null) {
+  if (!renderedVideo || !targetAspectRatio) return false;
+  const renderedRatio = inferRenderedAspectRatio(renderedVideo, fallbackDims, null);
+  return Boolean(renderedRatio && renderedRatio !== targetAspectRatio);
+}
+
+/**
+ * Merge episode voice settings into current workspace settings while NEVER letting
+ * stale episode metadata or legacy rendered outputs overwrite the user's sticky aspectRatio.
+ */
+export function resolveStickyVoiceSettings({
+  prevSettings = null,
+  savedGlobalSettings = null,
+  episodeVoiceSettings = null,
+} = {}) {
+  const base = {
+    ...DEFAULT_VOICE_SETTINGS,
+    ...(prevSettings && typeof prevSettings === 'object' ? prevSettings : {}),
+  };
+  const stickyRatio = base.aspectRatio || savedGlobalSettings?.aspectRatio || null;
+  const epClean = episodeVoiceSettings && typeof episodeVoiceSettings === 'object'
+    ? { ...episodeVoiceSettings }
+    : {};
+  delete epClean.aspectRatio;
+  return {
+    ...base,
+    ...epClean,
+    aspectRatio: stickyRatio,
+  };
+}
+
+/**
  * Load saved voice settings from localStorage
  */
 export function loadSavedVoiceSettings() {
   try {
     const raw = localStorage.getItem(STORAGE_VOICE_SETTINGS_KEY);
-    if (raw) return JSON.parse(raw);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') {
+        const merged = { ...DEFAULT_VOICE_SETTINGS, ...parsed };
+        if (merged.aspectRatio === '1:1') {
+          merged.aspectRatio = null;
+        }
+        return merged;
+      }
+    }
   } catch {}
-  return DEFAULT_VOICE_SETTINGS;
+  return { ...DEFAULT_VOICE_SETTINGS };
 }
 
 /**
@@ -316,6 +403,16 @@ export function sanitizeAndHealSeriesList(list) {
         }
         hasChanges = true;
       }
+
+      if (ep.renderedVideo && !sanitizeRenderedVideo(ep.renderedVideo)) {
+        ep.renderedVideo = null;
+        if (ep.status === 'completed') {
+          ep.status = (ep.audioGenerated && !ep.audioOutdated)
+            ? 'voicing'
+            : ((Array.isArray(ep.scriptData?.segments) && ep.scriptData.segments.length > 0) ? 'translated' : (ep.video ? 'uploaded' : 'idle'));
+        }
+        hasChanges = true;
+      }
     }
   }
 
@@ -398,8 +495,8 @@ export function loadSeriesList() {
   }
 
   saveSeriesList([initialSeries]);
-  setActiveSeriesId(initialSeries.id);
-  setActiveEpisodeId(initialSeries.episodes[0].id);
+  if (!getActiveSeriesId()) setActiveSeriesId(initialSeries.id);
+  if (!getActiveEpisodeId()) setActiveEpisodeId(initialSeries.episodes[0].id);
   return [initialSeries];
 }
 
@@ -443,6 +540,7 @@ function trimSegmentForStorage(s) {
     voiceGender: s.voiceGender || s.speakerGender || s.gender || 'male',
     voiceId: s.voiceId || s.khmerVoiceId || null,
     audioUrl: s.audioUrl || s.audioFile || s.rawAudioPath || null,
+    audioOutdated: Boolean(s.audioOutdated),
     speed: s.speed || 1.0,
     ttsStatus: s.ttsStatus || null,
   };
@@ -464,15 +562,20 @@ function createStorageOptimizedSeriesList(seriesList) {
       episodes: (series.episodes || []).map((ep) => {
         const hasSegments = Array.isArray(ep.scriptData?.segments) && ep.scriptData.segments.length > 0;
         const totalCount = ep.scriptData?.segments?.length || ep.scriptData?.totalSegments || 0;
+        const resolvedAudioOutdated = Boolean(ep.audioOutdated);
+        const resolvedAudioGenerated = Boolean(ep.audioGenerated || (!resolvedAudioOutdated && ep.fullAudioUrl));
+        const resolvedHasAudio = Boolean(ep.hasAudio || resolvedAudioGenerated);
 
         // For the active episode currently open, keep slimmed essential segment data in localStorage
         if (ep.id === activeEpId && hasSegments) {
           return {
             ...ep,
-            audioGenerated: Boolean(ep.audioGenerated || ep.fullAudioUrl),
-            hasAudio: Boolean(ep.hasAudio || ep.audioGenerated || ep.fullAudioUrl),
+            audioGenerated: resolvedAudioGenerated,
+            hasAudio: resolvedHasAudio,
+            audioOutdated: resolvedAudioOutdated,
             fullAudioUrl: ep.fullAudioUrl || null,
             fullAudioPath: ep.fullAudioPath || null,
+            renderedVideo: sanitizeRenderedVideo(ep.renderedVideo),
             scriptData: {
               ...ep.scriptData,
               hasScript: true,
@@ -483,26 +586,31 @@ function createStorageOptimizedSeriesList(seriesList) {
         }
 
         // For inactive episodes, keep metadata & summary count without the 4MB segment array
-        if (hasSegments || ep.scriptData?.hasScript || ep.status === 'translated' || ep.status === 'voicing' || ep.status === 'completed') {
+        if (hasSegments || (ep.scriptData?.hasScript && totalCount > 0)) {
           return {
             ...ep,
             status: (ep.status === 'uploaded' || !ep.status) ? 'translated' : ep.status,
-            audioGenerated: Boolean(ep.audioGenerated || ep.fullAudioUrl),
-            hasAudio: Boolean(ep.hasAudio || ep.audioGenerated || ep.fullAudioUrl),
+            audioGenerated: resolvedAudioGenerated,
+            hasAudio: resolvedHasAudio,
+            audioOutdated: resolvedAudioOutdated,
             fullAudioUrl: ep.fullAudioUrl || null,
             fullAudioPath: ep.fullAudioPath || null,
+            renderedVideo: sanitizeRenderedVideo(ep.renderedVideo),
             scriptData: {
               mode: ep.scriptData?.mode || 'dialogue',
+              generationMode: ep.scriptData?.generationMode || ep.generationMode,
               genre: ep.scriptData?.genre || 'auto',
-              hasScript: true,
+              hasScript: totalCount > 0,
               totalSegments: totalCount,
-              updatedAt: ep.scriptData?.updatedAt || Date.now(),
+              updatedAt: ep.scriptData?.updatedAt || 0,
               segments: [], // Offload bulky array from localStorage to backend server truth (series.json)
             },
           };
         }
 
-        return ep;
+        return ep.renderedVideo
+          ? { ...ep, renderedVideo: sanitizeRenderedVideo(ep.renderedVideo) }
+          : ep;
       }),
     };
   });
@@ -528,22 +636,34 @@ export function saveSeriesList(seriesList) {
           title: s.title,
           createdAt: s.createdAt,
           glossary: s.glossary || { characters: [], terms: [] },
-          episodes: (s.episodes || []).map((e) => ({
-            id: e.id,
-            episodeNumber: e.episodeNumber,
-            title: e.title,
-            displayTitle: e.displayTitle,
-            duration: e.duration || 0,
-            status: e.status || 'idle',
-            video: e.video ? { videoId: e.video.videoId, fileName: e.video.fileName, videoPath: e.video.videoPath, duration: e.video.duration } : null,
-            hasScript: Boolean(e.scriptData?.segments?.length || e.scriptData?.hasScript),
-            totalSegments: e.scriptData?.segments?.length || e.scriptData?.totalSegments || 0,
-            audioGenerated: Boolean(e.audioGenerated || e.fullAudioUrl),
-            hasAudio: Boolean(e.hasAudio || e.audioGenerated || e.fullAudioUrl),
-            fullAudioUrl: e.fullAudioUrl || null,
-            fullAudioPath: e.fullAudioPath || null,
-            scriptData: e.scriptData ? { mode: e.scriptData.mode, hasScript: true, totalSegments: e.scriptData.segments?.length || e.scriptData.totalSegments || 0 } : null,
-          })),
+          episodes: (s.episodes || []).map((e) => {
+            const isOutdated = Boolean(e.audioOutdated);
+            const hasGen = Boolean(e.audioGenerated || (!isOutdated && e.fullAudioUrl));
+            return {
+              id: e.id,
+              episodeNumber: e.episodeNumber,
+              title: e.title,
+              displayTitle: e.displayTitle,
+              duration: e.duration || 0,
+              status: e.status || 'idle',
+              video: e.video ? { videoId: e.video.videoId, fileName: e.video.fileName, videoPath: e.video.videoPath, duration: e.video.duration } : null,
+              hasScript: (e.scriptData?.segments?.length || e.scriptData?.totalSegments || 0) > 0,
+              totalSegments: e.scriptData?.segments?.length || e.scriptData?.totalSegments || 0,
+              audioGenerated: hasGen,
+              hasAudio: Boolean(e.hasAudio || hasGen),
+              audioOutdated: isOutdated,
+              fullAudioUrl: e.fullAudioUrl || null,
+              fullAudioPath: e.fullAudioPath || null,
+              scriptData: e.scriptData
+                ? {
+                    mode: e.scriptData.mode,
+                    hasScript: (e.scriptData.segments?.length || e.scriptData.totalSegments || 0) > 0,
+                    totalSegments: e.scriptData.segments?.length || e.scriptData.totalSegments || 0,
+                    updatedAt: e.scriptData.updatedAt || 0,
+                  }
+                : null,
+            };
+          }),
         }));
         localStorage.setItem(STORAGE_SERIES_LIST_KEY, JSON.stringify(ultraCompact));
         console.log('[Storage] ✅ Ultra-compact series list saved cleanly to localStorage.');
@@ -603,8 +723,12 @@ export function loadActiveSeriesAndEpisode() {
     saveSeriesList(seriesList);
   }
 
-  setActiveSeriesId(series.id);
-  setActiveEpisodeId(episode.id);
+  if (!seriesId || series.id === seriesId) {
+    setActiveSeriesId(series.id);
+    if (!episodeId || episode.id === episodeId) {
+      setActiveEpisodeId(episode.id);
+    }
+  }
 
   return {
     seriesList,
@@ -685,20 +809,36 @@ export function saveEpisodeState(seriesId, episodeId, stateData) {
       ? stateData.speakerRegistry
       : (prevEp.speakerRegistry || {});
 
-    const mergedFullAudioPath = stateData.fullAudioPath || (stateData.clearScript ? null : prevEp.fullAudioPath);
-    const mergedFullAudioUrl = stateData.fullAudioUrl || (stateData.clearScript ? null : prevEp.fullAudioUrl);
+    const mergedFullAudioPath = (stateData.clearAudio || stateData.clearScript)
+      ? null
+      : (stateData.fullAudioPath !== undefined ? stateData.fullAudioPath : prevEp.fullAudioPath);
+    const mergedFullAudioUrl = (stateData.clearAudio || stateData.clearScript)
+      ? null
+      : (stateData.fullAudioUrl !== undefined ? stateData.fullAudioUrl : prevEp.fullAudioUrl);
 
-    const mergedAudioGenerated = stateData.clearAudio
+    const mergedAudioOutdated = (stateData.clearAudio || stateData.clearScript)
       ? false
-      : Boolean(stateData.audioGenerated || prevEp.audioGenerated || mergedFullAudioUrl);
+      : (stateData.audioOutdated !== undefined ? Boolean(stateData.audioOutdated) : Boolean(prevEp.audioOutdated));
 
-    const mergedAudioOutdated = stateData.clearAudio
+    const mergedAudioGenerated = (stateData.clearAudio || stateData.clearScript)
       ? false
-      : Boolean(stateData.audioOutdated || prevEp.audioOutdated);
+      : stateData.audioGenerated !== undefined
+        ? Boolean(stateData.audioGenerated || (!mergedAudioOutdated && mergedFullAudioUrl))
+        : Boolean(prevEp.audioGenerated || (!mergedAudioOutdated && mergedFullAudioUrl));
+
+    const mergedHasAudio = (stateData.clearAudio || stateData.clearScript)
+      ? false
+      : (stateData.hasAudio !== undefined ? Boolean(stateData.hasAudio) : mergedAudioGenerated);
 
     const mergedVideoClips = (Array.isArray(stateData.videoClips) && stateData.videoClips.length > 0)
       ? stateData.videoClips
       : (prevEp.videoClips || []);
+
+    const mergedRenderedVideo = (stateData.clearAudio || stateData.clearScript)
+      ? null
+      : (stateData.renderedVideo !== undefined
+        ? sanitizeRenderedVideo(stateData.renderedVideo)
+        : sanitizeRenderedVideo(prevEp.renderedVideo));
 
     const updatedEp = {
       ...prevEp,
@@ -706,9 +846,11 @@ export function saveEpisodeState(seriesId, episodeId, stateData) {
       scriptData: mergedScriptData,
       speakerRegistry: mergedSpeakerRegistry,
       audioGenerated: mergedAudioGenerated,
+      hasAudio: mergedHasAudio,
       audioOutdated: mergedAudioOutdated,
       fullAudioPath: mergedFullAudioPath,
       fullAudioUrl: mergedFullAudioUrl,
+      renderedVideo: mergedRenderedVideo,
       videoClips: mergedVideoClips,
       title: episodeTitle,
       displayTitle: cleanDisplayTitle
@@ -735,11 +877,7 @@ export function saveEpisodeState(seriesId, episodeId, stateData) {
       updatedEp.status = 'completed';
     } else if (updatedEp.audioGenerated && !updatedEp.audioOutdated) {
       updatedEp.status = 'voicing';
-    } else if (
-      (updatedEp.scriptData?.segments && updatedEp.scriptData.segments.length > 0) ||
-      updatedEp.scriptData?.hasScript ||
-      (typeof updatedEp.scriptData?.totalSegments === 'number' && updatedEp.scriptData.totalSegments > 0)
-    ) {
+    } else if (Array.isArray(updatedEp.scriptData?.segments) && updatedEp.scriptData.segments.length > 0) {
       updatedEp.status = 'translated';
     } else if (updatedEp.video?.videoId || updatedEp.video?.videoUrl) {
       updatedEp.status = 'uploaded';
@@ -886,10 +1024,9 @@ export function deleteEpisodeFromSeries(seriesId, episodeId) {
   list[sIdx] = series;
   saveSeriesList(list);
 
-  // Background sync delete on backend
+  // Background sync delete on backend (DELETE endpoint persists deletion directly without clobbering series.json)
   try {
     deleteEpisodeApi(series.id, episodeId).catch(() => {});
-    syncSeriesToBackend(series);
   } catch (_) {}
 
   return true;
@@ -914,13 +1051,22 @@ export function extractGlossaryFromEpisode(scriptData, speakerRegistry) {
   const characters = [];
   const registry = speakerRegistry || {};
 
+  const detectGender = (spk, name, fallback) => {
+    const rawG = String(spk?.gender || spk?.speakerGender || '').toLowerCase();
+    if (rawG === 'female' || rawG === 'male') return rawG;
+    if (spk?.voiceId && spk.voiceId.includes('Sreymom')) return 'female';
+    if (spk?.voiceId && spk.voiceId.includes('Piseth')) return 'male';
+    if (name && /ស្រី|នាង|យាយ|ម៉ែ|កញ្ញា|ជំទាវ/i.test(name)) return 'female';
+    return fallback || 'male';
+  };
+
   Object.values(registry).forEach((spk) => {
     if (spk.name && spk.name !== 'Unknown' && !characters.some((c) => c.name === spk.name)) {
       characters.push({
         id: spk.id || spk.speakerId,
         name: spk.name,
         khmerName: spk.khmerName || spk.name,
-        gender: spk.gender || 'male',
+        gender: detectGender(spk, spk.name, 'male'),
         voiceId: spk.voiceId || null,
       });
     }
@@ -932,7 +1078,7 @@ export function extractGlossaryFromEpisode(scriptData, speakerRegistry) {
       characters.push({
         name: rawSpeaker,
         khmerName: rawSpeaker,
-        gender: seg.gender || seg.speakerGender || 'male',
+        gender: detectGender(seg, rawSpeaker, 'male'),
         voiceId: seg.voiceId || null,
       });
     }

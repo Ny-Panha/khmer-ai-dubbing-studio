@@ -1,7 +1,6 @@
-import React, { createContext, useContext } from 'react';
+import React from 'react';
 import { useJobQueue } from '../components/dashboard/useJobQueue';
-
-const JobQueueContext = createContext(null);
+import { JobQueueContext } from './jobQueueStore';
 
 export function JobQueueProvider({ children, isAnyJobViewOpen }) {
   const jobQueue = useJobQueue({ enabled: Boolean(isAnyJobViewOpen) });
@@ -10,13 +9,5 @@ export function JobQueueProvider({ children, isAnyJobViewOpen }) {
       {children}
     </JobQueueContext.Provider>
   );
-}
-
-export function useSharedJobQueue() {
-  const ctx = useContext(JobQueueContext);
-  if (!ctx) {
-    throw new Error('useSharedJobQueue must be used within a JobQueueProvider');
-  }
-  return ctx;
 }
 

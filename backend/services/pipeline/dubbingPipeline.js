@@ -1,5 +1,7 @@
 const { GoogleGenAI } = require('@google/genai');
-const { createSmartGenAIClient } = require('../geminiKeyManager');
+const { createSmartGenAIClient, extractAllGeminiKeys } = require('../geminiKeyManager');
+const { DUBBING_CASCADE_MODELS, isUsableDubbingModel } = require('../geminiModelCatalog');
+const { geminiQuotaTracker } = require('../geminiQuotaTracker');
 const { PIPELINE_STAGES, PIPELINE_STATUS, GENERATION_MODES } = require('./pipelineTypes');
 const { ingestEpisode } = require('./stages/stage1_ingestEpisode');
 const { analyzeSourceMedia } = require('./stages/stage2_analyzeSourceMedia');
@@ -16,11 +18,7 @@ const { createJob, updateJob } = require('./jobManager');
 const { saveCheckpoint, generateVideoFingerprint } = require('./checkpointManager');
 const { buildSpeakerRegistry, syncSegmentsWithSpeakerRegistry } = require('../../models/speakerRegistry');
 
-const CASCADE_MODELS = [
-  'gemini-3.5-flash-lite',
-  'gemini-3.5-flash',
-  'gemini-3.8-flash',
-];
+const CASCADE_MODELS = DUBBING_CASCADE_MODELS;
 
 function getAiClient(customApiKey) {
   return createSmartGenAIClient(customApiKey);
@@ -55,7 +53,7 @@ async function runDubbingPipeline({
   seriesId = 'series_default',
   episodeId = 'ep_1',
   apiKey = null,
-  modelName = 'gemini-3.5-flash-lite',
+  modelName = null,
   customPrompt = '',
   narratorGender = 'male',
   seriesGlossary = {},
@@ -86,7 +84,25 @@ async function runDubbingPipeline({
 
   checkAbort();
 
-  const chosenModel = CASCADE_MODELS.includes(modelName) ? modelName : CASCADE_MODELS[0];
+  const jobSeriesId = seriesId;
+  const jobEpisodeId = episodeId;
+  const cleanReqModel = String(modelName || '').trim();
+  const hasExplicitModel = Boolean(cleanReqModel && cleanReqModel !== 'auto' && isUsableDubbingModel(cleanReqModel));
+  const trackerSettings = geminiQuotaTracker.getSettings();
+  const hasPinnedPreferred = Boolean(
+    trackerSettings?.preferredModel &&
+    trackerSettings.preferredModel !== 'auto' &&
+    isUsableDubbingModel(trackerSettings.preferredModel)
+  );
+  const prioritizedPool = geminiQuotaTracker.prioritizeAvailableModels(
+    CASCADE_MODELS,
+    extractAllGeminiKeys(apiKey)
+  );
+  const chosenModel = hasExplicitModel
+    ? cleanReqModel
+    : hasPinnedPreferred
+      ? trackerSettings.preferredModel
+      : (prioritizedPool[0] || geminiQuotaTracker.getPreferredPrimaryModel(CASCADE_MODELS[0]));
   const aiClient = getAiClient(apiKey);
   const startTime = Date.now();
 
@@ -121,6 +137,8 @@ async function runDubbingPipeline({
       mode,
       seriesId: ingestResult.seriesId,
       episodeId: ingestResult.episodeId,
+      jobSeriesId,
+      jobEpisodeId,
       jobId: jobId || ingestResult.jobId,
       aiClient,
       modelName: chosenModel,
@@ -150,6 +168,7 @@ async function runDubbingPipeline({
     modelName: chosenModel,
     baseStepSec: 1.0, // High coverage without exceeding rate limits
     startOffsetSec: 0,
+    signal,
   });
 
   checkAbort();
@@ -185,6 +204,7 @@ async function runDubbingPipeline({
       aiClient,
       modelName: chosenModel,
       startOffsetSec: 0,
+      signal,
     });
 
     checkAbort();
@@ -215,6 +235,7 @@ async function runDubbingPipeline({
   );
   const scriptResult = await generateModeSpecificScript({
     mode: mode === GENERATION_MODES.FAST_OCR ? GENERATION_MODES.MODE_A_DIALOGUE : mode,
+    generationMode: mode,
     reconciledSegments: inputSegmentsForScript,
     durationSec,
     aiClient,
@@ -223,6 +244,7 @@ async function runDubbingPipeline({
     narratorGender,
     seriesGlossary,
     genre,
+    signal,
   });
 
   checkAbort();
@@ -264,6 +286,7 @@ async function runDubbingPipeline({
       audioDir: ingestResult.audioDir,
       defaultVoiceId: 'km-KH-PisethNeural',
       forceRegen: false,
+      signal,
     });
     finalizedSegments = ttsRes.segmentsWithAudio;
   }
@@ -271,7 +294,7 @@ async function runDubbingPipeline({
   checkAbort();
 
   // Stage 10: Preview and Export Preparation
-  report('previewAndExport', 100, 'រៀបចំ Timeline Data រួចរាល់ ១០០% សម្រាប់ Review & Playback!');
+  report('previewAndExport', 99, 'រៀបចំ Timeline Data និងត្រៀមផ្ទៀងផ្ទាត់រក្សាទុកទិន្នន័យ...');
   const exportPrep = await previewAndExport({
     videoPath: ingestResult.videoPath,
     segments: finalizedSegments,
@@ -315,29 +338,29 @@ async function runDubbingPipeline({
       completedAt: Date.now(),
       assSubtitlePath: exportPrep.assSubtitlePath,
       srtSubtitlePath: exportPrep.srtSubtitlePath,
+      ...(scriptResult.translationReport ? { translationReport: scriptResult.translationReport } : {}),
+      ...(validationRes?.validationReport ? { validationReport: validationRes.validationReport } : {}),
     },
   };
 
 
-  if (ingestResult?.seriesId) {
-    try {
-      const { getSeriesMetadata, saveSeriesMetadata } = require('../episodeService');
-      const series = getSeriesMetadata(ingestResult.seriesId);
-      if (series) {
-        if (Array.isArray(series.episodes) && ingestResult.episodeId) {
-          const ep = series.episodes.find((e) => e.id === ingestResult.episodeId);
-          if (ep) {
-            ep.scriptData = resultPayload;
-            ep.generationMode = mode;
-            ep.status = 'translated';
-          }
-        }
-        series.genre = scriptResult.genre || genre;
-        series.detectedGenre = scriptResult.detectedGenre || scriptResult.genre || genre;
-        saveSeriesMetadata(series);
-      }
-    } catch (_) {}
-  }
+  report('persistScript', 99, 'កំពុងរក្សាទុក & ផ្ទៀងផ្ទាត់ទិន្នន័យ Script ចូល series.json...');
+  const resolvedSeriesId = ingestResult?.seriesId || jobSeriesId;
+  const resolvedEpisodeId = ingestResult?.episodeId || jobEpisodeId;
+  const { persistEpisodeScriptData } = require('../episodeService');
+  const persistRes = await persistEpisodeScriptData({
+    seriesId: resolvedSeriesId,
+    episodeId: resolvedEpisodeId,
+    expectedSeriesId: jobSeriesId,
+    expectedEpisodeId: jobEpisodeId,
+    scriptData: resultPayload,
+    generationMode: mode,
+    status: 'translated',
+    seriesGenre: scriptResult.genre || genre,
+    seriesDetectedGenre: scriptResult.detectedGenre || scriptResult.genre || genre,
+    jobId: jobId || ingestResult?.jobId,
+  });
+  console.log(`[Pipeline] ✅ Persisted ${persistRes.savedCount} script segments atomically to series.json for ${persistRes.episodeId}`);
 
   if (jobId) {
     updateJob(jobId, {

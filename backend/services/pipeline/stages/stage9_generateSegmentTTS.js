@@ -1,13 +1,19 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { generateSingleSegmentSpeech, cleanTextForTts } = require('../../ttsService');
+const {
+  generateSingleSegmentSpeech,
+  cleanTextForTts,
+  isPlaceholderOrEmptyTtsText,
+  speedToEdgeRate,
+} = require('../../ttsService');
 const { getMediaDuration } = require('../../ffmpegService');
 const {
   loadSegmentLedger,
   recordSegmentCompletion,
   verifySegmentAudioIntegrity,
 } = require('../segmentLedger');
+const { detectSpeakerGender } = require('../../../models/speakerRegistry');
 
 function getTtsAudioCacheKey(text, voiceId, durationSec) {
   return crypto.createHash('md5')
@@ -102,21 +108,42 @@ async function generateSegmentTTS({
       const rawKhmer = String(seg.khmerTranslatedText || seg.khmerText || seg.khmer || '');
       const khmerText = cleanTextForTts ? cleanTextForTts(rawKhmer) : rawKhmer.trim();
 
-      if (!khmerText) {
+      if (!khmerText || isPlaceholderOrEmptyTtsText(rawKhmer)) {
         seg.ttsStatus = 'empty_text';
+        seg.audioPath = null;
+        seg.audioFile = null;
+        seg.audioUrl = null;
+        seg.audioGenerated = false;
         results[idx] = seg;
         skippedEmptyCount++;
         continue;
       }
 
-      // Speaker-to-voice assignment
-      const registryVoice = (speakerRegistry && seg.speakerId && speakerRegistry[seg.speakerId]?.voiceId) ||
-                            (seg.speakerRegistry && seg.speakerId && seg.speakerRegistry[seg.speakerId]?.voiceId);
-      const chosenVoiceId = (seg.userOverridden && seg.voiceId)
-        ? seg.voiceId
-        : (registryVoice || seg.khmerVoiceId || seg.voiceId || seg.voice || (
-            seg.voiceGender === 'female' ? 'km-KH-SreymomNeural' : defaultVoiceId
-          ));
+      // Speaker-to-voice assignment (manual override -> registry -> resolved gender/speaker title -> existing voiceId)
+      const segSpkName = String(seg.speaker || seg.speakerName || '').trim();
+      const isGenericSegSpk = !segSpkName || segSpkName === 'តួអង្គ' || segSpkName.toLowerCase() === 'speaker';
+      const localReg = speakerRegistry || seg.speakerRegistry || {};
+      const registryVoice =
+        (seg.speakerId && localReg[seg.speakerId]?.voiceId) ||
+        (!isGenericSegSpk && localReg[segSpkName]?.voiceId) ||
+        null;
+      const isManualSeg = Boolean(seg.userOverridden || seg.voiceAssignmentSource === 'manual' || seg.voiceOverride);
+      const normSegGender = String(seg.voiceGender || seg.gender || seg.speakerGender || '').trim().toLowerCase();
+      let knownSegGender = (normSegGender === 'female' || normSegGender === 'f' || normSegGender === 'girl')
+        ? 'female'
+        : ((normSegGender === 'male' || normSegGender === 'm' || normSegGender === 'boy') ? 'male' : '');
+      if (!knownSegGender) {
+        const kwG = detectSpeakerGender(segSpkName, '', khmerText);
+        if (kwG === 'FEMALE') knownSegGender = 'female';
+        else if (kwG === 'MALE') knownSegGender = 'male';
+      }
+      const genderDerivedVoice = knownSegGender === 'female'
+        ? 'km-KH-SreymomNeural'
+        : (knownSegGender === 'male' ? 'km-KH-PisethNeural' : null);
+
+      const chosenVoiceId = isManualSeg
+        ? (seg.voiceOverride || seg.voiceId || seg.khmerVoiceId || seg.voice || registryVoice || genderDerivedVoice || defaultVoiceId)
+        : (registryVoice || genderDerivedVoice || seg.khmerVoiceId || seg.voiceId || seg.voice || defaultVoiceId);
       seg.khmerVoiceId = chosenVoiceId;
       seg.voiceId = chosenVoiceId;
       seg.voice = chosenVoiceId;
@@ -141,9 +168,12 @@ async function generateSegmentTTS({
         continue;
       }
 
+      const segSpeedInfo = speedToEdgeRate(seg.speed ?? seg.rate);
+      const hasCustomSegSpeed = Boolean(seg.userCustomSpeed || segSpeedInfo.isCustomNonDefault);
+
       // 1. Check Durable Segment Ledger First (Phase 4.2 & 4.3 Requirement)
       const existingLedgerRecord = jobId ? ledger[segKey] : null;
-      if (existingLedgerRecord && !forceRegen) {
+      if (existingLedgerRecord && !forceRegen && !hasCustomSegSpeed) {
         const integrity = await verifySegmentAudioIntegrity({
           record: existingLedgerRecord,
           expectedText: khmerText,
@@ -175,7 +205,8 @@ async function generateSegmentTTS({
 
       // 2. Check if existing episode audio file is valid
       const existingAudioPath = seg.audioPath || (seg.audioFile ? path.join(audioDir, path.basename(seg.audioFile)) : null);
-      const canReuseExisting = !forceRegen && !seg.audioOutdated && existingAudioPath && fs.existsSync(existingAudioPath) && fs.statSync(existingAudioPath).size > 200;
+      const customSpeedMatchesExisting = !hasCustomSegSpeed || Boolean(seg.ttsRate && segSpeedInfo.valid && seg.ttsRate === segSpeedInfo.rate);
+      const canReuseExisting = !forceRegen && !seg.audioOutdated && customSpeedMatchesExisting && existingAudioPath && fs.existsSync(existingAudioPath) && fs.statSync(existingAudioPath).size > 200;
 
       if (canReuseExisting) {
         reusedCount++;
@@ -225,7 +256,7 @@ async function generateSegmentTTS({
       const cachedAudioPath = path.join(cacheDir, `tts_${cacheKey}.mp3`);
       const cachedMetaPath = path.join(cacheDir, `tts_${cacheKey}.json`);
 
-      if (!forceRegen && fs.existsSync(cachedAudioPath) && fs.statSync(cachedAudioPath).size > 200) {
+      if (!forceRegen && !hasCustomSegSpeed && fs.existsSync(cachedAudioPath) && fs.statSync(cachedAudioPath).size > 200) {
         try {
           const destFile = `seg_${seg.id || idx + 1}_${cacheKey.substring(0, 8)}.mp3`;
           const destPath = path.join(audioDir, destFile);
@@ -279,6 +310,9 @@ async function generateSegmentTTS({
             voiceId: chosenVoiceId,
             targetDurationSec: effectiveTargetDuration,
             maxSpeed: 1.35,
+            speed: seg.speed,
+            rate: segSpeedInfo.valid ? segSpeedInfo.rate : undefined,
+            userCustomSpeed: hasCustomSegSpeed,
           }
         );
 
@@ -287,6 +321,16 @@ async function generateSegmentTTS({
         seg.audioPath = result.audioPath;
         seg.audioUrl = result.audioUrl;
         seg.audioDurationSec = result.audioDurationSec;
+        seg.audioDuration = result.audioDuration;
+        seg.finalAudioDuration = result.finalAudioDuration;
+        seg.originalAudioDuration = result.originalAudioDuration;
+        seg.rawAudioDur = result.rawAudioDur;
+        seg.audioEndSec = result.audioEndSec;
+        seg.appliedSpeed = result.appliedSpeed;
+        seg.userCustomSpeed = result.userCustomSpeed;
+        seg.ttsRate = result.ttsRate;
+        seg.speed = result.speed;
+        seg.overflowSec = result.overflowSec;
         seg.ttsStatus = 'ready';
         seg.audioOutdated = false;
 
@@ -308,8 +352,8 @@ async function generateSegmentTTS({
           });
         }
 
-        // Persist to disk cache
-        if (result.audioPath && fs.existsSync(result.audioPath)) {
+        // Persist to disk cache only for default-speed audio so custom-speed variants never poison +0% cache
+        if (!hasCustomSegSpeed && result.audioPath && fs.existsSync(result.audioPath)) {
           try {
             fs.copyFileSync(result.audioPath, cachedAudioPath);
             fs.writeFileSync(cachedMetaPath, JSON.stringify({

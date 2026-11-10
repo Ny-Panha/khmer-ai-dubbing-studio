@@ -11,7 +11,10 @@ const { validateSubtitleTiming } = require('./stages/stage8_validateSubtitleTimi
 const { generateSegmentTTS } = require('./stages/stage9_generateSegmentTTS');
 const { previewAndExport } = require('./stages/stage10_previewAndExport');
 const { buildSpeakerRegistry, syncSegmentsWithSpeakerRegistry } = require('../../models/speakerRegistry');
-const { updateChunk, updateJob } = require('./jobManager');
+const { updateChunk, updateJob, productionJobQueue } = require('./jobManager');
+const { createAbortError } = require('../../utils/asyncSemaphore');
+const { DUBBING_CASCADE_MODELS, isUsableDubbingModel } = require('../geminiModelCatalog');
+const { geminiQuotaTracker } = require('../geminiQuotaTracker');
 
 /**
  * Generate logical chunk plan for long videos.
@@ -133,9 +136,11 @@ async function runChunkedDubbingPipeline({
   mode = GENERATION_MODES.MODE_A_DIALOGUE,
   seriesId = 'series_default',
   episodeId = 'ep_1',
+  jobSeriesId = null,
+  jobEpisodeId = null,
   jobId,
   aiClient,
-  modelName = 'gemini-3.5-flash-lite',
+  modelName = null,
   customPrompt = '',
   narratorGender = 'male',
   seriesGlossary = {},
@@ -146,6 +151,10 @@ async function runChunkedDubbingPipeline({
   chunkSizeSec = 300,
   overlapSec = 2,
 }) {
+  const cleanRequestedModel = String(modelName || '').trim();
+  const effectiveModelName = (cleanRequestedModel && cleanRequestedModel !== 'auto' && isUsableDubbingModel(cleanRequestedModel))
+    ? cleanRequestedModel
+    : geminiQuotaTracker.getPreferredPrimaryModel(DUBBING_CASCADE_MODELS[0]);
   const checkAbort = () => {
     if (signal?.aborted) {
       const err = new Error('Pipeline execution was cancelled by user');
@@ -216,7 +225,7 @@ async function runChunkedDubbingPipeline({
     } catch (_) {}
 
     const chunkHash = crypto.createHash('md5')
-      .update(`${videoPath}${videoSignature}_${chunk.startSec}_${chunk.endSec}_${modelName}_${mode}`)
+      .update(`${videoPath}${videoSignature}_${chunk.startSec}_${chunk.endSec}_${effectiveModelName}_${mode}`)
       .digest('hex');
     const chunkFile = path.join(chunkCacheDir, `chunk_${chunkHash}.json`);
 
@@ -250,9 +259,10 @@ async function runChunkedDubbingPipeline({
           videoPath,
           durationSec: chunk.durationSec,
           aiClient,
-          modelName,
+          modelName: effectiveModelName,
           baseStepSec: 1.8,
           startOffsetSec: chunk.startSec,
+          signal,
         });
 
         checkAbort();
@@ -273,8 +283,9 @@ async function runChunkedDubbingPipeline({
             videoPath,
             durationSec: chunk.durationSec,
             aiClient,
-            modelName,
+            modelName: effectiveModelName,
             startOffsetSec: chunk.startSec,
+            signal,
           });
 
           checkAbort();
@@ -311,15 +322,20 @@ async function runChunkedDubbingPipeline({
           }, null, 2), 'utf8');
         } catch (_) {}
       } catch (chunkErr) {
+        if (chunkErr?.name === 'AbortError' || signal?.aborted) {
+          console.warn(`[ChunkOrchestrator] 🛑 Chunk ${cIdx + 1}/${chunks.length} aborted by user.`);
+          throw chunkErr?.name === 'AbortError' ? chunkErr : createAbortError('Pipeline execution was cancelled by user');
+        }
         console.error(`[ChunkOrchestrator] ❌ Chunk ${cIdx + 1}/${chunks.length} failed: ${chunkErr.message}`);
         if (jobId) {
+          const managedByQueue = Boolean(productionJobQueue?.activeExecutions?.has(jobId));
           updateChunk(jobId, chunk.chunkIndex, {
             status: 'failed',
             error: chunkErr.message,
             failedAt: Date.now(),
           });
           updateJob(jobId, {
-            status: 'failed',
+            ...(managedByQueue ? {} : { status: 'failed' }),
             error: `Chunk ${cIdx + 1}/${chunks.length} failed: ${chunkErr.message}`,
             failedChunkIndex: chunk.chunkIndex,
           });
@@ -370,25 +386,29 @@ async function runChunkedDubbingPipeline({
   );
   const scriptResult = await generateModeSpecificScript({
     mode: mode === GENERATION_MODES.FAST_OCR ? GENERATION_MODES.MODE_A_DIALOGUE : mode,
+    generationMode: mode,
     reconciledSegments: stitchedSegments,
     durationSec,
     aiClient,
-    modelName,
+    modelName: effectiveModelName,
     userDirection: customPrompt,
     narratorGender,
     seriesGlossary,
     genre,
+    signal,
   });
 
   if (ingestResult?.seriesId) {
     try {
-      const { getSeriesMetadata, saveSeriesMetadata } = require('../episodeService');
-      const series = getSeriesMetadata(ingestResult.seriesId);
-      if (series) {
-        series.genre = scriptResult.genre || genre;
-        series.detectedGenre = scriptResult.detectedGenre || scriptResult.genre || genre;
-        saveSeriesMetadata(series);
-      }
+      const { withSeriesMetadataLock, updateSeriesMetadata } = require('../episodeService');
+      await withSeriesMetadataLock(ingestResult.seriesId, () => {
+        updateSeriesMetadata(ingestResult.seriesId, (series) => {
+          if (!series) return false;
+          series.genre = scriptResult.genre || genre;
+          series.detectedGenre = scriptResult.detectedGenre || scriptResult.genre || genre;
+          return true;
+        });
+      });
     } catch (_) {}
   }
 
@@ -431,6 +451,7 @@ async function runChunkedDubbingPipeline({
       audioDir: ingestResult.audioDir,
       defaultVoiceId: 'km-KH-PisethNeural',
       forceRegen: false,
+      signal,
     });
     finalizedSegments = ttsRes.segmentsWithAudio;
   }
@@ -438,7 +459,7 @@ async function runChunkedDubbingPipeline({
   checkAbort();
 
   // 9. Stage 10: Preview and Export Preparation
-  report('previewAndExport', 100, 'រៀបចំ Timeline Data រួចរាល់ ១០០% សម្រាប់ Review & Playback!');
+  report('previewAndExport', 99, 'រៀបចំ Timeline Data និងត្រៀមផ្ទៀងផ្ទាត់រក្សាទុកទិន្នន័យ...');
   const exportPrep = await previewAndExport({
     videoPath: ingestResult.videoPath,
     segments: finalizedSegments,
@@ -473,40 +494,48 @@ async function runChunkedDubbingPipeline({
       jobId: ingestResult.jobId,
       seriesId: ingestResult.seriesId,
       episodeId: ingestResult.episodeId,
-      modelUsed: modelName,
+      modelUsed: effectiveModelName,
       fileHash: ingestResult.fileHash,
       durationSec,
       totalChunks: chunks.length,
       completedAt: Date.now(),
       assSubtitlePath: exportPrep.assSubtitlePath,
       srtSubtitlePath: exportPrep.srtSubtitlePath,
+      ...(scriptResult.translationReport ? { translationReport: scriptResult.translationReport } : {}),
+      ...(validationRes?.validationReport ? { validationReport: validationRes.validationReport } : {}),
     },
   };
 
-  // Persist completed scriptData to series.json so it is immediately visible in Editor and Dashboards
-  if (ingestResult?.seriesId && ingestResult?.episodeId) {
-    try {
-      const { getSeriesMetadata, saveSeriesMetadata } = require('../episodeService');
-      const series = getSeriesMetadata(ingestResult.seriesId);
-      if (series && Array.isArray(series.episodes)) {
-        const targetEp = series.episodes.find((e) => String(e.id) === String(ingestResult.episodeId));
-        if (targetEp) {
-          targetEp.scriptData = {
-            mode: scriptResult.mode || mode,
-            generationMode: mode,
-            genre: scriptResult.genre || genre,
-            segments: finalizedSegments,
-            updatedAt: Date.now(),
-          };
-          targetEp.generationMode = mode;
-          saveSeriesMetadata(series);
-          console.log(`[ChunkOrchestrator] ✅ Persisted ${finalizedSegments.length} script segments to series.json for ${ingestResult.episodeId}`);
-        }
-      }
-    } catch (saveErr) {
-      console.warn(`[ChunkOrchestrator] Failed to persist scriptData to series.json:`, saveErr.message);
-    }
-  }
+  // Persist completed scriptData atomically to series.json under per-series mutex + disk verification
+  report('persistScript', 99, 'កំពុងរក្សាទុក & ផ្ទៀងផ្ទាត់ទិន្នន័យ Script ចូល series.json...');
+  const resolvedSeriesId = ingestResult?.seriesId || jobSeriesId || seriesId;
+  const resolvedEpisodeId = ingestResult?.episodeId || jobEpisodeId || episodeId;
+  const { persistEpisodeScriptData } = require('../episodeService');
+  const persistRes = await persistEpisodeScriptData({
+    seriesId: resolvedSeriesId,
+    episodeId: resolvedEpisodeId,
+    expectedSeriesId: jobSeriesId || seriesId || resolvedSeriesId,
+    expectedEpisodeId: jobEpisodeId || episodeId || resolvedEpisodeId,
+    scriptData: {
+      mode: scriptResult.mode || mode,
+      generationMode: mode,
+      genre: scriptResult.genre || genre,
+      detectedGenre: scriptResult.detectedGenre || scriptResult.genre || genre,
+      summary: scriptResult.summary,
+      speakers,
+      speakerRegistry,
+      hasScript: finalizedSegments.length > 0,
+      totalSegments: finalizedSegments.length,
+      segments: finalizedSegments,
+      updatedAt: Date.now(),
+    },
+    generationMode: mode,
+    status: 'translated',
+    seriesGenre: scriptResult.genre || genre,
+    seriesDetectedGenre: scriptResult.detectedGenre || scriptResult.genre || genre,
+    jobId: jobId || ingestResult?.jobId,
+  });
+  console.log(`[ChunkOrchestrator] ✅ Persisted ${persistRes.savedCount} script segments atomically to series.json for ${persistRes.episodeId}`);
 
   if (jobId) {
     updateJob(jobId, {

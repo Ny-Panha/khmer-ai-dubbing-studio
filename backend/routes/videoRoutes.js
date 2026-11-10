@@ -4,6 +4,8 @@ const path = require("path");
 const os = require("os");
 const {
   uploadsDir,
+  isSafeUploadPath,
+  safeDecodeURI,
   sanitizeProjectName,
   ensureProjectDirs,
   resolveMediaFile,
@@ -17,8 +19,15 @@ const {
 const {
   getSeriesMetadata,
   saveSeriesMetadata,
+  withSeriesMetadataLock,
   ensureEpisodeDirectories,
 } = require("../services/episodeService");
+const {
+  startBatchExportJob,
+  getBatchExportJob,
+  getLatestBatchExportJob,
+  cancelBatchExportJob,
+} = require("../services/batchExportService");
 
 const router = express.Router();
 
@@ -212,8 +221,14 @@ router.post("/render-video", async (req, res) => {
     const rawAspectRatio = subtitleOptions.aspectRatio || req.body.aspectRatio || req.body.voiceSettings?.aspectRatio;
     let targetAspectRatio = rawAspectRatio;
     if (!targetAspectRatio) {
-      if (meta?.width && meta?.height) {
-        targetAspectRatio = meta.height > meta.width ? "9:16" : (meta.width > meta.height ? "16:9" : "1:1");
+      let srcDims = req.body.sourceDimensions || null;
+      if (!srcDims?.width || !srcDims?.height) {
+        try {
+          srcDims = await getVideoMetadata(inputVideoPath);
+        } catch (_) {}
+      }
+      if (srcDims?.width && srcDims?.height) {
+        targetAspectRatio = srcDims.height > srcDims.width ? "9:16" : (srcDims.width > srcDims.height ? "16:9" : "1:1");
       } else {
         console.warn("[RenderVideo] Source video metadata genuinely missing dimensions, falling back to 16:9 last-resort");
         targetAspectRatio = "16:9";
@@ -340,10 +355,130 @@ router.post("/render-video", async (req, res) => {
       renderTimeSeconds: renderResult.renderTimeSeconds,
       savedToDownloads: Boolean(downloadsExportPath),
       downloadsPath: downloadsExportPath,
+      aspectRatio: targetAspectRatio,
+      verticalStyle,
     });
   } catch (err) {
     console.error("Render Error:", err);
     res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * 3b. Secure Export Download Endpoint (validates path strictly within uploadsDir)
+ */
+router.get("/download-export", (req, res) => {
+  try {
+    const rawFile = req.query?.file;
+    if (!rawFile || typeof rawFile !== "string") {
+      return res.status(400).json({ success: false, error: "file query parameter is required" });
+    }
+
+    const decodedFile = safeDecodeURI(rawFile).trim();
+    if (!decodedFile || decodedFile.includes("\0")) {
+      return res.status(403).json({ success: false, error: "Access denied: invalid export path" });
+    }
+
+    const hasUploadsPrefix = /^[/\\]?uploads[/\\]/i.test(decodedFile);
+    const cleanRel = decodedFile.replace(/^[/\\]?uploads[/\\]+/i, "");
+    const resolvedPath =
+      !hasUploadsPrefix && path.isAbsolute(decodedFile)
+        ? path.resolve(decodedFile)
+        : path.resolve(uploadsDir, cleanRel);
+
+    if (!isSafeUploadPath(resolvedPath, uploadsDir)) {
+      return res.status(403).json({ success: false, error: "Access denied: path outside uploads directory" });
+    }
+
+    if (!fs.existsSync(resolvedPath) || !fs.statSync(resolvedPath).isFile()) {
+      return res.status(404).json({ success: false, error: "Export file not found" });
+    }
+
+    const rawName = req.query?.name ? safeDecodeURI(String(req.query.name)) : path.basename(resolvedPath);
+    const safeDownloadName =
+      path
+        .basename(rawName)
+        .replace(/[<>:"/\\|?*\r\n\t\0]/g, "_")
+        .trim() || path.basename(resolvedPath);
+
+    return res.download(resolvedPath, safeDownloadName);
+  } catch (err) {
+    console.error("[DownloadExport Error]:", err);
+    return res.status(500).json({ success: false, error: err.message || "Download failed" });
+  }
+});
+
+/**
+ * 3c. Batch Export & Full Video Merge Async Job Endpoints
+ */
+router.post("/render-batch", async (req, res) => {
+  try {
+    const {
+      seriesId,
+      episodeIds = [],
+      mode = "merge",
+      allowOriginalAudio = false,
+      exportSettings = {},
+      episodeOverrides = {},
+    } = req.body || {};
+
+    const job = await startBatchExportJob({
+      seriesId,
+      episodeIds,
+      mode,
+      allowOriginalAudio: Boolean(allowOriginalAudio),
+      exportSettings,
+      episodeOverrides,
+    });
+
+    return res.json({ success: true, job });
+  } catch (err) {
+    console.error("[BatchRender Start Error]:", err);
+    return res.status(err.statusCode || 500).json({
+      success: false,
+      error: err.message || "Failed to start batch export",
+      skippedEpisodes: err.skippedEpisodes || [],
+      jobId: err.jobId || null,
+    });
+  }
+});
+
+router.get("/render-batch/progress", (req, res) => {
+  try {
+    const { jobId, seriesId } = req.query || {};
+    const job = jobId
+      ? getBatchExportJob(String(jobId))
+      : (seriesId ? getLatestBatchExportJob(String(seriesId)) : null);
+
+    if (!job) {
+      return res.status(404).json({ success: false, error: "Batch export job not found" });
+    }
+    return res.json({ success: true, job });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.get("/render-batch/latest", (req, res) => {
+  try {
+    const { seriesId } = req.query || {};
+    if (!seriesId) {
+      return res.status(400).json({ success: false, error: "seriesId is required" });
+    }
+    const job = getLatestBatchExportJob(String(seriesId));
+    return res.json({ success: true, job: job || null });
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.post("/render-batch/kill", (req, res) => {
+  try {
+    const { jobId, seriesId } = req.body || {};
+    const result = cancelBatchExportJob(jobId || null, seriesId || null);
+    return res.json(result);
+  } catch (err) {
+    return res.status(500).json({ success: false, error: err.message });
   }
 });
 
@@ -479,150 +614,156 @@ router.post("/split-video-episodes", async (req, res) => {
       filePrefix: cleanSeries,
     });
 
-    const currentSeries = getSeriesMetadata(cleanSeries) || { id: cleanSeries, title: "រឿងភាគ", episodes: [] };
-    const existing = currentSeries.episodes || [];
-    const shouldReplace = Boolean(replaceEpisodes);
+    const splitPersistResult = await withSeriesMetadataLock(cleanSeries, () => {
+      const currentSeries = getSeriesMetadata(cleanSeries, { forceDisk: true }) || { id: cleanSeries, title: "រឿងភាគ", episodes: [] };
+      const existing = currentSeries.episodes || [];
+      const shouldReplace = Boolean(replaceEpisodes);
 
-    // 1. Identify source episode: the entry whose video IS the split input
-    const sourceIndex = findSourceEpisodeIndex(existing, rawVideoRef, inputVideoPath, episodeId);
-    const sourceEpisodeFound = sourceIndex !== -1;
+      // 1. Identify source episode: the entry whose video IS the split input
+      const sourceIndex = findSourceEpisodeIndex(existing, rawVideoRef, inputVideoPath, episodeId);
+      const sourceEpisodeFound = sourceIndex !== -1;
 
-    // 2. Partition existing episodes around source:
-    // When shouldReplace is false, we keep other existing episodes excluding the source episode.
-    // When shouldReplace is true, existing episodes are completely replaced by chunks.
-    const keptBefore = (sourceEpisodeFound && !shouldReplace)
-      ? existing.slice(0, sourceIndex)
-      : (!sourceEpisodeFound && !shouldReplace ? existing : []);
-    const keptAfter = (sourceEpisodeFound && !shouldReplace)
-      ? existing.slice(sourceIndex + 1)
-      : [];
+      // 2. Partition existing episodes around source:
+      // When shouldReplace is false, we keep other existing episodes excluding the source episode.
+      // When shouldReplace is true, existing episodes are completely replaced by chunks.
+      const keptBefore = (sourceEpisodeFound && !shouldReplace)
+        ? existing.slice(0, sourceIndex)
+        : (!sourceEpisodeFound && !shouldReplace ? existing : []);
+      const keptAfter = (sourceEpisodeFound && !shouldReplace)
+        ? existing.slice(sourceIndex + 1)
+        : [];
 
-    const keptEpisodes = [...keptBefore, ...keptAfter];
-    const occupiedIds = new Set(keptEpisodes.map((e) => String(e.id).toLowerCase()));
-    const usedChunkIds = new Set();
+      const keptEpisodes = [...keptBefore, ...keptAfter];
+      const occupiedIds = new Set(keptEpisodes.map((e) => String(e.id).toLowerCase()));
+      const usedChunkIds = new Set();
 
-    const builtEpisodes = [];
+      const builtEpisodes = [];
 
-    for (let i = 0; i < chunks.length; i++) {
-      const chunk = chunks[i];
-      // Target display index:
-      const epDisplayNum = (sourceEpisodeFound ? sourceIndex : keptBefore.length) + i + 1;
+      for (let i = 0; i < chunks.length; i++) {
+        const chunk = chunks[i];
+        // Target display index:
+        const epDisplayNum = (sourceEpisodeFound ? sourceIndex : keptBefore.length) + i + 1;
 
-      // Assign chunk episode ID avoiding any collision with kept episodes
-      let epId = null;
-      const candidatePrefId = `ep_${epDisplayNum}`;
-      if (!occupiedIds.has(candidatePrefId.toLowerCase()) && !usedChunkIds.has(candidatePrefId.toLowerCase())) {
-        epId = candidatePrefId;
-      } else {
-        let n = 1;
-        while (occupiedIds.has(`ep_${n}`.toLowerCase()) || usedChunkIds.has(`ep_${n}`.toLowerCase())) {
-          n++;
+        // Assign chunk episode ID avoiding any collision with kept episodes
+        let epId = null;
+        const candidatePrefId = `ep_${epDisplayNum}`;
+        if (!occupiedIds.has(candidatePrefId.toLowerCase()) && !usedChunkIds.has(candidatePrefId.toLowerCase())) {
+          epId = candidatePrefId;
+        } else {
+          let n = 1;
+          while (occupiedIds.has(`ep_${n}`.toLowerCase()) || usedChunkIds.has(`ep_${n}`.toLowerCase())) {
+            n++;
+          }
+          epId = `ep_${n}`;
         }
-        epId = `ep_${n}`;
-      }
-      usedChunkIds.add(epId.toLowerCase());
+        usedChunkIds.add(epId.toLowerCase());
 
-      const { videoDir } = ensureEpisodeDirectories(cleanSeries, epId);
-      let epVideoFilename = `${cleanSeries}_${epId}_source.mp4`;
-      let epVideoDestPath = path.join(videoDir, epVideoFilename);
+        const { videoDir } = ensureEpisodeDirectories(cleanSeries, epId);
+        let epVideoFilename = `${cleanSeries}_${epId}_source.mp4`;
+        let epVideoDestPath = path.join(videoDir, epVideoFilename);
 
-      // Guard: Never overwrite the source input video file on disk
-      if (inputVideoPath && path.resolve(epVideoDestPath).toLowerCase() === path.resolve(inputVideoPath).toLowerCase()) {
-        epVideoFilename = `${cleanSeries}_${epId}_chunk_source.mp4`;
-        epVideoDestPath = path.join(videoDir, epVideoFilename);
-      }
+        // Guard: Never overwrite the source input video file on disk
+        if (inputVideoPath && path.resolve(epVideoDestPath).toLowerCase() === path.resolve(inputVideoPath).toLowerCase()) {
+          epVideoFilename = `${cleanSeries}_${epId}_chunk_source.mp4`;
+          epVideoDestPath = path.join(videoDir, epVideoFilename);
+        }
 
-      // Copy chunk to isolated episode video folder
-      fs.copyFileSync(chunk.outputPath, epVideoDestPath);
-      try { fs.unlinkSync(chunk.outputPath); } catch (_) {}
+        // Copy chunk to isolated episode video folder
+        fs.copyFileSync(chunk.outputPath, epVideoDestPath);
+        try { fs.unlinkSync(chunk.outputPath); } catch (_) {}
 
-      const epVideoUrl = `/uploads/projects/${cleanSeries}/episodes/${epId}/video/${epVideoFilename}`;
-      const epTitle = `ភាគទី ${epDisplayNum} (EP${epDisplayNum})`;
+        const epVideoUrl = `/uploads/projects/${cleanSeries}/episodes/${epId}/video/${epVideoFilename}`;
+        const epTitle = `ភាគទី ${epDisplayNum} (EP${epDisplayNum})`;
 
-      let fileStatSize = 0;
-      try { fileStatSize = fs.statSync(epVideoDestPath).size; } catch (_) {}
+        let fileStatSize = 0;
+        try { fileStatSize = fs.statSync(epVideoDestPath).size; } catch (_) {}
 
-      const epObj = {
-        id: epId,
-        episodeNumber: epDisplayNum,
-        title: epTitle,
-        displayTitle: epTitle,
-        status: "uploaded",
-        videoFile: epVideoUrl,
-        sourceVideoPath: epVideoDestPath,
-        duration: chunk.duration,
-        video: {
-          videoId: `projects/${cleanSeries}/episodes/${epId}/video/${epVideoFilename}`,
-          fileName: epVideoFilename,
-          originalFilename: `${cleanSeries}_EP${epDisplayNum}.mp4`,
+        const epObj = {
+          id: epId,
+          episodeNumber: epDisplayNum,
+          title: epTitle,
           displayTitle: epTitle,
-          storageFilename: epVideoFilename,
-          videoUrl: epVideoUrl,
-          videoPath: epVideoDestPath,
-          durationSec: chunk.duration,
-          width: meta?.width || 1920,
-          height: meta?.height || 1080,
-          sizeMB: parseFloat((fileStatSize / (1024 * 1024)).toFixed(2)),
-          size: (fileStatSize / (1024 * 1024)).toFixed(1) + " MB",
-        },
-        metadata: {
+          status: "uploaded",
+          videoFile: epVideoUrl,
+          sourceVideoPath: epVideoDestPath,
           duration: chunk.duration,
-          durationSec: chunk.duration,
-          width: meta?.width || 1920,
-          height: meta?.height || 1080,
-          resolution: meta?.resolution || (meta?.width ? `${meta.width}x${meta.height}` : "1920x1080"),
-          hasAudio: meta?.hasAudio !== false,
-        },
-        scriptData: null,
-        speakerRegistry: {},
-        audioGenerated: false,
-        audioOutdated: false,
-        fullAudioPath: null,
-        fullAudioUrl: null,
-        videoClips: [],
-        activeClipId: null,
-        selectedSegmentId: null,
-      };
+          video: {
+            videoId: `projects/${cleanSeries}/episodes/${epId}/video/${epVideoFilename}`,
+            fileName: epVideoFilename,
+            originalFilename: `${cleanSeries}_EP${epDisplayNum}.mp4`,
+            displayTitle: epTitle,
+            storageFilename: epVideoFilename,
+            videoUrl: epVideoUrl,
+            videoPath: epVideoDestPath,
+            durationSec: chunk.duration,
+            width: meta?.width || 1920,
+            height: meta?.height || 1080,
+            sizeMB: parseFloat((fileStatSize / (1024 * 1024)).toFixed(2)),
+            size: (fileStatSize / (1024 * 1024)).toFixed(1) + " MB",
+          },
+          metadata: {
+            duration: chunk.duration,
+            durationSec: chunk.duration,
+            width: meta?.width || 1920,
+            height: meta?.height || 1080,
+            resolution: meta?.resolution || (meta?.width ? `${meta.width}x${meta.height}` : "1920x1080"),
+            hasAudio: meta?.hasAudio !== false,
+          },
+          scriptData: null,
+          speakerRegistry: {},
+          audioGenerated: false,
+          audioOutdated: false,
+          fullAudioPath: null,
+          fullAudioUrl: null,
+          videoClips: [],
+          activeClipId: null,
+          selectedSegmentId: null,
+        };
 
-      builtEpisodes.push(epObj);
-    }
+        builtEpisodes.push(epObj);
+      }
 
-    try { fs.rmdirSync(tempOutputDir); } catch (_) {}
+      try { fs.rmdirSync(tempOutputDir); } catch (_) {}
 
-    // Construct final episodes list:
-    // If source episode was found, chunks replace the source episode at its former index
-    const finalEpisodes = sourceEpisodeFound
-      ? (shouldReplace ? builtEpisodes : [...keptBefore, ...builtEpisodes, ...keptAfter])
-      : (shouldReplace ? builtEpisodes : [...existing, ...builtEpisodes]);
+      // Construct final episodes list:
+      // If source episode was found, chunks replace the source episode at its former index
+      const finalEpisodes = sourceEpisodeFound
+        ? (shouldReplace ? builtEpisodes : [...keptBefore, ...builtEpisodes, ...keptAfter])
+        : (shouldReplace ? builtEpisodes : [...existing, ...builtEpisodes]);
 
-    // Renumber display numbering (episodeNumber) 1..N across the final array
-    for (let idx = 0; idx < finalEpisodes.length; idx++) {
-      const ep = finalEpisodes[idx];
-      const newNum = idx + 1;
-      const oldNum = ep.episodeNumber;
-      ep.episodeNumber = newNum;
+      // Renumber display numbering (episodeNumber) 1..N across the final array
+      for (let idx = 0; idx < finalEpisodes.length; idx++) {
+        const ep = finalEpisodes[idx];
+        const newNum = idx + 1;
+        const oldNum = ep.episodeNumber;
+        ep.episodeNumber = newNum;
 
-      // Update generic titles to match new sequential number
-      const isGeneric = !ep.title ||
-        new RegExp(`^ភាគទី\\s*${oldNum}\\s*\\(EP${oldNum}\\)$`, 'i').test(ep.title.trim()) ||
-        /^ភាគទី\s*[\d០-៩]+\s*\(EP[\d០-៩]+\)$/i.test(ep.title.trim()) ||
-        /^\(EP[\d០-៩]+\)$/i.test(ep.title.trim());
+        // Update generic titles to match new sequential number
+        const isGeneric = !ep.title ||
+          new RegExp(`^ភាគទី\\s*${oldNum}\\s*\\(EP${oldNum}\\)$`, 'i').test(ep.title.trim()) ||
+          /^ភាគទី\s*[\d០-៩]+\s*\(EP[\d០-៩]+\)$/i.test(ep.title.trim()) ||
+          /^\(EP[\d០-៩]+\)$/i.test(ep.title.trim());
 
-      if (isGeneric) {
-        ep.title = `ភាគទី ${newNum} (EP${newNum})`;
-        ep.displayTitle = ep.title;
-      } else if (typeof ep.title === 'string' && /^(?:ភាគទី|ភាគ|EP|Episode)\s*[:#\s]*\d+\s*[:\-\s]*/i.test(ep.title)) {
-        const rest = ep.title.replace(/^(?:ភាគទី|ភាគ|EP|Episode)\s*[:#\s]*\d+\s*[:\-\s]*/i, '').trim();
-        ep.title = `ភាគទី ${newNum}: ${rest}`;
-        if (ep.displayTitle) {
-          const restDisplay = ep.displayTitle.replace(/^(?:ភាគទី|ភាគ|EP|Episode)\s*[:#\s]*\d+\s*[:\-\s]*/i, '').trim();
-          ep.displayTitle = `ភាគទី ${newNum}: ${restDisplay}`;
+        if (isGeneric) {
+          ep.title = `ភាគទី ${newNum} (EP${newNum})`;
+          ep.displayTitle = ep.title;
+        } else if (typeof ep.title === 'string' && /^(?:ភាគទី|ភាគ|EP|Episode)\s*[:#\s]*\d+\s*[:\-\s]*/i.test(ep.title)) {
+          const rest = ep.title.replace(/^(?:ភាគទី|ភាគ|EP|Episode)\s*[:#\s]*\d+\s*[:\-\s]*/i, '').trim();
+          ep.title = `ភាគទី ${newNum}: ${rest}`;
+          if (ep.displayTitle) {
+            const restDisplay = ep.displayTitle.replace(/^(?:ភាគទី|ភាគ|EP|Episode)\s*[:#\s]*\d+\s*[:\-\s]*/i, '').trim();
+            ep.displayTitle = `ភាគទី ${newNum}: ${restDisplay}`;
+          }
         }
       }
-    }
 
-    currentSeries.episodes = finalEpisodes;
-    saveSeriesMetadata(currentSeries);
+      currentSeries.episodes = finalEpisodes;
+      saveSeriesMetadata(currentSeries);
+
+      return { currentSeries, builtEpisodes, sourceEpisodeFound };
+    });
+
+    const { currentSeries, builtEpisodes, sourceEpisodeFound } = splitPersistResult;
 
     const totalSeriesCount = currentSeries.episodes.length;
     console.log(`[Split Endpoint] ✅ Successfully split video into ${builtEpisodes.length} episodes for "${cleanSeries}" (Series total: ${totalSeriesCount} episodes, source replaced: ${sourceEpisodeFound})`);

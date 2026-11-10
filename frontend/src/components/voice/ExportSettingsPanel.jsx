@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
-  Clapperboard, Subtitles, Loader2, Download, Copy, Check, ChevronUp, ChevronDown, CheckCircle2, ShieldCheck, Image, Upload
+  Clapperboard, Subtitles, Loader2, Download, Copy, Check, ChevronUp, ChevronDown,
+  CheckCircle2, ShieldCheck, Image, Upload, Layers, AlertTriangle, Square, X, Film
 } from 'lucide-react';
 import { resolveDefaultAspectRatio } from '../../utils/projectStorage';
 
@@ -16,6 +17,10 @@ export default function ExportSettingsPanel({
   selectedVideo,
   videoMetadata = null,
   activeEpisode = null,
+  activeSeries = null,
+  seriesId = null,
+  episodeId = null,
+  batchRender = null,
   audioGenerated,
   previewAudioUrl,
   renderedVideo,
@@ -24,11 +29,91 @@ export default function ExportSettingsPanel({
 }) {
   const [internalProgress, setInternalProgress] = useState(0);
   const [internalStage, setInternalStage] = useState('');
+  const [isBatchExpanded, setIsBatchExpanded] = useState(true);
+  const [selectedBatchEpIds, setSelectedBatchEpIds] = useState([]);
+  const [allowOriginalAudio, setAllowOriginalAudio] = useState(false);
+  const lastInitSeriesRef = useRef(null);
+
+  const seriesEpisodes = useMemo(() => {
+    const list = Array.isArray(activeSeries?.episodes) ? [...activeSeries.episodes] : [];
+    return list.sort((a, b) => (Number(a.episodeNumber) || 0) - (Number(b.episodeNumber) || 0));
+  }, [activeSeries]);
+
+  const checkEpHasVideo = (ep) =>
+    Boolean(ep?.sourceVideoPath || ep?.video?.videoPath || ep?.video?.videoId || ep?.videoFile || ep?.video?.videoUrl);
+
+  const checkEpHasVoice = (ep) => {
+    if (!ep) return false;
+    if (episodeId && String(ep.id) === String(episodeId) && !ep.audioOutdated && !activeEpisode?.audioOutdated && (audioGenerated || previewAudioUrl)) return true;
+    if (ep.audioOutdated) return false;
+    if (ep.audioGenerated || ep.fullAudioUrl || ep.hasAudio) return true;
+    return false;
+  };
+
+  const episodesWithVideo = useMemo(
+    () => seriesEpisodes.filter((ep) => checkEpHasVideo(ep)),
+    [seriesEpisodes]
+  );
+
+  useEffect(() => {
+    const validIds = new Set(episodesWithVideo.map((e) => String(e.id)));
+    if (validIds.size === 0) {
+      setSelectedBatchEpIds((prev) => (prev.length === 0 ? prev : []));
+      return;
+    }
+    const currentSeriesKey = String(seriesId || activeSeries?.id || 'default');
+    if (lastInitSeriesRef.current !== currentSeriesKey) {
+      lastInitSeriesRef.current = currentSeriesKey;
+      setSelectedBatchEpIds(episodesWithVideo.map((e) => e.id));
+      return;
+    }
+    setSelectedBatchEpIds((prev) => {
+      const filtered = prev.filter((id) => validIds.has(String(id)));
+      return filtered.length === prev.length ? prev : filtered;
+    });
+  }, [seriesId, activeSeries?.id, episodesWithVideo]);
+
+  const selectedBatchSet = useMemo(
+    () => new Set(selectedBatchEpIds.map((id) => String(id))),
+    [selectedBatchEpIds]
+  );
+
+  const selectedBatchEpisodes = seriesEpisodes.filter(
+    (ep) => selectedBatchSet.has(String(ep.id)) && checkEpHasVideo(ep)
+  );
+  const selectedVoicedEpisodes = selectedBatchEpisodes.filter((ep) => checkEpHasVoice(ep));
+  const selectedMissingVoiceEpisodes = selectedBatchEpisodes.filter((ep) => !checkEpHasVoice(ep));
+  const eligibleBatchEpisodes = allowOriginalAudio ? selectedBatchEpisodes : selectedVoicedEpisodes;
+
+  const batchJob = batchRender?.job || null;
+  const isBatchRunning = Boolean(batchRender?.isRunning || batchJob?.status === 'running');
+  const isBatchStarting = Boolean(batchRender?.isStarting);
+  const batchError = batchRender?.error || null;
+
+  const toggleBatchEpisode = (id) => {
+    if (isBatchRunning) return;
+    const strId = String(id);
+    setSelectedBatchEpIds((prev) =>
+      prev.some((item) => String(item) === strId)
+        ? prev.filter((item) => String(item) !== strId)
+        : [...prev, id]
+    );
+  };
+
+  const handleStartBatchAction = (mode) => {
+    if (!batchRender?.start || eligibleBatchEpisodes.length === 0 || isBatchRunning || isBatchStarting) return;
+    batchRender.start({
+      episodeIds: selectedBatchEpisodes.map((ep) => ep.id),
+      mode,
+      allowOriginalAudio,
+    });
+  };
 
   const srcW = Number(videoMetadata?.width || selectedVideo?.width || activeEpisode?.metadata?.width || activeEpisode?.video?.width) || 0;
   const srcH = Number(videoMetadata?.height || selectedVideo?.height || activeEpisode?.metadata?.height || activeEpisode?.video?.height) || 0;
   const defaultAspectRatio = resolveDefaultAspectRatio(srcW, srcH) || '16:9';
-  const effectiveAspectRatio = settings?.aspectRatio || defaultAspectRatio;
+  const rawAspectRatio = settings?.aspectRatio || defaultAspectRatio;
+  const effectiveAspectRatio = rawAspectRatio === '9:16' ? '9:16' : '16:9';
   const effectiveVerticalStyle = settings?.verticalStyle || 'pad';
   const sourceHint = (srcW > 0 && srcH > 0)
     ? `Source: ${srcW}×${srcH} — ${srcH > srcW ? 'vertical' : (srcW > srcH ? 'horizontal' : 'square')}`
@@ -127,7 +212,6 @@ export default function ExportSettingsPanel({
             >
               <option value="16:9">16:9 (Landscape / YouTube)</option>
               <option value="9:16">9:16 (Portrait / TikTok / Reels / Shorts)</option>
-              <option value="1:1">1:1 (Square / Instagram / Facebook Post)</option>
             </select>
           </div>
 
@@ -873,7 +957,7 @@ export default function ExportSettingsPanel({
           <button
             type="button"
             onClick={onRenderVideo}
-            disabled={isRendering || !selectedVideo || (!audioGenerated && !previewAudioUrl)}
+            disabled={isRendering || isBatchRunning || isBatchStarting || !selectedVideo || (!audioGenerated && !previewAudioUrl)}
             className="capcut-export-btn btn-tactile"
             style={{
               fontSize: '0.88rem',
@@ -956,6 +1040,458 @@ export default function ExportSettingsPanel({
                 {copiedCaption ? <Check size={12} color="var(--color-success)" /> : <Copy size={12} />}
                 <span>{copiedCaption ? 'Copied Post Caption!' : 'Copy TikTok / Facebook Caption'}</span>
               </button>
+            </div>
+          )}
+
+          {/* ── Batch Export & Full Video Merge Section ── */}
+          {seriesEpisodes.length > 0 && batchRender && (
+            <div
+              style={{
+                marginTop: 14,
+                paddingTop: 12,
+                borderTop: '1px solid rgba(255, 255, 255, 0.1)',
+              }}
+            >
+              {/* Collapsible Header */}
+              <div
+                onClick={() => setIsBatchExpanded((prev) => !prev)}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  cursor: 'pointer',
+                  marginBottom: isBatchExpanded ? 8 : 0,
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                  <Layers size={14} color="#38bdf8" />
+                  <span style={{ fontSize: '0.78rem', fontWeight: 700, color: '#f8fafc', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    Batch Export & Merge ({seriesEpisodes.length} ភាគ)
+                  </span>
+                  {isBatchRunning && (
+                    <span style={{ fontSize: '0.64rem', fontWeight: 800, color: '#38bdf8', background: 'rgba(56,189,248,0.16)', padding: '1px 6px', borderRadius: 9999 }}>
+                      {batchJob?.progress || 0}%
+                    </span>
+                  )}
+                </div>
+                {isBatchExpanded ? <ChevronUp size={14} color="var(--text-dim)" /> : <ChevronDown size={14} color="var(--text-dim)" />}
+              </div>
+
+              {isBatchExpanded && (
+                <div
+                  style={{
+                    background: 'rgba(15, 23, 42, 0.55)',
+                    border: '1px solid rgba(56, 189, 248, 0.22)',
+                    borderRadius: 8,
+                    padding: '10px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 8,
+                  }}
+                >
+                  {/* Quick Select Bar */}
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 4 }}>
+                    <span style={{ fontSize: '0.7rem', color: '#94a3b8', fontWeight: 600 }}>
+                      បានជ្រើស {selectedBatchEpisodes.length}/{episodesWithVideo.length} ភាគ (មានសំឡេង {selectedVoicedEpisodes.length})
+                    </span>
+                    <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                      <button
+                        type="button"
+                        disabled={isBatchRunning || episodesWithVideo.length === 0}
+                        onClick={() => setSelectedBatchEpIds(episodesWithVideo.map((e) => e.id))}
+                        style={{
+                          fontSize: '0.64rem',
+                          padding: '2px 7px',
+                          borderRadius: 4,
+                          background: 'rgba(56, 189, 248, 0.16)',
+                          border: '1px solid rgba(56, 189, 248, 0.35)',
+                          color: '#38bdf8',
+                          fontWeight: 700,
+                          cursor: isBatchRunning ? 'not-allowed' : 'pointer',
+                        }}
+                      >
+                        ទាំងអស់ ({episodesWithVideo.length})
+                      </button>
+                      <button
+                        type="button"
+                        disabled={isBatchRunning}
+                        onClick={() => setSelectedBatchEpIds(episodesWithVideo.filter((e) => checkEpHasVoice(e)).map((e) => e.id))}
+                        style={{
+                          fontSize: '0.64rem',
+                          padding: '2px 7px',
+                          borderRadius: 4,
+                          background: 'rgba(16, 185, 129, 0.14)',
+                          border: '1px solid rgba(16, 185, 129, 0.35)',
+                          color: '#34d399',
+                          fontWeight: 700,
+                          cursor: isBatchRunning ? 'not-allowed' : 'pointer',
+                        }}
+                      >
+                        មាន Voice ({episodesWithVideo.filter((e) => checkEpHasVoice(e)).length})
+                      </button>
+                      <button
+                        type="button"
+                        disabled={isBatchRunning || selectedBatchEpIds.length === 0}
+                        onClick={() => setSelectedBatchEpIds([])}
+                        style={{
+                          fontSize: '0.64rem',
+                          padding: '2px 7px',
+                          borderRadius: 4,
+                          background: 'rgba(255, 255, 255, 0.06)',
+                          border: '1px solid rgba(255, 255, 255, 0.12)',
+                          color: '#cbd5e1',
+                          cursor: isBatchRunning ? 'not-allowed' : 'pointer',
+                        }}
+                      >
+                        លុបជម្រើស
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Episode Checkboxes Grid */}
+                  <div
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: 'repeat(auto-fill, minmax(70px, 1fr))',
+                      gap: 5,
+                      maxHeight: 132,
+                      overflowY: 'auto',
+                      paddingRight: 2,
+                    }}
+                  >
+                    {seriesEpisodes.map((ep, idx) => {
+                      const hasVid = checkEpHasVideo(ep);
+                      const hasVoi = checkEpHasVoice(ep);
+                      const isChecked = selectedBatchSet.has(String(ep.id));
+                      const epNum = ep.episodeNumber || idx + 1;
+                      return (
+                        <label
+                          key={ep.id}
+                          title={`${ep.title || `EP${epNum}`} • ${!hasVid ? 'គ្មានវីដេអូ' : hasVoi ? 'មានសំឡេងខ្មែររួច' : 'មិនទាន់មានសំឡេងខ្មែរ'}`}
+                          style={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 4,
+                            padding: '4px 6px',
+                            borderRadius: 5,
+                            fontSize: '0.69rem',
+                            fontWeight: 700,
+                            cursor: !hasVid || isBatchRunning ? 'not-allowed' : 'pointer',
+                            opacity: hasVid ? 1 : 0.45,
+                            background: isChecked
+                              ? (hasVoi ? 'rgba(16, 185, 129, 0.18)' : 'rgba(245, 158, 11, 0.16)')
+                              : 'rgba(255, 255, 255, 0.04)',
+                            border: isChecked
+                              ? (hasVoi ? '1px solid rgba(52, 211, 153, 0.45)' : '1px solid rgba(251, 191, 36, 0.45)')
+                              : '1px solid rgba(255, 255, 255, 0.08)',
+                            color: isChecked ? '#f8fafc' : '#94a3b8',
+                            userSelect: 'none',
+                          }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={isChecked}
+                            disabled={!hasVid || isBatchRunning}
+                            onChange={() => toggleBatchEpisode(ep.id)}
+                            style={{ margin: 0, accentColor: hasVoi ? '#10b981' : '#f59e0b', cursor: 'inherit' }}
+                          />
+                          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>EP{epNum}</span>
+                          <span
+                            style={{
+                              width: 6,
+                              height: 6,
+                              borderRadius: '50%',
+                              marginLeft: 'auto',
+                              flexShrink: 0,
+                              background: !hasVid ? '#475569' : hasVoi ? '#10b981' : '#f59e0b',
+                            }}
+                          />
+                        </label>
+                      );
+                    })}
+                  </div>
+
+                  {/* Missing Voice Warning & Allow Original Audio Checkbox */}
+                  {selectedMissingVoiceEpisodes.length > 0 && (
+                    <div
+                      style={{
+                        background: allowOriginalAudio ? 'rgba(56, 189, 248, 0.1)' : 'rgba(245, 158, 11, 0.12)',
+                        border: allowOriginalAudio ? '1px solid rgba(56, 189, 248, 0.35)' : '1px solid rgba(245, 158, 11, 0.4)',
+                        borderRadius: 6,
+                        padding: '7px 8px',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: 6,
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 6, fontSize: '0.69rem', color: allowOriginalAudio ? '#bae6fd' : '#fde68a', lineHeight: 1.35 }}>
+                        <AlertTriangle size={13} style={{ flexShrink: 0, marginTop: 1, color: allowOriginalAudio ? '#38bdf8' : '#fbbf24' }} />
+                        <span>
+                          {allowOriginalAudio
+                            ? `ភាគអត់ Voice (${selectedMissingVoiceEpisodes.map((e, i) => `EP${e.episodeNumber || i + 1}`).join(', ')}) នឹង Export ដោយប្រើសំឡេងដើម។`
+                            : `ភាគ ${selectedMissingVoiceEpisodes.map((e, i) => `EP${e.episodeNumber || i + 1}`).join(', ')} មិនទាន់មានសំឡេងខ្មែរ — នឹងត្រូវរំលងពេល Export!`}
+                        </span>
+                      </div>
+                      <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: isBatchRunning ? 'not-allowed' : 'pointer', fontSize: '0.7rem', fontWeight: 600, color: '#e2e8f0' }}>
+                        <input
+                          type="checkbox"
+                          checked={allowOriginalAudio}
+                          disabled={isBatchRunning}
+                          onChange={(e) => setAllowOriginalAudio(e.target.checked)}
+                          style={{ margin: 0, accentColor: '#38bdf8' }}
+                        />
+                        <span>Allow Original Audio (រួមបញ្ចូលភាគអត់ Voice ដោយប្រើសំឡេងដើម)</span>
+                      </label>
+                    </div>
+                  )}
+
+                  {/* Batch Error Alert */}
+                  {batchError && (
+                    <div
+                      style={{
+                        background: 'rgba(239, 68, 68, 0.14)',
+                        border: '1px solid rgba(239, 68, 68, 0.4)',
+                        borderRadius: 6,
+                        padding: '6px 8px',
+                        fontSize: '0.7rem',
+                        color: '#fca5a5',
+                        display: 'flex',
+                        alignItems: 'flex-start',
+                        justifyContent: 'space-between',
+                        gap: 6,
+                      }}
+                    >
+                      <span>{batchError}</span>
+                      <button
+                        type="button"
+                        onClick={() => batchRender.clear?.()}
+                        style={{ background: 'none', border: 'none', color: '#fca5a5', cursor: 'pointer', padding: 0, flexShrink: 0 }}
+                        title="បិទ"
+                      >
+                        <X size={13} />
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Two Primary Action Buttons: Merge Full Video & Batch Separate */}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    <button
+                      type="button"
+                      disabled={isBatchRunning || isBatchStarting || isRendering || eligibleBatchEpisodes.length === 0}
+                      onClick={() => handleStartBatchAction('merge')}
+                      className="btn-tactile"
+                      style={{
+                        width: '100%',
+                        padding: '8px 10px',
+                        borderRadius: 6,
+                        background: (isBatchRunning || eligibleBatchEpisodes.length === 0)
+                          ? 'rgba(255, 255, 255, 0.06)'
+                          : 'linear-gradient(135deg, #0284c7 0%, #2563eb 100%)',
+                        border: (isBatchRunning || eligibleBatchEpisodes.length === 0)
+                          ? '1px solid rgba(255, 255, 255, 0.12)'
+                          : '1px solid rgba(56, 189, 248, 0.55)',
+                        color: (isBatchRunning || eligibleBatchEpisodes.length === 0) ? '#64748b' : '#ffffff',
+                        fontSize: '0.76rem',
+                        fontWeight: 800,
+                        cursor: (isBatchRunning || isBatchStarting || isRendering || eligibleBatchEpisodes.length === 0) ? 'not-allowed' : 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 6,
+                      }}
+                    >
+                      {isBatchRunning && batchJob?.mode === 'merge' ? (
+                        <Loader2 size={14} className="animate-spin" />
+                      ) : (
+                        <Film size={14} />
+                      )}
+                      <span>
+                        Export 1 Full Video (Merge {eligibleBatchEpisodes.length} ភាគ)
+                      </span>
+                    </button>
+
+                    <button
+                      type="button"
+                      disabled={isBatchRunning || isBatchStarting || isRendering || eligibleBatchEpisodes.length === 0}
+                      onClick={() => handleStartBatchAction('separate')}
+                      className="btn-tactile"
+                      style={{
+                        width: '100%',
+                        padding: '8px 10px',
+                        borderRadius: 6,
+                        background: (isBatchRunning || eligibleBatchEpisodes.length === 0)
+                          ? 'rgba(255, 255, 255, 0.06)'
+                          : 'linear-gradient(135deg, rgba(16, 185, 129, 0.22) 0%, rgba(5, 150, 105, 0.3) 100%)',
+                        border: (isBatchRunning || eligibleBatchEpisodes.length === 0)
+                          ? '1px solid rgba(255, 255, 255, 0.12)'
+                          : '1px solid rgba(52, 211, 153, 0.45)',
+                        color: (isBatchRunning || eligibleBatchEpisodes.length === 0) ? '#64748b' : '#6ee7b7',
+                        fontSize: '0.74rem',
+                        fontWeight: 700,
+                        cursor: (isBatchRunning || isBatchStarting || isRendering || eligibleBatchEpisodes.length === 0) ? 'not-allowed' : 'pointer',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 6,
+                      }}
+                    >
+                      {isBatchRunning && batchJob?.mode === 'separate' ? (
+                        <Loader2 size={14} className="animate-spin" />
+                      ) : (
+                        <Layers size={14} />
+                      )}
+                      <span>
+                        Batch Export All ({eligibleBatchEpisodes.length} ភាគដាច់ដោយឡែក)
+                      </span>
+                    </button>
+                  </div>
+
+                  {/* Live Progress Monitor & Downloads Card */}
+                  {batchJob && (
+                    <div
+                      style={{
+                        marginTop: 2,
+                        background: 'rgba(2, 6, 23, 0.65)',
+                        border: batchJob.status === 'completed'
+                          ? '1px solid rgba(16, 185, 129, 0.45)'
+                          : batchJob.status === 'failed'
+                          ? '1px solid rgba(239, 68, 68, 0.45)'
+                          : '1px solid rgba(56, 189, 248, 0.4)',
+                        borderRadius: 6,
+                        padding: '8px 10px',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: 6,
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6 }}>
+                        <span style={{ fontSize: '0.71rem', fontWeight: 700, color: '#f8fafc', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {batchJob.stage || 'កំពុងដំណើរការ Batch Export...'}
+                        </span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                          <span style={{ fontSize: '0.82rem', fontWeight: 800, fontFamily: 'monospace', color: batchJob.status === 'completed' ? '#34d399' : '#38bdf8' }}>
+                            {batchJob.progress || 0}%
+                          </span>
+                          {batchJob.status !== 'running' && (
+                            <button
+                              type="button"
+                              onClick={() => batchRender.clear?.()}
+                              style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer', padding: 0 }}
+                              title="បិទផ្ទាំងលទ្ធផល"
+                            >
+                              <X size={13} />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Progress Bar */}
+                      <div style={{ width: '100%', height: 6, borderRadius: 9999, background: 'rgba(255,255,255,0.08)', overflow: 'hidden' }}>
+                        <div
+                          style={{
+                            width: `${Math.max(2, batchJob.progress || 0)}%`,
+                            height: '100%',
+                            borderRadius: 9999,
+                            background: batchJob.status === 'completed'
+                              ? 'linear-gradient(90deg, #10b981, #34d399)'
+                              : batchJob.status === 'failed'
+                              ? '#ef4444'
+                              : 'linear-gradient(90deg, #3b82f6, #06b6d4)',
+                            transition: 'width 0.25s ease',
+                          }}
+                        />
+                      </div>
+
+                      {batchJob.status === 'running' && (
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6 }}>
+                          <span style={{ fontSize: '0.67rem', color: '#94a3b8' }}>
+                            {batchJob.currentEpisodeTitle
+                              ? `${batchJob.currentIndex}/${batchJob.totalCount}: ${batchJob.currentEpisodeTitle}`
+                              : `កំពុងដំណើរការ ${batchJob.currentIndex || 0}/${batchJob.totalCount || 0}`}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => batchRender.kill?.(batchJob.jobId)}
+                            style={{
+                              fontSize: '0.67rem',
+                              fontWeight: 700,
+                              padding: '3px 8px',
+                              borderRadius: 4,
+                              background: 'rgba(239, 68, 68, 0.22)',
+                              border: '1px solid rgba(239, 68, 68, 0.55)',
+                              color: '#fecaca',
+                              cursor: 'pointer',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 4,
+                            }}
+                          >
+                            <Square size={10} />
+                            <span>Stop (Kill)</span>
+                          </button>
+                        </div>
+                      )}
+
+                      {Array.isArray(batchJob.skippedEpisodes) && batchJob.skippedEpisodes.length > 0 && batchJob.status !== 'running' && (
+                        <div style={{ fontSize: '0.66rem', color: '#fbbf24' }}>
+                          ⚠️ បានរំលង {batchJob.skippedEpisodes.length} ភាគអត់ Voice: {batchJob.skippedEpisodes.map((s) => `EP${s.episodeNumber}`).join(', ')}
+                        </div>
+                      )}
+
+                      {/* Merged Full Video Download */}
+                      {batchJob.mergedResult?.downloadUrl && (
+                        <a
+                          href={batchJob.mergedResult.downloadUrl || batchJob.mergedResult.videoUrl}
+                          download={batchJob.mergedResult.outputFilename || 'Full_Merged_Khmer_Dubbed.mp4'}
+                          className="btn-emerald"
+                          style={{ width: '100%', justifyContent: 'center', fontSize: '0.74rem', padding: '7px 8px', textDecoration: 'none' }}
+                        >
+                          <Download size={13} />
+                          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            Download Full Video ({batchJob.mergedResult.outputFilename})
+                          </span>
+                        </a>
+                      )}
+
+                      {/* Separate Outputs Downloads List */}
+                      {Array.isArray(batchJob.outputs) && batchJob.outputs.length > 0 && batchJob.status === 'completed' && (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, maxHeight: 115, overflowY: 'auto' }}>
+                          {batchJob.mode === 'separate' && (
+                            <div style={{ fontSize: '0.67rem', color: '#34d399', fontWeight: 600 }}>
+                              ✅ បាន Save {batchJob.outputs.length} ភាគ ចូល Folder Downloads រួចរាល់:
+                            </div>
+                          )}
+                          {batchJob.outputs.map((out) => (
+                            <a
+                              key={out.episodeId || out.outputFilename}
+                              href={out.downloadUrl || out.videoUrl}
+                              download={out.outputFilename}
+                              style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                                gap: 6,
+                                padding: '4px 7px',
+                                borderRadius: 4,
+                                background: 'rgba(16, 185, 129, 0.1)',
+                                border: '1px solid rgba(16, 185, 129, 0.28)',
+                                color: '#a7f3d0',
+                                fontSize: '0.68rem',
+                                textDecoration: 'none',
+                              }}
+                            >
+                              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                EP{out.episodeNumber}: {out.outputFilename}
+                              </span>
+                              <Download size={12} style={{ flexShrink: 0 }} />
+                            </a>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </>

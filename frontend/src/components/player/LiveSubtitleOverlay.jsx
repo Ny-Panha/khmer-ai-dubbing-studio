@@ -8,6 +8,7 @@ export default function LiveSubtitleOverlay({
   renderedVideo = null,
   currentTime = 0,
   aspectRatio = 'auto',
+  verticalStyle = 'pad',
   videoMeta = null,
 }) {
   if (!activeSegment || !voiceSettings.burnSubtitles || renderedVideo) {
@@ -26,7 +27,7 @@ export default function LiveSubtitleOverlay({
     ? 'style-pill'
     : (voiceSettings.subtitleStyle === 'cinema' ? 'style-cinema' : 'style-banner');
 
-  const isLandscapeInVertical = aspectRatio === '9:16' && (!videoMeta?.ratio || videoMeta.ratio > 1.2);
+  const isLandscapeInVertical = aspectRatio === '9:16' && verticalStyle !== 'crop' && (!videoMeta?.ratio || videoMeta.ratio > 1.2);
   const aspectClass = isLandscapeInVertical
     ? 'aspect-9-16-letterbox'
     : (aspectRatio === '9:16' ? 'aspect-9-16-vertical' : 'aspect-16-9');

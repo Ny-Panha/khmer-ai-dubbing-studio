@@ -1,13 +1,23 @@
 import React from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import {
-  Search, Play, Pause, RefreshCw, Trash2, Subtitles, AlertCircle, AlertTriangle,
+  Search, X, Play, Pause, RefreshCw, Trash2, Subtitles, AlertCircle, AlertTriangle,
   User, Mic, Volume2, Sparkles, Languages, Edit3, Check, CheckCircle2,
-  Loader2, MessageSquare, HelpCircle
+  Loader2, MessageSquare, HelpCircle, Wrench
 } from 'lucide-react';
 import { parseTimeToSeconds } from '../../utils/formatTime';
 import { cleanKhmerText } from '../../utils/cleanKhmer';
-import { retranslateSegmentApi } from '../../services/api';
+import {
+  retranslateSegmentApi,
+  startRepairBrokenJobApi,
+  fetchJobStatusApi,
+} from '../../services/api';
+import {
+  findRepeatedJunkKhmerSet,
+  isSegmentTextBroken,
+  isSegmentVoiceBroken,
+  scanEpisodeBrokenSegments,
+} from '../../utils/translationQuality';
 
 function DebouncedScriptTextarea({ value, onChange, onBlur, placeholder, className, style, rows = 2 }) {
   const [localVal, setLocalVal] = React.useState(value || '');
@@ -64,6 +74,7 @@ function DebouncedScriptTextarea({ value, onChange, onBlur, placeholder, classNa
 const CaptionItemCard = React.memo(function CaptionItemCard({
   seg,
   idx,
+  repeatedJunkSet = null,
   isSelected,
   isPlaying,
   onSelectSegment,
@@ -88,9 +99,9 @@ const CaptionItemCard = React.memo(function CaptionItemCard({
         : seg.audioDurationSec));
   const isOverflow = (typeof naturalAudioDur === 'number' && naturalAudioDur > (segDuration + 0.3)) || Boolean(seg.audioTrimmed);
 
-  const khmerText = (seg.khmer || seg.khmerText || seg.khmerTranslatedText || '').trim();
-  const isTextEmpty = !khmerText;
-  const isReviewNeeded = Boolean(seg.reviewNeeded || seg.uncertainOcr || seg.ocrDisagreement || isTextEmpty);
+  const isTextEmpty = isSegmentTextBroken(seg, repeatedJunkSet);
+  const isVoiceBroken = !isTextEmpty && isSegmentVoiceBroken(seg, { repeatedJunkSet });
+  const isReviewNeeded = Boolean(seg.reviewNeeded || seg.uncertainOcr || seg.ocrDisagreement || isTextEmpty || isVoiceBroken);
 
   const handleTranslateLine = async (e) => {
     e.stopPropagation();
@@ -129,7 +140,11 @@ const CaptionItemCard = React.memo(function CaptionItemCard({
 
   return (
     <div
-      onClick={() => onSelectSegment && onSelectSegment(seg._uid || (seg.id !== undefined && seg.id !== null ? seg.id : idx))}
+      onClick={() => {
+        if (!onSelectSegment) return;
+        const segKey = seg._uid || (seg.id !== undefined && seg.id !== null ? seg.id : idx);
+        onSelectSegment(segKey, seg, idx);
+      }}
       className={`caption-item-card ${isSelected ? 'selected' : ''}`}
       style={{
         padding: '8px 10px',
@@ -250,6 +265,25 @@ const CaptionItemCard = React.memo(function CaptionItemCard({
             >
               <AlertCircle size={10} />
               <span>ខ្វះអត្ថបទ</span>
+            </span>
+          ) : isVoiceBroken ? (
+            <span
+              style={{
+                fontSize: '0.62rem',
+                color: '#fb923c',
+                background: 'rgba(249, 115, 22, 0.15)',
+                border: '1px solid rgba(249, 115, 22, 0.4)',
+                padding: '1px 6px',
+                borderRadius: 4,
+                fontWeight: 700,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 3,
+              }}
+              title="ខ្វះសំឡេង AI (Missing or failed TTS audio)"
+            >
+              <AlertCircle size={10} />
+              <span>ខ្វះសំឡេង</span>
             </span>
           ) : isReviewNeeded ? (
             <span
@@ -447,8 +481,22 @@ const CaptionItemCard = React.memo(function CaptionItemCard({
   );
 });
 
+function resolveOriginalSegmentIndex(segments, seg, fallbackIdx = 0) {
+  if (!Array.isArray(segments) || segments.length === 0) return fallbackIdx;
+  const found = segments.findIndex((s) =>
+    s === seg ||
+    (s._uid && seg?._uid && s._uid === seg._uid) ||
+    (s.id !== undefined && s.id !== null && seg?.id !== undefined && seg?.id !== null && String(s.id) === String(seg.id))
+  );
+  return found >= 0 ? found : fallbackIdx;
+}
+
 function ScriptReviewTab({
   scriptData,
+  seriesId = null,
+  episodeId = null,
+  apiKey = null,
+  onRefreshSeries = null,
   handleBridgeGaps,
   handleAddSegment,
   searchQuery,
@@ -468,24 +516,142 @@ function ScriptReviewTab({
 }) {
   const parentRef = React.useRef(null);
   const [filterMode, setFilterMode] = React.useState('all'); // 'all' | 'missing'
+  const [isRepairingEpisode, setIsRepairingEpisode] = React.useState(false);
+  const [repairJobId, setRepairJobId] = React.useState(null);
+  const [repairStatusBanner, setRepairStatusBanner] = React.useState(null);
 
   const totalSegments = scriptData?.segments || [];
-  const missingTextCount = React.useMemo(() => {
-    return totalSegments.filter((seg) => {
-      const txt = (seg.khmer || seg.khmerText || seg.khmerTranslatedText || '').trim();
-      return !txt;
-    }).length;
-  }, [totalSegments]);
+  const repeatedJunkSet = React.useMemo(
+    () => findRepeatedJunkKhmerSet(totalSegments),
+    [totalSegments]
+  );
+  const brokenScan = React.useMemo(
+    () => scanEpisodeBrokenSegments({ id: episodeId, scriptData }),
+    [episodeId, scriptData]
+  );
+
+  // Reset status banner when switching episodes
+  React.useEffect(() => {
+    setRepairStatusBanner(null);
+    setRepairJobId(null);
+    setIsRepairingEpisode(false);
+  }, [episodeId]);
+
+  // Poll active episode repair job until terminal status
+  React.useEffect(() => {
+    if (!repairJobId) return undefined;
+    let cancelled = false;
+    const TERMINAL_STATUSES = new Set(['completed', 'partial', 'failed', 'cancelled']);
+
+    const checkStatus = async () => {
+      try {
+        const st = await fetchJobStatusApi(repairJobId);
+        if (cancelled || !st || !st.success) return;
+
+        if (TERMINAL_STATUSES.has(st.status)) {
+          const fr = st.finalResult || {};
+          const fixedCount = Number(fr.fixedCount || 0);
+          const remainingCount = Number(fr.remainingCount ?? fr.remainingBroken ?? 0);
+          const isQuota = fr.reason === 'quota' || /quota|429/i.test(String(fr.message || st.error || ''));
+
+          setRepairJobId(null);
+          setIsRepairingEpisode(false);
+
+          if (typeof onRefreshSeries === 'function') {
+            try { await onRefreshSeries(); } catch (_) {}
+          }
+
+          if (cancelled) return;
+
+          if (remainingCount > 0) {
+            setRepairStatusBanner({
+              type: 'partial',
+              text: `កែបាន ${fixedCount} • នៅសល់ ${remainingCount}${isQuota ? ' (quota)' : ''} — ចុចម្ដងទៀតដើម្បីបន្ត`,
+            });
+          } else if (st.status === 'failed' && fixedCount === 0) {
+            setRepairStatusBanner({
+              type: 'error',
+              text: st.error || fr.message || 'ការជួសជុលឃ្លាខូចបរាជ័យ',
+            });
+          } else {
+            setRepairStatusBanner({
+              type: 'success',
+              text: `✅ ជួសជុលឃ្លាខូច & Generate សំឡេងរួចរាល់ 100% (${fixedCount} ឃ្លា)!`,
+            });
+          }
+        }
+      } catch (_) {}
+    };
+
+    checkStatus();
+    const timer = setInterval(checkStatus, 1500);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [repairJobId, onRefreshSeries]);
+
+  const handleRepairEpisodeBroken = async () => {
+    if (!seriesId || !episodeId || isRepairingEpisode) return;
+    const n1 = brokenScan.textBrokenCount;
+    const n2 = brokenScan.voiceBrokenCount;
+    if (brokenScan.totalBrokenCount === 0) return;
+
+    const confirmed = window.confirm(
+      `🔧 បញ្ជាក់ការជួសជុលឃ្លាខូច & Generate ឡើងវិញ (${brokenScan.totalBrokenCount} ឃ្លា)\n\n` +
+      `អត្ថបទខូច: ${n1} ឃ្លា • សំឡេងខ្វះ: ${n2} ឃ្លា\n\n` +
+      `នឹងកែប្រែ & បង្កើតសំឡេងតែលើឃ្លាដែលខូចក្នុងភាគនេះប៉ុណ្ណោះ (មិនប៉ះពាល់ឃ្លាល្អឡើយ)។`
+    );
+    if (!confirmed) return;
+
+    try {
+      setIsRepairingEpisode(true);
+      setRepairStatusBanner(null);
+
+      const res = await startRepairBrokenJobApi({
+        seriesId,
+        episodeIds: [episodeId],
+        apiKey: apiKey || undefined,
+      });
+
+      const job = Array.isArray(res?.jobs) && res.jobs[0] ? res.jobs[0] : null;
+      const conflict = Array.isArray(res?.conflicts) && res.conflicts[0] ? res.conflicts[0] : null;
+      const jid = job?.jobId || job?.id || conflict?.existingJobId || null;
+
+      if (!jid) {
+        setIsRepairingEpisode(false);
+        if (typeof onRefreshSeries === 'function') {
+          try { await onRefreshSeries(); } catch (_) {}
+        }
+        setRepairStatusBanner({
+          type: 'success',
+          text: '✅ គ្រប់ឃ្លារួចរាល់ 100% — គ្មានឃ្លាខូចទេ!',
+        });
+        return;
+      }
+
+      setRepairJobId(jid);
+    } catch (err) {
+      setIsRepairingEpisode(false);
+      setRepairStatusBanner({
+        type: 'error',
+        text: err.message || 'ការជួសជុលឃ្លាខូចបរាជ័យ',
+      });
+    }
+  };
+
+  const missingTextCount = brokenScan.totalBrokenCount;
 
   const displayedSegments = React.useMemo(() => {
     if (filterMode === 'missing') {
-      return filteredSegments.filter((seg) => {
-        const txt = (seg.khmer || seg.khmerText || seg.khmerTranslatedText || '').trim();
-        return !txt;
-      });
+      return filteredSegments.filter(
+        (seg) =>
+          isSegmentTextBroken(seg, repeatedJunkSet) ||
+          isSegmentVoiceBroken(seg, { repeatedJunkSet })
+      );
     }
     return filteredSegments;
-  }, [filteredSegments, filterMode]);
+  }, [filteredSegments, filterMode, repeatedJunkSet]);
 
   const rowVirtualizer = useVirtualizer({
     count: displayedSegments.length,
@@ -501,6 +667,103 @@ function ScriptReviewTab({
 
   return (
     <div className="media-tab-content" style={{ overflow: 'hidden', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+      {/* Mirrored Episode Repair Broken & Regenerate Action in Script/Subs Header */}
+      {(brokenScan.totalBrokenCount > 0 || isRepairingEpisode) && seriesId && episodeId && (
+        <div style={{ marginBottom: 8, flexShrink: 0, display: 'flex', flexDirection: 'column', gap: 5 }}>
+          <button
+            type="button"
+            data-testid="btn-script-repair-broken"
+            onClick={handleRepairEpisodeBroken}
+            disabled={isRepairingEpisode || brokenScan.totalBrokenCount === 0}
+            style={{
+              width: '100%',
+              padding: '7px 10px',
+              borderRadius: 8,
+              background: isRepairingEpisode
+                ? 'rgba(56, 189, 248, 0.16)'
+                : 'linear-gradient(135deg, rgba(251, 113, 133, 0.2) 0%, rgba(245, 158, 11, 0.28) 100%)',
+              border: isRepairingEpisode
+                ? '1px solid rgba(56, 189, 248, 0.55)'
+                : '1px solid rgba(251, 146, 60, 0.65)',
+              color: isRepairingEpisode ? '#7DD3FC' : '#FDBA74',
+              fontSize: '0.73rem',
+              fontWeight: 800,
+              cursor: isRepairingEpisode ? 'not-allowed' : 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 6,
+            }}
+            title={`អត្ថបទខូច: ${brokenScan.textBrokenCount} ឃ្លា • សំឡេងខ្វះ: ${brokenScan.voiceBrokenCount} ឃ្លា`}
+          >
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+              {isRepairingEpisode ? (
+                <Loader2 size={13} className="animate-spin" color="#38BDF8" />
+              ) : (
+                <Wrench size={13} color="#FB923C" />
+              )}
+              <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {isRepairingEpisode
+                  ? 'កំពុងជួសជុលឃ្លាខូច & Generate សំឡេង...'
+                  : `🔧 ជួសជុលឃ្លាខូច & Generate ឡើងវិញ (${brokenScan.totalBrokenCount})`}
+              </span>
+            </span>
+            <span style={{
+              fontSize: '0.62rem',
+              fontWeight: 800,
+              padding: '1px 6px',
+              borderRadius: 9999,
+              background: 'rgba(0, 0, 0, 0.25)',
+              flexShrink: 0,
+            }}>
+              អត្ថបទ {brokenScan.textBrokenCount} • សំឡេង {brokenScan.voiceBrokenCount}
+            </span>
+          </button>
+        </div>
+      )}
+
+      {repairStatusBanner && (
+        <div
+          data-testid="script-repair-status-banner"
+          style={{
+            marginBottom: 8,
+            padding: '6px 9px',
+            borderRadius: 7,
+            fontSize: '0.71rem',
+            fontWeight: 700,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 6,
+            flexShrink: 0,
+            background: repairStatusBanner.type === 'success'
+              ? 'rgba(16, 185, 129, 0.15)'
+              : repairStatusBanner.type === 'partial'
+              ? 'rgba(245, 158, 11, 0.16)'
+              : 'rgba(239, 68, 68, 0.15)',
+            border: repairStatusBanner.type === 'success'
+              ? '1px solid rgba(52, 211, 153, 0.45)'
+              : repairStatusBanner.type === 'partial'
+              ? '1px solid rgba(245, 158, 11, 0.45)'
+              : '1px solid rgba(239, 68, 68, 0.45)',
+            color: repairStatusBanner.type === 'success'
+              ? '#6EE7B7'
+              : repairStatusBanner.type === 'partial'
+              ? '#FDE68A'
+              : '#FCA5A5',
+          }}
+        >
+          <span>{repairStatusBanner.text}</span>
+          <button
+            type="button"
+            onClick={() => setRepairStatusBanner(null)}
+            style={{ background: 'none', border: 'none', color: 'inherit', cursor: 'pointer', padding: 1 }}
+          >
+            <X size={12} />
+          </button>
+        </div>
+      )}
+
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8, gap: 8, flexShrink: 0 }}>
         <span style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--text-secondary)' }}>
           Segments ({scriptData?.segments?.length || 0})
@@ -569,15 +832,49 @@ function ScriptReviewTab({
       {/* Search Bar */}
       {scriptData?.segments && scriptData.segments.length > 3 && (
         <div style={{ position: 'relative', marginBottom: 10, flexShrink: 0 }}>
-          <Search size={13} color="var(--text-dim)" style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)' }} />
+          <Search size={13} color="var(--text-dim)" style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }} />
           <input
             type="text"
-            placeholder="Search dialogue or translation..."
+            aria-label="Search segments by number, dialogue, or speaker"
+            placeholder="Search #37, dialogue, or speaker..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && displayedSegments.length > 0 && onSelectSegment) {
+                e.preventDefault();
+                const firstSeg = displayedSegments[0];
+                const resolvedIdx = resolveOriginalSegmentIndex(scriptData?.segments, firstSeg, 0);
+                const segKey = firstSeg._uid || (firstSeg.id !== undefined && firstSeg.id !== null ? firstSeg.id : resolvedIdx);
+                onSelectSegment(segKey, firstSeg, resolvedIdx);
+              }
+            }}
             className="capcut-input"
-            style={{ paddingLeft: 26, fontSize: '0.76rem', height: 28 }}
+            style={{ paddingLeft: 26, paddingRight: searchQuery ? 26 : 10, fontSize: '0.76rem', height: 28 }}
           />
+          {searchQuery && (
+            <button
+              type="button"
+              onClick={() => setSearchQuery('')}
+              aria-label="Clear search"
+              title="Clear search"
+              style={{
+                position: 'absolute',
+                right: 6,
+                top: '50%',
+                transform: 'translateY(-50%)',
+                background: 'transparent',
+                border: 'none',
+                color: 'var(--text-dim)',
+                cursor: 'pointer',
+                padding: 2,
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              <X size={12} />
+            </button>
+          )}
         </div>
       )}
 
@@ -604,10 +901,7 @@ function ScriptReviewTab({
               const seg = displayedSegments[virtualRow.index];
               if (!seg) return null;
 
-              const effectiveIdx = scriptData?.segments
-                ? scriptData.segments.findIndex((s, i) => (s._uid && seg._uid && s._uid === seg._uid) || (s.id !== undefined && s.id !== null ? String(s.id) === String(seg.id) : i === virtualRow.index))
-                : virtualRow.index;
-              const targetIdx = effectiveIdx >= 0 ? effectiveIdx : virtualRow.index;
+              const targetIdx = resolveOriginalSegmentIndex(scriptData?.segments, seg, virtualRow.index);
 
               const isSelected = Boolean(
                 selectedSegmentId !== null && (
@@ -633,6 +927,7 @@ function ScriptReviewTab({
                   <CaptionItemCard
                     seg={seg}
                     idx={targetIdx}
+                    repeatedJunkSet={repeatedJunkSet}
                     isSelected={isSelected}
                     isPlaying={isPlaying}
                     onSelectSegment={onSelectSegment}

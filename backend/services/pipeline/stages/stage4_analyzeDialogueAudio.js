@@ -5,12 +5,58 @@ const crypto = require('crypto');
 const { spawn, spawnSync } = require('child_process');
 const { extractAudio } = require('../../ffmpegService');
 const { classifySegmentAcousticGender, computeYinPitch } = require('../../audioClassifierService');
+const { senseVoiceSemaphore, createAbortError } = require('../../../utils/asyncSemaphore');
+
+function sleepOrAbortStage4(ms, signal) {
+  if (!signal) {
+    return new Promise((r) => setTimeout(r, ms));
+  }
+  if (signal.aborted) {
+    return Promise.reject(createAbortError('Stage 4 ASR aborted'));
+  }
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(createAbortError('Stage 4 ASR aborted'));
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+function killChildTree(child) {
+  if (!child) return;
+  try {
+    if (process.platform === 'win32' && child.pid) {
+      spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], {
+        windowsHide: true,
+        stdio: 'ignore',
+      });
+    }
+    child.kill('SIGTERM');
+  } catch (_) {}
+}
 
 /**
  * Runs local SenseVoice-Small ASR worker in Python via Sherpa-ONNX
  */
-function runSenseVoiceWorker({ workerPath, audioPath, modelDir, startOffsetSec = 0 }) {
+function runSenseVoiceWorker({
+  workerPath,
+  audioPath,
+  modelDir,
+  startOffsetSec = 0,
+  numThreads = 2,
+  vadThreads = 1,
+  signal = null,
+}) {
   return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      return reject(createAbortError('SenseVoice worker aborted before start'));
+    }
+
     let pythonExe = process.env.PYTHON_BIN;
     if (!pythonExe || !fs.existsSync(pythonExe)) {
       const candidates = [
@@ -25,6 +71,8 @@ function runSenseVoiceWorker({ workerPath, audioPath, modelDir, startOffsetSec =
       '--audio', audioPath,
       '--model_dir', modelDir,
       '--start_offset', String(startOffsetSec),
+      '--num_threads', String(numThreads),
+      '--vad_threads', String(vadThreads),
     ];
 
     const child = spawn(pythonExe, args, {
@@ -32,8 +80,26 @@ function runSenseVoiceWorker({ workerPath, audioPath, modelDir, startOffsetSec =
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 
+    let settled = false;
     let stdoutData = '';
     let stderrData = '';
+
+    const onAbort = () => {
+      killChildTree(child);
+      if (!settled) {
+        settled = true;
+        reject(createAbortError('SenseVoice worker aborted by user'));
+      }
+    };
+
+    if (signal) {
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
+    const cleanupSignal = () => {
+      if (signal) {
+        try { signal.removeEventListener('abort', onAbort); } catch (_) {}
+      }
+    };
 
     child.stdout.on('data', (d) => {
       stdoutData += d.toString('utf8');
@@ -44,10 +110,22 @@ function runSenseVoiceWorker({ workerPath, audioPath, modelDir, startOffsetSec =
     });
 
     child.on('error', (err) => {
+      cleanupSignal();
+      if (settled) return;
+      settled = true;
+      if (signal?.aborted) {
+        return reject(createAbortError('SenseVoice worker aborted by user'));
+      }
       reject(err);
     });
 
     child.on('close', (code) => {
+      cleanupSignal();
+      if (settled) return;
+      settled = true;
+      if (signal?.aborted) {
+        return reject(createAbortError('SenseVoice worker aborted by user'));
+      }
       if (code !== 0) {
         return reject(new Error(`SenseVoice worker exited with code ${code}: ${stderrData || stdoutData}`));
       }
@@ -266,7 +344,16 @@ async function analyzeDialogueAudio({
   aiClient,
   modelName = 'gemini-3.5-flash-lite',
   startOffsetSec = 0,
+  signal = null,
 }) {
+  const checkAbort = () => {
+    if (signal?.aborted) {
+      throw createAbortError('Stage 4 ASR aborted');
+    }
+  };
+
+  checkAbort();
+
   if (!videoPath || !fs.existsSync(videoPath)) {
     throw new Error(`[Stage 4 Analyze Audio] Video file not found: ${videoPath}`);
   }
@@ -291,10 +378,12 @@ async function analyzeDialogueAudio({
   let asrEngineUsed = 'none';
 
   try {
+    checkAbort();
     // 1. Extract audio chunk with FFmpeg
     await extractAudio(videoPath, audioFilePath, {
       startSec: startOffsetSec,
       durationSec: durationSec > 0 ? durationSec : undefined,
+      signal,
     });
 
     if (!fs.existsSync(audioFilePath) || fs.statSync(audioFilePath).size < 1000) {
@@ -302,9 +391,11 @@ async function analyzeDialogueAudio({
       return { audioSegments: [], audioMeta: { hasAudio: false, speechSegmentsDetected: 0 } };
     }
 
+    checkAbort();
+
     // ==============================================================
     // STEP 1.5: PRIMARY ENGINE -> Local SenseVoice-Small ASR (Sherpa-ONNX)
-    // 100% Free, Zero API Tokens, Native Chinese STT with VAD Timestamps
+    // Bounded via senseVoiceSemaphore to prevent ONNX CPU oversubscription
     // ==============================================================
     const pythonWorkerPath = path.resolve(__dirname, '../../../workers/sense_voice_worker.py');
     const senseVoiceModelDir = path.resolve(__dirname, '../../../models/sense-voice');
@@ -312,12 +403,18 @@ async function analyzeDialogueAudio({
     if (fs.existsSync(pythonWorkerPath) && fs.existsSync(path.join(senseVoiceModelDir, 'tokens.txt'))) {
       try {
         console.log(`[Stage 4 Analyze Audio] 🚀 Running Local SenseVoice-Small ASR (offset: ${startOffsetSec}s)...`);
-        const localRes = await runSenseVoiceWorker({
-          workerPath: pythonWorkerPath,
-          audioPath: audioFilePath,
-          modelDir: senseVoiceModelDir,
-          startOffsetSec,
-        });
+        const localRes = await senseVoiceSemaphore.run(
+          () => runSenseVoiceWorker({
+            workerPath: pythonWorkerPath,
+            audioPath: audioFilePath,
+            modelDir: senseVoiceModelDir,
+            startOffsetSec,
+            numThreads: 2,
+            vadThreads: 1,
+            signal,
+          }),
+          { signal }
+        );
 
         if (localRes && Array.isArray(localRes.speechSegments) && localRes.speechSegments.length > 0) {
           for (const s of localRes.speechSegments) {
@@ -327,9 +424,14 @@ async function analyzeDialogueAudio({
           console.log(`[Stage 4 Analyze Audio] ⚡ Local SenseVoice succeeded with ${audioSegments.length} Chinese speech segments ($0.00 API cost)!`);
         }
       } catch (senseVoiceErr) {
+        if (senseVoiceErr?.name === 'AbortError' || signal?.aborted) {
+          throw senseVoiceErr?.name === 'AbortError' ? senseVoiceErr : createAbortError('Stage 4 ASR aborted');
+        }
         console.warn(`[Stage 4 Analyze Audio] Local SenseVoice notice: ${senseVoiceErr.message}. Falling back to Cloud Gemini ASR.`);
       }
     }
+
+    checkAbort();
 
     // ==============================================================
     // STEP 2: FALLBACK ENGINE -> Cloud Gemini ASR (if local not used)
@@ -456,6 +558,9 @@ async function analyzeDialogueAudio({
           console.log(`[Stage 4 Analyze Audio] gemini-3.5-transcribe returned 0 segments.`);
         }
       } catch (transcribeErr) {
+        if (transcribeErr?.name === 'AbortError' || signal?.aborted) {
+          throw transcribeErr?.name === 'AbortError' ? transcribeErr : createAbortError('Stage 4 ASR aborted');
+        }
         // Critical: Do NOT mask authentication, permission, or quota errors
         const errMsg = transcribeErr?.message || String(transcribeErr);
         const errLower = errMsg.toLowerCase();
@@ -512,6 +617,7 @@ Return JSON ONLY matching this schema:
         let attempt = 0;
         let lastFallbackErr = null;
         while (attempt < 2 && !fallbackResp) {
+          checkAbort();
           try {
             fallbackResp = await aiClient.models.generateContent({
               model: fallbackModel,
@@ -526,6 +632,9 @@ Return JSON ONLY matching this schema:
             });
             asrEngineUsed = fallbackModel;
           } catch (callErr) {
+            if (callErr?.name === 'AbortError' || signal?.aborted) {
+              throw callErr?.name === 'AbortError' ? callErr : createAbortError('Stage 4 ASR aborted');
+            }
             lastFallbackErr = callErr;
             attempt++;
             const errMsg = callErr?.message || String(callErr);
@@ -541,7 +650,7 @@ Return JSON ONLY matching this schema:
               throw callErr;
             }
             if (attempt >= 2) break;
-            await new Promise((r) => setTimeout(r, 1500));
+            await sleepOrAbortStage4(1500, signal);
           }
         }
 
@@ -589,22 +698,55 @@ Return JSON ONLY matching this schema:
     // without spawning hundreds of ffmpeg sub-processes!
     // ==============================================================
     if (audioSegments.length > 0 && fs.existsSync(audioFilePath)) {
+      checkAbort();
       try {
         const pcmPath = path.join(tempDir, 'chunk_raw.pcm');
         const ffmpegInstaller = require('@ffmpeg-installer/ffmpeg');
         const ffmpegBin = ffmpegInstaller.path;
 
-        await new Promise((resolvePcm) => {
+        await new Promise((resolvePcm, rejectPcm) => {
+          if (signal?.aborted) {
+            return rejectPcm(createAbortError('Stage 4 PCM decode aborted'));
+          }
+          let settled = false;
           const proc = spawn(ffmpegBin, [
             '-y',
+            '-threads', '2',
             '-i', audioFilePath,
             '-f', 's16le',
             '-ac', '1',
             '-ar', '16000',
             pcmPath,
           ], { windowsHide: true, stdio: ['ignore', 'ignore', 'ignore'] });
-          proc.on('close', resolvePcm);
-          proc.on('error', () => resolvePcm());
+
+          const onAbort = () => {
+            killChildTree(proc);
+            if (!settled) {
+              settled = true;
+              rejectPcm(createAbortError('Stage 4 PCM decode aborted'));
+            }
+          };
+          if (signal) signal.addEventListener('abort', onAbort, { once: true });
+          const detach = () => {
+            if (signal) {
+              try { signal.removeEventListener('abort', onAbort); } catch (_) {}
+            }
+          };
+
+          proc.on('close', () => {
+            detach();
+            if (settled) return;
+            settled = true;
+            if (signal?.aborted) return rejectPcm(createAbortError('Stage 4 PCM decode aborted'));
+            resolvePcm();
+          });
+          proc.on('error', () => {
+            detach();
+            if (settled) return;
+            settled = true;
+            if (signal?.aborted) return rejectPcm(createAbortError('Stage 4 PCM decode aborted'));
+            resolvePcm();
+          });
         });
 
         if (fs.existsSync(pcmPath)) {
@@ -646,6 +788,9 @@ Return JSON ONLY matching this schema:
           }
         }
       } catch (yinErr) {
+        if (yinErr?.name === 'AbortError' || signal?.aborted) {
+          throw yinErr?.name === 'AbortError' ? yinErr : createAbortError('Stage 4 ASR aborted');
+        }
         console.warn('[Stage 4 Analyze Audio] Fast PCM YIN notice:', yinErr.message);
       }
     }

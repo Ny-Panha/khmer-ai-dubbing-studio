@@ -4,23 +4,41 @@
  */
 
 const FEMALE_MARKERS = [
-  '女', '女主', '女性', '女人', '王妃', '皇后', '公主', '娘娘', '小姐', '夫人', '侍女', '丫鬟', 
+  '女', '女主', '女性', '女人', '王妃', '皇后', '公主', '娘娘', '小姐', '夫人', '侍女', '丫鬟',
   '姐姐', '妹妹', '母亲', '妈妈', '阿姨', '女士', '姑姑', '祖母', '奶奶', '郡主',
   '贵妃', '嫔妃', '女官', '医女', '师妹', '师姐', '姨母', '表妹', '表姐', '岳母',
-  'នារី', 'នារីម្នាក់', 'ស្ត្រី', 'ស្ត្រីម្នាក់', 'ស្រី', 'តួស្រី', 'តួឯកស្រី', 'នាង', 'នាងតូច', 'ម្តាយ', 'ម៉ែ', 'បងស្រី', 'ប្អូនស្រី', 'យាយ', 
-  'ម្ចាស់ក្សត្រី', 'អ្នកម្នាង', 'ភរិយា', 'កូនស្រី', 'អ្នកស្រី', 'កញ្ញា', 'ជំទាវ', 'មេម៉ាយ', 'កុមារី',
-  'female', 'woman', 'girl', 'mother', 'sister', 'queen', 'princess', 'lady', 'maid', 'mrs', 'miss'
+  '系统', '系统提示',
+  'នារី', 'នារីម្នាក់', 'ស្ត្រី', 'ស្ត្រីម្នាក់', 'ស្រី', 'តួស្រី', 'តួឯកស្រី', 'នាង', 'នាងតូច', 'ម្តាយ', 'ម្ដាយ', 'ម៉ែ', 'បងស្រី', 'ប្អូនស្រី', 'យាយ',
+  'ម្ចាស់ក្សត្រី', 'អ្នកម្នាង', 'ភរិយា', 'កូនស្រី', 'អ្នកស្រី', 'កញ្ញា', 'ជំទាវ', 'មេម៉ាយ', 'កុមារី', 'មាតា', 'ធីតា', 'ម្ចាស់ស្រី', 'ម្ចាស់អូន',
+  'ប្រព័ន្ធ', 'ប្រព័ន្ធ ai', 'ប្រព័ន្ធជំនួយ', 'ប្រព័ន្ធណែនាំ', 'ប្រព័ន្ធសំឡេង',
+  'female', 'woman', 'girl', 'mother', 'sister', 'queen', 'princess', 'lady', 'maid', 'mrs', 'miss', 'she', 'her', 'system', 'ai system', 'sreymom'
 ];
 
 const MALE_MARKERS = [
-  '男', '男主', '男性', '男人', '总', '王爷', '皇上', '陛下', '少爷', '总裁', '侍卫', '公公', 
-  '哥哥', '弟弟', '父亲', '爸爸', '叔叔', '先生', '伯父', '祖父', '太监', '掌柜', 
+  '男', '男主', '男性', '男人', '总', '王爷', '皇上', '陛下', '少爷', '总裁', '侍卫', '公公',
+  '哥哥', '弟弟', '父亲', '爸爸', '叔叔', '先生', '伯父', '祖父', '太监', '掌柜',
   '刺客', '兄', '弟', '将军', '大人', '世子', '国公', '侯爷', '丞相', '太傅',
   '少主', '师兄', '师弟', '表哥', '表弟', '岳父', '老太爷',
-  'បុរស', 'បុរសម្នាក់', 'បុរសវ័យ', 'ប្រុស', 'តួប្រុស', 'តួឯកប្រុស', 'លោក', 'ឪពុក', 'ប៉ា', 'បងប្រុស', 'ប្អូនប្រុស', 'តា', 
-  'ស្ដេច', 'មេទ័ព', 'ចៅហ្វាយ', 'កូនប្រុស', 'អ្នកប្រុស', 'មន្ត្រី', 'ពេទ្យ', 'ប្តី', 'ស្វាមី', 'កំលោះ', 'យុវជន', 'កុមារា', 'ព្រះអង្គ',
-  'male', 'man', 'boy', 'father', 'brother', 'king', 'prince', 'lord', 'guard', 'mr', 'sir', 'master'
+  'បុរស', 'បុរសម្នាក់', 'បុរសវ័យ', 'ប្រុស', 'តួប្រុស', 'តួឯកប្រុស', 'លោក', 'ឪពុក', 'ប៉ា', 'បងប្រុស', 'ប្អូនប្រុស', 'តា', 'ពូ', 'មា',
+  'ស្ដេច', 'មេទ័ព', 'ចៅហ្វាយ', 'កូនប្រុស', 'អ្នកប្រុស', 'មន្ត្រី', 'ពេទ្យ', 'ប្តី', 'ប្ដី', 'ស្វាមី', 'កំលោះ', 'យុវជន', 'កុមារា', 'ព្រះអង្គ',
+  'male', 'man', 'boy', 'father', 'brother', 'king', 'prince', 'lord', 'guard', 'mr', 'sir', 'master', 'hero', 'he', 'him', 'his', 'piseth'
 ];
+
+const AMBIGUOUS_SHORT_KHMER_TOKENS = new Set(['មា', 'តា', 'ពូ']);
+
+function matchesMarker(lowerName = '', marker = '') {
+  const m = String(marker || '').toLowerCase().trim();
+  if (!lowerName || !m) return false;
+  if (/^[a-z0-9'.\s-]+$/i.test(m)) {
+    const escaped = m.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`(?:^|[^a-z])${escaped}(?:$|[^a-z])`, 'i').test(lowerName);
+  }
+  if (AMBIGUOUS_SHORT_KHMER_TOKENS.has(m)) {
+    const escaped = m.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`(?:^|[\\s_\\-(\u200b])${escaped}(?=$|[\\s_\\-)0-9\u200b])`, 'u').test(lowerName);
+  }
+  return lowerName.includes(m);
+}
 
 /**
  * Detect speaker gender from explicit parameter, name, or keywords
@@ -32,18 +50,18 @@ const MALE_MARKERS = [
 export function detectSpeakerGender(speakerName = '', explicitGender = '', dialogueText = '') {
   if (explicitGender) {
     const norm = String(explicitGender).toUpperCase().trim();
-    if (norm === 'MALE' || norm === 'BOY' || norm === 'MAN') return 'MALE';
-    if (norm === 'FEMALE' || norm === 'GIRL' || norm === 'WOMAN') return 'FEMALE';
+    if (norm === 'MALE' || norm === 'M' || norm === 'BOY' || norm === 'MAN') return 'MALE';
+    if (norm === 'FEMALE' || norm === 'F' || norm === 'GIRL' || norm === 'WOMAN') return 'FEMALE';
   }
 
   const name = String(speakerName || '').trim().toLowerCase();
   if (name) {
     for (const m of FEMALE_MARKERS) {
-      if (name.includes(m.toLowerCase())) return 'FEMALE';
+      if (matchesMarker(name, m)) return 'FEMALE';
     }
 
     for (const m of MALE_MARKERS) {
-      if (name.includes(m.toLowerCase())) return 'MALE';
+      if (matchesMarker(name, m)) return 'MALE';
     }
   }
 
@@ -80,7 +98,7 @@ export function detectSpeakerGender(speakerName = '', explicitGender = '', dialo
 export function getSpeakerId(speakerName = '') {
   const clean = String(speakerName || 'Speaker').trim();
   const safe = clean
-    .replace(/[^\p{L}\p{N}]+/gu, '_')
+    .replace(/[^\p{L}\p{M}\p{N}]+/gu, '_')
     .replace(/^_+|_+$/g, '')
     .toLowerCase();
 
@@ -110,12 +128,18 @@ export function buildSpeakerRegistry(segments = [], existingRegistry = {}) {
   (segments || []).forEach((seg) => {
     const rawName = (seg.speaker || seg.speakerName || 'តួអង្គ').trim();
     const spkId = seg.speakerId || getSpeakerId(rawName);
-    const gender = seg.speakerGender || detectSpeakerGender(rawName, seg.gender || seg.voiceGender);
-    const voiceGender = seg.voiceGender || (gender === 'FEMALE' ? 'female' : (gender === 'MALE' ? 'male' : 'unknown'));
-    const isManual = seg.voiceAssignmentSource === 'manual' || Boolean(registry[spkId]?.userOverridden);
+    const knownSpkGender = (seg.speakerGender === 'FEMALE' || seg.speakerGender === 'MALE') ? seg.speakerGender : '';
+    const isManual = seg.voiceAssignmentSource === 'manual' || Boolean(seg.userOverridden) || Boolean(seg.voiceOverride) || Boolean(registry[spkId]?.userOverridden);
+    const titleGender = !isManual ? detectSpeakerGender(rawName, '', seg.khmerText || seg.khmer || '') : 'UNKNOWN';
+    const gender = titleGender !== 'UNKNOWN'
+      ? titleGender
+      : (knownSpkGender || detectSpeakerGender(rawName, seg.gender || seg.voiceGender, seg.khmerText || seg.khmer || ''));
+    const voiceGender = gender === 'FEMALE' ? 'female' : (gender === 'MALE' ? 'male' : (seg.voiceGender || 'unknown'));
 
     if (!registry[spkId]) {
-      const voiceId = seg.khmerVoiceId || seg.voiceId || getDefaultVoiceForGender(gender);
+      const voiceId = isManual
+        ? (seg.voiceOverride || seg.khmerVoiceId || seg.voiceId || getDefaultVoiceForGender(gender))
+        : (gender !== 'UNKNOWN' ? getDefaultVoiceForGender(gender) : (seg.khmerVoiceId || seg.voiceId || getDefaultVoiceForGender(gender)));
       registry[spkId] = {
         id: spkId,
         speakerId: spkId,
@@ -171,15 +195,23 @@ export function applySpeakerVoiceToSegments(segments = [], speakerRegistry = {})
 
   return segments.map((seg, idx) => {
     const rawName = (seg.speaker || seg.speakerName || 'តួអង្គ').trim();
+    const isGeneric = !rawName || rawName === 'តួអង្គ' || rawName.toLowerCase() === 'speaker';
     const spkId = seg.speakerId || getSpeakerId(rawName);
-    const reg = speakerRegistry[spkId] || speakerRegistry[rawName];
+    const reg = speakerRegistry[spkId] || (!isGeneric ? speakerRegistry[rawName] : null);
 
-    const isManual = seg.voiceAssignmentSource === 'manual' || Boolean(reg?.userOverridden);
-    const gender = reg?.gender || seg.speakerGender || detectSpeakerGender(rawName, seg.gender || seg.voiceGender);
-    const voiceGender = reg?.voiceGender || (gender === 'FEMALE' ? 'female' : (gender === 'MALE' ? 'male' : 'unknown'));
+    const isManual = Boolean(seg.userOverridden) || seg.voiceAssignmentSource === 'manual' || Boolean(seg.voiceOverride) || Boolean(reg?.userOverridden);
+    const regKnownGender = (reg?.gender === 'FEMALE' || reg?.gender === 'MALE') ? reg.gender : '';
+    const segKnownGender = (seg.speakerGender === 'FEMALE' || seg.speakerGender === 'MALE') ? seg.speakerGender : '';
+    const titleGender = !isManual ? detectSpeakerGender(rawName, '', seg.khmerText || seg.khmer || '') : 'UNKNOWN';
+    const gender = titleGender !== 'UNKNOWN'
+      ? titleGender
+      : (regKnownGender || segKnownGender || detectSpeakerGender(rawName, seg.gender || seg.voiceGender, seg.khmerText || seg.khmer || ''));
+    const voiceGender = gender === 'FEMALE' ? 'female' : (gender === 'MALE' ? 'male' : (reg?.voiceGender || 'unknown'));
     const voiceId = isManual
-      ? (seg.khmerVoiceId || seg.voiceId || reg?.khmerVoiceId || reg?.voiceId || getDefaultVoiceForGender(gender))
-      : (reg?.khmerVoiceId || reg?.voiceId || seg.khmerVoiceId || seg.voiceId || getDefaultVoiceForGender(gender));
+      ? (seg.voiceOverride || seg.khmerVoiceId || seg.voiceId || reg?.khmerVoiceId || reg?.voiceId || getDefaultVoiceForGender(gender))
+      : (gender !== 'UNKNOWN'
+          ? getDefaultVoiceForGender(gender)
+          : (reg?.khmerVoiceId || reg?.voiceId || seg.khmerVoiceId || seg.voiceId || getDefaultVoiceForGender(gender)));
     const speed = seg.speed || reg?.speed || 'normal';
 
     const segId = seg.segmentId || seg.id || `seg_${idx + 1}`;

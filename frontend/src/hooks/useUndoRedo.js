@@ -72,7 +72,7 @@ export function useUndoRedo({
         setVideoClips(targetSnapshot.videoClips);
       }
       if (targetSnapshot.segments && setScriptData) {
-        setScriptData((sPrev) => ({ ...sPrev, segments: targetSnapshot.segments }));
+        setScriptData((sPrev) => (sPrev ? { ...sPrev, segments: targetSnapshot.segments, updatedAt: Date.now() } : sPrev));
       }
       if (targetSnapshot.activeClipId !== undefined) {
         setActiveClipId(targetSnapshot.activeClipId);
@@ -101,7 +101,7 @@ export function useUndoRedo({
         setVideoClips(targetSnapshot.videoClips);
       }
       if (targetSnapshot.segments && setScriptData) {
-        setScriptData((sPrev) => ({ ...sPrev, segments: targetSnapshot.segments }));
+        setScriptData((sPrev) => (sPrev ? { ...sPrev, segments: targetSnapshot.segments, updatedAt: Date.now() } : sPrev));
       }
       if (targetSnapshot.activeClipId !== undefined) {
         setActiveClipId(targetSnapshot.activeClipId);

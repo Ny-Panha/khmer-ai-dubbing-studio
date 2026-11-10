@@ -1,9 +1,15 @@
-import { useState } from 'react';
-import { renderVideoApi } from '../services/api';
-import { resolveDefaultAspectRatio } from '../utils/projectStorage';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import {
+  renderVideoApi,
+  startBatchRenderApi,
+  fetchBatchRenderProgressApi,
+  fetchLatestBatchRenderApi,
+  killBatchRenderApi,
+} from '../services/api';
+import { resolveDefaultAspectRatio, inferRenderedAspectRatio } from '../utils/projectStorage';
 
 /**
- * Custom hook to manage final video export and FFmpeg rendering
+ * Custom hook to manage single-episode and multi-episode batch/merged video export
  */
 export function useVideoRender({
   selectedVideo,
@@ -12,6 +18,7 @@ export function useVideoRender({
   audioGenerated,
   speakerRegistry,
   voiceSettings,
+  voiceSettingsRef = null,
   scriptData,
   videoClips,
   fullAudioPath,
@@ -22,11 +29,336 @@ export function useVideoRender({
   activeSeries = null,
   handleSaveEpisodeBackground = null,
   setAudioOutdated = null,
+  refreshSeriesFromServer = null,
 }) {
   const [renderedVideo, setRenderedVideo] = useState(null);
   const [isRendering, setIsRendering] = useState(false);
   const [renderProgress, setRenderProgress] = useState(0);
   const [renderStage, setRenderStage] = useState('');
+
+  // Shared Batch Export & Full Merge state (synced across ExportSettingsPanel & GeminiRouteModal)
+  const [batchJob, setBatchJob] = useState(null);
+  const [isStartingBatchRender, setIsStartingBatchRender] = useState(false);
+  const [batchRenderError, setBatchRenderError] = useState(null);
+
+  const batchPollTimerRef = useRef(null);
+  const isPollingInFlightRef = useRef(false);
+  const lastHandledCompletionJobIdRef = useRef(null);
+  const seriesIdRef = useRef(seriesId);
+  seriesIdRef.current = seriesId;
+  const episodeIdRef = useRef(episodeId);
+  episodeIdRef.current = episodeId;
+  const refreshSeriesRef = useRef(refreshSeriesFromServer);
+  refreshSeriesRef.current = refreshSeriesFromServer;
+  const internalVoiceSettingsRef = useRef(voiceSettings);
+  internalVoiceSettingsRef.current = voiceSettings;
+
+  const getLatestVoiceSettings = useCallback(
+    () => voiceSettingsRef?.current || internalVoiceSettingsRef.current || voiceSettings || {},
+    [voiceSettingsRef, voiceSettings]
+  );
+
+  const triggerBrowserDownload = useCallback((url, filename) => {
+    if (!url || typeof document === 'undefined') return;
+    try {
+      const link = document.createElement('a');
+      link.href = url;
+      if (filename) link.setAttribute('download', filename);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } catch (dlErr) {
+      console.warn('Auto-download trigger error:', dlErr);
+    }
+  }, []);
+
+  const stopBatchPolling = useCallback(() => {
+    if (batchPollTimerRef.current) {
+      clearInterval(batchPollTimerRef.current);
+      batchPollTimerRef.current = null;
+    }
+    isPollingInFlightRef.current = false;
+  }, []);
+
+  const handleBatchJobFinished = useCallback((job, shouldAutoDownload = false) => {
+    if (!job || job.status !== 'completed') return;
+    if (lastHandledCompletionJobIdRef.current === job.jobId) return;
+    lastHandledCompletionJobIdRef.current = job.jobId;
+
+    if (episodeIdRef.current && Array.isArray(job.outputs)) {
+      const matched = job.outputs.find((o) => String(o.episodeId) === String(episodeIdRef.current));
+      if (matched) {
+        const resolvedMatchedRatio =
+          matched.aspectRatio ||
+          job.exportSettings?.aspectRatio ||
+          inferRenderedAspectRatio(matched, null, getLatestVoiceSettings()?.aspectRatio || '16:9');
+        setRenderedVideo({
+          success: true,
+          videoUrl: matched.videoUrl,
+          outputVideoUrl: matched.outputVideoUrl || matched.videoUrl,
+          outputFilename: matched.outputFilename,
+          downloadUrl: matched.downloadUrl,
+          renderTimeSeconds: matched.renderTimeSeconds || 0,
+          savedToDownloads: Boolean(matched.savedToDownloads),
+          downloadsPath: matched.downloadsPath || null,
+          aspectRatio: resolvedMatchedRatio,
+        });
+      }
+    }
+
+    if (typeof refreshSeriesRef.current === 'function') {
+      try {
+        Promise.resolve(refreshSeriesRef.current()).catch(() => {});
+      } catch (_) {}
+    }
+
+    if (shouldAutoDownload) {
+      if (job.mode === 'merge' && job.mergedResult?.downloadUrl) {
+        triggerBrowserDownload(
+          job.mergedResult.downloadUrl || job.mergedResult.videoUrl,
+          job.mergedResult.outputFilename || 'Full_Merged_Khmer_Dubbed.mp4'
+        );
+      } else if (job.mode === 'separate' && Array.isArray(job.outputs) && job.outputs.length === 1) {
+        const singleOut = job.outputs[0];
+        triggerBrowserDownload(
+          singleOut.downloadUrl || singleOut.videoUrl,
+          singleOut.outputFilename
+        );
+      }
+    }
+  }, [triggerBrowserDownload]);
+
+  const startBatchPolling = useCallback((jobId, targetSeriesId, shouldAutoDownload = true) => {
+    stopBatchPolling();
+    if (!jobId) return;
+
+    const pollOnce = async () => {
+      if (isPollingInFlightRef.current) return;
+      isPollingInFlightRef.current = true;
+      try {
+        const res = await fetchBatchRenderProgressApi(jobId, targetSeriesId);
+        if (seriesIdRef.current && targetSeriesId && String(seriesIdRef.current) !== String(targetSeriesId)) {
+          stopBatchPolling();
+          return;
+        }
+        const job = res?.job || null;
+        if (!job) return;
+        setBatchJob(job);
+        if (job.status !== 'running') {
+          stopBatchPolling();
+          if (job.status === 'completed') {
+            handleBatchJobFinished(job, shouldAutoDownload);
+          } else if (job.status === 'failed' && job.error) {
+            setBatchRenderError(job.error);
+          }
+        }
+      } catch (err) {
+        if (err?.status === 404) {
+          stopBatchPolling();
+        }
+      } finally {
+        isPollingInFlightRef.current = false;
+      }
+    };
+
+    pollOnce();
+    batchPollTimerRef.current = setInterval(pollOnce, 1000);
+  }, [stopBatchPolling, handleBatchJobFinished]);
+
+  // Hydrate latest batch export job when series switches and resume polling if active
+  useEffect(() => {
+    stopBatchPolling();
+    setBatchRenderError(null);
+    lastHandledCompletionJobIdRef.current = null;
+
+    if (!seriesId) {
+      setBatchJob(null);
+      return;
+    }
+
+    const controller = new AbortController();
+    fetchLatestBatchRenderApi(seriesId, { signal: controller.signal })
+      .then((res) => {
+        const job = res?.job || null;
+        setBatchJob(job);
+        if (job?.status === 'running') {
+          startBatchPolling(job.jobId, seriesId, false);
+        } else if (job?.status === 'completed') {
+          lastHandledCompletionJobIdRef.current = job.jobId;
+        }
+      })
+      .catch((err) => {
+        if (err?.name !== 'AbortError') {
+          setBatchJob(null);
+        }
+      });
+
+    return () => {
+      controller.abort();
+      stopBatchPolling();
+    };
+  }, [seriesId, stopBatchPolling, startBatchPolling]);
+
+  const buildAntiTheftOptions = useCallback(() => {
+    const activeSettings = getLatestVoiceSettings();
+    return {
+      enabled: Boolean(activeSettings?.enableAntiTheft),
+      marqueeText: activeSettings?.marqueeText || '«ហាមផុសបន្ត • សូមឱ្យតម្លៃលើការខិតខំរបស់ម្ចាស់ដើម»',
+      marqueeSpeed: activeSettings?.marqueeSpeed || 'normal',
+      marqueePosition: activeSettings?.marqueePosition || 'bottom',
+      marqueeTextColor: activeSettings?.marqueeTextColor || '#FFE600',
+      enableWatermark: activeSettings?.enableWatermark !== false,
+      watermarkText: activeSettings?.watermarkText || 'រក្សាសិទ្ធិដោយ ៖ Holiday Kh Drama',
+      watermarkPosition: activeSettings?.watermarkPosition || 'above-ticker',
+      watermarkColor: activeSettings?.watermarkColor || '#38BDF8',
+      antiTheftSize: activeSettings?.antiTheftSize || 'small',
+    };
+  }, [getLatestVoiceSettings]);
+
+  const buildLogoOptions = useCallback(() => {
+    const activeSettings = getLatestVoiceSettings();
+    return {
+      enabled: Boolean(activeSettings?.enableLogo),
+      image: activeSettings?.logoImage,
+      position: activeSettings?.logoPosition || 'both',
+      size: Number(activeSettings?.logoSize) || 72,
+      opacity: Number(activeSettings?.logoOpacity) || 0.9,
+      shape: activeSettings?.logoShape || 'circle',
+      margin: Number(activeSettings?.logoMargin) || 20,
+    };
+  }, [getLatestVoiceSettings]);
+
+  const handleStartBatchRender = useCallback(async ({
+    episodeIds = [],
+    mode = 'merge',
+    allowOriginalAudio = false,
+  } = {}) => {
+    const targetSeriesId = seriesId || activeSeries?.id;
+    if (!targetSeriesId) {
+      const msg = 'មិនទាន់មាន Series សម្រាប់ Batch Export ទេ!';
+      setBatchRenderError(msg);
+      return { success: false, error: msg };
+    }
+    if (!Array.isArray(episodeIds) || episodeIds.length === 0) {
+      const msg = 'សូមជ្រើសរើសយ៉ាងតិច ១ ភាគសម្រាប់ Export!';
+      setBatchRenderError(msg);
+      return { success: false, error: msg };
+    }
+
+    setIsStartingBatchRender(true);
+    setBatchRenderError(null);
+    lastHandledCompletionJobIdRef.current = null;
+
+    try {
+      const activeSettings = getLatestVoiceSettings();
+      const exportSettings = {
+        aspectRatio: activeSettings?.aspectRatio || null,
+        verticalStyle: activeSettings?.verticalStyle || 'pad',
+        burnSubtitles: activeSettings?.burnSubtitles !== false,
+        subtitleColor: activeSettings?.subtitleColor || 'white',
+        subtitleSize: activeSettings?.subtitleSize || 'medium',
+        subtitleStyle: activeSettings?.subtitleStyle || 'banner',
+        subtitleOptions: activeSettings?.subtitleOptions || {},
+        duckingVolume: activeSettings?.duckingVolume ?? 0.15,
+        khmerVolume: activeSettings?.khmerVolume ?? 1.3,
+        enableDemucs: Boolean(activeSettings?.enableDemucs),
+        antiTheft: buildAntiTheftOptions(),
+        logoSettings: buildLogoOptions(),
+      };
+
+      const episodeOverrides = {};
+      if (
+        episodeId &&
+        episodeIds.map(String).includes(String(episodeId)) &&
+        (scriptData?.segments?.length > 0 || (videoClips && videoClips.length > 0) || fullAudioPath)
+      ) {
+        episodeOverrides[episodeId] = {
+          segments: scriptData?.segments || undefined,
+          videoClips: videoClips || undefined,
+          fullAudioPath: fullAudioPath || undefined,
+        };
+      }
+
+      const res = await startBatchRenderApi({
+        seriesId: targetSeriesId,
+        episodeIds,
+        mode: mode === 'separate' ? 'separate' : 'merge',
+        allowOriginalAudio: Boolean(allowOriginalAudio),
+        exportSettings,
+        episodeOverrides,
+      });
+
+      const job = res?.job || null;
+      if (job) {
+        setBatchJob(job);
+        startBatchPolling(job.jobId, targetSeriesId, true);
+      }
+      return { success: true, job };
+    } catch (err) {
+      const msg = err?.message || 'Batch Export បរាជ័យ';
+      setBatchRenderError(msg);
+      return {
+        success: false,
+        error: msg,
+        skippedEpisodes: err?.data?.skippedEpisodes || [],
+      };
+    } finally {
+      setIsStartingBatchRender(false);
+    }
+  }, [
+    seriesId,
+    activeSeries?.id,
+    episodeId,
+    getLatestVoiceSettings,
+    scriptData,
+    videoClips,
+    fullAudioPath,
+    buildAntiTheftOptions,
+    buildLogoOptions,
+    startBatchPolling,
+  ]);
+
+  const handleKillBatchRender = useCallback(async (jobId = null) => {
+    const targetJobId = jobId || batchJob?.jobId || null;
+    const targetSeriesId = seriesId || activeSeries?.id || null;
+    try {
+      const res = await killBatchRenderApi({ jobId: targetJobId, seriesId: targetSeriesId });
+      stopBatchPolling();
+      if (res?.job) {
+        setBatchJob(res.job);
+      } else {
+        setBatchJob((prev) =>
+          prev
+            ? { ...prev, status: 'cancelled', stage: '🛑 បានបញ្ឈប់ការ Export (Cancelled)' }
+            : prev
+        );
+      }
+    } catch (err) {
+      setBatchRenderError(err?.message || 'មិនអាចបញ្ឈប់ Batch Export បានទេ');
+    }
+  }, [batchJob?.jobId, seriesId, activeSeries?.id, stopBatchPolling]);
+
+  const clearBatchRenderResult = useCallback(() => {
+    setBatchRenderError(null);
+    setBatchJob((prev) => (prev?.status === 'running' ? prev : null));
+  }, []);
+
+  const batchRender = useMemo(() => ({
+    job: batchJob,
+    isRunning: batchJob?.status === 'running',
+    isStarting: isStartingBatchRender,
+    error: batchRenderError,
+    start: handleStartBatchRender,
+    kill: handleKillBatchRender,
+    clear: clearBatchRenderResult,
+  }), [
+    batchJob,
+    isStartingBatchRender,
+    batchRenderError,
+    handleStartBatchRender,
+    handleKillBatchRender,
+    clearBatchRenderResult,
+  ]);
 
   // Render Final Dubbed Video via FFmpeg Backend
   const handleRenderVideo = async () => {
@@ -78,8 +410,9 @@ export function useVideoRender({
     }, 280);
 
     try {
-      const activeVoiceId = voiceSettings.voiceId || 'km-KH-PisethNeural';
-      const activeSpeed = voiceSettings.speed || 'normal';
+      const activeSettings = getLatestVoiceSettings();
+      const activeVoiceId = activeSettings.voiceId || 'km-KH-PisethNeural';
+      const activeSpeed = activeSettings.speed || 'normal';
 
       const humanDisplayTitle = selectedVideo?.displayTitle 
         || selectedVideo?.originalFilename?.replace(/\.[^/.]+$/, '').trim()
@@ -87,28 +420,8 @@ export function useVideoRender({
         || (scriptData?.title || 'Drama_Recap');
       const dramaName = humanDisplayTitle;
 
-      const antiTheftOptions = {
-        enabled: Boolean(voiceSettings.enableAntiTheft),
-        marqueeText: voiceSettings.marqueeText || '«ហាមផុសបន្ត • សូមឱ្យតម្លៃលើការខិតខំរបស់ម្ចាស់ដើម»',
-        marqueeSpeed: voiceSettings.marqueeSpeed || 'normal',
-        marqueePosition: voiceSettings.marqueePosition || 'bottom',
-        marqueeTextColor: voiceSettings.marqueeTextColor || '#FFE600',
-        enableWatermark: voiceSettings.enableWatermark !== false,
-        watermarkText: voiceSettings.watermarkText || 'រក្សាសិទ្ធិដោយ ៖ Holiday Kh Drama',
-        watermarkPosition: voiceSettings.watermarkPosition || 'above-ticker',
-        watermarkColor: voiceSettings.watermarkColor || '#38BDF8',
-        antiTheftSize: voiceSettings.antiTheftSize || 'small',
-      };
-
-      const logoOptions = {
-        enabled: Boolean(voiceSettings.enableLogo),
-        image: voiceSettings.logoImage,
-        position: voiceSettings.logoPosition || 'both',
-        size: Number(voiceSettings.logoSize) || 72,
-        opacity: Number(voiceSettings.logoOpacity) || 0.9,
-        shape: voiceSettings.logoShape || 'circle',
-        margin: Number(voiceSettings.logoMargin) || 20,
-      };
+      const antiTheftOptions = buildAntiTheftOptions();
+      const logoOptions = buildLogoOptions();
 
       // Resolve effective export aspect ratio:
       // 1. User manual select in voiceSettings.aspectRatio takes precedence.
@@ -118,7 +431,7 @@ export function useVideoRender({
       const srcH = Number(videoMetadata?.height || selectedVideo?.height || activeEpisode?.metadata?.height || activeEpisode?.video?.height) || 0;
       const defaultRatio = resolveDefaultAspectRatio(srcW, srcH);
 
-      let effectiveAspectRatio = voiceSettings.aspectRatio;
+      let effectiveAspectRatio = activeSettings.aspectRatio;
       if (!effectiveAspectRatio) {
         if (defaultRatio) {
           effectiveAspectRatio = defaultRatio;
@@ -137,15 +450,15 @@ export function useVideoRender({
         segments: scriptData?.segments || [],
         videoClips: videoClips || [],
         fullAudioPath,
-        duckingVolume: voiceSettings.duckingVolume,
-        khmerVolume: voiceSettings.khmerVolume,
-        enableDemucs: Boolean(voiceSettings.enableDemucs),
-        burnSubtitles: voiceSettings.burnSubtitles,
-        subtitleColor: voiceSettings.subtitleColor,
-        subtitleSize: voiceSettings.subtitleSize,
-        subtitleStyle: voiceSettings.subtitleStyle || 'banner',
+        duckingVolume: activeSettings.duckingVolume,
+        khmerVolume: activeSettings.khmerVolume,
+        enableDemucs: Boolean(activeSettings.enableDemucs),
+        burnSubtitles: activeSettings.burnSubtitles,
+        subtitleColor: activeSettings.subtitleColor,
+        subtitleSize: activeSettings.subtitleSize,
+        subtitleStyle: activeSettings.subtitleStyle || 'banner',
         aspectRatio: effectiveAspectRatio,
-        verticalStyle: voiceSettings.verticalStyle || 'pad',
+        verticalStyle: activeSettings.verticalStyle || 'pad',
         sourceDimensions: srcW && srcH ? { width: srcW, height: srcH } : null,
         voiceId: activeVoiceId,
         speed: activeSpeed,
@@ -159,7 +472,10 @@ export function useVideoRender({
       setRenderStage('🎉 Render & Export ជោគជ័យ 100%!');
       await new Promise((r) => setTimeout(r, 600));
 
-      setRenderedVideo(result);
+      setRenderedVideo({
+        ...result,
+        aspectRatio: effectiveAspectRatio,
+      });
       if (videoRef?.current) {
         videoRef.current.pause();
         if (setIsPlaying) setIsPlaying(false);
@@ -168,16 +484,10 @@ export function useVideoRender({
       }
 
       // Automatically trigger browser download to user's Downloads folder
-      try {
-        const link = document.createElement('a');
-        link.href = result.downloadUrl || result.outputVideoUrl;
-        link.setAttribute('download', result.outputFilename || `${dramaName}_Khmer_Dubbed.mp4`);
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-      } catch (dlErr) {
-        console.warn('Auto-download trigger error:', dlErr);
-      }
+      triggerBrowserDownload(
+        result.downloadUrl || result.outputVideoUrl,
+        result.outputFilename || `${dramaName}_Khmer_Dubbed.mp4`
+      );
     } catch (err) {
       clearInterval(progressTimer);
       setRenderProgress(0);
@@ -199,5 +509,6 @@ export function useVideoRender({
     renderProgress,
     renderStage,
     handleRenderVideo,
+    batchRender,
   };
 }

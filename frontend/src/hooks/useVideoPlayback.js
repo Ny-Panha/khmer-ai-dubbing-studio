@@ -180,7 +180,8 @@ export function useVideoPlayback({
         } else {
           // Last clip reached
           // If only 1 clip exists and real video has more content, allow video to play to full duration
-          if (videoClips.length === 1 && realDur > sEnd + 1.0) {
+          const trueMaxDur = Math.max(v.duration || 0, duration || 0, realDur || 0);
+          if (videoClips.length === 1 && trueMaxDur > sEnd + 0.5) {
             setCurrentTime(srcNow);
           } else {
             v.pause();

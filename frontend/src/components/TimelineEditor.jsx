@@ -1,6 +1,14 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { formatMinSec, getSegmentAudioDuration } from '../utils/timestampUtils';
-import { getPixelsPerSecond, trimClip, moveClip, syncSegmentsWithMovedClip, deleteSegmentByIdOrIndex, resolveSegmentAtTime } from '../utils/timelineUtils';
+import {
+  getPixelsPerSecond,
+  trimClip,
+  moveClip,
+  syncSegmentsWithMovedClip,
+  deleteSegmentByIdOrIndex,
+  resolveSegmentAtTime,
+  computeTimelineScrollForTime,
+} from '../utils/timelineUtils';
 
 import TimelineToolbar from './timeline/TimelineToolbar';
 import TimelineTrackHeaders from './timeline/TimelineTrackHeaders';
@@ -32,6 +40,7 @@ function TimelineEditor({
   videoThumbnails = [],
   selectedSegmentId = null,
   onSelectSegment = null,
+  timelineFocusRequest = null,
   onAutoSplitVideo = null,
   onResetFullVideo = null,
   onBridgeGaps = null,
@@ -67,7 +76,23 @@ function TimelineEditor({
   const [lockedTracks, setLockedTracks] = useState({ video: false, voice: false, subs: false, cleanBgm: false });
   const [hiddenTracks, setHiddenTracks] = useState({ video: false, voice: false, subs: false, cleanBgm: false });
   const [mutedTracks, setMutedTracks] = useState({ video: false, voice: false, subs: false, cleanBgm: false });
-  const [autoCenter, setAutoCenter] = useState(true);
+  // Persistent toggle for Auto-Center playhead (Default: ON / true - remembered in localStorage)
+  const [autoCenter, setAutoCenter] = useState(() => {
+    try {
+      const saved = localStorage.getItem('TIMELINE_AUTO_CENTER');
+      if (saved !== null) {
+        return saved === 'true';
+      }
+    } catch (_) {}
+    return true; // Default state: ON
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('TIMELINE_AUTO_CENTER', String(autoCenter));
+    } catch (_) {}
+  }, [autoCenter]);
+
   const isNativeDraggingRef = useRef(false);
 
   // Persistent toggle for Subtitles Track visibility on timeline (Default on first run: OFF)
@@ -109,10 +134,16 @@ function TimelineEditor({
       const isTrimmed = Boolean(seg.audioTrimmed || seg.userTrimmed);
       const slotStart = (typeof seg.startSec === 'number' && !isNaN(seg.startSec)) ? seg.startSec : rawStart;
       const slotEnd = (typeof seg.endSec === 'number' && !isNaN(seg.endSec)) ? seg.endSec : slotStart + 3.0;
-      const audioDur = getSegmentAudioDuration(seg, seg.audioDurationSec || 2.5);
+      const slotSpan = (typeof seg.audioEndSec === 'number' && !isNaN(seg.audioEndSec) && seg.audioEndSec > rawStart)
+        ? (seg.audioEndSec - rawStart)
+        : (slotEnd > slotStart ? (slotEnd - slotStart) : 2.5);
+      const audioDur = getSegmentAudioDuration(
+        seg,
+        (typeof seg.audioDurationSec === 'number' && seg.audioDurationSec > 0) ? seg.audioDurationSec : slotSpan
+      );
       const rawEnd = (isTrimmed && typeof seg.audioEndSec === 'number' && !isNaN(seg.audioEndSec))
         ? seg.audioEndSec 
-        : Math.max(slotEnd, rawStart + audioDur);
+        : (rawStart + audioDur);
 
       // If user explicitly shifted and set trackRow, respect it completely (any integer >= 0)
       if (typeof seg.trackRow === 'number' && (seg.userShifted || seg.trackRow >= 2)) {
@@ -161,10 +192,16 @@ function TimelineEditor({
     const slotStart = (typeof seg.startSec === 'number' && !isNaN(seg.startSec)) ? seg.startSec : rawStart;
     const slotEnd = (typeof seg.endSec === 'number' && !isNaN(seg.endSec)) ? seg.endSec : slotStart + 3.0;
     const isTrimmed = Boolean(seg.audioTrimmed || seg.userTrimmed);
-    const audioDur = getSegmentAudioDuration(seg, seg.audioDurationSec || 2.5);
+    const slotSpan = (typeof seg.audioEndSec === 'number' && !isNaN(seg.audioEndSec) && seg.audioEndSec > rawStart)
+      ? (seg.audioEndSec - rawStart)
+      : (slotEnd > slotStart ? (slotEnd - slotStart) : 2.5);
+    const audioDur = getSegmentAudioDuration(
+      seg,
+      (typeof seg.audioDurationSec === 'number' && seg.audioDurationSec > 0) ? seg.audioDurationSec : slotSpan
+    );
     const rawEnd = (isTrimmed && typeof seg.audioEndSec === 'number' && !isNaN(seg.audioEndSec))
       ? seg.audioEndSec
-      : Math.max(slotEnd, rawStart + audioDur);
+      : (rawStart + audioDur);
     return { start: rawStart, end: rawEnd };
   }, []);
 
@@ -400,6 +437,9 @@ function TimelineEditor({
   const onSelectSegmentRef = useRef(onSelectSegment);
   onSelectSegmentRef.current = onSelectSegment;
   const lastUserSelectTimeRef = useRef(0);
+  const manualFocusLockRef = useRef(null);
+  const handledFocusNonceRef = useRef(0);
+  const lastFocusScrollRef = useRef(null);
   const scrubRafRef = useRef(null);
   const pendingScrubTimeRef = useRef(null);
   const handleScrubRef = useRef(null);
@@ -416,6 +456,49 @@ function TimelineEditor({
     setSelectedSubId(selectedSegmentId);
     setSelectedAudioId(selectedSegmentId);
   }, [selectedSegmentId]);
+
+  // Focus timeline viewport + protect selection lock when user clicks a segment in "3. Subs"
+  useEffect(() => {
+    if (!timelineFocusRequest || !timelineFocusRequest.nonce) return;
+    if (handledFocusNonceRef.current === timelineFocusRequest.nonce) return;
+    handledFocusNonceRef.current = timelineFocusRequest.nonce;
+
+    const { segKey, timeSec } = timelineFocusRequest;
+    const safeTime = Number.isFinite(timeSec) ? Math.max(0, timeSec) : 0;
+
+    followSyncSkippedDueToEditingRef.current = false;
+    lastUserSelectTimeRef.current = Date.now();
+    lastPlayheadSegKeyRef.current = segKey;
+    selectedSegmentIdRef.current = segKey;
+    lastSyncedInspectorIdRef.current = segKey;
+    setSelectedAudioId(segKey);
+    setSelectedSubId(segKey);
+
+    manualFocusLockRef.current = {
+      segKey,
+      targetTime: safeTime,
+      expiresAt: Date.now() + 900,
+    };
+
+    const container = timelineBodyRef.current;
+    if (container && container.clientWidth > 0) {
+      const currentPps = ppsRef.current || 45;
+      const targetScroll = computeTimelineScrollForTime(
+        safeTime,
+        currentPps,
+        container.clientWidth,
+        TRACK_HEADER_WIDTH
+      );
+      lastFocusScrollRef.current = { targetScroll, ts: Date.now() };
+      if (Math.abs(container.scrollLeft - targetScroll) > 4) {
+        if (typeof container.scrollTo === 'function') {
+          container.scrollTo({ left: targetScroll, behavior: 'smooth' });
+        } else {
+          container.scrollLeft = targetScroll;
+        }
+      }
+    }
+  }, [timelineFocusRequest]);
 
   // Safe blur helper: Blurs active Inspector textarea/input so editing commits safely before timeline actions
   const safeBlurInspectorInput = useCallback(() => {
@@ -443,6 +526,20 @@ function TimelineEditor({
   // Runs both during playback and when seeking/paused; preserves manual click selection until playhead crosses into next segment
   useEffect(() => {
     if (!scriptSegments || scriptSegments.length === 0 || !Number.isFinite(currentTime) || dragState || isScrubbing || isScrubbingRef.current) return;
+
+    // Preserve explicit segment selection (from "3. Subs" click or timeline clip click) across
+    // 0.01s codec seek rounding or adjacent-segment overlaps while paused at that target time.
+    const lock = manualFocusLockRef.current;
+    if (lock) {
+      const delta = Math.abs(currentTime - lock.targetTime);
+      const withinSeekSettle = !isPlaying && Date.now() < lock.expiresAt && delta <= 0.35;
+      const parkedOnTarget = !isPlaying && delta <= 0.12;
+      if (withinSeekSettle || parkedOnTarget) {
+        lastPlayheadSegKeyRef.current = lock.segKey;
+        return;
+      }
+      manualFocusLockRef.current = null;
+    }
 
     const isEditingText = isEditingInspectorText();
 
@@ -549,33 +646,34 @@ function TimelineEditor({
     return Math.max(1200, totalDuration * pps + TRACK_HEADER_WIDTH + 1000);
   }, [totalDuration, pps]);
 
+  // Auto-heal single truncated video clip: if video track only has 1 uncut clip ending prematurely (e.g. at 20s instead of totalDuration),
+  // automatically heal and stretch it to match totalDuration so video track and playhead never stop or freeze at 20s!
+  useEffect(() => {
+    if (!videoClips || videoClips.length !== 1 || !onUpdateClips) return;
+    const singleClip = videoClips[0];
+    if ((singleClip.start || 0) === 0 && totalDuration > 15 && (singleClip.end || 0) < totalDuration - 2) {
+      const healedClips = [{
+        ...singleClip,
+        end: totalDuration,
+        sourceEnd: Math.max(Number(singleClip.sourceEnd) || 0, totalDuration),
+        duration: totalDuration,
+      }];
+      onUpdateClips(healedClips);
+    }
+  }, [videoClips, totalDuration, onUpdateClips]);
+
   const handleCenterPlayhead = useCallback(() => {
     if (!timelineBodyRef.current) return;
     const container = timelineBodyRef.current;
     const clientWidth = container.clientWidth;
     if (clientWidth <= 0) return;
     const activeTime = (videoRef?.current && !isNaN(videoRef.current.currentTime)) ? videoRef.current.currentTime : currentTime;
-    const targetScroll = Math.max(0, (activeTime * pps + TRACK_HEADER_WIDTH) - (clientWidth / 2));
+    const playheadAbsoluteX = activeTime * pps + TRACK_HEADER_WIDTH;
+    const centerThreshold = clientWidth / 2;
+    const targetScroll = playheadAbsoluteX > centerThreshold ? Math.max(0, Math.round(playheadAbsoluteX - centerThreshold)) : 0;
 
-    const currentScreenX = TRACK_HEADER_WIDTH + (activeTime * pps) - container.scrollLeft;
-    const isAtCenter = Math.abs(currentScreenX - (clientWidth / 2)) < 15;
-
-    if (autoCenter && isAtCenter) {
-      setAutoCenter(false);
-    } else {
-      container.scrollTo({ left: targetScroll, behavior: 'smooth' });
-      setAutoCenter(true);
-    }
-  }, [currentTime, pps, autoCenter, videoRef]);
-
-  // If user explicitly scrolls horizontally with wheel / touchpad, disable autoCenter so it doesn't fight the user
-  const handleTimelineWheel = useCallback((e) => {
-    if (Math.abs(e.deltaX) > 3 || (e.shiftKey && Math.abs(e.deltaY) > 3)) {
-      if (autoCenter) {
-        setAutoCenter(false);
-      }
-    }
-  }, [autoCenter]);
+    container.scrollTo({ left: targetScroll, behavior: 'smooth' });
+  }, [currentTime, pps, videoRef]);
 
   const performScrub = useCallback((newTime) => {
     onSeek(newTime);
@@ -583,6 +681,7 @@ function TimelineEditor({
 
   // Playhead scrubber calculation with requestAnimationFrame batching for ultra-smooth 60fps scrubbing
   const handleScrub = useCallback((e) => {
+    manualFocusLockRef.current = null;
     if (!timelineBodyRef.current || totalDuration === 0) return;
     const rect = timelineBodyRef.current.getBoundingClientRect();
     const scrollLeft = timelineBodyRef.current.scrollLeft || 0;
@@ -651,11 +750,27 @@ function TimelineEditor({
     const rawStart = (typeof seg.audioStartSec === 'number' && !isNaN(seg.audioStartSec))
       ? seg.audioStartSec 
       : (typeof seg.startSec === 'number' && !isNaN(seg.startSec) ? seg.startSec : 0);
-    const rawEnd = (typeof seg.audioEndSec === 'number' && !isNaN(seg.audioEndSec))
+    const slotStart = (typeof seg.startSec === 'number' && !isNaN(seg.startSec)) ? seg.startSec : rawStart;
+    const slotEnd = (typeof seg.endSec === 'number' && !isNaN(seg.endSec)) ? seg.endSec : slotStart + 3.0;
+    const slotSpan = (typeof seg.audioEndSec === 'number' && !isNaN(seg.audioEndSec) && seg.audioEndSec > rawStart)
+      ? (seg.audioEndSec - rawStart)
+      : (slotEnd > slotStart ? (slotEnd - slotStart) : 2.5);
+    const audioDur = getSegmentAudioDuration(
+      seg,
+      (typeof seg.audioDurationSec === 'number' && seg.audioDurationSec > 0) ? seg.audioDurationSec : slotSpan
+    );
+    const isTrimmed = Boolean(seg.audioTrimmed || seg.userTrimmed);
+    const rawEnd = (isTrimmed && typeof seg.audioEndSec === 'number' && !isNaN(seg.audioEndSec))
       ? seg.audioEndSec 
-      : (typeof seg.endSec === 'number' && !isNaN(seg.endSec) ? seg.endSec : rawStart + (seg.audioDurationSec || 2.5));
+      : (rawStart + audioDur);
 
     if (mode === 'move' && onSeek) {
+      manualFocusLockRef.current = {
+        segKey,
+        targetTime: rawStart,
+        expiresAt: Date.now() + 900,
+      };
+      lastPlayheadSegKeyRef.current = segKey;
       onSeek(rawStart);
     }
 
@@ -706,6 +821,12 @@ function TimelineEditor({
     if (onSelectClip) onSelectClip(null);
 
     if (mode === 'move' && onSeek) {
+      manualFocusLockRef.current = {
+        segKey: subKey,
+        targetTime: startSec,
+        expiresAt: Date.now() + 900,
+      };
+      lastPlayheadSegKeyRef.current = subKey;
       onSeek(startSec);
     }
 
@@ -1420,63 +1541,70 @@ function TimelineEditor({
     let lastPerfTime = performance.now();
 
     const updatePlayheadAndScroll = () => {
-      const v = videoRef?.current;
-      if (v && playheadRef.current) {
-        const nowPerf = performance.now();
-        const srcNow = v.currentTime;
+      try {
+        const v = videoRef?.current;
+        if (v && playheadRef.current) {
+          const nowPerf = performance.now();
+          const srcNow = v.currentTime;
 
-        // Re-anchor interpolation whenever video decoder advances to new frame
-        if (Math.abs(srcNow - lastVideoTime) > 0.001) {
-          lastVideoTime = srcNow;
-          lastPerfTime = nowPerf;
-        }
-
-        // Sub-frame interpolation between 24/30fps decoder ticks for buttery-smooth 60fps playhead motion
-        const elapsedSinceAnchor = ((nowPerf - lastPerfTime) / 1000) * (v.playbackRate || 1);
-        const smoothSrcTime = v.paused ? srcNow : Math.min(srcNow + 0.08, lastVideoTime + Math.max(0, elapsedSinceAnchor));
-
-        const currentPps = ppsRef.current || pps || 45;
-        const currentClips = videoClipsRef.current || videoClips || [];
-        let tlTime = smoothSrcTime;
-        if (currentClips && currentClips.length > 0) {
-          const c = currentClips.find((clip) => {
-            const sStart = Number.isFinite(clip.sourceStart) ? clip.sourceStart : (clip.start || 0);
-            const sEnd = Number.isFinite(clip.sourceEnd) ? clip.sourceEnd : (clip.end || (v.duration || 0));
-            return smoothSrcTime >= (sStart - 0.05) && smoothSrcTime <= (sEnd + 0.05);
-          });
-          if (c) {
-            const sStart = Number.isFinite(c.sourceStart) ? c.sourceStart : (c.start || 0);
-            const cStart = Number.isFinite(c.start) ? c.start : 0;
-            tlTime = cStart + Math.max(0, smoothSrcTime - sStart);
+          // Re-anchor interpolation whenever video decoder advances to new frame
+          if (Math.abs(srcNow - lastVideoTime) > 0.001) {
+            lastVideoTime = srcNow;
+            lastPerfTime = nowPerf;
           }
-        }
 
-        const currentX = tlTime * currentPps;
+          // Sub-frame interpolation between 24/30fps decoder ticks for buttery-smooth 60fps playhead motion
+          const elapsedSinceAnchor = ((nowPerf - lastPerfTime) / 1000) * (v.playbackRate || 1);
+          const smoothSrcTime = v.paused ? srcNow : Math.min(srcNow + 0.08, lastVideoTime + Math.max(0, elapsedSinceAnchor));
 
-        // Direct hardware GPU transform: silky-smooth 60 FPS without React re-render lag!
-        playheadRef.current.style.transform = `translate3d(${currentX}px, 0, 0)`;
+          const currentPps = ppsRef.current || pps || 45;
+          const currentClips = videoClipsRef.current || videoClips || [];
+          let tlTime = smoothSrcTime;
+          if (currentClips && currentClips.length > 0) {
+            const c = currentClips.find((clip) => {
+              const sStart = Number.isFinite(clip.sourceStart) ? clip.sourceStart : (clip.start || 0);
+              const sEnd = Number.isFinite(clip.sourceEnd) ? clip.sourceEnd : (clip.end || (v.duration || 0));
+              return smoothSrcTime >= (sStart - 0.05) && smoothSrcTime <= (sEnd + 0.05);
+            });
+            if (c) {
+              const sStart = Number.isFinite(c.sourceStart) ? c.sourceStart : (c.start || 0);
+              const cStart = Number.isFinite(c.start) ? c.start : 0;
+              tlTime = cStart + Math.max(0, smoothSrcTime - sStart);
+            }
+          }
 
-        if (playheadTimeTextRef.current) {
-          playheadTimeTextRef.current.textContent = formatMinSec(tlTime);
-        }
+          const currentX = tlTime * currentPps;
 
-        // Smart Professional Auto-Follow Viewport Bounds (Center-Lock Style)
-        // Keeps playhead locked at 50% viewport center once it advances past the center line
-        if (autoCenter && timelineBodyRef.current && !isScrubbing && !dragState) {
-          const container = timelineBodyRef.current;
-          const clientWidth = container.clientWidth;
-          if (clientWidth > 0) {
-            const screenX = (currentX + TRACK_HEADER_WIDTH) - container.scrollLeft;
-            const rightThreshold = clientWidth / 2;
+          // Direct hardware GPU transform: silky-smooth 60 FPS without React re-render lag!
+          playheadRef.current.style.transform = `translate3d(${currentX}px, 0, 0)`;
 
-            if (screenX > rightThreshold) {
-              const targetScroll = Math.round((currentX + TRACK_HEADER_WIDTH) - (clientWidth / 2));
-              container.scrollLeft = targetScroll;
-            } else if (screenX < TRACK_HEADER_WIDTH) {
-              container.scrollLeft = 0;
+          if (playheadTimeTextRef.current) {
+            playheadTimeTextRef.current.textContent = formatMinSec(tlTime);
+          }
+
+          // Smart Professional Auto-Follow Viewport Bounds (Center-Lock Style)
+          // Keeps playhead locked at 50% viewport center once it advances past the center line
+          if (autoCenter && timelineBodyRef.current && !isScrubbing && !dragState) {
+            const container = timelineBodyRef.current;
+            const clientWidth = container.clientWidth;
+            if (clientWidth > 0) {
+              const playheadAbsoluteX = currentX + TRACK_HEADER_WIDTH;
+              const rightThreshold = clientWidth / 2;
+              const screenX = playheadAbsoluteX - container.scrollLeft;
+
+              if (screenX > rightThreshold || playheadAbsoluteX > rightThreshold) {
+                const targetScroll = Math.round(playheadAbsoluteX - rightThreshold);
+                if (Math.abs(container.scrollLeft - targetScroll) >= 1) {
+                  container.scrollLeft = targetScroll;
+                }
+              } else if (container.scrollLeft > 0) {
+                container.scrollLeft = 0;
+              }
             }
           }
         }
+      } catch (err) {
+        console.warn('[Timeline RAF] Safe playhead error suppression:', err);
       }
       animId = requestAnimationFrame(updatePlayheadAndScroll);
     };
@@ -1505,7 +1633,12 @@ function TimelineEditor({
     const clientWidth = container.clientWidth;
     if (clientWidth <= 0) return;
 
-    const targetScroll = Math.max(0, (currentTime * pps + TRACK_HEADER_WIDTH) - (clientWidth / 2));
+    const targetScroll = computeTimelineScrollForTime(currentTime, pps, clientWidth, TRACK_HEADER_WIDTH);
+    const recentFocus = lastFocusScrollRef.current;
+    if (recentFocus && (Date.now() - recentFocus.ts) < 120 && Math.abs(targetScroll - recentFocus.targetScroll) <= 6) {
+      return;
+    }
+
     if (Math.abs(container.scrollLeft - targetScroll) > 4) {
       container.scrollTo({ left: targetScroll, behavior: 'smooth' });
     }
@@ -1594,7 +1727,6 @@ function TimelineEditor({
         className="timeline-scroll-area" 
         ref={timelineBodyRef}
         onMouseDown={handleBackgroundMouseDown}
-        onWheel={handleTimelineWheel}
       >
         <TimelineTrackHeaders
           lockedTracks={lockedTracks}

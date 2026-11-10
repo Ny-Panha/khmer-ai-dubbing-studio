@@ -14,6 +14,9 @@ import {
   extractGlossaryFromEpisode,
   createDefaultEpisode,
   createDefaultSeries,
+  loadSavedVoiceSettings,
+  resolveStickyVoiceSettings,
+  sanitizeRenderedVideo,
 } from '../utils/projectStorage';
 import { generateVideoThumbnails } from '../utils/thumbnailUtils';
 import { fetchVideoThumbnails } from '../services/api';
@@ -74,6 +77,11 @@ export function useSeriesManager({
 
   const activeSeries = seriesList.find((s) => s.id === activeSeriesIdState) || seriesList[0] || null;
   const activeEpisode = (activeSeries?.episodes || []).find((e) => e.id === activeEpisodeIdState) || activeSeries?.episodes?.[0] || null;
+
+  const latestSeriesListRef = useRef(seriesList);
+  latestSeriesListRef.current = seriesList;
+  const latestScriptDataRef = useRef(scriptData);
+  latestScriptDataRef.current = scriptData;
 
   // Stable reference to external setters to prevent applyEpisodeToWorkspace from recreating on every render
   const callbacksRef = useRef({});
@@ -165,14 +173,25 @@ export function useSeriesManager({
     if (cb.setFullAudioUrl) {
       cb.setFullAudioUrl(isMatchingEpAudio(ep.fullAudioUrl) ? ep.fullAudioUrl : null);
     }
+    const scriptMaxEnd = (ep.scriptData?.segments || []).reduce((max, s) => {
+      const end = Number(s.audioEndSec) || Number(s.endSec) || (Number(s.startSec) || 0) + (Number(s.audioDurationSec) || 3.0);
+      return Math.max(max, end);
+    }, 0);
+    const epDur = Math.max(
+      ep.duration || 0,
+      ep.metadata?.durationSec || 0,
+      ep.video?.durationSec || 0,
+      ep.video?.duration || 0,
+      scriptMaxEnd
+    );
+
     if (cb.setDuration) {
-      cb.setDuration(ep.duration || 0);
+      cb.setDuration(epDur || ep.duration || 0);
     }
     if (cb.setCurrentTime) {
       cb.setCurrentTime(0);
     }
     if (cb.setVideoClips) {
-      const epDur = ep.duration || ep.metadata?.durationSec || ep.video?.durationSec || 0;
       const existingClips = Array.isArray(ep.videoClips) ? ep.videoClips : [];
       if (existingClips.length === 0 && ep.video && epDur > 0) {
         cb.setVideoClips([
@@ -195,7 +214,7 @@ export function useSeriesManager({
         // Auto-heal single truncated video clip: if there is only 1 uncut clip starting at 0,
         // but its end is way shorter than the episode duration (e.g. truncated at 20s-30s instead of 1200s),
         // stretch it to cover the full episode duration so the video track never runs out!
-        if (normalized.length === 1 && normalized[0].start === 0 && epDur > 60 && normalized[0].end < epDur - 5) {
+        if (normalized.length === 1 && normalized[0].start === 0 && epDur > 15 && normalized[0].end < epDur - 2) {
           normalized[0].end = epDur;
           normalized[0].sourceEnd = epDur;
           normalized[0].duration = epDur;
@@ -210,10 +229,16 @@ export function useSeriesManager({
       cb.setSelectedSegmentId(ep.selectedSegmentId || null);
     }
     if (cb.setRenderedVideo) {
-      cb.setRenderedVideo(ep.renderedVideo || null);
+      cb.setRenderedVideo(sanitizeRenderedVideo(ep.renderedVideo));
     }
-    if (ep.voiceSettings && cb.setVoiceSettings) {
-      cb.setVoiceSettings((prev) => ({ ...prev, ...ep.voiceSettings }));
+    if (cb.setVoiceSettings) {
+      cb.setVoiceSettings((prev) =>
+        resolveStickyVoiceSettings({
+          prevSettings: prev,
+          savedGlobalSettings: loadSavedVoiceSettings(),
+          episodeVoiceSettings: ep.voiceSettings || null,
+        })
+      );
     }
     if (cb.setMediaAssets) {
       if (ep.video) {
@@ -267,44 +292,78 @@ export function useSeriesManager({
 
   // Sync state on initial mount (runs once on mount)
   useEffect(() => {
+    let cancelled = false;
+    const storedSeriesId = getActiveSeriesId();
+    const storedEpisodeId = getActiveEpisodeId();
     const { seriesList: sList, series, episode } = loadActiveSeriesAndEpisode();
     setSeriesList(sList);
     setActiveSeriesIdState(series.id);
     setActiveEpisodeIdState(episode.id);
+    activeEpisodeIdRef.current = episode.id;
 
     // Apply initial episode state to workspace
     if (episode) {
       applyEpisodeToWorkspace(episode);
     }
 
+    const markInitialized = () => {
+      if (!cancelled && !isInitializedRef.current) {
+        isInitializedRef.current = true;
+      }
+    };
+
+    // Safety fallback so initialization never stalls indefinitely if backend is offline
+    const fallbackTimer = setTimeout(markInitialized, 1500);
+
     // Server-truth hydration: sync latest series and episodes from server
     fetch('/api/series')
       .then((res) => res.json())
       .then((data) => {
+        if (cancelled) return;
         if (data?.success && Array.isArray(data.series) && data.series.length > 0) {
           const serverList = data.series;
+          const resolvedSeriesId = storedSeriesId || series?.id;
+          const targetSeries = serverList.find((s) => s.id === resolvedSeriesId) || serverList[0];
+          const userMovedOffInitial = activeEpisodeIdRef.current && activeEpisodeIdRef.current !== episode?.id;
+          const preferredEpId = userMovedOffInitial
+            ? activeEpisodeIdRef.current
+            : (storedEpisodeId || episode?.id);
+          const targetEp = targetSeries
+            ? ((targetSeries.episodes || []).find((e) => e.id === preferredEpId) || targetSeries.episodes?.[0])
+            : null;
+
+          if (targetSeries) {
+            setActiveSeriesId(targetSeries.id);
+            setActiveSeriesIdState(targetSeries.id);
+          }
+          if (targetEp) {
+            setActiveEpisodeId(targetEp.id);
+            setActiveEpisodeIdState(targetEp.id);
+            activeEpisodeIdRef.current = targetEp.id;
+          }
+
           setSeriesList(serverList);
           try {
             saveSeriesList(serverList);
           } catch (_) {}
-          const targetSeries = serverList.find((s) => s.id === series?.id) || serverList[0];
-          if (targetSeries) {
-            setActiveSeriesIdState(targetSeries.id);
-            const targetEp = (targetSeries.episodes || []).find((e) => e.id === episode?.id) || targetSeries.episodes?.[0];
-            if (targetEp) {
-              setActiveEpisodeIdState(targetEp.id);
-              applyEpisodeToWorkspace(targetEp);
-            }
+
+          if (targetEp) {
+            applyEpisodeToWorkspace(targetEp);
           }
         }
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => {
+        clearTimeout(fallbackTimer);
+        if (!cancelled) {
+          setTimeout(markInitialized, 120);
+        }
+      });
 
-    // Mark initialization complete after workspace states settle
-    const timer = setTimeout(() => {
-      isInitializedRef.current = true;
-    }, 200);
-    return () => clearTimeout(timer);
+    return () => {
+      cancelled = true;
+      clearTimeout(fallbackTimer);
+    };
   }, [applyEpisodeToWorkspace]);
 
   // Extract current workspace snapshot for saving
@@ -395,57 +454,112 @@ export function useSeriesManager({
 
   // 1. Switch to another episode safely (Auto-save current episode first)
   const handleSwitchEpisode = useCallback(async (targetEpisodeId) => {
-    if (!targetEpisodeId || targetEpisodeId === activeEpisodeIdRef.current) return;
+    if (!targetEpisodeId) return;
 
-    // 1. Save current episode completely
-    const snapshot = getCurrentWorkspaceSnapshot();
-    saveEpisodeState(activeSeriesIdState, activeEpisodeIdRef.current, snapshot);
+    const currentSeriesInMem = seriesList.find((s) => s.id === activeSeriesIdState);
+    const targetInMem = (currentSeriesInMem?.episodes || []).find((e) => e.id === targetEpisodeId);
+    const targetMemSegCount = Array.isArray(targetInMem?.scriptData?.segments) ? targetInMem.scriptData.segments.length : 0;
+    const activeWorkspaceSegCount = Array.isArray(scriptData?.segments) ? scriptData.segments.length : 0;
+    const targetMemUpdatedAt = Number(targetInMem?.scriptData?.updatedAt || 0);
+    const activeWorkspaceUpdatedAt = Number(scriptData?.updatedAt || 0);
 
-    // 2. Allow active in-flight AI requests to complete in background.
-    if (activeRequestRef?.current) {
-      activeRequestRef.current.activeEpisodeId = targetEpisodeId;
+    if (
+      targetEpisodeId === activeEpisodeIdRef.current &&
+      targetMemSegCount === activeWorkspaceSegCount &&
+      targetMemUpdatedAt === activeWorkspaceUpdatedAt &&
+      (targetMemSegCount > 0 || activeWorkspaceSegCount > 0)
+    ) {
+      return;
     }
 
-    // 3. Set active episode pointer immediately
-    setActiveEpisodeId(targetEpisodeId);
-    setActiveEpisodeIdState(targetEpisodeId);
-    activeEpisodeIdRef.current = targetEpisodeId;
-
-    // 4. Find target episode from current memory state or storage
-    let currentSeries = seriesList.find((s) => s.id === activeSeriesIdState);
-    if (!currentSeries) {
-      const currentList = loadSeriesList();
-      currentSeries = currentList.find((s) => s.id === activeSeriesIdState) || currentList[0];
-    }
-    let targetEp = (currentSeries?.episodes || []).find((e) => e.id === targetEpisodeId);
-
-    // Apply immediate local state first for instant responsiveness
-    if (targetEp) {
-      applyEpisodeToWorkspace(targetEp);
-    }
-
-    // 5. Server-truth Hydration: if target episode segments are missing or offloaded, fetch full data from backend
+    isTransitioningRef.current = true;
     try {
-      const res = await fetch(`/api/series/${activeSeriesIdState}`);
-      const data = await res.json();
-      if (data?.success && data.series) {
-        setSeriesList((prevList) => {
-          const updated = (prevList || []).map((s) => (s.id === data.series.id ? data.series : s));
-          try {
-            saveSeriesList(updated);
-          } catch (_) {}
-          return updated;
-        });
-        const hydratedEp = (data.series.episodes || []).find((e) => e.id === targetEpisodeId);
-        if (hydratedEp && hydratedEp.scriptData?.segments?.length > 0) {
-          applyEpisodeToWorkspace(hydratedEp);
-        }
+      const prevEpisodeId = activeEpisodeIdRef.current;
+      // 1. Save previous episode if actually switching away from it
+      const snapshot = getCurrentWorkspaceSnapshot();
+      if (prevEpisodeId && prevEpisodeId !== targetEpisodeId) {
+        saveEpisodeState(activeSeriesIdState, prevEpisodeId, snapshot);
       }
-    } catch (_) {}
-    console.log(`[SeriesManager] Switched from ${snapshot.video?.fileName || 'empty'} to ${targetEp?.title || targetEpisodeId} (${targetEpisodeId})`);
+
+      // 2. Allow active in-flight AI requests to complete in background.
+      if (activeRequestRef?.current) {
+        activeRequestRef.current.activeEpisodeId = targetEpisodeId;
+      }
+
+      // 3. Set active episode pointer immediately
+      setActiveEpisodeId(targetEpisodeId);
+      setActiveEpisodeIdState(targetEpisodeId);
+      activeEpisodeIdRef.current = targetEpisodeId;
+
+      // 4. Find target episode from current memory state or storage
+      let currentSeries = currentSeriesInMem;
+      if (!currentSeries) {
+        const currentList = loadSeriesList();
+        currentSeries = currentList.find((s) => s.id === activeSeriesIdState) || currentList[0];
+      }
+      const targetEp = (currentSeries?.episodes || []).find((e) => e.id === targetEpisodeId);
+
+      // Apply immediate local state first for instant responsiveness
+      if (targetEp) {
+        applyEpisodeToWorkspace(targetEp);
+      }
+
+      // 5. Server-truth Hydration: always confirm latest episode state from backend series.json
+      try {
+        const res = await fetch(`/api/series/${activeSeriesIdState}`);
+        const data = await res.json();
+        if (activeEpisodeIdRef.current !== targetEpisodeId) return;
+        if (data?.success && data.series) {
+          setSeriesList((prevList) => {
+            const exists = (prevList || []).some((s) => s.id === data.series.id);
+            const updated = exists
+              ? (prevList || []).map((s) => (s.id === data.series.id ? data.series : s))
+              : [...(prevList || []), data.series];
+            try {
+              saveSeriesList(updated);
+            } catch (_) {}
+            return updated;
+          });
+          const hydratedEp = (data.series.episodes || []).find((e) => e.id === targetEpisodeId);
+          const hydratedSegLen = Array.isArray(hydratedEp?.scriptData?.segments) ? hydratedEp.scriptData.segments.length : 0;
+          const localSegLen = Array.isArray(targetEp?.scriptData?.segments) ? targetEp.scriptData.segments.length : 0;
+          const hydratedUpdatedAt = Number(hydratedEp?.scriptData?.updatedAt || 0);
+          const localUpdatedAt = Number(targetEp?.scriptData?.updatedAt || 0);
+          const localHasNewerScript =
+            localSegLen > 0 && localUpdatedAt > hydratedUpdatedAt && hydratedUpdatedAt > 0;
+          const hydratedRv = sanitizeRenderedVideo(hydratedEp?.renderedVideo);
+          const localRv = sanitizeRenderedVideo(targetEp?.renderedVideo);
+          const hydratedRvUrl = typeof hydratedRv === 'string' ? hydratedRv : (hydratedRv?.outputVideoUrl || hydratedRv?.videoUrl || null);
+          const localRvUrl = typeof localRv === 'string' ? localRv : (localRv?.outputVideoUrl || localRv?.videoUrl || null);
+          const audioOrBgmChanged = Boolean(
+            Boolean(hydratedEp?.audioGenerated) !== Boolean(targetEp?.audioGenerated) ||
+            Boolean(hydratedEp?.audioOutdated) !== Boolean(targetEp?.audioOutdated) ||
+            (hydratedEp?.fullAudioUrl || null) !== (targetEp?.fullAudioUrl || null) ||
+            hydratedRvUrl !== localRvUrl ||
+            (hydratedEp?.bgmAudioUrl && hydratedEp.bgmAudioUrl !== targetEp?.bgmAudioUrl)
+          );
+          if (
+            hydratedEp &&
+            !localHasNewerScript &&
+            (hydratedSegLen > 0 || localSegLen === 0 || audioOrBgmChanged) &&
+            (hydratedSegLen !== localSegLen || hydratedUpdatedAt !== localUpdatedAt || localSegLen === 0 || audioOrBgmChanged)
+          ) {
+            applyEpisodeToWorkspace(hydratedEp);
+          }
+        }
+      } catch (_) {}
+      console.log(`[SeriesManager] Switched from ${snapshot.video?.fileName || 'empty'} to ${targetEp?.title || targetEpisodeId} (${targetEpisodeId})`);
+    } finally {
+      setTimeout(() => {
+        if (activeEpisodeIdRef.current === targetEpisodeId) {
+          isTransitioningRef.current = false;
+        }
+      }, 100);
+    }
   }, [
     activeSeriesIdState,
     seriesList,
+    scriptData,
     getCurrentWorkspaceSnapshot,
     activeRequestRef,
     applyEpisodeToWorkspace,
@@ -462,9 +576,13 @@ export function useSeriesManager({
     const newEp = addNewEpisodeToSeries(activeSeriesIdState, safeTitle);
     if (!newEp) return null;
 
-    // 3. Reload list and switch to new episode
-    const updatedList = loadSeriesList();
-    setSeriesList(updatedList);
+    // 3. Preserve in-memory segments on sibling episodes while adding newEp
+    setSeriesList((prevList) => {
+      if (!Array.isArray(prevList) || prevList.length === 0) return loadSeriesList();
+      return prevList.map((s) =>
+        s.id === activeSeriesIdState ? { ...s, episodes: [...(s.episodes || []), newEp] } : s
+      );
+    });
     setActiveEpisodeId(newEp.id);
     setActiveEpisodeIdState(newEp.id);
     activeEpisodeIdRef.current = newEp.id;
@@ -534,21 +652,36 @@ export function useSeriesManager({
     if (!targetEpisodeId || !newTitle) return;
     const list = loadSeriesList();
     const sIdx = list.findIndex((s) => s.id === activeSeriesIdState);
-    if (sIdx === -1) return;
-    const eIdx = (list[sIdx].episodes || []).findIndex((e) => e.id === targetEpisodeId);
-    if (eIdx === -1) return;
-
-    list[sIdx].episodes[eIdx].title = newTitle;
-    saveSeriesList(list);
-    setSeriesList(list);
+    if (sIdx !== -1) {
+      const eIdx = (list[sIdx].episodes || []).findIndex((e) => e.id === targetEpisodeId);
+      if (eIdx !== -1) {
+        list[sIdx].episodes[eIdx].title = newTitle;
+        saveSeriesList(list);
+      }
+    }
+    setSeriesList((prevList) =>
+      (prevList || []).map((s) =>
+        s.id === activeSeriesIdState
+          ? {
+              ...s,
+              episodes: (s.episodes || []).map((e) =>
+                e.id === targetEpisodeId ? { ...e, title: newTitle } : e
+              ),
+            }
+          : s
+      )
+    );
   }, [activeSeriesIdState]);
 
   // 5. Rename Series
   const handleRenameSeries = useCallback((newTitle) => {
     if (!newTitle) return;
     updateSeriesTitle(activeSeriesIdState, newTitle);
-    const list = loadSeriesList();
-    setSeriesList(list);
+    setSeriesList((prevList) =>
+      (prevList || []).map((s) =>
+        s.id === activeSeriesIdState ? { ...s, title: newTitle } : s
+      )
+    );
   }, [activeSeriesIdState]);
 
   // 6. Save background results (e.g. if user switched to EP2 while EP1 was generating)
@@ -556,17 +689,31 @@ export function useSeriesManager({
     if (!targetEpisodeId || !partialData) return;
     const list = loadSeriesList();
     const sIdx = list.findIndex((s) => s.id === activeSeriesIdState);
-    if (sIdx === -1) return;
-    const eIdx = (list[sIdx].episodes || []).findIndex((e) => e.id === targetEpisodeId);
-    if (eIdx === -1) return;
-
-    list[sIdx].episodes[eIdx] = {
-      ...list[sIdx].episodes[eIdx],
-      ...partialData,
-      lastModified: Date.now(),
-    };
-    saveSeriesList(list);
-    setSeriesList(list);
+    if (sIdx !== -1) {
+      const eIdx = (list[sIdx].episodes || []).findIndex((e) => e.id === targetEpisodeId);
+      if (eIdx !== -1) {
+        list[sIdx].episodes[eIdx] = {
+          ...list[sIdx].episodes[eIdx],
+          ...partialData,
+          lastModified: Date.now(),
+        };
+        saveSeriesList(list);
+      }
+    }
+    setSeriesList((prevList) =>
+      (prevList || []).map((s) =>
+        s.id === activeSeriesIdState
+          ? {
+              ...s,
+              episodes: (s.episodes || []).map((e) =>
+                e.id === targetEpisodeId
+                  ? { ...e, ...partialData, lastModified: Date.now() }
+                  : e
+              ),
+            }
+          : s
+      )
+    );
 
     // If currently active is this episode, also update workspace
     if (activeEpisodeIdRef.current === targetEpisodeId) {
@@ -598,15 +745,49 @@ export function useSeriesManager({
       const res = await fetch(`/api/series/${activeSeriesIdState}`);
       const data = await res.json();
       if (data?.success && data.series) {
+        const prevSeries = (latestSeriesListRef.current || []).find((s) => s.id === data.series.id);
+        const prevActiveEp = (prevSeries?.episodes || []).find((e) => e.id === activeEpisodeIdRef.current);
+        const prevSegLen = Array.isArray(prevActiveEp?.scriptData?.segments) ? prevActiveEp.scriptData.segments.length : 0;
+        const prevUpdatedAt = Number(prevActiveEp?.scriptData?.updatedAt || 0);
+        const workspaceSegLen = Array.isArray(latestScriptDataRef.current?.segments) ? latestScriptDataRef.current.segments.length : 0;
+        const workspaceUpdatedAt = Number(latestScriptDataRef.current?.updatedAt || 0);
+
         setSeriesList((prevList) => {
-          const updated = (prevList || []).map((s) => (s.id === data.series.id ? data.series : s));
+          const listToUpdate = Array.isArray(prevList) && prevList.length > 0 ? prevList : [data.series];
+          const exists = listToUpdate.some((s) => s.id === data.series.id);
+          const updated = exists
+            ? listToUpdate.map((s) => (s.id === data.series.id ? data.series : s))
+            : [...listToUpdate, data.series];
           try {
             saveSeriesList(updated);
           } catch (_) {}
           return updated;
         });
+
         const currentActiveEp = (data.series.episodes || []).find((e) => e.id === activeEpisodeIdRef.current);
-        if (currentActiveEp && currentActiveEp.scriptData?.segments?.length > 0) {
+        const nextSegLen = Array.isArray(currentActiveEp?.scriptData?.segments) ? currentActiveEp.scriptData.segments.length : 0;
+        const nextUpdatedAt = Number(currentActiveEp?.scriptData?.updatedAt || 0);
+        const serverOlderThanWorkspace =
+          workspaceUpdatedAt > nextUpdatedAt && nextUpdatedAt > 0 && workspaceSegLen > 0;
+        const serverRv = sanitizeRenderedVideo(currentActiveEp?.renderedVideo);
+        const prevRv = sanitizeRenderedVideo(prevActiveEp?.renderedVideo);
+        const serverRvUrl = typeof serverRv === 'string' ? serverRv : (serverRv?.outputVideoUrl || serverRv?.videoUrl || null);
+        const prevRvUrl = typeof prevRv === 'string' ? prevRv : (prevRv?.outputVideoUrl || prevRv?.videoUrl || null);
+        const audioOrBgmChanged = Boolean(
+          currentActiveEp && (
+            Boolean(currentActiveEp.audioGenerated) !== Boolean(prevActiveEp?.audioGenerated) ||
+            Boolean(currentActiveEp.audioOutdated) !== Boolean(prevActiveEp?.audioOutdated) ||
+            (currentActiveEp.fullAudioUrl || null) !== (prevActiveEp?.fullAudioUrl || null) ||
+            serverRvUrl !== prevRvUrl ||
+            (currentActiveEp.bgmAudioUrl && currentActiveEp.bgmAudioUrl !== prevActiveEp?.bgmAudioUrl)
+          )
+        );
+        if (
+          currentActiveEp &&
+          !serverOlderThanWorkspace &&
+          (nextSegLen > 0 || audioOrBgmChanged) &&
+          (workspaceSegLen === 0 || nextSegLen !== prevSegLen || nextUpdatedAt > prevUpdatedAt || audioOrBgmChanged)
+        ) {
           applyEpisodeToWorkspace(currentActiveEp);
         }
       }

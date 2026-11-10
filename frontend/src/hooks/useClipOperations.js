@@ -135,7 +135,7 @@ export function useClipOperations({
       if (isTrimmed && typeof s.audioEndSec === 'number' && !isNaN(s.audioEndSec)) {
         effectiveEnd = s.audioEndSec;
       } else {
-        const candidates = [slotEnd, effectiveStart + audioDur];
+        const candidates = [effectiveStart + audioDur];
         if (typeof s.audioEndSec === 'number' && !isNaN(s.audioEndSec)) {
           candidates.push(s.audioEndSec);
         }
@@ -316,7 +316,7 @@ export function useClipOperations({
 
       // Snapshot with current uncut videoClips to preserve unbroken video state
       pushUndoSnapshot(currentClips, segments);
-      setScriptData((prev) => (prev ? { ...prev, segments: reindexed } : null));
+      setScriptData((prev) => (prev ? { ...prev, segments: reindexed, updatedAt: Date.now() } : null));
       if (setSelectedSegmentId) setSelectedSegmentId(uid2);
 
       // Re-sync timeline narration audio
@@ -467,7 +467,9 @@ export function useClipOperations({
 
   // Reset video track back to 1 full continuous uncut video clip
   const handleResetFullVideo = () => {
-    const totalDur = duration > 0 ? duration : (videoRef?.current?.duration || selectedVideo?.durationSec || selectedVideo?.duration || 0);
+    const realVideoDur = (videoRef?.current?.duration && !isNaN(videoRef.current.duration) && videoRef.current.duration > 0) ? videoRef.current.duration : 0;
+    const scriptMaxEnd = (scriptData?.segments || []).reduce((max, s) => Math.max(max, Number(s.audioEndSec) || Number(s.endSec) || (Number(s.startSec) || 0) + 3.0), 0);
+    const totalDur = Math.max(realVideoDur, scriptMaxEnd, duration || 0, selectedVideo?.durationSec || selectedVideo?.duration || 0);
     if (totalDur > 0) {
       const fullClip = [
         {
@@ -517,7 +519,7 @@ export function useClipOperations({
         }
         return seg;
       });
-      setScriptData((prev) => prev ? ({ ...prev, segments: updated }) : null);
+      setScriptData((prev) => prev ? ({ ...prev, segments: updated, updatedAt: Date.now() }) : null);
     }
   };
 
@@ -552,6 +554,7 @@ export function useClipOperations({
     const nextScriptData = {
       ...scriptData,
       segments: alignedSegments,
+      updatedAt: Date.now(),
     };
 
     setScriptData(nextScriptData);
@@ -615,6 +618,7 @@ export function useClipOperations({
     setScriptData({
       ...scriptData,
       segments: resetSegs,
+      updatedAt: Date.now(),
     });
 
     try {
@@ -700,7 +704,7 @@ export function useClipOperations({
       const updatedReg = buildSpeakerRegistry(updated, speakerRegistry);
       if (setSpeakerRegistry) setSpeakerRegistry(updatedReg);
     }
-    setScriptData(prev => prev ? ({ ...prev, segments: updated }) : null);
+    setScriptData(prev => prev ? ({ ...prev, segments: updated, updatedAt: Date.now() }) : null);
     if (setSelectedSegmentId) setSelectedSegmentId(null);
 
     const hasAudios = Boolean(updated.some(s => s.audioFile || s.audioPath || s.audioUrl));
@@ -734,7 +738,7 @@ export function useClipOperations({
       const updatedReg = buildSpeakerRegistry(newSegments, speakerRegistry);
       if (setSpeakerRegistry) setSpeakerRegistry(updatedReg);
     }
-    setScriptData(prev => (prev ? ({ ...prev, segments: newSegments }) : null));
+    setScriptData(prev => (prev ? ({ ...prev, segments: newSegments, updatedAt: Date.now() }) : (newSegments?.length ? { mode: 'dialogue', genre: 'auto', segments: newSegments, updatedAt: Date.now() } : null)));
 
     const hasAudios = Boolean(newSegments?.some(s => s.audioFile || s.audioPath || s.audioUrl));
     if (!hasAudios && audioGenerated) {
@@ -773,20 +777,21 @@ export function useClipOperations({
     const rawTime = typeof targetTime === 'number' && !isNaN(targetTime)
       ? targetTime
       : (videoRef?.current?.currentTime || 0);
-    const safeTime = Math.max(0, parseFloat(rawTime.toFixed(2)));
+    // Floor to hundredths so safeTime <= currentTime and playhead auto-follow stays locked onto the new clip
+    const safeTime = Math.max(0, Math.floor(rawTime * 100) / 100);
 
     pushUndoSnapshot(videoClips, scriptData?.segments || []);
 
     const existingSegs = scriptData?.segments || [];
 
-    // Find slot where this timestamp falls
+    // Find slot where this timestamp falls (strictly after existing segments starting <= safeTime)
     let insertIdx = existingSegs.findIndex(s => {
       const sStart = typeof s.startSec === 'number' ? s.startSec : parseTimeToSeconds(s.start, 0);
       return sStart > safeTime;
     });
     if (insertIdx === -1) insertIdx = existingSegs.length;
 
-    // Check next segment start to prevent collision
+    // Check next segment start to prevent collision when space is tight
     let nextStart = safeTime + 3.0;
     if (insertIdx < existingSegs.length) {
       const nextSeg = existingSegs[insertIdx];
@@ -796,6 +801,51 @@ export function useClipOperations({
       }
     }
     const safeEnd = parseFloat(nextStart.toFixed(2));
+    const draftDur = Math.max(0.5, parseFloat((safeEnd - safeTime).toFixed(2)));
+
+    // Resolve existing voice lane occupancy so new segment lands on the lowest free VOICE lane at [safeTime, safeEnd]
+    const rowEndTimes = [0, 0];
+    const occupiedOnRow = new Map();
+    existingSegs.forEach((seg, idx) => {
+      const sRawStart = (typeof seg.audioStartSec === 'number' && !isNaN(seg.audioStartSec))
+        ? seg.audioStartSec
+        : (typeof seg.startSec === 'number' && !isNaN(seg.startSec) ? seg.startSec : parseTimeToSeconds(seg.start, idx * 4));
+      const sSlotStart = (typeof seg.startSec === 'number' && !isNaN(seg.startSec)) ? seg.startSec : sRawStart;
+      const sSlotEnd = (typeof seg.endSec === 'number' && !isNaN(seg.endSec)) ? seg.endSec : sSlotStart + 3.0;
+      const sSlotSpan = (typeof seg.audioEndSec === 'number' && !isNaN(seg.audioEndSec) && seg.audioEndSec > sRawStart)
+        ? (seg.audioEndSec - sRawStart)
+        : (sSlotEnd > sSlotStart ? (sSlotEnd - sSlotStart) : 2.5);
+      const sAudioDur = getSegmentAudioDuration(seg, (typeof seg.audioDurationSec === 'number' && seg.audioDurationSec > 0) ? seg.audioDurationSec : sSlotSpan);
+      const sEnd = (Boolean(seg.audioTrimmed || seg.userTrimmed) && typeof seg.audioEndSec === 'number' && !isNaN(seg.audioEndSec))
+        ? seg.audioEndSec
+        : (sRawStart + sAudioDur);
+
+      let assignedRow = 0;
+      if (typeof seg.trackRow === 'number' && (seg.userShifted || seg.trackRow >= 2)) {
+        assignedRow = Math.max(0, seg.trackRow);
+        rowEndTimes[assignedRow] = Math.max(rowEndTimes[assignedRow] || 0, sEnd);
+      } else if (sRawStart >= (rowEndTimes[0] || 0) - 0.05) {
+        rowEndTimes[0] = sEnd;
+        assignedRow = 0;
+      } else if (sRawStart >= (rowEndTimes[1] || 0) - 0.05) {
+        rowEndTimes[1] = sEnd;
+        assignedRow = 1;
+      } else {
+        assignedRow = (rowEndTimes[0] || 0) <= (rowEndTimes[1] || 0) ? 0 : 1;
+        rowEndTimes[assignedRow] = Math.max(rowEndTimes[assignedRow] || 0, sEnd);
+      }
+
+      if (!occupiedOnRow.has(assignedRow)) occupiedOnRow.set(assignedRow, []);
+      occupiedOnRow.get(assignedRow).push([sRawStart, sEnd]);
+    });
+
+    let targetRow = 0;
+    while (true) {
+      const spans = occupiedOnRow.get(targetRow) || [];
+      const overlaps = spans.some(([sStart, sEnd]) => safeTime < (sEnd - 0.02) && safeEnd > (sStart + 0.02));
+      if (!overlaps) break;
+      targetRow++;
+    }
 
     const newSegId = `seg_${Date.now()}`;
     const newSeg = {
@@ -808,12 +858,17 @@ export function useClipOperations({
       audioEndSec: safeEnd,
       audioStart: formatTimecode(safeTime),
       audioEnd: formatTimecode(safeEnd),
+      audioDurationSec: draftDur,
       speaker: scriptData?.mode === 'recap' ? 'អ្នកសម្រាយរឿង' : 'តួអង្គ',
       speakerGender: 'FEMALE',
       voiceId: 'km-KH-SreymomNeural',
       original: '',
       khmer: '',
       status: 'pending',
+      ttsStatus: 'pending',
+      trackRow: targetRow,
+      trackId: `voice-${targetRow + 1}`,
+      userAdded: true,
       userShifted: true,
       userCustomSpeed: false,
     };
@@ -893,7 +948,7 @@ export function useClipOperations({
       return seg;
     });
 
-    setScriptData((prev) => prev ? ({ ...prev, segments: updated }) : null);
+    setScriptData((prev) => prev ? ({ ...prev, segments: updated, updatedAt: Date.now() }) : null);
 
     if (audioGenerated) {
       syncTimelineAudioApi(updated, getProjectName(), getVideoId(), episodeId, seriesId)
@@ -936,7 +991,7 @@ export function useClipOperations({
       segmentId: idx + 1,
     }));
 
-    setScriptData((prev) => prev ? ({ ...prev, segments: reindexed }) : null);
+    setScriptData((prev) => prev ? ({ ...prev, segments: reindexed, updatedAt: Date.now() }) : null);
 
     if (audioGenerated) {
       syncTimelineAudioApi(reindexed, getProjectName(), getVideoId(), episodeId, seriesId)

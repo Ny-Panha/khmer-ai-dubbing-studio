@@ -6,6 +6,7 @@ import {
 import { splitVideoEpisodesApi } from '../../services/api';
 import { formatTimecode } from '../../utils/formatTime';
 import { isCorruptedOrMojibakeTitle } from '../../utils/projectStorage';
+import { checkEpisodeHasScript, getEpisodeSegmentCount } from '../dashboard/geminiRouteHelpers';
 
 export default function EpisodesTab({
   seriesList = [],
@@ -248,9 +249,15 @@ export default function EpisodesTab({
                 {ch.khmerName && ch.khmerName !== ch.name && (
                   <span style={{ color: 'var(--accent-cyan)' }}>→ {ch.khmerName}</span>
                 )}
-                <span style={{ fontSize: '0.62rem', color: ch.gender === 'female' ? '#f472b6' : '#60a5fa' }}>
-                  ({ch.gender === 'female' ? 'ស្រី' : 'ប្រុស'})
-                </span>
+                {(() => {
+                  const g = String(ch.gender || '').toLowerCase();
+                  const isFemale = g === 'female' || (ch.voiceId && ch.voiceId.includes('Sreymom')) || (ch.name && /ស្រី|នាង|យាយ|ម៉ែ|កញ្ញា|ជំទាវ/i.test(ch.name));
+                  return (
+                    <span style={{ fontSize: '0.62rem', color: isFemale ? '#f472b6' : '#60a5fa' }}>
+                      ({isFemale ? 'ស្រី' : 'ប្រុស'})
+                    </span>
+                  );
+                })()}
               </span>
             ))}
           </div>
@@ -315,14 +322,8 @@ export default function EpisodesTab({
           const currentVideo = ep.video || (isActive ? selectedVideo : null);
           const hasVideo = Boolean(currentVideo?.videoId || currentVideo?.videoUrl);
           const epDuration = ep.duration || (isActive ? (selectedVideo?.duration || videoMetadata?.durationSec || 0) : 0);
-          const hasScript = Boolean(
-            (ep.scriptData?.segments && ep.scriptData.segments.length > 0) ||
-            ep.scriptData?.hasScript ||
-            (typeof ep.scriptData?.totalSegments === 'number' && ep.scriptData.totalSegments > 0) ||
-            ep.status === 'translated' ||
-            ep.status === 'voicing' ||
-            ep.status === 'completed'
-          );
+          const hasScript = checkEpisodeHasScript(ep);
+          const segmentCount = getEpisodeSegmentCount(ep);
           const hasAudio = Boolean(ep.audioGenerated && !ep.audioOutdated);
           const isExported = Boolean(ep.renderedVideo);
 
@@ -606,7 +607,7 @@ export default function EpisodesTab({
                   }}
                 >
                   <Sparkles size={10} />
-                  <span>{hasScript ? `Script (${ep.scriptData?.segments?.length || ep.scriptData?.totalSegments || 'រួចរាល់'} ឃ្លា)` : 'No Script'}</span>
+                  <span>{hasScript ? `Script (${segmentCount} ឃ្លា)` : 'No Script'}</span>
                 </span>
 
                 <span

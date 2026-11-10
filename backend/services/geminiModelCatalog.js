@@ -1,0 +1,314 @@
+const GEMINI_MODEL_CATALOG = [
+  // Primary Lite Tier (High Quota: 15 RPM, 250K TPM, 500 RPD per Free Tier key)
+  {
+    id: 'gemini-3.5-flash-lite',
+    displayName: 'Gemini 3.5 Flash Lite',
+    category: 'Text-out • Lite',
+    roleTag: 'Primary Lite',
+    usableInDubbing: true,
+    usableInApp: true,
+    inCascade: true,
+    deprecated: false,
+    rpmLimit: 15,
+    tpmLimit: 250000,
+    rpdLimit: 500,
+    notes: 'Fast primary model with largest Free Tier daily quota (500/key).',
+  },
+  {
+    id: 'gemini-3.1-flash-lite',
+    displayName: 'Gemini 3.1 Flash Lite',
+    category: 'Text-out • Lite',
+    roleTag: 'Lite Backup',
+    usableInDubbing: true,
+    usableInApp: true,
+    inCascade: true,
+    deprecated: false,
+    rpmLimit: 15,
+    tpmLimit: 250000,
+    rpdLimit: 500,
+    notes: 'High-speed Flash Lite fallback.',
+  },
+  {
+    id: 'gemini-flash-lite-latest',
+    displayName: 'Gemini Flash-Lite Latest',
+    category: 'Text-out • Lite',
+    roleTag: 'Lite Alias',
+    usableInDubbing: true,
+    usableInApp: true,
+    inCascade: true,
+    deprecated: false,
+    rpmLimit: 15,
+    tpmLimit: 250000,
+    rpdLimit: 500,
+    notes: 'Rolling alias to latest Flash-Lite release.',
+  },
+
+  // Flash Multimodal Tier (5 RPM, 250K TPM, 20 RPD per Free Tier key)
+  {
+    id: 'gemini-3.5-flash',
+    displayName: 'Gemini 3.5 Flash',
+    category: 'Text-out • Flash',
+    roleTag: 'Multimodal',
+    usableInDubbing: true,
+    usableInApp: true,
+    inCascade: true,
+    deprecated: false,
+    rpmLimit: 5,
+    tpmLimit: 250000,
+    rpdLimit: 20,
+    notes: 'Balanced reasoning & Khmer dialogue fluency.',
+  },
+  {
+    id: 'gemini-3.6-flash',
+    displayName: 'Gemini 3.6 Flash',
+    category: 'Text-out • Flash',
+    roleTag: 'Multimodal',
+    usableInDubbing: true,
+    usableInApp: true,
+    inCascade: true,
+    deprecated: false,
+    rpmLimit: 5,
+    tpmLimit: 250000,
+    rpdLimit: 20,
+    notes: 'Backup Flash pool (separate 20 RPD/key bucket).',
+  },
+  {
+    id: 'gemini-3.7-flash',
+    displayName: 'Gemini 3.7 Flash',
+    category: 'Text-out • Flash',
+    roleTag: 'Multimodal',
+    usableInDubbing: true,
+    usableInApp: true,
+    inCascade: true,
+    deprecated: false,
+    rpmLimit: 5,
+    tpmLimit: 250000,
+    rpdLimit: 20,
+    notes: 'Backup Flash pool (separate 20 RPD/key bucket).',
+  },
+  {
+    id: 'gemini-3.8-flash',
+    displayName: 'Gemini 3.8 Flash',
+    category: 'Text-out • Flash',
+    roleTag: 'Multimodal',
+    usableInDubbing: true,
+    usableInApp: true,
+    inCascade: true,
+    deprecated: false,
+    rpmLimit: 5,
+    tpmLimit: 250000,
+    rpdLimit: 20,
+    notes: 'High-accuracy Flash model (20 RPD/key).',
+  },
+  {
+    id: 'gemini-2.5-flash',
+    displayName: 'Gemini 2.5 Flash',
+    category: 'Text-out • Flash',
+    roleTag: 'Multimodal',
+    usableInDubbing: true,
+    usableInApp: true,
+    inCascade: true,
+    deprecated: false,
+    rpmLimit: 5,
+    tpmLimit: 250000,
+    rpdLimit: 20,
+    notes: 'Reliable 2.5 Flash backup (separate 20 RPD/key bucket).',
+  },
+  {
+    id: 'gemini-3-flash-preview',
+    displayName: 'Gemini 3 Flash',
+    category: 'Text-out • Flash',
+    roleTag: 'Preview Pool',
+    usableInDubbing: true,
+    usableInApp: true,
+    inCascade: true,
+    deprecated: false,
+    rpmLimit: 5,
+    tpmLimit: 250000,
+    rpdLimit: 20,
+    notes: 'Gemini 3 Flash preview pool (separate 20 RPD/key bucket).',
+  },
+  {
+    id: 'gemini-flash-latest',
+    displayName: 'Gemini Flash Latest',
+    category: 'Text-out • Flash',
+    roleTag: 'Flash Alias',
+    usableInDubbing: true,
+    usableInApp: true,
+    inCascade: true,
+    deprecated: false,
+    rpmLimit: 5,
+    tpmLimit: 250000,
+    rpdLimit: 20,
+    notes: 'Latest general Flash alias fallback.',
+  },
+
+  // Specialized / Open / Inactive Reference Models (shown when "All models" toggle is enabled)
+  {
+    id: 'gemini-3.5-transcribe',
+    displayName: 'Gemini 3.5 Transcribe',
+    category: 'Live / Audio ASR',
+    roleTag: 'STT Only',
+    usableInDubbing: false,
+    usableInApp: true,
+    inCascade: false,
+    deprecated: false,
+    rpmLimit: 3,
+    tpmLimit: 10000,
+    rpdLimit: 25,
+    notes: 'Speech transcription only (JSON mode disabled by Google).',
+  },
+  {
+    id: 'gemma-4-31b-it',
+    displayName: 'Gemma 4 31B IT',
+    category: 'Open Text-out',
+    roleTag: 'Text Model',
+    usableInDubbing: false,
+    usableInApp: true,
+    inCascade: false,
+    deprecated: false,
+    rpmLimit: 30,
+    tpmLimit: 15000,
+    rpdLimit: 14400,
+    notes: 'Open-weight model available in Gemini API (plain text prompts).',
+  },
+  {
+    id: 'gemma-4-26b-a4b-it',
+    displayName: 'Gemma 4 26B A4B IT',
+    category: 'Open Text-out',
+    roleTag: 'Text Model',
+    usableInDubbing: false,
+    usableInApp: true,
+    inCascade: false,
+    deprecated: false,
+    rpmLimit: 30,
+    tpmLimit: 15000,
+    rpdLimit: 14400,
+    notes: 'MoE open-weight text model in Gemini API.',
+  },
+  {
+    id: 'gemini-2.5-flash-lite',
+    displayName: 'Gemini 2.5 Flash Lite',
+    category: 'Text-out • Deprecated',
+    roleTag: '404 Retired',
+    usableInDubbing: false,
+    usableInApp: false,
+    inCascade: false,
+    deprecated: true,
+    rpmLimit: 10,
+    tpmLimit: 250000,
+    rpdLimit: 20,
+    notes: 'Retired by Google for API calls (replaced by Gemini 3.5 Flash Lite).',
+  },
+  {
+    id: 'gemini-2.5-pro',
+    displayName: 'Gemini 2.5 Pro',
+    category: 'Text-out • Pro',
+    roleTag: '0 Free Limit',
+    usableInDubbing: false,
+    usableInApp: false,
+    inCascade: false,
+    deprecated: true,
+    rpmLimit: 0,
+    tpmLimit: 0,
+    rpdLimit: 0,
+    notes: 'Requires paid billing / unavailable on Free Tier.',
+  },
+  {
+    id: 'gemini-2.0-flash',
+    displayName: 'Gemini 2 Flash',
+    category: 'Text-out • Legacy',
+    roleTag: '0 Free Limit',
+    usableInDubbing: false,
+    usableInApp: false,
+    inCascade: false,
+    deprecated: true,
+    rpmLimit: 0,
+    tpmLimit: 0,
+    rpdLimit: 0,
+    notes: '0/0 quota on current Free Tier project.',
+  },
+  {
+    id: 'gemini-2.0-flash-lite',
+    displayName: 'Gemini 2 Flash Lite',
+    category: 'Text-out • Legacy',
+    roleTag: '0 Free Limit',
+    usableInDubbing: false,
+    usableInApp: false,
+    inCascade: false,
+    deprecated: true,
+    rpmLimit: 0,
+    tpmLimit: 0,
+    rpdLimit: 0,
+    notes: '0/0 quota on current Free Tier project.',
+  },
+];
+
+const MODEL_CATALOG_MAP = new Map(GEMINI_MODEL_CATALOG.map((m) => [m.id, m]));
+
+const DUBBING_CASCADE_MODELS = GEMINI_MODEL_CATALOG
+  .filter((m) => m.usableInDubbing && m.inCascade)
+  .map((m) => m.id);
+
+// Stage 3 Vision OCR keeps gemini-2.5-flash immediately after 3.5-flash-lite for proven OCR accuracy + compatibility
+const VISION_CASCADE_MODELS = [
+  'gemini-3.5-flash-lite',
+  'gemini-2.5-flash',
+  ...DUBBING_CASCADE_MODELS.filter((id) => id !== 'gemini-3.5-flash-lite' && id !== 'gemini-2.5-flash'),
+];
+
+function getModelCatalogEntry(modelId) {
+  const clean = String(modelId || '').trim();
+  if (!clean) return null;
+  if (MODEL_CATALOG_MAP.has(clean)) {
+    return MODEL_CATALOG_MAP.get(clean);
+  }
+  return {
+    id: clean,
+    displayName: clean,
+    category: 'Custom / Alias',
+    roleTag: 'Custom',
+    usableInDubbing: DUBBING_CASCADE_MODELS.includes(clean),
+    usableInApp: true,
+    inCascade: false,
+    deprecated: false,
+    rpmLimit: 5,
+    tpmLimit: 250000,
+    rpdLimit: 20,
+    notes: 'Custom or dynamically discovered Gemini model.',
+  };
+}
+
+function isUsableDubbingModel(modelId) {
+  const clean = String(modelId || '').trim();
+  return DUBBING_CASCADE_MODELS.includes(clean);
+}
+
+function buildOrderedCascadeModels(preferredOrRequested = 'auto', fallbackList = DUBBING_CASCADE_MODELS) {
+  const clean = String(preferredOrRequested || '').trim();
+  const base = Array.isArray(fallbackList) && fallbackList.length > 0 ? fallbackList : DUBBING_CASCADE_MODELS;
+  const seen = new Set();
+  const ordered = [];
+
+  if (clean && clean !== 'auto') {
+    seen.add(clean);
+    ordered.push(clean);
+  }
+  for (const id of base) {
+    if (!seen.has(id)) {
+      seen.add(id);
+      ordered.push(id);
+    }
+  }
+  return ordered;
+}
+
+module.exports = {
+  GEMINI_MODEL_CATALOG,
+  DUBBING_CASCADE_MODELS,
+  VISION_CASCADE_MODELS,
+  getModelCatalogEntry,
+  isUsableDubbingModel,
+  buildOrderedCascadeModels,
+};
+

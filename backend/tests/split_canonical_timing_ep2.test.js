@@ -33,7 +33,7 @@ test('Step 0 & 1: Real EP2 data dump & canonical effective timing verification',
   const realAudioDur1 = getSegmentAudioDuration(seg1, 2.5);
   assert.equal(realAudioDur1, 4.63);
 
-  const canvasRightEdge1 = Math.max(slotEnd1, rawStart1 + realAudioDur1);
+  const canvasRightEdge1 = rawStart1 + realAudioDur1;
   assert.equal(canvasRightEdge1, 4.83); // 0.2 + 4.63 = 4.83
 
   // 3. Old getSegTiming vs New getSegTiming
@@ -44,7 +44,7 @@ test('Step 0 & 1: Real EP2 data dump & canonical effective timing verification',
   const isTrimmed = Boolean(seg1.audioTrimmed || seg1.userTrimmed);
   const effectiveEnd = isTrimmed && typeof seg1.audioEndSec === 'number'
     ? seg1.audioEndSec
-    : Math.max(slotEnd1, rawStart1 + realAudioDur1, seg1.audioEndSec);
+    : (rawStart1 + realAudioDur1);
   assert.equal(effectiveEnd, canvasRightEdge1, 'Canonical effectiveEnd must equal canvas right edge');
 });
 
@@ -137,7 +137,7 @@ test('Step 3 & Verification: Split EP2 Segment #1 at 00:04.03 cuts audio into 2 
     if (isTrimmed && typeof s.audioEndSec === 'number' && !isNaN(s.audioEndSec)) {
       effectiveEnd = s.audioEndSec;
     } else {
-      const candidates = [slotEnd, effectiveStart + audioDur];
+      const candidates = [effectiveStart + audioDur];
       if (typeof s.audioEndSec === 'number' && !isNaN(s.audioEndSec)) {
         candidates.push(s.audioEndSec);
       }

@@ -1,6 +1,35 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
+- **Environment**: Antigravity IDE (`One "Fix broken & regenerate" Button Under AI Voice Step` — Shared Broken-Set Scanner, Idempotent Queued Repair Job, Quota Partial Resume & Truthful DONE Status)
+- **Timestamp**: 2026-11-10T14:35:00+07:00
+
+## Summary: One "Fix broken & regenerate" Button Under AI Voice Step & Truthful Segment-Level DONE
+1. **Shared Broken-Set Scanner ([backend/utils/translationQuality.js](file:///e:/khmer_ai_dubbing_studio/backend/utils/translationQuality.js), [frontend/src/utils/translationQuality.js](file:///e:/khmer_ai_dubbing_studio/frontend/src/utils/translationQuality.js))**:
+   - Scans stored segment arrays to classify `TEXT-BROKEN` (empty/punctuation-only Khmer, explicit filler `"សូមរង់ចាំ"` + truncations `"សូមរង់ចា"` / `"សូមរង់"` + `"សន្ទនា"`, or repeated `<=40`-char Khmer on `>=5` segments with differing Chinese) and `VOICE-BROKEN` (real Khmer text with missing audio URL/file, failed `ttsStatus`, or missing `.mp3` on disk).
+   - Updated [`applySafeDiskHydration`](file:///e:/khmer_ai_dubbing_studio/backend/services/episodeService.js#L156-L176) to verify segment `.mp3` disk existence (`seg.audioFileMissing`).
+2. **Idempotent Queued Repair Service & Route ([repairBrokenService.js](file:///e:/khmer_ai_dubbing_studio/backend/services/repairBrokenService.js), [jobRoutes.js](file:///e:/khmer_ai_dubbing_studio/backend/routes/jobRoutes.js), [productionJobQueue.js](file:///e:/khmer_ai_dubbing_studio/backend/services/pipeline/productionJobQueue.js), [jobWorker.js](file:///e:/khmer_ai_dubbing_studio/backend/services/pipeline/jobWorker.js))**:
+   - Added `POST /api/jobs/repair-broken` enqueueing one `repair_broken` job per episode with broken segments: re-translates ONLY `TEXT-BROKEN` segments via Gemini batch + key pool, re-verifies with `isSegmentTextBroken`, runs Edge-TTS ONLY on `VOICE-BROKEN` segments (never touching healthy `.mp3` files), and rebuilds master narration when changed.
+   - Added `JOB_STATUS.PARTIAL = 'partial'` so quota exhaustion/incomplete batches persist completed progress and report `"កែបាន X • នៅសល់ Y (quota) — ចុចម្ដងទៀតដើម្បីបន្ត"` for idempotent second-click resume.
+3. **Console Button, Episode Script Header Mirror & Truthful DONE ([GeminiRouteModal.jsx](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/dashboard/GeminiRouteModal.jsx), [geminiRouteHelpers.js](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/dashboard/geminiRouteHelpers.js), [ScriptReviewTab.jsx](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/media/ScriptReviewTab.jsx))**:
+   - Added `"🔧 ជួសជុលឃ្លាខូច & Generate ឡើងវិញ (N)"` directly below STEP 3 (`AI Voice`) in `GeminiRouteModal.jsx` and mirrored in `ScriptReviewTab.jsx`, with confirm dialog separating `"អត្ថបទខូច: N1 ឃ្លា • សំឡេងខ្វះ: N2 ឃ្លា"`.
+   - Made STEP 2 (`Translate`), STEP 3 (`AI Voice`), episode cards, and console footer derive `DONE` truthfully from segment-level broken counts (`broken === 0`) rather than episode-level `hasAudio`/Master flags.
+4. **Verification on Real Series (`series_1793898268958`, 11 episodes, 3,772 segments)**:
+   - **Before repair**: `237` broken segments (`236` text-broken + `1` voice-broken) across 8 episodes: `ep_2` (`207` text, incl. `#149` & `#150` `"សន្ទនា"`), `ep_3` (`1` text), `ep_4` (`8` text), `ep_5` (`2` text), `ep_7` (`5` text + `1` voice `#55`), `ep_8` (`3` text), `ep_10` (`6` text), `ep_11` (`4` text); `ep_6, ep_9, ep_12` (`0` broken).
+   - **Pass 1 (UI click + confirm)**: Fixed `ep_3, ep_4, ep_5, ep_7, ep_8, ep_10, ep_11` to `0` broken and `ep_2` `182/207` (`partial` -> `"កែបាន 182 • នៅសល់ 25 — ចុចម្ដងទៀតដើម្បីបន្ត"`).
+   - **Pass 2 (second press resume)**: Resumed ONLY the remaining `25` segments in `ep_2` -> `0` broken across all 11 episodes (`totalText: 0, totalVoice: 0, totalBroken: 0`), `ep_2 #149` (`"ចៅហ្វាយ ប្រព័ន្ធនេះមិនបានបោកអ្នកទេ"`), `ep_2 #150` (`"ជាថ្នាំគ្រាប់មិនស្គាល់ឈ្មោះមួយ"`), `ep_7 #55` (`"បែរជាបិទបាំងទីក្រុងផាន់សានទាំងមូល។"`).
+   - **Healthy `.mp3` integrity**: `55/55` sampled healthy `.mp3` files across all 11 episodes verified byte-untouched (`mtimeMs` & `size` identical, `drifted=0`).
+   - **Tests & Build**: [`repair_broken_segments.test.js`](file:///e:/khmer_ai_dubbing_studio/backend/tests/repair_broken_segments.test.js) (**5/5 PASS**), full backend test suite (**173/173 PASS**), `npm --prefix frontend run lint` (**0 errors**), `npm --prefix frontend run build` (**PASS `643ms`**).
+
+## Active Environment
+- **Dev Orchestrator (`.\dev.ps1 -NoBrowser -SkipInstall`, `task-2952`)**: Running cleanly — Backend `http://localhost:5000` + Frontend `http://localhost:5173`.
+
+## Next Steps
+- Refresh browser (`Ctrl + Shift + R`) on `http://localhost:5173` — `series_1793898268958` now has `0` broken segments across all 11 episodes (`DONE` on both STEP 2 and STEP 3).
+
+---
+
+## Previous Session
 - **Environment**: Antigravity IDE (`9:16 crop` Bottom Subtitle Blur Band Before Khmer ASS Burn + Container-Scaled Preview Readability & Blur Strip Honesty)
 - **Timestamp**: 2026-11-10T13:40:00+07:00
 

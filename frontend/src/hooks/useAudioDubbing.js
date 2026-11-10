@@ -11,6 +11,22 @@ import { formatTimecode, parseTimeToSeconds } from '../utils/timestampUtils';
 import { splitKhmerTextIntoHalves } from '../utils/khmerTextSplitter';
 import { cleanKhmerText } from '../utils/cleanKhmer';
 
+const isCustomClipSpeed = (spd) => {
+  if (spd === undefined || spd === null || spd === '') return false;
+  if (typeof spd === 'string') {
+    const norm = spd.trim().toLowerCase().replace(/x$/, '');
+    if (!norm || norm === 'normal' || norm === 'default' || norm === '+0%' || norm === '-0%' || norm === '0%') {
+      return false;
+    }
+    const parsed = Number(norm);
+    return Number.isFinite(parsed) ? Math.abs(parsed - 1) > 1e-6 : true;
+  }
+  if (typeof spd === 'number') {
+    return !Number.isFinite(spd) || Math.abs(spd - 1) > 1e-6;
+  }
+  return true;
+};
+
 /**
  * Custom hook to manage all Khmer AI Speech synthesis, voice switching, and audio sync
  */
@@ -174,7 +190,7 @@ const FALLBACK_VOICE_CATALOG = {
           }
           return seg;
         });
-        setScriptData((sPrev) => ({ ...sPrev, segments: updatedSegments }));
+        setScriptData((sPrev) => (sPrev ? { ...sPrev, segments: updatedSegments, updatedAt: Date.now() } : sPrev));
         setAudioOutdated(true);
       }
 
@@ -196,26 +212,29 @@ const FALLBACK_VOICE_CATALOG = {
     const targetSeg = scriptData.segments[segIdx];
     const targetVoiceId = targetSeg.voiceId || (targetSeg.speakerGender === 'FEMALE' ? 'km-KH-SreymomNeural' : 'km-KH-PisethNeural');
 
+    const customFlag = isCustomClipSpeed(newSpeed);
     const updatedSeg = {
       ...targetSeg,
       speed: newSpeed,
-      userCustomSpeed: true,
+      userCustomSpeed: customFlag,
       audioOutdated: true,
     };
 
     const newSegments = [...scriptData.segments];
     newSegments[segIdx] = updatedSeg;
 
-    setScriptData((prev) => ({
+    setScriptData((prev) => (prev ? {
       ...prev,
       segments: newSegments,
-    }));
+      updatedAt: Date.now(),
+    } : prev));
 
     const currentKhmerText = (updatedSeg.khmer || updatedSeg.khmerText || updatedSeg.khmerTranslatedText || '').trim();
     if (autoRegen && currentKhmerText) {
       try {
         const regenerated = await generateSingleSegmentAudio(updatedSeg, {
           speed: newSpeed,
+          userCustomSpeed: customFlag,
           voiceId: targetVoiceId,
           forceRegen: true,
           projectName: getProjectName(),
@@ -230,20 +249,21 @@ const FALLBACK_VOICE_CATALOG = {
           audioTrimmed: false,
           userTrimmed: false,
           speed: newSpeed,
-          userCustomSpeed: true,
+          userCustomSpeed: customFlag,
           audioOutdated: false,
         };
-        setScriptData((prev) => ({
+        setScriptData((prev) => (prev ? {
           ...prev,
           segments: finalSegments,
-        }));
+          updatedAt: Date.now(),
+        } : prev));
         setAudioGenerated(true);
 
         const stillOutdated = finalSegments.some((s) => s.audioOutdated);
         setAudioOutdated(stillOutdated);
 
         if (finalSegments.some((s) => s.audioFile || s.audioPath || s.audioUrl)) {
-          syncTimelineAudioApi(finalSegments, getProjectName(), getVideoId())
+          syncTimelineAudioApi(finalSegments, getProjectName(), getVideoId(), episodeId, seriesId)
             .then((res) => {
               if (res.fullAudioUrl) {
                 const cacheBusted = `${res.fullAudioUrl.split('?')[0]}?t=${Date.now()}`;
@@ -318,10 +338,11 @@ const FALLBACK_VOICE_CATALOG = {
       }));
     }
 
-    setScriptData((prev) => ({
+    setScriptData((prev) => (prev ? {
       ...prev,
       segments: newSegments,
-    }));
+      updatedAt: Date.now(),
+    } : prev));
 
     const currentKhmerText = (updatedSeg.khmer || updatedSeg.khmerText || updatedSeg.khmerTranslatedText || '').trim();
     if (autoRegen && currentKhmerText) {
@@ -343,10 +364,11 @@ const FALLBACK_VOICE_CATALOG = {
           speed: activeSpeed,
           audioOutdated: false,
         };
-        setScriptData((prev) => ({
+        setScriptData((prev) => (prev ? {
           ...prev,
           segments: finalSegments,
-        }));
+          updatedAt: Date.now(),
+        } : prev));
         setAudioGenerated(true);
 
         const stillOutdated = finalSegments.some((s) => s.audioOutdated);
@@ -409,10 +431,11 @@ const FALLBACK_VOICE_CATALOG = {
     const newSegments = [...scriptData.segments];
     newSegments[segIdx] = updatedSeg;
 
-    setScriptData((prev) => ({
+    setScriptData((prev) => (prev ? {
       ...prev,
       segments: newSegments,
-    }));
+      updatedAt: Date.now(),
+    } : prev));
 
     const currentKhmerText = (updatedSeg.khmer || updatedSeg.khmerText || updatedSeg.khmerTranslatedText || '').trim();
     if (autoRegen && currentKhmerText) {
@@ -440,10 +463,11 @@ const FALLBACK_VOICE_CATALOG = {
           audioOutdated: false,
         };
 
-        setScriptData((prev) => ({
+        setScriptData((prev) => (prev ? {
           ...prev,
           segments: finalSegments,
-        }));
+          updatedAt: Date.now(),
+        } : prev));
         setAudioGenerated(true);
 
         const stillOutdated = finalSegments.some((s) => s.audioOutdated);
@@ -472,10 +496,11 @@ const FALLBACK_VOICE_CATALOG = {
           textStatus: 'error',
           regenError: err.message || 'Inner thought generation failed',
         };
-        setScriptData((prev) => ({
+        setScriptData((prev) => (prev ? {
           ...prev,
           segments: errorSegments,
-        }));
+          updatedAt: Date.now(),
+        } : prev));
         return null;
       }
     }
@@ -525,7 +550,7 @@ const FALLBACK_VOICE_CATALOG = {
         audioOutdated: true,
         textStatus: autoRegen ? 'generating' : 'text_updated',
       };
-      return { ...prev, segments: nextSegs };
+      return { ...prev, segments: nextSegs, updatedAt: Date.now() };
     });
 
     if (autoRegen && cleanText) {
@@ -600,7 +625,7 @@ const FALLBACK_VOICE_CATALOG = {
           nextSegs[idx] = merged;
           returnedSeg = merged;
           allUpdatedSegments = nextSegs;
-          return { ...prev, segments: nextSegs };
+          return { ...prev, segments: nextSegs, updatedAt: Date.now() };
         });
 
         setAudioGenerated(true);
@@ -638,7 +663,7 @@ const FALLBACK_VOICE_CATALOG = {
             textStatus: 'error',
             regenError: err.message,
           };
-          return { ...prev, segments: nextSegs };
+          return { ...prev, segments: nextSegs, updatedAt: Date.now() };
         });
         return null;
       }
@@ -728,10 +753,11 @@ const FALLBACK_VOICE_CATALOG = {
       segmentId: idx + 1,
     }));
 
-    setScriptData((prev) => ({
+    setScriptData((prev) => (prev ? {
       ...prev,
       segments: reindexed,
-    }));
+      updatedAt: Date.now(),
+    } : prev));
 
     if (setSelectedSegmentId) {
       setSelectedSegmentId(uid2);
@@ -755,10 +781,11 @@ const FALLBACK_VOICE_CATALOG = {
         finalSegments[segIdx + 1] = { ...finalSegments[segIdx + 1], ...res2, audioOutdated: false };
       }
 
-      setScriptData((prev) => ({
+      setScriptData((prev) => (prev ? {
         ...prev,
         segments: finalSegments,
-      }));
+        updatedAt: Date.now(),
+      } : prev));
       setAudioGenerated(true);
 
       syncTimelineAudioApi(finalSegments, getProjectName(), getVideoId(), episodeId, seriesId)
@@ -789,9 +816,7 @@ const FALLBACK_VOICE_CATALOG = {
 
     const activeVoiceId = cleanParams.voiceId || voiceSettings.voiceId || 'km-KH-PisethNeural';
     const activeSpeed = cleanParams.speed || voiceSettings.speed || 'normal';
-    const forceRegen = cleanParams.forceRegen !== undefined
-      ? Boolean(cleanParams.forceRegen)
-      : Boolean(scriptData.segments.some((s) => s.audioUrl || s.audioPath || s.audioFile));
+    const forceRegen = Boolean(cleanParams.forceRegen);
 
     if (videoRef?.current && !videoRef.current.paused) {
       videoRef.current.pause();
@@ -809,17 +834,19 @@ const FALLBACK_VOICE_CATALOG = {
     }
 
     const speakerMap = {};
-    Object.values(speakerRegistry || {}).forEach((spk) => {
+    const sortedSpeakers = Object.values(speakerRegistry || {}).sort((a, b) => (a.lineCount || 0) - (b.lineCount || 0));
+    sortedSpeakers.forEach((spk) => {
       if (spk.voiceId) {
-        speakerMap[spk.id] = spk.voiceId;
-        speakerMap[spk.name] = spk.voiceId;
+        if (spk.id) speakerMap[spk.id] = spk.voiceId;
+        const isGeneric = !spk.name || spk.name === 'តួអង្គ' || String(spk.name).toLowerCase() === 'speaker';
+        if (!isGeneric) speakerMap[spk.name] = spk.voiceId;
       }
     });
 
     const targetEpisodeId = episodeId;
     setGeneratingAudioEpisodeId(targetEpisodeId);
     setIsGeneratingAudio(true);
-    setAudioProgress(15);
+    setAudioProgress(10);
     setAudioStage('1/3 កំពុងរៀបចំឃ្លាសន្ទនា និង Voice Mapping...');
 
     if (audioProgressTimerRef.current) {
@@ -829,14 +856,21 @@ const FALLBACK_VOICE_CATALOG = {
 
     try {
       const sanitizedSegments = (scriptData.segments || []).map((seg) => {
-        const rawGender = String(seg.speakerGender || seg.gender || '').toUpperCase().trim();
-        const detectedGender = (rawGender === 'FEMALE' || rawGender === 'GIRL' || rawGender === 'WOMAN')
+        const isManualOverride = Boolean(seg.userOverridden || seg.voiceAssignmentSource === 'manual' || seg.voiceOverride);
+        const rawGender = String(seg.voiceGender || seg.speakerGender || seg.gender || '').toUpperCase().trim();
+        const explicitKnown = (rawGender === 'FEMALE' || rawGender === 'GIRL' || rawGender === 'WOMAN')
           ? 'FEMALE'
-          : (rawGender === 'MALE' || rawGender === 'BOY' || rawGender === 'MAN')
-            ? 'MALE'
-            : detectSpeakerGender(seg.speaker, seg.gender, seg.khmer || seg.original);
-        const resolvedGender = detectedGender !== 'UNKNOWN' ? detectedGender : (seg.speakerGender || 'MALE');
-        const resolvedVoice = seg.voiceId || (resolvedGender === 'FEMALE' ? 'km-KH-SreymomNeural' : 'km-KH-PisethNeural');
+          : ((rawGender === 'MALE' || rawGender === 'BOY' || rawGender === 'MAN') ? 'MALE' : '');
+        const titleGender = detectSpeakerGender(seg.speaker, '', '');
+        const detectedGender = (!isManualOverride && titleGender !== 'UNKNOWN')
+          ? titleGender
+          : (explicitKnown || detectSpeakerGender(seg.speaker, '', seg.khmer || seg.khmerText || seg.original));
+        const resolvedGender = detectedGender !== 'UNKNOWN' ? detectedGender : 'MALE';
+        const resolvedVoice = isManualOverride
+          ? (seg.voiceOverride || seg.voiceId || seg.khmerVoiceId || (resolvedGender === 'FEMALE' ? 'km-KH-SreymomNeural' : 'km-KH-PisethNeural'))
+          : (detectedGender !== 'UNKNOWN'
+              ? (resolvedGender === 'FEMALE' ? 'km-KH-SreymomNeural' : 'km-KH-PisethNeural')
+              : (seg.voiceId || seg.khmerVoiceId || 'km-KH-PisethNeural'));
 
         const base = !seg.userShifted ? { ...seg, userShifted: false } : { ...seg };
         delete base.autoShifted;
@@ -844,6 +878,7 @@ const FALLBACK_VOICE_CATALOG = {
           ...base,
           speakerGender: resolvedGender,
           voiceId: resolvedVoice,
+          khmerVoiceId: resolvedVoice,
         };
       });
 
@@ -862,7 +897,7 @@ const FALLBACK_VOICE_CATALOG = {
         return;
       }
 
-      setAudioProgress(10);
+      setAudioProgress(12);
       setAudioStage(
         skippedEmptyCount > 0
           ? `2/3 Microsoft Edge Neural AI កំពុងបង្កើតសំឡេង (0/${validSegments.length} ឃ្លា, រំលង ${skippedEmptyCount} ឃ្លាខ្វះអត្ថបទ)...`
@@ -885,13 +920,18 @@ const FALLBACK_VOICE_CATALOG = {
             const pRes = await fetch(`/api/tts/progress?seriesId=${encodeURIComponent(targetSeriesId)}&episodeId=${encodeURIComponent(targetEpisodeId)}&total=${validSegments.length}`);
             const pData = await pRes.json();
             if (pData && pData.success && typeof pData.current === 'number') {
-              const currentCount = pData.current;
               const totalCount = pData.total || validSegments.length;
-              const pct = totalCount > 0 ? Math.min(95, Math.max(10, Math.round((currentCount / totalCount) * 85) + 10)) : 10;
-              setAudioProgress(pct);
-              const realPct = totalCount > 0 ? Math.round((currentCount / totalCount) * 100) : 0;
-              setAudioStage(`2/3 Microsoft Edge Neural AI: [${currentCount}/${totalCount} ឃ្លា] (${realPct}%)...`);
-              console.log(`[TTS Progress] 🎙️ ${currentCount}/${totalCount} (${realPct}%) ${pData.lastFile || ''}`);
+              const currentCount = totalCount > 0 ? Math.min(totalCount, Math.max(0, pData.current)) : Math.max(0, pData.current);
+              if (pData.stage === 'syncing') {
+                setAudioProgress((prev) => Math.max(prev, 96));
+                setAudioStage('3/3 កំពុង Syncing Master Narration Timeline...');
+              } else {
+                const pct = totalCount > 0 ? Math.min(95, Math.max(12, Math.round((currentCount / totalCount) * 82) + 12)) : 12;
+                setAudioProgress((prev) => Math.max(prev, pct));
+                const realPct = totalCount > 0 ? Math.min(100, Math.round((currentCount / totalCount) * 100)) : 0;
+                setAudioStage(`2/3 Microsoft Edge Neural AI: [${currentCount}/${totalCount} ឃ្លា] (${realPct}%)...`);
+                console.log(`[TTS Progress] 🎙️ ${currentCount}/${totalCount} (${realPct}%) ${pData.lastFile || ''}`);
+              }
             }
           } catch (_) {}
         }, 800);
@@ -914,8 +954,10 @@ const FALLBACK_VOICE_CATALOG = {
         audioProgressTimerRef.current = null;
       }
 
-      setAudioProgress(85);
-      setAudioStage('3/3 កំពុង Syncing Master Narration Timeline...');
+      if (!result.alreadyCompleted) {
+        setAudioProgress((prev) => Math.max(prev, 96));
+        setAudioStage('3/3 កំពុង Syncing Master Narration Timeline...');
+      }
 
       const updatedMap = new Map((result.segments || []).map((s) => [String(s.id), s]));
       const mergedSegments = (scriptData?.segments || []).map((s) => updatedMap.get(String(s.id)) || s);
@@ -926,7 +968,7 @@ const FALLBACK_VOICE_CATALOG = {
         console.log(`[Stale TTS Guard] Dropping audio state overwrite for episode ${targetEpisodeId} (active is ${activeTtsEpisodeRef.current})`);
         if (onSaveEpisodeBackground) {
           onSaveEpisodeBackground(targetEpisodeId, {
-            scriptData: { ...scriptData, segments: mergedSegments },
+            scriptData: { ...scriptData, segments: mergedSegments, updatedAt: Date.now() },
             fullAudioPath: result.fullAudioPath,
             fullAudioUrl: result.fullAudioUrl,
             audioGenerated: true,
@@ -937,9 +979,11 @@ const FALLBACK_VOICE_CATALOG = {
       }
 
       setAudioProgress(100);
-      const summaryMsg = skippedEmptyCount > 0
-        ? `✅ បង្កើតសំឡេង AI ជោគជ័យ ${validSegments.length} ឃ្លា (រំលង ${skippedEmptyCount} ឃ្លា គ្មានអត្ថបទ)!`
-        : `✅ បង្កើតសំឡេងខ្មែរ AI ជោគជ័យ ${validSegments.length} ឃ្លា (100%)!`;
+      const summaryMsg = result.alreadyCompleted
+        ? (result.summaryMessage || `✅ សំឡេងខ្មែរ AI មានរួចរាល់ ${validSegments.length} ឃ្លា (រក្សាទុកដើម)!`)
+        : skippedEmptyCount > 0
+          ? `✅ បង្កើតសំឡេង AI ជោគជ័យ ${validSegments.length} ឃ្លា (រំលង ${skippedEmptyCount} ឃ្លា គ្មានអត្ថបទ)!`
+          : `✅ បង្កើតសំឡេងខ្មែរ AI ជោគជ័យ ${validSegments.length} ឃ្លា (100%)!`;
       setAudioStage(summaryMsg);
 
       setScriptData((prev) => {
@@ -947,6 +991,7 @@ const FALLBACK_VOICE_CATALOG = {
         return {
           ...prev,
           segments: prev.segments.map((s) => updatedMap.get(String(s.id)) || s),
+          updatedAt: Date.now(),
         };
       });
       setFullAudioPath(result.fullAudioPath);
@@ -1036,6 +1081,7 @@ const FALLBACK_VOICE_CATALOG = {
 
       const updatedSeg = await generateSingleSegmentAudio(targetSeg, {
         speed: activeSpeed,
+        userCustomSpeed: overrideSpeed !== null ? isCustomClipSpeed(overrideSpeed) : Boolean(targetSeg.userCustomSpeed),
         voiceId: targetVoiceId,
         forceRegen: true,
         projectName: dramaName,
@@ -1085,7 +1131,7 @@ const FALLBACK_VOICE_CATALOG = {
           audioDurationSec: effAudioDur,
           voiceId: targetVoiceId,
           speed: activeSpeed,
-          userCustomSpeed: overrideSpeed !== null || Boolean(targetSeg.userCustomSpeed),
+          userCustomSpeed: overrideSpeed !== null ? isCustomClipSpeed(overrideSpeed) : Boolean(targetSeg.userCustomSpeed),
           audioOutdated: false,
           textStatus: 'voice_updated',
         };
@@ -1094,7 +1140,7 @@ const FALLBACK_VOICE_CATALOG = {
         nextSegs[idx] = merged;
         returnedSeg = merged;
         allUpdatedSegments = nextSegs;
-        return { ...prev, segments: nextSegs };
+        return { ...prev, segments: nextSegs, updatedAt: Date.now() };
       });
 
       setAudioGenerated(true);
@@ -1132,7 +1178,7 @@ const FALLBACK_VOICE_CATALOG = {
           textStatus: 'error',
           regenError: err.message,
         };
-        return { ...prev, segments: nextSegs };
+        return { ...prev, segments: nextSegs, updatedAt: Date.now() };
       });
       return null;
     }
@@ -1153,10 +1199,11 @@ const FALLBACK_VOICE_CATALOG = {
         speed: seg.userCustomSpeed ? seg.speed : newSettings.speed,
         audioOutdated: true,
       }));
-      setScriptData((prev) => ({
+      setScriptData((prev) => (prev ? {
         ...prev,
         segments: updatedSegments,
-      }));
+        updatedAt: Date.now(),
+      } : prev));
     }
 
     setVoiceSettings(newSettings);
@@ -1207,10 +1254,12 @@ const FALLBACK_VOICE_CATALOG = {
           }
           nextSegs[segIdx] = updated;
 
-          setScriptData((prev) => ({
+          const nextScriptUpdatedAt = Date.now();
+          setScriptData((prev) => (prev ? {
             ...prev,
             segments: nextSegs,
-          }));
+            updatedAt: nextScriptUpdatedAt,
+          } : prev));
 
           if (onUpdateSegments) {
             onUpdateSegments(nextSegs, false, true);
@@ -1218,6 +1267,7 @@ const FALLBACK_VOICE_CATALOG = {
             onUpdateScript({
               ...scriptData,
               segments: nextSegs,
+              updatedAt: nextScriptUpdatedAt,
             });
           }
 

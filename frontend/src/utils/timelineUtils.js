@@ -769,7 +769,7 @@ export function resolveSegmentAtTime(segments, targetTime) {
       const latestStart = (typeof latest.startSec === 'number' && !isNaN(latest.startSec))
         ? latest.startSec
         : ((typeof latest.audioStartSec === 'number' && !isNaN(latest.audioStartSec)) ? latest.audioStartSec : 0);
-      return sStart > latestStart ? s : latest;
+      return sStart >= latestStart ? s : latest;
     }, matches[0]);
   }
 
@@ -788,6 +788,50 @@ export function resolveSegmentAtTime(segments, targetTime) {
   });
 
   return lastMatch || null;
+}
+
+/**
+ * Resolve the exact timeline start timestamp (in seconds) of a segment's VOICE clip.
+ * Matches VOICE track rendering priority: audioStartSec -> startSec -> parsed string start -> fallback idx * 4.
+ *
+ * @param {Object} seg
+ * @param {number} [idx=0]
+ * @returns {number} Non-negative start seconds
+ */
+export function resolveVoiceClipStartSec(seg, idx = 0) {
+  if (!seg || typeof seg !== 'object') return 0;
+  const safeIdx = Number.isFinite(idx) && idx >= 0 ? idx : 0;
+  if (typeof seg.audioStartSec === 'number' && Number.isFinite(seg.audioStartSec)) {
+    return Math.max(0, seg.audioStartSec);
+  }
+  if (typeof seg.startSec === 'number' && Number.isFinite(seg.startSec)) {
+    return Math.max(0, seg.startSec);
+  }
+  const rawStr = seg.audioStart ?? seg.start ?? seg.startTime;
+  return Math.max(0, parseTimeToSeconds(rawStr, safeIdx * 4));
+}
+
+/**
+ * Computes the horizontal scrollLeft needed to center a timeline timestamp inside the track viewport.
+ * Matches TimelineEditor viewport geometry (including sticky track header offset).
+ *
+ * @param {number} timeSec
+ * @param {number} pixelsPerSecond
+ * @param {number} clientWidth
+ * @param {number} [trackHeaderWidth=112]
+ * @returns {number}
+ */
+export function computeTimelineScrollForTime(timeSec, pixelsPerSecond, clientWidth, trackHeaderWidth = 112) {
+  const safeTime = Number.isFinite(timeSec) ? Math.max(0, timeSec) : 0;
+  const safePps = Number.isFinite(pixelsPerSecond) && pixelsPerSecond > 0 ? pixelsPerSecond : 45;
+  const safeWidth = Number.isFinite(clientWidth) && clientWidth > 0 ? clientWidth : 0;
+  if (safeWidth <= 0) return 0;
+
+  const playheadAbsoluteX = safeTime * safePps + trackHeaderWidth;
+  const centerThreshold = safeWidth / 2;
+  return playheadAbsoluteX > centerThreshold
+    ? Math.max(0, Math.round(playheadAbsoluteX - centerThreshold))
+    : 0;
 }
 
 /**

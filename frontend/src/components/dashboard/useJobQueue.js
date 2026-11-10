@@ -34,7 +34,27 @@ export function useJobQueue(options = {}) {
 
   const eventSourceRef = useRef(null);
   const pollingTimerRef = useRef(null);
+  const reconnectTimeoutRef = useRef(null);
+  const reconnectAttemptsRef = useRef(0);
   const isMountedRef = useRef(true);
+
+  const clearReconnectTimeout = useCallback(() => {
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
+    }
+  }, []);
+
+  const closeEventSource = useCallback(() => {
+    if (eventSourceRef.current) {
+      try {
+        eventSourceRef.current.close();
+      } catch {
+        // ignore socket close errors
+      }
+      eventSourceRef.current = null;
+    }
+  }, []);
 
   // Manual or polling data fetch
   const refreshJobs = useCallback(async (activeFilter = filter) => {
@@ -105,31 +125,49 @@ export function useJobQueue(options = {}) {
     };
   }, [enabled, connectionMode, startPollingFallback, stopPollingFallback]);
 
-  // Connect to SSE stream
+  // Connect to SSE stream cleanly with backoff, visibility awareness, and backend-online recovery
   useEffect(() => {
     if (!enabled) {
-      if (eventSourceRef.current) {
-        eventSourceRef.current.close();
-        eventSourceRef.current = null;
-      }
+      closeEventSource();
+      clearReconnectTimeout();
       stopPollingFallback();
       return;
     }
     isMountedRef.current = true;
-    let reconnectTimeout = null;
+
+    const scheduleReconnect = () => {
+      if (!isMountedRef.current) return;
+      if (typeof document !== 'undefined' && document.hidden) return;
+      clearReconnectTimeout();
+      const attempt = Math.min(reconnectAttemptsRef.current, 4);
+      const delayMs = Math.min(15000, 2000 * Math.pow(2, attempt));
+      reconnectAttemptsRef.current = Math.min(reconnectAttemptsRef.current + 1, 10);
+      reconnectTimeoutRef.current = setTimeout(() => {
+        reconnectTimeoutRef.current = null;
+        if (isMountedRef.current) {
+          connectSSE();
+        }
+      }, delayMs);
+    };
 
     function connectSSE() {
+      if (!isMountedRef.current) return;
+      if (typeof document !== 'undefined' && document.hidden) return;
       if (typeof window === 'undefined' || !window.EventSource) {
         startPollingFallback();
         return;
       }
+
+      clearReconnectTimeout();
+      closeEventSource();
 
       try {
         const es = new EventSource('/api/jobs/stream');
         eventSourceRef.current = es;
 
         es.addEventListener('open', () => {
-          if (!isMountedRef.current) return;
+          if (!isMountedRef.current || eventSourceRef.current !== es) return;
+          reconnectAttemptsRef.current = 0;
           setIsConnected(true);
           setConnectionMode('sse');
           setError(null);
@@ -138,7 +176,7 @@ export function useJobQueue(options = {}) {
         });
 
         es.addEventListener('init', (e) => {
-          if (!isMountedRef.current) return;
+          if (!isMountedRef.current || eventSourceRef.current !== es) return;
           try {
             const data = JSON.parse(e.data);
             if (data.jobs) setJobs(data.jobs);
@@ -150,7 +188,7 @@ export function useJobQueue(options = {}) {
         });
 
         es.addEventListener('job_update', (e) => {
-          if (!isMountedRef.current) return;
+          if (!isMountedRef.current || eventSourceRef.current !== es) return;
           try {
             const data = JSON.parse(e.data);
             if (data.job) {
@@ -174,39 +212,66 @@ export function useJobQueue(options = {}) {
         });
 
         es.addEventListener('error', () => {
-          if (!isMountedRef.current) return;
-          // Disconnected or backend restarting -> gracefully fallback to polling
-          if (es.readyState === EventSource.CLOSED) {
-            es.close();
-            startPollingFallback();
-
-            // Try to re-establish SSE after 15 seconds
-            reconnectTimeout = setTimeout(() => {
-              if (isMountedRef.current) {
-                connectSSE();
-              }
-            }, 15000);
+          if (!isMountedRef.current || eventSourceRef.current !== es) return;
+          // Any stream interruption (CLOSED or CONNECTING) immediately marks SSE disconnected
+          // and closes the stale socket so browser + backoff timer never stack duplicate reconnects.
+          setIsConnected(false);
+          if (eventSourceRef.current === es) {
+            eventSourceRef.current = null;
           }
+          try {
+            es.close();
+          } catch {
+            // ignore close errors
+          }
+          startPollingFallback();
+          scheduleReconnect();
         });
       } catch {
+        setIsConnected(false);
         startPollingFallback();
+        scheduleReconnect();
       }
+    }
+
+    const handleBackendOnline = () => {
+      if (!isMountedRef.current) return;
+      if (!eventSourceRef.current || eventSourceRef.current.readyState === EventSource.CLOSED) {
+        reconnectAttemptsRef.current = 0;
+        connectSSE();
+      }
+    };
+
+    const handleVisibilityReconnect = () => {
+      if (typeof document === 'undefined') return;
+      if (!document.hidden && isMountedRef.current && (!eventSourceRef.current || eventSourceRef.current.readyState === EventSource.CLOSED)) {
+        reconnectAttemptsRef.current = 0;
+        connectSSE();
+      }
+    };
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener('backend-online', handleBackendOnline);
+    }
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', handleVisibilityReconnect);
     }
 
     connectSSE();
 
     return () => {
       isMountedRef.current = false;
-      if (eventSourceRef.current) {
-        eventSourceRef.current.close();
-        eventSourceRef.current = null;
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('backend-online', handleBackendOnline);
       }
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', handleVisibilityReconnect);
+      }
+      closeEventSource();
       stopPollingFallback();
-      if (reconnectTimeout) {
-        clearTimeout(reconnectTimeout);
-      }
+      clearReconnectTimeout();
     };
-  }, [enabled, startPollingFallback]);
+  }, [enabled, startPollingFallback, stopPollingFallback, closeEventSource, clearReconnectTimeout]);
 
   // Action: Pause Job
   const pauseJob = async (jobId) => {

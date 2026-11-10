@@ -12,6 +12,7 @@ const JOB_STATUS = Object.freeze({
   RUNNING: 'running',
   PAUSED: 'paused',
   COMPLETED: 'completed',
+  PARTIAL: 'partial',
   FAILED: 'failed',
   CANCELLED: 'cancelled',
   RECOVERING: 'recovering',
@@ -23,7 +24,7 @@ const ACTIVE_STATUSES = new Set([
   JOB_STATUS.RECOVERING,
 ]);
 
-const DEFAULT_MAX_CONCURRENCY = 4;
+const DEFAULT_MAX_CONCURRENCY = 2;
 const MAX_CONFIGURABLE_CONCURRENCY = 4;
 
 /**
@@ -39,15 +40,27 @@ function sanitizeIdentifier(rawId, fallback = 'default') {
   return cleaned || fallback;
 }
 
-const CANONICAL_UPLOADS_DIR = path.resolve(__dirname, '../../uploads');
+const pathUtils = require('../../utils/pathUtils');
+
+const CANONICAL_UPLOADS_DIR = pathUtils.uploadsDir || path.resolve(__dirname, '../../uploads');
 const LEGACY_UPLOADS_DIR = path.resolve(__dirname, '../../../uploads');
+
+function getCanonicalUploadsDir() {
+  try {
+    const livePathUtils = require('../../utils/pathUtils');
+    if (livePathUtils && livePathUtils.uploadsDir) {
+      return livePathUtils.uploadsDir;
+    }
+  } catch (_) {}
+  return CANONICAL_UPLOADS_DIR;
+}
 
 /**
  * Resolves the isolated jobs folder for an episode:
  * uploads/projects/:seriesId/episodes/:episodeId/jobs/
  */
 function getJobDir(seriesId, episodeId, baseUploadsDir = null) {
-  const uploadsDir = baseUploadsDir || CANONICAL_UPLOADS_DIR;
+  const uploadsDir = baseUploadsDir || getCanonicalUploadsDir();
   const cleanSeries = sanitizeIdentifier(seriesId, 'series_default');
   const cleanEpisode = sanitizeIdentifier(episodeId, 'ep_1');
   const jobDir = path.join(uploadsDir, 'projects', cleanSeries, 'episodes', cleanEpisode, 'jobs');
@@ -65,7 +78,8 @@ function getJobFilePath(seriesId, episodeId, jobId, baseUploadsDir = null) {
   const cleanEpisode = sanitizeIdentifier(episodeId, 'ep_1');
   const cleanJobId = sanitizeIdentifier(jobId, 'job_unknown');
 
-  const targetBaseDir = baseUploadsDir || CANONICAL_UPLOADS_DIR;
+  const defaultUploadsDir = getCanonicalUploadsDir();
+  const targetBaseDir = baseUploadsDir || defaultUploadsDir;
   const canonicalPath = path.join(targetBaseDir, 'projects', cleanSeries, 'episodes', cleanEpisode, 'jobs', `${cleanJobId}.json`);
 
   // If file already exists at canonical path, use it
@@ -74,7 +88,7 @@ function getJobFilePath(seriesId, episodeId, jobId, baseUploadsDir = null) {
   }
 
   // Fallback: Check if file exists in legacy uploads directory (only in default project environment)
-  const isDefaultEnv = !baseUploadsDir || baseUploadsDir === CANONICAL_UPLOADS_DIR;
+  const isDefaultEnv = !baseUploadsDir || baseUploadsDir === defaultUploadsDir;
   if (isDefaultEnv && LEGACY_UPLOADS_DIR && LEGACY_UPLOADS_DIR !== targetBaseDir && fs.existsSync(LEGACY_UPLOADS_DIR)) {
     const legacyPath = path.join(LEGACY_UPLOADS_DIR, 'projects', cleanSeries, 'episodes', cleanEpisode, 'jobs', `${cleanJobId}.json`);
     if (fs.existsSync(legacyPath)) {
@@ -129,10 +143,11 @@ class ProductionJobQueue {
     this.inMemoryJobs = new Map();
     this.activeAbortControllers = new Map();
     this.activeEpisodeLocks = new Map();
+    this.activeExecutions = new Set();
     this.workerHandler = null;
     this.baseUploadsDir = options.baseUploadsDir || CANONICAL_UPLOADS_DIR;
     
-    // Concurrency default is 1, max configurable is 2
+    // Concurrency default is 2 (laptop CPU safe), max configurable is 4
     const envConcurrency = process.env.DRAGONDUB_MAX_CONCURRENT_JOBS
       ? parseInt(process.env.DRAGONDUB_MAX_CONCURRENT_JOBS, 10)
       : null;
@@ -145,7 +160,7 @@ class ProductionJobQueue {
     if (typeof val !== 'number' || isNaN(val) || val < 1) {
       return DEFAULT_MAX_CONCURRENCY;
     }
-    // Hard ceiling of 2 in Phase 4.1 to strictly prevent CPU/GPU thrashing
+    // Clamp between 1 and MAX_CONFIGURABLE_CONCURRENCY to strictly prevent CPU/GPU thrashing
     return Math.min(MAX_CONFIGURABLE_CONCURRENCY, Math.floor(val));
   }
 
@@ -376,12 +391,12 @@ class ProductionJobQueue {
       console.warn(`[ProductionJobQueue] Failed to persist new job ${jobId} to disk:`, err.message);
     }
 
+    this.events.emit('job_change', { action: 'enqueue', job: jobData });
+
     // Trigger queue evaluation if worker is registered
     if (this.workerHandler) {
       this.processQueue();
     }
-
-    this.events.emit('job_change', { action: 'enqueue', job: jobData });
 
     return {
       isDuplicate: false,
@@ -420,6 +435,14 @@ class ProductionJobQueue {
       }
     }
 
+    // Populate in-memory cache from disk once if empty (e.g., /:jobId/retry or /:jobId/status after restart)
+    if (this.inMemoryJobs.size === 0) {
+      this.getAllJobs();
+      if (this.inMemoryJobs.has(cleanJobId)) {
+        return this.inMemoryJobs.get(cleanJobId);
+      }
+    }
+
     return null;
   }
 
@@ -430,12 +453,32 @@ class ProductionJobQueue {
     const job = this.inMemoryJobs.get(jobId);
     if (!job) return null;
 
+    const { _allowFromTerminal, ...cleanUpdates } = updates || {};
+
+    // Prevent stale async pipeline callbacks from overwriting cancelled/completed/partial/paused jobs
+    if (
+      (job.status === JOB_STATUS.CANCELLED ||
+        job.status === JOB_STATUS.COMPLETED ||
+        job.status === JOB_STATUS.PARTIAL) &&
+      !_allowFromTerminal
+    ) {
+      return job;
+    }
+    if (
+      job.status === JOB_STATUS.PAUSED &&
+      cleanUpdates.status !== JOB_STATUS.QUEUED &&
+      cleanUpdates.status !== JOB_STATUS.CANCELLED &&
+      !_allowFromTerminal
+    ) {
+      return job;
+    }
+
     const previousStatus = job.status;
-    const targetStatus = updates.status || job.status;
+    const targetStatus = cleanUpdates.status || job.status;
 
     // Validate status transition
-    if (updates.status && !Object.values(JOB_STATUS).includes(updates.status)) {
-      throw new Error(`Invalid job status: '${updates.status}'`);
+    if (cleanUpdates.status && !Object.values(JOB_STATUS).includes(cleanUpdates.status)) {
+      throw new Error(`Invalid job status: '${cleanUpdates.status}'`);
     }
 
     // Auto-manage lifecycle timestamps
@@ -443,14 +486,23 @@ class ProductionJobQueue {
       job.startedAt = Date.now();
     }
     if (
-      [JOB_STATUS.COMPLETED, JOB_STATUS.FAILED, JOB_STATUS.CANCELLED].includes(targetStatus) &&
+      [JOB_STATUS.COMPLETED, JOB_STATUS.PARTIAL, JOB_STATUS.FAILED, JOB_STATUS.CANCELLED].includes(targetStatus) &&
       !job.completedAt
     ) {
       job.completedAt = Date.now();
     }
 
+    // Preserve totalSegments count whenever finalResult carries it (even if list serializer strips segments)
+    if (
+      cleanUpdates.finalResult &&
+      typeof cleanUpdates.finalResult.totalSegments === 'number' &&
+      cleanUpdates.totalSegments === undefined
+    ) {
+      cleanUpdates.totalSegments = cleanUpdates.finalResult.totalSegments;
+    }
+
     // Apply updates safely (preserve core identifiers)
-    Object.assign(job, updates, {
+    Object.assign(job, cleanUpdates, {
       jobId: job.jobId,
       seriesId: job.seriesId,
       episodeId: job.episodeId,
@@ -459,12 +511,12 @@ class ProductionJobQueue {
 
     // Record structured log event for UI live console streaming
     if (!Array.isArray(job.logs)) job.logs = [];
-    if (updates.stageMessage || updates.currentStage) {
+    if (cleanUpdates.stageMessage || cleanUpdates.currentStage) {
       const logEntry = {
         time: Date.now(),
-        progress: typeof updates.progress === 'number' ? updates.progress : (job.progress || 0),
-        stage: updates.currentStage || job.currentStage || 'running',
-        message: updates.stageMessage || ''
+        progress: typeof cleanUpdates.progress === 'number' ? cleanUpdates.progress : (job.progress || 0),
+        stage: cleanUpdates.currentStage || job.currentStage || 'running',
+        message: cleanUpdates.stageMessage || ''
       };
       const last = job.logs[job.logs.length - 1];
       if (!last || last.message !== logEntry.message || Math.abs(last.progress - logEntry.progress) >= 2) {
@@ -527,17 +579,23 @@ class ProductionJobQueue {
    * Pauses a running or queued job.
    */
   pauseJob(jobId) {
-    const job = this.inMemoryJobs.get(jobId);
+    const job = this.getJob(jobId);
     if (!job) return null;
 
     if (job.status === JOB_STATUS.COMPLETED || job.status === JOB_STATUS.CANCELLED) {
       throw new Error(`Cannot pause a terminal job (${job.status})`);
     }
 
-    const wasRunning = job.status === JOB_STATUS.RUNNING;
+    const wasActive = job.status === JOB_STATUS.RUNNING || job.status === JOB_STATUS.RECOVERING;
     job.status = JOB_STATUS.PAUSED;
     job.stageMessage = 'Job paused by user';
     job.updatedAt = Date.now();
+
+    const controller = this.activeAbortControllers.get(jobId);
+    if (controller) {
+      controller.abort();
+      this.activeAbortControllers.delete(jobId);
+    }
 
     try {
       const filePath = getJobFilePath(job.seriesId, job.episodeId, jobId, this.baseUploadsDir);
@@ -545,7 +603,7 @@ class ProductionJobQueue {
     } catch (_) {}
 
     this.events.emit('job_change', { action: 'pause', job });
-    if (wasRunning) {
+    if (wasActive) {
       this.processQueue();
     }
 
@@ -556,7 +614,7 @@ class ProductionJobQueue {
    * Resumes a paused or failed job back into the queued state.
    */
   resumeJob(jobId) {
-    const job = this.inMemoryJobs.get(jobId);
+    const job = this.getJob(jobId);
     if (!job) return null;
 
     if (![JOB_STATUS.PAUSED, JOB_STATUS.FAILED].includes(job.status)) {
@@ -564,8 +622,12 @@ class ProductionJobQueue {
     }
 
     job.status = JOB_STATUS.QUEUED;
+    job.error = null;
+    job.completedAt = null;
     job.stageMessage = 'Job resumed back into queue';
     job.updatedAt = Date.now();
+
+    this.activeAbortControllers.set(job.jobId, new AbortController());
 
     try {
       const filePath = getJobFilePath(job.seriesId, job.episodeId, jobId, this.baseUploadsDir);
@@ -581,19 +643,20 @@ class ProductionJobQueue {
    * Cancels a job and signals its AbortController.
    */
   cancelJob(jobId) {
+    const job = this.getJob(jobId);
     const controller = this.activeAbortControllers.get(jobId);
-    if (controller) {
-      controller.abort();
-      this.activeAbortControllers.delete(jobId);
-    }
 
-    const job = this.inMemoryJobs.get(jobId);
     if (job) {
-      const wasRunning = job.status === JOB_STATUS.RUNNING;
+      const wasActive = job.status === JOB_STATUS.RUNNING || job.status === JOB_STATUS.RECOVERING;
       job.status = JOB_STATUS.CANCELLED;
       job.stageMessage = 'Job was cancelled by user';
       job.completedAt = Date.now();
       job.updatedAt = Date.now();
+
+      if (controller) {
+        controller.abort();
+        this.activeAbortControllers.delete(jobId);
+      }
 
       try {
         const filePath = getJobFilePath(job.seriesId, job.episodeId, jobId, this.baseUploadsDir);
@@ -601,10 +664,15 @@ class ProductionJobQueue {
       } catch (_) {}
 
       this.events.emit('job_change', { action: 'cancel', job });
-      if (wasRunning) {
+      if (wasActive) {
         this.processQueue();
       }
       return job;
+    }
+
+    if (controller) {
+      controller.abort();
+      this.activeAbortControllers.delete(jobId);
     }
     return null;
   }
@@ -628,7 +696,7 @@ class ProductionJobQueue {
 
   /**
    * Core Queue Processing Engine:
-   * Enforces MAX_CONCURRENT_JOBS (default: 1, configurable up to 2).
+   * Enforces MAX_CONCURRENT_JOBS (default: 2, configurable up to 4).
    * Sorts queued jobs using Stable Priority-FIFO ordering:
    * 1. Priority ascending (1 before 5)
    * 2. Enqueue createdAt ascending (FIFO)
@@ -640,7 +708,7 @@ class ProductionJobQueue {
 
     try {
       const runningJobs = Array.from(this.inMemoryJobs.values()).filter(
-        (j) => j.status === JOB_STATUS.RUNNING
+        (j) => j.status === JOB_STATUS.RUNNING || this.activeExecutions.has(j.jobId)
       );
 
       const availableSlots = this.maxConcurrency - runningJobs.length;
@@ -648,9 +716,9 @@ class ProductionJobQueue {
         return;
       }
 
-      // Find all candidates in queued status
+      // Find all candidates in queued status not currently executing
       const queuedJobs = Array.from(this.inMemoryJobs.values()).filter(
-        (j) => j.status === JOB_STATUS.QUEUED
+        (j) => j.status === JOB_STATUS.QUEUED && !this.activeExecutions.has(j.jobId)
       );
 
       if (queuedJobs.length === 0) {
@@ -669,8 +737,12 @@ class ProductionJobQueue {
       const jobsToStart = queuedJobs.slice(0, availableSlots);
 
       for (const job of jobsToStart) {
+        if (!this.activeAbortControllers.has(job.jobId)) {
+          this.activeAbortControllers.set(job.jobId, new AbortController());
+        }
+
         job.status = JOB_STATUS.RUNNING;
-        job.startedAt = Date.now();
+        job.startedAt = job.startedAt || Date.now();
         job.updatedAt = Date.now();
         job.stageMessage = 'Processing job in active worker slot...';
 
@@ -679,43 +751,100 @@ class ProductionJobQueue {
           atomicWriteJson(filePath, job);
         } catch (_) {}
 
+        this.activeExecutions.add(job.jobId);
+        this.events.emit('job_change', { action: 'start', job });
+
         if (typeof this.workerHandler === 'function') {
           // Execute worker asynchronously without blocking queue pump
           Promise.resolve()
             .then(() => this.workerHandler(job))
-            .catch(async (err) => {
-              console.error(`[ProductionJobQueue] Error in worker handler for ${job.jobId}:`, err.message);
-              const retryCount = (job.retryPolicy?.retryCount || 0);
-              const maxRetries = (job.retryPolicy?.maxRetries || 3);
-              const isFatal = String(err.message || '').includes('Video file not found');
+            .then((result) => {
+              if (job.status === JOB_STATUS.CANCELLED || job.status === JOB_STATUS.PAUSED) {
+                return;
+              }
+              if (job.status === JOB_STATUS.RUNNING) {
+                const isPartial = result && typeof result === 'object' && result.status === JOB_STATUS.PARTIAL;
+                this.updateJob(job.jobId, {
+                  status: isPartial ? JOB_STATUS.PARTIAL : JOB_STATUS.COMPLETED,
+                  progress: 100,
+                  currentStage: isPartial ? 'partial' : 'completed',
+                  stageMessage:
+                    (result && typeof result === 'object' && result.message) ||
+                    'ការបង្កើតបានបញ្ចប់ដោយជោគជ័យ!',
+                  ...(result !== undefined ? { finalResult: result } : {}),
+                });
+              }
+            })
+            .catch((err) => {
+              if (job.status === JOB_STATUS.CANCELLED || err?.name === 'AbortError') {
+                if (job.status === JOB_STATUS.RUNNING) {
+                  this.updateJob(job.jobId, {
+                    status: JOB_STATUS.CANCELLED,
+                    error: err?.message || 'Job was cancelled by user',
+                    stageMessage: 'Job was cancelled by user',
+                  });
+                }
+                return;
+              }
+              if (job.status === JOB_STATUS.PAUSED) {
+                return;
+              }
 
-              if (!isFatal && retryCount < maxRetries) {
+              const msg = String(err?.message || 'Pipeline execution failed');
+              console.error(`[ProductionJobQueue] Error in worker handler for ${job.jobId}:`, msg);
+              const retryCount = (job.retryPolicy?.retryCount || 0);
+              const maxRetries = (job.retryPolicy?.maxRetries ?? 3);
+              const msgLower = msg.toLowerCase();
+              const isNonRetryable =
+                err?.nonRetryable === true ||
+                msg.includes('Video file not found') ||
+                msg.includes('រកមិនឃើញ File វីដេអូ') ||
+                msg.includes('Gemini API Key') ||
+                msgLower.includes('api_key') ||
+                msgLower.includes('unauthenticated') ||
+                msgLower.includes('permission_denied') ||
+                msgLower.includes('401') ||
+                msgLower.includes('403') ||
+                err?.status === 401 ||
+                err?.status === 403 ||
+                err?.status === 400;
+
+              if (!isNonRetryable && retryCount < maxRetries) {
                 const nextRetry = retryCount + 1;
                 const backoffMs = Math.min(10000, 2000 * nextRetry);
                 console.log(`[ProductionJobQueue] 🔄 Auto-recovering job ${job.jobId} (Attempt ${nextRetry}/${maxRetries}) in ${backoffMs}ms...`);
-                
+
                 this.updateJob(job.jobId, {
                   status: JOB_STATUS.QUEUED,
                   stageMessage: `កំពុងព្យាយាមឡើងវិញដោយស្វ័យប្រវត្តិ (Auto-retry ${nextRetry}/${maxRetries})...`,
                   retryPolicy: {
                     ...job.retryPolicy,
                     retryCount: nextRetry,
-                    lastError: err.message,
+                    lastError: msg,
                   },
                 });
 
-                setTimeout(() => {
+                const retryTimer = setTimeout(() => {
                   this.processQueue();
                 }, backoffMs);
+                if (typeof retryTimer.unref === 'function') {
+                  retryTimer.unref();
+                }
                 return;
               }
 
               this.updateJob(job.jobId, {
                 status: JOB_STATUS.FAILED,
-                error: err.message,
-                stageMessage: `បរាជ័យ: ${err.message}`,
+                error: msg,
+                stageMessage: `បរាជ័យ: ${msg}`,
               });
+            })
+            .finally(() => {
+              this.activeExecutions.delete(job.jobId);
+              this.processQueue();
             });
+        } else {
+          this.activeExecutions.delete(job.jobId);
         }
       }
     } finally {
@@ -825,6 +954,12 @@ class ProductionJobQueue {
 
     job.status = JOB_STATUS.QUEUED;
     job.error = null;
+    job.completedAt = null;
+    job.startedAt = null;
+    job.failedChunkIndex = null;
+    if (job.progress >= 100) {
+      job.progress = 0;
+    }
     job.stageMessage = 'Job queued for retry in production queue...';
     if (!job.retryPolicy) {
       job.retryPolicy = { retryCount: 0, maxRetries: 3, lastError: null, recoverable: false };
@@ -895,6 +1030,9 @@ class ProductionJobQueue {
     this.activeAbortControllers.clear();
     if (this.activeEpisodeLocks) {
       this.activeEpisodeLocks.clear();
+    }
+    if (this.activeExecutions) {
+      this.activeExecutions.clear();
     }
     this.workerHandler = null;
     this.maxConcurrency = DEFAULT_MAX_CONCURRENCY;

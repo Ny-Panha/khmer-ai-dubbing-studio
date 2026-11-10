@@ -189,6 +189,9 @@ async function reconcileTimelineEvidence({
         voiceGender: aSeg.audioGender || aSeg.acousticGender || 'unknown',
         genderConfidence: typeof aSeg.acousticConfidence === 'number' ? aSeg.acousticConfidence : null,
         pitchHz: aSeg.acousticF0 || null,
+        acousticF0: aSeg.acousticF0 || null,
+        acousticGender: aSeg.acousticGender || null,
+        acousticConfidence: typeof aSeg.acousticConfidence === 'number' ? aSeg.acousticConfidence : null,
         evidenceSource: 'audio_and_ocr',
         evidenceType: 'fused_visual_audio',
         resolutionSource: resolution.resolutionSource,
@@ -308,6 +311,9 @@ async function reconcileTimelineEvidence({
         voiceGender: matchedAudio.audioGender || matchedAudio.acousticGender || 'unknown',
         genderConfidence: typeof matchedAudio.acousticConfidence === 'number' ? matchedAudio.acousticConfidence : null,
         pitchHz: matchedAudio.acousticF0 || null,
+        acousticF0: matchedAudio.acousticF0 || null,
+        acousticGender: matchedAudio.acousticGender || null,
+        acousticConfidence: typeof matchedAudio.acousticConfidence === 'number' ? matchedAudio.acousticConfidence : null,
         evidenceSource: 'audio_and_ocr',
         evidenceType: 'fused_visual_audio',
         resolutionSource: resolution.resolutionSource,
@@ -407,6 +413,10 @@ async function reconcileTimelineEvidence({
         target.speakerId = aSeg.speakerId || target.speakerId;
         target.voiceGender = aSeg.audioGender || aSeg.acousticGender || target.voiceGender;
         target.genderConfidence = aSeg.acousticConfidence || aSeg.audioConfidence || target.genderConfidence;
+        target.pitchHz = aSeg.acousticF0 || target.pitchHz || null;
+        target.acousticF0 = aSeg.acousticF0 || target.acousticF0 || null;
+        target.acousticGender = aSeg.acousticGender || target.acousticGender || null;
+        target.acousticConfidence = typeof aSeg.acousticConfidence === 'number' ? aSeg.acousticConfidence : (target.acousticConfidence ?? null);
         
         // STEP 2A: Visual cue boundary preservation. A segment must never expand across subsequent OCR cue boundaries.
         target.startSec = parseFloat(Math.min(target.startSec, aSeg.startSec).toFixed(2));
@@ -460,6 +470,9 @@ async function reconcileTimelineEvidence({
           voiceGender: aSeg.audioGender || aSeg.acousticGender || 'unknown',
           genderConfidence: aSeg.acousticConfidence || aSeg.audioConfidence || 0.9,
           pitchHz: aSeg.acousticF0 || null,
+          acousticF0: aSeg.acousticF0 || null,
+          acousticGender: aSeg.acousticGender || null,
+          acousticConfidence: typeof aSeg.acousticConfidence === 'number' ? aSeg.acousticConfidence : null,
           evidenceSource: 'audio_asr',
           evidenceType: 'audio_only',
           confidence: aSeg.audioConfidence || 0.9,
@@ -591,6 +604,8 @@ async function reconcileTimelineEvidence({
         if (seg.voiceGender && seg.voiceGender !== 'unknown') prev.voiceGender = seg.voiceGender;
         if (seg.pitchHz) prev.pitchHz = seg.pitchHz;
         if (seg.acousticF0) prev.acousticF0 = seg.acousticF0;
+        if (seg.acousticGender && seg.acousticGender !== 'unknown') prev.acousticGender = seg.acousticGender;
+        if (typeof seg.acousticConfidence === 'number') prev.acousticConfidence = seg.acousticConfidence;
       }
       // If visual segment was previously muted/skipTts, activate it because speech is corroborated:
       if (seg.evidenceSource === 'audio_asr' || seg.spokenChineseText || seg.spokenAudioText) {

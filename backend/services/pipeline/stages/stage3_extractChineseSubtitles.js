@@ -8,6 +8,29 @@ const {
   detectSubtitleChangePoints,
 } = require('../../ffmpegService');
 const { formatSecondsToTimecode } = require('../pipelineTypes');
+const { createAbortError } = require('../../../utils/asyncSemaphore');
+const { VISION_CASCADE_MODELS } = require('../../geminiModelCatalog');
+const { geminiQuotaTracker } = require('../../geminiQuotaTracker');
+
+function sleepOrAbort(ms, signal) {
+  if (!signal) {
+    return new Promise((r) => setTimeout(r, ms));
+  }
+  if (signal.aborted) {
+    return Promise.reject(createAbortError('Stage 3 OCR aborted'));
+  }
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(createAbortError('Stage 3 OCR aborted'));
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
 
 function getOcrCachePath(videoPath, startOffsetSec = 0, durationSec = 0, modelName = '') {
   try {
@@ -78,7 +101,7 @@ function generateBaseSamplingGrid(durationSec, stepSec = 0.75, startOffsetSec = 
   return times;
 }
 
-const CASCADE_VISION_MODELS = ['gemini-3.5-flash-lite', 'gemini-2.5-flash', 'gemini-3.5-flash'];
+const CASCADE_VISION_MODELS = VISION_CASCADE_MODELS;
 
 /**
  * Checks if an OCR vision error is retryable / temporary (429, 503, 504 Deadline Exceeded, timeouts).
@@ -110,13 +133,22 @@ function isRetryableVisionError(err) {
 /**
  * Helper: Call Gemini Vision with multi-model cascade and exponential backoff retry on 429 / 503 / 504
  */
-async function callGeminiVisionWithRetry(aiClient, modelName, contents, maxRetries = 2) {
-  const modelsToTry = [modelName, ...CASCADE_VISION_MODELS.filter((m) => m !== modelName)];
+async function callGeminiVisionWithRetry(aiClient, modelName, contents, maxRetries = 2, signal = null) {
+  const startModel = modelName || geminiQuotaTracker.getPreferredPrimaryModel(CASCADE_VISION_MODELS[0]);
+  const tailModels = CASCADE_VISION_MODELS.filter((m) => m !== startModel);
+  const poolKeys = Array.isArray(aiClient?.pool?.keys) ? aiClient.pool.keys : [];
+  const prioritizedTail = poolKeys.length > 0
+    ? geminiQuotaTracker.prioritizeAvailableModels(tailModels, poolKeys)
+    : tailModels;
+  const modelsToTry = [startModel, ...prioritizedTail];
   let lastErr = null;
 
   for (const currentModel of modelsToTry) {
     let attempt = 0;
     while (attempt < maxRetries) {
+      if (signal?.aborted) {
+        throw createAbortError('Stage 3 OCR aborted');
+      }
       try {
         const resp = await aiClient.models.generateContent({
           model: currentModel,
@@ -128,6 +160,9 @@ async function callGeminiVisionWithRetry(aiClient, modelName, contents, maxRetri
         });
         return resp;
       } catch (err) {
+        if (err?.name === 'AbortError' || signal?.aborted) {
+          throw err?.name === 'AbortError' ? err : createAbortError('Stage 3 OCR aborted');
+        }
         lastErr = err;
         attempt++;
         const isRetryable = isRetryableVisionError(err);
@@ -139,7 +174,7 @@ async function callGeminiVisionWithRetry(aiClient, modelName, contents, maxRetri
           break;
         }
         const backoffMs = Math.min(8000, 2000 * attempt);
-        await new Promise((r) => setTimeout(r, backoffMs));
+        await sleepOrAbort(backoffMs, signal);
       }
     }
   }
@@ -159,16 +194,27 @@ async function callGeminiVisionWithRetry(aiClient, modelName, contents, maxRetri
  * @param {string} [params.modelName='gemini-3.5-flash-lite']
  * @param {number} [params.baseStepSec=0.75] - Default ~0.75s between frames
  * @param {number} [params.startOffsetSec=0] - Offset for chunk processing
+ * @param {AbortSignal} [params.signal=null] - Cancellation signal
  * @returns {Promise<{ rawObservations: Array, visualSegments: Array, ocrMeta: object }>}
  */
 async function extractChineseSubtitles({
   videoPath,
   durationSec,
   aiClient,
-  modelName = 'gemini-3.5-flash-lite',
+  modelName = null,
   baseStepSec = 0.75,
   startOffsetSec = 0,
+  signal = null,
 }) {
+  const effectiveModel = modelName || geminiQuotaTracker.getPreferredPrimaryModel(CASCADE_VISION_MODELS[0]);
+  const checkAbort = () => {
+    if (signal?.aborted) {
+      throw createAbortError('Stage 3 OCR aborted');
+    }
+  };
+
+  checkAbort();
+
   if (!videoPath || !fs.existsSync(videoPath)) {
     throw new Error(`[Stage 3 Extract Subtitles] Video file not found: ${videoPath}`);
   }
@@ -176,7 +222,7 @@ async function extractChineseSubtitles({
     throw new Error('[Stage 3 Extract Subtitles] Gemini AI client is required');
   }
 
-  const cachePath = getOcrCachePath(videoPath, startOffsetSec, durationSec, modelName);
+  const cachePath = getOcrCachePath(videoPath, startOffsetSec, durationSec, effectiveModel);
   if (cachePath && fs.existsSync(cachePath)) {
     try {
       const cached = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
@@ -197,13 +243,18 @@ async function extractChineseSubtitles({
   let lastBatchError = null;
 
   try {
+    checkAbort();
     // 1. STEP 1: Change-driven sampling pre-pass (local FFmpeg pixel-diff, zero API calls)
     const { changePoints = [], cueStates = [], frameDiffs = [] } = await detectSubtitleChangePoints(
       videoPath,
       startOffsetSec,
       durationSec,
-      5.0
+      5.0,
+      { signal }
     ).catch((preErr) => {
+      if (preErr?.name === 'AbortError' || signal?.aborted) {
+        throw preErr?.name === 'AbortError' ? preErr : createAbortError('Stage 3 OCR aborted');
+      }
       console.warn('[Stage 3 Extract Subtitles] Pre-pass change point detection failed, falling back to grid:', preErr.message);
       return { changePoints: [], cueStates: [], frameDiffs: [] };
     });
@@ -289,13 +340,17 @@ async function extractChineseSubtitles({
     const sortedTimes = candidateTimestamps.map((c) => c.timestampSec);
 
     // 2. Extract candidate frames at scheduled timestamps
+    checkAbort();
     let extractedFrames = [];
     try {
-      extractedFrames = await extractFramesAtTimestamps(videoPath, sortedTimes, tempDir);
+      extractedFrames = await extractFramesAtTimestamps(videoPath, sortedTimes, tempDir, { signal });
     } catch (extractErr) {
+      if (extractErr?.name === 'AbortError' || signal?.aborted) {
+        throw extractErr?.name === 'AbortError' ? extractErr : createAbortError('Stage 3 OCR aborted');
+      }
       console.warn('[Stage 3 Extract Subtitles] Timestamp extraction error, attempting streaming fallback:', extractErr.message);
       const fps = Math.min(2.0, Math.max(0.8, parseFloat((1 / effectiveStep).toFixed(2))));
-      extractedFrames = await extractFramesStreaming(videoPath, safeStartSec, durationSec, fps, tempDir);
+      extractedFrames = await extractFramesStreaming(videoPath, safeStartSec, durationSec, fps, tempDir, { signal });
     }
 
     if (!extractedFrames || extractedFrames.length === 0) {
@@ -303,7 +358,7 @@ async function extractChineseSubtitles({
       return {
         rawObservations: [],
         visualSegments: [],
-        ocrMeta: { totalFramesSampled: 0, totalObservations: 0, detectedSegmentsCount: 0, modelUsed: modelName },
+        ocrMeta: { totalFramesSampled: 0, totalObservations: 0, detectedSegmentsCount: 0, modelUsed: effectiveModel },
       };
     }
 
@@ -367,12 +422,13 @@ Return JSON ONLY matching this schema:
 
     // Helper: Execute a batch call and push parsed frame observations
     async function executeVisionBatch(batch) {
+      checkAbort();
       const contents = buildVisionBatchContents(batch);
       if (!contents) return;
 
       try {
         apiCallsCount++;
-        const resp = await callGeminiVisionWithRetry(aiClient, modelName, contents);
+        const resp = await callGeminiVisionWithRetry(aiClient, effectiveModel, contents, 2, signal);
         const rawText = typeof resp.text === 'function' ? resp.text() : resp.text;
         if (rawText) {
           const clean = rawText.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
@@ -407,6 +463,9 @@ Return JSON ONLY matching this schema:
           }
         }
       } catch (geminiErr) {
+        if (geminiErr?.name === 'AbortError' || signal?.aborted) {
+          throw geminiErr?.name === 'AbortError' ? geminiErr : createAbortError('Stage 3 OCR aborted');
+        }
         retriesCount++;
         lastBatchError = geminiErr.message;
         console.error(`[Stage 3 Extract Subtitles] ❌ Batch OCR call failed at ${batch[0].timestampSec}s after full model cascade:`, geminiErr.message);
@@ -423,11 +482,12 @@ Return JSON ONLY matching this schema:
 
     const CONCURRENCY = 2;
     for (let bIdx = 0; bIdx < batchList.length; bIdx += CONCURRENCY) {
+      checkAbort();
       const activeBatches = batchList.slice(bIdx, bIdx + CONCURRENCY);
       await Promise.all(activeBatches.map((batch) => executeVisionBatch(batch)));
 
       if (bIdx + CONCURRENCY < batchList.length) {
-        await new Promise((r) => setTimeout(r, 400));
+        await sleepOrAbort(400, signal);
       }
     }
 
@@ -495,12 +555,16 @@ Return JSON ONLY matching this schema:
 
       // Execute tie-break read if any disagreements occurred
       if (statesNeedingTieBreak.length > 0) {
+        checkAbort();
         console.log(`[Stage 3 OCR] Executing tie-break verification for ${statesNeedingTieBreak.length} candidate cue states...`);
         const tieTimes = statesNeedingTieBreak.map((n) => n.cueState.sampleTieSec);
         let tieFrames = [];
         try {
-          tieFrames = await extractFramesAtTimestamps(videoPath, tieTimes, tempDir);
-        } catch (_) {
+          tieFrames = await extractFramesAtTimestamps(videoPath, tieTimes, tempDir, { signal });
+        } catch (tieErr) {
+          if (tieErr?.name === 'AbortError' || signal?.aborted) {
+            throw tieErr?.name === 'AbortError' ? tieErr : createAbortError('Stage 3 OCR aborted');
+          }
           tieFrames = [];
         }
 
@@ -783,7 +847,7 @@ Return JSON ONLY matching this schema:
       baseStepSec,
       apiCallsCount,
       retriesCount,
-      modelUsed: modelName,
+      modelUsed: effectiveModel,
       hasVisualSubtitles: finalizedVisualSegments.length > 0,
       ocrNotice: lastBatchError || null,
     },
@@ -816,10 +880,24 @@ function deduplicateFastOcrCues(rawCues = [], defaultGender = 'male') {
   const deduped = [];
 
   const defGen = (defaultGender || 'male').toLowerCase() === 'female' ? 'female' : 'male';
-  const defVoice = defGen === 'female' ? 'km-KH-SreymomNeural' : 'km-KH-PisethNeural';
-  const defVoiceLabel = defGen === 'female' ? 'ស្រីមុំ (Sreymom)' : 'ពិសិដ្ឋ (Piseth)';
-  const defAvatar = defGen === 'female' ? '👩' : '👨';
-  const defColor = defGen === 'female' ? '#ec4899' : '#3b82f6';
+  const buildVoiceMeta = (gender) => {
+    const isFemale = String(gender || '').toLowerCase() === 'female';
+    return isFemale
+      ? {
+          voiceGender: 'female',
+          voiceId: 'km-KH-SreymomNeural',
+          voiceLabel: 'ស្រីមុំ (Sreymom)',
+          avatar: '👩',
+          badgeColor: '#ec4899',
+        }
+      : {
+          voiceGender: 'male',
+          voiceId: 'km-KH-PisethNeural',
+          voiceLabel: 'ពិសិដ្ឋ (Piseth)',
+          avatar: '👨',
+          badgeColor: '#3b82f6',
+        };
+  };
 
   for (const cue of sorted) {
     const cueText = String(cue.originalChineseText || cue.chineseText || cue.text || '').trim();
@@ -882,8 +960,41 @@ function deduplicateFastOcrCues(rawCues = [], defaultGender = 'male') {
 
   return deduped.map((seg, idx) => {
     const isUserOverridden = Boolean(seg.userOverridden);
-    const resolvedGender = isUserOverridden ? (seg.voiceGender || defGen) : defGen;
-    const resolvedVoice = isUserOverridden ? (seg.voiceId || defVoice) : defVoice;
+    let resolvedGender;
+    let resolvedVoice;
+    let voiceMeta;
+
+    if (isUserOverridden) {
+      const existingVoice = seg.voiceId || seg.khmerVoiceId || seg.voice || '';
+      const rawGender = String(seg.voiceGender || '').toLowerCase();
+      if (rawGender === 'female' || rawGender === 'male') {
+        resolvedGender = rawGender;
+      } else if (existingVoice.includes('Sreymom')) {
+        resolvedGender = 'female';
+      } else if (existingVoice.includes('Piseth')) {
+        resolvedGender = 'male';
+      } else {
+        resolvedGender = defGen;
+      }
+      voiceMeta = buildVoiceMeta(resolvedGender);
+      resolvedVoice = existingVoice || voiceMeta.voiceId;
+      if (resolvedVoice.includes('Sreymom')) {
+        voiceMeta = buildVoiceMeta('female');
+      } else if (resolvedVoice.includes('Piseth')) {
+        voiceMeta = buildVoiceMeta('male');
+      }
+    } else {
+      // Rule 1: Non-overridden Fast OCR defaults ALWAYS re-derive voiceId/khmerVoiceId/voice from final voiceGender
+      resolvedGender = defGen;
+      voiceMeta = buildVoiceMeta(resolvedGender);
+      resolvedVoice = voiceMeta.voiceId;
+    }
+
+    const resolvedSpeaker = isUserOverridden ? (seg.speaker || seg.speakerName || 'តួអង្គ') : 'តួអង្គ';
+    const resolvedSpeakerId = isUserOverridden ? (seg.speakerId || `spk_ocr_${idx + 1}`) : `spk_ocr_${idx + 1}`;
+    const resolvedUnverified = isUserOverridden
+      ? (seg.unverifiedSpeaker !== undefined ? Boolean(seg.unverifiedSpeaker) : (resolvedSpeaker === 'តួអង្គ'))
+      : true;
 
     return {
       ...seg,
@@ -908,20 +1019,20 @@ function deduplicateFastOcrCues(rawCues = [], defaultGender = 'male') {
 
       // STEP 3: Speaker/gender WITHOUT ASR
       speakerSource: 'ocr_only',
-      unverifiedSpeaker: true,
-      genderConfidence: null,
+      unverifiedSpeaker: resolvedUnverified,
+      genderConfidence: isUserOverridden ? (seg.genderConfidence ?? null) : null,
       voiceGender: resolvedGender,
       gender: resolvedGender,
       speakerGender: resolvedGender.toUpperCase(),
-      speaker: 'តួអង្គ',
-      speakerName: 'តួអង្គ',
-      speakerId: `spk_ocr_${idx + 1}`,
+      speaker: resolvedSpeaker,
+      speakerName: resolvedSpeaker,
+      speakerId: resolvedSpeakerId,
       voiceId: resolvedVoice,
       khmerVoiceId: resolvedVoice,
       voice: resolvedVoice,
-      voiceLabel: defVoiceLabel,
-      avatar: defAvatar,
-      badgeColor: defColor,
+      voiceLabel: voiceMeta.voiceLabel,
+      avatar: voiceMeta.avatar,
+      badgeColor: voiceMeta.badgeColor,
 
       audioUrl: null,
       audioFile: null,

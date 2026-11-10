@@ -17,7 +17,14 @@ const {
   markKeyAsInvalid,
   getGlobalInvalidKeys,
 } = require("../services/geminiKeyManager");
+const { geminiQuotaTracker } = require("../services/geminiQuotaTracker");
+const {
+  GEMINI_MODEL_CATALOG,
+  DUBBING_CASCADE_MODELS,
+  isUsableDubbingModel,
+} = require("../services/geminiModelCatalog");
 const { CASCADE_MODELS } = require("../services/pipeline");
+const { DEFAULT_MODELS } = require("../services/geminiService");
 
 const router = express.Router();
 
@@ -66,113 +73,339 @@ router.get("/health", (req, res) => {
 
 /**
  * Real-time Gemini Key Quota & Health Check
- * Lightweight ping (0 tokens consumed) to verify 429 Rate Limit, 401 Invalid, or 200 Ready.
+ * - probe=stats : Instant local usage & cooldown snapshot (0 network calls, 0 tokens)
+ * - probe=models (default) : Lightweight key auth check via models.list + local usage/cooldowns (0 tokens)
+ * - probe=live : Real 1-token generateContent check per key to detect actual 429 RPM/RPD exhaustion vs 200 Ready
+ * - probe=matrix : Live multi-model check across usable cascade models + primary per-key health check
  */
+async function probeSingleKeyAndModel(key, modelId, timeoutMs = 8000) {
+  const start = Date.now();
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelId)}:generateContent?key=${encodeURIComponent(key)}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: "1" }] }],
+          generationConfig: { maxOutputTokens: 1 },
+        }),
+        signal: controller.signal,
+      }
+    );
+    clearTimeout(timer);
+    const latencyMs = Date.now() - start;
+    const rawBody = await response.text().catch(() => "");
+    let totalTokens = 1;
+    if (response.status === 200) {
+      try {
+        const parsed = JSON.parse(rawBody);
+        totalTokens = Number(parsed?.usageMetadata?.totalTokenCount) || 1;
+      } catch (_) {}
+    }
+    return {
+      status: response.status,
+      rawBody,
+      latencyMs,
+      totalTokens,
+    };
+  } catch (err) {
+    clearTimeout(timer);
+    return {
+      status: 0,
+      rawBody: err?.message || "Network error",
+      latencyMs: Date.now() - start,
+      totalTokens: 0,
+    };
+  }
+}
+
 router.get("/gemini/keys-status", async (req, res) => {
   try {
     const keys = extractAllGeminiKeys();
-    if (!keys || keys.length === 0) {
-      return res.json({ success: true, keys: [], totalRPM: 0, activeCount: 0 });
-    }
-
+    const probeMode = String(req.query.probe || "models").toLowerCase();
+    const includeAllModels = String(req.query.allModels || "").toLowerCase() === "true";
     const invalidKeys = getGlobalInvalidKeys();
+    const requestedModel = req.query.model ? String(req.query.model).trim() : "";
+    const preferredPrimary = geminiQuotaTracker.getPreferredPrimaryModel(DUBBING_CASCADE_MODELS[0]);
+    const primaryProbeModel =
+      requestedModel && requestedModel !== "auto" && isUsableDubbingModel(requestedModel)
+        ? requestedModel
+        : preferredPrimary;
 
-    const checks = await Promise.all(
-      keys.map(async (key, idx) => {
-        const masked = key.length > 8 ? `...${key.slice(-4)}` : '****';
-        if (invalidKeys.has(key)) {
-          return {
-            keyNum: idx + 1,
-            masked,
-            status: "invalid",
-            badge: "401 Key ខុស",
-            code: 401,
-            latencyMs: 0,
-            isRateLimited: false,
-            isInvalid: true,
-          };
-        }
-
-        const start = Date.now();
-        try {
-          const controller = new AbortController();
-          const timer = setTimeout(() => controller.abort(), 8000);
-          const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${key}`, {
-            signal: controller.signal,
-          });
-          clearTimeout(timer);
-          const latencyMs = Date.now() - start;
-
-          if (response.status === 200) {
-            return {
-              keyNum: idx + 1,
-              masked,
-              status: "ready",
-              badge: "15 RPM Ready",
-              code: 200,
-              latencyMs,
-              isRateLimited: false,
-              isInvalid: false,
-            };
-          } else if (response.status === 429) {
-            return {
-              keyNum: idx + 1,
-              masked,
-              status: "rate_limited",
-              badge: "429 Limit អស់ (Cooldown)",
-              code: 429,
-              latencyMs,
-              isRateLimited: true,
-              isInvalid: false,
-            };
-          } else if (response.status === 401 || response.status === 403) {
-            markKeyAsInvalid(key, response.status);
-            return {
-              keyNum: idx + 1,
-              masked,
-              status: "invalid",
-              badge: "401 Key ខុស",
-              code: response.status,
-              latencyMs,
-              isRateLimited: false,
-              isInvalid: true,
-            };
-          } else {
-            return {
-              keyNum: idx + 1,
-              masked,
-              status: "error",
-              badge: `HTTP ${response.status}`,
-              code: response.status,
-              latencyMs,
-              isRateLimited: false,
-              isInvalid: false,
-            };
-          }
-        } catch (fetchErr) {
-          const isDead = invalidKeys.has(key);
-          return {
-            keyNum: idx + 1,
-            masked,
-            status: isDead ? "invalid" : "ready_standby",
-            badge: isDead ? "401 Key ខុស" : "15 RPM Ready",
-            code: 0,
-            latencyMs: Date.now() - start,
-            isRateLimited: false,
-            isInvalid: isDead,
-          };
-        }
-      })
+    const probeModels = Array.from(
+      new Set([
+        primaryProbeModel,
+        ...(Array.isArray(DEFAULT_MODELS) ? DEFAULT_MODELS : []),
+        ...(Array.isArray(CASCADE_MODELS) ? CASCADE_MODELS : []),
+        ...DUBBING_CASCADE_MODELS,
+      ])
     );
 
-    const activeCount = checks.filter((c) => (c.status === "ready" || c.status === "ready_standby") && !c.isInvalid).length;
+    if (!keys || keys.length === 0) {
+      const emptySnap = geminiQuotaTracker.getPoolStatusSnapshot([], { invalidKeysSet: invalidKeys });
+      return res.json({ success: true, probeMode, probedModel: primaryProbeModel, ...emptySnap });
+    }
+
+    if (probeMode === "live") {
+      const fallbackPair = [primaryProbeModel, ...probeModels.filter((m) => m !== primaryProbeModel)].slice(0, 2);
+      await Promise.all(
+        keys.map(async (key) => {
+          if (invalidKeys.has(key)) {
+            geminiQuotaTracker.recordInvalid(key, 401, "Invalid API key");
+            return;
+          }
+
+          for (const candidateModel of fallbackPair) {
+            const probeRes = await probeSingleKeyAndModel(key, candidateModel);
+            const { status, rawBody, latencyMs, totalTokens } = probeRes;
+
+            if (status === 200) {
+              geminiQuotaTracker.recordSuccess(key, {
+                model: candidateModel,
+                totalTokens,
+                latencyMs,
+                statusCode: 200,
+                isProbe: true,
+                updateKeyCooldown: true,
+              });
+              return;
+            }
+
+            if (status === 404 && candidateModel !== fallbackPair[fallbackPair.length - 1]) {
+              geminiQuotaTracker.recordModelProbeStatus(candidateModel, { statusCode: 404, message: rawBody, latencyMs });
+              continue;
+            }
+
+            if (status === 401 || status === 403) {
+              markKeyAsInvalid(key, status);
+              geminiQuotaTracker.recordInvalid(key, status, rawBody, {
+                latencyMs,
+                isProbe: true,
+              });
+              return;
+            }
+
+            if (status === 429) {
+              geminiQuotaTracker.recordRateLimit(key, rawBody || "HTTP 429", {
+                model: candidateModel,
+                latencyMs,
+                isProbe: true,
+                updateKeyCooldown: true,
+              });
+              return;
+            }
+
+            if (status === 503) {
+              geminiQuotaTracker.recordRateLimit(key, rawBody || "HTTP 503", {
+                model: candidateModel,
+                latencyMs,
+                isProbe: true,
+                updateKeyCooldown: true,
+              });
+              geminiQuotaTracker.recordModelProbeStatus(candidateModel, { statusCode: 503, message: rawBody, latencyMs });
+              return;
+            }
+
+            geminiQuotaTracker.recordModelListProbe(key, {
+              statusCode: status,
+              latencyMs,
+            });
+            return;
+          }
+        })
+      );
+    } else if (probeMode === "matrix") {
+      // 1. First probe primary model across ALL keys so top Key cards accurately reflect active pool health
+      const readyPrimaryKeys = [];
+      const fallbackValidKeys = [];
+      await Promise.all(
+        keys.map(async (key) => {
+          if (invalidKeys.has(key)) {
+            geminiQuotaTracker.recordInvalid(key, 401, "Invalid API key");
+            return;
+          }
+          const probeRes = await probeSingleKeyAndModel(key, primaryProbeModel);
+          const { status, rawBody, latencyMs, totalTokens } = probeRes;
+          if (status === 200) {
+            readyPrimaryKeys.push(key);
+            geminiQuotaTracker.recordSuccess(key, {
+              model: primaryProbeModel,
+              totalTokens,
+              latencyMs,
+              statusCode: 200,
+              isProbe: true,
+              updateKeyCooldown: true,
+            });
+          } else if (status === 401 || status === 403) {
+            markKeyAsInvalid(key, status);
+            geminiQuotaTracker.recordInvalid(key, status, rawBody, { latencyMs, isProbe: true });
+          } else if (status === 429) {
+            fallbackValidKeys.push(key);
+            geminiQuotaTracker.recordRateLimit(key, rawBody || "HTTP 429", {
+              model: primaryProbeModel,
+              latencyMs,
+              isProbe: true,
+              updateKeyCooldown: true,
+            });
+          } else if (status === 503) {
+            fallbackValidKeys.push(key);
+            geminiQuotaTracker.recordModelProbeStatus(primaryProbeModel, { statusCode: 503, message: rawBody, latencyMs });
+          } else {
+            fallbackValidKeys.push(key);
+            geminiQuotaTracker.recordModelProbeStatus(primaryProbeModel, { statusCode: status, message: rawBody, latencyMs });
+          }
+        })
+      );
+
+      // Order keys so known healthy keys (e.g. Key #3) are tried first for the rest of the catalog
+      const probeKeyOrder = [...readyPrimaryKeys, ...fallbackValidKeys].filter((k) => !invalidKeys.has(k));
+
+      // 2. Test remaining active models across the pool with bounded concurrency (max 3 in-flight)
+      const catalogTargets = GEMINI_MODEL_CATALOG
+        .filter((entry) => {
+          if (entry.id === primaryProbeModel) return false;
+          if (entry.deprecated || entry.rpdLimit === 0) return false;
+          if (entry.usableInDubbing) return true;
+          if (entry.id === "gemini-3.5-transcribe") return true;
+          return includeAllModels && entry.usableInApp;
+        })
+        .map((entry) => entry.id);
+
+      const MATRIX_CONCURRENCY = 3;
+      for (let i = 0; i < catalogTargets.length && probeKeyOrder.length > 0; i += MATRIX_CONCURRENCY) {
+        const batch = catalogTargets.slice(i, i + MATRIX_CONCURRENCY);
+        await Promise.all(
+          batch.map(async (modelId, batchOffset) => {
+            const startIdx = (i + batchOffset) % probeKeyOrder.length;
+            let got200 = false;
+            let saw429 = false;
+            let sawTimeout = false;
+            for (let kStep = 0; kStep < probeKeyOrder.length; kStep++) {
+              const candidateKey = probeKeyOrder[(startIdx + kStep) % probeKeyOrder.length];
+              if (invalidKeys.has(candidateKey)) continue;
+
+              const probeRes = await probeSingleKeyAndModel(candidateKey, modelId, 12000);
+              const { status, rawBody, latencyMs, totalTokens } = probeRes;
+
+              if (status === 200) {
+                geminiQuotaTracker.recordSuccess(candidateKey, {
+                  model: modelId,
+                  totalTokens,
+                  latencyMs,
+                  statusCode: 200,
+                  isProbe: true,
+                  updateKeyCooldown: false,
+                });
+                got200 = true;
+                break;
+              }
+              if (status === 401 || status === 403) {
+                markKeyAsInvalid(candidateKey, status);
+                geminiQuotaTracker.recordInvalid(candidateKey, status, rawBody, { latencyMs, isProbe: true });
+                continue;
+              }
+              if (status === 429) {
+                saw429 = true;
+                geminiQuotaTracker.recordRateLimit(candidateKey, rawBody || "HTTP 429", {
+                  model: modelId,
+                  latencyMs,
+                  isProbe: true,
+                  updateKeyCooldown: false,
+                });
+                // Continue trying another key in the pool in case another key has remaining quota
+                continue;
+              }
+              if (status === 0 || status === 504) {
+                sawTimeout = true;
+                geminiQuotaTracker.recordModelProbeStatus(modelId, {
+                  statusCode: 504,
+                  message: rawBody || "Request timed out",
+                  latencyMs,
+                });
+                break;
+              }
+              // 404 / 503 / 500 apply at model endpoint level
+              geminiQuotaTracker.recordModelProbeStatus(modelId, {
+                statusCode: status,
+                message: rawBody,
+                latencyMs,
+              });
+              break;
+            }
+            if (!got200 && saw429 && !sawTimeout) {
+              const existingRec = geminiQuotaTracker._ensureModelRecord(modelId);
+              if (existingRec && (!existingRec.lastProbeCode || existingRec.lastProbeCode === 200)) {
+                geminiQuotaTracker.recordModelProbeStatus(modelId, { statusCode: 429, message: "429 Exhausted across pool keys" });
+              }
+            }
+          })
+        );
+      }
+    } else if (probeMode === "models") {
+      await Promise.all(
+        keys.map(async (key) => {
+          if (invalidKeys.has(key)) {
+            geminiQuotaTracker.recordInvalid(key, 401, "Invalid API key");
+            return;
+          }
+          const start = Date.now();
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 8000);
+          try {
+            const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(key)}`, {
+              signal: controller.signal,
+            });
+            clearTimeout(timer);
+            const latencyMs = Date.now() - start;
+            if (response.status === 401 || response.status === 403) {
+              markKeyAsInvalid(key, response.status);
+            }
+            geminiQuotaTracker.recordModelListProbe(key, {
+              statusCode: response.status,
+              latencyMs,
+            });
+          } catch (_) {
+            clearTimeout(timer);
+          }
+        })
+      );
+    }
+
+    const snapshot = geminiQuotaTracker.getPoolStatusSnapshot(keys, { invalidKeysSet: invalidKeys });
     res.json({
       success: true,
-      totalKeys: keys.length,
-      activeCount,
-      totalRPM: activeCount * 15,
-      keys: checks,
-      timestamp: Date.now(),
+      probeMode,
+      probedModel: primaryProbeModel,
+      ...snapshot,
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * Update Gemini Quota & Pacing Settings (Use All Keys Fast vs Safe Pacing, custom RPM/Daily limits, preferred primary model, or reset counter)
+ */
+router.post("/gemini/quota-settings", (req, res) => {
+  try {
+    const body = req.body && typeof req.body === "object" ? req.body : {};
+    const settings = geminiQuotaTracker.updateSettings({
+      useAllKeysFast: body.useAllKeysFast,
+      rpmPerKey: body.rpmPerKey,
+      dailyRpdPerKey: body.dailyRpdPerKey,
+      preferredModel: body.preferredModel,
+      resetDailyStats: Boolean(body.resetDailyStats),
+    });
+    const keys = extractAllGeminiKeys();
+    const invalidKeys = getGlobalInvalidKeys();
+    const snapshot = geminiQuotaTracker.getPoolStatusSnapshot(keys, { invalidKeysSet: invalidKeys });
+    res.json({
+      success: true,
+      settings,
+      ...snapshot,
     });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });

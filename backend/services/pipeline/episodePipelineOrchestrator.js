@@ -10,6 +10,8 @@ const { generateSegmentTTS } = require('./stages/stage9_generateSegmentTTS');
 const { previewAndExport } = require('./stages/stage10_previewAndExport');
 const { saveCheckpoint } = require('./checkpointManager');
 const { GENERATION_MODES } = require('./pipelineTypes');
+const { DUBBING_CASCADE_MODELS, isUsableDubbingModel } = require('../geminiModelCatalog');
+const { geminiQuotaTracker } = require('../geminiQuotaTracker');
 
 function checkAbortSignal(signal, stageName) {
   if (signal?.aborted) {
@@ -75,7 +77,7 @@ async function runEpisodePipeline({
   episodeId = 'ep_1',
   mode = GENERATION_MODES?.MODE_A_DIALOGUE || 'dialogue',
   genre = 'auto',
-  modelName = 'gemini-3.5-flash-lite',
+  modelName = null,
   userDirection = '',
   narratorGender = 'male',
   seriesGlossary = {},
@@ -88,6 +90,10 @@ async function runEpisodePipeline({
   signal = null,
   onProgress = null,
 }) {
+  const cleanRequestedModel = String(modelName || '').trim();
+  const effectiveModelName = (cleanRequestedModel && cleanRequestedModel !== 'auto' && isUsableDubbingModel(cleanRequestedModel))
+    ? cleanRequestedModel
+    : geminiQuotaTracker.getPreferredPrimaryModel(DUBBING_CASCADE_MODELS[0]);
   const notifyProgress = (stageIndex, stageName, percent, message, meta = {}) => {
     if (typeof onProgress === 'function') {
       onProgress({ stageIndex, stageName, percent, message, ...meta });
@@ -158,7 +164,7 @@ async function runEpisodePipeline({
       videoPath: ingestCtx.videoPath,
       durationSec,
       aiClient,
-      modelName,
+      modelName: effectiveModelName,
       baseStepSec: 0.75,
       startOffsetSec: 0,
     }),
@@ -166,7 +172,7 @@ async function runEpisodePipeline({
       videoPath: ingestCtx.videoPath,
       durationSec,
       aiClient,
-      modelName,
+      modelName: effectiveModelName,
       startOffsetSec: 0,
     }),
   ]);
@@ -225,11 +231,12 @@ async function runEpisodePipeline({
     reconciledSegments: reconciliation.reconciledSegments,
     durationSec,
     aiClient,
-    modelName,
+    modelName: effectiveModelName,
     userDirection,
     narratorGender,
     seriesGlossary,
     genre,
+    signal,
   });
 
   trySaveStageCheckpoint({

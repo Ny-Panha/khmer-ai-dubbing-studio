@@ -4,7 +4,8 @@ const path = require("path");
 const { uploadsDir } = require("../utils/pathUtils");
 const {
   getSeriesMetadata,
-  saveSeriesMetadata,
+  withSeriesMetadataLock,
+  syncSeriesMetadataSafely,
   createNewEpisode,
   deleteEpisode,
 } = require("../services/episodeService");
@@ -33,11 +34,11 @@ router.get("/", (req, res) => {
   }
 });
 
-router.post("/", (req, res) => {
+router.post("/", async (req, res) => {
   try {
     const { series } = req.body;
     if (!series || !series.id) return res.status(400).json({ error: "series with id is required" });
-    const saved = saveSeriesMetadata(series);
+    const saved = await syncSeriesMetadataSafely(series.id, series);
     res.json({ success: true, series: saved });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -65,10 +66,10 @@ router.post("/:seriesId/episodes", async (req, res) => {
   }
 });
 
-router.delete("/:seriesId/episodes/:episodeId", (req, res) => {
+router.delete("/:seriesId/episodes/:episodeId", async (req, res) => {
   try {
     const { seriesId, episodeId } = req.params;
-    const result = deleteEpisode(seriesId, episodeId);
+    const result = await withSeriesMetadataLock(seriesId, () => deleteEpisode(seriesId, episodeId));
     if (!result.success) {
       return res.status(400).json(result);
     }
@@ -78,12 +79,12 @@ router.delete("/:seriesId/episodes/:episodeId", (req, res) => {
   }
 });
 
-router.post("/:seriesId/sync", (req, res) => {
+router.post("/:seriesId/sync", async (req, res) => {
   try {
     const { seriesId } = req.params;
     const { series } = req.body || {};
     if (!series) return res.status(400).json({ error: "series payload required" });
-    const saved = saveSeriesMetadata(series);
+    const saved = await syncSeriesMetadataSafely(seriesId, series);
     res.json({ success: true, series: saved });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });

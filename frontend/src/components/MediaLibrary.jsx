@@ -3,6 +3,7 @@ import { Film, Sparkles, Subtitles, Layers, AlertCircle, Plus, CheckCircle2, Arr
 import { uploadVideoFile } from '../services/api';
 import { parseTimeToSeconds, parseTimestampToSeconds, formatMinSec } from '../utils/timestampUtils';
 import { deleteSegmentByIdOrIndex } from '../utils/timelineUtils';
+import { filterScriptSegments } from '../utils/scriptSearchUtils';
 
 import MediaUploadTab from './media/MediaUploadTab';
 import DubbingModeTab from './media/DubbingModeTab';
@@ -78,6 +79,7 @@ function MediaLibrary({
   onDeleteEpisode = null,
   onRenameEpisode = null,
   onRenameSeries = null,
+  onRefreshSeries = null,
   apiKey = null,
 }) {
   const [dubbingMode, setDubbingMode] = useState('dialogue');
@@ -304,14 +306,7 @@ function MediaLibrary({
 
   const filteredSegments = useMemo(() => {
     if (!scriptData?.segments) return EMPTY_SEGMENTS;
-    if (!searchQuery.trim()) return scriptData.segments;
-    const q = searchQuery.toLowerCase();
-    return scriptData.segments.filter((seg) => {
-      const km = (seg.khmer || seg.khmerText || '').toLowerCase();
-      const orig = (seg.original || seg.chineseText || seg.originalChineseText || '').toLowerCase();
-      const spk = (seg.speaker || seg.speakerName || '').toLowerCase();
-      return km.includes(q) || orig.includes(q) || spk.includes(q);
-    });
+    return filterScriptSegments(scriptData.segments, searchQuery);
   }, [scriptData?.segments, searchQuery]);
 
   return (
@@ -445,6 +440,10 @@ function MediaLibrary({
       {activeTab === 'subtitles' && (
         <ScriptReviewTab
           scriptData={scriptData}
+          seriesId={seriesId}
+          episodeId={episodeId}
+          apiKey={apiKey}
+          onRefreshSeries={onRefreshSeries}
           handleBridgeGaps={handleBridgeGaps}
           handleAddSegment={handleAddSegment}
           searchQuery={searchQuery}

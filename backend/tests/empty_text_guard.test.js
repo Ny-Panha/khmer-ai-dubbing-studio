@@ -123,6 +123,9 @@ test('Empty Text Guard: HTTP 400 returned on empty single-segment text', async (
     assert.equal(body3.success, false);
     assert.ok(body3.error.includes('Segment #1 គ្មានអត្ថបទខ្មែរទេ'));
 
+    const leftoverDramaDir = path.resolve(__dirname, '../uploads/projects/drama_project');
+    assert.equal(fs.existsSync(leftoverDramaDir), false, '400 empty-text guard must not create drama_project dir');
+
     // 4. Verification with real series data: ep_2 segment #5 from user repo
     const seriesMetaPath = path.resolve(__dirname, '../uploads/projects/series_1793898268958/series.json');
     if (fs.existsSync(seriesMetaPath)) {
@@ -212,5 +215,10 @@ test('Empty Text Guard: Batch branch gracefully skips empty segments without thr
     assert.equal(seg5Result.ttsStatus, 'empty_text', 'Segment #5 must have ttsStatus empty_text');
   } finally {
     await new Promise((resolve) => server.close(resolve));
+    for (const sId of ['test_empty_series', 'test_mixed_series']) {
+      try {
+        fs.rmSync(path.resolve(__dirname, '../uploads/projects', sId), { recursive: true, force: true });
+      } catch (_) {}
+    }
   }
 });

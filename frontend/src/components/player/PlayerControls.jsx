@@ -91,7 +91,18 @@ export function PlayerBottomBar({
                 border: '1px solid rgba(74, 222, 128, 0.3)',
                 cursor: 'pointer',
               }}
-              title="វីដេអូ Rendered (1920×1080 Landscape 16:9)"
+              title={
+                (() => {
+                  const ratio = (typeof renderedVideo === 'object' && renderedVideo?.aspectRatio)
+                    || (String(renderedVideo?.outputFilename || renderedVideo?.outputVideoUrl || '').includes('9-16') ? '9:16' : null)
+                    || (String(renderedVideo?.outputFilename || renderedVideo?.outputVideoUrl || '').includes('1-1') ? '1:1' : null)
+                    || voiceSettings?.aspectRatio
+                    || '16:9';
+                  if (ratio === '9:16') return 'វីដេអូ Rendered (1080×1920 Portrait 9:16) — ចុចដើម្បីត្រឡប់ Edit';
+                  if (ratio === '1:1') return 'វីដេអូ Rendered (1080×1080 Square 1:1) — ចុចដើម្បីត្រឡប់ Edit';
+                  return 'វីដេអូ Rendered (1920×1080 Landscape 16:9) — ចុចដើម្បីត្រឡប់ Edit';
+                })()
+              }
             >
               🎬 Rendered
             </button>

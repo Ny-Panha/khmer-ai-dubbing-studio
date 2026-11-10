@@ -4,7 +4,7 @@ const https = require("https");
 const { spawn } = require("child_process");
 const { MsEdgeTTS, OUTPUT_FORMAT } = require("msedge-tts");
 const crypto = require("crypto");
-const { autoStretchTtsAudio, getMediaDuration, applyInnerThoughtAudioEffect } = require("./ffmpegService");
+const { autoStretchTtsAudio, trimTtsSilence, getMediaDuration, applyInnerThoughtAudioEffect } = require("./ffmpegService");
 const { parseTimeToSec } = require("../models/timestampUtils");
 const { detectSpeakerGender } = require("../models/speakerRegistry");
 
@@ -40,6 +40,17 @@ function isTransientTtsError(err) {
   }
 
   return false;
+}
+
+/**
+ * Pick transient error from an attempt's layer failures so optional CLI absence (ENOENT)
+ * never masks an upstream transient error (e.g. HTTP 429/503/504/timeout).
+ */
+function pickAttemptRetryError(attemptErrors = []) {
+  const valid = (attemptErrors || []).filter(Boolean);
+  const transient = valid.find((err) => isTransientTtsError(err));
+  if (transient) return transient;
+  return valid.find((err) => err.code !== "ENOENT") || valid[valid.length - 1] || null;
 }
 
 /**
@@ -180,7 +191,114 @@ function cleanTextForTts(text = "") {
     .trim();
 }
 
+/**
+ * Check whether text is empty or an untranslated pipeline placeholder (e.g. literal "សន្ទនា")
+ */
+function isPlaceholderOrEmptyTtsText(text = "") {
+  const cleaned = cleanTextForTts(text);
+  if (!cleaned) return true;
+  return cleaned === "សន្ទនា";
+}
+
 const { EdgeTTS } = require("node-edge-tts");
+
+/**
+ * Convert a requested speed (numeric multiplier e.g. 1.5, 0.75; preset "normal"/"slow"/"fast";
+ * or Edge rate "+50%"/"-25%") into an Edge TTS prosody rate string (e.g. "+50%", "-25%", "+0%").
+ * Never silently treats invalid non-empty inputs as default "+0%"; returns { valid: false, reason }.
+ */
+function speedToEdgeRate(requestedSpeed) {
+  if (requestedSpeed === undefined || requestedSpeed === null || requestedSpeed === "") {
+    return { provided: false, valid: true, rate: "+0%", numericSpeed: 1.0, isCustomNonDefault: false, requested: requestedSpeed };
+  }
+
+  if (typeof requestedSpeed === "string") {
+    const trimmed = requestedSpeed.trim();
+    if (!trimmed) {
+      return { provided: false, valid: true, rate: "+0%", numericSpeed: 1.0, isCustomNonDefault: false, requested: requestedSpeed };
+    }
+    const lower = trimmed.toLowerCase();
+    if (lower === "normal" || lower === "default") {
+      return { provided: true, valid: true, rate: "+0%", numericSpeed: 1.0, isCustomNonDefault: false, requested: requestedSpeed };
+    }
+    if (lower === "slow") {
+      return { provided: true, valid: true, rate: "-25%", numericSpeed: 0.75, isCustomNonDefault: true, requested: requestedSpeed };
+    }
+    if (lower === "fast") {
+      return { provided: true, valid: true, rate: "+25%", numericSpeed: 1.25, isCustomNonDefault: true, requested: requestedSpeed };
+    }
+
+    const pctMatch = trimmed.match(/^([+-]?\d+(?:\.\d+)?)%$/);
+    if (pctMatch) {
+      const pctRaw = Number(pctMatch[1]);
+      if (!Number.isFinite(pctRaw) || pctRaw <= -100 || pctRaw > 300) {
+        return { provided: true, valid: false, rate: null, numericSpeed: null, isCustomNonDefault: false, requested: requestedSpeed, reason: "percentage_out_of_range" };
+      }
+      const pct = Math.round(pctRaw);
+      const rate = pct === 0 ? "+0%" : (pct > 0 ? `+${pct}%` : `${pct}%`);
+      const numericSpeed = parseFloat((1 + pct / 100).toFixed(4));
+      return { provided: true, valid: true, rate, numericSpeed, isCustomNonDefault: pct !== 0, requested: requestedSpeed };
+    }
+
+    const numMatch = trimmed.match(/^([+-]?(?:\d+\.?\d*|\.\d+))\s*x?$/i);
+    if (numMatch) {
+      const s = Number(numMatch[1]);
+      if (!Number.isFinite(s) || s <= 0 || s > 4.0) {
+        return { provided: true, valid: false, rate: null, numericSpeed: null, isCustomNonDefault: false, requested: requestedSpeed, reason: "numeric_out_of_range" };
+      }
+      const pct = s >= 1 ? Math.round((s - 1) * 100) : -Math.round((1 - s) * 100);
+      const rate = pct === 0 ? "+0%" : (pct > 0 ? `+${pct}%` : `${pct}%`);
+      return { provided: true, valid: true, rate, numericSpeed: s, isCustomNonDefault: pct !== 0, requested: requestedSpeed };
+    }
+
+    return { provided: true, valid: false, rate: null, numericSpeed: null, isCustomNonDefault: false, requested: requestedSpeed, reason: "unparseable_speed_string" };
+  }
+
+  if (typeof requestedSpeed === "number") {
+    if (!Number.isFinite(requestedSpeed) || requestedSpeed <= 0 || requestedSpeed > 4.0) {
+      return { provided: true, valid: false, rate: null, numericSpeed: null, isCustomNonDefault: false, requested: requestedSpeed, reason: "numeric_out_of_range" };
+    }
+    const pct = requestedSpeed >= 1
+      ? Math.round((requestedSpeed - 1) * 100)
+      : -Math.round((1 - requestedSpeed) * 100);
+    const rate = pct === 0 ? "+0%" : (pct > 0 ? `+${pct}%` : `${pct}%`);
+    return { provided: true, valid: true, rate, numericSpeed: requestedSpeed, isCustomNonDefault: pct !== 0, requested: requestedSpeed };
+  }
+
+  return { provided: true, valid: false, rate: null, numericSpeed: null, isCustomNonDefault: false, requested: requestedSpeed, reason: "unsupported_speed_type" };
+}
+
+/**
+ * Resolve effective speed, Edge rate, and explicit user-speed flag from options + segment payload.
+ * Precedence: explicit options.rate > explicit options.speed > segment.speed > segment.rate.
+ */
+function resolveSegmentSpeed(segment = {}, options = {}) {
+  const hasOptRate = options.rate !== undefined && options.rate !== null && options.rate !== "";
+  const hasOptSpeed = options.speed !== undefined && options.speed !== null && options.speed !== "";
+  const segSpeedRaw = (segment && segment.speed !== undefined && segment.speed !== null && segment.speed !== "")
+    ? segment.speed
+    : (segment && segment.rate !== undefined && segment.rate !== null && segment.rate !== "" ? segment.rate : undefined);
+
+  const chosenRaw = hasOptRate ? options.rate : (hasOptSpeed ? options.speed : segSpeedRaw);
+  const parsed = speedToEdgeRate(chosenRaw);
+
+  if (parsed.provided && !parsed.valid && !options._suppressInvalidSpeedLog) {
+    console.warn(`[TTS] ⚠️ Segment #${segment?.id ?? "N/A"} requested speed ${JSON.stringify(parsed.requested)} cannot be applied (${parsed.reason}) — synthesis rate will remain unmodified (+0%) instead of requested speed`);
+  }
+
+  const effectiveRate = parsed.valid ? parsed.rate : "+0%";
+  const explicitUserFlag = options.userCustomSpeed !== undefined
+    ? Boolean(options.userCustomSpeed)
+    : Boolean(segment?.userCustomSpeed);
+  const hasExplicitUserSpeed = Boolean(explicitUserFlag || parsed.isCustomNonDefault);
+
+  return {
+    ...parsed,
+    rate: effectiveRate,
+    hasExplicitUserSpeed,
+    speedApplyFailed: Boolean(parsed.provided && !parsed.valid),
+  };
+}
 
 /**
  * 1. បង្កើតសំឡេងតាមរយៈ Microsoft Edge Neural TTS
@@ -209,10 +327,15 @@ async function synthesizeWithEdgeNeural(text, voiceId, outputPath, rate = "+0%",
     const tempPath = path.join(outDir, tempFileName);
 
     let succeeded = false;
+    const attemptErrors = [];
 
     // Layer 1: node-edge-tts (លឿន និងមានស្ថេរភាពខ្ពស់បំផុត)
     try {
-      const tts = new EdgeTTS({ voice: voiceId });
+      const tts = new EdgeTTS({
+        voice: voiceId,
+        rate: rate || "+0%",
+        pitch: pitch || "+0Hz",
+      });
       await tts.ttsPromise(cleanText, tempPath);
       await validateTtsAudioFile(tempPath);
       atomicCommitFile(tempPath, outputPath);
@@ -220,14 +343,16 @@ async function synthesizeWithEdgeNeural(text, voiceId, outputPath, rate = "+0%",
       return outputPath;
     } catch (err1) {
       cleanupTempFile(tempPath);
+      attemptErrors.push(err1);
       lastError = err1;
       console.warn(`[TTSService] ⚠️ node-edge-tts warning (${err1.message}), attempt ${attempt + 1}/${maxRetries + 1}...`);
     }
 
     // Layer 2: msedge-tts stream
     if (!succeeded) {
+      let tts = null;
       try {
-        const tts = new MsEdgeTTS();
+        tts = new MsEdgeTTS();
         await tts.setMetadata(voiceId, OUTPUT_FORMAT.AUDIO_24KHZ_96KBITRATE_MONO_MP3);
         const { audioStream } = tts.toStream(cleanText, { rate, pitch });
 
@@ -245,8 +370,11 @@ async function synthesizeWithEdgeNeural(text, voiceId, outputPath, rate = "+0%",
         return outputPath;
       } catch (err2) {
         cleanupTempFile(tempPath);
+        attemptErrors.push(err2);
         lastError = err2;
         console.warn(`[TTSService] ⚠️ msedge-tts warning (${err2.message}), attempt ${attempt + 1}/${maxRetries + 1}...`);
+      } finally {
+        try { tts?.close?.(); } catch (_) { }
       }
     }
 
@@ -261,7 +389,7 @@ async function synthesizeWithEdgeNeural(text, voiceId, outputPath, rate = "+0%",
             `--pitch=${pitch}`,
             "--write-media", tempPath,
           ];
-          const proc = spawn("edge-tts", args);
+          const proc = spawn("edge-tts", args, { windowsHide: true });
           proc.on("close", (code) => {
             if (code === 0) {
               resolve(tempPath);
@@ -278,25 +406,37 @@ async function synthesizeWithEdgeNeural(text, voiceId, outputPath, rate = "+0%",
         return outputPath;
       } catch (err3) {
         cleanupTempFile(tempPath);
-        lastError = err3;
+        attemptErrors.push(err3);
+        // Preserve upstream transient/network error instead of clobbering it with missing optional CLI ENOENT
+        if (err3.code !== "ENOENT" || !lastError) {
+          lastError = err3;
+        }
         console.warn(`[TTSService] ⚠️ edge-tts CLI warning (${err3.message}), attempt ${attempt + 1}/${maxRetries + 1}...`);
       }
     }
 
-    // Check if error is transient and eligible for backoff retry
+    const retryError = pickAttemptRetryError(attemptErrors);
+    if (retryError) {
+      lastError = retryError;
+    }
+
+    // Check if any layer error is transient and eligible for backoff retry
     if (attempt < maxRetries) {
-      if (isTransientTtsError(lastError)) {
-        console.warn(`[TTSService] ⏳ Transient error detected (${lastError.message}). Retrying with jittered exponential backoff...`);
+      if (isTransientTtsError(retryError)) {
+        console.warn(`[TTSService] ⏳ Transient error detected (${retryError.message}). Retrying with jittered exponential backoff...`);
         await sleepWithJitter(attempt);
         continue;
       } else {
-        console.warn(`[TTSService] 🛑 Non-transient error detected (${lastError.message}). Skipping further Edge TTS retries.`);
+        console.warn(`[TTSService] 🛑 Non-transient error detected (${retryError?.message}). Skipping further Edge TTS retries.`);
         break;
       }
     }
   }
 
   // Layer 4: Fallback ទៅកាន់ Google Translate TTS
+  if (rate && rate !== "+0%") {
+    console.warn(`[TTS] ⚠️ Requested rate ${rate} (speed=${options.requestedSpeed ?? rate}) cannot be applied on Google Translate TTS Fallback`);
+  }
   console.warn(`[TTSService] ⚠️ Edge TTS attempts exhausted (${lastError?.message}), using Google Translate TTS Fallback...`);
   return await synthesizeWithGoogleFallback(cleanText, outputPath, options);
 }
@@ -369,28 +509,97 @@ function synthesizeWithGoogleFallback(text, outputPath, options = {}) {
   });
 }
 
+function resolvePriorSegmentAudioPath(segment = {}, uploadsDir = "") {
+  if (!segment || !uploadsDir) return null;
+  const resolvedBase = path.resolve(uploadsDir);
+  const candidates = [];
+  if (segment.audioPath && typeof segment.audioPath === "string") {
+    candidates.push(segment.audioPath);
+  }
+  if (segment.audioFile && typeof segment.audioFile === "string") {
+    candidates.push(path.join(uploadsDir, path.basename(segment.audioFile)));
+  }
+  if (segment.audioUrl && typeof segment.audioUrl === "string") {
+    const cleanUrl = segment.audioUrl.split("?")[0];
+    if (cleanUrl) {
+      candidates.push(path.join(uploadsDir, path.basename(cleanUrl)));
+    }
+  }
+  for (const cand of candidates) {
+    try {
+      const resolved = path.resolve(cand);
+      const insideDir = resolved.startsWith(resolvedBase + path.sep) || resolved === resolvedBase;
+      if (insideDir && fs.existsSync(resolved) && fs.statSync(resolved).size > 200) {
+        return resolved;
+      }
+    } catch (_) {}
+  }
+  return null;
+}
+
 /**
  * 3. បង្កើតសំឡេងសម្រាប់ឃ្លាមួយ (Single Segment) រួមជាមួយ Auto Time-Stretch (atempo)
  */
 async function generateSingleSegmentAudio(segment, uploadsDir, options = {}) {
-  const { autoStretch = true, maxSpeed = 1.35, rate = "+0%", pitch = "+0Hz" } = options;
+  const { autoStretch = true, maxSpeed = 1.35, pitch = "+0Hz" } = options;
 
   if (!fs.existsSync(uploadsDir)) {
     fs.mkdirSync(uploadsDir, { recursive: true });
   }
 
+  const speedInfo = resolveSegmentSpeed(segment, options);
+  const rate = speedInfo.rate;
+  const hasExplicitUserSpeed = speedInfo.hasExplicitUserSpeed;
+  const effectiveAutoStretch = Boolean(autoStretch) && !hasExplicitUserSpeed;
+
   const rawText = segment.khmer || segment.khmerText || segment.khmerTranslatedText || segment.text || "";
   const textToSpeak = cleanTextForTts(rawText);
-  if (!textToSpeak) {
-    throw new Error("អត្ថបទសម្រាប់បង្កើតសំឡេងទទេ (Empty text)!");
+  if (!textToSpeak || isPlaceholderOrEmptyTtsText(rawText)) {
+    throw new Error(
+      textToSpeak === "សន្ទនា"
+        ? "អត្ថបទ \"សន្ទនា\" ជាពាក្យជំនួសទទេ (Empty text / Untranslated placeholder)!"
+        : "អត្ថបទសម្រាប់បង្កើតសំឡេងទទេ (Empty text)!"
+    );
   }
-  const registryVoice = (options.speakerRegistry && segment.speakerId && options.speakerRegistry[segment.speakerId]?.voiceId) ||
-    (segment.speakerRegistry && segment.speakerId && segment.speakerRegistry[segment.speakerId]?.voiceId);
-  const rawAssignedVoice = (segment.userOverridden && segment.voiceId)
-    ? segment.voiceId
-    : (registryVoice || options.voiceId || segment.khmerVoiceId || segment.voice || segment.voiceId);
-  const segGender = segment.voiceGender || segment.gender || segment.speakerGender || (options.speakerRegistry && segment.speakerId && options.speakerRegistry[segment.speakerId]?.gender) || detectSpeakerGender(segment.speaker, segment.gender, textToSpeak);
-  const voiceId = resolveKhmerVoice(options.forceVoice ? options.voiceId : rawAssignedVoice, segGender);
+  const normalizeKnownGender = (g) => {
+    const v = String(g || "").trim().toLowerCase();
+    if (v === "female" || v === "f" || v === "ស្រី" || v === "girl" || v === "woman") return "female";
+    if (v === "male" || v === "m" || v === "ប្រុស" || v === "boy" || v === "man") return "male";
+    return "";
+  };
+  const speakerKeyName = String(segment.speaker || segment.speakerName || "").trim();
+  const isGenericSpk = !speakerKeyName || speakerKeyName === "តួអង្គ" || speakerKeyName.toLowerCase() === "speaker";
+  const spkReg = options.speakerRegistry || segment.speakerRegistry || {};
+  const regEntry = (segment.speakerId && spkReg[segment.speakerId]) || (!isGenericSpk && spkReg[speakerKeyName]) || null;
+  const mapVoice = options.speakerMap
+    ? ((segment.speakerId && options.speakerMap[segment.speakerId]) || (!isGenericSpk && options.speakerMap[speakerKeyName]) || null)
+    : null;
+  const registryVoice = regEntry?.voiceId || regEntry?.khmerVoiceId || mapVoice || null;
+  const isManualSegment = Boolean(segment.userOverridden || segment.voiceAssignmentSource === "manual" || segment.voiceOverride);
+
+  const knownSegGender =
+    normalizeKnownGender(segment.voiceGender) ||
+    normalizeKnownGender(segment.gender) ||
+    normalizeKnownGender(segment.speakerGender) ||
+    normalizeKnownGender(regEntry?.voiceGender || regEntry?.gender) ||
+    normalizeKnownGender(detectSpeakerGender(speakerKeyName, "", textToSpeak));
+
+  const segGender = knownSegGender || "unknown";
+  let rawAssignedVoice;
+  if (options.forceVoice && options.voiceId) {
+    rawAssignedVoice = options.voiceId;
+  } else if (isManualSegment) {
+    rawAssignedVoice = segment.voiceOverride || segment.khmerVoiceId || segment.voiceId || segment.voice || registryVoice || options.voiceId;
+  } else if (registryVoice) {
+    rawAssignedVoice = registryVoice;
+  } else if (knownSegGender === "female" || knownSegGender === "male") {
+    rawAssignedVoice = knownSegGender === "female" ? "km-KH-SreymomNeural" : "km-KH-PisethNeural";
+  } else {
+    rawAssignedVoice = segment.khmerVoiceId || segment.voice || segment.voiceId || options.voiceId;
+  }
+  const voiceId = resolveKhmerVoice(rawAssignedVoice, segGender);
+
+  console.log(`[TTS] Segment #${segment.id || 'N/A'} synthesis params: voice=${voiceId}, rate=${rate}, requestedSpeed=${speedInfo.requested ?? 'default'}, userCustomSpeed=${hasExplicitUserSpeed}, autoStretch=${effectiveAutoStretch}`);
 
   const cleanId = String(segment.id || Date.now()).replace(/[^a-zA-Z0-9_-]/g, "_");
   const epPrefix = options.episodeId ? `ep_${String(options.episodeId).replace(/[^a-zA-Z0-9_-]/g, "_")}_` : (segment.episodeId ? `ep_${String(segment.episodeId).replace(/[^a-zA-Z0-9_-]/g, "_")}_` : "");
@@ -402,13 +611,16 @@ async function generateSingleSegmentAudio(segment, uploadsDir, options = {}) {
   const effectConfig = options.effectConfig || segment.effectConfig || { inGain: 0.85, outGain: 0.75, delays: "40|90", decays: "0.3|0.15" };
   const deliveryOverride = Boolean(options.deliveryOverride !== undefined ? options.deliveryOverride : segment.deliveryOverride);
 
-  // Compute exact cache key incorporating text, voiceId, deliveryType, effect settings, and rate
+  // Compute exact cache key incorporating text, voiceId, deliveryType, effect settings, rate, and stretch mode
   const effectKey = isThought ? `${audioEffect}_${effectConfig.delays || "40|90"}_${effectConfig.decays || "0.3|0.15"}` : "clean";
-  const cacheKey = `${textToSpeak}__${voiceId}__${deliveryType}__${effectKey}__${rate}`;
+  const speedCacheMode = hasExplicitUserSpeed ? "custom" : (effectiveAutoStretch ? "fit" : "raw");
+  const cacheKey = `${textToSpeak}__${voiceId}__${deliveryType}__${effectKey}__${rate}__${speedCacheMode}__lt1`;
   const cacheHash = crypto.createHash("md5").update(cacheKey).digest("hex").substring(0, 8);
+  const legacyRateHash = crypto.createHash("md5").update(`${textToSpeak}__${voiceId}__${deliveryType}__${effectKey}__${rate}__${speedCacheMode}`).digest("hex").substring(0, 8);
+  const legacyBaseHash = crypto.createHash("md5").update(`${textToSpeak}__${voiceId}__${deliveryType}__${effectKey}`).digest("hex").substring(0, 8);
   const typeTag = isThought ? "thought" : "voice";
-  const fileName = `${epPrefix}seg_${cleanId}_${voiceId}_${typeTag}_${cacheHash}.mp3`;
-  const outputPath = path.join(uploadsDir, fileName);
+  let fileName = `${epPrefix}seg_${cleanId}_${voiceId}_${typeTag}_${cacheHash}.mp3`;
+  let outputPath = path.join(uploadsDir, fileName);
 
   const startSec = Number(segment.startSeconds ?? segment.startSec ?? parseTimeToSec(segment.start, 0));
   const endSec = Number(segment.endSeconds ?? segment.endSec ?? parseTimeToSec(segment.end, startSec + 2.5));
@@ -432,20 +644,42 @@ async function generateSingleSegmentAudio(segment, uploadsDir, options = {}) {
 
   let finalDuration = targetDuration;
   let originalDuration = targetDuration;
-  let appliedSpeed = 1.0;
+  let appliedSpeed = hasExplicitUserSpeed ? (speedInfo.numericSpeed || 1.0) : 1.0;
   let usedCache = false;
   let rawFilePath = segment.rawAudioPath && fs.existsSync(segment.rawAudioPath) ? segment.rawAudioPath : null;
   let rawFileName = rawFilePath ? path.basename(rawFilePath) : null;
 
   // 1. Check if an exact cached version of this audio already exists and is valid
+  let cacheCandidatePath = null;
   if (!options.forceRegen && fs.existsSync(outputPath) && fs.statSync(outputPath).size > 200) {
+    cacheCandidatePath = outputPath;
+  } else if (
+    !options.forceRegen &&
+    !segment.audioOutdated &&
+    segment.ttsStatus !== "pending" &&
+    segment.ttsStatus !== "error" &&
+    segment.ttsStatus !== "generating" &&
+    (!segment.ttsRate || segment.ttsRate === rate)
+  ) {
+    const existingPrior = resolvePriorSegmentAudioPath(segment, uploadsDir);
+    if (existingPrior) {
+      const priorBase = path.basename(existingPrior);
+      if (priorBase.includes(legacyRateHash) || priorBase.includes(legacyBaseHash)) {
+        cacheCandidatePath = existingPrior;
+      }
+    }
+  }
+
+  if (cacheCandidatePath) {
     try {
-      const cachedDur = await getMediaDuration(outputPath);
+      const cachedDur = await getMediaDuration(cacheCandidatePath);
       if (cachedDur && cachedDur > 0) {
+        outputPath = cacheCandidatePath;
+        fileName = path.basename(cacheCandidatePath);
         finalDuration = cachedDur;
         originalDuration = cachedDur;
         usedCache = true;
-        console.log(`[TTSService] ⚡ Reusing verified cached audio for segment #${segment.id || 'N/A'} (${deliveryType}): ${fileName}`);
+        console.log(`[TTSService] ⚡ Reusing verified cached audio for segment #${segment.id || 'N/A'} (${deliveryType}, rate=${rate}): ${fileName}`);
       }
     } catch (_) { }
   }
@@ -454,34 +688,52 @@ async function generateSingleSegmentAudio(segment, uploadsDir, options = {}) {
   if (!usedCache) {
     if (isThought) {
       // Step A: Ensure valid clean speech base exists
-      const rawHash = crypto.createHash("md5").update(`${textToSpeak}__${voiceId}__raw__${rate}`).digest("hex").substring(0, 8);
+      const rawHash = crypto.createHash("md5").update(`${textToSpeak}__${voiceId}__raw__${rate}__${speedCacheMode}__lt1`).digest("hex").substring(0, 8);
       rawFileName = `${epPrefix}seg_${cleanId}_${voiceId}_raw_${rawHash}.mp3`;
       rawFilePath = path.join(uploadsDir, rawFileName);
 
-      if (!fs.existsSync(rawFilePath) || fs.statSync(rawFilePath).size < 200) {
+      if (options.forceRegen || !fs.existsSync(rawFilePath) || fs.statSync(rawFilePath).size < 200) {
         try {
           if (voiceId === "google-km-standard") {
+            if (rate && rate !== "+0%") {
+              console.warn(`[TTS] ⚠️ Segment #${segment.id || 'N/A'} requested rate ${rate} (speed=${speedInfo.requested ?? rate}) cannot be applied on Google TTS voice`);
+            }
             await synthesizeWithGoogleFallback(textToSpeak, rawFilePath);
           } else {
-            await synthesizeWithEdgeNeural(textToSpeak, voiceId, rawFilePath, rate, pitch);
+            await synthesizeWithEdgeNeural(textToSpeak, voiceId, rawFilePath, rate, pitch, { requestedSpeed: speedInfo.requested });
           }
         } catch (edgeErr) {
+          if (rate && rate !== "+0%") {
+            console.warn(`[TTS] ⚠️ Segment #${segment.id || 'N/A'} requested rate ${rate} (speed=${speedInfo.requested ?? rate}) cannot be applied after Edge TTS error (${edgeErr.message})`);
+          }
           console.warn(`[TTSService] ⚠️ Edge TTS failed for raw thought base #${segment.id}, using Google TTS: ${edgeErr.message}`);
           await synthesizeWithGoogleFallback(textToSpeak, rawFilePath);
         }
 
-        if (autoStretch && fs.existsSync(rawFilePath)) {
+        // Strip Edge TTS ~200ms leading & ~800ms trailing dead silence immediately after synthesis
+        if (fs.existsSync(rawFilePath)) {
           try {
-            await autoStretchTtsAudio({
+            await trimTtsSilence(rawFilePath, { leadInCushionSec: 0.025, leadOutCushionSec: 0.060, microFadeMs: 8 });
+          } catch (trimErr) {
+            console.warn(`[TTSService] ⚠️ trimTtsSilence warning (thought raw): ${trimErr.message}`);
+          }
+        }
+
+        if (effectiveAutoStretch && fs.existsSync(rawFilePath)) {
+          try {
+            const stretchRes = await autoStretchTtsAudio({
               inputAudioPath: rawFilePath,
               targetDuration: targetDuration,
               maxSpeed: maxSpeed,
               minSpeed: 0.90,
-              leadInCushionSec: 0.040,
+              leadInCushionSec: 0.025,
               leadOutCushionSec: 0.060,
               microFadeMs: 8,
             });
+            if (stretchRes?.appliedSpeed) appliedSpeed = stretchRes.appliedSpeed;
           } catch (_) { }
+        } else if (hasExplicitUserSpeed) {
+          console.log(`[TTS] Segment #${segment.id || 'N/A'} (inner_thought) using explicit user speed (${rate}, speed=${speedInfo.numericSpeed ?? 1.0}) — skipping slot autoStretch`);
         }
       }
 
@@ -498,11 +750,17 @@ async function generateSingleSegmentAudio(segment, uploadsDir, options = {}) {
       // Normal spoken dialogue
       try {
         if (voiceId === "google-km-standard") {
+          if (rate && rate !== "+0%") {
+            console.warn(`[TTS] ⚠️ Segment #${segment.id || 'N/A'} requested rate ${rate} (speed=${speedInfo.requested ?? rate}) cannot be applied on Google TTS voice`);
+          }
           await synthesizeWithGoogleFallback(textToSpeak, outputPath);
         } else {
-          await synthesizeWithEdgeNeural(textToSpeak, voiceId, outputPath, rate, pitch);
+          await synthesizeWithEdgeNeural(textToSpeak, voiceId, outputPath, rate, pitch, { requestedSpeed: speedInfo.requested });
         }
       } catch (edgeErr) {
+        if (rate && rate !== "+0%") {
+          console.warn(`[TTS] ⚠️ Segment #${segment.id || 'N/A'} requested rate ${rate} (speed=${speedInfo.requested ?? rate}) cannot be applied after Edge TTS error (${edgeErr.message})`);
+        }
         console.warn(`[TTSService] ⚠️ Edge TTS failed for segment #${segment.id}, using Google TTS: ${edgeErr.message}`);
         await synthesizeWithGoogleFallback(textToSpeak, outputPath);
       }
@@ -515,12 +773,19 @@ async function generateSingleSegmentAudio(segment, uploadsDir, options = {}) {
         throw new Error(`TTS audio file is missing or invalid (<200 bytes) for segment #${segment.id || 'unknown'}`);
       }
 
+      // Always trim Edge TTS dead ~200ms leading & ~800ms trailing padding before duration measurement / slot fit
+      try {
+        await trimTtsSilence(outputPath, { leadInCushionSec: 0.025, leadOutCushionSec: 0.060, microFadeMs: 8 });
+      } catch (trimErr) {
+        console.warn(`[TTSService] ⚠️ trimTtsSilence warning: ${trimErr.message}`);
+      }
+
       const probed = await getMediaDuration(outputPath);
       originalDuration = probed || targetDuration;
       finalDuration = originalDuration;
       const actualDuration = originalDuration;
 
-      if (autoStretch && fs.existsSync(outputPath)) {
+      if (effectiveAutoStretch && fs.existsSync(outputPath)) {
         // Dubbing Policy:
         // availableSlotDuration is the reference boundary for avoiding collision with subsequent dialogue.
         // If the speech is only slightly longer than the slot (<= 30%), a gentle speed adjustment (up to 1.25x) fits naturally.
@@ -540,7 +805,7 @@ async function generateSingleSegmentAudio(segment, uploadsDir, options = {}) {
               targetDuration: safeSlotTarget,
               maxSpeed: targetSpeed,
               minSpeed: 1.0,
-              leadInCushionSec: 0.040,
+              leadInCushionSec: 0.025,
               leadOutCushionSec: 0.060,
               microFadeMs: 8,
               allowSlowdown: false,
@@ -565,7 +830,7 @@ async function generateSingleSegmentAudio(segment, uploadsDir, options = {}) {
               targetDuration: sourceSpeechDuration,
               maxSpeed: 1.0,
               minSpeed: 0.92,
-              leadInCushionSec: 0.040,
+              leadInCushionSec: 0.025,
               leadOutCushionSec: 0.060,
               microFadeMs: 8,
               allowSlowdown: true,
@@ -579,6 +844,13 @@ async function generateSingleSegmentAudio(segment, uploadsDir, options = {}) {
           originalDuration = actualDuration;
           appliedSpeed = 1.0;
         }
+      } else {
+        finalDuration = actualDuration;
+        originalDuration = actualDuration;
+        appliedSpeed = hasExplicitUserSpeed ? (speedInfo.numericSpeed || 1.0) : 1.0;
+        if (hasExplicitUserSpeed) {
+          console.log(`[TTS] Segment #${segment.id || 'N/A'} explicit user speed (rate=${rate}, speed=${appliedSpeed}) — skipping slot autoStretch (probed=${actualDuration.toFixed(3)}s, slot=${availableSlotDuration.toFixed(3)}s)`);
+        }
       }
 
       rawFilePath = outputPath;
@@ -591,15 +863,33 @@ async function generateSingleSegmentAudio(segment, uploadsDir, options = {}) {
     }
   }
 
-  // Preserve prior audio file until new file has succeeded; never delete raw base audio or active files
-  const priorAudioPath = segment.audioPath || (segment.audioFile ? path.join(uploadsDir, segment.audioFile) : null);
-  if (priorAudioPath && fs.existsSync(priorAudioPath) && priorAudioPath !== outputPath && priorAudioPath !== rawFilePath) {
-    try {
-      const baseName = path.basename(priorAudioPath);
-      if (baseName.startsWith("seg_") && !baseName.includes(cacheHash) && !baseName.includes("_raw_")) {
-        fs.unlinkSync(priorAudioPath);
-      }
-    } catch (_) { }
+  // Preserve prior audio file until new file has succeeded; never delete raw base audio, split-shared files, or unrelated segments
+  const priorAudioPath = resolvePriorSegmentAudioPath(segment, uploadsDir);
+  if (priorAudioPath) {
+    const resolvedPrior = path.resolve(priorAudioPath);
+    const resolvedUploadsDir = path.resolve(uploadsDir);
+    const resolvedOut = path.resolve(outputPath);
+    const resolvedRaw = rawFilePath ? path.resolve(rawFilePath) : null;
+    const isSharedWithOtherSegment = Boolean(options.sharedAudioPaths && options.sharedAudioPaths.has(resolvedPrior));
+    if (
+      path.dirname(resolvedPrior) === resolvedUploadsDir &&
+      resolvedPrior !== resolvedOut &&
+      resolvedPrior !== resolvedRaw &&
+      !isSharedWithOtherSegment &&
+      !segment.audioOffset
+    ) {
+      try {
+        const baseName = path.basename(resolvedPrior);
+        const expectedPrefix = `${epPrefix}seg_${cleanId}_`;
+        if (
+          (baseName.startsWith(expectedPrefix) || (!epPrefix && baseName.startsWith(`seg_${cleanId}_`))) &&
+          !baseName.includes(cacheHash) &&
+          !baseName.includes("_raw_")
+        ) {
+          fs.unlinkSync(resolvedPrior);
+        }
+      } catch (_) { }
+    }
   }
 
   const isFemale = voiceId.includes("Sreymom");
@@ -612,17 +902,25 @@ async function generateSingleSegmentAudio(segment, uploadsDir, options = {}) {
     file: fileName,
     sizeBytes: fs.statSync(outputPath).size,
     durationSec: finalDuration,
+    rate,
+    appliedSpeed,
+    userCustomSpeed: hasExplicitUserSpeed,
     effect: audioEffect,
     audioUrl: calculatedAudioUrl,
   });
 
   const incomingGender = segment.voiceGender || segment.gender;
   const isUnknown = incomingGender === "unknown" || incomingGender === "UNKNOWN";
-  const resolvedGender = isUnknown ? "unknown" : (isFemale ? "female" : "male");
+  const resolvedGender = (!knownSegGender && isUnknown) ? "unknown" : (isFemale ? "female" : "male");
   const finalConfidence = isUnknown
     ? (typeof segment.genderConfidence === "number" ? segment.genderConfidence : null)
     : (typeof segment.genderConfidence === "number" ? segment.genderConfidence : 1.0);
   const resolvedKhmer = segment.khmer || segment.khmerText || segment.khmerTranslatedText || textToSpeak;
+  const resolvedSpeedValue = (speedInfo.valid && speedInfo.provided)
+    ? (typeof speedInfo.requested === "string" && speedInfo.requested.trim().toLowerCase() === "normal"
+      ? "normal"
+      : (speedInfo.numericSpeed ?? 1.0))
+    : (segment.speed ?? "normal");
 
   return {
     ...segment,
@@ -659,6 +957,7 @@ async function generateSingleSegmentAudio(segment, uploadsDir, options = {}) {
     audioPath: outputPath,
     audioUrl: calculatedAudioUrl,
     originalAudioDuration: originalDuration,
+    rawAudioDur: hasExplicitUserSpeed ? finalDuration : originalDuration,
     sourceSpeechDuration: sourceSpeechDuration,
     availableSlotDuration: availableSlotDuration,
     finalAudioDuration: finalDuration,
@@ -666,7 +965,11 @@ async function generateSingleSegmentAudio(segment, uploadsDir, options = {}) {
     audioDurationSec: finalDuration,
     audioStartSec: startSec,
     audioEndSec: parseFloat((startSec + finalDuration).toFixed(2)),
+    speed: resolvedSpeedValue,
+    userCustomSpeed: hasExplicitUserSpeed,
+    ttsRate: rate,
     appliedSpeed: appliedSpeed,
+    ...(speedInfo.speedApplyFailed ? { speedWarning: `unapplied:${speedInfo.requested}` } : {}),
     audioOffset: 0,
     audioTrimmed: false,
     userTrimmed: false,
@@ -684,6 +987,22 @@ async function generateSingleSegmentAudio(segment, uploadsDir, options = {}) {
 }
 
 const activeTtsJobs = new Map();
+
+function getTtsJobProgress(seriesId = '', episodeId = '') {
+  const s = seriesId ? String(seriesId).trim() : '';
+  const e = episodeId ? String(episodeId).trim() : '';
+  const exactKey = e ? `${s}:${e}` : (s || 'default');
+  const direct = activeTtsJobs.get(exactKey);
+  if (direct) return direct;
+  if (e) {
+    for (const state of activeTtsJobs.values()) {
+      if (state.episodeId === e && (!s || state.seriesId === s)) {
+        return state;
+      }
+    }
+  }
+  return null;
+}
 
 function cancelTtsJob(targetKey = 'all') {
   let count = 0;
@@ -715,12 +1034,46 @@ async function generateBatchSegmentsAudio(segments = [], uploadsDir, options = {
   const results = new Array(segments.length);
   let currentIndex = 0;
 
+  const hasBatchRate = options.rate !== undefined && options.rate !== null && options.rate !== "";
+  const hasBatchSpeed = options.speed !== undefined && options.speed !== null && options.speed !== "";
+  const batchSpeedRaw = hasBatchRate ? options.rate : (hasBatchSpeed ? options.speed : undefined);
+  const batchSpeedInfo = speedToEdgeRate(batchSpeedRaw);
+  if (batchSpeedInfo.provided && !batchSpeedInfo.valid) {
+    console.warn(`[TTS] ⚠️ Batch requested speed ${JSON.stringify(batchSpeedInfo.requested)} cannot be applied (${batchSpeedInfo.reason}) — segments without valid per-segment speed will remain at +0%`);
+  }
+  const batchExplicitUserSpeed = Boolean(options.userCustomSpeed) || batchSpeedInfo.isCustomNonDefault;
+
+  // Detect any audio files shared across split clips so regenerating one segment never unlinks a sibling's file
+  const pathRefCounts = new Map();
+  for (const s of segments) {
+    const resolvedPrior = resolvePriorSegmentAudioPath(s, uploadsDir);
+    if (resolvedPrior) {
+      pathRefCounts.set(resolvedPrior, (pathRefCounts.get(resolvedPrior) || 0) + 1);
+    }
+  }
+  const sharedAudioPaths = new Set(
+    Array.from(pathRefCounts.entries())
+      .filter(([, count]) => count > 1)
+      .map(([p]) => p)
+  );
+
   const jobKey = options.jobKey || (options.episodeId ? `${options.seriesId || ''}:${options.episodeId}` : 'default');
-  const jobState = { aborted: false };
+  const jobState = {
+    aborted: false,
+    seriesId: options.seriesId || null,
+    episodeId: options.episodeId || null,
+    total: segments.length,
+    completed: 0,
+    skippedEmpty: 0,
+    failed: 0,
+    lastFile: null,
+    stage: 'synthesizing',
+    startedAt: Date.now(),
+  };
   activeTtsJobs.set(jobKey, jobState);
 
   console.log(
-    `[TTSService] 🎙️ ចាប់ផ្តើមបង្កើតសំឡេងខ្មែរចំនួន ${segments.length} ឃ្លា (Concurrency: ${concurrency}, Job: ${jobKey})...`
+    `[TTSService] 🎙️ ចាប់ផ្តើមបង្កើតសំឡេងខ្មែរចំនួន ${segments.length} ឃ្លា (Concurrency: ${concurrency}, Job: ${jobKey}, BatchRate: ${batchSpeedInfo.valid ? batchSpeedInfo.rate : 'INVALID'})...`
   );
   const startTime = Date.now();
 
@@ -735,7 +1088,7 @@ async function generateBatchSegmentsAudio(segments = [], uploadsDir, options = {
 
       const text = seg.khmer || seg.khmerText || seg.khmerTranslatedText || seg.text || "";
       const cleanedTextToSpeak = cleanTextForTts(text);
-      if (!cleanedTextToSpeak) {
+      if (!cleanedTextToSpeak || isPlaceholderOrEmptyTtsText(text)) {
         results[idx] = {
           ...seg,
           audioUrl: null,
@@ -746,6 +1099,8 @@ async function generateBatchSegmentsAudio(segments = [], uploadsDir, options = {
           audioDurationSec: 0,
           ttsStatus: "empty_text",
         };
+        jobState.skippedEmpty++;
+        jobState.completed++;
         continue;
       }
 
@@ -755,21 +1110,70 @@ async function generateBatchSegmentsAudio(segments = [], uploadsDir, options = {
 
       try {
         const generateFn = options.generateSingleFn || generateSingleSegmentAudio;
-        results[idx] = await generateFn(seg, uploadsDir, {
-          autoStretch,
-          maxSpeed,
-          ...options,
-        });
-        const completedCount = results.filter(Boolean).length;
+
+        const segHasUserFlag = Boolean(seg.userCustomSpeed);
+        const hasSegSpeed = seg.speed !== undefined && seg.speed !== null && seg.speed !== "";
+        const hasSegRate = seg.rate !== undefined && seg.rate !== null && seg.rate !== "";
+        const segOwnRaw = hasSegSpeed ? seg.speed : (hasSegRate ? seg.rate : undefined);
+        const segOwnInfo = speedToEdgeRate(segOwnRaw);
+        const segHasOwnCustomSpeed = segHasUserFlag || segOwnInfo.isCustomNonDefault || Boolean(segOwnInfo.provided && !segOwnInfo.valid);
+
+        let perSegOptions;
+        if (segHasOwnCustomSpeed) {
+          if (segOwnInfo.provided && !segOwnInfo.valid) {
+            console.warn(`[TTS] ⚠️ Batch Segment #${seg.id || idx + 1} requested speed ${JSON.stringify(segOwnInfo.requested)} cannot be applied (${segOwnInfo.reason})`);
+          }
+          perSegOptions = {
+            ...options,
+            autoStretch: false,
+            maxSpeed,
+            rate: segOwnInfo.valid ? segOwnInfo.rate : undefined,
+            speed: segOwnRaw !== undefined ? segOwnRaw : (segHasUserFlag ? 1.0 : seg.speed),
+            userCustomSpeed: true,
+            _suppressInvalidSpeedLog: true,
+            sharedAudioPaths,
+          };
+        } else if (batchExplicitUserSpeed || (batchSpeedInfo.provided && !batchSpeedInfo.valid)) {
+          perSegOptions = {
+            ...options,
+            autoStretch: batchExplicitUserSpeed ? false : autoStretch,
+            maxSpeed,
+            rate: batchSpeedInfo.valid ? batchSpeedInfo.rate : undefined,
+            speed: batchSpeedRaw,
+            userCustomSpeed: batchExplicitUserSpeed,
+            _suppressInvalidSpeedLog: batchSpeedInfo.provided && !batchSpeedInfo.valid,
+            sharedAudioPaths,
+          };
+        } else {
+          perSegOptions = {
+            ...options,
+            autoStretch,
+            maxSpeed,
+            rate: "+0%",
+            speed: segOwnRaw !== undefined ? segOwnRaw : "normal",
+            userCustomSpeed: false,
+            sharedAudioPaths,
+          };
+        }
+
+        results[idx] = await generateFn(seg, uploadsDir, perSegOptions);
+        jobState.completed++;
+        if (results[idx]?.audioFileName) {
+          jobState.lastFile = results[idx].audioFileName;
+        }
+        const completedCount = jobState.completed;
         const pct = Math.round((completedCount / segments.length) * 100);
-        console.log(`[TTSService] 🎙️ [${completedCount}/${segments.length}] (${pct}%) Seg #${seg.id || idx + 1}: "${cleanedTextToSpeak.substring(0, 30)}..." [${results[idx]?.voiceId || 'Neural'}]`);
+        console.log(`[TTSService] 🎙️ [${completedCount}/${segments.length}] (${pct}%) Seg #${seg.id || idx + 1}: "${cleanedTextToSpeak.substring(0, 30)}..." [${results[idx]?.voiceId || 'Neural'}, rate=${perSegOptions.rate || '+0%'}, fit=${perSegOptions.autoStretch}]`);
       } catch (err) {
         const isEmptyErr = err.message && (err.message.includes("Empty text") || err.message.includes("ទទេ"));
         if (isEmptyErr) {
           console.warn(`[TTSService] ⚠️ រំលងឃ្លា #${seg.id || idx + 1} (គ្មានអត្ថបទខ្មែរ)`);
+          jobState.skippedEmpty++;
         } else {
           console.error(`[TTSService] ❌ បរាជ័យឃ្លា #${seg.id || idx + 1}:`, err.message);
+          jobState.failed++;
         }
+        jobState.completed++;
         results[idx] = {
           ...seg,
           audioUrl: null,
@@ -879,7 +1283,11 @@ module.exports = {
   validateVoiceId,
   resolveKhmerVoice,
   cleanTextForTts,
+  isPlaceholderOrEmptyTtsText,
+  speedToEdgeRate,
+  resolveSegmentSpeed,
   isTransientTtsError,
+  pickAttemptRetryError,
   sleepWithJitter,
   validateTtsAudioFile,
   atomicCommitFile,
@@ -888,6 +1296,8 @@ module.exports = {
   synthesizeWithGoogleFallback,
   generateSingleSegmentAudio,
   generateBatchSegmentsAudio,
+  getTtsJobProgress,
+  resolvePriorSegmentAudioPath,
   cancelTtsJob,
   generateVoicePreview,
   generateKhmerSpeech,

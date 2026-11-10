@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
 import { 
-  Key, HelpCircle, Download, Loader2, RotateCcw, X, Trash2, Film, Plus, Cpu
+  Key, HelpCircle, Download, Loader2, RotateCcw, X, Trash2, Film, Plus, Cpu, Layers, Activity
 } from 'lucide-react';
 import { isCorruptedOrMojibakeTitle } from '../utils/projectStorage';
+import { useGeminiQuotaMonitor } from '../hooks/useGeminiQuotaMonitor';
 import ShortcutsModal from './ShortcutsModal';
 import './Navbar.css';
 
@@ -29,11 +30,17 @@ export default function Navbar({
   onTabChange = null,
   onOpenJobDashboard = null,
   onOpenGeminiRoute = null,
+  onOpenGeminiQuota = null,
+  isGeminiRouteActive = false,
+  isGeminiQuotaActive = false,
   activeJobCount = 0,
+  currentAspectRatio = '16:9',
+  onAspectRatioChange = null,
 }) {
   const [showKeyModal, setShowKeyModal] = useState(false);
   const [showShortcutsModal, setShowShortcutsModal] = useState(false);
   const [tempKey, setTempKey] = useState(apiKey || '');
+  const { keysHealth } = useGeminiQuotaMonitor({ enabled: false });
 
   const handleSave = (e) => {
     e.preventDefault();
@@ -41,29 +48,54 @@ export default function Navbar({
     setShowKeyModal(false);
   };
 
+  const episodesCount = Array.isArray(activeSeries?.episodes) ? activeSeries.episodes.length : 0;
+  const quotaSummary = keysHealth?.quotaSummary || null;
+  const keysChipText = quotaSummary && (quotaSummary.totalKeys || 0) > 0
+    ? `${quotaSummary.readyKeys}/${quotaSummary.totalKeys} Keys`
+    : '4 Keys';
+
   return (
     <>
       <header className="capcut-navbar">
-        {/* Left: Brand Mark & Gemini Multi-Key Route Launcher */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        {/* Left: Brand Mark, Batch Generate, Keys & Quota, and Jobs */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <div className="concat-app-mark" title="DragonDub AI Studio">
             <span>D</span>
           </div>
 
           <button
             type="button"
+            data-testid="navbar-batch-generate-btn"
             onClick={(e) => {
               e.preventDefault();
               e.stopPropagation();
               if (onOpenGeminiRoute) onOpenGeminiRoute();
             }}
-            className="navbar-gemini-route-btn"
-            title="Gemini Multi-Key Route Console (Batch & Key Pool)"
+            className={`navbar-gemini-route-btn ${isGeminiRouteActive ? 'active' : ''}`}
+            title="Batch Generate Studio (Translate, Khmer AI Voice, Demucs & Batch Export)"
           >
-            <Cpu size={14} />
-            <span>Gemini Route</span>
-            <span className="gemini-badge-chip">4 Keys</span>
+            <Layers size={14} />
+            <span>Batch Generate</span>
+            <span className="gemini-badge-chip">{episodesCount > 0 ? `${episodesCount} EPs` : 'Batch'}</span>
           </button>
+
+          {onOpenGeminiQuota && (
+            <button
+              type="button"
+              data-testid="navbar-keys-quota-btn"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                onOpenGeminiQuota();
+              }}
+              className={`navbar-gemini-route-btn ${isGeminiQuotaActive ? 'active' : ''}`}
+              title="Gemini API Keys Pool & Model Rate Limits (RPM / TPM / RPD & Pin Primary Model)"
+            >
+              <Activity size={14} />
+              <span>Keys &amp; Quota</span>
+              <span className="gemini-badge-chip">{keysChipText}</span>
+            </button>
+          )}
 
           {onOpenJobDashboard && (
             <button
@@ -89,6 +121,37 @@ export default function Navbar({
 
         {/* Right: Actions, Shortcuts, Key & Export CTA */}
         <div className="navbar-right-actions">
+          {/* Quick Aspect Ratio Switcher (16:9 Landscape / 9:16 Portrait) — Syncs Preview & Auto Export */}
+          <div
+            className="navbar-aspect-toggle"
+            role="group"
+            aria-label="Preview and Export Aspect Ratio"
+            title={`ទម្រង់វីដេអូ (Preview & Auto Export): ${currentAspectRatio}`}
+          >
+            <button
+              type="button"
+              onClick={() => onAspectRatioChange?.('16:9')}
+              disabled={isRendering}
+              aria-pressed={currentAspectRatio === '16:9'}
+              className={`navbar-aspect-btn ${currentAspectRatio === '16:9' ? 'active' : ''}`}
+              title="16:9 Landscape (ផ្ដេក — YouTube / Facebook)"
+            >
+              <span className="aspect-icon aspect-icon-16-9" aria-hidden="true" />
+              <span>16:9</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => onAspectRatioChange?.('9:16')}
+              disabled={isRendering}
+              aria-pressed={currentAspectRatio === '9:16'}
+              className={`navbar-aspect-btn ${currentAspectRatio === '9:16' ? 'active' : ''}`}
+              title="9:16 Portrait (បញ្ឈរ — TikTok / Reels / Shorts)"
+            >
+              <span className="aspect-icon aspect-icon-9-16" aria-hidden="true" />
+              <span>9:16</span>
+            </button>
+          </div>
+
           {/* Backend Online status chip */}
           <div className={`status-chip ${isBackendOnline ? 'online' : 'offline'}`} title={isBackendOnline ? 'FFmpeg backend is running' : 'Backend server offline'}>
             <span className="status-dot" />

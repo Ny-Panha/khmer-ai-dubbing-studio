@@ -2,7 +2,11 @@ const express = require("express");
 const fs = require("fs");
 const path = require("path");
 const { uploadsDir, getFileSha256, resolveMediaFile } = require("../utils/pathUtils");
-const { extractAllGeminiKeys } = require("../services/geminiKeyManager");
+const {
+  extractAllGeminiKeys,
+  isAuthOrInvalidKeyError,
+  isQuotaOrRateLimitError,
+} = require("../services/geminiKeyManager");
 const {
   generateStorytellingScript,
   retranslateSingleDialogue,
@@ -11,7 +15,12 @@ const {
 const { runDubbingPipeline } = require("../services/pipeline");
 const { productionJobQueue } = require("../services/pipeline/productionJobQueue");
 const { GENERATION_MODES } = require("../services/pipeline/pipelineTypes");
-const { getSeriesMetadata, saveSeriesMetadata } = require("../services/episodeService");
+const {
+  getSeriesMetadata,
+  saveSeriesMetadata,
+  updateSeriesMetadata,
+  withSeriesMetadataLock,
+} = require("../services/episodeService");
 const { parseSrtContent, parseJsonContent } = require("../utils/subtitleParser");
 const { deduplicateFastOcrCues } = require("../services/pipeline/stages/stage3_extractChineseSubtitles");
 
@@ -210,36 +219,103 @@ router.post("/generate-script", async (req, res) => {
   }
 });
 
+function formatRetranslateRouteError(err) {
+  const rawMsg = String(err?.message || err || "Failed to retranslate dialogue")
+    .replace(/key=[a-zA-Z0-9_\-]+/gi, "key=[REDACTED]");
+  const lowerMsg = rawMsg.toLowerCase();
+  const status = err?.status || err?.statusCode;
+
+  if (lowerMsg.includes("មិនរកឃើញ gemini_api_key")) {
+    return {
+      statusCode: 400,
+      code: "MISSING_API_KEY",
+      error: "Gemini API Key មិនទាន់បានកំណត់ទេ។ សូមបញ្ចូល API Key ក្នុង Settings ឬ .env ជាមុនសិន។",
+    };
+  }
+
+  if (isAuthOrInvalidKeyError(err)) {
+    return {
+      statusCode: 401,
+      code: "INVALID_API_KEY",
+      error: "Gemini API Key មិនត្រឹមត្រូវ ឬអស់សុពលភាព (401/403)។ សូមពិនិត្យ API Key ក្នុង Settings ឬ .env ឡើងវិញ។",
+    };
+  }
+
+  const isExplicitQuota =
+    status === 429 ||
+    lowerMsg.includes("429") ||
+    lowerMsg.includes("resource_exhausted") ||
+    lowerMsg.includes("quota") ||
+    lowerMsg.includes("rate limit") ||
+    lowerMsg.includes("too many requests");
+
+  if (isExplicitQuota) {
+    const retryMatch = rawMsg.match(/retry in\s+([0-9hms.]+)/i);
+    const retryHint = retryMatch ? ` (អាចសាកម្ដងទៀតក្នុង ${retryMatch[1]})` : "";
+    return {
+      statusCode: 429,
+      code: "QUOTA_EXCEEDED",
+      error: `Gemini API Quota ពេញហើយ (429) លើគ្រប់ Model បម្រុងទាំងអស់${retryHint}។ សូមរង់ចាំបន្តិច ឬបន្ថែម/ប្តូរ API Key ថ្មី។`,
+    };
+  }
+
+  if (isQuotaOrRateLimitError(err) || status === 504 || lowerMsg.includes("504") || lowerMsg.includes("deadline_exceeded")) {
+    return {
+      statusCode: 503,
+      code: "UPSTREAM_UNAVAILABLE",
+      error: "ការតភ្ជាប់ទៅកាន់ Google Gemini AI រអាក់រអួល ឬយឺតពេក (503/Timeout)។ សូមសាកល្បងម្ដងទៀត។",
+    };
+  }
+
+  return {
+    statusCode: 500,
+    code: "RETRANSLATE_FAILED",
+    error: rawMsg,
+  };
+}
+
 /**
  * AI In-App Re-Translation Endpoints (Classical Cinema Quality)
  */
 router.post("/dubbing/retranslate-segment", async (req, res) => {
   try {
-    const { chineseText, context = {} } = req.body;
+    const { chineseText, context = {} } = req.body || {};
     if (!chineseText || !String(chineseText).trim()) {
       return res.status(400).json({ success: false, error: "Chinese dialogue text is required" });
     }
-    const result = await retranslateSingleDialogue(chineseText, req.body.apiKey, context);
+    const result = await retranslateSingleDialogue(chineseText, req.body?.apiKey, context);
     res.json({ success: true, ...result });
   } catch (err) {
-    console.error("[API] /api/dubbing/retranslate-segment error:", err.message);
-    res.status(500).json({ success: false, error: err.message });
+    const formatted = formatRetranslateRouteError(err);
+    console.error(`[API] /api/dubbing/retranslate-segment error (${formatted.statusCode}):`, formatted.error);
+    res.status(formatted.statusCode).json({
+      success: false,
+      code: formatted.code,
+      error: formatted.error,
+    });
   }
 });
 
 router.post("/dubbing/retranslate-all", async (req, res) => {
   try {
-    const { segments = [], seriesId, episodeId, options = {} } = req.body;
+    const { segments = [], seriesId, episodeId, options = {} } = req.body || {};
     if (!Array.isArray(segments) || segments.length === 0) {
       return res.status(400).json({ success: false, error: "Segments array is required" });
     }
-    const updated = await retranslateBatchDialogues(segments, req.body.apiKey, options);
+    const updated = await retranslateBatchDialogues(segments, req.body?.apiKey, options);
     res.json({ success: true, segments: updated });
   } catch (err) {
-    console.error("[API] /api/dubbing/retranslate-all error:", err.message);
-    res.status(500).json({ success: false, error: err.message });
+    const formatted = formatRetranslateRouteError(err);
+    console.error(`[API] /api/dubbing/retranslate-all error (${formatted.statusCode}):`, formatted.error);
+    res.status(formatted.statusCode).json({
+      success: false,
+      code: formatted.code,
+      error: formatted.error,
+    });
   }
 });
+
+router.formatRetranslateRouteError = formatRetranslateRouteError;
 
 /**
  * STEP 4: Subtitle Import endpoint (.srt / .json)
@@ -354,19 +430,25 @@ router.post("/dubbing/import-subtitles", async (req, res) => {
       }
     }
 
-    // 5. Persist to Episode & series.json
-    if (targetEp) {
-      targetEp.scriptData = {
-        mode: GENERATION_MODES.FAST_OCR,
-        generationMode: 'fast_ocr',
-        source: 'imported_subtitles',
-        segments: finalizedSegments,
-        updatedAt: Date.now(),
-      };
-      targetEp.generationMode = 'fast_ocr';
-      targetEp.status = 'translated';
-      saveSeriesMetadata(seriesMeta);
-    }
+    // 5. Persist to Episode & series.json under per-series mutex (re-reading latest disk state after async translation)
+    await withSeriesMetadataLock(seriesId, () =>
+      updateSeriesMetadata(seriesId, (freshSeries) => {
+        const freshTargetEp = (freshSeries?.episodes || []).find((e) => String(e.id) === String(episodeId));
+        if (!freshTargetEp) return false;
+        freshTargetEp.scriptData = {
+          mode: GENERATION_MODES.FAST_OCR,
+          generationMode: 'fast_ocr',
+          source: 'imported_subtitles',
+          segments: finalizedSegments,
+          hasScript: finalizedSegments.length > 0,
+          totalSegments: finalizedSegments.length,
+          updatedAt: Date.now(),
+        };
+        freshTargetEp.generationMode = 'fast_ocr';
+        freshTargetEp.status = 'translated';
+        return true;
+      })
+    );
 
     return res.json({
       success: true,

@@ -46,6 +46,7 @@ export default function ClipInspectorPanel({
   const [copiedChinese, setCopiedChinese] = useState(false);
   const [isRetranslating, setIsRetranslating] = useState(false);
   const [retranslateData, setRetranslateData] = useState(null);
+  const [retranslateError, setRetranslateError] = useState(null);
   const retranslateCacheRef = React.useRef({});
 
   const originalChinese = selectedSegment?.originalChineseText || selectedSegment?.chineseText || selectedSegment?.originalText || selectedSegment?.original || selectedSegment?.chinese || '';
@@ -110,6 +111,7 @@ export default function ClipInspectorPanel({
       prevPropChineseTextRef.current = originalChinese;
 
       setRetranslateData(retranslateCacheRef.current[currentSegKey] || null);
+      setRetranslateError(null);
     }
   }, [currentSegKey, flushPendingCommit]);
 
@@ -320,17 +322,57 @@ export default function ClipInspectorPanel({
     }
   };
 
+  const formatRetranslateUiError = (err) => {
+    const rawMsg = String(err?.message || err || 'បរាជ័យក្នុងការបកប្រែឡើងវិញ');
+    if (err?.status === 429 || /\b429\b|RESOURCE_EXHAUSTED|quota/i.test(rawMsg)) {
+      return rawMsg.includes('Gemini API Quota')
+        ? rawMsg
+        : 'Gemini API Quota ពេញហើយ (429) — សូមរង់ចាំបន្តិច ឬពិនិត្យ API Key ក្នុង Settings។';
+    }
+    if (err?.status === 401 || err?.status === 403) {
+      return rawMsg.includes('Gemini API Key')
+        ? rawMsg
+        : 'Gemini API Key មិនត្រឹមត្រូវ ឬអស់សុពលភាព (401/403)។';
+    }
+    return rawMsg;
+  };
+
   // ✨ AI In-App Re-Translation handler (1-Click classical drama options)
   const handleAiRetranslate = async () => {
     const textToTranslate = (localChineseText || originalChinese || '').trim();
     if (!textToTranslate || isRetranslating) return;
     setIsRetranslating(true);
+    setRetranslateError(null);
     try {
+      // Context enrichment: previous translation + surrounding dialogue context
+      const previousTranslation = (localKhmerText || selectedSegment?.khmerText || selectedSegment?.khmerTranslatedText || selectedSegment?.khmer || '').trim();
+      const allSegs = scriptData?.segments || [];
+      const segIdx = allSegs.findIndex(s => s.id === selectedSegment?.id || s._uid === selectedSegment?._uid);
+      let surroundingContext = '';
+      if (segIdx >= 0) {
+        const prevSeg = segIdx > 0 ? allSegs[segIdx - 1] : null;
+        const nextSeg = segIdx < allSegs.length - 1 ? allSegs[segIdx + 1] : null;
+        const parts = [];
+        if (prevSeg) {
+          const prevCn = prevSeg.originalChineseText || prevSeg.chineseText || prevSeg.originalText || prevSeg.original || '';
+          const prevKh = prevSeg.khmerTranslatedText || prevSeg.khmerText || prevSeg.text || '';
+          if (prevCn || prevKh) parts.push(`[មុន]: ${prevCn} ➜ ${prevKh}`);
+        }
+        if (nextSeg) {
+          const nextCn = nextSeg.originalChineseText || nextSeg.chineseText || nextSeg.originalText || nextSeg.original || '';
+          const nextKh = nextSeg.khmerTranslatedText || nextSeg.khmerText || nextSeg.text || '';
+          if (nextCn || nextKh) parts.push(`[បន្ទាប់]: ${nextCn} ➜ ${nextKh}`);
+        }
+        surroundingContext = parts.join(' | ');
+      }
+
       const res = await retranslateSegmentApi(textToTranslate, {
         speaker: selectedSegment?.speaker,
         gender: selectedSegment?.gender || selectedSegment?.speakerGender,
+        previousTranslation,
+        context: surroundingContext,
       });
-      if (res && Array.isArray(res.options)) {
+      if (res && Array.isArray(res.options) && res.options.length > 0) {
         const sanitizedRes = {
           ...res,
           note: cleanKhmerText(res.note),
@@ -338,9 +380,12 @@ export default function ClipInspectorPanel({
         };
         setRetranslateData(sanitizedRes);
         retranslateCacheRef.current[currentSegKey] = sanitizedRes;
+      } else {
+        setRetranslateError('AI មិនបានបញ្ជូនជម្រើសបកប្រែត្រឡប់មកវិញទេ។ សូមសាកល្បងម្ដងទៀត។');
       }
     } catch (err) {
       console.error('AI Re-translation failed:', err);
+      setRetranslateError(formatRetranslateUiError(err));
     } finally {
       setIsRetranslating(false);
     }
@@ -356,6 +401,7 @@ export default function ClipInspectorPanel({
       return;
     }
     setIsRetranslating(true);
+    setRetranslateError(null);
     try {
       let bestText = null;
       let resOptions = null;
@@ -368,9 +414,11 @@ export default function ClipInspectorPanel({
       }
 
       if (!bestText) {
+        const previousTranslation = (localKhmerText || selectedSegment?.khmerText || selectedSegment?.khmerTranslatedText || selectedSegment?.khmer || '').trim();
         const res = await retranslateSegmentApi(textToTranslate, {
           speaker: selectedSegment?.speaker,
           gender: selectedSegment?.gender || selectedSegment?.speakerGender,
+          previousTranslation,
         });
         if (res && Array.isArray(res.options) && res.options.length > 0) {
           bestText = cleanKhmerText(res.options[0].text);
@@ -421,7 +469,8 @@ export default function ClipInspectorPanel({
       }
     } catch (err) {
       console.error('[Inspector] Translate line failed:', err);
-      alert(`បរាជ័យក្នុងការបកប្រែ: ${err.message}`);
+      const friendly = formatRetranslateUiError(err);
+      setRetranslateError(friendly);
     } finally {
       setIsRetranslating(false);
     }
@@ -429,6 +478,7 @@ export default function ClipInspectorPanel({
   const handleApplyOption = (newText) => {
     const cleanText = cleanKhmerText(newText);
     if (!cleanText) return;
+    setRetranslateError(null);
     if (debounceTimerRef.current) {
       clearTimeout(debounceTimerRef.current);
       debounceTimerRef.current = null;
@@ -548,31 +598,74 @@ export default function ClipInspectorPanel({
 
             {/* AI Re-Translation Action Button (Clean, 1-Line, Never Squished) */}
             {(localChineseText || originalChinese) && (
-              <div style={{ marginTop: 6, display: 'flex', justifyContent: 'flex-end' }}>
-                <button
-                  type="button"
-                  onClick={handleAiRetranslate}
-                  disabled={isRetranslating}
-                  style={{
-                    background: 'linear-gradient(135deg, rgba(168, 85, 247, 0.28), rgba(139, 92, 246, 0.18))',
-                    border: '1px solid rgba(168, 85, 247, 0.55)',
-                    borderRadius: 4,
-                    color: '#d8b4fe',
-                    cursor: isRetranslating ? 'wait' : 'pointer',
-                    fontSize: '0.68rem',
-                    fontWeight: 700,
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 4,
-                    padding: '3px 8px',
-                    whiteSpace: 'nowrap',
-                    transition: 'all 0.15s ease',
-                  }}
-                  title="✨ AI Re-Translate: ឱ្យ AI បកប្រែជាភាសាកុនបុរាណ ៣ ជម្រើសភ្លាមៗ"
-                >
-                  {isRetranslating ? <Loader2 size={11} className="spin animate-spin" /> : <Sparkles size={11} color="#d8b4fe" />}
-                  <span>{isRetranslating ? 'កំពុងគិត...' : '✨ AI កែប្រែ (Re-Translate)'}</span>
-                </button>
+              <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                  <button
+                    type="button"
+                    data-testid="btn-ai-retranslate"
+                    onClick={handleAiRetranslate}
+                    disabled={isRetranslating}
+                    style={{
+                      background: 'linear-gradient(135deg, rgba(168, 85, 247, 0.28), rgba(139, 92, 246, 0.18))',
+                      border: '1px solid rgba(168, 85, 247, 0.55)',
+                      borderRadius: 4,
+                      color: '#d8b4fe',
+                      cursor: isRetranslating ? 'wait' : 'pointer',
+                      fontSize: '0.68rem',
+                      fontWeight: 700,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 4,
+                      padding: '3px 8px',
+                      whiteSpace: 'nowrap',
+                      transition: 'all 0.15s ease',
+                    }}
+                    title="✨ AI Re-Translate: ឱ្យ AI បកប្រែជាភាសាកុនបុរាណ ៣ ជម្រើសភ្លាមៗ"
+                  >
+                    {isRetranslating ? <Loader2 size={11} className="spin animate-spin" /> : <Sparkles size={11} color="#d8b4fe" />}
+                    <span>{isRetranslating ? 'កំពុងគិត...' : '✨ AI កែប្រែ (Re-Translate)'}</span>
+                  </button>
+                </div>
+
+                {retranslateError && (
+                  <div
+                    data-testid="retranslate-error-banner"
+                    style={{
+                      padding: '6px 8px',
+                      background: 'rgba(239, 68, 68, 0.14)',
+                      border: '1px solid rgba(239, 68, 68, 0.45)',
+                      borderRadius: 5,
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: 8,
+                    }}
+                  >
+                    <span style={{ fontSize: '0.7rem', color: '#fca5a5', display: 'flex', alignItems: 'center', gap: 5, lineHeight: 1.4 }}>
+                      <AlertCircle size={12} color="#ef4444" style={{ flexShrink: 0 }} />
+                      <span>{retranslateError}</span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={handleAiRetranslate}
+                      disabled={isRetranslating}
+                      style={{
+                        padding: '2px 7px',
+                        fontSize: '0.66rem',
+                        background: 'rgba(239, 68, 68, 0.85)',
+                        color: '#ffffff',
+                        border: 'none',
+                        borderRadius: 4,
+                        cursor: isRetranslating ? 'wait' : 'pointer',
+                        fontWeight: 700,
+                        whiteSpace: 'nowrap',
+                        flexShrink: 0,
+                      }}
+                    >
+                      🔄 សាកម្ដងទៀត
+                    </button>
+                  </div>
+                )}
               </div>
             )}
 

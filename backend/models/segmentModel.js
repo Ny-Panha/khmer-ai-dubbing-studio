@@ -48,8 +48,19 @@ function createSegment(raw = {}, index = 0, defaultMode = 'dialogue') {
   );
   const speakerName = raw.speakerName || speaker;
   const speakerId = raw.speakerId || getSpeakerId(speaker);
-  const speakerGender = detectSpeakerGender(speaker, raw.speakerGender || raw.gender || raw.voiceGender);
-  const voiceId = raw.khmerVoiceId || raw.voiceId || getDefaultVoiceForGender(speakerGender);
+  const explicitRawGender = String(raw.speakerGender || raw.gender || raw.voiceGender || '').trim().toLowerCase();
+  const hasExplicitGender = explicitRawGender === 'female' || explicitRawGender === 'male' || explicitRawGender === 'f' || explicitRawGender === 'm';
+  const isManual = Boolean(raw.userOverridden || raw.voiceAssignmentSource === 'manual' || raw.voiceOverride);
+  const titleGender = detectSpeakerGender(speaker, '', raw.khmerTranslatedText || raw.khmer || raw.khmerText || '');
+  const speakerGender = (!isManual && titleGender !== 'UNKNOWN')
+    ? titleGender
+    : detectSpeakerGender(speaker, hasExplicitGender ? explicitRawGender : '');
+  const derivedVoice = (speakerGender === 'FEMALE' || speakerGender === 'MALE')
+    ? getDefaultVoiceForGender(speakerGender)
+    : null;
+  const voiceId = isManual
+    ? (raw.voiceOverride || raw.khmerVoiceId || raw.voiceId || raw.voice || derivedVoice || getDefaultVoiceForGender(speakerGender))
+    : (derivedVoice || raw.khmerVoiceId || raw.voiceId || getDefaultVoiceForGender(speakerGender));
   const voiceProvider = raw.voiceProvider || (voiceId === 'km' ? 'google-translate-tts' : 'edge-tts');
 
   const audioStartSec = raw.audioStartSec !== undefined 
@@ -83,7 +94,9 @@ function createSegment(raw = {}, index = 0, defaultMode = 'dialogue') {
 
   let status = raw.status || (ttsStatus === 'ready' ? 'audio_ready' : (khmer ? 'translated' : 'pending'));
 
-  const voiceGender = raw.voiceGender || (speakerGender === 'FEMALE' ? 'female' : (speakerGender === 'MALE' ? 'male' : 'unknown'));
+  const voiceGender = isManual
+    ? (String(raw.voiceGender || (speakerGender === 'FEMALE' ? 'female' : (speakerGender === 'MALE' ? 'male' : 'unknown'))).toLowerCase())
+    : (speakerGender === 'FEMALE' ? 'female' : (speakerGender === 'MALE' ? 'male' : (raw.voiceGender || 'unknown')));
   const genderConfidence = typeof raw.genderConfidence === 'number' && raw.genderConfidence !== 0.5
     ? raw.genderConfidence
     : (voiceGender === 'unknown' ? null : 0.85);

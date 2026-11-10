@@ -55,12 +55,23 @@ export default function DubbingModeTab({
   const [selectedGenre, setSelectedGenre] = useState(scriptData?.genre || scriptData?.detectedGenre || 'auto');
   const [showRegenerateForm, setShowRegenerateForm] = useState(false);
   const [showConfirmRetranslate, setShowConfirmRetranslate] = useState(false);
+  const [showConfirmReTts, setShowConfirmReTts] = useState(false);
   const [isSeparatingAudio, setIsSeparatingAudio] = useState(false);
   const [separationProgress, setSeparationProgress] = useState(0);
   const [isCleanBgReady, setIsCleanBgReady] = useState(false);
   const [separationError, setSeparationError] = useState(null);
   const hasExistingScript = Boolean(scriptData?.segments && scriptData.segments.length > 0);
   const hasExistingAudio = Boolean(scriptData?.segments?.some(s => s.audioUrl || s.audioPath || s.audioFile));
+  const validTextSegments = (scriptData?.segments || []).filter((s) =>
+    Boolean((s.khmer || s.khmerText || s.khmerTranslatedText || s.text || '').trim())
+  );
+  const pendingOrOutdatedCount = validTextSegments.filter((s) =>
+    Boolean(s.audioOutdated) ||
+    s.ttsStatus === 'pending' ||
+    s.ttsStatus === 'error' ||
+    s.status === 'tts_error' ||
+    (!s.audioUrl && !s.audioPath && !s.audioFile)
+  ).length;
 
   useEffect(() => {
     const detectedMode =
@@ -592,15 +603,39 @@ export default function DubbingModeTab({
               transition: 'all 0.2s cubic-bezier(0.16, 1, 0.3, 1)',
             }}
           >
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, gap: 6, flexWrap: 'wrap' }}>
               <div style={{ fontSize: '11px', color: '#94A3B8', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.4px', display: 'flex', alignItems: 'center', gap: 6 }}>
                 <Mic size={14} color="#FF8577" />
                 <span>ជំហានទី ៣ ៖ បង្កើតសំឡេងខ្មែរ AI (Voice Studio)</span>
               </div>
               {hasExistingAudio && !isThisEpisodeGeneratingAudio && (
-                <span style={{ fontSize: '10px', background: 'rgba(52, 211, 153, 0.15)', color: '#34D399', padding: '2px 8px', borderRadius: 9999, fontWeight: 700, border: '1px solid rgba(52, 211, 153, 0.3)' }}>
-                  ✅ សំឡេង AI រួចរាល់
-                </span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ fontSize: '10px', background: pendingOrOutdatedCount > 0 ? 'rgba(251, 191, 36, 0.15)' : 'rgba(52, 211, 153, 0.15)', color: pendingOrOutdatedCount > 0 ? '#fbbf24' : '#34D399', padding: '2px 8px', borderRadius: 9999, fontWeight: 700, border: pendingOrOutdatedCount > 0 ? '1px solid rgba(251, 191, 36, 0.35)' : '1px solid rgba(52, 211, 153, 0.3)' }}>
+                    {pendingOrOutdatedCount > 0 ? `⚠️ ខ្វះ / កែប្រែ ${pendingOrOutdatedCount} ឃ្លា` : '✅ សំឡេង AI រួចរាល់'}
+                  </span>
+                  {pendingOrOutdatedCount > 0 && onNavigateToVoice && (
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        setShowConfirmReTts(true);
+                      }}
+                      title="បង្កើតសំឡេង AI ឡើងវិញទាំងអស់"
+                      style={{
+                        fontSize: '10px',
+                        background: 'rgba(255, 255, 255, 0.05)',
+                        color: '#cbd5e1',
+                        border: '1px solid rgba(255, 255, 255, 0.12)',
+                        borderRadius: 9999,
+                        padding: '2px 7px',
+                        cursor: 'pointer',
+                        fontWeight: 600,
+                      }}
+                    >
+                      Re-TTS ទាំងអស់
+                    </button>
+                  )}
+                </div>
               )}
             </div>
 
@@ -609,7 +644,11 @@ export default function DubbingModeTab({
                 type="button"
                 onClick={(e) => {
                   e.preventDefault();
-                  onNavigateToVoice({ forceRegen: Boolean(hasExistingAudio) });
+                  if (!hasExistingAudio || pendingOrOutdatedCount > 0) {
+                    onNavigateToVoice({ forceRegen: false });
+                  } else {
+                    setShowConfirmReTts(true);
+                  }
                 }}
                 disabled={isThisEpisodeGeneratingAudio}
                 className="btn-tactile"
@@ -640,7 +679,11 @@ export default function DubbingModeTab({
                     <div style={{ display: 'flex', alignItems: 'center', gap: 7, minWidth: 0 }}>
                       <Mic size={14} style={{ flexShrink: 0 }} />
                       <span style={{ whiteSpace: 'nowrap' }}>
-                        {hasExistingAudio ? 'បង្កើតសំឡេង AI ឡើងវិញ (Re-TTS)' : 'បង្កើតសំឡេងខ្មែរ AI (Generate TTS)'}
+                        {!hasExistingAudio
+                          ? 'បង្កើតសំឡេងខ្មែរ AI (Generate TTS)'
+                          : pendingOrOutdatedCount > 0
+                            ? `បង្កើតសំឡេងខ្វះ / កែប្រែ (${pendingOrOutdatedCount} ឃ្លា)`
+                            : 'បង្កើតសំឡេង AI ឡើងវិញ (Re-TTS)'}
                       </span>
                     </div>
                     {hasExistingAudio ? (
@@ -1709,6 +1752,113 @@ export default function DubbingModeTab({
                 }}
               >
                 បាទ/ចាស, Re-Translate ឥឡូវនេះ
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Re-TTS Confirmation Modal (Prevents accidental 500-segment overwrite) */}
+      {showConfirmReTts && (
+        <div
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: 'rgba(0, 0, 0, 0.75)',
+            backdropFilter: 'blur(4px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 9999,
+          }}
+          onClick={() => setShowConfirmReTts(false)}
+        >
+          <div
+            style={{
+              background: 'var(--panel)',
+              border: '1px solid var(--line)',
+              borderRadius: 8,
+              padding: '20px 24px',
+              maxWidth: 460,
+              width: '92%',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 12,
+              boxShadow: '0 20px 40px rgba(0,0,0,0.6)',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 style={{ display: 'flex', alignItems: 'center', gap: 8, margin: 0, fontSize: '14px', color: 'var(--ink)', fontWeight: 600 }}>
+              <AlertCircle size={18} color="var(--color-warning)" />
+              <span>បញ្ជាក់ការបង្កើតសំឡេង AI ឡើងវិញ (Confirm Re-TTS)</span>
+            </h3>
+            <p style={{ margin: 0, fontSize: '13px', color: 'var(--ink-dim)', lineHeight: 1.5 }}>
+              ភាគនេះមានសំឡេងខ្មែរ AI រួចរាល់ហើយ ({validTextSegments.length} ឃ្លា)។
+              <br /><br />
+              • <strong>Smart Sync:</strong> រក្សាសំឡេងដើមទាំងអស់ និងបង្កើតតែឃ្លាដែលខ្វះ ឬទើបកែប្រែប៉ុណ្ណោះ។
+              <br />
+              • <strong>Force Re-TTS ទាំងអស់:</strong> បង្កើតសំឡេងថ្មីទាំង {validTextSegments.length} ឃ្លាឡើងវិញ (ត្រូវការពេលយូរ)។
+            </p>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                onClick={() => setShowConfirmReTts(false)}
+                style={{
+                  height: 34,
+                  padding: '0 12px',
+                  borderRadius: 6,
+                  border: '1px solid var(--line)',
+                  background: 'transparent',
+                  color: 'var(--ink-dim)',
+                  cursor: 'pointer',
+                  fontSize: 12,
+                  fontWeight: 500,
+                }}
+              >
+                បោះបង់ (Cancel)
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowConfirmReTts(false);
+                  onNavigateToVoice?.({ forceRegen: false });
+                }}
+                style={{
+                  height: 34,
+                  padding: '0 14px',
+                  borderRadius: 6,
+                  border: '1px solid rgba(52, 211, 153, 0.4)',
+                  background: 'rgba(16, 185, 129, 0.16)',
+                  color: '#34d399',
+                  cursor: 'pointer',
+                  fontSize: 12,
+                  fontWeight: 600,
+                }}
+              >
+                Smart Sync (រក្សាសំឡេងដើម)
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowConfirmReTts(false);
+                  onNavigateToVoice?.({ forceRegen: true });
+                }}
+                style={{
+                  height: 34,
+                  padding: '0 14px',
+                  borderRadius: 6,
+                  border: 'none',
+                  background: '#e11d48',
+                  color: '#ffffff',
+                  cursor: 'pointer',
+                  fontSize: 12,
+                  fontWeight: 600,
+                }}
+              >
+                Re-TTS ទាំងអស់ ({validTextSegments.length})
               </button>
             </div>
           </div>

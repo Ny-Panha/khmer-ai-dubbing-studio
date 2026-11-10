@@ -15,6 +15,9 @@ param (
     [Alias("no-browser")]
     [switch]$NoBrowser,
 
+    [Alias("watch")]
+    [switch]$WatchBackend,
+
     [Alias("h", "?")]
     [switch]$Help
 )
@@ -24,14 +27,16 @@ $ErrorActionPreference = "Continue"
 # Parse raw args in case flags were passed in Linux style (--new-window, --fast, etc.)
 foreach ($arg in $args) {
     switch ($arg) {
-        "--new-window"   { $NewWindow = $true }
-        "--window"       { $NewWindow = $true }
-        "--skip-install" { $SkipInstall = $true }
-        "--fast"         { $SkipInstall = $true }
-        "--no-install"   { $SkipInstall = $true }
-        "--no-browser"   { $NoBrowser = $true }
-        "--help"         { $Help = $true }
-        "-h"             { $Help = $true }
+        "--new-window"    { $NewWindow = $true }
+        "--window"        { $NewWindow = $true }
+        "--skip-install"  { $SkipInstall = $true }
+        "--fast"          { $SkipInstall = $true }
+        "--no-install"    { $SkipInstall = $true }
+        "--no-browser"    { $NoBrowser = $true }
+        "--watch"         { $WatchBackend = $true }
+        "--watch-backend" { $WatchBackend = $true }
+        "--help"          { $Help = $true }
+        "-h"              { $Help = $true }
     }
 }
 
@@ -42,6 +47,7 @@ if ($Help) {
     Write-Host "  -NewWindow, --new-window         Launch services in separate terminal windows"
     Write-Host "  -SkipInstall, -Fast, --fast      Skip dependency checks"
     Write-Host "  -NoBrowser, --no-browser         Do not auto-open default browser"
+    Write-Host "  -WatchBackend, --watch           Enable node --watch hot reload for backend JS (not recommended for batch runs)"
     Write-Host "  -Help, -h, --help                Show this help message"
     exit 0
 }
@@ -190,7 +196,12 @@ try {
     Write-Host "`n[2/3] Starting Backend API (Port 5000)..." -ForegroundColor White
     $backendDir = Join-Path $RootDir "backend"
     Ensure-Dependencies -WorkingDir $backendDir -Name "Backend"
-    $backendCmd = "node --watch-path=server.js --watch-path=routes --watch-path=services --watch-path=models server.js"
+    # Run plain `node server.js` by default so NTFS LastAccessTime reads on models/sense-voice/*.onnx or JS files NEVER kill long-running jobs.
+    if ($WatchBackend) {
+        $backendCmd = "node --watch-path=server.js --watch-path=routes --watch-path=services --watch-path=models/episodeModel.js --watch-path=models/segmentModel.js --watch-path=models/speakerRegistry.js --watch-path=models/timestampUtils.js server.js"
+    } else {
+        $backendCmd = "node server.js"
+    }
     $null = Start-DevProcess -Title "[Khmer AI Dubbing] Backend API" -WorkingDir $backendDir -Command $backendCmd
     Wait-ForBackend -Port 5000
 

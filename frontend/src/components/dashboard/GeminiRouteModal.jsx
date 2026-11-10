@@ -1,12 +1,32 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { 
   Cpu, Sparkles, CheckCircle2, AlertCircle, Check, Clock, 
-  ArrowRight, Loader2, Terminal, ChevronDown, ChevronUp, X, RefreshCw,
-  RotateCcw, FileText, CheckCheck, Activity, Layers, Mic, Volume2
+  ArrowRight, Loader2, X, RefreshCw,
+  RotateCcw, FileText, Mic, Volume2, Download, Film, AlertTriangle, Square, Layers,
+  Pin, Key, Wrench
 } from 'lucide-react';
-import { startGenerationJob, fetchGeminiKeysStatusApi } from '../../services/api';
-import { useSharedJobQueue } from '../../context/JobQueueContext';
+import {
+  startGenerationJob,
+  startRepairBrokenJobApi,
+  fetchJobStatusApi,
+} from '../../services/api';
+import { useGeminiQuotaMonitor } from '../../hooks/useGeminiQuotaMonitor';
+import { useSharedJobQueue } from '../../context/jobQueueStore';
 import { formatTimecode } from '../../utils/formatTime';
+import { resolveDefaultAspectRatio } from '../../utils/projectStorage';
+import {
+  checkEpisodeHasScript,
+  checkEpisodeHasAudioReady,
+  checkEpisodeHasDemucsReady,
+  getEpisodeSegmentCount,
+  getEpisodeBrokenSummary,
+  getEpisodesBrokenSummary,
+  isJobCompletedSegmentsMissing,
+  computeSeriesTranslateSummary,
+  partitionSelectedEpisodesForTranslate,
+  computeClampedStagePercent,
+  applyElapsedCountdownToKeysHealth,
+} from './geminiRouteHelpers';
 
 // 3 Dedicated Route Progress Runners (Step 1: Translate, Step 2: Khmer TTS, Step 3: Demucs)
 import EpisodeTranslateProgressCard from './route-runners/EpisodeTranslateProgressCard';
@@ -16,6 +36,7 @@ import EpisodeDemucsProgressCard from './route-runners/EpisodeDemucsProgressCard
 export default function GeminiRouteModal({
   isOpen,
   onClose,
+  onOpenQuotaModal = null,
   activeSeries = null,
   activeEpisode = null,
   seriesId = null,
@@ -24,17 +45,24 @@ export default function GeminiRouteModal({
   onTabChange = null,
   onRefreshSeries = null,
   apiKey = null,
+  voiceSettings = {},
+  currentAspectRatio = null,
+  onAspectRatioChange = null,
+  isRendering = false,
+  batchRender = null,
 }) {
   const episodes = (activeSeries && Array.isArray(activeSeries.episodes)) ? activeSeries.episodes : [];
 
   // Selection & generation settings
   const [selectedEpIds, setSelectedEpIds] = useState(new Set());
+  const [allowOriginalAudio, setAllowOriginalAudio] = useState(false);
   const [dubbingMode, setDubbingMode] = useState('dialogue');
   const [genre, setGenre] = useState('auto');
   const [narratorGender, setNarratorGender] = useState('male');
   const [isStartingBatch, setIsStartingBatch] = useState(false);
   const [batchError, setBatchError] = useState(null);
   const [batchSuccess, setBatchSuccess] = useState(null);
+  const [batchInfo, setBatchInfo] = useState(null);
 
   // Batch TTS State (Step 2: Generate TTS for 2, 5, or ALL selected episodes simultaneously)
   const [isGeneratingBatchTTS, setIsGeneratingBatchTTS] = useState(false);
@@ -46,62 +74,6 @@ export default function GeminiRouteModal({
   const [completedTtsEpIds, setCompletedTtsEpIds] = useState(new Set());
   const [completedDemucsEpIds, setCompletedDemucsEpIds] = useState(new Set());
 
-  // Initialize completed episodes from series data and server truth
-  useEffect(() => {
-    if (episodes.length > 0) {
-      const alreadyAudioDone = new Set();
-      const alreadyDemucsDone = new Set();
-      episodes.forEach((ep) => {
-        if (ep.audioGenerated || ep.fullAudioUrl || ep.hasAudio) {
-          alreadyAudioDone.add(ep.id);
-        }
-        if (ep.bgmAudioUrl || ep.cleanBgmPath || ep.hasDemucs || ep.isDemucsDone) {
-          alreadyDemucsDone.add(ep.id);
-        }
-      });
-      if (alreadyAudioDone.size > 0) {
-        setCompletedTtsEpIds((prev) => new Set([...prev, ...alreadyAudioDone]));
-      }
-      if (alreadyDemucsDone.size > 0) {
-        setCompletedDemucsEpIds((prev) => new Set([...prev, ...alreadyDemucsDone]));
-      }
-    }
-  }, [episodes]);
-
-  // Direct server truth sync when modal opens: guarantees completed audio and Demucs BGM are never forgotten after browser reload
-  useEffect(() => {
-    if (!isOpen) return;
-    const targetSeriesId = activeSeries?.id || seriesId;
-    if (targetSeriesId) {
-      fetch(`/api/series/${targetSeriesId}`)
-        .then((res) => res.json())
-        .then((data) => {
-          if (data?.success && Array.isArray(data.series?.episodes)) {
-            const serverTtsDone = new Set();
-            const serverDemucsDone = new Set();
-            data.series.episodes.forEach((ep) => {
-              if (ep.audioGenerated || ep.fullAudioUrl || ep.hasAudio) {
-                serverTtsDone.add(ep.id);
-              }
-              if (ep.bgmAudioUrl || ep.cleanBgmPath || ep.hasDemucs || ep.isDemucsDone) {
-                serverDemucsDone.add(ep.id);
-              }
-            });
-            if (serverTtsDone.size > 0) {
-              setCompletedTtsEpIds((prev) => new Set([...prev, ...serverTtsDone]));
-            }
-            if (serverDemucsDone.size > 0) {
-              setCompletedDemucsEpIds((prev) => new Set([...prev, ...serverDemucsDone]));
-            }
-          }
-        })
-        .catch(() => {});
-    }
-    if (typeof onRefreshSeries === 'function') {
-      try { onRefreshSeries(); } catch (_) {}
-    }
-  }, [isOpen, activeSeries?.id, seriesId, onRefreshSeries]);
-
   // Batch Demucs State (Step 3: AI Vocal Separation for 2, 5, or ALL selected episodes simultaneously)
   const [isSeparatingBatchDemucs, setIsSeparatingBatchDemucs] = useState(false);
   const [activeDemucsEpisodeId, setActiveDemucsEpisodeId] = useState(null);
@@ -109,6 +81,81 @@ export default function GeminiRouteModal({
   const [demucsLiveStats, setDemucsLiveStats] = useState({});
   const [demucsCurrentEpTitle, setDemucsCurrentEpTitle] = useState('');
   const [demucsProgressPercent, setDemucsProgressPercent] = useState(0);
+
+  // Repair Broken Segments State (ONE button sweeping text-broken + voice-broken subsets)
+  const [isRepairingBroken, setIsRepairingBroken] = useState(false);
+  const [trackedRepairJobIds, setTrackedRepairJobIds] = useState([]);
+  const [repairProgressSummary, setRepairProgressSummary] = useState(null);
+
+  const isGeneratingBatchTtsRef = useRef(false);
+  const isSeparatingBatchDemucsRef = useRef(false);
+  const ttsLiveStatsRef = useRef({});
+  const demucsLiveStatsRef = useRef({});
+  isGeneratingBatchTtsRef.current = isGeneratingBatchTTS;
+  isSeparatingBatchDemucsRef.current = isSeparatingBatchDemucs;
+  ttsLiveStatsRef.current = ttsLiveStats;
+  demucsLiveStatsRef.current = demucsLiveStats;
+
+  // Reconcile completed episodes cleanly from current episodes & server truth (never retain stale localStorage DONE flags)
+  useEffect(() => {
+    const alreadyAudioDone = new Set();
+    const alreadyDemucsDone = new Set();
+    episodes.forEach((ep) => {
+      if (checkEpisodeHasAudioReady(ep, null, ttsLiveStats)) {
+        alreadyAudioDone.add(ep.id);
+      }
+      if (checkEpisodeHasDemucsReady(ep, null, demucsLiveStats)) {
+        alreadyDemucsDone.add(ep.id);
+      }
+    });
+    setCompletedTtsEpIds(alreadyAudioDone);
+    setCompletedDemucsEpIds(alreadyDemucsDone);
+  }, [episodes, ttsLiveStats, demucsLiveStats]);
+
+  // Direct server truth sync when modal opens: resets stale idle live stats & reconciles completed vs outdated episodes
+  useEffect(() => {
+    if (!isOpen) return;
+    let cancelled = false;
+    if (!isGeneratingBatchTtsRef.current) {
+      setTtsLiveStats({});
+    }
+    if (!isSeparatingBatchDemucsRef.current) {
+      setDemucsLiveStats({});
+    }
+
+    const targetSeriesId = activeSeries?.id || seriesId;
+    if (targetSeriesId) {
+      fetch(`/api/series/${targetSeriesId}`)
+        .then((res) => res.json())
+        .then((data) => {
+          if (cancelled) return;
+          if (data?.success && Array.isArray(data.series?.episodes)) {
+            const serverTtsDone = new Set();
+            const serverDemucsDone = new Set();
+            const liveTts = isGeneratingBatchTtsRef.current ? ttsLiveStatsRef.current : {};
+            const liveDemucs = isSeparatingBatchDemucsRef.current ? demucsLiveStatsRef.current : {};
+            data.series.episodes.forEach((ep) => {
+              if (checkEpisodeHasAudioReady(ep, null, liveTts)) {
+                serverTtsDone.add(ep.id);
+              }
+              if (checkEpisodeHasDemucsReady(ep, null, liveDemucs)) {
+                serverDemucsDone.add(ep.id);
+              }
+            });
+            setCompletedTtsEpIds(serverTtsDone);
+            setCompletedDemucsEpIds(serverDemucsDone);
+          }
+        })
+        .catch(() => {});
+    }
+    if (typeof onRefreshSeries === 'function') {
+      try { onRefreshSeries(); } catch (_) {}
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, activeSeries?.id, seriesId, onRefreshSeries]);
+
   const isDemucsCancelledRef = useRef(false);
   const isTranslateCancelledRef = useRef(false);
   const isTtsCancelledRef = useRef(false);
@@ -142,6 +189,7 @@ export default function GeminiRouteModal({
         }),
       });
       setIsStartingBatch(false);
+      setBatchInfo(null);
       setBatchError('🛑 បានបញ្ឈប់ (Kill) ដំណើរការ Translate ដោយជោគជ័យ!');
       if (typeof onRefreshSeries === 'function') {
         try { await onRefreshSeries(); } catch (_) {}
@@ -223,56 +271,113 @@ export default function GeminiRouteModal({
   };
 
   // Single-source-of-truth job queue from JobQueueContext (Zero duplicate polling)
-  const { jobs: activeJobs = [] } = useSharedJobQueue();
+  const { jobs: activeJobs = [], isLoading: isJobsLoading = false } = useSharedJobQueue();
 
-  // Gemini Keys Quota & Rate Limit Health State
-  const [keysHealth, setKeysHealth] = useState(null);
-  const [isCheckingQuota, setIsCheckingQuota] = useState(false);
+  // Shared Gemini Keys & Cascade Summary (heavy monitor lives in dedicated GeminiQuotaModal)
+  const {
+    keysHealth,
+    isUpdatingQuotaSettings,
+    handleSelectPreferredModel,
+  } = useGeminiQuotaMonitor({
+    enabled: Boolean(isOpen),
+    initialProbe: 'stats',
+    pollIntervalMs: 8000,
+  });
+  const [quotaNowMs, setQuotaNowMs] = useState(() => Date.now());
 
-  const handleCheckQuota = async () => {
-    try {
-      setIsCheckingQuota(true);
-      const res = await fetchGeminiKeysStatusApi();
-      if (res && res.success) {
-        setKeysHealth(res);
-      }
-    } catch (err) {
-      console.error('Failed to check keys quota:', err);
-    } finally {
-      setIsCheckingQuota(false);
-    }
-  };
-
-  // Run initial quota check when modal opens
   useEffect(() => {
-    if (isOpen) {
-      handleCheckQuota();
-    }
+    if (!isOpen) return undefined;
+    const tickTimer = setInterval(() => {
+      setQuotaNowMs(Date.now());
+    }, 1000);
+    return () => clearInterval(tickTimer);
   }, [isOpen]);
 
-  // Close on Escape key
+  // Close on Escape key (only when dedicated Quota modal isn't layered on top)
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen) return undefined;
     const handleKeyDown = (e) => {
-      if (e.key === 'Escape') onClose();
+      if (e.key === 'Escape' && !document.querySelector('[data-testid="gemini-quota-modal"]')) {
+        onClose();
+      }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isOpen, onClose]);
 
+  const handleOpenQuotaConsole = useCallback(() => {
+    if (!onOpenQuotaModal) return;
+    const isLocalLoopBusy = isGeneratingBatchTTS || isSeparatingBatchDemucs;
+    if (!isLocalLoopBusy) {
+      onClose?.();
+    }
+    onOpenQuotaModal();
+  }, [onOpenQuotaModal, onClose, isGeneratingBatchTTS, isSeparatingBatchDemucs]);
 
 
-  // Map of latest job per episodeId (tracks running, queued, completed, and failed states)
+
+  const currentSeriesId = activeSeries?.id || seriesId;
+
+  // Map of latest job per episodeId for current series (tracks running, queued, completed, and failed states)
   const jobsByEpisodeId = useMemo(() => {
     const map = new Map();
     const sorted = [...activeJobs].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
     for (const job of sorted) {
+      if (currentSeriesId && job.seriesId && String(job.seriesId) !== String(currentSeriesId)) {
+        continue;
+      }
       if (job.episodeId && !map.has(job.episodeId)) {
         map.set(job.episodeId, job);
       }
     }
     return map;
-  }, [activeJobs]);
+  }, [activeJobs, currentSeriesId]);
+
+  // Trigger series refresh automatically whenever a queued/running translate job finishes via SSE
+  const seenCompletedJobsRef = useRef(new Set());
+  const hasInitializedSseRef = useRef(false);
+  const prevSeriesForSseRef = useRef(currentSeriesId);
+
+  useEffect(() => {
+    if (prevSeriesForSseRef.current !== currentSeriesId) {
+      prevSeriesForSseRef.current = currentSeriesId;
+      seenCompletedJobsRef.current.clear();
+      hasInitializedSseRef.current = false;
+    }
+
+    const currentCompletedKeys = new Set();
+    for (const job of activeJobs) {
+      if (!job || (job.status !== 'completed' && job.status !== 'partial')) continue;
+      if (currentSeriesId && job.seriesId && String(job.seriesId) !== String(currentSeriesId)) {
+        continue;
+      }
+      const jKey = `${job.jobId || job.id || job.episodeId}:${job.status}:${job.completedAt || job.updatedAt || 'done'}`;
+      currentCompletedKeys.add(jKey);
+    }
+
+    if (!hasInitializedSseRef.current) {
+      if (isJobsLoading && activeJobs.length === 0) {
+        return;
+      }
+      hasInitializedSseRef.current = true;
+      currentCompletedKeys.forEach((k) => seenCompletedJobsRef.current.add(k));
+      return;
+    }
+
+    let hasNewlyCompleted = false;
+    for (const k of currentCompletedKeys) {
+      if (!seenCompletedJobsRef.current.has(k)) {
+        seenCompletedJobsRef.current.add(k);
+        hasNewlyCompleted = true;
+      }
+    }
+
+    if (hasNewlyCompleted && typeof onRefreshSeries === 'function') {
+      try {
+        onRefreshSeries();
+      } catch (_) {}
+    }
+  }, [activeJobs, isJobsLoading, currentSeriesId, onRefreshSeries]);
 
   // Handle single-episode retry on failure
   const handleRetryEpisode = async (ep) => {
@@ -285,6 +390,7 @@ export default function GeminiRouteModal({
         seriesId: activeSeries?.id || seriesId || 'drama_project',
         episodeId: ep.id,
         mode: dubbingMode,
+        force: false,
         genre,
         narratorGender,
         seriesGlossary: activeSeries?.glossary,
@@ -295,84 +401,44 @@ export default function GeminiRouteModal({
     }
   };
 
-  // Robust helper: verifies whether an episode already has completed script/segments
-  const checkEpisodeHasScript = (ep) => {
-    if (!ep) return false;
-    const activeJob = jobsByEpisodeId.get(ep.id);
-    const isJobCompleted = Boolean(activeJob && activeJob.status === 'completed');
-    return Boolean(
-      (ep.scriptData?.segments && ep.scriptData.segments.length > 0) ||
-      ep.scriptData?.hasScript ||
-      (typeof ep.scriptData?.totalSegments === 'number' && ep.scriptData.totalSegments > 0) ||
-      ep.status === 'translated' ||
-      ep.status === 'voicing' ||
-      ep.status === 'completed' ||
-      isJobCompleted
-    );
-  };
-
-  // Robust helper: accurately extracts total segment count from scriptData or completed job
-  const getEpisodeSegmentCount = (ep) => {
-    if (!ep) return 0;
-    const activeJob = jobsByEpisodeId.get(ep.id);
-    const count =
-      ep.scriptData?.segments?.length ||
-      ep.scriptData?.totalSegments ||
-      activeJob?.result?.totalSegments ||
-      activeJob?.result?.segmentsCount ||
-      0;
-    return count > 0 ? count : (checkEpisodeHasScript(ep) ? 'រួចរាល់' : 0);
-  };
-
   // Check if an episode is 100% completed across all 3 steps (Translate + Audio TTS + Clean BGM)
+  // Uses strictly stored episode segments via checkEpisodeHasScript from geminiRouteHelpers
   const isEpisodeFullyDone = useCallback((ep) => {
     if (!ep) return false;
     const hasScript = checkEpisodeHasScript(ep);
-    const hasAudio = Boolean(ep.audioGenerated || ep.fullAudioUrl || ep.hasAudio || completedTtsEpIds.has(ep.id) || ttsLiveStats[ep.id]?.isDone);
-    const hasDemucs = Boolean(ep.bgmAudioUrl || ep.cleanBgmPath || ep.hasDemucs || ep.isDemucsDone || completedDemucsEpIds.has(ep.id) || demucsLiveStats[ep.id]?.isDone);
+    const hasAudio = checkEpisodeHasAudioReady(ep, completedTtsEpIds, ttsLiveStats);
+    const hasDemucs = checkEpisodeHasDemucsReady(ep, completedDemucsEpIds, demucsLiveStats);
     return Boolean(hasScript && hasAudio && hasDemucs);
-  }, [completedTtsEpIds, ttsLiveStats, completedDemucsEpIds, demucsLiveStats, jobsByEpisodeId]);
+  }, [completedTtsEpIds, ttsLiveStats, completedDemucsEpIds, demucsLiveStats]);
+
+  // All episodes with a source video ordered sequentially (supports Step 4 export on completed episodes)
+  const episodesWithVideo = useMemo(() => {
+    return episodes
+      .filter((ep) => Boolean(ep?.video || ep?.videoFile || ep?.sourceVideoPath))
+      .sort((a, b) => (Number(a.episodeNumber) || 0) - (Number(b.episodeNumber) || 0));
+  }, [episodes]);
 
   // Episodes that still have pending work (Step 1, Step 2, or Step 3)
   const pendingEpisodes = useMemo(() => {
-    return episodes.filter((ep) => {
-      const hasVideo = Boolean(ep.video || ep.videoFile || ep.sourceVideoPath);
-      return hasVideo && !isEpisodeFullyDone(ep);
-    });
-  }, [episodes, isEpisodeFullyDone]);
+    return episodesWithVideo.filter((ep) => !isEpisodeFullyDone(ep));
+  }, [episodesWithVideo, isEpisodeFullyDone]);
 
-  // Auto-remove 100% completed episodes from selection
-  useEffect(() => {
-    setSelectedEpIds((prev) => {
-      let changed = false;
-      const next = new Set(prev);
-      for (const id of prev) {
-        const ep = episodes.find((e) => e.id === id);
-        if (ep && isEpisodeFullyDone(ep)) {
-          next.delete(id);
-          changed = true;
-        }
-      }
-      return changed ? next : prev;
-    });
-  }, [episodes, isEpisodeFullyDone]);
-
-  // Auto-select pending episodes by default on open (skip completed episodes)
+  // Auto-select episodes by default on open (pending work if any, else all episodes with video for Step 4 export)
   useEffect(() => {
     if (isOpen && episodes.length > 0 && selectedEpIds.size === 0) {
       if (pendingEpisodes.length > 0) {
         const toPick = pendingEpisodes.slice(0, Math.min(4, pendingEpisodes.length));
         setSelectedEpIds(new Set(toPick.map((ep) => ep.id)));
+      } else if (episodesWithVideo.length > 0) {
+        setSelectedEpIds(new Set(episodesWithVideo.map((ep) => ep.id)));
       }
     }
-  }, [isOpen, episodes.length, pendingEpisodes]);
+  }, [isOpen, episodes.length, pendingEpisodes, episodesWithVideo]);
 
   const toggleSelect = (id) => {
     const ep = episodes.find((e) => e.id === id);
-    if (ep && isEpisodeFullyDone(ep)) {
-      // Completed episodes cannot be selected
-      return;
-    }
+    const hasVid = Boolean(ep && (ep.video || ep.videoFile || ep.sourceVideoPath));
+    if (!hasVid) return;
     const next = new Set(selectedEpIds);
     if (next.has(id)) next.delete(id);
     else next.add(id);
@@ -380,7 +446,8 @@ export default function GeminiRouteModal({
   };
 
   const handleSelectCount = (count) => {
-    const picked = pendingEpisodes.slice(0, count);
+    const pool = pendingEpisodes.length > 0 ? pendingEpisodes : episodesWithVideo;
+    const picked = pool.slice(0, count);
     setSelectedEpIds(new Set(picked.map((ep) => ep.id)));
   };
 
@@ -393,38 +460,130 @@ export default function GeminiRouteModal({
     setSelectedEpIds(new Set(pendingEpisodes.map((ep) => ep.id)));
   };
 
-  const unscriptedCount = useMemo(() => {
-    return episodes.filter((ep) => {
-      const hasScript = checkEpisodeHasScript(ep);
-      return (ep.video || ep.videoFile || ep.sourceVideoPath) && !hasScript;
-    }).length;
-  }, [episodes, jobsByEpisodeId]);
+  const handleSelectAllWithVideo = () => {
+    setSelectedEpIds(new Set(episodesWithVideo.map((ep) => ep.id)));
+  };
 
-  const completedCount = useMemo(() => {
-    return episodes.filter((ep) => checkEpisodeHasScript(ep)).length;
-  }, [episodes, jobsByEpisodeId]);
+  // Selected export readiness & missing Khmer Voice breakdown (Step 4 Batch Export / Merge)
+  const checkEpHasVoiceReady = useCallback((ep) => {
+    return checkEpisodeHasAudioReady(ep, completedTtsEpIds, ttsLiveStats);
+  }, [completedTtsEpIds, ttsLiveStats]);
 
-  // Total completed audio across all episodes
+  const selectedEpisodesForExport = useMemo(
+    () => episodesWithVideo.filter((ep) => selectedEpIds.has(ep.id)),
+    [episodesWithVideo, selectedEpIds]
+  );
+
+  const selectedVoicedForExport = useMemo(
+    () => selectedEpisodesForExport.filter((ep) => checkEpHasVoiceReady(ep)),
+    [selectedEpisodesForExport, checkEpHasVoiceReady]
+  );
+
+  const selectedMissingVoiceForExport = useMemo(
+    () => selectedEpisodesForExport.filter((ep) => !checkEpHasVoiceReady(ep)),
+    [selectedEpisodesForExport, checkEpHasVoiceReady]
+  );
+
+  const eligibleForBatchExport = allowOriginalAudio
+    ? selectedEpisodesForExport
+    : selectedVoicedForExport;
+
+  const isBatchExportRunning = Boolean(batchRender?.isRunning || batchRender?.job?.status === 'running');
+  const isBatchExportStarting = Boolean(batchRender?.isStarting);
+  const batchExportJob = batchRender?.job || null;
+
+  const firstSelectedWithVideo = selectedEpisodesForExport[0] || activeEpisode || null;
+  const step4SrcW = Number(firstSelectedWithVideo?.metadata?.width || firstSelectedWithVideo?.video?.width) || 0;
+  const step4SrcH = Number(firstSelectedWithVideo?.metadata?.height || firstSelectedWithVideo?.video?.height) || 0;
+  const resolvedStep4AspectRatio =
+    currentAspectRatio ||
+    voiceSettings?.aspectRatio ||
+    resolveDefaultAspectRatio(step4SrcW, step4SrcH) ||
+    '16:9';
+
+  const handleStartStep4BatchExport = async (mode) => {
+    if (!batchRender?.start || eligibleForBatchExport.length === 0 || isBatchExportRunning || isBatchExportStarting) return;
+    setBatchError(null);
+    setBatchSuccess(null);
+    setBatchInfo(null);
+    const res = await batchRender.start({
+      episodeIds: selectedEpisodesForExport.map((ep) => ep.id),
+      mode,
+      allowOriginalAudio,
+    });
+    if (res && !res.success && res.error) {
+      setBatchError(res.error);
+    }
+  };
+
+  const translateSummary = useMemo(
+    () => computeSeriesTranslateSummary(episodes, jobsByEpisodeId),
+    [episodes, jobsByEpisodeId]
+  );
+  const {
+    completedCount,
+    healthyScriptedCount,
+    totalTextBrokenCount,
+    remainingCount,
+    unsavedCompletedJobsCount,
+    isTranslateAllDone,
+    translatePercent,
+  } = translateSummary;
+
+  const selectedTargetEpisodes = useMemo(
+    () => episodes.filter((ep) => selectedEpIds.has(ep.id)),
+    [episodes, selectedEpIds]
+  );
+  const {
+    unscriptedEpisodes: unscriptedSelectedEpisodes,
+    scriptedEpisodes: scriptedSelectedEpisodes,
+  } = useMemo(
+    () => partitionSelectedEpisodesForTranslate(selectedTargetEpisodes),
+    [selectedTargetEpisodes]
+  );
+
+  // Segment-level broken summaries (stored segments are the single source of truth)
+  const selectedBrokenSummary = useMemo(
+    () => getEpisodesBrokenSummary(selectedTargetEpisodes),
+    [selectedTargetEpisodes]
+  );
+  const seriesBrokenSummary = useMemo(
+    () => getEpisodesBrokenSummary(episodes),
+    [episodes]
+  );
+  const effectiveBrokenSummary = selectedEpIds.size > 0 ? selectedBrokenSummary : seriesBrokenSummary;
+  const repairButtonCount = effectiveBrokenSummary.totalBrokenCount;
+
+  // Truthful STEP 2 & STEP 3 DONE flags: DONE ONLY when broken count == 0 across target episodes
+  const isStep2TargetDone = selectedEpIds.size > 0
+    ? (unscriptedSelectedEpisodes.length === 0 && selectedBrokenSummary.textBrokenCount === 0)
+    : (isTranslateAllDone && seriesBrokenSummary.textBrokenCount === 0);
+
+  // Total completed audio across all episodes (uses segment-level broken scan)
   const completedAudioCount = useMemo(() => {
-    return episodes.filter((ep) => {
-      return Boolean(ep.audioGenerated || ep.fullAudioUrl || ep.hasAudio || completedTtsEpIds.has(ep.id) || ttsLiveStats[ep.id]?.isDone);
-    }).length;
+    return episodes.filter((ep) => checkEpisodeHasAudioReady(ep, completedTtsEpIds, ttsLiveStats)).length;
   }, [episodes, completedTtsEpIds, ttsLiveStats]);
 
   const unAudioCount = Math.max(0, episodes.length - completedAudioCount);
+  const audioPercent = computeClampedStagePercent(completedAudioCount, episodes.length);
 
   // Total completed Demucs (Clean BGM) across all episodes
   const completedDemucsCount = useMemo(() => {
-    return episodes.filter((ep) => {
-      return Boolean(ep.bgmAudioUrl || ep.cleanBgmPath || ep.hasDemucs || ep.isDemucsDone || completedDemucsEpIds.has(ep.id) || demucsLiveStats[ep.id]?.isDone);
-    }).length;
+    return episodes.filter((ep) => checkEpisodeHasDemucsReady(ep, completedDemucsEpIds, demucsLiveStats)).length;
   }, [episodes, completedDemucsEpIds, demucsLiveStats]);
 
   const unDemucsCount = Math.max(0, episodes.length - completedDemucsCount);
+  const demucsPercent = computeClampedStagePercent(completedDemucsCount, episodes.length);
+  const overallStagePercent = computeClampedStagePercent(
+    healthyScriptedCount + completedAudioCount + completedDemucsCount,
+    episodes.length * 3
+  );
 
-  // Completion flags across the whole series
-  const isTranslateAllDone = episodes.length > 0 && completedCount === episodes.length;
-  const isAudioAllDone = episodes.length > 0 && completedAudioCount === episodes.length;
+  // Completion flags across the whole series (episode flags NEVER override segment-level broken counts)
+  const isAudioAllDone =
+    episodes.length > 0 &&
+    completedAudioCount === episodes.length &&
+    seriesBrokenSummary.totalBrokenCount === 0;
   const isDemucsAllDone = episodes.length > 0 && completedDemucsCount === episodes.length;
   const isAll1To3Done = isTranslateAllDone && isAudioAllDone && isDemucsAllDone;
   const is1And2Done = isTranslateAllDone && isAudioAllDone && !isDemucsAllDone;
@@ -432,7 +591,7 @@ export default function GeminiRouteModal({
   // Selected episodes that still need Demucs separation
   const unDemucsSelectedEpisodes = useMemo(() => {
     return episodes.filter((ep) => {
-      const isDone = Boolean(ep.bgmAudioUrl || ep.cleanBgmPath || ep.hasDemucs || ep.isDemucsDone || completedDemucsEpIds.has(ep.id) || demucsLiveStats[ep.id]?.isDone);
+      const isDone = checkEpisodeHasDemucsReady(ep, completedDemucsEpIds, demucsLiveStats);
       return selectedEpIds.has(ep.id) && !isDone;
     });
   }, [episodes, selectedEpIds, completedDemucsEpIds, demucsLiveStats]);
@@ -445,49 +604,147 @@ export default function GeminiRouteModal({
   // Selected episodes that still need audio generation (filter out already completed)
   const unAudioSelectedEpisodes = useMemo(() => {
     return episodes.filter((ep) => {
-      const isDone = Boolean(ep.audioGenerated || ep.fullAudioUrl || ep.hasAudio || completedTtsEpIds.has(ep.id) || ttsLiveStats[ep.id]?.isDone);
+      const isDone = checkEpisodeHasAudioReady(ep, completedTtsEpIds, ttsLiveStats);
       return selectedEpIds.has(ep.id) && !isDone;
     });
   }, [episodes, selectedEpIds, completedTtsEpIds, ttsLiveStats]);
 
   const allSelectedAudioCompleted = useMemo(() => {
     if (selectedEpIds.size === 0) return false;
-    return unAudioSelectedEpisodes.length === 0;
-  }, [selectedEpIds, unAudioSelectedEpisodes]);
+    return unAudioSelectedEpisodes.length === 0 && selectedBrokenSummary.totalBrokenCount === 0;
+  }, [selectedEpIds, unAudioSelectedEpisodes, selectedBrokenSummary.totalBrokenCount]);
 
-  // Trigger parallel batch translation (or safe re-translation)
-  const handleStartBatchTranslate = async (forceReTranslate = false) => {
-    const targetEpisodes = episodes.filter((ep) => selectedEpIds.has(ep.id));
-    if (targetEpisodes.length === 0) {
-      alert('សូមជ្រើសរើសភាគដែលចង់ Translate ជាមុនសិន!');
-      return;
+  const isStep3TrulyDone = selectedEpIds.size > 0
+    ? allSelectedAudioCompleted
+    : isAudioAllDone;
+
+  const activeSeriesRepairJobs = useMemo(() => {
+    return activeJobs.filter(
+      (j) =>
+        j &&
+        (j.mode === 'repair_broken' || j.config?.isRepairBroken === true) &&
+        (!currentSeriesId || !j.seriesId || String(j.seriesId) === String(currentSeriesId)) &&
+        (j.status === 'running' || j.status === 'queued')
+    );
+  }, [activeJobs, currentSeriesId]);
+
+  const isRepairBusy = isRepairingBroken || activeSeriesRepairJobs.length > 0;
+
+  // Track submitted repair-broken queued jobs to report exact completed vs partial (quota) outcome
+  useEffect(() => {
+    if (!Array.isArray(trackedRepairJobIds) || trackedRepairJobIds.length === 0) {
+      return undefined;
     }
 
-    const episodesWithoutVideo = targetEpisodes.filter((ep) => !ep.video && !ep.videoFile && !ep.sourceVideoPath);
-    if (episodesWithoutVideo.length > 0) {
-      alert(`ភាគមួយចំនួនមិនទាន់មានវីដេអូទេ: ${episodesWithoutVideo.map((e) => `EP${e.episodeNumber}`).join(', ')}`);
-      return;
-    }
+    let cancelled = false;
+    const TERMINAL_STATUSES = new Set(['completed', 'partial', 'failed', 'cancelled']);
 
-    // Check if any selected episode is already completed and user is re-translating
-    const isReTranslating = forceReTranslate || unscriptedCount === 0;
-    if (isReTranslating) {
-      const epNames = targetEpisodes.map((e) => `EP${e.episodeNumber || e.id}`).join(', ');
-      const modeLabel = dubbingMode === 'fast_ocr' ? '⚡ Fast OCR (លឿនបំផុត)' : (dubbingMode === 'recap' ? 'Mode B: សម្រាយរឿង' : 'Mode A: សន្ទនា 1:1');
-      const confirmed = window.confirm(
-        `⚠️ តើអ្នកប្រាកដជាចង់ Re-Translate ឡើងវិញលើភាគ [${epNames}] មែនទេ?\n\n` +
-        `• Script ចាស់នឹងត្រូវ Auto-Backup ទុកក្នុង folder backups ដោយស្វ័យប្រវត្ត។\n` +
-        `• ដំណើរការនេះនឹងបង្កើត Subtitle & Translation ថ្មីតាម (${modeLabel})។`
-      );
-      if (!confirmed) return;
-    }
+    const finalizeIfAllDone = async (jobSnapshots) => {
+      if (cancelled) return;
+      if (jobSnapshots.length < trackedRepairJobIds.length) return;
+      if (!jobSnapshots.every((j) => j && TERMINAL_STATUSES.has(j.status))) return;
 
+      let totalFixed = 0;
+      let totalRemaining = 0;
+      let anyQuota = false;
+      let firstError = null;
+
+      for (const j of jobSnapshots) {
+        const fr = j.finalResult || {};
+        totalFixed += Number(fr.fixedCount || 0);
+        totalRemaining += Number(fr.remainingCount ?? fr.remainingBroken ?? 0);
+        if (fr.reason === 'quota' || /quota|429/i.test(String(fr.message || j.error || ''))) {
+          anyQuota = true;
+        }
+        if (j.status === 'failed' && !firstError) {
+          firstError = j.error || fr.message || 'ការជួសជុលឃ្លាខូចបរាជ័យ';
+        }
+      }
+
+      setTrackedRepairJobIds([]);
+      setIsRepairingBroken(false);
+      setRepairProgressSummary(null);
+
+      if (typeof onRefreshSeries === 'function') {
+        try {
+          await onRefreshSeries();
+        } catch (_) {}
+      }
+
+      if (cancelled) return;
+
+      if (totalRemaining > 0) {
+        setBatchError(null);
+        setBatchSuccess(null);
+        setBatchInfo(
+          `កែបាន ${totalFixed} • នៅសល់ ${totalRemaining}${anyQuota ? ' (quota)' : ''} — ចុចម្ដងទៀតដើម្បីបន្ត`
+        );
+      } else if (firstError && totalFixed === 0) {
+        setBatchSuccess(null);
+        setBatchInfo(null);
+        setBatchError(`❌ ${firstError}`);
+      } else {
+        setBatchError(null);
+        setBatchInfo(null);
+        setBatchSuccess(
+          `✅ ជួសជុលឃ្លាខូច & Generate សំឡេងរួចរាល់ 100% (${totalFixed} ឃ្លា)!`
+        );
+      }
+    };
+
+    const checkFromSharedOrApi = async () => {
+      const snapshots = [];
+      for (const jid of trackedRepairJobIds) {
+        const fromShared = activeJobs.find((j) => String(j.jobId || j.id) === String(jid));
+        if (fromShared && TERMINAL_STATUSES.has(fromShared.status)) {
+          snapshots.push(fromShared);
+          continue;
+        }
+        try {
+          const st = await fetchJobStatusApi(jid);
+          if (st && st.success && st.status) {
+            snapshots.push({
+              jobId: jid,
+              status: st.status,
+              progress: st.progress,
+              stageMessage: st.message,
+              finalResult: st.finalResult,
+              error: st.error,
+            });
+          } else if (fromShared) {
+            snapshots.push(fromShared);
+          }
+        } catch (_) {
+          if (fromShared) snapshots.push(fromShared);
+        }
+      }
+
+      if (!cancelled && snapshots.length > 0) {
+        const runningOne = snapshots.find((s) => s.status === 'running' || s.status === 'queued');
+        if (runningOne) {
+          setRepairProgressSummary(runningOne.stageMessage || 'កំពុងជួសជុលឃ្លាខូច...');
+        }
+      }
+
+      await finalizeIfAllDone(snapshots);
+    };
+
+    checkFromSharedOrApi();
+    const pollTimer = setInterval(checkFromSharedOrApi, 1500);
+    return () => {
+      cancelled = true;
+      clearInterval(pollTimer);
+    };
+  }, [trackedRepairJobIds, activeJobs, onRefreshSeries]);
+
+  const executeBatchTranslateEnqueue = async (episodesToTranslate, { force = false, skippedScriptedCount = 0 } = {}) => {
     try {
       setIsStartingBatch(true);
       setBatchError(null);
       setBatchSuccess(null);
+      setBatchInfo(null);
 
-      const promises = targetEpisodes.map(async (ep) => {
+      const promises = episodesToTranslate.map(async (ep) => {
         const rawVideoRef = ep.video?.videoPath || ep.video?.videoId || ep.videoFile || ep.sourceVideoPath;
         return startGenerationJob({
           videoId: rawVideoRef,
@@ -495,7 +752,7 @@ export default function GeminiRouteModal({
           seriesId: activeSeries?.id || seriesId || 'drama_project',
           episodeId: ep.id,
           mode: dubbingMode,
-          force: isReTranslating,
+          force: force === true,
           genre,
           narratorGender,
           seriesGlossary: activeSeries?.glossary,
@@ -504,13 +761,43 @@ export default function GeminiRouteModal({
       });
 
       const results = await Promise.allSettled(promises);
-      const successful = results.filter((r) => r.status === 'fulfilled' && r.value?.success).length;
-      const alreadyDone = results.filter((r) => r.status === 'fulfilled' && r.value?.alreadyCompleted).length;
+      const successfulResults = results
+        .filter((r) => r.status === 'fulfilled' && r.value?.success)
+        .map((r) => r.value);
+      const successful = successfulResults.length;
+      const queuedCount = successfulResults.filter((v) => v?.status === 'queued').length;
+      const runningCount = Math.max(0, successful - queuedCount);
+      const alreadyDone = results.filter(
+        (r) =>
+          (r.status === 'fulfilled' && r.value?.alreadyCompleted) ||
+          (r.status === 'rejected' && r.reason?.data?.alreadyCompleted)
+      ).length;
+      const failedReasons = results
+        .filter(
+          (r) =>
+            (r.status === 'rejected' && !r.reason?.data?.alreadyCompleted) ||
+            (r.status === 'fulfilled' && !r.value?.success && !r.value?.alreadyCompleted)
+        )
+        .map((r) => (r.status === 'rejected' ? (r.reason?.message || 'Request failed') : (r.value?.error || 'Request failed')));
 
-      if (alreadyDone > 0 && alreadyDone === targetEpisodes.length) {
-        setBatchSuccess(`🎉 ភាគដែលបានជ្រើសរើសទាំង ${alreadyDone} គឺបាន Translate រួចរាល់ ១០០% ហើយ មិនចាំបាច់ Translate ឡើងវិញទេ!`);
+      const totalSkipped = skippedScriptedCount + alreadyDone;
+
+      if (successful === 0 && totalSkipped > 0 && failedReasons.length === 0) {
+        setBatchInfo('ភាគដែលរើសទាំងអស់មាន Script រួចរាល់ហើយ — បើចង់ធ្វើឡើងវិញ សូមប្រើ Re-Translate');
+      } else if (successful === 0 && failedReasons.length > 0) {
+        setBatchError(`❌ ការចាប់ផ្ដើម Translate បរាជ័យ (${failedReasons.length} ភាគ): ${failedReasons[0]}`);
+        if (skippedScriptedCount > 0) {
+          setBatchInfo(`រំលង ${skippedScriptedCount} ភាគ (មាន Script រួចរាល់)`);
+        }
       } else {
-        setBatchSuccess(`🎉 បានចាប់ផ្ដើមដំណើរការ ${isReTranslating ? 'Re-Translate' : 'Translate'} ចំនួន ${successful} ភាគព្រមគ្នាតាមរយៈ Gemini Route!`);
+        const queueNote = queuedCount > 0 ? ` (ដំណើរការ ${runningCount} + រង់ចាំក្នុង Queue ${queuedCount})` : '';
+        const skipNote = totalSkipped > 0 ? ` • រំលង ${totalSkipped} ភាគ (មាន Script រួចរាល់)` : '';
+        setBatchSuccess(
+          `🎉 បានដាក់បញ្ចូល ${force ? 'Re-Translate' : 'Translate'} ចំនួន ${successful} ភាគ${queueNote}${skipNote}!`
+        );
+        if (failedReasons.length > 0) {
+          setBatchError(`⚠️ មាន ${failedReasons.length} ភាគមិនអាចចាប់ផ្ដើមបាន: ${failedReasons[0]}`);
+        }
       }
       if (typeof onRefreshSeries === 'function') {
         try {
@@ -523,6 +810,138 @@ export default function GeminiRouteModal({
     } finally {
       setIsStartingBatch(false);
     }
+  };
+
+  // Default batch click = fill gaps ONLY (always force: false, skips stored scripted episodes)
+  const handleStartBatchTranslate = async () => {
+    const targetEpisodes = episodes.filter((ep) => selectedEpIds.has(ep.id));
+    if (targetEpisodes.length === 0) {
+      alert('សូមជ្រើសរើសភាគដែលចង់ Translate ជាមុនសិន!');
+      return;
+    }
+
+    const episodesWithoutVideo = targetEpisodes.filter((ep) => !ep.video && !ep.videoFile && !ep.sourceVideoPath);
+    if (episodesWithoutVideo.length > 0) {
+      alert(`ភាគមួយចំនួនមិនទាន់មានវីដេអូទេ: ${episodesWithoutVideo.map((e) => `EP${e.episodeNumber}`).join(', ')}`);
+      return;
+    }
+
+    const { unscriptedEpisodes, scriptedEpisodes } = partitionSelectedEpisodesForTranslate(targetEpisodes);
+
+    if (unscriptedEpisodes.length === 0) {
+      setBatchError(null);
+      setBatchSuccess(null);
+      if (selectedBrokenSummary.textBrokenCount > 0) {
+        setBatchInfo(
+          `ភាគដែលរើសមាន Script រួច ប៉ុន្តែនៅខ្វះ/ខូច ${selectedBrokenSummary.textBrokenCount} ឃ្លា — សូមចុច "🔧 ជួសជុលឃ្លាខូច & Generate ឡើងវិញ" ខាងក្រោម Step 3 ដើម្បីកែតែឃ្លាខូច`
+        );
+      } else {
+        setBatchInfo('ភាគដែលរើសទាំងអស់មាន Script រួចរាល់ហើយ — បើចង់ធ្វើឡើងវិញ សូមប្រើ Re-Translate');
+      }
+      return;
+    }
+
+    await executeBatchTranslateEnqueue(unscriptedEpisodes, {
+      force: false,
+      skippedScriptedCount: scriptedEpisodes.length,
+    });
+  };
+
+  // One-click sweep of ONLY text-broken + voice-broken segments (never re-runs whole episodes)
+  const handleRepairBrokenSegments = async () => {
+    const targetEps = selectedTargetEpisodes.length > 0 ? selectedTargetEpisodes : episodes;
+    if (targetEps.length === 0) {
+      alert('មិនទាន់មានភាគសម្រាប់ជួសជុលទេ!');
+      return;
+    }
+
+    const summary = getEpisodesBrokenSummary(targetEps);
+    const n1 = summary.textBrokenCount;
+    const n2 = summary.voiceBrokenCount;
+    if (summary.totalBrokenCount === 0) {
+      setBatchError(null);
+      setBatchSuccess(null);
+      setBatchInfo('គ្រប់ឃ្លារួចរាល់ 100% — គ្មានឃ្លាខូចទេ!');
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `🔧 បញ្ជាក់ការជួសជុលឃ្លាខូច & Generate ឡើងវិញ (${summary.totalBrokenCount} ឃ្លា)\n\n` +
+      `អត្ថបទខូច: ${n1} ឃ្លា • សំឡេងខ្វះ: ${n2} ឃ្លា\n\n` +
+      `• នឹងបកប្រែ & បង្កើតសំឡេងតែលើឃ្លាដែលខូចប៉ុណ្ណោះ (មិនប៉ះពាល់ឃ្លាដែលល្អរួចស្រាប់ទេ)។\n` +
+      `• ប្រសិនបើ Gemini Quota អស់កណ្តាលទី ប្រព័ន្ធនឹងរក្សាទុកលទ្ធផលដែលកែរួច ហើយរាយការណ៍ដើម្បីចុចបន្ត។`
+    );
+    if (!confirmed) return;
+
+    try {
+      setIsRepairingBroken(true);
+      setBatchError(null);
+      setBatchSuccess(null);
+      setBatchInfo(null);
+
+      const res = await startRepairBrokenJobApi({
+        seriesId: currentSeriesId || 'drama_project',
+        episodeIds: targetEps.map((ep) => ep.id),
+        apiKey: apiKey || undefined,
+      });
+
+      const enqueuedJobs = Array.isArray(res?.jobs) ? res.jobs : [];
+      const conflictJobs = Array.isArray(res?.conflicts) ? res.conflicts : [];
+      const allJobIds = [
+        ...enqueuedJobs.map((j) => j.jobId || j.id).filter(Boolean),
+        ...conflictJobs.map((c) => c.existingJobId).filter(Boolean),
+      ];
+
+      if (allJobIds.length === 0) {
+        setIsRepairingBroken(false);
+        if (typeof onRefreshSeries === 'function') {
+          try { await onRefreshSeries(); } catch (_) {}
+        }
+        setBatchSuccess('✅ គ្រប់ឃ្លារួចរាល់ 100% — គ្មានឃ្លាខូចទេ!');
+        return;
+      }
+
+      setRepairProgressSummary(
+        `🔧 កំពុងជួសជុលឃ្លាខូច ${enqueuedJobs.length || allJobIds.length} ភាគ (អត្ថបទខូច: ${n1} ឃ្លា • សំឡេងខ្វះ: ${n2} ឃ្លា)...`
+      );
+      setTrackedRepairJobIds(allJobIds);
+    } catch (err) {
+      console.error('[Repair Broken] Error:', err);
+      setIsRepairingBroken(false);
+      setRepairProgressSummary(null);
+      setBatchError(`❌ ${err.message || 'ការជួសជុលឃ្លាខូចបរាជ័យ'}`);
+    }
+  };
+
+  // Separate explicit Re-Translate control (the ONLY path allowed to send force: true)
+  const handleReTranslateSelected = async () => {
+    const targetEpisodes = episodes.filter((ep) => selectedEpIds.has(ep.id));
+    if (targetEpisodes.length === 0) {
+      alert('សូមជ្រើសរើសភាគដែលចង់ Re-Translate ជាមុនសិន!');
+      return;
+    }
+
+    const episodesWithoutVideo = targetEpisodes.filter((ep) => !ep.video && !ep.videoFile && !ep.sourceVideoPath);
+    if (episodesWithoutVideo.length > 0) {
+      alert(`ភាគមួយចំនួនមិនទាន់មានវីដេអូទេ: ${episodesWithoutVideo.map((e) => `EP${e.episodeNumber}`).join(', ')}`);
+      return;
+    }
+
+    const epNames = targetEpisodes.map((e) => `EP${e.episodeNumber || e.id}`).join(', ');
+    const modeLabel = dubbingMode === 'fast_ocr' ? '⚡ Fast OCR' : (dubbingMode === 'recap' ? 'Mode B: សម្រាយរឿង' : 'Mode A: សន្ទនា 1:1');
+    const confirmed = window.confirm(
+      `⚠️ បញ្ជាក់ការ Re-Translate ឡើងវិញ (FORCE RE-RUN) សម្រាប់ ${targetEpisodes.length} ភាគ [${epNames}]\n\n` +
+      `• នឹងដំណើរការ FULL Pipeline ឡើងវិញពីដើម (OCR + ASR + Gemini) តាម (${modeLabel})។\n` +
+      `• នឹងប្រើប្រាស់ Quota របស់ Gemini API Keys (Key Pool)។\n` +
+      `• ប្រព័ន្ធនឹងធ្វើ Auto-Backup Script ចាស់ទុកជាមុនសិន រួចទើបសរសេរជាន់លើ Script បច្ចុប្បន្ន (Overwrite) ពេល Job នីមួយៗបញ្ចប់។\n\n` +
+      `តើអ្នកប្រាកដជាចង់បន្ត Re-Translate មែនទេ?`
+    );
+    if (!confirmed) return;
+
+    await executeBatchTranslateEnqueue(targetEpisodes, {
+      force: true,
+      skippedScriptedCount: 0,
+    });
   };
 
   // ── Trigger Batch Khmer TTS (Step 3) for Selected Episodes (Skip Already Completed) ──
@@ -545,27 +964,17 @@ export default function GeminiRouteModal({
       }
     } catch (_) {}
 
-    // Filter to only episodes that actually need audio generation (Skip already done)
+    // Filter to only episodes that actually need audio generation (never skip outdated episodes using stale localStorage flags)
     const pendingEpisodes = targetEpisodes.filter((localEp) => {
       const serverEp = freshServerEpisodes.find((fe) => String(fe.id) === String(localEp.id));
-      const isDone = Boolean(
-        serverEp?.audioGenerated ||
-        serverEp?.fullAudioUrl ||
-        serverEp?.hasAudio ||
-        localEp.audioGenerated ||
-        localEp.fullAudioUrl ||
-        localEp.hasAudio ||
-        completedTtsEpIds.has(localEp.id) ||
-        ttsLiveStats[localEp.id]?.isDone
-      );
-      if (isDone) {
-        setCompletedTtsEpIds((prev) => new Set([...prev, localEp.id]));
-      }
+      const isDone = serverEp
+        ? checkEpisodeHasAudioReady(serverEp, null, isGeneratingBatchTtsRef.current ? ttsLiveStats : null)
+        : checkEpisodeHasAudioReady(localEp, completedTtsEpIds, ttsLiveStats);
       return !isDone;
     });
 
     if (pendingEpisodes.length === 0) {
-      setBatchSuccess(`🎉 គ្រប់ភាគដែលបានជ្រើសរើស (${targetEpisodes.length} ភាគ) គឺបានបង្កើតសំឡេង AI រួចរាល់ ១០០% ហើយ មិនបាច់បង្កើតឡើងវិញទេ!`);
+      setBatchSuccess(`🎉 គ្រប់ភាគដែលបានជ្រើសរើស (${targetEpisodes.length} ភាគ) គឺបានបង្កើតសំឡេង AI រួចរាល់ 100% ហើយ មិនបាច់បង្កើតឡើងវិញទេ!`);
       return;
     }
 
@@ -573,6 +982,7 @@ export default function GeminiRouteModal({
       setIsGeneratingBatchTTS(true);
       setBatchError(null);
       setBatchSuccess(null);
+      setBatchInfo(null);
       setTtsProgressPercent(1);
 
       // Trigger ALL pending episodes simultaneously in parallel (100% Like Step 1)
@@ -584,10 +994,11 @@ export default function GeminiRouteModal({
       let newlyCompletedCount = 0;
 
       const ttsPromises = pendingEpisodes.map(async (ep, idx) => {
-        const serverEp = freshServerEpisodes.find((fe) => String(fe.id) === String(ep.id)) || ep;
+        const serverEp = freshServerEpisodes.find((fe) => String(fe.id) === String(ep.id));
+        const effectiveEp = serverEp || ep;
 
-        // Skip immediately if server shows audio was already generated
-        if (serverEp.audioGenerated || serverEp.fullAudioUrl || serverEp.hasAudio || completedTtsEpIds.has(ep.id)) {
+        // Skip immediately if fresh server state confirms non-outdated completed narration on disk
+        if (checkEpisodeHasAudioReady(effectiveEp, serverEp ? null : completedTtsEpIds, null)) {
           console.log(`[Batch TTS] Episode ${ep.id} already has completed narration on disk. Skipping.`);
           setCompletedTtsEpIds((prev) => new Set([...prev, ep.id]));
           setActiveTtsEpisodeIds((prev) => {
@@ -598,8 +1009,14 @@ export default function GeminiRouteModal({
           return;
         }
 
-        // Ensure we have full script segments for this episode
-        let segs = ep.scriptData?.segments || [];
+        // Ensure we have up-to-date script segments for this episode (prefer newer/repaired server segments when available)
+        const localSegs = Array.isArray(ep.scriptData?.segments) ? ep.scriptData.segments : [];
+        const serverSegs = Array.isArray(serverEp?.scriptData?.segments) ? serverEp.scriptData.segments : [];
+        const localUpdatedAt = Number(ep.scriptData?.updatedAt || 0);
+        const serverUpdatedAt = Number(serverEp?.scriptData?.updatedAt || 0);
+        let segs = (serverSegs.length > 0 && (localSegs.length === 0 || serverUpdatedAt >= localUpdatedAt))
+          ? serverSegs
+          : localSegs;
         if (!Array.isArray(segs) || segs.length === 0) {
           try {
             const sRes = await fetch(`/api/series/${targetSeriesId}`);
@@ -636,7 +1053,6 @@ export default function GeminiRouteModal({
         }));
 
         // Start live polling of generated audio segments with zero-blocking interval (1200ms)
-        const targetSeriesId = activeSeries?.id || seriesId;
         let lastReportedCurrent = 0;
         const pollTimer = setInterval(async () => {
           try {
@@ -691,14 +1107,23 @@ export default function GeminiRouteModal({
         }, 1200);
         activeTimersRef.current.add(pollTimer);
 
-        // Build speakerMap if available
+        // Build speakerMap if available (skip generic 'តួអង្គ'/'Speaker' collisions, prefer server registry when up-to-date)
         const speakerMap = {};
-        Object.values(ep.speakerRegistry || activeSeries?.glossary?.characters || {}).forEach((spk) => {
-          if (spk.voiceId) {
-            speakerMap[spk.id || spk.name] = spk.voiceId;
-            speakerMap[spk.name] = spk.voiceId;
-          }
-        });
+        const regSource = (serverUpdatedAt >= localUpdatedAt && serverEp?.speakerRegistry && Object.keys(serverEp.speakerRegistry).length > 0)
+          ? serverEp.speakerRegistry
+          : (ep.speakerRegistry && Object.keys(ep.speakerRegistry).length > 0)
+            ? ep.speakerRegistry
+            : (activeSeries?.glossary?.characters || {});
+        Object.values(regSource)
+          .sort((a, b) => (a.lineCount || 0) - (b.lineCount || 0))
+          .forEach((spk) => {
+            if (spk.voiceId) {
+              const key = spk.id || spk.speakerId || spk.name;
+              if (key) speakerMap[key] = spk.voiceId;
+              const isGeneric = !spk.name || spk.name === 'តួអង្គ' || String(spk.name).toLowerCase() === 'speaker';
+              if (!isGeneric) speakerMap[spk.name] = spk.voiceId;
+            }
+          });
 
         // Call TTS API for this episode
         try {
@@ -709,7 +1134,6 @@ export default function GeminiRouteModal({
               seriesId: targetSeriesId,
               episodeId: ep.id,
               segments: segs,
-              voiceId: 'km-KH-PisethNeural',
               speed: 'normal',
               speakerMap,
             }),
@@ -804,7 +1228,7 @@ export default function GeminiRouteModal({
 
     // Filter only episodes that actually need Demucs separation
     const episodesToProcess = targetEpisodes.filter((ep) => {
-      const isDone = Boolean(ep.bgmAudioUrl || ep.cleanBgmPath || ep.hasDemucs || ep.isDemucsDone || completedDemucsEpIds.has(ep.id));
+      const isDone = checkEpisodeHasDemucsReady(ep, completedDemucsEpIds, demucsLiveStats);
       return !isDone;
     });
 
@@ -823,6 +1247,7 @@ export default function GeminiRouteModal({
       setIsSeparatingBatchDemucs(true);
       setBatchError(null);
       setBatchSuccess(null);
+      setBatchInfo(null);
       setDemucsProgressPercent(5);
       isDemucsCancelledRef.current = false;
 
@@ -1088,6 +1513,7 @@ export default function GeminiRouteModal({
 
   return (
     <div 
+      data-testid="gemini-route-modal"
       style={{
         position: 'fixed',
         top: 0,
@@ -1122,7 +1548,7 @@ export default function GeminiRouteModal({
         }}
         onClick={(e) => e.stopPropagation()}
       >
-        {/* ── 1. MODAL HEADER (Tavola Midnight Navy & Coral Accent) ── */}
+        {/* ── 1. MODAL HEADER (Batch Generate Studio) ── */}
         <div style={{
           padding: '16px 24px',
           borderBottom: '1px solid rgba(255, 255, 255, 0.06)',
@@ -1162,72 +1588,159 @@ export default function GeminiRouteModal({
                   WebkitBackgroundClip: 'text',
                   WebkitTextFillColor: 'transparent',
                 }}>
-                  GEMINI BATCH & KEYS CONSOLE
+                  BATCH GENERATE STUDIO
                 </h2>
-                <span style={{
-                  fontSize: '0.68rem',
-                  fontWeight: 800,
-                  padding: '3px 10px',
-                  borderRadius: 9999,
-                  background: 'rgba(52, 211, 153, 0.12)',
-                  color: '#34D399',
-                  border: '1px solid rgba(52, 211, 153, 0.3)',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 6,
-                  boxShadow: '0 0 12px rgba(52, 211, 153, 0.2)',
-                }}>
-                  <span style={{ 
-                    width: 6, 
-                    height: 6, 
-                    borderRadius: '50%', 
-                    background: '#34D399', 
-                    display: 'inline-block',
-                    boxShadow: '0 0 6px #34D399',
-                  }} />
-                  4 Keys Active (60 RPM Pool)
-                </span>
+                {(() => {
+                  const hdrView = applyElapsedCountdownToKeysHealth(keysHealth, quotaNowMs);
+                  const hdrSummary = hdrView?.quotaSummary;
+                  const hdrTotal = hdrSummary?.totalKeys ?? hdrView?.totalKeys ?? 4;
+                  const hdrReady = hdrSummary?.readyKeys ?? hdrView?.activeCount ?? hdrTotal;
+                  const hdrRpmPerKey = hdrView?.settings?.rpmPerKey || 15;
+                  const hdrRpmReady = hdrReady * hdrRpmPerKey;
+                  const allReady = hdrReady === hdrTotal && hdrTotal > 0;
+                  const noneReady = hdrReady === 0 && hdrTotal > 0;
+                  const pillColor = noneReady ? '#F87171' : allReady ? '#34D399' : '#FBBF24';
+                  const pillBg = noneReady ? 'rgba(248, 113, 113, 0.12)' : allReady ? 'rgba(52, 211, 153, 0.12)' : 'rgba(251, 191, 36, 0.12)';
+                  const pillBorder = noneReady ? 'rgba(248, 113, 113, 0.35)' : allReady ? 'rgba(52, 211, 153, 0.3)' : 'rgba(251, 191, 36, 0.35)';
+                  const pillShadow = noneReady ? '0 0 12px rgba(248, 113, 113, 0.2)' : allReady ? '0 0 12px rgba(52, 211, 153, 0.2)' : '0 0 12px rgba(251, 191, 36, 0.2)';
+                  const pillLabel = hdrTotal > 0
+                    ? `${hdrReady}/${hdrTotal} Keys Ready (${hdrRpmReady} RPM Pool)`
+                    : 'No Keys Configured';
+                  const hdrPrefModel = hdrView?.settings?.preferredModel || 'auto';
+                  const hdrReadyModels = hdrSummary?.readyCascadeModelsCount ?? 10;
+                  const hdrTotalModels = hdrSummary?.totalCascadeModelsCount ?? 10;
+                  const isPinned = hdrPrefModel && hdrPrefModel !== 'auto';
+                  return (
+                    <>
+                      <span style={{
+                        fontSize: '0.68rem',
+                        fontWeight: 800,
+                        padding: '3px 10px',
+                        borderRadius: 9999,
+                        background: pillBg,
+                        color: pillColor,
+                        border: `1px solid ${pillBorder}`,
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 6,
+                        boxShadow: pillShadow,
+                      }}>
+                        <span style={{
+                          width: 6,
+                          height: 6,
+                          borderRadius: '50%',
+                          background: pillColor,
+                          display: 'inline-block',
+                          boxShadow: `0 0 6px ${pillColor}`,
+                        }} />
+                        {pillLabel}
+                      </span>
+                      <span
+                        data-testid="header-model-cascade-pill"
+                        style={{
+                          fontSize: '0.66rem',
+                          fontWeight: 800,
+                          padding: '3px 10px',
+                          borderRadius: 9999,
+                          background: isPinned ? 'rgba(255, 133, 119, 0.14)' : 'rgba(56, 189, 248, 0.12)',
+                          color: isPinned ? '#FF8577' : '#38BDF8',
+                          border: `1px solid ${isPinned ? 'rgba(255, 133, 119, 0.35)' : 'rgba(56, 189, 248, 0.32)'}`,
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 5,
+                        }}
+                      >
+                        {isPinned ? <Pin size={10} /> : <Sparkles size={10} />}
+                        <span>
+                          {isPinned
+                            ? `Primary: ${hdrPrefModel}`
+                            : `Auto Cascade (${hdrReadyModels}/${hdrTotalModels} Models)`}
+                        </span>
+                      </span>
+                    </>
+                  );
+                })()}
               </div>
               <p style={{ margin: '3px 0 0 0', fontSize: '0.74rem', color: '#94A3B8' }}>
-                បែងចែកបន្ទុកតាម Round-Robin ទៅកាន់ Key 1, 2, 3, 4 — Translate ២, ៤ ឬ គ្រប់ភាគព្រមគ្នាដោយគ្មាន Rate Limit!
+                Translate (Step 2) • Khmer AI Voice (Step 3) • Demucs Clean BGM • Batch Export &amp; Merge
               </p>
             </div>
           </div>
 
-          {/* Close Button */}
-          <button
-            type="button"
-            onClick={onClose}
-            className="btn-tactile"
-            style={{
-              width: 34,
-              height: 34,
-              borderRadius: 9999,
-              background: 'rgba(255, 255, 255, 0.05)',
-              border: '1px solid rgba(255, 255, 255, 0.1)',
-              color: '#94A3B8',
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              transition: 'all 0.15s cubic-bezier(0.16, 1, 0.3, 1)',
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background = 'rgba(255, 133, 119, 0.15)';
-              e.currentTarget.style.borderColor = 'rgba(255, 133, 119, 0.4)';
-              e.currentTarget.style.color = '#FF8577';
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = 'rgba(255, 255, 255, 0.05)';
-              e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.1)';
-              e.currentTarget.style.color = '#94A3B8';
-            }}
-            title="បិទ (ESC)"
-          >
-            <X size={16} />
-          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+            {onOpenQuotaModal && (
+              <button
+                type="button"
+                data-testid="btn-open-quota-from-batch"
+                onClick={handleOpenQuotaConsole}
+                className="btn-tactile"
+                style={{
+                  padding: '7px 13px',
+                  borderRadius: 9999,
+                  background: 'rgba(56, 189, 248, 0.12)',
+                  border: '1px solid rgba(56, 189, 248, 0.38)',
+                  color: '#38BDF8',
+                  fontSize: '0.72rem',
+                  fontWeight: 800,
+                  cursor: 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  boxShadow: '0 2px 12px rgba(56, 189, 248, 0.16)',
+                }}
+                title="បើកផ្ទាំងពិនិត្យ Gemini API Keys, Rate Limits គ្រប់ Model និង Pin Primary Model"
+              >
+                <Key size={13} />
+                <span>Key &amp; Model Quota</span>
+              </button>
+            )}
+
+            {/* Close Button */}
+            <button
+              type="button"
+              onClick={onClose}
+              className="btn-tactile"
+              style={{
+                width: 34,
+                height: 34,
+                borderRadius: 9999,
+                background: 'rgba(255, 255, 255, 0.05)',
+                border: '1px solid rgba(255, 255, 255, 0.1)',
+                color: '#94A3B8',
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                transition: 'all 0.15s cubic-bezier(0.16, 1, 0.3, 1)',
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.background = 'rgba(255, 133, 119, 0.15)';
+                e.currentTarget.style.borderColor = 'rgba(255, 133, 119, 0.4)';
+                e.currentTarget.style.color = '#FF8577';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.background = 'rgba(255, 255, 255, 0.05)';
+                e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.1)';
+                e.currentTarget.style.color = '#94A3B8';
+              }}
+              title="បិទ (ESC)"
+            >
+              <X size={16} />
+            </button>
+          </div>
         </div>
 
+        {/* ── UNIFIED SCROLLABLE BODY (Prevents Top Monitor from squishing Episode Grid) ── */}
+        <div
+          data-testid="modal-scroll-body"
+          style={{
+            flex: 1,
+            minHeight: 0,
+            overflowY: 'auto',
+            display: 'flex',
+            flexDirection: 'column',
+          }}
+        >
         {/* ── 2. TOP CONTROL CENTER (GetLayers 4-Tier Depth) ── */}
         <div style={{
           padding: '14px 24px',
@@ -1236,150 +1749,99 @@ export default function GeminiRouteModal({
           display: 'flex',
           flexDirection: 'column',
           gap: 12,
-          flexShrink: 0,
         }}>
-          {/* Key Monitor Header + Test Quota Button */}
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ fontSize: '0.72rem', fontWeight: 800, color: '#94A3B8', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-                Multi-Key Pool Status
-              </span>
-              <span style={{
-                fontSize: '0.68rem',
-                fontWeight: 700,
-                color: (keysHealth?.activeCount ?? 4) > 0 ? '#34D399' : '#FBBF24',
-                background: 'rgba(255, 255, 255, 0.04)',
-                padding: '2px 9px',
-                borderRadius: 9999,
-                border: '1px solid rgba(255, 255, 255, 0.08)',
-              }}>
-                {isCheckingQuota
-                  ? '🔄 កំពុងពិនិត្យ Keys...'
-                  : keysHealth
-                  ? `${keysHealth.activeCount}/${keysHealth.totalKeys} keys online • ${keysHealth.totalRPM} RPM pool`
-                  : '4/4 keys online • 60 RPM pool'}
-              </span>
-            </div>
-
-            <button
-              type="button"
-              onClick={handleCheckQuota}
-              disabled={isCheckingQuota}
-              className="btn-tactile"
-              style={{
-                background: isCheckingQuota ? 'rgba(56, 189, 248, 0.15)' : 'rgba(56, 189, 248, 0.08)',
-                border: '1px solid rgba(56, 189, 248, 0.35)',
-                color: '#38BDF8',
-                borderRadius: 9999,
-                padding: '5px 14px',
-                fontSize: '0.72rem',
-                fontWeight: 800,
-                cursor: isCheckingQuota ? 'wait' : 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 6,
-                boxShadow: '0 2px 8px rgba(0, 0, 0, 0.25)',
-                transition: 'all 0.18s cubic-bezier(0.16, 1, 0.3, 1)',
-              }}
-              onMouseEnter={(e) => {
-                if (!isCheckingQuota) {
-                  e.currentTarget.style.background = 'rgba(56, 189, 248, 0.2)';
-                  e.currentTarget.style.boxShadow = '0 0 14px rgba(56, 189, 248, 0.3)';
-                }
-              }}
-              onMouseLeave={(e) => {
-                if (!isCheckingQuota) {
-                  e.currentTarget.style.background = 'rgba(56, 189, 248, 0.08)';
-                  e.currentTarget.style.boxShadow = '0 2px 8px rgba(0, 0, 0, 0.25)';
-                }
-              }}
-              title="ពិនិត្យ Rate Limit & Quota លើ Gemini Keys ទាំងអស់"
-            >
-              <RefreshCw size={13} className={isCheckingQuota ? 'animate-spin' : ''} />
-              <span>{isCheckingQuota ? 'កំពុងពិនិត្យ Quota...' : '⚡ ពិនិត្យ Quota Keys'}</span>
-            </button>
-          </div>
-
-          {/* Key Monitor Strip with Multi-Color Pool Accents & Real-time Quota Detection */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10 }}>
-            {[1, 2, 3, 4].map((kNum) => {
-              const theme = KEY_THEMES[kNum] || KEY_THEMES[1];
-              const liveKeyData = keysHealth?.keys?.find((k) => k.keyNum === kNum);
-              const isRateLimited = !isCheckingQuota && liveKeyData?.status === 'rate_limited';
-              const isInvalid = !isCheckingQuota && liveKeyData?.status === 'invalid';
-              const isError = !isCheckingQuota && liveKeyData?.status === 'error';
-              
-              let badgeText = '15 RPM Ready';
-              if (isCheckingQuota) {
-                badgeText = 'កំពុងពិនិត្យ...';
-              } else if (liveKeyData?.badge) {
-                badgeText = liveKeyData.badge;
-              }
-
-              const badgeColor = isCheckingQuota ? '#38BDF8' : isRateLimited ? '#FBBF24' : (isInvalid || isError) ? '#F87171' : theme.color;
-              const badgeBg = isCheckingQuota ? 'rgba(56, 189, 248, 0.15)' : isRateLimited ? 'rgba(251, 191, 36, 0.15)' : (isInvalid || isError) ? 'rgba(248, 113, 113, 0.15)' : theme.bg;
-              const badgeBorder = isCheckingQuota ? 'rgba(56, 189, 248, 0.4)' : isRateLimited ? 'rgba(251, 191, 36, 0.4)' : (isInvalid || isError) ? 'rgba(248, 113, 113, 0.4)' : theme.border;
-              const dotColor = isCheckingQuota ? '#38BDF8' : isRateLimited ? '#FBBF24' : (isInvalid || isError) ? '#F87171' : theme.dot;
-
-              return (
-                <div 
-                  key={kNum}
-                  style={{
-                    background: 'rgba(25, 39, 68, 0.7)',
-                    border: `1px solid ${isRateLimited ? 'rgba(251, 191, 36, 0.5)' : (isInvalid || isError) ? 'rgba(248, 113, 113, 0.5)' : theme.border}`,
-                    borderRadius: 12,
-                    padding: '9px 13px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    boxShadow: isRateLimited 
-                      ? '0 0 12px rgba(251, 191, 36, 0.25)' 
-                      : (isInvalid || isError) ? '0 0 12px rgba(248, 113, 113, 0.25)' : '0 2px 10px rgba(0, 0, 0, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.05)',
-                    transition: 'all 0.2s cubic-bezier(0.16, 1, 0.3, 1)',
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <span style={{ 
-                      width: 8, 
-                      height: 8, 
-                      borderRadius: '50%', 
-                      background: dotColor, 
-                      boxShadow: `0 0 8px ${dotColor}` 
-                    }} />
-                    <span style={{ fontSize: '0.80rem', fontWeight: 800, color: '#F8FAFC' }}>Key #{kNum}</span>
-                    {liveKeyData?.masked && (
-                      <code style={{ 
-                        fontSize: '0.62rem', 
-                        background: 'rgba(0, 0, 0, 0.35)', 
-                        color: '#94A3B8', 
-                        padding: '1px 6px', 
-                        borderRadius: 4, 
-                        border: '1px solid rgba(255, 255, 255, 0.06)',
-                        fontFamily: "'JetBrains Mono', 'Fira Code', 'Consolas', monospace" 
-                      }}>
-                        {liveKeyData.masked}
-                      </code>
-                    )}
-                  </div>
-                  <span style={{
-                    fontSize: '0.66rem',
-                    fontWeight: 800,
-                    color: badgeColor,
-                    background: badgeBg,
-                    border: `1px solid ${badgeBorder}`,
-                    padding: '3px 8px',
-                    borderRadius: 6,
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 4,
-                  }}>
-                    {isCheckingQuota ? <Loader2 size={10} className="animate-spin" /> : isRateLimited ? '⏳ ' : (isInvalid || isError) ? '❌ ' : '✓ '}
-                    {badgeText}
+          {/* Compact Quota Exhaustion Strip (Full Monitor lives in separate Keys & Quota Modal) */}
+          {(() => {
+            const liveView = applyElapsedCountdownToKeysHealth(keysHealth, quotaNowMs);
+            const summary = liveView?.quotaSummary || null;
+            const totalKeys = summary?.totalKeys ?? liveView?.totalKeys ?? 0;
+            const readyKeys = summary?.readyKeys ?? liveView?.activeCount ?? totalKeys;
+            if (totalKeys <= 0 || readyKeys > 0) return null;
+            const preferredModel = liveView?.settings?.preferredModel || 'auto';
+            const cascadeRows = (Array.isArray(liveView?.modelRateLimits) ? liveView.modelRateLimits : []).filter((m) => m.usableInDubbing);
+            const readyModelsCount = summary?.readyCascadeModelsCount ?? cascadeRows.filter((m) => m.liveStatus === 'ready' || m.liveStatus === 'partial' || m.liveStatus === 'untested').length;
+            const totalModelsCount = summary?.totalCascadeModelsCount ?? (cascadeRows.length || 10);
+            const bestBackup = cascadeRows.find((m) => m.id !== preferredModel && m.liveStatus === 'ready')
+              || cascadeRows.find((m) => m.id !== preferredModel && m.liveStatus === 'partial' && (preferredModel !== 'auto' || m.id !== cascadeRows[0]?.id))
+              || null;
+            return (
+              <div
+                data-testid="batch-quota-warning-strip"
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 10,
+                  flexWrap: 'wrap',
+                  padding: '7px 12px',
+                  borderRadius: 10,
+                  background: 'linear-gradient(90deg, rgba(248, 113, 113, 0.14) 0%, rgba(255, 133, 119, 0.08) 100%)',
+                  border: '1px solid rgba(248, 113, 113, 0.42)',
+                }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flex: 1 }}>
+                  <AlertTriangle size={14} color="#F87171" style={{ flexShrink: 0 }} />
+                  <span style={{ fontSize: '0.70rem', fontWeight: 700, color: '#F8FAFC', lineHeight: 1.35 }}>
+                    {bestBackup
+                      ? `Quota លើ ${preferredModel === 'auto' ? 'Primary Model' : preferredModel} កំពុងពេញ 429 — Auto Cascade នឹងរត់ទៅ Model ទំនេរ (${readyModelsCount}/${totalModelsCount} Models) ឬប្តូរទៅ «${bestBackup.displayName}»។`
+                      : `Key ទាំង ${totalKeys} លើ Primary Model កំពុងជាប់ 429 — ចុច «Key & Model Quota» ដើម្បីពិនិត្យ និង Test គ្រប់ Model (${totalModelsCount} Models)។`}
                   </span>
                 </div>
-              );
-            })}
-          </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0, flexWrap: 'wrap' }}>
+                  {bestBackup && (
+                    <button
+                      type="button"
+                      disabled={isUpdatingQuotaSettings}
+                      onClick={async () => {
+                        const res = await handleSelectPreferredModel(bestBackup.id);
+                        if (res?.success) setBatchInfo(`📌 បានកំណត់ «${bestBackup.id}» ជា Primary Model សម្រាប់បកប្រែ និង Pipeline!`);
+                      }}
+                      className="btn-tactile"
+                      style={{
+                        padding: '4px 10px',
+                        borderRadius: 8,
+                        background: 'rgba(52, 211, 153, 0.16)',
+                        border: '1px solid rgba(52, 211, 153, 0.45)',
+                        color: '#34D399',
+                        fontSize: '0.67rem',
+                        fontWeight: 800,
+                        cursor: 'pointer',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 4,
+                      }}
+                    >
+                      <Pin size={10} />
+                      <span>ប្តូរទៅ {bestBackup.displayName}</span>
+                    </button>
+                  )}
+                  {onOpenQuotaModal && (
+                    <button
+                      type="button"
+                      onClick={handleOpenQuotaConsole}
+                      className="btn-tactile"
+                      style={{
+                        padding: '4px 10px',
+                        borderRadius: 8,
+                        background: 'rgba(56, 189, 248, 0.14)',
+                        border: '1px solid rgba(56, 189, 248, 0.4)',
+                        color: '#38BDF8',
+                        fontSize: '0.67rem',
+                        fontWeight: 800,
+                        cursor: 'pointer',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 5,
+                      }}
+                    >
+                      <Key size={11} />
+                      <span>ពិនិត្យ Key &amp; Model Quota</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })()}
 
           {/* Quick Select & Filter Bar */}
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
@@ -1396,7 +1858,6 @@ export default function GeminiRouteModal({
                   borderRadius: 9999,
                   fontSize: '0.74rem',
                   fontWeight: 700,
-                  cursor: 'pointer',
                   display: 'flex',
                   alignItems: 'center',
                   gap: 6,
@@ -1405,10 +1866,10 @@ export default function GeminiRouteModal({
                   color: selectedEpIds.size === 2 ? '#38BDF8' : '#CBD5E1',
                   boxShadow: selectedEpIds.size === 2 ? '0 0 14px rgba(56, 189, 248, 0.25)' : 'none',
                   transition: 'all 0.15s cubic-bezier(0.16, 1, 0.3, 1)',
-                  opacity: pendingEpisodes.length === 0 ? 0.5 : 1,
-                  cursor: pendingEpisodes.length === 0 ? 'not-allowed' : 'pointer',
+                  opacity: episodesWithVideo.length === 0 ? 0.5 : 1,
+                  cursor: episodesWithVideo.length === 0 ? 'not-allowed' : 'pointer',
                 }}
-                disabled={pendingEpisodes.length === 0}
+                disabled={episodesWithVideo.length === 0}
               >
                 <Sparkles size={12} />
                 <span>២ ភាគ (2 EPs)</span>
@@ -1431,10 +1892,10 @@ export default function GeminiRouteModal({
                   color: selectedEpIds.size === 4 ? '#38BDF8' : '#CBD5E1',
                   boxShadow: selectedEpIds.size === 4 ? '0 0 14px rgba(56, 189, 248, 0.25)' : 'none',
                   transition: 'all 0.15s cubic-bezier(0.16, 1, 0.3, 1)',
-                  opacity: pendingEpisodes.length === 0 ? 0.5 : 1,
-                  cursor: pendingEpisodes.length === 0 ? 'not-allowed' : 'pointer',
+                  opacity: episodesWithVideo.length === 0 ? 0.5 : 1,
+                  cursor: episodesWithVideo.length === 0 ? 'not-allowed' : 'pointer',
                 }}
-                disabled={pendingEpisodes.length === 0}
+                disabled={episodesWithVideo.length === 0}
               >
                 <Sparkles size={12} />
                 <span>៤ ភាគ (4 EPs)</span>
@@ -1461,11 +1922,57 @@ export default function GeminiRouteModal({
                   cursor: pendingEpisodes.length === 0 ? 'not-allowed' : 'pointer',
                 }}
                 disabled={pendingEpisodes.length === 0}
-                title={pendingEpisodes.length === 0 ? 'គ្រប់ភាគទាំងអស់រួចរាល់ ១០០% ហើយ' : 'ជ្រើសរើសភាគដែលនៅសល់'}
+                title={pendingEpisodes.length === 0 ? 'គ្រប់ភាគទាំងអស់រួចរាល់ 100% ហើយ' : 'ជ្រើសរើសភាគដែលនៅសល់'}
               >
                 <Sparkles size={12} />
-                <span>{pendingEpisodes.length === 0 ? '✓ គ្រប់ភាគរួចរាល់ ១០០%' : `ភាគនៅសល់ (${pendingEpisodes.length} ភាគ)`}</span>
+                <span>{pendingEpisodes.length === 0 ? '✓ គ្រប់ភាគរួចរាល់ 100%' : `ភាគនៅសល់ (${pendingEpisodes.length} ភាគ)`}</span>
               </button>
+
+              <button
+                type="button"
+                onClick={handleSelectAllWithVideo}
+                className="btn-tactile"
+                style={{
+                  padding: '6px 14px',
+                  borderRadius: 9999,
+                  fontSize: '0.74rem',
+                  fontWeight: 700,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  background: (selectedEpIds.size === episodesWithVideo.length && episodesWithVideo.length > 0) ? 'rgba(16, 185, 129, 0.22)' : 'rgba(255, 255, 255, 0.04)',
+                  border: (selectedEpIds.size === episodesWithVideo.length && episodesWithVideo.length > 0) ? '1px solid #34D399' : '1px solid rgba(255, 255, 255, 0.1)',
+                  color: (selectedEpIds.size === episodesWithVideo.length && episodesWithVideo.length > 0) ? '#34D399' : '#CBD5E1',
+                  boxShadow: (selectedEpIds.size === episodesWithVideo.length && episodesWithVideo.length > 0) ? '0 0 14px rgba(16, 185, 129, 0.22)' : 'none',
+                  transition: 'all 0.15s cubic-bezier(0.16, 1, 0.3, 1)',
+                  opacity: episodesWithVideo.length === 0 ? 0.5 : 1,
+                  cursor: episodesWithVideo.length === 0 ? 'not-allowed' : 'pointer',
+                }}
+                disabled={episodesWithVideo.length === 0}
+                title="ជ្រើសរើសគ្រប់ភាគទាំងអស់ (រួមទាំងភាគធ្វើរួច) ដើម្បី Batch Export ឬ Merge Full Video"
+              >
+                <Layers size={12} />
+                <span>🌐 ទាំងអស់ ({episodesWithVideo.length} ភាគ)</span>
+              </button>
+
+              {selectedEpIds.size > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setSelectedEpIds(new Set())}
+                  style={{
+                    padding: '5px 10px',
+                    borderRadius: 9999,
+                    fontSize: '0.7rem',
+                    fontWeight: 700,
+                    background: 'rgba(255, 255, 255, 0.04)',
+                    border: '1px solid rgba(255, 255, 255, 0.1)',
+                    color: '#94A3B8',
+                    cursor: 'pointer',
+                  }}
+                >
+                  លុប ({selectedEpIds.size})
+                </button>
+              )}
             </div>
 
             {/* Dubbing Options Dropdowns */}
@@ -1578,11 +2085,12 @@ export default function GeminiRouteModal({
             gap: 12,
             paddingTop: 4,
           }}>
-            {/* ── 1. TRANSLATE ACTION (Step 2 - Subtitle & Translation / Re-Translate) ── */}
+            {/* ── 1. TRANSLATE ACTION (Step 1 - Fill Gaps ONLY; Re-Translate is a separate explicit control) ── */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
               <button
                 type="button"
-                onClick={() => handleStartBatchTranslate(unscriptedCount === 0)}
+                data-testid="btn-batch-translate"
+                onClick={handleStartBatchTranslate}
                 disabled={isStartingBatch || selectedEpIds.size === 0}
                 className="btn-tactile"
                 style={{
@@ -1593,15 +2101,11 @@ export default function GeminiRouteModal({
                     ? '#131b2e'
                     : (selectedEpIds.size === 0)
                     ? 'rgba(255, 255, 255, 0.04)'
-                    : (unscriptedCount === 0)
-                    ? 'linear-gradient(135deg, rgba(245, 158, 11, 0.2) 0%, rgba(217, 119, 6, 0.3) 100%)'
                     : 'linear-gradient(135deg, #0284c7 0%, #2563eb 50%, #4338ca 100%)',
                   border: (selectedEpIds.size === 0)
                     ? '1px solid rgba(255, 255, 255, 0.08)'
-                    : (unscriptedCount === 0)
-                    ? '1px solid rgba(245, 158, 11, 0.5)'
                     : '1px solid #38bdf8',
-                  color: (selectedEpIds.size === 0) ? '#64748B' : (unscriptedCount === 0 ? '#FBBF24' : '#ffffff'),
+                  color: (selectedEpIds.size === 0) ? '#64748B' : '#ffffff',
                   fontWeight: 800,
                   cursor: (isStartingBatch || selectedEpIds.size === 0) ? 'not-allowed' : 'pointer',
                   display: 'flex',
@@ -1609,7 +2113,7 @@ export default function GeminiRouteModal({
                   justifyContent: 'space-between',
                   gap: 10,
                   boxShadow: (selectedEpIds.size > 0 && !isStartingBatch)
-                    ? (unscriptedCount === 0 ? '0 4px 18px rgba(245, 158, 11, 0.25)' : '0 6px 20px rgba(2, 132, 199, 0.4)')
+                    ? '0 6px 20px rgba(2, 132, 199, 0.4)'
                     : 'none',
                   transition: 'all 0.2s cubic-bezier(0.16, 1, 0.3, 1)',
                 }}
@@ -1619,7 +2123,7 @@ export default function GeminiRouteModal({
                     width: 34,
                     height: 34,
                     borderRadius: 10,
-                    background: (unscriptedCount === 0) ? 'rgba(245, 158, 11, 0.2)' : 'rgba(255, 255, 255, 0.18)',
+                    background: 'rgba(255, 255, 255, 0.18)',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
@@ -1627,8 +2131,6 @@ export default function GeminiRouteModal({
                   }}>
                     {isStartingBatch ? (
                       <Loader2 size={17} className="animate-spin" color="#38bdf8" />
-                    ) : unscriptedCount === 0 ? (
-                      <RotateCcw size={17} color="#FBBF24" />
                     ) : (
                       <Sparkles size={17} color="#ffffff" />
                     )}
@@ -1637,33 +2139,97 @@ export default function GeminiRouteModal({
                     <div style={{ fontSize: '0.82rem', fontWeight: 900, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                       {isStartingBatch
                         ? 'កំពុងបញ្ជូន Translate...'
-                        : (unscriptedCount === 0 && selectedEpIds.size > 0)
-                        ? `🔄 Re-Translate ${selectedEpIds.size} ភាគ`
-                        : unscriptedCount === 0
-                        ? '✓ គ្រប់ភាគ Translate រួចរាល់ ១០០%'
-                        : `🚀 Translate ${selectedEpIds.size} ភាគ`}
+                        : unscriptedSelectedEpisodes.length > 0 && scriptedSelectedEpisodes.length > 0
+                        ? `🚀 Translate ${unscriptedSelectedEpisodes.length} ភាគថ្មី (រំលង ${scriptedSelectedEpisodes.length})`
+                        : unscriptedSelectedEpisodes.length > 0
+                        ? `🚀 Translate ${unscriptedSelectedEpisodes.length} ភាគ (${remainingCount} នៅសល់)`
+                        : (selectedEpIds.size > 0 && selectedBrokenSummary.textBrokenCount > 0)
+                        ? `⚠️ នៅខ្វះ/ខូច ${selectedBrokenSummary.textBrokenCount} ឃ្លា`
+                        : (selectedEpIds.size === 0 && seriesBrokenSummary.textBrokenCount > 0)
+                        ? `⚠️ នៅខ្វះ/ខូច ${seriesBrokenSummary.textBrokenCount} ឃ្លា`
+                        : selectedEpIds.size > 0
+                        ? `🚀 Translate (${selectedEpIds.size} ភាគមាន Script រួច)`
+                        : `🚀 Translate (${remainingCount} ភាគនៅសល់)`}
                     </div>
-                    <div style={{ fontSize: '0.68rem', color: (unscriptedCount === 0) ? '#FCD34D' : 'rgba(255, 255, 255, 0.8)', whiteSpace: 'nowrap' }}>
-                      {unscriptedCount === 0 && selectedEpIds.size > 0
-                        ? (dubbingMode === 'fast_ocr' ? '⚡ Fast OCR (Bypass Whisper)' : 'ចុចដើម្បី Translate ឡើងវិញ')
-                        : unscriptedCount === 0
-                        ? `គ្រប់ភាគ (${episodes.length}/${episodes.length}) មាន Script ពេញលេញ`
-                        : (dubbingMode === 'fast_ocr' ? '⚡ Fast Subtitle OCR (3-5x Faster)' : 'Gemini Multi-Key Route')}
+                    <div style={{ fontSize: '0.68rem', color: 'rgba(255, 255, 255, 0.8)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {unscriptedSelectedEpisodes.length === 0 && selectedEpIds.size > 0
+                        ? (selectedBrokenSummary.textBrokenCount > 0
+                          ? `មាន Script (${completedCount}/${episodes.length}) • នៅខ្វះ/ខូចអត្ថបទ ${selectedBrokenSummary.textBrokenCount} ឃ្លា`
+                          : `រំលងភាគមាន Script រួច (${completedCount}/${episodes.length})`)
+                        : (seriesBrokenSummary.textBrokenCount > 0
+                          ? `មាន Script ${completedCount}/${episodes.length} • នៅខ្វះ/ខូច ${seriesBrokenSummary.textBrokenCount} ឃ្លា`
+                          : dubbingMode === 'fast_ocr'
+                          ? `⚡ Fast OCR • រំលងភាគរួច (${completedCount}/${episodes.length})`
+                          : `រំលងភាគមាន Script រួច (${completedCount}/${episodes.length})`)}
                     </div>
                   </div>
                 </div>
+                <span
+                  data-testid="step2-status-badge"
+                  style={{
+                    fontSize: '0.64rem',
+                    fontWeight: 900,
+                    background: isStep2TargetDone ? 'rgba(16, 185, 129, 0.25)' : 'rgba(0, 0, 0, 0.35)',
+                    color: isStep2TargetDone ? '#34d399' : '#38bdf8',
+                    padding: '2px 8px',
+                    borderRadius: 9999,
+                    border: isStep2TargetDone ? '1px solid rgba(16, 185, 129, 0.45)' : '1px solid rgba(56, 189, 248, 0.3)',
+                    flexShrink: 0,
+                    letterSpacing: '0.04em',
+                  }}
+                >
+                  {isStep2TargetDone ? 'DONE' : 'STEP 2'}
+                </span>
+              </button>
+
+              {/* Separate explicit Re-Translate button (ONLY control allowed to send force: true) */}
+              <button
+                type="button"
+                data-testid="btn-batch-retranslate"
+                onClick={handleReTranslateSelected}
+                disabled={isStartingBatch || selectedEpIds.size === 0 || scriptedSelectedEpisodes.length === 0}
+                className="btn-tactile"
+                title="ដំណើរការ FULL Pipeline (OCR + ASR + Gemini) ឡើងវិញលើភាគដែលរើស (ប្រើ Quota & Overwrite Script ក្រោយ Auto-Backup)"
+                style={{
+                  padding: '7px 12px',
+                  borderRadius: 10,
+                  background: (selectedEpIds.size > 0 && scriptedSelectedEpisodes.length > 0 && !isStartingBatch)
+                    ? 'linear-gradient(135deg, rgba(245, 158, 11, 0.16) 0%, rgba(217, 119, 6, 0.28) 100%)'
+                    : 'rgba(255, 255, 255, 0.03)',
+                  border: (selectedEpIds.size > 0 && scriptedSelectedEpisodes.length > 0 && !isStartingBatch)
+                    ? '1px solid rgba(245, 158, 11, 0.55)'
+                    : '1px solid rgba(255, 255, 255, 0.08)',
+                  color: (selectedEpIds.size > 0 && scriptedSelectedEpisodes.length > 0 && !isStartingBatch) ? '#FBBF24' : '#64748B',
+                  fontSize: '0.72rem',
+                  fontWeight: 800,
+                  cursor: (isStartingBatch || selectedEpIds.size === 0 || scriptedSelectedEpisodes.length === 0) ? 'not-allowed' : 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 8,
+                  transition: 'all 0.2s cubic-bezier(0.16, 1, 0.3, 1)',
+                }}
+              >
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                  <RotateCcw size={13} color={(selectedEpIds.size > 0 && scriptedSelectedEpisodes.length > 0 && !isStartingBatch) ? '#FBBF24' : '#64748B'} />
+                  <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {scriptedSelectedEpisodes.length > 0
+                      ? `Re-Translate (${selectedTargetEpisodes.length} ភាគ)`
+                      : 'Re-Translate (រើសភាគមាន Script រួច)'}
+                  </span>
+                </span>
                 <span style={{
-                  fontSize: '0.64rem',
+                  fontSize: '0.6rem',
                   fontWeight: 900,
-                  background: (unscriptedCount === 0) ? 'rgba(245, 158, 11, 0.25)' : 'rgba(0, 0, 0, 0.35)',
-                  color: (unscriptedCount === 0) ? '#FBBF24' : '#38bdf8',
-                  padding: '2px 8px',
+                  padding: '1px 6px',
                   borderRadius: 9999,
-                  border: (unscriptedCount === 0) ? '1px solid rgba(245, 158, 11, 0.4)' : '1px solid rgba(56, 189, 248, 0.3)',
-                  flexShrink: 0,
+                  background: (selectedEpIds.size > 0 && scriptedSelectedEpisodes.length > 0) ? 'rgba(245, 158, 11, 0.22)' : 'rgba(255, 255, 255, 0.05)',
+                  border: (selectedEpIds.size > 0 && scriptedSelectedEpisodes.length > 0) ? '1px solid rgba(245, 158, 11, 0.45)' : '1px solid rgba(255, 255, 255, 0.08)',
+                  color: (selectedEpIds.size > 0 && scriptedSelectedEpisodes.length > 0) ? '#FCD34D' : '#64748B',
                   letterSpacing: '0.04em',
+                  flexShrink: 0,
                 }}>
-                  {unscriptedCount === 0 && selectedEpIds.size > 1 ? 'RE-RUN BATCH' : unscriptedCount === 0 ? 'DONE' : 'STEP 2'}
+                  FORCE
                 </span>
               </button>
               {(isStartingBatch || (Array.isArray(activeJobs) && activeJobs.some((j) => (j.status === 'running' || j.status === 'queued') && (selectedEpIds.size === 0 || selectedEpIds.has(j.episodeId))))) && (
@@ -1704,8 +2270,9 @@ export default function GeminiRouteModal({
             <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
               <button
                 type="button"
+                data-testid="btn-batch-tts"
                 onClick={handleBatchGenerateTTS}
-                disabled={isGeneratingBatchTTS || isSeparatingBatchDemucs || isStartingBatch || selectedEpIds.size === 0}
+                disabled={isGeneratingBatchTTS || isSeparatingBatchDemucs || isStartingBatch || isRepairBusy || selectedEpIds.size === 0}
                 className="btn-tactile"
                 style={{
                   position: 'relative',
@@ -1714,28 +2281,28 @@ export default function GeminiRouteModal({
                   borderRadius: 14,
                   background: isGeneratingBatchTTS
                     ? 'linear-gradient(135deg, #182236 0%, #1e293b 100%)'
-                    : allSelectedAudioCompleted
+                    : isStep3TrulyDone
                     ? 'linear-gradient(135deg, rgba(16, 185, 129, 0.14) 0%, rgba(5, 150, 105, 0.22) 100%)'
-                    : (selectedEpIds.size === 0)
+                    : (selectedEpIds.size === 0 && effectiveBrokenSummary.totalBrokenCount === 0)
                     ? 'rgba(255, 133, 119, 0.1)'
                     : 'linear-gradient(135deg, #FF8577 0%, #f43f5e 100%)',
                   border: isGeneratingBatchTTS
                     ? '1px solid rgba(255, 133, 119, 0.7)'
-                    : allSelectedAudioCompleted
+                    : isStep3TrulyDone
                     ? '1px solid rgba(16, 185, 129, 0.5)'
-                    : (selectedEpIds.size === 0)
+                    : (selectedEpIds.size === 0 && effectiveBrokenSummary.totalBrokenCount === 0)
                     ? '1px solid rgba(255, 133, 119, 0.2)'
                     : '1px solid #FF8577',
-                  color: isGeneratingBatchTTS ? '#FF8577' : allSelectedAudioCompleted ? '#34d399' : '#0B132B',
+                  color: isGeneratingBatchTTS ? '#FF8577' : isStep3TrulyDone ? '#34d399' : '#0B132B',
                   fontWeight: 800,
-                  cursor: (isGeneratingBatchTTS || isSeparatingBatchDemucs || isStartingBatch || selectedEpIds.size === 0) ? 'not-allowed' : 'pointer',
+                  cursor: (isGeneratingBatchTTS || isSeparatingBatchDemucs || isStartingBatch || isRepairBusy || selectedEpIds.size === 0) ? 'not-allowed' : 'pointer',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'space-between',
                   gap: 10,
                   boxShadow: (isGeneratingBatchTTS)
                     ? '0 0 20px rgba(255, 133, 119, 0.3)'
-                    : allSelectedAudioCompleted
+                    : isStep3TrulyDone
                     ? '0 2px 14px rgba(16, 185, 129, 0.2)'
                     : (selectedEpIds.size > 0)
                     ? '0 6px 20px rgba(255, 133, 119, 0.38)'
@@ -1763,7 +2330,7 @@ export default function GeminiRouteModal({
                     borderRadius: 10,
                     background: isGeneratingBatchTTS
                       ? 'rgba(255, 133, 119, 0.22)'
-                      : allSelectedAudioCompleted
+                      : isStep3TrulyDone
                       ? 'rgba(16, 185, 129, 0.25)'
                       : 'rgba(11, 19, 43, 0.2)',
                     display: 'flex',
@@ -1773,7 +2340,7 @@ export default function GeminiRouteModal({
                   }}>
                     {isGeneratingBatchTTS ? (
                       <Loader2 size={17} className="animate-spin" color="#FF8577" />
-                    ) : allSelectedAudioCompleted ? (
+                    ) : isStep3TrulyDone ? (
                       <CheckCircle2 size={17} color="#34d399" />
                     ) : (
                       <Mic size={17} color={isGeneratingBatchTTS ? '#FF8577' : '#0B132B'} />
@@ -1786,19 +2353,21 @@ export default function GeminiRouteModal({
                       whiteSpace: 'nowrap',
                       overflow: 'hidden',
                       textOverflow: 'ellipsis',
-                      color: isGeneratingBatchTTS ? '#f8fafc' : allSelectedAudioCompleted ? '#34d399' : '#0B132B',
+                      color: isGeneratingBatchTTS ? '#f8fafc' : isStep3TrulyDone ? '#34d399' : '#0B132B',
                     }}>
                       {isGeneratingBatchTTS
                         ? `🎙️ កំពុង TTS: ${ttsCurrentEpTitle}`
-                        : allSelectedAudioCompleted
-                        ? '✓ សំឡេងខ្មែរ AI រួចរាល់ ១០០%'
-                        : `🎙️ បង្កើតសំឡេងខ្មែរ AI (${unAudioSelectedEpisodes.length} ភាគនៅសល់)`}
+                        : isStep3TrulyDone
+                        ? '✓ សំឡេងខ្មែរ AI រួចរាល់ 100%'
+                        : effectiveBrokenSummary.totalBrokenCount > 0
+                        ? `⚠️ នៅខ្វះ/ខូច ${effectiveBrokenSummary.totalBrokenCount} ឃ្លា (${selectedEpIds.size > 0 ? unAudioSelectedEpisodes.length : unAudioCount} ភាគ)`
+                        : `🎙️ បង្កើតសំឡេងខ្មែរ AI (${selectedEpIds.size > 0 ? unAudioSelectedEpisodes.length : unAudioCount} ភាគនៅសល់)`}
                     </div>
                     <div style={{
                       fontSize: '0.68rem',
                       color: isGeneratingBatchTTS
                         ? '#fca5a5'
-                        : allSelectedAudioCompleted
+                        : isStep3TrulyDone
                         ? '#6ee7b7'
                         : 'rgba(11, 19, 43, 0.85)',
                       whiteSpace: 'nowrap',
@@ -1808,32 +2377,114 @@ export default function GeminiRouteModal({
                     }}>
                       {isGeneratingBatchTTS
                         ? `${ttsLiveStats[activeTtsEpisodeId]?.current || 0}/${ttsLiveStats[activeTtsEpisodeId]?.total || '...'} ឃ្លា (${ttsLiveStats[activeTtsEpisodeId]?.percent || 0}%) • សរុប ${ttsProgressPercent}%`
-                        : allSelectedAudioCompleted
-                        ? `គ្រប់ភាគ (${selectedEpIds.size} ភាគ) មានសំឡេង Master ពេញលេញ`
+                        : isStep3TrulyDone
+                        ? `គ្រប់ភាគ (${selectedEpIds.size > 0 ? selectedEpIds.size : episodes.length} ភាគ) មានសំឡេង Master ពេញលេញ`
+                        : effectiveBrokenSummary.totalBrokenCount > 0
+                        ? `អត្ថបទខូច: ${effectiveBrokenSummary.textBrokenCount} • សំឡេងខ្វះ: ${effectiveBrokenSummary.voiceBrokenCount} (Master មិនទាន់គ្រប់)`
                         : 'រំលងភាគដែលធ្វើរួច • Edge-TTS'}
                     </div>
                   </div>
                 </div>
+                <span
+                  data-testid="step3-status-badge"
+                  style={{
+                    fontSize: '0.64rem',
+                    fontWeight: 900,
+                    background: isGeneratingBatchTTS
+                      ? 'rgba(255, 133, 119, 0.25)'
+                      : isStep3TrulyDone
+                      ? 'rgba(16, 185, 129, 0.25)'
+                      : 'rgba(11, 19, 43, 0.15)',
+                    color: isGeneratingBatchTTS ? '#FF8577' : isStep3TrulyDone ? '#34d399' : '#0B132B',
+                    padding: '2px 8px',
+                    borderRadius: 9999,
+                    border: isGeneratingBatchTTS
+                      ? '1px solid rgba(255, 133, 119, 0.4)'
+                      : isStep3TrulyDone
+                      ? '1px solid rgba(16, 185, 129, 0.35)'
+                      : '1px solid rgba(11, 19, 43, 0.25)',
+                    flexShrink: 0,
+                    letterSpacing: '0.04em',
+                  }}
+                >
+                  {isGeneratingBatchTTS ? `${ttsProgressPercent}%` : isStep3TrulyDone ? 'DONE' : 'STEP 3'}
+                </span>
+              </button>
+
+              {/* ONE Repair Broken & Regenerate Button directly under STEP 3 (Sweeps ONLY text-broken + voice-broken segments) */}
+              <button
+                type="button"
+                data-testid="btn-repair-broken-segments"
+                onClick={handleRepairBrokenSegments}
+                disabled={isRepairBusy || isGeneratingBatchTTS || isSeparatingBatchDemucs || isStartingBatch || repairButtonCount === 0}
+                className="btn-tactile"
+                title={
+                  repairButtonCount > 0
+                    ? `ជួសជុលតែឃ្លាដែលខូច (${repairButtonCount} ឃ្លា: អត្ថបទខូច ${effectiveBrokenSummary.textBrokenCount} • សំឡេងខ្វះ ${effectiveBrokenSummary.voiceBrokenCount}) ដោយមិនប៉ះពាល់ឃ្លាល្អឡើយ`
+                    : 'គ្មានឃ្លាខូចទេ — គ្រប់ឃ្លារួចរាល់ 100%'
+                }
+                style={{
+                  padding: '7px 12px',
+                  borderRadius: 10,
+                  background: isRepairBusy
+                    ? 'linear-gradient(135deg, rgba(56, 189, 248, 0.2) 0%, rgba(14, 165, 233, 0.32) 100%)'
+                    : repairButtonCount > 0
+                    ? 'linear-gradient(135deg, rgba(251, 113, 133, 0.18) 0%, rgba(245, 158, 11, 0.26) 100%)'
+                    : 'rgba(255, 255, 255, 0.03)',
+                  border: isRepairBusy
+                    ? '1px solid rgba(56, 189, 248, 0.65)'
+                    : repairButtonCount > 0
+                    ? '1px solid rgba(251, 146, 60, 0.6)'
+                    : '1px solid rgba(255, 255, 255, 0.08)',
+                  color: isRepairBusy
+                    ? '#7DD3FC'
+                    : repairButtonCount > 0
+                    ? '#FDBA74'
+                    : '#64748B',
+                  fontSize: '0.72rem',
+                  fontWeight: 800,
+                  cursor: (isRepairBusy || isGeneratingBatchTTS || isSeparatingBatchDemucs || isStartingBatch || repairButtonCount === 0)
+                    ? 'not-allowed'
+                    : 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 8,
+                  transition: 'all 0.2s cubic-bezier(0.16, 1, 0.3, 1)',
+                }}
+              >
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+                  {isRepairBusy ? (
+                    <Loader2 size={13} className="animate-spin" color="#38BDF8" />
+                  ) : (
+                    <Wrench size={13} color={repairButtonCount > 0 ? '#FB923C' : '#64748B'} />
+                  )}
+                  <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {isRepairBusy
+                      ? (repairProgressSummary || 'កំពុងជួសជុលឃ្លាខូច...')
+                      : `🔧 ជួសជុលឃ្លាខូច & Generate ឡើងវិញ (${repairButtonCount})`}
+                  </span>
+                </span>
                 <span style={{
-                  fontSize: '0.64rem',
+                  fontSize: '0.6rem',
                   fontWeight: 900,
-                  background: isGeneratingBatchTTS
-                    ? 'rgba(255, 133, 119, 0.25)'
-                    : allSelectedAudioCompleted
-                    ? 'rgba(16, 185, 129, 0.25)'
-                    : 'rgba(11, 19, 43, 0.15)',
-                  color: isGeneratingBatchTTS ? '#FF8577' : allSelectedAudioCompleted ? '#34d399' : '#0B132B',
-                  padding: '2px 8px',
+                  padding: '1px 6px',
                   borderRadius: 9999,
-                  border: isGeneratingBatchTTS
-                    ? '1px solid rgba(255, 133, 119, 0.4)'
-                    : allSelectedAudioCompleted
-                    ? '1px solid rgba(16, 185, 129, 0.35)'
-                    : '1px solid rgba(11, 19, 43, 0.25)',
-                  flexShrink: 0,
+                  background: isRepairBusy
+                    ? 'rgba(56, 189, 248, 0.22)'
+                    : repairButtonCount > 0
+                    ? 'rgba(251, 146, 60, 0.22)'
+                    : 'rgba(16, 185, 129, 0.14)',
+                  border: isRepairBusy
+                    ? '1px solid rgba(56, 189, 248, 0.45)'
+                    : repairButtonCount > 0
+                    ? '1px solid rgba(251, 146, 60, 0.45)'
+                    : '1px solid rgba(52, 211, 153, 0.3)',
+                  color: isRepairBusy ? '#7DD3FC' : repairButtonCount > 0 ? '#FDBA74' : '#34D399',
                   letterSpacing: '0.04em',
+                  flexShrink: 0,
                 }}>
-                  {isGeneratingBatchTTS ? `${ttsProgressPercent}%` : allSelectedAudioCompleted ? 'DONE' : 'STEP 3'}
+                  {isRepairBusy ? 'REPAIRING' : repairButtonCount > 0 ? `${repairButtonCount}` : '0'}
                 </span>
               </button>
               {isGeneratingBatchTTS && (
@@ -1961,7 +2612,7 @@ export default function GeminiRouteModal({
                       {isSeparatingBatchDemucs
                         ? `🎧 កំពុងបំបែក: ${demucsCurrentEpTitle}`
                         : allSelectedDemucsCompleted
-                        ? '✓ Demucs AI Clean BGM រួចរាល់ ១០០%'
+                        ? '✓ Demucs AI Clean BGM រួចរាល់ 100%'
                         : `🎧 បំបែកសំឡេងដើម AI (${unDemucsSelectedEpisodes.length} ភាគនៅសល់)`}
                     </div>
                     <div style={{
@@ -2036,24 +2687,281 @@ export default function GeminiRouteModal({
               )}
             </div>
           </div>
+
+          {/* ── STEP 4: BATCH EXPORT & FULL VIDEO MERGE BAR ── */}
+          {batchRender && (
+            <div style={{
+              marginTop: 2,
+              padding: '10px 12px',
+              borderRadius: 12,
+              background: 'linear-gradient(135deg, rgba(15, 23, 42, 0.85) 0%, rgba(25, 39, 68, 0.85) 100%)',
+              border: '1px solid rgba(56, 189, 248, 0.25)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              flexWrap: 'wrap',
+              gap: 10,
+            }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 3, minWidth: 220, flex: 1 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                  <span style={{ fontSize: '0.76rem', fontWeight: 900, color: '#F8FAFC', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                    <Film size={14} color="#38BDF8" />
+                    STEP 4: Batch Export & Merge
+                  </span>
+                  <span style={{
+                    fontSize: '0.66rem',
+                    fontWeight: 700,
+                    padding: '2px 8px',
+                    borderRadius: 9999,
+                    background: 'rgba(56, 189, 248, 0.14)',
+                    color: '#38BDF8',
+                    border: '1px solid rgba(56, 189, 248, 0.3)',
+                  }}>
+                    {selectedEpisodesForExport.length} ភាគ • មានសំឡេង {selectedVoicedForExport.length} • {resolvedStep4AspectRatio}
+                  </span>
+                </div>
+
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                  {selectedMissingVoiceForExport.length > 0 && (
+                    <span style={{ fontSize: '0.68rem', color: allowOriginalAudio ? '#7dd3fc' : '#FBBF24', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                      <AlertTriangle size={12} />
+                      <span>
+                        {allowOriginalAudio
+                          ? `${selectedMissingVoiceForExport.length} ភាគអត់ Voice នឹងប្រើសំឡេងដើម`
+                          : `រំលង ${selectedMissingVoiceForExport.length} ភាគអត់ Voice (${selectedMissingVoiceForExport.map((e, i) => `EP${e.episodeNumber || i + 1}`).slice(0, 5).join(', ')}${selectedMissingVoiceForExport.length > 5 ? '...' : ''})`}
+                      </span>
+                    </span>
+                  )}
+                  <label style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 5,
+                    fontSize: '0.69rem',
+                    fontWeight: 600,
+                    color: '#CBD5E1',
+                    cursor: isBatchExportRunning ? 'not-allowed' : 'pointer',
+                  }}>
+                    <input
+                      type="checkbox"
+                      checked={allowOriginalAudio}
+                      disabled={isBatchExportRunning}
+                      onChange={(e) => setAllowOriginalAudio(e.target.checked)}
+                      style={{ margin: 0, accentColor: '#38BDF8' }}
+                    />
+                    <span>Allow Original Audio (រួមបញ្ចូលភាគអត់ Voice)</span>
+                  </label>
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <div
+                  role="group"
+                  aria-label="Step 4 Export Aspect Ratio"
+                  data-testid="step4-aspect-toggle"
+                  title={`ទម្រង់វីដេអូ Export & Preview: ${resolvedStep4AspectRatio}`}
+                  style={{
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 3,
+                    padding: 3,
+                    borderRadius: 10,
+                    background: 'rgba(15, 23, 42, 0.88)',
+                    border: '1px solid rgba(56, 189, 248, 0.28)',
+                  }}
+                >
+                  <button
+                    type="button"
+                    data-testid="step4-aspect-16-9"
+                    aria-pressed={resolvedStep4AspectRatio === '16:9'}
+                    disabled={isBatchExportRunning || isBatchExportStarting || isRendering}
+                    onClick={() => onAspectRatioChange?.('16:9')}
+                    title="16:9 Landscape (ផ្ដេក — YouTube / Facebook)"
+                    style={{
+                      padding: '6px 11px',
+                      borderRadius: 7,
+                      border: resolvedStep4AspectRatio === '16:9'
+                        ? '1px solid rgba(56, 189, 248, 0.7)'
+                        : '1px solid transparent',
+                      background: resolvedStep4AspectRatio === '16:9'
+                        ? 'rgba(2, 132, 199, 0.28)'
+                        : 'transparent',
+                      color: resolvedStep4AspectRatio === '16:9' ? '#38BDF8' : '#94A3B8',
+                      fontSize: '0.73rem',
+                      fontWeight: 800,
+                      fontFamily: 'monospace',
+                      cursor: (isBatchExportRunning || isBatchExportStarting || isRendering) ? 'not-allowed' : 'pointer',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 5,
+                      opacity: (isBatchExportRunning || isBatchExportStarting || isRendering) ? 0.5 : 1,
+                      transition: 'all 0.15s ease',
+                    }}
+                  >
+                    <span
+                      style={{
+                        display: 'inline-block',
+                        width: 13,
+                        height: 8,
+                        border: '1.5px solid currentColor',
+                        borderRadius: 1.5,
+                      }}
+                      aria-hidden="true"
+                    />
+                    <span>16:9</span>
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="step4-aspect-9-16"
+                    aria-pressed={resolvedStep4AspectRatio === '9:16'}
+                    disabled={isBatchExportRunning || isBatchExportStarting || isRendering}
+                    onClick={() => onAspectRatioChange?.('9:16')}
+                    title="9:16 Portrait (បញ្ឈរ — TikTok / Reels / Shorts)"
+                    style={{
+                      padding: '6px 11px',
+                      borderRadius: 7,
+                      border: resolvedStep4AspectRatio === '9:16'
+                        ? '1px solid rgba(56, 189, 248, 0.7)'
+                        : '1px solid transparent',
+                      background: resolvedStep4AspectRatio === '9:16'
+                        ? 'rgba(2, 132, 199, 0.28)'
+                        : 'transparent',
+                      color: resolvedStep4AspectRatio === '9:16' ? '#38BDF8' : '#94A3B8',
+                      fontSize: '0.73rem',
+                      fontWeight: 800,
+                      fontFamily: 'monospace',
+                      cursor: (isBatchExportRunning || isBatchExportStarting || isRendering) ? 'not-allowed' : 'pointer',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 5,
+                      opacity: (isBatchExportRunning || isBatchExportStarting || isRendering) ? 0.5 : 1,
+                      transition: 'all 0.15s ease',
+                    }}
+                  >
+                    <span
+                      style={{
+                        display: 'inline-block',
+                        width: 8,
+                        height: 12,
+                        border: '1.5px solid currentColor',
+                        borderRadius: 1.5,
+                      }}
+                      aria-hidden="true"
+                    />
+                    <span>9:16</span>
+                  </button>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => handleStartStep4BatchExport('merge')}
+                  disabled={isBatchExportRunning || isBatchExportStarting || eligibleForBatchExport.length === 0}
+                  className="btn-tactile"
+                  style={{
+                    padding: '9px 14px',
+                    borderRadius: 10,
+                    background: (isBatchExportRunning || eligibleForBatchExport.length === 0)
+                      ? 'rgba(255, 255, 255, 0.05)'
+                      : 'linear-gradient(135deg, #0284c7 0%, #2563eb 100%)',
+                    border: (isBatchExportRunning || eligibleForBatchExport.length === 0)
+                      ? '1px solid rgba(255, 255, 255, 0.1)'
+                      : '1px solid #38BDF8',
+                    color: (isBatchExportRunning || eligibleForBatchExport.length === 0) ? '#64748B' : '#FFFFFF',
+                    fontSize: '0.76rem',
+                    fontWeight: 800,
+                    cursor: (isBatchExportRunning || isBatchExportStarting || eligibleForBatchExport.length === 0) ? 'not-allowed' : 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                    boxShadow: (!isBatchExportRunning && eligibleForBatchExport.length > 0) ? '0 4px 16px rgba(2, 132, 199, 0.35)' : 'none',
+                  }}
+                >
+                  {isBatchExportRunning && batchExportJob?.mode === 'merge' ? <Loader2 size={14} className="animate-spin" /> : <Film size={14} />}
+                  <span>Export 1 Full Video (Merge {eligibleForBatchExport.length} ភាគ)</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleStartStep4BatchExport('separate')}
+                  disabled={isBatchExportRunning || isBatchExportStarting || eligibleForBatchExport.length === 0}
+                  className="btn-tactile"
+                  style={{
+                    padding: '9px 14px',
+                    borderRadius: 10,
+                    background: (isBatchExportRunning || eligibleForBatchExport.length === 0)
+                      ? 'rgba(255, 255, 255, 0.05)'
+                      : 'linear-gradient(135deg, rgba(16, 185, 129, 0.22) 0%, rgba(5, 150, 105, 0.35) 100%)',
+                    border: (isBatchExportRunning || eligibleForBatchExport.length === 0)
+                      ? '1px solid rgba(255, 255, 255, 0.1)'
+                      : '1px solid rgba(52, 211, 153, 0.55)',
+                    color: (isBatchExportRunning || eligibleForBatchExport.length === 0) ? '#64748B' : '#34D399',
+                    fontSize: '0.76rem',
+                    fontWeight: 800,
+                    cursor: (isBatchExportRunning || isBatchExportStarting || eligibleForBatchExport.length === 0) ? 'not-allowed' : 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 6,
+                  }}
+                >
+                  {isBatchExportRunning && batchExportJob?.mode === 'separate' ? <Loader2 size={14} className="animate-spin" /> : <Layers size={14} />}
+                  <span>Batch Export All ({eligibleForBatchExport.length} ភាគដាច់)</span>
+                </button>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* ── 3. BATCH NOTIFICATIONS ── */}
+        {batchInfo && (
+          <div
+            role="status"
+            data-testid="batch-info-banner"
+            style={{
+              margin: '12px 22px 0 22px',
+              padding: '9px 14px',
+              borderRadius: 8,
+              background: 'rgba(56, 189, 248, 0.14)',
+              border: '1px solid rgba(56, 189, 248, 0.4)',
+              color: '#bae6fd',
+              fontSize: '0.76rem',
+              fontWeight: 700,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              backdropFilter: 'blur(8px)',
+              boxShadow: '0 4px 14px rgba(56, 189, 248, 0.15)',
+            }}
+          >
+            <span style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+              <AlertCircle size={15} color="#38bdf8" />
+              <span>{batchInfo}</span>
+            </span>
+            <button
+              type="button"
+              onClick={() => setBatchInfo(null)}
+              style={{ background: 'none', border: 'none', color: '#bae6fd', cursor: 'pointer', padding: 2 }}
+            >
+              <X size={14} />
+            </button>
+          </div>
+        )}
         {batchSuccess && (
-          <div style={{
-            margin: '12px 22px 0 22px',
-            padding: '9px 14px',
-            borderRadius: 8,
-            background: 'rgba(16, 185, 129, 0.15)',
-            border: '1px solid rgba(16, 185, 129, 0.4)',
-            color: '#6ee7b7',
-            fontSize: '0.76rem',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            backdropFilter: 'blur(8px)',
-            boxShadow: '0 4px 14px rgba(16, 185, 129, 0.15)',
-          }}>
+          <div
+            data-testid="batch-success-banner"
+            style={{
+              margin: '12px 22px 0 22px',
+              padding: '9px 14px',
+              borderRadius: 8,
+              background: 'rgba(16, 185, 129, 0.15)',
+              border: '1px solid rgba(16, 185, 129, 0.4)',
+              color: '#6ee7b7',
+              fontSize: '0.76rem',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              backdropFilter: 'blur(8px)',
+              boxShadow: '0 4px 14px rgba(16, 185, 129, 0.15)',
+            }}
+          >
             <span style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
               <CheckCircle2 size={15} />
               <span>{batchSuccess}</span>
@@ -2068,20 +2976,23 @@ export default function GeminiRouteModal({
           </div>
         )}
         {batchError && (
-          <div style={{
-            margin: '12px 22px 0 22px',
-            padding: '9px 14px',
-            borderRadius: 8,
-            background: 'rgba(239, 68, 68, 0.15)',
-            border: '1px solid rgba(239, 68, 68, 0.4)',
-            color: '#fca5a5',
-            fontSize: '0.76rem',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            backdropFilter: 'blur(8px)',
-            boxShadow: '0 4px 14px rgba(239, 68, 68, 0.15)',
-          }}>
+          <div
+            data-testid="batch-error-banner"
+            style={{
+              margin: '12px 22px 0 22px',
+              padding: '9px 14px',
+              borderRadius: 8,
+              background: 'rgba(239, 68, 68, 0.15)',
+              border: '1px solid rgba(239, 68, 68, 0.4)',
+              color: '#fca5a5',
+              fontSize: '0.76rem',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              backdropFilter: 'blur(8px)',
+              boxShadow: '0 4px 14px rgba(239, 68, 68, 0.15)',
+            }}
+          >
             <span style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
               <AlertCircle size={15} />
               <span>{batchError}</span>
@@ -2098,17 +3009,161 @@ export default function GeminiRouteModal({
 
         {/* ── 4. SPACIOUS EPISODE GRID (Clean UI) ── */}
         <div style={{
-          flex: 1,
-          overflowY: 'auto',
-          padding: '16px 22px',
+          padding: '16px 22px 24px 22px',
         }}>
+          {/* Step 4 Live Batch Export / Merge Monitor & Download Card */}
+          {batchExportJob && (
+            <div style={{
+              marginBottom: 14,
+              padding: '12px 16px',
+              borderRadius: 12,
+              background: 'rgba(15, 23, 42, 0.88)',
+              border: batchExportJob.status === 'completed'
+                ? '1px solid rgba(52, 211, 153, 0.5)'
+                : batchExportJob.status === 'failed'
+                ? '1px solid rgba(248, 113, 113, 0.5)'
+                : '1px solid rgba(56, 189, 248, 0.45)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 8,
+              boxShadow: '0 8px 24px rgba(0, 0, 0, 0.35)',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                  {batchExportJob.status === 'running' ? (
+                    <Loader2 size={16} className="animate-spin" color="#38BDF8" />
+                  ) : batchExportJob.status === 'completed' ? (
+                    <CheckCircle2 size={16} color="#34D399" />
+                  ) : (
+                    <AlertCircle size={16} color="#F87171" />
+                  )}
+                  <span style={{ fontSize: '0.8rem', fontWeight: 800, color: '#F8FAFC', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {batchExportJob.stage}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+                  <span style={{ fontSize: '0.95rem', fontWeight: 900, fontFamily: 'monospace', color: batchExportJob.status === 'completed' ? '#34D399' : '#38BDF8' }}>
+                    {batchExportJob.progress || 0}%
+                  </span>
+                  {batchExportJob.status === 'running' ? (
+                    <button
+                      type="button"
+                      onClick={() => batchRender?.kill?.(batchExportJob.jobId)}
+                      style={{
+                        padding: '4px 10px',
+                        borderRadius: 6,
+                        background: 'rgba(239, 68, 68, 0.25)',
+                        border: '1px solid rgba(239, 68, 68, 0.6)',
+                        color: '#FEE2E2',
+                        fontSize: '0.72rem',
+                        fontWeight: 800,
+                        cursor: 'pointer',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 4,
+                      }}
+                    >
+                      <Square size={11} />
+                      <span>បញ្ឈប់ (Kill Export)</span>
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => batchRender?.clear?.()}
+                      style={{ background: 'none', border: 'none', color: '#94A3B8', cursor: 'pointer', padding: 2 }}
+                      title="បិទផ្ទាំងលទ្ធផល"
+                    >
+                      <X size={15} />
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              <div style={{ width: '100%', height: 7, borderRadius: 9999, background: 'rgba(255, 255, 255, 0.08)', overflow: 'hidden' }}>
+                <div style={{
+                  width: `${Math.max(2, batchExportJob.progress || 0)}%`,
+                  height: '100%',
+                  borderRadius: 9999,
+                  background: batchExportJob.status === 'completed'
+                    ? 'linear-gradient(90deg, #10b981, #34d399)'
+                    : batchExportJob.status === 'failed'
+                    ? '#ef4444'
+                    : 'linear-gradient(90deg, #3b82f6, #06b6d4)',
+                  transition: 'width 0.25s ease',
+                }} />
+              </div>
+
+              {Array.isArray(batchExportJob.skippedEpisodes) && batchExportJob.skippedEpisodes.length > 0 && batchExportJob.status !== 'running' && (
+                <div style={{ fontSize: '0.72rem', color: '#FBBF24' }}>
+                  ⚠️ បានរំលង {batchExportJob.skippedEpisodes.length} ភាគអត់ Voice: {batchExportJob.skippedEpisodes.map((s) => `EP${s.episodeNumber}`).join(', ')}
+                </div>
+              )}
+
+              {batchExportJob.mergedResult?.downloadUrl && (
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8, paddingTop: 2 }}>
+                  <span style={{ fontSize: '0.74rem', color: '#6EE7B7', fontWeight: 700 }}>
+                    ✅ បាន Merge {batchExportJob.mergedResult.mergedCount} ភាគ ចូល Folder Downloads រួចរាល់!
+                  </span>
+                  <a
+                    href={batchExportJob.mergedResult.downloadUrl || batchExportJob.mergedResult.videoUrl}
+                    download={batchExportJob.mergedResult.outputFilename}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 6,
+                      padding: '6px 14px',
+                      borderRadius: 8,
+                      background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+                      color: '#FFFFFF',
+                      fontSize: '0.75rem',
+                      fontWeight: 800,
+                      textDecoration: 'none',
+                    }}
+                  >
+                    <Download size={14} />
+                    <span>Download Full Video ({batchExportJob.mergedResult.outputFilename})</span>
+                  </a>
+                </div>
+              )}
+
+              {Array.isArray(batchExportJob.outputs) && batchExportJob.outputs.length > 0 && batchExportJob.status === 'completed' && !batchExportJob.mergedResult && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, paddingTop: 2 }}>
+                  {batchExportJob.outputs.map((out) => (
+                    <a
+                      key={out.episodeId || out.outputFilename}
+                      href={out.downloadUrl || out.videoUrl}
+                      download={out.outputFilename}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 5,
+                        padding: '4px 10px',
+                        borderRadius: 6,
+                        background: 'rgba(16, 185, 129, 0.14)',
+                        border: '1px solid rgba(52, 211, 153, 0.4)',
+                        color: '#6EE7B7',
+                        fontSize: '0.7rem',
+                        fontWeight: 700,
+                        textDecoration: 'none',
+                      }}
+                    >
+                      <Download size={12} />
+                      <span>EP{out.episodeNumber}</span>
+                    </a>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
           {episodes.length === 0 ? (
             <div style={{
               display: 'flex',
               flexDirection: 'column',
               alignItems: 'center',
               justifyContent: 'center',
-              height: '100%',
+              minHeight: 190,
+              padding: '28px 16px',
               color: '#94a3b8',
               gap: 12,
             }}>
@@ -2130,26 +3185,31 @@ export default function GeminiRouteModal({
                 const isRunning = Boolean(activeJob && activeJob.status === 'running');
                 const isQueued = Boolean(activeJob && activeJob.status === 'queued');
                 const isFailed = Boolean(activeJob && activeJob.status === 'failed' && !hasScript);
+                const segmentsMissingAfterJob = Boolean(!isRunning && !isQueued && !isFailed && isJobCompletedSegmentsMissing(ep, activeJob));
                 const assignedKeyNum = (idx % 4) + 1;
                 const keyTheme = KEY_THEMES[assignedKeyNum] || KEY_THEMES[1];
                 const segmentCount = getEpisodeSegmentCount(ep);
+                const epBrokenScan = getEpisodeBrokenSummary(ep);
                 const isFullyDone = isEpisodeFullyDone(ep);
 
                 return (
                   <div
                     key={ep.id}
-                    onClick={() => !isFullyDone && hasVideo && toggleSelect(ep.id)}
-                    className={isFullyDone ? '' : 'motion-lift'}
+                    data-testid={`ep-card-${ep.id}`}
+                    onClick={() => hasVideo && !isRunning && !isQueued && toggleSelect(ep.id)}
+                    className={hasVideo ? 'motion-lift' : ''}
                     style={{
                       borderRadius: 16,
                       border: isRunning
                         ? '1px solid #38BDF8'
                         : isFailed
                         ? '1px solid rgba(248, 113, 113, 0.65)'
-                        : isFullyDone
-                        ? '1px solid rgba(52, 211, 153, 0.45)'
+                        : segmentsMissingAfterJob
+                        ? '1px solid rgba(245, 158, 11, 0.6)'
                         : isSelected
                         ? '1px solid #FF8577'
+                        : isFullyDone
+                        ? '1px solid rgba(52, 211, 153, 0.45)'
                         : hasScript
                         ? '1px solid rgba(52, 211, 153, 0.35)'
                         : '1px solid rgba(255, 255, 255, 0.07)',
@@ -2157,6 +3217,8 @@ export default function GeminiRouteModal({
                         ? 'rgba(56, 189, 248, 0.12)'
                         : isFailed
                         ? 'rgba(248, 113, 113, 0.08)'
+                        : segmentsMissingAfterJob
+                        ? 'rgba(245, 158, 11, 0.08)'
                         : isFullyDone
                         ? 'linear-gradient(135deg, rgba(16, 185, 129, 0.10) 0%, rgba(20, 32, 54, 0.75) 100%)'
                         : isSelected
@@ -2167,17 +3229,17 @@ export default function GeminiRouteModal({
                       flexDirection: 'column',
                       justifyContent: 'space-between',
                       gap: 12,
-                      cursor: isFullyDone ? 'default' : hasVideo ? 'pointer' : 'not-allowed',
+                      cursor: hasVideo ? 'pointer' : 'not-allowed',
                       opacity: hasVideo ? 1 : 0.6,
                       transition: 'all 0.2s cubic-bezier(0.16, 1, 0.3, 1)',
                       boxShadow: isRunning 
                         ? '0 0 25px rgba(56, 189, 248, 0.25)' 
                         : isFailed
                         ? '0 0 20px rgba(248, 113, 113, 0.2)'
-                        : isFullyDone
-                        ? '0 4px 14px rgba(16, 185, 129, 0.12)'
                         : isSelected
                         ? '0 10px 28px rgba(0, 0, 0, 0.45), 0 0 16px rgba(255, 133, 119, 0.22)'
+                        : isFullyDone
+                        ? '0 4px 14px rgba(16, 185, 129, 0.12)'
                         : '0 4px 14px rgba(0, 0, 0, 0.25)',
                     }}
                   >
@@ -2185,36 +3247,14 @@ export default function GeminiRouteModal({
                     <div>
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 8 }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flex: 1 }}>
-                          {isFullyDone ? (
-                            <div
-                              title="ភាគនេះរួចរាល់ ១០០% (Translate, Voice AI, Clean BGM) - ពេញលេញគ្រប់ដំណាក់កាល"
-                              style={{
-                                width: 18,
-                                height: 18,
-                                borderRadius: 5,
-                                background: 'rgba(52, 211, 153, 0.22)',
-                                border: '1.5px solid #34D399',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                color: '#34D399',
-                                boxShadow: '0 0 8px rgba(52, 211, 153, 0.35)',
-                                flexShrink: 0,
-                                cursor: 'default',
-                              }}
-                            >
-                              <Check size={12} strokeWidth={3.5} />
-                            </div>
-                          ) : (
-                            <input
-                              type="checkbox"
-                              checked={isSelected}
-                              disabled={!hasVideo || isRunning}
-                              onChange={() => toggleSelect(ep.id)}
-                              onClick={(e) => e.stopPropagation()}
-                              style={{ width: 17, height: 17, cursor: 'pointer', accentColor: '#FF8577' }}
-                            />
-                          )}
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            disabled={!hasVideo || isRunning || isQueued}
+                            onChange={() => toggleSelect(ep.id)}
+                            onClick={(e) => e.stopPropagation()}
+                            style={{ width: 17, height: 17, cursor: hasVideo ? 'pointer' : 'not-allowed', accentColor: isFullyDone ? '#10B981' : '#FF8577', flexShrink: 0 }}
+                          />
                           <span style={{
                             fontSize: '0.74rem',
                             fontWeight: 900,
@@ -2255,6 +3295,37 @@ export default function GeminiRouteModal({
                               letterSpacing: '0.03em',
                             }}>
                               ✓ ALL DONE
+                            </span>
+                          )}
+                          {hasScript && epBrokenScan.totalBrokenCount > 0 && (
+                            <span
+                              data-testid={`ep-broken-badge-${ep.id}`}
+                              style={{
+                                fontSize: '0.62rem',
+                                fontWeight: 800,
+                                padding: '2px 7px',
+                                borderRadius: 9999,
+                                background: 'rgba(245, 158, 11, 0.2)',
+                                color: '#FBBF24',
+                                border: '1px solid rgba(245, 158, 11, 0.45)',
+                                letterSpacing: '0.02em',
+                              }}
+                              title={`អត្ថបទខូច: ${epBrokenScan.textBrokenCount} ឃ្លា • សំឡេងខ្វះ: ${epBrokenScan.voiceBrokenCount} ឃ្លា`}
+                            >
+                              ⚠️ ខូច {epBrokenScan.totalBrokenCount} ឃ្លា
+                            </span>
+                          )}
+                          {(ep.renderedVideo?.videoUrl || ep.renderedVideo?.outputVideoUrl) && (
+                            <span style={{
+                              fontSize: '0.6rem',
+                              fontWeight: 800,
+                              padding: '2px 7px',
+                              borderRadius: 9999,
+                              background: 'rgba(56, 189, 248, 0.18)',
+                              color: '#38BDF8',
+                              border: '1px solid rgba(56, 189, 248, 0.4)',
+                            }}>
+                              MP4 EXPORTED
                             </span>
                           )}
                           <h4 style={{
@@ -2327,8 +3398,63 @@ export default function GeminiRouteModal({
 
                       {/* Completed State Banner */}
                       {hasScript && !isRunning && !isQueued && !isFailed && !(isGeneratingBatchTTS && (activeTtsEpisodeIds.has(ep.id) || activeTtsEpisodeId === ep.id)) && !(isSeparatingBatchDemucs && (activeDemucsEpisodeIds.has(ep.id) || activeDemucsEpisodeId === ep.id)) && (() => {
-                        const isAudioReady = Boolean(completedTtsEpIds.has(ep.id) || ep.audioGenerated || ep.fullAudioUrl || ep.hasAudio || ttsLiveStats[ep.id]?.isDone);
-                        const isDemucsReady = Boolean(completedDemucsEpIds.has(ep.id) || ep.bgmAudioUrl || ep.cleanBgmPath || ep.hasDemucs || ep.isDemucsDone || demucsLiveStats[ep.id]?.isDone);
+                        const isAudioReady = checkEpisodeHasAudioReady(ep, completedTtsEpIds, ttsLiveStats);
+                        const isDemucsReady = checkEpisodeHasDemucsReady(ep, completedDemucsEpIds, demucsLiveStats);
+                        const isAudioOutdated = Boolean(ep.audioOutdated && !isAudioReady);
+
+                        if (epBrokenScan.totalBrokenCount > 0) {
+                          return (
+                            <div style={{
+                              marginTop: 6,
+                              padding: '10px 12px',
+                              borderRadius: 10,
+                              background: 'rgba(245, 158, 11, 0.10)',
+                              border: '1px solid rgba(245, 158, 11, 0.42)',
+                              display: 'flex',
+                              flexDirection: 'column',
+                              gap: 6,
+                            }}>
+                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6 }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                  <AlertTriangle size={14} color="#FBBF24" />
+                                  <span style={{ fontSize: '0.74rem', fontWeight: 800, color: '#FCD34D' }}>
+                                    ⚠️ នៅខ្វះ/ខូច {epBrokenScan.totalBrokenCount} ឃ្លា {typeof segmentCount === 'number' && segmentCount > 0 ? `(សរុប ${segmentCount} ឃ្លា)` : ''}
+                                  </span>
+                                </div>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                                  {epBrokenScan.textBrokenCount > 0 && (
+                                    <span style={{
+                                      fontSize: '0.60rem',
+                                      fontWeight: 800,
+                                      color: '#FCA5A5',
+                                      background: 'rgba(239, 68, 68, 0.2)',
+                                      padding: '1px 6px',
+                                      borderRadius: 9999,
+                                    }}>
+                                      អត្ថបទខូច {epBrokenScan.textBrokenCount}
+                                    </span>
+                                  )}
+                                  {epBrokenScan.voiceBrokenCount > 0 && (
+                                    <span style={{
+                                      fontSize: '0.60rem',
+                                      fontWeight: 800,
+                                      color: '#FDBA74',
+                                      background: 'rgba(249, 115, 22, 0.2)',
+                                      padding: '1px 6px',
+                                      borderRadius: 9999,
+                                    }}>
+                                      សំឡេងខ្វះ {epBrokenScan.voiceBrokenCount}
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                              <div style={{ fontSize: '0.68rem', color: '#FDE68A', opacity: 0.9 }}>
+                                អត្ថបទខូច: {epBrokenScan.textBrokenCount} ឃ្លា • សំឡេងខ្វះ: {epBrokenScan.voiceBrokenCount} ឃ្លា
+                                {(ep.hasAudio || ep.fullAudioUrl) ? ' (មាន Master ចាស់ ប៉ុន្តែមិនទាន់គ្រប់ឃ្លា)' : ''} — ចុច "🔧 ជួសជុលឃ្លាខូច"
+                              </div>
+                            </div>
+                          );
+                        }
 
                         if (isAudioReady && isDemucsReady) {
                           return (
@@ -2373,7 +3499,7 @@ export default function GeminiRouteModal({
                                 </div>
                               </div>
                               <div style={{ fontSize: '0.68rem', color: '#94A3B8' }}>
-                                សំឡេងនិយាយខ្មែរ និងតន្ត្រី Clean BGM/SFX រួចរាល់ ១០០% អាច Export ឬ Dubbing បានភ្លាមៗ!
+                                សំឡេងនិយាយខ្មែរ និងតន្ត្រី Clean BGM/SFX រួចរាល់ 100% អាច Export ឬ Dubbing បានភ្លាមៗ!
                               </div>
                             </div>
                           );
@@ -2423,7 +3549,7 @@ export default function GeminiRouteModal({
                                 </div>
                               </div>
                               <div style={{ fontSize: '0.68rem', color: '#94A3B8' }}>
-                                Chinese OCR + ASR Reconciled + Khmer Speech Synthesized! (ចុច Step 3 ដើម្បីបំបែក Clean BGM)
+                                Chinese OCR + ASR Reconciled + Khmer Speech Synthesized! (ចុច Step 4 ដើម្បីបំបែក Clean BGM)
                               </div>
                             </div>
                           );
@@ -2436,7 +3562,7 @@ export default function GeminiRouteModal({
                               padding: '10px 12px',
                               borderRadius: 10,
                               background: 'rgba(56, 189, 248, 0.08)',
-                              border: '1px solid rgba(56, 189, 248, 0.35)',
+                              border: `1px solid ${isAudioOutdated ? 'rgba(245, 158, 11, 0.45)' : 'rgba(56, 189, 248, 0.35)'}`,
                               display: 'flex',
                               flexDirection: 'column',
                               gap: 6,
@@ -2448,19 +3574,35 @@ export default function GeminiRouteModal({
                                     🎧 Clean BGM 100% រួចរាល់ (Demucs AI)
                                   </span>
                                 </div>
-                                <span style={{
-                                  fontSize: '0.60rem',
-                                  fontWeight: 800,
-                                  color: '#38BDF8',
-                                  background: 'rgba(56, 189, 248, 0.2)',
-                                  padding: '1px 6px',
-                                  borderRadius: 9999,
-                                }}>
-                                  BGM READY
-                                </span>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                                  {isAudioOutdated && (
+                                    <span style={{
+                                      fontSize: '0.60rem',
+                                      fontWeight: 800,
+                                      color: '#FBBF24',
+                                      background: 'rgba(245, 158, 11, 0.2)',
+                                      padding: '1px 6px',
+                                      borderRadius: 9999,
+                                    }}>
+                                      OUTDATED AUDIO
+                                    </span>
+                                  )}
+                                  <span style={{
+                                    fontSize: '0.60rem',
+                                    fontWeight: 800,
+                                    color: '#38BDF8',
+                                    background: 'rgba(56, 189, 248, 0.2)',
+                                    padding: '1px 6px',
+                                    borderRadius: 9999,
+                                  }}>
+                                    BGM READY
+                                  </span>
+                                </div>
                               </div>
-                              <div style={{ fontSize: '0.68rem', color: '#94A3B8' }}>
-                                សំឡេងតន្ត្រី Clean BGM បានបំបែករួចរាល់ — រង់ចាំបង្កើតសំឡេងខ្មែរ AI (Step 2)
+                              <div style={{ fontSize: '0.68rem', color: isAudioOutdated ? '#FCD34D' : '#94A3B8' }}>
+                                {isAudioOutdated
+                                  ? '⚠️ សំឡេងចាស់ហួសសម័យ — សូមចុច Step 3 (បង្កើតសំឡេងខ្មែរ AI) ឡើងវិញ!'
+                                  : 'សំឡេងតន្ត្រី Clean BGM បានបំបែករួចរាល់ — រង់ចាំបង្កើតសំឡេងខ្មែរ AI (Step 3)'}
                               </div>
                             </div>
                           );
@@ -2471,52 +3613,122 @@ export default function GeminiRouteModal({
                             marginTop: 6,
                             padding: '10px 12px',
                             borderRadius: 10,
-                            background: 'rgba(56, 189, 248, 0.08)',
-                            border: '1px solid rgba(56, 189, 248, 0.28)',
+                            background: isAudioOutdated ? 'rgba(245, 158, 11, 0.08)' : 'rgba(56, 189, 248, 0.08)',
+                            border: `1px solid ${isAudioOutdated ? 'rgba(245, 158, 11, 0.38)' : 'rgba(56, 189, 248, 0.28)'}`,
                             display: 'flex',
                             flexDirection: 'column',
                             gap: 6,
                           }}>
                             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6 }}>
                               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                                <CheckCircle2 size={14} color="#38BDF8" />
-                                <span style={{ fontSize: '0.74rem', fontWeight: 800, color: '#38BDF8' }}>
+                                <CheckCircle2 size={14} color={isAudioOutdated ? '#FBBF24' : '#38BDF8'} />
+                                <span style={{ fontSize: '0.74rem', fontWeight: 800, color: isAudioOutdated ? '#FCD34D' : '#38BDF8' }}>
                                   Script 100% រួចរាល់ {typeof segmentCount === 'number' && segmentCount > 0 ? `(${segmentCount} ឃ្លា)` : ''}
                                 </span>
                               </div>
-                              {ep.scriptData?.generationMode === 'fast_ocr' && (
-                                <span style={{ fontSize: '0.62rem', fontWeight: 800, color: '#FBBF24', background: 'rgba(251, 191, 36, 0.15)', padding: '1px 6px', borderRadius: 4, border: '1px solid rgba(251, 191, 36, 0.3)' }}>
-                                  ⚡ Fast OCR
-                                </span>
-                              )}
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                                {isAudioOutdated && (
+                                  <span style={{
+                                    fontSize: '0.60rem',
+                                    fontWeight: 800,
+                                    color: '#FBBF24',
+                                    background: 'rgba(245, 158, 11, 0.2)',
+                                    padding: '1px 6px',
+                                    borderRadius: 9999,
+                                    border: '1px solid rgba(245, 158, 11, 0.4)',
+                                  }}>
+                                    OUTDATED AUDIO
+                                  </span>
+                                )}
+                                {ep.scriptData?.generationMode === 'fast_ocr' && (
+                                  <span style={{ fontSize: '0.62rem', fontWeight: 800, color: '#FBBF24', background: 'rgba(251, 191, 36, 0.15)', padding: '1px 6px', borderRadius: 4, border: '1px solid rgba(251, 191, 36, 0.3)' }}>
+                                    ⚡ Fast OCR
+                                  </span>
+                                )}
+                              </div>
                             </div>
-                            <div style={{ fontSize: '0.68rem', color: '#94A3B8' }}>
-                              {ep.scriptData?.generationMode === 'fast_ocr'
-                                ? '⚡ Subtitle ចិនត្រូវបានស្រង់លើអេក្រង់ & បកប្រែភាសាខ្មែរសម្រេច (Bypass Whisper)។'
-                                : 'Chinese OCR + ASR Reconciled ភ្ជាប់ជាភាសាខ្មែរសម្រេច។'}
+                            <div style={{ fontSize: '0.68rem', color: isAudioOutdated ? '#FCD34D' : '#94A3B8' }}>
+                              {isAudioOutdated
+                                ? '⚠️ កែប្រែតួអង្គ/អត្ថបទរួច — សូមចុច Step 3 (បង្កើតសំឡេងខ្មែរ AI) ដើម្បីអាប់ដេតសំឡេងថ្មី!'
+                                : (ep.scriptData?.generationMode === 'fast_ocr'
+                                    ? '⚡ Subtitle ចិនត្រូវបានស្រង់លើអេក្រង់ & បកប្រែភាសាខ្មែរសម្រេច (Bypass Whisper)។'
+                                    : 'Chinese OCR + ASR Reconciled ភ្ជាប់ជាភាសាខ្មែរសម្រេច។')}
                             </div>
                           </div>
                         );
                       })()}
 
-                      {/* Idle State Banner (Unscripted) */}
+                      {/* Idle / Unsaved State Banner (Unscripted) */}
                       {!hasScript && !isRunning && !isQueued && !isFailed && (
-                        <div style={{
-                          marginTop: 6,
-                          padding: '12px 14px',
-                          borderRadius: 10,
-                          background: 'rgba(255, 255, 255, 0.02)',
-                          border: '1px dashed rgba(255, 255, 255, 0.08)',
-                          display: 'flex',
-                          alignItems: 'center',
-                          gap: 8,
-                          color: '#64748B',
-                        }}>
-                          <FileText size={16} />
-                          <div style={{ fontSize: '0.72rem' }}>
-                            {hasVideo ? 'វីដេអូរួចរាល់ — ចុច Select ដើម្បី Translate' : 'មិនទាន់មានវីដេអូសម្រាប់ Translate ទេ'}
+                        segmentsMissingAfterJob ? (
+                          <div style={{
+                            marginTop: 6,
+                            padding: '10px 12px',
+                            borderRadius: 10,
+                            background: 'rgba(245, 158, 11, 0.12)',
+                            border: '1px solid rgba(245, 158, 11, 0.45)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                            gap: 10,
+                            color: '#FBBF24',
+                          }}>
+                            <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, minWidth: 0 }}>
+                              <AlertTriangle size={16} style={{ flexShrink: 0, marginTop: 1 }} />
+                              <div style={{ minWidth: 0 }}>
+                                <div style={{ fontSize: '0.74rem', fontWeight: 800, color: '#FCD34D' }}>
+                                  ⚠️ Job done — segments not saved
+                                </div>
+                                <div style={{ fontSize: '0.67rem', color: '#FDE68A', opacity: 0.85, marginTop: 2 }}>
+                                  Job បានបញ្ចប់ ប៉ុន្តែមិនទាន់មាន Segments ក្នុង series.json ទេ — ចុច Refresh ឬ Translate ឡើងវិញ។
+                                </div>
+                              </div>
+                            </div>
+                            {typeof onRefreshSeries === 'function' && (
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onRefreshSeries();
+                                }}
+                                style={{
+                                  flexShrink: 0,
+                                  padding: '4px 10px',
+                                  borderRadius: 9999,
+                                  background: 'rgba(245, 158, 11, 0.2)',
+                                  border: '1px solid rgba(245, 158, 11, 0.5)',
+                                  color: '#FCD34D',
+                                  fontSize: '0.68rem',
+                                  fontWeight: 800,
+                                  cursor: 'pointer',
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: 4,
+                                }}
+                              >
+                                <RefreshCw size={11} />
+                                <span>Refresh</span>
+                              </button>
+                            )}
                           </div>
-                        </div>
+                        ) : (
+                          <div style={{
+                            marginTop: 6,
+                            padding: '12px 14px',
+                            borderRadius: 10,
+                            background: 'rgba(255, 255, 255, 0.02)',
+                            border: '1px dashed rgba(255, 255, 255, 0.08)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 8,
+                            color: '#64748B',
+                          }}>
+                            <FileText size={16} />
+                            <div style={{ fontSize: '0.72rem' }}>
+                              {hasVideo ? 'វីដេអូរួចរាល់ — ចុច Select ដើម្បី Translate' : 'មិនទាន់មានវីដេអូសម្រាប់ Translate ទេ'}
+                            </div>
+                          </div>
+                        )
                       )}
                     </div>
 
@@ -2561,9 +3773,23 @@ export default function GeminiRouteModal({
                               <Loader2 size={12} className="animate-spin" color="#38bdf8" />
                               <span>កំពុងបំបែកសំឡេង Demucs... ({demucsLiveStats[ep.id]?.percent || 0}%)</span>
                             </span>
-                          ) : (Boolean(completedTtsEpIds.has(ep.id) || ep.audioGenerated || ep.fullAudioUrl || ep.hasAudio || ttsLiveStats[ep.id]?.isDone) || Boolean(completedDemucsEpIds.has(ep.id) || ep.bgmAudioUrl || ep.cleanBgmPath || ep.hasDemucs || ep.isDemucsDone || demucsLiveStats[ep.id]?.isDone)) ? (
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                              {Boolean(completedTtsEpIds.has(ep.id) || ep.audioGenerated || ep.fullAudioUrl || ep.hasAudio || ttsLiveStats[ep.id]?.isDone) && (
+                          ) : segmentsMissingAfterJob ? (
+                            <span style={{
+                              color: '#FBBF24',
+                              fontWeight: 700,
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 4,
+                              background: 'rgba(245, 158, 11, 0.14)',
+                              padding: '2px 9px',
+                              borderRadius: 9999,
+                              border: '1px solid rgba(245, 158, 11, 0.4)',
+                            }}>
+                              <span>⚠️ Job done — segments not saved</span>
+                            </span>
+                          ) : (checkEpisodeHasAudioReady(ep, completedTtsEpIds, ttsLiveStats) || checkEpisodeHasDemucsReady(ep, completedDemucsEpIds, demucsLiveStats)) ? (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                              {checkEpisodeHasAudioReady(ep, completedTtsEpIds, ttsLiveStats) && (
                                 <span style={{
                                   color: '#34D399',
                                   fontWeight: 700,
@@ -2580,7 +3806,22 @@ export default function GeminiRouteModal({
                                   <span>សំឡេង AI</span>
                                 </span>
                               )}
-                              {Boolean(completedDemucsEpIds.has(ep.id) || ep.bgmAudioUrl || ep.cleanBgmPath || ep.hasDemucs || ep.isDemucsDone || demucsLiveStats[ep.id]?.isDone) && (
+                              {ep.audioOutdated && !checkEpisodeHasAudioReady(ep, completedTtsEpIds, ttsLiveStats) && hasScript && (
+                                <span style={{
+                                  color: '#FBBF24',
+                                  fontWeight: 700,
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: 4,
+                                  background: 'rgba(245, 158, 11, 0.14)',
+                                  padding: '2px 8px',
+                                  borderRadius: 9999,
+                                  border: '1px solid rgba(245, 158, 11, 0.4)',
+                                }}>
+                                  <span>ត្រូវបង្កើតសំឡេងថ្មី</span>
+                                </span>
+                              )}
+                              {checkEpisodeHasDemucsReady(ep, completedDemucsEpIds, demucsLiveStats) && (
                                 <span style={{
                                   color: '#38BDF8',
                                   fontWeight: 700,
@@ -2598,6 +3839,34 @@ export default function GeminiRouteModal({
                                 </span>
                               )}
                             </div>
+                          ) : (hasScript && epBrokenScan.totalBrokenCount > 0) ? (
+                            <span style={{
+                              color: '#FBBF24',
+                              fontWeight: 700,
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 5,
+                              background: 'rgba(245, 158, 11, 0.14)',
+                              padding: '2px 9px',
+                              borderRadius: 9999,
+                              border: '1px solid rgba(245, 158, 11, 0.45)',
+                            }}>
+                              <span>⚠️ នៅខ្វះ/ខូច {epBrokenScan.totalBrokenCount} ឃ្លា ({segmentCount} ឃ្លា)</span>
+                            </span>
+                          ) : (hasScript && ep.audioOutdated) ? (
+                            <span style={{
+                              color: '#FBBF24',
+                              fontWeight: 700,
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 5,
+                              background: 'rgba(245, 158, 11, 0.14)',
+                              padding: '2px 9px',
+                              borderRadius: 9999,
+                              border: '1px solid rgba(245, 158, 11, 0.4)',
+                            }}>
+                              <span>⚠️ {segmentCount > 0 ? `${segmentCount} ឃ្លា • ` : ''}ត្រូវបង្កើតសំឡេងថ្មី</span>
+                            </span>
                           ) : hasScript ? (
                             <span style={{
                               color: '#38BDF8',
@@ -2611,7 +3880,7 @@ export default function GeminiRouteModal({
                               border: '1px solid rgba(56, 189, 248, 0.3)',
                             }}>
                               <Check size={12} strokeWidth={3} />
-                              <span>{typeof segmentCount === 'number' && segmentCount > 0 ? `${segmentCount} ឃ្លាខ្មែរ` : 'Script រួចរាល់'}</span>
+                              <span>{segmentCount > 0 ? `${segmentCount} ឃ្លាខ្មែរ` : 'Script រួចរាល់'}</span>
                             </span>
                           ) : isFailed ? (
                             <span style={{
@@ -2680,6 +3949,7 @@ export default function GeminiRouteModal({
             </div>
           )}
         </div>
+        </div>
 
         {/* ── 5. MODAL FOOTER ── */}
         <div style={{
@@ -2694,7 +3964,7 @@ export default function GeminiRouteModal({
           flexShrink: 0,
         }}>
           {/* Detailed Multi-Step Progress Tracker (Step 1, Step 2, Step 3 & 100% Celebration) */}
-          <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
+          <div data-testid="modal-footer-status" style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
             <span style={{ color: '#F8FAFC', fontWeight: 800 }}>
               សរុប: <strong style={{ color: '#38bdf8' }}>{episodes.length} ភាគ</strong>
             </span>
@@ -2714,11 +3984,29 @@ export default function GeminiRouteModal({
                 1. Translate:
               </span>
               <strong style={{ color: isTranslateAllDone ? '#34D399' : '#E2E8F0' }}>
-                {completedCount}/{episodes.length}
+                {healthyScriptedCount}/{episodes.length}
               </strong>
               <span style={{ fontSize: '0.68rem', color: isTranslateAllDone ? '#34D399' : '#FBBF24', fontWeight: 700 }}>
-                ({isTranslateAllDone ? '✓ រួចរាល់ ១០០%' : `នៅសល់ ${unscriptedCount}`})
+                ({isTranslateAllDone
+                  ? `✓ រួចរាល់ ${translatePercent}%`
+                  : totalTextBrokenCount > 0
+                  ? `${translatePercent}% • នៅខ្វះ/ខូច ${totalTextBrokenCount} ឃ្លា`
+                  : `${translatePercent}% • នៅសល់ ${remainingCount}`})
               </span>
+              {unsavedCompletedJobsCount > 0 && (
+                <span style={{
+                  fontSize: '0.66rem',
+                  color: '#FBBF24',
+                  fontWeight: 800,
+                  marginLeft: 4,
+                  background: 'rgba(245, 158, 11, 0.14)',
+                  border: '1px solid rgba(245, 158, 11, 0.35)',
+                  padding: '1px 6px',
+                  borderRadius: 9999,
+                }}>
+                  ⚠️ {unsavedCompletedJobsCount} not saved
+                </span>
+              )}
             </div>
 
             <span style={{ color: 'rgba(255, 255, 255, 0.2)' }}>|</span>
@@ -2740,7 +4028,11 @@ export default function GeminiRouteModal({
                 {completedAudioCount}/{episodes.length}
               </strong>
               <span style={{ fontSize: '0.68rem', color: isAudioAllDone ? '#34D399' : '#FF8577', fontWeight: 700 }}>
-                ({isAudioAllDone ? '✓ រួចរាល់ ១០០%' : `នៅសល់ ${unAudioCount} ភាគ`})
+                ({isAudioAllDone
+                  ? `✓ រួចរាល់ ${audioPercent}%`
+                  : seriesBrokenSummary.totalBrokenCount > 0
+                  ? `${audioPercent}% • នៅខ្វះ/ខូច ${seriesBrokenSummary.totalBrokenCount} ឃ្លា (${unAudioCount} ភាគ)`
+                  : `${audioPercent}% • នៅសល់ ${unAudioCount} ភាគ`})
               </span>
             </div>
 
@@ -2763,7 +4055,7 @@ export default function GeminiRouteModal({
                 {completedDemucsCount}/{episodes.length}
               </strong>
               <span style={{ fontSize: '0.68rem', color: isDemucsAllDone ? '#34D399' : '#94A3B8', fontWeight: 700 }}>
-                ({isDemucsAllDone ? '✓ រួចរាល់ ១០០%' : `នៅសល់ ${unDemucsCount}`})
+                ({isDemucsAllDone ? `✓ រួចរាល់ ${demucsPercent}%` : `${demucsPercent}% • នៅសល់ ${unDemucsCount}`})
               </span>
             </div>
 
@@ -2783,7 +4075,7 @@ export default function GeminiRouteModal({
                 boxShadow: '0 0 12px rgba(52, 211, 153, 0.25)',
               }}>
                 <CheckCircle2 size={13} color="#34D399" />
-                🎉 ដំណាក់កាល ១-៣ ធ្វើរួចរាល់ ១០០% (ALL READY)!
+                🎉 ដំណាក់កាល 1-3 ធ្វើរួចរាល់ {overallStagePercent}% (ALL READY)!
               </span>
             ) : is1And2Done ? (
               <span style={{

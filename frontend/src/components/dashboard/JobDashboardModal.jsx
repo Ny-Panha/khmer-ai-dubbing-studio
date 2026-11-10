@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { useSharedJobQueue } from '../../context/JobQueueContext';
+import { useSharedJobQueue } from '../../context/jobQueueStore';
 import JobQueueList from './JobQueueList';
 
 export default function JobDashboardModal({ isOpen, onClose }) {

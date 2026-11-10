@@ -38,6 +38,11 @@ async function translateAndValidateKhmer({ scriptSegments = [], mode = 'dialogue
 
     const errors = [];
 
+    const isPlaceholderKhmer = khmerText === 'សន្ទនា';
+    if (isPlaceholderKhmer) {
+      khmerText = '';
+    }
+
     // Ensure Chinese source text is preserved
     seg.originalChineseText = origChinese;
     seg.originalText = origChinese;
@@ -52,7 +57,11 @@ async function translateAndValidateKhmer({ scriptSegments = [], mode = 'dialogue
       missingTranslationCount++;
       seg.translationStatus = 'review_needed';
       seg.reviewNeeded = true;
-      errors.push('មិនទាន់មានអត្ថបទបកប្រែជាភាសាខ្មែរឡើយ (ត្រូវការ Review)');
+      errors.push(
+        isPlaceholderKhmer
+          ? 'រកឃើញអត្ថបទជំនួស "សន្ទនា" ដែលមិនទាន់បកប្រែពិតប្រាកដ (ត្រូវការ Review ឬបកប្រែឡើងវិញ)'
+          : 'មិនទាន់មានអត្ថបទបកប្រែជាភាសាខ្មែរឡើយ (ត្រូវការ Review)'
+      );
     } else {
       translatedCount++;
       seg.translationStatus = seg.translationStatus || 'translated';

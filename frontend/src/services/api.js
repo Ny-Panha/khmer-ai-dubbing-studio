@@ -2,14 +2,18 @@
  * REST API Client for Khmer AI Dubbing Studio Backend
  */
 
+let lastNotifiedBackendState = null;
+
 export function notifyBackendOffline() {
-  if (typeof window !== 'undefined') {
+  if (typeof window !== 'undefined' && lastNotifiedBackendState !== 'offline') {
+    lastNotifiedBackendState = 'offline';
     window.dispatchEvent(new CustomEvent('backend-offline'));
   }
 }
 
 export function notifyBackendOnline() {
-  if (typeof window !== 'undefined') {
+  if (typeof window !== 'undefined' && lastNotifiedBackendState !== 'online') {
+    lastNotifiedBackendState = 'online';
     window.dispatchEvent(new CustomEvent('backend-online'));
   }
 }
@@ -75,6 +79,7 @@ async function parseResponseJson(res, defaultErrMsg = 'Request failed') {
     throw error;
   }
 
+  notifyBackendOnline();
   return data || {};
 }
 
@@ -84,12 +89,20 @@ async function parseResponseJson(res, defaultErrMsg = 'Request failed') {
 export async function checkBackendHealth() {
   try {
     const res = await fetch('/api/health');
-    if (!res.ok) return { online: false, data: null };
+    if (!res.ok) {
+      notifyBackendOffline();
+      return { online: false, data: null };
+    }
     const text = await res.text();
-    if (!text || !text.trim()) return { online: false, data: null };
+    if (!text || !text.trim()) {
+      notifyBackendOffline();
+      return { online: false, data: null };
+    }
     const data = JSON.parse(text);
+    notifyBackendOnline();
     return { online: true, data };
   } catch {
+    notifyBackendOffline();
     return { online: false, data: null };
   }
 }
@@ -307,7 +320,8 @@ export async function generateAudioApi(params) {
   const isObject = !Array.isArray(params) && typeof params === 'object';
   const segments = isObject ? params.segments : params;
   const voiceId = isObject ? (params.voiceId || 'km-KH-PisethNeural') : 'km-KH-PisethNeural';
-  const speed = isObject ? (params.speed || 'normal') : 'normal';
+  const hasParamSpeed = isObject && params.speed !== undefined && params.speed !== null && params.speed !== '';
+  const speed = hasParamSpeed ? params.speed : 'normal';
   const speakerMap = isObject ? (params.speakerMap || {}) : {};
   const projectName = isObject ? params.projectName : undefined;
   const videoId = isObject ? params.videoId : undefined;
@@ -324,6 +338,8 @@ export async function generateAudioApi(params) {
   const data = await parseResponseJson(res, 'Failed to generate audio speech with TTS');
 
   return {
+    alreadyCompleted: Boolean(data.alreadyCompleted),
+    summaryMessage: data.summaryMessage,
     projectName: data.projectName,
     seriesId: data.seriesId || seriesId,
     episodeId: data.episodeId || episodeId,
@@ -340,7 +356,7 @@ export async function generateAudioApi(params) {
  * @param {Object} segment 
  * @param {string|Object} [options='normal'] - speed string or { speed, voiceId, projectName, videoId, seriesId, episodeId }
  */
-export async function generateSingleSegmentAudio(segment, options = 'normal') {
+export async function generateSingleSegmentAudio(segment, options = {}) {
   const rawText = segment?.khmer || segment?.khmerText || segment?.khmerTranslatedText || segment?.text || '';
   if (!rawText || !String(rawText).trim()) {
     const segNum = segment?.index || segment?.id || '';
@@ -349,7 +365,13 @@ export async function generateSingleSegmentAudio(segment, options = 'normal') {
     throw err;
   }
   const isObj = typeof options === 'object' && options !== null;
-  const speed = isObj ? (options.speed || 'normal') : (options || 'normal');
+  const hasOptSpeed = isObj
+    ? (options.speed !== undefined && options.speed !== null && options.speed !== '')
+    : (options !== undefined && options !== null && options !== '');
+  const speed = hasOptSpeed
+    ? (isObj ? options.speed : options)
+    : (segment?.userCustomSpeed && segment?.speed !== undefined && segment?.speed !== null && segment?.speed !== '' ? segment.speed : undefined);
+  const userCustomSpeed = isObj && options.userCustomSpeed !== undefined ? Boolean(options.userCustomSpeed) : undefined;
   const voiceId = isObj ? (options.voiceId || 'km-KH-PisethNeural') : 'km-KH-PisethNeural';
   const projectName = isObj ? (options.projectName || segment.projectName) : segment.projectName;
   const videoId = isObj ? (options.videoId || segment.videoId) : segment.videoId;
@@ -375,7 +397,8 @@ export async function generateSingleSegmentAudio(segment, options = 'normal') {
       seriesId,
       episodeId,
     },
-    speed,
+    ...(speed !== undefined ? { speed } : {}),
+    ...(userCustomSpeed !== undefined ? { userCustomSpeed } : {}),
     voiceId,
     forceVoice: true,
     deliveryType,
@@ -716,10 +739,30 @@ export async function retryJobApi(jobId) {
 
 /**
  * Fetch realtime Gemini API keys status and quota health
+ * @param {{ probe?: 'models' | 'live' | 'matrix' | 'stats', model?: string, allModels?: boolean, signal?: AbortSignal }} [options]
  */
-export async function fetchGeminiKeysStatusApi({ signal } = {}) {
-  const res = await fetch('/api/gemini/keys-status', { signal });
+export async function fetchGeminiKeysStatusApi({ probe = 'models', model = '', allModels = false, signal } = {}) {
+  const params = new URLSearchParams();
+  if (probe) params.set('probe', probe);
+  if (model) params.set('model', model);
+  if (allModels) params.set('allModels', 'true');
+  const qs = params.toString();
+  const res = await fetch(`/api/gemini/keys-status${qs ? `?${qs}` : ''}`, { signal });
   return await parseResponseJson(res, 'Failed to fetch Gemini keys status');
+}
+
+/**
+ * Update Gemini Multi-Key Pacing, Primary Model & Quota Limit Settings
+ * @param {{ useAllKeysFast?: boolean, rpmPerKey?: number, dailyRpdPerKey?: number, preferredModel?: string, resetDailyStats?: boolean }} payload
+ */
+export async function updateGeminiQuotaSettingsApi(payload = {}, { signal } = {}) {
+  const res = await fetch('/api/gemini/quota-settings', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+    signal,
+  });
+  return await parseResponseJson(res, 'Failed to update Gemini quota settings');
 }
 
 /**
@@ -766,4 +809,88 @@ export async function deleteEpisodeApi(seriesId, episodeId) {
     }
     throw err;
   }
+}
+
+/**
+ * Start background Batch Export (separate files) or Full Video Merge (single concatenated MP4)
+ * @param {Object} payload
+ */
+export async function startBatchRenderApi(payload = {}) {
+  const res = await fetch('/api/render-batch', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  return await parseResponseJson(res, 'Failed to start batch export job');
+}
+
+/**
+ * Poll Batch Export / Merge job progress
+ * @param {string} jobId
+ * @param {string|null} seriesId
+ */
+export async function fetchBatchRenderProgressApi(jobId, seriesId = null, { signal } = {}) {
+  const query = new URLSearchParams();
+  if (jobId) query.set('jobId', jobId);
+  if (seriesId) query.set('seriesId', seriesId);
+  const res = await fetch(`/api/render-batch/progress?${query.toString()}`, { signal });
+  return await parseResponseJson(res, 'Failed to fetch batch export progress');
+}
+
+/**
+ * Fetch latest Batch Export / Merge job for a series
+ * @param {string} seriesId
+ */
+export async function fetchLatestBatchRenderApi(seriesId, { signal } = {}) {
+  if (!seriesId) return { success: true, job: null };
+  const res = await fetch(`/api/render-batch/latest?seriesId=${encodeURIComponent(seriesId)}`, { signal });
+  return await parseResponseJson(res, 'Failed to fetch latest batch export job');
+}
+
+/**
+ * Cancel / Kill an active Batch Export / Merge job
+ */
+export async function killBatchRenderApi({ jobId = null, seriesId = null } = {}) {
+  const res = await fetch('/api/render-batch/kill', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jobId, seriesId }),
+  });
+  return await parseResponseJson(res, 'Failed to stop batch export job');
+}
+
+/**
+ * Enqueue ONE queued repair job per episode with broken text or missing/failed audio
+ */
+export async function startRepairBrokenJobApi({
+  seriesId,
+  episodeIds = null,
+  episodeId = null,
+  apiKey = null,
+  modelName = null,
+} = {}) {
+  const res = await fetch('/api/jobs/repair-broken', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      seriesId,
+      episodeIds,
+      episodeId,
+      apiKey,
+      modelName,
+    }),
+  });
+  return await parseResponseJson(res, 'Failed to enqueue repair broken job');
+}
+
+/**
+ * Poll single job status (used by inline Script/Subs repair button & status checks)
+ */
+export async function fetchJobStatusApi(jobId, { seriesId = null, episodeId = null, signal } = {}) {
+  const params = new URLSearchParams();
+  if (seriesId) params.set('seriesId', seriesId);
+  if (episodeId) params.set('episodeId', episodeId);
+  const qs = params.toString();
+  const res = await fetch(`/api/jobs/${encodeURIComponent(jobId)}/status${qs ? `?${qs}` : ''}`, { signal });
+  return await parseResponseJson(res, `Failed to fetch status for job ${jobId}`);
 }

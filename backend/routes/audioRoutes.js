@@ -14,18 +14,64 @@ const {
   getSupportedVoices,
   validateVoiceId,
   speedToEdgeRate,
+  cleanTextForTts,
+  isPlaceholderOrEmptyTtsText,
   generateSingleSegmentAudio,
   generateBatchSegmentsAudio,
+  getTtsJobProgress,
+  resolvePriorSegmentAudioPath,
   cancelTtsJob,
   generateVoicePreview,
 } = require("../services/ttsService");
 const { detectSpeakerGender } = require("../models/speakerRegistry");
 const { createSynchronizedNarrationAudio, parseTimeToSec } = require("../services/ffmpegService");
 const audioSeparationService = require("../services/audioSeparationService");
+const { withSeriesMetadataLock, updateSeriesMetadata } = require("../services/episodeService");
 
 const router = express.Router();
 
 const activeSyncJobs = new Map();
+const activeBatchStages = new Map();
+
+function countUniqueSegmentMp3s(mp3s = []) {
+  const uniqueSegIds = new Set();
+  for (const f of mp3s) {
+    if (!f || f.startsWith(".tmp")) continue;
+    const m = f.match(/seg_([^_]+)_/);
+    uniqueSegIds.add(m && m[1] ? m[1] : f);
+  }
+  return uniqueSegIds.size;
+}
+
+function doesSegmentNeedTts(seg, audioDir, batchSpeedInfo = null, batchExplicitCustom = false) {
+  if (!seg || typeof seg !== "object") return false;
+  if (seg.ttsStatus === "empty_text") return false;
+  const raw = seg.khmer || seg.khmerText || seg.khmerTranslatedText || seg.text || "";
+  if (typeof raw !== "string" || !raw.trim() || !cleanTextForTts(raw) || isPlaceholderOrEmptyTtsText(raw)) return false;
+
+  if (seg.audioOutdated) return true;
+  if (seg.ttsStatus === "pending" || seg.ttsStatus === "error" || seg.status === "tts_error") return true;
+
+  const existingPath = resolvePriorSegmentAudioPath(seg, audioDir);
+  if (!existingPath) return true;
+
+  const ownInfo = speedToEdgeRate(seg.speed ?? seg.rate);
+  if ((seg.userCustomSpeed || ownInfo.isCustomNonDefault) && seg.ttsRate && ownInfo.valid && seg.ttsRate !== ownInfo.rate) {
+    return true;
+  }
+  if (!seg.userCustomSpeed && batchExplicitCustom && batchSpeedInfo?.valid && seg.ttsRate && seg.ttsRate !== batchSpeedInfo.rate) {
+    return true;
+  }
+
+  if (seg.voiceId) {
+    const validVoice = validateVoiceId(seg.voiceId);
+    if (validVoice !== "google-km-standard" && !path.basename(existingPath).includes(validVoice)) {
+      return true;
+    }
+  }
+
+  return false;
+}
 
 /**
  * 1. Voices catalog endpoints
@@ -69,22 +115,6 @@ router.get("/tts/progress", async (req, res) => {
     const cleanEpisode = sanitizeEpisodeId(episodeId);
     const epAudioDir = path.join(uploadsDir, "projects", cleanSeries, "episodes", cleanEpisode, "audio");
 
-    let current = 0;
-    let lastFile = null;
-    let isDone = false;
-
-    if (fs.existsSync(epAudioDir)) {
-      try {
-        const dirEntries = await fs.promises.readdir(epAudioDir);
-        const mp3s = dirEntries.filter((f) => f.endsWith(".mp3") && !f.includes("narration"));
-        current = mp3s.length;
-        if (current > 0) {
-          lastFile = mp3s[current - 1];
-        }
-        isDone = dirEntries.includes(`${cleanEpisode}_narration_khmer.mp3`);
-      } catch (_) {}
-    }
-
     // Determine total segments without re-reading huge series.json synchronously
     let total = 0;
     const cacheKey = `${cleanSeries}_${cleanEpisode}`;
@@ -111,12 +141,67 @@ router.get("/tts/progress", async (req, res) => {
       }
     }
 
+    // Prefer exact in-flight job counters when batch TTS or master narration sync is running
+    const batchKey = `${cleanSeries}:${cleanEpisode}`;
+    const activeJob = getTtsJobProgress(cleanSeries, cleanEpisode);
+    const batchStage = activeBatchStages.get(batchKey);
+
+    if (activeJob || batchStage) {
+      const effTotal = activeJob?.total || batchStage?.total || total;
+      if (batchStage?.stage === "syncing" && !activeJob) {
+        return res.json({
+          success: true,
+          isRunning: true,
+          isDone: false,
+          current: effTotal,
+          total: effTotal,
+          percent: 98,
+          lastFile: null,
+          stage: "syncing",
+          seriesId: cleanSeries,
+          episodeId: cleanEpisode,
+        });
+      }
+      const rawCurrent = activeJob ? activeJob.completed : 0;
+      const current = effTotal > 0 ? Math.min(effTotal, rawCurrent) : rawCurrent;
+      const percent = effTotal > 0 ? Math.min(99, Math.round((current / effTotal) * 100)) : 0;
+      return res.json({
+        success: true,
+        isRunning: true,
+        isDone: false,
+        current,
+        total: effTotal,
+        percent,
+        lastFile: activeJob?.lastFile || null,
+        stage: batchStage?.stage || activeJob?.stage || "synthesizing",
+        seriesId: cleanSeries,
+        episodeId: cleanEpisode,
+      });
+    }
+
+    let current = 0;
+    let lastFile = null;
+    let isDone = false;
+
+    if (fs.existsSync(epAudioDir)) {
+      try {
+        const dirEntries = await fs.promises.readdir(epAudioDir);
+        const mp3s = dirEntries.filter((f) => f.endsWith(".mp3") && !f.includes("narration") && !f.startsWith(".tmp"));
+        const uniqueCount = countUniqueSegmentMp3s(mp3s);
+        current = total > 0 ? Math.min(total, uniqueCount) : uniqueCount;
+        if (mp3s.length > 0) {
+          lastFile = mp3s[mp3s.length - 1];
+        }
+        isDone = dirEntries.includes(`${cleanEpisode}_narration_khmer.mp3`);
+      } catch (_) {}
+    }
+
     const percent = total > 0 ? Math.min(100, Math.round((current / total) * 100)) : 0;
-    const stage = isDone ? 'completed' : (percent >= 98 ? 'syncing' : (current > 0 ? 'synthesizing' : 'starting'));
+    const stage = isDone ? "completed" : (current > 0 ? "idle" : "starting");
 
     return res.json({
       success: true,
-      isRunning: current > 0 && !isDone,
+      isRunning: false,
       isDone,
       current,
       total,
@@ -163,7 +248,7 @@ router.post("/generate-audio", async (req, res) => {
     const {
       segment,
       segments,
-      voiceId = "km-KH-PisethNeural",
+      voiceId: rawBodyVoiceId,
       speed: rawBodySpeed,
       rate: rawBodyRate,
       userCustomSpeed: rawBodyUserCustomSpeed,
@@ -207,17 +292,21 @@ router.post("/generate-audio", async (req, res) => {
     const rawEpisodeId = episodeId || segment?.episodeId || extractedEpisode || null;
     const rawSeriesId = seriesId || segment?.seriesId || extractedSeries || null;
     const rawProjectName = projectName || segment?.projectName || (videoId ? path.basename(videoId, path.extname(videoId)).replace(/_source$/, "") : (extractedSeries || "drama_project"));
-    const { audioDir, cleanName, cleanSeries, cleanEpisode, isEpisode } = ensureProjectDirs(rawProjectName, rawEpisodeId, rawSeriesId);
 
-    // ករណីទី 1: Single Segment Regeneration (1-Click Inspector)
+    // Guard empty or untranslated placeholder single-segment text BEFORE ensureProjectDirs so rejected 400 calls never create empty project/drama_project dirs
     if (segment && typeof segment === "object") {
-      const rawText = segment.khmer || segment.khmerText || segment.khmerTranslatedText || segment.text || "";
-      const textToSpeak = typeof rawText === "string" ? rawText.trim() : "";
-      if (!textToSpeak) {
+      const earlyRawText = segment.khmer || segment.khmerText || segment.khmerTranslatedText || segment.text || "";
+      const earlyTextToSpeak = typeof earlyRawText === "string" ? cleanTextForTts(earlyRawText) : "";
+      if (!earlyTextToSpeak || isPlaceholderOrEmptyTtsText(earlyRawText)) {
         const segNum = segment.index || segment.id || "";
-        const emptyMsg = segNum
-          ? `Segment #${segNum} គ្មានអត្ថបទខ្មែរទេ — សូមបកប្រែ ឬវាយអត្ថបទសិន`
-          : "គ្មានអត្ថបទខ្មែរទេ — សូមបកប្រែ ឬវាយអត្ថបទសិន";
+        const isPlaceholder = earlyTextToSpeak === "សន្ទនា";
+        const emptyMsg = isPlaceholder
+          ? (segNum
+            ? `Segment #${segNum} មានតែពាក្យជំនួស "សន្ទនា" (មិនទាន់បកប្រែពិតប្រាកដទេ) — សូមបកប្រែឡើងវិញសិន`
+            : 'មានតែពាក្យជំនួស "សន្ទនា" (មិនទាន់បកប្រែពិតប្រាកដទេ) — សូមបកប្រែឡើងវិញសិន')
+          : (segNum
+            ? `Segment #${segNum} គ្មានអត្ថបទខ្មែរទេ — សូមបកប្រែ ឬវាយអត្ថបទសិន`
+            : "គ្មានអត្ថបទខ្មែរទេ — សូមបកប្រែ ឬវាយអត្ថបទសិន");
         console.warn(`[TTS 400 Guard] ${emptyMsg}`);
         return res.status(400).json({
           success: false,
@@ -225,13 +314,39 @@ router.post("/generate-audio", async (req, res) => {
           message: emptyMsg,
         });
       }
+    }
 
-      const segGender = segment.voiceGender || segment.gender || segment.speakerGender || detectSpeakerGender(segment.speaker, segment.gender, segment.khmer || segment.khmerText);
-      const requestedVoice = req.body.voiceId || voiceId;
+    const { audioDir, cleanName, cleanSeries, cleanEpisode, isEpisode } = ensureProjectDirs(rawProjectName, rawEpisodeId, rawSeriesId);
+
+    // ករណីទី 1: Single Segment Regeneration (1-Click Inspector)
+    if (segment && typeof segment === "object") {
+      const rawText = segment.khmer || segment.khmerText || segment.khmerTranslatedText || segment.text || "";
+      const textToSpeak = typeof rawText === "string" ? rawText.trim() : "";
+
+      const normKnownGender = (g) => {
+        const s = String(g || "").trim().toLowerCase();
+        if (s === "female" || s === "f" || s === "ស្រី" || s === "girl" || s === "woman") return "female";
+        if (s === "male" || s === "m" || s === "ប្រុស" || s === "boy" || s === "man") return "male";
+        return "";
+      };
+      const segSpeakerName = String(segment.speaker || segment.speakerName || "").trim();
+      const segGender =
+        normKnownGender(segment.voiceGender) ||
+        normKnownGender(segment.gender) ||
+        normKnownGender(segment.speakerGender) ||
+        normKnownGender(detectSpeakerGender(segSpeakerName, "", segment.khmer || segment.khmerText)) ||
+        "unknown";
+      const requestedVoice = rawBodyVoiceId || null;
+      const isSegManual = Boolean(segment.userOverridden || segment.voiceAssignmentSource === "manual" || segment.voiceOverride);
+      const isManual = Boolean(req.body.forceVoice || requestedVoice || isSegManual);
+      const derivedGenderVoice = segGender === "female"
+        ? "km-KH-SreymomNeural"
+        : (segGender === "male" ? "km-KH-PisethNeural" : null);
       const targetVoice = requestedVoice
         ? validateVoiceId(requestedVoice)
-        : validateVoiceId(segment.khmerVoiceId || segment.voice || segment.voiceId || (segGender === "female" || segGender === "FEMALE" ? "km-KH-SreymomNeural" : "km-KH-PisethNeural"));
-      const isManual = Boolean(req.body.forceVoice || requestedVoice || segment.voiceAssignmentSource === "manual");
+        : (isSegManual
+            ? validateVoiceId(segment.voiceOverride || segment.khmerVoiceId || segment.voiceId || segment.voice || derivedGenderVoice || "km-KH-PisethNeural")
+            : validateVoiceId(derivedGenderVoice || segment.khmerVoiceId || segment.voice || segment.voiceId || "km-KH-PisethNeural"));
 
       const deliveryType = req.body.deliveryType || segment.deliveryType || "out_loud";
       const audioEffect = req.body.audioEffect || segment.audioEffect || (deliveryType === "inner_thought" ? "inner_thought_reverb" : "none");
@@ -249,14 +364,38 @@ router.post("/generate-audio", async (req, res) => {
         console.warn(`[TTS] ⚠️ Route /generate-audio single segment #${segment.id || "N/A"} requested speed ${JSON.stringify(speedInfo.requested)} cannot be applied (${speedInfo.reason})`);
       }
       const resolvedRate = speedInfo.valid ? speedInfo.rate : "+0%";
+      const segHadNonDefaultSpeed = Boolean(speedToEdgeRate(segOwnRawSpeed).isCustomNonDefault);
       const hasExplicitUserSpeed = rawBodyUserCustomSpeed !== undefined
         ? Boolean(rawBodyUserCustomSpeed)
-        : Boolean(speedInfo.isCustomNonDefault || segment.userCustomSpeed);
+        : (hasBodySpeed || hasBodyRate
+          ? Boolean(speedInfo.isCustomNonDefault || (segment.userCustomSpeed && !segHadNonDefaultSpeed))
+          : Boolean(speedInfo.isCustomNonDefault || segment.userCustomSpeed));
       const resolvedSegSpeed = (speedInfo.valid && speedInfo.provided)
         ? (typeof speedInfo.requested === "string" && speedInfo.requested.trim().toLowerCase() === "normal"
           ? "normal"
           : (speedInfo.numericSpeed ?? 1.0))
         : (segment.speed ?? "normal");
+
+      // Protect split sibling audio files from prior-file cleanup if any other segment still points to the same file
+      const singleSharedAudioPaths = new Set();
+      try {
+        let peerSegments = Array.isArray(req.body.allSegments) ? req.body.allSegments : null;
+        if (!peerSegments && isEpisode && cleanSeries && cleanEpisode) {
+          const metaPath = path.join(uploadsDir, "projects", cleanSeries, "series.json");
+          if (fs.existsSync(metaPath)) {
+            const meta = JSON.parse(await fs.promises.readFile(metaPath, "utf8"));
+            const ep = (meta.episodes || []).find((e) => String(e.id) === String(cleanEpisode));
+            if (Array.isArray(ep?.scriptData?.segments)) peerSegments = ep.scriptData.segments;
+          }
+        }
+        if (peerSegments) {
+          for (const peer of peerSegments) {
+            if (!peer || String(peer.id) === String(segment.id)) continue;
+            const peerPath = resolvePriorSegmentAudioPath(peer, audioDir);
+            if (peerPath) singleSharedAudioPaths.add(path.resolve(peerPath));
+          }
+        }
+      } catch (_) {}
 
       console.log(`[TTS] Regenerating single segment #${segment.id} [${deliveryType}] with voice ${targetVoice}, rate=${resolvedRate} (requestedSpeed=${requestedSpeedRaw ?? "default"}, userCustomSpeed=${hasExplicitUserSpeed})${cleanEpisode ? ` [Episode: ${cleanEpisode}]` : ""}...`);
       const updatedSegment = await generateSingleSegmentAudio(
@@ -291,6 +430,7 @@ router.post("/generate-audio", async (req, res) => {
           effectConfig,
           forceRegen: Boolean(forceRegen),
           episodeId: cleanEpisode,
+          sharedAudioPaths: singleSharedAudioPaths,
           ...(speedInfo.provided && !speedInfo.valid ? { _suppressInvalidSpeedLog: true } : {}),
         }
       );
@@ -315,15 +455,17 @@ router.post("/generate-audio", async (req, res) => {
         }
       }
 
-      // Persist updated single segment into series.json immediately
+      // Persist updated single segment into series.json immediately under per-series mutex
       if (isEpisode && cleanSeries && cleanEpisode) {
         try {
           const metaPath = path.join(uploadsDir, "projects", cleanSeries, "series.json");
-          if (fs.existsSync(metaPath)) {
-            const fileContent = await fs.promises.readFile(metaPath, "utf8");
-            const seriesMeta = JSON.parse(fileContent);
-            const targetEp = (seriesMeta.episodes || []).find((e) => String(e.id) === String(cleanEpisode));
-            if (targetEp && targetEp.scriptData && Array.isArray(targetEp.scriptData.segments)) {
+          await withSeriesMetadataLock(cleanSeries, () => {
+            if (!fs.existsSync(metaPath)) return;
+            updateSeriesMetadata(cleanSeries, (seriesMeta) => {
+              const targetEp = (seriesMeta?.episodes || []).find((e) => String(e.id) === String(cleanEpisode));
+              if (!targetEp || !targetEp.scriptData || !Array.isArray(targetEp.scriptData.segments)) {
+                return false;
+              }
               const segIdx = targetEp.scriptData.segments.findIndex((s) => String(s.id) === String(updatedSegment.id));
               if (segIdx !== -1) {
                 targetEp.scriptData.segments[segIdx] = {
@@ -334,14 +476,22 @@ router.post("/generate-audio", async (req, res) => {
                   userTrimmed: false,
                 };
               }
+              targetEp.scriptData.updatedAt = Date.now();
               if (fullAudioUrl) {
                 targetEp.fullAudioUrl = fullAudioUrl;
+                const hasRemainingOutdatedSpoken = targetEp.scriptData.segments.some((s) => {
+                  const txt = String(s?.khmer || s?.khmerText || s?.khmerTranslatedText || s?.text || "").trim();
+                  return Boolean(txt) && s?.ttsStatus !== "empty_text" && !isPlaceholderOrEmptyTtsText(txt) && Boolean(s?.audioOutdated || s?.ttsStatus === "outdated");
+                });
+                if (!hasRemainingOutdatedSpoken) {
+                  targetEp.audioOutdated = false;
+                }
               }
               targetEp.audioGenerated = true;
               targetEp.hasAudio = true;
-              await fs.promises.writeFile(metaPath, JSON.stringify(seriesMeta, null, 2), "utf8");
-            }
-          }
+              return true;
+            });
+          });
         } catch (_) {}
       }
 
@@ -362,60 +512,94 @@ router.post("/generate-audio", async (req, res) => {
 
       const hasAnyText = segments.some((s) => {
         const raw = s.khmer || s.khmerText || s.khmerTranslatedText || s.text || "";
-        return Boolean(typeof raw === "string" && raw.trim());
+        return typeof raw === "string" && !isPlaceholderOrEmptyTtsText(raw);
       });
 
       if (!hasAnyText) {
-        console.warn(`[TTS] Batch audio request has 0 segments with text (${segments.length} segments skipped).`);
+        console.warn(`[TTS] Batch audio request has 0 segments with real Khmer text (${segments.length} segments skipped).`);
         return res.json({
           success: true,
           projectName: cleanSeries,
           seriesId: cleanSeries,
           episodeId: cleanEpisode,
-          voiceId,
+          voiceId: rawBodyVoiceId || "km-KH-PisethNeural",
           speed,
           fullAudioUrl: null,
           fullAudioPath: null,
-          segments: segments.map((s) => ({ ...s, ttsStatus: "empty_text", audioGenerated: false, audioOutdated: true })),
+          segments: segments.map((s) => ({
+            ...s,
+            audioUrl: null,
+            audioPath: null,
+            audioFile: null,
+            ttsStatus: "empty_text",
+            audioGenerated: false,
+            audioOutdated: true,
+          })),
           skippedEmptyCount: segments.length,
           validCount: 0,
           summaryMessage: `រំលង ${segments.length} ឃ្លា (គ្មានអត្ថបទ)`,
         });
       }
 
-      // Fast Path: If master narration audio already exists and forceRegen is false, return immediately without re-rendering
-      // (unless segments are marked outdated or have an unapplied custom speed rate change).
-      const hasOutdatedOrSpeedChange = segments.some((s) => {
-        if (s.audioOutdated) return true;
-        const ownInfo = speedToEdgeRate(s.speed ?? s.rate);
-        return Boolean((s.userCustomSpeed || ownInfo.isCustomNonDefault) && s.ttsRate && ownInfo.valid && s.ttsRate !== ownInfo.rate);
-      });
-      if (!forceRegen && !hasOutdatedOrSpeedChange && fs.existsSync(fullAudioPath) && fs.statSync(fullAudioPath).size > 1000) {
+      const batchRequestedSpeed = hasBodyRate ? rawBodyRate : (hasBodySpeed ? rawBodySpeed : undefined);
+      const batchSpeedInfo = speedToEdgeRate(batchRequestedSpeed);
+      if (batchSpeedInfo.provided && !batchSpeedInfo.valid) {
+        console.warn(`[TTS] ⚠️ Route /generate-audio batch requested speed ${JSON.stringify(batchSpeedInfo.requested)} cannot be applied (${batchSpeedInfo.reason})`);
+      }
+      const batchExplicitCustom = Boolean(rawBodyUserCustomSpeed) || batchSpeedInfo.isCustomNonDefault;
+
+      // Fast Path: If master narration audio already exists, all valid segments have ready files on disk,
+      // and forceRegen is false, return immediately without re-rendering any TTS clips.
+      const needsAnySegmentWork = segments.some((s) =>
+        doesSegmentNeedTts(s, audioDir, batchSpeedInfo, batchExplicitCustom)
+      );
+      if (!forceRegen && !needsAnySegmentWork && fs.existsSync(fullAudioPath) && fs.statSync(fullAudioPath).size > 1000) {
         const relAudioUrl = isEpisode
           ? `/uploads/projects/${cleanSeries}/episodes/${cleanEpisode}/audio/${fullAudioFilename}`
           : `/uploads/projects/${cleanName}/audio/${fullAudioFilename}`;
-        console.log(`[TTS] Master narration audio already exists for ${cleanEpisode || cleanName} (${fs.statSync(fullAudioPath).size} bytes). Skipping duplicate generation.`);
+        console.log(`[TTS] Master narration & all segment audio already exist for ${cleanEpisode || cleanName} (${fs.statSync(fullAudioPath).size} bytes). Skipping duplicate generation.`);
         if (isEpisode && cleanSeries && cleanEpisode) {
           try {
             const metaPath = path.join(uploadsDir, "projects", cleanSeries, "series.json");
-            if (fs.existsSync(metaPath)) {
-              const fileContent = await fs.promises.readFile(metaPath, "utf8");
-              const seriesMeta = JSON.parse(fileContent);
-              const targetEp = (seriesMeta.episodes || []).find((e) => String(e.id) === String(cleanEpisode));
-              if (targetEp && (!targetEp.audioGenerated || !targetEp.fullAudioUrl)) {
+            await withSeriesMetadataLock(cleanSeries, () => {
+              if (!fs.existsSync(metaPath)) return;
+              updateSeriesMetadata(cleanSeries, (seriesMeta) => {
+                const targetEp = (seriesMeta?.episodes || []).find((e) => String(e.id) === String(cleanEpisode));
+                if (!targetEp || (targetEp.audioGenerated && targetEp.fullAudioUrl && !targetEp.audioOutdated)) return false;
                 targetEp.audioGenerated = true;
+                targetEp.audioOutdated = false;
                 targetEp.fullAudioUrl = relAudioUrl;
                 targetEp.fullAudioPath = fullAudioPath;
                 targetEp.hasAudio = true;
-                await fs.promises.writeFile(metaPath, JSON.stringify(seriesMeta, null, 2), "utf8");
-              }
-            }
+                return true;
+              });
+            });
           } catch (_) {}
         }
+        const uploadsRoot = path.resolve(__dirname, "..", "uploads");
         const mappedSegments = segments.map((s) => {
           const raw = s.khmer || s.khmerText || s.khmerTranslatedText || s.text || "";
-          if (!raw.trim()) {
-            return { ...s, ttsStatus: "empty_text", audioGenerated: false, audioOutdated: true };
+          if (!raw.trim() || s.ttsStatus === "empty_text" || isPlaceholderOrEmptyTtsText(raw)) {
+            return {
+              ...s,
+              audioUrl: null,
+              audioPath: null,
+              audioFile: null,
+              ttsStatus: "empty_text",
+              audioGenerated: false,
+              audioOutdated: true,
+            };
+          }
+          const verifiedPath = resolvePriorSegmentAudioPath(s, audioDir);
+          if (verifiedPath && (!s.audioPath || !s.audioFile)) {
+            const relSeg = path.relative(uploadsRoot, verifiedPath).replace(/\\/g, "/");
+            return {
+              ...s,
+              audioPath: s.audioPath || verifiedPath,
+              audioFile: s.audioFile || path.basename(verifiedPath),
+              audioUrl: s.audioUrl || `/uploads/${relSeg}`,
+              ttsStatus: "ready",
+            };
           }
           return s;
         });
@@ -427,115 +611,130 @@ router.post("/generate-audio", async (req, res) => {
           projectName: cleanSeries,
           seriesId: cleanSeries,
           episodeId: cleanEpisode,
-          voiceId,
+          voiceId: rawBodyVoiceId || "km-KH-PisethNeural",
           speed,
           fullAudioUrl: relAudioUrl,
           fullAudioPath,
           segments: mappedSegments,
           skippedEmptyCount,
           validCount,
-          summaryMessage: skippedEmptyCount > 0 ? `ជោគជ័យ ${validCount} ឃ្លា (រំលង ${skippedEmptyCount} ឃ្លា គ្មានអត្ថបទ)` : `ជោគជ័យ ${validCount} ឃ្លា (100%)`,
+          summaryMessage: skippedEmptyCount > 0 ? `✅ សំឡេងខ្មែរមានរួចរាល់ ${validCount} ឃ្លា (រក្សាទុកដើម, រំលង ${skippedEmptyCount} ឃ្លា គ្មានអត្ថបទ)` : `✅ សំឡេងខ្មែរមានរួចរាល់ ${validCount} ឃ្លា (រក្សាទុកដើម)`,
         });
       }
 
-      const batchRequestedSpeed = hasBodyRate ? rawBodyRate : (hasBodySpeed ? rawBodySpeed : undefined);
-      const batchSpeedInfo = speedToEdgeRate(batchRequestedSpeed);
-      if (batchSpeedInfo.provided && !batchSpeedInfo.valid) {
-        console.warn(`[TTS] ⚠️ Route /generate-audio batch requested speed ${JSON.stringify(batchSpeedInfo.requested)} cannot be applied (${batchSpeedInfo.reason})`);
-      }
+      const batchKey = cleanEpisode ? `${cleanSeries}:${cleanEpisode}` : cleanSeries;
+      console.log(`[TTS] Batch generating audio for ${segments.length} segments in ${cleanSeries}${cleanEpisode ? ` [Episode: ${cleanEpisode}]` : ""} (forceRegen=${Boolean(forceRegen)}, batchSpeed=${batchRequestedSpeed ?? "default"}, batchRate=${batchSpeedInfo.valid ? batchSpeedInfo.rate : "INVALID"})...`);
+      let updatedSegments;
+      let narrationSynced = false;
+      try {
+        activeBatchStages.set(batchKey, { stage: "synthesizing", total: segments.length });
+        updatedSegments = await generateBatchSegmentsAudio(segments, audioDir, {
+          concurrency: 3,
+          autoStretch,
+          maxSpeed,
+          speed: hasBodySpeed ? rawBodySpeed : undefined,
+          rate: hasBodyRate ? rawBodyRate : undefined,
+          userCustomSpeed: rawBodyUserCustomSpeed !== undefined ? Boolean(rawBodyUserCustomSpeed) : undefined,
+          speakerMap,
+          seriesId: cleanSeries,
+          episodeId: cleanEpisode,
+          forceRegen: Boolean(forceRegen),
+        });
 
-      console.log(`[TTS] Batch generating audio for ${segments.length} segments in ${cleanSeries}${cleanEpisode ? ` [Episode: ${cleanEpisode}]` : ""} (batchSpeed=${batchRequestedSpeed ?? "default"}, batchRate=${batchSpeedInfo.valid ? batchSpeedInfo.rate : "INVALID"})...`);
-      const updatedSegments = await generateBatchSegmentsAudio(segments, audioDir, {
-        concurrency: 3,
-        autoStretch,
-        maxSpeed,
-        speed: hasBodySpeed ? rawBodySpeed : undefined,
-        rate: hasBodyRate ? rawBodyRate : undefined,
-        userCustomSpeed: rawBodyUserCustomSpeed !== undefined ? Boolean(rawBodyUserCustomSpeed) : undefined,
-        speakerMap,
-        seriesId: cleanSeries,
-        episodeId: cleanEpisode,
-        forceRegen: Boolean(forceRegen),
-      });
-
-      // Save updated segments to series.json IMMEDIATELY so individual segment playback and inspector work!
-      if (isEpisode && cleanSeries && cleanEpisode) {
-        try {
-          const metaPath = path.join(uploadsDir, "projects", cleanSeries, "series.json");
-          if (fs.existsSync(metaPath)) {
-            const fileContent = await fs.promises.readFile(metaPath, "utf8");
-            const seriesMeta = JSON.parse(fileContent);
-            const targetEp = (seriesMeta.episodes || []).find((e) => String(e.id) === String(cleanEpisode));
-            if (targetEp) {
-              if (!targetEp.scriptData) targetEp.scriptData = {};
-              if (Array.isArray(targetEp.scriptData.segments) && targetEp.scriptData.segments.length > updatedSegments.length) {
-                const updatedMap = new Map(updatedSegments.map((s) => [String(s.id ?? s.index), s]));
-                targetEp.scriptData.segments = targetEp.scriptData.segments.map((s) => updatedMap.get(String(s.id ?? s.index)) || s);
-              } else {
-                targetEp.scriptData.segments = updatedSegments;
-              }
-              targetEp.scriptData.hasScript = true;
-              targetEp.scriptData.totalSegments = targetEp.scriptData.segments.length;
-              targetEp.audioGenerated = true;
-              targetEp.hasAudio = true;
-              await fs.promises.writeFile(metaPath, JSON.stringify(seriesMeta, null, 2), "utf8");
-              console.log(`[TTS] Immediately persisted ${targetEp.scriptData.segments.length} segments with audio to series.json for episode ${cleanEpisode}`);
-            }
+        // Save updated segments to series.json IMMEDIATELY under per-series mutex so individual segment playback and inspector work!
+        if (isEpisode && cleanSeries && cleanEpisode) {
+          try {
+            const metaPath = path.join(uploadsDir, "projects", cleanSeries, "series.json");
+            await withSeriesMetadataLock(cleanSeries, () => {
+              if (!fs.existsSync(metaPath)) return;
+              updateSeriesMetadata(cleanSeries, (seriesMeta) => {
+                const targetEp = (seriesMeta?.episodes || []).find((e) => String(e.id) === String(cleanEpisode));
+                if (!targetEp) return false;
+                if (!targetEp.scriptData) targetEp.scriptData = {};
+                if (Array.isArray(targetEp.scriptData.segments) && targetEp.scriptData.segments.length > updatedSegments.length) {
+                  const updatedMap = new Map(updatedSegments.map((s) => [String(s.id ?? s.index), s]));
+                  targetEp.scriptData.segments = targetEp.scriptData.segments.map((s) => updatedMap.get(String(s.id ?? s.index)) || s);
+                } else {
+                  targetEp.scriptData.segments = updatedSegments;
+                }
+                targetEp.scriptData.hasScript = targetEp.scriptData.segments.length > 0;
+                targetEp.scriptData.totalSegments = targetEp.scriptData.segments.length;
+                targetEp.scriptData.updatedAt = Date.now();
+                targetEp.audioGenerated = true;
+                targetEp.hasAudio = true;
+                console.log(`[TTS] Immediately persisted ${targetEp.scriptData.segments.length} segments with audio to series.json for episode ${cleanEpisode}`);
+                return true;
+              });
+            });
+          } catch (saveErr) {
+            console.warn("[TTS] Error saving updated segments to series.json:", saveErr.message);
           }
-        } catch (saveErr) {
-          console.warn("[TTS] Error saving updated segments to series.json:", saveErr.message);
         }
-      }
 
-      const syncSegments = updatedSegments
-        .filter((s) => s.audioPath && fs.existsSync(s.audioPath))
-        .map((s, idx) => ({
-          ...s,
-          audioPath: s.audioPath,
-          startSec: typeof s.audioStartSec === "number" && !isNaN(s.audioStartSec)
-            ? s.audioStartSec
-            : (typeof s.startSec === "number" && !isNaN(s.startSec)
-              ? s.startSec
-              : parseTimeToSec(s.start, idx * 4)),
-        }));
+        const syncSegments = updatedSegments
+          .filter((s) => s.audioPath && s.ttsStatus !== "empty_text" && fs.existsSync(s.audioPath))
+          .map((s, idx) => ({
+            ...s,
+            audioPath: s.audioPath,
+            startSec: typeof s.audioStartSec === "number" && !isNaN(s.audioStartSec)
+              ? s.audioStartSec
+              : (typeof s.startSec === "number" && !isNaN(s.startSec)
+                ? s.startSec
+                : parseTimeToSec(s.start, idx * 4)),
+          }));
 
-      if (syncSegments.length > 0) {
-        try {
-          await createSynchronizedNarrationAudio(syncSegments, fullAudioPath);
-        } catch (syncErr) {
-          console.warn("[TTS] Could not build master narration audio:", syncErr.message);
+        if (syncSegments.length > 0) {
+          activeBatchStages.set(batchKey, { stage: "syncing", total: segments.length });
+          try {
+            await createSynchronizedNarrationAudio(syncSegments, fullAudioPath);
+            narrationSynced = fs.existsSync(fullAudioPath);
+          } catch (syncErr) {
+            console.warn("[TTS] Could not build master narration audio:", syncErr.message);
+          }
         }
+      } finally {
+        activeBatchStages.delete(batchKey);
       }
 
       const relAudioUrl = isEpisode
         ? `/uploads/projects/${cleanSeries}/episodes/${cleanEpisode}/audio/${fullAudioFilename}`
         : `/uploads/projects/${cleanName}/audio/${fullAudioFilename}`;
 
-      // Auto-persist audio status in series.json for episode isolation
+      // Auto-persist audio status in series.json under per-series mutex for episode isolation
       if (isEpisode && cleanSeries && cleanEpisode) {
         try {
           const metaPath = path.join(uploadsDir, "projects", cleanSeries, "series.json");
-          if (fs.existsSync(metaPath)) {
-            const fileContent = await fs.promises.readFile(metaPath, "utf8");
-            const seriesMeta = JSON.parse(fileContent);
-            const targetEp = (seriesMeta.episodes || []).find((e) => String(e.id) === String(cleanEpisode));
-            if (targetEp) {
+          await withSeriesMetadataLock(cleanSeries, () => {
+            if (!fs.existsSync(metaPath)) return;
+            updateSeriesMetadata(cleanSeries, (seriesMeta) => {
+              const targetEp = (seriesMeta?.episodes || []).find((e) => String(e.id) === String(cleanEpisode));
+              if (!targetEp) return false;
               targetEp.audioGenerated = true;
               targetEp.hasAudio = true;
               if (fs.existsSync(fullAudioPath)) {
                 targetEp.fullAudioUrl = relAudioUrl;
                 targetEp.fullAudioPath = fullAudioPath;
               }
-              await fs.promises.writeFile(metaPath, JSON.stringify(seriesMeta, null, 2), "utf8");
-              console.log(`[TTS] Auto-persisted audioGenerated=true in series.json for episode ${cleanEpisode}`);
-            }
-          }
+              const hasRemainingOutdatedSpoken = Array.isArray(targetEp.scriptData?.segments) &&
+                targetEp.scriptData.segments.some((s) => {
+                  const txt = String(s?.khmer || s?.khmerText || s?.khmerTranslatedText || s?.text || "").trim();
+                  return Boolean(txt) && s?.ttsStatus !== "empty_text" && !isPlaceholderOrEmptyTtsText(txt) && Boolean(s?.audioOutdated || s?.ttsStatus === "outdated");
+                });
+              if (narrationSynced && !hasRemainingOutdatedSpoken) {
+                targetEp.audioOutdated = false;
+              }
+              console.log(`[TTS] Auto-persisted audioGenerated=true (audioOutdated=${Boolean(targetEp.audioOutdated)}) in series.json for episode ${cleanEpisode}`);
+              return true;
+            });
+          });
         } catch (saveErr) {
           console.warn("[TTS] Could not persist audio status in series.json:", saveErr.message);
         }
       }
 
-      const skippedEmptyCount = updatedSegments.filter(s => s.ttsStatus === 'empty_text' || !((s.khmer || s.khmerText || s.khmerTranslatedText || s.text || '').trim())).length;
+      const skippedEmptyCount = updatedSegments.filter(
+        (s) => s.ttsStatus === 'empty_text' || isPlaceholderOrEmptyTtsText(s.khmer || s.khmerText || s.khmerTranslatedText || s.text || '')
+      ).length;
       const validGeneratedCount = updatedSegments.length - skippedEmptyCount;
       const summaryMessage = skippedEmptyCount > 0
         ? `ជោគជ័យ ${validGeneratedCount} ឃ្លា (រំលង ${skippedEmptyCount} ឃ្លា គ្មានអត្ថបទ)`
@@ -546,7 +745,7 @@ router.post("/generate-audio", async (req, res) => {
         projectName: cleanSeries,
         seriesId: cleanSeries,
         episodeId: cleanEpisode,
-        voiceId,
+        voiceId: rawBodyVoiceId || "km-KH-PisethNeural",
         speed,
         fullAudioUrl: fs.existsSync(fullAudioPath) ? relAudioUrl : null,
         fullAudioPath: fs.existsSync(fullAudioPath) ? fullAudioPath : null,
@@ -673,26 +872,30 @@ router.post("/audio/separate", async (req, res) => {
     const relPath = path.relative(uploadsDir, sepRes.noVocalsPath).replace(/\\/g, "/");
     const noVocalsUrl = `/uploads/${relPath}`;
 
-    // Auto-persist Clean BGM into series.json for episode tracking (even if client socket closed mid-run)
+    // Auto-persist Clean BGM into series.json under per-series mutex for episode tracking
     try {
       const match = inputVideoPath.match(/projects[/\\]([^/\\]+)[/\\]episodes[/\\]([^/\\]+)/);
       const pSeriesId = (match && match[1]) || req.body.seriesId;
       const pEpisodeId = (match && match[2]) || req.body.episodeId;
       if (pSeriesId && pEpisodeId) {
-        const metaPath = path.join(uploadsDir, "projects", pSeriesId, "series.json");
-        if (fs.existsSync(metaPath)) {
-          const rawMeta = await fs.promises.readFile(metaPath, "utf8");
-          const sMeta = JSON.parse(rawMeta);
-          const targetEp = (sMeta.episodes || []).find((e) => String(e.id) === String(pEpisodeId));
-          if (targetEp) {
+        const cleanPSeries = sanitizeProjectName(pSeriesId);
+        const cleanPEp = sanitizeEpisodeId(pEpisodeId);
+        const metaPath = path.join(uploadsDir, "projects", cleanPSeries, "series.json");
+        await withSeriesMetadataLock(cleanPSeries, () => {
+          if (!fs.existsSync(metaPath)) return;
+          updateSeriesMetadata(cleanPSeries, (sMeta) => {
+            const targetEp = (sMeta?.episodes || []).find(
+              (e) => sanitizeEpisodeId(e.id) === cleanPEp || String(e.id) === String(pEpisodeId)
+            );
+            if (!targetEp) return false;
             targetEp.bgmAudioUrl = noVocalsUrl;
             targetEp.cleanBgmPath = sepRes.noVocalsPath;
             targetEp.isDemucsDone = true;
             targetEp.hasDemucs = true;
-            await fs.promises.writeFile(metaPath, JSON.stringify(sMeta, null, 2), "utf8");
-            console.log(`[AudioSeparation] ✅ Auto-persisted clean BGM into series.json for episode ${pEpisodeId}`);
-          }
-        }
+            console.log(`[AudioSeparation] ✅ Auto-persisted clean BGM into series.json for episode ${cleanPEp}`);
+            return true;
+          });
+        });
       }
     } catch (saveErr) {
       console.warn("[AudioSeparation] Could not auto-persist to series.json:", saveErr.message);

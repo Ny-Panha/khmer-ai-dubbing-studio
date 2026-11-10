@@ -5,6 +5,7 @@ export default function AntiTheftOverlay({
   voiceSettings = {},
   renderedVideo = null,
   aspectRatio = '16:9',
+  verticalStyle = 'pad',
   videoMeta = null,
 }) {
   if (!voiceSettings?.enableAntiTheft || renderedVideo) {
@@ -29,7 +30,7 @@ export default function AntiTheftOverlay({
     : (marqueeSpeed === 'fast' ? 9 : (marqueeSpeed === 'slow' ? 20 : 13));
   const repeatedText = `${marqueeText}       ❖       ${marqueeText}       ❖       ${marqueeText}`;
 
-  const isLandscapeInVertical = aspectRatio === '9:16' && (!videoMeta?.ratio || videoMeta.ratio > 1.2);
+  const isLandscapeInVertical = aspectRatio === '9:16' && verticalStyle !== 'crop' && (!videoMeta?.ratio || videoMeta.ratio > 1.2);
   const aspectClass = isLandscapeInVertical
     ? 'aspect-9-16-letterbox'
     : (aspectRatio === '9:16' ? 'aspect-9-16-vertical' : 'aspect-16-9');

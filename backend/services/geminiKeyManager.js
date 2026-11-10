@@ -4,6 +4,7 @@
  */
 
 const { GoogleGenAI } = require('@google/genai');
+const { geminiQuotaTracker } = require('./geminiQuotaTracker');
 
 /**
  * Parses all available Gemini API keys from various sources:
@@ -250,87 +251,106 @@ function createSmartGenAIClient(initialKeyInput = null) {
     throw new Error('មិនរកឃើញ GEMINI_API_KEY ទេ! សូមបញ្ចូលក្នុង .env ឬក្នុង Settings នៃកម្មវិធី។');
   }
 
-  // Dynamic Models Proxy
-  const modelsProxy = {
-    async generateContent(args) {
-      let lastErr = null;
-      let quotaAttempts = 0;
+  function selectReadyKeyIfAvailable(modelName = null) {
+    const activeCount = pool.getKeyCount();
+    if (activeCount <= 1) return pool.getCurrentKey();
+    const now = Date.now();
+    for (let step = 0; step < activeCount; step++) {
+      const candidate = pool.getCurrentKey();
+      if (!candidate) break;
+      const cd = geminiQuotaTracker.isKeyInCooldown(candidate, now, modelName);
+      if (!cd.inCooldown) return candidate;
+      pool.rotateKey(`Skip ${modelName || 'key'} cooldown (${cd.cooldownSec}s left)`);
+    }
+    return pool.getCurrentKey();
+  }
 
-      while (pool.getKeyCount() > 0) {
-        const currentKey = pool.getCurrentKey();
+  async function runWithPool(execFn, { getModel = () => null, errorLabel = 'Quota Exceeded' } = {}) {
+    let lastErr = null;
+    let quotaAttempts = 0;
+
+    while (pool.getKeyCount() > 0) {
+      const modelName = getModel();
+      const currentKey = selectReadyKeyIfAvailable(modelName);
+      const pacingDelay = geminiQuotaTracker.getRecommendedPacingDelayMs(currentKey);
+      if (pacingDelay > 0) {
+        await new Promise((r) => setTimeout(r, pacingDelay));
+      }
+
+      const startedAt = Date.now();
+      try {
+        const client = pool.getCurrentClient();
+        const result = await execFn(client);
         try {
-          const client = pool.getCurrentClient();
-          return await client.models.generateContent(args);
-        } catch (err) {
-          lastErr = err;
+          const totalTokens = result?.usageMetadata?.totalTokenCount || 0;
+          geminiQuotaTracker.recordSuccess(currentKey, {
+            model: modelName,
+            totalTokens,
+            latencyMs: Date.now() - startedAt,
+          });
+        } catch (_) {}
+        return result;
+      } catch (err) {
+        lastErr = err;
 
-          // 1. Permanent Auth/Invalid Key Failure (401 / 403)
-          if (isAuthOrInvalidKeyError(err)) {
-            const status = err.status || err.statusCode || 401;
-            const remaining = pool.markKeyInvalid(currentKey, status);
-            if (remaining === 0) {
-              throw new Error(`[GeminiKeyPool] 🚨 All Gemini API keys in pool are INVALID (${status} Unauthenticated/Forbidden). Cannot proceed.`);
-            }
-            // Immediately retry with next valid key without delay
-            continue;
+        // 1. Permanent Auth/Invalid Key Failure (401 / 403)
+        if (isAuthOrInvalidKeyError(err)) {
+          const status = err.status || err.statusCode || 401;
+          try {
+            geminiQuotaTracker.recordInvalid(currentKey, status, err.message, {
+              latencyMs: Date.now() - startedAt,
+            });
+          } catch (_) {}
+          const remaining = pool.markKeyInvalid(currentKey, status);
+          if (remaining === 0) {
+            throw new Error(`[GeminiKeyPool] 🚨 All Gemini API keys in pool are INVALID (${status} Unauthenticated/Forbidden). Cannot proceed.`);
           }
+          continue;
+        }
 
-          // 2. Temporary Quota / Rate Limit (429 / 503)
-          if (isQuotaOrRateLimitError(err) && pool.getKeyCount() > 1) {
+        // 2. Temporary Quota / Rate Limit (429 / 503)
+        if (isQuotaOrRateLimitError(err)) {
+          try {
+            geminiQuotaTracker.recordRateLimit(currentKey, err, {
+              model: modelName,
+              latencyMs: Date.now() - startedAt,
+            });
+          } catch (_) {}
+
+          if (pool.getKeyCount() > 1) {
             quotaAttempts++;
             if (quotaAttempts >= pool.getKeyCount() * 2) {
-              // Cycled through all active keys on quota
               throw err;
             }
-            pool.rotateKey(err.message || '429 Quota Exceeded');
+            pool.rotateKey(err.message || `429 ${errorLabel}`);
             await new Promise((r) => setTimeout(r, 600));
             continue;
           }
-
-          throw err;
         }
+
+        throw err;
       }
-      throw lastErr || new Error('[GeminiKeyPool] 🚨 All Gemini API keys in pool are INVALID (401/403). Cannot proceed.');
+    }
+    throw lastErr || new Error('[GeminiKeyPool] 🚨 All Gemini API keys in pool are INVALID (401/403). Cannot proceed.');
+  }
+
+  // Dynamic Models Proxy
+  const modelsProxy = {
+    async generateContent(args) {
+      return await runWithPool((client) => client.models.generateContent(args), {
+        getModel: () => args?.model || null,
+        errorLabel: 'Quota Exceeded',
+      });
     },
   };
 
   // Dynamic Files Proxy
   const filesProxy = {
     async upload(args) {
-      let lastErr = null;
-      let quotaAttempts = 0;
-
-      while (pool.getKeyCount() > 0) {
-        const currentKey = pool.getCurrentKey();
-        try {
-          const client = pool.getCurrentClient();
-          return await client.files.upload(args);
-        } catch (err) {
-          lastErr = err;
-
-          if (isAuthOrInvalidKeyError(err)) {
-            const status = err.status || err.statusCode || 401;
-            const remaining = pool.markKeyInvalid(currentKey, status);
-            if (remaining === 0) {
-              throw new Error(`[GeminiKeyPool] 🚨 All Gemini API keys in pool are INVALID (${status} Unauthenticated/Forbidden). Cannot proceed.`);
-            }
-            continue;
-          }
-
-          if (isQuotaOrRateLimitError(err) && pool.getKeyCount() > 1) {
-            quotaAttempts++;
-            if (quotaAttempts >= pool.getKeyCount() * 2) {
-              throw err;
-            }
-            pool.rotateKey(err.message || '429 Quota on file upload');
-            await new Promise((r) => setTimeout(r, 600));
-            continue;
-          }
-
-          throw err;
-        }
-      }
-      throw lastErr || new Error('[GeminiKeyPool] 🚨 All Gemini API keys in pool are INVALID (401/403). Cannot proceed.');
+      return await runWithPool((client) => client.files.upload(args), {
+        getModel: () => 'files.upload',
+        errorLabel: 'Quota on file upload',
+      });
     },
     async delete(args) {
       const client = pool.getCurrentClient();
@@ -341,43 +361,18 @@ function createSmartGenAIClient(initialKeyInput = null) {
   // Dynamic Interactions Proxy (e.g. gemini-3.5-transcribe)
   const interactionsProxy = {
     async create(args) {
-      let lastErr = null;
-      let quotaAttempts = 0;
-
-      while (pool.getKeyCount() > 0) {
-        const currentKey = pool.getCurrentKey();
-        try {
-          const client = pool.getCurrentClient();
+      return await runWithPool(
+        (client) => {
           if (client.interactions && typeof client.interactions.create === 'function') {
-            return await client.interactions.create(args);
+            return client.interactions.create(args);
           }
           throw new Error('Interactions API not available on native client instance');
-        } catch (err) {
-          lastErr = err;
-
-          if (isAuthOrInvalidKeyError(err)) {
-            const status = err.status || err.statusCode || 401;
-            const remaining = pool.markKeyInvalid(currentKey, status);
-            if (remaining === 0) {
-              throw new Error(`[GeminiKeyPool] 🚨 All Gemini API keys in pool are INVALID (${status} Unauthenticated/Forbidden). Cannot proceed.`);
-            }
-            continue;
-          }
-
-          if (isQuotaOrRateLimitError(err) && pool.getKeyCount() > 1) {
-            quotaAttempts++;
-            if (quotaAttempts >= pool.getKeyCount() * 2) {
-              throw err;
-            }
-            pool.rotateKey(err.message || '429 Quota on interactions');
-            await new Promise((r) => setTimeout(r, 600));
-            continue;
-          }
-
-          throw err;
+        },
+        {
+          getModel: () => args?.model || 'interactions',
+          errorLabel: 'Quota on interactions',
         }
-      }
-      throw lastErr || new Error('[GeminiKeyPool] 🚨 All Gemini API keys in pool are INVALID (401/403). Cannot proceed.');
+      );
     },
   };
 

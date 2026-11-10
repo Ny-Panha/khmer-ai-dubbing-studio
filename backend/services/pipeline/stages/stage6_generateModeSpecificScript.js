@@ -1,4 +1,8 @@
 const { GENERATION_MODES, formatSecondsToTimecode } = require('../pipelineTypes');
+const { detectSpeakerGender } = require('../../../models/speakerRegistry');
+const { isAuthOrInvalidKeyError, isQuotaOrRateLimitError } = require('../../geminiKeyManager');
+const { DUBBING_CASCADE_MODELS } = require('../../geminiModelCatalog');
+const { geminiQuotaTracker } = require('../../geminiQuotaTracker');
 
 const DRAMA_GENRES = {
   AUTO: 'auto',
@@ -8,6 +12,44 @@ const DRAMA_GENRES = {
   COMEDY: 'comedy',
   GENERAL: 'general',
 };
+
+// Full Gemini cascade matching Shared Catalog (all 10 usable dubbing models)
+const STAGE6_CASCADE_MODELS = DUBBING_CASCADE_MODELS;
+
+function sanitizeStage6ErrorMsg(err) {
+  return String(err?.message || err || 'Unknown error')
+    .replace(/key=[a-zA-Z0-9_\-]+/gi, 'key=[REDACTED]');
+}
+
+function isModelNotFoundError(err) {
+  if (!err) return false;
+  const status = err.status || err.statusCode;
+  const msg = String(err.message || err.toString() || '').toLowerCase();
+  return (
+    status === 404 ||
+    msg.includes('404') ||
+    msg.includes('not_found') ||
+    msg.includes('not found') ||
+    msg.includes('no longer available')
+  );
+}
+
+function isAbortLikeError(err, signal = null) {
+  if (signal?.aborted) return true;
+  return Boolean(err && (err.name === 'AbortError' || err.code === 'ABORT_ERR'));
+}
+
+function createStage6AbortError(message = 'Stage 6 translation aborted by user signal') {
+  const abortErr = new Error(message);
+  abortErr.name = 'AbortError';
+  abortErr.code = 'ABORT_ERR';
+  return abortErr;
+}
+
+function isPlaceholderTranslationText(text = '') {
+  const cleaned = String(text || '').trim();
+  return !cleaned || cleaned === 'សន្ទនា';
+}
 
 // Universal Genre Reference (Series-specific glossaries are provided dynamically via seriesGlossary)
 const CULTIVATION_DRAMA_GLOSSARY = '';
@@ -228,9 +270,37 @@ DRAMA GENRE: ✨ រឿងទូទៅ / ស្គាល់តាមបរិប
   }
 }
 
+function deriveVoiceFromGender(gender = 'unknown') {
+  const norm = String(gender || '').trim().toLowerCase();
+  if (norm === 'female') {
+    return {
+      voiceGender: 'female',
+      gender: 'female',
+      speakerGender: 'FEMALE',
+      voiceId: 'km-KH-SreymomNeural',
+      khmerVoiceId: 'km-KH-SreymomNeural',
+      voice: 'km-KH-SreymomNeural',
+      voiceLabel: 'ស្រីមុំ (Sreymom)',
+      avatar: '👩',
+      badgeColor: '#ec4899',
+    };
+  }
+  return {
+    voiceGender: norm === 'male' ? 'male' : 'unknown',
+    gender: 'male',
+    speakerGender: norm === 'male' ? 'MALE' : 'UNKNOWN',
+    voiceId: 'km-KH-PisethNeural',
+    khmerVoiceId: 'km-KH-PisethNeural',
+    voice: 'km-KH-PisethNeural',
+    voiceLabel: 'ពិសិដ្ឋ (Piseth)',
+    avatar: '👨',
+    badgeColor: '#3b82f6',
+  };
+}
+
 function buildSafeSpeakerId(speakerName = '', voiceGender = 'unknown', fallbackIndex = 0) {
   const cleanName = String(speakerName || '').trim()
-    .replace(/[^\p{L}\p{N}]+/gu, '_')
+    .replace(/[^\p{L}\p{M}\p{N}]+/gu, '_')
     .replace(/^_+|_+$/g, '')
     .toLowerCase();
   const genderTag = voiceGender === 'female' ? 'female' : (voiceGender === 'male' ? 'male' : 'unknown');
@@ -243,31 +313,78 @@ function buildSafeSpeakerId(speakerName = '', voiceGender = 'unknown', fallbackI
 function createCanonicalSegment(raw = {}, index = 0, mode = 'dialogue') {
   const origChinese = String(raw.originalChineseText || raw.chineseText || raw.originalText || '').trim();
   const rawKhmer = String(raw.khmerTranslatedText || raw.khmerText || raw.khmer || '').trim();
-  const khmerText = cleanKhmerSpokenText(rawKhmer);
+  const cleanedKhmer = cleanKhmerSpokenText(rawKhmer);
+  const khmerText = cleanedKhmer === 'សន្ទនា' ? '' : cleanedKhmer;
   const startSec = Math.max(0, typeof raw.startSec === 'number' ? raw.startSec : 0);
   const endSec = typeof raw.endSec === 'number' ? raw.endSec : startSec + 2.0;
   const dur = parseFloat(Math.max(0.6, endSec - startSec).toFixed(2));
   const evidenceSrc = raw.evidenceSource || raw.evidenceType || (mode === 'recap' ? 'cinematic_recap' : 'audio_asr');
-  const cleanSpk = cleanKhmerSpokenText(raw.speaker) || (mode === 'recap' ? 'អ្នកសម្រាយរឿង' : 'តួអង្គ');
+  const cleanSpk = cleanKhmerSpokenText(raw.speaker || raw.speakerName) || (mode === 'recap' ? 'អ្នកសម្រាយរឿង' : 'តួអង្គ');
+
+  const isOcrOnly = raw.speakerSource === 'ocr_only';
+  const isUserOverridden = Boolean(raw.userOverridden);
+  const isGenericSpeaker = cleanSpk === 'តួអង្គ' || cleanSpk.toLowerCase() === 'speaker';
 
   let resolvedGender = String(raw.voiceGender || '').toLowerCase();
-  if (resolvedGender !== 'female' && resolvedGender !== 'male') {
+  const titleKwGender = !isUserOverridden ? detectSpeakerGender(cleanSpk) : 'UNKNOWN';
+  if (isUserOverridden) {
+    if (resolvedGender !== 'female' && resolvedGender !== 'male') {
+      const explicitVoice = String(raw.voiceId || raw.khmerVoiceId || raw.voice || '');
+      if (explicitVoice.includes('Sreymom')) resolvedGender = 'female';
+      else if (explicitVoice.includes('Piseth')) resolvedGender = 'male';
+      else resolvedGender = mode === 'recap' ? 'male' : 'unknown';
+    }
+  } else if (titleKwGender === 'FEMALE' || titleKwGender === 'MALE') {
+    resolvedGender = titleKwGender === 'FEMALE' ? 'female' : 'male';
+  } else if (resolvedGender !== 'female' && resolvedGender !== 'male') {
     if (typeof raw.pitchHz === 'number' && raw.pitchHz >= 170) {
       resolvedGender = 'female';
-    } else if (/ស្រី|នាង|អ្នកនាង|ម៉ែ|យាយ|ព្រះនាង|សិស្សប្អូនស្រី/i.test(cleanSpk)) {
+    } else if (/ស្រី|នាង|អ្នកនាង|ម៉ែ|យាយ|ព្រះនាង|សិស្សប្អូនស្រី|ប្រព័ន្ធ|កុមារី|មាតា|ធីតា/i.test(cleanSpk)) {
       resolvedGender = 'female';
     } else {
       resolvedGender = mode === 'recap' ? 'male' : 'unknown';
     }
   }
 
-  const safeSpeakerId = mode === 'recap'
-    ? 'narrator'
-    : (raw.speakerId && !raw.speakerId.startsWith('spk_1') && !raw.speakerId.endsWith('_unknown') && (raw.speakerId.includes('female') || raw.speakerId.includes('male'))
-      ? raw.speakerId
-      : buildSafeSpeakerId(cleanSpk, resolvedGender, index));
+  const genderVoiceMeta = deriveVoiceFromGender(resolvedGender);
+  const assignedVoiceId = genderVoiceMeta.voiceId;
 
-  const assignedVoiceId = resolvedGender === 'female' ? 'km-KH-SreymomNeural' : 'km-KH-PisethNeural';
+  // For ALL non-manual/non-userOverridden segments with a resolved gender (Fast OCR & Standard),
+  // ALWAYS derive voiceId/khmerVoiceId/voice from final voiceGender so stale earlier voices never leak through.
+  const isManualVoice = isUserOverridden || raw.voiceAssignmentSource === 'manual' || Boolean(raw.voiceOverride);
+  let finalVoiceId;
+  let finalKhmerVoiceId;
+  let finalVoice;
+  if (isManualVoice) {
+    finalVoiceId = raw.voiceOverride || raw.voiceId || raw.khmerVoiceId || raw.voice || assignedVoiceId;
+    finalKhmerVoiceId = raw.voiceOverride || raw.khmerVoiceId || raw.voiceId || raw.voice || assignedVoiceId;
+    finalVoice = raw.voice || finalVoiceId;
+  } else if (isOcrOnly || resolvedGender === 'female' || resolvedGender === 'male') {
+    finalVoiceId = assignedVoiceId;
+    finalKhmerVoiceId = assignedVoiceId;
+    finalVoice = assignedVoiceId;
+  } else {
+    finalVoiceId = raw.voiceId || raw.khmerVoiceId || assignedVoiceId;
+    finalKhmerVoiceId = raw.khmerVoiceId || raw.voiceId || assignedVoiceId;
+    finalVoice = raw.voice || finalVoiceId;
+  }
+
+  const displayVoiceMeta = String(finalVoiceId).includes('Sreymom')
+    ? deriveVoiceFromGender('female')
+    : deriveVoiceFromGender(resolvedGender === 'unknown' ? 'unknown' : 'male');
+
+  let safeSpeakerId;
+  if (mode === 'recap') {
+    safeSpeakerId = 'narrator';
+  } else if (isUserOverridden && raw.speakerId) {
+    safeSpeakerId = raw.speakerId;
+  } else if (isOcrOnly) {
+    safeSpeakerId = buildSafeSpeakerId(cleanSpk, resolvedGender, index);
+  } else {
+    safeSpeakerId = (raw.speakerId && !raw.speakerId.startsWith('spk_1') && !raw.speakerId.endsWith('_unknown') && (raw.speakerId.includes('female') || raw.speakerId.includes('male')))
+      ? raw.speakerId
+      : buildSafeSpeakerId(cleanSpk, resolvedGender, index);
+  }
 
   return {
     id: index + 1,
@@ -291,11 +408,30 @@ function createCanonicalSegment(raw = {}, index = 0, mode = 'dialogue') {
     khmerText: khmerText,
     khmer: khmerText,
     speaker: cleanSpk,
+    speakerName: cleanSpk,
     speakerId: safeSpeakerId,
     voiceGender: resolvedGender,
-    voiceId: raw.voiceId || raw.khmerVoiceId || assignedVoiceId,
-    khmerVoiceId: raw.khmerVoiceId || raw.voiceId || assignedVoiceId,
-    voiceAssignmentSource: raw.voiceAssignmentSource || 'ai_pipeline',
+    gender: displayVoiceMeta.gender,
+    speakerGender: displayVoiceMeta.speakerGender,
+    voiceId: finalVoiceId,
+    khmerVoiceId: finalKhmerVoiceId,
+    voice: finalVoice,
+    voiceLabel: displayVoiceMeta.voiceLabel,
+    avatar: displayVoiceMeta.avatar,
+    badgeColor: displayVoiceMeta.badgeColor,
+    voiceAssignmentSource: raw.voiceAssignmentSource || (isUserOverridden ? 'manual' : 'ai_pipeline'),
+    ...(isOcrOnly
+      ? {
+          speakerSource: 'ocr_only',
+          unverifiedSpeaker: isGenericSpeaker ? true : (raw.unverifiedSpeaker !== undefined ? Boolean(raw.unverifiedSpeaker) : false),
+        }
+      : (raw.speakerSource ? { speakerSource: raw.speakerSource } : {})),
+    ...(isUserOverridden ? { userOverridden: true } : {}),
+    ...(raw.voiceOverride ? { voiceOverride: raw.voiceOverride } : {}),
+    ...(typeof raw.pitchHz === 'number' ? { pitchHz: raw.pitchHz } : {}),
+    ...(raw.acousticGender ? { acousticGender: raw.acousticGender } : {}),
+    ...(typeof raw.acousticConfidence === 'number' ? { acousticConfidence: raw.acousticConfidence } : {}),
+    ...(raw.genderConfidence !== undefined ? { genderConfidence: raw.genderConfidence } : {}),
     evidenceType: evidenceSrc,
     evidenceSource: evidenceSrc,
     confidence: typeof raw.confidence === 'number' ? raw.confidence : 0.9,
@@ -312,7 +448,9 @@ function createCanonicalSegment(raw = {}, index = 0, mode = 'dialogue') {
     rawAudioPath: raw.rawAudioPath || null,
     rawAudioFile: raw.rawAudioFile || null,
     translationWarning: raw.translationWarning || null,
+    translationStatus: raw.translationStatus || (khmerText ? 'translated' : 'review_needed'),
     validationWarnings: Array.isArray(raw.validationWarnings) ? [...raw.validationWarnings] : [],
+    validationErrors: Array.isArray(raw.validationErrors) ? [...raw.validationErrors] : [],
     speechStartSec: typeof raw.speechStartSec === 'number' ? raw.speechStartSec : null,
     speechEndSec: typeof raw.speechEndSec === 'number' ? raw.speechEndSec : null,
     speechDuration: typeof raw.speechDuration === 'number' ? raw.speechDuration : null,
@@ -324,6 +462,296 @@ function createCanonicalSegment(raw = {}, index = 0, mode = 'dialogue') {
     fullAudioUrl: null,
   };
 }
+
+function applyTranslatedSegmentResult(targetSeg, t, maxWords, segIdx, { isFastOcrMode = false } = {}) {
+  if (!targetSeg || !t) return false;
+
+  const rawTranslated = cleanKhmerSpokenText(t.khmerText || '');
+  const usableTranslated = rawTranslated === 'សន្ទនា' ? '' : rawTranslated;
+  const condensed = usableTranslated ? condenseKhmerDialogue(usableTranslated, maxWords) : '';
+  const finalTranslated = condensed === 'សន្ទនា' ? '' : condensed;
+
+  if (targetSeg.userOverridden || targetSeg.voiceAssignmentSource === 'manual' || targetSeg.voiceOverride) {
+    // User-overridden/manual segment keeps its manual speaker/gender/voice untouched; only populate missing translation
+    if (!targetSeg.khmerTranslatedText || targetSeg.khmerTranslatedText === 'សន្ទនា') {
+      if (finalTranslated) {
+        targetSeg.khmerTranslatedText = finalTranslated;
+        targetSeg.translationStatus = 'translated';
+      } else {
+        targetSeg.khmerTranslatedText = '';
+        targetSeg.reviewNeeded = true;
+        targetSeg.translationStatus = 'review_needed';
+      }
+    }
+    return Boolean(targetSeg.khmerTranslatedText && targetSeg.khmerTranslatedText !== 'សន្ទនា');
+  }
+
+  targetSeg.khmerTranslatedText = finalTranslated;
+  if (!finalTranslated) {
+    targetSeg.reviewNeeded = true;
+    targetSeg.translationStatus = 'review_needed';
+  } else {
+    targetSeg.translationStatus = 'translated';
+  }
+  const cleanSpk = cleanKhmerSpokenText(t.speaker) || cleanKhmerSpokenText(targetSeg.speaker) || 'តួអង្គ';
+  targetSeg.speaker = cleanSpk;
+  targetSeg.speakerName = cleanSpk;
+
+  const isOcrSeg = isFastOcrMode || targetSeg.speakerSource === 'ocr_only';
+  const aiGender = String(t.gender || '').toLowerCase();
+
+  if (!isOcrSeg) {
+    // Standard Mode: explicit unambiguous speaker title beats noisy un-isolated YIN pitch;
+    // generic/neutral characters still follow real acoustic pitch or AI dialogue context.
+    const hasFemalePitch = typeof targetSeg.pitchHz === 'number' && targetSeg.pitchHz >= 172;
+    const hasMalePitch = typeof targetSeg.pitchHz === 'number' && targetSeg.pitchHz > 0 && targetSeg.pitchHz <= 148;
+    const titleGender = detectSpeakerGender(cleanSpk);
+
+    if (titleGender === 'FEMALE') {
+      targetSeg.voiceGender = 'female';
+    } else if (titleGender === 'MALE') {
+      targetSeg.voiceGender = 'male';
+    } else if (hasFemalePitch) {
+      targetSeg.voiceGender = 'female';
+    } else if (hasMalePitch && aiGender !== 'female') {
+      targetSeg.voiceGender = 'male';
+    } else if (aiGender === 'female' || aiGender === 'male') {
+      targetSeg.voiceGender = aiGender;
+    }
+
+    const vMeta = deriveVoiceFromGender(targetSeg.voiceGender);
+    targetSeg.voiceId = vMeta.voiceId;
+    targetSeg.khmerVoiceId = vMeta.khmerVoiceId;
+    targetSeg.voice = vMeta.voice;
+    targetSeg.voiceLabel = vMeta.voiceLabel;
+    targetSeg.avatar = vMeta.avatar;
+    targetSeg.badgeColor = vMeta.badgeColor;
+    targetSeg.gender = vMeta.gender;
+    targetSeg.speakerGender = vMeta.speakerGender;
+    targetSeg.speakerId = buildSafeSpeakerId(cleanSpk, targetSeg.voiceGender, segIdx);
+    return Boolean(targetSeg.khmerTranslatedText && targetSeg.khmerTranslatedText !== 'សន្ទនា');
+  }
+
+  // Fast OCR ('ocr_only') Mode: NO acoustic pitch exists — assign from AI dialogue context or speaker name keywords, then re-derive voice
+  targetSeg.speakerSource = 'ocr_only';
+  if (aiGender === 'female' || aiGender === 'male') {
+    targetSeg.voiceGender = aiGender;
+  } else {
+    const kwGender = detectSpeakerGender(cleanSpk);
+    if (kwGender === 'FEMALE') {
+      targetSeg.voiceGender = 'female';
+    } else if (kwGender === 'MALE') {
+      targetSeg.voiceGender = 'male';
+    } else if (cleanSpk === 'តួអង្គ' || cleanSpk.toLowerCase() === 'speaker') {
+      targetSeg.voiceGender = (targetSeg.voiceGender === 'female' || targetSeg.voiceGender === 'male')
+        ? targetSeg.voiceGender
+        : 'unknown';
+    }
+  }
+
+  const vMeta = deriveVoiceFromGender(targetSeg.voiceGender);
+  targetSeg.voiceId = vMeta.voiceId;
+  targetSeg.khmerVoiceId = vMeta.khmerVoiceId;
+  targetSeg.voice = vMeta.voice;
+  targetSeg.voiceLabel = vMeta.voiceLabel;
+  targetSeg.avatar = vMeta.avatar;
+  targetSeg.badgeColor = vMeta.badgeColor;
+  targetSeg.gender = vMeta.gender;
+  targetSeg.speakerGender = vMeta.speakerGender;
+  targetSeg.unverifiedSpeaker = cleanSpk === 'តួអង្គ' || cleanSpk.toLowerCase() === 'speaker';
+  targetSeg.speakerId = buildSafeSpeakerId(cleanSpk, targetSeg.voiceGender, segIdx);
+  return Boolean(targetSeg.khmerTranslatedText && targetSeg.khmerTranslatedText !== 'សន្ទនា');
+}
+
+/**
+ * Whole-episode character consistency pass (Fast OCR + Standard Dialogue):
+ * - Ignores userOverridden / manual segments (untouched by both voting and mutation)
+ * - Keeps generic 'តួអង្គ' per-line gender judgement (and unverifiedSpeaker: true on OCR) while re-deriving voice
+ * - Groups named characters by cleanSpk across the full episode; majority gender wins and minority lines are corrected + voice re-derived
+ * - Logs episode character & correction stats
+ */
+function enforceEpisodeCharacterConsistency(segments = [], { defaultGender = 'male', isFastOcrMode = false } = {}) {
+  const normDefault = String(defaultGender || 'male').toLowerCase() === 'female' ? 'female' : 'male';
+  const updated = Array.isArray(segments) ? segments.map((s) => ({ ...s })) : [];
+
+  const groups = new Map();
+  const genericIndices = [];
+  let overriddenCount = 0;
+
+  for (let idx = 0; idx < updated.length; idx++) {
+    const seg = updated[idx];
+    const isOcrSeg = isFastOcrMode || seg.speakerSource === 'ocr_only';
+
+    if (seg.userOverridden || seg.voiceAssignmentSource === 'manual' || seg.voiceOverride) {
+      overriddenCount++;
+      continue;
+    }
+
+    if (isOcrSeg) {
+      seg.speakerSource = 'ocr_only';
+    }
+    const cleanSpk = cleanKhmerSpokenText(seg.speaker || seg.speakerName || '') || 'តួអង្គ';
+    seg.speaker = cleanSpk;
+    seg.speakerName = cleanSpk;
+
+    if (cleanSpk === 'តួអង្គ' || cleanSpk.toLowerCase() === 'speaker') {
+      genericIndices.push(idx);
+      continue;
+    }
+
+    if (!groups.has(cleanSpk)) {
+      groups.set(cleanSpk, {
+        speaker: cleanSpk,
+        indices: [],
+        femaleVotes: 0,
+        maleVotes: 0,
+        unknownVotes: 0,
+      });
+    }
+    const entry = groups.get(cleanSpk);
+    entry.indices.push(idx);
+
+    const g = String(seg.voiceGender || '').toLowerCase();
+    if (g === 'female') entry.femaleVotes++;
+    else if (g === 'male') entry.maleVotes++;
+    else entry.unknownVotes++;
+  }
+
+  // Generic 'តួអង្គ': preserve per-line gender judgement, re-derive voice when gender is resolved
+  for (const idx of genericIndices) {
+    const seg = updated[idx];
+    const isOcrSeg = isFastOcrMode || seg.speakerSource === 'ocr_only';
+    let g = String(seg.voiceGender || '').toLowerCase();
+    if (g !== 'female' && g !== 'male') {
+      g = 'unknown';
+    }
+    const vMeta = deriveVoiceFromGender(g);
+    seg.voiceGender = g;
+    seg.gender = vMeta.gender;
+    seg.speakerGender = vMeta.speakerGender;
+    seg.voiceId = vMeta.voiceId;
+    seg.khmerVoiceId = vMeta.khmerVoiceId;
+    seg.voice = vMeta.voice;
+    seg.voiceLabel = vMeta.voiceLabel;
+    seg.avatar = vMeta.avatar;
+    seg.badgeColor = vMeta.badgeColor;
+    if (isOcrSeg) {
+      seg.unverifiedSpeaker = true;
+    }
+    seg.speakerId = buildSafeSpeakerId('តួអង្គ', g, idx);
+  }
+
+  // Named characters: majority gender (or explicit unambiguous role title like ប្រព័ន្ធ / តួឯកប្រុស) wins across the entire episode
+  let genderCorrectedCount = 0;
+  let staleVoiceFixedCount = 0;
+  const characterSummary = [];
+
+  for (const [charName, entry] of groups.entries()) {
+    const kwGender = detectSpeakerGender(charName);
+    const isSystemChar = /ប្រព័ន្ធ|system|系统/i.test(charName);
+    let winnerGender;
+    if (isSystemChar) {
+      winnerGender = 'female';
+    } else if (entry.femaleVotes > entry.maleVotes) {
+      if (kwGender === 'MALE' && !updated[entry.indices[0]]?.pitchHz) {
+        winnerGender = 'male';
+      } else {
+        winnerGender = 'female';
+      }
+    } else if (entry.maleVotes > entry.femaleVotes) {
+      if (kwGender === 'FEMALE' && !updated[entry.indices[0]]?.pitchHz) {
+        winnerGender = 'female';
+      } else {
+        winnerGender = 'male';
+      }
+    } else {
+      if (kwGender === 'FEMALE') {
+        winnerGender = 'female';
+      } else if (kwGender === 'MALE') {
+        winnerGender = 'male';
+      } else {
+        const firstG = String(updated[entry.indices[0]]?.voiceGender || '').toLowerCase();
+        winnerGender = (firstG === 'female' || firstG === 'male') ? firstG : normDefault;
+      }
+    }
+
+    const vMeta = deriveVoiceFromGender(winnerGender);
+    const canonicalSpeakerId = buildSafeSpeakerId(charName, winnerGender, entry.indices[0]);
+    let charCorrected = 0;
+    let charStaleVoiceFixed = 0;
+
+    for (const idx of entry.indices) {
+      const seg = updated[idx];
+      const isOcrSeg = isFastOcrMode || seg.speakerSource === 'ocr_only';
+      const prevGender = String(seg.voiceGender || '').toLowerCase();
+      const prevVoice = seg.voiceId || seg.khmerVoiceId || seg.voice || '';
+
+      if (prevGender !== winnerGender) {
+        charCorrected++;
+      } else if (prevVoice !== vMeta.voiceId) {
+        charStaleVoiceFixed++;
+      }
+
+      seg.speaker = charName;
+      seg.speakerName = charName;
+      seg.speakerId = canonicalSpeakerId;
+      if (isOcrSeg) {
+        seg.speakerSource = 'ocr_only';
+        seg.unverifiedSpeaker = false;
+      }
+      seg.voiceGender = winnerGender;
+      seg.gender = vMeta.gender;
+      seg.speakerGender = vMeta.speakerGender;
+      seg.voiceId = vMeta.voiceId;
+      seg.khmerVoiceId = vMeta.khmerVoiceId;
+      seg.voice = vMeta.voice;
+      seg.voiceLabel = vMeta.voiceLabel;
+      seg.avatar = vMeta.avatar;
+      seg.badgeColor = vMeta.badgeColor;
+    }
+
+    genderCorrectedCount += charCorrected;
+    staleVoiceFixedCount += charStaleVoiceFixed;
+    characterSummary.push({
+      speaker: charName,
+      speakerId: canonicalSpeakerId,
+      gender: winnerGender,
+      voiceId: vMeta.voiceId,
+      totalLines: entry.indices.length,
+      femaleVotes: entry.femaleVotes,
+      maleVotes: entry.maleVotes,
+      unknownVotes: entry.unknownVotes,
+      correctedCount: charCorrected,
+      staleVoiceFixedCount: charStaleVoiceFixed,
+    });
+  }
+
+  if (characterSummary.length > 0 || genericIndices.length > 0 || overriddenCount > 0) {
+    const modeTag = isFastOcrMode ? 'Fast OCR Consistency' : 'Episode Consistency';
+    console.log(
+      `[Stage 6 ${modeTag}] 📊 Episode pass: ${characterSummary.length} named character(s) found (${genericIndices.length} generic 'តួអង្គ', ${overriddenCount} userOverridden untouched), ${genderCorrectedCount} minority segment(s) corrected, ${staleVoiceFixedCount} stale voiceId fixed.`
+    );
+    for (const ch of characterSummary) {
+      console.log(
+        `[Stage 6 ${modeTag}]   • "${ch.speaker}" => ${ch.gender} (${ch.voiceId}) | lines=${ch.totalLines}, votes[F:${ch.femaleVotes}/M:${ch.maleVotes}/U:${ch.unknownVotes}], corrected=${ch.correctedCount}`
+      );
+    }
+  }
+
+  return {
+    segments: updated,
+    stats: {
+      namedCharactersCount: characterSummary.length,
+      characters: characterSummary,
+      genericCount: genericIndices.length,
+      overriddenCount,
+      correctedCount: genderCorrectedCount,
+      staleVoiceFixedCount,
+    },
+  };
+}
+
+const enforceFastOcrCharacterConsistency = enforceEpisodeCharacterConsistency;
 
 function splitLongDialogueSegment(seg, maxDur = 6.0) {
   const text = String(seg.originalChineseText || '').trim();
@@ -398,6 +826,86 @@ function splitLongDialogueSegment(seg, maxDur = 6.0) {
   }];
 }
 
+function isTimeoutLikeError(err) {
+  if (!err) return false;
+  const status = err.status || err.statusCode;
+  const msg = String(err.message || err.toString() || '').toLowerCase();
+  return (
+    status === 504 ||
+    msg.includes('504') ||
+    msg.includes('deadline_exceeded') ||
+    msg.includes('deadline expired') ||
+    msg.includes('gateway timeout')
+  );
+}
+
+function buildStage6OrderedModels(preferredModel = 'gemini-3.5-flash-lite', fallbackModels = STAGE6_CASCADE_MODELS, retiredModels = null, quotaDemotedModels = null, poolKeys = []) {
+  const seen = new Set();
+  const list = [];
+  for (const m of [preferredModel, ...(Array.isArray(fallbackModels) ? fallbackModels : STAGE6_CASCADE_MODELS)]) {
+    const cleanM = String(m || '').trim();
+    if (!cleanM || seen.has(cleanM)) continue;
+    if (retiredModels && retiredModels.has(cleanM)) continue;
+    seen.add(cleanM);
+    list.push(cleanM);
+  }
+  let ordered = list;
+  if (Array.isArray(poolKeys) && poolKeys.length > 0) {
+    ordered = geminiQuotaTracker.prioritizeAvailableModels(ordered, poolKeys);
+  }
+  if (!quotaDemotedModels || quotaDemotedModels.size === 0) {
+    return ordered;
+  }
+  return [
+    ...ordered.filter((m) => !quotaDemotedModels.has(m)),
+    ...ordered.filter((m) => quotaDemotedModels.has(m)),
+  ];
+}
+
+function parseJsonResponseText(resp) {
+  const rawText = typeof resp?.text === 'function' ? resp.text() : resp?.text;
+  if (!rawText || typeof rawText !== 'string') {
+    throw new Error('Empty response text from Gemini');
+  }
+  const clean = rawText.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+  return JSON.parse(clean);
+}
+
+function applyBatchTranslations({ batchSlice, dialogueList, dialoguePayload, batchOffset, parsed, isFastOcrMode }) {
+  const translations = Array.isArray(parsed?.segments) ? parsed.segments : [];
+  const transByIndex = new Map();
+  const transBySegmentId = new Map();
+  for (const t of translations) {
+    if (!t || typeof t !== 'object') continue;
+    if (typeof t.index === 'number') transByIndex.set(t.index, t);
+    if (t.segmentId !== undefined && t.segmentId !== null) transBySegmentId.set(String(t.segmentId), t);
+  }
+
+  let appliedCount = 0;
+  const missingLocalIndices = [];
+
+  for (let i = 0; i < batchSlice.length; i++) {
+    const globalIndex = batchOffset + i + 1;
+    const payloadSegId = String(dialoguePayload[i]?.segmentId ?? globalIndex);
+    const t = transByIndex.get(globalIndex) || transBySegmentId.get(payloadSegId);
+    const targetSeg = dialogueList[batchOffset + i];
+    if (!targetSeg) continue;
+    if (t) {
+      const maxWords = dialoguePayload[i]?.maxKhmerWords || 10;
+      const ok = applyTranslatedSegmentResult(targetSeg, t, maxWords, batchOffset + i, { isFastOcrMode });
+      if (ok) {
+        appliedCount++;
+      } else {
+        missingLocalIndices.push(i);
+      }
+    } else {
+      missingLocalIndices.push(i);
+    }
+  }
+
+  return { appliedCount, missingLocalIndices };
+}
+
 /**
  * Stage 6: Generate Mode Specific Script
  * Mode A: Line-by-line faithful Chinese-to-Khmer spoken drama dubbing with character assignment,
@@ -414,19 +922,37 @@ function splitLongDialogueSegment(seg, maxDur = 6.0) {
  * @param {string} [params.narratorGender='male']
  * @param {object} [params.seriesGlossary={}]
  * @param {string} [params.genre='auto']
- * @returns {Promise<{ mode: string, genre: string, detectedGenre: string, summary: string, scriptSegments: Array }>}
+ * @param {AbortSignal} [params.signal=null]
+ * @param {Array<string>} [params.fallbackModels]
+ * @param {number} [params.retryDelayMs=1500]
+ * @returns {Promise<{ mode: string, genre: string, detectedGenre: string, summary: string, scriptSegments: Array, translationReport?: object }>}
  */
 async function generateModeSpecificScript({
   mode = GENERATION_MODES.MODE_A_DIALOGUE,
+  generationMode = '',
   reconciledSegments = [],
   durationSec = 0,
   aiClient,
-  modelName = 'gemini-3.5-flash-lite',
+  modelName = null,
   userDirection = '',
   narratorGender = 'male',
   seriesGlossary = {},
   genre = 'auto',
+  signal = null,
+  fallbackModels = STAGE6_CASCADE_MODELS,
+  retryDelayMs = 1500,
 }) {
+  if (signal?.aborted) {
+    throw createStage6AbortError();
+  }
+
+  const cleanReqModel = String(modelName || '').trim();
+  const resolvedInitialModel = (cleanReqModel && cleanReqModel !== 'auto')
+    ? cleanReqModel
+    : geminiQuotaTracker.getPreferredPrimaryModel(STAGE6_CASCADE_MODELS[0]);
+  const poolKeys = Array.isArray(aiClient?.pool?.keys) ? aiClient.pool.keys : [];
+
+  const isFastOcrMode = generationMode === GENERATION_MODES.FAST_OCR;
   const normMode = (mode === GENERATION_MODES.MODE_B_RECAP || mode === 'cinematic_recap' || mode === 'recap')
     ? GENERATION_MODES.MODE_B_RECAP
     : GENERATION_MODES.MODE_A_DIALOGUE;
@@ -470,7 +996,16 @@ async function generateModeSpecificScript({
     console.log(`[Stage 6 Mode A] 🌐 ចាប់ផ្តើមបកប្រែពាក្យសន្ទនាចិនទៅជាខ្មែរសរុប ${dialogueList.length} បន្ទាត់ (ចែកជា ${totalBatches} Batches)...`);
 
     const batchFailures = [];
+    const retiredModels = new Set();
+    const quotaDemotedModels = new Set();
+    let activePrimaryModel = resolvedInitialModel;
+    let consecutiveFailures = 0;
+
     for (let b = 0; b < dialogueList.length; b += TRANSLATION_BATCH) {
+      if (signal?.aborted) {
+        throw createStage6AbortError(`Stage 6 Mode A aborted before batch ${Math.floor(b / TRANSLATION_BATCH) + 1}/${totalBatches}`);
+      }
+
       const batchNum = Math.floor(b / TRANSLATION_BATCH) + 1;
       const batchSlice = dialogueList.slice(b, b + TRANSLATION_BATCH);
       console.log(`[Stage 6 Mode A] ⏳ កំពុងបកប្រែ Batch ទី ${batchNum}/${totalBatches} (បន្ទាត់ ${b + 1} -> ${Math.min(dialogueList.length, b + TRANSLATION_BATCH)})...`);
@@ -499,6 +1034,8 @@ async function generateModeSpecificScript({
         const targetToTranslate = segmentChinese || audioTranscript;
         const audioContext = (audioTranscript && audioTranscript !== targetToTranslate) ? audioTranscript : null;
 
+        const isOcrNoPitchSeg = isFastOcrMode || s.speakerSource === 'ocr_only';
+
         return {
           index: globalIdx + 1,
           segmentId: s.segmentId || s.id || (globalIdx + 1),
@@ -510,15 +1047,21 @@ async function generateModeSpecificScript({
           surroundingAudioContext: audioContext,
           ocrSubtitleText: s.ocrSubtitleText || '',
           originalChineseText: s.originalChineseText || '',
-          detectedGender: s.voiceGender || 'unknown',
-          acousticGenderHint: s.voiceGender || 'unknown',
-          acousticPitchHz: s.pitchHz || s.acousticF0 || null,
+          // Rule 3 (Honest hints): Fast OCR / ocr_only has no ASR or acoustic pitch — never feed fabricated stage-3 default as acoustic hint
+          detectedGender: isOcrNoPitchSeg ? 'unknown' : (s.voiceGender || 'unknown'),
+          acousticGenderHint: isOcrNoPitchSeg ? 'unknown' : (s.voiceGender || 'unknown'),
+          acousticPitchHz: isOcrNoPitchSeg ? null : (s.pitchHz || s.acousticF0 || null),
         };
       });
 
+      const isOcrBatch = isFastOcrMode || batchSlice.some((s) => s.speakerSource === 'ocr_only');
+
       // Context Window: provide surrounding context lines so Gemini translates connected thoughts
       const previousContext = b > 0
-        ? dialogueList.slice(Math.max(0, b - 5), b).map((p, pIdx) => `[#${b - 5 + pIdx + 1} ${p.speaker || 'តួ'}] ${p.originalChineseText} ➜ "${p.khmerTranslatedText || ''}"`).join('\n')
+        ? dialogueList.slice(Math.max(0, b - 5), b).map((p, pIdx) => {
+            const gLabel = p.voiceGender && p.voiceGender !== 'unknown' ? ` (${p.voiceGender})` : '';
+            return `[#${b - 5 + pIdx + 1} ${p.speaker || 'តួ'}${gLabel}] ${p.originalChineseText} ➜ "${p.khmerTranslatedText || ''}"`;
+          }).join('\n')
         : '(ដើមភាគដំបូង គ្មានបរិបទមុន)';
 
       const upcomingContext = dialogueList.slice(b + TRANSLATION_BATCH, b + TRANSLATION_BATCH + 5)
@@ -580,7 +1123,10 @@ ${customGlossaryPrompt}
 7. ការកំណត់អត្តសញ្ញាណតួអង្គ និងភេទអ្នកនិយាយ (SPEAKER vs ADDRESSEE GENDER IDENTIFICATION):
 - ត្រូវបែងចែកឱ្យដាច់រវាង «អ្នកកំពុងនិយាយ (Speaker)» និង «អ្នកដែលត្រូវគេហៅក្នុងប្រយោគ (Addressee / Person Mentioned)»!
   * គោលការណ៍ទូទៅ៖ នៅពេលតួអង្គស្រីនិយាយទៅកាន់បុរស ឬហៅឈ្មោះ/ងារតួប្រុស (ដូចជា "បង", "លោកប្រធាន", "សិស្សច្បង", "លោកប៉ា", "លោកម្ចាស់", "បងប្រុស") អ្នកនិយាយនៅតែជា «តួស្រី (female)» ដដែល។ ហាមដាច់ខាតឃើញពាក្យសម្គាល់ភេទប្រុស ឬឈ្មោះតួប្រុសក្នុងប្រយោគ ហើយដាក់អ្នកនិយាយជាប្រុស (male)!
-- ពិនិត្យ "acousticGenderHint" និង "acousticPitchHz"៖ បើ acousticPitchHz >= 170Hz ឬបរិបទជាសម្ដីនារីនិយាយទៅកាន់បុរស ត្រូវដាក់ "gender": "female" និង "speaker": "តួឯកស្រី" (ឬឈ្មោះតួស្រី) ដាច់ខាត។
+${isOcrBatch
+  ? '- Fast OCR Mode (គ្មាន ASR/Pitch ទេ — "acousticGenderHint" គឺ "unknown" និង "acousticPitchHz" គឺ null): មិនត្រូវអនុវត្តច្បាប់ pitch Hz ទេ។ ត្រូវវិនិច្ឆ័យ "speaker" និង "gender" ពីបរិបទអត្ថបទ និង [Previous Lines] ឱ្យស៊ីសង្វាក់គ្នា — តួអង្គដដែលត្រូវប្រើឈ្មោះ "speaker" និង "gender" ដូចគ្នាឆ្លងកាត់គ្រប់ Batch (ឧ. បើបរិបទជាសម្ដីនារីនិយាយទៅកាន់បុរស ត្រូវដាក់ "gender": "female" និង "speaker": "តួឯកស្រី" ឬឈ្មោះតួស្រី; ប្រើ "តួអង្គ" តែនៅពេលមិនដឹងតួអង្គពិតប្រាកដ)។'
+  : '- ពិនិត្យ "acousticGenderHint" និង "acousticPitchHz"៖ បើ acousticPitchHz >= 170Hz ឬបរិបទជាសម្ដីនារីនិយាយទៅកាន់បុរស ត្រូវដាក់ "gender": "female" និង "speaker": "តួឯកស្រី" (ឬឈ្មោះតួស្រី) ដាច់ខាត។'}
+- តួអង្គ «ប្រព័ន្ធ / AI System / 系统 / ទីប្រឹក្សាប្រព័ន្ធ» ត្រូវកំណត់ជា "speaker": "ប្រព័ន្ធ" និង "gender": "female" (សំឡេង Sreymom) ជាលំនាំដើម (លើកលែងតែបរិបទបញ្ជាក់ច្បាស់ថាជាតួបុរស)។
 - ការលេងពាក្យក្នុងភាសាចិន (Chinese Puns / 谐音梗 / Slang)៖ ប្រសិនបើតួអង្គលេងពាក្យសូរសំឡេង ឬនិយាយពាក្យកំប្លុកកំប្លែង ត្រូវបកប្រែឱ្យស៊ីនឹងន័យកំប្លែង និងបរិបទសន្ទនាធម្មជាតិរបស់ខ្មែរ ហាមបកប្រែតាមសូរអក្សរឆ្គងៗរឹងៗ។
 - "speaker": ឈ្មោះ ឬតួនាទីតួអង្គជាភាសាខ្មែរ (e.g. "តួឯកប្រុស", "តួឯកស្រី", "លោកប្រធាន", "អ្នកនាង", "អ្នកគ្រប់គ្រង", "មេទ័ព", "អ្នកភូមិ") តាមប្រភេទរឿង។
 - "gender": "male" | "female" | "unknown" (សំឡេងប្រុសប្រើ Piseth, សំឡេងស្រីប្រើ Sreymom)។
@@ -616,141 +1162,236 @@ Return JSON ONLY matching this schema:
 }
 `;
 
-      try {
-        let resp = null;
-        let attempt = 0;
-        const maxAttempts = 4;
-        while (attempt < maxAttempts && !resp) {
+      let orderedBatchModels = buildStage6OrderedModels(activePrimaryModel, fallbackModels, retiredModels, quotaDemotedModels, poolKeys);
+      if (orderedBatchModels.length === 0) {
+        orderedBatchModels = buildStage6OrderedModels(resolvedInitialModel, fallbackModels, null, null, poolKeys);
+      }
+
+      let recovered = false;
+      const modelErrors = [];
+
+      for (let mIdx = 0; mIdx < orderedBatchModels.length; mIdx++) {
+        if (signal?.aborted) {
+          throw createStage6AbortError(`Stage 6 Mode A aborted during batch ${batchNum}`);
+        }
+        const candidateModel = orderedBatchModels[mIdx];
+        if (mIdx > 0) {
+          console.log(`[Stage 6 Mode A] 🛡️ Batch ${batchNum}/${totalBatches}: Cascading to '${candidateModel}'...`);
+        }
+
+        const maxSameModelAttempts = 2;
+        for (let attempt = 0; attempt < maxSameModelAttempts; attempt++) {
           try {
-            resp = await aiClient.models.generateContent({
-              model: modelName,
+            const resp = await aiClient.models.generateContent({
+              model: candidateModel,
               contents: [modeAPrompt],
               config: {
                 temperature: 0.2,
                 responseMimeType: 'application/json',
               },
             });
-          } catch (tErr) {
-            attempt++;
-            if (attempt >= maxAttempts) throw tErr;
-            console.warn(`[Stage 6 Mode A] Retry translation attempt ${attempt}/${maxAttempts} after error: ${tErr.message}`);
-            await new Promise((r) => setTimeout(r, 2000 * attempt));
-          }
-        }
 
-        const rawText = typeof resp?.text === 'function' ? resp.text() : resp?.text;
-        if (rawText) {
-          const clean = rawText.replace(/^\`\`\`(?:json)?\s*/i, '').replace(/\s*\`\`\`$/i, '').trim();
-          const parsed = JSON.parse(clean);
-          if (parsed.summary && b === 0) overallSummary = parsed.summary;
-          if (parsed.detectedGenre && genre === 'auto' && b === 0) {
-            effectiveGenre = parsed.detectedGenre;
-          }
-          const translations = Array.isArray(parsed.segments) ? parsed.segments : [];
-          const transMap = new Map();
-          for (const t of translations) {
-            if (t && typeof t.index === 'number') transMap.set(t.index, t);
-          }
-
-          for (let i = 0; i < batchSlice.length; i++) {
-            const globalIndex = b + i + 1;
-            const t = transMap.get(globalIndex);
-            const targetSeg = dialogueList[b + i];
-            if (t && targetSeg) {
-              const maxWords = dialoguePayload[i]?.maxKhmerWords || 10;
-              const rawTranslated = cleanKhmerSpokenText(t.khmerText || '');
-              // បង្រួមពាក្យបន្ថែមដោយស្វ័យប្រវត្តិបើវែងពេក ដើម្បីការពារកុំឱ្យ TTS អូសបន្លាយ
-              targetSeg.khmerTranslatedText = condenseKhmerDialogue(rawTranslated, maxWords);
-              targetSeg.speaker = cleanKhmerSpokenText(t.speaker) || targetSeg.speaker || 'តួអង្គ';
-
-              // រួមបញ្ចូលភេទពី AI និងភេទពីហ្វ្រេកង់សំឡេងពិត (Acoustic Pitch F0)
-              const aiGender = String(t.gender || '').toLowerCase();
-              const hasFemalePitch = typeof targetSeg.pitchHz === 'number' && targetSeg.pitchHz >= 172;
-              const hasMalePitch = typeof targetSeg.pitchHz === 'number' && targetSeg.pitchHz > 0 && targetSeg.pitchHz <= 148;
-
-              if (hasFemalePitch) {
-                targetSeg.voiceGender = 'female';
-              } else if (hasMalePitch && aiGender !== 'female') {
-                targetSeg.voiceGender = 'male';
-              } else if (aiGender === 'female' || aiGender === 'male') {
-                targetSeg.voiceGender = aiGender;
-              }
-
-              // កំណត់ speakerId ថ្មីតាមឈ្មោះតួអង្គ និងភេទ ដើម្បីកុំឱ្យជាប់ 'spk_1' រួមគ្នា
-              targetSeg.speakerId = buildSafeSpeakerId(targetSeg.speaker, targetSeg.voiceGender, b + i);
-            }
-          }
-        }
-      } catch (err) {
-        const sanitizedMsg = (err?.message || String(err)).replace(/key=[a-zA-Z0-9_\-]+/gi, 'key=[REDACTED]');
-        console.warn(`[Stage 6 Mode A] Translation call notice for batch at index ${b + 1}:`, sanitizedMsg);
-
-        // Secondary Fallback: Try with cascade model (gemini-3.5-flash or gemini-3.8-flash)
-        let recovered = false;
-        for (const fallbackModel of ['gemini-3.5-flash', 'gemini-3.8-flash']) {
-          if (fallbackModel === modelName) continue;
-          try {
-            console.log(`[Stage 6 Mode A] 🛡️ Attempting batch rescue with cascade model '${fallbackModel}'...`);
-            const fallbackResp = await aiClient.models.generateContent({
-              model: fallbackModel,
-              contents: [modeAPrompt],
-              config: {
-                temperature: 0.2,
-                responseMimeType: 'application/json',
-              },
+            const parsed = parseJsonResponseText(resp);
+            const { appliedCount, missingLocalIndices } = applyBatchTranslations({
+              batchSlice,
+              dialogueList,
+              dialoguePayload,
+              batchOffset: b,
+              parsed,
+              isFastOcrMode,
             });
-            const rawFallback = typeof fallbackResp?.text === 'function' ? fallbackResp.text() : fallbackResp?.text;
-            if (rawFallback) {
-              const clean = rawFallback.replace(/^\`\`\`(?:json)?\s*/i, '').replace(/\s*\`\`\`$/i, '').trim();
-              const parsed = JSON.parse(clean);
-              const translations = Array.isArray(parsed.segments) ? parsed.segments : [];
-              const transMap = new Map();
-              for (const t of translations) {
-                if (t && typeof t.index === 'number') transMap.set(t.index, t);
-              }
-              for (let i = 0; i < batchSlice.length; i++) {
-                const globalIndex = b + i + 1;
-                const t = transMap.get(globalIndex);
-                const targetSeg = dialogueList[b + i];
-                if (t && targetSeg) {
-                  const maxWords = dialoguePayload[i]?.maxKhmerWords || 10;
-                  const rawTranslated = cleanKhmerSpokenText(t.khmerText || '');
-                  targetSeg.khmerTranslatedText = condenseKhmerDialogue(rawTranslated, maxWords);
-                  targetSeg.speaker = cleanKhmerSpokenText(t.speaker) || targetSeg.speaker || 'តួអង្គ';
-                  targetSeg.speakerId = buildSafeSpeakerId(targetSeg.speaker, targetSeg.voiceGender, b + i);
-                }
-              }
-              recovered = true;
-              console.log(`[Stage 6 Mode A] ✅ Batch rescue succeeded with '${fallbackModel}'!`);
-              break;
+
+            if (appliedCount === 0 && batchSlice.length > 0) {
+              throw new Error(`Model '${candidateModel}' returned 0 usable Khmer translations for Batch ${batchNum}`);
             }
-          } catch (resErr) {
-            console.warn(`[Stage 6 Mode A] Rescue with '${fallbackModel}' failed:`, resErr.message);
+
+            if (parsed.summary && b === 0) overallSummary = parsed.summary;
+            if (parsed.detectedGenre && genre === 'auto' && b === 0) {
+              effectiveGenre = parsed.detectedGenre;
+            }
+
+            // Flag any individual omitted lines inside an otherwise successful partial batch
+            for (const missIdx of missingLocalIndices) {
+              const targetSeg = dialogueList[b + missIdx];
+              if (targetSeg && isPlaceholderTranslationText(targetSeg.khmerTranslatedText)) {
+                targetSeg.khmerTranslatedText = '';
+                targetSeg.reviewNeeded = true;
+                targetSeg.translationStatus = 'review_needed';
+                targetSeg.translationWarning = targetSeg.translationWarning || 'MISSING_SEGMENT_TRANSLATION';
+                targetSeg.validationErrors = [
+                  ...(targetSeg.validationErrors || []),
+                  `មិនមានលទ្ធផលបកប្រែពី AI សម្រាប់បន្ទាត់ #${b + missIdx + 1} (ត្រូវការ Review ឬបកប្រែឡើងវិញ)`,
+                ];
+              }
+            }
+
+            activePrimaryModel = candidateModel;
+            quotaDemotedModels.delete(candidateModel);
+            recovered = true;
+            if (mIdx > 0) {
+              console.log(`[Stage 6 Mode A] ✅ Batch ${batchNum} rescued with '${candidateModel}'!`);
+            }
+            break;
+          } catch (err) {
+            if (isAbortLikeError(err, signal)) {
+              throw err?.name === 'AbortError' ? err : createStage6AbortError();
+            }
+
+            const sanitizedMsg = sanitizeStage6ErrorMsg(err);
+
+            // Fail-fast immediately on 401/403 authentication errors across ALL keys
+            if (isAuthOrInvalidKeyError(err)) {
+              const authErr = new Error(`[Stage 6 Mode A] Gemini API Key មិនត្រឹមត្រូវ ឬផុតសុពលភាព (${sanitizedMsg})`);
+              authErr.status = Number(err?.status || err?.statusCode || 401);
+              authErr.code = 'INVALID_API_KEY';
+              authErr.nonRetryable = true;
+              throw authErr;
+            }
+
+            const isNotFound = isModelNotFoundError(err);
+            const isQuota = isQuotaOrRateLimitError(err);
+            const isTimeout = isTimeoutLikeError(err);
+
+            if (isNotFound) retiredModels.add(candidateModel);
+            if (isQuota || isTimeout) quotaDemotedModels.add(candidateModel);
+
+            // Cascade immediately on 404 / 429 / 503 / 504 without burning retry backoff on the same model
+            const canRetrySameModel = !isNotFound && !isQuota && !isTimeout && attempt + 1 < maxSameModelAttempts;
+            if (canRetrySameModel) {
+              console.warn(`[Stage 6 Mode A] Retry '${candidateModel}' (attempt ${attempt + 1}/${maxSameModelAttempts}) for Batch ${batchNum}: ${sanitizedMsg}`);
+              if (retryDelayMs > 0) {
+                await new Promise((r) => setTimeout(r, retryDelayMs));
+              }
+              continue;
+            }
+
+            console.warn(`[Stage 6 Mode A] Batch ${batchNum} model '${candidateModel}' failed: ${sanitizedMsg}`);
+            modelErrors.push({
+              model: candidateModel,
+              status: err?.status || err?.statusCode || null,
+              isQuota,
+              isNotFound,
+              isTimeout,
+              message: sanitizedMsg,
+            });
+            break;
           }
         }
 
-        if (!recovered) {
-          console.warn(`[Stage 6 Mode A] ⚠️ Gracefully preserving ${batchSlice.length} segment(s) with fallback text to avoid crashing episode.`);
-          for (let i = 0; i < batchSlice.length; i++) {
-            const targetSeg = dialogueList[b + i];
-            if (targetSeg && !targetSeg.khmerTranslatedText) {
-              targetSeg.khmerTranslatedText = targetSeg.sourceChineseToTranslate || 'សន្ទនា';
-              targetSeg.needsReview = true;
-            }
+        if (recovered) break;
+      }
+
+      if (recovered) {
+        consecutiveFailures = 0;
+      } else {
+        consecutiveFailures++;
+        const lastModelErr = modelErrors[modelErrors.length - 1] || { message: 'Unknown translation error' };
+        batchFailures.push({
+          batchNum,
+          startIndex: b + 1,
+          endIndex: b + batchSlice.length,
+          segmentCount: batchSlice.length,
+          lastError: lastModelErr,
+          errors: modelErrors,
+        });
+
+        for (let i = 0; i < batchSlice.length; i++) {
+          const targetSeg = dialogueList[b + i];
+          if (targetSeg && isPlaceholderTranslationText(targetSeg.khmerTranslatedText)) {
+            targetSeg.khmerTranslatedText = '';
+            targetSeg.reviewNeeded = true;
+            targetSeg.translationStatus = 'review_needed';
+            targetSeg.translationWarning = 'TRANSLATION_FAILED';
+            targetSeg.validationErrors = [
+              ...(targetSeg.validationErrors || []),
+              `ការបកប្រែ AI បរាជ័យសម្រាប់ Batch ${batchNum}: ${lastModelErr.message}`,
+            ];
           }
+        }
+
+        // Fail fast on single-batch failures or consecutive full-cascade failures instead of hanging remaining batches
+        if (totalBatches === 1 || consecutiveFailures >= 2) {
+          console.error(`[Stage 6 Mode A] 🚨 Aborting Stage 6 early at Batch ${batchNum}/${totalBatches} after ${consecutiveFailures} consecutive full-cascade failure(s).`);
+          break;
         }
       }
+    }
+
+    const translatedSegmentsCount = dialogueList.filter((s) => !isPlaceholderTranslationText(s.khmerTranslatedText)).length;
+    const untranslatedCount = dialogueList.length - translatedSegmentsCount;
+    const failedRatio = dialogueList.length > 0 ? untranslatedCount / dialogueList.length : 0;
+
+    if (
+      batchFailures.length > 0 &&
+      (totalBatches === 1 ||
+        consecutiveFailures >= 2 ||
+        batchFailures.length >= 2 ||
+        translatedSegmentsCount === 0 ||
+        failedRatio >= 0.25)
+    ) {
+      const allErrors = batchFailures.flatMap((bf) => bf.errors || []);
+      const hasQuotaErr = allErrors.some((e) => e.isQuota);
+      const hasNotFoundOnly = allErrors.length > 0 && allErrors.every((e) => e.isNotFound);
+      const firstFailedBatch = batchFailures[0]?.batchNum || 1;
+      const lastMsg = batchFailures[batchFailures.length - 1]?.lastError?.message || 'All cascade models failed';
+
+      let errCode = 'TRANSLATION_FAILED';
+      let errStatus = batchFailures[batchFailures.length - 1]?.lastError?.status || 502;
+      let errMessage = `[Stage 6 Mode A] ការបកប្រែ AI បរាជ័យ (${errCode}) នៅ Batch ${firstFailedBatch}/${totalBatches} (បរាជ័យ ${untranslatedCount}/${dialogueList.length} ឃ្លា): ${lastMsg}`;
+
+      if (hasQuotaErr) {
+        errCode = 'QUOTA_EXCEEDED';
+        errStatus = 429;
+        errMessage = `[Stage 6 Mode A] Gemini API Quota/Rate Limit ពេញគ្រប់ Key និងគ្រប់ Cascade Model នៅ Batch ${firstFailedBatch}/${totalBatches} (បរាជ័យ ${untranslatedCount}/${dialogueList.length} ឃ្លា): ${lastMsg}`;
+      } else if (hasNotFoundOnly) {
+        errCode = 'MODEL_UNAVAILABLE';
+        errStatus = 404;
+        errMessage = `[Stage 6 Mode A] ម៉ូដែល Gemini មិនអាចប្រើបាន (404 Model Unavailable) នៅ Batch ${firstFailedBatch}/${totalBatches}: ${lastMsg}`;
+      }
+
+      const stage6Err = new Error(errMessage);
+      stage6Err.code = errCode;
+      stage6Err.status = errStatus;
+      stage6Err.translationReport = {
+        totalSegments: dialogueList.length,
+        translatedCount: translatedSegmentsCount,
+        untranslatedCount,
+        totalBatches,
+        failedBatches: batchFailures.length,
+        isPartial: translatedSegmentsCount > 0,
+      };
+      throw stage6Err;
     }
 
     // Phase 1: Non-destructive duplicate detection pass (flags warnings, never auto-deletes)
     dialogueList = detectDuplicateTranslations(dialogueList);
 
+    // Whole-episode character gender consistency & voice re-derivation pass (both Fast OCR & Standard Dialogue)
+    const consistencyRes = enforceEpisodeCharacterConsistency(dialogueList, {
+      defaultGender: narratorGender,
+      isFastOcrMode,
+    });
+    dialogueList = consistencyRes.segments;
+    const consistencySummary = consistencyRes.stats;
+
     const scriptSegments = dialogueList.map((s, idx) => createCanonicalSegment(s, idx, normMode));
+    const finalTranslatedCount = scriptSegments.filter((s) => !isPlaceholderTranslationText(s.khmerTranslatedText)).length;
+    const finalUntranslatedCount = scriptSegments.length - finalTranslatedCount;
+
     return {
       mode: normMode,
       genre: effectiveGenre,
       detectedGenre: effectiveGenre,
       summary: overallSummary,
+      ...(consistencySummary ? { consistencySummary } : {}),
+      translationReport: {
+        totalSegments: scriptSegments.length,
+        translatedCount: finalTranslatedCount,
+        untranslatedCount: finalUntranslatedCount,
+        totalBatches,
+        failedBatches: batchFailures.length,
+        isPartial: finalUntranslatedCount > 0,
+      },
       scriptSegments,
     };
   } else {
@@ -801,23 +1442,28 @@ Return JSON ONLY:
     let summary = 'សម្រាយរឿងបែបកុនភាគខ្មែរ';
     let segmentsOut = [];
 
-    try {
-      const resp = await aiClient.models.generateContent({
-        model: modelName,
-        contents: [modeBPrompt],
-        config: {
-          temperature: 0.3,
-          responseMimeType: 'application/json',
-        },
-      });
+    const modeBModels = buildStage6OrderedModels(resolvedInitialModel, fallbackModels, null, null, poolKeys);
+    let lastModeBErr = null;
 
-      const rawText = typeof resp.text === 'function' ? resp.text() : resp.text;
-      if (rawText) {
-        const clean = rawText.replace(/^\`\`\`(?:json)?\s*/i, '').replace(/\s*\`\`\`$/i, '').trim();
-        const parsed = JSON.parse(clean);
+    for (let mIdx = 0; mIdx < modeBModels.length; mIdx++) {
+      if (signal?.aborted) {
+        throw createStage6AbortError('Stage 6 Mode B aborted by user signal');
+      }
+      const candidateModel = modeBModels[mIdx];
+      try {
+        const resp = await aiClient.models.generateContent({
+          model: candidateModel,
+          contents: [modeBPrompt],
+          config: {
+            temperature: 0.3,
+            responseMimeType: 'application/json',
+          },
+        });
+
+        const parsed = parseJsonResponseText(resp);
         if (parsed.summary) summary = parsed.summary;
         const rawSegs = Array.isArray(parsed.segments) ? parsed.segments : [];
-        segmentsOut = rawSegs.map((s, idx) => ({
+        segmentsOut = rawSegs.map((s) => ({
           ...s,
           khmerText: cleanKhmerSpokenText(s.khmerText || ''),
           speaker: 'អ្នកសម្រាយរឿង',
@@ -826,12 +1472,32 @@ Return JSON ONLY:
           voiceId: normNarratorGender === 'female' ? 'km-KH-SreymomNeural' : 'km-KH-PisethNeural',
           evidenceType: 'cinematic_recap',
         }));
+        break;
+      } catch (err) {
+        if (isAbortLikeError(err, signal)) {
+          throw err?.name === 'AbortError' ? err : createStage6AbortError();
+        }
+        const sanitizedMsg = sanitizeStage6ErrorMsg(err);
+        if (isAuthOrInvalidKeyError(err)) {
+          const authErr = new Error(`[Stage 6 Mode B] Gemini API Key មិនត្រឹមត្រូវ ឬផុតសុពលភាព (${sanitizedMsg})`);
+          authErr.status = Number(err?.status || err?.statusCode || 401);
+          authErr.code = 'INVALID_API_KEY';
+          authErr.nonRetryable = true;
+          throw authErr;
+        }
+        lastModeBErr = err;
+        console.warn(`[Stage 6 Mode B] Recap model '${candidateModel}' failed:`, sanitizedMsg);
+        const canCascade = isQuotaOrRateLimitError(err) || isModelNotFoundError(err) || isTimeoutLikeError(err);
+        if (!canCascade) break;
       }
-    } catch (err) {
-      const sanitizedMsg = (err?.message || String(err)).replace(/key=[a-zA-Z0-9_\-]+/gi, 'key=[REDACTED]');
-      console.warn('[Stage 6 Mode B] Recap generation call error:', sanitizedMsg);
+    }
+
+    if (segmentsOut.length === 0 && lastModeBErr) {
+      const sanitizedMsg = sanitizeStage6ErrorMsg(lastModeBErr);
       const recapErr = new Error(`[Stage 6 Mode B] Recap generation call error: ${sanitizedMsg}`);
       recapErr.isPartial = false;
+      recapErr.code = isQuotaOrRateLimitError(lastModeBErr) ? 'QUOTA_EXCEEDED' : 'RECAP_FAILED';
+      recapErr.status = lastModeBErr?.status || lastModeBErr?.statusCode || (recapErr.code === 'QUOTA_EXCEEDED' ? 429 : 502);
       throw recapErr;
     }
 
@@ -878,6 +1544,10 @@ function condenseKhmerDialogue(khmerText = '', targetWordLimit = 0) {
 module.exports = {
   generateModeSpecificScript,
   createCanonicalSegment,
+  deriveVoiceFromGender,
+  enforceEpisodeCharacterConsistency,
+  enforceFastOcrCharacterConsistency,
+  applyTranslatedSegmentResult,
   buildSafeSpeakerId,
   splitLongDialogueSegment,
   condenseKhmerDialogue,
@@ -886,6 +1556,8 @@ module.exports = {
   cleanKhmerSpokenText,
   computeKhmerSimilarity,
   detectDuplicateTranslations,
+  isPlaceholderTranslationText,
+  STAGE6_CASCADE_MODELS,
   DRAMA_GENRES,
   CULTIVATION_DRAMA_GLOSSARY,
 };
