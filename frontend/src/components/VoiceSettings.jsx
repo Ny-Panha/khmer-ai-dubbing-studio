@@ -262,12 +262,14 @@ export default function VoiceSettings({
   const handleClipVoiceChange = useCallback(async (segIdOrIndex, newVoiceId, targetIndex = null) => {
     if (onUpdateSegmentVoice) {
       const effectiveIndex = typeof targetIndex === 'number' ? targetIndex : selectedSegmentIndex;
+      if (segmentAudioRef.current) {
+        segmentAudioRef.current.pause();
+        segmentAudioRef.current.removeAttribute('src');
+        setPlayingSegmentId(null);
+      }
       setRegeneratingId(segIdOrIndex);
       try {
-        const res = await onUpdateSegmentVoice(segIdOrIndex, newVoiceId, true, effectiveIndex);
-        if (res && res.audioUrl) {
-          playSegmentAudio(res.audioUrl, segIdOrIndex);
-        }
+        await onUpdateSegmentVoice(segIdOrIndex, newVoiceId, true, effectiveIndex);
       } finally {
         setRegeneratingId(null);
       }

@@ -215,3 +215,19 @@ test('Subtitle controls exit stale renderedVideo, preserve time across src swap,
   assert.match(playerCss, /\.live-subtitle-overlay\.style-pill\s*>\s*span/);
   assert.match(playerCss, /\.live-subtitle-overlay\.style-cinema\s*>\s*span\s*\{[^}]*background:\s*transparent/);
 });
+
+test('Voice gender switch (handleClipVoiceChange) does not auto-play segment audio', () => {
+  const voiceSettingsCode = fs.readFileSync(
+    path.resolve(__dirname, '../../frontend/src/components/VoiceSettings.jsx'),
+    'utf8'
+  );
+  const voiceChangeBlockMatch = voiceSettingsCode.match(
+    /const handleClipVoiceChange = useCallback\(async[\s\S]*?\}, \[onUpdateSegmentVoice, selectedSegmentIndex\]\);/
+  );
+  assert.ok(voiceChangeBlockMatch, 'handleClipVoiceChange block must exist in VoiceSettings.jsx');
+  assert.doesNotMatch(
+    voiceChangeBlockMatch[0],
+    /playSegmentAudio\s*\(/,
+    'Switching segment voice gender must not auto-play audio'
+  );
+});

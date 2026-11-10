@@ -1,6 +1,30 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
+- **Environment**: Antigravity IDE (`Disable Auto-Play When Switching Segment Voice Gender`)
+- **Timestamp**: 2026-11-10T16:37:31+07:00
+
+## Summary: Disabled Automatic Segment Audio Playback on Voice Gender Switch (`👨 ប្រុស` / `👩 ស្រី`)
+1. **Root Cause & Fix ([VoiceSettings.jsx](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/VoiceSettings.jsx#L262-L277))**:
+   - `handleClipVoiceChange` (invoked by `👨 ប្រុស` / `👩 ស្រី` in [`ClipInspectorPanel.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/voice/ClipInspectorPanel.jsx#L1050-L1101)) previously called `playSegmentAudio(res.audioUrl, segIdOrIndex)` immediately after `onUpdateSegmentVoice` finished regenerating TTS audio.
+   - Removed the automatic `playSegmentAudio(...)` call from `handleClipVoiceChange` and explicitly paused/cleared any currently playing `segmentAudioRef.current` clip preview when switching voice gender, while keeping voice updates + TTS synthesis (`onUpdateSegmentVoice`) and manual playback (`ស្តាប់សំឡេង (Play)`) intact.
+2. **Regression Coverage ([workspace_player_containment.test.js](file:///e:/khmer_ai_dubbing_studio/backend/tests/workspace_player_containment.test.js#L219-L233))**:
+   - Added `'Voice gender switch (handleClipVoiceChange) does not auto-play segment audio'` verifying `handleClipVoiceChange` does not call `playSegmentAudio(`.
+3. **Verification Results (Fresh After Final Edit — Real `series.json` Untouched)**:
+   - `npm --prefix frontend run lint`: **0 errors** (374 pre-existing repo warnings).
+   - `npm --prefix frontend run build`: **PASS (`1.21s`)**.
+   - `node --test backend/tests/workspace_player_containment.test.js backend/tests/aspect_ratio_and_crop.test.js`: **12/12 PASS**.
+   - Live Playwright Chrome E2E (`verify_voice_switch_no_autoplay.cjs` on `http://127.0.0.1:5173` with mocked write routes & `/api/generate-audio` + `/api/sync-timeline-audio`): **PASS, 0 console/page errors** — verified clicking `👩 ស្រី` (`playCalls = []`) and `👨 ប្រុស` (`playCalls = []`) never triggers `HTMLMediaElement.prototype.play`, while clicking manual `ស្តាប់សំឡេង (Play)` triggers 1 `AUDIO` playback.
+
+## Active Environment
+- **Dev Orchestrator**: Backend `http://localhost:5000` + Frontend `http://localhost:5173`.
+
+## Next Steps
+- Hard refresh browser (`Ctrl + Shift + R`) on `http://localhost:5173` and click `👨 ប្រុស` / `👩 ស្រី` on any segment — voice switches cleanly without auto-playing audio.
+
+---
+
+## Previous Session
 - **Environment**: Antigravity IDE (`Fix Export Panel Subtitle Controls Not Working in Live Preview & Rendered Mode`)
 - **Timestamp**: 2026-11-10T16:06:30+07:00
 
