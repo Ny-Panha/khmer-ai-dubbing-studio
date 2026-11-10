@@ -608,8 +608,11 @@ export default function App() {
           onOpenJobDashboard={handleOpenJobDashboard}
           onOpenGeminiRoute={handleOpenGeminiRoute}
           onOpenGeminiQuota={handleOpenGeminiQuota}
+          onOpenBatchExportStudio={handleOpenBatchExportStudio}
           isGeminiRouteActive={showGeminiRouteModal}
           isGeminiQuotaActive={showGeminiQuotaModal}
+          isBatchExportStudioActive={showBatchExportStudioModal}
+          batchRender={render.batchRender}
           currentAspectRatio={currentAspectRatio}
           onAspectRatioChange={handleAspectRatioChange}
         />
@@ -772,7 +775,6 @@ export default function App() {
                 seriesId={series.seriesId}
                 episodeId={series.episodeId}
                 batchRender={render.batchRender}
-                onOpenBatchExportStudio={handleOpenBatchExportStudio}
                 duration={playback.duration}
                 selectedClip={media.selectedClip}
                 onSplitClip={handleSplitClip}

@@ -31,8 +31,11 @@ export default function Navbar({
   onOpenJobDashboard = null,
   onOpenGeminiRoute = null,
   onOpenGeminiQuota = null,
+  onOpenBatchExportStudio = null,
   isGeminiRouteActive = false,
   isGeminiQuotaActive = false,
+  isBatchExportStudioActive = false,
+  batchRender = null,
   activeJobCount = 0,
   currentAspectRatio = '16:9',
   onAspectRatioChange = null,
@@ -49,6 +52,8 @@ export default function Navbar({
   };
 
   const episodesCount = Array.isArray(activeSeries?.episodes) ? activeSeries.episodes.length : 0;
+  const batchJob = batchRender?.job || null;
+  const isBatchRunning = Boolean(batchRender?.isRunning || batchJob?.status === 'running');
   const quotaSummary = keysHealth?.quotaSummary || null;
   const keysChipText = quotaSummary && (quotaSummary.totalKeys || 0) > 0
     ? `${quotaSummary.readyKeys}/${quotaSummary.totalKeys} Keys`
@@ -247,6 +252,39 @@ export default function Navbar({
             >
               <Download size={14} />
               <span>Export</span>
+            </button>
+          )}
+
+          {onOpenBatchExportStudio && (
+            <button
+              type="button"
+              data-testid="open-batch-export-studio-btn"
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                onOpenBatchExportStudio();
+              }}
+              disabled={episodesCount === 0}
+              className={`navbar-gemini-route-btn ${isBatchExportStudioActive ? 'active' : ''}`}
+              style={{
+                borderColor: isBatchRunning ? 'rgba(56, 189, 248, 0.6)' : 'rgba(56, 189, 248, 0.35)',
+                color: '#E0F2FE',
+                background: isBatchExportStudioActive ? 'rgba(2, 132, 199, 0.24)' : 'rgba(14, 165, 233, 0.12)',
+              }}
+              title="Export Studio — Batch Export & Merge គ្រប់ភាគ"
+            >
+              <Layers size={14} style={{ color: '#38BDF8' }} />
+              <span>Batch Export</span>
+              <span
+                className="gemini-badge-chip"
+                style={{
+                  borderColor: 'rgba(56, 189, 248, 0.35)',
+                  color: '#38BDF8',
+                  background: 'rgba(15, 23, 42, 0.7)',
+                }}
+              >
+                {isBatchRunning ? `${batchJob?.progress || 0}%` : `${episodesCount} ភាគ`}
+              </span>
             </button>
           )}
         </div>

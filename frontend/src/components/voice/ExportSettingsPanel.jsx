@@ -1,7 +1,7 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Clapperboard, Subtitles, Loader2, Download, Copy, Check, ChevronUp, ChevronDown,
-  CheckCircle2, ShieldCheck, Image, Upload, Layers, ArrowRight
+  CheckCircle2, ShieldCheck, Image, Upload
 } from 'lucide-react';
 import { resolveDefaultAspectRatio } from '../../utils/projectStorage';
 
@@ -17,9 +17,7 @@ export default function ExportSettingsPanel({
   selectedVideo,
   videoMetadata = null,
   activeEpisode = null,
-  activeSeries = null,
   batchRender = null,
-  onOpenBatchExportStudio = null,
   audioGenerated,
   previewAudioUrl,
   renderedVideo,
@@ -28,11 +26,6 @@ export default function ExportSettingsPanel({
 }) {
   const [internalProgress, setInternalProgress] = useState(0);
   const [internalStage, setInternalStage] = useState('');
-
-  const seriesEpisodes = useMemo(() => {
-    const list = Array.isArray(activeSeries?.episodes) ? [...activeSeries.episodes] : [];
-    return list.sort((a, b) => (Number(a.episodeNumber) || 0) - (Number(b.episodeNumber) || 0));
-  }, [activeSeries]);
 
   const batchJob = batchRender?.job || null;
   const isBatchRunning = Boolean(batchRender?.isRunning || batchJob?.status === 'running');
@@ -968,62 +961,6 @@ export default function ExportSettingsPanel({
               >
                 {copiedCaption ? <Check size={12} color="var(--color-success)" /> : <Copy size={12} />}
                 <span>{copiedCaption ? 'Copied Post Caption!' : 'Copy TikTok / Facebook Caption'}</span>
-              </button>
-            </div>
-          )}
-
-          {/* ── Dedicated Batch Export & Merge Studio Launcher ── */}
-          {seriesEpisodes.length > 0 && batchRender && (
-            <div
-              style={{
-                marginTop: 14,
-                paddingTop: 12,
-                borderTop: '1px solid rgba(255, 255, 255, 0.1)',
-              }}
-            >
-              <button
-                type="button"
-                data-testid="open-batch-export-studio-btn"
-                onClick={() => onOpenBatchExportStudio?.()}
-                className="btn-tactile"
-                style={{
-                  width: '100%',
-                  padding: '9px 12px',
-                  borderRadius: 8,
-                  background: 'linear-gradient(135deg, rgba(14, 165, 233, 0.18) 0%, rgba(37, 99, 235, 0.24) 100%)',
-                  border: '1px solid rgba(56, 189, 248, 0.42)',
-                  color: '#E0F2FE',
-                  fontSize: '0.78rem',
-                  fontWeight: 800,
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  gap: 8,
-                }}
-              >
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7, minWidth: 0 }}>
-                  <Layers size={14} color="#38BDF8" style={{ flexShrink: 0 }} />
-                  <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    Batch Export &amp; Merge ({seriesEpisodes.length} ភាគ)
-                  </span>
-                  {isBatchRunning && (
-                    <span
-                      style={{
-                        fontSize: '0.64rem',
-                        fontWeight: 800,
-                        color: '#38BDF8',
-                        background: 'rgba(56, 189, 248, 0.18)',
-                        padding: '1px 6px',
-                        borderRadius: 9999,
-                        flexShrink: 0,
-                      }}
-                    >
-                      {batchJob?.progress || 0}%
-                    </span>
-                  )}
-                </span>
-                <ArrowRight size={14} color="#38BDF8" style={{ flexShrink: 0 }} />
               </button>
             </div>
           )}

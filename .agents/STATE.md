@@ -1,6 +1,27 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
+- **Environment**: Antigravity IDE (`Move Batch Export Button to Top Navbar Next to Export / Download MP4`)
+- **Timestamp**: 2026-11-10T15:08:00+07:00
+
+## Summary: Moved `Batch Export` Launcher Button to Top-Right Navbar Beside `Export` / `Download MP4`
+1. **Top Navbar Placement ([Navbar.jsx](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/Navbar.jsx#L253-L283), [App.jsx](file:///e:/khmer_ai_dubbing_studio/frontend/src/App.jsx#L611-L614))**:
+   - Placed the **`Batch Export (N ភាគ)`** button (`data-testid="open-batch-export-studio-btn"`) in `.navbar-right-actions` directly next to the top-right `Export` / `Download MP4` button (`36px` height, live `%` badge while running) to open **Export Studio — Batch Export & Merge**.
+2. **Removed from Right Inspector Panel ([ExportSettingsPanel.jsx](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/voice/ExportSettingsPanel.jsx), [VoiceSettings.jsx](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/VoiceSettings.jsx))**:
+   - Removed the launcher button from the bottom of `ExportSettingsPanel` so the right-hand Inspector panel contains only single-episode export controls.
+3. **Verification**:
+   - `npm --prefix frontend run lint` (**0 errors**), `npm --prefix frontend run build` (**PASS `565ms`**).
+   - Live Chrome Playwright screenshot verified `Batch Export` aligned flush right next to `Export` in the Navbar (`y: 7.5, height: 36`), `0` launcher buttons in the right panel, and clicking opens `BatchExportStudioModal` with `0` console errors.
+
+## Active Environment
+- **Dev Orchestrator (`.\dev.ps1 -NoBrowser -SkipInstall`, `task-3196`)**: Running cleanly — Backend `http://localhost:5000` + Frontend `http://localhost:5173`.
+
+## Next Steps
+- Refresh browser (`Ctrl + Shift + R`) on `http://localhost:5173` — the **`Batch Export (N ភាគ)`** button now sits right beside **`Download MP4` / `Export`** in the top-right Navbar.
+
+---
+
+## Previous Session
 - **Environment**: Antigravity IDE (`Move Batch Export & Merge into Dedicated Export Studio Modal View + Clean Export Panel + Step 4 Handoff`)
 - **Timestamp**: 2026-11-10T15:02:00+07:00
 
