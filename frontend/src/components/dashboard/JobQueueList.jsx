@@ -1,4 +1,5 @@
 import React from 'react';
+import { Loader2, Briefcase } from 'lucide-react';
 import JobProgressCard from './JobProgressCard';
 
 const TABS = [
@@ -48,11 +49,23 @@ export default function JobQueueList({
   };
 
   return (
-    <div className="flex flex-col h-full">
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
       {/* Controls Bar: Filter Tabs & Search */}
-      <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 pb-4 mb-4 border-b border-[#252830]">
+      <div
+        style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 12,
+          paddingBottom: 14,
+          marginBottom: 14,
+          borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
+          flexShrink: 0,
+        }}
+      >
         {/* Tabs */}
-        <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar py-0.5">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
           {TABS.map((tab) => {
             const count = getTabCount(tab.id);
             const isActive = filter === tab.id;
@@ -61,17 +74,32 @@ export default function JobQueueList({
                 key={tab.id}
                 type="button"
                 onClick={() => setFilter(tab.id)}
-                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-colors cursor-pointer ${
-                  isActive
-                    ? 'bg-[#4C8DFF] text-white shadow-sm'
-                    : 'bg-[#181A20] text-zinc-400 hover:text-white hover:bg-[#252830] border border-[#343843]'
-                }`}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  padding: '6px 12px',
+                  borderRadius: 8,
+                  fontSize: '0.75rem',
+                  fontWeight: isActive ? 700 : 500,
+                  whiteSpace: 'nowrap',
+                  cursor: 'pointer',
+                  transition: 'all 0.15s ease',
+                  background: isActive ? '#0284C7' : '#10192C',
+                  color: isActive ? '#FFFFFF' : '#94A3B8',
+                  border: isActive ? '1px solid #38BDF8' : '1px solid rgba(255, 255, 255, 0.1)',
+                }}
               >
                 <span>{tab.labelKhmer}</span>
                 <span
-                  className={`text-[10px] px-1.5 py-0.2 rounded-full ${
-                    isActive ? 'bg-white/20 text-white' : 'bg-[#252830] text-zinc-400'
-                  }`}
+                  style={{
+                    fontSize: '0.68rem',
+                    fontFamily: 'var(--font-mono), monospace',
+                    padding: '1px 6px',
+                    borderRadius: 9999,
+                    background: isActive ? 'rgba(255, 255, 255, 0.22)' : '#192744',
+                    color: isActive ? '#FFFFFF' : '#CBD5E1',
+                  }}
                 >
                   {count}
                 </span>
@@ -81,19 +109,38 @@ export default function JobQueueList({
         </div>
 
         {/* Search Input */}
-        <div className="relative min-w-[220px]">
+        <div style={{ position: 'relative', minWidth: 230 }}>
           <input
             type="text"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             placeholder="ស្វែងរកតាម Series, Ep, Job ID..."
-            className="w-full bg-[#181A20] border border-[#343843] rounded-lg px-3 py-1.5 text-xs text-white placeholder-zinc-500 focus:outline-none focus:border-[#4C8DFF] transition-colors"
+            style={{
+              width: '100%',
+              background: '#0E1422',
+              border: '1px solid rgba(255, 255, 255, 0.12)',
+              borderRadius: 8,
+              padding: '7px 28px 7px 12px',
+              fontSize: '0.76rem',
+              color: '#F8FAFC',
+              outline: 'none',
+            }}
           />
           {searchTerm && (
             <button
               type="button"
               onClick={() => setSearchTerm('')}
-              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-white text-xs cursor-pointer"
+              style={{
+                position: 'absolute',
+                right: 8,
+                top: '50%',
+                transform: 'translateY(-50%)',
+                background: 'transparent',
+                border: 'none',
+                color: '#94A3B8',
+                fontSize: '0.95rem',
+                cursor: 'pointer',
+              }}
             >
               ×
             </button>
@@ -102,24 +149,57 @@ export default function JobQueueList({
       </div>
 
       {/* Jobs Scrollable List */}
-      <div className="flex-1 overflow-y-auto space-y-3 pr-1">
+      <div
+        style={{
+          flex: 1,
+          overflowY: 'auto',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 10,
+          paddingRight: 4,
+          minHeight: 0,
+        }}
+      >
         {isLoading && jobs.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-16 text-zinc-400 text-xs gap-2">
-            <svg className="animate-spin w-6 h-6 text-[#4C8DFF]" viewBox="0 0 24 24" fill="none">
-              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
-            </svg>
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: '64px 16px',
+              color: '#94A3B8',
+              fontSize: '0.8rem',
+              gap: 10,
+            }}
+          >
+            <Loader2 size={24} className="animate-spin" style={{ color: '#38BDF8' }} />
             <span>កំពុងទាញយកបញ្ជី Jobs...</span>
           </div>
         ) : jobs.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-16 text-zinc-400 text-xs border border-dashed border-[#343843] rounded-xl bg-[#181A20]/40">
-            <svg className="w-10 h-10 text-zinc-600 mb-2" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-              <rect x="2" y="7" width="20" height="14" rx="2" ry="2" />
-              <path d="M16 21V5a2 2 0 00-2-2h-4a2 2 0 00-2 2v16" />
-            </svg>
-            <p className="font-medium text-zinc-300">មិនមាន Job ណាមួយក្នុងបញ្ជីនេះឡើយ</p>
-            <p className="text-[11px] text-zinc-500 mt-1">
-              {filter !== 'all' ? `គ្មាន Job ដែលមាន status '${filter}' ទេ` : 'សូមចាប់ផ្តើម dubbing ដើម្បីបង្កើត Job ថ្មី'}
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: '56px 16px',
+              color: '#94A3B8',
+              fontSize: '0.8rem',
+              border: '1px dashed rgba(255, 255, 255, 0.14)',
+              borderRadius: 12,
+              background: 'rgba(16, 25, 44, 0.5)',
+              textAlign: 'center',
+            }}
+          >
+            <Briefcase size={34} style={{ color: '#475569', marginBottom: 10 }} />
+            <p style={{ fontWeight: 700, color: '#E2E8F0', margin: 0, fontSize: '0.86rem' }}>
+              មិនមាន Job ណាមួយក្នុងបញ្ជីនេះឡើយ
+            </p>
+            <p style={{ fontSize: '0.74rem', color: '#64748B', margin: '6px 0 0' }}>
+              {filter !== 'all'
+                ? `គ្មាន Job ដែលមាន status '${filter}' ទេ`
+                : 'សូមចាប់ផ្តើម Batch Generate / Repair / Dubbing ដើម្បីបង្កើត Job ថ្មី'}
             </p>
           </div>
         ) : (
@@ -139,4 +219,3 @@ export default function JobQueueList({
     </div>
   );
 }
-

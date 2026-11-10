@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useContext } from 'react';
 import { 
   Key, HelpCircle, Download, Loader2, RotateCcw, X, Trash2, Film, Plus, Cpu, Layers, Activity
 } from 'lucide-react';
 import { isCorruptedOrMojibakeTitle } from '../utils/projectStorage';
 import { useGeminiQuotaMonitor } from '../hooks/useGeminiQuotaMonitor';
+import { JobQueueContext } from '../context/jobQueueStore';
 import ShortcutsModal from './ShortcutsModal';
 import './Navbar.css';
 
@@ -35,6 +36,7 @@ export default function Navbar({
   isGeminiRouteActive = false,
   isGeminiQuotaActive = false,
   isBatchExportStudioActive = false,
+  isJobDashboardActive = false,
   batchRender = null,
   activeJobCount = 0,
   currentAspectRatio = '16:9',
@@ -44,6 +46,9 @@ export default function Navbar({
   const [showShortcutsModal, setShowShortcutsModal] = useState(false);
   const [tempKey, setTempKey] = useState(apiKey || '');
   const { keysHealth } = useGeminiQuotaMonitor({ enabled: false });
+  const jobQueue = useContext(JobQueueContext);
+  const queueStats = jobQueue?.stats || null;
+  const effectiveActiveJobCount = activeJobCount || ((queueStats?.runningCount || 0) + (queueStats?.queuedCount || 0));
 
   const handleSave = (e) => {
     e.preventDefault();
@@ -105,19 +110,20 @@ export default function Navbar({
           {onOpenJobDashboard && (
             <button
               type="button"
+              data-testid="navbar-jobs-btn"
               onClick={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
                 onOpenJobDashboard();
               }}
-              className="navbar-gemini-route-btn"
+              className={`navbar-gemini-route-btn ${isJobDashboardActive ? 'active' : ''}`}
               title="Job Queue Dashboard (Production Pipeline Monitor)"
             >
               <Cpu size={14} />
               <span>Jobs</span>
-              {activeJobCount > 0 && (
+              {effectiveActiveJobCount > 0 && (
                 <span className="gemini-badge-chip">
-                  {activeJobCount}
+                  {effectiveActiveJobCount}
                 </span>
               )}
             </button>

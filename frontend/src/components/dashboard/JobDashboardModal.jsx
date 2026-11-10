@@ -1,4 +1,5 @@
 import React, { useEffect } from 'react';
+import { Monitor, RefreshCw, X } from 'lucide-react';
 import { useSharedJobQueue } from '../../context/jobQueueStore';
 import JobQueueList from './JobQueueList';
 
@@ -36,121 +37,229 @@ export default function JobDashboardModal({ isOpen, onClose }) {
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-[#050A18]/80 backdrop-blur-md animate-in fade-in duration-150">
-      <div className="bg-[#141E33] border border-white/10 rounded-3xl w-full max-w-5xl h-[88vh] flex flex-col shadow-2xl shadow-black/80 overflow-hidden">
+    <div
+      data-testid="job-dashboard-modal"
+      onClick={onClose}
+      style={{
+        position: 'fixed',
+        inset: 0,
+        zIndex: 100020,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 18,
+        background: 'rgba(5, 10, 24, 0.84)',
+        backdropFilter: 'blur(8px)',
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: '#141E33',
+          border: '1px solid rgba(255, 255, 255, 0.12)',
+          borderRadius: 16,
+          width: '100%',
+          maxWidth: 1040,
+          height: '86vh',
+          display: 'flex',
+          flexDirection: 'column',
+          boxShadow: '0 24px 64px rgba(0, 0, 0, 0.85)',
+          overflow: 'hidden',
+        }}
+      >
         {/* Modal Header */}
-        <div className="px-6 py-4 border-b border-white/5 bg-[#10192C] flex flex-wrap items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[#FF8577]/20 to-[#38BDF8]/20 border border-[#FF8577]/30 flex items-center justify-center text-[#FF8577] shadow-[0_0_14px_rgba(255,133,119,0.2)]">
-              <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
-                <line x1="8" y1="21" x2="16" y2="21" />
-                <line x1="12" y1="17" x2="12" y2="21" />
-              </svg>
+        <div
+          style={{
+            padding: '14px 22px',
+            borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
+            background: '#10192C',
+            display: 'flex',
+            flexWrap: 'wrap',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 12,
+            flexShrink: 0,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <div
+              style={{
+                width: 40,
+                height: 40,
+                borderRadius: 10,
+                background: 'linear-gradient(135deg, rgba(255, 133, 119, 0.18), rgba(56, 189, 248, 0.18))',
+                border: '1px solid rgba(56, 189, 248, 0.35)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: '#38BDF8',
+              }}
+            >
+              <Monitor size={19} />
             </div>
             <div>
-              <h2 className="text-base font-bold text-white flex items-center gap-2">
+              <h2
+                style={{
+                  margin: 0,
+                  fontSize: '1rem',
+                  fontWeight: 800,
+                  color: '#FFFFFF',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                }}
+              >
                 <span>DragonDub Production Job Queue</span>
-                <span className="text-[10px] font-mono px-2.5 py-0.5 rounded-full bg-white/5 text-slate-300 border border-white/10">
-                  Phase 4.4
+                <span
+                  style={{
+                    fontSize: '0.66rem',
+                    fontFamily: 'var(--font-mono), monospace',
+                    padding: '2px 8px',
+                    borderRadius: 9999,
+                    background: 'rgba(56, 189, 248, 0.12)',
+                    color: '#7DD3FC',
+                    border: '1px solid rgba(56, 189, 248, 0.3)',
+                  }}
+                >
+                  Background Queue
                 </span>
               </h2>
-              <p className="text-xs text-slate-400">
+              <p style={{ margin: '2px 0 0', fontSize: '0.75rem', color: '#94A3B8' }}>
                 ផ្ទាំងគ្រប់គ្រង និងតាមដានដំណើរការ Dubbing Jobs ទាំងអស់ (Real-Time Background Engine)
               </p>
             </div>
           </div>
 
           {/* Right Header: Connection Status & Controls */}
-          <div className="flex items-center gap-2.5">
-            {/* Connection Status Pill */}
-            <div className="flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-medium bg-[#192744] border border-white/10">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                padding: '5px 12px',
+                borderRadius: 9999,
+                fontSize: '0.73rem',
+                fontWeight: 600,
+                background: '#192744',
+                border: '1px solid rgba(255, 255, 255, 0.1)',
+                color: '#CBD5E1',
+              }}
+            >
               <span
-                className={`w-2 h-2 rounded-full ${
-                  isConnected
-                    ? 'bg-emerald-400 animate-pulse'
+                style={{
+                  width: 8,
+                  height: 8,
+                  borderRadius: '50%',
+                  background: isConnected
+                    ? '#10B981'
                     : connectionMode === 'polling'
-                    ? 'bg-amber-400'
-                    : 'bg-zinc-500'
-                }`}
+                    ? '#F59E0B'
+                    : '#64748B',
+                  display: 'inline-block',
+                }}
               />
-              <span className="text-slate-300 text-[11px]">
-                {isConnected ? 'SSE Live' : 'Polling (3s)'}
-              </span>
+              <span>{isConnected ? 'SSE Live' : 'Polling (3s)'}</span>
             </div>
 
-            {/* Manual Refresh */}
             <button
               type="button"
               onClick={() => refreshJobs()}
               title="Refresh Jobs"
-              className="p-1.5 rounded-full text-slate-400 hover:text-white hover:bg-white/10 border border-white/10 transition-colors cursor-pointer"
+              style={{
+                width: 34,
+                height: 34,
+                borderRadius: 8,
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: '#CBD5E1',
+                background: '#192744',
+                border: '1px solid rgba(255, 255, 255, 0.1)',
+                cursor: 'pointer',
+              }}
             >
-              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67" />
-              </svg>
+              <RefreshCw size={15} />
             </button>
 
-            {/* Close Button */}
             <button
               type="button"
+              data-testid="job-dashboard-close-btn"
               onClick={onClose}
               title="Close Dashboard (ESC)"
-              className="p-1.5 rounded-full text-slate-400 hover:text-white hover:bg-rose-500/20 hover:border-rose-500/40 border border-white/10 transition-colors cursor-pointer"
+              style={{
+                width: 34,
+                height: 34,
+                borderRadius: 8,
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: '#CBD5E1',
+                background: '#192744',
+                border: '1px solid rgba(255, 255, 255, 0.1)',
+                cursor: 'pointer',
+              }}
             >
-              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <line x1="18" y1="6" x2="6" y2="18" />
-                <line x1="6" y1="6" x2="18" y2="18" />
-              </svg>
+              <X size={16} />
             </button>
           </div>
         </div>
 
         {/* Quick Stats Ribbon */}
-        <div className="px-6 py-3 bg-[#10192C]/80 border-b border-white/5 grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-          <div className="flex items-center gap-2.5 p-2 rounded-xl bg-[#192744] border border-white/5">
-            <div className="w-7 h-7 rounded-lg bg-blue-500/15 text-blue-400 flex items-center justify-center font-bold">
+        <div
+          style={{
+            padding: '12px 22px',
+            background: 'rgba(16, 25, 44, 0.85)',
+            borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
+            display: 'grid',
+            gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
+            gap: 10,
+            flexShrink: 0,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', borderRadius: 10, background: '#192744', border: '1px solid rgba(255, 255, 255, 0.06)' }}>
+            <div style={{ width: 30, height: 30, borderRadius: 8, background: 'rgba(56, 189, 248, 0.16)', color: '#38BDF8', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: '0.86rem' }}>
               {stats.runningCount || 0}
             </div>
             <div>
-              <div className="text-[10px] text-slate-400">កំពុងដំណើរការ</div>
-              <div className="font-semibold text-white">Running Jobs</div>
+              <div style={{ fontSize: '0.67rem', color: '#94A3B8' }}>កំពុងដំណើរការ</div>
+              <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#FFFFFF' }}>Running Jobs</div>
             </div>
           </div>
 
-          <div className="flex items-center gap-2.5 p-2 rounded-xl bg-[#192744] border border-white/5">
-            <div className="w-7 h-7 rounded-lg bg-amber-500/15 text-amber-400 flex items-center justify-center font-bold">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', borderRadius: 10, background: '#192744', border: '1px solid rgba(255, 255, 255, 0.06)' }}>
+            <div style={{ width: 30, height: 30, borderRadius: 8, background: 'rgba(245, 158, 11, 0.16)', color: '#FBBF24', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: '0.86rem' }}>
               {stats.queuedCount || 0}
             </div>
             <div>
-              <div className="text-[10px] text-slate-400">រង់ចាំក្នុងជួរ</div>
-              <div className="font-semibold text-white">Queued Jobs</div>
+              <div style={{ fontSize: '0.67rem', color: '#94A3B8' }}>រង់ចាំក្នុងជួរ</div>
+              <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#FFFFFF' }}>Queued Jobs</div>
             </div>
           </div>
 
-          <div className="flex items-center gap-2.5 p-2 rounded-xl bg-[#192744] border border-white/5">
-            <div className="w-7 h-7 rounded-lg bg-yellow-500/15 text-yellow-400 flex items-center justify-center font-bold">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', borderRadius: 10, background: '#192744', border: '1px solid rgba(255, 255, 255, 0.06)' }}>
+            <div style={{ width: 30, height: 30, borderRadius: 8, background: 'rgba(234, 179, 8, 0.16)', color: '#FACC15', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: '0.86rem' }}>
               {stats.pausedCount || 0}
             </div>
             <div>
-              <div className="text-[10px] text-slate-400">បានផ្អាក</div>
-              <div className="font-semibold text-white">Paused Jobs</div>
+              <div style={{ fontSize: '0.67rem', color: '#94A3B8' }}>បានផ្អាក</div>
+              <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#FFFFFF' }}>Paused Jobs</div>
             </div>
           </div>
 
-          <div className="flex items-center gap-2.5 p-2 rounded-xl bg-[#192744] border border-white/5">
-            <div className="w-7 h-7 rounded-lg bg-emerald-500/15 text-emerald-400 flex items-center justify-center font-bold">
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', borderRadius: 10, background: '#192744', border: '1px solid rgba(255, 255, 255, 0.06)' }}>
+            <div style={{ width: 30, height: 30, borderRadius: 8, background: 'rgba(16, 185, 129, 0.16)', color: '#34D399', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: '0.86rem' }}>
               {stats.completedCount || 0}
             </div>
             <div>
-              <div className="text-[10px] text-slate-400">បានបញ្ចប់</div>
-              <div className="font-semibold text-white">Completed</div>
+              <div style={{ fontSize: '0.67rem', color: '#94A3B8' }}>បានបញ្ចប់</div>
+              <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#FFFFFF' }}>Completed</div>
             </div>
           </div>
         </div>
 
         {/* Modal Main Content */}
-        <div className="flex-1 p-6 overflow-hidden">
+        <div style={{ flex: 1, padding: '16px 22px', overflow: 'hidden', minHeight: 0 }}>
           <JobQueueList
             jobs={jobs}
             stats={stats}
@@ -168,17 +277,31 @@ export default function JobDashboardModal({ isOpen, onClose }) {
         </div>
 
         {/* Modal Footer */}
-        <div className="px-6 py-3 border-t border-white/5 bg-[#10192C] flex flex-wrap items-center justify-between text-xs text-slate-500 gap-2">
-          <div className="flex items-center gap-3">
+        <div
+          style={{
+            padding: '11px 22px',
+            borderTop: '1px solid rgba(255, 255, 255, 0.08)',
+            background: '#10192C',
+            display: 'flex',
+            flexWrap: 'wrap',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            fontSize: '0.73rem',
+            color: '#64748B',
+            gap: 8,
+            flexShrink: 0,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
             <span>
-              Queue Concurrency: <strong className="text-slate-300">{stats.maxConcurrency || 1} Active Job</strong>
+              Queue Concurrency: <strong style={{ color: '#CBD5E1' }}>{stats.maxConcurrency || 1} Active Job</strong>
             </span>
             <span>•</span>
-            <span className="text-slate-400">
+            <span style={{ color: '#94A3B8' }}>
               ការប្តូរ Episode ឬបិទផ្ទាំងនេះមិនធ្វើឱ្យខូចខាតដំណើរការ Job ក្នុង Background ឡើយ
             </span>
           </div>
-          <div className="text-[11px] text-slate-500 font-mono">
+          <div style={{ fontSize: '0.72rem', color: '#94A3B8', fontFamily: 'var(--font-mono), monospace' }}>
             Total Jobs Tracked: {stats.totalJobs || 0}
           </div>
         </div>
@@ -186,4 +309,3 @@ export default function JobDashboardModal({ isOpen, onClose }) {
     </div>
   );
 }
-

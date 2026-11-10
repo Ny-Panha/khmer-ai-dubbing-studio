@@ -1,6 +1,33 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
+- **Environment**: Antigravity IDE (`Fix Invisible Jobs Dashboard Modal & Wire Navbar Jobs Active/Badge State`)
+- **Timestamp**: 2026-11-10T15:29:00+07:00
+
+## Summary: Fixed Missing Jobs Dashboard UI (Replaced Non-Existent Tailwind Classes with Inline Studio Styles)
+1. **Root Cause Identified**:
+   - `frontend/package.json` uses vanilla CSS + inline styles (`tailwindcss` is not installed). All 4 Jobs Dashboard components (`JobDashboardModal`, `JobQueueList`, `JobProgressCard`, `JobActionButtons`) were written exclusively with Tailwind utility classes, causing `<JobDashboardModal isOpen={true} />` to render unstyled below `.capcut-app-container` (`height: 100vh; overflow: hidden`) and appear completely invisible when clicking `Jobs`.
+2. **Restyled All 4 Jobs Dashboard Components with Studio Midnight Navy CSS**:
+   - [`JobDashboardModal.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/dashboard/JobDashboardModal.jsx): Fixed full-screen overlay (`position: 'fixed', inset: 0, zIndex: 100020`), backdrop blur, Escape & X close handlers, `SSE Live` / `Polling (3s)` indicator, Refresh button, 4-card stats ribbon, and footer (`data-testid="job-dashboard-modal"`, `data-testid="job-dashboard-close-btn"`).
+   - [`JobQueueList.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/dashboard/JobQueueList.jsx): Styled status filter tabs with live counts, search input, loading spinner, empty state, and scrollable list container.
+   - [`JobProgressCard.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/dashboard/JobProgressCard.jsx): Styled status badges (including `partial`), progress bar, ETA/speed metrics, error alert banner, download link, and distinct short Job ID (`slice(-8)`).
+   - [`JobActionButtons.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/dashboard/JobActionButtons.jsx): Styled Pause, Resume, Retry (including `partial`), Cancel buttons, and fixed-overlay Cancel Confirmation modal (`zIndex: 100040`, `slice(-8)`).
+3. **Wired Navbar `Jobs` Button Active Highlight & Live Queue Count ([Navbar.jsx](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/Navbar.jsx), [App.jsx](file:///e:/khmer_ai_dubbing_studio/frontend/src/App.jsx))**:
+   - Passed `isJobDashboardActive={showJobDashboard}` from `App.jsx` to `Navbar`, added `data-testid="navbar-jobs-btn"`, `.active` styling when open, and safe `useContext(JobQueueContext)` live active count badge (`runningCount + queuedCount`).
+4. **Verification Results (Fresh After Final Edits)**:
+   - `npm --prefix frontend run lint`: **0 errors**.
+   - `npm --prefix frontend run build`: **PASS (`567ms`)**.
+   - Live Playwright Chrome E2E on `http://127.0.0.1:5173`: clicked `[data-testid="navbar-jobs-btn"]`, verified `[data-testid="job-dashboard-modal"]` full-viewport backdrop (`1440x900`) and centered card (`1040x774`), active button class, stats ribbon, `SSE Live`, filter tabs (`All`/`Failed`), Cancel Confirm modal open/back, Escape & Close button, visually verified screenshots, and **0** console/page errors.
+
+## Active Environment
+- **Dev Orchestrator**: Backend `http://localhost:5000` + Frontend `http://localhost:5173`.
+
+## Next Steps
+- Refresh browser (`Ctrl + Shift + R`) on `http://localhost:5173` and click `Jobs` in the top navbar — the Job Queue Dashboard modal now opens and tracks running/queued/completed/failed jobs in real time.
+
+---
+
+## Previous Session
 - **Environment**: Antigravity IDE (`Wire Subtitle Size Control into ASS Burn + Distinct Pill vs Banner + Effective ASS Burn Log + Honest Size Labels`)
 - **Timestamp**: 2026-11-10T15:20:30+07:00
 

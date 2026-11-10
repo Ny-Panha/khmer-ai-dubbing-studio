@@ -611,6 +611,7 @@ export default function App() {
           isGeminiRouteActive={showGeminiRouteModal}
           isGeminiQuotaActive={showGeminiQuotaModal}
           isBatchExportStudioActive={showBatchExportStudioModal}
+          isJobDashboardActive={showJobDashboard}
           batchRender={render.batchRender}
           currentAspectRatio={currentAspectRatio}
           onAspectRatioChange={handleAspectRatioChange}

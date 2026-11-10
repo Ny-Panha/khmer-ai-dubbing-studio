@@ -1,64 +1,90 @@
 import React from 'react';
+import { Download, AlertCircle } from 'lucide-react';
 import JobActionButtons from './JobActionButtons';
 
-/**
- * Status style mapping with dark theme colors and badges
- */
 const STATUS_CONFIG = {
   running: {
     labelKhmer: 'កំពុងដំណើរការ',
     labelEn: 'Running',
-    badgeClass: 'bg-blue-500/15 text-blue-400 border-blue-500/30',
-    dotClass: 'bg-blue-400 animate-pulse',
-    borderClass: 'border-blue-500/30 hover:border-blue-500/50',
+    badgeBg: 'rgba(56, 189, 248, 0.15)',
+    badgeText: '#38BDF8',
+    badgeBorder: 'rgba(56, 189, 248, 0.35)',
+    dotColor: '#38BDF8',
+    cardBorder: 'rgba(56, 189, 248, 0.35)',
+    barColor: '#38BDF8',
   },
   queued: {
     labelKhmer: 'រង់ចាំក្នុងជួរ',
     labelEn: 'Queued',
-    badgeClass: 'bg-amber-500/15 text-amber-400 border-amber-500/30',
-    dotClass: 'bg-amber-400',
-    borderClass: 'border-amber-500/20 hover:border-amber-500/40',
+    badgeBg: 'rgba(245, 158, 11, 0.15)',
+    badgeText: '#FBBF24',
+    badgeBorder: 'rgba(245, 158, 11, 0.35)',
+    dotColor: '#FBBF24',
+    cardBorder: 'rgba(245, 158, 11, 0.25)',
+    barColor: '#F59E0B',
   },
   paused: {
     labelKhmer: 'បានផ្អាក',
     labelEn: 'Paused',
-    badgeClass: 'bg-yellow-500/15 text-yellow-400 border-yellow-500/30',
-    dotClass: 'bg-yellow-400',
-    borderClass: 'border-yellow-500/20 hover:border-yellow-500/40',
+    badgeBg: 'rgba(234, 179, 8, 0.15)',
+    badgeText: '#FACC15',
+    badgeBorder: 'rgba(234, 179, 8, 0.35)',
+    dotColor: '#FACC15',
+    cardBorder: 'rgba(234, 179, 8, 0.25)',
+    barColor: '#EAB308',
   },
   recovering: {
     labelKhmer: 'កំពុងស្តារឡើងវិញ',
     labelEn: 'Recovering',
-    badgeClass: 'bg-purple-500/15 text-purple-400 border-purple-500/30',
-    dotClass: 'bg-purple-400 animate-pulse',
-    borderClass: 'border-purple-500/30 hover:border-purple-500/50',
+    badgeBg: 'rgba(168, 85, 247, 0.15)',
+    badgeText: '#C084FC',
+    badgeBorder: 'rgba(168, 85, 247, 0.35)',
+    dotColor: '#C084FC',
+    cardBorder: 'rgba(168, 85, 247, 0.3)',
+    barColor: '#A855F7',
+  },
+  partial: {
+    labelKhmer: 'បានមួយផ្នែក (Quota)',
+    labelEn: 'Partial',
+    badgeBg: 'rgba(245, 158, 11, 0.16)',
+    badgeText: '#FBBF24',
+    badgeBorder: 'rgba(245, 158, 11, 0.4)',
+    dotColor: '#F59E0B',
+    cardBorder: 'rgba(245, 158, 11, 0.3)',
+    barColor: '#F59E0B',
   },
   completed: {
     labelKhmer: 'បានបញ្ចប់ជោគជ័យ',
     labelEn: 'Completed',
-    badgeClass: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30',
-    dotClass: 'bg-emerald-400',
-    borderClass: 'border-emerald-500/20 hover:border-emerald-500/40',
+    badgeBg: 'rgba(16, 185, 129, 0.15)',
+    badgeText: '#34D399',
+    badgeBorder: 'rgba(16, 185, 129, 0.35)',
+    dotColor: '#10B981',
+    cardBorder: 'rgba(16, 185, 129, 0.25)',
+    barColor: '#10B981',
   },
   failed: {
     labelKhmer: 'បានបរាជ័យ',
     labelEn: 'Failed',
-    badgeClass: 'bg-rose-500/15 text-rose-400 border-rose-500/30',
-    dotClass: 'bg-rose-400',
-    borderClass: 'border-rose-500/30 hover:border-rose-500/50',
+    badgeBg: 'rgba(244, 63, 94, 0.15)',
+    badgeText: '#FB7185',
+    badgeBorder: 'rgba(244, 63, 94, 0.35)',
+    dotColor: '#F43F5E',
+    cardBorder: 'rgba(244, 63, 94, 0.3)',
+    barColor: '#F43F5E',
   },
   cancelled: {
     labelKhmer: 'បានបោះបង់',
     labelEn: 'Cancelled',
-    badgeClass: 'bg-zinc-500/15 text-zinc-400 border-zinc-500/30',
-    dotClass: 'bg-zinc-400',
-    borderClass: 'border-zinc-700 hover:border-zinc-600',
+    badgeBg: 'rgba(148, 163, 184, 0.14)',
+    badgeText: '#94A3B8',
+    badgeBorder: 'rgba(148, 163, 184, 0.28)',
+    dotColor: '#94A3B8',
+    cardBorder: 'rgba(255, 255, 255, 0.1)',
+    barColor: '#64748B',
   },
 };
 
-/**
- * Calculates estimated time remaining based on start time and segment progress
- */
 function calculateEtaAndSpeed(job) {
   if (job.status !== 'running' || !job.startedAt || !job.completedSegments || job.completedSegments <= 0) {
     return { eta: null, speed: null };
@@ -67,7 +93,7 @@ function calculateEtaAndSpeed(job) {
   const elapsedSec = (Date.now() - job.startedAt) / 1000;
   if (elapsedSec < 3) return { eta: null, speed: null };
 
-  const speed = job.completedSegments / elapsedSec; // segments per sec
+  const speed = job.completedSegments / elapsedSec;
   const remaining = Math.max(0, (job.totalSegments || 0) - job.completedSegments);
 
   if (speed <= 0 || remaining <= 0) {
@@ -102,116 +128,196 @@ export default function JobProgressCard({
   const completedSegs = job.completedSegments || 0;
   const totalSegs = job.totalSegments || 0;
   const failedSegs = job.failedSegments || 0;
-
   const outputVideoUrl = job.output?.finalVideoUrl;
 
   return (
     <div
-      className={`bg-[#181A20] border rounded-xl p-4 transition-all duration-200 shadow-md ${cfg.borderClass}`}
+      style={{
+        background: '#10192C',
+        border: `1px solid ${cfg.cardBorder}`,
+        borderRadius: 12,
+        padding: '14px 16px',
+        boxShadow: '0 4px 14px rgba(0, 0, 0, 0.28)',
+      }}
     >
-      {/* Top Row: Series, Episode, Job ID & Status Badge */}
-      <div className="flex flex-wrap items-center justify-between gap-2.5 mb-3">
-        <div className="flex items-center gap-2">
-          {/* Episode Pill */}
-          <span className="px-2.5 py-1 rounded-md text-xs font-semibold bg-[#252830] text-zinc-200 border border-[#343843]">
+      {/* Top Row: Series, Episode, Mode, Job ID & Status Badge */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 10 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <span
+            style={{
+              padding: '3px 9px',
+              borderRadius: 6,
+              fontSize: '0.74rem',
+              fontWeight: 700,
+              background: '#192744',
+              color: '#E2E8F0',
+              border: '1px solid rgba(255, 255, 255, 0.1)',
+            }}
+          >
             {job.seriesId || 'series_default'} • {job.episodeId || 'ep_1'}
           </span>
 
-          {/* Job ID */}
+          {job.mode && (
+            <span
+              style={{
+                padding: '2px 7px',
+                borderRadius: 5,
+                fontSize: '0.68rem',
+                fontWeight: 600,
+                background: 'rgba(56, 189, 248, 0.1)',
+                color: '#7DD3FC',
+                border: '1px solid rgba(56, 189, 248, 0.25)',
+                textTransform: 'uppercase',
+              }}
+            >
+              {job.mode}
+            </span>
+          )}
+
           <span
-            className="text-[11px] font-mono text-zinc-400 hover:text-zinc-200 cursor-pointer"
-            title={`Full Job ID: ${job.jobId}`}
+            style={{
+              fontSize: '0.72rem',
+              fontFamily: 'var(--font-mono), monospace',
+              color: '#94A3B8',
+              cursor: 'pointer',
+            }}
+            title={`Full Job ID: ${job.jobId} (Click to copy)`}
             onClick={() => {
               if (navigator.clipboard) {
                 navigator.clipboard.writeText(job.jobId);
               }
             }}
           >
-            #{String(job.jobId).slice(0, 8)}
+            #{String(job.jobId || '').slice(-8)}
           </span>
         </div>
 
-        {/* Status Badge */}
-        <div className="flex items-center gap-2">
+        <span
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 6,
+            padding: '3px 10px',
+            borderRadius: 9999,
+            fontSize: '0.73rem',
+            fontWeight: 600,
+            background: cfg.badgeBg,
+            color: cfg.badgeText,
+            border: `1px solid ${cfg.badgeBorder}`,
+          }}
+        >
           <span
-            className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium border ${cfg.badgeClass}`}
-          >
-            <span className={`w-1.5 h-1.5 rounded-full ${cfg.dotClass}`} />
-            <span>{cfg.labelKhmer}</span>
-            <span className="opacity-60 text-[10px]">({cfg.labelEn})</span>
-          </span>
-        </div>
+            style={{
+              width: 7,
+              height: 7,
+              borderRadius: '50%',
+              background: cfg.dotColor,
+              display: 'inline-block',
+            }}
+          />
+          <span>{cfg.labelKhmer}</span>
+          <span style={{ opacity: 0.72, fontSize: '0.67rem' }}>({cfg.labelEn})</span>
+        </span>
       </div>
 
-      {/* Stage Info & Message */}
-      <div className="mb-3">
-        <div className="flex items-baseline justify-between text-xs mb-1">
-          <span className="font-medium text-zinc-200">
+      {/* Stage Info & Progress Bar */}
+      <div style={{ marginBottom: 10 }}>
+        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', fontSize: '0.76rem', marginBottom: 5 }}>
+          <span style={{ fontWeight: 600, color: '#E2E8F0' }}>
             {job.currentStage ? `Stage: ${job.currentStage}` : 'ដំណាក់កាលបឋម'}
           </span>
-          <span className="font-semibold text-[#4C8DFF]">{progressPercent}%</span>
+          <span style={{ fontWeight: 700, fontFamily: 'var(--font-mono), monospace', color: cfg.barColor }}>
+            {progressPercent}%
+          </span>
         </div>
 
-        {/* Progress Bar */}
-        <div className="w-full bg-[#111216] rounded-full h-2 overflow-hidden border border-[#343843]">
+        <div
+          style={{
+            width: '100%',
+            height: 7,
+            background: '#090D16',
+            borderRadius: 9999,
+            overflow: 'hidden',
+            border: '1px solid rgba(255, 255, 255, 0.08)',
+          }}
+        >
           <div
-            className={`h-full transition-all duration-500 rounded-full ${
-              statusKey === 'completed'
-                ? 'bg-emerald-500'
-                : statusKey === 'failed'
-                ? 'bg-rose-500'
-                : statusKey === 'paused'
-                ? 'bg-yellow-500'
-                : 'bg-[#4C8DFF]'
-            }`}
-            style={{ width: `${progressPercent}%` }}
+            style={{
+              height: '100%',
+              width: `${progressPercent}%`,
+              background: cfg.barColor,
+              borderRadius: 9999,
+              transition: 'width 0.35s ease',
+            }}
           />
         </div>
 
-        {/* Stage Message */}
         {job.stageMessage && (
-          <p className="text-[11px] text-zinc-400 mt-1.5 truncate" title={job.stageMessage}>
+          <p
+            style={{
+              fontSize: '0.73rem',
+              color: '#94A3B8',
+              margin: '6px 0 0',
+              lineHeight: 1.4,
+            }}
+            title={job.stageMessage}
+          >
             {job.stageMessage}
           </p>
         )}
       </div>
 
       {/* Segments & Performance Metrics */}
-      <div className="flex flex-wrap items-center justify-between gap-y-2 py-2 border-t border-[#252830] text-xs text-zinc-400">
-        <div className="flex items-center gap-4">
+      <div
+        style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 10,
+          padding: '8px 0',
+          borderTop: '1px solid rgba(255, 255, 255, 0.07)',
+          fontSize: '0.74rem',
+          color: '#94A3B8',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
           <span>
-            Segments: <strong className="text-zinc-200">{completedSegs}</strong> / {totalSegs}
+            Segments: <strong style={{ color: '#F1F5F9' }}>{completedSegs}</strong> / {totalSegs}
           </span>
           {failedSegs > 0 && (
-            <span className="text-rose-400 font-medium">
+            <span style={{ color: '#FB7185', fontWeight: 600 }}>
               Failed: {failedSegs}
             </span>
           )}
           {speed && (
-            <span className="text-zinc-400">
-              Speed: <strong className="text-zinc-200">{speed}</strong>
+            <span>
+              Speed: <strong style={{ color: '#F1F5F9' }}>{speed}</strong>
             </span>
           )}
           {eta && (
-            <span className="text-amber-400/90">
-              ETA: <strong className="text-amber-300">{eta}</strong>
+            <span style={{ color: '#FBBF24' }}>
+              ETA: <strong style={{ color: '#FDE68A' }}>{eta}</strong>
             </span>
           )}
         </div>
 
-        {/* Output Link for completed jobs */}
         {statusKey === 'completed' && outputVideoUrl && (
           <a
             href={outputVideoUrl}
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex items-center gap-1 text-xs text-emerald-400 hover:text-emerald-300 font-medium underline"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 5,
+              fontSize: '0.74rem',
+              color: '#34D399',
+              fontWeight: 700,
+              textDecoration: 'underline',
+            }}
           >
-            <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" />
-              <polyline points="7 10 12 15 17 10" />
-              <line x1="12" y1="15" x2="12" y2="3" />
-            </svg>
+            <Download size={13} />
             <span>ទាញយកវីដេអូ</span>
           </a>
         )}
@@ -219,21 +325,44 @@ export default function JobProgressCard({
 
       {/* Error Banner */}
       {(job.error || (statusKey === 'failed' && job.stageMessage)) && (
-        <div className="mt-2.5 p-2 rounded-lg bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs flex items-start gap-2">
-          <svg className="w-4 h-4 flex-shrink-0 mt-0.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <circle cx="12" cy="12" r="10" />
-            <line x1="12" y1="8" x2="12" y2="12" />
-            <line x1="12" y1="16" x2="12.01" y2="16" />
-          </svg>
-          <span className="break-all leading-relaxed">
-            {typeof job.error === 'string' ? job.error : job.error?.message || job.stageMessage || 'មានបញ្ហាបរាជ័យក្នុងដំណើរការ Job'}
+        <div
+          style={{
+            marginTop: 6,
+            marginBottom: 4,
+            padding: '8px 10px',
+            borderRadius: 8,
+            background: 'rgba(244, 63, 94, 0.12)',
+            border: '1px solid rgba(244, 63, 94, 0.32)',
+            color: '#FDA4AF',
+            fontSize: '0.74rem',
+            display: 'flex',
+            alignItems: 'flex-start',
+            gap: 8,
+          }}
+        >
+          <AlertCircle size={15} style={{ flexShrink: 0, marginTop: 1 }} />
+          <span style={{ wordBreak: 'break-word', lineHeight: 1.45 }}>
+            {typeof job.error === 'string'
+              ? job.error
+              : job.error?.message || job.stageMessage || 'មានបញ្ហាបរាជ័យក្នុងដំណើរការ Job'}
           </span>
         </div>
       )}
 
       {/* Action Buttons Row */}
-      <div className="mt-3 pt-2.5 border-t border-[#252830] flex items-center justify-between">
-        <span className="text-[10px] text-zinc-500">
+      <div
+        style={{
+          marginTop: 8,
+          paddingTop: 8,
+          borderTop: '1px solid rgba(255, 255, 255, 0.07)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 8,
+          flexWrap: 'wrap',
+        }}
+      >
+        <span style={{ fontSize: '0.69rem', color: '#64748B', fontFamily: 'var(--font-mono), monospace' }}>
           Created: {new Date(job.createdAt || Date.now()).toLocaleTimeString()}
         </span>
         <JobActionButtons
@@ -248,4 +377,3 @@ export default function JobProgressCard({
     </div>
   );
 }
-
