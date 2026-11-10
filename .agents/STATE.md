@@ -1,6 +1,102 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
+- **Environment**: Antigravity IDE (`Wire Subtitle Size Control into ASS Burn + Distinct Pill vs Banner + Effective ASS Burn Log + Honest Size Labels`)
+- **Timestamp**: 2026-11-10T15:20:30+07:00
+
+## Summary: Wired `subtitleSize` (`small`/`medium`/`large`) into ASS Burn, Split Pill vs Banner Styles & Added Effective Burn Logging
+1. **Central `subtitleSize` Resolution & Single-Source Layout Defaults ([ffmpegService.js](file:///e:/khmer_ai_dubbing_studio/backend/services/ffmpegService.js#L796-L880), [ffmpegService.js](file:///e:/khmer_ai_dubbing_studio/backend/services/ffmpegService.js#L1680-L1725))**:
+   - Extracted [`resolveAssSubtitleLayoutDefaults`](file:///e:/khmer_ai_dubbing_studio/backend/services/ffmpegService.js#L802-L828) as the single source of truth for per-aspect/verticalStyle/orientation base font sizes (`9:16 crop`/portrait `44`, `9:16 pad` `48`, `16:9` `44`, `1:1` `52`) used by both [`generateKhmerAssSubtitleFile`](file:///e:/khmer_ai_dubbing_studio/backend/services/ffmpegService.js#L830-L895) and [`renderDubbedVideoWithDucking`](file:///e:/khmer_ai_dubbing_studio/backend/services/ffmpegService.js#L1680-L1725).
+   - At the `generateKhmerAssSubtitleFile` call site in `renderDubbedVideoWithDucking`, resolved `fontSize` with precedence: explicit `subtitleOptions.fontSize` wins (`size=explicit`), else `subtitleOptions.subtitleSize` scales the per-aspect default (`small` `×0.8`, `medium` `×1.0`, `large` `×1.25`, rounded), else `null`.
+   - Passed `subtitleSize` through `subtitleOptions` from BOTH callers: [`videoRoutes.js`](file:///e:/khmer_ai_dubbing_studio/backend/routes/videoRoutes.js#L267-L277) (`finalSubOptions`) and [`batchExportService.js`](file:///e:/khmer_ai_dubbing_studio/backend/services/batchExportService.js#L634-L647).
+2. **Distinct `pill` vs `banner` Styles ([ffmpegService.js](file:///e:/khmer_ai_dubbing_studio/backend/services/ffmpegService.js#L868-L895))**:
+   - Split the shared branch: `banner` retains solid dark box (`BorderStyle 3`, `outline 10`/`12`, `backBox &H3208080c`), `pill` uses a lighter translucent chip (`BorderStyle 3`, `outline 6`, `backBox &H6408080c`), and `cinema` remains unchanged.
+3. **Effective ASS Burn Log ([ffmpegService.js](file:///e:/khmer_ai_dubbing_studio/backend/services/ffmpegService.js#L1722-L1724))**:
+   - Logged `🎬 ASS burn: style=<style> color=<hex> fontSize=<n> (size=<small|medium|large|explicit|null>) playRes=<XxY>` on every render burning `.ass` subtitles.
+4. **Honest Size Labels ([ExportSettingsPanel.jsx](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/voice/ExportSettingsPanel.jsx#L205-L214))**:
+   - Relabelled subtitle size options from fake pixel strings (`តូច (14px)` / `ស្តង់ដារ (16px)` / `ធំ (18px)`) to **`តូច`** / **`ស្តង់ដារ`** / **`ធំ`**.
+5. **Verification Results (`series.json` Untouched)**:
+   - Exported real 30s `9:16 crop` clips of `series_1793898268958` `ep_2` across `small` / `medium` / `large`, logging:
+     - `🎬 ASS burn: style=banner color=#FFFFFF fontSize=35 (size=small) playRes=1080x1920`
+     - `🎬 ASS burn: style=banner color=#FFFFFF fontSize=44 (size=medium) playRes=1080x1920`
+     - `🎬 ASS burn: style=banner color=#FFFFFF fontSize=55 (size=large) playRes=1080x1920`
+   - Visually verified extracted frames for `small` vs `medium` vs `large`, distinct translucent `pill` vs solid `banner`, and `cinema` + `yellow` (`#FFE600`).
+   - Added automated tests in [`aspect_ratio_and_crop.test.js`](file:///e:/khmer_ai_dubbing_studio/backend/tests/aspect_ratio_and_crop.test.js#L411-L526) and [`batch_export_and_merge.test.js`](file:///e:/khmer_ai_dubbing_studio/backend/tests/batch_export_and_merge.test.js#L331-L369) (**10/10 PASS**); `npm --prefix frontend run lint` (**0 errors**), `npm --prefix frontend run build` (**PASS `581ms`**).
+
+## Active Environment
+- **Dev Orchestrator**: Backend `http://localhost:5000` + Frontend `http://localhost:5173`.
+
+## Next Steps
+- Refresh browser (`Ctrl + Shift + R`) on `http://localhost:5173` — subtitle size (`តូច` / `ស្តង់ដារ` / `ធំ`) and `CapCut Pill` vs `Title Banner` now export faithfully in both single-episode and Batch Export Studio renders.
+
+---
+
+## Previous Session
+- **Environment**: Antigravity IDE (Removed `Flow:` `WorkflowStepper` Bar from Main Workspace)
+- **Timestamp**: 2026-11-10T15:15:10+07:00
+
+## Summary: Removed `WorkflowStepper` (`Flow: 1. Import video ... 5. Mix & export`) Bar from `App.jsx`
+1. **Removed `WorkflowStepper` from Main Workspace ([App.jsx](file:///e:/khmer_ai_dubbing_studio/frontend/src/App.jsx#L8-L9), [L635-L642](file:///e:/khmer_ai_dubbing_studio/frontend/src/App.jsx#L635-L642))**:
+   - Removed `import WorkflowStepper from './components/WorkflowStepper'` and `<WorkflowStepper ... />` inside `.capcut-main-workspace`, giving `.capcut-top-suite` full vertical height cleanly.
+2. **Verification Results (Fresh After Final Edits)**:
+   - `oxlint App.jsx`: **0 errors**.
+   - `npm --prefix frontend run lint`: **0 errors** (`375` pre-existing warnings).
+   - `npm --prefix frontend run build`: **PASS (`584ms`)**.
+
+## Active Environment
+- **Dev Orchestrator (`.\dev.ps1 -NoBrowser -SkipInstall`, `task-3196`)**: Running cleanly — Backend `http://localhost:5000` + Frontend `http://localhost:5173`.
+
+## Next Steps
+- Refresh browser (`Ctrl + Shift + R`) on `http://localhost:5173` — the `Flow: 1. Import video > 2. Translate & script > 3. Khmer voice (TTS) > 4. Demucs AI > 5. Mix & export` bar is now removed.
+
+---
+
+## Previous Session
+- **Environment**: Antigravity IDE (Removed `Re-Export Dubbed Video` / `Export Dubbed Video (.mp4)` Button from `ExportSettingsPanel`)
+- **Timestamp**: 2026-11-10T15:11:40+07:00
+
+## Summary: Removed Single-Episode Render/Export Button from `ExportSettingsPanel`
+1. **Removed Export / Render Button ([ExportSettingsPanel.jsx](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/voice/ExportSettingsPanel.jsx#L860-L870))**:
+   - Removed `<button className="capcut-export-btn btn-tactile">` (`Re-Export Dubbed Video` / `Export Dubbed Video (.mp4)` / `កំពុង Render...`) from the bottom of `2. Subtitle & Export Settings`, keeping the top-right Navbar `Export` button as the single clean export trigger.
+   - Cleaned up unused destructured props/variables (`onRenderVideo`, `batchRender`, `audioGenerated`, `previewAudioUrl`, `renderedVideo`, `batchJob`, `isBatchRunning`, `isBatchStarting`) in [`ExportSettingsPanel`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/voice/ExportSettingsPanel.jsx#L8-L21).
+2. **Verification Results (Fresh After Final Edits)**:
+   - `oxlint ExportSettingsPanel.jsx`: **0 errors** (2 pre-existing warnings).
+   - `npm --prefix frontend run lint`: **0 errors** (`375` pre-existing warnings).
+   - `npm --prefix frontend run build`: **PASS (`564ms`)**.
+
+## Active Environment
+- **Dev Orchestrator (`.\dev.ps1 -NoBrowser -SkipInstall`, `task-3196`)**: Running cleanly — Backend `http://localhost:5000` + Frontend `http://localhost:5173`.
+
+## Next Steps
+- Refresh browser (`Ctrl + Shift + R`) on `http://localhost:5173` — the `Re-Export Dubbed Video` / `Export Dubbed Video (.mp4)` button inside `2. Subtitle & Export Settings` is now removed.
+
+---
+
+## Previous Session
+- **Environment**: Antigravity IDE (Removed Post-Render Downloads Banner, Download Button, & Copy TikTok/Facebook Caption Button from `ExportSettingsPanel`)
+- **Timestamp**: 2026-11-10T15:08:40+07:00
+
+## Summary: Removed 3 Post-Render Elements Below `Export Dubbed Video` Button in `ExportSettingsPanel`
+1. **Removed Post-Render UI Block ([ExportSettingsPanel.jsx](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/voice/ExportSettingsPanel.jsx#L918-L921))**:
+   - Removed the `{renderedVideo && (...)}` section below the Render/Export button containing:
+     1. `✓ បាន Export ចូល Folder Downloads លើកុំព្យូទ័ររួចរាល់!` green banner
+     2. `Download ..._Khmer_Dubbed.mp4` button
+     3. `Copy TikTok / Facebook Caption` button
+   - Cleaned up unused `Download`, `Copy`, and `Check` icon imports and unused `onCopyCaption` / `copiedCaption` destructured props in [`ExportSettingsPanel`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/voice/ExportSettingsPanel.jsx#L8-L25).
+2. **Verification Results (Fresh After Final Edits)**:
+   - `oxlint ExportSettingsPanel.jsx`: **0 errors** (2 pre-existing warnings).
+   - `npm --prefix frontend run lint`: **0 errors** (`375` pre-existing warnings).
+   - `npm --prefix frontend run build`: **PASS (`2.75s`)**.
+
+## Active Environment
+- **Dev Orchestrator (`.\dev.ps1 -NoBrowser -SkipInstall`, `task-3196`)**: Running cleanly — Backend `http://localhost:5000` + Frontend `http://localhost:5173`.
+
+## Next Steps
+- Refresh browser (`Ctrl + Shift + R`) on `http://localhost:5173` — the 3 post-render items below `Export Dubbed Video` are now removed cleanly.
+
+---
+
+## Previous Session
 - **Environment**: Antigravity IDE (`Move Batch Export Button to Top Navbar Next to Export / Download MP4`)
 - **Timestamp**: 2026-11-10T15:08:00+07:00
 

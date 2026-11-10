@@ -6,7 +6,6 @@ import JobDashboardModal from './components/dashboard/JobDashboardModal';
 import GeminiRouteModal from './components/dashboard/GeminiRouteModal';
 import GeminiQuotaModal from './components/dashboard/GeminiQuotaModal';
 import BatchExportStudioModal from './components/dashboard/BatchExportStudioModal';
-import WorkflowStepper from './components/WorkflowStepper';
 import MediaLibrary from './components/MediaLibrary';
 import VideoPlayerPreview from './components/VideoPlayerPreview';
 import VoiceSettings from './components/VoiceSettings';
@@ -635,21 +634,6 @@ export default function App() {
 
         {/* Main Video Editing Workspace */}
         <main className="capcut-main-workspace">
-          {/* Chinese Drama Dubbing Workflow Stepper Bar */}
-          <WorkflowStepper
-            leftTab={leftTab}
-            onTabChange={setLeftTab}
-            isStep1Done={Boolean(media.selectedVideo?.videoId)}
-            isStep2Done={Boolean(scriptData?.segments?.length)}
-            isStep3Done={Boolean(audio.audioGenerated)}
-            isStep4Done={Boolean(audio.audioGenerated && voiceSettings.duckingVolume !== undefined)}
-            onGenerateAudio={handleGenerateAudio}
-            isGeneratingAudio={audio.isGeneratingAudio}
-            audioProgress={audio.audioProgress}
-            audioStage={audio.audioStage}
-            hasSegments={Boolean(scriptData?.segments?.length)}
-          />
-
           {/* Top 3-Column Suite: Left Tools | Video Monitor | Contextual Inspector */}
           <div className="capcut-top-suite" ref={topSuiteRef}>
             {/* 1. Left Panel: Media Library, AI Script, Subtitles */}

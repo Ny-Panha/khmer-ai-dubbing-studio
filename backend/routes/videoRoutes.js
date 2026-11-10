@@ -267,6 +267,7 @@ router.post("/render-video", async (req, res) => {
     const finalSubOptions = {
       fontName: subtitleOptions.fontName || "Khmer OS Battambang",
       fontSize: subtitleOptions.fontSize || null,
+      subtitleSize: subtitleOptions.subtitleSize || req.body?.subtitleSize || null,
       textColor: subtitleOptions.textColor || (subtitleColor === "yellow" ? "#FFE600" : "#FFFFFF"),
       outlineColor: subtitleOptions.outlineColor || "#000000",
       subtitleStyle: subtitleOptions.subtitleStyle || req.body?.subtitleStyle || subtitleStyle || "banner",

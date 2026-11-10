@@ -635,6 +635,7 @@ async function runBatchExportWorker({
         ...(exportSettings.subtitleOptions || {}),
         fontName: exportSettings.subtitleOptions?.fontName || "Khmer OS Battambang",
         fontSize: exportSettings.subtitleOptions?.fontSize || null,
+        subtitleSize: exportSettings.subtitleOptions?.subtitleSize || exportSettings.subtitleSize || null,
         textColor:
           exportSettings.subtitleOptions?.textColor ||
           (subtitleColor === "yellow" ? "#FFE600" : "#FFFFFF"),

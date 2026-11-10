@@ -793,6 +793,42 @@ function sanitizeKhmerSubtitleText(text = "") {
     .trim();
 }
 
+const SUBTITLE_SIZE_SCALE_MAP = {
+  small: 0.8,
+  medium: 1.0,
+  large: 1.25,
+};
+
+function resolveAssSubtitleLayoutDefaults({
+  aspectRatio = "16:9",
+  verticalStyle = "pad",
+  sourceDimensions = null,
+} = {}) {
+  if (aspectRatio === "9:16") {
+    const isSourcePortrait = Boolean(
+      sourceDimensions && Number(sourceDimensions.height) > Number(sourceDimensions.width)
+    );
+    const isCropOrPortrait = verticalStyle === "crop" || isSourcePortrait;
+    return {
+      playResX: 1080,
+      playResY: 1920,
+      defaultFontSize: isCropOrPortrait ? 44 : 48,
+    };
+  }
+  if (aspectRatio === "1:1") {
+    return {
+      playResX: 1080,
+      playResY: 1080,
+      defaultFontSize: 52,
+    };
+  }
+  return {
+    playResX: 1920,
+    playResY: 1080,
+    defaultFontSize: 44,
+  };
+}
+
 function generateKhmerAssSubtitleFile({
   segments = [],
   outputPath,
@@ -808,20 +844,22 @@ function generateKhmerAssSubtitleFile({
   totalDuration = null,
   sourceDimensions = null,
 }) {
-  let playResX = 1920;
-  let playResY = 1080;
-  let effFontSize = fontSize;
+  const layoutDefaults = resolveAssSubtitleLayoutDefaults({
+    aspectRatio,
+    verticalStyle,
+    sourceDimensions,
+  });
+  const playResX = layoutDefaults.playResX;
+  const playResY = layoutDefaults.playResY;
+  let effFontSize = fontSize || layoutDefaults.defaultFontSize;
   let effMarginV = marginV;
 
   const isAntiTheftActive = Boolean(antiTheft && (antiTheft.enabled || antiTheft.enableAntiTheft));
   const marqueePos = antiTheft?.marqueePosition || antiTheft?.position || "bottom";
 
-  // កំណត់ទំហំអក្សរ និងគម្លាតស្វ័យប្រវត្តិតាមទម្រង់វីដេអូ
+  // កំណត់គម្លាតស្វ័យប្រវត្តិតាមទម្រង់វីដេអូ
   if (aspectRatio === "9:16") {
-    playResX = 1080;
-    playResY = 1920;
     const isSourcePortrait = Boolean(sourceDimensions && sourceDimensions.height > sourceDimensions.width);
-    effFontSize = fontSize || (verticalStyle === "crop" || isSourcePortrait ? 44 : 48);
     if (verticalStyle === "crop" || isSourcePortrait) {
       // Full-bleed 9:16 crop or naturally vertical video: subtitles sit near the bottom of the full frame
       effMarginV = marginV || (isAntiTheftActive && marqueePos === "bottom" ? 180 : 130);
@@ -830,20 +868,14 @@ function generateKhmerAssSubtitleFile({
       effMarginV = marginV || 720;
     }
   } else if (aspectRatio === "1:1") {
-    playResX = 1080;
-    playResY = 1080;
-    effFontSize = fontSize || 52;
     effMarginV = marginV || (isAntiTheftActive && marqueePos === "bottom" ? 180 : 120);
   } else {
     // 16:9 YouTube Landscape
-    playResX = 1920;
-    playResY = 1080;
-    effFontSize = fontSize || 44; // YouTube Landscape: ទំហំល្មមស្អាត មិនបាំងមុខតួអង្គ
     effMarginV = marginV || (isAntiTheftActive && marqueePos === "bottom" ? 150 : 80);
   }
 
   const primaryAssColor = hexToAssColor(textColor, "00");
-  const outlineAssColor = hexToAssColor(outlineColor, "00");
+  let outlineAssColor = hexToAssColor(outlineColor, "00");
   const shadowAssColor = "&H80000000";
 
   let borderStyle = 3;
@@ -861,7 +893,14 @@ function generateKhmerAssSubtitleFile({
     outlineWidth = 5;
     shadowWidth = 2;
     backBoxColor = "&H60000000";
-  } else if (subtitleStyle === "pill" || subtitleStyle === "banner") {
+  } else if (subtitleStyle === "pill") {
+    borderStyle = 3;
+    outlineWidth = 6;
+    shadowWidth = 0;
+    backBoxColor = "&H6408080c";
+    outlineAssColor = hexToAssColor(outlineColor, "64");
+  } else {
+    // "banner" (default) — solid dark box that cleanly covers burned-in source subtitles
     borderStyle = 3;
     outlineWidth = aspectRatio === "9:16" ? 12 : 10;
     shadowWidth = 0;
@@ -1638,14 +1677,42 @@ function renderDubbedVideoWithDucking(options = {}) {
         calculatedDuration = Math.max(...validSegments.map((s) => Number(s.endSeconds || (s.startSeconds + s.duration) || 0)));
       }
 
+      const layoutDefaults = resolveAssSubtitleLayoutDefaults({
+        aspectRatio: targetAspectRatio,
+        verticalStyle,
+        sourceDimensions,
+      });
+      const explicitFontSize = subtitleOptions.fontSize ? Number(subtitleOptions.fontSize) : null;
+      const rawSubtitleSize = subtitleOptions.subtitleSize
+        ? String(subtitleOptions.subtitleSize).trim().toLowerCase()
+        : null;
+      const sizeScale =
+        rawSubtitleSize && Object.prototype.hasOwnProperty.call(SUBTITLE_SIZE_SCALE_MAP, rawSubtitleSize)
+          ? SUBTITLE_SIZE_SCALE_MAP[rawSubtitleSize]
+          : null;
+
+      let resolvedFontSize = null;
+      let resolvedSizeLabel = "null";
+      if (explicitFontSize && Number.isFinite(explicitFontSize) && explicitFontSize > 0) {
+        resolvedFontSize = explicitFontSize;
+        resolvedSizeLabel = "explicit";
+      } else if (sizeScale !== null) {
+        resolvedFontSize = Math.round(layoutDefaults.defaultFontSize * sizeScale);
+        resolvedSizeLabel = rawSubtitleSize;
+      }
+
+      const effectiveBurnFontSize = resolvedFontSize || layoutDefaults.defaultFontSize;
+      const effectiveBurnColor = subtitleOptions.textColor || "#FFFFFF";
+      const effectiveBurnStyle = subtitleStyle || "banner";
+
       generateKhmerAssSubtitleFile({
         segments: burnSubtitles ? validSegments : [],
         outputPath: tempAssPath,
         fontName: subtitleOptions.fontName || "Khmer OS Battambang",
-        fontSize: subtitleOptions.fontSize ? Number(subtitleOptions.fontSize) : null,
-        textColor: subtitleOptions.textColor || "#FFFFFF",
+        fontSize: resolvedFontSize,
+        textColor: effectiveBurnColor,
         outlineColor: subtitleOptions.outlineColor || "#000000",
-        subtitleStyle,
+        subtitleStyle: effectiveBurnStyle,
         marginV: subtitleOptions.marginV ? Number(subtitleOptions.marginV) : null,
         aspectRatio: targetAspectRatio,
         verticalStyle,
@@ -1653,6 +1720,10 @@ function renderDubbedVideoWithDucking(options = {}) {
         totalDuration: calculatedDuration > 0 ? calculatedDuration : null,
         sourceDimensions,
       });
+
+      console.log(
+        `🎬 ASS burn: style=${effectiveBurnStyle} color=${effectiveBurnColor} fontSize=${effectiveBurnFontSize} (size=${resolvedSizeLabel}) playRes=${layoutDefaults.playResX}x${layoutDefaults.playResY}`
+      );
 
       const assFilter = buildAssSubtitleVideoFilter(tempAssPath);
 
@@ -3901,6 +3972,8 @@ module.exports = {
   hexToAssColor,
   formatSecondsToAssTime,
   sanitizeKhmerSubtitleText,
+  resolveAssSubtitleLayoutDefaults,
+  SUBTITLE_SIZE_SCALE_MAP,
   generateKhmerAssSubtitleFile,
   buildAssSubtitleVideoFilter,
   buildVerticalVideoFilterChain,

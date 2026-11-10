@@ -8,6 +8,8 @@ const { execSync } = require('child_process');
 const {
   renderDubbedVideoWithDucking,
   generateKhmerAssSubtitleFile,
+  resolveAssSubtitleLayoutDefaults,
+  SUBTITLE_SIZE_SCALE_MAP,
   buildVerticalVideoFilterChain,
   getVideoDimensionsFast,
 } = require('../services/ffmpegService');
@@ -401,6 +403,122 @@ test('9:16 Crop Export: Blurs bottom source subtitle band while keeping upper fr
       portSubBandAfter < 10 && portUpperAfter > 50,
       `Expected native portrait bottom band blurred (${portSubBandAfter.toFixed(1)}) and upper sharp (${portUpperAfter.toFixed(1)})`
     );
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('ASS Subtitle Size Scaling & Distinct Pill vs Banner Styles', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dragondub-sub-style-'));
+  try {
+    // 1. Single-source layout defaults + scale multipliers
+    assert.equal(SUBTITLE_SIZE_SCALE_MAP.small, 0.8);
+    assert.equal(SUBTITLE_SIZE_SCALE_MAP.medium, 1.0);
+    assert.equal(SUBTITLE_SIZE_SCALE_MAP.large, 1.25);
+
+    assert.deepEqual(
+      resolveAssSubtitleLayoutDefaults({ aspectRatio: '9:16', verticalStyle: 'crop', sourceDimensions: { width: 1920, height: 1080 } }),
+      { playResX: 1080, playResY: 1920, defaultFontSize: 44 }
+    );
+    assert.deepEqual(
+      resolveAssSubtitleLayoutDefaults({ aspectRatio: '9:16', verticalStyle: 'pad', sourceDimensions: { width: 1920, height: 1080 } }),
+      { playResX: 1080, playResY: 1920, defaultFontSize: 48 }
+    );
+    assert.deepEqual(
+      resolveAssSubtitleLayoutDefaults({ aspectRatio: '16:9', verticalStyle: 'pad', sourceDimensions: { width: 1920, height: 1080 } }),
+      { playResX: 1920, playResY: 1080, defaultFontSize: 44 }
+    );
+    assert.deepEqual(
+      resolveAssSubtitleLayoutDefaults({ aspectRatio: '1:1' }),
+      { playResX: 1080, playResY: 1080, defaultFontSize: 52 }
+    );
+
+    // 2. Distinct Pill vs Banner vs Cinema ASS style definitions
+    const bannerAss = path.join(tmpDir, 'banner.ass');
+    const pillAss = path.join(tmpDir, 'pill.ass');
+    const cinemaAss = path.join(tmpDir, 'cinema.ass');
+
+    generateKhmerAssSubtitleFile({
+      segments: [{ startSec: 0, duration: 2, khmerText: 'សាកល្បង Banner' }],
+      outputPath: bannerAss,
+      subtitleStyle: 'banner',
+      aspectRatio: '16:9',
+    });
+    generateKhmerAssSubtitleFile({
+      segments: [{ startSec: 0, duration: 2, khmerText: 'សាកល្បង Pill' }],
+      outputPath: pillAss,
+      subtitleStyle: 'pill',
+      aspectRatio: '16:9',
+    });
+    generateKhmerAssSubtitleFile({
+      segments: [{ startSec: 0, duration: 2, khmerText: 'សាកល្បង Cinema' }],
+      outputPath: cinemaAss,
+      subtitleStyle: 'cinema',
+      textColor: '#FFE600',
+      aspectRatio: '16:9',
+    });
+
+    const bannerTxt = fs.readFileSync(bannerAss, 'utf8');
+    const pillTxt = fs.readFileSync(pillAss, 'utf8');
+    const cinemaTxt = fs.readFileSync(cinemaAss, 'utf8');
+
+    assert.ok(
+      bannerTxt.includes('Style: Default,Khmer OS Battambang,44,&H00FFFFFF,&H000000FF,&H00000000,&H3208080c,-1,0,0,0,100,100,0,0,3,10,0,2,60,60,80,1'),
+      'Banner must keep solid BorderStyle 3, outline 10, backBox &H3208080c'
+    );
+    assert.ok(
+      pillTxt.includes('Style: Default,Khmer OS Battambang,44,&H00FFFFFF,&H000000FF,&H64000000,&H6408080c,-1,0,0,0,100,100,0,0,3,6,0,2,60,60,80,1'),
+      'Pill must use lighter translucent chip BorderStyle 3, outline 6, backBox &H6408080c'
+    );
+    assert.ok(
+      cinemaTxt.includes('Style: Default,Khmer OS Battambang,44,&H0000E6FF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,2.5,1.5,2,60,60,80,1'),
+      'Cinema + yellow must keep BorderStyle 1, outline 2.5, shadow 1.5, backBox &H80000000'
+    );
+
+    // 3. Render entry logs effective settings & resolves small / medium / large / explicit / null
+    const toneWav = path.join(tmpDir, 'tone.wav');
+    const srcVid = path.join(tmpDir, 'src.mp4');
+    execSync(`ffmpeg -y -f lavfi -i "sine=frequency=440:duration=1.2" -c:a pcm_s16le "${toneWav}"`, { stdio: 'ignore' });
+    execSync(`ffmpeg -y -f lavfi -i "color=c=navy:s=1280x720:d=1.2" -i "${toneWav}" -c:v libx264 -pix_fmt yuv420p -c:a aac -shortest "${srcVid}"`, { stdio: 'ignore' });
+
+    const capturedLogs = [];
+    const origLog = console.log;
+    console.log = (...args) => {
+      const line = args.map(String).join(' ');
+      if (line.includes('🎬 ASS burn:')) capturedLogs.push(line);
+      origLog(...args);
+    };
+
+    try {
+      for (const [idx, opts] of [
+        { subtitleSize: 'small', subtitleStyle: 'banner' },
+        { subtitleSize: 'medium', subtitleStyle: 'pill' },
+        { subtitleSize: 'large', subtitleStyle: 'cinema', textColor: '#FFE600' },
+        { fontSize: 62, subtitleSize: 'small', subtitleStyle: 'banner' },
+        { subtitleStyle: 'banner' },
+      ].entries()) {
+        await renderDubbedVideoWithDucking({
+          inputVideoPath: srcVid,
+          masterAudioPath: toneWav,
+          fullAudioPath: toneWav,
+          outputVideoPath: path.join(tmpDir, `out_${idx}.mp4`),
+          aspectRatio: '9:16',
+          verticalStyle: 'crop',
+          burnSubtitles: true,
+          subtitleOptions: opts,
+          segments: [{ startSec: 0.1, duration: 0.9, khmerText: 'សាកល្បងទំហំអក្សរ' }],
+        });
+      }
+    } finally {
+      console.log = origLog;
+    }
+
+    assert.equal(capturedLogs.length, 5);
+    assert.equal(capturedLogs[0], '🎬 ASS burn: style=banner color=#FFFFFF fontSize=35 (size=small) playRes=1080x1920');
+    assert.equal(capturedLogs[1], '🎬 ASS burn: style=pill color=#FFFFFF fontSize=44 (size=medium) playRes=1080x1920');
+    assert.equal(capturedLogs[2], '🎬 ASS burn: style=cinema color=#FFE600 fontSize=55 (size=large) playRes=1080x1920');
+    assert.equal(capturedLogs[3], '🎬 ASS burn: style=banner color=#FFFFFF fontSize=62 (size=explicit) playRes=1080x1920');
+    assert.equal(capturedLogs[4], '🎬 ASS burn: style=banner color=#FFFFFF fontSize=44 (size=null) playRes=1080x1920');
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }

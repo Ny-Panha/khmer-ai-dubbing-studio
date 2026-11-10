@@ -232,6 +232,9 @@ test("HTTP Batch Export & Merge workflow + secure /api/download-export endpoints
           metadata: { width: 320, height: 180, durationSec: 1.2 },
           duration: 1.2,
           video: { videoPath: ep1Vid, width: 320, height: 180, durationSec: 1.2 },
+          scriptData: {
+            segments: [{ startSec: 0.1, duration: 0.9, khmerText: "សាកល្បងអក្សរខ្មែរ Batch EP1" }],
+          },
         },
         {
           id: "ep_2",
@@ -257,6 +260,9 @@ test("HTTP Batch Export & Merge workflow + secure /api/download-export endpoints
           metadata: { width: 320, height: 180, durationSec: 1.2 },
           duration: 1.2,
           video: { videoPath: ep3Vid, width: 320, height: 180, durationSec: 1.2 },
+          scriptData: {
+            segments: [{ startSec: 0.1, duration: 0.9, khmerText: "សាកល្បងអក្សរខ្មែរ Batch EP3" }],
+          },
         },
       ],
     });
@@ -322,25 +328,45 @@ test("HTTP Batch Export & Merge workflow + secure /api/download-export endpoints
     const latestJson = await latestRes.json();
     assert.equal(latestJson.job?.jobId, sepStartJson.job.jobId);
 
-    // 3. Batch Merge mode (all 3 episodes -> 1 Full Video)
-    const mergeStart = await fetch(`${baseUrl}/api/render-batch`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        seriesId,
-        episodeIds: ["ep_1", "ep_2", "ep_3"],
-        mode: "merge",
-        allowOriginalAudio: true,
-        exportSettings: {
-          aspectRatio: "16:9",
-          burnSubtitles: false,
-          soundMode: "ducking",
-        },
-      }),
-    });
-    assert.equal(mergeStart.status, 200);
-    const mergeStartJson = await mergeStart.json();
-    const mergeDone = await pollUntilBatchDone(baseUrl, mergeStartJson.job.jobId);
+    // 3. Batch Merge mode (all 3 episodes -> 1 Full Video, honouring subtitleSize='large' & pill style)
+    const batchAssLogs = [];
+    const origConsoleLog = console.log;
+    console.log = (...args) => {
+      const line = args.map(String).join(" ");
+      if (line.includes("ASS burn:")) batchAssLogs.push(line);
+      origConsoleLog(...args);
+    };
+    let mergeDone;
+    try {
+      const mergeStart = await fetch(`${baseUrl}/api/render-batch`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          seriesId,
+          episodeIds: ["ep_1", "ep_2", "ep_3"],
+          mode: "merge",
+          allowOriginalAudio: true,
+          exportSettings: {
+            aspectRatio: "16:9",
+            burnSubtitles: true,
+            subtitleStyle: "pill",
+            subtitleColor: "yellow",
+            subtitleSize: "large",
+            soundMode: "ducking",
+          },
+        }),
+      });
+      assert.equal(mergeStart.status, 200);
+      const mergeStartJson = await mergeStart.json();
+      mergeDone = await pollUntilBatchDone(baseUrl, mergeStartJson.job.jobId);
+    } finally {
+      console.log = origConsoleLog;
+    }
+    assert.ok(
+      batchAssLogs.length >= 2 &&
+        batchAssLogs.every((l) => l.includes("style=pill color=#FFE600 fontSize=55 (size=large) playRes=1920x1080")),
+      `Batch export must honour subtitleSize='large' & pill style; got logs: ${JSON.stringify(batchAssLogs)}`
+    );
     assert.equal(mergeDone.status, "completed", `Expected completed, got ${mergeDone.status}: ${mergeDone.error}`);
     assert.equal(mergeDone.outputs.length, 3);
     assert.ok(mergeDone.mergedResult?.success, "mergedResult must succeed");

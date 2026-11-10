@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import {
-  Clapperboard, Subtitles, Loader2, Download, Copy, Check, ChevronUp, ChevronDown,
+  Clapperboard, Subtitles, Loader2, ChevronUp, ChevronDown,
   CheckCircle2, ShieldCheck, Image, Upload
 } from 'lucide-react';
 import { resolveDefaultAspectRatio } from '../../utils/projectStorage';
@@ -10,26 +10,15 @@ export default function ExportSettingsPanel({
   onToggle,
   settings,
   onSettingChange,
-  onRenderVideo,
   isRendering,
   renderProgress = 0,
   renderStage = '',
   selectedVideo,
   videoMetadata = null,
   activeEpisode = null,
-  batchRender = null,
-  audioGenerated,
-  previewAudioUrl,
-  renderedVideo,
-  onCopyCaption,
-  copiedCaption,
 }) {
   const [internalProgress, setInternalProgress] = useState(0);
   const [internalStage, setInternalStage] = useState('');
-
-  const batchJob = batchRender?.job || null;
-  const isBatchRunning = Boolean(batchRender?.isRunning || batchJob?.status === 'running');
-  const isBatchStarting = Boolean(batchRender?.isStarting);
 
   const srcW = Number(videoMetadata?.width || selectedVideo?.width || activeEpisode?.metadata?.width || activeEpisode?.video?.width) || 0;
   const srcH = Number(videoMetadata?.height || selectedVideo?.height || activeEpisode?.metadata?.height || activeEpisode?.video?.height) || 0;
@@ -219,9 +208,9 @@ export default function ExportSettingsPanel({
                   className="inspector-select"
                   style={{ width: '100%', padding: '5px 8px', fontSize: '0.78rem' }}
                 >
-                  <option value="small">តូច (14px)</option>
-                  <option value="medium">ស្តង់ដារ (16px)</option>
-                  <option value="large">ធំ (18px)</option>
+                  <option value="small">តូច</option>
+                  <option value="medium">ស្តង់ដារ</option>
+                  <option value="large">ធំ</option>
                 </select>
               </div>
             </div>
@@ -736,7 +725,7 @@ export default function ExportSettingsPanel({
                   : '0 6px 20px rgba(56, 189, 248, 0.15)',
                 borderRadius: 8,
                 padding: '12px 14px',
-                marginBottom: 10,
+                marginBottom: 0,
                 transition: 'all 0.3s ease',
               }}
             >
@@ -872,96 +861,6 @@ export default function ExportSettingsPanel({
                   4. Downloads
                 </div>
               </div>
-            </div>
-          )}
-
-          {/* Export / Render Action Button */}
-          <button
-            type="button"
-            onClick={onRenderVideo}
-            disabled={isRendering || isBatchRunning || isBatchStarting || !selectedVideo || (!audioGenerated && !previewAudioUrl)}
-            className="capcut-export-btn btn-tactile"
-            style={{
-              fontSize: '0.88rem',
-              padding: '10px 14px',
-              position: 'relative',
-              overflow: 'hidden',
-              background: isRendering ? 'rgba(30, 41, 59, 0.85)' : undefined,
-              border: isRendering ? '1px solid rgba(56, 189, 248, 0.5)' : undefined,
-            }}
-          >
-            {isRendering ? (
-              <>
-                <div
-                  style={{
-                    position: 'absolute',
-                    top: 0,
-                    left: 0,
-                    bottom: 0,
-                    width: `${displayProgress}%`,
-                    background: 'linear-gradient(90deg, rgba(59, 130, 246, 0.3), rgba(6, 182, 212, 0.4))',
-                    transition: 'width 0.25s ease-out',
-                    zIndex: 0,
-                  }}
-                />
-                <div style={{ position: 'relative', zIndex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7, width: '100%' }}>
-                  <Loader2 size={15} className="animate-spin" style={{ color: '#38bdf8' }} />
-                  <span style={{ color: '#f8fafc', fontWeight: 600 }}>
-                    កំពុង Render... {displayProgress}%
-                  </span>
-                </div>
-              </>
-            ) : (
-              <>
-                <Clapperboard size={15} />
-                <span>{renderedVideo ? 'Re-Export Dubbed Video' : 'Export Dubbed Video (.mp4)'}</span>
-              </>
-            )}
-          </button>
-
-          {/* If rendered, quick download and caption copy */}
-          {renderedVideo && (
-            <div style={{ marginTop: 10, display: 'flex', flexDirection: 'column', gap: 6 }}>
-              <div style={{ 
-                fontSize: '0.76rem', 
-                color: 'var(--color-success)', 
-                background: 'rgba(34, 197, 94, 0.1)', 
-                padding: '8px 10px', 
-                borderRadius: 'var(--radius-sm)', 
-                border: '1px solid rgba(34, 197, 94, 0.25)', 
-                display: 'flex', 
-                alignItems: 'center', 
-                gap: 6 
-              }}>
-                <Check size={14} color="var(--color-success)" />
-                <span>បាន Export ចូល Folder <strong>Downloads</strong> លើកុំព្យូទ័ររួចរាល់!</span>
-              </div>
-              <a
-                href={typeof renderedVideo === 'string' ? renderedVideo : (renderedVideo.downloadUrl || renderedVideo.outputVideoUrl)}
-                download={
-                  renderedVideo?.outputFilename ||
-                  (selectedVideo?.fileName
-                    ? `${selectedVideo.fileName.replace(/\.[^/.]+$/, '').trim()}_Khmer_Dubbed.mp4`
-                    : 'Dubbed_Video_Khmer.mp4')
-                }
-                className="btn-emerald"
-                style={{ width: '100%', justifyContent: 'center', fontSize: '0.82rem', padding: '8px', textDecoration: 'none' }}
-              >
-                <Download size={14} />
-                <span>
-                  Download {renderedVideo?.outputFilename || (selectedVideo?.fileName ? `${selectedVideo.fileName.replace(/\.[^/.]+$/, '').trim()}_Khmer_Dubbed.mp4` : 'Dubbed Video.mp4')}
-                </span>
-              </a>
-
-              <button
-                onClick={onCopyCaption}
-                className="btn-secondary"
-                style={{ width: '100%', justifyContent: 'center', fontSize: '0.76rem', padding: '6px' }}
-                title="Copy full story text for TikTok or Facebook post caption"
-              >
-                {copiedCaption ? <Check size={12} color="var(--color-success)" /> : <Copy size={12} />}
-                <span>{copiedCaption ? 'Copied Post Caption!' : 'Copy TikTok / Facebook Caption'}</span>
-              </button>
             </div>
           )}
         </>
