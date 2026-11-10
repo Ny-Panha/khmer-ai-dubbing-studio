@@ -5,6 +5,35 @@ const ffmpegInstaller = require("@ffmpeg-installer/ffmpeg");
 const ffprobeInstaller = require("@ffprobe-installer/ffprobe");
 const ffmpeg = require("fluent-ffmpeg");
 const audioSeparationService = require("./audioSeparationService");
+const { ffmpegHeavySemaphore, createAbortError } = require("../utils/asyncSemaphore");
+
+function attachAbortKill(proc, signal, onAbortCallback) {
+  if (!signal || !proc) return () => {};
+  const onAbort = () => {
+    try {
+      if (process.platform === "win32" && proc.pid) {
+        spawn("taskkill", ["/pid", String(proc.pid), "/T", "/F"], {
+          windowsHide: true,
+          stdio: "ignore",
+        });
+      }
+      proc.kill("SIGTERM");
+    } catch (_) {}
+    if (typeof onAbortCallback === "function") {
+      onAbortCallback();
+    }
+  };
+  if (signal.aborted) {
+    onAbort();
+    return () => {};
+  }
+  signal.addEventListener("abort", onAbort, { once: true });
+  return () => {
+    try {
+      signal.removeEventListener("abort", onAbort);
+    } catch (_) {}
+  };
+}
 
 function resolveBinary(cmdName, fallbackPath) {
   try {
@@ -20,6 +49,22 @@ const FFPROBE_PATH = resolveBinary("ffprobe", ffprobeInstaller.path);
 
 ffmpeg.setFfmpegPath(FFMPEG_PATH);
 ffmpeg.setFfprobePath(FFPROBE_PATH);
+
+// Probe whether this FFmpeg build supports -fps_mode (FFmpeg 5.1+/8.x removed -vsync)
+const FFMPEG_VFR_ARGS = (() => {
+  try {
+    const helpRes = spawnSync(FFMPEG_PATH, ["-h", "long"], {
+      encoding: "utf8",
+      windowsHide: true,
+      timeout: 4000,
+    });
+    const combinedHelp = `${helpRes.stdout || ""}\n${helpRes.stderr || ""}`;
+    if (/\bfps_mode\b/.test(combinedHelp)) {
+      return ["-fps_mode", "vfr"];
+    }
+  } catch (_) {}
+  return ["-vsync", "vfr"];
+})();
 
 let isQsvSupported = null;
 function checkQsvSupport() {
@@ -420,11 +465,135 @@ function detectSpeechBounds(filePath, noiseThreshold = "-50dB", minSilenceDurati
 }
 
 /**
+ * Strip dead leading & trailing Edge TTS padding silence from any generated TTS clip
+ * while preserving a crisp 25ms acoustic cushion for initial aspirated Khmer consonants
+ * (ក ខ ច ឆ ត ថ ប ផ ស) and 60ms trailing decay.
+ */
+async function trimTtsSilence(
+  inputAudioPath,
+  {
+    leadInCushionSec = 0.025,
+    leadOutCushionSec = 0.060,
+    microFadeMs = 8,
+    minLeadingSilenceToTrimSec = 0.060,
+    minTrailingSilenceToTrimSec = 0.140,
+    noiseThreshold = "-45dB",
+  } = {}
+) {
+  if (!inputAudioPath || !fs.existsSync(inputAudioPath)) {
+    throw new Error(`រកមិនឃើញ File សំឡេង TTS៖ ${inputAudioPath}`);
+  }
+
+  const bounds = await detectSpeechBounds(inputAudioPath, noiseThreshold, 0.02);
+  const totalDur = bounds.totalDur || (await getMediaDuration(inputAudioPath));
+  if (!totalDur || totalDur <= 0.25 || !bounds.hasSpeech) {
+    return {
+      outputPath: inputAudioPath,
+      trimmed: false,
+      trimmedLeadSec: 0,
+      originalDuration: totalDur || 0,
+      finalDuration: totalDur || 0,
+      leadInSec: bounds.leadingSilence || 0,
+    };
+  }
+
+  let safeStart = 0;
+  if (bounds.leadingSilence > minLeadingSilenceToTrimSec) {
+    safeStart = Math.max(0, parseFloat((bounds.leadingSilence - leadInCushionSec).toFixed(3)));
+  }
+
+  let safeEnd = totalDur;
+  if (bounds.tailSilence > safeStart + 0.15 && (totalDur - bounds.tailSilence) > minTrailingSilenceToTrimSec) {
+    safeEnd = Math.min(totalDur, parseFloat((bounds.tailSilence + leadOutCushionSec).toFixed(3)));
+  }
+
+  const needsTrim = (safeStart > 0.015 || safeEnd < totalDur - 0.050) && (safeEnd > safeStart + 0.20);
+  if (!needsTrim) {
+    return {
+      outputPath: inputAudioPath,
+      trimmed: false,
+      trimmedLeadSec: 0,
+      originalDuration: totalDur,
+      finalDuration: totalDur,
+      leadInSec: bounds.leadingSilence,
+    };
+  }
+
+  const dir = path.dirname(inputAudioPath);
+  const ext = path.extname(inputAudioPath);
+  const base = path.basename(inputAudioPath, ext);
+  const tempTrimPath = path.join(dir, `.tmp_trim_${base}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}${ext}`);
+
+  const fadeSec = (microFadeMs / 1000).toFixed(3);
+  const clippedDur = Math.max(0.1, safeEnd - safeStart);
+  const fadeOutStart = Math.max(0, clippedDur - microFadeMs / 1000).toFixed(3);
+
+  const trimOk = await new Promise((resolve) => {
+    const trimArgs = [
+      "-y",
+      "-i", getSafeCliPath(inputAudioPath),
+      "-af", `atrim=start=${safeStart.toFixed(3)}:end=${safeEnd.toFixed(3)},asetpts=PTS-STARTPTS,afade=t=in:st=0:d=${fadeSec},afade=t=out:st=${fadeOutStart}:d=${fadeSec}`,
+      "-c:a", "libmp3lame",
+      "-q:a", "2",
+      getSafeCliPath(tempTrimPath),
+    ];
+    const p = spawn(FFMPEG_PATH, trimArgs, {
+      stdio: ["ignore", "ignore", "pipe"],
+      windowsHide: true,
+    });
+    if (p.stderr) p.stderr.on("data", () => {});
+    p.on("close", (code) => {
+      try {
+        resolve(code === 0 && fs.existsSync(tempTrimPath) && fs.statSync(tempTrimPath).size >= 250);
+      } catch (_) {
+        resolve(false);
+      }
+    });
+    p.on("error", () => resolve(false));
+  });
+
+  if (!trimOk) {
+    try { if (fs.existsSync(tempTrimPath)) fs.unlinkSync(tempTrimPath); } catch (_) {}
+    return {
+      outputPath: inputAudioPath,
+      trimmed: false,
+      trimmedLeadSec: 0,
+      originalDuration: totalDur,
+      finalDuration: totalDur,
+      leadInSec: bounds.leadingSilence,
+    };
+  }
+
+  try {
+    if (fs.existsSync(inputAudioPath)) {
+      fs.unlinkSync(inputAudioPath);
+    }
+    fs.renameSync(tempTrimPath, inputAudioPath);
+  } catch (_) {
+    try {
+      fs.copyFileSync(tempTrimPath, inputAudioPath);
+    } finally {
+      try { if (fs.existsSync(tempTrimPath)) fs.unlinkSync(tempTrimPath); } catch (_) {}
+    }
+  }
+
+  const finalDuration = (await getMediaDuration(inputAudioPath)) || totalDur;
+  return {
+    outputPath: inputAudioPath,
+    trimmed: true,
+    trimmedLeadSec: safeStart,
+    originalDuration: totalDur,
+    finalDuration,
+    leadInSec: Number(Math.max(0, bounds.leadingSilence - safeStart).toFixed(3)),
+  };
+}
+
+/**
  * Auto Time-Stretch TTS Audio to fit timeline segment duration.
  * PRESERVES 100% of the initial consonant and syllable:
- * - Guarantees an 80ms acoustic lead-in cushion before speech onset.
- * - If natural leading silence <= 150ms, does NOT trim the start at all (retains natural human speech onset).
- * - Trims excessive trailing dead silence (Edge TTS tail silence) with an 80ms decay cushion.
+ * - Guarantees a 25ms+ acoustic lead-in cushion before speech onset.
+ * - If natural leading silence <= 60ms, does NOT trim the start at all.
+ * - Trims excessive trailing dead silence (Edge TTS tail silence) with a 60ms decay cushion.
  * - Applies atempo only if required, maintaining timeline sync and zero audio clipping.
  */
 async function autoStretchTtsAudio({
@@ -432,7 +601,7 @@ async function autoStretchTtsAudio({
   targetDuration,
   maxSpeed = 1.35,
   minSpeed = 0.95,
-  leadInCushionSec = 0.040,  // 40ms lead-in: protects Khmer aspirated consonants (ក ខ ច ឆ ត ថ ប ផ ស) which need ~30-50ms onset
+  leadInCushionSec = 0.025,  // 25ms lead-in: eliminates Edge TTS +220ms lag while protecting Khmer aspirated consonants (ក ខ ច ឆ ត ថ ប ផ ស)
   leadOutCushionSec = 0.060, // 60ms decay cushion protects final syllable and tail consonants
   microFadeMs = 8,           // 8ms micro-fade within silence cushion to eliminate boundary clicks
   allowSlowdown = false,     // Only allow stretching down if explicitly requested (e.g. for mouth sync, never when fitting slot)
@@ -452,10 +621,8 @@ async function autoStretchTtsAudio({
   const totalDur = bounds.totalDur || (await getMediaDuration(inputAudioPath));
 
   // Determine safe trim boundaries that strictly PRESERVE speech onset:
-  // Trim dead leading silence down to a crisp 15ms acoustic cushion, eliminating ~100ms TTS delay
-  // while preserving initial consonants (ក, ខ, ច, ឆ, ត, ប, ស...) from clipping.
   let safeStart = 0;
-  if (bounds.leadingSilence > 0.080) {
+  if (bounds.leadingSilence > 0.060) {
     safeStart = Math.max(0, parseFloat((bounds.leadingSilence - leadInCushionSec).toFixed(3)));
   }
 
@@ -1061,6 +1228,48 @@ function getActiveJobRenderProcess(jobId) {
   return jobRenderProcesses.get(jobId) || null;
 }
 
+/**
+ * Builds the FFmpeg filter_complex chain for 9:16 vertical output (1080x1920).
+ * When blurSubtitleBand is enabled (9:16 crop or native portrait with burned Khmer captions),
+ * blurs and slightly darkens the bottom source subtitle band BEFORE ASS subtitle burning
+ * so source burned-in Chinese captions are unreadable soft shapes beneath Khmer text.
+ */
+function buildVerticalVideoFilterChain({
+  inputLabel = "[0:v:0]",
+  outputLabel = "[final_video]",
+  verticalStyle = "pad",
+  blurSubtitleBand = false,
+  blurBandY = 1592,
+  blurRadius = 24,
+  blurPower = 2,
+  darkenBrightness = -0.08,
+} = {}) {
+  const isCrop = verticalStyle === "crop";
+  const baseScaleFilter = isCrop
+    ? "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920:(in_w-1080)/2:(in_h-1920)/2,setsar=1"
+    : "scale=1080:-2:force_original_aspect_ratio=decrease,pad=1080:1920:(1080-iw)/2:(1920-ih)/2:color=black,setsar=1";
+
+  if (!blurSubtitleBand) {
+    return [`${inputLabel}${baseScaleFilter}${outputLabel}`];
+  }
+
+  // Align Y and strip height to even integers for yuv420p and clamp chroma blur within FFmpeg limits.
+  const rawY = Math.round(Number(blurBandY));
+  const y = Math.max(0, Math.min(1856, (Number.isFinite(rawY) ? rawY : 1592) & ~1));
+  const h = Math.max(16, (1920 - y) & ~1);
+  const requestedR = Math.max(2, Math.round(Number(blurRadius) || 24));
+  const maxChromaR = Math.max(1, Math.floor(h / 4) - 1);
+  const chromaR = Math.min(requestedR, maxChromaR);
+  const power = Math.max(1, Math.round(Number(blurPower) || 2));
+  const brightness = Number.isFinite(Number(darkenBrightness)) ? Number(darkenBrightness) : -0.08;
+
+  return [
+    `${inputLabel}${baseScaleFilter},split[v_vert_main][v_vert_band_src]`,
+    `[v_vert_band_src]crop=1080:${h}:0:${y},boxblur=luma_radius=${requestedR}:luma_power=${power}:chroma_radius=${chromaR}:chroma_power=${power},eq=brightness=${brightness.toFixed(2)}[v_vert_sub_blur]`,
+    `[v_vert_main][v_vert_sub_blur]overlay=0:${y}${outputLabel}`,
+  ];
+}
+
 function renderDubbedVideoWithDucking(options = {}) {
   const inputVideoPath = options.inputVideoPath || options.videoPath;
   const masterAudioPath = options.masterAudioPath || null;
@@ -1078,6 +1287,9 @@ function renderDubbedVideoWithDucking(options = {}) {
   const videoClips = options.videoClips || [];
   const antiTheft = options.antiTheft || null;
   const logoSettings = options.logoSettings || null;
+  const allowOriginalAudio = Boolean(options.allowOriginalAudio);
+  const onProgress = typeof options.onProgress === "function" ? options.onProgress : null;
+  const expectedDurationSec = Number(options.expectedDurationSec) || 0;
 
   return new Promise(async (resolve, reject) => {
     if (!inputVideoPath || !fs.existsSync(inputVideoPath)) {
@@ -1123,14 +1335,16 @@ function renderDubbedVideoWithDucking(options = {}) {
         duration: Number(seg.audioDuration ?? seg.duration ?? seg.audioDurationSec ?? 2.5),
       }));
 
-    if (!hasValidMasterAudio && validSegments.length === 0) {
+    if (!hasValidMasterAudio && validSegments.length === 0 && !allowOriginalAudio) {
       return reject(new Error("មិនមាន File សំឡេងខ្មែរ TTS សម្រាប់យកមក Mix ឡើយ!"));
     }
+
+    const isOriginalPassthrough = Boolean(!hasValidMasterAudio && validSegments.length === 0 && allowOriginalAudio);
 
     // Windows CLI Length Guard: If no master audio is pre-rendered and segment count > 20,
     // auto-assemble master narration audio using bounded hierarchical batching (BATCH_SIZE = 40)
     // to strictly prevent Windows CreateProcessW 32,767 character command-line overflow!
-    if (!hasValidMasterAudio && (validSegments.length > 20 || options.enableDemucs)) {
+    if (!isOriginalPassthrough && !hasValidMasterAudio && (validSegments.length > 20 || options.enableDemucs)) {
       console.log(`[FFmpegService] ⚠️ Master audio track not pre-rendered for ${validSegments.length} segments. Auto-assembling master narration track...`);
       const autoMasterAudioPath = path.join(
         outDir,
@@ -1175,7 +1389,23 @@ function renderDubbedVideoWithDucking(options = {}) {
       .filter((c) => Number(c.end) > Number(c.start))
       .sort((a, b) => Number(a.start) - Number(b.start));
 
-    if (hasValidMasterAudio) {
+    let probedMeta = null;
+    if (isOriginalPassthrough || onProgress) {
+      try {
+        probedMeta = await getVideoMetadata(inputVideoPath);
+      } catch (_) {}
+    }
+    const effectiveExpectedDur = expectedDurationSec > 0
+      ? expectedDurationSec
+      : (probedMeta?.durationSec || 0);
+
+    if (isOriginalPassthrough) {
+      if (probedMeta && probedMeta.hasAudio === false) {
+        filterComplexParts.push(`aevalsrc=0:s=44100:c=stereo[final_audio]`);
+      } else {
+        filterComplexParts.push(`[0:a]aformat=sample_rates=44100:channel_layouts=stereo[final_audio]`);
+      }
+    } else if (hasValidMasterAudio) {
       // 🚀 Fast Path: streamlined render using pre-synchronized master Khmer narration audio
       args.push("-i", getSafeCliPath(activeMasterAudio));
 
@@ -1345,7 +1575,28 @@ function renderDubbedVideoWithDucking(options = {}) {
       }
     }
     const hasAntiTheft = Boolean(antiTheft && (antiTheft.enabled || antiTheft.enableAntiTheft));
-    const shouldBurnAss = Boolean(burnSubtitles || hasAntiTheft);
+    const hasBurnableSubs = Boolean(burnSubtitles && validSegments.length > 0);
+    const shouldBurnAss = Boolean(hasBurnableSubs || hasAntiTheft);
+    const isSourcePortrait = Boolean(
+      sourceDimensions &&
+      Number(sourceDimensions.height) > Number(sourceDimensions.width)
+    );
+    const shouldBlurVerticalSubBand = Boolean(
+      targetAspectRatio === "9:16" &&
+      hasBurnableSubs &&
+      (verticalStyle === "crop" || isSourcePortrait)
+    );
+
+    const srcRatio =
+      sourceDimensions && Number(sourceDimensions.width) > 0 && Number(sourceDimensions.height) > 0
+        ? sourceDimensions.width / sourceDimensions.height
+        : 16 / 9;
+    const needsLandscape16x9Pad =
+      targetAspectRatio === "16:9" &&
+      sourceDimensions &&
+      Number(sourceDimensions.width) > 0 &&
+      Number(sourceDimensions.height) > 0 &&
+      Math.abs(srcRatio - 16 / 9) > 0.05;
 
     if (shouldBurnAss) {
       tempAssPath = path.join(
@@ -1381,23 +1632,19 @@ function renderDubbedVideoWithDucking(options = {}) {
       const assFilter = buildAssSubtitleVideoFilter(tempAssPath);
 
       if (targetAspectRatio === "9:16") {
-        if (verticalStyle === "crop") {
-          // Full-bleed center crop: scale to FILL 1080x1920, center-crop, no black bars
-          filterComplexParts.push(
-            `${baseVideoSource}scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920:(in_w-1080)/2:(in_h-1920)/2,setsar=1[base_vert]`,
-            `[base_vert]${assFilter}[final_video]`
-          );
-        } else {
-          // Pad mode: Clean Black Cinema Canvas + Centered Video + Subtitles
-          filterComplexParts.push(
-            `${baseVideoSource}scale=1080:-2:force_original_aspect_ratio=decrease,pad=1080:1920:(1080-iw)/2:(1920-ih)/2:color=black,setsar=1[base_vert]`,
-            `[base_vert]${assFilter}[final_video]`
-          );
-        }
-      } else if (targetAspectRatio === "16:9" && sourceDimensions && sourceDimensions.height > sourceDimensions.width) {
-        // Vertical source manually exported to 16:9 landscape canvas
         filterComplexParts.push(
-          `${baseVideoSource}scale=-2:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(1920-iw)/2:(1080-ih)/2:color=black,setsar=1[base_land]`,
+          ...buildVerticalVideoFilterChain({
+            inputLabel: baseVideoSource,
+            outputLabel: "[base_vert]",
+            verticalStyle,
+            blurSubtitleBand: shouldBlurVerticalSubBand,
+          }),
+          `[base_vert]${assFilter}[final_video]`
+        );
+      } else if (needsLandscape16x9Pad) {
+        // Non-16:9 source (portrait, 1:1, 4:3, or ultrawide) exported to 16:9 landscape canvas
+        filterComplexParts.push(
+          `${baseVideoSource}scale='if(gt(a,16/9),1920,-2)':'if(gt(a,16/9),-2,1080)',pad=1920:1080:(1920-iw)/2:(1080-ih)/2:color=black,setsar=1[base_land]`,
           `[base_land]${assFilter}[final_video]`
         );
       } else if (targetAspectRatio === "1:1") {
@@ -1411,20 +1658,19 @@ function renderDubbedVideoWithDucking(options = {}) {
       }
       videoMapArg = "[final_video]";
     } else if (targetAspectRatio === "9:16") {
-      // 9:16 Canvas without subtitles or anti-theft
-      if (verticalStyle === "crop") {
-        filterComplexParts.push(
-          `${baseVideoSource}scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920:(in_w-1080)/2:(in_h-1920)/2,setsar=1[final_video]`
-        );
-      } else {
-        filterComplexParts.push(
-          `${baseVideoSource}scale=1080:-2:force_original_aspect_ratio=decrease,pad=1080:1920:(1080-iw)/2:(1920-ih)/2:color=black,setsar=1[final_video]`
-        );
-      }
-      videoMapArg = "[final_video]";
-    } else if (targetAspectRatio === "16:9" && sourceDimensions && sourceDimensions.height > sourceDimensions.width) {
+      // 9:16 Canvas without subtitles or anti-theft (uses shared vertical filter builder)
       filterComplexParts.push(
-        `${baseVideoSource}scale=-2:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(1920-iw)/2:(1080-ih)/2:color=black,setsar=1[final_video]`
+        ...buildVerticalVideoFilterChain({
+          inputLabel: baseVideoSource,
+          outputLabel: "[final_video]",
+          verticalStyle,
+          blurSubtitleBand: shouldBlurVerticalSubBand,
+        })
+      );
+      videoMapArg = "[final_video]";
+    } else if (needsLandscape16x9Pad) {
+      filterComplexParts.push(
+        `${baseVideoSource}scale='if(gt(a,16/9),1920,-2)':'if(gt(a,16/9),-2,1080)',pad=1920:1080:(1920-iw)/2:(1080-ih)/2:color=black,setsar=1[final_video]`
       );
       videoMapArg = "[final_video]";
     } else if (targetAspectRatio === "1:1") {
@@ -1494,7 +1740,7 @@ function renderDubbedVideoWithDucking(options = {}) {
     args.push("-map", videoMapArg, "-map", "[final_audio]");
 
     const isVideoFiltered = (videoMapArg !== "0:v:0" && videoMapArg !== "[0:v:0]");
-    if (!burnSubtitles && !hasLogo && !isVideoFiltered && !hasCustomCuts) {
+    if (!hasBurnableSubs && !hasLogo && !isVideoFiltered && !hasCustomCuts) {
       args.push("-c:v", "copy");
     } else {
       if (checkQsvSupport()) {
@@ -1580,9 +1826,21 @@ function renderDubbedVideoWithDucking(options = {}) {
     proc.stderr.on("data", (data) => {
       const text = data.toString();
       stderrLog += text;
-      const timeMatch = text.match(/time=(\d{2}:\d{2}:\d{2}\.\d{2})/);
+      const timeMatch = text.match(/time=(\d{2}):(\d{2}):(\d{2})\.(\d{2})/);
       if (timeMatch) {
-        process.stdout.write(`\r[FFmpegService] ⏳ Rendering: time=${timeMatch[1]}`);
+        const hh = Number(timeMatch[1]) || 0;
+        const mm = Number(timeMatch[2]) || 0;
+        const ss = Number(timeMatch[3]) || 0;
+        const cs = Number(timeMatch[4]) || 0;
+        const timeSec = hh * 3600 + mm * 60 + ss + cs / 100;
+        const timeStr = `${timeMatch[1]}:${timeMatch[2]}:${timeMatch[3]}.${timeMatch[4]}`;
+        process.stdout.write(`\r[FFmpegService] ⏳ Rendering: time=${timeStr}`);
+        if (onProgress && effectiveExpectedDur > 0) {
+          const pct = Math.max(1, Math.min(99, Math.round((timeSec / effectiveExpectedDur) * 100)));
+          try {
+            onProgress({ percent: pct, timeSec, timeStr });
+          } catch (_) {}
+        }
       }
     });
 
@@ -1669,6 +1927,9 @@ function renderDubbedVideoWithDucking(options = {}) {
 
 function extractAudio(videoPath, outputAudioPath, options = {}) {
   return new Promise((resolve, reject) => {
+    if (options?.signal?.aborted) {
+      return reject(createAbortError("Audio extraction aborted"));
+    }
     if (!fs.existsSync(videoPath)) {
       return reject(new Error(`Input video not found: ${videoPath}`));
     }
@@ -1678,6 +1939,8 @@ function extractAudio(videoPath, outputAudioPath, options = {}) {
       fs.mkdirSync(dir, { recursive: true });
     }
 
+    let settled = false;
+    let aborted = false;
     let command = ffmpeg(videoPath);
 
     // Fast input seek (-ss BEFORE -i) for instant seek on large videos (2GB+ / 3h+)
@@ -1689,16 +1952,56 @@ function extractAudio(videoPath, outputAudioPath, options = {}) {
       .noVideo()
       .audioCodec("libmp3lame")
       .audioBitrate("64k")
-      .audioChannels(1);
+      .audioChannels(1)
+      .outputOptions(["-threads", "2"]);
 
     if (typeof options.durationSec === "number" && options.durationSec > 0) {
       command = command.setDuration(options.durationSec);
     }
 
+    const onAbort = () => {
+      aborted = true;
+      try {
+        command.kill("SIGTERM");
+      } catch (_) {}
+      if (!settled) {
+        settled = true;
+        reject(createAbortError("Audio extraction aborted"));
+      }
+    };
+
+    if (options?.signal) {
+      options.signal.addEventListener("abort", onAbort, { once: true });
+    }
+
+    const cleanupSignal = () => {
+      if (options?.signal) {
+        try {
+          options.signal.removeEventListener("abort", onAbort);
+        } catch (_) {}
+      }
+    };
+
     command
       .output(outputAudioPath)
-      .on("end", () => resolve(outputAudioPath))
-      .on("error", (err) => reject(err))
+      .on("end", () => {
+        cleanupSignal();
+        if (settled) return;
+        settled = true;
+        if (aborted || options?.signal?.aborted) {
+          return reject(createAbortError("Audio extraction aborted"));
+        }
+        resolve(outputAudioPath);
+      })
+      .on("error", (err) => {
+        cleanupSignal();
+        if (settled) return;
+        settled = true;
+        if (aborted || options?.signal?.aborted) {
+          return reject(createAbortError("Audio extraction aborted"));
+        }
+        reject(err);
+      })
       .run();
   });
 }
@@ -2337,6 +2640,9 @@ function measureAudioLoudnessDiagnostics(audioPath) {
  * @returns {Promise<Array<{ timestampSec: number, filePath: string }>>}
  */
 async function extractFramesAtTimestamps(inputVideoPath, timestampsSec = [], outputDir, options = {}) {
+  if (options?.signal?.aborted) {
+    throw createAbortError("Frame extraction aborted");
+  }
   if (!fs.existsSync(inputVideoPath)) {
     throw new Error(`រកមិនឃើញវីដេអូដើម៖ ${inputVideoPath}`);
   }
@@ -2344,12 +2650,28 @@ async function extractFramesAtTimestamps(inputVideoPath, timestampsSec = [], out
     fs.mkdirSync(outputDir, { recursive: true });
   }
 
-  const safeInputPath = getSafeCliPath(inputVideoPath);
-  const results = [];
+  // Deduplicate and sort timestamps chronologically
+  const uniqueTimes = Array.from(
+    new Set(
+      (timestampsSec || [])
+        .map((t) => parseFloat(Math.max(0, Number(t) || 0).toFixed(2)))
+        .filter((t) => Number.isFinite(t))
+    )
+  ).sort((a, b) => a - b);
 
-  const extractSingle = (t) => {
-    return new Promise((resolve) => {
-      const safeSec = Math.max(0, Number(t) || 0);
+  if (uniqueTimes.length === 0) {
+    return [];
+  }
+
+  const safeInputPath = getSafeCliPath(inputVideoPath);
+  const signal = options?.signal || null;
+
+  // Internal single-frame direct seek helper (MUST NOT re-acquire ffmpegHeavySemaphore)
+  const extractSingleDirect = (safeSec) => {
+    return new Promise((resolve, reject) => {
+      if (signal?.aborted) {
+        return reject(createAbortError("Frame extraction aborted"));
+      }
       const outFileName = `frame_${safeSec.toFixed(2).replace(".", "_")}.jpg`;
       const outPath = path.join(outputDir, outFileName);
 
@@ -2357,41 +2679,232 @@ async function extractFramesAtTimestamps(inputVideoPath, timestampsSec = [], out
         "-y",
         "-ss", safeSec.toFixed(3),
         "-i", safeInputPath,
+        "-an", "-sn",
+        "-threads", "2",
         "-vf", "scale=-2:360",
         "-vframes", "1",
         "-q:v", "3",
         outPath,
       ];
 
+      let settled = false;
       const proc = spawn(FFMPEG_PATH, args, {
         windowsHide: true,
         stdio: ["ignore", "ignore", "ignore"],
       });
+      const detachAbort = attachAbortKill(proc, signal, () => {
+        if (!settled) {
+          settled = true;
+          reject(createAbortError("Frame extraction aborted"));
+        }
+      });
+
       proc.on("close", (code) => {
-        if (code === 0 && fs.existsSync(outPath) && fs.statSync(outPath).size > 1000) {
+        detachAbort();
+        if (settled) return;
+        settled = true;
+        if (signal?.aborted) {
+          return reject(createAbortError("Frame extraction aborted"));
+        }
+        if (code === 0 && fs.existsSync(outPath) && fs.statSync(outPath).size > 400) {
           resolve({ timestampSec: safeSec, filePath: outPath });
         } else {
           resolve(null);
         }
       });
       proc.on("error", (err) => {
+        detachAbort();
+        if (settled) return;
+        settled = true;
+        if (signal?.aborted) {
+          return reject(createAbortError("Frame extraction aborted"));
+        }
         console.warn(`[FFmpegService] ⚠️ Frame extraction at ${safeSec}s failed:`, err.message);
         resolve(null);
       });
     });
   };
 
-  // Process in concurrent pools of 4 to prevent blocking the event loop or exhausting OS process limits
-  const CONCURRENCY = 4;
-  for (let i = 0; i < timestampsSec.length; i += CONCURRENCY) {
-    const chunk = timestampsSec.slice(i, i + CONCURRENCY);
-    const chunkResults = await Promise.all(chunk.map((t) => extractSingle(t)));
-    for (const r of chunkResults) {
-      if (r) results.push(r);
+  // Single-pass windowed select + showinfo helper (1 FFmpeg process per dense window)
+  const extractWindowSinglePass = async (windowTimes, winIndex) => {
+    if (signal?.aborted) {
+      throw createAbortError("Frame extraction aborted");
     }
-  }
 
-  return results;
+    const winStart = Math.max(0, windowTimes[0] - 0.25);
+    const winEnd = windowTimes[windowTimes.length - 1] + 0.35;
+    const winDur = Math.max(0.5, winEnd - winStart);
+
+    const terms = windowTimes.map((t) => {
+      const thresh = (t - 0.02).toFixed(3);
+      return `(isnan(prev_selected_t)+lte(prev_selected_t,${thresh}))*gte(t,${thresh})`;
+    });
+    const filterGraph = `select='${terms.join("+")}',showinfo,scale=-2:360`;
+
+    const prefix = `selw_${winIndex}_${Date.now()}_`;
+    const outPattern = path.join(outputDir, `${prefix}%05d.jpg`);
+    const safeOutPattern = getSafeCliPath(outPattern);
+
+    let ptsList = [];
+    try {
+      ptsList = await new Promise((resolve, reject) => {
+        if (signal?.aborted) {
+          return reject(createAbortError("Frame extraction aborted"));
+        }
+        const args = [
+          "-y",
+          "-ss", winStart.toFixed(3),
+          "-t", winDur.toFixed(3),
+          "-copyts",
+          "-i", safeInputPath,
+          "-an", "-sn",
+          "-threads", "2",
+          "-vf", filterGraph,
+          ...FFMPEG_VFR_ARGS,
+          "-q:v", "3",
+          safeOutPattern,
+        ];
+
+        let settled = false;
+        const proc = spawn(FFMPEG_PATH, args, {
+          windowsHide: true,
+          stdio: ["ignore", "ignore", "pipe"],
+        });
+
+        let stderrText = "";
+        proc.stderr.on("data", (d) => {
+          stderrText += d.toString("utf8");
+        });
+
+        const detachAbort = attachAbortKill(proc, signal, () => {
+          if (!settled) {
+            settled = true;
+            reject(createAbortError("Frame extraction aborted"));
+          }
+        });
+
+        proc.on("close", () => {
+          detachAbort();
+          if (settled) return;
+          settled = true;
+          if (signal?.aborted) {
+            return reject(createAbortError("Frame extraction aborted"));
+          }
+          const extractedPts = [];
+          const regex = /pts_time:\s*([0-9.]+)/g;
+          let m;
+          while ((m = regex.exec(stderrText)) !== null) {
+            const val = parseFloat(m[1]);
+            if (Number.isFinite(val)) extractedPts.push(val);
+          }
+          resolve(extractedPts);
+        });
+
+        proc.on("error", () => {
+          detachAbort();
+          if (settled) return;
+          settled = true;
+          if (signal?.aborted) {
+            return reject(createAbortError("Frame extraction aborted"));
+          }
+          resolve([]);
+        });
+      });
+
+      const producedFiles = fs
+        .readdirSync(outputDir)
+        .filter((f) => f.startsWith(prefix) && f.endsWith(".jpg"))
+        .sort()
+        .map((f) => path.join(outputDir, f));
+
+      const matchedResults = new Map();
+      const missedTimes = [];
+
+      if (producedFiles.length > 0 && producedFiles.length === ptsList.length) {
+        for (const targetT of windowTimes) {
+          let bestIdx = -1;
+          let bestDiff = Infinity;
+          for (let i = 0; i < ptsList.length; i++) {
+            const diff = Math.abs(ptsList[i] - targetT);
+            if (diff < bestDiff) {
+              bestDiff = diff;
+              bestIdx = i;
+            }
+          }
+          if (bestIdx >= 0 && bestDiff <= 0.45 && fs.existsSync(producedFiles[bestIdx]) && fs.statSync(producedFiles[bestIdx]).size > 400) {
+            const destName = `frame_${targetT.toFixed(2).replace(".", "_")}.jpg`;
+            const destPath = path.join(outputDir, destName);
+            fs.copyFileSync(producedFiles[bestIdx], destPath);
+            matchedResults.set(targetT, { timestampSec: targetT, filePath: destPath });
+          } else {
+            missedTimes.push(targetT);
+          }
+        }
+      } else {
+        missedTimes.push(...windowTimes);
+      }
+
+      // Remove temporary window files before any targeted fallback
+      for (const pf of producedFiles) {
+        try { fs.unlinkSync(pf); } catch (_) {}
+      }
+
+      for (const missedT of missedTimes) {
+        if (signal?.aborted) throw createAbortError("Frame extraction aborted");
+        const directRes = await extractSingleDirect(missedT);
+        if (directRes) matchedResults.set(missedT, directRes);
+      }
+
+      return windowTimes.map((t) => matchedResults.get(t)).filter(Boolean);
+    } finally {
+      try {
+        const leftovers = fs.readdirSync(outputDir).filter((f) => f.startsWith(prefix) && f.endsWith(".jpg"));
+        for (const lf of leftovers) {
+          try { fs.unlinkSync(path.join(outputDir, lf)); } catch (_) {}
+        }
+      } catch (_) {}
+    }
+  };
+
+  return await ffmpegHeavySemaphore.run(async () => {
+    // Partition sorted timestamps into contiguous windows (gap <= 12s, max 40 inline select clauses for safe CLI length)
+    const windows = [];
+    let currentWin = [];
+    for (const t of uniqueTimes) {
+      if (currentWin.length === 0) {
+        currentWin.push(t);
+      } else {
+        const prev = currentWin[currentWin.length - 1];
+        if ((t - prev) > 12.0 || currentWin.length >= 40) {
+          windows.push(currentWin);
+          currentWin = [t];
+        } else {
+          currentWin.push(t);
+        }
+      }
+    }
+    if (currentWin.length > 0) windows.push(currentWin);
+
+    const results = [];
+    for (let wIdx = 0; wIdx < windows.length; wIdx++) {
+      if (signal?.aborted) {
+        throw createAbortError("Frame extraction aborted");
+      }
+      const win = windows[wIdx];
+      // For sparse 1-2 frame windows spaced > 4s apart, direct fast seek avoids decoding intermediate frames
+      if (win.length === 1 || (win.length === 2 && (win[1] - win[0]) > 4.0)) {
+        for (const t of win) {
+          const singleRes = await extractSingleDirect(t);
+          if (singleRes) results.push(singleRes);
+        }
+      } else {
+        const winRes = await extractWindowSinglePass(win, wIdx);
+        results.push(...winRes);
+      }
+    }
+
+    return results;
+  }, { signal });
 }
 
 /**
@@ -2403,10 +2916,15 @@ async function extractFramesAtTimestamps(inputVideoPath, timestampsSec = [], out
  * @param {number} durationSec
  * @param {number} fps - e.g. 1.4 (one frame every ~0.71s)
  * @param {string} outputDir
+ * @param {object} [options={}]
  * @returns {Promise<Array<{ index: number, timestampSec: number, filePath: string }>>}
  */
-function extractFramesStreaming(inputVideoPath, startSec = 0, durationSec = 0, fps = 1.4, outputDir = null) {
-  return new Promise((resolve, reject) => {
+function extractFramesStreaming(inputVideoPath, startSec = 0, durationSec = 0, fps = 1.4, outputDir = null, options = {}) {
+  const signal = options?.signal || null;
+  return ffmpegHeavySemaphore.run(() => new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      return reject(createAbortError("Streaming frame extraction aborted"));
+    }
     if (!inputVideoPath || !fs.existsSync(inputVideoPath)) {
       return reject(new Error(`Input video not found: ${inputVideoPath}`));
     }
@@ -2431,12 +2949,13 @@ function extractFramesStreaming(inputVideoPath, startSec = 0, durationSec = 0, f
     args.push(
       '-i', safeInputPath,
       '-an', '-sn',
-      '-threads', '4',
+      '-threads', '2',
       '-vf', `fps=${fps},scale=-2:360`,
       '-q:v', '3',
       outPattern
     );
 
+    let settled = false;
     const proc = spawn(FFMPEG_PATH, args, {
       windowsHide: true,
       stdio: ['ignore', 'ignore', 'pipe'],
@@ -2447,7 +2966,20 @@ function extractFramesStreaming(inputVideoPath, startSec = 0, durationSec = 0, f
       stderr += d.toString();
     });
 
+    const detachAbort = attachAbortKill(proc, signal, () => {
+      if (!settled) {
+        settled = true;
+        reject(createAbortError("Streaming frame extraction aborted"));
+      }
+    });
+
     proc.on('close', (code) => {
+      detachAbort();
+      if (settled) return;
+      settled = true;
+      if (signal?.aborted) {
+        return reject(createAbortError("Streaming frame extraction aborted"));
+      }
       if (code !== 0) {
         console.warn(`[FFmpegService] Streaming frame extraction notice (code ${code}):`, stderr.slice(-300));
       }
@@ -2469,9 +3001,15 @@ function extractFramesStreaming(inputVideoPath, startSec = 0, durationSec = 0, f
     });
 
     proc.on('error', (err) => {
+      detachAbort();
+      if (settled) return;
+      settled = true;
+      if (signal?.aborted) {
+        return reject(createAbortError("Streaming frame extraction aborted"));
+      }
       reject(err);
     });
-  });
+  }), { signal });
 }
 
 /**
@@ -2480,8 +3018,12 @@ function extractFramesStreaming(inputVideoPath, startSec = 0, durationSec = 0, f
  * Computes average full-strip difference as well as subtitle band difference (rows 8-28, cols 16-112).
  * Runs completely locally with FFmpeg in ~1-2s per chunk with zero API calls.
  */
-function extractSubtitleDifferenceGrid(inputVideoPath, startSec = 0, durationSec = 0, fps = 5.0) {
-  return new Promise((resolve) => {
+function extractSubtitleDifferenceGrid(inputVideoPath, startSec = 0, durationSec = 0, fps = 5.0, options = {}) {
+  const signal = options?.signal || null;
+  return ffmpegHeavySemaphore.run(() => new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      return reject(createAbortError("Subtitle difference grid aborted"));
+    }
     if (!inputVideoPath || !fs.existsSync(inputVideoPath)) return resolve([]);
     const safeInputPath = getSafeCliPath(inputVideoPath);
     const safeStartSec = Math.max(0, Number(startSec) || 0);
@@ -2495,17 +3037,32 @@ function extractSubtitleDifferenceGrid(inputVideoPath, startSec = 0, durationSec
     args.push(
       '-i', safeInputPath,
       '-an', '-sn',
-      '-threads', '4',
+      '-threads', '2',
       '-vf', `fps=${fps},crop=iw:ih*0.3:0:ih*0.7,scale=${scaleW}:${scaleH},format=gray`,
       '-f', 'rawvideo',
       '-pix_fmt', 'gray',
       '-'
     );
 
+    let settled = false;
     const proc = spawn(FFMPEG_PATH, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
     const chunks = [];
     proc.stdout.on('data', (d) => chunks.push(d));
+
+    const detachAbort = attachAbortKill(proc, signal, () => {
+      if (!settled) {
+        settled = true;
+        reject(createAbortError("Subtitle difference grid aborted"));
+      }
+    });
+
     proc.on('close', () => {
+      detachAbort();
+      if (settled) return;
+      settled = true;
+      if (signal?.aborted) {
+        return reject(createAbortError("Subtitle difference grid aborted"));
+      }
       const buf = Buffer.concat(chunks);
       const frameSize = scaleW * scaleH;
       const count = Math.floor(buf.length / frameSize);
@@ -2546,8 +3103,16 @@ function extractSubtitleDifferenceGrid(inputVideoPath, startSec = 0, durationSec
       }
       resolve(diffs);
     });
-    proc.on('error', () => resolve([]));
-  });
+    proc.on('error', () => {
+      detachAbort();
+      if (settled) return;
+      settled = true;
+      if (signal?.aborted) {
+        return reject(createAbortError("Subtitle difference grid aborted"));
+      }
+      resolve([]);
+    });
+  }), { signal });
 }
 
 /**
@@ -2559,10 +3124,11 @@ function extractSubtitleDifferenceGrid(inputVideoPath, startSec = 0, durationSec
  * @param {number} startSec
  * @param {number} durationSec
  * @param {number} [fps=5.0]
+ * @param {object} [options={}]
  * @returns {Promise<{ changePoints: Array, cueStates: Array, frameDiffs: Array }>}
  */
-async function detectSubtitleChangePoints(inputVideoPath, startSec = 0, durationSec = 0, fps = 5.0) {
-  const diffs = await extractSubtitleDifferenceGrid(inputVideoPath, startSec, durationSec, fps);
+async function detectSubtitleChangePoints(inputVideoPath, startSec = 0, durationSec = 0, fps = 5.0, options = {}) {
+  const diffs = await extractSubtitleDifferenceGrid(inputVideoPath, startSec, durationSec, fps, options);
   if (!diffs || diffs.length === 0) {
     return { changePoints: [], cueStates: [], frameDiffs: [] };
   }
@@ -2928,6 +3494,370 @@ async function getOrCreateVideoThumbnails(videoPath, episodeDir = null, duration
   });
 }
 
+/**
+ * Merge multiple rendered episode MP4 files sequentially into a single Full Video MP4.
+ * Uses fast lossless stream-copy concat demuxer when stream signatures match,
+ * and falls back automatically to normalized H.264 + AAC filter_complex concat otherwise
+ * (with hierarchical batching if > 20 inputs to stay safe under Windows CLI limits).
+ */
+async function mergeVideosConcat({
+  inputVideoPaths = [],
+  outputVideoPath,
+  targetResolution = null,
+  jobId = null,
+  signal = null,
+  onProgress = null,
+} = {}) {
+  const validInputs = (Array.isArray(inputVideoPaths) ? inputVideoPaths : []).filter(
+    (p) => p && typeof p === "string" && fs.existsSync(p)
+  );
+  if (validInputs.length === 0) {
+    throw new Error("មិនមានឯកសារវីដេអូសម្រាប់តភ្ជាប់ (merge) ទេ!");
+  }
+  if (!outputVideoPath) {
+    throw new Error("outputVideoPath is required for mergeVideosConcat");
+  }
+
+  const outDir = path.dirname(outputVideoPath);
+  if (!fs.existsSync(outDir)) {
+    fs.mkdirSync(outDir, { recursive: true });
+  }
+
+  if (signal?.aborted) {
+    const abortErr = new Error("Merge cancelled via AbortSignal");
+    abortErr.name = "AbortError";
+    throw abortErr;
+  }
+
+  const startTime = Date.now();
+  const safeJobId = jobId ? String(jobId).replace(/[^a-zA-Z0-9_-]/g, "_") : Date.now();
+
+  // Single input fast path
+  if (validInputs.length === 1) {
+    const tmpSingle = path.join(outDir, `.tmp_merge_single_${safeJobId}_${Date.now()}.mp4`);
+    fs.copyFileSync(validInputs[0], tmpSingle);
+    if (fs.existsSync(outputVideoPath)) {
+      try { fs.unlinkSync(outputVideoPath); } catch (_) {}
+    }
+    try {
+      fs.renameSync(tmpSingle, outputVideoPath);
+    } catch (_) {
+      fs.copyFileSync(tmpSingle, outputVideoPath);
+      try { fs.unlinkSync(tmpSingle); } catch (_) {}
+    }
+    if (typeof onProgress === "function") {
+      try { onProgress({ percent: 100, timeSec: 0, timeStr: "00:00:00.00" }); } catch (_) {}
+    }
+    return {
+      success: true,
+      outputVideoPath,
+      mergedCount: 1,
+      fastCopy: true,
+      renderTimeSeconds: Number(((Date.now() - startTime) / 1000).toFixed(1)),
+    };
+  }
+
+  // Probe stream signatures of every input
+  const streamInfos = [];
+  for (const filePath of validInputs) {
+    const info = await getMediaInfo(filePath);
+    const vStream = (info.streams || []).find((s) => s.codec_type === "video") || {};
+    const aStream = (info.streams || []).find((s) => s.codec_type === "audio") || null;
+    const dur = parseFloat(info.format?.duration || vStream.duration || 0) || 0;
+    let fps = 30;
+    if (vStream.r_frame_rate) {
+      const parts = String(vStream.r_frame_rate).split("/");
+      if (parts.length === 2 && parseFloat(parts[1]) > 0) {
+        fps = parseFloat(parts[0]) / parseFloat(parts[1]);
+      }
+    }
+    streamInfos.push({
+      filePath,
+      width: Number(vStream.width) || 0,
+      height: Number(vStream.height) || 0,
+      videoCodec: vStream.codec_name || "",
+      pixFmt: vStream.pix_fmt || "",
+      fps: Number.isFinite(fps) && fps > 0 ? fps : 30,
+      timeBase: vStream.time_base || "",
+      hasAudio: Boolean(aStream && aStream.codec_name),
+      audioCodec: aStream?.codec_name || "",
+      sampleRate: Number(aStream?.sample_rate) || 0,
+      channels: Number(aStream?.channels) || 0,
+      durationSec: dur,
+    });
+  }
+
+  const totalDurationSec = streamInfos.reduce((sum, m) => sum + (m.durationSec || 0), 0);
+  const first = streamInfos[0];
+
+  const allSameForFastCopy =
+    first.width > 0 &&
+    first.height > 0 &&
+    first.hasAudio &&
+    streamInfos.every(
+      (m) =>
+        m.width === first.width &&
+        m.height === first.height &&
+        m.videoCodec === first.videoCodec &&
+        m.pixFmt === first.pixFmt &&
+        m.hasAudio &&
+        m.audioCodec === first.audioCodec &&
+        m.sampleRate === first.sampleRate &&
+        m.channels === first.channels &&
+        Math.abs(m.fps - first.fps) <= 0.5 &&
+        (!first.timeBase || !m.timeBase || m.timeBase === first.timeBase)
+    );
+
+  const runFfmpegProcess = (args, tempOutPath, expectedDur) =>
+    new Promise((resolve, reject) => {
+      if (signal?.aborted) {
+        const abortErr = new Error("Merge cancelled via AbortSignal");
+        abortErr.name = "AbortError";
+        return reject(abortErr);
+      }
+
+      const proc = spawn(FFMPEG_PATH, args, {
+        stdio: ["ignore", "ignore", "pipe"],
+        windowsHide: true,
+      });
+
+      const regRecord = { proc, tempOutputPath: tempOutPath, interrupted: false, paused: false, cancelled: false };
+      if (jobId) {
+        jobRenderProcesses.set(jobId, regRecord);
+      }
+
+      const onAbort = () => {
+        try {
+          regRecord.interrupted = true;
+          regRecord.cancelled = true;
+          proc.kill("SIGTERM");
+        } catch (_) {}
+      };
+      if (signal) {
+        signal.addEventListener("abort", onAbort, { once: true });
+      }
+
+      let stderrLog = "";
+      proc.stderr.on("data", (data) => {
+        const text = data.toString();
+        stderrLog += text;
+        const timeMatch = text.match(/time=(\d{2}):(\d{2}):(\d{2})\.(\d{2})/);
+        if (timeMatch && typeof onProgress === "function" && expectedDur > 0) {
+          const timeSec =
+            (Number(timeMatch[1]) || 0) * 3600 +
+            (Number(timeMatch[2]) || 0) * 60 +
+            (Number(timeMatch[3]) || 0) +
+            (Number(timeMatch[4]) || 0) / 100;
+          const pct = Math.max(1, Math.min(99, Math.round((timeSec / expectedDur) * 100)));
+          const timeStr = `${timeMatch[1]}:${timeMatch[2]}:${timeMatch[3]}.${timeMatch[4]}`;
+          try {
+            onProgress({ percent: pct, timeSec, timeStr });
+          } catch (_) {}
+        }
+      });
+
+      proc.on("close", (code) => {
+        if (signal) {
+          try { signal.removeEventListener("abort", onAbort); } catch (_) {}
+        }
+        if (jobId) jobRenderProcesses.delete(jobId);
+
+        if (regRecord.paused || regRecord.cancelled || regRecord.interrupted) {
+          if (fs.existsSync(tempOutPath)) {
+            try { fs.unlinkSync(tempOutPath); } catch (_) {}
+          }
+          const err = new Error("Merge cancelled by user");
+          err.name = "AbortError";
+          return reject(err);
+        }
+
+        if (code === 0 && fs.existsSync(tempOutPath)) {
+          const stat = fs.statSync(tempOutPath);
+          if (stat.size < 1000) {
+            try { fs.unlinkSync(tempOutPath); } catch (_) {}
+            return reject(new Error("Merged video file is invalid or too small"));
+          }
+          resolve(tempOutPath);
+        } else {
+          if (fs.existsSync(tempOutPath)) {
+            try { fs.unlinkSync(tempOutPath); } catch (_) {}
+          }
+          const errLines = stderrLog
+            .split(/\r?\n/)
+            .filter((line) => /error|invalid|failed|cannot|no such|denied/i.test(line))
+            .slice(-5)
+            .join(" | ");
+          reject(new Error(`FFmpeg merge failed (code ${code}): ${errLines || stderrLog.slice(-400)}`));
+        }
+      });
+
+      proc.on("error", (err) => {
+        if (signal) {
+          try { signal.removeEventListener("abort", onAbort); } catch (_) {}
+        }
+        if (jobId) jobRenderProcesses.delete(jobId);
+        if (fs.existsSync(tempOutPath)) {
+          try { fs.unlinkSync(tempOutPath); } catch (_) {}
+        }
+        reject(err);
+      });
+    });
+
+  // Helper to commit temp output atomically
+  const finalizeOutput = (tmpPath, fastCopyUsed) => {
+    if (fs.existsSync(outputVideoPath)) {
+      try { fs.unlinkSync(outputVideoPath); } catch (_) {}
+    }
+    try {
+      fs.renameSync(tmpPath, outputVideoPath);
+    } catch (_) {
+      fs.copyFileSync(tmpPath, outputVideoPath);
+      try { fs.unlinkSync(tmpPath); } catch (_) {}
+    }
+    if (typeof onProgress === "function") {
+      try { onProgress({ percent: 100, timeSec: totalDurationSec, timeStr: "done" }); } catch (_) {}
+    }
+    const elapsed = Number(((Date.now() - startTime) / 1000).toFixed(1));
+    console.log(`[FFmpegService] ✅ Merged ${validInputs.length} videos (${fastCopyUsed ? "fast stream copy" : "normalized re-encode"}) in ${elapsed}s ➜ ${outputVideoPath}`);
+    return {
+      success: true,
+      outputVideoPath,
+      mergedCount: validInputs.length,
+      fastCopy: fastCopyUsed,
+      renderTimeSeconds: elapsed,
+    };
+  };
+
+  // Attempt 1: Fast lossless concat demuxer when streams match cleanly
+  if (allSameForFastCopy) {
+    const listPath = path.join(outDir, `.tmp_concat_list_${safeJobId}_${Date.now()}.txt`);
+    const tempFastOut = path.join(outDir, `.tmp_merge_fast_${safeJobId}_${Date.now()}.mp4`);
+    try {
+      const listContent = validInputs
+        .map((p) => {
+          const safeSrc = path.resolve(p).replace(/\\/g, "/").replace(/'/g, "'\\''");
+          return `file '${safeSrc}'`;
+        })
+        .join("\n");
+      fs.writeFileSync(listPath, listContent, "utf8");
+
+      const args = [
+        "-y",
+        "-f", "concat",
+        "-safe", "0",
+        "-i", getSafeCliPath(listPath),
+        "-c", "copy",
+        "-movflags", "+faststart",
+        getSafeCliPath(tempFastOut),
+      ];
+      await runFfmpegProcess(args, tempFastOut, totalDurationSec);
+      const outDur = await getMediaDuration(tempFastOut).catch(() => 0);
+      if (outDur > 0) {
+        return finalizeOutput(tempFastOut, true);
+      }
+    } catch (fastErr) {
+      if (fastErr?.name === "AbortError") throw fastErr;
+      console.warn(`[FFmpegService] Fast concat copy fallback triggered (${fastErr.message}). Re-encoding cleanly...`);
+      if (fs.existsSync(tempFastOut)) {
+        try { fs.unlinkSync(tempFastOut); } catch (_) {}
+      }
+    } finally {
+      if (fs.existsSync(listPath)) {
+        try { fs.unlinkSync(listPath); } catch (_) {}
+      }
+    }
+  }
+
+  // Attempt 2: Normalized filter_complex concat (handles mixed resolutions/fps/audio, batched if > 20)
+  const rawW = Number(targetResolution?.width) || first.width || 1920;
+  const rawH = Number(targetResolution?.height) || first.height || 1080;
+  const targetW = rawW % 2 === 0 ? rawW : rawW + 1;
+  const targetH = rawH % 2 === 0 ? rawH : rawH + 1;
+  const targetFps = Math.max(15, Math.min(60, Math.round(first.fps || 30)));
+
+  const concatBatchDirect = async (batchInfos, batchOutPath, batchDur) => {
+    const args = ["-y"];
+    const filterParts = [];
+    const pairLabels = [];
+
+    batchInfos.forEach((info, idx) => {
+      args.push("-i", getSafeCliPath(info.filePath));
+      filterParts.push(
+        `[${idx}:v]scale=${targetW}:${targetH}:force_original_aspect_ratio=decrease,pad=${targetW}:${targetH}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1,fps=${targetFps},format=yuv420p[v${idx}]`
+      );
+      if (info.hasAudio) {
+        filterParts.push(
+          `[${idx}:a]aformat=sample_rates=44100:channel_layouts=stereo,aresample=async=1[a${idx}]`
+        );
+      } else {
+        const silentDur = Math.max(0.1, info.durationSec || 1).toFixed(3);
+        filterParts.push(
+          `anullsrc=channel_layout=stereo:sample_rate=44100,atrim=duration=${silentDur}[a${idx}]`
+        );
+      }
+      pairLabels.push(`[v${idx}][a${idx}]`);
+    });
+
+    filterParts.push(`${pairLabels.join("")}concat=n=${batchInfos.length}:v=1:a=1[outv][outa]`);
+
+    args.push("-filter_complex", filterParts.join(";"), "-map", "[outv]", "-map", "[outa]");
+    if (checkQsvSupport()) {
+      args.push("-c:v", "h264_qsv", "-preset", "veryfast", "-global_quality", "23");
+    } else {
+      args.push("-c:v", "libx264", "-preset", "superfast", "-crf", "22", "-threads", "0");
+    }
+    args.push("-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-movflags", "+faststart", getSafeCliPath(batchOutPath));
+
+    await runFfmpegProcess(args, batchOutPath, batchDur);
+    return batchOutPath;
+  };
+
+  const MAX_DIRECT_INPUTS = 16;
+  const tempMergeOut = path.join(outDir, `.tmp_merge_norm_${safeJobId}_${Date.now()}.mp4`);
+
+  if (streamInfos.length <= MAX_DIRECT_INPUTS) {
+    await concatBatchDirect(streamInfos, tempMergeOut, totalDurationSec);
+    return finalizeOutput(tempMergeOut, false);
+  }
+
+  // Hierarchical chunked normalization -> fast concat of normalized chunks (Windows CLI safe)
+  const intermediateChunks = [];
+  try {
+    for (let start = 0; start < streamInfos.length; start += MAX_DIRECT_INPUTS) {
+      const slice = streamInfos.slice(start, start + MAX_DIRECT_INPUTS);
+      const chunkDur = slice.reduce((sum, m) => sum + (m.durationSec || 0), 0);
+      const chunkPath = path.join(outDir, `.tmp_merge_chunk_${safeJobId}_${start}_${Date.now()}.mp4`);
+      await concatBatchDirect(slice, chunkPath, chunkDur);
+      intermediateChunks.push(chunkPath);
+    }
+
+    const chunkListPath = path.join(outDir, `.tmp_concat_chunks_${safeJobId}_${Date.now()}.txt`);
+    try {
+      const listBody = intermediateChunks
+        .map((p) => `file '${path.resolve(p).replace(/\\/g, "/").replace(/'/g, "'\\''")}'`)
+        .join("\n");
+      fs.writeFileSync(chunkListPath, listBody, "utf8");
+      await runFfmpegProcess(
+        ["-y", "-f", "concat", "-safe", "0", "-i", getSafeCliPath(chunkListPath), "-c", "copy", "-movflags", "+faststart", getSafeCliPath(tempMergeOut)],
+        tempMergeOut,
+        totalDurationSec
+      );
+    } finally {
+      if (fs.existsSync(chunkListPath)) {
+        try { fs.unlinkSync(chunkListPath); } catch (_) {}
+      }
+    }
+
+    return finalizeOutput(tempMergeOut, false);
+  } finally {
+    for (const cp of intermediateChunks) {
+      if (fs.existsSync(cp)) {
+        try { fs.unlinkSync(cp); } catch (_) {}
+      }
+    }
+  }
+}
+
 module.exports = {
   getOrCreateVideoThumbnails,
   checkQsvSupport,
@@ -2941,14 +3871,17 @@ module.exports = {
   detectSubtitleChangePoints,
   getMediaDuration,
   buildAtempoFilter,
+  trimTtsSilence,
   autoStretchTtsAudio,
   hexToAssColor,
   formatSecondsToAssTime,
   sanitizeKhmerSubtitleText,
   generateKhmerAssSubtitleFile,
   buildAssSubtitleVideoFilter,
+  buildVerticalVideoFilterChain,
   buildDynamicDuckingFilter,
   renderDubbedVideoWithDucking,
+  mergeVideosConcat,
   mergeTimeIntervals,
   extractAudio,
   toSrtTime,

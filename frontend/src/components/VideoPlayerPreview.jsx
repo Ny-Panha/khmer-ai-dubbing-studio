@@ -1,9 +1,11 @@
-import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo } from 'react';
 import { Video, Upload, Loader2, AlertCircle } from 'lucide-react';
 import { parseTimeToSeconds } from '../utils/timestampUtils';
 import { mapSourceToTimelineTime } from '../utils/timelineUtils';
+import { findLeadingSilenceFromChannels, computeSegmentAudioSyncTarget } from '../utils/audioSyncUtils';
 import { uploadVideoFile } from '../services/api';
 import { createAudioRecoveryManager } from '../utils/audioAutoRecovery';
+import { resolveDefaultAspectRatio, inferRenderedAspectRatio } from '../utils/projectStorage';
 
 import { PlayerTopBar, PlayerBottomBar } from './player/PlayerControls';
 import LiveSubtitleOverlay from './player/LiveSubtitleOverlay';
@@ -13,6 +15,7 @@ import './VideoPlayerPreview.css';
 
 function VideoPlayerPreview({
   selectedVideo,
+  videoMetadata = null,
   seriesId,
   episodeId,
   scriptData,
@@ -38,18 +41,61 @@ function VideoPlayerPreview({
   onVideoSelected,
   videoClips = [],
 }) {
-  const aspectRatio = '16:9'; // Fixed standard 1920x1080 Landscape 16:9 requested by Nha
   const [videoMeta, setVideoMeta] = useState({ width: 0, height: 0, ratio: 1 });
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadError, setUploadError] = useState(null);
+  const [canvasBounds, setCanvasBounds] = useState({ width: 0, height: 0 });
   const containerRef = useRef(null);
+  const canvasContainerRef = useRef(null);
+
+  const srcW = Number(videoMetadata?.width || selectedVideo?.width) || videoMeta.width || 0;
+  const srcH = Number(videoMetadata?.height || selectedVideo?.height) || videoMeta.height || 0;
+  const isSourceLandscape = srcW > 0 && srcH > 0
+    ? srcW > srcH
+    : Boolean(videoMeta?.ratio && videoMeta.ratio > 1.05);
+  const defaultAspectRatio = resolveDefaultAspectRatio(srcW, srcH) || '16:9';
+  const selectedAspectRatio = voiceSettings?.aspectRatio || defaultAspectRatio;
+  const aspectRatio = voiceSettings?.aspectRatio
+    ? voiceSettings.aspectRatio
+    : (renderedVideo
+      ? (inferRenderedAspectRatio(renderedVideo, videoMeta, selectedAspectRatio) || selectedAspectRatio)
+      : selectedAspectRatio);
+  const verticalStyle = voiceSettings?.verticalStyle || 'pad';
+  const showPreviewCropBlurBand = Boolean(
+    !renderedVideo &&
+    aspectRatio === '9:16' &&
+    verticalStyle === 'crop' &&
+    isSourceLandscape &&
+    voiceSettings?.burnSubtitles
+  );
+
+  useLayoutEffect(() => {
+    const el = canvasContainerRef.current;
+    if (!el) return undefined;
+    const updateSize = () => {
+      const rect = el.getBoundingClientRect();
+      const w = Math.floor(rect.width);
+      const h = Math.floor(rect.height);
+      setCanvasBounds((prev) => (prev.width === w && prev.height === h ? prev : { width: w, height: h }));
+    };
+    updateSize();
+    if (typeof ResizeObserver === 'undefined') return undefined;
+    const ro = new ResizeObserver(updateSize);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
   const narrationAudioRef = useRef(null);
   const cleanBgAudioRef = useRef(null);
   const [cleanBgAudioUrl, setCleanBgAudioUrl] = useState(null);
   const fileInputRef = useRef(null);
   const activeSegmentAudiosRef = useRef({});
   const segmentAudioPoolRef = useRef({});
+  const segmentAudioMetaRef = useRef(new Map());
+  const leadingSilenceCacheRef = useRef(new Map());
+  const leadingSilenceInflightRef = useRef(new Map());
+  const audioProbeCtxRef = useRef(null);
+  const lastPreloadCenterRef = useRef(-Infinity);
   const currentTimeRef = useRef(currentTime);
   currentTimeRef.current = currentTime;
   const isPlayPendingRef = useRef(false);
@@ -80,17 +126,26 @@ function VideoPlayerPreview({
     scriptData?.segments?.some(s => s.audioUrl || s.audioFile || s.audioPath)
   );
 
-  const stopAllSegmentAudios = () => {
+  // Refs to hold latest values for RAF / preload loops without re-triggering effects
+  const segAudioConfigRef = useRef({ voiceSettings, videoClips, scriptData, hasSegmentAudios, renderedVideo, cleanBgAudioUrl });
+  useEffect(() => {
+    segAudioConfigRef.current = { voiceSettings, videoClips, scriptData, hasSegmentAudios, renderedVideo, cleanBgAudioUrl };
+  }, [voiceSettings, videoClips, scriptData, hasSegmentAudios, renderedVideo, cleanBgAudioUrl]);
+
+  const stopAllSegmentAudios = useCallback(() => {
     Object.keys(activeSegmentAudiosRef.current).forEach((key) => {
       const item = activeSegmentAudiosRef.current[key];
+      if (item?.cleanupMetadataListener) {
+        try { item.cleanupMetadataListener(); } catch (_) {}
+      }
       if (item?.audio && !item.audio.paused) {
         item.audio.pause();
       }
     });
     activeSegmentAudiosRef.current = {};
-  };
+  }, []);
 
-  const getSegmentAudio = (url) => {
+  const getSegmentAudio = useCallback((url, segStart = 0) => {
     if (!url) return null;
     let audio = segmentAudioPoolRef.current[url];
     if (!audio) {
@@ -101,34 +156,137 @@ function VideoPlayerPreview({
       if ('webkitPreservesPitch' in audio) audio.webkitPreservesPitch = true;
       segmentAudioPoolRef.current[url] = audio;
     }
+    segmentAudioMetaRef.current.set(url, { segStart, lastUsedMs: Date.now() });
     return audio;
-  };
+  }, []);
 
-  // Preload on-demand: proactively preload upcoming segments near playhead (-2s to +20s) with 2s throttle
+  const probeUrlLeadingSilence = useCallback((url) => {
+    if (!url || typeof window === 'undefined') return;
+    if (leadingSilenceCacheRef.current.has(url) || leadingSilenceInflightRef.current.has(url)) return;
+
+    const AudioCtx = window.AudioContext || window.webkitAudioContext;
+    const OfflineCtx = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+    if (!AudioCtx && !OfflineCtx) return;
+
+    const task = (async () => {
+      try {
+        if (!audioProbeCtxRef.current || audioProbeCtxRef.current.state === 'closed') {
+          audioProbeCtxRef.current = AudioCtx ? new AudioCtx() : new OfflineCtx(1, 24000, 24000);
+        }
+        const ctx = audioProbeCtxRef.current;
+        const res = await fetch(url, { cache: 'force-cache' });
+        if (!res.ok) return;
+        const arrayBuf = await res.arrayBuffer();
+        const audioBuf = await ctx.decodeAudioData(arrayBuf);
+        const channels = [];
+        for (let c = 0; c < audioBuf.numberOfChannels; c++) {
+          channels.push(audioBuf.getChannelData(c));
+        }
+        const skipSec = findLeadingSilenceFromChannels(channels, audioBuf.sampleRate);
+        if (leadingSilenceCacheRef.current.size >= 250) {
+          const oldestKey = leadingSilenceCacheRef.current.keys().next().value;
+          if (oldestKey !== undefined) leadingSilenceCacheRef.current.delete(oldestKey);
+        }
+        leadingSilenceCacheRef.current.set(url, skipSec);
+      } catch (_) {
+        // Leave uncached on decode/abort so a future retry can still probe safely
+      } finally {
+        leadingSilenceInflightRef.current.delete(url);
+      }
+    })();
+
+    leadingSilenceInflightRef.current.set(url, task);
+  }, []);
+
+  const evictDistantSegmentAudios = useCallback((centerTime) => {
+    const urls = Object.keys(segmentAudioPoolRef.current);
+    if (urls.length <= 32) return;
+
+    const activeUrls = new Set(
+      Object.values(activeSegmentAudiosRef.current)
+        .map((item) => item?.url)
+        .filter(Boolean)
+    );
+
+    const candidates = urls
+      .filter((url) => !activeUrls.has(url))
+      .map((url) => {
+        const meta = segmentAudioMetaRef.current.get(url);
+        const segStart = meta?.segStart ?? centerTime;
+        const dist = Math.abs(segStart - centerTime);
+        const outsideWindow = segStart < (centerTime - 25) || segStart > (centerTime + 80);
+        return { url, dist, outsideWindow, lastUsedMs: meta?.lastUsedMs ?? 0 };
+      })
+      .filter((c) => c.outsideWindow)
+      .sort((a, b) => (b.dist - a.dist) || (a.lastUsedMs - b.lastUsedMs));
+
+    let remaining = urls.length;
+    for (const c of candidates) {
+      if (remaining <= 28) break;
+      const audio = segmentAudioPoolRef.current[c.url];
+      if (audio) {
+        try {
+          if (!audio.paused) audio.pause();
+          audio.removeAttribute('src');
+          audio.load();
+        } catch (_) {}
+      }
+      delete segmentAudioPoolRef.current[c.url];
+      segmentAudioMetaRef.current.delete(c.url);
+      remaining--;
+    }
+  }, []);
+
+  const preloadSegmentsAroundTime = useCallback((centerTime) => {
+    const { hasSegmentAudios: hsa, scriptData: sd } = segAudioConfigRef.current;
+    if (!hsa || !sd?.segments || sd.segments.length === 0) return;
+
+    const now = Number.isFinite(centerTime) ? centerTime : (currentTimeRef.current || 0);
+    lastPreloadCenterRef.current = now;
+
+    const upcoming = sd.segments
+      .map((seg) => {
+        const s = (typeof seg.audioStartSec === 'number' && !isNaN(seg.audioStartSec)) ? seg.audioStartSec : (seg.startSec || 0);
+        const rawUrl = seg.audioUrl || (seg.audioPath ? `/uploads/${seg.audioPath.replace(/\\/g, '/').replace(/^.*uploads\//, '')}` : null);
+        return { seg, s, rawUrl };
+      })
+      .filter(({ s, rawUrl }) => rawUrl && s >= (now - 2) && s <= (now + 45))
+      .sort((a, b) => Math.abs(a.s - now) - Math.abs(b.s - now))
+      .slice(0, 14);
+
+    upcoming.forEach(({ seg, s, rawUrl }) => {
+      getSegmentAudio(rawUrl, s);
+      const rawOffset = (typeof seg.audioOffset === 'number' && !isNaN(seg.audioOffset)) ? seg.audioOffset : 0;
+      if (rawOffset === 0 && !seg.userTrimmed) {
+        probeUrlLeadingSilence(rawUrl);
+      }
+    });
+
+    evictDistantSegmentAudios(now);
+  }, [getSegmentAudio, probeUrlLeadingSilence, evictDistantSegmentAudios]);
+
+  // Preload on-demand: proactively warm upcoming clips & probe Edge TTS leading silence around playhead
   useEffect(() => {
     if (!hasSegmentAudios || !scriptData?.segments || scriptData.segments.length === 0) return;
 
-    const preloadUpcoming = () => {
-      const now = currentTimeRef.current || 0;
-      const upcoming = scriptData.segments
-        .filter((seg) => {
-          const s = (typeof seg.audioStartSec === 'number' && !isNaN(seg.audioStartSec)) ? seg.audioStartSec : (seg.startSec || 0);
-          return s >= (now - 2) && s <= (now + 20);
-        })
-        .slice(0, 6);
-
-      upcoming.forEach((seg) => {
-        const rawUrl = seg.audioUrl || (seg.audioPath ? `/uploads/${seg.audioPath.replace(/\\/g, '/').replace(/^.*uploads\//, '')}` : null);
-        if (rawUrl) {
-          getSegmentAudio(rawUrl);
-        }
-      });
-    };
-
-    preloadUpcoming();
-    const interval = setInterval(preloadUpcoming, 2000);
+    preloadSegmentsAroundTime(currentTimeRef.current || 0);
+    const interval = setInterval(() => preloadSegmentsAroundTime(), 1500);
     return () => clearInterval(interval);
-  }, [hasSegmentAudios, scriptData?.segments]);
+  }, [hasSegmentAudios, scriptData?.segments, preloadSegmentsAroundTime]);
+
+  // Immediately preload when playback starts or user scrubs to a new position (>= 2.5s jump)
+  useEffect(() => {
+    if (isPlaying) {
+      preloadSegmentsAroundTime(currentTimeRef.current || 0);
+    }
+  }, [isPlaying, preloadSegmentsAroundTime]);
+
+  useEffect(() => {
+    if (!hasSegmentAudios) return;
+    if (Math.abs((currentTime || 0) - lastPreloadCenterRef.current) >= 2.5) {
+      preloadSegmentsAroundTime(currentTime || 0);
+    }
+  }, [currentTime, hasSegmentAudios, preloadSegmentsAroundTime]);
 
   const handleFileSelect = async (e) => {
     const file = e.target.files?.[0];
@@ -166,16 +324,21 @@ function VideoPlayerPreview({
   useEffect(() => {
     isPlayPendingRef.current = false;
     stopAllSegmentAudios();
-    // Clear segment audio pool and pause cached audio elements
+    // Clear segment audio pool and pause cached audio elements cleanly
     Object.values(segmentAudioPoolRef.current).forEach((audio) => {
       try {
         if (audio) {
           audio.pause();
-          audio.src = '';
+          audio.removeAttribute('src');
+          audio.load();
         }
       } catch (_) {}
     });
     segmentAudioPoolRef.current = {};
+    segmentAudioMetaRef.current.clear();
+    leadingSilenceCacheRef.current.clear();
+    leadingSilenceInflightRef.current.clear();
+    lastPreloadCenterRef.current = -Infinity;
     if (recoveryManagerRef.current) {
       recoveryManagerRef.current.cancelPending();
     }
@@ -183,16 +346,21 @@ function VideoPlayerPreview({
       if (!narrationAudioRef.current.paused) narrationAudioRef.current.pause();
       narrationAudioRef.current.playbackRate = 1.0;
     }
-  }, [episodeId, seriesId]);
+  }, [episodeId, seriesId, stopAllSegmentAudios]);
 
-  // Component unmount: cancel all pending recovery timers & network checks
+  // Component unmount: cancel all pending recovery timers, audio pool, & probe AudioContext
   useEffect(() => {
     return () => {
+      stopAllSegmentAudios();
       if (recoveryManagerRef.current) {
         recoveryManagerRef.current.cancelPending();
       }
+      if (audioProbeCtxRef.current && typeof audioProbeCtxRef.current.close === 'function' && audioProbeCtxRef.current.state !== 'closed') {
+        audioProbeCtxRef.current.close().catch(() => {});
+      }
+      audioProbeCtxRef.current = null;
     };
-  }, []);
+  }, [stopAllSegmentAudios]);
 
   // Track browser fullscreen state (supports Esc key and native exit)
   useEffect(() => {
@@ -269,16 +437,9 @@ function VideoPlayerPreview({
     }
   }, [fullAudioUrl]);
 
-  // 🎙️ Real-time Segment-by-Segment Dubbing Playback (RAF-based loop for 0-lag during playback)
-  // Refs to hold latest values for the RAF loop without re-triggering the effect
-  const segAudioConfigRef = useRef({ voiceSettings, videoClips, scriptData, hasSegmentAudios, renderedVideo });
-  useEffect(() => {
-    segAudioConfigRef.current = { voiceSettings, videoClips, scriptData, hasSegmentAudios, renderedVideo };
-  }, [voiceSettings, videoClips, scriptData, hasSegmentAudios, renderedVideo]);
-
-  // Core segment audio sync logic (extracted so both RAF loop and seek effect can call it)
+  // Core segment audio sync logic (extracted for 60Hz RAF loop precision)
   const syncSegmentAudiosAtTime = useCallback((now) => {
-    const { voiceSettings: vs, videoClips: vc, scriptData: sd, hasSegmentAudios: hsa, renderedVideo: rv } = segAudioConfigRef.current;
+    const { voiceSettings: vs, scriptData: sd, hasSegmentAudios: hsa, renderedVideo: rv } = segAudioConfigRef.current;
     if (rv || !hsa) {
       stopAllSegmentAudios();
       return;
@@ -296,7 +457,6 @@ function VideoPlayerPreview({
     const nearbySegs = segments.map((seg, idx) => ({ seg, idx })).filter(({ seg }) => {
       if (seg.muted || seg.isMuted) return false;
       const s = (typeof seg.audioStartSec === 'number' && !isNaN(seg.audioStartSec)) ? seg.audioStartSec : (seg.startSec || 0);
-      const slotEnd = (typeof seg.endSec === 'number' && !isNaN(seg.endSec)) ? seg.endSec : (s + 3.0);
       const rawAudioDur = (typeof seg.originalAudioDuration === 'number' && seg.originalAudioDuration > 0)
         ? seg.originalAudioDuration
         : ((typeof seg.rawAudioDur === 'number' && seg.rawAudioDur > 0)
@@ -309,15 +469,21 @@ function VideoPlayerPreview({
       const isTrimmed = Boolean(seg.audioTrimmed || seg.userTrimmed);
       const effectiveEnd = (isTrimmed && typeof seg.audioEndSec === 'number')
         ? seg.audioEndSec
-        : Math.max(slotEnd, s + rawAudioDur);
-      return now >= (s - 0.2) && now < (effectiveEnd + 0.3);
+        : (s + rawAudioDur);
+      return now >= (s - 0.25) && now < (effectiveEnd + 0.3);
     });
 
     // Cleanup active audios no longer in window
     Object.keys(activeSegmentAudiosRef.current).forEach((k) => {
       if (!nearbySegs.some(({ seg, idx }) => String(seg._uid || (seg.id !== undefined && seg.id !== null ? seg.id : idx)) === k)) {
         const item = activeSegmentAudiosRef.current[k];
-        if (item?.audio && !item.audio.paused) item.audio.pause();
+        if (item?.cleanupMetadataListener) {
+          try { item.cleanupMetadataListener(); } catch (_) {}
+        }
+        if (item?.audio) {
+          if (!item.audio.paused) item.audio.pause();
+          item.audio.playbackRate = currentRate;
+        }
         delete activeSegmentAudiosRef.current[k];
       }
     });
@@ -326,7 +492,9 @@ function VideoPlayerPreview({
       const segKey = seg._uid || (seg.id !== undefined && seg.id !== null ? seg.id : idx);
       if (seg.muted || seg.isMuted) {
         if (activeSegmentAudiosRef.current[segKey]) {
-          activeSegmentAudiosRef.current[segKey].audio.pause();
+          const item = activeSegmentAudiosRef.current[segKey];
+          item.cleanupMetadataListener?.();
+          item.audio.pause();
           delete activeSegmentAudiosRef.current[segKey];
         }
         return;
@@ -335,43 +503,51 @@ function VideoPlayerPreview({
       const rawUrl = seg.audioUrl || (seg.audioPath ? `/uploads/${seg.audioPath.replace(/\\/g, '/').replace(/^.*uploads\//, '')}` : null);
       if (!rawUrl) return;
 
-      const segStart = (typeof seg.audioStartSec === 'number' && !isNaN(seg.audioStartSec))
-        ? seg.audioStartSec
-        : (typeof seg.startSec === 'number' && !isNaN(seg.startSec)
-          ? seg.startSec
-          : parseTimeToSeconds(seg.audioStart ?? seg.start, 0));
-      const segDur = (typeof seg.finalAudioDuration === 'number' && seg.finalAudioDuration > 0)
-        ? seg.finalAudioDuration
-        : ((typeof seg.audioDuration === 'number' && seg.audioDuration > 0)
-          ? seg.audioDuration
-          : ((typeof seg.audioDurationSec === 'number' && !isNaN(seg.audioDurationSec))
-            ? seg.audioDurationSec
-            : 2.5));
+      // If segment URL changed (regenerated clip while timeline open), tear down stale audio handle
+      let activeItem = activeSegmentAudiosRef.current[segKey];
+      if (activeItem && activeItem.url && activeItem.url !== rawUrl) {
+        activeItem.cleanupMetadataListener?.();
+        if (!activeItem.audio.paused) activeItem.audio.pause();
+        delete activeSegmentAudiosRef.current[segKey];
+        activeItem = null;
+      }
 
-      // CRITICAL: Determine true audio end boundary (STEP 2B)
-      const slotStart = (typeof seg.startSec === 'number' && !isNaN(seg.startSec)) ? seg.startSec : segStart;
-      const slotEnd = (typeof seg.endSec === 'number' && !isNaN(seg.endSec)) ? seg.endSec : (slotStart + 3.0);
-      const existingAudio = activeSegmentAudiosRef.current[segKey]?.audio;
-      const trueAudioDuration = (existingAudio && existingAudio.duration && !isNaN(existingAudio.duration) && existingAudio.duration > 0.2)
+      const existingAudio = activeItem?.audio || segmentAudioPoolRef.current[rawUrl];
+      const knownDuration = (existingAudio && existingAudio.duration && !isNaN(existingAudio.duration) && existingAudio.duration > 0.2)
         ? existingAudio.duration
-        : ((typeof seg.originalAudioDuration === 'number' && seg.originalAudioDuration > 0)
-          ? seg.originalAudioDuration
-          : ((typeof seg.rawAudioDur === 'number' && seg.rawAudioDur > 0) ? seg.rawAudioDur : segDur));
-      const isTrimmed = Boolean(seg.audioTrimmed || seg.userTrimmed);
-      const effectiveSegEnd = (isTrimmed && typeof seg.audioEndSec === 'number')
-        ? seg.audioEndSec
-        : Math.max(slotEnd, segStart + trueAudioDuration);
+        : null;
+      const detectedLeadSkipSec = leadingSilenceCacheRef.current.get(rawUrl) ?? 0;
 
-      const inRange = now >= (segStart - 0.02) && now < effectiveSegEnd;
+      const syncTarget = computeSegmentAudioSyncTarget({
+        seg,
+        now,
+        audioDuration: knownDuration,
+        detectedLeadSkipSec,
+        lookaheadSec: 0.035,
+      });
+
+      const {
+        segStart,
+        effectiveSegEnd,
+        segAudioOffset,
+        expectedOffset,
+        segAudioEndLimit,
+        inRange,
+      } = syncTarget;
+
+      // Warm leading-silence probe 250ms ahead if user jumped straight to an un-preloaded clip
+      if (segAudioOffset === 0 && !seg.userTrimmed && !leadingSilenceCacheRef.current.has(rawUrl)) {
+        probeUrlLeadingSilence(rawUrl);
+      }
 
       // Smart Auto-Ducking on Overlapping Dialogues (50% Auto Duck):
       // If next dialogue starts while this one is still speaking, auto-duck this clip to 50% volume!
       const isOverlappedByNext = segments.some((nextSeg, nextIdx) => {
         if (nextIdx <= idx) return false;
         if (nextSeg.muted || nextSeg.isMuted) return false;
-        const nextStart = (typeof nextSeg.audioStartSec === "number" && !isNaN(nextSeg.audioStartSec))
+        const nextStart = (typeof nextSeg.audioStartSec === 'number' && !isNaN(nextSeg.audioStartSec))
           ? nextSeg.audioStartSec
-          : (typeof nextSeg.startSec === "number" && !isNaN(nextSeg.startSec)
+          : (typeof nextSeg.startSec === 'number' && !isNaN(nextSeg.startSec)
             ? nextSeg.startSec
             : parseTimeToSeconds(nextSeg.audioStart ?? nextSeg.start, 0));
         return nextStart > segStart && nextStart < effectiveSegEnd && now >= (nextStart - 0.04);
@@ -379,37 +555,72 @@ function VideoPlayerPreview({
 
       const effectiveVol = isOverlappedByNext ? parseFloat((targetVol * 0.50).toFixed(2)) : targetVol;
 
-      const rawOffset = (typeof seg.audioOffset === 'number' && !isNaN(seg.audioOffset)) ? seg.audioOffset : 0;
-      // Stale offset safety guard: if offset >= segDur, clip was newly regenerated or offset is invalid -> fallback to 0
-      const segAudioOffset = (segDur > 0 && rawOffset >= segDur) ? 0 : Math.max(0, rawOffset);
-      const segAudioEndLimit = (isTrimmed && typeof seg.audioDurationSec === 'number')
-        ? (segAudioOffset + seg.audioDurationSec)
-        : (isTrimmed && typeof seg.audioEndSec === 'number' && typeof seg.audioStartSec === 'number'
-          ? (segAudioOffset + (seg.audioEndSec - seg.audioStartSec))
-          : null);
-
       if (inRange) {
-        const expectedOffset = segAudioOffset + Math.max(0, now - segStart);
-        let activeItem = activeSegmentAudiosRef.current[segKey];
-
         if (!activeItem) {
-          const audio = getSegmentAudio(rawUrl);
+          const audio = getSegmentAudio(rawUrl, segStart);
           if (audio) {
             audio.volume = effectiveVol;
             audio.playbackRate = currentRate;
-            // Seek accurately to expected offset including slice audioOffset
-            if (Math.abs(audio.currentTime - expectedOffset) > 0.08) {
-              try { audio.currentTime = expectedOffset; } catch (_) {}
+
+            let cleanupMetadataListener = null;
+            if (audio.readyState >= 1) {
+              if (Math.abs(audio.currentTime - expectedOffset) > 0.015) {
+                try {
+                  const bounded = Number.isFinite(audio.duration) && audio.duration > 0
+                    ? Math.min(expectedOffset, Math.max(0, audio.duration - 0.02))
+                    : expectedOffset;
+                  audio.currentTime = bounded;
+                } catch (_) {}
+              }
+            } else {
+              // Cold buffer guard: seek immediately to live timeline position once metadata decodes
+              const onLoadedMetadata = () => {
+                cleanupMetadataListener = null;
+                const curItem = activeSegmentAudiosRef.current[segKey];
+                if (!curItem || curItem.url !== rawUrl) return;
+                const liveV = videoRef?.current;
+                const { videoClips: liveVc } = segAudioConfigRef.current;
+                const liveTlNow = (liveV && Array.isArray(liveVc) && liveVc.length > 0)
+                  ? (mapSourceToTimelineTime(liveV.currentTime || 0, liveVc) ?? currentTimeRef.current)
+                  : (liveV?.currentTime ?? currentTimeRef.current);
+                const freshSkip = (segAudioOffset === 0 && !seg.userTrimmed)
+                  ? (leadingSilenceCacheRef.current.get(rawUrl) ?? 0)
+                  : 0;
+                const liveBase = segAudioOffset + freshSkip;
+                const liveExpected = liveBase + Math.max(0, (Number.isFinite(liveTlNow) ? liveTlNow : segStart) - segStart);
+                const maxPos = Number.isFinite(audio.duration) && audio.duration > 0 ? Math.max(0, audio.duration - 0.02) : liveExpected;
+                try {
+                  audio.currentTime = Math.max(0, Math.min(liveExpected, maxPos));
+                } catch (_) {}
+                curItem.lastSeekPerf = performance.now();
+                curItem.cleanupMetadataListener = null;
+              };
+              audio.addEventListener('loadedmetadata', onLoadedMetadata, { once: true });
+              cleanupMetadataListener = () => {
+                audio.removeEventListener('loadedmetadata', onLoadedMetadata);
+              };
             }
+
             if (audio.paused) {
               audio.play().catch((err) => {
                 if (err.name !== 'AbortError') console.warn('Segment audio play notice:', err);
               });
             }
-            activeSegmentAudiosRef.current[segKey] = { audio, segKey, segStart, segEnd: effectiveSegEnd, segAudioEndLimit, hasEnded: false };
+            activeSegmentAudiosRef.current[segKey] = {
+              audio,
+              url: rawUrl,
+              segKey,
+              segStart,
+              segEnd: effectiveSegEnd,
+              segAudioEndLimit,
+              hasEnded: false,
+              lastSeekPerf: performance.now(),
+              cleanupMetadataListener,
+            };
           }
         } else {
           const audio = activeItem.audio;
+          activeItem.segAudioEndLimit = segAudioEndLimit;
           if (audio.volume !== effectiveVol) audio.volume = effectiveVol;
 
           // Check if audio finished natural sentence duration or reached the split slice end limit
@@ -423,59 +634,63 @@ function VideoPlayerPreview({
               audio.play().catch(() => {});
             }
 
-            // CRITICAL AUDIO SMOOTHNESS WITH HYSTERESIS:
-            // Never hard-seek audio on micro-drifts during forward playback!
-            const drift = expectedOffset - audio.currentTime;
-            const absDrift = Math.abs(drift);
-            const isNudged = Math.abs(audio.playbackRate - currentRate) > 0.005;
+            // Tight 3-Tier Sync (<= 35ms lock, 35-120ms hysteresis rate nudge, > 120ms debounced seek)
+            if (audio.readyState >= 2 && !audio.seeking) {
+              const drift = expectedOffset - audio.currentTime;
+              const absDrift = Math.abs(drift);
+              const isNudged = Math.abs(audio.playbackRate - currentRate) > 0.005;
+              const nowPerf = performance.now();
 
-            if (absDrift > 0.50) {
-              // Severe desync (user scrub or seek): resync time cleanly
-              try { audio.currentTime = expectedOffset; } catch (_) {}
-              if (audio.playbackRate !== currentRate) audio.playbackRate = currentRate;
-            } else if (isNudged) {
-              // Nudge is currently active: maintain until recovered below 20ms hysteresis threshold
-              if (absDrift < 0.020) {
-                audio.playbackRate = currentRate;
-              } else {
-                const rateMultiplier = drift > 0 ? 1.04 : 0.96;
+              if (absDrift > 0.120 && (nowPerf - (activeItem.lastSeekPerf || 0)) >= 250) {
+                try {
+                  const maxPos = Number.isFinite(audio.duration) && audio.duration > 0 ? Math.max(0, audio.duration - 0.02) : (expectedOffset + 0.015);
+                  audio.currentTime = Math.max(0, Math.min(expectedOffset + 0.015, maxPos));
+                } catch (_) {}
+                activeItem.lastSeekPerf = nowPerf;
+                if (audio.playbackRate !== currentRate) audio.playbackRate = currentRate;
+              } else if (isNudged) {
+                if (absDrift < 0.015) {
+                  audio.playbackRate = currentRate;
+                } else {
+                  const rateMultiplier = drift > 0 ? 1.10 : 0.90;
+                  audio.playbackRate = parseFloat((currentRate * rateMultiplier).toFixed(3));
+                }
+              } else if (absDrift >= 0.035) {
+                const rateMultiplier = drift > 0 ? 1.10 : 0.90;
                 audio.playbackRate = parseFloat((currentRate * rateMultiplier).toFixed(3));
               }
-            } else if (absDrift >= 0.060) {
-              // Exceeded 60ms tolerance: activate bounded rate nudge
-              const rateMultiplier = drift > 0 ? 1.04 : 0.96;
-              audio.playbackRate = parseFloat((currentRate * rateMultiplier).toFixed(3));
             }
           }
         }
       } else {
         if (activeSegmentAudiosRef.current[segKey]) {
-          const audio = activeSegmentAudiosRef.current[segKey].audio;
-          if (!audio.paused) {
-            audio.pause();
+          const item = activeSegmentAudiosRef.current[segKey];
+          item.cleanupMetadataListener?.();
+          if (!item.audio.paused) {
+            item.audio.pause();
           }
-          audio.playbackRate = currentRate;
+          item.audio.playbackRate = currentRate;
           delete activeSegmentAudiosRef.current[segKey];
         }
       }
     });
-  }, [videoRef]);
+  }, [videoRef, stopAllSegmentAudios, getSegmentAudio, probeUrlLeadingSilence]);
 
-  // PERF: During playback, sync segment audio via RAF loop (bypasses React re-render entirely)
+  // PERF: During playback, sync segment audio & Clean Demucs BGM via ~60Hz RAF loop (bypasses React re-render)
   useEffect(() => {
     if (!isPlaying) {
       stopAllSegmentAudios();
       return;
     }
 
-    const { hasSegmentAudios: hsa, renderedVideo: rv } = segAudioConfigRef.current;
-    if (rv || !hsa) {
+    const { hasSegmentAudios: hsa, renderedVideo: rv, voiceSettings: vs0, cleanBgAudioUrl: bgUrl0 } = segAudioConfigRef.current;
+    if (rv || (!hsa && !(vs0?.enableDemucs && bgUrl0))) {
       stopAllSegmentAudios();
       return;
     }
 
-    // Pause master narration audio to prevent double-audio/echo
-    if (narrationAudioRef.current && !narrationAudioRef.current.paused) {
+    // Pause master narration audio to prevent double-audio/echo when playing direct segments
+    if (hsa && narrationAudioRef.current && !narrationAudioRef.current.paused) {
       narrationAudioRef.current.pause();
     }
 
@@ -483,21 +698,34 @@ function VideoPlayerPreview({
     let lastSyncPerf = 0;
     const syncLoop = () => {
       const nowPerf = performance.now();
-      // Throttle audio sync to ~20Hz (50ms) — audio elements self-play, we only need periodic correction
-      if (nowPerf - lastSyncPerf >= 50) {
+      if (nowPerf - lastSyncPerf >= 14) {
         lastSyncPerf = nowPerf;
         const v = videoRef?.current;
-        const { videoClips: vc } = segAudioConfigRef.current;
-        const tlNow = (v && Array.isArray(vc) && vc.length > 0)
-          ? (mapSourceToTimelineTime(v.currentTime || 0, vc) ?? currentTimeRef.current)
-          : (v?.currentTime ?? currentTimeRef.current);
-        syncSegmentAudiosAtTime(tlNow);
+        const { videoClips: vc, hasSegmentAudios: curHsa, voiceSettings: vs, cleanBgAudioUrl: bgUrl } = segAudioConfigRef.current;
+
+        if (curHsa) {
+          const tlNow = (v && Array.isArray(vc) && vc.length > 0)
+            ? (mapSourceToTimelineTime(v.currentTime || 0, vc) ?? currentTimeRef.current)
+            : (v?.currentTime ?? currentTimeRef.current);
+          syncSegmentAudiosAtTime(tlNow);
+        }
+
+        // Tight 60Hz Clean Demucs BGM sync
+        const bg = cleanBgAudioRef.current;
+        if (bg && vs?.enableDemucs && bgUrl && v && !v.paused && Number.isFinite(v.currentTime)) {
+          const baseRate = v.playbackRate || 1.0;
+          if (bg.playbackRate !== baseRate) bg.playbackRate = baseRate;
+          if (bg.readyState >= 1 && !bg.seeking && Math.abs(bg.currentTime - v.currentTime) > 0.04) {
+            bg.currentTime = v.currentTime;
+          }
+          if (bg.paused) bg.play().catch(() => {});
+        }
       }
       animId = requestAnimationFrame(syncLoop);
     };
     animId = requestAnimationFrame(syncLoop);
     return () => cancelAnimationFrame(animId);
-  }, [isPlaying, syncSegmentAudiosAtTime]);
+  }, [isPlaying, syncSegmentAudiosAtTime, stopAllSegmentAudios, videoRef, hasSegmentAudios, cleanBgAudioUrl, voiceSettings?.enableDemucs]);
 
   // Helper: Idempotent audio play to prevent promise rejection warnings & duplicate starts
   const safePlayNarration = (a) => {
@@ -596,6 +824,16 @@ function VideoPlayerPreview({
     };
 
     const handleSync = () => {
+      // Sync Clean Demucs BGM (no_vocals.wav) with video regardless of segment vs master narration mode
+      const { voiceSettings: vs, cleanBgAudioUrl: bgUrl } = segAudioConfigRef.current;
+      const bg = cleanBgAudioRef.current;
+      if (bg && !renderedVideo && vs?.enableDemucs && bgUrl && !v.paused) {
+        if (bg.paused) bg.play().catch(() => {});
+        if (Number.isFinite(v.currentTime) && Math.abs(bg.currentTime - v.currentTime) > 0.04) {
+          bg.currentTime = v.currentTime;
+        }
+      }
+
       const a = narrationAudioRef.current;
       if (!a || renderedVideo || !audioGenerated || !fullAudioUrl || hasSegmentAudios) return;
 
@@ -642,22 +880,20 @@ function VideoPlayerPreview({
         // Tier 1: Drift is < 40ms; preserve nominal rate
         a.playbackRate = baseRate;
       }
-
-      // Sync Clean Demucs BGM (no_vocals.wav) with video
-      const bg = cleanBgAudioRef.current;
-      if (bg && voiceSettings?.enableDemucs && cleanBgAudioUrl && !v.paused) {
-        if (bg.paused) bg.play().catch(() => {});
-        if (Number.isFinite(v.currentTime) && Math.abs(bg.currentTime - v.currentTime) > 0.08) {
-          bg.currentTime = v.currentTime;
-        }
-      }
     };
 
     const handlePlay = () => {
+      const { voiceSettings: vs, cleanBgAudioUrl: bgUrl } = segAudioConfigRef.current;
       const bg = cleanBgAudioRef.current;
-      if (bg && voiceSettings?.enableDemucs && cleanBgAudioUrl) {
+      if (bg && !renderedVideo && vs?.enableDemucs && bgUrl) {
         if (Number.isFinite(v.currentTime)) bg.currentTime = v.currentTime;
         bg.play().catch(() => {});
+      }
+
+      if (hasSegmentAudios && !renderedVideo) {
+        const tlNow = getTargetTimelineTime();
+        preloadSegmentsAroundTime(tlNow);
+        syncSegmentAudiosAtTime(tlNow);
       }
 
       const a = narrationAudioRef.current;
@@ -708,10 +944,19 @@ function VideoPlayerPreview({
     };
 
     const handleSeeked = () => {
+      const { voiceSettings: vs, cleanBgAudioUrl: bgUrl } = segAudioConfigRef.current;
       const bg = cleanBgAudioRef.current;
-      if (bg && voiceSettings?.enableDemucs && cleanBgAudioUrl) {
+      if (bg && !renderedVideo && vs?.enableDemucs && bgUrl) {
         if (Number.isFinite(v.currentTime)) bg.currentTime = v.currentTime;
         if (!v.paused) bg.play().catch(() => {});
+      }
+
+      if (hasSegmentAudios && !renderedVideo) {
+        const tlNow = getTargetTimelineTime();
+        preloadSegmentsAroundTime(tlNow);
+        if (!v.paused) {
+          syncSegmentAudiosAtTime(tlNow);
+        }
       }
 
       const a = narrationAudioRef.current;
@@ -786,7 +1031,7 @@ function VideoPlayerPreview({
         narrationAudioRef.current.playbackRate = 1.0;
       }
     };
-  }, [videoRef, renderedVideo, audioGenerated, fullAudioUrl, hasSegmentAudios, videoClips]);
+  }, [videoRef, renderedVideo, audioGenerated, fullAudioUrl, hasSegmentAudios, videoClips, preloadSegmentsAroundTime, syncSegmentAudiosAtTime, stopAllSegmentAudios]);
 
   // Pre-calculate speaking intervals once per script change (ultra-fast O(1) checks during 60fps playback)
   const speakingIntervals = React.useMemo(() => {
@@ -905,6 +1150,20 @@ function VideoPlayerPreview({
   }, [currentTime, audioGenerated, audioOutdated, fullAudioUrl, renderedVideo, scriptData, voiceSettings, videoClips, videoRef]);
 
   const currentVideoSrc = (typeof renderedVideo === 'string' ? renderedVideo : renderedVideo?.outputVideoUrl) || selectedVideo?.videoUrl;
+  const prevVideoSrcRef = useRef(currentVideoSrc);
+  useEffect(() => {
+    if (prevVideoSrcRef.current && prevVideoSrcRef.current !== currentVideoSrc) {
+      isPlayPendingRef.current = false;
+      stopAllSegmentAudios();
+      if (narrationAudioRef.current && !narrationAudioRef.current.paused) {
+        narrationAudioRef.current.pause();
+      }
+      if (cleanBgAudioRef.current && !cleanBgAudioRef.current.paused) {
+        cleanBgAudioRef.current.pause();
+      }
+    }
+    prevVideoSrcRef.current = currentVideoSrc;
+  }, [currentVideoSrc, stopAllSegmentAudios]);
 
   const handleInternalLoadedMetadata = (e) => {
     if (onLoadedMetadata) onLoadedMetadata(e);
@@ -999,27 +1258,57 @@ function VideoPlayerPreview({
     }
   };
 
-  const getCanvasAspectRatio = () => '16/9';
+  const targetRatio = aspectRatio === '9:16'
+    ? (9 / 16)
+    : (aspectRatio === '1:1' ? 1 : (16 / 9));
+  const aspectCssRatio = aspectRatio === '9:16'
+    ? '9 / 16'
+    : (aspectRatio === '1:1' ? '1 / 1' : '16 / 9');
+  const frameModeClass = aspectRatio === '9:16'
+    ? 'is-aspect-frame is-portrait-frame'
+    : (aspectRatio === '1:1' ? 'is-aspect-frame is-square-frame' : 'is-aspect-frame is-landscape-frame');
+
+  const framedStageStyle = React.useMemo(() => {
+    const padPx = isFullscreen ? 24 : 16;
+    const availW = Math.max(80, (canvasBounds.width || 0) - padPx);
+    const availH = Math.max(80, (canvasBounds.height || 0) - padPx);
+    let stageW = 0;
+    let stageH = 0;
+    if (canvasBounds.width > 0 && canvasBounds.height > 0) {
+      stageW = Math.floor(Math.min(availW, availH * targetRatio));
+      stageH = Math.floor(stageW / targetRatio);
+    }
+    const useHeightDrivenFallback = aspectRatio === '9:16' || aspectRatio === '1:1';
+    return {
+      width: stageW > 0 ? `${stageW}px` : (useHeightDrivenFallback ? 'auto' : `calc(100% - ${padPx}px)`),
+      height: stageH > 0 ? `${stageH}px` : (useHeightDrivenFallback ? `calc(100% - ${padPx}px)` : 'auto'),
+      ...(stageW === 0 ? { aspectRatio: aspectCssRatio } : {}),
+      maxWidth: `calc(100% - ${padPx}px)`,
+      maxHeight: `calc(100% - ${padPx}px)`,
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      background: '#000000',
+    };
+  }, [aspectRatio, targetRatio, aspectCssRatio, isFullscreen, canvasBounds.width, canvasBounds.height]);
+
+  const videoObjectFit = (!renderedVideo && aspectRatio === '9:16' && verticalStyle === 'crop') ? 'cover' : 'contain';
 
   return (
     <div className={`capcut-player-panel ${isFullscreen ? 'is-fullscreen-active' : ''}`} ref={containerRef}>
-      {/* Video View Canvas (Fixed 1920x1080 Landscape 16:9) */}
-      <div className={`player-canvas-container is-full-view ${isFullscreen ? 'is-fullscreen' : ''}`}>
+      {/* Video View Canvas (Synced dynamically to 16:9 / 9:16 / 1:1) */}
+      <div
+        ref={canvasContainerRef}
+        className={`player-canvas-container is-stage-host ${isFullscreen ? 'is-fullscreen' : ''}`}
+      >
         <div
-          className={`player-canvas-area is-full-view ${isFullscreen ? 'is-fullscreen' : ''}`}
-          style={{
-            width: '100%',
-            height: '100%',
-            maxWidth: '100%',
-            maxHeight: '100%',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            background: '#000000',
-          }}
+          className={`player-canvas-area ${frameModeClass} ${isFullscreen ? 'is-fullscreen' : ''}`}
+          data-aspect-ratio={aspectRatio}
+          data-testid="player-aspect-frame"
+          style={framedStageStyle}
         >
           {currentVideoSrc ? (
-            <div style={{ position: 'relative', width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <div className="player-stage-viewport" data-testid="player-stage-viewport">
               <video
                 ref={videoRef}
                 src={currentVideoSrc}
@@ -1034,7 +1323,7 @@ function VideoPlayerPreview({
                   height: '100%',
                   maxWidth: '100%',
                   maxHeight: '100%',
-                  objectFit: 'contain',
+                  objectFit: videoObjectFit,
                   cursor: 'pointer',
                   display: 'block',
                   backgroundColor: '#000000',
@@ -1146,6 +1435,15 @@ function VideoPlayerPreview({
                 </div>
               )}
 
+              {/* Preview Blur Strip Approximation for 9:16 Crop with Landscape Source */}
+              {showPreviewCropBlurBand && (
+                <div
+                  className="preview-crop-sub-blur-strip"
+                  data-testid="preview-crop-sub-blur-strip"
+                  aria-hidden="true"
+                />
+              )}
+
               {/* Subtitle Overlay */}
               <LiveSubtitleOverlay
                 activeSegment={activeSegment}
@@ -1153,6 +1451,7 @@ function VideoPlayerPreview({
                 renderedVideo={renderedVideo}
                 currentTime={effectiveTimelineTime}
                 aspectRatio={aspectRatio}
+                verticalStyle={verticalStyle}
                 videoMeta={videoMeta}
               />
 
@@ -1161,6 +1460,7 @@ function VideoPlayerPreview({
                 voiceSettings={voiceSettings}
                 renderedVideo={renderedVideo}
                 aspectRatio={aspectRatio}
+                verticalStyle={verticalStyle}
                 videoMeta={videoMeta}
               />
 
@@ -1169,6 +1469,8 @@ function VideoPlayerPreview({
                 voiceSettings={voiceSettings}
                 renderedVideo={renderedVideo}
                 aspectRatio={aspectRatio}
+                verticalStyle={verticalStyle}
+                videoMeta={videoMeta}
               />
             </div>
           ) : (

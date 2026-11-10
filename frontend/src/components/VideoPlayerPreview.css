@@ -46,9 +46,9 @@
   padding: 0 !important;
 }
 
-.capcut-player-panel:fullscreen .player-canvas-area,
-.capcut-player-panel:-webkit-full-screen .player-canvas-area,
-.capcut-player-panel.is-fullscreen-active .player-canvas-area {
+.capcut-player-panel:fullscreen .player-canvas-area:not(.is-aspect-frame):not(.is-portrait-frame),
+.capcut-player-panel:-webkit-full-screen .player-canvas-area:not(.is-aspect-frame):not(.is-portrait-frame),
+.capcut-player-panel.is-fullscreen-active .player-canvas-area:not(.is-aspect-frame):not(.is-portrait-frame) {
   width: 100% !important;
   height: 100% !important;
   max-width: 100vw !important;
@@ -136,7 +136,8 @@
   min-height: 0;
 }
 
-.player-canvas-container.is-full-view {
+.player-canvas-container.is-full-view,
+.player-canvas-container.is-stage-host {
   padding: 0 !important;
 }
 
@@ -165,6 +166,14 @@
   border-radius: 0 !important;
   border: none !important;
   box-shadow: none !important;
+}
+
+.player-canvas-area.is-aspect-frame,
+.player-canvas-area.is-portrait-frame {
+  border-radius: 10px !important;
+  border: 1px solid rgba(255, 255, 255, 0.16) !important;
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.72) !important;
+  aspect-ratio: auto;
 }
 
 .phone-mockup-frame {
@@ -218,6 +227,33 @@
   text-align: center;
 }
 
+.player-stage-viewport {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  container-type: inline-size;
+  container-name: player-frame;
+}
+
+.preview-crop-sub-blur-strip {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  width: 100%;
+  height: 17.2%;
+  z-index: 8;
+  pointer-events: none;
+  background: rgba(0, 0, 0, 0.25);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
 /* Video Subtitle Overlay */
 .live-subtitle-overlay {
   position: absolute;
@@ -237,24 +273,34 @@
 }
 
 .live-subtitle-overlay.aspect-9-16-vertical.size-small,
+.live-subtitle-overlay.aspect-9-16-letterbox.size-small,
 .live-subtitle-overlay.aspect-9-16.size-small {
-  font-size: clamp(0.44rem, 0.85vw, 0.52rem);
-  padding: 2px 6px;
-  border-radius: 4px;
+  font-size: clamp(0.62rem, 1.4vw, 0.80rem);
+  font-size: clamp(0.56rem, 3.4cqw, 1.75rem);
+  padding: 3px 8px;
+  border-radius: 5px;
 }
 
 .live-subtitle-overlay.aspect-9-16-vertical.size-medium,
+.live-subtitle-overlay.aspect-9-16-letterbox.size-medium,
 .live-subtitle-overlay.aspect-9-16.size-medium {
-  font-size: clamp(0.50rem, 0.95vw, 0.58rem);
-  padding: 2.5px 8px;
-  border-radius: 4px;
+  font-size: clamp(0.72rem, 1.7vw, 0.96rem);
+  font-size: clamp(0.68rem, 4cqw, 2.25rem);
+  padding: 4px 10px;
+  border-radius: 6px;
 }
 
 .live-subtitle-overlay.aspect-9-16-vertical.size-large,
+.live-subtitle-overlay.aspect-9-16-letterbox.size-large,
 .live-subtitle-overlay.aspect-9-16.size-large {
-  font-size: clamp(0.58rem, 1.1vw, 0.68rem);
-  padding: 3px 10px;
-  border-radius: 5px;
+  font-size: clamp(0.84rem, 2.0vw, 1.15rem);
+  font-size: clamp(0.80rem, 4.8cqw, 2.75rem);
+  padding: 5px 12px;
+  border-radius: 7px;
+}
+
+.live-subtitle-overlay.aspect-9-16-letterbox {
+  bottom: 36.5%;
 }
 
 /* Sizes for standard 16:9 mode */
@@ -314,8 +360,11 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  padding: 30px;
-  gap: 12px;
+  padding: 16px;
+  gap: 8px;
+  max-width: 100%;
+  max-height: 100%;
+  text-align: center;
 }
 
 .player-bottom-bar {

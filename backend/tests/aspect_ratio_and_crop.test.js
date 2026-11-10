@@ -1,5 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const os = require('os');
 const path = require('path');
 const fs = require('fs');
 const { execSync } = require('child_process');
@@ -7,11 +8,15 @@ const { execSync } = require('child_process');
 const {
   renderDubbedVideoWithDucking,
   generateKhmerAssSubtitleFile,
+  buildVerticalVideoFilterChain,
   getVideoDimensionsFast,
 } = require('../services/ffmpegService');
 
 const {
   resolveDefaultAspectRatio,
+  resolveStickyVoiceSettings,
+  isRenderedRatioMismatch,
+  inferRenderedAspectRatio,
 } = require('../../frontend/src/utils/projectStorage');
 
 function probeVideo(filePath) {
@@ -32,16 +37,53 @@ test('Aspect Ratio: resolveDefaultAspectRatio unit tests', () => {
   assert.equal(resolveDefaultAspectRatio(null, null), null, 'Null dimensions must resolve to null');
 });
 
-test('Aspect Ratio & 9:16 Framing: End-to-end render verification (a)-(e)', async () => {
-  const outDir = path.resolve(__dirname, '../uploads/test_verification_export');
-  if (!fs.existsSync(outDir)) {
-    fs.mkdirSync(outDir, { recursive: true });
-  }
+test('Aspect Ratio: Sticky persistence preserves last user choice across episode switches & stale renderedVideo', () => {
+  // User manually selected 16:9 -> switching to episode with stale 9:16 voiceSettings MUST stay 16:9
+  const afterSwitch = resolveStickyVoiceSettings({
+    prevSettings: { aspectRatio: '16:9', voiceId: 'km-KH-PisethNeural' },
+    savedGlobalSettings: { aspectRatio: '16:9' },
+    episodeVoiceSettings: { aspectRatio: '9:16', duckingVolume: 0.2 },
+  });
+  assert.equal(afterSwitch.aspectRatio, '16:9', 'Sticky 16:9 must never be overwritten by stale ep.voiceSettings');
+  assert.equal(afterSwitch.duckingVolume, 0.2, 'Other per-episode voiceSettings must still merge cleanly');
 
+  // After browser reload (prevSettings fresh, savedGlobalSettings has sticky 9:16) -> must keep 9:16
+  const afterReload = resolveStickyVoiceSettings({
+    prevSettings: { aspectRatio: null },
+    savedGlobalSettings: { aspectRatio: '9:16' },
+    episodeVoiceSettings: { aspectRatio: '16:9' },
+  });
+  assert.equal(afterReload.aspectRatio, '9:16', 'Saved localStorage ratio must win on reload');
+
+  // User has NEVER manually clicked (null everywhere) -> must stay null so source dimensions govern default
+  const untouched = resolveStickyVoiceSettings({
+    prevSettings: { aspectRatio: null },
+    savedGlobalSettings: { aspectRatio: null },
+    episodeVoiceSettings: { aspectRatio: '9:16' },
+  });
+  assert.equal(untouched.aspectRatio, null, 'Stale episode aspectRatio must not override unclicked default (null)');
+
+  // Legacy renderedVideo mismatch guard
+  const staleVertRender = { outputFilename: 'ភាគទី 2 (EP2) [9-16 TikTok Reels].mp4' };
+  assert.equal(inferRenderedAspectRatio(staleVertRender, { width: 1920, height: 1080 }), '9:16');
+  assert.equal(isRenderedRatioMismatch(staleVertRender, '16:9', { width: 1920, height: 1080 }), true);
+  assert.equal(isRenderedRatioMismatch(staleVertRender, '9:16', { width: 1920, height: 1080 }), false);
+
+  const explicitLandRender = { outputFilename: 'ep_vert.mp4', aspectRatio: '16:9' };
+  assert.equal(isRenderedRatioMismatch(explicitLandRender, '9:16', { width: 1080, height: 1920 }), true);
+  assert.equal(isRenderedRatioMismatch(explicitLandRender, '16:9', { width: 1080, height: 1920 }), false);
+});
+
+test('Aspect Ratio & 9:16 Framing: End-to-end render verification (a)-(e)', async () => {
   const ep2Source = path.resolve(__dirname, '../uploads/test_media/ep_2_source.mp4');
   if (!fs.existsSync(ep2Source)) {
     console.log('[Aspect Ratio Test] ep_2_source.mp4 not found, skipping render test');
     return;
+  }
+
+  const outDir = path.resolve(__dirname, '../uploads/test_verification_export');
+  if (!fs.existsSync(outDir)) {
+    fs.mkdirSync(outDir, { recursive: true });
   }
 
   const tempToneAudio = path.join(outDir, 'test_tone.wav');
@@ -146,5 +188,221 @@ test('Aspect Ratio & 9:16 Framing: End-to-end render verification (a)-(e)', asyn
   const probeE2 = probeVideo(outE2);
   assert.equal(probeE2.width, 1080);
   assert.equal(probeE2.height, 1920);
+
+  // (f) Square (1:1) source forced to 16:9 -> 1920x1080
+  const tempSquareSource = path.join(outDir, 'test_square_source.mp4');
+  if (!fs.existsSync(tempSquareSource)) {
+    execSync(
+      `ffmpeg -y -f lavfi -i "color=c=darkgreen:s=1080x1080:d=3" -i "${tempToneAudio}" -c:v libx264 -pix_fmt yuv420p -c:a aac -shortest "${tempSquareSource}"`
+    );
+  }
+  const outF = path.join(outDir, 'test_out_scenario_f_square_to_16x9.mp4');
+  await renderDubbedVideoWithDucking({
+    inputVideoPath: tempSquareSource,
+    masterAudioPath: tempToneAudio,
+    fullAudioPath: tempToneAudio,
+    outputVideoPath: outF,
+    aspectRatio: '16:9',
+    burnSubtitles: false,
+  });
+  const probeF = probeVideo(outF);
+  assert.equal(probeF.width, 1920);
+  assert.equal(probeF.height, 1080);
+});
+
+test('9:16 Vertical Filter Chain: buildVerticalVideoFilterChain blurs subtitle band only when requested', () => {
+  // 1. 9:16 crop with subtitle band blur enabled (prior to ASS burn)
+  const cropBlurChain = buildVerticalVideoFilterChain({
+    inputLabel: '[0:v:0]',
+    outputLabel: '[base_vert]',
+    verticalStyle: 'crop',
+    blurSubtitleBand: true,
+  });
+  assert.equal(cropBlurChain.length, 3);
+  assert.ok(cropBlurChain[0].includes('scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920:(in_w-1080)/2:(in_h-1920)/2,setsar=1,split[v_vert_main][v_vert_band_src]'));
+  assert.equal(
+    cropBlurChain[1],
+    '[v_vert_band_src]crop=1080:328:0:1592,boxblur=luma_radius=24:luma_power=2:chroma_radius=24:chroma_power=2,eq=brightness=-0.08[v_vert_sub_blur]'
+  );
+  assert.equal(cropBlurChain[2], '[v_vert_main][v_vert_sub_blur]overlay=0:1592[base_vert]');
+
+  // 2. 9:16 crop without blur (burnSubtitles=false) stays single-step untouched
+  const cropNoBlur = buildVerticalVideoFilterChain({
+    inputLabel: '[0:v:0]',
+    outputLabel: '[final_video]',
+    verticalStyle: 'crop',
+    blurSubtitleBand: false,
+  });
+  assert.deepEqual(cropNoBlur, [
+    '[0:v:0]scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920:(in_w-1080)/2:(in_h-1920)/2,setsar=1[final_video]',
+  ]);
+
+  // 3. 9:16 pad mode without blur stays byte-for-byte untouched
+  const padChain = buildVerticalVideoFilterChain({
+    inputLabel: '[0:v:0]',
+    outputLabel: '[base_vert]',
+    verticalStyle: 'pad',
+    blurSubtitleBand: false,
+  });
+  assert.deepEqual(padChain, [
+    '[0:v:0]scale=1080:-2:force_original_aspect_ratio=decrease,pad=1080:1920:(1080-iw)/2:(1920-ih)/2:color=black,setsar=1[base_vert]',
+  ]);
+});
+
+test('9:16 Crop Export: Blurs bottom source subtitle band while keeping upper frame sharp & pad/16:9 untouched', async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dragondub-blur-band-'));
+  try {
+    const toneWav = path.join(tmpDir, 'tone.wav');
+    execSync(`ffmpeg -y -f lavfi -i "sine=frequency=440:duration=2" -c:a pcm_s16le "${toneWav}"`, { stdio: 'ignore' });
+
+    // Synthetic 1280x720 landscape source with high-contrast vertical stripes in BOTH:
+    // - upper subject region (y=120..260 -> scaled y=320..693)
+    // - bottom Chinese subtitle region (y=604..648 -> scaled y=1610..1728)
+    const synthLandscape = path.join(tmpDir, 'synth_landscape.mp4');
+    execSync(
+      `ffmpeg -y -f lavfi -i "color=c=#1b2436:s=1280x720:d=2,geq=lum='if((between(Y,120,260)+between(Y,604,648))*gt(mod(X,12),5),245,35)':cb=128:cr=128" -i "${toneWav}" -c:v libx264 -pix_fmt yuv420p -c:a aac -shortest "${synthLandscape}"`,
+      { stdio: 'ignore' }
+    );
+
+    const synthPortrait = path.join(tmpDir, 'synth_portrait.mp4');
+    execSync(
+      `ffmpeg -y -f lavfi -i "color=c=#1b2436:s=720x1280:d=2,geq=lum='if((between(Y,220,380)+between(Y,1072,1150))*gt(mod(X,16),7),245,35)':cb=128:cr=128" -i "${toneWav}" -c:v libx264 -pix_fmt yuv420p -c:a aac -shortest "${synthPortrait}"`,
+      { stdio: 'ignore' }
+    );
+
+    const outUnblurred = path.join(tmpDir, 'out_crop_unblurred.mp4');
+    const outBlurred = path.join(tmpDir, 'out_crop_blurred.mp4');
+    const outPad = path.join(tmpDir, 'out_pad.mp4');
+    const out16x9 = path.join(tmpDir, 'out_16x9.mp4');
+    const outPortraitBlur = path.join(tmpDir, 'out_portrait_blurred.mp4');
+
+    await renderDubbedVideoWithDucking({
+      inputVideoPath: synthLandscape,
+      masterAudioPath: toneWav,
+      fullAudioPath: toneWav,
+      outputVideoPath: outUnblurred,
+      aspectRatio: '9:16',
+      verticalStyle: 'crop',
+      burnSubtitles: false,
+    });
+
+    await renderDubbedVideoWithDucking({
+      inputVideoPath: synthLandscape,
+      masterAudioPath: toneWav,
+      fullAudioPath: toneWav,
+      outputVideoPath: outBlurred,
+      aspectRatio: '9:16',
+      verticalStyle: 'crop',
+      burnSubtitles: true,
+      segments: [{ startSec: 0.1, duration: 1.8, khmerText: 'សាកល្បងអក្សរខ្មែរច្បាស់' }],
+    });
+
+    await renderDubbedVideoWithDucking({
+      inputVideoPath: synthLandscape,
+      masterAudioPath: toneWav,
+      fullAudioPath: toneWav,
+      outputVideoPath: outPad,
+      aspectRatio: '9:16',
+      verticalStyle: 'pad',
+      burnSubtitles: true,
+      segments: [{ startSec: 0.1, duration: 1.8, khmerText: 'សាកល្បងម៉ូដ Pad' }],
+    });
+
+    await renderDubbedVideoWithDucking({
+      inputVideoPath: synthLandscape,
+      masterAudioPath: toneWav,
+      fullAudioPath: toneWav,
+      outputVideoPath: out16x9,
+      aspectRatio: '16:9',
+      burnSubtitles: true,
+      segments: [{ startSec: 0.1, duration: 1.8, khmerText: 'សាកល្បង 16:9' }],
+    });
+
+    await renderDubbedVideoWithDucking({
+      inputVideoPath: synthPortrait,
+      masterAudioPath: toneWav,
+      fullAudioPath: toneWav,
+      outputVideoPath: outPortraitBlur,
+      aspectRatio: '9:16',
+      verticalStyle: 'pad',
+      burnSubtitles: true,
+      segments: [{ startSec: 0.1, duration: 1.8, khmerText: 'សាកល្បងវីដេអូបញ្ឈរ' }],
+    });
+
+    const pBlur = probeVideo(outBlurred);
+    assert.equal(pBlur.width, 1080);
+    assert.equal(pBlur.height, 1920);
+
+    const pPad = probeVideo(outPad);
+    assert.equal(pPad.width, 1080);
+    assert.equal(pPad.height, 1920);
+
+    const p16 = probeVideo(out16x9);
+    assert.equal(p16.width, 1280);
+    assert.equal(p16.height, 720);
+
+    const pPort = probeVideo(outPortraitBlur);
+    assert.equal(pPort.width, 1080);
+    assert.equal(pPort.height, 1920);
+
+    // Extract raw luma frames at t=1.0s and compare horizontal edge contrast in upper vs bottom band
+    const rawUnblurred = path.join(tmpDir, 'unblurred.gray');
+    const rawBlurred = path.join(tmpDir, 'blurred.gray');
+    const rawPad = path.join(tmpDir, 'pad.gray');
+    const rawPortrait = path.join(tmpDir, 'portrait.gray');
+    execSync(`ffmpeg -y -ss 1.0 -i "${outUnblurred}" -frames:v 1 -f rawvideo -pix_fmt gray "${rawUnblurred}"`, { stdio: 'ignore' });
+    execSync(`ffmpeg -y -ss 1.0 -i "${outBlurred}" -frames:v 1 -f rawvideo -pix_fmt gray "${rawBlurred}"`, { stdio: 'ignore' });
+    execSync(`ffmpeg -y -ss 1.0 -i "${outPad}" -frames:v 1 -f rawvideo -pix_fmt gray "${rawPad}"`, { stdio: 'ignore' });
+    execSync(`ffmpeg -y -ss 1.0 -i "${outPortraitBlur}" -frames:v 1 -f rawvideo -pix_fmt gray "${rawPortrait}"`, { stdio: 'ignore' });
+
+    const bufUnblur = fs.readFileSync(rawUnblurred);
+    const bufBlur = fs.readFileSync(rawBlurred);
+    const bufPad = fs.readFileSync(rawPad);
+    const bufPort = fs.readFileSync(rawPortrait);
+    const measureBandEdgeEnergy = (buf, yStart, yEnd) => {
+      let sumDiff = 0;
+      let count = 0;
+      for (let y = yStart; y < yEnd; y += 2) {
+        const rowOff = y * 1080;
+        for (let x = 200; x < 860; x += 2) {
+          sumDiff += Math.abs(buf[rowOff + x + 16] - buf[rowOff + x]);
+          count++;
+        }
+      }
+      return sumDiff / Math.max(1, count);
+    };
+
+    const upperBefore = measureBandEdgeEnergy(bufUnblur, 340, 660);
+    const upperAfter = measureBandEdgeEnergy(bufBlur, 340, 660);
+    const subBandBefore = measureBandEdgeEnergy(bufUnblur, 1615, 1700);
+    const subBandAfter = measureBandEdgeEnergy(bufBlur, 1615, 1700);
+    const padBandEnergy = measureBandEdgeEnergy(bufPad, 1170, 1210);
+    const portSubBandAfter = measureBandEdgeEnergy(bufPort, 1615, 1700);
+    const portUpperAfter = measureBandEdgeEnergy(bufPort, 340, 560);
+
+    // Bottom subtitle band high-frequency contrast must drop drastically (unreadable soft shapes)
+    assert.ok(subBandBefore > 80, `Expected high-contrast stripes in unblurred subtitle band, got ${subBandBefore}`);
+    assert.ok(
+      subBandAfter < subBandBefore * 0.15,
+      `Expected subtitle band edge contrast to drop >85% after blur (${subBandBefore.toFixed(1)} -> ${subBandAfter.toFixed(1)})`
+    );
+
+    // Upper region outside the bottom band must stay sharp and unaffected
+    assert.ok(
+      Math.abs(upperAfter - upperBefore) < upperBefore * 0.08,
+      `Expected upper region sharpness to remain intact (${upperBefore.toFixed(1)} vs ${upperAfter.toFixed(1)})`
+    );
+
+    // Pad mode must leave the landscape bottom inside the letterbox sharp/unblurred
+    assert.ok(padBandEnergy > 40, `Expected pad mode landscape bottom band unblurred (${padBandEnergy.toFixed(1)})`);
+
+    // Native portrait source with burnSubtitles must also blur its bottom subtitle band while preserving upper frame
+    assert.ok(
+      portSubBandAfter < 10 && portUpperAfter > 50,
+      `Expected native portrait bottom band blurred (${portSubBandAfter.toFixed(1)}) and upper sharp (${portUpperAfter.toFixed(1)})`
+    );
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
 });
 
