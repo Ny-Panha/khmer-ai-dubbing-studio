@@ -37,6 +37,7 @@ export default function GeminiRouteModal({
   isOpen,
   onClose,
   onOpenQuotaModal = null,
+  onOpenExportStudio = null,
   activeSeries = null,
   activeEpisode = null,
   seriesId = null,
@@ -55,7 +56,6 @@ export default function GeminiRouteModal({
 
   // Selection & generation settings
   const [selectedEpIds, setSelectedEpIds] = useState(new Set());
-  const [allowOriginalAudio, setAllowOriginalAudio] = useState(false);
   const [dubbingMode, setDubbingMode] = useState('dialogue');
   const [genre, setGenre] = useState('auto');
   const [narratorGender, setNarratorGender] = useState('male');
@@ -464,7 +464,7 @@ export default function GeminiRouteModal({
     setSelectedEpIds(new Set(episodesWithVideo.map((ep) => ep.id)));
   };
 
-  // Selected export readiness & missing Khmer Voice breakdown (Step 4 Batch Export / Merge)
+  // Selected export readiness & shared aspect ratio for Step 4 handoff to Export Studio
   const checkEpHasVoiceReady = useCallback((ep) => {
     return checkEpisodeHasAudioReady(ep, completedTtsEpIds, ttsLiveStats);
   }, [completedTtsEpIds, ttsLiveStats]);
@@ -479,15 +479,6 @@ export default function GeminiRouteModal({
     [selectedEpisodesForExport, checkEpHasVoiceReady]
   );
 
-  const selectedMissingVoiceForExport = useMemo(
-    () => selectedEpisodesForExport.filter((ep) => !checkEpHasVoiceReady(ep)),
-    [selectedEpisodesForExport, checkEpHasVoiceReady]
-  );
-
-  const eligibleForBatchExport = allowOriginalAudio
-    ? selectedEpisodesForExport
-    : selectedVoicedForExport;
-
   const isBatchExportRunning = Boolean(batchRender?.isRunning || batchRender?.job?.status === 'running');
   const isBatchExportStarting = Boolean(batchRender?.isStarting);
   const batchExportJob = batchRender?.job || null;
@@ -500,21 +491,6 @@ export default function GeminiRouteModal({
     voiceSettings?.aspectRatio ||
     resolveDefaultAspectRatio(step4SrcW, step4SrcH) ||
     '16:9';
-
-  const handleStartStep4BatchExport = async (mode) => {
-    if (!batchRender?.start || eligibleForBatchExport.length === 0 || isBatchExportRunning || isBatchExportStarting) return;
-    setBatchError(null);
-    setBatchSuccess(null);
-    setBatchInfo(null);
-    const res = await batchRender.start({
-      episodeIds: selectedEpisodesForExport.map((ep) => ep.id),
-      mode,
-      allowOriginalAudio,
-    });
-    if (res && !res.success && res.error) {
-      setBatchError(res.error);
-    }
-  };
 
   const translateSummary = useMemo(
     () => computeSeriesTranslateSummary(episodes, jobsByEpisodeId),
@@ -2688,7 +2664,7 @@ export default function GeminiRouteModal({
             </div>
           </div>
 
-          {/* ── STEP 4: BATCH EXPORT & FULL VIDEO MERGE BAR ── */}
+          {/* ── STEP 4: BATCH EXPORT & FULL VIDEO MERGE BAR (Single Handoff to Export Studio) ── */}
           {batchRender && (
             <div style={{
               marginTop: 2,
@@ -2706,7 +2682,7 @@ export default function GeminiRouteModal({
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                   <span style={{ fontSize: '0.76rem', fontWeight: 900, color: '#F8FAFC', display: 'inline-flex', alignItems: 'center', gap: 5 }}>
                     <Film size={14} color="#38BDF8" />
-                    STEP 4: Batch Export & Merge
+                    STEP 4: Batch Export &amp; Merge
                   </span>
                   <span style={{
                     fontSize: '0.66rem',
@@ -2720,37 +2696,9 @@ export default function GeminiRouteModal({
                     {selectedEpisodesForExport.length} ភាគ • មានសំឡេង {selectedVoicedForExport.length} • {resolvedStep4AspectRatio}
                   </span>
                 </div>
-
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                  {selectedMissingVoiceForExport.length > 0 && (
-                    <span style={{ fontSize: '0.68rem', color: allowOriginalAudio ? '#7dd3fc' : '#FBBF24', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                      <AlertTriangle size={12} />
-                      <span>
-                        {allowOriginalAudio
-                          ? `${selectedMissingVoiceForExport.length} ភាគអត់ Voice នឹងប្រើសំឡេងដើម`
-                          : `រំលង ${selectedMissingVoiceForExport.length} ភាគអត់ Voice (${selectedMissingVoiceForExport.map((e, i) => `EP${e.episodeNumber || i + 1}`).slice(0, 5).join(', ')}${selectedMissingVoiceForExport.length > 5 ? '...' : ''})`}
-                      </span>
-                    </span>
-                  )}
-                  <label style={{
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 5,
-                    fontSize: '0.69rem',
-                    fontWeight: 600,
-                    color: '#CBD5E1',
-                    cursor: isBatchExportRunning ? 'not-allowed' : 'pointer',
-                  }}>
-                    <input
-                      type="checkbox"
-                      checked={allowOriginalAudio}
-                      disabled={isBatchExportRunning}
-                      onChange={(e) => setAllowOriginalAudio(e.target.checked)}
-                      style={{ margin: 0, accentColor: '#38BDF8' }}
-                    />
-                    <span>Allow Original Audio (រួមបញ្ចូលភាគអត់ Voice)</span>
-                  </label>
-                </div>
+                <span style={{ fontSize: '0.69rem', color: '#94A3B8' }}>
+                  ជ្រើសរើសភាគ Merge វីដេអូ ឬ Download ឯកសារ Export នៅក្នុង Export Studio
+                </span>
               </div>
 
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
@@ -2853,57 +2801,43 @@ export default function GeminiRouteModal({
 
                 <button
                   type="button"
-                  onClick={() => handleStartStep4BatchExport('merge')}
-                  disabled={isBatchExportRunning || isBatchExportStarting || eligibleForBatchExport.length === 0}
+                  data-testid="step4-open-export-studio-btn"
+                  onClick={() => {
+                    onClose?.();
+                    onOpenExportStudio?.();
+                  }}
                   className="btn-tactile"
                   style={{
-                    padding: '9px 14px',
+                    padding: '9px 15px',
                     borderRadius: 10,
-                    background: (isBatchExportRunning || eligibleForBatchExport.length === 0)
-                      ? 'rgba(255, 255, 255, 0.05)'
-                      : 'linear-gradient(135deg, #0284c7 0%, #2563eb 100%)',
-                    border: (isBatchExportRunning || eligibleForBatchExport.length === 0)
-                      ? '1px solid rgba(255, 255, 255, 0.1)'
-                      : '1px solid #38BDF8',
-                    color: (isBatchExportRunning || eligibleForBatchExport.length === 0) ? '#64748B' : '#FFFFFF',
+                    background: 'linear-gradient(135deg, #0284c7 0%, #2563eb 100%)',
+                    border: '1px solid #38BDF8',
+                    color: '#FFFFFF',
                     fontSize: '0.76rem',
                     fontWeight: 800,
-                    cursor: (isBatchExportRunning || isBatchExportStarting || eligibleForBatchExport.length === 0) ? 'not-allowed' : 'pointer',
-                    display: 'flex',
+                    cursor: 'pointer',
+                    display: 'inline-flex',
                     alignItems: 'center',
                     gap: 6,
-                    boxShadow: (!isBatchExportRunning && eligibleForBatchExport.length > 0) ? '0 4px 16px rgba(2, 132, 199, 0.35)' : 'none',
+                    boxShadow: '0 4px 16px rgba(2, 132, 199, 0.35)',
                   }}
                 >
-                  {isBatchExportRunning && batchExportJob?.mode === 'merge' ? <Loader2 size={14} className="animate-spin" /> : <Film size={14} />}
-                  <span>Export 1 Full Video (Merge {eligibleForBatchExport.length} ភាគ)</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => handleStartStep4BatchExport('separate')}
-                  disabled={isBatchExportRunning || isBatchExportStarting || eligibleForBatchExport.length === 0}
-                  className="btn-tactile"
-                  style={{
-                    padding: '9px 14px',
-                    borderRadius: 10,
-                    background: (isBatchExportRunning || eligibleForBatchExport.length === 0)
-                      ? 'rgba(255, 255, 255, 0.05)'
-                      : 'linear-gradient(135deg, rgba(16, 185, 129, 0.22) 0%, rgba(5, 150, 105, 0.35) 100%)',
-                    border: (isBatchExportRunning || eligibleForBatchExport.length === 0)
-                      ? '1px solid rgba(255, 255, 255, 0.1)'
-                      : '1px solid rgba(52, 211, 153, 0.55)',
-                    color: (isBatchExportRunning || eligibleForBatchExport.length === 0) ? '#64748B' : '#34D399',
-                    fontSize: '0.76rem',
-                    fontWeight: 800,
-                    cursor: (isBatchExportRunning || isBatchExportStarting || eligibleForBatchExport.length === 0) ? 'not-allowed' : 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 6,
-                  }}
-                >
-                  {isBatchExportRunning && batchExportJob?.mode === 'separate' ? <Loader2 size={14} className="animate-spin" /> : <Layers size={14} />}
-                  <span>Batch Export All ({eligibleForBatchExport.length} ភាគដាច់)</span>
+                  <Film size={14} />
+                  <span>Open Export Studio</span>
+                  {isBatchExportRunning && (
+                    <span
+                      style={{
+                        fontSize: '0.65rem',
+                        fontWeight: 800,
+                        padding: '1px 6px',
+                        borderRadius: 9999,
+                        background: 'rgba(255, 255, 255, 0.22)',
+                      }}
+                    >
+                      {batchExportJob?.progress || 0}%
+                    </span>
+                  )}
+                  <ArrowRight size={14} />
                 </button>
               </div>
             </div>
@@ -3011,150 +2945,6 @@ export default function GeminiRouteModal({
         <div style={{
           padding: '16px 22px 24px 22px',
         }}>
-          {/* Step 4 Live Batch Export / Merge Monitor & Download Card */}
-          {batchExportJob && (
-            <div style={{
-              marginBottom: 14,
-              padding: '12px 16px',
-              borderRadius: 12,
-              background: 'rgba(15, 23, 42, 0.88)',
-              border: batchExportJob.status === 'completed'
-                ? '1px solid rgba(52, 211, 153, 0.5)'
-                : batchExportJob.status === 'failed'
-                ? '1px solid rgba(248, 113, 113, 0.5)'
-                : '1px solid rgba(56, 189, 248, 0.45)',
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 8,
-              boxShadow: '0 8px 24px rgba(0, 0, 0, 0.35)',
-            }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-                  {batchExportJob.status === 'running' ? (
-                    <Loader2 size={16} className="animate-spin" color="#38BDF8" />
-                  ) : batchExportJob.status === 'completed' ? (
-                    <CheckCircle2 size={16} color="#34D399" />
-                  ) : (
-                    <AlertCircle size={16} color="#F87171" />
-                  )}
-                  <span style={{ fontSize: '0.8rem', fontWeight: 800, color: '#F8FAFC', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {batchExportJob.stage}
-                  </span>
-                </div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
-                  <span style={{ fontSize: '0.95rem', fontWeight: 900, fontFamily: 'monospace', color: batchExportJob.status === 'completed' ? '#34D399' : '#38BDF8' }}>
-                    {batchExportJob.progress || 0}%
-                  </span>
-                  {batchExportJob.status === 'running' ? (
-                    <button
-                      type="button"
-                      onClick={() => batchRender?.kill?.(batchExportJob.jobId)}
-                      style={{
-                        padding: '4px 10px',
-                        borderRadius: 6,
-                        background: 'rgba(239, 68, 68, 0.25)',
-                        border: '1px solid rgba(239, 68, 68, 0.6)',
-                        color: '#FEE2E2',
-                        fontSize: '0.72rem',
-                        fontWeight: 800,
-                        cursor: 'pointer',
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: 4,
-                      }}
-                    >
-                      <Square size={11} />
-                      <span>បញ្ឈប់ (Kill Export)</span>
-                    </button>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => batchRender?.clear?.()}
-                      style={{ background: 'none', border: 'none', color: '#94A3B8', cursor: 'pointer', padding: 2 }}
-                      title="បិទផ្ទាំងលទ្ធផល"
-                    >
-                      <X size={15} />
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              <div style={{ width: '100%', height: 7, borderRadius: 9999, background: 'rgba(255, 255, 255, 0.08)', overflow: 'hidden' }}>
-                <div style={{
-                  width: `${Math.max(2, batchExportJob.progress || 0)}%`,
-                  height: '100%',
-                  borderRadius: 9999,
-                  background: batchExportJob.status === 'completed'
-                    ? 'linear-gradient(90deg, #10b981, #34d399)'
-                    : batchExportJob.status === 'failed'
-                    ? '#ef4444'
-                    : 'linear-gradient(90deg, #3b82f6, #06b6d4)',
-                  transition: 'width 0.25s ease',
-                }} />
-              </div>
-
-              {Array.isArray(batchExportJob.skippedEpisodes) && batchExportJob.skippedEpisodes.length > 0 && batchExportJob.status !== 'running' && (
-                <div style={{ fontSize: '0.72rem', color: '#FBBF24' }}>
-                  ⚠️ បានរំលង {batchExportJob.skippedEpisodes.length} ភាគអត់ Voice: {batchExportJob.skippedEpisodes.map((s) => `EP${s.episodeNumber}`).join(', ')}
-                </div>
-              )}
-
-              {batchExportJob.mergedResult?.downloadUrl && (
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8, paddingTop: 2 }}>
-                  <span style={{ fontSize: '0.74rem', color: '#6EE7B7', fontWeight: 700 }}>
-                    ✅ បាន Merge {batchExportJob.mergedResult.mergedCount} ភាគ ចូល Folder Downloads រួចរាល់!
-                  </span>
-                  <a
-                    href={batchExportJob.mergedResult.downloadUrl || batchExportJob.mergedResult.videoUrl}
-                    download={batchExportJob.mergedResult.outputFilename}
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: 6,
-                      padding: '6px 14px',
-                      borderRadius: 8,
-                      background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
-                      color: '#FFFFFF',
-                      fontSize: '0.75rem',
-                      fontWeight: 800,
-                      textDecoration: 'none',
-                    }}
-                  >
-                    <Download size={14} />
-                    <span>Download Full Video ({batchExportJob.mergedResult.outputFilename})</span>
-                  </a>
-                </div>
-              )}
-
-              {Array.isArray(batchExportJob.outputs) && batchExportJob.outputs.length > 0 && batchExportJob.status === 'completed' && !batchExportJob.mergedResult && (
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, paddingTop: 2 }}>
-                  {batchExportJob.outputs.map((out) => (
-                    <a
-                      key={out.episodeId || out.outputFilename}
-                      href={out.downloadUrl || out.videoUrl}
-                      download={out.outputFilename}
-                      style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: 5,
-                        padding: '4px 10px',
-                        borderRadius: 6,
-                        background: 'rgba(16, 185, 129, 0.14)',
-                        border: '1px solid rgba(52, 211, 153, 0.4)',
-                        color: '#6EE7B7',
-                        fontSize: '0.7rem',
-                        fontWeight: 700,
-                        textDecoration: 'none',
-                      }}
-                    >
-                      <Download size={12} />
-                      <span>EP{out.episodeNumber}</span>
-                    </a>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
 
           {episodes.length === 0 ? (
             <div style={{

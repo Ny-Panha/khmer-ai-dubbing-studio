@@ -55,6 +55,7 @@ export default function VoiceSettings({
   seriesId = null,
   episodeId = null,
   batchRender = null,
+  onOpenBatchExportStudio = null,
   selectedClip = null,
   onSplitClip,
   onDeleteClip,
@@ -805,9 +806,8 @@ export default function VoiceSettings({
           videoMetadata={videoMetadata}
           activeEpisode={activeEpisode}
           activeSeries={activeSeries}
-          seriesId={seriesId}
-          episodeId={episodeId}
           batchRender={batchRender}
+          onOpenBatchExportStudio={onOpenBatchExportStudio}
           audioGenerated={audioGenerated}
           previewAudioUrl={previewAudioUrl}
           renderedVideo={renderedVideo}

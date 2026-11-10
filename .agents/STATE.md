@@ -1,6 +1,39 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
+- **Environment**: Antigravity IDE (`Move Batch Export & Merge into Dedicated Export Studio Modal View + Clean Export Panel + Step 4 Handoff`)
+- **Timestamp**: 2026-11-10T15:02:00+07:00
+
+## Summary: Dedicated Export Studio Modal View & Clean Export Panel
+1. **Clean Export Panel ([ExportSettingsPanel.jsx](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/voice/ExportSettingsPanel.jsx), [VoiceSettings.jsx](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/VoiceSettings.jsx))**:
+   - Removed the entire inline `"Batch Export & Merge"` section (episode checkboxes, readiness warning, `Allow Original Audio`, `Export 1 Full Video`, `Batch Export All`, and batch download links) from the top Export panel.
+   - Kept single-episode export controls (`Anti-Theft`, `Export Dubbed Video (.mp4)`, export settings) unchanged, and placed ONE clean button in its place: `"Batch Export & Merge (N ភាគ) →"` (`data-testid="open-batch-export-studio-btn"`), showing live `%` progress badge when a job is running.
+2. **Dedicated Full-Screen View ([BatchExportStudioModal.jsx](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/dashboard/BatchExportStudioModal.jsx), [App.jsx](file:///e:/khmer_ai_dubbing_studio/frontend/src/App.jsx))**:
+   - Implemented full-screen modal `"Export Studio — Batch Export & Merge"` (`data-testid="batch-export-studio-modal"`) containing in order:
+     - **(a)** Episode multi-select grid (`Select All`, `មាន Voice`, `Clear`) with per-episode readiness (`Script ✓/✗`, `Voice ✓/✗`, `Demucs ✓/✗` + reason flags) and missing-voice warning banner.
+     - **(b)** Shared aspect indicator + sticky `16:9 | 9:16` toggle synced across Step 4 / Navbar / Export Studio.
+     - **(c)** `Allow Original Audio` checkbox.
+     - **(d)** Two primary actions: `"Export 1 Full Video (Merge N ភាគ)"` and `"Batch Export All (N ភាគដាច់ដោយឡែក)"` governed by the same readiness rules.
+     - **(e)** Live per-episode + overall progress bar & `Stop (Kill)`.
+     - **(f)** Finished files area with individual `Download` buttons (merged full video and/or per-episode `.mp4` files).
+   - Lifted episode selections (`exportStudioSelectedEpIds`) and `exportStudioAllowOriginalAudio` to `App.jsx` alongside `useVideoRender`'s `batchRender` job state so closing and reopening Export Studio mid-job preserves progress and selections seamlessly.
+3. **Gemini Console Step 4 Handoff ([GeminiRouteModal.jsx](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/dashboard/GeminiRouteModal.jsx))**:
+   - Replaced duplicated Step 4 export buttons (`Export 1 Full Video` & `Batch Export All`) and Step 4 batch downloads with ONE **`Open Export Studio →`** button (`data-testid="step4-open-export-studio-btn"`), keeping the shared `16:9 | 9:16` toggle (`data-testid="step4-aspect-toggle"`).
+4. **Long-Episode Ducking Filter Fix ([ffmpegService.js](file:///e:/khmer_ai_dubbing_studio/backend/services/ffmpegService.js#L1144-L1208))**:
+   - Chunked `buildDynamicDuckingFilter` intervals (`MAX_TERMS_PER_VOLUME_EXPR = 35`) into chained `volume` filters so 300–500+ segment episodes never hit FFmpeg expression parser `Cannot allocate memory`.
+5. **Verification Results (`series.json` Untouched)**:
+   - Live Playwright E2E + visual screenshots (`0` console errors): verified clean Export panel, Step 4 single handoff button, Export Studio readiness flags & shared `16:9 | 9:16` sync, close/reopen mid-job survival, and full 2-episode merge (`EP1` + `EP2` of `series_1793898268958`, `100%`, `HEAD /api/download-export` `200 OK`).
+   - Backend tests (`batch_export_and_merge.test.js` + `aspect_ratio_and_crop.test.js`): **9/9 PASS**; Frontend: `npm --prefix frontend run lint` (**0 errors**), `npm --prefix frontend run build` (**PASS `894ms`**).
+
+## Active Environment
+- **Dev Orchestrator (`.\dev.ps1 -NoBrowser -SkipInstall`, `task-3196`)**: Running cleanly — Backend `http://localhost:5000` + Frontend `http://localhost:5173`.
+
+## Next Steps
+- Refresh browser (`Ctrl + Shift + R`) on `http://localhost:5173` — the Export panel now shows ONE clean `"Batch Export & Merge (N ភាគ) →"` button that opens **Export Studio — Batch Export & Merge**.
+
+---
+
+## Previous Session
 - **Environment**: Antigravity IDE (`One "Fix broken & regenerate" Button Under AI Voice Step` — Shared Broken-Set Scanner, Idempotent Queued Repair Job, Quota Partial Resume & Truthful DONE Status)
 - **Timestamp**: 2026-11-10T14:35:00+07:00
 

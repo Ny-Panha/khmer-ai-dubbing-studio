@@ -1142,6 +1142,7 @@ function mergeTimeIntervals(rawIntervals, mergeGap = 0.3) {
 
 
 function buildDynamicDuckingFilter(segments, bgDuckVolume = 0.15, bgNormalVolume = 1.0, videoClips = []) {
+  const MAX_TERMS_PER_VOLUME_EXPR = 35;
   const mutedClipWindows = (Array.isArray(videoClips) ? videoClips : [])
     .filter((c) => c.isMuted)
     .map((c) => {
@@ -1151,11 +1152,19 @@ function buildDynamicDuckingFilter(segments, bgDuckVolume = 0.15, bgNormalVolume
     });
 
   const hasMutedClips = mutedClipWindows.length > 0;
-  const mutedCondition = hasMutedClips ? mutedClipWindows.join("+") : null;
 
   if (!segments || segments.length === 0) {
     if (hasMutedClips) {
-      return `volume='if(gt(${mutedCondition},0),0.0,${bgNormalVolume.toFixed(2)})':eval=frame`;
+      if (mutedClipWindows.length <= MAX_TERMS_PER_VOLUME_EXPR) {
+        const mutedCondition = mutedClipWindows.join("+");
+        return `volume='if(gt(${mutedCondition},0),0.0,${bgNormalVolume.toFixed(2)})':eval=frame`;
+      }
+      const filters = [`volume=${bgNormalVolume.toFixed(2)}`];
+      for (let i = 0; i < mutedClipWindows.length; i += MAX_TERMS_PER_VOLUME_EXPR) {
+        const cond = mutedClipWindows.slice(i, i + MAX_TERMS_PER_VOLUME_EXPR).join("+");
+        filters.push(`volume='if(gt(${cond},0),0.0,1.0)':eval=frame`);
+      }
+      return filters.join(",");
     }
     return `volume=${bgNormalVolume.toFixed(2)}`;
   }
@@ -1173,13 +1182,29 @@ function buildDynamicDuckingFilter(segments, bgDuckVolume = 0.15, bgNormalVolume
 
   const mergedIntervals = mergeTimeIntervals(rawIntervals, 0.3);
   const timeWindows = mergedIntervals.map((iv) => `between(t,${iv.start.toFixed(2)},${iv.end.toFixed(2)})`);
-  const conditionExpr = timeWindows.join("+");
 
-  if (hasMutedClips) {
-    return `volume='if(gt(${mutedCondition},0),0.0,if(gt(${conditionExpr},0),${bgDuckVolume.toFixed(2)},${bgNormalVolume.toFixed(2)}))':eval=frame`;
+  // Fast single-filter path when expression fits comfortably inside FFmpeg eval parser stack
+  if (timeWindows.length <= MAX_TERMS_PER_VOLUME_EXPR && mutedClipWindows.length <= MAX_TERMS_PER_VOLUME_EXPR) {
+    const conditionExpr = timeWindows.join("+");
+    if (hasMutedClips) {
+      const mutedCondition = mutedClipWindows.join("+");
+      return `volume='if(gt(${mutedCondition},0),0.0,if(gt(${conditionExpr},0),${bgDuckVolume.toFixed(2)},${bgNormalVolume.toFixed(2)}))':eval=frame`;
+    }
+    return `volume='if(gt(${conditionExpr},0),${bgDuckVolume.toFixed(2)},${bgNormalVolume.toFixed(2)})':eval=frame`;
   }
 
-  return `volume='if(gt(${conditionExpr},0),${bgDuckVolume.toFixed(2)},${bgNormalVolume.toFixed(2)})':eval=frame`;
+  // Chunked filter chain for long videos (100-500+ segments) to avoid FFmpeg eval memory exhaustion
+  const filters = [`volume=${bgNormalVolume.toFixed(2)}`];
+  const duckRatio = bgNormalVolume > 0 ? (bgDuckVolume / bgNormalVolume) : bgDuckVolume;
+  for (let i = 0; i < timeWindows.length; i += MAX_TERMS_PER_VOLUME_EXPR) {
+    const chunkCond = timeWindows.slice(i, i + MAX_TERMS_PER_VOLUME_EXPR).join("+");
+    filters.push(`volume='if(gt(${chunkCond},0),${duckRatio.toFixed(4)},1.0)':eval=frame`);
+  }
+  for (let i = 0; i < mutedClipWindows.length; i += MAX_TERMS_PER_VOLUME_EXPR) {
+    const mutedChunkCond = mutedClipWindows.slice(i, i + MAX_TERMS_PER_VOLUME_EXPR).join("+");
+    filters.push(`volume='if(gt(${mutedChunkCond},0),0.0,1.0)':eval=frame`);
+  }
+  return filters.join(",");
 }
 
 /**

@@ -1,10 +1,11 @@
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { AlertTriangle, X } from 'lucide-react';
 import Navbar from './components/Navbar';
 import ErrorBoundary from './components/common/ErrorBoundary';
 import JobDashboardModal from './components/dashboard/JobDashboardModal';
 import GeminiRouteModal from './components/dashboard/GeminiRouteModal';
 import GeminiQuotaModal from './components/dashboard/GeminiQuotaModal';
+import BatchExportStudioModal from './components/dashboard/BatchExportStudioModal';
 import WorkflowStepper from './components/WorkflowStepper';
 import MediaLibrary from './components/MediaLibrary';
 import VideoPlayerPreview from './components/VideoPlayerPreview';
@@ -43,6 +44,10 @@ export default function App() {
   const [showJobDashboard, setShowJobDashboard] = useState(false);
   const [showGeminiRouteModal, setShowGeminiRouteModal] = useState(false);
   const [showGeminiQuotaModal, setShowGeminiQuotaModal] = useState(false);
+  const [showBatchExportStudioModal, setShowBatchExportStudioModal] = useState(false);
+  const [exportStudioSelectedEpIds, setExportStudioSelectedEpIds] = useState([]);
+  const [exportStudioAllowOriginalAudio, setExportStudioAllowOriginalAudio] = useState(false);
+  const lastExportStudioSeriesRef = useRef(null);
   const [scriptData, setScriptData] = useState(null);
   const [speakerRegistry, setSpeakerRegistry] = useState({});
   const [voiceSettings, setVoiceSettings] = useState(loadSavedVoiceSettings);
@@ -506,6 +511,31 @@ export default function App() {
   const handleCloseGeminiRoute = useCallback(() => setShowGeminiRouteModal(false), []);
   const handleOpenGeminiQuota = useCallback(() => setShowGeminiQuotaModal(true), []);
   const handleCloseGeminiQuota = useCallback(() => setShowGeminiQuotaModal(false), []);
+  const handleOpenBatchExportStudio = useCallback(() => setShowBatchExportStudioModal(true), []);
+  const handleCloseBatchExportStudio = useCallback(() => setShowBatchExportStudioModal(false), []);
+
+  // Persist Export Studio episode selections while app remains open
+  useEffect(() => {
+    const eps = Array.isArray(series.activeSeries?.episodes) ? series.activeSeries.episodes : [];
+    const withVideo = eps.filter((ep) =>
+      Boolean(ep?.sourceVideoPath || ep?.video?.videoPath || ep?.video?.videoId || ep?.videoFile || ep?.video?.videoUrl)
+    );
+    const validIds = new Set(withVideo.map((e) => String(e.id)));
+    if (validIds.size === 0) {
+      setExportStudioSelectedEpIds((prev) => (prev.length === 0 ? prev : []));
+      return;
+    }
+    const seriesKey = String(series.seriesId || series.activeSeries?.id || 'default');
+    if (lastExportStudioSeriesRef.current !== seriesKey) {
+      lastExportStudioSeriesRef.current = seriesKey;
+      setExportStudioSelectedEpIds(withVideo.map((e) => e.id));
+      return;
+    }
+    setExportStudioSelectedEpIds((prev) => {
+      const filtered = prev.filter((id) => validIds.has(String(id)));
+      return filtered.length === prev.length ? prev : filtered;
+    });
+  }, [series.seriesId, series.activeSeries]);
 
   // Immediate episode workspace reset upon loading new video (prevents inheriting stale script/audio)
   const handleVideoSelected = useCallback((vid) => {
@@ -742,6 +772,7 @@ export default function App() {
                 seriesId={series.seriesId}
                 episodeId={series.episodeId}
                 batchRender={render.batchRender}
+                onOpenBatchExportStudio={handleOpenBatchExportStudio}
                 duration={playback.duration}
                 selectedClip={media.selectedClip}
                 onSplitClip={handleSplitClip}
@@ -842,9 +873,9 @@ export default function App() {
             isOpen={showGeminiRouteModal}
             onClose={handleCloseGeminiRoute}
             onOpenQuotaModal={handleOpenGeminiQuota}
+            onOpenExportStudio={handleOpenBatchExportStudio}
             activeSeries={series.activeSeries}
             activeEpisode={series.activeEpisode}
-            seriesId={series.seriesId}
             episodeId={series.episodeId}
             onSwitchEpisode={handleSwitchEpisode}
             onTabChange={setLeftTab}
@@ -855,6 +886,30 @@ export default function App() {
             onAspectRatioChange={handleAspectRatioChange}
             isRendering={render.isRendering}
             batchRender={render.batchRender}
+          />
+        </ErrorBoundary>
+
+        {/* DragonDub Dedicated Export Studio Modal (Batch Export & Full Video Merge) */}
+        <ErrorBoundary inline name="Export Studio" onReset={handleCloseBatchExportStudio}>
+          <BatchExportStudioModal
+            isOpen={showBatchExportStudioModal}
+            onClose={handleCloseBatchExportStudio}
+            activeSeries={series.activeSeries}
+            activeEpisode={series.activeEpisode}
+            episodeId={series.episodeId}
+            voiceSettings={voiceSettings || EMPTY_OBJECT}
+            currentAspectRatio={currentAspectRatio}
+            onAspectRatioChange={handleAspectRatioChange}
+            isRendering={render.isRendering}
+            batchRender={render.batchRender}
+            audioGenerated={audio.audioGenerated}
+            previewAudioUrl={
+              audio.fullAudioUrl || scriptData?.segments?.find((s) => s.audioUrl)?.audioUrl || null
+            }
+            selectedEpIds={exportStudioSelectedEpIds}
+            onChangeSelectedEpIds={setExportStudioSelectedEpIds}
+            allowOriginalAudio={exportStudioAllowOriginalAudio}
+            onChangeAllowOriginalAudio={setExportStudioAllowOriginalAudio}
           />
         </ErrorBoundary>
 
