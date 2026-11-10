@@ -453,7 +453,7 @@ export function useVideoRender({
         duckingVolume: activeSettings.duckingVolume,
         khmerVolume: activeSettings.khmerVolume,
         enableDemucs: Boolean(activeSettings.enableDemucs),
-        burnSubtitles: activeSettings.burnSubtitles,
+        burnSubtitles: activeSettings.burnSubtitles !== false,
         subtitleColor: activeSettings.subtitleColor,
         subtitleSize: activeSettings.subtitleSize,
         subtitleStyle: activeSettings.subtitleStyle || 'banner',
@@ -475,12 +475,11 @@ export function useVideoRender({
       setRenderedVideo({
         ...result,
         aspectRatio: effectiveAspectRatio,
+        renderedAt: Date.now(),
       });
       if (videoRef?.current) {
         videoRef.current.pause();
         if (setIsPlaying) setIsPlaying(false);
-        videoRef.current.src = result.outputVideoUrl;
-        videoRef.current.load();
       }
 
       // Automatically trigger browser download to user's Downloads folder

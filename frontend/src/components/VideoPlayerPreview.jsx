@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo } from 'react';
 import { Video, Upload, Loader2, AlertCircle } from 'lucide-react';
 import { parseTimeToSeconds } from '../utils/timestampUtils';
-import { mapSourceToTimelineTime } from '../utils/timelineUtils';
+import { mapSourceToTimelineTime, mapTimelineToSourceTime } from '../utils/timelineUtils';
 import { findLeadingSilenceFromChannels, computeSegmentAudioSyncTarget } from '../utils/audioSyncUtils';
 import { uploadVideoFile } from '../services/api';
 import { createAudioRecoveryManager } from '../utils/audioAutoRecovery';
@@ -1166,10 +1166,26 @@ function VideoPlayerPreview({
     }
   }, [currentTime, audioGenerated, audioOutdated, fullAudioUrl, renderedVideo, scriptData, voiceSettings, videoClips, videoRef]);
 
-  const currentVideoSrc = (typeof renderedVideo === 'string' ? renderedVideo : renderedVideo?.outputVideoUrl) || selectedVideo?.videoUrl;
+  const episodeSourceKey = `${seriesId || ''}::${episodeId || ''}::${selectedVideo?.videoId || selectedVideo?.videoUrl || ''}`;
+  const prevEpisodeSourceKeyRef = useRef(episodeSourceKey);
+  const pendingSrcSwitchSeekRef = useRef(null);
+  const rawVideoSrc = (typeof renderedVideo === 'string' ? renderedVideo : renderedVideo?.outputVideoUrl) || selectedVideo?.videoUrl;
+  const currentVideoSrc = rawVideoSrc && renderedVideo && typeof renderedVideo === 'object' && renderedVideo.renderedAt
+    ? `${rawVideoSrc}${rawVideoSrc.includes('?') ? '&' : '?'}v=${renderedVideo.renderedAt}`
+    : rawVideoSrc;
   const prevVideoSrcRef = useRef(currentVideoSrc);
   useEffect(() => {
+    const isSameEpisodeSource = prevEpisodeSourceKeyRef.current === episodeSourceKey;
+    if (!isSameEpisodeSource) {
+      pendingSrcSwitchSeekRef.current = null;
+    }
     if (prevVideoSrcRef.current && prevVideoSrcRef.current !== currentVideoSrc) {
+      if (isSameEpisodeSource) {
+        const t = Number(currentTimeRef.current);
+        if (Number.isFinite(t) && t > 0) {
+          pendingSrcSwitchSeekRef.current = { timelineTime: t, applied: false, mediaTarget: t };
+        }
+      }
       isPlayPendingRef.current = false;
       stopAllSegmentAudios();
       if (narrationAudioRef.current && !narrationAudioRef.current.paused) {
@@ -1179,8 +1195,9 @@ function VideoPlayerPreview({
         cleanBgAudioRef.current.pause();
       }
     }
+    prevEpisodeSourceKeyRef.current = episodeSourceKey;
     prevVideoSrcRef.current = currentVideoSrc;
-  }, [currentVideoSrc, stopAllSegmentAudios]);
+  }, [currentVideoSrc, episodeSourceKey, stopAllSegmentAudios]);
 
   const handleInternalLoadedMetadata = (e) => {
     if (onLoadedMetadata) onLoadedMetadata(e);
@@ -1193,7 +1210,50 @@ function VideoPlayerPreview({
         ratio: r,
       });
     }
+    if (v && pendingSrcSwitchSeekRef.current && !pendingSrcSwitchSeekRef.current.applied) {
+      const restoreTlTime = pendingSrcSwitchSeekRef.current.timelineTime;
+      let targetMediaTime = restoreTlTime;
+      if (!renderedVideo && Array.isArray(videoClips) && videoClips.length > 0) {
+        const mapping = mapTimelineToSourceTime(restoreTlTime, videoClips);
+        if (mapping.inClip && Number.isFinite(mapping.sourceTime)) {
+          targetMediaTime = mapping.sourceTime;
+        } else if (mapping.isGap && mapping.nextClip && Number.isFinite(mapping.nextClip.sourceStart)) {
+          targetMediaTime = mapping.nextClip.sourceStart;
+        }
+      }
+      const maxDur = Number.isFinite(v.duration) && v.duration > 0 ? v.duration : targetMediaTime;
+      const clampedTarget = Math.max(0, Math.min(Math.max(0, maxDur - 0.02), targetMediaTime));
+      if (Number.isFinite(clampedTarget) && clampedTarget > 0) {
+        pendingSrcSwitchSeekRef.current.applied = true;
+        pendingSrcSwitchSeekRef.current.mediaTarget = clampedTarget;
+        if (Math.abs((v.currentTime || 0) - clampedTarget) > 0.03) {
+          v.currentTime = clampedTarget;
+        } else {
+          pendingSrcSwitchSeekRef.current = null;
+        }
+      } else {
+        pendingSrcSwitchSeekRef.current = null;
+      }
+    }
   };
+
+  const handleInternalTimeUpdate = useCallback((e) => {
+    const pending = pendingSrcSwitchSeekRef.current;
+    if (pending) {
+      const v = e?.target || videoRef?.current;
+      if (!pending.applied || !v || Math.abs((v.currentTime || 0) - pending.mediaTarget) > 0.15) {
+        return;
+      }
+      pendingSrcSwitchSeekRef.current = null;
+    }
+    if (onTimeUpdate) onTimeUpdate(e);
+  }, [onTimeUpdate, videoRef]);
+
+  const handleInternalSeeked = useCallback(() => {
+    if (pendingSrcSwitchSeekRef.current?.applied) {
+      pendingSrcSwitchSeekRef.current = null;
+    }
+  }, []);
 
   // Derive canonical timeline time coordinate for video and subtitle presentation.
   // In multi-clip draft preview with non-zero sourceStart, map HTML5 video element source time to timeline coordinate.
@@ -1346,7 +1406,8 @@ function VideoPlayerPreview({
                 ref={videoRef}
                 src={currentVideoSrc}
                 muted={!renderedVideo && (voiceSettings.duckingVolume === 0)}
-                onTimeUpdate={onTimeUpdate}
+                onTimeUpdate={handleInternalTimeUpdate}
+                onSeeked={handleInternalSeeked}
                 onLoadedMetadata={handleInternalLoadedMetadata}
                 onClick={onPlayPause}
                 onDoubleClick={toggleFullscreen}

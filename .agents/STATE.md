@@ -1,6 +1,35 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
+- **Environment**: Antigravity IDE (`Fix Export Panel Subtitle Controls Not Working in Live Preview & Rendered Mode`)
+- **Timestamp**: 2026-11-10T16:06:30+07:00
+
+## Summary: Fixed All 4 Export Subtitle Controls (`Burn Subtitles`, `Style`, `Color`, `Size`) Not Responding & Preview Visual Fidelity
+1. **Root Causes Found & Fixed**:
+   - **(a) Saved `renderedVideo` (`🎬 Rendered`) Blocked All Live Overlays ([App.jsx](file:///e:/khmer_ai_dubbing_studio/frontend/src/App.jsx#L31-L102), [L469-L539](file:///e:/khmer_ai_dubbing_studio/frontend/src/App.jsx#L469-L539))**:
+     - Episodes that already completed an export (e.g., `ep_2`, `ep_3`) loaded into `🎬 Rendered` playback mode, where [`LiveSubtitleOverlay`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/player/LiveSubtitleOverlay.jsx#L14-L16), Logo, and Anti-Theft overlays return `null`. Editing subtitle settings never invalidated stale `renderedVideo`, so controls appeared dead and the top Navbar stayed stuck on stale `Download MP4`.
+     - Added `VISUAL_SETTING_DEFAULTS`, `RENDER_INVALIDATING_SETTING_KEYS`, and `SUBTITLE_PREVIEW_SETTING_KEYS` in `App.jsx`: changing any subtitle/visual/mix export setting via `handleUpdateVoiceSettings` now persists `voiceSettings` immediately, auto-clears stale `renderedVideo` (switching back to Live Editor Preview and resetting Navbar CTA `Download MP4` -> `Export`), and syncs the cleared state to storage/backend.
+   - **(b) Initial `00:00` Frame Gap & Time Reset on `<video src>` Swap ([App.jsx](file:///e:/khmer_ai_dubbing_studio/frontend/src/App.jsx#L76-L102), [VideoPlayerPreview.jsx](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/VideoPlayerPreview.jsx#L1169-L1250), [useVideoRender.js](file:///e:/khmer_ai_dubbing_studio/frontend/src/hooks/useVideoRender.js#L456-L484))**:
+     - When paused outside any spoken segment (such as `00:00.00` before `ep_2` Seg #1 at `0.20s`), changing subtitle controls while `burnSubtitles !== false` seeks to `resolveSubtitleSampleSeekTime` so the updated Khmer subtitle is immediately visible.
+     - Switching between `renderedVideo` (`?v=${renderedAt}` cache-busted) and `selectedVideo.videoUrl` on the same episode preserves timeline position via `pendingSrcSwitchSeekRef`, `mapTimelineToSourceTime`, `handleInternalLoadedMetadata`, `handleInternalTimeUpdate`, and `handleInternalSeeked`, avoiding the reset to `00:00.00`.
+     - Aligned `burnSubtitles !== false` default-ON behavior across [`ExportSettingsPanel.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/voice/ExportSettingsPanel.jsx#L156-L224), [`LiveSubtitleOverlay.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/player/LiveSubtitleOverlay.jsx#L14), and [`useVideoRender.js`](file:///e:/khmer_ai_dubbing_studio/frontend/src/hooks/useVideoRender.js#L456).
+   - **(c) Distinct Banner / Pill / Cinema Styling & Proportional `cqw` Sizing ([VideoPlayerPreview.css](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/VideoPlayerPreview.css#L261-L380), [LiveSubtitleOverlay.jsx](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/player/LiveSubtitleOverlay.jsx#L18-L54))**:
+     - Scoped card backgrounds to `.live-subtitle-overlay > span` (with `font-weight: 700`), added translucent rounded `pill` vs solid dark rectangular `banner` vs transparent dark-outlined `cinema`, aligned yellow color to `#FFE600`, added `1:1` (`aspect-1-1`) sizing rules, and replaced small `vw`/`rem` clamps on `16:9` with `cqw` units proportional to ASS export (`1.85 / 2.30 / 2.90 cqw`).
+2. **Verification Results (Fresh After Final Edit — Real `series.json` Untouched)**:
+   - `npm --prefix frontend run lint`: **0 errors** (375 pre-existing repo warnings).
+   - `npm --prefix frontend run build`: **PASS**.
+   - `node --test backend/tests/workspace_player_containment.test.js backend/tests/aspect_ratio_and_crop.test.js`: **11/11 PASS** (added subtitle control regression test in [`workspace_player_containment.test.js`](file:///e:/khmer_ai_dubbing_studio/backend/tests/workspace_player_containment.test.js#L181-L217)).
+   - Live Playwright Chrome E2E (`verify_subtitle_controls_e2e.cjs` on `http://127.0.0.1:5173` with mocked write routes): **ALL PASS, 0 console/page errors** — verified auto-exit from `renderedVideo`, `Download MP4` -> `Export`, `2.50s` seek preservation across `rendered` -> `live` swap, distinct `banner`/`pill`/`cinema` CSS, `#ffffff` / `#ffe600` colors, `small`/`medium`/`large` `16:9` (`13.95 / 17.34 / 21.87 px` @ `754px` stage) and `9:16` (`8.84 / 10.40 / 12.48 px` @ `260px` stage) scaling, and visually verified screenshots.
+
+## Active Environment
+- **Dev Orchestrator**: Backend `http://localhost:5000` + Frontend `http://localhost:5173`.
+
+## Next Steps
+- Hard refresh browser (`Ctrl + Shift + R`) on `http://localhost:5173` and test `Burn Subtitles`, `Style` (`Banner`/`Pill`/`Cinema`), `Color` (`White`/`Yellow`), and `Size` (`តូច`/`ស្តង់ដារ`/`ធំ`) directly on `ep_2`.
+
+---
+
+## Previous Session
 - **Environment**: Antigravity IDE (`Fix Workspace Player Frame Containment, AspectRatio Sanitization & Per-Panel Isolation`)
 - **Timestamp**: 2026-11-10T15:51:00+07:00
 

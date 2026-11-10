@@ -177,3 +177,41 @@ test('Workspace isolation, containment guards, and panel NaN guards exist in fro
   // Panel hook guards saved NaN widths with Number.isFinite
   assert.match(panelsCode, /Number\.isFinite\(parsed\)/);
 });
+
+test('Subtitle controls exit stale renderedVideo, preserve time across src swap, and keep span-scoped styles & cqw sizing', () => {
+  const appCode = fs.readFileSync(path.resolve(__dirname, '../../frontend/src/App.jsx'), 'utf8');
+  const playerCode = fs.readFileSync(
+    path.resolve(__dirname, '../../frontend/src/components/VideoPlayerPreview.jsx'),
+    'utf8'
+  );
+  const playerCss = fs.readFileSync(
+    path.resolve(__dirname, '../../frontend/src/components/VideoPlayerPreview.css'),
+    'utf8'
+  );
+  const overlayCode = fs.readFileSync(
+    path.resolve(__dirname, '../../frontend/src/components/player/LiveSubtitleOverlay.jsx'),
+    'utf8'
+  );
+
+  // App.jsx: changing visual/export settings auto-clears stale renderedVideo and seeks off-segment to sample caption when paused
+  assert.match(appCode, /const RENDER_INVALIDATING_SETTING_KEYS = Object\.keys\(VISUAL_SETTING_DEFAULTS\);/);
+  assert.match(appCode, /const SUBTITLE_PREVIEW_SETTING_KEYS = \[/);
+  assert.match(appCode, /clearedRenderedForEdit/);
+  assert.match(appCode, /resolveSubtitleSampleSeekTime/);
+
+  // VideoPlayerPreview.jsx: preserves timeline time when toggling renderedVideo <-> sourceVideo on same episode
+  assert.match(playerCode, /pendingSrcSwitchSeekRef/);
+  assert.match(playerCode, /mapTimelineToSourceTime/);
+  assert.match(playerCode, /handleInternalTimeUpdate/);
+  assert.match(playerCode, /handleInternalSeeked/);
+
+  // LiveSubtitleOverlay.jsx & VideoPlayerPreview.css: clean span scoping and 16:9 cqw scaling before 9:16 overrides
+  assert.match(overlayCode, /data-testid="live-subtitle-overlay"/);
+  assert.match(overlayCode, /aspect-1-1/);
+  assert.match(playerCss, /\.live-subtitle-overlay\.size-small\s*\{[^}]*cqw/);
+  assert.match(playerCss, /\.live-subtitle-overlay\.size-medium\s*\{[^}]*cqw/);
+  assert.match(playerCss, /\.live-subtitle-overlay\.size-large\s*\{[^}]*cqw/);
+  assert.match(playerCss, /\.live-subtitle-overlay\.style-banner\s*>\s*span/);
+  assert.match(playerCss, /\.live-subtitle-overlay\.style-pill\s*>\s*span/);
+  assert.match(playerCss, /\.live-subtitle-overlay\.style-cinema\s*>\s*span\s*\{[^}]*background:\s*transparent/);
+});

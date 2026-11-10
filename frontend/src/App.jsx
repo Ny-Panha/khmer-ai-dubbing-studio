@@ -19,6 +19,7 @@ import {
   sanitizeAspectRatio,
 } from './utils/projectStorage';
 import { isSegmentMatch, resolveVoiceClipStartSec } from './utils/timelineUtils';
+import { parseTimeToSeconds } from './utils/timestampUtils';
 import { JobQueueProvider } from './context/JobQueueContext';
 
 // Hoisted immutable fallbacks (prevents prop churning and broken memoization)
@@ -26,6 +27,79 @@ const EMPTY_SEGMENTS = Object.freeze([]);
 const EMPTY_CLIPS = Object.freeze([]);
 const EMPTY_OBJECT = Object.freeze({});
 const EMPTY_ARRAY = Object.freeze([]);
+
+const VISUAL_SETTING_DEFAULTS = {
+  aspectRatio: null,
+  verticalStyle: 'pad',
+  burnSubtitles: true,
+  subtitleStyle: 'banner',
+  subtitleColor: 'white',
+  subtitleSize: 'medium',
+  enableLogo: true,
+  logoImage: '/assets/dragon_town_logo.jpg',
+  logoPosition: 'both',
+  logoSize: 72,
+  logoOpacity: 0.9,
+  logoShape: 'circle',
+  logoMargin: 20,
+  enableAntiTheft: false,
+  marqueeText: '«ហាមផុសបន្ត • សូមឱ្យតម្លៃលើការខិតខំរបស់ម្ចាស់ដើម»',
+  marqueeSpeed: 'normal',
+  marqueePosition: 'bottom',
+  marqueeTextColor: '#FFE600',
+  enableWatermark: true,
+  watermarkText: 'រក្សាសិទ្ធិដោយ ៖ Holiday Kh Drama',
+  watermarkPosition: 'above-ticker',
+  watermarkColor: '#38BDF8',
+  antiTheftSize: 'small',
+  duckingVolume: 0.15,
+  khmerVolume: 1.3,
+  enableDemucs: false,
+};
+
+const RENDER_INVALIDATING_SETTING_KEYS = Object.keys(VISUAL_SETTING_DEFAULTS);
+const SUBTITLE_PREVIEW_SETTING_KEYS = [
+  'burnSubtitles',
+  'subtitleStyle',
+  'subtitleColor',
+  'subtitleSize',
+  'verticalStyle',
+];
+
+function readNormalizedSettingVal(settings, key) {
+  const raw = settings?.[key];
+  if (key === 'aspectRatio') return sanitizeAspectRatio(raw);
+  if (raw === undefined || raw === null) return VISUAL_SETTING_DEFAULTS[key];
+  return raw;
+}
+
+function resolveSubtitleSampleSeekTime(segments = [], currentTimeSec = 0) {
+  if (!Array.isArray(segments) || segments.length === 0) return null;
+  const t = Number.isFinite(currentTimeSec) ? currentTimeSec : 0;
+  const intervals = [];
+  for (const seg of segments) {
+    if (!seg) continue;
+    const text = String(seg.khmer || seg.khmerText || seg.khmerTranslatedText || seg.text || '').trim();
+    if (!text) continue;
+    const s = (typeof seg.startSec === 'number' && !isNaN(seg.startSec))
+      ? seg.startSec
+      : parseTimeToSeconds(seg.start ?? seg.startTime, 0);
+    let e = (typeof seg.endSec === 'number' && !isNaN(seg.endSec))
+      ? seg.endSec
+      : parseTimeToSeconds(seg.end ?? seg.endTime, s + 2.5);
+    if (isNaN(e) || e <= s || (e - s) < 0.6) {
+      e = s + Math.max(1.8, Math.min(6.0, text.length * 0.16));
+    }
+    if (t >= s && t < (e - 0.05)) {
+      return null;
+    }
+    intervals.push({ s, e });
+  }
+  if (intervals.length === 0) return null;
+  const target = intervals.find((it) => it.s >= t) || intervals[intervals.length - 1];
+  const sampleOffset = Math.min(0.35, Math.max(0.05, (target.e - target.s) / 2));
+  return parseFloat(Math.min(target.e - 0.05, target.s + sampleOffset).toFixed(2));
+}
 
 // Custom Architectural Hooks (Modularized for clean maintainability & debugging)
 import { useResizablePanels } from './hooks/useResizablePanels';
@@ -393,25 +467,73 @@ export default function App() {
   const handleGenerateAudio = useCallback((...args) => audioRef.current.handleGenerateAudio?.(...args), []);
   const handleToggleDeliveryType = useCallback((...args) => audioRef.current.handleToggleDeliveryType?.(...args), []);
   const handleUpdateVoiceSettings = useCallback((newSettings) => {
-    const prevRatio = sanitizeAspectRatio(voiceSettingsRef.current?.aspectRatio);
+    const prevSettings = voiceSettingsRef.current || EMPTY_OBJECT;
+    const prevRatio = sanitizeAspectRatio(prevSettings?.aspectRatio);
     const normalizedSettings = newSettings && typeof newSettings === 'object' && !Array.isArray(newSettings)
       ? {
           ...newSettings,
           aspectRatio: sanitizeAspectRatio(newSettings.aspectRatio),
         }
       : newSettings;
+
+    const hasRenderAffectingChange = Boolean(
+      normalizedSettings &&
+      typeof normalizedSettings === 'object' &&
+      RENDER_INVALIDATING_SETTING_KEYS.some(
+        (key) => readNormalizedSettingVal(prevSettings, key) !== readNormalizedSettingVal(normalizedSettings, key)
+      )
+    );
+    const hasSubtitleVisualChange = Boolean(
+      normalizedSettings &&
+      typeof normalizedSettings === 'object' &&
+      SUBTITLE_PREVIEW_SETTING_KEYS.some(
+        (key) => readNormalizedSettingVal(prevSettings, key) !== readNormalizedSettingVal(normalizedSettings, key)
+      )
+    );
+
     if (normalizedSettings && typeof normalizedSettings === 'object') {
       voiceSettingsRef.current = normalizedSettings;
+      saveVoiceSettings(normalizedSettings);
     }
     audioRef.current.handleUpdateVoiceSettings?.(normalizedSettings);
-    if (normalizedSettings?.aspectRatio && normalizedSettings.aspectRatio !== prevRatio) {
-      saveVoiceSettings(normalizedSettings);
-      const patch = { voiceSettings: normalizedSettings };
-      const sId = seriesRef.current.seriesId;
-      const eId = seriesRef.current.episodeId;
+
+    const sId = seriesRef.current.seriesId;
+    const eId = seriesRef.current.episodeId;
+    const ratioChanged = Boolean(normalizedSettings?.aspectRatio && normalizedSettings.aspectRatio !== prevRatio);
+    const clearedRenderedForEdit = Boolean(hasRenderAffectingChange && renderRef.current?.renderedVideo);
+
+    if (clearedRenderedForEdit) {
+      if (renderRef.current.setRenderedVideo) {
+        renderRef.current.setRenderedVideo(null);
+      }
+      const patch = { renderedVideo: null, voiceSettings: normalizedSettings };
       if (sId && eId) {
         saveEpisodeState(sId, eId, patch);
-        seriesRef.current.handleSaveEpisodeBackground?.(eId, patch);
+      }
+      if (eId && seriesRef.current.handleSaveEpisodeBackground) {
+        seriesRef.current.handleSaveEpisodeBackground(eId, patch);
+      }
+    } else if (hasRenderAffectingChange || ratioChanged) {
+      const patch = { voiceSettings: normalizedSettings };
+      if (sId && eId) {
+        saveEpisodeState(sId, eId, patch);
+        if (ratioChanged) {
+          seriesRef.current.handleSaveEpisodeBackground?.(eId, patch);
+        }
+      }
+    }
+
+    if (
+      hasSubtitleVisualChange &&
+      normalizedSettings?.burnSubtitles !== false &&
+      !playbackRef.current?.isPlaying
+    ) {
+      const sampleTime = resolveSubtitleSampleSeekTime(
+        scriptDataRef.current?.segments,
+        playbackRef.current?.currentTime || 0
+      );
+      if (sampleTime !== null) {
+        playbackRef.current?.handleSeek?.(sampleTime);
       }
     }
   }, []);

@@ -153,10 +153,11 @@ export default function ExportSettingsPanel({
           )}
 
           {/* Subtitle Burn Switch */}
-          <label className="checkbox-container" style={{ marginBottom: settings?.burnSubtitles ? 10 : 12 }}>
+          <label className="checkbox-container" style={{ marginBottom: settings?.burnSubtitles !== false ? 10 : 12 }}>
             <input
               type="checkbox"
-              checked={settings?.burnSubtitles}
+              data-testid="export-burn-subtitles-checkbox"
+              checked={settings?.burnSubtitles !== false}
               onChange={(e) => onSettingChange('burnSubtitles', e.target.checked)}
             />
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -168,13 +169,14 @@ export default function ExportSettingsPanel({
           </label>
 
           {/* Subtitle Style Controls (Style, Color & Size) */}
-          {settings?.burnSubtitles && (
+          {settings?.burnSubtitles !== false && (
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 12, paddingLeft: 6 }}>
               <div style={{ gridColumn: 'span 2' }}>
                 <span style={{ fontSize: '0.72rem', color: 'var(--text-dim)', display: 'block', marginBottom: 4 }}>
                   ម៉ូដ Subtitle (Caption Style for TikTok/Reels/FB)
                 </span>
                 <select
+                  data-testid="export-subtitle-style-select"
                   value={settings?.subtitleStyle || 'banner'}
                   onChange={(e) => onSettingChange('subtitleStyle', e.target.value)}
                   className="inspector-select"
@@ -191,6 +193,7 @@ export default function ExportSettingsPanel({
                   ពណ៌អក្សរ Subtitle
                 </span>
                 <select
+                  data-testid="export-subtitle-color-select"
                   value={settings?.subtitleColor || 'white'}
                   onChange={(e) => onSettingChange('subtitleColor', e.target.value)}
                   className="inspector-select"
@@ -206,6 +209,7 @@ export default function ExportSettingsPanel({
                   ទំហំអក្សរ Subtitle
                 </span>
                 <select
+                  data-testid="export-subtitle-size-select"
                   value={settings?.subtitleSize || 'medium'}
                   onChange={(e) => onSettingChange('subtitleSize', e.target.value)}
                   className="inspector-select"

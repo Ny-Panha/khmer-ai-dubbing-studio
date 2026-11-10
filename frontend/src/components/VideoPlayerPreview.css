@@ -261,102 +261,124 @@
 /* Video Subtitle Overlay */
 .live-subtitle-overlay {
   position: absolute;
-  bottom: 8%;
+  bottom: 7.5%;
   left: 5%;
   right: 5%;
   z-index: 10;
   display: flex;
   justify-content: center;
   align-items: center;
+  background: transparent;
+  border: none;
+  padding: 0;
+  box-shadow: none;
   pointer-events: none;
   user-select: none;
   text-align: center;
   white-space: normal;
   text-wrap: balance;
-  line-height: 1.55;
+  line-height: 1.5;
 }
 
+.live-subtitle-overlay > span {
+  display: inline-block;
+  max-width: 100%;
+  font-family: inherit;
+  font-size: inherit;
+  font-weight: 700;
+  line-height: 1.5;
+  color: inherit;
+  white-space: pre-wrap;
+  transition: all 0.12s ease-out;
+}
+
+/* Sizes for standard 16:9 mode (proportional to 1920x1080 ASS burn: 35 / 44 / 55 px) */
+.live-subtitle-overlay.size-small {
+  font-size: clamp(0.62rem, 1.85cqw, 2.25rem);
+}
+
+.live-subtitle-overlay.size-medium {
+  font-size: clamp(0.76rem, 2.30cqw, 2.80rem);
+}
+
+.live-subtitle-overlay.size-large {
+  font-size: clamp(0.95rem, 2.90cqw, 3.50rem);
+}
+
+/* Sizes for 1:1 square mode (proportional to 1080x1080 ASS burn: 42 / 52 / 65 px) */
+.live-subtitle-overlay.aspect-1-1.size-small {
+  font-size: clamp(0.66rem, 3.85cqw, 2.60rem);
+}
+
+.live-subtitle-overlay.aspect-1-1.size-medium {
+  font-size: clamp(0.82rem, 4.80cqw, 3.25rem);
+}
+
+.live-subtitle-overlay.aspect-1-1.size-large {
+  font-size: clamp(1.02rem, 6.00cqw, 4.05rem);
+}
+
+/* Sizes for 9:16 portrait/letterbox mode (proportional to 1080x1920 ASS burn: 35 / 44 / 55 px) */
 .live-subtitle-overlay.aspect-9-16-vertical.size-small,
 .live-subtitle-overlay.aspect-9-16-letterbox.size-small,
 .live-subtitle-overlay.aspect-9-16.size-small {
-  font-size: clamp(0.62rem, 1.4vw, 0.80rem);
-  font-size: clamp(0.56rem, 3.4cqw, 1.75rem);
-  padding: 3px 8px;
-  border-radius: 5px;
+  font-size: clamp(0.56rem, 3.4cqw, 2.20rem);
 }
 
 .live-subtitle-overlay.aspect-9-16-vertical.size-medium,
 .live-subtitle-overlay.aspect-9-16-letterbox.size-medium,
 .live-subtitle-overlay.aspect-9-16.size-medium {
-  font-size: clamp(0.72rem, 1.7vw, 0.96rem);
-  font-size: clamp(0.68rem, 4cqw, 2.25rem);
-  padding: 4px 10px;
-  border-radius: 6px;
+  font-size: clamp(0.68rem, 4cqw, 2.75rem);
 }
 
 .live-subtitle-overlay.aspect-9-16-vertical.size-large,
 .live-subtitle-overlay.aspect-9-16-letterbox.size-large,
 .live-subtitle-overlay.aspect-9-16.size-large {
-  font-size: clamp(0.84rem, 2.0vw, 1.15rem);
-  font-size: clamp(0.80rem, 4.8cqw, 2.75rem);
-  padding: 5px 12px;
-  border-radius: 7px;
+  font-size: clamp(0.80rem, 4.8cqw, 3.45rem);
 }
 
 .live-subtitle-overlay.aspect-9-16-letterbox {
   bottom: 36.5%;
 }
 
-/* Sizes for standard 16:9 mode */
-.live-subtitle-overlay.size-small {
-  font-size: clamp(0.70rem, 1.5vw, 0.86rem);
-  padding: 3px 12px;
-}
-
-.live-subtitle-overlay.size-medium {
-  font-size: clamp(0.82rem, 1.8vw, 1.02rem);
-  padding: 4px 15px;
-}
-
-.live-subtitle-overlay.size-large {
-  font-size: clamp(0.96rem, 2.2vw, 1.20rem);
-  padding: 6px 18px;
-}
-
-/* Style A: Title Banner */
-.live-subtitle-overlay.style-banner {
-  background: rgba(11, 19, 43, 0.85);
+/* Style A: Title Banner — solid dark rectangular box matching ASS BorderStyle 3 (&H3208080c) */
+.live-subtitle-overlay.style-banner > span {
+  background: rgba(8, 12, 24, 0.88);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
   border: 1px solid rgba(255, 255, 255, 0.16);
-  border-radius: 8px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.85);
-  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.95);
-}
-
-/* Style B: CapCut Pill */
-.live-subtitle-overlay.style-pill {
-  background: rgba(11, 19, 43, 0.82);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  border-radius: 9999px;
-  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.75);
-  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.95);
-}
-
-/* Style C: Cinema Floating */
-.live-subtitle-overlay.style-cinema {
-  background: rgba(0, 0, 0, 0.45);
-  backdrop-filter: blur(4px);
-  -webkit-backdrop-filter: blur(4px);
   border-radius: 6px;
-  padding: 4px 12px;
-  text-shadow: 
-    0 1.5px 3px rgba(0, 0, 0, 0.95),
-    0 2px 8px rgba(0, 0, 0, 0.9),
-    0 0 14px rgba(0, 0, 0, 0.85);
-  -webkit-text-stroke: 0.5px rgba(0, 0, 0, 0.85);
+  padding: 0.28em 0.75em;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.82);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.95);
+}
+
+/* Style B: CapCut Pill — lighter translucent capsule matching ASS BorderStyle 3 (&H6408080c) */
+.live-subtitle-overlay.style-pill > span {
+  background: rgba(11, 19, 43, 0.58);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  border: 1px solid rgba(255, 255, 255, 0.26);
+  border-radius: 9999px;
+  padding: 0.18em 0.95em;
+  box-shadow: 0 3px 14px rgba(0, 0, 0, 0.5);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9);
+}
+
+/* Style C: Cinema Soft — clean outlined floating text matching ASS BorderStyle 1 */
+.live-subtitle-overlay.style-cinema > span {
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 0.10em 0.35em;
+  box-shadow: none;
+  text-shadow:
+    -1.5px -1.5px 0 rgba(0, 0, 0, 0.95),
+     1.5px -1.5px 0 rgba(0, 0, 0, 0.95),
+    -1.5px  1.5px 0 rgba(0, 0, 0, 0.95),
+     1.5px  1.5px 0 rgba(0, 0, 0, 0.95),
+     0px    2px   6px rgba(0, 0, 0, 0.95),
+     0px    0px  12px rgba(0, 0, 0, 0.75);
 }
 
 .empty-player-placeholder {
