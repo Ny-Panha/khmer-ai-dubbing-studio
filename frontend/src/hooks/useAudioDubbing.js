@@ -1212,16 +1212,26 @@ const FALLBACK_VOICE_CATALOG = {
   // ✨ One-Click AI Translation Remedy for Missing-Text Segments
   const handleTranslateSingleSegment = async (segIdOrIndex, targetIndex = null) => {
     if (!scriptData?.segments) return null;
+    const matchSegment = (s, idx) => (
+      (s._uid && String(s._uid) === String(segIdOrIndex)) ||
+      s.id === segIdOrIndex || idx === segIdOrIndex ||
+      String(s.id) === String(segIdOrIndex) || String(idx) === String(segIdOrIndex)
+    );
     const segIdx = typeof targetIndex === 'number' && targetIndex >= 0 && targetIndex < scriptData.segments.length
       ? targetIndex
-      : scriptData.segments.findIndex((s, idx) =>
-          s.id === segIdOrIndex || idx === segIdOrIndex ||
-          String(s.id) === String(segIdOrIndex) || String(idx) === String(segIdOrIndex)
-        );
+      : scriptData.segments.findIndex(matchSegment);
     if (segIdx === -1) return null;
 
+    const targetEpisodeId = episodeId;
     const targetSeg = scriptData.segments[segIdx];
-    const textToTranslate = (targetSeg.chineseText || targetSeg.originalChineseText || targetSeg.originalText || targetSeg.original || '').trim();
+    const textToTranslate = (
+      targetSeg.chineseText ||
+      targetSeg.originalChineseText ||
+      targetSeg.originalText ||
+      targetSeg.original ||
+      targetSeg.chinese ||
+      ''
+    ).trim();
     if (!textToTranslate) {
       alert(`Segment #${targetSeg.id || segIdx + 1} មិនមានអត្ថបទចិនដើមសម្រាប់បកប្រែទេ!`);
       return null;
@@ -1234,42 +1244,48 @@ const FALLBACK_VOICE_CATALOG = {
         gender: targetSeg.voiceGender || targetSeg.speakerGender || targetSeg.gender,
       });
 
+      if (targetEpisodeId && targetEpisodeId !== activeTtsEpisodeRef.current) {
+        return null;
+      }
+
       if (res && Array.isArray(res.options) && res.options.length > 0) {
         const bestText = cleanKhmerText(res.options[0].text);
         if (bestText) {
-          const nextSegs = [...scriptData.segments];
-          const updated = {
-            ...targetSeg,
-            khmer: bestText,
-            khmerText: bestText,
-            khmerTranslatedText: bestText,
-            audioOutdated: true,
-            textStatus: 'text_updated',
-            reviewNeeded: false,
-            ttsStatus: 'pending',
+          const buildUpdatedSegment = (baseSeg) => {
+            const nextSeg = {
+              ...baseSeg,
+              khmer: bestText,
+              khmerText: bestText,
+              khmerTranslatedText: bestText,
+              audioOutdated: true,
+              textStatus: 'text_updated',
+              reviewNeeded: false,
+              ttsStatus: 'pending',
+            };
+            delete nextSeg.regenError;
+            if (Array.isArray(nextSeg.validationErrors)) {
+              nextSeg.validationErrors = nextSeg.validationErrors.filter((e) => !e.includes('មិនទាន់មានអត្ថបទបកប្រែ'));
+            }
+            return nextSeg;
           };
-          delete updated.regenError;
-          if (Array.isArray(updated.validationErrors)) {
-            updated.validationErrors = updated.validationErrors.filter((e) => !e.includes('មិនទាន់មានអត្ថបទបកប្រែ'));
-          }
-          nextSegs[segIdx] = updated;
 
+          const updated = buildUpdatedSegment(targetSeg);
           const nextScriptUpdatedAt = Date.now();
-          setScriptData((prev) => (prev ? {
-            ...prev,
-            segments: nextSegs,
-            updatedAt: nextScriptUpdatedAt,
-          } : prev));
-
-          if (onUpdateSegments) {
-            onUpdateSegments(nextSegs, false, true);
-          } else if (onUpdateScript) {
-            onUpdateScript({
-              ...scriptData,
+          setScriptData((prev) => {
+            if (!prev?.segments) return prev;
+            const liveIdx = typeof targetIndex === 'number' && targetIndex >= 0 && targetIndex < prev.segments.length
+              ? targetIndex
+              : prev.segments.findIndex(matchSegment);
+            if (liveIdx === -1) return prev;
+            const nextSegs = [...prev.segments];
+            nextSegs[liveIdx] = buildUpdatedSegment(prev.segments[liveIdx]);
+            return {
+              ...prev,
               segments: nextSegs,
               updatedAt: nextScriptUpdatedAt,
-            });
-          }
+            };
+          });
+          setAudioOutdated(true);
 
           return updated;
         }

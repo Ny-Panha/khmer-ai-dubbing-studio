@@ -231,3 +231,19 @@ test('Voice gender switch (handleClipVoiceChange) does not auto-play segment aud
     'Switching segment voice gender must not auto-play audio'
   );
 });
+
+test('useAudioDubbing handleTranslateSingleSegment uses setScriptData/setAudioOutdated without undefined callbacks', () => {
+  const audioDubbingCode = fs.readFileSync(
+    path.resolve(__dirname, '../../frontend/src/hooks/useAudioDubbing.js'),
+    'utf8'
+  );
+  const translateBlockMatch = audioDubbingCode.match(
+    /const handleTranslateSingleSegment = async[\s\S]*?return null;\s*\};/
+  );
+  assert.ok(translateBlockMatch, 'handleTranslateSingleSegment block must exist in useAudioDubbing.js');
+  const block = translateBlockMatch[0];
+  assert.doesNotMatch(block, /\bonUpdateSegments\b/, 'useAudioDubbing does not receive onUpdateSegments');
+  assert.doesNotMatch(block, /\bonUpdateScript\b/, 'useAudioDubbing does not receive onUpdateScript');
+  assert.match(block, /setScriptData\s*\(/, 'Must update scriptData via setScriptData');
+  assert.match(block, /setAudioOutdated\s*\(\s*true\s*\)/, 'Must mark audioOutdated true after translating line');
+});

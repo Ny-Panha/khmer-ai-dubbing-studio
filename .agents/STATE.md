@@ -1,6 +1,30 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
+- **Environment**: Antigravity IDE (`Fix ReferenceError: onUpdateSegments is not defined in handleTranslateSingleSegment`)
+- **Timestamp**: 2026-11-10T17:27:09+07:00
+
+## Summary: Fixed `ReferenceError: onUpdateSegments / onUpdateScript is not defined` in Single-Segment AI Translate
+1. **Root Cause & Fix ([useAudioDubbing.js](file:///e:/khmer_ai_dubbing_studio/frontend/src/hooks/useAudioDubbing.js#L1212-L1298))**:
+   - [`handleTranslateSingleSegment`](file:///e:/khmer_ai_dubbing_studio/frontend/src/hooks/useAudioDubbing.js#L1213-L1298) (called by `handleTranslateThisLine` in [`ClipInspectorPanel.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/voice/ClipInspectorPanel.jsx#L410) and `ScriptReviewTab.jsx`) called undefined variables `onUpdateSegments` and `onUpdateScript` after `setScriptData(...)`, causing every single-line translation click to throw `ReferenceError: onUpdateSegments is not defined`, abort returning `updated`, and trigger a duplicate fallback API retry.
+   - Removed the bogus `if (onUpdateSegments) ... else if (onUpdateScript) ...` block, added `setAudioOutdated(true)`, preserved `_uid` matching + `.chinese` text fallback, built `updated` synchronously so React 18 batching never returns `null`, and added active-episode staleness guard (`activeTtsEpisodeRef`).
+2. **Regression Coverage ([workspace_player_containment.test.js](file:///e:/khmer_ai_dubbing_studio/backend/tests/workspace_player_containment.test.js#L235-L249))**:
+   - Added `'useAudioDubbing handleTranslateSingleSegment uses setScriptData/setAudioOutdated without undefined callbacks'` asserting `onUpdateSegments`/`onUpdateScript` do not appear and `setScriptData(` / `setAudioOutdated(true)` are used.
+3. **Verification Results (Fresh After Final Edit — Real `series.json` Untouched)**:
+   - `npm --prefix frontend run lint`: **0 errors** (374 pre-existing warnings); `oxlint -D no-undef frontend/src/hooks/useAudioDubbing.js`: **0** non-browser `no-undef` errors.
+   - `npm --prefix frontend run build`: **PASS (`689ms`)**.
+   - `node --test backend/tests/workspace_player_containment.test.js backend/tests/aspect_ratio_and_crop.test.js`: **13/13 PASS**.
+   - Live Playwright Chrome E2E (`verify_translate_segment_no_ref_error.cjs` on `http://127.0.0.1:5173` with mocked `/api/series` writes & `/api/dubbing/retranslate-segment`): **PASS, 0 console/page errors, 0 alert dialogs** — verified 1 API call (no duplicate retry) and translated Khmer text applied directly into `#inspector-khmer-textarea`.
+
+## Active Environment
+- **Dev Orchestrator**: Backend `http://localhost:5000` + Frontend `http://localhost:5173`.
+
+## Next Steps
+- Hard refresh browser (`Ctrl + Shift + R`) on `http://localhost:5173` and click `បកប្រែឃ្លានេះ` on any missing-text segment — Khmer translation updates immediately without console errors.
+
+---
+
+## Previous Session
 - **Environment**: Antigravity IDE (`Disable Auto-Play When Switching Segment Voice Gender`)
 - **Timestamp**: 2026-11-10T16:37:31+07:00
 
