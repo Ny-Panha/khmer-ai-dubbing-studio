@@ -1094,3 +1094,85 @@ test('Mock renderedVideo sanitization: strips mock_render.mp4 on disk hydration,
     else global.localStorage = prevLocalStorage;
   }
 });
+
+test('Re-Translate on previously voiced episode sets audioOutdated=true and syncSeriesMetadataSafely preserves it over stale /sync', async () => {
+  const projectsDir = makeTempProjectsDir();
+  const seriesId = 'series_retranslate_outdated_guard';
+  try {
+    seedSeriesWithEpisodes(projectsDir, seriesId, ['ep_4']);
+    const seeded = getSeriesMetadata(seriesId, { forceDisk: true, projectsDir });
+    seeded.episodes[0].hasAudio = true;
+    seeded.episodes[0].audioGenerated = true;
+    seeded.episodes[0].audioOutdated = false;
+    seeded.episodes[0].fullAudioUrl = `/uploads/projects/${seriesId}/episodes/ep_4/audio/old_master.mp3`;
+    seeded.episodes[0].scriptData = { mode: 'dialogue', segments: makeSegments(4, 'old'), updatedAt: 1000 };
+    saveSeriesMetadata(seeded, { projectsDir });
+
+    const newUnvoicedSegs = [
+      { id: 1, chineseText: '新台词1', khmerText: 'ឃ្លាថ្មីទី១', audioUrl: null },
+      { id: 2, chineseText: '新台词2', khmerText: 'ឃ្លាថ្មីទី២', audioUrl: null },
+    ];
+    await persistEpisodeScriptData({
+      seriesId,
+      episodeId: 'ep_4',
+      scriptData: { mode: 'dialogue', segments: newUnvoicedSegs },
+      generationMode: 'dialogue',
+      status: 'translated',
+      projectsDir,
+    });
+
+    const afterPersist = getSeriesMetadata(seriesId, { forceDisk: true, projectsDir });
+    assert.equal(afterPersist.episodes[0].audioOutdated, true, 'Re-Translate overwrite on voiced episode must mark audioOutdated=true');
+    assert.equal(afterPersist.episodes[0].scriptData.segments.length, 2);
+
+    // Stale browser /sync with older updatedAt trying to clear audioOutdated back to false must lose
+    await syncSeriesMetadataSafely(
+      seriesId,
+      {
+        id: seriesId,
+        episodes: [
+          {
+            id: 'ep_4',
+            episodeNumber: 4,
+            hasAudio: true,
+            audioGenerated: true,
+            audioOutdated: false,
+            fullAudioUrl: `/uploads/projects/${seriesId}/episodes/ep_4/audio/old_master.mp3`,
+            scriptData: { mode: 'dialogue', segments: [], updatedAt: 1000 },
+          },
+        ],
+      },
+      { projectsDir }
+    );
+
+    const afterSync = getSeriesMetadata(seriesId, { forceDisk: true, projectsDir });
+    assert.equal(afterSync.episodes[0].audioOutdated, true, 'syncSeriesMetadataSafely must preserve disk audioOutdated=true against stale /sync');
+
+    const helpers = await import('../../frontend/src/components/dashboard/geminiRouteHelpers.js');
+    assert.equal(helpers.checkEpisodeHasAudioReady(afterSync.episodes[0]), false);
+  } finally {
+    fs.rmSync(projectsDir, { recursive: true, force: true });
+  }
+});
+
+test('frontend GeminiRouteModal active translate queue & banner helpers scope strictly to current series and exclude repair_broken', async () => {
+  const helpers = await import('../../frontend/src/components/dashboard/geminiRouteHelpers.js');
+  const { getActiveSeriesTranslateJobs, isTranslateQueueEnqueueBanner } = helpers;
+
+  const jobs = [
+    { jobId: 'j1', seriesId: 's_1', episodeId: 'ep_1', mode: 'dialogue', status: 'running' },
+    { jobId: 'j2', seriesId: 's_1', episodeId: 'ep_2', mode: 'fast_ocr', status: 'queued' },
+    { jobId: 'j3', seriesId: 's_1', episodeId: 'ep_3', mode: 'repair_broken', config: { isRepairBroken: true }, status: 'running' },
+    { jobId: 'j4', seriesId: 's_1', episodeId: 'ep_4', mode: 'dialogue', status: 'completed' },
+    { jobId: 'j5', seriesId: 's_2', episodeId: 'ep_1', mode: 'dialogue', status: 'running' },
+  ];
+
+  const activeForS1 = getActiveSeriesTranslateJobs(jobs, 's_1');
+  assert.deepEqual(activeForS1.map((j) => j.jobId), ['j1', 'j2']);
+  assert.equal(getActiveSeriesTranslateJobs(jobs, 's_other').length, 0);
+
+  assert.equal(isTranslateQueueEnqueueBanner('🎉 បានដាក់បញ្ចូល Re-Translate ចំនួន 11 ភាគ (ដំណើរការ 1 + រង់ចាំក្នុង Queue 10)!'), true);
+  assert.equal(isTranslateQueueEnqueueBanner('✅ បានដាក់បញ្ចូល Translate ចំនួន 3 ភាគ!'), true);
+  assert.equal(isTranslateQueueEnqueueBanner('🔧 បានជួសជុលឃ្លាខូចរួចរាល់!'), false);
+  assert.equal(isTranslateQueueEnqueueBanner(''), false);
+});

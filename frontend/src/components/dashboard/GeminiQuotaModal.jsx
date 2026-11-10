@@ -19,7 +19,10 @@ const KEY_THEMES = {
   2: { color: '#34d399', bg: 'rgba(52, 211, 153, 0.12)', border: 'rgba(52, 211, 153, 0.3)', dot: '#34d399' },
   3: { color: '#818cf8', bg: 'rgba(129, 140, 248, 0.12)', border: 'rgba(129, 140, 248, 0.3)', dot: '#818cf8' },
   4: { color: '#FF8577', bg: 'rgba(255, 133, 119, 0.12)', border: 'rgba(255, 133, 119, 0.3)', dot: '#FF8577' },
+  5: { color: '#fbbf24', bg: 'rgba(251, 191, 36, 0.12)', border: 'rgba(251, 191, 36, 0.3)', dot: '#fbbf24' },
+  6: { color: '#e879f9', bg: 'rgba(232, 121, 249, 0.12)', border: 'rgba(232, 121, 249, 0.3)', dot: '#e879f9' },
 };
+const KEY_THEME_COUNT = Object.keys(KEY_THEMES).length;
 
 const FALLBACK_CASCADE_OPTIONS = [
   { id: 'gemini-3.5-flash-lite', displayName: 'Gemini 3.5 Flash Lite', perKey: { rpmLimit: 15, rpdLimit: 500 } },
@@ -336,7 +339,7 @@ export default function GeminiQuotaModal({
                 </span>
               </div>
               <p style={{ margin: '3px 0 0 0', fontSize: '0.73rem', color: '#94A3B8' }}>
-                តាមដាន Quota ពិត (RPM / TPM / RPD) របស់ Key #1–#4 និងស្ថានភាព Model Cascade — ចុច Test ឬ Pin Model មុនពេល Generate!
+                តាមដាន Quota ពិត (RPM / TPM / RPD) របស់ {totalKeys > 1 ? `Key #1–#${totalKeys}` : totalKeys === 1 ? 'Key #1' : 'API Keys'} និងស្ថានភាព Model Cascade — ចុច Test ឬ Pin Model មុនពេល Generate!
               </p>
             </div>
           </div>
@@ -913,13 +916,13 @@ export default function GeminiQuotaModal({
             <div
               style={{
                 display: 'grid',
-                gridTemplateColumns: `repeat(${Math.min(4, Math.max(1, displayKeys.length))}, minmax(0, 1fr))`,
+                gridTemplateColumns: 'repeat(auto-fit, minmax(205px, 1fr))',
                 gap: 10,
               }}
             >
               {displayKeys.map((liveKeyData) => {
                 const kNum = liveKeyData.keyNum;
-                const theme = KEY_THEMES[((kNum - 1) % 4) + 1] || KEY_THEMES[1];
+                const theme = KEY_THEMES[((kNum - 1) % KEY_THEME_COUNT) + 1] || KEY_THEMES[1];
                 const isDailyExhausted = !isCheckingQuota && liveKeyData.status === 'daily_exhausted';
                 const isRateLimited = !isCheckingQuota && liveKeyData.status === 'rate_limited';
                 const isInvalid = !isCheckingQuota && liveKeyData.status === 'invalid';

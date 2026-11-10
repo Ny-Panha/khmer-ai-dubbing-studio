@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Terminal, ChevronDown, ChevronUp, AlertCircle, CheckCircle2, Clock, Loader2, RotateCcw } from 'lucide-react';
+import StudioConfirmDialog from '../../common/StudioConfirmDialog';
 
 /**
  * EpisodeTranslateProgressCard:
@@ -13,12 +14,14 @@ export default function EpisodeTranslateProgressCard({
   isFailed = false,
   onRetry = null,
   onKill = null,
+  onRequestConfirm = null,
 }) {
   const targetProgress = isQueued
     ? 0
     : Math.min(100, Math.max(0, Number(activeJob?.progress || 0)));
   const [smoothProgress, setSmoothProgress] = useState(targetProgress || (isQueued ? 0 : 1));
   const [showConsole, setShowConsole] = useState(true);
+  const [showKillConfirm, setShowKillConfirm] = useState(false);
   const consoleBottomRef = useRef(null);
 
   useEffect(() => {
@@ -216,11 +219,22 @@ export default function EpisodeTranslateProgressCard({
               {!isDone && onKill && (
                 <button
                   type="button"
-                  onClick={(e) => {
+                  onClick={async (e) => {
                     e.stopPropagation();
-                    if (window.confirm('តើអ្នកពិតជាចង់បញ្ឈប់ (Kill) ដំណើរការ Translate នេះមែនទេ?')) {
-                      onKill(activeJob);
+                    if (typeof onRequestConfirm === 'function') {
+                      const confirmed = await onRequestConfirm({
+                        variant: 'danger',
+                        badge: 'KILL TRANSLATE',
+                        title: 'បញ្ឈប់ (Kill) ដំណើរការ Translate នេះ?',
+                        subtitle: activeJob?.episodeId ? `Episode: ${activeJob.episodeId}` : '',
+                        message: 'តើអ្នកពិតជាចង់បញ្ឈប់ (Kill) ដំណើរការ Translate នេះមែនទេ?',
+                        confirmLabel: '🛑 បញ្ឈប់ (Kill)',
+                        cancelLabel: 'បន្តដំណើរការ',
+                      });
+                      if (confirmed) onKill(activeJob);
+                      return;
                     }
+                    setShowKillConfirm(true);
                   }}
                   title="Kill Translate Process"
                   style={{
@@ -500,6 +514,21 @@ export default function EpisodeTranslateProgressCard({
           </div>
         )}
       </div>
+      <StudioConfirmDialog
+        isOpen={showKillConfirm}
+        variant="danger"
+        badge="KILL TRANSLATE"
+        title="បញ្ឈប់ (Kill) ដំណើរការ Translate នេះ?"
+        subtitle={activeJob?.episodeId ? `Episode: ${activeJob.episodeId}` : ''}
+        message="តើអ្នកពិតជាចង់បញ្ឈប់ (Kill) ដំណើរការ Translate នេះមែនទេ?"
+        confirmLabel="🛑 បញ្ឈប់ (Kill)"
+        cancelLabel="បន្តដំណើរការ"
+        onConfirm={() => {
+          setShowKillConfirm(false);
+          onKill?.(activeJob);
+        }}
+        onCancel={() => setShowKillConfirm(false)}
+      />
     </div>
   );
 }

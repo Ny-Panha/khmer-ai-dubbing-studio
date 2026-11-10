@@ -373,3 +373,19 @@ export function applyElapsedCountdownToKeysHealth(keysHealth, nowMs = Date.now()
     modelRateLimits: adjustedModels,
   };
 }
+
+export function getActiveSeriesTranslateJobs(activeJobs = [], currentSeriesId = null) {
+  if (!Array.isArray(activeJobs)) return [];
+  return activeJobs.filter(
+    (j) =>
+      j &&
+      j.mode !== 'repair_broken' &&
+      j.config?.isRepairBroken !== true &&
+      (!currentSeriesId || !j.seriesId || String(j.seriesId) === String(currentSeriesId)) &&
+      (j.status === 'running' || j.status === 'queued')
+  );
+}
+
+export function isTranslateQueueEnqueueBanner(message = '') {
+  return typeof message === 'string' && /បានដាក់បញ្ចូល\s+(?:Re-)?Translate/.test(message);
+}

@@ -1,17 +1,19 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Terminal, ChevronDown, ChevronUp, CheckCircle2, Loader2, AlertCircle } from 'lucide-react';
+import StudioConfirmDialog from '../../common/StudioConfirmDialog';
 
 /**
  * EpisodeTtsProgressCard:
  * Dynamic 0% - 100% smooth runner, glowing coral progress bar, 4 visual milestones,
  * and collapsible Live Console Terminal Drawer for Step 2 (Khmer TTS Voice Studio).
  */
-export default function EpisodeTtsProgressCard({ liveStats, ep, onKill = null }) {
+export default function EpisodeTtsProgressCard({ liveStats, ep, onKill = null, onRequestConfirm = null }) {
   const current = liveStats?.current || 0;
   const total = liveStats?.total || ep?.scriptData?.segments?.length || ep?.scriptData?.totalSegments || 1;
   const targetPercent = Math.min(100, Math.max(0, liveStats?.percent ?? Math.round((current / (total || 1)) * 100)));
   const [smoothProgress, setSmoothProgress] = useState(targetPercent || 1);
   const [showConsole, setShowConsole] = useState(true);
+  const [showKillConfirm, setShowKillConfirm] = useState(false);
   const consoleBottomRef = useRef(null);
 
   useEffect(() => {
@@ -114,11 +116,22 @@ export default function EpisodeTtsProgressCard({ liveStats, ep, onKill = null })
           {!isDone && !isFailed && onKill && (
             <button
               type="button"
-              onClick={(e) => {
+              onClick={async (e) => {
                 e.stopPropagation();
-                if (window.confirm('តើអ្នកពិតជាចង់បញ្ឈប់ (Kill) ដំណើរការ TTS នេះមែនទេ?')) {
-                  onKill(ep);
+                if (typeof onRequestConfirm === 'function') {
+                  const confirmed = await onRequestConfirm({
+                    variant: 'danger',
+                    badge: 'KILL TTS',
+                    title: 'បញ្ឈប់ (Kill) ដំណើរការ TTS នេះ?',
+                    subtitle: ep?.episodeNumber ? `EP${ep.episodeNumber}` : '',
+                    message: 'តើអ្នកពិតជាចង់បញ្ឈប់ (Kill) ដំណើរការ TTS នេះមែនទេ?',
+                    confirmLabel: '🛑 បញ្ឈប់ (Kill)',
+                    cancelLabel: 'បន្តដំណើរការ',
+                  });
+                  if (confirmed) onKill(ep);
+                  return;
                 }
+                setShowKillConfirm(true);
               }}
               title="Kill TTS Process"
               style={{
@@ -334,6 +347,21 @@ export default function EpisodeTtsProgressCard({ liveStats, ep, onKill = null })
           </div>
         )}
       </div>
+      <StudioConfirmDialog
+        isOpen={showKillConfirm}
+        variant="danger"
+        badge="KILL TTS"
+        title="បញ្ឈប់ (Kill) ដំណើរការ TTS នេះ?"
+        subtitle={ep?.episodeNumber ? `EP${ep.episodeNumber}` : ''}
+        message="តើអ្នកពិតជាចង់បញ្ឈប់ (Kill) ដំណើរការ TTS នេះមែនទេ?"
+        confirmLabel="🛑 បញ្ឈប់ (Kill)"
+        cancelLabel="បន្តដំណើរការ"
+        onConfirm={() => {
+          setShowKillConfirm(false);
+          onKill?.(ep);
+        }}
+        onCancel={() => setShowKillConfirm(false)}
+      />
     </div>
   );
 }

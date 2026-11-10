@@ -16,6 +16,7 @@ const { previewAndExport } = require('./stages/stage10_previewAndExport');
 const { runChunkedDubbingPipeline } = require('./chunkOrchestrator');
 const { createJob, updateJob } = require('./jobManager');
 const { saveCheckpoint, generateVideoFingerprint } = require('./checkpointManager');
+const { isNonChineseAsrHallucination } = require('../../utils/translationQuality');
 const { buildSpeakerRegistry, syncSegmentsWithSpeakerRegistry } = require('../../models/speakerRegistry');
 
 const CASCADE_MODELS = DUBBING_CASCADE_MODELS;
@@ -218,7 +219,9 @@ async function runDubbingPipeline({
       durationSec,
     });
 
-    inputSegmentsForScript = reconciliation.reconciledSegments || [];
+    inputSegmentsForScript = (reconciliation.reconciledSegments || []).filter(
+      (seg) => !isNonChineseAsrHallucination(seg)
+    );
   }
 
   checkAbort();

@@ -3,6 +3,10 @@ const { detectSpeakerGender } = require('../../../models/speakerRegistry');
 const { isAuthOrInvalidKeyError, isQuotaOrRateLimitError } = require('../../geminiKeyManager');
 const { DUBBING_CASCADE_MODELS } = require('../../geminiModelCatalog');
 const { geminiQuotaTracker } = require('../../geminiQuotaTracker');
+const {
+  stripPunctuationForSpeech,
+  isExplicitFillerKhmer,
+} = require('../../../utils/translationQuality');
 
 const DRAMA_GENRES = {
   AUTO: 'auto',
@@ -48,7 +52,10 @@ function createStage6AbortError(message = 'Stage 6 translation aborted by user s
 
 function isPlaceholderTranslationText(text = '') {
   const cleaned = String(text || '').trim();
-  return !cleaned || cleaned === 'សន្ទនា';
+  if (!cleaned) return true;
+  if (isExplicitFillerKhmer(cleaned)) return true;
+  if (!stripPunctuationForSpeech(cleaned)) return true;
+  return false;
 }
 
 // Universal Genre Reference (Series-specific glossaries are provided dynamically via seriesGlossary)
@@ -314,7 +321,7 @@ function createCanonicalSegment(raw = {}, index = 0, mode = 'dialogue') {
   const origChinese = String(raw.originalChineseText || raw.chineseText || raw.originalText || '').trim();
   const rawKhmer = String(raw.khmerTranslatedText || raw.khmerText || raw.khmer || '').trim();
   const cleanedKhmer = cleanKhmerSpokenText(rawKhmer);
-  const khmerText = cleanedKhmer === 'សន្ទនា' ? '' : cleanedKhmer;
+  const khmerText = isPlaceholderTranslationText(cleanedKhmer) ? '' : cleanedKhmer;
   const startSec = Math.max(0, typeof raw.startSec === 'number' ? raw.startSec : 0);
   const endSec = typeof raw.endSec === 'number' ? raw.endSec : startSec + 2.0;
   const dur = parseFloat(Math.max(0.6, endSec - startSec).toFixed(2));
@@ -466,14 +473,17 @@ function createCanonicalSegment(raw = {}, index = 0, mode = 'dialogue') {
 function applyTranslatedSegmentResult(targetSeg, t, maxWords, segIdx, { isFastOcrMode = false } = {}) {
   if (!targetSeg || !t) return false;
 
-  const rawTranslated = cleanKhmerSpokenText(t.khmerText || '');
-  const usableTranslated = rawTranslated === 'សន្ទនា' ? '' : rawTranslated;
+  const candidateKhmerRaw = t.khmerText || t.khmerTranslatedText || t.khmer || '';
+  const rawTranslated = cleanKhmerSpokenText(candidateKhmerRaw);
+  const usableTranslated = isPlaceholderTranslationText(rawTranslated) ? '' : rawTranslated;
   const condensed = usableTranslated ? condenseKhmerDialogue(usableTranslated, maxWords) : '';
-  const finalTranslated = condensed === 'សន្ទនា' ? '' : condensed;
+  const finalTranslated = !isPlaceholderTranslationText(condensed)
+    ? condensed
+    : (!isPlaceholderTranslationText(usableTranslated) ? usableTranslated : '');
 
   if (targetSeg.userOverridden || targetSeg.voiceAssignmentSource === 'manual' || targetSeg.voiceOverride) {
     // User-overridden/manual segment keeps its manual speaker/gender/voice untouched; only populate missing translation
-    if (!targetSeg.khmerTranslatedText || targetSeg.khmerTranslatedText === 'សន្ទនា') {
+    if (isPlaceholderTranslationText(targetSeg.khmerTranslatedText)) {
       if (finalTranslated) {
         targetSeg.khmerTranslatedText = finalTranslated;
         targetSeg.translationStatus = 'translated';
@@ -483,7 +493,7 @@ function applyTranslatedSegmentResult(targetSeg, t, maxWords, segIdx, { isFastOc
         targetSeg.translationStatus = 'review_needed';
       }
     }
-    return Boolean(targetSeg.khmerTranslatedText && targetSeg.khmerTranslatedText !== 'សន្ទនា');
+    return !isPlaceholderTranslationText(targetSeg.khmerTranslatedText);
   }
 
   targetSeg.khmerTranslatedText = finalTranslated;
@@ -529,7 +539,7 @@ function applyTranslatedSegmentResult(targetSeg, t, maxWords, segIdx, { isFastOc
     targetSeg.gender = vMeta.gender;
     targetSeg.speakerGender = vMeta.speakerGender;
     targetSeg.speakerId = buildSafeSpeakerId(cleanSpk, targetSeg.voiceGender, segIdx);
-    return Boolean(targetSeg.khmerTranslatedText && targetSeg.khmerTranslatedText !== 'សន្ទនា');
+    return !isPlaceholderTranslationText(targetSeg.khmerTranslatedText);
   }
 
   // Fast OCR ('ocr_only') Mode: NO acoustic pitch exists — assign from AI dialogue context or speaker name keywords, then re-derive voice
@@ -560,7 +570,7 @@ function applyTranslatedSegmentResult(targetSeg, t, maxWords, segIdx, { isFastOc
   targetSeg.speakerGender = vMeta.speakerGender;
   targetSeg.unverifiedSpeaker = cleanSpk === 'តួអង្គ' || cleanSpk.toLowerCase() === 'speaker';
   targetSeg.speakerId = buildSafeSpeakerId(cleanSpk, targetSeg.voiceGender, segIdx);
-  return Boolean(targetSeg.khmerTranslatedText && targetSeg.khmerTranslatedText !== 'សន្ទនា');
+  return !isPlaceholderTranslationText(targetSeg.khmerTranslatedText);
 }
 
 /**
@@ -862,32 +872,232 @@ function buildStage6OrderedModels(preferredModel = 'gemini-3.5-flash-lite', fall
   ];
 }
 
+function extractJsonSliceFromText(text = '') {
+  const objStart = text.indexOf('{');
+  const arrStart = text.indexOf('[');
+  let start = -1;
+  let openCh = '';
+  let closeCh = '';
+  if (objStart !== -1 && (arrStart === -1 || objStart < arrStart)) {
+    start = objStart;
+    openCh = '{';
+    closeCh = '}';
+  } else if (arrStart !== -1) {
+    start = arrStart;
+    openCh = '[';
+    closeCh = ']';
+  }
+  if (start === -1) return null;
+
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (ch === '\\' && inString) {
+      escaped = true;
+      continue;
+    }
+    if (ch === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) continue;
+    if (ch === openCh) depth++;
+    else if (ch === closeCh) {
+      depth--;
+      if (depth === 0) {
+        return text.slice(start, i + 1);
+      }
+    }
+  }
+  return null;
+}
+
 function parseJsonResponseText(resp) {
   const rawText = typeof resp?.text === 'function' ? resp.text() : resp?.text;
   if (!rawText || typeof rawText !== 'string') {
     throw new Error('Empty response text from Gemini');
   }
-  const clean = rawText.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
-  return JSON.parse(clean);
+  let clean = rawText.replace(/^\uFEFF/, '').trim();
+  const fencedMatch = clean.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+  if (fencedMatch && fencedMatch[1]) {
+    clean = fencedMatch[1].trim();
+  } else {
+    clean = clean.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+  }
+
+  try {
+    return JSON.parse(clean);
+  } catch (firstErr) {
+    const trailingCommaFixed = clean.replace(/,\s*([\]}])/g, '$1');
+    try {
+      return JSON.parse(trailingCommaFixed);
+    } catch (_) {}
+
+    const slice = extractJsonSliceFromText(clean);
+    if (slice) {
+      try {
+        return JSON.parse(slice);
+      } catch (_) {}
+      try {
+        return JSON.parse(slice.replace(/,\s*([\]}])/g, '$1'));
+      } catch (_) {}
+    }
+
+    throw firstErr;
+  }
+}
+
+function normalizePositiveLookupKey(value) {
+  if (typeof value === 'number') {
+    return Number.isInteger(value) && value >= 1 ? value : null;
+  }
+  if (typeof value === 'string') {
+    const stripped = value.trim().replace(/^#/, '');
+    if (/^\d+$/.test(stripped)) {
+      const n = Number(stripped);
+      return Number.isInteger(n) && n >= 1 ? n : null;
+    }
+  }
+  return null;
+}
+
+function extractSegmentsFromParsedResponse(parsed) {
+  if (Array.isArray(parsed)) return parsed;
+  if (Array.isArray(parsed?.segments)) return parsed.segments;
+  if (Array.isArray(parsed?.items)) return parsed.items;
+  return [];
+}
+
+function resolveBatchTranslationMatches(translations = [], expectedItems = []) {
+  const items = Array.isArray(translations) ? translations.filter((t) => t && typeof t === 'object') : [];
+  const matches = new Array(expectedItems.length).fill(null);
+  const usedTransIndices = new Set();
+
+  // Pass 1: Strict unambiguous key match (exact index, segmentId, or id; supports numeric strings like "86")
+  const byKey = new Map();
+  items.forEach((t, ti) => {
+    const keys = [
+      normalizePositiveLookupKey(t.index),
+      normalizePositiveLookupKey(t.segmentId),
+      normalizePositiveLookupKey(t.id),
+    ].filter((k) => k !== null);
+    for (const k of keys) {
+      if (!byKey.has(k)) byKey.set(k, ti);
+    }
+  });
+
+  for (let ei = 0; ei < expectedItems.length; ei++) {
+    const exp = expectedItems[ei] || {};
+    const expKeys = [
+      normalizePositiveLookupKey(exp.index),
+      normalizePositiveLookupKey(exp.segmentId),
+      normalizePositiveLookupKey(exp.id),
+    ].filter((k) => k !== null);
+
+    for (const k of expKeys) {
+      const ti = byKey.get(k);
+      if (ti !== undefined && !usedTransIndices.has(ti)) {
+        matches[ei] = items[ti];
+        usedTransIndices.add(ti);
+        break;
+      }
+    }
+  }
+
+  // Pass 2: Safe 1-based relative re-indexing (e.g. retry batch [67, 233] returned as index 1, 2)
+  const unmatchedExpIndices = [];
+  for (let ei = 0; ei < expectedItems.length; ei++) {
+    if (!matches[ei]) unmatchedExpIndices.push(ei);
+  }
+  if (unmatchedExpIndices.length > 0) {
+    const unusedTrans = [];
+    for (let ti = 0; ti < items.length; ti++) {
+      if (!usedTransIndices.has(ti)) unusedTrans.push({ ti, item: items[ti] });
+    }
+
+    const hasBadOutOfRangeIndex = unusedTrans.some(({ item }) => {
+      const explicitVals = [item.index, item.segmentId, item.id].filter((v) => v !== undefined && v !== null);
+      if (explicitVals.length === 0) return false;
+      const posKeys = explicitVals.map((v) => normalizePositiveLookupKey(v));
+      if (posKeys.some((k) => k === null)) return true; // rejects <= 0 like -19..0
+      return false;
+    });
+
+    if (!hasBadOutOfRangeIndex) {
+      const relMap = new Map();
+      for (const { ti, item } of unusedTrans) {
+        const k = normalizePositiveLookupKey(item.index ?? item.id ?? item.segmentId);
+        if (k !== null && k >= 1 && k <= expectedItems.length && !relMap.has(k)) {
+          relMap.set(k, ti);
+        }
+      }
+
+      if (relMap.size > 0) {
+        for (const ei of unmatchedExpIndices) {
+          const ti = relMap.get(ei + 1);
+          if (ti !== undefined && !usedTransIndices.has(ti)) {
+            matches[ei] = items[ti];
+            usedTransIndices.add(ti);
+          }
+        }
+      }
+
+      // Pass 3: Safe 1:1 positional alignment ONLY when response item count == expected item count
+      if (items.length === expectedItems.length) {
+        const expectedGlobalSet = new Set();
+        for (const exp of expectedItems) {
+          for (const k of [
+            normalizePositiveLookupKey(exp.index),
+            normalizePositiveLookupKey(exp.segmentId),
+            normalizePositiveLookupKey(exp.id),
+          ]) {
+            if (k !== null) expectedGlobalSet.add(k);
+          }
+        }
+        const allItemsPlausibleForThisSlice = items.every((item) => {
+          const explicitVals = [item.index, item.segmentId, item.id].filter((v) => v !== undefined && v !== null);
+          if (explicitVals.length === 0) return true;
+          return explicitVals.some((v) => {
+            const k = normalizePositiveLookupKey(v);
+            return k !== null && (k <= expectedItems.length || expectedGlobalSet.has(k));
+          });
+        });
+
+        if (allItemsPlausibleForThisSlice) {
+          for (let ei = 0; ei < expectedItems.length; ei++) {
+            if (!matches[ei] && !usedTransIndices.has(ei) && items[ei]) {
+              matches[ei] = items[ei];
+              usedTransIndices.add(ei);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return matches;
 }
 
 function applyBatchTranslations({ batchSlice, dialogueList, dialoguePayload, batchOffset, parsed, isFastOcrMode }) {
-  const translations = Array.isArray(parsed?.segments) ? parsed.segments : [];
-  const transByIndex = new Map();
-  const transBySegmentId = new Map();
-  for (const t of translations) {
-    if (!t || typeof t !== 'object') continue;
-    if (typeof t.index === 'number') transByIndex.set(t.index, t);
-    if (t.segmentId !== undefined && t.segmentId !== null) transBySegmentId.set(String(t.segmentId), t);
-  }
+  const translations = extractSegmentsFromParsedResponse(parsed);
+  const expectedItems = batchSlice.map((_, i) => ({
+    index: batchOffset + i + 1,
+    segmentId: dialoguePayload[i]?.segmentId ?? (batchOffset + i + 1),
+    id: dialoguePayload[i]?.segmentId ?? (batchOffset + i + 1),
+  }));
+  const matchedTranslations = resolveBatchTranslationMatches(translations, expectedItems);
 
   let appliedCount = 0;
   const missingLocalIndices = [];
 
   for (let i = 0; i < batchSlice.length; i++) {
-    const globalIndex = batchOffset + i + 1;
-    const payloadSegId = String(dialoguePayload[i]?.segmentId ?? globalIndex);
-    const t = transByIndex.get(globalIndex) || transBySegmentId.get(payloadSegId);
+    const t = matchedTranslations[i];
     const targetSeg = dialogueList[batchOffset + i];
     if (!targetSeg) continue;
     if (t) {
@@ -904,6 +1114,99 @@ function applyBatchTranslations({ batchSlice, dialogueList, dialoguePayload, bat
   }
 
   return { appliedCount, missingLocalIndices };
+}
+
+function buildRetrySegmentPayload(dialogueList, globalIdx) {
+  const s = dialogueList[globalIdx];
+  const prevSeg = globalIdx > 0 ? dialogueList[globalIdx - 1] : null;
+  const nextSeg = globalIdx + 1 < dialogueList.length ? dialogueList[globalIdx + 1] : null;
+  const rawDur = typeof s.duration === 'number' && s.duration > 0
+    ? s.duration
+    : parseFloat(Math.max(0.6, (s.endSec || 0) - (s.startSec || 0)).toFixed(2));
+  const maxWords = Math.min(14, Math.max(2, Math.ceil(Math.min(rawDur, 4.5) * 2.5)));
+  const segChinese = String(s.originalChineseText || s.chineseText || s.originalText || s.spokenAudioText || '').trim();
+  const prevChinese = prevSeg ? String(prevSeg.originalChineseText || prevSeg.chineseText || '').trim() : '';
+  const nextChinese = nextSeg ? String(nextSeg.originalChineseText || nextSeg.chineseText || '').trim() : '';
+
+  return {
+    index: s.segmentId || s.id || (globalIdx + 1),
+    segmentId: s.segmentId || s.id || (globalIdx + 1),
+    sourceChineseToTranslate: segChinese,
+    ...(prevChinese ? { prevContext: prevChinese } : {}),
+    ...(nextChinese ? { nextContext: nextChinese } : {}),
+    durationSec: parseFloat(Math.min(rawDur, 4.5).toFixed(2)),
+    maxKhmerWords: maxWords,
+    speaker: s.speaker || 'តួអង្គ',
+    detectedGender: s.voiceGender || 'unknown',
+  };
+}
+
+function clearRescuedSegmentFailureState(targetSeg) {
+  if (!targetSeg) return;
+  targetSeg.reviewNeeded = Boolean(targetSeg.uncertainOcr);
+  targetSeg.translationStatus = 'translated';
+  if (
+    targetSeg.translationWarning === 'MISSING_SEGMENT_TRANSLATION' ||
+    targetSeg.translationWarning === 'TRANSLATION_FAILED'
+  ) {
+    targetSeg.translationWarning = null;
+  }
+  if (Array.isArray(targetSeg.validationErrors) && targetSeg.validationErrors.length > 0) {
+    targetSeg.validationErrors = targetSeg.validationErrors.filter(
+      (e) =>
+        !String(e).includes('មិនមានលទ្ធផលបកប្រែពី AI') &&
+        !String(e).includes('ការបកប្រែ AI បរាជ័យ') &&
+        !String(e).includes('មិនទាន់មានអត្ថបទបកប្រែ')
+    );
+  }
+}
+
+function extractSingleLineRescueCandidate(parsed, expectedItem) {
+  if (!parsed || typeof parsed !== 'object') return null;
+
+  // Direct single-object response: { speaker, gender, khmerText }
+  if (!Array.isArray(parsed) && (parsed.khmerText || parsed.khmerTranslatedText || parsed.khmer)) {
+    const explicitVals = [parsed.index, parsed.segmentId, parsed.id].filter((v) => v !== undefined && v !== null);
+    if (explicitVals.length === 0 || explicitVals.some((v) => normalizePositiveLookupKey(v) !== null)) {
+      return parsed;
+    }
+  }
+
+  const list = extractSegmentsFromParsedResponse(parsed).filter((item) => item && typeof item === 'object');
+  if (list.length === 0) return null;
+
+  const expectedKeys = [
+    normalizePositiveLookupKey(expectedItem?.index),
+    normalizePositiveLookupKey(expectedItem?.segmentId),
+    normalizePositiveLookupKey(expectedItem?.id),
+  ].filter((k) => k !== null);
+
+  // Match explicit target key if multi-item or keyed response is returned
+  for (const item of list) {
+    const itemKeys = [
+      normalizePositiveLookupKey(item.index),
+      normalizePositiveLookupKey(item.segmentId),
+      normalizePositiveLookupKey(item.id),
+    ].filter((k) => k !== null);
+    if (itemKeys.some((k) => expectedKeys.includes(k))) {
+      return item;
+    }
+  }
+
+  // If strictly 1 object was wrapped in an array/segments list, accept if it does NOT carry an invalid (<= 0) key
+  if (list.length === 1) {
+    const only = list[0];
+    const explicitVals = [only.index, only.segmentId, only.id].filter((v) => v !== undefined && v !== null);
+    if (explicitVals.length === 0) return only;
+    if (explicitVals.every((v) => normalizePositiveLookupKey(v) !== null)) {
+      const k = normalizePositiveLookupKey(explicitVals[0]);
+      if (k === 1 || expectedKeys.includes(k)) {
+        return only;
+      }
+    }
+  }
+
+  return null;
 }
 
 /**
@@ -1117,7 +1420,7 @@ ${customGlossaryPrompt}
 - ហាមដាច់ខាតបកប្រែពាក្យតាមពាក្យ (Literal / robotic Google Translate)។
 - ហាមដាច់ខាតកុំឱ្យសល់តួអក្សរចិន (Chinese Characters / Hanzi 汉字) នៅក្នុង "khmerText" ដាច់ខាត (100% Khmer Script Only)! រាល់ពាក្យកម្រិតថាមពល (ឧ. 金丹 ➜ ជីនតាន, 化神 ➜ ហ្វាស៊ិន, 元神 ➜ យានស៊ិន, 灵根 ➜ ឫសវិញ្ញាណ) ត្រូវតែសរសេរជាសូរសព្ទអក្សរខ្មែរ ហាមទុកតួអក្សរចិន!
 - ហាមដាច់ខាតកុំឱ្យមានតួអក្សរថៃ (Thai characters) ឬពាក្យថៃណាមួយ 100%!
-- កុំបកស្រាយ OCR ជាសំឡេងនិយាយដោយស្វ័យប្រវត្តិនូវរាល់ Credits, Title, ឬ Watermark។
+- កុំបន្ថែមឈ្មោះ Channel ឬ Watermark ក្រៅពី Input តែគ្រប់ index នៅក្នុង INPUT SEGMENTS ត្រូវតែបកប្រែ ១០០% (រួមទាំងឃ្លា OCR ខ្លីៗ ឈ្មោះជំនាញ/ទិដ្ឋភាព ឬឃ្លាជេរ/កំហឹងក្នុងសាច់រឿង) — ហាមរំលង index ណាមួយឡើយ!
 - កុំប្ដូរឈ្មោះតួអង្គ ឬសំឡេងរបស់ Speaker ដោយគ្មានភស្តុតាង។
 
 7. ការកំណត់អត្តសញ្ញាណតួអង្គ និងភេទអ្នកនិយាយ (SPEAKER vs ADDRESSEE GENDER IDENTIFICATION):
@@ -1136,6 +1439,7 @@ ${userDirection ? `User Custom Direction: ${userDirection}` : ''}
 - 1 Segment = 1 Translation: ឃ្លានីមួយៗត្រូវបកប្រែដាច់ដោយឡែកពីគ្នា ស្របតាម "sourceChineseToTranslate" របស់វា។
 - ហាមដាច់ខាតកុំបកប្រែចេញអត្ថបទខ្មែរដូចគ្នា ២ បន្ទាត់ជាប់គ្នា លុះត្រាតែប្រយោគចិនដើមនៃបន្ទាត់ទាំងពីរជាពាក្យដដែលៗពិតប្រាកដ (ឧ. "对对对", "快走快走")។ បើប្រយោគចិនខុសគ្នា អត្ថបទខ្មែរត្រូវតែខុសគ្នា!
 - ត្រូវផ្តល់លទ្ធផល "khmerText" មួយគត់សម្រាប់ index / segmentId នីមួយៗ ដោយមិនលុប ឬផ្លាស់ប្តូរលេខរៀងឡើយ។
+- ហាមដាច់ខាតកុំឱ្យ "khmerText" ទទេ, មានតែសញ្ញាវណ្ណយុត្តិ (ដូចជា "។", "!", "?") ឬប្រើពាក្យជំនួស ("សន្ទនា", "សូមរង់ចាំ", "...")! គ្រប់ index ទាំងអស់ត្រូវតែមានពាក្យខ្មែរពិតប្រាកដដែលអាចអានជាសំឡេងបាន ១០០%!
 
 SURROUNDING NARRATIVE CONTEXT:
 [Previous Lines]:
@@ -1156,7 +1460,7 @@ Return JSON ONLY matching this schema:
       "index": ${b + 1},
       "speaker": "តួឯកប្រុស",
       "gender": "male",
-      "khmerText": "..."
+      "khmerText": "ប្រយោគបកប្រែជាភាសាខ្មែរពេញលេញ"
     }
   ]
 }
@@ -1363,6 +1667,254 @@ Return JSON ONLY matching this schema:
       throw stage6Err;
     }
 
+    // Bounded Auto-Retry for isolated omitted/broken lines (never touches already healthy segments)
+    const missingRetryIndices = [];
+    for (let idx = 0; idx < dialogueList.length; idx++) {
+      if (isPlaceholderTranslationText(dialogueList[idx]?.khmerTranslatedText)) {
+        missingRetryIndices.push(idx);
+      }
+    }
+
+    let retryQuotaAborted = false;
+    if (missingRetryIndices.length > 0 && aiClient?.models?.generateContent) {
+      const RETRY_BATCH_SIZE = 10;
+      const MAX_RETRY_ITEMS = 60;
+      const targetRetryIndices = missingRetryIndices.slice(0, MAX_RETRY_ITEMS);
+      const rTotalBatches = Math.ceil(targetRetryIndices.length / RETRY_BATCH_SIZE);
+      let rescuedCount = 0;
+
+      console.log(`[Stage 6 Mode A] 🔄 Auto-retrying ${targetRetryIndices.length} missing/broken segment(s) in ${rTotalBatches} small batch(es)...`);
+
+      for (let rStart = 0; rStart < targetRetryIndices.length; rStart += RETRY_BATCH_SIZE) {
+        if (signal?.aborted) {
+          throw createStage6AbortError('Stage 6 Mode A aborted during recovery retry');
+        }
+        if (retryQuotaAborted) break;
+
+        const rBatchNum = Math.floor(rStart / RETRY_BATCH_SIZE) + 1;
+        let pendingSlice = targetRetryIndices.slice(rStart, rStart + RETRY_BATCH_SIZE);
+
+        const orderedRetryModels = buildStage6OrderedModels(
+          activePrimaryModel,
+          fallbackModels,
+          retiredModels,
+          quotaDemotedModels,
+          poolKeys
+        ).slice(0, 6);
+
+        let zeroMatchAttempts = 0;
+        for (const candidateModel of orderedRetryModels) {
+          if (signal?.aborted) {
+            throw createStage6AbortError('Stage 6 Mode A aborted during recovery retry');
+          }
+          pendingSlice = pendingSlice.filter((globalIdx) => isPlaceholderTranslationText(dialogueList[globalIdx]?.khmerTranslatedText));
+          if (pendingSlice.length === 0) break;
+
+          const retryPayload = pendingSlice.map((globalIdx) => buildRetrySegmentPayload(dialogueList, globalIdx));
+          const retryPrompt = `
+អ្នកគឺជាអ្នកបកប្រែកុនភាគចិន-ខ្មែរអាជីព។ ឃ្លាខាងក្រោមត្រូវបានរំលង ឬមានអត្ថបទមិនគ្រប់លក្ខណៈពីជំហានមុន — សូមបកប្រែឃ្លានីមួយៗឡើងវិញឱ្យបានពេញលេញជាភាសាខ្មែរធម្មជាតិ ១០០%។
+
+ច្បាប់តឹងរ៉ឹង៖
+- 1 Segment = 1 Translation ដោយប្រើ "index" និង "segmentId" ដូចក្នុង Input ដដែល (រួមទាំងឃ្លា OCR ខ្លីៗ ឈ្មោះជំនាញ/ទិដ្ឋភាព ឬឃ្លាជេរ/កំហឹងក្នុងសាច់រឿង ហាមរំលងដាច់ខាត)។
+- ហាមដាច់ខាតកុំឱ្យ "khmerText" ទទេ, មានតែសញ្ញាវណ្ណយុត្តិ (ដូចជា "។", "!", "?") ឬប្រើពាក្យជំនួស ("សន្ទនា", "សូមរង់ចាំ", "...")!
+- ហាមមានតួអក្សរចិន ឬតួអក្សរថៃ នៅក្នុង "khmerText" ដាច់ខាត។
+
+RECOVER MISSING OR BROKEN KHMER DIALOGUE SEGMENTS (Retry Batch ${rBatchNum}/${rTotalBatches}):
+${JSON.stringify(retryPayload, null, 2)}
+
+Return JSON ONLY matching this schema:
+{
+  "segments": [
+    {
+      "index": ${retryPayload[0]?.index || 1},
+      "segmentId": ${retryPayload[0]?.segmentId || 1},
+      "speaker": "តួឯកប្រុស",
+      "gender": "male",
+      "khmerText": "ប្រយោគបកប្រែជាភាសាខ្មែរពេញលេញ"
+    }
+  ]
+}`;
+
+          try {
+            const resp = await aiClient.models.generateContent({
+              model: candidateModel,
+              contents: [retryPrompt],
+              config: {
+                temperature: 0.2,
+                responseMimeType: 'application/json',
+              },
+            });
+            const parsed = parseJsonResponseText(resp);
+            const translations = extractSegmentsFromParsedResponse(parsed);
+            const matchedTranslations = resolveBatchTranslationMatches(translations, retryPayload);
+
+            let batchApplied = 0;
+            for (let k = 0; k < pendingSlice.length; k++) {
+              const globalIdx = pendingSlice[k];
+              const payloadItem = retryPayload[k];
+              const t = matchedTranslations[k];
+              const targetSeg = dialogueList[globalIdx];
+              if (!t || !targetSeg) continue;
+              const ok = applyTranslatedSegmentResult(targetSeg, t, payloadItem.maxKhmerWords, globalIdx, { isFastOcrMode });
+              if (ok) {
+                clearRescuedSegmentFailureState(targetSeg);
+                batchApplied++;
+                rescuedCount++;
+              }
+            }
+
+            if (batchApplied === pendingSlice.length) {
+              break;
+            }
+            if (batchApplied > 0) {
+              zeroMatchAttempts = 0;
+              continue;
+            }
+            zeroMatchAttempts++;
+            if (zeroMatchAttempts >= 2) {
+              break;
+            }
+          } catch (retryErr) {
+            if (isAbortLikeError(retryErr, signal)) {
+              throw retryErr?.name === 'AbortError' ? retryErr : createStage6AbortError();
+            }
+            if (isAuthOrInvalidKeyError(retryErr)) {
+              const sanitizedMsg = sanitizeStage6ErrorMsg(retryErr);
+              const authErr = new Error(`[Stage 6 Mode A Retry] Gemini API Key មិនត្រឹមត្រូវ ឬផុតសុពលភាព (${sanitizedMsg})`);
+              authErr.status = Number(retryErr?.status || retryErr?.statusCode || 401);
+              authErr.code = 'INVALID_API_KEY';
+              authErr.nonRetryable = true;
+              throw authErr;
+            }
+            if (isModelNotFoundError(retryErr)) retiredModels.add(candidateModel);
+            if (isQuotaOrRateLimitError(retryErr) || isTimeoutLikeError(retryErr)) {
+              quotaDemotedModels.add(candidateModel);
+              if (candidateModel === orderedRetryModels[orderedRetryModels.length - 1]) {
+                retryQuotaAborted = true;
+              }
+            }
+            console.warn(`[Stage 6 Mode A] Recovery retry batch ${rBatchNum}/${rTotalBatches} notice on '${candidateModel}': ${sanitizeStage6ErrorMsg(retryErr)}`);
+          }
+        }
+      }
+
+      if (rescuedCount > 0) {
+        console.log(`[Stage 6 Mode A] ✅ Auto-retry rescued ${rescuedCount}/${targetRetryIndices.length} missing/broken segment(s)!`);
+      }
+
+      // Stage 3 Bounded Final Rescue: isolate any remaining omitted line (1-by-1 without batch index drift)
+      const stillMissingPrioritized = [];
+      const stillMissingFailed = [];
+      for (let idx = 0; idx < dialogueList.length; idx++) {
+        const s = dialogueList[idx];
+        if (!s || !isPlaceholderTranslationText(s.khmerTranslatedText)) continue;
+        const srcCn = String(s.originalChineseText || s.chineseText || s.originalText || s.spokenAudioText || '').trim();
+        if (!srcCn) continue;
+        if (s.translationWarning === 'TRANSLATION_FAILED') {
+          stillMissingFailed.push(idx);
+        } else {
+          stillMissingPrioritized.push(idx);
+        }
+      }
+
+      const MAX_SINGLE_LINE_RESCUE = 15;
+      const singleLineTargets = [...stillMissingPrioritized, ...stillMissingFailed].slice(0, MAX_SINGLE_LINE_RESCUE);
+      if (singleLineTargets.length > 0 && !retryQuotaAborted) {
+        let singleRescuedCount = 0;
+        let consecAllFailedLines = 0;
+        console.log(`[Stage 6 Mode A] 🎯 Single-line final rescue for ${singleLineTargets.length} remaining omitted segment(s)...`);
+
+        for (const globalIdx of singleLineTargets) {
+          if (signal?.aborted) {
+            throw createStage6AbortError('Stage 6 Mode A aborted during single-line rescue');
+          }
+          if (consecAllFailedLines >= 3) break;
+
+          const payloadItem = buildRetrySegmentPayload(dialogueList, globalIdx);
+          const singlePrompt = `
+អ្នកគឺជាអ្នកបកប្រែកុនភាគចិន-ខ្មែរអាជីព។ នេះជាការបកប្រែឃ្លាសន្ទនារឿងភាគសម្រាប់ Dubbing — ទោះបីជាឃ្លាកំហឹង/ជេរប្រមាថក្នុងសាច់រឿង ពាក្យ OCR ខ្លីៗ (ឧ. ឈ្មោះទីតាំង/ជំនាញ/មុំមើល) ឬឃ្លាមិនទាន់ចប់ន័យ ក៏ត្រូវបកប្រែជាភាសាខ្មែរធម្មជាតិ ១០០% ហាមរំលង ឬទុកទទេជាដាច់ខាត។
+
+RECOVER SINGLE MISSING KHMER LINE (#${payloadItem.index}):
+- sourceChineseToTranslate: ${JSON.stringify(payloadItem.sourceChineseToTranslate)}
+${payloadItem.prevContext ? `- prevContext: ${JSON.stringify(payloadItem.prevContext)}` : ''}
+${payloadItem.nextContext ? `- nextContext: ${JSON.stringify(payloadItem.nextContext)}` : ''}
+- maxKhmerWords: ${payloadItem.maxKhmerWords}
+- speakerHint: ${JSON.stringify(payloadItem.speaker)}
+- detectedGender: ${JSON.stringify(payloadItem.detectedGender)}
+
+Return ONE JSON object ONLY (no array, no extra commentary):
+{
+  "speaker": "តួឯកប្រុស",
+  "gender": "male",
+  "khmerText": "ប្រយោគបកប្រែជាភាសាខ្មែរពេញលេញ"
+}`;
+
+          const orderedSingleModels = buildStage6OrderedModels(
+            activePrimaryModel,
+            fallbackModels,
+            retiredModels,
+            quotaDemotedModels,
+            poolKeys
+          ).slice(0, 6);
+
+          let lineRescued = false;
+          for (const candidateModel of orderedSingleModels) {
+            if (signal?.aborted) {
+              throw createStage6AbortError('Stage 6 Mode A aborted during single-line rescue');
+            }
+            try {
+              const resp = await aiClient.models.generateContent({
+                model: candidateModel,
+                contents: [singlePrompt],
+                config: {
+                  temperature: 0.25,
+                  responseMimeType: 'application/json',
+                },
+              });
+              const parsed = parseJsonResponseText(resp);
+              const candidate = extractSingleLineRescueCandidate(parsed, payloadItem);
+              const targetSeg = dialogueList[globalIdx];
+              if (candidate && targetSeg) {
+                const ok = applyTranslatedSegmentResult(targetSeg, candidate, payloadItem.maxKhmerWords, globalIdx, { isFastOcrMode });
+                if (ok) {
+                  clearRescuedSegmentFailureState(targetSeg);
+                  lineRescued = true;
+                  singleRescuedCount++;
+                  break;
+                }
+              }
+            } catch (singleErr) {
+              if (isAbortLikeError(singleErr, signal)) {
+                throw singleErr?.name === 'AbortError' ? singleErr : createStage6AbortError();
+              }
+              if (isAuthOrInvalidKeyError(singleErr)) {
+                const sanitizedMsg = sanitizeStage6ErrorMsg(singleErr);
+                const authErr = new Error(`[Stage 6 Mode A Single-Line Rescue] Gemini API Key មិនត្រឹមត្រូវ ឬផុតសុពលភាព (${sanitizedMsg})`);
+                authErr.status = Number(singleErr?.status || singleErr?.statusCode || 401);
+                authErr.code = 'INVALID_API_KEY';
+                authErr.nonRetryable = true;
+                throw authErr;
+              }
+              if (isModelNotFoundError(singleErr)) retiredModels.add(candidateModel);
+              if (isQuotaOrRateLimitError(singleErr) || isTimeoutLikeError(singleErr)) {
+                quotaDemotedModels.add(candidateModel);
+              }
+            }
+          }
+
+          if (lineRescued) {
+            consecAllFailedLines = 0;
+          } else {
+            consecAllFailedLines++;
+          }
+        }
+
+        if (singleRescuedCount > 0) {
+          console.log(`[Stage 6 Mode A] ✅ Single-line rescue recovered ${singleRescuedCount}/${singleLineTargets.length} stubborn segment(s)!`);
+        }
+      }
+    }
+
     // Phase 1: Non-destructive duplicate detection pass (flags warnings, never auto-deletes)
     dialogueList = detectDuplicateTranslations(dialogueList);
 
@@ -1518,7 +2070,8 @@ Return JSON ONLY:
 
 function condenseKhmerDialogue(khmerText = '', targetWordLimit = 0) {
   if (!khmerText || typeof khmerText !== 'string') return khmerText;
-  let text = cleanKhmerSpokenText(khmerText);
+  const initialClean = cleanKhmerSpokenText(khmerText);
+  let text = initialClean;
 
   // Remove superfluous filler phrases in spoken drama to tighten duration:
   const fillers = [
@@ -1538,6 +2091,10 @@ function condenseKhmerDialogue(khmerText = '', targetWordLimit = 0) {
 
   // Compress repetitive spaces
   text = text.replace(/\s+/g, ' ').trim();
+  // Never strip a valid short phrase (e.g. "កុំបារម្ភអី!") down to bare punctuation ("!") or empty string
+  if (!stripPunctuationForSpeech(text) && stripPunctuationForSpeech(initialClean)) {
+    return initialClean;
+  }
   return text;
 }
 

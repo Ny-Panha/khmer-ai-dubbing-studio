@@ -3,8 +3,88 @@
  * Automatically detects multiple keys and seamlessly rotates on 429 / Rate Limit / Quota Exhaustion.
  */
 
+const fs = require('fs');
+const dotenv = require('dotenv');
 const { GoogleGenAI } = require('@google/genai');
 const { geminiQuotaTracker } = require('./geminiQuotaTracker');
+
+const GEMINI_KEY_ENV_REGEX = /^GEMINI_API_KEYS?$|^GEMINI_API_KEY_?\d+$/;
+let liveDotenvPaths = [];
+let liveDotenvStatCache = new Map();
+let managedEnvKeys = new Set();
+
+function isGeminiKeyEnvName(name) {
+  return GEMINI_KEY_ENV_REGEX.test(String(name || ''));
+}
+
+/**
+ * Registers .env files for lightweight mtime-based key hot-reload in running server mode.
+ * Kept opt-in (called by server.js on boot) so unit tests remain completely isolated from real .env files.
+ */
+function registerLiveDotenvFiles(filePaths = []) {
+  liveDotenvPaths = Array.isArray(filePaths) ? filePaths.filter(Boolean) : [];
+  liveDotenvStatCache = new Map();
+  managedEnvKeys = new Set();
+  return syncGeminiKeysFromEnvFilesIfChanged();
+}
+
+function resetLiveDotenvFiles() {
+  liveDotenvPaths = [];
+  liveDotenvStatCache = new Map();
+  managedEnvKeys = new Set();
+}
+
+/**
+ * Re-parses registered .env files only when mtime/size changes, updating GEMINI_API_KEY* vars
+ * in process.env without restarting Node or interrupting active dubbing/TTS/Demucs jobs.
+ */
+function syncGeminiKeysFromEnvFilesIfChanged(pathsOverride = null) {
+  const targetPaths = Array.isArray(pathsOverride) ? pathsOverride : liveDotenvPaths;
+  if (!targetPaths || targetPaths.length === 0) return false;
+
+  let changed = false;
+  const nextStats = new Map();
+  for (const envPath of targetPaths) {
+    let sig = 'missing';
+    try {
+      const st = fs.statSync(envPath);
+      sig = `${st.mtimeMs}:${st.size}`;
+    } catch (_) {}
+    nextStats.set(envPath, sig);
+    if (liveDotenvStatCache.get(envPath) !== sig) {
+      changed = true;
+    }
+  }
+
+  if (!changed) return false;
+
+  const mergedGeminiVars = {};
+  for (const envPath of targetPaths) {
+    try {
+      if (!fs.existsSync(envPath)) continue;
+      const parsed = dotenv.parse(fs.readFileSync(envPath, 'utf8'));
+      for (const [key, val] of Object.entries(parsed || {})) {
+        if (isGeminiKeyEnvName(key)) {
+          mergedGeminiVars[key] = String(val ?? '');
+        }
+      }
+    } catch (_) {}
+  }
+
+  for (const prevKey of managedEnvKeys) {
+    if (!Object.prototype.hasOwnProperty.call(mergedGeminiVars, prevKey)) {
+      delete process.env[prevKey];
+    }
+  }
+
+  for (const [key, val] of Object.entries(mergedGeminiVars)) {
+    process.env[key] = val;
+    managedEnvKeys.add(key);
+  }
+
+  liveDotenvStatCache = nextStats;
+  return true;
+}
 
 /**
  * Parses all available Gemini API keys from various sources:
@@ -14,6 +94,10 @@ const { geminiQuotaTracker } = require('./geminiQuotaTracker');
  * - process.env.GEMINI_API_KEY_1, GEMINI_API_KEY_2, GEMINI_API_KEY_3, ...
  */
 function extractAllGeminiKeys(customInput = null) {
+  if (!customInput && liveDotenvPaths.length > 0) {
+    syncGeminiKeysFromEnvFilesIfChanged();
+  }
+
   const rawList = [];
 
   // 1. From custom input (e.g. from UI or argument)
@@ -394,6 +478,9 @@ function createSmartGenAIClient(initialKeyInput = null) {
 
 module.exports = {
   extractAllGeminiKeys,
+  registerLiveDotenvFiles,
+  resetLiveDotenvFiles,
+  syncGeminiKeysFromEnvFilesIfChanged,
   GeminiKeyPool,
   createSmartGenAIClient,
   isAuthOrInvalidKeyError,

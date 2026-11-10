@@ -1,9 +1,9 @@
-import React, { useState, useContext } from 'react';
+import React, { useState, useContext, useEffect } from 'react';
 import { 
   Key, HelpCircle, Download, Loader2, RotateCcw, X, Trash2, Film, Plus, Cpu, Layers, Activity
 } from 'lucide-react';
 import { isCorruptedOrMojibakeTitle } from '../utils/projectStorage';
-import { useGeminiQuotaMonitor } from '../hooks/useGeminiQuotaMonitor';
+import { useGeminiQuotaMonitor, runQuotaCheck } from '../hooks/useGeminiQuotaMonitor';
 import { JobQueueContext } from '../context/jobQueueStore';
 import ShortcutsModal from './ShortcutsModal';
 import './Navbar.css';
@@ -46,6 +46,11 @@ export default function Navbar({
   const [showShortcutsModal, setShowShortcutsModal] = useState(false);
   const [tempKey, setTempKey] = useState(apiKey || '');
   const { keysHealth } = useGeminiQuotaMonitor({ enabled: false });
+  useEffect(() => {
+    if (isBackendOnline && !keysHealth) {
+      runQuotaCheck('stats');
+    }
+  }, [isBackendOnline, keysHealth]);
   const jobQueue = useContext(JobQueueContext);
   const queueStats = jobQueue?.stats || null;
   const effectiveActiveJobCount = activeJobCount || ((queueStats?.runningCount || 0) + (queueStats?.queuedCount || 0));
@@ -62,7 +67,7 @@ export default function Navbar({
   const quotaSummary = keysHealth?.quotaSummary || null;
   const keysChipText = quotaSummary && (quotaSummary.totalKeys || 0) > 0
     ? `${quotaSummary.readyKeys}/${quotaSummary.totalKeys} Keys`
-    : '4 Keys';
+    : 'Keys';
 
   return (
     <>

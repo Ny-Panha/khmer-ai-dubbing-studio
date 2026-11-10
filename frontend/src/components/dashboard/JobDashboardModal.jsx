@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react';
-import { Monitor, RefreshCw, X } from 'lucide-react';
+import { Monitor, RefreshCw, X, AlertCircle } from 'lucide-react';
 import { useSharedJobQueue } from '../../context/jobQueueStore';
 import JobQueueList from './JobQueueList';
 
@@ -12,6 +12,8 @@ export default function JobDashboardModal({ isOpen, onClose }) {
     searchTerm,
     setSearchTerm,
     isLoading,
+    error,
+    clearError,
     connectionMode,
     isConnected,
     actionInProgress,
@@ -257,6 +259,52 @@ export default function JobDashboardModal({ isOpen, onClose }) {
             </div>
           </div>
         </div>
+
+        {/* Inline Error Notice Banner */}
+        {error && (
+          <div
+            role="alert"
+            style={{
+              margin: '12px 22px 0 22px',
+              padding: '9px 14px',
+              borderRadius: 10,
+              background: 'rgba(239, 68, 68, 0.14)',
+              border: '1px solid rgba(239, 68, 68, 0.42)',
+              color: '#FCA5A5',
+              fontSize: '0.76rem',
+              fontWeight: 700,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 10,
+              flexShrink: 0,
+            }}
+          >
+            <span style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+              <AlertCircle size={15} color="#F87171" style={{ flexShrink: 0 }} />
+              <span>{error}</span>
+            </span>
+            {typeof clearError === 'function' && (
+              <button
+                type="button"
+                onClick={clearError}
+                aria-label="បិទសារជូនដំណឹង"
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  color: '#FCA5A5',
+                  cursor: 'pointer',
+                  padding: 2,
+                  display: 'flex',
+                  alignItems: 'center',
+                  flexShrink: 0,
+                }}
+              >
+                <X size={14} />
+              </button>
+            )}
+          </div>
+        )}
 
         {/* Modal Main Content */}
         <div style={{ flex: 1, padding: '16px 22px', overflow: 'hidden', minHeight: 0 }}>

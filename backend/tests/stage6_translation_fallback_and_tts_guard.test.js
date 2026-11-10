@@ -11,6 +11,7 @@ const {
   createCanonicalSegment,
   applyTranslatedSegmentResult,
   isPlaceholderTranslationText,
+  condenseKhmerDialogue,
   STAGE6_CASCADE_MODELS,
 } = require('../services/pipeline/stages/stage6_generateModeSpecificScript');
 const { translateAndValidateKhmer } = require('../services/pipeline/stages/stage7_translateAndValidateKhmer');
@@ -420,6 +421,205 @@ test('POST /api/generate-audio rejects literal សន្ទនា on single (400
   } finally {
     await new Promise((resolve) => server.close(resolve));
     fs.rmSync(path.resolve(__dirname, '../uploads/projects/test_placeholder_guard'), { recursive: true, force: true });
+  }
+});
+
+test('Stage 6 & Stage 7 Reject punctuation-only & explicit filler text cleanly while condenseKhmerDialogue preserves valid short phrases', async () => {
+  for (const badText of ['', '   ', '។', '!', '...', '?!', '។...', 'សន្ទនា', 'សូមរង់ចាំ', 'សូមរង់...']) {
+    assert.equal(isPlaceholderTranslationText(badText), true, `Must reject bad placeholder/punctuation: ${JSON.stringify(badText)}`);
+  }
+  assert.equal(isPlaceholderTranslationText('សួស្តី!'), false);
+
+  // applyTranslatedSegmentResult & createCanonicalSegment must reject punctuation-only outputs
+  const segPunct = { id: 1, originalChineseText: '加油！', speaker: 'តួអង្គ', speakerSource: 'ocr_only' };
+  const okPunct = applyTranslatedSegmentResult(segPunct, { speaker: 'តួឯកប្រុស', gender: 'male', khmerText: '។' }, 8, 0, { isFastOcrMode: false });
+  assert.equal(okPunct, false);
+  assert.equal(segPunct.khmerTranslatedText, '');
+  assert.equal(segPunct.reviewNeeded, true);
+  assert.equal(segPunct.translationStatus, 'review_needed');
+
+  const canonicalPunct = createCanonicalSegment({
+    startSec: 0,
+    endSec: 2,
+    originalChineseText: '别动！',
+    khmerTranslatedText: '!',
+  }, 0, 'dialogue');
+  assert.equal(canonicalPunct.khmerTranslatedText, '');
+  assert.equal(canonicalPunct.reviewNeeded, true);
+
+  // condenseKhmerDialogue must NOT strip "កុំបារម្ភអី!" down to bare "!"
+  assert.equal(condenseKhmerDialogue('កុំបារម្ភអី!', 3), 'កុំបារម្ភអី!');
+  assert.equal(condenseKhmerDialogue('កុំបារម្ភអី ពួកយើងទៅភ្លាម', 5), 'ពួកយើងទៅភ្លាម');
+
+  // Stage 7 rejects punctuation-only ("។", "!") and explicit fillers ("សូមរង់ចាំ", "សូមរង់...")
+  const stage7Out = await translateAndValidateKhmer({
+    scriptSegments: [
+      { id: 1, originalChineseText: '你好', khmerTranslatedText: 'សួស្តី!' },
+      { id: 2, originalChineseText: '喂', khmerTranslatedText: '។' },
+      { id: 3, originalChineseText: '快走', khmerTranslatedText: '!' },
+      { id: 4, originalChineseText: '等等', khmerTranslatedText: 'សូមរង់ចាំ' },
+    ],
+    mode: 'dialogue',
+  });
+  assert.equal(stage7Out.validationReport.translatedCount, 1);
+  assert.equal(stage7Out.validationReport.missingTranslationCount, 3);
+  for (const idx of [1, 2, 3]) {
+    assert.equal(stage7Out.validatedSegments[idx].khmerTranslatedText, '');
+    assert.equal(stage7Out.validatedSegments[idx].reviewNeeded, true);
+    assert.equal(stage7Out.validatedSegments[idx].translationStatus, 'review_needed');
+  }
+});
+
+test('Stage 6 Mode A bounded auto-retry rescues omitted & punctuation-only lines automatically', async () => {
+  let seenRetryPrompt = false;
+  const mockAiClient = {
+    models: {
+      generateContent: async ({ contents }) => {
+        const prompt = String(contents[0] || '');
+        if (prompt.includes('RECOVER MISSING OR BROKEN KHMER DIALOGUE SEGMENTS')) {
+          seenRetryPrompt = true;
+          return {
+            text: JSON.stringify({
+              segments: [
+                { index: 2, segmentId: 2, speaker: 'តួឯកស្រី', gender: 'female', khmerText: 'ប្រយ័ត្នផងណា!' },
+                { index: 3, segmentId: 3, speaker: 'តួឯកប្រុស', gender: 'male', khmerText: 'កុំបារម្ភអី ខ្ញុំដឹងហើយ!' },
+              ],
+            }),
+          };
+        }
+        // Main pass omits segment #2 and emits broken punctuation-only "។" for segment #3
+        return {
+          text: JSON.stringify({
+            summary: 'តេស្ត Auto-Retry',
+            detectedGenre: 'modern',
+            segments: [
+              { index: 1, speaker: 'តួឯកប្រុស', gender: 'male', khmerText: 'តោះយើងទៅមុខទៀត!' },
+              { index: 3, speaker: 'តួឯកប្រុស', gender: 'male', khmerText: '។' },
+              { index: 4, speaker: 'តួឯកស្រី', gender: 'female', khmerText: 'ចាស៎ បងប្រុស!' },
+            ],
+          }),
+        };
+      },
+    },
+  };
+
+  const result = await generateModeSpecificScript({
+    mode: GENERATION_MODES.MODE_A_DIALOGUE,
+    generationMode: GENERATION_MODES.DIALOGUE,
+    reconciledSegments: buildMockChineseSegments(4),
+    durationSec: 20,
+    aiClient: mockAiClient,
+    modelName: 'gemini-3.5-flash-lite',
+    retryDelayMs: 0,
+  });
+
+  assert.equal(seenRetryPrompt, true, 'Stage 6 Mode A must run bounded recovery retry for missing/broken lines');
+  assert.equal(result.scriptSegments.length, 4);
+  for (const seg of result.scriptSegments) {
+    assert.equal(seg.reviewNeeded, false);
+    assert.equal(seg.translationStatus, 'translated');
+    assert.ok(seg.khmerTranslatedText.length >= 4);
+  }
+  assert.equal(result.scriptSegments[1].khmerTranslatedText, 'ប្រយ័ត្នផងណា!');
+  assert.equal(result.scriptSegments[2].khmerTranslatedText, 'ខ្ញុំដឹងហើយ!');
+});
+
+test('Stage 6 Mode A tolerant matching + cascade + single-line rescue leaves ZERO missing segments on string IDs, bare arrays, re-indexed retries & harsh/OCR lines', async () => {
+  const segInputs = [
+    { id: 1, segmentId: 1, startSec: 0.5, endSec: 2.0, duration: 1.5, originalChineseText: '你们是谁？', speaker: 'តួអង្គ', voiceGender: 'female' },
+    { id: 2, segmentId: 2, startSec: 2.0, endSec: 4.0, duration: 2.0, originalChineseText: '你这个混蛋，', speaker: 'តួអង្គ', voiceGender: 'female' },
+    { id: 3, segmentId: 3, startSec: 4.0, endSec: 6.0, duration: 2.0, originalChineseText: '快放开我！', speaker: 'តួអង្គ', voiceGender: 'female' },
+    { id: 4, segmentId: 4, startSec: 6.0, endSec: 8.0, duration: 2.0, originalChineseText: '别再靠近了！', speaker: 'តួអង្គ', voiceGender: 'female' },
+    { id: 5, segmentId: 5, startSec: 8.5, endSec: 10.5, duration: 2.0, originalChineseText: '天眼视角', speaker: 'តួអង្គ', speakerSource: 'ocr_only', evidenceSource: 'visual_ocr', voiceGender: 'unknown' },
+    { id: 6, segmentId: 6, startSec: 11.0, endSec: 13.0, duration: 2.0, originalChineseText: '我们走吧。', speaker: 'តួអង្គ', voiceGender: 'male' },
+    { id: 7, segmentId: 7, startSec: 13.5, endSec: 16.5, duration: 3.0, originalChineseText: '不然你们走到灵虚圣地得走多少年', speaker: 'តួអង្គ', voiceGender: 'male' },
+    { id: 8, segmentId: 8, startSec: 17.0, endSec: 19.0, duration: 2.0, originalChineseText: '小心前面！', speaker: 'តួអង្គ', voiceGender: 'male' },
+  ];
+
+  let retryAttempt = 0;
+  let singleAttempt = 0;
+
+  const mockAiClient = {
+    models: {
+      generateContent: async ({ model, contents }) => {
+        const prompt = String(contents[0] || '');
+
+        if (prompt.includes('RECOVER SINGLE MISSING KHMER LINE')) {
+          singleAttempt++;
+          // First model returns empty string; second model succeeds with direct single JSON object
+          if (singleAttempt === 1) {
+            return { text: JSON.stringify({ speaker: 'តួឯកស្រី', gender: 'female', khmerText: '' }) };
+          }
+          return {
+            text: `Here is the line:\n\`\`\`json\n{"speaker": "តួឯកស្រី", "gender": "female", "khmerText": "អាចង្រៃនេះ,",}\n\`\`\``,
+          };
+        }
+
+        if (prompt.includes('RECOVER MISSING OR BROKEN KHMER DIALOGUE SEGMENTS')) {
+          retryAttempt++;
+          if (retryAttempt === 1) {
+            // Model 1 returns bare array with relative 1-based index 3 (-> segment #7), omitting #2 and #5
+            return {
+              text: JSON.stringify([
+                { index: 3, speaker: 'តួឯកប្រុស', gender: 'male', khmerText: 'បើមិនអញ្ចឹង ដើរដល់ណាទើបដល់?' },
+              ]),
+            };
+          }
+          // Model 2 receives narrowed slice [#2, #5] and returns explicit string ID "#5" while still omitting #2
+          return {
+            text: JSON.stringify({
+              segments: [
+                { index: '5', speaker: 'អ្នករៀបរាប់', gender: 'male', khmerText: 'ទិដ្ឋភាពភ្នែកទិព្វ' },
+              ],
+            }),
+          };
+        }
+
+        // Main Batch 1 wrapped in markdown fence + trailing comma + string indices, omitting #2, #5, #7
+        return {
+          text: `\`\`\`json
+{
+  "summary": "តេស្តជួយសង្គ្រោះឃ្លា",
+  "detectedGenre": "ancient",
+  "segments": [
+    { "index": "1", "speaker": "តួឯកស្រី", "gender": "female", "khmerText": "ពួកឯងជាអ្នកណា?" },
+    { "index": "3", "speaker": "តួឯកស្រី", "gender": "female", "khmerText": "ឆាប់លែងខ្ញុំភ្លាម!" },
+    { "index": "4", "speaker": "តួឯកស្រី", "gender": "female", "khmerText": "កុំចូលមកជិតទៀត!" },
+    { "index": "6", "speaker": "តួឯកប្រុស", "gender": "male", "khmerText": "តោះពួកយើងទៅ។" },
+    { "index": "8", "speaker": "តួឯកប្រុស", "gender": "male", "khmerText": "ប្រយ័ត្នខាងមុខ!", }
+  ]
+}
+\`\`\``,
+        };
+      },
+    },
+  };
+
+  const result = await generateModeSpecificScript({
+    mode: GENERATION_MODES.MODE_A_DIALOGUE,
+    generationMode: GENERATION_MODES.DIALOGUE,
+    reconciledSegments: segInputs,
+    durationSec: 25,
+    aiClient: mockAiClient,
+    modelName: 'gemini-3.5-flash-lite',
+    retryDelayMs: 0,
+  });
+
+  assert.equal(result.translationReport.totalSegments, 8);
+  assert.equal(result.translationReport.translatedCount, 8);
+  assert.equal(result.translationReport.untranslatedCount, 0);
+  assert.equal(result.translationReport.isPartial, false);
+  assert.ok(retryAttempt >= 2, 'Retry must cascade with narrowed slice across models');
+  assert.ok(singleAttempt >= 2, 'Single-line rescue must cascade when first model omits/returns empty');
+
+  assert.equal(result.scriptSegments[1].khmerTranslatedText, 'អាចង្រៃនេះ,');
+  assert.equal(result.scriptSegments[4].khmerTranslatedText, 'ទិដ្ឋភាពភ្នែកទិព្វ');
+  assert.equal(result.scriptSegments[6].khmerTranslatedText, 'បើមិនអញ្ចឹង ដើរដល់ណាទើបដល់?');
+  for (const seg of result.scriptSegments) {
+    assert.equal(seg.reviewNeeded, false);
+    assert.equal(seg.translationStatus, 'translated');
+    assert.equal(seg.translationWarning, null);
+    assert.deepEqual(seg.validationErrors, []);
   }
 });
 

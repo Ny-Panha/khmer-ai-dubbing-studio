@@ -26,12 +26,17 @@ import {
   partitionSelectedEpisodesForTranslate,
   computeClampedStagePercent,
   applyElapsedCountdownToKeysHealth,
+  getActiveSeriesTranslateJobs,
+  isTranslateQueueEnqueueBanner,
 } from './geminiRouteHelpers';
 
 // 3 Dedicated Route Progress Runners (Step 1: Translate, Step 2: Khmer TTS, Step 3: Demucs)
 import EpisodeTranslateProgressCard from './route-runners/EpisodeTranslateProgressCard';
 import EpisodeTtsProgressCard from './route-runners/EpisodeTtsProgressCard';
 import EpisodeDemucsProgressCard from './route-runners/EpisodeDemucsProgressCard';
+import StudioConfirmDialog from '../common/StudioConfirmDialog';
+
+const EMPTY_EPISODES = [];
 
 export default function GeminiRouteModal({
   isOpen,
@@ -52,7 +57,7 @@ export default function GeminiRouteModal({
   isRendering = false,
   batchRender = null,
 }) {
-  const episodes = (activeSeries && Array.isArray(activeSeries.episodes)) ? activeSeries.episodes : [];
+  const episodes = (activeSeries && Array.isArray(activeSeries.episodes)) ? activeSeries.episodes : EMPTY_EPISODES;
 
   // Selection & generation settings
   const [selectedEpIds, setSelectedEpIds] = useState(new Set());
@@ -160,16 +165,47 @@ export default function GeminiRouteModal({
   const isTranslateCancelledRef = useRef(false);
   const isTtsCancelledRef = useRef(false);
   const activeTimersRef = useRef(new Set());
+  const [confirmDialog, setConfirmDialog] = useState(null);
+  const confirmResolverRef = useRef(null);
 
-  // Cleanup all running polling timers on modal unmount or when modal closes
+  const openStudioDialog = useCallback((config) => new Promise((resolve) => {
+    if (confirmResolverRef.current) {
+      try { confirmResolverRef.current(false); } catch (_) {}
+    }
+    confirmResolverRef.current = resolve;
+    setConfirmDialog({
+      showCancel: true,
+      ...config,
+    });
+  }), []);
+
+  const closeStudioDialog = useCallback((accepted) => {
+    const resolve = confirmResolverRef.current;
+    confirmResolverRef.current = null;
+    setConfirmDialog(null);
+    if (typeof resolve === 'function') {
+      resolve(Boolean(accepted));
+    }
+  }, []);
+
+  // Cleanup all running polling timers and pending confirm dialog on modal unmount or when modal closes
   useEffect(() => {
     if (!isOpen) {
       activeTimersRef.current.forEach((t) => clearInterval(t));
       activeTimersRef.current.clear();
+      if (confirmResolverRef.current) {
+        try { confirmResolverRef.current(false); } catch (_) {}
+        confirmResolverRef.current = null;
+      }
+      setConfirmDialog(null);
     }
     return () => {
       activeTimersRef.current.forEach((t) => clearInterval(t));
       activeTimersRef.current.clear();
+      if (confirmResolverRef.current) {
+        try { confirmResolverRef.current(false); } catch (_) {}
+        confirmResolverRef.current = null;
+      }
     };
   }, [isOpen]);
 
@@ -190,6 +226,7 @@ export default function GeminiRouteModal({
       });
       setIsStartingBatch(false);
       setBatchInfo(null);
+      setBatchSuccess((prev) => (isTranslateQueueEnqueueBanner(prev) ? null : prev));
       setBatchError('🛑 បានបញ្ឈប់ (Kill) ដំណើរការ Translate ដោយជោគជ័យ!');
       if (typeof onRefreshSeries === 'function') {
         try { await onRefreshSeries(); } catch (_) {}
@@ -293,11 +330,15 @@ export default function GeminiRouteModal({
     return () => clearInterval(tickTimer);
   }, [isOpen]);
 
-  // Close on Escape key (only when dedicated Quota modal isn't layered on top)
+  // Close on Escape key (only when dedicated Quota or Confirm modal isn't layered on top)
   useEffect(() => {
     if (!isOpen) return undefined;
     const handleKeyDown = (e) => {
-      if (e.key === 'Escape' && !document.querySelector('[data-testid="gemini-quota-modal"]')) {
+      if (
+        e.key === 'Escape' &&
+        !document.querySelector('[data-testid="gemini-quota-modal"]') &&
+        !document.querySelector('[data-testid="studio-confirm-modal"]')
+      ) {
         onClose();
       }
     };
@@ -333,6 +374,13 @@ export default function GeminiRouteModal({
     return map;
   }, [activeJobs, currentSeriesId]);
 
+  const activeSeriesTranslateJobs = useMemo(
+    () => getActiveSeriesTranslateJobs(activeJobs, currentSeriesId),
+    [activeJobs, currentSeriesId]
+  );
+  const hasActiveTranslateQueue = activeSeriesTranslateJobs.length > 0;
+  const wasTranslateQueueActiveRef = useRef(false);
+
   // Trigger series refresh automatically whenever a queued/running translate job finishes via SSE
   const seenCompletedJobsRef = useRef(new Set());
   const hasInitializedSseRef = useRef(false);
@@ -343,6 +391,7 @@ export default function GeminiRouteModal({
       prevSeriesForSseRef.current = currentSeriesId;
       seenCompletedJobsRef.current.clear();
       hasInitializedSseRef.current = false;
+      wasTranslateQueueActiveRef.current = false;
     }
 
     const currentCompletedKeys = new Set();
@@ -377,7 +426,23 @@ export default function GeminiRouteModal({
         onRefreshSeries();
       } catch (_) {}
     }
-  }, [activeJobs, isJobsLoading, currentSeriesId, onRefreshSeries]);
+
+    if (hasNewlyCompleted && !hasActiveTranslateQueue && !isStartingBatch) {
+      setBatchSuccess((prev) => (isTranslateQueueEnqueueBanner(prev) ? null : prev));
+    }
+  }, [activeJobs, isJobsLoading, currentSeriesId, onRefreshSeries, hasActiveTranslateQueue, isStartingBatch]);
+
+  // Clear stale enqueue queue banner once active translate jobs drain from > 0 to 0
+  useEffect(() => {
+    if (hasActiveTranslateQueue) {
+      wasTranslateQueueActiveRef.current = true;
+      return;
+    }
+    if (wasTranslateQueueActiveRef.current && !isStartingBatch) {
+      wasTranslateQueueActiveRef.current = false;
+      setBatchSuccess((prev) => (isTranslateQueueEnqueueBanner(prev) ? null : prev));
+    }
+  }, [hasActiveTranslateQueue, isStartingBatch]);
 
   // Handle single-episode retry on failure
   const handleRetryEpisode = async (ep) => {
@@ -792,13 +857,28 @@ export default function GeminiRouteModal({
   const handleStartBatchTranslate = async () => {
     const targetEpisodes = episodes.filter((ep) => selectedEpIds.has(ep.id));
     if (targetEpisodes.length === 0) {
-      alert('សូមជ្រើសរើសភាគដែលចង់ Translate ជាមុនសិន!');
+      await openStudioDialog({
+        showCancel: false,
+        variant: 'warning',
+        badge: 'TRANSLATE',
+        title: 'សូមជ្រើសរើសភាគជាមុនសិន',
+        message: 'សូមជ្រើសរើសភាគដែលចង់ Translate ជាមុនសិន!',
+        confirmLabel: 'យល់ព្រម',
+      });
       return;
     }
 
     const episodesWithoutVideo = targetEpisodes.filter((ep) => !ep.video && !ep.videoFile && !ep.sourceVideoPath);
     if (episodesWithoutVideo.length > 0) {
-      alert(`ភាគមួយចំនួនមិនទាន់មានវីដេអូទេ: ${episodesWithoutVideo.map((e) => `EP${e.episodeNumber}`).join(', ')}`);
+      await openStudioDialog({
+        showCancel: false,
+        variant: 'warning',
+        badge: 'MISSING VIDEO',
+        title: 'ភាគមួយចំនួនមិនទាន់មានវីដេអូទេ',
+        chips: episodesWithoutVideo.map((e) => `EP${e.episodeNumber || e.id}`),
+        message: 'សូម Upload វីដេអូសម្រាប់ភាគទាំងនេះជាមុនសិន មុននឹងចាប់ផ្ដើម Translate។',
+        confirmLabel: 'យល់ព្រម',
+      });
       return;
     }
 
@@ -825,28 +905,59 @@ export default function GeminiRouteModal({
 
   // One-click sweep of ONLY text-broken + voice-broken segments (never re-runs whole episodes)
   const handleRepairBrokenSegments = async () => {
-    const targetEps = selectedTargetEpisodes.length > 0 ? selectedTargetEpisodes : episodes;
-    if (targetEps.length === 0) {
-      alert('មិនទាន់មានភាគសម្រាប់ជួសជុលទេ!');
+    if (hasActiveTranslateQueue || isStartingBatch) {
+      setBatchError(null);
+      setBatchSuccess(null);
+      setBatchInfo(
+        '⏳ កំពុងដំណើរការ Translate / Re-Translate — សូមរង់ចាំឱ្យ Queue ចប់សិន មុននឹងចុចជួសជុលឃ្លាខូច!'
+      );
       return;
     }
 
-    const summary = getEpisodesBrokenSummary(targetEps);
-    const n1 = summary.textBrokenCount;
-    const n2 = summary.voiceBrokenCount;
-    if (summary.totalBrokenCount === 0) {
+    const candidateEps = selectedTargetEpisodes.length > 0 ? selectedTargetEpisodes : episodes;
+    if (candidateEps.length === 0) {
+      await openStudioDialog({
+        showCancel: false,
+        variant: 'warning',
+        badge: 'REPAIR',
+        title: 'មិនទាន់មានភាគសម្រាប់ជួសជុលទេ',
+        message: 'សូមបន្ថែម ឬជ្រើសរើសភាគវីដេអូជាមុនសិន។',
+        confirmLabel: 'យល់ព្រម',
+      });
+      return;
+    }
+
+    // Filter to ONLY episodes that have at least 1 broken segment (skip 100% healthy episodes like EP1-EP4)
+    const targetEps = candidateEps.filter((ep) => {
+      const scan = getEpisodeBrokenSummary(ep);
+      return (scan?.totalBrokenCount || 0) > 0;
+    });
+
+    if (targetEps.length === 0) {
       setBatchError(null);
       setBatchSuccess(null);
       setBatchInfo('គ្រប់ឃ្លារួចរាល់ 100% — គ្មានឃ្លាខូចទេ!');
       return;
     }
 
-    const confirmed = window.confirm(
-      `🔧 បញ្ជាក់ការជួសជុលឃ្លាខូច & Generate ឡើងវិញ (${summary.totalBrokenCount} ឃ្លា)\n\n` +
-      `អត្ថបទខូច: ${n1} ឃ្លា • សំឡេងខ្វះ: ${n2} ឃ្លា\n\n` +
-      `• នឹងបកប្រែ & បង្កើតសំឡេងតែលើឃ្លាដែលខូចប៉ុណ្ណោះ (មិនប៉ះពាល់ឃ្លាដែលល្អរួចស្រាប់ទេ)។\n` +
-      `• ប្រសិនបើ Gemini Quota អស់កណ្តាលទី ប្រព័ន្ធនឹងរក្សាទុកលទ្ធផលដែលកែរួច ហើយរាយការណ៍ដើម្បីចុចបន្ត។`
-    );
+    const summary = getEpisodesBrokenSummary(targetEps);
+    const n1 = summary.textBrokenCount;
+    const n2 = summary.voiceBrokenCount;
+
+    const confirmed = await openStudioDialog({
+      variant: 'repair',
+      badge: `REPAIR • ${summary.totalBrokenCount} ឃ្លា`,
+      title: 'បញ្ជាក់ការជួសជុលឃ្លាខូច & Generate ឡើងវិញ',
+      subtitle: `អត្ថបទខូច: ${n1} ឃ្លា • សំឡេងខ្វះ: ${n2} ឃ្លា (${targetEps.length} ភាគ)`,
+      chips: targetEps.map((e) => `EP${e.episodeNumber || e.id}`),
+      bullets: [
+        'នឹងបកប្រែ & បង្កើតសំឡេងតែលើឃ្លាដែលខូចប៉ុណ្ណោះ (មិនប៉ះពាល់ឃ្លាដែលល្អរួចស្រាប់ទេ)។',
+        'ប្រសិនបើ Gemini Quota អស់កណ្តាលទី ប្រព័ន្ធនឹងរក្សាទុកលទ្ធផលដែលកែរួច ហើយរាយការណ៍ដើម្បីចុចបន្ត។',
+      ],
+      question: 'តើអ្នកចង់ចាប់ផ្ដើមជួសជុលឃ្លាខូចទាំងនេះឥឡូវនេះទេ?',
+      confirmLabel: `🔧 ជួសជុល (${summary.totalBrokenCount} ឃ្លា)`,
+      cancelLabel: 'បោះបង់',
+    });
     if (!confirmed) return;
 
     try {
@@ -893,25 +1004,47 @@ export default function GeminiRouteModal({
   const handleReTranslateSelected = async () => {
     const targetEpisodes = episodes.filter((ep) => selectedEpIds.has(ep.id));
     if (targetEpisodes.length === 0) {
-      alert('សូមជ្រើសរើសភាគដែលចង់ Re-Translate ជាមុនសិន!');
+      await openStudioDialog({
+        showCancel: false,
+        variant: 'warning',
+        badge: 'RE-TRANSLATE',
+        title: 'សូមជ្រើសរើសភាគជាមុនសិន',
+        message: 'សូមជ្រើសរើសភាគដែលចង់ Re-Translate ជាមុនសិន!',
+        confirmLabel: 'យល់ព្រម',
+      });
       return;
     }
 
     const episodesWithoutVideo = targetEpisodes.filter((ep) => !ep.video && !ep.videoFile && !ep.sourceVideoPath);
     if (episodesWithoutVideo.length > 0) {
-      alert(`ភាគមួយចំនួនមិនទាន់មានវីដេអូទេ: ${episodesWithoutVideo.map((e) => `EP${e.episodeNumber}`).join(', ')}`);
+      await openStudioDialog({
+        showCancel: false,
+        variant: 'warning',
+        badge: 'MISSING VIDEO',
+        title: 'ភាគមួយចំនួនមិនទាន់មានវីដេអូទេ',
+        chips: episodesWithoutVideo.map((e) => `EP${e.episodeNumber || e.id}`),
+        message: 'សូម Upload វីដេអូសម្រាប់ភាគទាំងនេះជាមុនសិន មុននឹងចាប់ផ្ដើម Re-Translate។',
+        confirmLabel: 'យល់ព្រម',
+      });
       return;
     }
 
-    const epNames = targetEpisodes.map((e) => `EP${e.episodeNumber || e.id}`).join(', ');
     const modeLabel = dubbingMode === 'fast_ocr' ? '⚡ Fast OCR' : (dubbingMode === 'recap' ? 'Mode B: សម្រាយរឿង' : 'Mode A: សន្ទនា 1:1');
-    const confirmed = window.confirm(
-      `⚠️ បញ្ជាក់ការ Re-Translate ឡើងវិញ (FORCE RE-RUN) សម្រាប់ ${targetEpisodes.length} ភាគ [${epNames}]\n\n` +
-      `• នឹងដំណើរការ FULL Pipeline ឡើងវិញពីដើម (OCR + ASR + Gemini) តាម (${modeLabel})។\n` +
-      `• នឹងប្រើប្រាស់ Quota របស់ Gemini API Keys (Key Pool)។\n` +
-      `• ប្រព័ន្ធនឹងធ្វើ Auto-Backup Script ចាស់ទុកជាមុនសិន រួចទើបសរសេរជាន់លើ Script បច្ចុប្បន្ន (Overwrite) ពេល Job នីមួយៗបញ្ចប់។\n\n` +
-      `តើអ្នកប្រាកដជាចង់បន្ត Re-Translate មែនទេ?`
-    );
+    const confirmed = await openStudioDialog({
+      variant: 'warning',
+      badge: 'FORCE RE-RUN',
+      title: 'បញ្ជាក់ការ Re-Translate ឡើងវិញ',
+      subtitle: `សម្រាប់ ${targetEpisodes.length} ភាគ • ${modeLabel}`,
+      chips: targetEpisodes.map((e) => `EP${e.episodeNumber || e.id}`),
+      bullets: [
+        `នឹងដំណើរការ FULL Pipeline ឡើងវិញពីដើម (OCR + ASR + Gemini) តាម (${modeLabel})។`,
+        'នឹងប្រើប្រាស់ Quota របស់ Gemini API Keys (Key Pool)។',
+        'ប្រព័ន្ធនឹងធ្វើ Auto-Backup Script ចាស់ទុកជាមុនសិន រួចទើបសរសេរជាន់លើ Script បច្ចុប្បន្ន (Overwrite) ពេល Job នីមួយៗបញ្ចប់។',
+      ],
+      question: 'តើអ្នកប្រាកដជាចង់បន្ត Re-Translate មែនទេ?',
+      confirmLabel: `Re-Translate (${targetEpisodes.length} ភាគ)`,
+      cancelLabel: 'បោះបង់',
+    });
     if (!confirmed) return;
 
     await executeBatchTranslateEnqueue(targetEpisodes, {
@@ -924,7 +1057,14 @@ export default function GeminiRouteModal({
   const handleBatchGenerateTTS = async () => {
     const targetEpisodes = episodes.filter((ep) => selectedEpIds.has(ep.id));
     if (targetEpisodes.length === 0) {
-      alert('សូមជ្រើសរើសភាគដែលចង់បង្កើតសំឡេង AI ជាមុនសិន!');
+      await openStudioDialog({
+        showCancel: false,
+        variant: 'warning',
+        badge: 'KHMER AI VOICE',
+        title: 'សូមជ្រើសរើសភាគជាមុនសិន',
+        message: 'សូមជ្រើសរើសភាគដែលចង់បង្កើតសំឡេង AI ជាមុនសិន!',
+        confirmLabel: 'យល់ព្រម',
+      });
       return;
     }
 
@@ -1198,7 +1338,14 @@ export default function GeminiRouteModal({
   const handleBatchDemucsSeparation = async () => {
     const targetEpisodes = episodes.filter((ep) => selectedEpIds.has(ep.id));
     if (targetEpisodes.length === 0) {
-      alert('សូមជ្រើសរើសភាគដែលចង់បំបែកសំឡេង Demucs AI ជាមុនសិន!');
+      await openStudioDialog({
+        showCancel: false,
+        variant: 'warning',
+        badge: 'DEMUCS AI',
+        title: 'សូមជ្រើសរើសភាគជាមុនសិន',
+        message: 'សូមជ្រើសរើសភាគដែលចង់បំបែកសំឡេង Demucs AI ជាមុនសិន!',
+        confirmLabel: 'យល់ព្រម',
+      });
       return;
     }
 
@@ -1209,13 +1356,30 @@ export default function GeminiRouteModal({
     });
 
     if (episodesToProcess.length === 0) {
-      alert('🎉 ភាគដែលបានជ្រើសរើសទាំងអស់ មានសំឡេង Clean BGM រួចរាល់អស់ហើយ!');
+      setBatchError(null);
+      setBatchInfo(null);
+      setBatchSuccess('🎉 ភាគដែលបានជ្រើសរើសទាំងអស់ មានសំឡេង Clean BGM រួចរាល់អស់ហើយ!');
+      await openStudioDialog({
+        showCancel: false,
+        variant: 'success',
+        badge: 'CLEAN BGM READY',
+        title: 'សំឡេង Clean BGM រួចរាល់អស់ហើយ',
+        message: '🎉 ភាគដែលបានជ្រើសរើសទាំងអស់ មានសំឡេង Clean BGM រួចរាល់អស់ហើយ!',
+        confirmLabel: 'យល់ព្រម',
+      });
       return;
     }
 
     const episodesWithVideo = episodesToProcess.filter((ep) => ep.video?.videoPath || ep.video?.videoId || ep.videoFile || ep.sourceVideoPath);
     if (episodesWithVideo.length === 0) {
-      alert('ភាគដែលបានជ្រើសរើសមិនទាន់មានវីដេអូសម្រាប់បំបែកសំឡេងទេ!');
+      await openStudioDialog({
+        showCancel: false,
+        variant: 'warning',
+        badge: 'MISSING VIDEO',
+        title: 'មិនទាន់មានវីដេអូសម្រាប់បំបែកសំឡេងទេ',
+        message: 'ភាគដែលបានជ្រើសរើសមិនទាន់មានវីដេអូសម្រាប់បំបែកសំឡេងទេ!',
+        confirmLabel: 'យល់ព្រម',
+      });
       return;
     }
 
@@ -1258,7 +1422,7 @@ export default function GeminiRouteModal({
           [ep.id]: { percent: 5, isDone: false, logs: [initialLog], message: 'AI Deep Learning Stem Separation...', model: 'htdemucs' },
         }));
 
-        // Controlled polling loop at 2500ms with in-flight request lock
+        // Controlled polling loop at 1200ms with in-flight request lock for real-time Terminal parity
         let isPolling = false;
         const demucsPollTimer = setInterval(async () => {
           if (isDemucsCancelledRef.current) {
@@ -1273,25 +1437,42 @@ export default function GeminiRouteModal({
             if (!dpRes.ok) return;
             const dpData = await dpRes.json();
             if (dpData && dpData.success && typeof dpData.progress === 'number') {
-              const dPct = Math.max(5, dpData.progress);
+              const dPct = Math.min(100, Math.max(5, dpData.progress));
+              setDemucsProgressPercent(dPct);
               setDemucsLiveStats((prev) => {
                 const prevD = prev[ep.id] || { logs: [] };
-                const curLogs = [...(prevD.logs || [])];
-                if (dpData.message && !curLogs.some((l) => l.message === dpData.message)) {
-                  curLogs.push({
-                    time: new Date().toLocaleTimeString(),
-                    progress: dPct,
-                    message: dpData.message,
-                  });
+                let mergedLogs = [...(prevD.logs || [])];
+
+                // Synchronize server-side logs directly from backend Demucs process
+                if (Array.isArray(dpData.logs) && dpData.logs.length > 0) {
+                  const seen = new Set(mergedLogs.map((l) => `${l.progress}_${l.message}`));
+                  for (const sLog of dpData.logs) {
+                    const key = `${sLog.progress}_${sLog.message}`;
+                    if (!seen.has(key)) {
+                      mergedLogs.push(sLog);
+                      seen.add(key);
+                    }
+                  }
+                } else {
+                  const lastLog = mergedLogs[mergedLogs.length - 1];
+                  const lastProgress = typeof lastLog?.progress === 'number' ? lastLog.progress : 0;
+                  if (dPct > lastProgress) {
+                    mergedLogs.push({
+                      time: new Date().toLocaleTimeString(),
+                      progress: dPct,
+                      message: `⏳ Demucs Progress: ${dPct}%`,
+                    });
+                  }
                 }
+
                 return {
                   ...prev,
                   [ep.id]: {
                     percent: dPct,
                     isDone: dpData.status === 'completed' || dPct >= 100,
-                    message: dpData.message || 'Demucs Stem Separation...',
+                    message: dpData.message || `⏳ Demucs Progress: ${dPct}%`,
                     model: dpData.model || 'htdemucs',
-                    logs: curLogs.slice(-30),
+                    logs: mergedLogs.slice(-60),
                   },
                 };
               });
@@ -1300,7 +1481,7 @@ export default function GeminiRouteModal({
           finally {
             isPolling = false;
           }
-        }, 2500);
+        }, 1200);
         activeTimersRef.current.add(demucsPollTimer);
 
         try {
@@ -1485,7 +1666,11 @@ export default function GeminiRouteModal({
     2: { color: '#34d399', bg: 'rgba(52, 211, 153, 0.12)', border: 'rgba(52, 211, 153, 0.3)', dot: '#34d399' },
     3: { color: '#818cf8', bg: 'rgba(129, 140, 248, 0.12)', border: 'rgba(129, 140, 248, 0.3)', dot: '#818cf8' },
     4: { color: '#FF8577', bg: 'rgba(255, 133, 119, 0.12)', border: 'rgba(255, 133, 119, 0.3)', dot: '#FF8577' },
+    5: { color: '#fbbf24', bg: 'rgba(251, 191, 36, 0.12)', border: 'rgba(251, 191, 36, 0.3)', dot: '#fbbf24' },
+    6: { color: '#e879f9', bg: 'rgba(232, 121, 249, 0.12)', border: 'rgba(232, 121, 249, 0.3)', dot: '#e879f9' },
   };
+  const keyThemeCount = Object.keys(KEY_THEMES).length;
+  const poolTotalKeys = Math.max(1, Number(keysHealth?.quotaSummary?.totalKeys ?? keysHealth?.totalKeys ?? 4) || 4);
 
   return (
     <div 
@@ -2208,12 +2393,23 @@ export default function GeminiRouteModal({
                   FORCE
                 </span>
               </button>
-              {(isStartingBatch || (Array.isArray(activeJobs) && activeJobs.some((j) => (j.status === 'running' || j.status === 'queued') && (selectedEpIds.size === 0 || selectedEpIds.has(j.episodeId))))) && (
+              {(isStartingBatch || activeSeriesTranslateJobs.some((j) => selectedEpIds.size === 0 || selectedEpIds.has(j.episodeId))) && (
                 <button
                   type="button"
-                  onClick={(e) => {
+                  onClick={async (e) => {
                     e.stopPropagation();
-                    if (window.confirm('តើអ្នកពិតជាចង់បញ្ឈប់ (Kill) ដំណើរការ Translate ទាំងអស់មែនទេ?')) {
+                    const confirmed = await openStudioDialog({
+                      variant: 'danger',
+                      badge: 'KILL TRANSLATE',
+                      title: 'បញ្ឈប់ (Kill) ដំណើរការ Translate ទាំងអស់?',
+                      bullets: [
+                        'នឹងបញ្ឈប់ Translate Jobs ដែលកំពុងរត់ និងដក Jobs ដែលរង់ចាំក្នុង Queue ទាំងអស់សម្រាប់ Series នេះ។',
+                      ],
+                      question: 'តើអ្នកពិតជាចង់បញ្ឈប់ (Kill) ដំណើរការ Translate ទាំងអស់មែនទេ?',
+                      confirmLabel: '🛑 បញ្ឈប់ (Kill All)',
+                      cancelLabel: 'បន្តដំណើរការ',
+                    });
+                    if (confirmed) {
                       handleKillTranslate();
                     }
                   }}
@@ -2392,10 +2588,12 @@ export default function GeminiRouteModal({
                 type="button"
                 data-testid="btn-repair-broken-segments"
                 onClick={handleRepairBrokenSegments}
-                disabled={isRepairBusy || isGeneratingBatchTTS || isSeparatingBatchDemucs || isStartingBatch || repairButtonCount === 0}
+                disabled={isRepairBusy || isGeneratingBatchTTS || isSeparatingBatchDemucs || isStartingBatch || hasActiveTranslateQueue || repairButtonCount === 0}
                 className="btn-tactile"
                 title={
-                  repairButtonCount > 0
+                  hasActiveTranslateQueue
+                    ? `រង់ចាំ Translate / Re-Translate ចប់សិន (${activeSeriesTranslateJobs.length} ភាគកំពុងដំណើរការ/ក្នុង Queue) ដើម្បីកុំឱ្យជាន់គ្នា`
+                    : repairButtonCount > 0
                     ? `ជួសជុលតែឃ្លាដែលខូច (${repairButtonCount} ឃ្លា: អត្ថបទខូច ${effectiveBrokenSummary.textBrokenCount} • សំឡេងខ្វះ ${effectiveBrokenSummary.voiceBrokenCount}) ដោយមិនប៉ះពាល់ឃ្លាល្អឡើយ`
                     : 'គ្មានឃ្លាខូចទេ — គ្រប់ឃ្លារួចរាល់ 100%'
                 }
@@ -2404,22 +2602,28 @@ export default function GeminiRouteModal({
                   borderRadius: 10,
                   background: isRepairBusy
                     ? 'linear-gradient(135deg, rgba(56, 189, 248, 0.2) 0%, rgba(14, 165, 233, 0.32) 100%)'
+                    : hasActiveTranslateQueue
+                    ? 'rgba(255, 255, 255, 0.03)'
                     : repairButtonCount > 0
                     ? 'linear-gradient(135deg, rgba(251, 113, 133, 0.18) 0%, rgba(245, 158, 11, 0.26) 100%)'
                     : 'rgba(255, 255, 255, 0.03)',
                   border: isRepairBusy
                     ? '1px solid rgba(56, 189, 248, 0.65)'
+                    : hasActiveTranslateQueue
+                    ? '1px solid rgba(251, 191, 36, 0.28)'
                     : repairButtonCount > 0
                     ? '1px solid rgba(251, 146, 60, 0.6)'
                     : '1px solid rgba(255, 255, 255, 0.08)',
                   color: isRepairBusy
                     ? '#7DD3FC'
+                    : hasActiveTranslateQueue
+                    ? '#94A3B8'
                     : repairButtonCount > 0
                     ? '#FDBA74'
                     : '#64748B',
                   fontSize: '0.72rem',
                   fontWeight: 800,
-                  cursor: (isRepairBusy || isGeneratingBatchTTS || isSeparatingBatchDemucs || isStartingBatch || repairButtonCount === 0)
+                  cursor: (isRepairBusy || isGeneratingBatchTTS || isSeparatingBatchDemucs || isStartingBatch || hasActiveTranslateQueue || repairButtonCount === 0)
                     ? 'not-allowed'
                     : 'pointer',
                   display: 'flex',
@@ -2432,12 +2636,16 @@ export default function GeminiRouteModal({
                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
                   {isRepairBusy ? (
                     <Loader2 size={13} className="animate-spin" color="#38BDF8" />
+                  ) : hasActiveTranslateQueue ? (
+                    <Clock size={13} color="#FBBF24" />
                   ) : (
                     <Wrench size={13} color={repairButtonCount > 0 ? '#FB923C' : '#64748B'} />
                   )}
                   <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                     {isRepairBusy
                       ? (repairProgressSummary || 'កំពុងជួសជុលឃ្លាខូច...')
+                      : hasActiveTranslateQueue
+                      ? `⏳ រង់ចាំ Translate Queue (${activeSeriesTranslateJobs.length})...`
                       : `🔧 ជួសជុលឃ្លាខូច & Generate ឡើងវិញ (${repairButtonCount})`}
                   </span>
                 </span>
@@ -2448,27 +2656,48 @@ export default function GeminiRouteModal({
                   borderRadius: 9999,
                   background: isRepairBusy
                     ? 'rgba(56, 189, 248, 0.22)'
+                    : hasActiveTranslateQueue
+                    ? 'rgba(251, 191, 36, 0.16)'
                     : repairButtonCount > 0
                     ? 'rgba(251, 146, 60, 0.22)'
                     : 'rgba(16, 185, 129, 0.14)',
                   border: isRepairBusy
                     ? '1px solid rgba(56, 189, 248, 0.45)'
+                    : hasActiveTranslateQueue
+                    ? '1px solid rgba(251, 191, 36, 0.38)'
                     : repairButtonCount > 0
                     ? '1px solid rgba(251, 146, 60, 0.45)'
                     : '1px solid rgba(52, 211, 153, 0.3)',
-                  color: isRepairBusy ? '#7DD3FC' : repairButtonCount > 0 ? '#FDBA74' : '#34D399',
+                  color: isRepairBusy
+                    ? '#7DD3FC'
+                    : hasActiveTranslateQueue
+                    ? '#FDE68A'
+                    : repairButtonCount > 0
+                    ? '#FDBA74'
+                    : '#34D399',
                   letterSpacing: '0.04em',
                   flexShrink: 0,
                 }}>
-                  {isRepairBusy ? 'REPAIRING' : repairButtonCount > 0 ? `${repairButtonCount}` : '0'}
+                  {isRepairBusy ? 'REPAIRING' : hasActiveTranslateQueue ? 'QUEUE' : repairButtonCount > 0 ? `${repairButtonCount}` : '0'}
                 </span>
               </button>
               {isGeneratingBatchTTS && (
                 <button
                   type="button"
-                  onClick={(e) => {
+                  onClick={async (e) => {
                     e.stopPropagation();
-                    if (window.confirm('តើអ្នកពិតជាចង់បញ្ឈប់ (Kill) ដំណើរការបង្កើតសំឡេង TTS ទាំងអស់មែនទេ?')) {
+                    const confirmed = await openStudioDialog({
+                      variant: 'danger',
+                      badge: 'KILL TTS',
+                      title: 'បញ្ឈប់ (Kill) ដំណើរការ TTS ទាំងអស់?',
+                      bullets: [
+                        'នឹងបញ្ឈប់ការសំយោគសំឡេងខ្មែរ Edge-TTS ដែលកំពុងដំណើរការភ្លាមៗ។',
+                      ],
+                      question: 'តើអ្នកពិតជាចង់បញ្ឈប់ (Kill) ដំណើរការបង្កើតសំឡេង TTS ទាំងអស់មែនទេ?',
+                      confirmLabel: '🛑 បញ្ឈប់ (Kill TTS)',
+                      cancelLabel: 'បន្តដំណើរការ',
+                    });
+                    if (confirmed) {
                       handleKillTTS();
                     }
                   }}
@@ -2632,9 +2861,20 @@ export default function GeminiRouteModal({
               {isSeparatingBatchDemucs && (
                 <button
                   type="button"
-                  onClick={(e) => {
+                  onClick={async (e) => {
                     e.stopPropagation();
-                    if (window.confirm('តើអ្នកពិតជាចង់បញ្ឈប់ (Kill) ដំណើរការបំបែកសំឡេង Demucs ទាំងអស់មែនទេ?')) {
+                    const confirmed = await openStudioDialog({
+                      variant: 'danger',
+                      badge: 'KILL DEMUCS',
+                      title: 'បញ្ឈប់ (Kill) ដំណើរការ Demucs ទាំងអស់?',
+                      bullets: [
+                        'នឹងបញ្ឈប់ការបំបែកសំឡេងដើម Demucs AI (Clean BGM) ដែលកំពុងដំណើរការ។',
+                      ],
+                      question: 'តើអ្នកពិតជាចង់បញ្ឈប់ (Kill) ដំណើរការបំបែកសំឡេង Demucs ទាំងអស់មែនទេ?',
+                      confirmLabel: '🛑 បញ្ឈប់ (Kill Demucs)',
+                      cancelLabel: 'បន្តដំណើរការ',
+                    });
+                    if (confirmed) {
                       handleKillDemucs();
                     }
                   }}
@@ -2976,8 +3216,8 @@ export default function GeminiRouteModal({
                 const isQueued = Boolean(activeJob && activeJob.status === 'queued');
                 const isFailed = Boolean(activeJob && activeJob.status === 'failed' && !hasScript);
                 const segmentsMissingAfterJob = Boolean(!isRunning && !isQueued && !isFailed && isJobCompletedSegmentsMissing(ep, activeJob));
-                const assignedKeyNum = (idx % 4) + 1;
-                const keyTheme = KEY_THEMES[assignedKeyNum] || KEY_THEMES[1];
+                const assignedKeyNum = (idx % poolTotalKeys) + 1;
+                const keyTheme = KEY_THEMES[((assignedKeyNum - 1) % keyThemeCount) + 1] || KEY_THEMES[1];
                 const segmentCount = getEpisodeSegmentCount(ep);
                 const epBrokenScan = getEpisodeBrokenSummary(ep);
                 const isFullyDone = isEpisodeFullyDone(ep);
@@ -3165,6 +3405,7 @@ export default function GeminiRouteModal({
                           isFailed={isFailed}
                           onRetry={() => handleRetryEpisode(ep)}
                           onKill={() => handleKillTranslate(activeJob || ep)}
+                          onRequestConfirm={openStudioDialog}
                         />
                       )}
 
@@ -3174,16 +3415,44 @@ export default function GeminiRouteModal({
                           liveStats={ttsLiveStats[ep.id]}
                           ep={ep}
                           onKill={() => handleKillTTS(ep)}
+                          onRequestConfirm={openStudioDialog}
                         />
                       )}
 
-                      {/* Step 3: Dynamic Progress Runner & Live Console Terminal for Demucs AI Clean BGM */}
-                      {isSeparatingBatchDemucs && (activeDemucsEpisodeIds.has(ep.id) || activeDemucsEpisodeId === ep.id) && (
+                      {/* Step 3: Dynamic Progress Runner & Live Console Terminal for Demucs AI Clean BGM (Active Running Ep Only) */}
+                      {isSeparatingBatchDemucs && activeDemucsEpisodeId === ep.id && (
                         <EpisodeDemucsProgressCard
                           liveStats={demucsLiveStats[ep.id]}
                           ep={ep}
+                          isCurrentRunning={true}
                           onKill={handleKillDemucs}
+                          onRequestConfirm={openStudioDialog}
                         />
+                      )}
+
+                      {/* Step 3: Compact Queue Indicator for Episodes Waiting Their Turn (Only active ep expands full drawer) */}
+                      {isSeparatingBatchDemucs && activeDemucsEpisodeIds.has(ep.id) && activeDemucsEpisodeId !== ep.id && (
+                        <div style={{
+                          marginTop: 6,
+                          padding: '7px 11px',
+                          borderRadius: 8,
+                          background: 'rgba(15, 23, 42, 0.75)',
+                          border: '1px dashed rgba(56, 189, 248, 0.35)',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          gap: 8,
+                        }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <Clock size={13} color="#94A3B8" />
+                            <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#94A3B8' }}>
+                              ⏳ រង់ចាំក្នុង Queue (Waiting in Queue)
+                            </span>
+                          </div>
+                          <span style={{ fontSize: '0.64rem', color: '#64748B' }}>
+                            ដំណើរការម្ដង ១ ភាគ
+                          </span>
+                        </div>
                       )}
 
                       {/* Completed State Banner */}
@@ -3917,6 +4186,13 @@ export default function GeminiRouteModal({
           </div>
         </div>
       </div>
+
+      <StudioConfirmDialog
+        {...(confirmDialog || {})}
+        isOpen={Boolean(confirmDialog)}
+        onConfirm={() => closeStudioDialog(true)}
+        onCancel={() => closeStudioDialog(false)}
+      />
     </div>
   );
 }

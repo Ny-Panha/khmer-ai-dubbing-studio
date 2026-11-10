@@ -13,6 +13,7 @@ const { previewAndExport } = require('./stages/stage10_previewAndExport');
 const { buildSpeakerRegistry, syncSegmentsWithSpeakerRegistry } = require('../../models/speakerRegistry');
 const { updateChunk, updateJob, productionJobQueue } = require('./jobManager');
 const { createAbortError } = require('../../utils/asyncSemaphore');
+const { isNonChineseAsrHallucination } = require('../../utils/translationQuality');
 const { DUBBING_CASCADE_MODELS, isUsableDubbingModel } = require('../geminiModelCatalog');
 const { geminiQuotaTracker } = require('../geminiQuotaTracker');
 
@@ -64,10 +65,13 @@ function generateChunkPlan(totalDurationSec, chunkSizeSec = 300, overlapSec = 2)
  * @returns {Array<object>}
  */
 function stitchAndDeduplicateSegments(allChunkSegments = []) {
-  if (allChunkSegments.length === 0) return [];
+  const validSegments = Array.isArray(allChunkSegments)
+    ? allChunkSegments.filter((seg) => !isNonChineseAsrHallucination(seg))
+    : [];
+  if (validSegments.length === 0) return [];
 
   // Sort globally by startSec
-  const sorted = [...allChunkSegments].sort((a, b) => a.startSec - b.startSec);
+  const sorted = [...validSegments].sort((a, b) => a.startSec - b.startSec);
   const stitched = [];
 
   for (const seg of sorted) {
@@ -238,11 +242,15 @@ async function runChunkedDubbingPipeline({
       try {
         const cachedChunk = JSON.parse(fs.readFileSync(chunkFile, 'utf8'));
         if (Array.isArray(cachedChunk.segments) && cachedChunk.segments.length > 0) {
-          chunkSegments = cachedChunk.segments;
+          const beforeCacheCount = cachedChunk.segments.length;
+          chunkSegments = cachedChunk.segments.filter((seg) => !isNonChineseAsrHallucination(seg));
+          const droppedCacheJunk = beforeCacheCount - chunkSegments.length;
           visualOnlyCount = cachedChunk.visualOnlyCount || 0;
           fusedCount = cachedChunk.fusedCount || 0;
           isChunkReused = true;
-          console.log(`[ChunkOrchestrator] ⚡ Resuming Chunk ${cIdx + 1}/${chunks.length}: Loaded ${chunkSegments.length} validated segments from disk cache`);
+          console.log(
+            `[ChunkOrchestrator] ⚡ Resuming Chunk ${cIdx + 1}/${chunks.length}: Loaded ${chunkSegments.length} validated segments from disk cache${droppedCacheJunk > 0 ? ` (dropped ${droppedCacheJunk} non-Chinese ASR junk)` : ''}`
+          );
         }
       } catch (_) {}
     }
@@ -303,7 +311,11 @@ async function runChunkedDubbingPipeline({
             durationSec: chunk.durationSec,
           });
 
-          chunkSegments = chunkReconciliation.reconciledSegments || [];
+          const rawReconciled = chunkReconciliation.reconciledSegments || [];
+          chunkSegments = rawReconciled.filter((seg) => !isNonChineseAsrHallucination(seg));
+          if (chunkSegments.length !== rawReconciled.length) {
+            console.log(`[ChunkOrchestrator] 🧹 Dropped ${rawReconciled.length - chunkSegments.length} non-Chinese ASR hallucination(s) from Chunk ${cIdx + 1}.`);
+          }
           visualOnlyCount = chunkReconciliation.reconciliationMeta?.visualOnlyCount || 0;
           fusedCount = chunkReconciliation.reconciliationMeta?.fusedSegmentsCount || 0;
         }

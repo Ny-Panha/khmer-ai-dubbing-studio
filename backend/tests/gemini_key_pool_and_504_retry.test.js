@@ -1,7 +1,13 @@
 const test = require('node:test');
 const assert = require('node:assert');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
 
 const {
+  extractAllGeminiKeys,
+  registerLiveDotenvFiles,
+  resetLiveDotenvFiles,
   GeminiKeyPool,
   isAuthOrInvalidKeyError,
   isQuotaOrRateLimitError,
@@ -159,5 +165,74 @@ test('GeminiKeyPool & 504 Timeout Resilience Suite', async (t) => {
       },
       (err) => err.message.includes('504') || err.message.includes('exceeded quota')
     );
+  });
+
+  await t.test('7. Live .env sync reloads newly added GEMINI_API_KEY5+ without restart and ignores blank slots', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'live_env_keys_'));
+    const rootEnv = path.join(tmpDir, 'root.env');
+    const backendEnv = path.join(tmpDir, 'backend.env');
+    const prevSnapshot = {};
+    for (let i = 1; i <= 6; i++) {
+      prevSnapshot[`GEMINI_API_KEY${i}`] = process.env[`GEMINI_API_KEY${i}`];
+      delete process.env[`GEMINI_API_KEY${i}`];
+    }
+
+    try {
+      fs.writeFileSync(
+        rootEnv,
+        [
+          'GEMINI_API_KEY1=MockTestKey_One_111111',
+          'GEMINI_API_KEY2=MockTestKey_Two_222222',
+          'GEMINI_API_KEY3=MockTestKey_Three_3333',
+          'GEMINI_API_KEY4=MockTestKey_Four_44444',
+        ].join('\n'),
+        'utf8'
+      );
+      fs.writeFileSync(
+        backendEnv,
+        [
+          'GEMINI_API_KEY1=MockTestKey_One_111111',
+          'GEMINI_API_KEY2=MockTestKey_Two_222222',
+          'GEMINI_API_KEY3=MockTestKey_Three_3333',
+          'GEMINI_API_KEY4=MockTestKey_Four_44444',
+          'GEMINI_API_KEY5=MockTestKey_Five_55555',
+          'GEMINI_API_KEY6=',
+        ].join('\n'),
+        'utf8'
+      );
+
+      registerLiveDotenvFiles([rootEnv, backendEnv]);
+      const keysFive = extractAllGeminiKeys();
+      assert.strictEqual(keysFive.length, 5);
+      assert.strictEqual(keysFive[4], 'MockTestKey_Five_55555');
+
+      // Simulate filling GEMINI_API_KEY6 while backend stays running
+      fs.writeFileSync(
+        backendEnv,
+        [
+          'GEMINI_API_KEY1=MockTestKey_One_111111',
+          'GEMINI_API_KEY2=MockTestKey_Two_222222',
+          'GEMINI_API_KEY3=MockTestKey_Three_3333',
+          'GEMINI_API_KEY4=MockTestKey_Four_44444',
+          'GEMINI_API_KEY5=MockTestKey_Five_55555',
+          'GEMINI_API_KEY6=MockTestKey_Six_666666',
+        ].join('\n'),
+        'utf8'
+      );
+      // Force mtime delta on fast Windows filesystems
+      const futureTime = new Date(Date.now() + 3000);
+      fs.utimesSync(backendEnv, futureTime, futureTime);
+
+      const keysSix = extractAllGeminiKeys();
+      assert.strictEqual(keysSix.length, 6);
+      assert.strictEqual(keysSix[5], 'MockTestKey_Six_666666');
+    } finally {
+      resetLiveDotenvFiles();
+      for (const [k, v] of Object.entries(prevSnapshot)) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 });

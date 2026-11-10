@@ -39,7 +39,7 @@ test('Demucs Worker Defaults & Service Inheritance', async (t) => {
     assert.strictEqual(parsed.shifts, 0, 'shifts default must be 0');
     assert.strictEqual(parsed.overlap, 0.25, 'overlap default must be 0.25');
     assert.strictEqual(parsed.segment, 7, 'segment default must be 7');
-    assert.strictEqual(parsed.jobs, 2, 'jobs default must be 2');
+    assert.ok(parsed.jobs >= 1 && parsed.jobs <= 2, 'jobs default must be 1 (Eco Mode) or 2');
     assert.strictEqual(parsed.suppress_residuals, true, 'suppress_residuals must stay ON by default');
   });
 

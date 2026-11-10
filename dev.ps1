@@ -18,6 +18,9 @@ param (
     [Alias("watch")]
     [switch]$WatchBackend,
 
+    [Alias("no-watch")]
+    [switch]$NoWatch,
+
     [Alias("h", "?")]
     [switch]$Help
 )
@@ -27,27 +30,37 @@ $ErrorActionPreference = "Continue"
 # Parse raw args in case flags were passed in Linux style (--new-window, --fast, etc.)
 foreach ($arg in $args) {
     switch ($arg) {
-        "--new-window"    { $NewWindow = $true }
-        "--window"        { $NewWindow = $true }
-        "--skip-install"  { $SkipInstall = $true }
-        "--fast"          { $SkipInstall = $true }
-        "--no-install"    { $SkipInstall = $true }
-        "--no-browser"    { $NoBrowser = $true }
-        "--watch"         { $WatchBackend = $true }
-        "--watch-backend" { $WatchBackend = $true }
-        "--help"          { $Help = $true }
-        "-h"              { $Help = $true }
+        "--new-window"       { $NewWindow = $true }
+        "--window"           { $NewWindow = $true }
+        "--skip-install"     { $SkipInstall = $true }
+        "--fast"             { $SkipInstall = $true }
+        "--no-install"       { $SkipInstall = $true }
+        "--no-browser"       { $NoBrowser = $true }
+        "--watch"            { $WatchBackend = $true }
+        "--watch-backend"    { $WatchBackend = $true }
+        "--no-watch"         { $NoWatch = $true }
+        "--no-watch-backend" { $NoWatch = $true }
+        "--help"             { $Help = $true }
+        "-h"                 { $Help = $true }
     }
 }
 
+$EnableWatchBackend = $true
+if ($NoWatch) {
+    $EnableWatchBackend = $false
+} elseif ($PSBoundParameters.ContainsKey("WatchBackend") -and -not $WatchBackend) {
+    $EnableWatchBackend = $false
+}
+
 if ($Help) {
-    Write-Host "Usage: .\dev.ps1 [OPTIONS]" -ForegroundColor White
+    Write-Host "Usage: .\dev.ps1 [OPTIONS]  (or start.bat [OPTIONS])" -ForegroundColor White
     Write-Host ""
     Write-Host "Options:"
     Write-Host "  -NewWindow, --new-window         Launch services in separate terminal windows"
     Write-Host "  -SkipInstall, -Fast, --fast      Skip dependency checks"
     Write-Host "  -NoBrowser, --no-browser         Do not auto-open default browser"
-    Write-Host "  -WatchBackend, --watch           Enable node --watch hot reload for backend JS (not recommended for batch runs)"
+    Write-Host "  -WatchBackend, --watch           Auto-reload backend JS on edit (ON by default)"
+    Write-Host "  -NoWatch, --no-watch             Run plain node server.js without auto-reload"
     Write-Host "  -Help, -h, --help                Show this help message"
     exit 0
 }
@@ -196,9 +209,10 @@ try {
     Write-Host "`n[2/3] Starting Backend API (Port 5000)..." -ForegroundColor White
     $backendDir = Join-Path $RootDir "backend"
     Ensure-Dependencies -WorkingDir $backendDir -Name "Backend"
-    # Run plain `node server.js` by default so NTFS LastAccessTime reads on models/sense-voice/*.onnx or JS files NEVER kill long-running jobs.
-    if ($WatchBackend) {
-        $backendCmd = "node --watch-path=server.js --watch-path=routes --watch-path=services --watch-path=models/episodeModel.js --watch-path=models/segmentModel.js --watch-path=models/speakerRegistry.js --watch-path=models/timestampUtils.js server.js"
+    # Watch ONLY pure JS code paths by default (excluding models/sense-voice/*.onnx, uploads/, workers/, and tests/).
+    # Pass -NoWatch / --no-watch if you want plain `node server.js` without auto-reload.
+    if ($EnableWatchBackend) {
+        $backendCmd = "node --watch-path=server.js --watch-path=routes --watch-path=services --watch-path=utils --watch-path=middleware --watch-path=models/episodeModel.js --watch-path=models/segmentModel.js --watch-path=models/speakerRegistry.js --watch-path=models/timestampUtils.js server.js"
     } else {
         $backendCmd = "node server.js"
     }
@@ -226,6 +240,11 @@ try {
     Write-Host "  - Frontend Studio: http://localhost:5173" -ForegroundColor Cyan
     Write-Host "  - Backend API:     http://localhost:5000" -ForegroundColor Cyan
     Write-Host "  - Health Check:    http://localhost:5000/api/health" -ForegroundColor Cyan
+    if ($EnableWatchBackend) {
+        Write-Host "  - Backend Watch:   ON (auto-reload JS code on edit; --no-watch to disable)" -ForegroundColor Cyan
+    } else {
+        Write-Host "  - Backend Watch:   OFF (plain node server.js)" -ForegroundColor Yellow
+    }
     Write-Host "------------------------------------------------------"
     Write-Host "  [*] Press [Ctrl + C] anytime to stop all services." -ForegroundColor Yellow
     Write-Host "======================================================`n"

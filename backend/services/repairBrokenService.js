@@ -5,6 +5,7 @@ const {
   getSegmentKhmerText,
   getSegmentChineseText,
   isSegmentTextBroken,
+  isNonChineseAsrHallucination,
   scanEpisodeBrokenSegments,
 } = require('../utils/translationQuality');
 const {
@@ -112,6 +113,7 @@ function buildBatchTranslationPrompt(inputLines) {
 4. ហាមដាច់ខាតកុំប្រើពាក្យបំពេញទទេដូចជា "សន្ទនា", "សូមរង់ចាំ", "សូមរង់..." ឬ "..." ឱ្យសោះ!
 5. ហាមដាច់ខាតកុំបកប្រែចេញអត្ថបទខ្មែរដូចគ្នាលើបន្ទាត់ដែលប្រយោគចិនខុសគ្នា!
 6. ហាមមានតួអក្សរចិន (\u4E00-\u9FFF) ឬតួអក្សរថៃនៅក្នុង "khmerText" ដាច់ខាត (100% Khmer Script Only)!
+7. ហាមដាច់ខាតកុំឱ្យ "khmerText" ទទេ ឬមានតែសញ្ញាវណ្ណយុត្តិ (ដូចជា "។", "!", "?")! គ្រប់ id ទាំងអស់ (រួមទាំងឃ្លា OCR ខ្លីៗ ឬឃ្លាកំហឹងក្នុងសាច់រឿង) ត្រូវតែមានពាក្យខ្មែរពិតប្រាកដដែលអាចអានជាសំឡេងបាន ១០០%។
 
 បញ្ជីប្រយោគត្រូវបកប្រែ៖
 ${JSON.stringify(inputLines, null, 2)}
@@ -123,6 +125,132 @@ ${JSON.stringify(inputLines, null, 2)}
     "khmerText": "អត្ថបទខ្មែរដែលបានបកប្រែរួច"
   }
 ]`;
+}
+
+function buildSingleLineRepairPrompt(line) {
+  return `អ្នកគឺជាអ្នកបកប្រែកុនភាគចិន-ខ្មែរអាជីព។ នេះជាការបកប្រែឃ្លាសន្ទនារឿងភាគសម្រាប់ Dubbing — ទោះបីជាឃ្លាកំហឹង/ជេរប្រមាថក្នុងរឿង ពាក្យ OCR ខ្លីៗ ឬឃ្លាមិនទាន់ចប់ន័យ ក៏ត្រូវបកប្រែជាភាសាខ្មែរធម្មជាតិ ១០០% ហាមរំលង ឬទុកទទេជាដាច់ខាត។
+
+ឃ្លាត្រូវជួសជុល (#${line.id}):
+- sourceChineseToTranslate: ${JSON.stringify(line.sourceChineseToTranslate)}
+${line.prevContext ? `- prevContext: ${JSON.stringify(line.prevContext)}` : ''}
+${line.nextContext ? `- nextContext: ${JSON.stringify(line.nextContext)}` : ''}
+- speaker: ${JSON.stringify(line.speaker || 'តួអង្គ')}
+- maxKhmerWords: ${line.maxKhmerWords}
+
+Return ONE JSON object ONLY (no extra commentary):
+{
+  "id": ${typeof line.id === 'number' ? line.id : JSON.stringify(line.id)},
+  "khmerText": "អត្ថបទខ្មែរពេញលេញ"
+}`;
+}
+
+function normalizeRepairLookupKey(value) {
+  if (typeof value === 'number') {
+    return Number.isInteger(value) && value >= 1 ? String(value) : null;
+  }
+  if (typeof value === 'string') {
+    const clean = value.trim().replace(/^#/, '');
+    return clean ? clean : null;
+  }
+  return null;
+}
+
+function extractRepairItems(parsed) {
+  if (Array.isArray(parsed)) return parsed;
+  if (Array.isArray(parsed?.segments)) return parsed.segments;
+  if (Array.isArray(parsed?.items)) return parsed.items;
+  if (parsed && typeof parsed === 'object' && (parsed.khmerText || parsed.khmerTranslatedText || parsed.khmer)) {
+    return [parsed];
+  }
+  return [];
+}
+
+function resolveRepairBatchMatches(parsed, inputLines = []) {
+  const items = extractRepairItems(parsed).filter((it) => it && typeof it === 'object');
+  const matches = new Array(inputLines.length).fill(null);
+  const usedItems = new Set();
+
+  // Pass 1: Strict key lookup (id / segmentId / index; tolerates "#86" or "86")
+  const itemByKey = new Map();
+  items.forEach((it, ii) => {
+    for (const rawKey of [it.id, it.segmentId, it.index]) {
+      const k = normalizeRepairLookupKey(rawKey);
+      if (k && !itemByKey.has(k)) {
+        itemByKey.set(k, ii);
+      }
+    }
+  });
+
+  for (let i = 0; i < inputLines.length; i++) {
+    const lineKey = normalizeRepairLookupKey(inputLines[i]?.id);
+    if (!lineKey) continue;
+    const ii = itemByKey.get(lineKey);
+    if (ii !== undefined && !usedItems.has(ii)) {
+      matches[i] = items[ii];
+      usedItems.add(ii);
+    }
+  }
+
+  // Pass 2: Relative 1..N or 1:1 positional match when response count equals slice count and no foreign negative/zero IDs exist
+  const hasUnmatched = matches.some((m) => !m);
+  if (hasUnmatched && items.length > 0) {
+    const hasInvalidNegativeKey = items.some((it) => {
+      const rawVals = [it.id, it.segmentId, it.index].filter((v) => v !== undefined && v !== null);
+      return rawVals.some((v) => typeof v === 'number' && v <= 0);
+    });
+    if (!hasInvalidNegativeKey) {
+      const relMap = new Map();
+      items.forEach((it, ii) => {
+        if (usedItems.has(ii)) return;
+        const k = normalizeRepairLookupKey(it.id ?? it.index ?? it.segmentId);
+        const numK = k && /^\d+$/.test(k) ? Number(k) : null;
+        if (numK && numK >= 1 && numK <= inputLines.length && !relMap.has(numK)) {
+          relMap.set(numK, ii);
+        }
+      });
+      for (let i = 0; i < inputLines.length; i++) {
+        if (matches[i]) continue;
+        const ii = relMap.get(i + 1);
+        if (ii !== undefined && !usedItems.has(ii)) {
+          matches[i] = items[ii];
+          usedItems.add(ii);
+        }
+      }
+
+      if (items.length === inputLines.length) {
+        for (let i = 0; i < inputLines.length; i++) {
+          if (!matches[i] && !usedItems.has(i) && items[i]) {
+            matches[i] = items[i];
+            usedItems.add(i);
+          }
+        }
+      }
+    }
+  }
+
+  return matches;
+}
+
+function clearRepairedSegmentErrors(seg) {
+  if (!seg) return;
+  if (
+    seg.translationWarning === 'MISSING_SEGMENT_TRANSLATION' ||
+    seg.translationWarning === 'TRANSLATION_FAILED'
+  ) {
+    seg.translationWarning = null;
+  }
+  if (Array.isArray(seg.validationErrors) && seg.validationErrors.length > 0) {
+    seg.validationErrors = seg.validationErrors.filter((e) => {
+      const msg = String(e);
+      return (
+        !msg.includes('មិនមានលទ្ធផលបកប្រែពី AI') &&
+        !msg.includes('ការបកប្រែ AI បរាជ័យ') &&
+        !msg.includes('មិនទាន់មានអត្ថបទបកប្រែ') &&
+        !msg.includes('រកឃើញអត្ថបទជំនួស') &&
+        !msg.includes('រកឃើញអត្ថបទមានតែសញ្ញាវណ្ណយុត្តិ')
+      );
+    });
+  }
 }
 
 /**
@@ -180,25 +308,70 @@ async function runRepairBrokenSegmentsJob(job, deps = {}) {
       ? deps.checkAudioFileFn
       : buildDiskAudioChecker(epDirInfo.audioDir, baseUploadsDir);
 
-  let workingSegments = targetEp.scriptData.segments.map((s) => ({ ...s }));
+  const rawWorkingSegments = targetEp.scriptData.segments.map((s) => ({ ...s }));
+  const rawInitialScan = scanEpisodeBrokenSegments(
+    { id: episodeId, scriptData: { segments: rawWorkingSegments } },
+    { checkAudioFileFn }
+  );
+
+  let workingSegments = [];
+  let droppedJunkCount = 0;
+  for (const seg of rawWorkingSegments) {
+    if (isNonChineseAsrHallucination(seg)) {
+      droppedJunkCount += 1;
+    } else {
+      workingSegments.push(seg);
+    }
+  }
+
+  if (droppedJunkCount > 0) {
+    console.log(
+      `[RepairBroken] 🧹 Auto-dropped ${droppedJunkCount} non-Chinese ASR hallucination segment(s) from ${seriesId}/${episodeId} (preserving healthy segment IDs).`
+    );
+    await withSeriesMetadataLock(
+      seriesId,
+      () =>
+        updateSeriesMetadata(
+          seriesId,
+          (freshSeries) => {
+            const ep = (freshSeries?.episodes || []).find((e) => String(e.id) === String(episodeId));
+            if (!ep || !ep.scriptData) return false;
+            ep.scriptData.segments = workingSegments;
+            ep.scriptData.hasScript = workingSegments.length > 0;
+            ep.scriptData.totalSegments = workingSegments.length;
+            ep.scriptData.updatedAt = Date.now();
+            ep.lastModified = Date.now();
+            return true;
+          },
+          { projectsDir }
+        ),
+      { projectsDir }
+    );
+  }
+
   const initialScan = scanEpisodeBrokenSegments(
     { id: episodeId, scriptData: { segments: workingSegments } },
     { checkAudioFileFn }
   );
 
   if (initialScan.totalBrokenCount === 0) {
+    const fixedFromDrop = Math.max(0, rawInitialScan.totalBrokenCount - initialScan.totalBrokenCount);
     return {
       success: true,
       status: 'completed',
       episodeId,
-      fixedCount: 0,
+      fixedCount: fixedFromDrop,
       remainingCount: 0,
       textFixed: 0,
       voiceFixed: 0,
+      ...(droppedJunkCount > 0 ? { droppedJunkCount } : {}),
       remainingTextBroken: 0,
       remainingVoiceBroken: 0,
       remainingBroken: 0,
-      message: 'គ្មានឃ្លាខូចទេ — គ្រប់ឃ្លារួចរាល់ 100%!',
+      message:
+        droppedJunkCount > 0
+          ? `✅ ជួសជុល និងលុបឃ្លាខូចមិនមែនភាសាចិនរួចរាល់ 100% (${fixedFromDrop} ឃ្លា)!`
+          : 'គ្មានឃ្លាខូចទេ — គ្រប់ឃ្លារួចរាល់ 100%!',
     };
   }
 
@@ -334,15 +507,22 @@ async function runRepairBrokenSegmentsJob(job, deps = {}) {
       }
 
       let batchFixedCount = 0;
-      if (Array.isArray(parsedItems)) {
-        for (const item of parsedItems) {
-          if (!item || item.id === undefined || item.id === null || !item.khmerText) continue;
-          const targetIdx = indexBySegId.get(String(item.id));
-          if (targetIdx === undefined) continue;
+      const resolvedSegIndices = new Set();
+      const applyParsedRepairItems = (parsedPayload, expectedLines = inputLines) => {
+        const matched = resolveRepairBatchMatches(parsedPayload, expectedLines);
+        for (let i = 0; i < expectedLines.length; i++) {
+          const item = matched[i];
+          const line = expectedLines[i];
+          if (!item || !line) continue;
+          const rawKhmer = item.khmerText || item.khmerTranslatedText || item.khmer || '';
+          if (!rawKhmer) continue;
+
+          const targetIdx = indexBySegId.get(String(line.id));
+          if (targetIdx === undefined || resolvedSegIndices.has(targetIdx)) continue;
 
           const origSeg = workingSegments[targetIdx];
           const origChinese = getSegmentChineseText(origSeg);
-          const cleanKhmer = sanitizeKhmerDialogue(String(item.khmerText).trim(), origChinese);
+          const cleanKhmer = sanitizeKhmerDialogue(String(rawKhmer).trim(), origChinese);
           const candidateSeg = {
             ...origSeg,
             khmerTranslatedText: cleanKhmer,
@@ -355,6 +535,7 @@ async function runRepairBrokenSegmentsJob(job, deps = {}) {
             continue;
           }
 
+          clearRepairedSegmentErrors(candidateSeg);
           delete candidateSeg.audioFileMissing;
           workingSegments[targetIdx] = {
             ...candidateSeg,
@@ -369,8 +550,129 @@ async function runRepairBrokenSegmentsJob(job, deps = {}) {
             audioOutdated: true,
             ttsStatus: 'pending',
           };
+          resolvedSegIndices.add(targetIdx);
           batchFixedCount += 1;
           textFixed += 1;
+        }
+      };
+
+      applyParsedRepairItems(parsedItems, inputLines);
+
+      // Focused retry + single-line rescue for omitted/punctuation-only lines during live AI translation (or when explicitly enabled)
+      const allowRetryPass = typeof deps.translateBatchFn !== 'function' || deps.enableInJobRetry === true;
+      if (allowRetryPass && !quotaExhausted) {
+        const retryLines = inputLines.filter((line) => {
+          const idx = indexBySegId.get(String(line.id));
+          return idx !== undefined && !resolvedSegIndices.has(idx);
+        });
+        if (retryLines.length > 0) {
+          const RETRY_SLICE_SIZE = 10;
+          for (let rs = 0; rs < retryLines.length; rs += RETRY_SLICE_SIZE) {
+            if (abortSignal?.aborted) {
+              throw createAbortError();
+            }
+            if (quotaExhausted) break;
+            const retrySlice = retryLines.slice(rs, rs + RETRY_SLICE_SIZE);
+            try {
+              let retryParsed = null;
+              if (typeof deps.translateBatchFn === 'function') {
+                retryParsed = await deps.translateBatchFn(retrySlice, {
+                  batchIndex: b,
+                  totalBatches,
+                  isRetry: true,
+                  signal: abortSignal,
+                });
+              } else {
+                const retryPrompt = buildBatchTranslationPrompt(retrySlice);
+                const { response: retryRes } = await generateContentWithModelFallback(
+                  aiClient,
+                  primaryModel,
+                  () => ({
+                    contents: [retryPrompt],
+                    config: {
+                      systemInstruction: KHMER_DUBBING_BASE_SYSTEM_PROMPT,
+                      temperature: 0.3,
+                      responseMimeType: 'application/json',
+                    },
+                  }),
+                  {
+                    models: fallbackModels,
+                    logTag: 'repairBrokenSegmentsRetry',
+                    timeoutMs: deps.timeoutMs ?? 45000,
+                  }
+                );
+                const rawRetryText = typeof retryRes?.text === 'function' ? retryRes.text() : retryRes?.text || '';
+                retryParsed = safeParseOrRepairJson(rawRetryText);
+              }
+              applyParsedRepairItems(retryParsed, retrySlice);
+            } catch (retryErr) {
+              if (retryErr?.name === 'AbortError' || abortSignal?.aborted) {
+                throw createAbortError();
+              }
+              if (isQuotaOrRateLimitError(retryErr) || retryErr?.status === 429 || retryErr?.status === 503) {
+                quotaExhausted = true;
+                quotaErrorMessage = retryErr.message || '429 Quota exceeded';
+              }
+            }
+          }
+
+          // Final 1-by-1 single-line rescue if any line in this batch STILL remained unresolved after batch retry
+          const stillUnresolved = inputLines.filter((line) => {
+            const idx = indexBySegId.get(String(line.id));
+            return idx !== undefined && !resolvedSegIndices.has(idx);
+          });
+          if (stillUnresolved.length > 0 && !quotaExhausted) {
+            const singleTargets = stillUnresolved.slice(0, 15);
+            for (const singleLine of singleTargets) {
+              if (abortSignal?.aborted) {
+                throw createAbortError();
+              }
+              if (quotaExhausted) break;
+              try {
+                let singleParsed = null;
+                if (typeof deps.translateBatchFn === 'function') {
+                  singleParsed = await deps.translateBatchFn([singleLine], {
+                    batchIndex: b,
+                    totalBatches,
+                    isRetry: true,
+                    isSingleLine: true,
+                    signal: abortSignal,
+                  });
+                } else {
+                  const singlePrompt = buildSingleLineRepairPrompt(singleLine);
+                  const { response: singleRes } = await generateContentWithModelFallback(
+                    aiClient,
+                    primaryModel,
+                    () => ({
+                      contents: [singlePrompt],
+                      config: {
+                        systemInstruction: KHMER_DUBBING_BASE_SYSTEM_PROMPT,
+                        temperature: 0.25,
+                        responseMimeType: 'application/json',
+                      },
+                    }),
+                    {
+                      models: fallbackModels,
+                      logTag: 'repairBrokenSegmentsSingleLine',
+                      timeoutMs: deps.timeoutMs ?? 45000,
+                    }
+                  );
+                  const rawSingleText = typeof singleRes?.text === 'function' ? singleRes.text() : singleRes?.text || '';
+                  singleParsed = safeParseOrRepairJson(rawSingleText);
+                }
+                applyParsedRepairItems(singleParsed, [singleLine]);
+              } catch (singleErr) {
+                if (singleErr?.name === 'AbortError' || abortSignal?.aborted) {
+                  throw createAbortError();
+                }
+                if (isQuotaOrRateLimitError(singleErr) || singleErr?.status === 429 || singleErr?.status === 503) {
+                  quotaExhausted = true;
+                  quotaErrorMessage = singleErr.message || '429 Quota exceeded';
+                  break;
+                }
+              }
+            }
+          }
         }
       }
 
@@ -522,7 +824,7 @@ async function runRepairBrokenSegmentsJob(job, deps = {}) {
     { projectsDir }
   );
 
-  const fixedCount = Math.max(0, initialScan.totalBrokenCount - finalScan.totalBrokenCount);
+  const fixedCount = Math.max(0, rawInitialScan.totalBrokenCount - finalScan.totalBrokenCount);
   const remainingCount = finalScan.totalBrokenCount;
 
   if (remainingCount > 0) {
@@ -538,6 +840,7 @@ async function runRepairBrokenSegmentsJob(job, deps = {}) {
       remainingCount,
       textFixed,
       voiceFixed,
+      ...(droppedJunkCount > 0 ? { droppedJunkCount } : {}),
       remainingTextBroken: finalScan.textBrokenCount,
       remainingVoiceBroken: finalScan.voiceBrokenCount,
       remainingBroken: remainingCount,
@@ -555,6 +858,7 @@ async function runRepairBrokenSegmentsJob(job, deps = {}) {
     remainingCount: 0,
     textFixed,
     voiceFixed,
+    ...(droppedJunkCount > 0 ? { droppedJunkCount } : {}),
     remainingTextBroken: 0,
     remainingVoiceBroken: 0,
     remainingBroken: 0,

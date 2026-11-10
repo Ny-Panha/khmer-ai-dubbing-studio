@@ -677,6 +677,20 @@ async function persistEpisodeScriptData({
     const resolvedMode = restScriptData.mode || 'dialogue';
     const resolvedGenMode =
       generationMode || restScriptData.generationMode || targetEp.generationMode || resolvedMode;
+    const hasAnyVoicedSegment = incomingSegments.some(
+      (seg) =>
+        seg &&
+        typeof seg === 'object' &&
+        Boolean(seg.audioUrl || seg.audioPath || seg.audioFile) &&
+        seg.audioGenerated !== false
+    );
+    const hadPriorAudio = Boolean(
+      targetEp.audioGenerated ||
+      targetEp.hasAudio ||
+      targetEp.fullAudioUrl ||
+      targetEp.fullAudioPath ||
+      targetEp.audioOutdated
+    );
 
     targetEp.scriptData = {
       ...restScriptData,
@@ -690,6 +704,9 @@ async function persistEpisodeScriptData({
     targetEp.generationMode = resolvedGenMode;
     if (incomingSegments.length > 0) {
       targetEp.status = status || 'translated';
+      if (!hasAnyVoicedSegment && hadPriorAudio) {
+        targetEp.audioOutdated = true;
+      }
     }
     targetEp.lastModified = Date.now();
 
@@ -821,6 +838,10 @@ async function syncSeriesMetadataSafely(seriesId, incomingSeries, options = {}) 
         !diskEp.audioGenerated &&
         (!incUpdatedAt || !diskUpdatedAt || incUpdatedAt <= diskUpdatedAt)
       );
+      const preserveDiskAudioOutdated = Boolean(
+        diskEp.audioOutdated &&
+        (!incUpdatedAt || (diskUpdatedAt > 0 && incUpdatedAt < diskUpdatedAt))
+      );
 
       const checkDiskRv = projectsDir === PROJECTS_DIR;
       const safeIncRv = sanitizeRenderedVideoRef(incEp.renderedVideo, { checkDisk: checkDiskRv, uploadsDir: UPLOADS_DIR });
@@ -843,7 +864,7 @@ async function syncSeriesMetadataSafely(seriesId, incomingSeries, options = {}) 
         fullAudioPath: preserveDiskAudioInvalidation ? diskEp.fullAudioPath : (incEp.fullAudioPath || diskEp.fullAudioPath),
         audioGenerated: preserveDiskAudioInvalidation ? false : Boolean(incEp.audioGenerated || diskEp.audioGenerated),
         hasAudio: preserveDiskAudioInvalidation ? false : Boolean(incEp.hasAudio || diskEp.hasAudio),
-        audioOutdated: preserveDiskAudioInvalidation
+        audioOutdated: preserveDiskAudioInvalidation || preserveDiskAudioOutdated
           ? true
           : (incEp.audioOutdated !== undefined ? Boolean(incEp.audioOutdated) : Boolean(diskEp.audioOutdated)),
         bgmAudioUrl: incEp.bgmAudioUrl || diskEp.bgmAudioUrl,

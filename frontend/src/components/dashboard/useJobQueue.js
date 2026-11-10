@@ -279,9 +279,10 @@ export function useJobQueue(options = {}) {
     setActionInProgress((prev) => ({ ...prev, [jobId]: 'pause' }));
     try {
       await pauseJobApi(jobId);
+      setError(null);
       await refreshJobs();
     } catch (err) {
-      alert(`បរាជ័យក្នុងការ Pause Job: ${err.message}`);
+      setError(`បរាជ័យក្នុងការ Pause Job: ${err.message}`);
     } finally {
       setActionInProgress((prev) => {
         const copy = { ...prev };
@@ -297,9 +298,10 @@ export function useJobQueue(options = {}) {
     setActionInProgress((prev) => ({ ...prev, [jobId]: 'resume' }));
     try {
       await resumeJobApi(jobId);
+      setError(null);
       await refreshJobs();
     } catch (err) {
-      alert(`បរាជ័យក្នុងការ Resume Job: ${err.message}`);
+      setError(`បរាជ័យក្នុងការ Resume Job: ${err.message}`);
     } finally {
       setActionInProgress((prev) => {
         const copy = { ...prev };
@@ -315,9 +317,10 @@ export function useJobQueue(options = {}) {
     setActionInProgress((prev) => ({ ...prev, [jobId]: 'retry' }));
     try {
       await retryJobApi(jobId);
+      setError(null);
       await refreshJobs();
     } catch (err) {
-      alert(`បរាជ័យក្នុងការ Retry Job: ${err.message}`);
+      setError(`បរាជ័យក្នុងការ Retry Job: ${err.message}`);
     } finally {
       setActionInProgress((prev) => {
         const copy = { ...prev };
@@ -333,9 +336,10 @@ export function useJobQueue(options = {}) {
     setActionInProgress((prev) => ({ ...prev, [jobId]: 'cancel' }));
     try {
       await cancelJobApi(jobId);
+      setError(null);
       await refreshJobs();
     } catch (err) {
-      alert(`បរាជ័យក្នុងការ Cancel Job: ${err.message}`);
+      setError(`បរាជ័យក្នុងការ Cancel Job: ${err.message}`);
     } finally {
       setActionInProgress((prev) => {
         const copy = { ...prev };
@@ -367,6 +371,8 @@ export function useJobQueue(options = {}) {
     return true;
   });
 
+  const clearError = useCallback(() => setError(null), []);
+
   return {
     jobs: filteredJobs,
     allJobsCount: jobs.length,
@@ -377,6 +383,7 @@ export function useJobQueue(options = {}) {
     setSearchTerm,
     isLoading,
     error,
+    clearError,
     connectionMode,
     isConnected,
     actionInProgress,

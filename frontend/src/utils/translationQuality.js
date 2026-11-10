@@ -14,6 +14,11 @@ export const EXPLICIT_FILLER_KHMERS = Object.freeze([
 
 const EXPLICIT_FILLER_SET = new Set(EXPLICIT_FILLER_KHMERS);
 const EXPLICIT_FILLER_REGEX = /^សូមរង់(?:ចា(?:ំ)?)?[\s.…។!?,:;~'"«»()\-–—]*$/u;
+const CHINESE_HANZI_REGEX = /[\u3400-\u4dbf\u4e00-\u9fa5]/;
+
+export function containsChineseHanzi(text = '') {
+  return CHINESE_HANZI_REGEX.test(String(text || '').normalize('NFC'));
+}
 
 export function getSegmentKhmerText(seg) {
   if (!seg || typeof seg !== 'object') return '';
@@ -82,6 +87,28 @@ export function findRepeatedJunkKhmerSet(segments = [], { maxLen = 40, minCount 
   }
 
   return repeatedSet;
+}
+
+export function isNonChineseAsrHallucination(seg) {
+  if (!seg || typeof seg !== 'object') return false;
+  if (seg.userOverridden || seg.voiceAssignmentSource === 'manual') return false;
+
+  const evSource = String(seg.evidenceSource || seg.evidenceType || seg.source || '')
+    .trim()
+    .toLowerCase();
+  if (evSource !== 'audio_asr' && evSource !== 'sense_voice_local') {
+    return false;
+  }
+
+  const ocrText = String(seg.ocrSubtitleText || '').trim();
+  if (ocrText.length > 0) return false;
+
+  const sourceText =
+    getSegmentChineseText(seg) ||
+    String(seg.spokenAudioText || seg.spokenChineseText || '').trim();
+  if (!sourceText) return false;
+
+  return !containsChineseHanzi(sourceText);
 }
 
 export function isSegmentTextBroken(seg, repeatedJunkSet = null) {

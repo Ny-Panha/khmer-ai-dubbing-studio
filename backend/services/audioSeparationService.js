@@ -17,12 +17,23 @@ function normalizeSeparationKey(mediaRef) {
 }
 
 function getSeparationProgress(mediaRef) {
-  if (!mediaRef) return null;
-  const cleanBase = normalizeSeparationKey(mediaRef);
-  for (const [key, val] of activeSeparationProgress.entries()) {
-    if (key.includes(cleanBase) || cleanBase.includes(key)) {
-      return val;
+  if (mediaRef) {
+    const cleanBase = normalizeSeparationKey(mediaRef);
+    for (const [key, val] of activeSeparationProgress.entries()) {
+      if (key.includes(cleanBase) || cleanBase.includes(key)) {
+        return val;
+      }
     }
+  }
+  // Resilient Fallback: If Demucs is running or active entries exist, return the active/latest separation
+  if (activeSeparationProgress.size > 0) {
+    for (const val of activeSeparationProgress.values()) {
+      if (val && (val.status === 'separating' || val.status === 'completed')) {
+        return val;
+      }
+    }
+    const all = Array.from(activeSeparationProgress.values());
+    return all[all.length - 1] || null;
   }
   return null;
 }
@@ -160,7 +171,20 @@ function executeDemucsWorker(options, targetDir, cleanKey) {
       onProgress = null,
     } = options;
 
-    activeSeparationProgress.set(cleanKey, { progress: 1, status: 'separating', message: 'Starting Demucs AI separation...', model });
+    const initialLogs = [
+      {
+        time: new Date().toLocaleTimeString(),
+        progress: 1,
+        message: '🎧 Starting Demucs AI separation (Loading PyTorch AI model)...',
+      },
+    ];
+    activeSeparationProgress.set(cleanKey, {
+      progress: 1,
+      status: 'separating',
+      message: 'Starting Demucs AI separation...',
+      model,
+      logs: initialLogs,
+    });
 
     const workerScript = path.join(__dirname, '../workers/demucs_worker.py');
     if (!fs.existsSync(workerScript)) {
@@ -184,9 +208,8 @@ function executeDemucsWorker(options, targetDir, cleanKey) {
     if (options.segment !== undefined && options.segment !== null) {
       args.push('--segment', String(options.segment));
     }
-    if (options.jobs !== undefined && options.jobs !== null) {
-      args.push('--jobs', String(options.jobs));
-    }
+    const cpuJobs = options.jobs !== undefined && options.jobs !== null ? String(options.jobs) : '1';
+    args.push('--jobs', cpuJobs);
     if (options.suppressResiduals !== false) {
       args.push('--suppress_residuals');
     }
@@ -195,15 +218,24 @@ function executeDemucsWorker(options, targetDir, cleanKey) {
       options.shifts !== undefined ? `Shifts: ${options.shifts}` : null,
       options.overlap !== undefined ? `Overlap: ${options.overlap}` : null,
       options.segment !== undefined ? `Segment: ${options.segment}` : null,
-      options.jobs !== undefined ? `Jobs: ${options.jobs}` : null,
-    ].filter(Boolean).join(', ') || 'Worker defaults (shifts=0, overlap=0.25, segment=7, j=2)';
+      `Jobs: ${cpuJobs} (Eco CPU)`,
+    ].filter(Boolean).join(', ');
 
     console.log(`[AudioSeparation] 🎧 Launching Demucs separation for: ${path.basename(audioPath)} (Model: ${model}, Device: ${device}, ${optSummary})`);
     if (onProgress) onProgress({ phase: 'starting', progress: 5, message: 'Launching Demucs Audio Separation AI...' });
 
+    const spawnEnv = {
+      ...process.env,
+      OMP_NUM_THREADS: '3',
+      MKL_NUM_THREADS: '3',
+      OPENBLAS_NUM_THREADS: '3',
+      NUMEXPR_NUM_THREADS: '3',
+    };
+
     const child = spawn(pythonBin, args, {
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
+      env: spawnEnv,
     });
 
     activeSeparationJobs.set(jobId, child);
@@ -224,11 +256,22 @@ function executeDemucsWorker(options, targetDir, cleanKey) {
         const match = chunk.match(/(\d+)%/);
         if (match) {
           const pct = Math.min(99, Math.max(1, parseInt(match[1], 10)));
+          const existing = activeSeparationProgress.get(cleanKey);
+          const curLogs = Array.isArray(existing?.logs) ? [...existing.logs] : [];
+          const lastLog = curLogs[curLogs.length - 1];
+          if (!lastLog || lastLog.progress !== pct) {
+            curLogs.push({
+              time: new Date().toLocaleTimeString(),
+              progress: pct,
+              message: `⏳ Demucs Progress: ${pct}%`,
+            });
+          }
           activeSeparationProgress.set(cleanKey, {
             progress: pct,
             status: 'separating',
             message: `Demucs Separation: ${pct}%`,
             model,
+            logs: curLogs.slice(-60),
           });
           console.log(`[AudioSeparation] ⏳ Demucs Progress: ${pct}%`);
           if (onProgress) {
@@ -286,6 +329,13 @@ function executeDemucsWorker(options, targetDir, cleanKey) {
         const parsed = JSON.parse(lastLine);
 
         if (parsed.status === 'success') {
+          const existing = activeSeparationProgress.get(cleanKey);
+          const curLogs = Array.isArray(existing?.logs) ? [...existing.logs] : [];
+          curLogs.push({
+            time: new Date().toLocaleTimeString(),
+            progress: 100,
+            message: '🎉 Demucs Separation 100% Complete (Clean BGM Ready)',
+          });
           activeSeparationProgress.set(cleanKey, {
             progress: 100,
             status: 'completed',
@@ -293,6 +343,7 @@ function executeDemucsWorker(options, targetDir, cleanKey) {
             model,
             noVocalsPath: parsed.noVocalsPath,
             processingTimeSec: parsed.processingTimeSec,
+            logs: curLogs.slice(-60),
           });
           setTimeout(() => activeSeparationProgress.delete(cleanKey), 300000);
           console.log(`[AudioSeparation] ✅ Separation successful in ${parsed.processingTimeSec}s (Vocals: ${(parsed.vocalsSizeBytes / 1024 / 1024).toFixed(1)}MB, No-Vocals: ${(parsed.noVocalsSizeBytes / 1024 / 1024).toFixed(1)}MB)`);

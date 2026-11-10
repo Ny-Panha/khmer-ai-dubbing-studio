@@ -947,6 +947,7 @@ router.get("/audio/separation-progress", (req, res) => {
       message: progressData ? progressData.message : '',
       error: progressData?.error || null,
       model: progressData?.model || 'htdemucs',
+      logs: progressData?.logs || [],
       noVocalsUrl,
       noVocalsPath,
     });

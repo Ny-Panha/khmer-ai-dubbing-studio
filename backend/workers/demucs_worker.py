@@ -36,7 +36,7 @@ def parse_args():
     parser.add_argument("--shifts", type=int, default=0, help="Random time shifts (default 0: single deterministic unshifted pass; 1 adds random shift with negligible quality delta under suppress_residuals; >=2 repeats full inference N times at Nx CPU wall time)")
     parser.add_argument("--overlap", type=float, default=0.25, help="Overlap between split chunks (default 0.25: Demucs upstream default, -26%% CPU wall time vs 0.50 with equivalent speech removal after suppress_residuals; raise to 0.35/0.50 only if boundary bleed occurs)")
     parser.add_argument("--segment", type=int, default=7, help="Split chunk duration in seconds (default 7: -56%% total wall time vs segment=4 at overlap=0.25 on i5-1235U CPU by nearly halving chunk count; verified clean on Stage-2 speech suppression gate)")
-    parser.add_argument("--jobs", "-j", type=int, default=2, help="Parallel worker jobs on CPU (default 2: ~20%% faster than -j 1 on i5-1235U CPU; total -65%% / 2.86x faster vs shifts=1/overlap=0.5/segment=4/-j 1; set 0 for auto)")
+    parser.add_argument("--jobs", "-j", type=int, default=1, help="Parallel worker jobs on CPU (default 1 for Eco CPU/RAM safety on laptops; avoids 95% CPU and 3.8GB RAM spike)")
     parser.add_argument("--suppress_residuals", action="store_true", default=True, help="Apply second-stage cross-adaptive spectral residual suppression on no_vocals")
     return parser.parse_args()
 
@@ -187,7 +187,7 @@ def main():
         # with --two-stems=vocals so it outputs strictly:
         # 1. vocals.wav (speech)
         # 2. no_vocals.wav (music + ambient sfx)
-        cpu_jobs = args.jobs if args.jobs > 0 else 2
+        cpu_jobs = args.jobs if args.jobs > 0 else 1
         cmd = [
             sys.executable, "-m", "demucs.separate",
             "-n", args.model,
@@ -201,13 +201,26 @@ def main():
             input_audio
         ]
 
+        # Low-overhead CPU throttling & below-normal priority so laptop stays cool (<50% CPU, <2GB RAM)
+        demucs_env = os.environ.copy()
+        demucs_env["OMP_NUM_THREADS"] = "3"
+        demucs_env["MKL_NUM_THREADS"] = "3"
+        demucs_env["OPENBLAS_NUM_THREADS"] = "3"
+        demucs_env["NUMEXPR_NUM_THREADS"] = "3"
+
+        creationflags = 0
+        if sys.platform.startswith("win"):
+            creationflags = getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0x00004000)
+
         # Execute demucs process with live stderr streaming for real-time progress
         process = subprocess.Popen(
             cmd,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
             text=True,
-            bufsize=1
+            bufsize=1,
+            env=demucs_env,
+            creationflags=creationflags
         )
 
         def _cleanup_subproc():

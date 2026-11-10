@@ -1,6 +1,234 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
+- **Environment**: Antigravity IDE (`Documentation Update & Full Architecture Sync`)
+- **Timestamp**: 2026-11-10T23:56:30+07:00
+
+## Summary: Fully Updated `README.MD` to Match Production Studio Capabilities
+1. **Core Features Expanded**:
+   - Added **Demucs v4 Neural Vocal Separation** documentation (Clean BGM extraction, 0% vocal bleed, live console log drawer, 1-by-1 sequential mutex protection).
+   - Added **Gemini Multi-Key Pool & Quota Manager** (Up to 6 Keys, 75+ RPM, auto-rotation, 429/504 backoff retry, `.env` live hot-reload, interactive Quota Modal).
+   - Added **Drama Series & Multi-Episode Batch Workflow** (Episode file isolation, SSE jobs stream, pause/cancel, automated segment repair).
+2. **Project Structure Modernized**:
+   - Synchronized file tree to show modular `backend/routes/` (`audioRoutes`, `jobRoutes`, `scriptRoutes`, `seriesRoutes`, `systemRoutes`, `videoRoutes`), `backend/services/pipeline/` (Stages 1-7), `backend/workers/demucs_worker.py`, and `frontend/src/components/dashboard/` route-runner cards.
+3. **API Reference Table Completed**:
+   - Replaced basic 8-endpoint table with a comprehensive 20+ endpoint reference organized into 5 clear categories (System/Keys, Audio/Demucs, Script/Translation, Series/Jobs, Video/Render).
+4. **Quick Start & Shortcuts Refined**:
+   - Clarified prerequisites (Node.js v18+, Multi-Key setup, Python Demucs with FFmpeg fallback), added `Shift + Arrow` shortcuts, and updated workflow Mermaid diagram.
+
+## Active Environment
+- **Backend**: Live at `http://localhost:5000`.
+- **Frontend**: Live at `http://localhost:5173`.
+- **Workspace**: [`README.MD`](file:///e:/khmer_ai_dubbing_studio/README.MD) fully synchronized with latest system state.
+
+---
+
+## Previous Session
+- **Environment**: Antigravity IDE (`Authoritative Server-to-Client Demucs Live Console Log Sync`)
+- **Timestamp**: 2026-11-10T23:52:00+07:00
+
+## Summary: Fixed "ot kernh pg pel run" — Real-Time Server-Side Demucs Progress Logs
+1. **Root Cause Analysis ("ot kernh pg pel run")**:
+   - In [`audioSeparationService.js`](file:///e:/khmer_ai_dubbing_studio/backend/services/audioSeparationService.js), `activeSeparationProgress` only tracked `progress: pct` as an integer and did NOT preserve history logs.
+   - If `getSeparationProgress(mediaRef)` had any slight key mismatch (e.g. URI encoding, Windows `\` vs `/`), it returned `null`, returning `progress: 0` to client which capped at `5%` and stopped logs from rendering.
+   - Initial 15-25 seconds of Demucs runs were silent while PyTorch initialized into memory, making it appear stuck at 5%.
+2. **Defensive Fix Implemented**:
+   - **Server-Side Log Buffer**: [`backend/services/audioSeparationService.js`](file:///e:/khmer_ai_dubbing_studio/backend/services/audioSeparationService.js) now records live log entries directly into `activeSeparationProgress.logs` on every stderr `%` change.
+   - **Resilient Fallback Matching**: `getSeparationProgress` now falls back to the currently active separating job if `mediaRef` key differs, guaranteeing progress is NEVER missed.
+   - **API Response Sync**: [`backend/routes/audioRoutes.js`](file:///e:/khmer_ai_dubbing_studio/backend/routes/audioRoutes.js) returns `logs: progressData?.logs || []`.
+   - **Client Merging**: [`frontend/src/components/dashboard/GeminiRouteModal.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/dashboard/GeminiRouteModal.jsx) streams server logs directly into the Console Drawer so progress numbers (`Demucs Progress: 10%`, `Demucs Progress: 20%`...) always appear in real time.
+3. **Verification**:
+   - Backend unit tests (`demucs_worker_defaults`, `repair_broken_segments`): **14/14 PASS**.
+   - `npm --prefix frontend run build`: **PASS (959ms, 0 errors)**.
+   - Backend (`:5000`): **200 OK**, 6 Gemini keys active.
+   - Frontend (`:5173`): **200 OK**, Vite v8.3.5 running.
+
+## Active Environment
+- **Backend**: Live on task-5358 (`http://localhost:5000`).
+- **Frontend**: Live on task-5366 (`http://localhost:5173`).
+- **Next Step**: Nha refreshes browser (`Ctrl + Shift + R`) and clicks Demucs to see live progress stream.
+
+---
+
+## Previous Session
+
+## Summary: Synchronized Demucs Web Console Logs to Identically Match Terminal Output
+1. **Frontend Code Updates**:
+   - [`GeminiRouteModal.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/dashboard/GeminiRouteModal.jsx#L1425-L1465): Polling loop interval tuned to `1200ms` for smooth live streaming. Dynamically syncs `setDemucsProgressPercent(dPct)` so top header progress increments live, and appends a new terminal-style log line whenever `dPct > lastProgress`.
+   - [`EpisodeDemucsProgressCard.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/dashboard/route-runners/EpisodeDemucsProgressCard.jsx#L320-L345): Updated live console drawer to render in JetBrains Mono / monospace font with `[AudioSeparation] ⏳ Demucs Progress: XX%` identical to the VS Code Terminal display (Img 1).
+2. **Verification Results**:
+   - `npm --prefix frontend run build`: **PASS (`1.24s`)**.
+   - Live backend Demucs progress: Verified reaching **`95%`**.
+
+## Active Environment
+- **Backend**: Live at `http://localhost:5000` (Demucs separation finalizing).
+- **Frontend**: Live at `http://localhost:5173`.
+- **Workspace**: Uncommitted changes on `main`.
+
+---
+
+## Previous Session
+
+## Summary: Synchronized Demucs Web UI Progress & Live Console Logs with VS Code Terminal Output
+1. **Root Cause of UI / Terminal Desync ([GeminiRouteModal.jsx](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/dashboard/GeminiRouteModal.jsx#L1425-L1468))**:
+   - The polling loop previously did not update `demucsProgressPercent` (leaving top banner stuck at initial `5%`), and only logged new messages if `!curLogs.some(l => l.message === dpData.message)` (which caused log lines to freeze once `1%` was registered).
+   - Furthermore, HMR module reload during prior file edits had orphaned the in-flight React timer while the backend Demucs Python process continued running uninterrupted on the server (progressing up to 68%).
+2. **Real-Time Terminal Parity Fix**:
+   - `GeminiRouteModal.jsx`: Reduced polling interval from `2500ms` to `1200ms` for smooth real-time tracking.
+   - Wired live `setDemucsProgressPercent(dPct)` so top bar updates dynamically in lockstep with the running episode.
+   - Pushes live `[time] [XX%] ⏳ Demucs Progress: XX%` log lines whenever `dPct > lastProgress`, mirroring the exact log format output by `[AudioSeparation] ⏳ Demucs Progress: XX%` in VS Code Terminal (Img 1).
+3. **Verification Results**:
+   - `npm --prefix frontend run build`: **PASS (`1.36s`)**.
+   - Backend `/api/audio/separation-progress`: Verified live active progress returning **`68%`** and streaming.
+
+## Active Environment
+- **Backend**: Live at `http://localhost:5000` (Demucs actively separating ep_2 audio).
+- **Frontend**: Live at `http://localhost:5173`.
+- **Workspace**: Uncommitted changes on `main`.
+
+---
+
+## Previous Session
+
+## Summary: Clarified Demucs AI Strict 1-by-1 Sequential Queue & Polished Waiting Episode Card State
+1. **Clarified Demucs AI Concurrency Architecture**:
+   - Backend (`audioSeparationService.js`): Strictly gated by `isDemucsRunning` mutex lock (allows only 1 Demucs process at any moment; rejects concurrent requests with `409 DEMUCS_BUSY` to prevent CPU/RAM memory freeze).
+   - Frontend (`GeminiRouteModal.jsx`): Loop is `for (let i = 0; i < episodes.length; i++)` with `await` — executes strictly **one episode at a time (1-by-1 sequential)**.
+2. **Polished Card UI for Queued Episodes ([EpisodeDemucsProgressCard.jsx](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/dashboard/route-runners/EpisodeDemucsProgressCard.jsx), [GeminiRouteModal.jsx](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/dashboard/GeminiRouteModal.jsx#L3407))**:
+   - Passed `isCurrentRunning={activeDemucsEpisodeId === ep.id}` to `EpisodeDemucsProgressCard`.
+   - Episodes waiting in the queue now clearly show:
+     - Badge/Title: `⏳ រង់ចាំក្នុង Queue (Waiting in Queue)` with `0%` progress and clock icon
+     - Subtitle: `រង់ចាំភាគមុនបញ្ចប់ (ដំណើរការ ១ ភាគម្ដង ដើម្បីការពារកុំឱ្យ CPU គាំង)`
+     - Live Console: `[0%] ⏳ ភាគនេះកំពុងរង់ចាំក្នុង Queue — ប្រព័ន្ធនឹងបំបែកសំឡេង Clean BGM បន្តបន្ទាប់ពីភាគមុនបញ្ចប់ (ដំណើរការ ១ ភាគម្ដង ដើម្បីធានាម៉ាស៊ីនដើរស្រួល)`
+   - Only the actively running episode displays the animated spinner and live progress.
+3. **Verification Results**:
+   - `npm --prefix frontend run lint`: **0 errors** (371 warnings).
+   - `npm --prefix frontend run build`: **PASS (`668ms`)**.
+
+## Active Environment
+- **Backend**: Live at `http://localhost:5000`.
+- **Frontend**: Live at `http://localhost:5173`.
+- **Workspace**: Uncommitted changes on `main`.
+
+---
+
+## Previous Session
+- **Environment**: Antigravity IDE (`Verify & Wire GEMINI_API_KEY5 + Live .env Hot-Reload & Dynamic 5-Key UI`)
+- **Timestamp**: 2026-11-10T19:54:30+07:00
+
+## Summary: Verified New `GEMINI_API_KEY5`, Synced `.env`, Added Live `.env` Hot-Reload & Dynamic Multi-Key UI (`4/5 Ready, 75 RPM Pool`)
+1. **Verified & Synced `GEMINI_API_KEY5` ([`.env`](file:///e:/khmer_ai_dubbing_studio/.env), [`backend/.env`](file:///e:/khmer_ai_dubbing_studio/backend/.env#L5-L10))**:
+   - Confirmed `GEMINI_API_KEY5=REDACTED` in [`backend/.env`](file:///e:/khmer_ai_dubbing_studio/backend/.env#L9) is unique and returns `HTTP 200` on Google Gemini `models.list` & `generateContent` (`gemini-3.5-flash-lite`). Kept `GEMINI_API_KEY6=` blank slot intact.
+   - Synced root [`.env`](file:///e:/khmer_ai_dubbing_studio/.env#L8-L10) with `GEMINI_API_KEY5` and `GEMINI_API_KEY6=` to match `backend/.env`.
+2. **In-Process `.env` Key Hot-Reload ([`geminiKeyManager.js`](file:///e:/khmer_ai_dubbing_studio/backend/services/geminiKeyManager.js#L11-L97), [`server.js`](file:///e:/khmer_ai_dubbing_studio/backend/server.js#L25-L71))**:
+   - Added opt-in `registerLiveDotenvFiles`, `resetLiveDotenvFiles`, and mtime-cached `syncGeminiKeysFromEnvFilesIfChanged()` in [`geminiKeyManager.js`](file:///e:/khmer_ai_dubbing_studio/backend/services/geminiKeyManager.js), wired in [`server.js`](file:///e:/khmer_ai_dubbing_studio/backend/server.js#L64-L70) only when `require.main === module` (preserving unit test isolation while reloading newly added `GEMINI_API_KEY*` entries immediately on save without interrupting active jobs).
+3. **Dynamic Multi-Key UI Support (`5+ Keys`)**:
+   - [`GeminiQuotaModal.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/dashboard/GeminiQuotaModal.jsx#L17-L24): Expanded `KEY_THEMES` to 6 colors (amber `#fbbf24` for Key #5, fuchsia `#e879f9` for #6), made header subtitle dynamic (`Key #1–#${totalKeys}`), and updated key grid to `repeat(auto-fit, minmax(205px, 1fr))` so all 5 key cards align in one clean row.
+   - [`GeminiRouteModal.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/dashboard/GeminiRouteModal.jsx#L1638-L1647): Expanded `KEY_THEMES` (`1..6`) and replaced hardcoded `(idx % 4) + 1` on episode cards with dynamic `(idx % poolTotalKeys) + 1` so `EP5` displays `Key #5`.
+   - [`Navbar.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/Navbar.jsx#L48-L71): Syncs lightweight `stats` snapshot once backend comes online and replaced hardcoded `'4 Keys'` fallback with `'Keys'`.
+4. **Verification Results (Fresh After Final Edits — Live `series_1793898268958/series.json` Untouched)**:
+   - Added hot-reload test in [`gemini_key_pool_and_504_retry.test.js`](file:///e:/khmer_ai_dubbing_studio/backend/tests/gemini_key_pool_and_504_retry.test.js#L168-L230). Ran 4 backend suites (`gemini_key_pool_and_504_retry`, `gemini_quota_tracker_and_routes`, `stage6_translation_fallback_and_tts_guard`, `repair_broken_segments`): **32/32 PASS**.
+   - `npm --prefix frontend run lint`: **0 errors**; `npm --prefix frontend run build`: **PASS (`1.03s`)**.
+   - Live Backend (`http://localhost:5000/api/health` & `/api/gemini/keys-status`): Auto-reloaded cleanly to **`5/5 Keys` total** (`Key #2`, `#3`, `#4`, `#5 ...825A` Ready `200`; `Key #1 ...uB8A` at today's 500 RPD cap until PT midnight).
+   - Live Playwright UI (`http://localhost:5173`): Verified `Navbar` (`Keys & Quota 4/5 Keys`), `GeminiQuotaModal` (`Key #1–#5`, `5 Keys Pool (×5)`, `75` RPM pool, Key #5 amber card `...825A`), and `GeminiRouteModal` (`4/5 Keys Ready`, `EP5` `Key #5`) with `0` console/page errors.
+
+## Active Environment
+- **Backend**: Live at `http://localhost:5000` (`totalKeysCount: 5`, live `.env` key hot-reload enabled).
+- **Frontend**: Live at `http://localhost:5173`.
+- **Workspace**: Uncommitted changes on `main`. Live `series_1793898268958/series.json` left untouched.
+
+## Next Steps
+- Press `Ctrl + Shift + R` in the browser (`http://localhost:5173`) if still open from earlier to see `5 Keys` and `Key #5` immediately.
+- Next time Nha wants to add Key #6 (`GEMINI_API_KEY6=`), paste it in `backend/.env` line 10 and save — backend picks it up automatically without restarting jobs.
+
+---
+
+## Previous Session
+- **Environment**: Antigravity IDE (`Harden Stage 6 Mode A & RepairBroken Service Against Omitted Lines`)
+- **Timestamp**: 2026-11-10T19:29:00+07:00
+
+## Summary: Hardened Stage 6 Mode A & Repair Translation Matching, Retry Cascade, and Bounded Single-Line Rescue (`9/11 -> 11/11`)
+1. **Stage 6 Mode A Resilient Parsing, Matching & Single-Line Rescue ([stage6_generateModeSpecificScript.js](file:///e:/khmer_ai_dubbing_studio/backend/services/pipeline/stages/stage6_generateModeSpecificScript.js))**:
+   - Upgraded `parseJsonResponseText` with prose/fence extraction (`extractJsonSliceFromText`) + trailing comma recovery, added `extractSegmentsFromParsedResponse` (accepts bare JSON arrays `[...]` and `{ segments }`/`{ items }`), and added `resolveBatchTranslationMatches` supporting string/`"#"` indices, safe 1-based relative retry re-indexing (`1..N`), and safe 1:1 positional alignment.
+   - Updated `applyTranslatedSegmentResult` to accept `khmerText || khmerTranslatedText || khmer` and never discard usable Khmer text if `condenseKhmerDialogue` over-strips fillers; updated Mode A Rule 6 so short OCR tags/views (`"天眼视角"`) and mild insults/incomplete clauses (`"你这个混蛋，"`) in Input are never skipped.
+   - Improved bounded Auto-Retry (`MAX_RETRY_ITEMS = 60`, up to 6 healthy models, narrows `pendingSlice` incrementally per model so partial successes cascade cleanly without re-translating finished lines) and added **Stage 3 Bounded Single-Line Final Rescue** (`MAX_SINGLE_LINE_RESCUE = 15`, 1-by-1 single JSON object `{ speaker, gender, khmerText }` across up to 6 cascade models, clearing `MISSING_SEGMENT_TRANSLATION` & stale `validationErrors`).
+2. **Repair Broken Service Hardening ([repairBrokenService.js](file:///e:/khmer_ai_dubbing_studio/backend/services/repairBrokenService.js))**:
+   - Added `resolveRepairBatchMatches` (tolerating `{ segments }`/`{ items }`/bare array/single object, `"#86"`/`"86"` string keys, relative `1..N`, and exact-length positional match), `clearRepairedSegmentErrors` (clearing `MISSING_SEGMENT_TRANSLATION`/`TRANSLATION_FAILED` + stale validation messages), unlimited sliced batch retry (`10`/slice instead of skipping when `> 15`), and 1-by-1 `buildSingleLineRepairPrompt` rescue for any line still broken after batch retry.
+3. **Verification Results (Fresh After Final Edits — Live `series_1793898268958/series.json` Untouched)**:
+   - Added comprehensive regression tests in [`stage6_translation_fallback_and_tts_guard.test.js`](file:///e:/khmer_ai_dubbing_studio/backend/tests/stage6_translation_fallback_and_tts_guard.test.js) and [`repair_broken_segments.test.js`](file:///e:/khmer_ai_dubbing_studio/backend/tests/repair_broken_segments.test.js).
+   - Executed `node --test` across all 10 backend translation/repair/guard/persistence suites (`stage6_translation_fallback_and_tts_guard`, `repair_broken_segments`, `series_persist_and_sync`, `empty_text_guard`, `fast_ocr_mode`, `retranslate_fallback`, `stage5_reconciliation_and_recovery`, `gender_voice_consistency`, `episode_state_isolation`, `phase1_translation_boundary`): **82/82 PASS (0 fail)**.
+   - Verified watched live backend `http://localhost:5000/api/health` reloaded cleanly (`200 ok`, 4/4 active keys, 10 cascade models).
+
+## Active Environment
+- **Backend**: Live auto-reloaded (`http://localhost:5000/api/health` -> `200 ok`, `--watch-path`).
+- **Workspace**: Uncommitted changes on `main`. Live `series_1793898268958/series.json` left untouched.
+
+## Next Steps
+- In Batch Generate Studio, click **"🔧 ជួសជុលឃ្លាខូច & Generate ឡើងវិញ (4094)"** (which fixes the 3 stored missing text lines in EP2/EP6 + synthesizes all 4,094 segment voices) or re-select only EP2/EP6 to Re-Translate (`11/11`) before generating TTS.
+- Commit & push changes when ready.
+
+---
+
+## Previous Session
+- **Environment**: Antigravity IDE (`Replace Native Browser Alert/Confirm with Custom StudioConfirmDialog UI`)
+- **Timestamp**: 2026-11-10T19:04:00+07:00
+
+## Summary: Replaced All Browser `window.confirm` & `alert` Dialogs in Batch Generate Studio & Job Dashboard with Custom Studio UI
+1. **New Reusable Custom Dialog Component ([StudioConfirmDialog.jsx](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/common/StudioConfirmDialog.jsx))**:
+   - Midnight Navy glassmorphic modal rendered via React `createPortal(..., document.body)` at `zIndex: 100060` using inline styles (zero Tailwind dependency).
+   - Supports semantic themes (`warning`, `repair`, `danger`, `success`, `info`), structured badge pill (`FORCE RE-RUN`, `REPAIR`, `KILL TRANSLATE`), episode chip badges, bulleted Khmer details card, `Escape`/backdrop dismissal (without closing parent `GeminiRouteModal`), and single-button alert mode (`showCancel={false}`).
+2. **Eliminated All 18 Native `window.confirm` / `alert` Calls in `dashboard/`**:
+   - [`GeminiRouteModal.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/dashboard/GeminiRouteModal.jsx): Added promise-based `openStudioDialog` / `closeStudioDialog` helper + unmount cleanup, guarded `Escape` handler against `studio-confirm-modal`, and replaced all 14 native `alert`/`window.confirm` calls (`handleStartBatchTranslate`, `handleRepairBrokenSegments`, `handleReTranslateSelected`, `handleBatchGenerateTTS`, `handleBatchDemucsSeparation`, and Kill Translate / TTS / Demucs buttons).
+   - [`EpisodeTranslateProgressCard.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/dashboard/route-runners/EpisodeTranslateProgressCard.jsx), [`EpisodeTtsProgressCard.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/dashboard/route-runners/EpisodeTtsProgressCard.jsx), [`EpisodeDemucsProgressCard.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/dashboard/route-runners/EpisodeDemucsProgressCard.jsx): Replaced native `window.confirm` on card `Kill` buttons with `onRequestConfirm` + standalone `<StudioConfirmDialog />` fallback.
+   - [`useJobQueue.js`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/dashboard/useJobQueue.js) & [`JobDashboardModal.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/dashboard/JobDashboardModal.jsx): Replaced 4 `alert(...)` calls on pause/resume/retry/cancel errors with `setError(...)` + dismissible in-modal error banner.
+3. **Verification Results (Fresh After Final Edits)**:
+   - `git grep -n -E "window\.confirm|\balert\(" frontend/src/components/dashboard/ frontend/src/components/common/`: **0 matches**.
+   - Added static audit test in [`repair_broken_segments.test.js`](file:///e:/khmer_ai_dubbing_studio/backend/tests/repair_broken_segments.test.js#L843-L881); `node --test backend/tests/repair_broken_segments.test.js backend/tests/empty_text_guard.test.js backend/tests/series_persist_and_sync.test.js`: **25/25 PASS**.
+   - `npm --prefix frontend run lint` (`oxlint`): **0 errors** (`0` warnings in newly added/modified modal & queue hook code); `npm --prefix frontend run build`: **PASS (`923ms`)**.
+   - Playwright Chrome E2E (`verify_gemini_modal.mjs` on `http://127.0.0.1:5179` with mocked `/api/**`): **PASS** (`nativeDialogCount: 0`, `pageErrorCount: 0`, `repairReenabled: true`), visually verified [`confirm_retranslate_modal.png`](file:///C:/Users/nhastar/.gemini/antigravity/brain/5da0cdee-686d-4dd8-b5fb-3670bed21397/scratch/confirm_retranslate_modal.png) showing `FORCE RE-RUN`, `EP1`/`EP2` pills, Khmer bullets, and tactile buttons; tested `Escape`, `Cancel`, `Confirm`, and `Kill` custom modal flows.
+
+## Active Environment
+- **Workspace**: Uncommitted changes on `main` (dev launcher auto-reload + broken-segment fixes + custom UI confirm modal). Live `series_1793898268958/series.json` left untouched.
+
+## Next Steps
+- In browser (`http://localhost:5173`), press `Ctrl + Shift + R` if needed to load the new modal immediately and test `Re-Translate` / `ជួសជុលឃ្លាខូច` / `Kill`.
+- Commit & push changes when ready.
+
+---
+
+## Previous Session
+- **Environment**: Antigravity IDE (`Enable Safe Backend Auto-Reload in dev.ps1/start.bat & Fix Recurring Broken Segments`)
+- **Timestamp**: 2026-11-10T18:53:00+07:00
+
+## Summary: Enabled Safe Backend JS Auto-Reload (`--watch-path`) in `dev.ps1` / `start.bat` + Fixed Recurring `អត្ថបទខូច` / `សំឡេងខ្វះ`
+0. **Dev Launcher Auto-Reload ([dev.ps1](file:///e:/khmer_ai_dubbing_studio/dev.ps1#L18-L62), [L212-L246](file:///e:/khmer_ai_dubbing_studio/dev.ps1#L212-L246), [start.bat](file:///e:/khmer_ai_dubbing_studio/start.bat))**:
+   - Enabled `$EnableWatchBackend = $true` by default in `dev.ps1` (with `-NoWatch` / `--no-watch` to opt out cleanly), watching ONLY pure JS source paths (`server.js`, `routes`, `services`, `utils`, `middleware`, and the 4 `models/*.js` files) — excluding `models/sense-voice/*.onnx`, `uploads/`, `workers/`, `scripts/`, and `tests/`. Added `-NoProfile` to `start.bat`.
+   - Verified `start.bat --help`, PowerShell AST parse (`0` errors), and Node 24 `--watch-path` stability while reading `models/sense-voice/tokens.txt` (zero spurious reloads).
+1. **Filtered Non-Chinese SenseVoice ASR Hallucinations Upstream & During Repair**:
+   - [`translationQuality.js`](file:///e:/khmer_ai_dubbing_studio/backend/utils/translationQuality.js) & [`frontend/src/utils/translationQuality.js`](file:///e:/khmer_ai_dubbing_studio/frontend/src/utils/translationQuality.js): Added `containsChineseHanzi` (`/[\u3400-\u4dbf\u4e00-\u9fa5]/`) and `isNonChineseAsrHallucination(seg)` with 100% BE/FE parity (drops `audio_asr`/`sense_voice_local` empty-OCR non-Hanzi junk like `"The."`/`"Yeah."` while keeping `visual_ocr` such as `"E=MC²"`, Chinese dialogue, and `userOverridden` lines).
+   - Wired filtering into [`stage4_analyzeDialogueAudio.js`](file:///e:/khmer_ai_dubbing_studio/backend/services/pipeline/stages/stage4_analyzeDialogueAudio.js) (`filterValidChineseAsrSegments`, widening Hanzi check + cleaning ASR cache & live output), [`chunkOrchestrator.js`](file:///e:/khmer_ai_dubbing_studio/backend/services/pipeline/chunkOrchestrator.js) (cache/live/stitch), [`dubbingPipeline.js`](file:///e:/khmer_ai_dubbing_studio/backend/services/pipeline/dubbingPipeline.js), and [`repairBrokenService.js`](file:///e:/khmer_ai_dubbing_studio/backend/services/repairBrokenService.js) (auto-drops junk segments immediately on repair, persists cleaned `series.json`, and preserves healthy `seg.id`s & `.mp3` mtimes).
+2. **Prevented Punctuation-Only / Filler Outputs & Added Mode A Auto-Retry**:
+   - [`stage6_generateModeSpecificScript.js`](file:///e:/khmer_ai_dubbing_studio/backend/services/pipeline/stages/stage6_generateModeSpecificScript.js) & [`stage7_translateAndValidateKhmer.js`](file:///e:/khmer_ai_dubbing_studio/backend/services/pipeline/stages/stage7_translateAndValidateKhmer.js): Hardened `isPlaceholderTranslationText` & Stage 7 validation to reject punctuation-only (`"។"`, `"!"`, `"..."`) and explicit fillers (`"សូមរង់ចាំ"`, `"សូមរង់..."`). Fixed Stage 6 Mode A schema `"khmerText": "ប្រយោគបកប្រែជាភាសាខ្មែរពេញលេញ"`, guarded `condenseKhmerDialogue` against stripping short phrases like `"កុំបារម្ភអី!"` down to `"!"`, and added bounded Mode A auto-retry (`MAX_RETRY_ITEMS = 40`, batches of 10) for omitted/broken lines.
+   - [`repairBrokenService.js`](file:///e:/khmer_ai_dubbing_studio/backend/services/repairBrokenService.js): Added Rule 7 against punctuation-only `"khmerText"` and focused in-batch retry pass for omitted/broken items.
+3. **Outdated-Master Marking & Concurrent Queue Guard in Batch Generate Studio**:
+   - [`episodeService.js`](file:///e:/khmer_ai_dubbing_studio/backend/services/episodeService.js): `persistEpisodeScriptData` now sets `audioOutdated = true` only when `!hasAnyVoicedSegment && hadPriorAudio` (safe against fresh concurrent sync tests while accurately flagging Re-Translated episodes that still had prior Master flags), and `syncSeriesMetadataSafely` preserves `audioOutdated` against older client `/sync` payloads.
+   - [`geminiRouteHelpers.js`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/dashboard/geminiRouteHelpers.js) & [`GeminiRouteModal.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/dashboard/GeminiRouteModal.jsx): Added `getActiveSeriesTranslateJobs` and `isTranslateQueueEnqueueBanner`; disables `btn-repair-broken-segments` (`QUEUE` / `⏳ រង់ចាំ Translate Queue`) and blocks `handleRepairBrokenSegments` while series translate/re-translate jobs run, scopes `Kill Translate` to active translate jobs, and auto-clears stale `"បានដាក់បញ្ចូល ..."` banner when queue drains.
+4. **Verification Results (Fresh After Final Edits — Live `series_1793898268958/series.json` Untouched)**:
+   - Core pipeline, persistence & repair tests (`node --test backend/tests/repair_broken_segments.test.js backend/tests/stage6_translation_fallback_and_tts_guard.test.js backend/tests/series_persist_and_sync.test.js backend/tests/stage5_reconciliation_and_recovery.test.js backend/tests/empty_text_guard.test.js backend/tests/fast_ocr_mode.test.js backend/tests/episode_state_isolation.test.js backend/tests/phase1_translation_boundary.test.js backend/tests/retranslate_fallback.test.js`): **73/73 PASS**.
+   - Full `backend/tests/*.test.js` suite: **186/188 PASS** (1 skipped due to missing `ep_2_source.mp4` fixture; 1 pre-existing live-`series.json`-coupled assertion at `regenerate_split_audio_offset_reset.test.js:73` where `ep_2` segment 2 `audioOffset` is `undefined` after Nha's recent unvoiced Re-Translate).
+   - `npm --prefix frontend run lint` (`oxlint`): **0 errors**; `npm --prefix frontend run build`: **PASS (`1.78s`)**.
+   - Playwright Chrome E2E (`verify_gemini_modal.mjs` on `http://127.0.0.1:5179` with mocked `/api/**`): **PASS, 0 page/React errors** — verified `btn-repair-broken-segments` disables into `QUEUE` during Re-Translate and re-enables while auto-clearing stale enqueue banner upon queue completion.
+
+## Active Environment
+- **Dev Orchestrator**: Backend `http://localhost:5000` (running); Frontend Vite preview/dev stopped cleanly after Playwright check.
+
+## Next Steps
+- Click `"🔧 ជួសជុលឃ្លាខូច & Generate ឡើងវិញ"` once (after Translate queue finishes) on `series_1793898268958` episodes to clean existing non-Chinese ASR junk + generate missing voices.
+- Ask Nha if ready to commit & push changes.
+
+---
+
+## Previous Session
 - **Environment**: Antigravity IDE (`Fix ReferenceError: onUpdateSegments is not defined in handleTranslateSingleSegment`)
 - **Timestamp**: 2026-11-10T17:27:09+07:00
 

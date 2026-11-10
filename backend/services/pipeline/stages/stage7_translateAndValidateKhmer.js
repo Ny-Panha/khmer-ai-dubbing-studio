@@ -1,3 +1,8 @@
+const {
+  stripPunctuationForSpeech,
+  isExplicitFillerKhmer,
+} = require('../../../utils/translationQuality');
+
 /**
  * Stage 7: Translate and Validate Khmer
  * Preserves Chinese source text, links Khmer translation to segment ID,
@@ -38,8 +43,10 @@ async function translateAndValidateKhmer({ scriptSegments = [], mode = 'dialogue
 
     const errors = [];
 
-    const isPlaceholderKhmer = khmerText === 'សន្ទនា';
-    if (isPlaceholderKhmer) {
+    const rawKhmerBeforeFilter = khmerText;
+    const isPlaceholderKhmer = isExplicitFillerKhmer(khmerText);
+    const isPunctuationOnlyKhmer = Boolean(khmerText) && !stripPunctuationForSpeech(khmerText);
+    if (isPlaceholderKhmer || isPunctuationOnlyKhmer) {
       khmerText = '';
     }
 
@@ -59,8 +66,10 @@ async function translateAndValidateKhmer({ scriptSegments = [], mode = 'dialogue
       seg.reviewNeeded = true;
       errors.push(
         isPlaceholderKhmer
-          ? 'រកឃើញអត្ថបទជំនួស "សន្ទនា" ដែលមិនទាន់បកប្រែពិតប្រាកដ (ត្រូវការ Review ឬបកប្រែឡើងវិញ)'
-          : 'មិនទាន់មានអត្ថបទបកប្រែជាភាសាខ្មែរឡើយ (ត្រូវការ Review)'
+          ? `រកឃើញអត្ថបទជំនួស "${rawKhmerBeforeFilter}" ដែលមិនទាន់បកប្រែពិតប្រាកដ (ត្រូវការ Review ឬបកប្រែឡើងវិញ)`
+          : isPunctuationOnlyKhmer
+            ? 'រកឃើញអត្ថបទមានតែសញ្ញាវណ្ណយុត្តិ (គ្មានពាក្យអានជាសំឡេង — ត្រូវការ Review ឬបកប្រែឡើងវិញ)'
+            : 'មិនទាន់មានអត្ថបទបកប្រែជាភាសាខ្មែរឡើយ (ត្រូវការ Review)'
       );
     } else {
       translatedCount++;

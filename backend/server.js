@@ -22,6 +22,7 @@ const { productionJobQueue } = require("./services/pipeline/productionJobQueue.j
 const { ensurePipelineWorkerRegistered } = require("./services/pipeline/jobWorker.js");
 
 // Middlewares & Modular Route Handlers
+const { registerLiveDotenvFiles } = require("./services/geminiKeyManager.js");
 const mediaStreamMiddleware = require("./middleware/mediaStream.js");
 const systemRoutes = require("./routes/systemRoutes.js");
 const scriptRoutes = require("./routes/scriptRoutes.js");
@@ -60,6 +61,16 @@ app.use((err, req, res, next) => {
 // Start Server
 let server = null;
 if (require.main === module) {
+  // Enable live .env key hot-reload (when GEMINI_API_KEY* is edited in .env while server runs)
+  try {
+    registerLiveDotenvFiles([
+      path.join(__dirname, "..", ".env"),
+      path.join(__dirname, ".env"),
+    ]);
+  } catch (envSyncErr) {
+    console.warn("[Server Startup] ⚠️ Live .env key sync setup warning:", envSyncErr.message);
+  }
+
   // Startup Crash Recovery: Scan and recover any dangling/interrupted jobs
   try {
     console.log("[Server Startup] 🔍 Running dangling jobs crash recovery check...");

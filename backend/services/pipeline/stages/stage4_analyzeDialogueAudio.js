@@ -165,7 +165,14 @@ function parseOffsetToSeconds(offsetStr) {
 }
 
 function containsChineseCharacters(text = '') {
-  return /[\u4e00-\u9fa5]/.test(String(text));
+  return /[\u3400-\u4dbf\u4e00-\u9fa5]/.test(String(text || ''));
+}
+
+function filterValidChineseAsrSegments(segments = []) {
+  if (!Array.isArray(segments)) return [];
+  return segments.filter((s) =>
+    containsChineseCharacters(s?.spokenChineseText || s?.chineseText || s?.text || '')
+  );
 }
 
 function safelyParseSpeechSegments(rawText) {
@@ -363,9 +370,20 @@ async function analyzeDialogueAudio({
     try {
       const cached = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
       if (cached && Array.isArray(cached.audioSegments) && cached.audioSegments.length > 0) {
-        cached.audioSegments = cached.audioSegments.map(normalizeSegmentGenderAndSpeaker);
-        console.log(`[Stage 4 ASR] ⚡ Cache Hit: Reusing & normalizing ${cached.audioSegments.length} speech segments (${path.basename(cachePath)})`);
-        return cached;
+        const beforeCount = cached.audioSegments.length;
+        cached.audioSegments = filterValidChineseAsrSegments(cached.audioSegments).map(normalizeSegmentGenderAndSpeaker);
+        const droppedFromCache = beforeCount - cached.audioSegments.length;
+        if (droppedFromCache > 0) {
+          console.log(`[Stage 4 ASR] 🧹 Filtered ${droppedFromCache} non-Chinese hallucination(s) from ASR cache (${path.basename(cachePath)})`);
+          cached.audioMeta = {
+            ...(cached.audioMeta || {}),
+            speechSegmentsDetected: cached.audioSegments.length,
+          };
+        }
+        if (cached.audioSegments.length > 0 || droppedFromCache > 0) {
+          console.log(`[Stage 4 ASR] ⚡ Cache Hit: Reusing & normalizing ${cached.audioSegments.length} speech segments (${path.basename(cachePath)})`);
+          return cached;
+        }
       }
     } catch (_) {}
   }
@@ -417,11 +435,18 @@ async function analyzeDialogueAudio({
         );
 
         if (localRes && Array.isArray(localRes.speechSegments) && localRes.speechSegments.length > 0) {
-          for (const s of localRes.speechSegments) {
+          const validChineseSegs = filterValidChineseAsrSegments(localRes.speechSegments);
+          const droppedNonChinese = localRes.speechSegments.length - validChineseSegs.length;
+          if (droppedNonChinese > 0) {
+            console.log(`[Stage 4 Analyze Audio] 🧹 Filtered ${droppedNonChinese} non-Chinese SenseVoice hallucination(s) (keeping ${validChineseSegs.length} Chinese speech segments).`);
+          }
+          for (const s of validChineseSegs) {
             audioSegments.push(s);
           }
-          asrEngineUsed = 'sense-voice-small-onnx';
-          console.log(`[Stage 4 Analyze Audio] ⚡ Local SenseVoice succeeded with ${audioSegments.length} Chinese speech segments ($0.00 API cost)!`);
+          if (audioSegments.length > 0) {
+            asrEngineUsed = 'sense-voice-small-onnx';
+            console.log(`[Stage 4 Analyze Audio] ⚡ Local SenseVoice succeeded with ${audioSegments.length} Chinese speech segments ($0.00 API cost)!`);
+          }
         }
       } catch (senseVoiceErr) {
         if (senseVoiceErr?.name === 'AbortError' || signal?.aborted) {
@@ -831,5 +856,6 @@ module.exports = {
   groupTranscriptionWordsIntoSegments,
   safelyParseSpeechSegments,
   containsChineseCharacters,
+  filterValidChineseAsrSegments,
   normalizeSegmentGenderAndSpeaker,
 };

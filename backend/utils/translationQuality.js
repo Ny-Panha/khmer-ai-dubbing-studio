@@ -21,6 +21,11 @@ const EXPLICIT_FILLER_KHMERS = Object.freeze([
 
 const EXPLICIT_FILLER_SET = new Set(EXPLICIT_FILLER_KHMERS);
 const EXPLICIT_FILLER_REGEX = /^សូមរង់(?:ចា(?:ំ)?)?[\s.…។!?,:;~'"«»()\-–—]*$/u;
+const CHINESE_HANZI_REGEX = /[\u3400-\u4dbf\u4e00-\u9fa5]/;
+
+function containsChineseHanzi(text = '') {
+  return CHINESE_HANZI_REGEX.test(String(text || '').normalize('NFC'));
+}
 
 function getSegmentKhmerText(seg) {
   if (!seg || typeof seg !== 'object') return '';
@@ -93,6 +98,33 @@ function findRepeatedJunkKhmerSet(segments = [], { maxLen = 40, minCount = 5 } =
   }
 
   return repeatedSet;
+}
+
+/**
+ * Returns true ONLY when a segment came solely from audio ASR (audio_asr / sense_voice_local)
+ * with zero visual OCR subtitle text, was NOT manually overridden, and its source text
+ * contains zero Chinese Hanzi characters (e.g., SenseVoice non-Chinese hallucinations like "The.", "Yeah.").
+ */
+function isNonChineseAsrHallucination(seg) {
+  if (!seg || typeof seg !== 'object') return false;
+  if (seg.userOverridden || seg.voiceAssignmentSource === 'manual') return false;
+
+  const evSource = String(seg.evidenceSource || seg.evidenceType || seg.source || '')
+    .trim()
+    .toLowerCase();
+  if (evSource !== 'audio_asr' && evSource !== 'sense_voice_local') {
+    return false;
+  }
+
+  const ocrText = String(seg.ocrSubtitleText || '').trim();
+  if (ocrText.length > 0) return false;
+
+  const sourceText =
+    getSegmentChineseText(seg) ||
+    String(seg.spokenAudioText || seg.spokenChineseText || '').trim();
+  if (!sourceText) return false;
+
+  return !containsChineseHanzi(sourceText);
 }
 
 /**
@@ -233,6 +265,8 @@ function scanSeriesBrokenSegments(episodes = [], { checkAudioFileFn = null } = {
 
 module.exports = {
   EXPLICIT_FILLER_KHMERS,
+  containsChineseHanzi,
+  isNonChineseAsrHallucination,
   getSegmentKhmerText,
   getSegmentChineseText,
   stripPunctuationForSpeech,
