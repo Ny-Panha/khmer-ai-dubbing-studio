@@ -1,6 +1,36 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
+- **Environment**: Antigravity IDE (`Fix Workspace Player Frame Containment, AspectRatio Sanitization & Per-Panel Isolation`)
+- **Timestamp**: 2026-11-10T15:51:00+07:00
+
+## Summary: Hardened `aspectRatio` Load Sanitization, Player Frame Bounds Containment & Per-Panel Error Boundaries
+1. **Identified Element**:
+   - `<div class="player-canvas-area is-aspect-frame is-landscape-frame|is-portrait-frame|is-square-frame" data-aspect-ratio="..." data-testid="player-aspect-frame">` ([`VideoPlayerPreview.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/VideoPlayerPreview.jsx#L1337-L1342), styled by [`VideoPlayerPreview.css`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/VideoPlayerPreview.css#L171-L177) with `border-radius: 10px`, `1px solid` border, `#000` background) inside `.player-canvas-container.is-stage-host` / `.top-suite-col-center`.
+2. **Root Causes Found & Fixed**:
+   - **(a) Strict `aspectRatio` Sanitization ([projectStorage.js](file:///e:/khmer_ai_dubbing_studio/frontend/src/utils/projectStorage.js#L40-L187), [useSeriesManager.js](file:///e:/khmer_ai_dubbing_studio/frontend/src/hooks/useSeriesManager.js#L334-L361))**:
+     - `loadSavedVoiceSettings` previously only cleared `'1:1'` while letting poisoned strings/types (`"1:1 (Square / IG)"`, `"auto"`, `"4:3"`, objects/arrays) leak unvalidated into `App.jsx` -> `VideoPlayerPreview` (`data-aspect-ratio` & `framedStageStyle`).
+     - Added exported `VALID_ASPECT_RATIOS = ['16:9', '9:16', '1:1']` and [`sanitizeAspectRatio`](file:///e:/khmer_ai_dubbing_studio/frontend/src/utils/projectStorage.js#L46-L50); wired across [`loadSavedVoiceSettings`](file:///e:/khmer_ai_dubbing_studio/frontend/src/utils/projectStorage.js#L160-L173) (preserving valid `'1:1'` too), [`saveVoiceSettings`](file:///e:/khmer_ai_dubbing_studio/frontend/src/utils/projectStorage.js#L178-L187), [`resolveStickyVoiceSettings`](file:///e:/khmer_ai_dubbing_studio/frontend/src/utils/projectStorage.js#L127-L155), [`inferRenderedAspectRatio`](file:///e:/khmer_ai_dubbing_studio/frontend/src/utils/projectStorage.js#L71-L89), [`sanitizeAndHealSeriesList`](file:///e:/khmer_ai_dubbing_studio/frontend/src/utils/projectStorage.js#L441-L462), [`saveEpisodeState`](file:///e:/khmer_ai_dubbing_studio/frontend/src/utils/projectStorage.js#L890-L909), [`App.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/App.jsx#L161-L433), [`VideoPlayerPreview.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/VideoPlayerPreview.jsx#L58-L63), [`ExportSettingsPanel.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/voice/ExportSettingsPanel.jsx#L26-L129), [`useVideoRender.js`](file:///e:/khmer_ai_dubbing_studio/frontend/src/hooks/useVideoRender.js#L92-L434), [`BatchExportStudioModal.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/dashboard/BatchExportStudioModal.jsx#L130-L133), and [`GeminiRouteModal.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/dashboard/GeminiRouteModal.jsx#L490-L493).
+   - **(b) Player Bounds Measurement & Strict Container Clamping ([VideoPlayerPreview.jsx](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/VideoPlayerPreview.jsx#L73-L107), [L1278-L1326](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/VideoPlayerPreview.jsx#L1278-L1326), [useResizablePanels.js](file:///e:/khmer_ai_dubbing_studio/frontend/src/hooks/useResizablePanels.js#L11-L101), [VideoPlayerPreview.css](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/VideoPlayerPreview.css#L8-L371), [index.css](file:///e:/khmer_ai_dubbing_studio/frontend/src/index.css#L193-L200))**:
+     - Removed `Math.max(80, ...)` floor in `framedStageStyle` (which overflowed containers `<80px`), clamped `stageW`/`stageH`/`maxWidth`/`maxHeight` strictly `<= availW`/`availH`, and when `canvasBounds` is unmeasured (`0`) or collapsed, renders a normal CSS `aspectRatio: '16 / 9'` (`width: calc(100% - ...)`, `height: auto`, zero inline `px` sizes).
+     - Strengthened `canvasBounds` measurement (`getBoundingClientRect` / `clientWidth`, `requestAnimationFrame` post-mount re-measure, `window.resize`, `fullscreenchange`, `ResizeObserver`) and added `min-width: 0; min-height: 0` on `.capcut-player-panel` / `.top-suite-col-center` / `.player-canvas-container`.
+     - Guarded [`useResizablePanels.js`](file:///e:/khmer_ai_dubbing_studio/frontend/src/hooks/useResizablePanels.js#L11-L41) against poisoned `NaN` saved widths (using `Number.isFinite`) and clamped effective side-panel widths on narrow viewports (`MIN_CENTER_RESERVE = 328px`) so the center player & right inspector stay visible without React CSS `NaN` warnings or off-screen clipping.
+   - **(c) Per-Panel Layout Isolation ([App.jsx](file:///e:/khmer_ai_dubbing_studio/frontend/src/App.jsx#L650-L864))**:
+     - Wrapped `<MediaLibrary>`, `<VideoPlayerPreview>`, `<VoiceSettings>`, and `<TimelineEditor>` individually inside `<ErrorBoundary inline>` so a render failure in the player (or any sibling panel) stays contained in its own panel and side panels + timeline continue rendering normally.
+3. **Verification Results (Fresh After Final Edits — `series.json` & User Brave Profile Untouched)**:
+   - Unit & regression suite (`node --test backend/tests/workspace_player_containment.test.js backend/tests/aspect_ratio_and_crop.test.js`): **10/10 PASS**.
+   - Targeted `oxlint` across all 9 modified JS/JSX files: **0 errors**; full `npm --prefix frontend run lint`: **0 errors**; `npm --prefix frontend run build`: **PASS (`869ms`)**.
+   - Live Playwright Chrome E2E on `http://localhost:5173` (using exported copy of user's real Brave `localStorage` + `ep_2`, plus clean profile, isolated empty episode, `9:16` ↔ `16:9` sticky reload, valid `'1:1'` survival, poisoned strings/objects/arrays, `NaN` + narrow `960x850`, short `1280x420`, and mocked `bounds = 0` CSS `16 / 9` fallback): **ALL PASS, 0 console/page errors**; visually verified refreshed `9:16` portrait crop preview (`readyState: 4`) and all `before_*` / `after_*` screenshots.
+
+## Active Environment
+- **Dev Orchestrator**: Backend `http://localhost:5000` + Frontend `http://localhost:5173`.
+
+## Next Steps
+- Hard refresh browser (`Ctrl + Shift + R`) on `http://localhost:5173` — workspace layout, `16:9` ↔ `9:16` switching, and sticky reload now stay strictly contained inside their panels.
+
+---
+
+## Previous Session
 - **Environment**: Antigravity IDE (`Fix Invisible Jobs Dashboard Modal & Wire Navbar Jobs Active/Badge State`)
 - **Timestamp**: 2026-11-10T15:29:00+07:00
 

@@ -3,7 +3,7 @@ import {
   Film, Layers, Download, Loader2, CheckCircle2, AlertTriangle, AlertCircle,
   Square, X, Check, Clock
 } from 'lucide-react';
-import { resolveDefaultAspectRatio } from '../../utils/projectStorage';
+import { resolveDefaultAspectRatio, sanitizeAspectRatio } from '../../utils/projectStorage';
 import {
   checkEpisodeHasScript,
   checkEpisodeHasAudioReady,
@@ -127,8 +127,8 @@ export default function BatchExportStudioModal({
   const srcW = Number(firstSelectedWithVideo?.metadata?.width || firstSelectedWithVideo?.video?.width) || 0;
   const srcH = Number(firstSelectedWithVideo?.metadata?.height || firstSelectedWithVideo?.video?.height) || 0;
   const resolvedAspectRatio =
-    currentAspectRatio ||
-    voiceSettings?.aspectRatio ||
+    sanitizeAspectRatio(currentAspectRatio) ||
+    sanitizeAspectRatio(voiceSettings?.aspectRatio) ||
     resolveDefaultAspectRatio(srcW, srcH) ||
     '16:9';
   const effectiveVerticalStyle = voiceSettings?.verticalStyle || 'pad';

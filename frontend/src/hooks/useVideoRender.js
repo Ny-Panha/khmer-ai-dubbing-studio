@@ -6,7 +6,7 @@ import {
   fetchLatestBatchRenderApi,
   killBatchRenderApi,
 } from '../services/api';
-import { resolveDefaultAspectRatio, inferRenderedAspectRatio } from '../utils/projectStorage';
+import { resolveDefaultAspectRatio, inferRenderedAspectRatio, sanitizeAspectRatio } from '../utils/projectStorage';
 
 /**
  * Custom hook to manage single-episode and multi-episode batch/merged video export
@@ -89,9 +89,9 @@ export function useVideoRender({
       const matched = job.outputs.find((o) => String(o.episodeId) === String(episodeIdRef.current));
       if (matched) {
         const resolvedMatchedRatio =
-          matched.aspectRatio ||
-          job.exportSettings?.aspectRatio ||
-          inferRenderedAspectRatio(matched, null, getLatestVoiceSettings()?.aspectRatio || '16:9');
+          sanitizeAspectRatio(matched.aspectRatio) ||
+          sanitizeAspectRatio(job.exportSettings?.aspectRatio) ||
+          inferRenderedAspectRatio(matched, null, sanitizeAspectRatio(getLatestVoiceSettings()?.aspectRatio) || '16:9');
         setRenderedVideo({
           success: true,
           videoUrl: matched.videoUrl,
@@ -252,7 +252,7 @@ export function useVideoRender({
     try {
       const activeSettings = getLatestVoiceSettings();
       const exportSettings = {
-        aspectRatio: activeSettings?.aspectRatio || null,
+        aspectRatio: sanitizeAspectRatio(activeSettings?.aspectRatio),
         verticalStyle: activeSettings?.verticalStyle || 'pad',
         burnSubtitles: activeSettings?.burnSubtitles !== false,
         subtitleColor: activeSettings?.subtitleColor || 'white',
@@ -431,7 +431,7 @@ export function useVideoRender({
       const srcH = Number(videoMetadata?.height || selectedVideo?.height || activeEpisode?.metadata?.height || activeEpisode?.video?.height) || 0;
       const defaultRatio = resolveDefaultAspectRatio(srcW, srcH);
 
-      let effectiveAspectRatio = activeSettings.aspectRatio;
+      let effectiveAspectRatio = sanitizeAspectRatio(activeSettings.aspectRatio);
       if (!effectiveAspectRatio) {
         if (defaultRatio) {
           effectiveAspectRatio = defaultRatio;

@@ -16,6 +16,7 @@ import {
   saveEpisodeState,
   resolveDefaultAspectRatio,
   isRenderedRatioMismatch,
+  sanitizeAspectRatio,
 } from './utils/projectStorage';
 import { isSegmentMatch, resolveVoiceClipStartSec } from './utils/timelineUtils';
 import { JobQueueProvider } from './context/JobQueueContext';
@@ -157,7 +158,7 @@ export default function App() {
 
   const srcW = Number(media.videoMetadata?.width || media.selectedVideo?.width || series.activeEpisode?.metadata?.width || series.activeEpisode?.video?.width) || 0;
   const srcH = Number(media.videoMetadata?.height || media.selectedVideo?.height || series.activeEpisode?.metadata?.height || series.activeEpisode?.video?.height) || 0;
-  const currentAspectRatio = voiceSettings?.aspectRatio || resolveDefaultAspectRatio(srcW, srcH) || '16:9';
+  const currentAspectRatio = sanitizeAspectRatio(voiceSettings?.aspectRatio) || resolveDefaultAspectRatio(srcW, srcH) || '16:9';
 
   const prevRawRendered = renderRef.current.renderedVideo || null;
   const playbackEffectiveRenderedVideo = isRenderedRatioMismatch(
@@ -392,14 +393,20 @@ export default function App() {
   const handleGenerateAudio = useCallback((...args) => audioRef.current.handleGenerateAudio?.(...args), []);
   const handleToggleDeliveryType = useCallback((...args) => audioRef.current.handleToggleDeliveryType?.(...args), []);
   const handleUpdateVoiceSettings = useCallback((newSettings) => {
-    const prevRatio = voiceSettingsRef.current?.aspectRatio || null;
-    if (newSettings && typeof newSettings === 'object') {
-      voiceSettingsRef.current = newSettings;
+    const prevRatio = sanitizeAspectRatio(voiceSettingsRef.current?.aspectRatio);
+    const normalizedSettings = newSettings && typeof newSettings === 'object' && !Array.isArray(newSettings)
+      ? {
+          ...newSettings,
+          aspectRatio: sanitizeAspectRatio(newSettings.aspectRatio),
+        }
+      : newSettings;
+    if (normalizedSettings && typeof normalizedSettings === 'object') {
+      voiceSettingsRef.current = normalizedSettings;
     }
-    audioRef.current.handleUpdateVoiceSettings?.(newSettings);
-    if (newSettings?.aspectRatio && newSettings.aspectRatio !== prevRatio) {
-      saveVoiceSettings(newSettings);
-      const patch = { voiceSettings: newSettings };
+    audioRef.current.handleUpdateVoiceSettings?.(normalizedSettings);
+    if (normalizedSettings?.aspectRatio && normalizedSettings.aspectRatio !== prevRatio) {
+      saveVoiceSettings(normalizedSettings);
+      const patch = { voiceSettings: normalizedSettings };
       const sId = seriesRef.current.seriesId;
       const eId = seriesRef.current.episodeId;
       if (sId && eId) {
@@ -410,8 +417,9 @@ export default function App() {
   }, []);
 
   const handleAspectRatioChange = useCallback((nextRatio) => {
-    if (!nextRatio) return;
-    const updated = { ...(voiceSettingsRef.current || {}), aspectRatio: nextRatio };
+    const sanitizedRatio = sanitizeAspectRatio(nextRatio);
+    if (!sanitizedRatio) return;
+    const updated = { ...(voiceSettingsRef.current || {}), aspectRatio: sanitizedRatio };
     voiceSettingsRef.current = updated;
     setVoiceSettings(updated);
     saveVoiceSettings(updated);
@@ -639,57 +647,59 @@ export default function App() {
           <div className="capcut-top-suite" ref={topSuiteRef}>
             {/* 1. Left Panel: Media Library, AI Script, Subtitles */}
             <div className="top-suite-col-left" style={{ width: leftPanelWidth }}>
-              <MediaLibrary
-                apiKey={persistence.apiKey}
-                selectedVideo={media.selectedVideo}
-                videoMetadata={media.videoMetadata}
-                videoThumbnails={media.videoThumbnails || EMPTY_ARRAY}
-                videoClips={media.videoClips || EMPTY_CLIPS}
-                mediaAssets={media.mediaAssets || EMPTY_ARRAY}
-                duration={playback.duration}
-                onAddClipToTimeline={handleAddClipToTimeline}
-                onVideoSelected={handleVideoSelected}
-                onRemoveVideo={handleClearVideo}
-                scriptData={scriptData}
-                onUpdateScript={handleUpdateScript}
-                onUpdateSegments={handleUpdateTimelineSegments}
-                onGenerateScript={handleGenerateScript}
-                isGeneratingScript={script.isGeneratingScript}
-                generatingEpisodeId={script.generatingEpisodeId}
-                scriptProgress={script.scriptProgress}
-                scriptStage={script.scriptStage}
-                scriptLogs={script.scriptLogs}
-                scriptError={script.scriptError}
-                activeTab={leftTab}
-                onTabChange={setLeftTab}
-                onNavigateToVoice={handleGenerateAudio}
-                isGeneratingAudio={audio.isGeneratingAudio}
-                generatingAudioEpisodeId={audio.generatingAudioEpisodeId}
-                audioProgress={audio.audioProgress}
-                audioStage={audio.audioStage}
-                onRegenerateSegment={handleRegenerateSingleSegment}
-                onTranslateSegment={handleTranslateSingleSegment}
-                onUpdateSegmentText={handleUpdateSegmentText}
-                speakerRegistry={speakerRegistry || EMPTY_OBJECT}
-                onUpdateSpeakerVoice={handleUpdateSpeakerVoice}
-                onUpdateSegmentVoice={handleUpdateSegmentVoice}
-                onToggleDeliveryType={handleToggleDeliveryType}
-                selectedSegmentId={media.selectedSegmentId}
-                onSelectSegment={handleSelectSegmentFromScript}
-                onDeleteSegment={handleDeleteSegment}
-                seriesList={series.seriesList}
-                activeSeries={series.activeSeries}
-                activeEpisode={series.activeEpisode}
-                seriesId={series.seriesId}
-                episodeId={series.episodeId}
-                seriesGlossary={series.seriesGlossary}
-                onSwitchEpisode={handleSwitchEpisode}
-                onCreateEpisode={handleCreateEpisode}
-                onDeleteEpisode={handleDeleteEpisode}
-                onRenameEpisode={handleRenameEpisode}
-                onRenameSeries={handleRenameSeries}
-                onRefreshSeries={series.refreshSeriesFromServer}
-              />
+              <ErrorBoundary inline name="Media Library">
+                <MediaLibrary
+                  apiKey={persistence.apiKey}
+                  selectedVideo={media.selectedVideo}
+                  videoMetadata={media.videoMetadata}
+                  videoThumbnails={media.videoThumbnails || EMPTY_ARRAY}
+                  videoClips={media.videoClips || EMPTY_CLIPS}
+                  mediaAssets={media.mediaAssets || EMPTY_ARRAY}
+                  duration={playback.duration}
+                  onAddClipToTimeline={handleAddClipToTimeline}
+                  onVideoSelected={handleVideoSelected}
+                  onRemoveVideo={handleClearVideo}
+                  scriptData={scriptData}
+                  onUpdateScript={handleUpdateScript}
+                  onUpdateSegments={handleUpdateTimelineSegments}
+                  onGenerateScript={handleGenerateScript}
+                  isGeneratingScript={script.isGeneratingScript}
+                  generatingEpisodeId={script.generatingEpisodeId}
+                  scriptProgress={script.scriptProgress}
+                  scriptStage={script.scriptStage}
+                  scriptLogs={script.scriptLogs}
+                  scriptError={script.scriptError}
+                  activeTab={leftTab}
+                  onTabChange={setLeftTab}
+                  onNavigateToVoice={handleGenerateAudio}
+                  isGeneratingAudio={audio.isGeneratingAudio}
+                  generatingAudioEpisodeId={audio.generatingAudioEpisodeId}
+                  audioProgress={audio.audioProgress}
+                  audioStage={audio.audioStage}
+                  onRegenerateSegment={handleRegenerateSingleSegment}
+                  onTranslateSegment={handleTranslateSingleSegment}
+                  onUpdateSegmentText={handleUpdateSegmentText}
+                  speakerRegistry={speakerRegistry || EMPTY_OBJECT}
+                  onUpdateSpeakerVoice={handleUpdateSpeakerVoice}
+                  onUpdateSegmentVoice={handleUpdateSegmentVoice}
+                  onToggleDeliveryType={handleToggleDeliveryType}
+                  selectedSegmentId={media.selectedSegmentId}
+                  onSelectSegment={handleSelectSegmentFromScript}
+                  onDeleteSegment={handleDeleteSegment}
+                  seriesList={series.seriesList}
+                  activeSeries={series.activeSeries}
+                  activeEpisode={series.activeEpisode}
+                  seriesId={series.seriesId}
+                  episodeId={series.episodeId}
+                  seriesGlossary={series.seriesGlossary}
+                  onSwitchEpisode={handleSwitchEpisode}
+                  onCreateEpisode={handleCreateEpisode}
+                  onDeleteEpisode={handleDeleteEpisode}
+                  onRenameEpisode={handleRenameEpisode}
+                  onRenameSeries={handleRenameSeries}
+                  onRefreshSeries={series.refreshSeriesFromServer}
+                />
+              </ErrorBoundary>
             </div>
 
             {/* Left Resizer Splitter (Drag Left / Right) */}
@@ -701,34 +711,36 @@ export default function App() {
 
             {/* 2. Center Panel: Video Preview Monitor */}
             <div className="top-suite-col-center">
-              <VideoPlayerPreview
-                selectedVideo={media.selectedVideo}
-                videoMetadata={media.videoMetadata}
-                seriesId={series.seriesId}
-                episodeId={series.episodeId}
-                scriptData={scriptData}
-                renderedVideo={effectiveRenderedVideo}
-                setRenderedVideo={render.setRenderedVideo}
-                onResetToPreview={handleResetToPreview}
-                isRendering={render.isRendering}
-                onRenderVideo={handleRenderVideo}
-                videoRef={videoRef}
-                currentTime={playback.currentTime}
-                duration={playback.duration}
-                isPlaying={playback.isPlaying}
-                onPlayPause={handlePlayPause}
-                onSeek={handleSeek}
-                onTimeUpdate={handleTimeUpdate}
-                onLoadedMetadata={handleLoadedMetadata}
-                voiceSettings={voiceSettings || EMPTY_OBJECT}
-                onEnded={handleVideoEnded}
-                fullAudioUrl={audio.fullAudioUrl}
-                audioGenerated={audio.audioGenerated}
-                audioOutdated={audio.audioOutdated}
-                onImportClick={handleImportClick}
-                onVideoSelected={handleVideoSelected}
-                videoClips={media.videoClips || EMPTY_CLIPS}
-              />
+              <ErrorBoundary inline name="Video Player">
+                <VideoPlayerPreview
+                  selectedVideo={media.selectedVideo}
+                  videoMetadata={media.videoMetadata}
+                  seriesId={series.seriesId}
+                  episodeId={series.episodeId}
+                  scriptData={scriptData}
+                  renderedVideo={effectiveRenderedVideo}
+                  setRenderedVideo={render.setRenderedVideo}
+                  onResetToPreview={handleResetToPreview}
+                  isRendering={render.isRendering}
+                  onRenderVideo={handleRenderVideo}
+                  videoRef={videoRef}
+                  currentTime={playback.currentTime}
+                  duration={playback.duration}
+                  isPlaying={playback.isPlaying}
+                  onPlayPause={handlePlayPause}
+                  onSeek={handleSeek}
+                  onTimeUpdate={handleTimeUpdate}
+                  onLoadedMetadata={handleLoadedMetadata}
+                  voiceSettings={voiceSettings || EMPTY_OBJECT}
+                  onEnded={handleVideoEnded}
+                  fullAudioUrl={audio.fullAudioUrl}
+                  audioGenerated={audio.audioGenerated}
+                  audioOutdated={audio.audioOutdated}
+                  onImportClick={handleImportClick}
+                  onVideoSelected={handleVideoSelected}
+                  videoClips={media.videoClips || EMPTY_CLIPS}
+                />
+              </ErrorBoundary>
             </div>
 
             {/* Right Resizer Splitter (Drag Left / Right) */}
@@ -740,112 +752,116 @@ export default function App() {
 
             {/* 3. Right Panel: Khmer Voice (TTS), Audio Ducking, Export Settings */}
             <div className="top-suite-col-right" style={{ width: rightPanelWidth }}>
-              <VoiceSettings
-                settings={voiceSettings || EMPTY_OBJECT}
-                onUpdateSettings={handleUpdateVoiceSettings}
-                voiceCatalog={audio.ttsVoiceCatalog}
-                audioOutdated={audio.audioOutdated}
-                previewAudioUrl={
-                  audio.fullAudioUrl || scriptData?.segments?.find((s) => s.audioUrl)?.audioUrl || null
-                }
-                onRenderVideo={handleRenderVideo}
-                isRendering={render.isRendering}
-                renderProgress={render.renderProgress}
-                renderStage={render.renderStage}
-                renderedVideo={effectiveRenderedVideo}
-                selectedVideo={media.selectedVideo}
-                videoMetadata={media.videoMetadata}
-                activeEpisode={series.activeEpisode}
-                activeSeries={series.activeSeries}
-                seriesId={series.seriesId}
-                episodeId={series.episodeId}
-                batchRender={render.batchRender}
-                duration={playback.duration}
-                selectedClip={media.selectedClip}
-                onSplitClip={handleSplitClip}
-                onDeleteClip={handleDeleteClip}
-                currentTime={playback.currentTime}
-                isPlaying={playback.isPlaying}
-                scriptData={scriptData}
-                onGenerateAudio={handleGenerateAudio}
-                isGeneratingAudio={audio.isGeneratingAudio}
-                audioProgress={audio.audioProgress}
-                audioStage={audio.audioStage}
-                audioGenerated={audio.audioGenerated}
-                onRegenerateSegment={handleRegenerateSingleSegment}
-                onTranslateSegment={handleTranslateSingleSegment}
-                speakerRegistry={speakerRegistry || EMPTY_OBJECT}
-                onUpdateSpeakerVoice={handleUpdateSpeakerVoice}
-                onUpdateSegmentVoice={handleUpdateSegmentVoice}
-                onUpdateSegmentText={handleUpdateSegmentText}
-                onUpdateSegmentSpeed={audio.handleUpdateSegmentSpeed}
-                onToggleDeliveryType={handleToggleDeliveryType}
-                onSplitSegment={audio.handleSplitSegment}
-                onAutoSplitSegment={clips.handleAutoSplitSegment}
-                selectedSegmentId={media.selectedSegmentId}
-                onSelectSegment={media.setSelectedSegmentId}
-                onDeleteSegment={handleDeleteSegment}
-                onUpdateSegments={handleUpdateTimelineSegments}
-                onToggleMuteSegment={handleToggleMuteSegment}
-                onToggleMuteVideoClip={handleToggleMuteVideoClip}
-                onToggleMuteAllCuts={handleToggleMuteAllCuts}
-                videoClips={media.videoClips || EMPTY_CLIPS}
-                onUpdateScript={handleUpdateScript}
-              />
+              <ErrorBoundary inline name="Inspector">
+                <VoiceSettings
+                  settings={voiceSettings || EMPTY_OBJECT}
+                  onUpdateSettings={handleUpdateVoiceSettings}
+                  voiceCatalog={audio.ttsVoiceCatalog}
+                  audioOutdated={audio.audioOutdated}
+                  previewAudioUrl={
+                    audio.fullAudioUrl || scriptData?.segments?.find((s) => s.audioUrl)?.audioUrl || null
+                  }
+                  onRenderVideo={handleRenderVideo}
+                  isRendering={render.isRendering}
+                  renderProgress={render.renderProgress}
+                  renderStage={render.renderStage}
+                  renderedVideo={effectiveRenderedVideo}
+                  selectedVideo={media.selectedVideo}
+                  videoMetadata={media.videoMetadata}
+                  activeEpisode={series.activeEpisode}
+                  activeSeries={series.activeSeries}
+                  seriesId={series.seriesId}
+                  episodeId={series.episodeId}
+                  batchRender={render.batchRender}
+                  duration={playback.duration}
+                  selectedClip={media.selectedClip}
+                  onSplitClip={handleSplitClip}
+                  onDeleteClip={handleDeleteClip}
+                  currentTime={playback.currentTime}
+                  isPlaying={playback.isPlaying}
+                  scriptData={scriptData}
+                  onGenerateAudio={handleGenerateAudio}
+                  isGeneratingAudio={audio.isGeneratingAudio}
+                  audioProgress={audio.audioProgress}
+                  audioStage={audio.audioStage}
+                  audioGenerated={audio.audioGenerated}
+                  onRegenerateSegment={handleRegenerateSingleSegment}
+                  onTranslateSegment={handleTranslateSingleSegment}
+                  speakerRegistry={speakerRegistry || EMPTY_OBJECT}
+                  onUpdateSpeakerVoice={handleUpdateSpeakerVoice}
+                  onUpdateSegmentVoice={handleUpdateSegmentVoice}
+                  onUpdateSegmentText={handleUpdateSegmentText}
+                  onUpdateSegmentSpeed={audio.handleUpdateSegmentSpeed}
+                  onToggleDeliveryType={handleToggleDeliveryType}
+                  onSplitSegment={audio.handleSplitSegment}
+                  onAutoSplitSegment={clips.handleAutoSplitSegment}
+                  selectedSegmentId={media.selectedSegmentId}
+                  onSelectSegment={media.setSelectedSegmentId}
+                  onDeleteSegment={handleDeleteSegment}
+                  onUpdateSegments={handleUpdateTimelineSegments}
+                  onToggleMuteSegment={handleToggleMuteSegment}
+                  onToggleMuteVideoClip={handleToggleMuteVideoClip}
+                  onToggleMuteAllCuts={handleToggleMuteAllCuts}
+                  videoClips={media.videoClips || EMPTY_CLIPS}
+                  onUpdateScript={handleUpdateScript}
+                />
+              </ErrorBoundary>
             </div>
           </div>
 
           {/* Bottom Multi-Track Timeline */}
           <div className="capcut-bottom-timeline">
-            <TimelineEditor
-              videoRef={videoRef}
-              activeTab={leftTab}
-              currentTime={playback.currentTime}
-              duration={playback.duration}
-              isPlaying={playback.isPlaying}
-              onSeek={handleSeek}
-              onPlayPause={handlePlayPause}
-              videoClips={media.videoClips || EMPTY_CLIPS}
-              activeClipId={media.activeClipId}
-              onSelectClip={handleSelectClip}
-              onUpdateClips={handleUpdateClips}
-              onSplitClip={handleSplitClip}
-              onDeleteClip={handleDeleteClip}
-              onDeleteSegment={handleDeleteSegment}
-              scriptSegments={scriptData?.segments || EMPTY_SEGMENTS}
-              onUpdateSegments={handleUpdateTimelineSegments}
-              onToggleMuteSegment={handleToggleMuteSegment}
-              onToggleMuteVideoClip={handleToggleMuteVideoClip}
-              onToggleMuteAllCuts={handleToggleMuteAllCuts}
-              onToggleDeliveryType={handleToggleDeliveryType}
-              speakerRegistry={speakerRegistry || EMPTY_OBJECT}
-              voiceSettings={voiceSettings || EMPTY_OBJECT}
-              onUpdateVoiceSettings={handleUpdateVoiceSettings}
-              audioGenerated={audio.audioGenerated}
-              selectedVideo={media.selectedVideo}
-              videoThumbnails={media.videoThumbnails || EMPTY_ARRAY}
-              selectedSegmentId={media.selectedSegmentId}
-              onSelectSegment={media.setSelectedSegmentId}
-              timelineFocusRequest={timelineFocusRequest}
-              onAutoSplitVideo={handleAutoSplitVideo}
-              onResetFullVideo={handleResetFullVideo}
-              onBridgeGaps={handleBridgeGaps}
-              onAutoAlignNoOverlap={handleAutoAlignNoOverlap}
-              onResetToSourceTiming={handleResetToSourceTiming}
-              onAddSegment={handleAddSegmentAtTime}
-              canUndo={undoRedo.canUndo}
-              canRedo={undoRedo.canRedo}
-              onUndo={handleUndo}
-              onRedo={handleRedo}
-              onGenerateAudio={handleGenerateAudio}
-              isGeneratingAudio={audio.isGeneratingAudio}
-              onAddClipToTimeline={handleAddClipToTimeline}
-              mediaAssets={media.mediaAssets || EMPTY_ARRAY}
-              onImportClick={handleImportClick}
-              onVideoSelected={handleVideoSelected}
-              seriesId={series.seriesId}
-              episodeId={series.episodeId}
-            />
+            <ErrorBoundary inline name="Timeline">
+              <TimelineEditor
+                videoRef={videoRef}
+                activeTab={leftTab}
+                currentTime={playback.currentTime}
+                duration={playback.duration}
+                isPlaying={playback.isPlaying}
+                onSeek={handleSeek}
+                onPlayPause={handlePlayPause}
+                videoClips={media.videoClips || EMPTY_CLIPS}
+                activeClipId={media.activeClipId}
+                onSelectClip={handleSelectClip}
+                onUpdateClips={handleUpdateClips}
+                onSplitClip={handleSplitClip}
+                onDeleteClip={handleDeleteClip}
+                onDeleteSegment={handleDeleteSegment}
+                scriptSegments={scriptData?.segments || EMPTY_SEGMENTS}
+                onUpdateSegments={handleUpdateTimelineSegments}
+                onToggleMuteSegment={handleToggleMuteSegment}
+                onToggleMuteVideoClip={handleToggleMuteVideoClip}
+                onToggleMuteAllCuts={handleToggleMuteAllCuts}
+                onToggleDeliveryType={handleToggleDeliveryType}
+                speakerRegistry={speakerRegistry || EMPTY_OBJECT}
+                voiceSettings={voiceSettings || EMPTY_OBJECT}
+                onUpdateVoiceSettings={handleUpdateVoiceSettings}
+                audioGenerated={audio.audioGenerated}
+                selectedVideo={media.selectedVideo}
+                videoThumbnails={media.videoThumbnails || EMPTY_ARRAY}
+                selectedSegmentId={media.selectedSegmentId}
+                onSelectSegment={media.setSelectedSegmentId}
+                timelineFocusRequest={timelineFocusRequest}
+                onAutoSplitVideo={handleAutoSplitVideo}
+                onResetFullVideo={handleResetFullVideo}
+                onBridgeGaps={handleBridgeGaps}
+                onAutoAlignNoOverlap={handleAutoAlignNoOverlap}
+                onResetToSourceTiming={handleResetToSourceTiming}
+                onAddSegment={handleAddSegmentAtTime}
+                canUndo={undoRedo.canUndo}
+                canRedo={undoRedo.canRedo}
+                onUndo={handleUndo}
+                onRedo={handleRedo}
+                onGenerateAudio={handleGenerateAudio}
+                isGeneratingAudio={audio.isGeneratingAudio}
+                onAddClipToTimeline={handleAddClipToTimeline}
+                mediaAssets={media.mediaAssets || EMPTY_ARRAY}
+                onImportClick={handleImportClick}
+                onVideoSelected={handleVideoSelected}
+                seriesId={series.seriesId}
+                episodeId={series.episodeId}
+              />
+            </ErrorBoundary>
           </div>
         </main>
 

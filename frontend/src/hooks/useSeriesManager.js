@@ -17,6 +17,7 @@ import {
   loadSavedVoiceSettings,
   resolveStickyVoiceSettings,
   sanitizeRenderedVideo,
+  sanitizeAndHealSeriesList,
 } from '../utils/projectStorage';
 import { generateVideoThumbnails } from '../utils/thumbnailUtils';
 import { fetchVideoThumbnails } from '../services/api';
@@ -136,6 +137,15 @@ export function useSeriesManager({
         if (cb.setVideoThumbnails) cb.setVideoThumbnails([]);
         if (cb.clearHistory) cb.clearHistory();
         if (cb.setLeftTab) cb.setLeftTab('media');
+      }
+      if (cb.setVoiceSettings) {
+        cb.setVoiceSettings((prev) =>
+          resolveStickyVoiceSettings({
+            prevSettings: prev,
+            savedGlobalSettings: loadSavedVoiceSettings(),
+            episodeVoiceSettings: null,
+          })
+        );
       }
       return;
     }
@@ -321,7 +331,7 @@ export function useSeriesManager({
       .then((data) => {
         if (cancelled) return;
         if (data?.success && Array.isArray(data.series) && data.series.length > 0) {
-          const serverList = data.series;
+          const serverList = sanitizeAndHealSeriesList(data.series);
           const resolvedSeriesId = storedSeriesId || series?.id;
           const targetSeries = serverList.find((s) => s.id === resolvedSeriesId) || serverList[0];
           const userMovedOffInitial = activeEpisodeIdRef.current && activeEpisodeIdRef.current !== episode?.id;
@@ -745,7 +755,8 @@ export function useSeriesManager({
       const res = await fetch(`/api/series/${activeSeriesIdState}`);
       const data = await res.json();
       if (data?.success && data.series) {
-        const prevSeries = (latestSeriesListRef.current || []).find((s) => s.id === data.series.id);
+        const [healedSeries] = sanitizeAndHealSeriesList([data.series]) || [data.series];
+        const prevSeries = (latestSeriesListRef.current || []).find((s) => s.id === healedSeries.id);
         const prevActiveEp = (prevSeries?.episodes || []).find((e) => e.id === activeEpisodeIdRef.current);
         const prevSegLen = Array.isArray(prevActiveEp?.scriptData?.segments) ? prevActiveEp.scriptData.segments.length : 0;
         const prevUpdatedAt = Number(prevActiveEp?.scriptData?.updatedAt || 0);
@@ -753,18 +764,18 @@ export function useSeriesManager({
         const workspaceUpdatedAt = Number(latestScriptDataRef.current?.updatedAt || 0);
 
         setSeriesList((prevList) => {
-          const listToUpdate = Array.isArray(prevList) && prevList.length > 0 ? prevList : [data.series];
-          const exists = listToUpdate.some((s) => s.id === data.series.id);
+          const listToUpdate = Array.isArray(prevList) && prevList.length > 0 ? prevList : [healedSeries];
+          const exists = listToUpdate.some((s) => s.id === healedSeries.id);
           const updated = exists
-            ? listToUpdate.map((s) => (s.id === data.series.id ? data.series : s))
-            : [...listToUpdate, data.series];
+            ? listToUpdate.map((s) => (s.id === healedSeries.id ? healedSeries : s))
+            : [...listToUpdate, healedSeries];
           try {
             saveSeriesList(updated);
           } catch (_) {}
           return updated;
         });
 
-        const currentActiveEp = (data.series.episodes || []).find((e) => e.id === activeEpisodeIdRef.current);
+        const currentActiveEp = (healedSeries.episodes || []).find((e) => e.id === activeEpisodeIdRef.current);
         const nextSegLen = Array.isArray(currentActiveEp?.scriptData?.segments) ? currentActiveEp.scriptData.segments.length : 0;
         const nextUpdatedAt = Number(currentActiveEp?.scriptData?.updatedAt || 0);
         const serverOlderThanWorkspace =

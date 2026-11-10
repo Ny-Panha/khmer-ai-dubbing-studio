@@ -37,6 +37,18 @@ export const DEFAULT_VOICE_SETTINGS = {
   logoMargin: 20,
 };
 
+export const VALID_ASPECT_RATIOS = Object.freeze(['16:9', '9:16', '1:1']);
+
+/**
+ * Strictly validate aspectRatio against supported framing modes ('16:9' | '9:16' | '1:1').
+ * Any invalid/poisoned value returns null so callers fall back cleanly to follow-source default.
+ */
+export function sanitizeAspectRatio(value) {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return VALID_ASPECT_RATIOS.includes(trimmed) ? trimmed : null;
+}
+
 /**
  * Determine default export aspect ratio based on source video dimensions.
  * Portrait (height > width) -> '9:16'
@@ -57,9 +69,11 @@ export function resolveDefaultAspectRatio(width, height) {
  * Infer the aspect ratio of an exported/rendered video object or URL.
  */
 export function inferRenderedAspectRatio(renderedVideo, fallbackDims = null, fallbackRatio = '16:9') {
+  const safeFallback = sanitizeAspectRatio(fallbackRatio) || fallbackRatio;
   if (!renderedVideo) return null;
   if (typeof renderedVideo === 'object' && renderedVideo.aspectRatio) {
-    return renderedVideo.aspectRatio;
+    const explicit = sanitizeAspectRatio(renderedVideo.aspectRatio);
+    if (explicit) return explicit;
   }
   const ref = String(
     typeof renderedVideo === 'string'
@@ -69,9 +83,9 @@ export function inferRenderedAspectRatio(renderedVideo, fallbackDims = null, fal
   if (ref.includes('[9-16') || ref.includes('9-16 TikTok')) return '9:16';
   if (ref.includes('[1-1') || ref.includes('1-1 Square')) return '1:1';
   if (fallbackDims?.width && fallbackDims?.height) {
-    return resolveDefaultAspectRatio(fallbackDims.width, fallbackDims.height) || fallbackRatio;
+    return resolveDefaultAspectRatio(fallbackDims.width, fallbackDims.height) || safeFallback;
   }
-  return fallbackRatio;
+  return safeFallback;
 }
 
 export function sanitizeRenderedVideo(renderedVideo) {
@@ -115,12 +129,21 @@ export function resolveStickyVoiceSettings({
   savedGlobalSettings = null,
   episodeVoiceSettings = null,
 } = {}) {
+  const safePrev = prevSettings && typeof prevSettings === 'object' && !Array.isArray(prevSettings)
+    ? prevSettings
+    : {};
+  const safeGlobal = savedGlobalSettings && typeof savedGlobalSettings === 'object' && !Array.isArray(savedGlobalSettings)
+    ? savedGlobalSettings
+    : null;
   const base = {
     ...DEFAULT_VOICE_SETTINGS,
-    ...(prevSettings && typeof prevSettings === 'object' ? prevSettings : {}),
+    ...safePrev,
   };
-  const stickyRatio = base.aspectRatio || savedGlobalSettings?.aspectRatio || null;
-  const epClean = episodeVoiceSettings && typeof episodeVoiceSettings === 'object'
+  const stickyRatio =
+    sanitizeAspectRatio(base.aspectRatio) ||
+    sanitizeAspectRatio(safeGlobal?.aspectRatio) ||
+    null;
+  const epClean = episodeVoiceSettings && typeof episodeVoiceSettings === 'object' && !Array.isArray(episodeVoiceSettings)
     ? { ...episodeVoiceSettings }
     : {};
   delete epClean.aspectRatio;
@@ -139,11 +162,9 @@ export function loadSavedVoiceSettings() {
     const raw = localStorage.getItem(STORAGE_VOICE_SETTINGS_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed === 'object') {
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
         const merged = { ...DEFAULT_VOICE_SETTINGS, ...parsed };
-        if (merged.aspectRatio === '1:1') {
-          merged.aspectRatio = null;
-        }
+        merged.aspectRatio = sanitizeAspectRatio(merged.aspectRatio);
         return merged;
       }
     }
@@ -156,7 +177,12 @@ export function loadSavedVoiceSettings() {
  */
 export function saveVoiceSettings(settings) {
   try {
-    localStorage.setItem(STORAGE_VOICE_SETTINGS_KEY, JSON.stringify(settings));
+    if (!settings || typeof settings !== 'object' || Array.isArray(settings)) return;
+    const normalized = {
+      ...settings,
+      aspectRatio: sanitizeAspectRatio(settings.aspectRatio),
+    };
+    localStorage.setItem(STORAGE_VOICE_SETTINGS_KEY, JSON.stringify(normalized));
   } catch {}
 }
 
@@ -412,6 +438,27 @@ export function sanitizeAndHealSeriesList(list) {
             : ((Array.isArray(ep.scriptData?.segments) && ep.scriptData.segments.length > 0) ? 'translated' : (ep.video ? 'uploaded' : 'idle'));
         }
         hasChanges = true;
+      } else if (
+        ep.renderedVideo &&
+        typeof ep.renderedVideo === 'object' &&
+        ep.renderedVideo.aspectRatio !== undefined &&
+        !sanitizeAspectRatio(ep.renderedVideo.aspectRatio)
+      ) {
+        delete ep.renderedVideo.aspectRatio;
+        hasChanges = true;
+      }
+
+      if (ep.voiceSettings !== undefined && ep.voiceSettings !== null) {
+        if (typeof ep.voiceSettings !== 'object' || Array.isArray(ep.voiceSettings)) {
+          ep.voiceSettings = null;
+          hasChanges = true;
+        } else if (ep.voiceSettings.aspectRatio !== undefined) {
+          const cleanRatio = sanitizeAspectRatio(ep.voiceSettings.aspectRatio);
+          if (ep.voiceSettings.aspectRatio !== cleanRatio) {
+            ep.voiceSettings = { ...ep.voiceSettings, aspectRatio: cleanRatio };
+            hasChanges = true;
+          }
+        }
       }
     }
   }
@@ -840,6 +887,13 @@ export function saveEpisodeState(seriesId, episodeId, stateData) {
         ? sanitizeRenderedVideo(stateData.renderedVideo)
         : sanitizeRenderedVideo(prevEp.renderedVideo));
 
+    const rawVoiceSettings = stateData.voiceSettings !== undefined
+      ? stateData.voiceSettings
+      : prevEp.voiceSettings;
+    const sanitizedVoiceSettings = rawVoiceSettings && typeof rawVoiceSettings === 'object' && !Array.isArray(rawVoiceSettings)
+      ? { ...rawVoiceSettings, aspectRatio: sanitizeAspectRatio(rawVoiceSettings.aspectRatio) }
+      : (rawVoiceSettings === null ? null : prevEp.voiceSettings || null);
+
     const updatedEp = {
       ...prevEp,
       ...stateData,
@@ -852,6 +906,7 @@ export function saveEpisodeState(seriesId, episodeId, stateData) {
       fullAudioUrl: mergedFullAudioUrl,
       renderedVideo: mergedRenderedVideo,
       videoClips: mergedVideoClips,
+      voiceSettings: sanitizedVoiceSettings,
       title: episodeTitle,
       displayTitle: cleanDisplayTitle
         ? `ភាគទី ${prevEp.episodeNumber || (eIdx + 1)}: ${cleanDisplayTitle}`

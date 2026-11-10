@@ -13,7 +13,7 @@ import {
 import { useGeminiQuotaMonitor } from '../../hooks/useGeminiQuotaMonitor';
 import { useSharedJobQueue } from '../../context/jobQueueStore';
 import { formatTimecode } from '../../utils/formatTime';
-import { resolveDefaultAspectRatio } from '../../utils/projectStorage';
+import { resolveDefaultAspectRatio, sanitizeAspectRatio } from '../../utils/projectStorage';
 import {
   checkEpisodeHasScript,
   checkEpisodeHasAudioReady,
@@ -487,8 +487,8 @@ export default function GeminiRouteModal({
   const step4SrcW = Number(firstSelectedWithVideo?.metadata?.width || firstSelectedWithVideo?.video?.width) || 0;
   const step4SrcH = Number(firstSelectedWithVideo?.metadata?.height || firstSelectedWithVideo?.video?.height) || 0;
   const resolvedStep4AspectRatio =
-    currentAspectRatio ||
-    voiceSettings?.aspectRatio ||
+    sanitizeAspectRatio(currentAspectRatio) ||
+    sanitizeAspectRatio(voiceSettings?.aspectRatio) ||
     resolveDefaultAspectRatio(step4SrcW, step4SrcH) ||
     '16:9';
 

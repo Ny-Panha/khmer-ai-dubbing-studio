@@ -8,6 +8,8 @@
   overflow: hidden;
   height: 100%;
   width: 100%;
+  min-width: 0;
+  min-height: 0;
   box-shadow: none;
 }
 
@@ -133,6 +135,8 @@
   overflow: hidden;
   padding: 20px;
   position: relative;
+  width: 100%;
+  min-width: 0;
   min-height: 0;
 }
 
@@ -364,6 +368,7 @@
   gap: 8px;
   max-width: 100%;
   max-height: 100%;
+  overflow-y: auto;
   text-align: center;
 }
 

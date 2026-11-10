@@ -3,7 +3,7 @@ import {
   Clapperboard, Subtitles, Loader2, ChevronUp, ChevronDown,
   CheckCircle2, ShieldCheck, Image, Upload
 } from 'lucide-react';
-import { resolveDefaultAspectRatio } from '../../utils/projectStorage';
+import { resolveDefaultAspectRatio, sanitizeAspectRatio } from '../../utils/projectStorage';
 
 export default function ExportSettingsPanel({
   isOpen,
@@ -23,8 +23,8 @@ export default function ExportSettingsPanel({
   const srcW = Number(videoMetadata?.width || selectedVideo?.width || activeEpisode?.metadata?.width || activeEpisode?.video?.width) || 0;
   const srcH = Number(videoMetadata?.height || selectedVideo?.height || activeEpisode?.metadata?.height || activeEpisode?.video?.height) || 0;
   const defaultAspectRatio = resolveDefaultAspectRatio(srcW, srcH) || '16:9';
-  const rawAspectRatio = settings?.aspectRatio || defaultAspectRatio;
-  const effectiveAspectRatio = rawAspectRatio === '9:16' ? '9:16' : '16:9';
+  const rawAspectRatio = sanitizeAspectRatio(settings?.aspectRatio) || defaultAspectRatio;
+  const effectiveAspectRatio = sanitizeAspectRatio(rawAspectRatio) || '16:9';
   const effectiveVerticalStyle = settings?.verticalStyle || 'pad';
   const sourceHint = (srcW > 0 && srcH > 0)
     ? `Source: ${srcW}×${srcH} — ${srcH > srcW ? 'vertical' : (srcW > srcH ? 'horizontal' : 'square')}`
@@ -123,6 +123,9 @@ export default function ExportSettingsPanel({
             >
               <option value="16:9">16:9 (Landscape / YouTube)</option>
               <option value="9:16">9:16 (Portrait / TikTok / Reels / Shorts)</option>
+              {effectiveAspectRatio === '1:1' && (
+                <option value="1:1">1:1 (Square)</option>
+              )}
             </select>
           </div>
 

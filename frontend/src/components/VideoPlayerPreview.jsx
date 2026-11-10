@@ -5,7 +5,7 @@ import { mapSourceToTimelineTime } from '../utils/timelineUtils';
 import { findLeadingSilenceFromChannels, computeSegmentAudioSyncTarget } from '../utils/audioSyncUtils';
 import { uploadVideoFile } from '../services/api';
 import { createAudioRecoveryManager } from '../utils/audioAutoRecovery';
-import { resolveDefaultAspectRatio, inferRenderedAspectRatio } from '../utils/projectStorage';
+import { resolveDefaultAspectRatio, inferRenderedAspectRatio, sanitizeAspectRatio } from '../utils/projectStorage';
 
 import { PlayerTopBar, PlayerBottomBar } from './player/PlayerControls';
 import LiveSubtitleOverlay from './player/LiveSubtitleOverlay';
@@ -55,12 +55,12 @@ function VideoPlayerPreview({
     ? srcW > srcH
     : Boolean(videoMeta?.ratio && videoMeta.ratio > 1.05);
   const defaultAspectRatio = resolveDefaultAspectRatio(srcW, srcH) || '16:9';
-  const selectedAspectRatio = voiceSettings?.aspectRatio || defaultAspectRatio;
-  const aspectRatio = voiceSettings?.aspectRatio
-    ? voiceSettings.aspectRatio
-    : (renderedVideo
-      ? (inferRenderedAspectRatio(renderedVideo, videoMeta, selectedAspectRatio) || selectedAspectRatio)
-      : selectedAspectRatio);
+  const explicitAspectRatio = sanitizeAspectRatio(voiceSettings?.aspectRatio);
+  const selectedAspectRatio = explicitAspectRatio || defaultAspectRatio;
+  const renderedRatio = renderedVideo
+    ? sanitizeAspectRatio(inferRenderedAspectRatio(renderedVideo, videoMeta, selectedAspectRatio))
+    : null;
+  const aspectRatio = explicitAspectRatio || renderedRatio || selectedAspectRatio;
   const verticalStyle = voiceSettings?.verticalStyle || 'pad';
   const showPreviewCropBlurBand = Boolean(
     !renderedVideo &&
@@ -75,15 +75,32 @@ function VideoPlayerPreview({
     if (!el) return undefined;
     const updateSize = () => {
       const rect = el.getBoundingClientRect();
-      const w = Math.floor(rect.width);
-      const h = Math.floor(rect.height);
+      const rawW = (rect && rect.width > 0) ? rect.width : (el.clientWidth || 0);
+      const rawH = (rect && rect.height > 0) ? rect.height : (el.clientHeight || 0);
+      const w = Math.max(0, Math.floor(rawW));
+      const h = Math.max(0, Math.floor(rawH));
       setCanvasBounds((prev) => (prev.width === w && prev.height === h ? prev : { width: w, height: h }));
     };
     updateSize();
-    if (typeof ResizeObserver === 'undefined') return undefined;
-    const ro = new ResizeObserver(updateSize);
-    ro.observe(el);
-    return () => ro.disconnect();
+    const rafId = typeof requestAnimationFrame !== 'undefined' ? requestAnimationFrame(updateSize) : null;
+    if (typeof window !== 'undefined') {
+      window.addEventListener('resize', updateSize);
+    }
+    if (typeof document !== 'undefined') {
+      document.addEventListener('fullscreenchange', updateSize);
+    }
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(updateSize) : null;
+    if (ro) ro.observe(el);
+    return () => {
+      if (rafId !== null && typeof cancelAnimationFrame !== 'undefined') cancelAnimationFrame(rafId);
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('resize', updateSize);
+      }
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('fullscreenchange', updateSize);
+      }
+      if (ro) ro.disconnect();
+    };
   }, []);
   const narrationAudioRef = useRef(null);
   const cleanBgAudioRef = useRef(null);
@@ -1258,39 +1275,55 @@ function VideoPlayerPreview({
     }
   };
 
-  const targetRatio = aspectRatio === '9:16'
+  const safeAspectRatio = sanitizeAspectRatio(aspectRatio) || '16:9';
+  const targetRatio = safeAspectRatio === '9:16'
     ? (9 / 16)
-    : (aspectRatio === '1:1' ? 1 : (16 / 9));
-  const aspectCssRatio = aspectRatio === '9:16'
-    ? '9 / 16'
-    : (aspectRatio === '1:1' ? '1 / 1' : '16 / 9');
-  const frameModeClass = aspectRatio === '9:16'
+    : (safeAspectRatio === '1:1' ? 1 : (16 / 9));
+  const frameModeClass = safeAspectRatio === '9:16'
     ? 'is-aspect-frame is-portrait-frame'
-    : (aspectRatio === '1:1' ? 'is-aspect-frame is-square-frame' : 'is-aspect-frame is-landscape-frame');
+    : (safeAspectRatio === '1:1' ? 'is-aspect-frame is-square-frame' : 'is-aspect-frame is-landscape-frame');
 
   const framedStageStyle = React.useMemo(() => {
     const padPx = isFullscreen ? 24 : 16;
-    const availW = Math.max(80, (canvasBounds.width || 0) - padPx);
-    const availH = Math.max(80, (canvasBounds.height || 0) - padPx);
-    let stageW = 0;
-    let stageH = 0;
-    if (canvasBounds.width > 0 && canvasBounds.height > 0) {
-      stageW = Math.floor(Math.min(availW, availH * targetRatio));
-      stageH = Math.floor(stageW / targetRatio);
+    const rawW = Number(canvasBounds.width) || 0;
+    const rawH = Number(canvasBounds.height) || 0;
+    const availW = Math.max(0, Math.floor(rawW - padPx));
+    const availH = Math.max(0, Math.floor(rawH - padPx));
+
+    // When container bounds are unmeasured (0) or collapsed, render a normal CSS aspect-ratio 16:9 box
+    // without inline pixel sizes so it stays contained inside its container.
+    if (rawW <= 0 || rawH <= 0 || availW <= 0 || availH <= 0) {
+      const cssPad = rawW > 0 && availW <= 0 ? '0px' : `${padPx}px`;
+      const cssHPad = rawH > 0 && availH <= 0 ? '0px' : `${padPx}px`;
+      return {
+        width: `calc(100% - ${cssPad})`,
+        height: 'auto',
+        aspectRatio: '16 / 9',
+        maxWidth: `calc(100% - ${cssPad})`,
+        maxHeight: `calc(100% - ${cssHPad})`,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        background: '#000000',
+      };
     }
-    const useHeightDrivenFallback = aspectRatio === '9:16' || aspectRatio === '1:1';
+
+    const fittedW = Math.floor(Math.min(availW, availH * targetRatio));
+    const fittedH = Math.floor(fittedW / targetRatio);
+    const stageW = Math.max(1, Math.min(availW, fittedW));
+    const stageH = Math.max(1, Math.min(availH, fittedH));
+
     return {
-      width: stageW > 0 ? `${stageW}px` : (useHeightDrivenFallback ? 'auto' : `calc(100% - ${padPx}px)`),
-      height: stageH > 0 ? `${stageH}px` : (useHeightDrivenFallback ? `calc(100% - ${padPx}px)` : 'auto'),
-      ...(stageW === 0 ? { aspectRatio: aspectCssRatio } : {}),
-      maxWidth: `calc(100% - ${padPx}px)`,
-      maxHeight: `calc(100% - ${padPx}px)`,
+      width: `${stageW}px`,
+      height: `${stageH}px`,
+      maxWidth: `${availW}px`,
+      maxHeight: `${availH}px`,
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
       background: '#000000',
     };
-  }, [aspectRatio, targetRatio, aspectCssRatio, isFullscreen, canvasBounds.width, canvasBounds.height]);
+  }, [targetRatio, isFullscreen, canvasBounds.width, canvasBounds.height]);
 
   const videoObjectFit = (!renderedVideo && aspectRatio === '9:16' && verticalStyle === 'crop') ? 'cover' : 'contain';
 
