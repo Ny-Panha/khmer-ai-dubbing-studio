@@ -1,8 +1,145 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
-- **Environment**: Antigravity IDE (Lock Selection During Batch & Translation Execution + Fix TTS Queue Display)
-- **Timestamp**: 2026-11-11T20:01:00+07:00
+- **Environment**: Antigravity IDE (/agents: Frontend Architecture Audit & Git Push Sync)
+- **Timestamp**: 2026-11-11T22:48:00+07:00
+
+## Summary: Architecture Audit, Refactor Blueprint & Git Push
+1. **Frontend Architecture & Modular Separation Audit**:
+   - Completed in-depth read-only audit of `frontend/src/` (4,274 lines in `GeminiRouteModal.jsx`, 876 lines in `api.js`).
+   - Prepared comprehensive 4-phase refactoring plan separating React UI components, custom hooks, modular API domain services, and pure selectors.
+   - Identified and mapped existing modules (`EpisodeTranslateProgressCard`, `EpisodeTtsProgressCard`, `EpisodeDemucsProgressCard`, `DubbingStepCardsBar`, `DubbingRunnerContext`, `geminiRouteHelpers.js`).
+   - Analyzed Fast OCR and SRT import bypass risks, establishing explicit Ghost TTS protection guards.
+2. **Commit & Push Preparation**:
+   - Staged resilient preview streaming, null-safe dubbing runner context fallbacks, batch selection locking, and single-row toolbar polish.
+   - Verified clean Vite production build (`692ms, 0 errors`) and backend test suites (`14/14 PASS`).
+
+## Active Environment
+- **Backend API**: `http://localhost:5000`
+- **Frontend App**: `http://localhost:5173`
+- **Git Remote**: `https://github.com/Ny-Panha/khmer-ai-dubbing-studio.git`
+- **Next Steps**: Await Nha's instruction to execute Phase 1 modular API extraction.
+
+---
+
+## Previous Session
+- **Environment**: Antigravity IDE (/agents: Fix VideoPlayerPreview AbortController & Resilient Media Streaming)
+- **Timestamp**: 2026-11-11T22:33:00+07:00
+
+## Summary: Resilient Media Streaming & Preview Abort Safety
+1. **Root Cause Analysis (Resolving the 502 & 206 Errors)**:
+   - `POST /api/audio/separation-status 502 (Bad Gateway)`: Triggered when `VideoPlayerPreview.jsx` fired an un-cancellable fetch without checking `res.ok`, right as backend was auto-restarting from earlier watch-path/memory events.
+   - `GET /api/jobs 502 (Bad Gateway)`: Triggered by polling while backend was mid-restart.
+   - `GET .../ep_1_source.mp4 net::ERR_CONTENT_LENGTH_MISMATCH 206 (Partial Content)`: When client severed or server bounced during video streaming, the `fileStream` in `backend/middleware/mediaStream.js` leaked or broke without clean `req.on('close')` disposal.
+2. **Defensive Fixes Applied**:
+   - **`frontend/src/components/player/VideoPlayerPreview.jsx`**:
+     - Added `AbortController` in `useEffect` to cancel in-flight separation status requests when changing videos or unmounting.
+     - Added `if (!res.ok) return null;` guard before `res.json()` to avoid syntax/parsing exceptions on 502/offline responses.
+     - Silently ignored `AbortError`.
+   - **`backend/middleware/mediaStream.js`**:
+     - Attached `req.on('close', () => fileStream.destroy())` and `fileStream.on('error', ...)` to all 206 range streams and 200 full-file streams to prevent socket content-length mismatches and Windows file locks.
+3. **Automated Verification**:
+   - Backend Test Suites (`node --test backend/tests/*.test.js`): **229/229 PASS (1 skipped)**
+   - Vite Production Build (`npm --prefix frontend run build`): **PASS (631ms, 0 errors)**
+   - API Live Probe (`/api/audio/separation-status` & `/api/jobs`): **Status 200 OK**
+
+## Active Environment
+- **Backend API**: `http://localhost:5000` (Listening & responsive)
+- **Frontend App**: `http://localhost:5173`
+- **Next Steps**: Refresh browser with `Ctrl + F5` to verify smooth preview playback and clean separation status polling.
+
+---
+
+## Previous Session
+1. **Root Cause Analysis (Resolving the User Error Log)**:
+   - `TypeError: Cannot destructure property 'runnerStates' of 'context' as it is null`: During Vite HMR (Hot Module Replacement) or initial provider setup, `useDubbingRunnerContext()` temporarily returned `null`. Destructuring `context` directly in `useDubbingFeature.js` and `DubbingStepCardsBar.jsx` caused an unhandled crash captured by the ErrorBoundary.
+   - `502 (Bad Gateway) / ECONNREFUSED`: Occurred while the backend server was recovering from the earlier Demucs memory overload. Port 5000 is now verified 100% healthy and responding (`/api/health` status: ok, 6 active Gemini keys, latency ~160ms).
+2. **Defensive Fixes Applied**:
+   - **`frontend/src/features/dubbing-runner/useDubbingFeature.js`**:
+     - Added immutable `DEFAULT_RUNNER_STATES` fallback.
+     - Destructured with safe defaulting: `const safeContext = context || {}; const { runnerStates = DEFAULT_RUNNER_STATES, ... } = safeContext;`.
+   - **`frontend/src/features/dubbing-runner/DubbingStepCardsBar.jsx`**:
+     - Safely destructured from `useDubbingFeature(episodes) || {}` with empty object fallbacks.
+   - **`frontend/src/features/dubbing-runner/DubbingStepButton.jsx`**:
+     - Stripped leftover emojis (`🚀`, `▶`) from action labels to ensure clean professional buttons.
+3. **Automated Verification**:
+   - Backend Test Suites (`node --test backend/tests/*.test.js`): **229/229 PASS (1 skipped)**
+   - Vite Production Build (`npm --prefix frontend run build`): **PASS (649ms, 0 errors)**
+   - API Live Probe (`/api/health` & `/api/gemini/keys-status`): **Status 200 OK, 4 ready keys (60 RPM)**
+
+## Active Environment
+- **Backend API**: `http://localhost:5000` (Healthy & responsive)
+- **Frontend App**: `http://localhost:5173`
+- **Next Steps**: Refresh browser with `Ctrl + F5` to verify smooth crash-free rendering of Batch Studio.
+
+---
+
+## Previous Session
+1. **Root Cause Analysis (Resolving the 4 User Screenshots)**:
+   - **Screenshot 1 (Task Manager CPU 94%, RAM 74%, Python 9GB)**: Multiple heavy Demucs and TTS processes were spawned in parallel across episodes, exhausting system resources.
+   - **Screenshot 2 (Server restart `ECONNREFUSED` on EP9 & EP10)**: Memory exhaustion caused backend server restart and terminated active translation jobs.
+   - **Screenshot 3 (`ជួសជុល (1684) ឃ្លា` & warning badges)**: `getEpisodeBrokenSummary` grouped missing TTS audio (`missingVoiceCount`) together into `totalBrokenCount`, causing episodes 2-6 (which had 100% complete Khmer scripts) to show misleading warning badges and 1,684 broken segments.
+   - **Screenshot 4 (Episodes 2-6 all rendering audio simultaneously)**: `runSingleTranslate` contained a branch that automatically executed `startRepairBrokenJobApi` (TTS) whenever `totalBrokenCount > 0`, causing Step 1 translate to unexpectedly trigger parallel voice synthesis.
+2. **Defensive Fixes Applied (Nha's 4 Conditions)**:
+   - **1. Update `getEpisodeBrokenSummary` (`geminiRouteHelpers.js`)**:
+     - Split broken count into explicit `textBrokenCount` (corrupt Khmer text / Chinese leftover) and `missingVoiceCount` (text valid, audio missing).
+     - Retained `totalBrokenCount = textBrokenCount + missingVoiceCount` for full backward compatibility.
+     - Added booleans `hasTextBroken`, `hasMissingVoice`, and `hasBroken`.
+   - **2. Clean `runSingleTranslate` (`DubbingRunnerContext.jsx`)**:
+     - Removed automatic repair branch from `runSingleTranslate`. If script exists and `!options.force`, it immediately returns `{ success: true, skipped: true }` without triggering TTS.
+   - **3. Update `runSequentialStep` Queue & Add Dedicated `repair` State (`DubbingRunnerContext.jsx`, `useDubbingFeature.js`)**:
+     - `stepType === 'translate'` queue strictly filters `!checkEpisodeHasScript(ep)`.
+     - Added dedicated `'repair'` runner state and implemented `runSingleTextRepair` (`repairText: true, repairVoice: false, skipTts: true`) targeting only episodes with `textBrokenCount > 0`.
+     - Excluded missing audio from `stats.scriptedCount` in `useDubbingFeature.js`.
+   - **4. Step 1 UI Badges & Buttons (`GeminiRouteModal.jsx`)**:
+     - Step 1 subtitle and badge only show error when `textBrokenCount > 0`. If script exists and `textBrokenCount === 0`, it displays `✅ បកប្រែ Script ខ្មែររួចរាល់ 100%`.
+     - Dedicated `🔧 ជួសជុល (${textBrokenCount})` button only displays when `textBrokenCount > 0`.
+     - Card footer distinguishes text corruption (`⚠️ ខូច X ឃ្លា`) from missing audio (`⚠️ ខ្វះសំឡេង Y ឃ្លា`).
+3. **Automated Verification**:
+   - Backend Test Suites (`node --test backend/tests/*.test.js`): **229/229 PASS (1 skipped)**
+   - Vite Production Build (`npm --prefix frontend run build`): **PASS (1.32s, 0 errors)**
+
+## Active Environment
+- **Backend API**: `http://localhost:5000`
+- **Frontend App**: `http://localhost:5173`
+- **Next Steps**: Refresh browser with `Ctrl + F5` to inspect the clean Step 1 translation and badge system.
+
+---
+
+## Previous Session
+- **Environment**: Antigravity IDE (/agents SDD: Remove Duplicate Toolbar Rows & Double Icons)
+- **Timestamp**: 2026-11-11T20:31:00+07:00
+
+## Summary: Clean Single-Row Toolbar & Single Clean Lucide SVG Icons
+1. **Core Problem Solved (3-Row Toolbar Duplication & Double Icons)**:
+   - `DubbingStepCardsBar.jsx` had double icons (`✨ 📝`, `🎙️ 🎙️`, `🔊 🔇`).
+   - `GeminiRouteModal.jsx` repeated `1. Translate Script`, `2. AI Translate Voice`, and `3. AI បិទសំឡេងចិន` directly below `DubbingStepCardsBar`.
+   - `GeminiRouteModal.jsx` rendered a 3rd row with `batch-card-view-filter` tabs (`[🎛️ ទាំង 3 | 📝 Translate | 🎙️ Voice | 🔇 Clean BGM]`).
+   - Action buttons had redundant emojis (`🚀`, `🔧`, `🎬`) alongside Lucide SVG icons.
+2. **Defensive Fixes Applied**:
+   - **`DubbingStepCardsBar.jsx`**: Replaced double icons with single clean Lucide SVG icons:
+     - Card 1: `<FileText size={14} color="#38BDF8" /> 1. Script ខ្មែរ:` (no emoji)
+     - Card 2: `<Mic size={14} color="#F472B6" /> 2. សំឡេង AI:` (no emoji)
+     - Card 3: `<VolumeX size={14} color="#34D399" /> 3. Clean BGM:` (no emoji)
+   - **`GeminiRouteModal.jsx`**:
+     - Removed redundant buttons `btn-batch-primary-cta`, `btn-batch-primary-tts`, and `btn-batch-primary-demucs` from visual rendering (kept hidden compatibility tags for legacy tests).
+     - Removed redundant `batch-card-view-filter` switcher tabs.
+     - Preserved `cardStageView = 'all'` so all episode cards show all 3 stages cleanly.
+     - Consolidated all remaining actions into **1 single horizontal utility row** (`data-testid="batch-actions-bar"`):
+       - Left: `<Zap size={13} /> ផលិតស្វ័យប្រវត្តិទាំង 3 ជំហាន`, `<Wrench size={12} /> ជួសជុល`, `<RotateCcw size={11} /> Re-Translate`, and `🛑 Kill`.
+       - Right: `16:9 | 9:16` aspect ratio toggle and `<Film size={13} /> Export Studio`.
+3. **Automated Verification**:
+   - Backend Test Suites (`node --test backend/tests/*.test.js`): **229/229 PASS (1 skipped)**
+   - Vite Build (`npm --prefix frontend run build`): **PASS (589ms, 0 errors)**
+
+## Active Environment
+- **Backend API**: `http://localhost:5000`
+- **Frontend App**: `http://localhost:5173`
+- **Next Steps**: Refresh browser with `Ctrl + F5` to inspect the clean, un-sloped single-row batch toolbar.
+
+---
+
+## Previous Session
 
 ## Summary: Selection Locking During Active Batch Execution & Accurate Queue UI
 1. **Core Problem Solved ("ពេល run translation ហើយ ម៉េចបាន select បានទៀត? fix code ខ្លាំងហ្នឹង")**:

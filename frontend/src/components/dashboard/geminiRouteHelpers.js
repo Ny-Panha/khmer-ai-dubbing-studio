@@ -27,7 +27,19 @@ export function checkEpisodeHasScript(ep) {
 }
 
 export function getEpisodeBrokenSummary(ep) {
-  return scanEpisodeBrokenSegments(ep);
+  const scan = scanEpisodeBrokenSegments(ep);
+  const textBrokenCount = scan?.textBrokenCount || 0;
+  const missingVoiceCount = scan?.voiceBrokenCount || 0;
+  const totalBrokenCount = scan?.totalBrokenCount || (textBrokenCount + missingVoiceCount);
+  return {
+    ...scan,
+    textBrokenCount,
+    missingVoiceCount,
+    totalBrokenCount,
+    hasTextBroken: textBrokenCount > 0,
+    hasMissingVoice: missingVoiceCount > 0,
+    hasBroken: totalBrokenCount > 0,
+  };
 }
 
 export function getEpisodesBrokenSummary(episodes = []) {

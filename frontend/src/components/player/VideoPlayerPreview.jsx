@@ -406,14 +406,20 @@ function VideoPlayerPreview({
     const videoRefName = selectedVideo?.videoUrl || selectedVideo?.filePath || selectedVideo?.fileName || selectedVideo?.name;
     if (!videoRefName) return;
 
+    const controller = new AbortController();
+
     fetch('/api/audio/separation-status', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ videoPath: videoRefName }),
+      signal: controller.signal,
     })
-      .then((res) => res.json())
+      .then(async (res) => {
+        if (!res.ok) return null;
+        return res.json().catch(() => null);
+      })
       .then((data) => {
-        if (data.success && data.available && data.noVocalsUrl) {
+        if (data?.success && data?.available && data?.noVocalsUrl) {
           const fullUrl = data.noVocalsUrl;
           console.log('[VideoPlayerPreview] 🎧 Found separated clean BGM:', fullUrl);
           setCleanBgAudioUrl(fullUrl);
@@ -422,9 +428,13 @@ function VideoPlayerPreview({
         }
       })
       .catch((err) => {
-        console.warn('[VideoPlayerPreview] Error checking separation status:', err);
+        if (err.name === 'AbortError') return;
         setCleanBgAudioUrl(null);
       });
+
+    return () => {
+      controller.abort();
+    };
   }, [selectedVideo, voiceSettings?.enableDemucs]);
 
   // Listen for instant Demucs separation completed event from DubbingModeTab

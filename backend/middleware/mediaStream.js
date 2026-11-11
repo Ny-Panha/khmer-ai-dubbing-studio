@@ -77,7 +77,10 @@ router.get(/^\/(.+\.(?:mp3|wav|ogg|m4a|aac|mp4|webm|mov))$/i, (req, res, next) =
       "Content-Type": contentType,
       "Accept-Ranges": "bytes",
     });
-    return fs.createReadStream(filePath).pipe(res);
+    const s = fs.createReadStream(filePath);
+    req.on('close', () => s.destroy());
+    s.on('error', () => { if (!res.headersSent) res.status(500).end(); });
+    return s.pipe(res);
   }
 
   const parts = range.replace(/bytes=/, "").split("-");
@@ -90,12 +93,25 @@ router.get(/^\/(.+\.(?:mp3|wav|ogg|m4a|aac|mp4|webm|mov))$/i, (req, res, next) =
       "Content-Type": contentType,
       "Accept-Ranges": "bytes",
     });
-    return fs.createReadStream(filePath).pipe(res);
+    const s = fs.createReadStream(filePath);
+    req.on('close', () => s.destroy());
+    s.on('error', () => { if (!res.headersSent) res.status(500).end(); });
+    return s.pipe(res);
   }
 
   const clampedEnd = Math.min(isNaN(end) ? fileSize - 1 : end, fileSize - 1);
   const chunksize = (clampedEnd - start) + 1;
   const fileStream = fs.createReadStream(filePath, { start, end: clampedEnd });
+
+  req.on('close', () => {
+    fileStream.destroy();
+  });
+
+  fileStream.on('error', () => {
+    if (!res.headersSent) {
+      res.status(500).end();
+    }
+  });
 
   res.writeHead(206, {
     "Content-Range": `bytes ${start}-${clampedEnd}/${fileSize}`,

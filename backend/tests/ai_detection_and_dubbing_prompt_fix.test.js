@@ -245,11 +245,14 @@ test('Step 5: Batch Generate Studio (GeminiRouteModal) renders full 4-group Batc
   assert.match(geminiModalJsx, /genre:\s*dramaGenre/);
 });
 
-test('Step 6: Impeccable / Unslop UI cleanup in GeminiRouteModal removes duplicate cascade/footer trackers and renders 3 slim step rows + 1 primary CTA + quiet secondary row', () => {
+test('Step 6: Impeccable / Unslop UI cleanup in GeminiRouteModal removes duplicate cascade/footer trackers and renders DubbingStepCardsBar + unified single action row', () => {
   const geminiModalJsx = fs.readFileSync(
     path.join(__dirname, '..', '..', 'frontend', 'src', 'components', 'dashboard', 'GeminiRouteModal.jsx'),
     'utf8'
   );
+  const cardsBarPath = path.join(__dirname, '..', '..', 'frontend', 'src', 'features', 'dubbing-runner', 'DubbingStepCardsBar.jsx');
+  const cardsBarJsx = fs.existsSync(cardsBarPath) ? fs.readFileSync(cardsBarPath, 'utf8') : '';
+  const combinedJsx = geminiModalJsx + '\n' + cardsBarJsx;
 
   // 1. Header has no duplicate Auto Cascade pill
   assert.equal(geminiModalJsx.includes('data-testid="header-model-cascade-pill"'), false);
@@ -258,17 +261,16 @@ test('Step 6: Impeccable / Unslop UI cleanup in GeminiRouteModal removes duplica
   assert.match(geminiModalJsx, /data-testid="batch-direction-more-toggle"/);
   assert.match(geminiModalJsx, /isDirectionExpanded\s*\?\s*'បង្រួម ▴'\s*:\s*'more ▾'/);
 
-  // 3. 3 Slim Step Status Rows & duplicate footer tracker removed
-  assert.match(geminiModalJsx, /data-testid="batch-step-status-rows"/);
-  assert.match(geminiModalJsx, /1\. Translate \(បកប្រែ Script ខ្មែរ\)/);
-  assert.match(geminiModalJsx, /2\. សំឡេងខ្មែរ AI \(Khmer AI Voice\)/);
-  assert.match(geminiModalJsx, /3\. បំបែកសំឡេងដើម AI \(Demucs Clean BGM\)/);
+  // 3. 3 Slim Step Status Cards & duplicate footer tracker removed
+  assert.match(combinedJsx, /data-testid="batch-step-status-rows"/);
+  assert.match(combinedJsx, /1\. Script ខ្មែរ/);
+  assert.match(combinedJsx, /2\. សំឡេង AI/);
+  assert.match(combinedJsx, /3\. Clean BGM/);
   assert.equal(geminiModalJsx.includes('data-testid="modal-footer-status"'), false);
 
-  // 4. 1 Primary Contextual CTA + Quiet Secondary Row
-  assert.match(geminiModalJsx, /data-testid="btn-batch-primary-cta"/);
-  assert.match(geminiModalJsx, /data-testid="batch-quiet-secondary-actions"/);
-  assert.match(geminiModalJsx, /🎧 បន្ត Demucs AI \(នៅសល់ \$\{targetDemucsLeft\} ភាគ\)/);
+  // 4. Unified single action row
+  assert.match(geminiModalJsx, /data-testid="btn-batch-run-all"/);
+  assert.match(geminiModalJsx, /data-testid="batch-primary-execution-row"/);
 });
 
 test('Step 7: Direct URL Route System (/home, /studio, /batch, /quota, /export, /jobs) and HomeDashboard.jsx are wired and persistent across refresh', () => {

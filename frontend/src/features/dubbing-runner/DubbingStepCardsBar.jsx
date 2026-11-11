@@ -1,9 +1,15 @@
 import React from 'react';
-import { Loader2, CheckCircle2, Sparkles, Mic, Volume2, Play, Square } from 'lucide-react';
+import { Loader2, CheckCircle2, FileText, Mic, VolumeX, Play, Square } from 'lucide-react';
 import { useDubbingFeature } from './useDubbingFeature';
 
 export default function DubbingStepCardsBar({ episodes = [], selectedEpIds = null, setupOptions = {} }) {
-  const { runnerStates, runSequentialStep, stopStep, stats } = useDubbingFeature(episodes);
+  const feature = useDubbingFeature(episodes) || {};
+  const {
+    runnerStates = {},
+    runSequentialStep = () => {},
+    stopStep = () => {},
+    stats = {},
+  } = feature;
 
   const selectedList = React.useMemo(() => {
     if (!selectedEpIds || selectedEpIds.size === 0) return episodes;
@@ -53,10 +59,10 @@ export default function DubbingStepCardsBar({ episodes = [], selectedEpIds = nul
           ) : stats.translatePercent === 100 ? (
             <CheckCircle2 size={13} color="#34D399" />
           ) : (
-            <Sparkles size={13} color="#38BDF8" />
+            <FileText size={14} color="#38BDF8" />
           )}
           <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#F8FAFC', whiteSpace: 'nowrap' }}>
-            📝 1. Script ខ្មែរ:
+            1. Script ខ្មែរ:
           </span>
           <span style={{ fontSize: '0.70rem', color: '#94A3B8', whiteSpace: 'nowrap' }}>
             {stats.scriptedCount}/{stats.total} ភាគ
@@ -162,10 +168,10 @@ export default function DubbingStepCardsBar({ episodes = [], selectedEpIds = nul
           ) : stats.voicePercent === 100 ? (
             <CheckCircle2 size={13} color="#34D399" />
           ) : (
-            <Mic size={13} color="#F472B6" />
+            <Mic size={14} color="#F472B6" />
           )}
           <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#F8FAFC', whiteSpace: 'nowrap' }}>
-            🎙️ 2. សំឡេង AI:
+            2. សំឡេង AI:
           </span>
           <span style={{ fontSize: '0.70rem', color: '#94A3B8', whiteSpace: 'nowrap' }}>
             {stats.voicedCount}/{stats.total} ភាគ
@@ -270,10 +276,10 @@ export default function DubbingStepCardsBar({ episodes = [], selectedEpIds = nul
           ) : stats.cleanBgmPercent === 100 ? (
             <CheckCircle2 size={13} color="#34D399" />
           ) : (
-            <Volume2 size={13} color="#34D399" />
+            <VolumeX size={14} color="#34D399" />
           )}
           <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#F8FAFC', whiteSpace: 'nowrap' }}>
-            🔇 3. Clean BGM:
+            3. Clean BGM:
           </span>
           <span style={{ fontSize: '0.70rem', color: '#94A3B8', whiteSpace: 'nowrap' }}>
             {stats.cleanBgmCount}/{stats.total} ភាគ

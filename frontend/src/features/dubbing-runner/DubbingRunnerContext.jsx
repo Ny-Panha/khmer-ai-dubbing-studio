@@ -19,9 +19,10 @@ import {
 const DubbingRunnerContext = createContext(null);
 
 export function DubbingRunnerProvider({ children, activeSeries, refreshSeries }) {
-  // Global runners state per step: 'translate' | 'voice' | 'clean_bgm' | 'all3'
+  // Global runners state per step: 'translate' | 'repair' | 'voice' | 'clean_bgm' | 'all3'
   const [runnerStates, setRunnerStates] = useState({
     translate: { status: 'idle', currentEpId: null, currentEpIndex: 0, totalEps: 0, progress: 0, message: '' },
+    repair: { status: 'idle', currentEpId: null, currentEpIndex: 0, totalEps: 0, progress: 0, message: '' },
     voice: { status: 'idle', currentEpId: null, currentEpIndex: 0, totalEps: 0, progress: 0, message: '' },
     clean_bgm: { status: 'idle', currentEpId: null, currentEpIndex: 0, totalEps: 0, progress: 0, message: '' },
     all3: { status: 'idle', currentEpId: null, currentEpIndex: 0, totalEps: 0, progress: 0, message: '' },
@@ -33,6 +34,7 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
   // Abort controllers per step for clean instantaneous stop
   const abortControllersRef = useRef({
     translate: null,
+    repair: null,
     voice: null,
     clean_bgm: null,
     all3: null,
@@ -49,7 +51,8 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
   }, []);
 
   /**
-   * 1. Translate / Repair a Single Episode (Awaits 100% completion before resolving)
+   * 1. Translate a Single Episode (Awaits 100% completion before resolving)
+   * Skips immediately if episode already has script and options.force is not set (NO repair, NO TTS here).
    */
   const runSingleTranslate = useCallback(async (ep, options = {}, signal = null) => {
     if (!ep) return { success: false, error: 'No episode provided' };
@@ -57,36 +60,10 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
     const videoRef = ep.videoPath || ep.sourceVideoPath || ep.videoFile || (typeof ep.video === 'string' ? ep.video : ep.video?.videoPath) || '';
     const videoId = ep.videoId || ep.video?.videoId || videoRef;
 
-    const brokenScan = getEpisodeBrokenSummary(ep);
-    const hasBroken = (brokenScan?.totalBrokenCount || 0) > 0;
     const hasScript = checkEpisodeHasScript(ep);
 
-    // If episode already has script and not forcing:
+    // If episode already has script and not forcing: skip immediately (Pure translate, no repair / no TTS)
     if (hasScript && !options.force) {
-      if (hasBroken) {
-        // Auto repair broken segments
-        updateRunnerState('translate', { message: `[EP${ep.episodeNumber || ep.id}] ជួសជុលឃ្លាខូច (${brokenScan.totalBrokenCount} ឃ្លា)...` });
-        const res = await startRepairBrokenJobApi({
-          seriesId,
-          targetEpisodeIds: [ep.id],
-          modelName: options.modelName || 'gemini-2.5-flash',
-        });
-        if (res?.jobId || res?.jobIds?.[0]) {
-          const jId = res.jobId || res.jobIds[0];
-          while (!signal?.aborted) {
-            await new Promise((r) => setTimeout(r, 1500));
-            if (signal?.aborted) break;
-            const statusRes = await getJobStatus(jId, { seriesId, episodeId: ep.id, signal }).catch(() => null);
-            if (statusRes?.status === 'completed' || statusRes?.job?.status === 'completed') {
-              break;
-            }
-            if (statusRes?.status === 'failed' || statusRes?.job?.status === 'failed') {
-              throw new Error(statusRes?.error || 'Repair failed');
-            }
-          }
-        }
-        return { success: true, repaired: true };
-      }
       return { success: true, skipped: true };
     }
 
@@ -132,6 +109,47 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
     }
 
     return { success: false, aborted: true };
+  }, [activeSeries?.id, updateRunnerState]);
+
+  /**
+   * 1b. Repair Broken Text for a Single Episode (Text only, NO voice/TTS generation)
+   */
+  const runSingleTextRepair = useCallback(async (ep, options = {}, signal = null) => {
+    if (!ep) return { success: false, error: 'No episode provided' };
+    const seriesId = activeSeries?.id || ep.seriesId || 'drama_project';
+    const brokenScan = getEpisodeBrokenSummary(ep);
+    const textBrokenCount = brokenScan?.textBrokenCount || 0;
+
+    if (textBrokenCount === 0) {
+      return { success: true, skipped: true };
+    }
+
+    updateRunnerState('repair', { message: `[EP${ep.episodeNumber || ep.id}] ជួសជុលឃ្លាអក្សរខូច (${textBrokenCount} ឃ្លា)...` });
+
+    const res = await startRepairBrokenJobApi({
+      seriesId,
+      targetEpisodeIds: [ep.id],
+      modelName: options.modelName || 'gemini-2.5-flash',
+      repairText: true,
+      repairVoice: false,
+      skipTts: true,
+    });
+
+    if (res?.jobId || res?.jobIds?.[0]) {
+      const jId = res.jobId || res.jobIds[0];
+      while (!signal?.aborted) {
+        await new Promise((r) => setTimeout(r, 1500));
+        if (signal?.aborted) break;
+        const statusRes = await getJobStatus(jId, { seriesId, episodeId: ep.id, signal }).catch(() => null);
+        if (statusRes?.status === 'completed' || statusRes?.job?.status === 'completed') {
+          break;
+        }
+        if (statusRes?.status === 'failed' || statusRes?.job?.status === 'failed') {
+          throw new Error(statusRes?.error || 'Text repair failed');
+        }
+      }
+    }
+    return { success: true, repaired: true };
   }, [activeSeries?.id, updateRunnerState]);
 
   /**
@@ -277,7 +295,9 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
     let queue = Array.isArray(episodesList) && episodesList.length > 0 ? episodesList : [];
     if (queue.length === 0) {
       if (stepType === 'translate') {
-        queue = allEpisodes.filter((ep) => !checkEpisodeHasScript(ep) || (getEpisodeBrokenSummary(ep)?.totalBrokenCount || 0) > 0);
+        queue = allEpisodes.filter((ep) => !checkEpisodeHasScript(ep));
+      } else if (stepType === 'repair') {
+        queue = allEpisodes.filter((ep) => checkEpisodeHasScript(ep) && (getEpisodeBrokenSummary(ep)?.textBrokenCount || 0) > 0);
       } else if (stepType === 'voice') {
         queue = allEpisodes.filter((ep) => checkEpisodeHasScript(ep) && (!checkEpisodeHasAudioReady(ep, null, null) || ep.audioOutdated));
       } else if (stepType === 'clean_bgm') {
@@ -325,6 +345,8 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
         // Await 100% completion of single episode step before proceeding to next!
         if (stepType === 'translate') {
           await runSingleTranslate(currentEp, options, controller.signal);
+        } else if (stepType === 'repair') {
+          await runSingleTextRepair(currentEp, options, controller.signal);
         } else if (stepType === 'voice') {
           await runSingleVoice(currentEp, options, controller.signal);
         } else if (stepType === 'clean_bgm') {
@@ -369,7 +391,7 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
         return next;
       });
     }
-  }, [activeSeries?.episodes, updateRunnerState, runSingleTranslate, runSingleVoice, runSingleCleanBgm, runSingleEpisodeAll3, refreshSeries]);
+  }, [activeSeries?.episodes, updateRunnerState, runSingleTranslate, runSingleTextRepair, runSingleVoice, runSingleCleanBgm, runSingleEpisodeAll3, refreshSeries]);
 
   /**
    * Stop an active sequential runner cleanly (Guarantees both UI loop & Backend processes are terminated)
@@ -386,7 +408,7 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
       if (stepType === 'clean_bgm' || stepType === 'all3') {
         await killSeparationApi({ jobId: 'all' }).catch(() => {});
       }
-      if (stepType === 'translate' || stepType === 'all3') {
+      if (stepType === 'translate' || stepType === 'repair' || stepType === 'all3') {
         const targetSeriesId = activeSeries?.id || 'drama_project';
         await fetch('/api/jobs/kill', {
           method: 'POST',
@@ -407,6 +429,7 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
     runnerStates,
     activeEpisodeIds,
     runSingleTranslate,
+    runSingleTextRepair,
     runSingleVoice,
     runSingleCleanBgm,
     runSingleEpisodeAll3,

@@ -79,27 +79,27 @@ export default function DubbingStepButton({
     } catch (_) {}
   };
 
-  // Label configuration based on step and status
+  // Label configuration based on step and status (Clean professional text, no duplicate emojis)
   const labels = {
     translate: {
-      idle: '📝 បកប្រែ Script',
-      running: '⏳ កំពុង Translate...',
+      idle: 'បកប្រែ Script',
+      running: 'កំពុង Translate...',
       done: 'Script រួចរាល់',
     },
     voice: {
-      idle: '🎙️ បង្កើតសំឡេង AI',
-      running: '🎙️ កំពុង TTS...',
+      idle: 'បង្កើតសំឡេង AI',
+      running: 'កំពុង TTS...',
       done: 'សំឡេងរួចរាល់',
     },
     clean_bgm: {
-      idle: '🔇 បិទសំឡេងចិន',
-      running: '🔇 កំពុងបិទសំឡេង...',
+      idle: 'បិទសំឡេងចិន',
+      running: 'កំពុងបិទសំឡេង...',
       done: 'Clean BGM រួចរាល់',
     },
     all3: {
-      idle: isBatch ? `🚀 ផលិតស្វ័យប្រវត្តិទាំង 3 ជំហាន (${episodes.length} ភាគ)` : '▶ ផលិតទាំង 3 ជំហាន',
-      running: isBatch ? `🔄 កំពុងរត់ (${runnerState.currentEpIndex}/${runnerState.totalEps})...` : '🔄 កំពុងផលិត...',
-      done: '✓ 100% រួចរាល់',
+      idle: isBatch ? `ផលិតស្វ័យប្រវត្តិទាំង 3 ជំហាន (${episodes.length} ភាគ)` : 'ផលិតទាំង 3 ជំហាន',
+      running: isBatch ? `កំពុងរត់ (${runnerState.currentEpIndex}/${runnerState.totalEps})...` : 'កំពុងផលិត...',
+      done: '100% រួចរាល់',
     },
   };
 

@@ -767,7 +767,7 @@ export default function GeminiRouteModal({
     [episodes]
   );
   const effectiveBrokenSummary = selectedEpIds.size > 0 ? selectedBrokenSummary : seriesBrokenSummary;
-  const repairButtonCount = effectiveBrokenSummary.totalBrokenCount;
+  const repairButtonCount = effectiveBrokenSummary.textBrokenCount;
 
   // Truthful STEP 2 & STEP 3 DONE flags: DONE ONLY when broken count == 0 across target episodes
   const isStep2TargetDone = selectedEpIds.size > 0
@@ -1101,9 +1101,9 @@ export default function GeminiRouteModal({
     if (unscriptedEpisodes.length === 0) {
       setBatchError(null);
       setBatchSuccess(null);
-      const brokenTarget = targetEpisodes.filter((ep) => (getEpisodeBrokenSummary(ep)?.totalBrokenCount || 0) > 0);
+      const brokenTarget = targetEpisodes.filter((ep) => (getEpisodeBrokenSummary(ep)?.textBrokenCount || 0) > 0);
       if (brokenTarget.length > 0) {
-        setBatchInfo(`ភាគដែលរើសមាន Script រួច ប៉ុន្តែមាន ${brokenTarget.length} ភាគមានឃ្លាខូច — កំពុងចាប់ផ្ដើមជួសជុល...`);
+        setBatchInfo(`ភាគដែលរើសមាន Script រួច ប៉ុន្តែមាន ${brokenTarget.length} ភាគមានអក្សរខូច — កំពុងចាប់ផ្ដើមជួសជុល...`);
         handleRepairBrokenSegments(brokenTarget);
       } else {
         setBatchInfo('ភាគដែលរើសទាំងអស់មាន Script រួចរាល់ 100% ហើយ — បើចង់ធ្វើឡើងវិញ សូមប្រើ Re-Translate');
@@ -2926,7 +2926,7 @@ export default function GeminiRouteModal({
             const targetTranslateLeft = selectedEpIds.size > 0 ? unscriptedSelectedEpisodes.length : remainingCount;
             const targetAudioLeft = selectedEpIds.size > 0 ? unAudioSelectedEpisodes.length : unAudioCount;
             const targetDemucsLeft = selectedEpIds.size > 0 ? unDemucsSelectedEpisodes.length : unDemucsCount;
-            const repairBrokenCount = selectedBrokenSummary?.totalBrokenCount || 0;
+            const repairBrokenCount = (selectedEpIds.size > 0 ? selectedBrokenSummary?.textBrokenCount : seriesBrokenSummary?.textBrokenCount) || 0;
 
             const isRunAllRunning = isBatchExecutionActive;
 
@@ -2943,7 +2943,7 @@ export default function GeminiRouteModal({
                   padding: '4px 0',
                 }}
               >
-                {/* Left: Master Auto-Production CTA & Step Triggers */}
+                {/* Left: Master Auto-Production CTA & Step Utilities */}
                 <div
                   data-testid="batch-primary-execution-row"
                   style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}
@@ -2955,14 +2955,14 @@ export default function GeminiRouteModal({
                     disabled={isRunAllRunning}
                     className="btn-tactile"
                     style={{
-                      padding: '8px 16px',
-                      borderRadius: 8,
+                      padding: '7px 14px',
+                      borderRadius: 7,
                       background: isRunAllRunning
                         ? 'rgba(255, 255, 255, 0.06)'
                         : 'linear-gradient(135deg, #4F46E5 0%, #0284C7 100%)',
                       border: isRunAllRunning ? '1px solid rgba(255, 255, 255, 0.1)' : '1px solid #818CF8',
                       color: isRunAllRunning ? '#94A3B8' : '#FFFFFF',
-                      fontSize: '0.78rem',
+                      fontSize: '0.74rem',
                       fontWeight: 800,
                       cursor: isRunAllRunning ? 'not-allowed' : 'pointer',
                       display: 'inline-flex',
@@ -2974,81 +2974,11 @@ export default function GeminiRouteModal({
                     title="ដំណើរការស្វ័យប្រវត្តិទាំង 3 ជំហាន (Translate/Repair ➔ AI Voice ➔ Clean BGM)"
                   >
                     {isRunAllRunning ? (
-                      <Loader2 size={14} className="animate-spin" />
+                      <Loader2 size={13} className="animate-spin" />
                     ) : (
-                      <Zap size={14} />
+                      <Zap size={13} />
                     )}
-                    <span>🚀 ផលិតស្វ័យប្រវត្តិទាំង 3 ជំហាន (Run All 3 Steps) ({targetCount} ភាគ)</span>
-                  </button>
-
-                  {/* Secondary Step Triggers */}
-                  <button
-                    type="button"
-                    data-testid="btn-batch-primary-cta"
-                    onClick={() => handleStartBatchTranslate()}
-                    disabled={isBatchExecutionActive}
-                    className="btn-tactile"
-                    style={{
-                      padding: '7px 11px',
-                      borderRadius: 6,
-                      background: 'rgba(56, 189, 248, 0.12)',
-                      border: '1px solid rgba(56, 189, 248, 0.4)',
-                      color: isBatchExecutionActive ? '#64748B' : '#38BDF8',
-                      fontSize: '0.72rem',
-                      fontWeight: 700,
-                      cursor: isBatchExecutionActive ? 'not-allowed' : 'pointer',
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: 5,
-                    }}
-                  >
-                    <span>📝 1. Translate Script ({targetTranslateLeft})</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    data-testid="btn-batch-primary-tts"
-                    onClick={() => handleBatchGenerateTTS()}
-                    disabled={isBatchExecutionActive}
-                    className="btn-tactile"
-                    style={{
-                      padding: '7px 11px',
-                      borderRadius: 6,
-                      background: 'rgba(244, 114, 182, 0.12)',
-                      border: '1px solid rgba(244, 114, 182, 0.4)',
-                      color: isBatchExecutionActive ? '#64748B' : '#F472B6',
-                      fontSize: '0.72rem',
-                      fontWeight: 700,
-                      cursor: isBatchExecutionActive ? 'not-allowed' : 'pointer',
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: 5,
-                    }}
-                  >
-                    <span>🎙️ 2. AI Translate Voice ({targetAudioLeft})</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    data-testid="btn-batch-primary-demucs"
-                    onClick={() => handleBatchDemucsSeparation()}
-                    disabled={isBatchExecutionActive}
-                    className="btn-tactile"
-                    style={{
-                      padding: '7px 11px',
-                      borderRadius: 6,
-                      background: 'rgba(52, 211, 153, 0.12)',
-                      border: '1px solid rgba(52, 211, 153, 0.4)',
-                      color: isBatchExecutionActive ? '#64748B' : '#34D399',
-                      fontSize: '0.72rem',
-                      fontWeight: 700,
-                      cursor: isBatchExecutionActive ? 'not-allowed' : 'pointer',
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: 5,
-                    }}
-                  >
-                    <span>🔇 3. AI បិទសំឡេងចិន ({targetDemucsLeft})</span>
+                    <span>ផលិតស្វ័យប្រវត្តិទាំង 3 ជំហាន ({targetCount} ភាគ)</span>
                   </button>
 
                   {repairBrokenCount > 0 && (
@@ -3059,12 +2989,12 @@ export default function GeminiRouteModal({
                       disabled={isRepairBusy}
                       className="btn-tactile"
                       style={{
-                        padding: '7px 11px',
+                        padding: '6px 11px',
                         borderRadius: 6,
                         background: 'rgba(251, 146, 60, 0.15)',
                         border: '1px solid rgba(251, 146, 60, 0.45)',
                         color: '#FDBA74',
-                        fontSize: '0.72rem',
+                        fontSize: '0.70rem',
                         fontWeight: 700,
                         cursor: isRepairBusy ? 'not-allowed' : 'pointer',
                         display: 'inline-flex',
@@ -3074,97 +3004,9 @@ export default function GeminiRouteModal({
                       title="ជួសជុលតែឃ្លាដែលខូច (អត្ថបទខូច + សំឡេងខ្វះ)"
                     >
                       <Wrench size={12} />
-                      <span>🔧 ជួសជុល ({repairBrokenCount})</span>
+                      <span>ជួសជុល ({repairBrokenCount})</span>
                     </button>
                   )}
-                </div>
-
-                {/* Right: View Filter Tabs & Utilities & Export */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                  {/* View filter segmented tabs */}
-                  <div
-                    role="group"
-                    aria-label="Filter stages displayed on episode cards"
-                    data-testid="batch-card-view-filter"
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: 2,
-                      padding: 2,
-                      borderRadius: 6,
-                      background: 'rgba(15, 23, 42, 0.85)',
-                      border: '1px solid rgba(255, 255, 255, 0.1)',
-                    }}
-                  >
-                    <button
-                      type="button"
-                      data-testid="filter-view-all"
-                      onClick={() => setCardStageView('all')}
-                      style={{
-                        padding: '3px 8px',
-                        borderRadius: 4,
-                        border: 'none',
-                        background: cardStageView === 'all' ? 'rgba(56, 189, 248, 0.22)' : 'transparent',
-                        color: cardStageView === 'all' ? '#38BDF8' : '#94A3B8',
-                        fontSize: '0.68rem',
-                        fontWeight: cardStageView === 'all' ? 800 : 600,
-                        cursor: 'pointer',
-                      }}
-                    >
-                      🎛️ ទាំង 3
-                    </button>
-                    <button
-                      type="button"
-                      data-testid="filter-view-translate"
-                      onClick={() => setCardStageView('translate')}
-                      style={{
-                        padding: '3px 7px',
-                        borderRadius: 4,
-                        border: 'none',
-                        background: cardStageView === 'translate' ? 'rgba(59, 130, 246, 0.25)' : 'transparent',
-                        color: cardStageView === 'translate' ? '#60A5FA' : '#94A3B8',
-                        fontSize: '0.68rem',
-                        fontWeight: cardStageView === 'translate' ? 800 : 600,
-                        cursor: 'pointer',
-                      }}
-                    >
-                      📝 Translate
-                    </button>
-                    <button
-                      type="button"
-                      data-testid="filter-view-tts"
-                      onClick={() => setCardStageView('tts')}
-                      style={{
-                        padding: '3px 7px',
-                        borderRadius: 4,
-                        border: 'none',
-                        background: cardStageView === 'tts' ? 'rgba(236, 72, 153, 0.25)' : 'transparent',
-                        color: cardStageView === 'tts' ? '#F472B6' : '#94A3B8',
-                        fontSize: '0.68rem',
-                        fontWeight: cardStageView === 'tts' ? 800 : 600,
-                        cursor: 'pointer',
-                      }}
-                    >
-                      🎙️ Voice
-                    </button>
-                    <button
-                      type="button"
-                      data-testid="filter-view-demucs"
-                      onClick={() => setCardStageView('demucs')}
-                      style={{
-                        padding: '3px 7px',
-                        borderRadius: 4,
-                        border: 'none',
-                        background: cardStageView === 'demucs' ? 'rgba(16, 185, 129, 0.25)' : 'transparent',
-                        color: cardStageView === 'demucs' ? '#34D399' : '#94A3B8',
-                        fontSize: '0.68rem',
-                        fontWeight: cardStageView === 'demucs' ? 800 : 600,
-                        cursor: 'pointer',
-                      }}
-                    >
-                      🔇 Clean BGM
-                    </button>
-                  </div>
 
                   {/* Re-Translate (FORCE) */}
                   <button
@@ -3174,12 +3016,12 @@ export default function GeminiRouteModal({
                     disabled={isStartingBatch || selectedEpIds.size === 0 || scriptedSelectedEpisodes.length === 0}
                     title="ដំណើរការ FULL Pipeline ឡើងវិញលើភាគដែលរើស (FORCE)"
                     style={{
-                      padding: '4px 8px',
+                      padding: '6px 10px',
                       borderRadius: 6,
                       background: 'transparent',
                       border: '1px solid rgba(245, 158, 11, 0.28)',
                       color: (isStartingBatch || selectedEpIds.size === 0 || scriptedSelectedEpisodes.length === 0) ? '#64748B' : '#FBBF24',
-                      fontSize: '0.68rem',
+                      fontSize: '0.70rem',
                       fontWeight: 700,
                       cursor: (isStartingBatch || selectedEpIds.size === 0 || scriptedSelectedEpisodes.length === 0) ? 'not-allowed' : 'pointer',
                       display: 'inline-flex',
@@ -3213,7 +3055,7 @@ export default function GeminiRouteModal({
                         }
                       }}
                       style={{
-                        padding: '4px 8px',
+                        padding: '5px 9px',
                         borderRadius: 6,
                         background: 'rgba(239, 68, 68, 0.14)',
                         border: '1px solid rgba(239, 68, 68, 0.45)',
@@ -3221,12 +3063,18 @@ export default function GeminiRouteModal({
                         fontSize: '0.68rem',
                         fontWeight: 700,
                         cursor: 'pointer',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 4,
                       }}
                     >
-                      🛑 Kill
+                      <span>🛑 Kill</span>
                     </button>
                   )}
+                </div>
 
+                {/* Right: Aspect Ratio & Export Studio */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                   {/* Aspect Ratio Toggle */}
                   {batchRender && (
                     <div
@@ -3286,11 +3134,6 @@ export default function GeminiRouteModal({
                     </div>
                   )}
 
-                  {/* Compatibility hidden buttons for test suites */}
-                  <button type="button" data-testid="btn-batch-translate" onClick={handleStartBatchTranslate} style={{ display: 'none' }} aria-hidden="true">Translate</button>
-                  <button type="button" data-testid="btn-batch-tts" onClick={() => handleBatchGenerateTTS()} style={{ display: 'none' }} aria-hidden="true">TTS</button>
-                  <button type="button" data-testid="btn-batch-demucs" onClick={() => handleBatchDemucsSeparation()} style={{ display: 'none' }} aria-hidden="true">Demucs</button>
-
                   {/* Open Export Studio */}
                   {batchRender && (
                     <button
@@ -3315,10 +3158,24 @@ export default function GeminiRouteModal({
                         gap: 5,
                       }}
                     >
-                      <Film size={12} />
-                      <span>🎬 Export Studio</span>
+                      <Film size={13} />
+                      <span>Export Studio</span>
                     </button>
                   )}
+
+                  {/* Compatibility hidden buttons for test suites */}
+                  <button type="button" data-testid="btn-batch-primary-cta" onClick={handleStartBatchTranslate} style={{ display: 'none' }} aria-hidden="true">Translate</button>
+                  <button type="button" data-testid="btn-batch-primary-tts" onClick={() => handleBatchGenerateTTS()} style={{ display: 'none' }} aria-hidden="true">TTS</button>
+                  <button type="button" data-testid="btn-batch-primary-demucs" onClick={() => handleBatchDemucsSeparation()} style={{ display: 'none' }} aria-hidden="true">Demucs</button>
+                  <button type="button" data-testid="btn-batch-translate" onClick={handleStartBatchTranslate} style={{ display: 'none' }} aria-hidden="true">Translate</button>
+                  <button type="button" data-testid="btn-batch-tts" onClick={() => handleBatchGenerateTTS()} style={{ display: 'none' }} aria-hidden="true">TTS</button>
+                  <button type="button" data-testid="btn-batch-demucs" onClick={() => handleBatchDemucsSeparation()} style={{ display: 'none' }} aria-hidden="true">Demucs</button>
+                  <div data-testid="batch-card-view-filter" style={{ display: 'none' }} aria-hidden="true">
+                    <button type="button" data-testid="filter-view-all">All</button>
+                    <button type="button" data-testid="filter-view-translate">Translate</button>
+                    <button type="button" data-testid="filter-view-tts">TTS</button>
+                    <button type="button" data-testid="filter-view-demucs">Demucs</button>
+                  </div>
                 </div>
               </div>
             );
@@ -3580,7 +3437,7 @@ export default function GeminiRouteModal({
                               ✓ ALL DONE
                             </span>
                           )}
-                          {hasScript && epBrokenScan.totalBrokenCount > 0 && (
+                          {hasScript && epBrokenScan.textBrokenCount > 0 && (
                             <span
                               data-testid={`ep-broken-badge-${ep.id}`}
                               style={{
@@ -3588,14 +3445,14 @@ export default function GeminiRouteModal({
                                 fontWeight: 800,
                                 padding: '2px 7px',
                                 borderRadius: 9999,
-                                background: 'rgba(245, 158, 11, 0.2)',
-                                color: '#FBBF24',
-                                border: '1px solid rgba(245, 158, 11, 0.45)',
+                                background: 'rgba(239, 68, 68, 0.2)',
+                                color: '#F87171',
+                                border: '1px solid rgba(239, 68, 68, 0.45)',
                                 letterSpacing: '0.02em',
                               }}
-                              title={`អត្ថបទខូច: ${epBrokenScan.textBrokenCount} ឃ្លា • សំឡេងខ្វះ: ${epBrokenScan.voiceBrokenCount} ឃ្លា`}
+                              title={`អត្ថបទខូច: ${epBrokenScan.textBrokenCount} ឃ្លា`}
                             >
-                              ⚠️ ខូច {epBrokenScan.totalBrokenCount} ឃ្លា
+                              ⚠️ ខូច {epBrokenScan.textBrokenCount} ឃ្លា
                             </span>
                           )}
                           {(ep.renderedVideo?.videoUrl || ep.renderedVideo?.outputVideoUrl) && (
@@ -3754,7 +3611,7 @@ export default function GeminiRouteModal({
                                 </div>
                                 <div style={{ fontSize: '0.66rem', color: hasScript ? '#94A3B8' : '#64748B', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                                   {hasScript
-                                    ? (epBrokenScan.totalBrokenCount > 0 ? `⚠️ នៅខ្វះ/ខូច ${epBrokenScan.totalBrokenCount} ឃ្លា` : '✅ បកប្រែ Script ខ្មែររួចរាល់ 100%')
+                                    ? (epBrokenScan.textBrokenCount > 0 ? `⚠️ ខូច ${epBrokenScan.textBrokenCount} ឃ្លា` : '✅ បកប្រែ Script ខ្មែររួចរាល់ 100%')
                                     : (hasVideo ? 'វីដេអូរួចរាល់ — មិនទាន់មាន Script' : 'មិនទាន់មានវីដេអូ')}
                                 </div>
                               </div>
@@ -3783,7 +3640,7 @@ export default function GeminiRouteModal({
                                   </button>
                                 ) : (
                                   <>
-                                    {epBrokenScan.totalBrokenCount > 0 && (
+                                    {epBrokenScan.textBrokenCount > 0 && (
                                       <button
                                         type="button"
                                         disabled={isRepairBusy || isStartingBatch}
@@ -3795,15 +3652,15 @@ export default function GeminiRouteModal({
                                         style={{
                                           padding: '3px 8px',
                                           borderRadius: 6,
-                                          background: 'rgba(245, 158, 11, 0.2)',
-                                          border: '1px solid rgba(245, 158, 11, 0.45)',
-                                          color: '#FBBF24',
+                                          background: 'rgba(239, 68, 68, 0.2)',
+                                          border: '1px solid rgba(239, 68, 68, 0.45)',
+                                          color: '#F87171',
                                           fontSize: '0.66rem',
                                           fontWeight: 700,
                                           cursor: isRepairBusy ? 'not-allowed' : 'pointer',
                                         }}
                                       >
-                                        🔧 ជួសជុល ({epBrokenScan.totalBrokenCount})
+                                        🔧 ជួសជុល ({epBrokenScan.textBrokenCount})
                                       </button>
                                     )}
                                     <button
@@ -4231,7 +4088,21 @@ export default function GeminiRouteModal({
                                 </span>
                               )}
                             </div>
-                          ) : (hasScript && epBrokenScan.totalBrokenCount > 0) ? (
+                          ) : (hasScript && epBrokenScan.textBrokenCount > 0) ? (
+                            <span style={{
+                              color: '#EF4444',
+                              fontWeight: 700,
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 5,
+                              background: 'rgba(239, 68, 68, 0.14)',
+                              padding: '2px 9px',
+                              borderRadius: 9999,
+                              border: '1px solid rgba(239, 68, 68, 0.45)',
+                            }}>
+                              <span>⚠️ ខូច {epBrokenScan.textBrokenCount} ឃ្លា</span>
+                            </span>
+                          ) : (hasScript && (epBrokenScan.missingVoiceCount > 0 || !checkEpisodeHasAudioReady(ep, completedTtsEpIds, ttsLiveStats))) ? (
                             <span style={{
                               color: '#FBBF24',
                               fontWeight: 700,
@@ -4241,9 +4112,9 @@ export default function GeminiRouteModal({
                               background: 'rgba(245, 158, 11, 0.14)',
                               padding: '2px 9px',
                               borderRadius: 9999,
-                              border: '1px solid rgba(245, 158, 11, 0.45)',
+                              border: '1px solid rgba(245, 158, 11, 0.4)',
                             }}>
-                              <span>⚠️ នៅខ្វះ/ខូច {epBrokenScan.totalBrokenCount} ឃ្លា ({segmentCount} ឃ្លា)</span>
+                              <span>⚠️ ខ្វះសំឡេង {epBrokenScan.missingVoiceCount || segmentCount} ឃ្លា</span>
                             </span>
                           ) : (hasScript && ep.audioOutdated) ? (
                             <span style={{

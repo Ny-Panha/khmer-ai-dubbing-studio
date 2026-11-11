@@ -7,26 +7,35 @@ import {
   getEpisodeBrokenSummary,
 } from '../../components/dashboard/geminiRouteHelpers';
 
+const DEFAULT_RUNNER_STATES = {
+  translate: { status: 'idle', currentEpId: null, currentEpIndex: 0, totalEps: 0, progress: 0, message: '' },
+  repair: { status: 'idle', currentEpId: null, currentEpIndex: 0, totalEps: 0, progress: 0, message: '' },
+  voice: { status: 'idle', currentEpId: null, currentEpIndex: 0, totalEps: 0, progress: 0, message: '' },
+  clean_bgm: { status: 'idle', currentEpId: null, currentEpIndex: 0, totalEps: 0, progress: 0, message: '' },
+  all3: { status: 'idle', currentEpId: null, currentEpIndex: 0, totalEps: 0, progress: 0, message: '' },
+};
+
 /**
  * useDubbingFeature:
  * Hook used across all pages (Batch studio, EpisodesTab, DubbingModeTab, VoiceSettings, EP Cards).
  */
 export function useDubbingFeature(episodes = [], activeSeries = null) {
   const context = useDubbingRunnerContext();
+  const safeContext = context || {};
 
   const isEpisodeDone = useCallback((ep) => {
     if (!ep) return false;
     const hasScript = checkEpisodeHasScript(ep);
-    const broken = getEpisodeBrokenSummary(ep)?.totalBrokenCount || 0;
+    const textBroken = getEpisodeBrokenSummary(ep)?.textBrokenCount || 0;
     const hasVoice = checkEpisodeHasAudioReady(ep, null, null);
     const hasDemucs = checkEpisodeHasDemucsReady(ep, null, null);
-    return Boolean(hasScript && broken === 0 && hasVoice && !ep.audioOutdated && hasDemucs);
+    return Boolean(hasScript && textBroken === 0 && hasVoice && !ep.audioOutdated && hasDemucs);
   }, []);
 
   const stats = useMemo(() => {
     const epList = Array.isArray(episodes) ? episodes : (activeSeries?.episodes || []);
     const total = epList.length;
-    const scriptedCount = epList.filter((ep) => checkEpisodeHasScript(ep) && (getEpisodeBrokenSummary(ep)?.totalBrokenCount || 0) === 0).length;
+    const scriptedCount = epList.filter((ep) => checkEpisodeHasScript(ep) && (getEpisodeBrokenSummary(ep)?.textBrokenCount || 0) === 0).length;
     const voicedCount = epList.filter((ep) => checkEpisodeHasAudioReady(ep, null, null) && !ep.audioOutdated).length;
     const cleanBgmCount = epList.filter((ep) => checkEpisodeHasDemucsReady(ep, null, null)).length;
     const allDoneCount = epList.filter(isEpisodeDone).length;
@@ -45,21 +54,23 @@ export function useDubbingFeature(episodes = [], activeSeries = null) {
   }, [episodes, activeSeries?.episodes, isEpisodeDone]);
 
   const {
-    runnerStates,
-    activeEpisodeIds,
-    runSingleTranslate,
-    runSingleVoice,
-    runSingleCleanBgm,
-    runSingleEpisodeAll3,
-    runSequentialStep,
-    stopStep,
+    runnerStates = DEFAULT_RUNNER_STATES,
+    activeEpisodeIds = new Set(),
+    runSingleTranslate = async () => ({ success: false, skipped: true }),
+    runSingleTextRepair = async () => ({ success: false, skipped: true }),
+    runSingleVoice = async () => ({ success: false, skipped: true }),
+    runSingleCleanBgm = async () => ({ success: false, skipped: true }),
+    runSingleEpisodeAll3 = async () => ({ success: false, skipped: true }),
+    runSequentialStep = async () => ({ success: false, count: 0 }),
+    stopStep = async () => {},
     ...restContext
-  } = context;
+  } = safeContext;
 
   return {
     runnerStates,
     activeEpisodeIds,
     runSingleTranslate,
+    runSingleTextRepair,
     runSingleVoice,
     runSingleCleanBgm,
     runSingleEpisodeAll3,
