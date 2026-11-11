@@ -1,6 +1,40 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
+- **Environment**: Antigravity IDE (`/agents` Spec-Kit SDD — AI Detection, OCR, Gender & Dubbing Prompt Upgrade)
+- **Timestamp**: 2026-11-11T11:42:30+07:00
+
+## Summary: Completed 4-Step AI Detection, OCR, Gender & Dubbing Prompt Upgrade (`ai_detection_and_dubbing_prompt_fix.md`)
+1. **Spec-Kit SDD Artifacts (`.specify/`)**:
+   - Created and verified [`.specify/specs/ai-detection-and-dubbing-prompt-fix.md`](file:///e:/khmer_ai_dubbing_studio/.specify/specs/ai-detection-and-dubbing-prompt-fix.md), [`.specify/plans/ai-detection-and-dubbing-prompt-fix.md`](file:///e:/khmer_ai_dubbing_studio/.specify/plans/ai-detection-and-dubbing-prompt-fix.md), and [`.specify/tasks/ai-detection-and-dubbing-prompt-fix.md`](file:///e:/khmer_ai_dubbing_studio/.specify/tasks/ai-detection-and-dubbing-prompt-fix.md) (`5/5` tasks `[x]`).
+2. **Step 1 — Multimodal Subtitle OCR & Visual Speaker Gender Extraction**:
+   - Updated [`backend/services/ffmpegService.js`](file:///e:/khmer_ai_dubbing_studio/backend/services/ffmpegService.js) (`extractSubtitleDifferenceGrid`, `detectSubtitleChangePoints`) with center-bottom subtitle ROI (`crop=w=0.72*iw:h=0.16*ih:x=0.14*iw:y=0.78*ih`) and `0.35s` short-cue sensitivity (`minPeakDist = 0.35`, `minCueDurationSec = 0.35`).
+   - Updated [`backend/services/pipeline/stages/stage3_extractChineseSubtitles.js`](file:///e:/khmer_ai_dubbing_studio/backend/services/pipeline/stages/stage3_extractChineseSubtitles.js) with `stripDecorativeSubtitleNoise`, multimodal Vision OCR (`textZh`, `chineseText`, `visualGender`, `speakerVisualHint`, `deliveryType`), `0.35s` minimum cue duration floor, and `< 0.20s` merge gap.
+3. **Step 2 — Master Dubbing Prompt & Pre-Translation Cast Registry**:
+   - Updated [`backend/services/geminiService.js`](file:///e:/khmer_ai_dubbing_studio/backend/services/geminiService.js) (`SCRIPT_RESPONSE_SCHEMA`, `buildDialoguePrompt`, `buildRecapPrompt`) and [`backend/services/pipeline/stages/stage6_generateModeSpecificScript.js`](file:///e:/khmer_ai_dubbing_studio/backend/services/pipeline/stages/stage6_generateModeSpecificScript.js) (`dialoguePayload`, `modeAPrompt`, `applyBatchTranslations`) with:
+     - Pre-translation `detectedGenre` (`"ancient" | "ceo" | "modern" | "action" | "comedy"`) and `castRegistry`.
+     - 3-Signal Gender & Conversational Turn-Taking Rules (`visualGender` & `speakerVisualHint`, `A -> B -> A -> B`, and Self-Pronoun vs Addressed Title disambiguation).
+     - Genre-Specific Natural Khmer Vocabulary (`ancient`, `ceo`/`modern`, `action`, `comedy`) and Lip-Sync Duration Rule (`<= 5.5 syllables/sec`).
+4. **Step 3 — Speaker & Gender Classification Engine**:
+   - Updated [`backend/models/speakerRegistry.js`](file:///e:/khmer_ai_dubbing_studio/backend/models/speakerRegistry.js) with expanded `FEMALE_KEYWORDS`, `MALE_KEYWORDS`, `KHMER_FEMALE_PRONOUNS`, `KHMER_MALE_PRONOUNS`, and 3-tier priority `detectSpeakerGender` (`segment.visualGender` -> `castRegistry`/`voiceGender` -> speaker title/name & 1st-person self-pronouns vs addressed pronouns).
+5. **Step 4 — Left Sidebar UI Polish & 1-Click Smart Prompt Chips**:
+   - Updated [`frontend/src/components/media/MediaLibrary.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/media/MediaLibrary.jsx) and [`frontend/src/components/media/MediaLibrary.css`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/media/MediaLibrary.css) (`padding: 0 6px`, `font-size: 11.5px`, compact `.tab-badge`, `1. វីដេអូ`, `2. សំឡេង AI`, `3. អត្ថបទ`) so top tabs never truncate into `2. ...`.
+   - Updated [`frontend/src/components/media/DubbingModeTab.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/media/DubbingModeTab.jsx) to add the 4 clickable 1-Click Smart Prompt Chips above `ឈ្មោះតួអង្គ / DIRECTION` and the `"OCR + Visual Speaker Gender + Direct Translate"` summary pill inside `⚡ Fast OCR Mode`.
+   - Also removed `1:1` and `Fit` from [`frontend/src/components/player/PlayerControls.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/player/PlayerControls.jsx) per user request.
+6. **Verification**:
+   - Added [`backend/tests/ai_detection_and_dubbing_prompt_fix.test.js`](file:///e:/khmer_ai_dubbing_studio/backend/tests/ai_detection_and_dubbing_prompt_fix.test.js).
+   - `node --test` across 6 backend & frontend verification suites: **32/32 PASS (`0 fail`)**.
+   - `npm --prefix frontend run lint`: **PASS (`838ms`, 0 errors)**.
+   - `npm --prefix frontend run build`: **PASS (`608ms`, 0 errors)**.
+
+## Active Environment
+- **Backend**: Live at `http://localhost:5000`.
+- **Frontend**: Live at `http://localhost:5173`.
+- **Next Steps**: Refresh browser (`Ctrl + Shift + R`) to verify the non-truncating top tabs (`1. វីដេអូ`, `2. សំឡេង AI`, `3. អត្ថបទ`), 1-Click Smart Prompt Chips, and Multimodal OCR + Visual Speaker Gender + Turn-Taking translation pipeline.
+
+---
+
+## Previous Session
 - **Environment**: Antigravity IDE (`/agents` Spec-Kit SDD — Timeline UI, Features & Workflow Fix)
 - **Timestamp**: 2026-11-11T10:47:00+07:00
 

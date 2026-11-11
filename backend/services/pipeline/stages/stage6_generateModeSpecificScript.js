@@ -470,7 +470,7 @@ function createCanonicalSegment(raw = {}, index = 0, mode = 'dialogue') {
   };
 }
 
-function applyTranslatedSegmentResult(targetSeg, t, maxWords, segIdx, { isFastOcrMode = false } = {}) {
+function applyTranslatedSegmentResult(targetSeg, t, maxWords, segIdx, { isFastOcrMode = false, castRegistry = [] } = {}) {
   if (!targetSeg || !t) return false;
 
   const candidateKhmerRaw = t.khmerText || t.khmerTranslatedText || t.khmer || '';
@@ -508,11 +508,20 @@ function applyTranslatedSegmentResult(targetSeg, t, maxWords, segIdx, { isFastOc
   targetSeg.speakerName = cleanSpk;
 
   const isOcrSeg = isFastOcrMode || targetSeg.speakerSource === 'ocr_only';
-  const aiGender = String(t.gender || '').toLowerCase();
+  const castMatch = Array.isArray(castRegistry)
+    ? castRegistry.find(
+        (c) =>
+          c &&
+          ((t.speakerId && c.speakerId === t.speakerId) ||
+            (cleanSpk && (c.speakerLabelKh === cleanSpk || c.speakerId === cleanSpk)))
+      )
+    : null;
+  const aiGender = String(t.voiceGender || t.gender || castMatch?.voiceGender || '').toLowerCase();
+  const visGender = String(targetSeg.visualGender || '').toLowerCase();
 
   if (!isOcrSeg) {
     // Standard Mode: explicit unambiguous speaker title beats noisy un-isolated YIN pitch;
-    // generic/neutral characters still follow real acoustic pitch or AI dialogue context.
+    // generic/neutral characters still follow real acoustic pitch, visual gender, or AI dialogue context.
     const hasFemalePitch = typeof targetSeg.pitchHz === 'number' && targetSeg.pitchHz >= 172;
     const hasMalePitch = typeof targetSeg.pitchHz === 'number' && targetSeg.pitchHz > 0 && targetSeg.pitchHz <= 148;
     const titleGender = detectSpeakerGender(cleanSpk);
@@ -521,6 +530,8 @@ function applyTranslatedSegmentResult(targetSeg, t, maxWords, segIdx, { isFastOc
       targetSeg.voiceGender = 'female';
     } else if (titleGender === 'MALE') {
       targetSeg.voiceGender = 'male';
+    } else if (visGender === 'female' || visGender === 'male') {
+      targetSeg.voiceGender = visGender;
     } else if (hasFemalePitch) {
       targetSeg.voiceGender = 'female';
     } else if (hasMalePitch && aiGender !== 'female') {
@@ -542,12 +553,17 @@ function applyTranslatedSegmentResult(targetSeg, t, maxWords, segIdx, { isFastOc
     return !isPlaceholderTranslationText(targetSeg.khmerTranslatedText);
   }
 
-  // Fast OCR ('ocr_only') Mode: NO acoustic pitch exists — assign from AI dialogue context or speaker name keywords, then re-derive voice
+  // Fast OCR ('ocr_only') Mode: assign from visualGender, AI castRegistry/dialogue context, or speaker name/self-pronoun keywords, then re-derive voice
   targetSeg.speakerSource = 'ocr_only';
-  if (aiGender === 'female' || aiGender === 'male') {
+  if (visGender === 'female' || visGender === 'male') {
+    targetSeg.voiceGender = visGender;
+  } else if (aiGender === 'female' || aiGender === 'male') {
     targetSeg.voiceGender = aiGender;
   } else {
-    const kwGender = detectSpeakerGender(cleanSpk);
+    const kwGender = detectSpeakerGender(
+      { ...targetSeg, speaker: cleanSpk, khmerText: finalTranslated },
+      { castRegistry }
+    );
     if (kwGender === 'FEMALE') {
       targetSeg.voiceGender = 'female';
     } else if (kwGender === 'MALE') {
@@ -1086,6 +1102,7 @@ function resolveBatchTranslationMatches(translations = [], expectedItems = []) {
 
 function applyBatchTranslations({ batchSlice, dialogueList, dialoguePayload, batchOffset, parsed, isFastOcrMode }) {
   const translations = extractSegmentsFromParsedResponse(parsed);
+  const castRegistry = Array.isArray(parsed?.castRegistry) ? parsed.castRegistry : [];
   const expectedItems = batchSlice.map((_, i) => ({
     index: batchOffset + i + 1,
     segmentId: dialoguePayload[i]?.segmentId ?? (batchOffset + i + 1),
@@ -1102,7 +1119,7 @@ function applyBatchTranslations({ batchSlice, dialogueList, dialoguePayload, bat
     if (!targetSeg) continue;
     if (t) {
       const maxWords = dialoguePayload[i]?.maxKhmerWords || 10;
-      const ok = applyTranslatedSegmentResult(targetSeg, t, maxWords, batchOffset + i, { isFastOcrMode });
+      const ok = applyTranslatedSegmentResult(targetSeg, t, maxWords, batchOffset + i, { isFastOcrMode, castRegistry });
       if (ok) {
         appliedCount++;
       } else {
@@ -1350,6 +1367,9 @@ async function generateModeSpecificScript({
           surroundingAudioContext: audioContext,
           ocrSubtitleText: s.ocrSubtitleText || '',
           originalChineseText: s.originalChineseText || '',
+          visualGender: s.visualGender || 'unknown',
+          speakerVisualHint: s.speakerVisualHint || '',
+          deliveryType: s.deliveryType || 'dialogue',
           // Rule 3 (Honest hints): Fast OCR / ocr_only has no ASR or acoustic pitch — never feed fabricated stage-3 default as acoustic hint
           detectedGender: isOcrNoPitchSeg ? 'unknown' : (s.voiceGender || 'unknown'),
           acousticGenderHint: isOcrNoPitchSeg ? 'unknown' : (s.voiceGender || 'unknown'),
@@ -1391,16 +1411,18 @@ async function generateModeSpecificScript({
 អ្នកគឺជាអ្នកបកប្រែ និងសម្រួលសាច់រឿងចិនទៅជាភាសាខ្មែរសម្រាប់ DragonDub AI (Master Theatrical Drama Dubbing Translator & Script Director).
 MODE A - FAITHFUL DIALOGUE TRANSLATION (ការបកប្រែពាក្យសន្ទនាតាមបន្ទាត់អក្សរចិនដើម ១០០% Line-by-Line Chinese Dialogue).
 
-1. ស្គាល់ប្រភេទរឿង និងបរិបទ (DRAMA GENRE GUIDELINES):
+1. MANDATORY PRE-TRANSLATION CAST REGISTRY & GENRE LOCKING:
+- មុននឹងបកប្រែ "segments" អ្នកត្រូវតែកំណត់ "detectedGenre" ("ancient" | "ceo" | "modern" | "action" | "comedy") និងបង្កើត "castRegistry" (បញ្ជីតួអង្គដែលមាន speakerId, speakerLabelKh, voiceGender, roleArchetype, selfPronounKh, addressPronounKh) ដើម្បីចាក់សោភេទ (male/female) និងសព្វនាមឱ្យថេរ!
 ${getGenrePromptGuidelines(effectiveGenre)}
 ${genreGlossarySection}
 ${customGlossaryPrompt}
 
-2. ជ្រើសរើសរបៀបនិយាយឱ្យត្រូវនឹងរឿង:
-- រឿងបុរាណ៖ ប្រើពាក្យសព្វនាម និងឋានៈសមស្រប (ខ្ញុំ, ឯង, លោកម្ចាស់, អ្នកនាង, ព្រឹទ្ធាចារ្យ)។
-- រឿងសម័យទំនើប៖ ប្រើភាសាសន្ទនាធម្មជាតិ (បង, អូន, លោកប្រធាន, អ្នកស្រី) តាមទំនាក់ទំនងតួអង្គ។
-- រឿងកំប្លែង ឬ Action៖ រក្សាអារម្មណ៍ កំហឹង ការភ្ញាក់ផ្អើល និងចង្វាក់សន្ទនាឱ្យសមនឹងឈុតឆាក។
-- កុំប្រើពាក្យសព្វនាម ឬពាក្យបច្ចេកទេសរបស់ប្រភេទរឿងមួយ ទៅលើរឿងផ្សេងដោយគ្មានមូលហេតុ!
+2. GENRE-SPECIFIC KHMER VOCABULARY & LIP-SYNC PACING RULE (<= 5.5 syllables/sec):
+- រឿងបុរាណ / រាជវាំង / គុណនិយម (ancient)៖ ប្រើរាជស័ព្ទ និងពាក្យគុណនិយមខ្មែរពិតប្រាកដ (ព្រះអង្គ, ព្រះនាង, ទូលបង្គំ, ខ្ញុំម្ចាស់, ម្ចាស់បង, សិស្សប្អូន, គ្រូពេទ្យទេព, បក្ស, ថាមពលធាតុ)។
+- រឿងសម័យទំនើប / អគ្គនាយក (ceo / modern)៖ ប្រើភាសាសន្ទនាទំនើបច្បាស់ៗ (លោកប្រធាន, អ្នកនាង, លេខា, អគ្គនាយក, បង, អូន, ខ្ញុំ)។ ហាមយកពាក្យគុណនិយមទៅប្រើក្នុងរឿងសម័យទំនើប!
+- រឿង Action / ប្រយុទ្ធ (action)៖ ប្រើឃ្លាបញ្ជាខ្លីៗ មុតមាំ (បញ្ឈប់ភ្លាម!, ថយក្រោយ!, ហ៊ានណាស់!)។
+- រឿងកំប្លែង (comedy)៖ ប្រើពាក្យសន្ទនារស់រវើក (ណ៎ា, ហ្នឹងណា, ងាប់ហើយ, ម៉េចចឹង)។
+- Strict Lip-Sync Pacing (<= 5.5 syllables/sec, ~4.5 to 5.5 Khmer words/sec max): កំហិតពាក្យខ្មែរឱ្យត្រូវតាម "maxKhmerWords" ដើម្បីឱ្យសំឡេង TTS ខ្មែរត្រូវមាត់តួអង្គក្នុងរយៈពេល (endTime - startTime) ដោយមិនបាច់បង្ខំល្បឿន atempo > 1.35x។
 
 3. ប្រភពអត្ថបទចិន និងបរិបទសំឡេង (SOURCE CHINESE VS AUDIO CONTEXT):
 - "sourceChineseToTranslate" គឺជាអត្ថបទចិនគោលដៅតែមួយគត់ដែលត្រូវបកប្រែសម្រាប់ Segment នេះ (THE SOLE TRANSLATION TARGET)។
@@ -1423,11 +1445,15 @@ ${customGlossaryPrompt}
 - កុំបន្ថែមឈ្មោះ Channel ឬ Watermark ក្រៅពី Input តែគ្រប់ index នៅក្នុង INPUT SEGMENTS ត្រូវតែបកប្រែ ១០០% (រួមទាំងឃ្លា OCR ខ្លីៗ ឈ្មោះជំនាញ/ទិដ្ឋភាព ឬឃ្លាជេរ/កំហឹងក្នុងសាច់រឿង) — ហាមរំលង index ណាមួយឡើយ!
 - កុំប្ដូរឈ្មោះតួអង្គ ឬសំឡេងរបស់ Speaker ដោយគ្មានភស្តុតាង។
 
-7. ការកំណត់អត្តសញ្ញាណតួអង្គ និងភេទអ្នកនិយាយ (SPEAKER vs ADDRESSEE GENDER IDENTIFICATION):
-- ត្រូវបែងចែកឱ្យដាច់រវាង «អ្នកកំពុងនិយាយ (Speaker)» និង «អ្នកដែលត្រូវគេហៅក្នុងប្រយោគ (Addressee / Person Mentioned)»!
-  * គោលការណ៍ទូទៅ៖ នៅពេលតួអង្គស្រីនិយាយទៅកាន់បុរស ឬហៅឈ្មោះ/ងារតួប្រុស (ដូចជា "បង", "លោកប្រធាន", "សិស្សច្បង", "លោកប៉ា", "លោកម្ចាស់", "បងប្រុស") អ្នកនិយាយនៅតែជា «តួស្រី (female)» ដដែល។ ហាមដាច់ខាតឃើញពាក្យសម្គាល់ភេទប្រុស ឬឈ្មោះតួប្រុសក្នុងប្រយោគ ហើយដាក់អ្នកនិយាយជាប្រុស (male)!
+7. STRICT GENDER & CONVERSATIONAL TURN-TAKING RULES (ប្រុស vs ស្រី):
+- ត្រូវរួមបញ្ចូលសញ្ញាទាំង ៣ (3 Signals) ដើម្បីកំណត់ភេទអ្នកនិយាយ ("male" ឬ "female") ឱ្យត្រឹមត្រូវ៖
+  * Signal 1 (Visual Evidence): ពិនិត្យ "visualGender" និង "speakerVisualHint" ពីការស្កេនមុខ សក់ និងសម្លៀកបំពាក់តួអង្គក្នុងវីដេអូ។
+  * Signal 2 (Conversational Turn-Taking A -> B -> A -> B): បើឃ្លាទី N ហៅឈ្មោះ ឬងារបុរស ("皇上 / 师兄 / 总裁 / 老公 / ព្រះអង្គ / ម្ចាស់បង / លោកប្រធាន") នោះអ្នកនិយាយឃ្លាទី N ច្រើនតែជាស្ត្រី (female) ឬកូនចៅ ហើយឃ្លាឆ្លើយតបបន្ទាប់ N+1 គឺជាបុរស (male) ឆ្លើយតប! ផ្ទុយទៅវិញ បើឃ្លាទី N ហៅស្ត្រី ("皇后 / 师妹 / 夫人 / 小姐 / 老婆 / ព្រះមហេសី / សិស្សប្អូនស្រី / អ្នកនាង") ឃ្លាទី N ច្រើនតែជាបុរស (male) និយាយ ហើយឃ្លាបន្ទាប់ N+1 គឺជាស្ត្រី (female) ឆ្លើយតប! ហាមដាច់ខាតឃើញពាក្យហៅងារបុរសក្នុងប្រយោគ ហើយដាក់អ្នកនិយាយជាប្រុស!
+  * Signal 3 (Pronoun & Kinship Context):
+    - ស្ត្រីហៅខ្លួនឯងថា៖ 臣妾, 奴婢, 本宫, 本妃, ខ្ញុំម្ចាស់, នាងខ្ញុំ, អូន ➜ gender: "female" (Sreymom)។
+    - បុរសហៅខ្លួនឯងថា៖ 朕, 本王, 本尊, 本座, 微臣, ទូលបង្គំ, យើងខ្ញុំព្រះករុណា, បង, ខ្ញុំបាទ ➜ gender: "male" (Piseth)។
 ${isOcrBatch
-  ? '- Fast OCR Mode (គ្មាន ASR/Pitch ទេ — "acousticGenderHint" គឺ "unknown" និង "acousticPitchHz" គឺ null): មិនត្រូវអនុវត្តច្បាប់ pitch Hz ទេ។ ត្រូវវិនិច្ឆ័យ "speaker" និង "gender" ពីបរិបទអត្ថបទ និង [Previous Lines] ឱ្យស៊ីសង្វាក់គ្នា — តួអង្គដដែលត្រូវប្រើឈ្មោះ "speaker" និង "gender" ដូចគ្នាឆ្លងកាត់គ្រប់ Batch (ឧ. បើបរិបទជាសម្ដីនារីនិយាយទៅកាន់បុរស ត្រូវដាក់ "gender": "female" និង "speaker": "តួឯកស្រី" ឬឈ្មោះតួស្រី; ប្រើ "តួអង្គ" តែនៅពេលមិនដឹងតួអង្គពិតប្រាកដ)។'
+  ? '- Fast OCR Mode (គ្មាន ASR/Pitch ទេ — "acousticGenderHint" គឺ "unknown" និង "acousticPitchHz" គឺ null): មិនត្រូវអនុវត្តច្បាប់ pitch Hz ទេ។ ត្រូវវិនិច្ឆ័យ "speaker" និង "gender" ពី visualGender, speakerVisualHint, Turn-Taking និង [Previous Lines] ឱ្យស៊ីសង្វាក់គ្នា — តួអង្គដដែលត្រូវប្រើឈ្មោះ "speaker" និង "gender" ដូចគ្នាឆ្លងកាត់គ្រប់ Batch (ឧ. បើបរិបទជាសម្ដីនារីនិយាយទៅកាន់បុរស ត្រូវដាក់ "gender": "female" និង "speaker": "តួឯកស្រី" ឬឈ្មោះតួស្រី; ប្រើ "តួអង្គ" តែនៅពេលមិនដឹងតួអង្គពិតប្រាកដ)។'
   : '- ពិនិត្យ "acousticGenderHint" និង "acousticPitchHz"៖ បើ acousticPitchHz >= 170Hz ឬបរិបទជាសម្ដីនារីនិយាយទៅកាន់បុរស ត្រូវដាក់ "gender": "female" និង "speaker": "តួឯកស្រី" (ឬឈ្មោះតួស្រី) ដាច់ខាត។'}
 - តួអង្គ «ប្រព័ន្ធ / AI System / 系统 / ទីប្រឹក្សាប្រព័ន្ធ» ត្រូវកំណត់ជា "speaker": "ប្រព័ន្ធ" និង "gender": "female" (សំឡេង Sreymom) ជាលំនាំដើម (លើកលែងតែបរិបទបញ្ជាក់ច្បាស់ថាជាតួបុរស)។
 - ការលេងពាក្យក្នុងភាសាចិន (Chinese Puns / 谐音梗 / Slang)៖ ប្រសិនបើតួអង្គលេងពាក្យសូរសំឡេង ឬនិយាយពាក្យកំប្លុកកំប្លែង ត្រូវបកប្រែឱ្យស៊ីនឹងន័យកំប្លែង និងបរិបទសន្ទនាធម្មជាតិរបស់ខ្មែរ ហាមបកប្រែតាមសូរអក្សរឆ្គងៗរឹងៗ។
@@ -1454,12 +1480,24 @@ ${JSON.stringify(dialoguePayload, null, 2)}
 Return JSON ONLY matching this schema:
 {
   "summary": "សេចក្តីសង្ខេបសាច់រឿងខ្លី",
-  "detectedGenre": "ancient" | "modern" | "action" | "comedy" | "general",
+  "detectedGenre": "ancient" | "ceo" | "modern" | "action" | "comedy",
+  "castRegistry": [
+    {
+      "speakerId": "spk_male_lead",
+      "speakerLabelKh": "តួឯកប្រុស (ព្រះអង្គម្ចាស់)",
+      "voiceGender": "male",
+      "roleArchetype": "royal_male_lead",
+      "selfPronounKh": "យើង / ទូលបង្គំ",
+      "addressPronounKh": "នាង / ម្ចាស់អូន"
+    }
+  ],
   "segments": [
     {
       "index": ${b + 1},
+      "speakerId": "spk_male_lead",
       "speaker": "តួឯកប្រុស",
       "gender": "male",
+      "voiceGender": "male",
       "khmerText": "ប្រយោគបកប្រែជាភាសាខ្មែរពេញលេញ"
     }
   ]

@@ -54,6 +54,19 @@ function normalizeChineseChars(str = '') {
     .trim();
 }
 
+/**
+ * Strip decorative brackets, music notes (♪/♫), and watermark noise from raw OCR subtitle text.
+ */
+function stripDecorativeSubtitleNoise(str = '') {
+  const cleaned = String(str || '')
+    .replace(/[♪♫♬♩]+/g, '')
+    .trim()
+    .replace(/^《第[0-9一二三四五六七八九十百千万]+[集话章]》$/, '')
+    .replace(/^[【〖『\[]([^】〗』\]]+)[】〗』\]]$/, '$1')
+    .trim();
+  return cleaned;
+}
+
 function areChineseTextsEquivalent(a = '', b = '') {
   const normA = normalizeChineseChars(a);
   const normB = normalizeChineseChars(b);
@@ -385,22 +398,24 @@ async function extractChineseSubtitles({
       if (contents.length === 0) return null;
 
       contents.push({
-        text: `You are an expert Chinese Video & Drama OCR engine.
+        text: `You are an expert Chinese Video & Drama Multimodal OCR + Visual Speaker Analysis engine.
 Analyze these ${batch.length} sequential video frames at the specified timestamps.
 
 TASK:
-Detect all burned-in Chinese dialogue subtitles in the lower area of each frame.
+Detect all burned-in Chinese dialogue subtitles in the center-bottom safe zone of each frame AND inspect the visible speaking character on screen.
 
 RULES:
-1. Examine the lower area of each frame for burned-in Chinese dialogue text.
-2. If dialogue subtitle text is clearly present, set "hasText": true and return the exact Chinese characters in "chineseText".
-3. If no dialogue subtitle text is present (e.g. background scenery, action without speaking, character reaction with no text), set "hasText": false and "chineseText": "".
+1. Examine the center-bottom subtitle area of each frame for burned-in Chinese dialogue text.
+2. If dialogue subtitle text is clearly present, set "hasText": true and return the exact Chinese characters in both "textZh" and "chineseText" (strip decorative brackets like 【...】, music notes ♪, or watermarks).
+3. If no dialogue subtitle text is present (e.g. background scenery, action without speaking, character reaction with no text), set "hasText": false, "textZh": "", and "chineseText": "".
 4. "position": "bottom_subtitle" (for actor dialogue) or "title_card" (for on-screen titles).
 5. "isSharp": true if readable, false if blurry or motion-faded.
-6. "speakerGender": Estimate speaking actor gender from visible character cues or speech context: "male", "female", or "unknown" if ambiguous.
-7. "genderConfidence": Number between 0.0 and 1.0 indicating confidence in speakerGender.
-8. EXCLUDE WATERMARKS: Do NOT output creator watermarks, channel handles, or anti-theft stamps (e.g. '偷了...的视频', '抖音', '快手', account IDs). Only output genuine actor dialogue lines and scene titles.
-9. Preserve exact recognized Chinese characters across all video genres (Modern, Romance, Action, Period, Comedy, etc.). Do NOT invent or summarize dialogue.
+6. "visualGender" (and "speakerGender"): Inspect the visible speaking character's face, hair, costume, and open mouth to determine gender: "male", "female", or "unknown" if offscreen/ambiguous.
+7. "speakerVisualHint": Short visual archetype tag for the speaker on screen (e.g. "male_lead_ancient", "female_lead_white_robe", "emperor", "maid", "ceo_suit", "offscreen_narrator").
+8. "deliveryType": "dialogue" (speaking out loud with mouth moving), "inner_thought" (mouth closed with echoing/internal monologue or parenthetical subtitle), or "narration" (offscreen narrator / story recap).
+9. "genderConfidence": Number between 0.0 and 1.0 indicating confidence in visualGender.
+10. EXCLUDE WATERMARKS: Do NOT output creator watermarks, channel handles, or anti-theft stamps (e.g. '偷了...的视频', '抖音', '快手', account IDs). Only output genuine actor dialogue lines and scene titles.
+11. Preserve exact recognized Chinese characters across all video genres (Ancient/Xianxia, Modern CEO, Romance, Action, Comedy). Do NOT invent or summarize dialogue.
 
 Return JSON ONLY matching this schema:
 {
@@ -408,11 +423,15 @@ Return JSON ONLY matching this schema:
     {
       "timestampSec": 39.5,
       "hasText": true,
+      "textZh": "我们今天必须完成这项工作",
       "chineseText": "我们今天必须完成这项工作",
       "position": "bottom_subtitle",
       "isSharp": true,
+      "visualGender": "female",
       "speakerGender": "female",
-      "genderConfidence": 0.85
+      "speakerVisualHint": "female_lead_white_robe",
+      "deliveryType": "dialogue",
+      "genderConfidence": 0.9
     }
   ]
 }`,
@@ -442,22 +461,32 @@ Return JSON ONLY matching this schema:
               ? parseFloat(f.timestampSec.toFixed(2))
               : fallbackTime;
 
-            const cText = String(f.chineseText || '').trim();
+            const rawChinese = String(f.textZh || f.chineseText || '').trim();
+            const cText = stripDecorativeSubtitleNoise(rawChinese);
             const hasCleanText = Boolean(f.hasText && normalizeChineseChars(cText).length > 0);
-            const rawGender = String(f.speakerGender || 'unknown').toLowerCase();
+            const rawGender = String(f.visualGender || f.speakerGender || 'unknown').toLowerCase();
             const validGender = rawGender === 'female' ? 'female' : (rawGender === 'male' ? 'male' : 'unknown');
             const conf = typeof f.genderConfidence === 'number' && !isNaN(f.genderConfidence)
               ? Math.min(1.0, Math.max(0.0, f.genderConfidence))
               : (validGender === 'unknown' ? 0.5 : 0.85);
+            const speakerVisualHint = String(f.speakerVisualHint || '').trim();
+            const rawDelivery = String(f.deliveryType || 'dialogue').toLowerCase();
+            const validDelivery = ['dialogue', 'inner_thought', 'narration'].includes(rawDelivery)
+              ? rawDelivery
+              : 'dialogue';
 
             rawObservations.push({
               timestampSec: fallbackTime,
               reportedSec: tSec,
               hasText: hasCleanText,
+              textZh: hasCleanText ? cText : '',
               chineseText: hasCleanText ? cText : '',
               position: f.position || 'bottom_subtitle',
               isSharp: f.isSharp !== false,
+              visualGender: validGender,
               speakerGender: validGender,
+              speakerVisualHint,
+              deliveryType: validDelivery,
               genderConfidence: conf,
             });
           }
@@ -530,17 +559,28 @@ Return JSON ONLY matching this schema:
         // If both reads have text and are equivalent -> ACCEPT with high confidence
         if (hasA && hasB && areChineseTextsEquivalent(textA, textB)) {
           const resolvedText = textA.length >= textB.length ? textA : textB;
+          const gA = obsA.visualGender || obsA.speakerGender || 'unknown';
+          const gB = obsB.visualGender || obsB.speakerGender || 'unknown';
+          const resolvedVisualGender = gA === gB ? gA : (gA !== 'unknown' ? gA : gB);
+          const resolvedVisualHint = obsA.speakerVisualHint || obsB.speakerVisualHint || '';
+          const resolvedDelivery = (obsA.deliveryType && obsA.deliveryType !== 'dialogue')
+            ? obsA.deliveryType
+            : (obsB.deliveryType || 'dialogue');
           evaluatedCueStates.push({
             ...cs,
+            textZh: resolvedText,
             originalChineseText: resolvedText,
             chineseText: resolvedText,
             ocrConfidence: 'high',
             reviewNeeded: false,
             ocrDisagreement: false,
             uncertainOcr: false,
+            visualGender: resolvedVisualGender,
+            speakerVisualHint: resolvedVisualHint,
+            deliveryType: resolvedDelivery,
             genderVotes: {
-              [obsA.speakerGender || 'unknown']: 1,
-              [obsB.speakerGender || 'unknown']: (obsA.speakerGender === obsB.speakerGender ? 2 : 1),
+              [gA]: 1,
+              [gB]: (gA === gB ? 2 : 1),
             },
           });
         } else {
@@ -607,18 +647,33 @@ Return JSON ONLY matching this schema:
 
           if (resolvedText) {
             const votes = { male: 0, female: 0, unknown: 0 };
+            let resolvedVisualHint = '';
+            let resolvedDelivery = 'dialogue';
             [obsA, obsB, obsTie].forEach((o) => {
-              if (o && o.speakerGender) votes[o.speakerGender] = (votes[o.speakerGender] || 0) + 1;
+              if (!o) return;
+              const g = o.visualGender || o.speakerGender;
+              if (g) votes[g] = (votes[g] || 0) + 1;
+              if (!resolvedVisualHint && o.speakerVisualHint) resolvedVisualHint = o.speakerVisualHint;
+              if (resolvedDelivery === 'dialogue' && o.deliveryType && o.deliveryType !== 'dialogue') {
+                resolvedDelivery = o.deliveryType;
+              }
             });
+            const resolvedVisualGender = votes.female > votes.male && votes.female > 0
+              ? 'female'
+              : (votes.male > votes.female && votes.male > 0 ? 'male' : 'unknown');
 
             evaluatedCueStates.push({
               ...cs,
+              textZh: resolvedText,
               originalChineseText: resolvedText,
               chineseText: resolvedText,
               ocrConfidence,
               reviewNeeded,
               ocrDisagreement,
               uncertainOcr,
+              visualGender: resolvedVisualGender,
+              speakerVisualHint: resolvedVisualHint,
+              deliveryType: resolvedDelivery,
               genderVotes: votes,
             });
           }
@@ -637,7 +692,7 @@ Return JSON ONLY matching this schema:
     } catch (_) {}
   }
 
-  function resolveGenderFromVotes(genderVotes = {}) {
+  function resolveGenderFromVotes(genderVotes = {}, explicitVisualGender = null) {
     const mCount = genderVotes.male || 0;
     const fCount = genderVotes.female || 0;
     const uCount = genderVotes.unknown || 0;
@@ -652,12 +707,16 @@ Return JSON ONLY matching this schema:
     } else if (mCount > fCount && mCount > 0) {
       resolvedGender = 'male';
       resolvedConfidence = parseFloat((mCount / Math.max(1, total)).toFixed(2));
+    } else if (explicitVisualGender === 'female' || explicitVisualGender === 'male') {
+      resolvedGender = explicitVisualGender;
+      resolvedConfidence = 0.85;
     }
 
     const voiceGender = resolvedGender === 'female' ? 'female' : 'male';
     const khmerVoiceId = voiceGender === 'female' ? 'km-KH-SreymomNeural' : 'km-KH-PisethNeural';
 
     return {
+      visualGender: resolvedGender,
       speakerGender: resolvedGender.toUpperCase(),
       voiceGender,
       gender: voiceGender,
@@ -673,14 +732,14 @@ Return JSON ONLY matching this schema:
   if (evaluatedCueStates && evaluatedCueStates.length > 0) {
     evaluatedCueStates.sort((a, b) => a.startSec - b.startSec);
 
-    // Pass 2: Merge adjacent states with equivalent Chinese text
+    // Pass 2: Merge adjacent states ONLY when Chinese text is equivalent AND gap < 0.20s
     for (const cue of evaluatedCueStates) {
       if (visualSegments.length === 0) {
         visualSegments.push({ ...cue });
         continue;
       }
       const prev = visualSegments[visualSegments.length - 1];
-      const isAdjacent = (cue.startSec - prev.endSec) <= 0.35;
+      const isAdjacent = (cue.startSec - prev.endSec) < 0.20;
       const isEquivalent = areChineseTextsEquivalent(prev.originalChineseText, cue.originalChineseText);
 
       if (isAdjacent && isEquivalent) {
@@ -689,12 +748,19 @@ Return JSON ONLY matching this schema:
         if (cue.originalChineseText.length > prev.originalChineseText.length) {
           prev.originalChineseText = cue.originalChineseText;
           prev.chineseText = cue.originalChineseText;
+          prev.textZh = cue.originalChineseText;
         }
         if (cue.ocrConfidence === 'low') {
           prev.ocrConfidence = 'low';
           prev.reviewNeeded = true;
           prev.ocrDisagreement = true;
           prev.uncertainOcr = true;
+        }
+        if (!prev.speakerVisualHint && cue.speakerVisualHint) {
+          prev.speakerVisualHint = cue.speakerVisualHint;
+        }
+        if ((!prev.deliveryType || prev.deliveryType === 'dialogue') && cue.deliveryType && cue.deliveryType !== 'dialogue') {
+          prev.deliveryType = cue.deliveryType;
         }
         if (cue.genderVotes) {
           for (const [k, v] of Object.entries(cue.genderVotes)) {
@@ -713,8 +779,8 @@ Return JSON ONLY matching this schema:
       if (!obs.hasText) {
         if (currentSegment) {
           const endSec = parseFloat(obs.timestampSec.toFixed(2));
-          const dur = Math.max(0.6, parseFloat((endSec - currentSegment.startSec).toFixed(2)));
-          const genderData = resolveGenderFromVotes(currentSegment.genderVotes);
+          const dur = Math.max(0.35, parseFloat((endSec - currentSegment.startSec).toFixed(2)));
+          const genderData = resolveGenderFromVotes(currentSegment.genderVotes, currentSegment.visualGender);
           visualSegments.push({
             ...currentSegment,
             endSec: parseFloat((currentSegment.startSec + dur).toFixed(2)),
@@ -734,9 +800,11 @@ Return JSON ONLY matching this schema:
       if (!currentSegment) {
         const startSec = parseFloat(obs.timestampSec.toFixed(2));
         const genderVotes = { male: 0, female: 0, unknown: 0 };
-        if (obs.speakerGender) genderVotes[obs.speakerGender] = (genderVotes[obs.speakerGender] || 0) + 1;
+        const obsGender = obs.visualGender || obs.speakerGender;
+        if (obsGender) genderVotes[obsGender] = (genderVotes[obsGender] || 0) + 1;
 
         currentSegment = {
+          textZh: obs.chineseText,
           originalChineseText: obs.chineseText,
           startSec,
           lastObservedSec: startSec,
@@ -744,6 +812,9 @@ Return JSON ONLY matching this schema:
           isSharp: obs.isSharp,
           frameCount: 1,
           source: 'visual_ocr',
+          visualGender: obsGender || 'unknown',
+          speakerVisualHint: obs.speakerVisualHint || '',
+          deliveryType: obs.deliveryType || 'dialogue',
           genderVotes,
         };
       } else {
@@ -753,14 +824,22 @@ Return JSON ONLY matching this schema:
           currentSegment.frameCount++;
           if (obs.chineseText.length > currentSegment.originalChineseText.length) {
             currentSegment.originalChineseText = obs.chineseText;
+            currentSegment.textZh = obs.chineseText;
           }
-          if (obs.speakerGender) {
-            currentSegment.genderVotes[obs.speakerGender] = (currentSegment.genderVotes[obs.speakerGender] || 0) + 1;
+          const obsGender = obs.visualGender || obs.speakerGender;
+          if (obsGender) {
+            currentSegment.genderVotes[obsGender] = (currentSegment.genderVotes[obsGender] || 0) + 1;
+          }
+          if (!currentSegment.speakerVisualHint && obs.speakerVisualHint) {
+            currentSegment.speakerVisualHint = obs.speakerVisualHint;
+          }
+          if (currentSegment.deliveryType === 'dialogue' && obs.deliveryType && obs.deliveryType !== 'dialogue') {
+            currentSegment.deliveryType = obs.deliveryType;
           }
         } else {
           const endSec = parseFloat(obs.timestampSec.toFixed(2));
-          const dur = Math.max(0.6, parseFloat((endSec - currentSegment.startSec).toFixed(2)));
-          const genderData = resolveGenderFromVotes(currentSegment.genderVotes);
+          const dur = Math.max(0.35, parseFloat((endSec - currentSegment.startSec).toFixed(2)));
+          const genderData = resolveGenderFromVotes(currentSegment.genderVotes, currentSegment.visualGender);
           visualSegments.push({
             ...currentSegment,
             endSec: parseFloat((currentSegment.startSec + dur).toFixed(2)),
@@ -775,9 +854,11 @@ Return JSON ONLY matching this schema:
 
           const startSec = parseFloat(obs.timestampSec.toFixed(2));
           const genderVotes = { male: 0, female: 0, unknown: 0 };
-          if (obs.speakerGender) genderVotes[obs.speakerGender] = (genderVotes[obs.speakerGender] || 0) + 1;
+          const obsGender = obs.visualGender || obs.speakerGender;
+          if (obsGender) genderVotes[obsGender] = (genderVotes[obsGender] || 0) + 1;
 
           currentSegment = {
+            textZh: obs.chineseText,
             originalChineseText: obs.chineseText,
             startSec,
             lastObservedSec: startSec,
@@ -785,6 +866,9 @@ Return JSON ONLY matching this schema:
             isSharp: obs.isSharp,
             frameCount: 1,
             source: 'visual_ocr',
+            visualGender: obsGender || 'unknown',
+            speakerVisualHint: obs.speakerVisualHint || '',
+            deliveryType: obs.deliveryType || 'dialogue',
             genderVotes,
           };
         }
@@ -795,8 +879,8 @@ Return JSON ONLY matching this schema:
       const estimatedEnd = currentSegment.lastObservedSec > currentSegment.startSec
         ? parseFloat((currentSegment.lastObservedSec + baseStepSec).toFixed(2))
         : parseFloat((currentSegment.startSec + 1.2).toFixed(2));
-      const dur = Math.max(0.6, parseFloat((estimatedEnd - currentSegment.startSec).toFixed(2)));
-      const genderData = resolveGenderFromVotes(currentSegment.genderVotes);
+      const dur = Math.max(0.35, parseFloat((estimatedEnd - currentSegment.startSec).toFixed(2)));
+      const genderData = resolveGenderFromVotes(currentSegment.genderVotes, currentSegment.visualGender);
       visualSegments.push({
         ...currentSegment,
         endSec: parseFloat((currentSegment.startSec + dur).toFixed(2)),
@@ -811,12 +895,13 @@ Return JSON ONLY matching this schema:
     }
   }
 
-  // Finalize segments with valid timecodes, gender resolution, and minimum duration 0.5s (supports short cues <0.8s)
+  // Finalize segments with valid timecodes, gender resolution, and minimum duration 0.35s (supports rapid short cues)
   const finalizedVisualSegments = visualSegments.map((s, idx) => {
     const rawDur = parseFloat((s.endSec - s.startSec).toFixed(2));
-    const dur = Math.max(0.5, rawDur);
+    const dur = Math.max(0.35, rawDur);
     const endSec = parseFloat((s.startSec + dur).toFixed(2));
-    const genderData = resolveGenderFromVotes(s.genderVotes);
+    const genderData = resolveGenderFromVotes(s.genderVotes, s.visualGender);
+    const resolvedChinese = s.originalChineseText || s.chineseText || s.textZh || '';
 
     return {
       ...s,
@@ -824,8 +909,12 @@ Return JSON ONLY matching this schema:
       segmentId: idx + 1,
       endSec,
       duration: dur,
-      originalChineseText: s.originalChineseText || s.chineseText || '',
-      chineseText: s.originalChineseText || s.chineseText || '',
+      textZh: resolvedChinese,
+      originalChineseText: resolvedChinese,
+      chineseText: resolvedChinese,
+      visualGender: genderData.visualGender || s.visualGender || 'unknown',
+      speakerVisualHint: s.speakerVisualHint || '',
+      deliveryType: s.deliveryType || 'dialogue',
       ocrConfidence: s.ocrConfidence || 'high',
       reviewNeeded: Boolean(s.reviewNeeded),
       ocrDisagreement: Boolean(s.ocrDisagreement),
@@ -866,7 +955,8 @@ Return JSON ONLY matching this schema:
 /**
  * Deduplicate raw OCR cues for Fast OCR mode and external subtitle imports.
  * Drops chunk-boundary repeats (equivalent CN text within 0.3s or overlapping).
- * Merges truly continuous duplicates of the same text by extending endSec.
+ * Merges truly continuous duplicates of the same text when gap < 0.20s by extending endSec.
+ * Supports short dialogue cues down to 0.35s and preserves visualGender, speakerVisualHint, and deliveryType.
  * Applies Fast OCR speaker/gender defaults: speakerSource: 'ocr_only', unverifiedSpeaker: true.
  *
  * @param {Array<object>} rawCues
@@ -900,7 +990,8 @@ function deduplicateFastOcrCues(rawCues = [], defaultGender = 'male') {
   };
 
   for (const cue of sorted) {
-    const cueText = String(cue.originalChineseText || cue.chineseText || cue.text || '').trim();
+    const rawCueText = String(cue.originalChineseText || cue.chineseText || cue.textZh || cue.text || '').trim();
+    const cueText = stripDecorativeSubtitleNoise(rawCueText);
     if (!cueText) continue;
 
     const cStart = parseFloat(Number(cue.startSec || 0).toFixed(2));
@@ -911,9 +1002,13 @@ function deduplicateFastOcrCues(rawCues = [], defaultGender = 'male') {
         ...cue,
         startSec: cStart,
         endSec: cEnd,
-        duration: parseFloat(Math.max(0.6, cEnd - cStart).toFixed(2)),
+        duration: parseFloat(Math.max(0.35, cEnd - cStart).toFixed(2)),
+        textZh: cueText,
         originalChineseText: cueText,
         chineseText: cueText,
+        visualGender: cue.visualGender || 'unknown',
+        speakerVisualHint: cue.speakerVisualHint || '',
+        deliveryType: cue.deliveryType || 'dialogue',
         source: 'visual_ocr',
         evidenceSource: 'visual_ocr',
         evidenceType: 'visual_only',
@@ -922,24 +1017,33 @@ function deduplicateFastOcrCues(rawCues = [], defaultGender = 'male') {
     }
 
     const prev = deduped[deduped.length - 1];
-    const prevText = String(prev.originalChineseText || prev.chineseText || '').trim();
+    const prevText = String(prev.originalChineseText || prev.chineseText || prev.textZh || '').trim();
     const isEq = areChineseTextsEquivalent(prevText, cueText);
 
     if (isEq) {
       const timeDiff = cStart - prev.startSec;
       const isChunkBoundaryRepeat = (Math.abs(timeDiff) <= 0.3) || (cStart < prev.endSec);
-      const isContinuous = (cStart <= prev.endSec + 0.35);
+      const isContinuous = (cStart - prev.endSec) < 0.20;
 
       if (isContinuous || isChunkBoundaryRepeat) {
         if (cEnd > prev.endSec) {
           prev.endSec = parseFloat(Number(cEnd).toFixed(2));
-          prev.duration = parseFloat(Math.max(0.6, prev.endSec - prev.startSec).toFixed(2));
+          prev.duration = parseFloat(Math.max(0.35, prev.endSec - prev.startSec).toFixed(2));
         }
         if (cue.ocrConfidence === 'low') {
           prev.ocrConfidence = 'low';
           prev.reviewNeeded = true;
           prev.ocrDisagreement = true;
           prev.uncertainOcr = true;
+        }
+        if (prev.visualGender === 'unknown' && cue.visualGender && cue.visualGender !== 'unknown') {
+          prev.visualGender = cue.visualGender;
+        }
+        if (!prev.speakerVisualHint && cue.speakerVisualHint) {
+          prev.speakerVisualHint = cue.speakerVisualHint;
+        }
+        if ((!prev.deliveryType || prev.deliveryType === 'dialogue') && cue.deliveryType && cue.deliveryType !== 'dialogue') {
+          prev.deliveryType = cue.deliveryType;
         }
         continue;
       }
@@ -949,9 +1053,13 @@ function deduplicateFastOcrCues(rawCues = [], defaultGender = 'male') {
       ...cue,
       startSec: cStart,
       endSec: cEnd,
-      duration: parseFloat(Math.max(0.6, cEnd - cStart).toFixed(2)),
+      duration: parseFloat(Math.max(0.35, cEnd - cStart).toFixed(2)),
+      textZh: cueText,
       originalChineseText: cueText,
       chineseText: cueText,
+      visualGender: cue.visualGender || 'unknown',
+      speakerVisualHint: cue.speakerVisualHint || '',
+      deliveryType: cue.deliveryType || 'dialogue',
       source: 'visual_ocr',
       evidenceSource: 'visual_ocr',
       evidenceType: 'visual_only',
@@ -1012,6 +1120,10 @@ function deduplicateFastOcrCues(rawCues = [], defaultGender = 'male') {
       availableSlotDuration: seg.duration,
       slotDuration: seg.duration,
 
+      visualGender: seg.visualGender || 'unknown',
+      speakerVisualHint: seg.speakerVisualHint || '',
+      deliveryType: seg.deliveryType || 'dialogue',
+
       ocrConfidence: seg.ocrConfidence || 'high',
       reviewNeeded: Boolean(seg.reviewNeeded),
       ocrDisagreement: Boolean(seg.ocrDisagreement),
@@ -1049,6 +1161,7 @@ function deduplicateFastOcrCues(rawCues = [], defaultGender = 'male') {
 module.exports = {
   extractChineseSubtitles,
   normalizeChineseChars,
+  stripDecorativeSubtitleNoise,
   areChineseTextsEquivalent,
   generateBaseSamplingGrid,
   deduplicateFastOcrCues,

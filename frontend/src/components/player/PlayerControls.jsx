@@ -141,10 +141,8 @@ export function PlayerBottomBar({
           {[
             { id: '16:9', label: '16:9' },
             { id: '9:16', label: '9:16' },
-            { id: '1:1', label: '1:1' },
-            { id: 'fit', label: 'Fit' },
           ].map((opt) => {
-            const isActive = opt.id === 'fit' ? !rawRatio : rawRatio === opt.id;
+            const isActive = rawRatio === opt.id;
             return (
               <button
                 key={opt.id}

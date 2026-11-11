@@ -76,10 +76,13 @@ test('Phase 2: CapCut Pro OKLCH tokens, Khmer line-height 1.68, resizable split 
   assert.match(navbarCode, /toggle-timeline-panel-btn/);
   assert.match(navbarCode, /toggle-right-panel-btn/);
 
-  // 3. Player controls: precision timecode, 16:9 | 9:16 | 1:1 | Fit, and live Ducking dB meter
+  // 3. Player controls: precision timecode, 16:9 | 9:16, and live Ducking dB meter
   assert.match(playerControlsCode, /formatPrecisionTimecode/);
   assert.match(playerControlsCode, /player-ducking-db-meter/);
-  assert.match(playerControlsCode, /id:\s*'fit'/);
+  assert.match(playerControlsCode, /id:\s*'16:9'/);
+  assert.match(playerControlsCode, /id:\s*'9:16'/);
+  assert.doesNotMatch(playerControlsCode, /id:\s*'1:1'/);
+  assert.doesNotMatch(playerControlsCode, /id:\s*'fit'/);
   assert.match(playerControlsCode, /player-ratio-\$\{opt\.id\}/);
 
   // 4. Right Inspector: Character Voice Mapping accordion, sticky Export CTA, and inline voice switch spinner

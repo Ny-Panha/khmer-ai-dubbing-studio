@@ -209,9 +209,49 @@ const SCRIPT_RESPONSE_SCHEMA = {
       type: Type.STRING,
       description: "Mode ដែលបានប្រើ: dialogue ឬ recap ឬ subtitles",
     },
+    detectedGenre: {
+      type: Type.STRING,
+      enum: ["ancient", "ceo", "modern", "action", "comedy"],
+      description: "ប្រភេទសាច់រឿងដែលបានកំណត់៖ ancient, ceo, modern, action, ឬ comedy",
+    },
     summary: {
       type: Type.STRING,
       description: "សេចក្តីសង្ខេបខ្លឹមសាររឿងជាភាសាខ្មែរ (1-2 ប្រយោគ)",
+    },
+    castRegistry: {
+      type: Type.ARRAY,
+      description: "បញ្ជីតួអង្គសំខាន់ៗក្នុងឈុតឆាក (Pre-Translation Cast Registry) សម្រាប់ចាក់សោភេទ និងសព្វនាមឱ្យថេរ",
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          speakerId: {
+            type: Type.STRING,
+            description: "ID សម្គាល់តួអង្គថេរ (ឧ. spk_male_lead, spk_female_lead, spk_emperor, spk_ceo)",
+          },
+          speakerLabelKh: {
+            type: Type.STRING,
+            description: "ឈ្មោះតួអង្គជាភាសាខ្មែរ (ឧ. តួឯកប្រុស (ព្រះអង្គម្ចាស់), តួឯកស្រី (ព្រះមហេសី), លោកប្រធាន)",
+          },
+          voiceGender: {
+            type: Type.STRING,
+            enum: ["male", "female"],
+            description: "ភេទសំឡេងពិតរបស់តួអង្គ (male ឬ female)",
+          },
+          roleArchetype: {
+            type: Type.STRING,
+            description: "តួនាទីគំរូ (ឧ. royal_male_lead, royal_female_lead, ceo_male, maid_female)",
+          },
+          selfPronounKh: {
+            type: Type.STRING,
+            description: "សព្វនាមហៅខ្លួនឯងជាខ្មែរ (ឧ. យើង / ទូលបង្គំ / ខ្ញុំម្ចាស់ / នាងខ្ញុំ / បង / អូន)",
+          },
+          addressPronounKh: {
+            type: Type.STRING,
+            description: "សព្វនាមហៅដៃគូសន្ទនា (ឧ. នាង / ម្ចាស់អូន / ព្រះអង្គ / ម្ចាស់បង / លោកប្រធាន)",
+          },
+        },
+        required: ["speakerId", "speakerLabelKh", "voiceGender"],
+      },
     },
     segments: {
       type: Type.ARRAY,
@@ -287,7 +327,7 @@ const SCRIPT_RESPONSE_SCHEMA = {
       },
     },
   },
-  required: ["mode", "summary", "segments"],
+  required: ["mode", "detectedGenre", "summary", "castRegistry", "segments"],
 };
 
 function buildDialoguePrompt(userDirection = "", durationSec = 0, options = {}) {
@@ -301,19 +341,23 @@ function buildDialoguePrompt(userDirection = "", durationSec = 0, options = {}) 
   let genreSpecificRule = "";
   if (genre === "ancient") {
     genreSpecificRule = `
-   - រឿងបុរាណចិន/ប្រវត្តិសាស្ត្រ/គុណនិយម: ប្រើពាក្យសព្វនាម និងឋានៈសមស្រប (ខ្ញុំ, ឯង, លោកម្ចាស់, អ្នកនាង, ព្រះអង្គ, លោកមេទ័ព, ម្ចាស់បង, ម្ចាស់អូន, ព្រឹទ្ធាចារ្យ) តាមបរិបទរឿង។`;
-  } else if (genre === "modern") {
+   - រឿងបុរាណចិន/ប្រវត្តិសាស្ត្រ/គុណនិយម (ancient): ប្រើរាជស័ព្ទ និងពាក្យគុណនិយមខ្មែរពិតប្រាកដ (ព្រះអង្គ, ព្រះនាង, ទូលបង្គំ, ខ្ញុំម្ចាស់, ម្ចាស់បង, សិស្សប្អូន, គ្រូពេទ្យទេព, បក្ស, ថាមពលធាតុ) តាមឋានៈតួអង្គ។`;
+  } else if (genre === "modern" || genre === "ceo") {
     genreSpecificRule = `
-   - រឿងសម័យទំនើប/CEO/Romance: ប្រើភាសាសន្ទនាធម្មជាតិ (បង, អូន, លោកប្រធាន, អ្នកស្រី, នាយក) តាមទំនាក់ទំនងតួអង្គ។ ហាមដាច់ខាតយកពាក្យគុណនិយម (លោកម្ចាស់, ព្រឹទ្ធាចារ្យ, សម្អាតកាយ...) មកប្រើក្នុងរឿងសម័យទំនើប!`;
+   - រឿងសម័យទំនើប/CEO/Romance (ceo / modern): ប្រើភាសាសន្ទនាទំនើបច្បាស់ៗ (លោកប្រធាន, អ្នកនាង, លេខា, អគ្គនាយក, បង, អូន, ខ្ញុំ)។ ហាមដាច់ខាតយកពាក្យគុណនិយម (លោកម្ចាស់, ព្រឹទ្ធាចារ្យ, ថាមពលធាតុ...) មកប្រើក្នុងរឿងសម័យទំនើប!`;
   } else if (genre === "action") {
     genreSpecificRule = `
-   - រឿង Action/សងសឹក: ភាសាមុតមាំ ខ្លី ចំៗ មានកំហឹង និងចង្វាក់សន្ទនារហ័សសមនឹងឈុតឆាក។`;
+   - រឿង Action/សងសឹក (action): ប្រើឃ្លាបញ្ជាខ្លីៗ មុតមាំ និងមានអំណាច (បញ្ឈប់ភ្លាម!, ថយក្រោយ!, ហ៊ានណាស់!)។`;
   } else if (genre === "comedy") {
     genreSpecificRule = `
-   - រឿងកំប្លែង/គ្រួសារ: ភាសាសន្ទនាកំប្លុកកំប្លែង ធម្មជាតិ រស់រវើក។`;
+   - រឿងកំប្លែង/គ្រួសារ (comedy): ប្រើពាក្យសន្ទនារស់រវើក និងធម្មជាតិ (ណ៎ា, ហ្នឹងណា, ងាប់ហើយ, ម៉េចចឹង)។`;
   } else {
     genreSpecificRule = `
-   - ស្គាល់ប្រភេទរឿងតាមបរិបទជាក់ស្ដែង៖ កុំសន្មតថាគ្រប់រឿងសុទ្ធតែជារឿងគុណនិយម។ បើជារឿងសម័យ ត្រូវប្រើភាសាសម័យ; បើជារឿងបុរាណ ត្រូវប្រើភាសាបុរាណ។ កុំប្រើពាក្យបច្ចេកទេសរបស់ប្រភេទរឿងមួយទៅលើរឿងផ្សេង។`;
+   - ស្គាល់ប្រភេទរឿង (detectedGenre: "ancient" | "ceo" | "modern" | "action" | "comedy") តាមបរិបទជាក់ស្ដែង៖
+     • ancient (បុរាណ/រាជវាំង/គុណនិយម): ព្រះអង្គ, ព្រះនាង, ទូលបង្គំ, ខ្ញុំម្ចាស់, ម្ចាស់បង, សិស្សប្អូន, គ្រូពេទ្យទេព, បក្ស, ថាមពលធាតុ។
+     • ceo / modern (សម័យទំនើប/អគ្គនាយក): លោកប្រធាន, អ្នកនាង, លេខា, អគ្គនាយក, បង, អូន, ខ្ញុំ។
+     • action (ប្រយុទ្ធ/សងសឹក): បញ្ឈប់ភ្លាម!, ថយក្រោយ!, ហ៊ានណាស់!
+     • comedy (កំប្លែង): ណ៎ា, ហ្នឹងណា, ងាប់ហើយ, ម៉េចចឹង។`;
   }
 
   return `
@@ -322,31 +366,30 @@ MODE A — FAITHFUL DIALOGUE TRANSLATION
 (ការបញ្ចូលសំឡេងសន្ទនាតួអង្គតាមបន្ទាត់អក្សរចិនដើម ១០០% Line-by-Line Chinese Dialogue)
 ==================================================
 គោលការណ៍គ្រឹះតឹងរ៉ឹងសម្រាប់ Mode A (Strict Rules for Mode A Dialogue Dubbing):
-1. Mode A គឺជាការបកប្រែពាក្យសន្ទនាតាមបន្ទាត់អក្សរចិនជាក់ស្តែង (Faithful line-by-line Chinese dialogue translation) មិនមែនជាការសង្ខេបសាច់រឿង ឬការនិទានបែបសម្រាយរឿង (NOT narration, NOT story recap) ឡើយ។
-2. ត្រូវអាន និងស្រង់រាល់អក្សរ Subtitle ចិនដែលបង្កប់លើអេក្រង់ (Burned-in Chinese Subtitles) ទាំងអស់ដោយគ្មានការរំលង ទោះបីជាឃ្លានោះខ្លីត្រឹមតែ 1 ទៅ 2 វិនាទីក៏ដោយ។
-3. កាត់ឃ្លាតាមបន្ទាត់អក្សរ Subtitle ឬប្រយោគនីមួយៗដាច់ដោយឡែក (STRICT LINE-BY-LINE SENTENCE SEGMENTATION)៖
+1. MANDATORY PRE-TRANSLATION CAST REGISTRY & GENRE LOCKING:
+   - មុននឹងបកប្រែ segments អ្នកត្រូវតែកំណត់ "detectedGenre" ("ancient" | "ceo" | "modern" | "action" | "comedy") និងបង្កើត "castRegistry" (បញ្ជីតួអង្គដែលមាន speakerId, speakerLabelKh, voiceGender, roleArchetype, selfPronounKh, addressPronounKh) ជាមុនសិន ដើម្បីចាក់សោភេទ (male/female) និងសព្វនាមឱ្យថេរពេញមួយភាគ!
+2. Mode A គឺជាការបកប្រែពាក្យសន្ទនាតាមបន្ទាត់អក្សរចិនជាក់ស្តែង (Faithful line-by-line Chinese dialogue translation) មិនមែនជាការសង្ខេបសាច់រឿង ឬការនិទានបែបសម្រាយរឿង (NOT narration, NOT story recap) ឡើយ។
+3. ត្រូវអាន និងស្រង់រាល់អក្សរ Subtitle ចិនដែលបង្កប់លើអេក្រង់ (Burned-in Chinese Subtitles) ទាំងអស់ដោយគ្មានការរំលង ទោះបីជាឃ្លានោះខ្លីត្រឹមតែ 0.35s ទៅ 2.0s (ឧ. "住手!", "皇上!", "快走!", "是谁?", "不敢") ក៏ដោយ។
+4. កាត់ឃ្លាតាមបន្ទាត់អក្សរ Subtitle ឬប្រយោគនីមួយៗដាច់ដោយឡែក (STRICT LINE-BY-LINE SENTENCE SEGMENTATION)៖
    - មួយបន្ទាត់អក្សរ Subtitle ឬមួយប្រយោគសន្ទនា = មួយ Segment ដាច់ដោយឡែកពីគ្នាជានិច្ច (One subtitle line on screen = One distinct segment)។
-   - រយៈពេល Segment នីមួយៗត្រូវស្ថិតនៅចន្លោះពី 1.8 ទៅ 5.0 វិនាទី (ហាមលើសពី 6.0 វិនាទីជាដាច់ខាត)!
-   - ហាមដាច់ខាតមិនឱ្យច្របាច់ប្រយោគច្រើន ឬការសន្ទនាឆ្លើយឆ្លងគ្នារាប់សិបវិនាទី (10s - 20s) មកដាក់ក្នុង Segment តែមួយឡើយ!
-   - រាល់ពេលដែលប្រយោគចិនចប់ (មានសញ្ញាខណ្ឌ "。", សញ្ញាសួរ "？", សញ្ញាឧទាន "！", ឬចុចបី "……"), ឬពេលអក្សរ Subtitle ចាស់រលត់ហើយអក្សរ Subtitle ថ្មីឡើង ត្រូវតែបង្កើត Segment ថ្មីភ្លាម!
    - បើតួអង្គពីរនិយាយឆ្លើយឆ្លងគ្នា ត្រូវតែចែកជា Segment ដាច់ដោយឡែកពីគ្នា ហាមដាក់ចូលគ្នាក្នុង Segment តែមួយដាច់ខាត!
-4. រក្សាអត្ថបទចិនដើមឱ្យចំតួអក្សរដែលបានឃើញ (Preserve exact original Chinese characters as recognized)។ ហាមតែង ឬទាយអក្សរចិនដែលមើលមិនឃើញ។
-5. កំណត់ startTime និង endTime ឱ្យសុក្រឹតតាមពេលវេលាដើមនៃវីដេអូ (Source-media timestamp)។
-6. កំណត់អត្តសញ្ញាណតួអង្គ និងភេទសំឡេង (Speaker Diarization & Voice Gender)៖
-   - សំឡេងដើមជាបុរស MALE (ប្រុស) ➜ voiceGender: "male", gender: "male" (សំឡេងពិសិដ្ឋ km-KH-PisethNeural)
-   - សំឡេងដើមជាស្ត្រី FEMALE (ស្រី) ➜ voiceGender: "female", gender: "female" (សំឡេងស្រីមុំ km-KH-SreymomNeural)
-   - មិនច្បាស់ ឬគ្មានសំឡេង ➜ voiceGender: "unknown", gender: "unknown"
-7. ភាសាសន្ទនាខ្មែរ (khmerText) & Strict Syllable/Duration Budget:
+5. STRICT GENDER & CONVERSATIONAL TURN-TAKING RULES (ប្រុស vs ស្រី):
+   ត្រូវរួមបញ្ចូលសញ្ញាទាំង ៣ (3 Signals) ដើម្បីកំណត់ voiceGender ("male" ឬ "female") ឱ្យត្រឹមត្រូវ ១០០%៖
+   - Signal 1 (Visual Evidence): មើល visualGender និង speakerVisualHint ពីរូបភាពមុខ សក់ សម្លៀកបំពាក់ និងមាត់តួអង្គដែលកំពុងនិយាយ។
+   - Signal 2 (Conversational Turn-Taking A -> B -> A -> B): បើឃ្លាទី N ហៅឈ្មោះ ឬងារបុរស ("皇上 / 师兄 / 总裁 / 老公 / ព្រះអង្គ / ម្ចាស់បង / លោកប្រធាន") នោះអ្នកនិយាយឃ្លាទី N ច្រើនតែជាស្ត្រី (female) ឬកូនចៅ ហើយឃ្លាឆ្លើយតបបន្ទាប់ N+1 គឺជាបុរស (male) នោះជាអ្នកឆ្លើយ! ផ្ទុយទៅវិញ បើឃ្លាទី N ហៅស្ត្រី ("皇后 / 师妹 / 夫人 / 小姐 / 老婆 / ព្រះមហេសី / សិស្សប្អូនស្រី / អ្នកនាង") អ្នកនិយាយឃ្លាទី N ច្រើនតែជាបុរស (male) ហើយឃ្លាបន្ទាប់ N+1 គឺជាស្ត្រី (female) ឆ្លើយតប។ ហាមដាច់ខាតច្រឡំអ្នកហៅ ទៅជាអ្នកត្រូវគេហៅ!
+   - Signal 3 (Self-Pronoun & Kinship Context):
+     • ស្ត្រីហៅខ្លួនឯងថា៖ 臣妾, 奴婢, 本宫, 本妃, ខ្ញុំម្ចាស់, នាងខ្ញុំ, អូន ➜ voiceGender: "female", gender: "female" (សំឡេងស្រីមុំ km-KH-SreymomNeural)។
+     • បុរសហៅខ្លួនឯងថា៖ 朕, 本王, 本尊, 本座, 微臣, ទូលបង្គំ, យើងខ្ញុំព្រះករុណា, បង, ខ្ញុំបាទ ➜ voiceGender: "male", gender: "male" (សំឡេងពិសិដ្ឋ km-KH-PisethNeural)។
+6. ភាសាសន្ទនាខ្មែរ (khmerText) & STRICT LIP-SYNC DURATION RULE (<= 5.5 syllables/sec):
    - ភាសាសន្ទនាកុនភាគខ្មែរធម្មជាតិ រស់រវើក (Cinema-grade spoken drama Khmer)។ ហាមដាច់ខាតប្រើ Google Translate style ឬបកប្រែពាក្យមួយៗ!
-   - គោរពកំហិតពាក្យខ្មែរយ៉ាងតឹងរ៉ឹង៖ ចំនួនពាក្យខ្មែរអតិបរមា = Math.ceil((endTime - startTime) * 2.5) (ប្រហែល 2.2 ទៅ 2.5 ពាក្យក្នុង 1 វិនាទី) ឱ្យសមស្របនឹងល្បឿនអានរបស់ Edge TTS ខ្មែរ។ បើតួនិយាយខ្លី 1.0s ត្រូវបកត្រឹម 2-3 ពាក្យខ្លីចំៗ ហាមបកវែងដែលនាំឱ្យសំឡេង TTS អូសបន្លាយជាន់លើតួបន្ទាប់!
+   - គោរពកំហិតល្បឿនមាត់ (Strict Lip-Sync Pacing: <= 5.5 syllables/sec ឬ ~4.5 ទៅ 5.5 Khmer words/sec max) ដើម្បីឱ្យសំឡេង TTS ខ្មែរនិយាយត្រូវមាត់តួអង្គក្នុងរយៈពេល (endSec - startSec) ដោយមិនបាច់បង្ខំល្បឿន atempo > 1.35x!
    - ហាមដាច់ខាតកុំឱ្យមានតួអក្សរថៃ (Thai characters) ឬពាក្យថៃណាមួយ 100%!
 ${genreSpecificRule}
-   - ពេលមាន Dual-Source (Audio + OCR) ត្រូវយកសំឡេងនិយាយ Audio ជាធំដើម្បីកែអក្សរ OCR ដែលស្កេនខុស។
-8. ការវិភាគ Inner Thought (Delivery Classification)៖
+7. ការវិភាគ Inner Thought (Delivery Classification)៖
    - out_loud: ការសន្ទនានិយាយចេញក្រៅធម្មតា។
-   - inner_thought: ការគិតក្នុងចិត្ត/និយាយក្នុងចិត្ត។
+   - inner_thought: ការគិតក្នុងចិត្ត/និយាយក្នុងចិត្ត (មាត់បិទ)។
    - narration: សំឡេងអ្នកនិទាន/voice-over បរិយាយសាច់រឿង។
-9. បញ្ចេញលទ្ធផលជា JSON ដែលមាន "mode": "dialogue"។${durationInstruction}
+8. បញ្ចេញលទ្ធផលជា JSON ដែលមាន "mode": "dialogue", "detectedGenre", "castRegistry", និង "segments"។${durationInstruction}
 ${cleanDirection ? `\nតម្រូវការបន្ថែមពីអ្នកប្រើប្រាស់៖ ${cleanDirection}` : ""}
 `;
 }
@@ -361,11 +404,11 @@ function buildRecapPrompt(userDirection = "", durationSec = 0, narratorGender = 
 ការគ្របដណ្តប់រយៈពេលវីដេអូទាំងមូល (សំខាន់បំផុត)៖
 1. រយៈពេលវីដេអូសរុប៖ ${formatSecondsToTimecode(durationSec)} (${Math.round(durationSec)} វិនាទី)។
 2. អ្នកត្រូវតែសម្រាយសាច់រឿងឱ្យពេញវីដេអូតាំងពីវិនាទីចាប់ផ្តើម (00:00.00) រហូតដល់វិនាទីចុងក្រោយ (${formatSecondsToTimecode(durationSec)}) ដោយហាមឈប់ពាក់កណ្តាលទីដាច់ខាត។
-3. បង្កើតឃ្លានិទានរឿងបន្តបន្ទាប់គ្នាជាប់រហូត (មួយឃ្លាៗមានរយៈពេលពី 4 ទៅ 8 វិនាទី ប្រហែល 15 ទៅ 28 ពាក្យខ្មែរ) ដោយមិនទុកចន្លោះស្ងាត់ (Gap) យូរឡើយ។
+3. បង្កើតឃ្លានិទានរឿងបន្តបន្ទាប់គ្នាជាប់រហូត (មួយឃ្លាៗមានរយៈពេលពី 4 ទៅ 8 វិនាទី ប្រហែល 15 ទៅ 28 ពាក្យខ្មែរ, <= 5.5 syllables/sec) ដោយមិនទុកចន្លោះស្ងាត់ (Gap) យូរឡើយ។
 4. ហាមបកប្រែតែចំណងជើង ឬអក្សរលើអេក្រង់ដាច់ខាត! ត្រូវមើលសកម្មភាពតួអង្គក្នុងវីដេអូ ហើយនិទានសាច់រឿងឱ្យអ្នកមើលយល់ពីដើមដល់ចប់។`
       : `
 ការគ្របដណ្តប់រយៈពេលវីដេអូទាំងមូល៖
-1. សម្រាយសាច់រឿងពេញវីដេអូតាំងពីដើមរហូតដល់ចប់ ដោយមួយឃ្លាៗមានរយៈពេលពី 4 ទៅ 8 វិនាទី។
+1. សម្រាយសាច់រឿងពេញវីដេអូតាំងពីដើមរហូតដល់ចប់ ដោយមួយឃ្លាៗមានរយៈពេលពី 4 ទៅ 8 វិនាទី (<= 5.5 syllables/sec)។
 2. មើលសកម្មភាពតួអង្គក្នុងវីដេអូ ហើយនិទានដំណើររឿងជាប់រហូតដោយគ្មានចន្លោះស្ងាត់។`;
 
   return `
@@ -373,12 +416,13 @@ function buildRecapPrompt(userDirection = "", durationSec = 0, narratorGender = 
 MODE B — CINEMATIC DRAMA RECAP (សម្រាយសាច់រឿងកុនរស់រវើក)
 ==================================================
 អ្នកគឺជាអ្នកសម្រាយរឿងកុនដ៏ល្បីល្បាញនៅកម្ពុជា។ សូមមើលវីដេអូនេះទាំងមូល រួចតែងជាអត្ថបទសម្រាយសាច់រឿងជាភាសាខ្មែរ៖
-1. ប្រើភាសាសម្រាយរឿងខ្មែររស់រវើក ទាក់ទាញ មានទឹកដម និងប្រើពាក្យភ្ជាប់សេចក្តីដូចជា៖ «ពេលនោះឯង», «រំពេចនោះ», «ស្រាប់តែ», «បន្ទាប់មក», «មិនបង្អង់យូរ», «ឃើញសភាពបែបនេះ...»។
-2. រៀបចំឃ្លាប្រយោគឱ្យច្បាស់លាស់ ដើម្បីឱ្យ Microsoft Edge Neural TTS អានបានពិរោះធម្មជាតិ។
-3. កំណត់អត្តសញ្ញាណអ្នកនិយាយគ្រប់ឃ្លាទាំងអស់៖
+1. កំណត់ "detectedGenre" ("ancient" | "ceo" | "modern" | "action" | "comedy") និង "castRegistry" សម្រាប់អ្នកសម្រាយរឿង និងតួអង្គសំខាន់ៗ។
+2. ប្រើភាសាសម្រាយរឿងខ្មែររស់រវើក ទាក់ទាញ មានទឹកដម និងប្រើពាក្យភ្ជាប់សេចក្តីដូចជា៖ «ពេលនោះឯង», «រំពេចនោះ», «ស្រាប់តែ», «បន្ទាប់មក», «មិនបង្អង់យូរ», «ឃើញសភាពបែបនេះ...» និងប្រើវាក្យស័ព្ទតាមប្រភេទរឿង (បុរាណ៖ ព្រះអង្គ, ព្រះនាង, ម្ចាស់បង, សិស្សប្អូន / សម័យ CEO៖ លោកប្រធាន, អ្នកនាង, អគ្គនាយក)។
+3. រៀបចំឃ្លាប្រយោគឱ្យច្បាស់លាស់ (<= 5.5 syllables/sec) ដើម្បីឱ្យ Microsoft Edge Neural TTS អានបានពិរោះធម្មជាតិ។
+4. កំណត់អត្តសញ្ញាណអ្នកនិយាយគ្រប់ឃ្លាទាំងអស់៖
    - "speaker": "អ្នកសម្រាយរឿង"
    - "gender": "${normGender}"
-4. បញ្ចេញលទ្ធផលជា JSON ដែលមាន "mode": "recap"។
+5. បញ្ចេញលទ្ធផលជា JSON ដែលមាន "mode": "recap", "detectedGenre", "castRegistry", និង "segments"។
 ${durationInstruction}
 ${cleanDirection ? `\nតម្រូវការបន្ថែម៖ ${cleanDirection}` : ""}
 `;
@@ -584,7 +628,7 @@ function validateAndSanitizeSegment(rawSeg, index = 0, activeMode = "dialogue") 
   let endSec = parseTimeToSec(rawSeg.endTime || rawSeg.end, startSec + 3.0);
 
   const rawDuration = endSec - startSec;
-  const isMicroDuration = isNaN(rawDuration) || rawDuration < 0.6; // Block 0.01s or zero duration
+  const isMicroDuration = isNaN(rawDuration) || rawDuration < 0.35; // Block 0.01s or zero duration while preserving 0.35s+ short cues
 
   if (isNaN(startSec) || startSec < 0) startSec = Math.max(0, index * 3.5);
   if (isNaN(endSec) || endSec <= startSec || isMicroDuration) {
@@ -597,7 +641,7 @@ function validateAndSanitizeSegment(rawSeg, index = 0, activeMode = "dialogue") 
   const rawGender = String(rawSeg.speakerGender || rawSeg.gender || rawSeg.voiceGender || "").toUpperCase();
   const gender = (rawGender === "MALE" || rawGender === "FEMALE")
     ? rawGender
-    : detectSpeakerGender(speaker, rawGender, khmerText);
+    : detectSpeakerGender(rawSeg, {}, khmerText);
   const voiceGender = rawSeg.voiceGender
     ? String(rawSeg.voiceGender).toLowerCase()
     : (gender.toLowerCase() === "female" ? "female" : (gender.toLowerCase() === "male" ? "male" : "unknown"));
@@ -949,11 +993,13 @@ function normalizeScriptData(rawData = {}, requestedMode = "dialogue", seriesSpe
     ];
   }
 
+  const castRegistry = Array.isArray(rawData.castRegistry) ? rawData.castRegistry : [];
+
   const segments = rawSegments.map((seg, idx) => {
     const startSec = parseTimeToSec(seg.startSec ?? seg.start ?? seg.startTime, idx * 4);
     let endSec = parseTimeToSec(seg.endSec ?? seg.end ?? seg.endTime, startSec + 3.0);
     const rawDur = endSec - startSec;
-    const isMicroDuration = isNaN(rawDur) || rawDur < 0.6;
+    const isMicroDuration = isNaN(rawDur) || rawDur < 0.35;
     if (endSec <= startSec || isMicroDuration) {
       const textLen = String(seg.khmerTranslatedText || seg.khmerText || seg.khmer || seg.originalChineseText || seg.originalText || "").trim().length || 8;
       endSec = parseFloat((startSec + Math.max(1.8, Math.min(8.0, textLen * 0.16))).toFixed(2));
@@ -965,8 +1011,8 @@ function normalizeScriptData(rawData = {}, requestedMode = "dialogue", seriesSpe
         : String(seg.speaker || seg.speakerName || "តួអង្គ").trim();
 
     const genderDetected = detectSpeakerGender(
-      rawSpeaker,
-      seg.speakerGender || seg.gender || seg.voiceGender,
+      { ...seg, speaker: rawSpeaker },
+      { castRegistry },
       seg.khmer || seg.khmerText || ""
     );
     const finalGender =
@@ -1049,6 +1095,8 @@ function normalizeScriptData(rawData = {}, requestedMode = "dialogue", seriesSpe
   return {
     title: (rawData.title || "វីដេអូសម្រាយរឿង").trim(),
     summary: (rawData.summary || "").trim(),
+    detectedGenre: rawData.detectedGenre || "modern",
+    castRegistry,
     mode: activeMode,
     segments: syncRes.segments,
     speakers: syncRes.speakers,

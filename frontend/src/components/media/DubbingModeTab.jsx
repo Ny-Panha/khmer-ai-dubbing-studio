@@ -12,6 +12,31 @@ const GENRE_OPTIONS = [
   { id: 'comedy', label: '🎭 កំប្លែង / គ្រួសារ', hint: 'រឿងកំប្លែងសើចចុកពោះ, ភាសាកំប្លុកកំប្លែងធម្មជាតិ' },
 ];
 
+const SMART_PROMPT_CHIPS = [
+  {
+    id: 'auto_face_gender',
+    label: '🎭 ស្គាល់ភេទតាមមុខតួអង្គ (Auto Face Gender)',
+    promptText: 'កំណត់ភេទតួអង្គតាមមុខមាត់ក្នុងវីដេអូ និងវេនសន្ទនា (Auto Face Gender & Turn-Taking)',
+  },
+  {
+    id: 'royal_xianxia',
+    label: '👑 រាជស័ព្ទបុរាណចិន (Royal/Xianxia)',
+    promptText: 'រឿងបុរាណចិន/គុណនិយម ប្រើរាជស័ព្ទ និងពាក្យគុណនិយម (ទូលបង្គំ, ព្រះអង្គ, ម្ចាស់ក្សត្រី, លោកម្ចាស់)',
+    genreId: 'ancient',
+  },
+  {
+    id: 'modern_ceo',
+    label: '💼 សន្ទនាអគ្គនាយក (Modern CEO)',
+    promptText: 'រឿងសម័យទំនើប CEO ប្រើភាសាធម្មជាតិសម័យទំនើប (លោកប្រធាន, អ្នកនាង, បង/អូន, ខ្ញុំ/លោក)',
+    genreId: 'modern',
+  },
+  {
+    id: 'strict_lipsync',
+    label: '⚡ ឃ្លាខ្លីត្រូវមាត់ 100% (Strict Lip-Sync)',
+    promptText: 'បកប្រែឃ្លាខ្លីណែន ត្រូវចង្វាក់មាត់ 100% (<= 5.5 ព្យាង្គ/វិនាទី ហាមអូសបន្លាយ)',
+  },
+];
+
 export default function DubbingModeTab({
   selectedVideo,
   dubbingMode,
@@ -912,6 +937,7 @@ export default function DubbingModeTab({
 
               <button
                 type="button"
+                data-testid="fast-ocr-toggle"
                 onClick={() => setGenerationMode('fast_ocr')}
                 style={{
                   padding: '8px 10px',
@@ -921,13 +947,34 @@ export default function DubbingModeTab({
                   color: generationMode === 'fast_ocr' ? '#f1f5f9' : '#94a3b8',
                   cursor: 'pointer',
                   textAlign: 'left',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 3,
                 }}
               >
                 <div style={{ fontSize: '11.5px', fontWeight: 700, color: generationMode === 'fast_ocr' ? '#eab308' : '#f1f5f9' }}>
                   ⚡ Fast OCR Mode
                 </div>
-                <div style={{ fontSize: '10px', color: '#94a3b8', marginTop: 2 }}>
+                <div style={{ fontSize: '10px', color: '#94a3b8' }}>
                   Direct Subtitles (OCR ➡️ Translate, 1 Cue = 1 Segment)
+                </div>
+                <div
+                  data-testid="fast-ocr-summary-pill"
+                  style={{
+                    marginTop: 2,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    alignSelf: 'flex-start',
+                    padding: '1.5px 6px',
+                    borderRadius: 4,
+                    fontSize: '9.5px',
+                    fontWeight: 700,
+                    background: generationMode === 'fast_ocr' ? 'rgba(234, 179, 8, 0.22)' : 'rgba(255, 255, 255, 0.06)',
+                    color: generationMode === 'fast_ocr' ? '#fde047' : '#cbd5e1',
+                    border: generationMode === 'fast_ocr' ? '1px solid rgba(234, 179, 8, 0.45)' : '1px solid rgba(255, 255, 255, 0.1)',
+                  }}
+                >
+                  OCR + Visual Speaker Gender + Direct Translate
                 </div>
               </button>
             </div>
@@ -1229,9 +1276,9 @@ export default function DubbingModeTab({
           </div>
         )}
 
-        {/* 3. Optional Direction */}
+        {/* 3. Optional Direction + 1-Click Smart Prompt Chips */}
         <div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 5 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
             <label style={{ fontSize: '10.5px', color: '#cbd5e1', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.4px', display: 'flex', alignItems: 'center', gap: 5 }}>
               <span>{dubbingMode === 'dialogue' ? 'ឈ្មោះតួអង្គ / Direction' : 'ទិសដៅសម្រាយបន្ថែម (Direction)'}</span>
               <span style={{ fontSize: '9.5px', color: '#94a3b8', background: 'rgba(255, 255, 255, 0.08)', padding: '1px 5px', borderRadius: 3, fontWeight: 500, textTransform: 'none' }}>
@@ -1249,13 +1296,72 @@ export default function DubbingModeTab({
               </button>
             )}
           </div>
+
+          {/* 1-Click Smart Prompt Chips */}
+          <div
+            data-testid="smart-prompt-chips"
+            style={{
+              display: 'flex',
+              flexWrap: 'wrap',
+              gap: 5,
+              marginBottom: 7,
+            }}
+          >
+            {SMART_PROMPT_CHIPS.map((chip) => {
+              const currentText = String(promptInput || '');
+              const isChipActive = currentText.includes(chip.promptText) || currentText.includes(chip.label);
+              return (
+                <button
+                  key={chip.id}
+                  type="button"
+                  data-testid={`smart-prompt-chip-${chip.id}`}
+                  onClick={() => {
+                    if (chip.genreId && dubbingMode === 'dialogue') {
+                      setSelectedGenre(chip.genreId);
+                    }
+                    if (isChipActive) {
+                      const nextText = currentText
+                        .replace(chip.promptText, '')
+                        .replace(chip.label, '')
+                        .replace(/\s*•\s*•\s*/g, ' • ')
+                        .replace(/^\s*•\s*|\s*•\s*$/g, '')
+                        .trim();
+                      setPromptInput(nextText);
+                    } else {
+                      const trimmed = currentText.trim();
+                      setPromptInput(trimmed ? `${trimmed} • ${chip.promptText}` : chip.promptText);
+                    }
+                  }}
+                  style={{
+                    padding: '3.5px 8px',
+                    borderRadius: 6,
+                    fontSize: '10px',
+                    fontWeight: isChipActive ? 700 : 500,
+                    fontFamily: "'Kantumruy Pro', 'Battambang', system-ui, sans-serif",
+                    background: isChipActive
+                      ? 'rgba(56, 189, 248, 0.2)'
+                      : 'rgba(15, 23, 42, 0.75)',
+                    color: isChipActive ? '#38bdf8' : '#cbd5e1',
+                    border: isChipActive
+                      ? '1px solid rgba(56, 189, 248, 0.55)'
+                      : '1px solid rgba(255, 255, 255, 0.09)',
+                    cursor: 'pointer',
+                    transition: 'all 0.15s ease',
+                  }}
+                >
+                  {chip.label}
+                </button>
+              );
+            })}
+          </div>
+
           <textarea
             rows={2}
             value={promptInput}
             onChange={(e) => setPromptInput(e.target.value)}
             placeholder={dubbingMode === 'dialogue'
-              ? 'ឧ. រឿងភាគបុរាណចិន, តួប្រុសឈ្មោះ លីនហ្វេង... (អាចទុកទំនេរបាន)'
-              : 'ឧ. សម្រាយបែបរន្ធត់ ជក់ចិត្ត ផ្តោតលើប្រយុទ្ធ... (អាចទុកទំនេរបាន)'}
+              ? 'ឧ. រឿងភាគបុរាណចិន, តួប្រុសឈ្មោះ លីនហ្វេង... (អាចចុច Chip ខាងលើ ឬទុកទំនេរបាន)'
+              : 'ឧ. សម្រាយបែបរន្ធត់ ជក់ចិត្ត ផ្តោតលើប្រយុទ្ធ... (អាចចុច Chip ខាងលើ ឬទុកទំនេរបាន)'}
             style={{
               width: '100%', padding: '9px 12px', borderRadius: 8,
               background: '#0a0d15', border: '1px solid #1e2536',

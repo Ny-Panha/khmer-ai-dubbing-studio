@@ -329,22 +329,22 @@ function MediaLibrary({
         <button
           onClick={() => onTabChange && onTabChange('media')}
           className={`media-tab-btn ${activeTab === 'media' ? 'active' : ''}`}
-          title="វីដេអូដើម / Original Video File"
+          title="1. វីដេអូដើម / Original Video File"
         >
-          <Film size={14} />
-          <span>1. Video</span>
+          <Film size={13} />
+          <span>1. វីដេអូ</span>
           {selectedVideo && (
-            <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#34d399', marginLeft: 4 }} />
+            <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#34d399', marginLeft: 3 }} />
           )}
         </button>
 
         <button
           onClick={() => onTabChange && onTabChange('script')}
           className={`media-tab-btn ${activeTab === 'script' ? 'active' : ''}`}
-          title="AI Dialogue Translation & Recap Generator"
+          title="2. បញ្ចូលសំឡេង AI / AI Dialogue Translation & Recap Generator"
         >
-          <Sparkles size={14} />
-          <span>2. Script</span>
+          <Sparkles size={13} />
+          <span>2. សំឡេង AI</span>
           {scriptData?.segments && (
             <span className="tab-badge">{scriptData.segments.length}</span>
           )}
@@ -353,10 +353,10 @@ function MediaLibrary({
         <button
           onClick={() => onTabChange && onTabChange('subtitles')}
           className={`media-tab-btn ${activeTab === 'subtitles' ? 'active' : ''}`}
-          title="Khmer Script & Subtitles Editor"
+          title="3. កែសម្រួលអត្ថបទ / Khmer Script & Subtitles Editor"
         >
-          <Subtitles size={14} />
-          <span>3. Subs</span>
+          <Subtitles size={13} />
+          <span>3. អត្ថបទ</span>
           {scriptData?.segments && (
             <span className="tab-badge">{scriptData.segments.length}</span>
           )}

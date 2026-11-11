@@ -5,20 +5,22 @@
 
 const FEMALE_KEYWORDS = [
   // ភាសាខ្មែរ (ងារ, តួនាទី, សាច់ញាតិ)
-  "ស្រី", "នារី", "ស្ត្រី", "កញ្ញា", "អ្នកនាង", "អ្នកស្រី", "លោកស្រី", "ជំទាវ",
+  "ស្រី", "នារី", "ស្ត្រី", "កញ្ញា", "អ្នកនាង", "អ្នកនាងតូច", "អ្នកស្រី", "លោកស្រី", "ជំទាវ",
   "ម្តាយ", "ម្ដាយ", "ម៉ែ", "ម៉ាក់", "យាយ", "លោកយាយ", "មីង", "អ្នកមីង", "អ៊ំស្រី",
   "បងស្រី", "ប្អូនស្រី", "កូនស្រី", "ក្មួយស្រី", "ចៅស្រី", "ប្រពន្ធ", "ភរិយា",
-  "ព្រះមហេសី", "មហេសី", "ព្រះនាង", "ម្ចាស់ក្សត្រី", "ម្ចាស់បងស្រី", "ស្នំ", "អ្នកម្នាង",
+  "ព្រះមហេសី", "មហេសី", "ព្រះនាង", "ម្ចាស់ក្សត្រី", "ម្ចាស់បងស្រី", "សិស្សប្អូនស្រី", "សិស្សច្បងស្រី", "ស្នំ", "អ្នកម្នាង",
   "តួស្រី", "តួឯកស្រី", "តួរងស្រី", "មិត្តស្រី", "សង្សារស្រី", "លេខាស្រី", "គិលានុបដ្ឋាយិកា",
   "អ្នកគ្រូ", "ដូនជី", "ស្រីមុំ", "នាង", "កុមារី", "មាតា", "ធីតា", "ម្ចាស់ស្រី", "ម្ចាស់អូន",
+  "ខ្ញុំម្ចាស់", "នាងខ្ញុំ",
   // AI System / ប្រព័ន្ធ (Default Female / Sreymom)
   "ប្រព័ន្ធ", "ប្រព័ន្ធ ai", "ប្រព័ន្ធជំនួយ", "ប្រព័ន្ធណែនាំ", "ប្រព័ន្ធសំឡេង",
   "system", "ai system", "系统", "系统提示",
   // ភាសាចិន (Chinese Drama Cues)
   "女", "女主", "女主角", "女配", "女孩", "女人", "女生", "女士", "小姐", "姑娘",
-  "夫人", "太太", "妈妈", "母亲", "娘", "奶奶", "外婆", "婆婆", "阿姨", "姑姑",
-  "姐姐", "妹妹", "女儿", "妻子", "老婆", "媳妇", "公主", "皇后", "皇太后", "太后",
-  "妃", "贵妃", "娘娘", "丫鬟", "婢女", "师姐", "师妹", "师太", "仙女", "侍女", "医女",
+  "夫人", "太太", "妈妈", "母亲", "娘", "妈", "奶奶", "外婆", "婆婆", "阿姨", "姑姑",
+  "姐姐", "妹妹", "姐", "妹", "女儿", "妻子", "老婆", "闺蜜", "媳妇", "公主", "皇后", "皇太后", "太后",
+  "王妃", "妃", "贵妃", "娘娘", "丫鬟", "婢女", "师姐", "师妹", "师太", "仙子", "仙女", "侍女", "医女",
+  "臣妾", "奴婢", "本宫", "本妃",
   // ភាសាអង់គ្លេស (English Cues)
   "female", "woman", "girl", "lady", "miss", "ms", "mrs", "madam", "ma'am",
   "mother", "mom", "mum", "grandma", "grandmother", "aunt", "sister", "daughter",
@@ -31,14 +33,16 @@ const MALE_KEYWORDS = [
   "ប្រុស", "បុរស", "លោក", "ឧកញ៉ា", "ឯកឧត្តម", "លោកប្រធាន", "ប្រធាន", "ថៅកែ",
   "ឪពុក", "ពុក", "ប៉ា", "តា", "លោកតា", "ពូ", "លោកពូ", "អ៊ំប្រុស", "មា",
   "បងប្រុស", "ប្អូនប្រុស", "កូនប្រុស", "ក្មួយប្រុស", "ចៅប្រុស", "ប្តី", "ប្ដី", "ស្វាមី",
-  "ព្រះអង្គ", "ព្រះរាជា", "ស្តេច", "ស្ដេច", "ព្រះបុត្រា", "រាជបុត្រ", "ម្ចាស់បង", "លោកម្ចាស់",
+  "ព្រះអង្គ", "ព្រះអង្គម្ចាស់", "ព្រះរាជា", "ស្តេច", "ស្ដេច", "ព្រះបុត្រា", "រាជបុត្រ", "ម្ចាស់បង", "សិស្សច្បង", "លោកម្ចាស់",
+  "ទូលបង្គំ", "យើងខ្ញុំព្រះករុណា", "ខ្ញុំបាទ",
   "មេទ័ព", "អង្គរក្ស", "កងការពារ", "តួប្រុស", "តួឯកប្រុស", "តួរងប្រុស", "មិត្តប្រុស",
   "លោកគ្រូ", "ព្រះសង្ឃ", "លោកគ្រូពេទ្យ", "អ្នកសម្រាយរឿង", "ពិសិដ្ឋ", "គាត់", "ចៅហ្វាយ", "កំលោះ",
   // ភាសាចិន (Chinese Drama Cues)
   "男", "男主", "男主角", "男配", "男孩", "男人", "男生", "先生", "公子", "少爷",
-  "总裁", "老板", "董事长", "总", "爸爸", "父亲", "爹", "爷爷", "外公", "叔叔", "伯伯",
-  "哥哥", "弟弟", "儿子", "丈夫", "老公", "殿下", "太子", "皇上", "皇帝", "王爷", "陛下",
-  "将军", "侍卫", "保镖", "师兄", "师弟", "师父", "大师", "旁白", "太监", "掌柜", "刺客", "大人",
+  "总裁", "老板", "董事长", "总", "爸爸", "父亲", "爹", "爸", "爷爷", "外公", "叔叔", "伯伯",
+  "哥哥", "弟弟", "大哥", "哥", "弟", "儿子", "丈夫", "老公", "殿下", "太子", "皇上", "皇帝", "王爷", "陛下",
+  "将军", "侍卫", "保镖", "师兄", "师弟", "师尊", "师父", "大师", "旁白", "太监", "掌柜", "刺客", "大人",
+  "朕", "本王", "本尊", "本座", "微臣", "老夫",
   // ភាសាអង់គ្លេស (English Cues)
   "male", "man", "boy", "gentleman", "mr", "sir", "boss", "ceo", "president", "chairman",
   "father", "dad", "grandpa", "grandfather", "uncle", "brother", "son", "husband",
@@ -46,9 +50,9 @@ const MALE_KEYWORDS = [
   "actor", "hero", "narrator", "he", "him", "his", "piseth"
 ];
 
-// Unambiguous 1st-person self-references only (NOT 2nd or 3rd person words like នាង, លោក, ម៉ាក់, ប៉ា)
-const KHMER_FEMALE_PRONOUNS = ["នាងខ្ញុំ", "ខ្ញុំម្ចាស់"];
-const KHMER_MALE_PRONOUNS = ["ខ្ញុំបាទ", "ទូលបង្គំ"];
+// Unambiguous 1st-person self-references only (NOT 2nd or 3rd person addressed titles like ព្រះអង្គ, 皇上, នាង, លោក)
+const KHMER_FEMALE_PRONOUNS = ["នាងខ្ញុំ", "ខ្ញុំម្ចាស់", "臣妾", "奴婢", "本宫", "本妃"];
+const KHMER_MALE_PRONOUNS = ["ខ្ញុំបាទ", "ទូលបង្គំ", "យើងខ្ញុំព្រះករុណា", "朕", "微臣", "本王", "本尊", "本座", "老夫"];
 
 const VOICE_PROFILES = {
   female: {
@@ -83,10 +87,73 @@ function matchesSpeakerKeyword(lowerName = "", kw = "") {
 
 /**
  * 1. វិភាគភេទតួអង្គ ("MALE" | "FEMALE" | "UNKNOWN")
- * Audio & Acoustic first, followed by explicit character title/name.
- * Dialogue text alone MUST NOT falsely classify speaker gender.
+ * Supports both `detectSpeakerGender(speakerName, explicitGender, khmerText)`
+ * and `detectSpeakerGender(segment, context)`:
+ * - Priority 1: Explicit `segment.visualGender` ("male" / "female") when confidence is high.
+ * - Priority 2: Explicit `segment.voiceGender` / `segment.gender` / `castRegistry` gender.
+ * - Priority 3: Speaker title/name keywords (`FEMALE_KEYWORDS` before `MALE_KEYWORDS`) and
+ *   1st-person self-pronouns (`KHMER_FEMALE_PRONOUNS` / `KHMER_MALE_PRONOUNS`),
+ *   strictly distinguishing self-pronouns from addressed pronouns.
  */
 function detectSpeakerGender(speakerName = "", explicitGender = "", khmerText = "") {
+  if (speakerName && typeof speakerName === "object") {
+    const seg = speakerName;
+    const ctx = (explicitGender && typeof explicitGender === "object") ? explicitGender : {};
+
+    // Priority 1: Explicit segment.visualGender ("male" / "female") when confidence is high
+    const visGender = String(seg.visualGender || ctx.visualGender || "").trim().toLowerCase();
+    const visConf = typeof seg.genderConfidence === "number" ? seg.genderConfidence : 0.85;
+    if ((visGender === "female" || visGender === "f") && visConf >= 0.6) {
+      return "FEMALE";
+    }
+    if ((visGender === "male" || visGender === "m") && visConf >= 0.6) {
+      return "MALE";
+    }
+
+    // Priority 2: Explicit voiceGender / gender from Gemini's castRegistry or segment
+    const castList = Array.isArray(ctx.castRegistry)
+      ? ctx.castRegistry
+      : (Array.isArray(seg.castRegistry) ? seg.castRegistry : []);
+    const castEntry = castList.find(
+      (c) =>
+        c &&
+        ((seg.speakerId && c.speakerId === seg.speakerId) ||
+          (seg.speaker && (c.speakerLabelKh === seg.speaker || c.speakerId === seg.speaker)))
+    );
+    const explicitCastGender = String(
+      castEntry?.voiceGender ||
+      castEntry?.gender ||
+      seg.castGender ||
+      seg.voiceGender ||
+      seg.gender ||
+      seg.speakerGender ||
+      (typeof explicitGender === "string" ? explicitGender : "") ||
+      ""
+    ).trim().toLowerCase();
+
+    if (explicitCastGender === "female" || explicitCastGender === "f" || explicitCastGender === "ស្រី" || explicitCastGender === "girl" || explicitCastGender === "woman") {
+      return "FEMALE";
+    }
+    if (explicitCastGender === "male" || explicitCastGender === "m" || explicitCastGender === "ប្រុស" || explicitCastGender === "boy" || explicitCastGender === "man") {
+      return "MALE";
+    }
+
+    // Priority 3: Speaker title/name keywords & 1st-person self-pronouns
+    const segSpeaker = String(seg.speaker || seg.speakerName || "").trim();
+    const segDialogue = [
+      seg.khmerText,
+      seg.khmer,
+      seg.khmerTranslatedText,
+      seg.originalChineseText,
+      seg.chineseText,
+      seg.originalText,
+      khmerText,
+    ]
+      .filter(Boolean)
+      .join(" ");
+    return detectSpeakerGender(segSpeaker, "", segDialogue);
+  }
+
   const cleanExplicit = String(explicitGender || "").trim().toLowerCase();
   if (cleanExplicit === "female" || cleanExplicit === "f" || cleanExplicit === "ស្រី" || cleanExplicit === "girl" || cleanExplicit === "woman") {
     return "FEMALE";
@@ -97,7 +164,7 @@ function detectSpeakerGender(speakerName = "", explicitGender = "", khmerText = 
 
   const cleanName = String(speakerName || "").toLowerCase().trim();
   if (cleanName) {
-    // 1. ពិនិត្យពាក្យគន្លឹះភេទស្រីមុនគេ (ការពារពាក្យ "លោកស្រី" កុំឱ្យច្រឡំជាមួយ "លោក")
+    // 1. ពិនិត្យពាក្យគន្លឹះភេទស្រីមុនគេ (ការពារពាក្យ "លោកស្រី" ឬ "ម្ចាស់បងស្រី" កុំឱ្យច្រឡំជាមួយ "លោក" ឬ "ម្ចាស់បង")
     for (const kw of FEMALE_KEYWORDS) {
       if (matchesSpeakerKeyword(cleanName, kw)) {
         return "FEMALE";
@@ -112,7 +179,7 @@ function detectSpeakerGender(speakerName = "", explicitGender = "", khmerText = 
     }
   }
 
-  // 3. វិភាគសព្វនាមបញ្ជាក់ខ្លួនឯងច្បាស់លាស់ក្នុងប្រយោគសន្ទនាខ្មែរ (1st-person pronouns only)
+  // 3. វិភាគសព្វនាមបញ្ជាក់ខ្លួនឯងច្បាស់លាស់ក្នុងប្រយោគសន្ទនាខ្មែរ និងចិន (1st-person self-pronouns only)
   const cleanDialogue = String(khmerText || "").trim();
   if (cleanDialogue) {
     for (const pronoun of KHMER_FEMALE_PRONOUNS) {
@@ -277,6 +344,14 @@ function syncSegmentsWithSpeakerRegistry(segments = [], customSpeakerVoiceMap = 
     } else if (seg.acousticGender === "male" && (seg.acousticConfidence || 0) >= 0.55) {
       entry.maleScore += 2.5 * (seg.acousticConfidence || 0.8);
       entry.acousticObservations += 1;
+    }
+
+    // 1.5. Multimodal Visual Face/Costume Evidence (Weight: 2.2)
+    const rawVisualGender = String(seg.visualGender || "").toLowerCase();
+    if (rawVisualGender === "female") {
+      entry.femaleScore += 2.2;
+    } else if (rawVisualGender === "male") {
+      entry.maleScore += 2.2;
     }
 
     // 2. Keyword & Pronoun Evidence (Computed purely from name/pronouns, never stale voiceGender)
@@ -618,6 +693,8 @@ function detectGenderFromAcousticPitch(f0, confidence = 0.9) {
 module.exports = {
   FEMALE_KEYWORDS,
   MALE_KEYWORDS,
+  KHMER_FEMALE_PRONOUNS,
+  KHMER_MALE_PRONOUNS,
   FEMALE_MARKERS: FEMALE_KEYWORDS,
   MALE_MARKERS: MALE_KEYWORDS,
   VOICE_PROFILES,
