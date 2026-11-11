@@ -894,3 +894,49 @@ export async function fetchJobStatusApi(jobId, { seriesId = null, episodeId = nu
   const res = await fetch(`/api/jobs/${encodeURIComponent(jobId)}/status${qs ? `?${qs}` : ''}`, { signal });
   return await parseResponseJson(res, `Failed to fetch status for job ${jobId}`);
 }
+
+/**
+ * Trigger AI Vocal Separation (Demucs Clean BGM) for a single episode or video
+ */
+export async function separateAudioApi({ videoPath, seriesId = null, episodeId = null, twoStems = 'vocals', model = 'htdemucs', signal } = {}) {
+  const res = await fetch('/api/audio/separate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ videoPath, seriesId, episodeId, twoStems, model }),
+    signal,
+  });
+  return await parseResponseJson(res, 'Failed to trigger audio separation');
+}
+
+/**
+ * Poll AI Vocal Separation progress for a given videoPath
+ */
+export async function getSeparationProgressApi(videoPath, { signal } = {}) {
+  const res = await fetch(`/api/audio/separation-progress?videoPath=${encodeURIComponent(videoPath || '')}`, { signal });
+  return await parseResponseJson(res, 'Failed to get separation progress');
+}
+
+/**
+ * Check AI Vocal Separation final status for a given videoPath
+ */
+export async function getSeparationStatusApi(videoPath, { signal } = {}) {
+  const res = await fetch('/api/audio/separation-status', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ videoPath }),
+    signal,
+  });
+  return await parseResponseJson(res, 'Failed to check separation status');
+}
+
+/**
+ * Kill active AI Vocal Separation process
+ */
+export async function killSeparationApi({ videoPath = '', jobId = 'all' } = {}) {
+  const res = await fetch('/api/audio/separate-kill', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ videoPath, jobId }),
+  });
+  return await parseResponseJson(res, 'Failed to kill separation');
+}

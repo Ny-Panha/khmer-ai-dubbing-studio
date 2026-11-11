@@ -1,44 +1,57 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
-- **Environment**: Antigravity IDE (Clean Unified 3-Step Auto-Pipeline & Batch UI Fix)
-- **Timestamp**: 2026-11-11T17:15:00+07:00
+- **Environment**: Antigravity IDE (Lock Selection During Batch & Translation Execution + Fix TTS Queue Display)
+- **Timestamp**: 2026-11-11T20:01:00+07:00
 
-## Summary: Implemented Clean Unified 3-Step Auto-Pipeline & Batch UI Fix
-1. **Eliminated Blocking Warning Modal (`⚠️ សូមជ្រើសរើសភាគជាមុនសិន`)**:
-   - In [`GeminiRouteModal.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/dashboard/GeminiRouteModal.jsx): `handleStartBatchTranslate`, `handleBatchGenerateTTS`, `handleBatchDemucsSeparation`, and `handleRunAll3Steps` now use Smart Auto-Targeting. If 0 checkboxes are selected (`selectedEpIds.size === 0`), they automatically target remaining unscripted / unvoiced / undemucsed / incomplete episodes, update `selectedEpIds`, and run immediately without throwing the blocker dialog.
-2. **Fixed Broken Selection Pills**:
-   - Added `allSelectableEpisodes` and `incompleteEpisodes` (`!hasScript || brokenCount > 0 || !hasAudio || !hasDemucs`).
-   - Cleaned selection pills:
-     - `ទាំងអស់ (${episodes.length} ភាគ)` (`21 ភាគ`)
-     - `ភាគមិនទាន់ចប់ (${incompleteEpisodes.length} ភាគ)`
-     - `២ ភាគដំបូង (2 EPs)`
-     - `៤ ភាគដំបូង (4 EPs)`
-     - `ដកជ្រើសរើស (Clear)` (visible when `selectedEpIds.size > 0`)
-3. **Unified 1-Click 3-Step Auto-Pipeline Engine (`runEpisodeFullPipeline`)**:
-   - Added `runEpisodeFullPipeline(ep)`: Sequentially runs:
-     1. Translate/Repair Script (`executeBatchTranslateEnqueue` / `handleRepairBrokenSegments`)
-     2. AI Khmer Voice TTS (`handleBatchGenerateTTS`)
-     3. Demucs AI Clean BGM (`handleBatchDemucsSeparation`)
-   - Added `▶ ផលិតទាំង 3 ជំហាន` button to every Episode Card footer (`btn-auto-run-ep-`).
-   - Integrated Master CTA `🚀 ផលិតស្វ័យប្រវត្តិទាំង 3 ជំហាន (Run All 3 Steps)` on the top bar.
-4. **Decluttered Top Header & Toolbar (Zero Overflow, < 140px Height)**:
-   - `isScriptSetupExpanded = false` by default (collapsed into a clean 1-line summary bar).
-   - Replaced 3 giant stacked progress bars with a sleek single-row `grid-cols-3` summary pill row (`📝 1. Script`, `🎙️ 2. សំឡេង AI`, `🔇 3. Clean BGM`).
-   - Consolidated 2 overflowing toolbar rows into 1 clean wrapping studio control bar with primary CTA, secondary compact step buttons, view filters, stops, and export.
-5. **Collapsed Console Logs by Default**:
-   - In [`EpisodeTranslateProgressCard.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/dashboard/route-runners/EpisodeTranslateProgressCard.jsx), [`EpisodeTtsProgressCard.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/dashboard/route-runners/EpisodeTtsProgressCard.jsx), and [`EpisodeDemucsProgressCard.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/dashboard/route-runners/EpisodeDemucsProgressCard.jsx): `showConsole = false` by default, leaving maximum vertical space for episode cards.
-6. **Automated Verification**:
-   - `npm --prefix frontend run lint`: **PASS (`0 errors`)**.
-   - `npm --prefix frontend run build`: **PASS (`1.24s`, `0 errors`)**.
-   - `node --test backend/tests/clean_unified_3step_batch_pipeline.test.js`: **PASS (`5/5 PASS`)**.
-   - `node --test backend/tests/full_project_master_upgrade.test.js`: **PASS (`8/8 PASS`)**.
-   - Combined test suite: **PASS (`13/13 PASS`)**.
+## Summary: Selection Locking During Active Batch Execution & Accurate Queue UI
+1. **Core Problem Solved ("ពេល run translation ហើយ ម៉េចបាន select បានទៀត? fix code ខ្លាំងហ្នឹង")**:
+   - While batch translation, TTS, or Demucs was running in `GeminiRouteModal.jsx`, user could still click top selection pills (`ទាំងអស់`, `ភាគមិនទាន់ចប់`, `២ ភាគដំបូង`, `៤ ភាគដំបូង`, `ដកជ្រើសរើស`) or toggle individual card checkboxes.
+   - This caused selection desynchronization, corrupted targeting during active runs, and triggered confusing alert prompts.
+   - Furthermore, queued TTS episodes all displayed `កំពុង Render សំឡេង... (0/230)` simultaneously rather than distinguishing active render from waiting in queue.
+2. **Defensive Fixes Applied**:
+   - **`GeminiRouteModal.jsx`**:
+     - Defined unified boolean `isBatchExecutionActive` checking `isStartingBatch`, `hasActiveTranslateQueue`, `isGeneratingBatchTTS`, `isSeparatingBatchDemucs`, `isRepairingBroken`, `runningPipelineEpIds.size > 0`, and `runnerStates`.
+     - Guarded `toggleSelect`, `handleSelectCount`, `handleSelectAllEpisodes`, `handleSelectIncompleteEpisodes`, `handleClearSelection`, and `handleSelectAllUnscripted` with `if (isBatchExecutionActive) return;`.
+     - Added `disabled={isBatchExecutionActive}` to all 5 quick-select pills with `not-allowed` cursor, reduced opacity, and visual status indicator: `🔒 កំពុងដំណើរការ (Selection Locked)`.
+     - Guarded episode card `onClick` and checkbox with `disabled={!hasVideo || isRunning || isQueued || isBatchExecutionActive}`.
+     - Fixed footer rendering: Only `activeTtsEpisodeId === ep.id` displays `កំពុង Render សំឡេង... (${current}/${total})`; remaining queued episodes display `⏳ រង់ចាំក្នុង Queue`.
+     - Bottom modal helper text updates to `🔒 កំពុងដំណើរការ Batch មិនអាចផ្លាស់ប្តូរការជ្រើសរើសបានទេ`.
+3. **Automated Verification**:
+   - `node --test backend/tests/clean_unified_3step_batch_pipeline.test.js`: **6/6 PASS**
+   - `node --test backend/tests/reusable_1by1_dubbing_feature.test.js`: **9/9 PASS**
+   - `node --test backend/tests/full_project_master_upgrade.test.js`: **8/8 PASS**
+   - Combined test suite: **23/23 PASS**
+   - `npm --prefix frontend run build`: **PASS (1.25s, 0 errors)**
 
 ## Active Environment
 - **Backend API**: `http://localhost:5000`
 - **Frontend App**: `http://localhost:5173`
-- **Next Steps**: Refresh `http://localhost:5173/` in browser to test the sleek, unified 3-step auto-pipeline.
+- **Next Steps**: Test batch running — selection stays strictly locked until execution completes or user presses Kill/Stop.
+
+---
+
+## Previous Session
+
+## Summary: Synchronized UI ⟷ Backend Execution & Kill Lifecycle
+1. **Core Problem Solved ("បើ UI ធ្វើ backend ក៏ run តែបើ UI kill backend ក៏ kill ដែរ")**:
+   - Previously, clicking "Stop" in UI only aborted the local React fetch signal, leaving the background backend child processes (Demucs Python workers / JobQueue workers) running in the background.
+2. **True Two-Way Kill Protocol Implemented**:
+   - **`DubbingRunnerContext.jsx`**: When `stopStep(stepType)` is called:
+     - Instantly aborts the client fetch controller.
+     - Automatically fires `POST /api/audio/separate-kill` (for `clean_bgm` or `all3`).
+     - Automatically fires `POST /api/jobs/kill` (for `translate` or `all3`).
+   - **`audioSeparationService.js`**: `killSeparationJob('all')` triggers both `taskkill /pid ${proc.pid} /T /F` and `killAllDemucsSystemProcesses()` (terminating any python demucs process at the Windows OS level).
+   - **`GeminiRouteModal.jsx`**: When the modal closes (`!isOpen`), it dispatches `/api/audio/separate-kill` and sets all cancel flags, ensuring no hidden background loops survive.
+3. **Automated Verification**:
+   - `node --test backend/tests/*.test.js`: **22/22 PASS**
+   - `npm --prefix frontend run build`: **PASS (646ms, 0 errors)**
+   - Active Python processes: **0 (clean RAM & CPU)**.
+
+## Active Environment
+- **Backend API**: `http://localhost:5000`
+- **Frontend App**: `http://localhost:5173`
+- **Next Steps**: Hard-refresh browser (`Ctrl + F5`) and test Run / Stop on UI.
 
 ---
 

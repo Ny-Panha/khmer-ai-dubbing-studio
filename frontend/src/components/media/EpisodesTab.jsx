@@ -7,6 +7,7 @@ import { splitVideoEpisodesApi } from '../../services/api';
 import { formatTimecode } from '../../utils/formatTime';
 import { isCorruptedOrMojibakeTitle } from '../../utils/projectStorage';
 import { checkEpisodeHasScript, getEpisodeSegmentCount } from '../dashboard/geminiRouteHelpers';
+import { DubbingStepButton, useDubbingFeature } from '../../features/dubbing-runner';
 
 export default function EpisodesTab({
   seriesList = [],
@@ -683,6 +684,16 @@ export default function EpisodesTab({
                     <span>Rendered MP4</span>
                   </span>
                 )}
+              </div>
+
+              {/* Episode Quick 1-by-1 Dubbing Action */}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 6, paddingTop: 6, borderTop: '1px solid rgba(255, 255, 255, 0.05)' }}>
+                <DubbingStepButton
+                  step="all3"
+                  episodes={[ep]}
+                  variant="pill"
+                  onComplete={onRefreshSeries}
+                />
               </div>
             </div>
           );

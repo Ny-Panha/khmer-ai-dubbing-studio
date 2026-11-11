@@ -94,6 +94,12 @@ if (require.main === module) {
     console.warn("[Server Startup] ⚠️ Crash recovery warning:", recErr.message);
   }
 
+  // Startup Demucs Cleanup: Terminate any orphaned Python demucs worker processes left by previous server crash/restart
+  try {
+    const audioSeparationService = require("./services/audioSeparationService");
+    audioSeparationService.killAllDemucsSystemProcesses();
+  } catch (_) {}
+
   // Register canonical pipeline worker BEFORE listening so queued/recovered jobs start cleanly in worker slots
   ensurePipelineWorkerRegistered(productionJobQueue);
 

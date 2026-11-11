@@ -3,6 +3,7 @@ import {
   Sparkles, Languages, BookOpen, Loader2, AlertCircle, ArrowRight, CheckCircle2, Mic, Volume2, Film, RefreshCw, ChevronDown, ChevronUp, Settings2, FileText, Check, Terminal, FileUp
 } from 'lucide-react';
 import { importSubtitlesApi } from '../../services/api';
+import { DubbingStepButton, useDubbingFeature } from '../../features/dubbing-runner';
 
 const GENRE_OPTIONS = [
   { id: 'auto', label: '✨ Auto (ស្គាល់ស្វ័យប្រវត្តិ)', hint: 'AI វិភាគ Audio + OCR កំណត់ប្រភេទរឿងស្វ័យប្រវត្តិ' },
@@ -1706,6 +1707,22 @@ export default function DubbingModeTab({
             )}
           </div>
         </button>
+
+        {activeEpisode && (
+          <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <DubbingStepButton
+              step="all3"
+              episodes={[activeEpisode]}
+              variant="card"
+              setupOptions={{
+                pipelineMode: generationMode,
+                dubbingMode,
+                genre: selectedGenre,
+                narratorGender,
+              }}
+            />
+          </div>
+        )}
 
         {!selectedVideo && (
           <div style={{

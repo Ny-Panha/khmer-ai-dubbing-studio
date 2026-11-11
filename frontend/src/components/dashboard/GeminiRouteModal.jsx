@@ -36,6 +36,7 @@ import EpisodeTranslateProgressCard from './route-runners/EpisodeTranslateProgre
 import EpisodeTtsProgressCard from './route-runners/EpisodeTtsProgressCard';
 import EpisodeDemucsProgressCard from './route-runners/EpisodeDemucsProgressCard';
 import StudioConfirmDialog from '../common/StudioConfirmDialog';
+import { DubbingStepCardsBar, DubbingStepButton, useDubbingFeature } from '../../features/dubbing-runner';
 
 const EMPTY_EPISODES = [];
 
@@ -96,6 +97,9 @@ export default function GeminiRouteModal({
 }) {
   const episodes = (activeSeries && Array.isArray(activeSeries.episodes)) ? activeSeries.episodes : EMPTY_EPISODES;
 
+  // Dubbing sequential runner feature state
+  const { runnerStates, activeEpisodeIds: runnerActiveEpIds } = useDubbingFeature(episodes);
+
   // Selection & Batch Script Setup configuration state
   const [selectedEpIds, setSelectedEpIds] = useState(new Set());
   const [cardStageView, setCardStageView] = useState('all'); // 'all' | 'translate' | 'tts' | 'demucs'
@@ -148,6 +152,9 @@ export default function GeminiRouteModal({
   const [isRepairingBroken, setIsRepairingBroken] = useState(false);
   const [trackedRepairJobIds, setTrackedRepairJobIds] = useState([]);
   const [repairProgressSummary, setRepairProgressSummary] = useState(null);
+
+  // Auto-Pipeline Run All 3 Steps State
+  const [runningPipelineEpIds, setRunningPipelineEpIds] = useState(new Set());
 
   const isGeneratingBatchTtsRef = useRef(false);
   const isSeparatingBatchDemucsRef = useRef(false);
@@ -245,11 +252,23 @@ export default function GeminiRouteModal({
     }
   }, []);
 
-  // Cleanup all running polling timers and pending confirm dialog on modal unmount or when modal closes
+  // Cleanup all running polling timers and pending loops when modal closes or unmounts
   useEffect(() => {
     if (!isOpen) {
+      isDemucsCancelledRef.current = true;
+      isTtsCancelledRef.current = true;
+      isTranslateCancelledRef.current = true;
+      setIsSeparatingBatchDemucs(false);
+      setIsGeneratingBatchTTS(false);
+      setIsStartingBatch(false);
       activeTimersRef.current.forEach((t) => clearInterval(t));
       activeTimersRef.current.clear();
+      // Transmit kill to backend so no zombie Demucs or Jobs continue running when modal closes
+      fetch('/api/audio/separate-kill', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jobId: 'all' }),
+      }).catch(() => {});
       if (confirmResolverRef.current) {
         try { confirmResolverRef.current(false); } catch (_) {}
         confirmResolverRef.current = null;
@@ -257,6 +276,9 @@ export default function GeminiRouteModal({
       setConfirmDialog(null);
     }
     return () => {
+      isDemucsCancelledRef.current = true;
+      isTtsCancelledRef.current = true;
+      isTranslateCancelledRef.current = true;
       activeTimersRef.current.forEach((t) => clearInterval(t));
       activeTimersRef.current.clear();
       if (confirmResolverRef.current) {
@@ -438,6 +460,21 @@ export default function GeminiRouteModal({
   const hasActiveTranslateQueue = activeSeriesTranslateJobs.length > 0;
   const wasTranslateQueueActiveRef = useRef(false);
 
+  // Unified batch execution active flag: locks episode selection & prevents race conditions
+  const isBatchExecutionActive = Boolean(
+    isStartingBatch ||
+    hasActiveTranslateQueue ||
+    isGeneratingBatchTTS ||
+    isSeparatingBatchDemucs ||
+    isRepairingBroken ||
+    (runningPipelineEpIds && runningPipelineEpIds.size > 0) ||
+    (runnerStates?.translate?.status === 'running') ||
+    (runnerStates?.voice?.status === 'running') ||
+    (runnerStates?.clean_bgm?.status === 'running') ||
+    (runnerStates?.all3?.status === 'running') ||
+    (runnerActiveEpIds && runnerActiveEpIds.size > 0)
+  );
+
   // Trigger series refresh automatically whenever a queued/running translate job finishes via SSE
   const seenCompletedJobsRef = useRef(new Set());
   const hasInitializedSseRef = useRef(false);
@@ -617,7 +654,7 @@ export default function GeminiRouteModal({
 
   // Auto-select episodes by default on open (pending work if any, else all episodes)
   useEffect(() => {
-    if (isOpen && episodes.length > 0 && selectedEpIds.size === 0) {
+    if (isOpen && episodes.length > 0 && selectedEpIds.size === 0 && !isBatchExecutionActive) {
       if (incompleteEpisodes.length > 0) {
         const toPick = incompleteEpisodes.slice(0, Math.min(4, incompleteEpisodes.length));
         setSelectedEpIds(new Set(toPick.map((ep) => ep.id)));
@@ -625,9 +662,10 @@ export default function GeminiRouteModal({
         setSelectedEpIds(new Set(allSelectableEpisodes.map((ep) => ep.id)));
       }
     }
-  }, [isOpen, episodes.length, incompleteEpisodes, allSelectableEpisodes]);
+  }, [isOpen, episodes.length, incompleteEpisodes, allSelectableEpisodes, isBatchExecutionActive]);
 
   const toggleSelect = (id) => {
+    if (isBatchExecutionActive) return;
     const next = new Set(selectedEpIds);
     if (next.has(id)) next.delete(id);
     else next.add(id);
@@ -635,24 +673,29 @@ export default function GeminiRouteModal({
   };
 
   const handleSelectCount = (count) => {
+    if (isBatchExecutionActive) return;
     const pool = incompleteEpisodes.length > 0 ? incompleteEpisodes : allSelectableEpisodes;
     const picked = pool.slice(0, count);
     setSelectedEpIds(new Set(picked.map((ep) => ep.id)));
   };
 
   const handleSelectAllEpisodes = () => {
+    if (isBatchExecutionActive) return;
     setSelectedEpIds(new Set(allSelectableEpisodes.map((ep) => ep.id)));
   };
 
   const handleSelectIncompleteEpisodes = () => {
+    if (isBatchExecutionActive) return;
     setSelectedEpIds(new Set(incompleteEpisodes.map((ep) => ep.id)));
   };
 
   const handleClearSelection = () => {
+    if (isBatchExecutionActive) return;
     setSelectedEpIds(new Set());
   };
 
   const handleSelectAllUnscripted = () => {
+    if (isBatchExecutionActive) return;
     const unscripted = allSelectableEpisodes.filter((ep) => !checkEpisodeHasScript(ep));
     setSelectedEpIds(new Set(unscripted.map((ep) => ep.id)));
   };
@@ -1785,6 +1828,11 @@ export default function GeminiRouteModal({
                 ],
               },
             }));
+            const isFatal = /memory|alloc_cpu|DefaultCPUAllocator|refused|code 1|500/i.test(String(postErrorMsg || ''));
+            if (isFatal) {
+              setBatchError(`❌ ការបំបែកសំឡេង Demucs ជួបបញ្ហា RAM / Memory (${postErrorMsg || ''}) — បានបញ្ឈប់ដំណើរការភាគបន្ទាប់ជាស្វ័យប្រវត្តិ!`);
+              break;
+            }
           }
         } catch (dErr) {
           clearInterval(demucsPollTimer);
@@ -1804,6 +1852,11 @@ export default function GeminiRouteModal({
               ],
             },
           }));
+          const isFatal = /memory|alloc_cpu|refused|Failed to fetch|NetworkError/i.test(String(dErr?.message || ''));
+          if (isFatal) {
+            setBatchError(`❌ បរាជ័យក្នុងការតភ្ជាប់បំបែកសំឡេង Demucs (${dErr.message || ''}) — បានបញ្ឈប់ដំណើរការភាគបន្ទាប់ជាស្វ័យប្រវត្តិ!`);
+            break;
+          }
         } finally {
           clearInterval(demucsPollTimer);
           activeTimersRef.current.delete(demucsPollTimer);
@@ -1843,8 +1896,6 @@ export default function GeminiRouteModal({
   };
 
   // ── Master Run All 3 Steps (Auto-Pipeline: Translate -> AI Khmer Voice -> Demucs Clean BGM) ──
-  const [runningPipelineEpIds, setRunningPipelineEpIds] = useState(new Set());
-
   const handleRunAll3Steps = async (targetOverride = null) => {
     let targetEpisodes = (Array.isArray(targetOverride) && targetOverride.length > 0)
       ? targetOverride
@@ -1881,11 +1932,11 @@ export default function GeminiRouteModal({
     // 2. Trigger Khmer TTS for episodes with script
     const readyForTts = targetEpisodes.filter((ep) => checkEpisodeHasScript(ep));
     if (readyForTts.length > 0) {
-      handleBatchGenerateTTS(readyForTts);
+      await handleBatchGenerateTTS(readyForTts);
     }
 
     // 3. Trigger Demucs vocal separation
-    handleBatchDemucsSeparation(targetEpisodes);
+    await handleBatchDemucsSeparation(targetEpisodes);
   };
 
   // 1-Click 3-Step Auto-Production for a single Episode Card
@@ -2223,11 +2274,33 @@ export default function GeminiRouteModal({
           >
             <span style={{ fontSize: '0.73rem', color: '#94A3B8', fontWeight: 700 }}>ជ្រើសរើសភាគ៖</span>
 
+            {isBatchExecutionActive && (
+              <span
+                data-testid="selection-locked-badge"
+                style={{
+                  fontSize: '0.69rem',
+                  fontWeight: 700,
+                  color: '#38BDF8',
+                  background: 'rgba(56, 189, 248, 0.12)',
+                  padding: '2px 8px',
+                  borderRadius: 6,
+                  border: '1px solid rgba(56, 189, 248, 0.35)',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 4,
+                }}
+              >
+                <Loader2 size={11} className="animate-spin" />
+                <span>🔒 កំពុងដំណើរការ (Selection Locked)</span>
+              </span>
+            )}
+
             {/* Pill 1: ទាំងអស់ (${episodes.length} ភាគ) */}
             <button
               type="button"
               data-testid="pill-select-all"
               onClick={handleSelectAllEpisodes}
+              disabled={isBatchExecutionActive}
               className="btn-tactile"
               style={{
                 padding: '4px 11px',
@@ -2241,9 +2314,10 @@ export default function GeminiRouteModal({
                 border: (selectedEpIds.size === episodes.length && episodes.length > 0) ? '1px solid rgba(56, 189, 248, 0.55)' : '1px solid rgba(255, 255, 255, 0.08)',
                 color: (selectedEpIds.size === episodes.length && episodes.length > 0) ? '#38BDF8' : '#CBD5E1',
                 transition: 'all 0.15s ease',
-                cursor: 'pointer',
+                cursor: isBatchExecutionActive ? 'not-allowed' : 'pointer',
+                opacity: isBatchExecutionActive ? 0.45 : 1,
               }}
-              title="ជ្រើសរើសគ្រប់ភាគទាំងអស់ក្នុង Series"
+              title={isBatchExecutionActive ? 'កំពុងដំណើរការ មិនអាចផ្លាស់ប្តូរការជ្រើសរើសបានទេ' : 'ជ្រើសរើសគ្រប់ភាគទាំងអស់ក្នុង Series'}
             >
               <span>ទាំងអស់ ({episodes.length} ភាគ)</span>
             </button>
@@ -2253,6 +2327,7 @@ export default function GeminiRouteModal({
               type="button"
               data-testid="pill-select-incomplete"
               onClick={handleSelectIncompleteEpisodes}
+              disabled={isBatchExecutionActive || incompleteEpisodes.length === 0}
               className="btn-tactile"
               style={{
                 padding: '4px 12px',
@@ -2266,9 +2341,10 @@ export default function GeminiRouteModal({
                 border: (selectedEpIds.size === incompleteEpisodes.length && incompleteEpisodes.length > 0) ? '1px solid rgba(245, 158, 11, 0.55)' : '1px solid rgba(255, 255, 255, 0.08)',
                 color: (selectedEpIds.size === incompleteEpisodes.length && incompleteEpisodes.length > 0) ? '#FBBF24' : '#CBD5E1',
                 transition: 'all 0.15s ease',
-                cursor: incompleteEpisodes.length === 0 ? 'default' : 'pointer',
+                cursor: (isBatchExecutionActive || incompleteEpisodes.length === 0) ? 'not-allowed' : 'pointer',
+                opacity: (isBatchExecutionActive || incompleteEpisodes.length === 0) ? 0.45 : 1,
               }}
-              title={incompleteEpisodes.length === 0 ? 'គ្រប់ភាគទាំងអស់រួចរាល់ 100% ហើយ' : 'ជ្រើសរើសភាគដែលមិនទាន់ចប់'}
+              title={isBatchExecutionActive ? 'កំពុងដំណើរការ មិនអាចផ្លាស់ប្តូរការជ្រើសរើសបានទេ' : (incompleteEpisodes.length === 0 ? 'គ្រប់ភាគទាំងអស់រួចរាល់ 100% ហើយ' : 'ជ្រើសរើសភាគដែលមិនទាន់ចប់')}
             >
               <span>{incompleteEpisodes.length === 0 ? '✓ គ្រប់ភាគរួចរាល់ 100%' : `ភាគមិនទាន់ចប់ (${incompleteEpisodes.length} ភាគ)`}</span>
             </button>
@@ -2277,6 +2353,7 @@ export default function GeminiRouteModal({
             <button
               type="button"
               onClick={() => handleSelectCount(2)}
+              disabled={isBatchExecutionActive}
               className="btn-tactile"
               style={{
                 padding: '4px 11px',
@@ -2290,8 +2367,10 @@ export default function GeminiRouteModal({
                 border: selectedEpIds.size === 2 ? '1px solid rgba(56, 189, 248, 0.55)' : '1px solid rgba(255, 255, 255, 0.08)',
                 color: selectedEpIds.size === 2 ? '#38BDF8' : '#CBD5E1',
                 transition: 'all 0.15s ease',
-                cursor: 'pointer',
+                cursor: isBatchExecutionActive ? 'not-allowed' : 'pointer',
+                opacity: isBatchExecutionActive ? 0.45 : 1,
               }}
+              title={isBatchExecutionActive ? 'កំពុងដំណើរការ មិនអាចផ្លាស់ប្តូរការជ្រើសរើសបានទេ' : 'ជ្រើសរើស ២ ភាគដំបូង'}
             >
               <span>២ ភាគដំបូង (2 EPs)</span>
             </button>
@@ -2300,6 +2379,7 @@ export default function GeminiRouteModal({
             <button
               type="button"
               onClick={() => handleSelectCount(4)}
+              disabled={isBatchExecutionActive}
               className="btn-tactile"
               style={{
                 padding: '4px 11px',
@@ -2313,8 +2393,10 @@ export default function GeminiRouteModal({
                 border: selectedEpIds.size === 4 ? '1px solid rgba(56, 189, 248, 0.55)' : '1px solid rgba(255, 255, 255, 0.08)',
                 color: selectedEpIds.size === 4 ? '#38BDF8' : '#CBD5E1',
                 transition: 'all 0.15s ease',
-                cursor: 'pointer',
+                cursor: isBatchExecutionActive ? 'not-allowed' : 'pointer',
+                opacity: isBatchExecutionActive ? 0.45 : 1,
               }}
+              title={isBatchExecutionActive ? 'កំពុងដំណើរការ មិនអាចផ្លាស់ប្តូរការជ្រើសរើសបានទេ' : 'ជ្រើសរើស ៤ ភាគដំបូង'}
             >
               <span>៤ ភាគដំបូង (4 EPs)</span>
             </button>
@@ -2324,6 +2406,7 @@ export default function GeminiRouteModal({
               <button
                 type="button"
                 onClick={handleClearSelection}
+                disabled={isBatchExecutionActive}
                 className="btn-tactile"
                 style={{
                   padding: '4px 9px',
@@ -2332,9 +2415,11 @@ export default function GeminiRouteModal({
                   fontWeight: 700,
                   background: 'rgba(255, 255, 255, 0.04)',
                   border: '1px solid rgba(255, 255, 255, 0.12)',
-                  color: '#94A3B8',
-                  cursor: 'pointer',
+                  color: isBatchExecutionActive ? '#64748B' : '#94A3B8',
+                  cursor: isBatchExecutionActive ? 'not-allowed' : 'pointer',
+                  opacity: isBatchExecutionActive ? 0.45 : 1,
                 }}
+                title={isBatchExecutionActive ? 'កំពុងដំណើរការ មិនអាចផ្លាស់ប្តូរការជ្រើសរើសបានទេ' : 'ដកការជ្រើសរើសទាំងអស់'}
               >
                 ដកជ្រើសរើស ({selectedEpIds.size})
               </button>
@@ -2828,184 +2913,12 @@ export default function GeminiRouteModal({
             )}
           </div>
 
-          {/* ── 4. STEP STATUS (Compact 3-Stage Progress Summary in 1 Sleek Row) ── */}
-          <div
-            data-testid="batch-step-status-rows"
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
-              gap: 8,
-              width: '100%',
-            }}
-          >
-            {/* Pill 1: 📝 1. Script ខ្មែរ */}
-            {(() => {
-              const isRow1Running = isStartingBatch || hasActiveTranslateQueue;
-              const row1Pct = translatePercent;
-              return (
-                <div
-                  data-testid="step-row-translate"
-                  style={{
-                    position: 'relative',
-                    padding: '8px 12px',
-                    borderRadius: 8,
-                    background: 'rgba(15, 23, 42, 0.65)',
-                    border: '1px solid rgba(56, 189, 248, 0.25)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    gap: 8,
-                    overflow: 'hidden',
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
-                    {isRow1Running ? (
-                      <Loader2 size={13} className="animate-spin" color="#38BDF8" />
-                    ) : isTranslateAllDone ? (
-                      <CheckCircle2 size={13} color="#34D399" />
-                    ) : (
-                      <Sparkles size={13} color="#38BDF8" />
-                    )}
-                    <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#F8FAFC', whiteSpace: 'nowrap' }}>
-                      📝 1. Script ខ្មែរ:
-                    </span>
-                    <span style={{ fontSize: '0.70rem', color: '#94A3B8', whiteSpace: 'nowrap' }}>
-                      {healthyScriptedCount}/{episodes.length} ភាគ
-                    </span>
-                  </div>
-                  <span
-                    data-testid="step2-status-badge"
-                    style={{
-                      fontSize: '0.64rem',
-                      fontWeight: 800,
-                      padding: '1px 6px',
-                      borderRadius: 9999,
-                      background: isTranslateAllDone ? 'rgba(52, 211, 153, 0.18)' : 'rgba(56, 189, 248, 0.16)',
-                      color: isTranslateAllDone ? '#34D399' : '#38BDF8',
-                    }}
-                  >
-                    {isRow1Running ? `RUNNING ${row1Pct}%` : isTranslateAllDone ? 'DONE' : `${row1Pct}%`}
-                  </span>
-                  {/* Slim bottom progress bar */}
-                  <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 2, background: 'rgba(255, 255, 255, 0.06)' }}>
-                    <div style={{ height: '100%', width: `${Math.max(isRow1Running ? 6 : 0, row1Pct)}%`, background: isTranslateAllDone ? '#34D399' : '#38BDF8', transition: 'width 0.3s ease' }} />
-                  </div>
-                </div>
-              );
-            })()}
-
-            {/* Pill 2: 🎙️ 2. សំឡេងខ្មែរ AI */}
-            {(() => {
-              const isRow2Running = isGeneratingBatchTTS;
-              const row2Pct = isRow2Running ? Math.max(audioPercent, ttsProgressPercent) : audioPercent;
-              return (
-                <div
-                  data-testid="step-row-tts"
-                  style={{
-                    position: 'relative',
-                    padding: '8px 12px',
-                    borderRadius: 8,
-                    background: 'rgba(15, 23, 42, 0.65)',
-                    border: '1px solid rgba(244, 114, 182, 0.25)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    gap: 8,
-                    overflow: 'hidden',
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
-                    {isRow2Running ? (
-                      <Loader2 size={13} className="animate-spin" color="#F472B6" />
-                    ) : isAudioAllDone ? (
-                      <CheckCircle2 size={13} color="#34D399" />
-                    ) : (
-                      <Mic size={13} color="#F472B6" />
-                    )}
-                    <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#F8FAFC', whiteSpace: 'nowrap' }}>
-                      🎙️ 2. សំឡេង AI:
-                    </span>
-                    <span style={{ fontSize: '0.70rem', color: '#94A3B8', whiteSpace: 'nowrap' }}>
-                      {completedAudioCount}/{episodes.length} ភាគ
-                    </span>
-                  </div>
-                  <span
-                    data-testid="step3-status-badge"
-                    style={{
-                      fontSize: '0.64rem',
-                      fontWeight: 800,
-                      padding: '1px 6px',
-                      borderRadius: 9999,
-                      background: isAudioAllDone ? 'rgba(52, 211, 153, 0.18)' : 'rgba(244, 114, 182, 0.16)',
-                      color: isAudioAllDone ? '#34D399' : '#F472B6',
-                    }}
-                  >
-                    {isRow2Running ? `RUNNING ${row2Pct}%` : isAudioAllDone ? 'DONE' : `${row2Pct}%`}
-                  </span>
-                  {/* Slim bottom progress bar */}
-                  <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 2, background: 'rgba(255, 255, 255, 0.06)' }}>
-                    <div style={{ height: '100%', width: `${Math.max(isRow2Running ? 6 : 0, row2Pct)}%`, background: isAudioAllDone ? '#34D399' : '#F472B6', transition: 'width 0.3s ease' }} />
-                  </div>
-                </div>
-              );
-            })()}
-
-            {/* Pill 3: 🔇 3. Clean BGM */}
-            {(() => {
-              const isRow3Running = isSeparatingBatchDemucs;
-              const row3Pct = isRow3Running ? Math.max(demucsPercent, demucsProgressPercent) : demucsPercent;
-              return (
-                <div
-                  data-testid="step-row-demucs"
-                  style={{
-                    position: 'relative',
-                    padding: '8px 12px',
-                    borderRadius: 8,
-                    background: 'rgba(15, 23, 42, 0.65)',
-                    border: '1px solid rgba(52, 211, 153, 0.25)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    gap: 8,
-                    overflow: 'hidden',
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
-                    {isRow3Running ? (
-                      <Loader2 size={13} className="animate-spin" color="#34D399" />
-                    ) : isDemucsAllDone ? (
-                      <CheckCircle2 size={13} color="#34D399" />
-                    ) : (
-                      <Volume2 size={13} color="#34D399" />
-                    )}
-                    <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#F8FAFC', whiteSpace: 'nowrap' }}>
-                      🔇 3. Clean BGM:
-                    </span>
-                    <span style={{ fontSize: '0.70rem', color: '#94A3B8', whiteSpace: 'nowrap' }}>
-                      {completedDemucsCount}/{episodes.length} ភាគ
-                    </span>
-                  </div>
-                  <span
-                    data-testid="step4-status-badge"
-                    style={{
-                      fontSize: '0.64rem',
-                      fontWeight: 800,
-                      padding: '1px 6px',
-                      borderRadius: 9999,
-                      background: isDemucsAllDone ? 'rgba(52, 211, 153, 0.18)' : 'rgba(52, 211, 153, 0.16)',
-                      color: isDemucsAllDone ? '#34D399' : '#34D399',
-                    }}
-                  >
-                    {isRow3Running ? `RUNNING ${row3Pct}%` : isDemucsAllDone ? 'DONE' : `${row3Pct}%`}
-                  </span>
-                  {/* Slim bottom progress bar */}
-                  <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 2, background: 'rgba(255, 255, 255, 0.06)' }}>
-                    <div style={{ height: '100%', width: `${Math.max(isRow3Running ? 6 : 0, row3Pct)}%`, background: isDemucsAllDone ? '#34D399' : '#34D399', transition: 'width 0.3s ease' }} />
-                  </div>
-                </div>
-              );
-            })()}
-          </div>
+          {/* ── 4. STEP STATUS & 1-BY-1 CONTROLS (Reusable DubbingStepCardsBar) ── */}
+          <DubbingStepCardsBar
+            episodes={episodes}
+            selectedEpIds={selectedEpIds}
+            setupOptions={{ pipelineMode, dubbingMode, genre, narratorGender, customDirection }}
+          />
 
           {/* ── 5. SINGLE UNIFIED ACTIONS & CONTROLS TOOLBAR (Wrapping, Never Overflowing) ── */}
           {(() => {
@@ -3015,7 +2928,7 @@ export default function GeminiRouteModal({
             const targetDemucsLeft = selectedEpIds.size > 0 ? unDemucsSelectedEpisodes.length : unDemucsCount;
             const repairBrokenCount = selectedBrokenSummary?.totalBrokenCount || 0;
 
-            const isRunAllRunning = isStartingBatch || isGeneratingBatchTTS || isSeparatingBatchDemucs;
+            const isRunAllRunning = isBatchExecutionActive;
 
             return (
               <div
@@ -3073,17 +2986,17 @@ export default function GeminiRouteModal({
                     type="button"
                     data-testid="btn-batch-primary-cta"
                     onClick={() => handleStartBatchTranslate()}
-                    disabled={isStartingBatch}
+                    disabled={isBatchExecutionActive}
                     className="btn-tactile"
                     style={{
                       padding: '7px 11px',
                       borderRadius: 6,
                       background: 'rgba(56, 189, 248, 0.12)',
                       border: '1px solid rgba(56, 189, 248, 0.4)',
-                      color: '#38BDF8',
+                      color: isBatchExecutionActive ? '#64748B' : '#38BDF8',
                       fontSize: '0.72rem',
                       fontWeight: 700,
-                      cursor: isStartingBatch ? 'not-allowed' : 'pointer',
+                      cursor: isBatchExecutionActive ? 'not-allowed' : 'pointer',
                       display: 'inline-flex',
                       alignItems: 'center',
                       gap: 5,
@@ -3096,17 +3009,17 @@ export default function GeminiRouteModal({
                     type="button"
                     data-testid="btn-batch-primary-tts"
                     onClick={() => handleBatchGenerateTTS()}
-                    disabled={isGeneratingBatchTTS}
+                    disabled={isBatchExecutionActive}
                     className="btn-tactile"
                     style={{
                       padding: '7px 11px',
                       borderRadius: 6,
                       background: 'rgba(244, 114, 182, 0.12)',
                       border: '1px solid rgba(244, 114, 182, 0.4)',
-                      color: '#F472B6',
+                      color: isBatchExecutionActive ? '#64748B' : '#F472B6',
                       fontSize: '0.72rem',
                       fontWeight: 700,
-                      cursor: isGeneratingBatchTTS ? 'not-allowed' : 'pointer',
+                      cursor: isBatchExecutionActive ? 'not-allowed' : 'pointer',
                       display: 'inline-flex',
                       alignItems: 'center',
                       gap: 5,
@@ -3119,17 +3032,17 @@ export default function GeminiRouteModal({
                     type="button"
                     data-testid="btn-batch-primary-demucs"
                     onClick={() => handleBatchDemucsSeparation()}
-                    disabled={isSeparatingBatchDemucs}
+                    disabled={isBatchExecutionActive}
                     className="btn-tactile"
                     style={{
                       padding: '7px 11px',
                       borderRadius: 6,
                       background: 'rgba(52, 211, 153, 0.12)',
                       border: '1px solid rgba(52, 211, 153, 0.4)',
-                      color: '#34D399',
+                      color: isBatchExecutionActive ? '#64748B' : '#34D399',
                       fontSize: '0.72rem',
                       fontWeight: 700,
-                      cursor: isSeparatingBatchDemucs ? 'not-allowed' : 'pointer',
+                      cursor: isBatchExecutionActive ? 'not-allowed' : 'pointer',
                       display: 'inline-flex',
                       alignItems: 'center',
                       gap: 5,
@@ -3560,7 +3473,7 @@ export default function GeminiRouteModal({
                   <div
                     key={ep.id}
                     data-testid={`ep-card-${ep.id}`}
-                    onClick={() => hasVideo && !isRunning && !isQueued && toggleSelect(ep.id)}
+                    onClick={() => hasVideo && !isBatchExecutionActive && !isRunning && !isQueued && toggleSelect(ep.id)}
                     className={hasVideo ? 'motion-lift' : ''}
                     style={{
                       borderRadius: 16,
@@ -3593,7 +3506,7 @@ export default function GeminiRouteModal({
                       flexDirection: 'column',
                       justifyContent: 'space-between',
                       gap: 12,
-                      cursor: hasVideo ? 'pointer' : 'not-allowed',
+                      cursor: isBatchExecutionActive ? 'default' : (hasVideo ? 'pointer' : 'not-allowed'),
                       opacity: hasVideo ? 1 : 0.6,
                       transition: 'all 0.2s cubic-bezier(0.16, 1, 0.3, 1)',
                       boxShadow: isRunning 
@@ -3614,10 +3527,16 @@ export default function GeminiRouteModal({
                           <input
                             type="checkbox"
                             checked={isSelected}
-                            disabled={!hasVideo || isRunning || isQueued}
-                            onChange={() => toggleSelect(ep.id)}
+                            disabled={!hasVideo || isRunning || isQueued || isBatchExecutionActive}
+                            onChange={() => !isBatchExecutionActive && toggleSelect(ep.id)}
                             onClick={(e) => e.stopPropagation()}
-                            style={{ width: 17, height: 17, cursor: hasVideo ? 'pointer' : 'not-allowed', accentColor: isFullyDone ? '#10B981' : '#FF8577', flexShrink: 0 }}
+                            style={{
+                              width: 17,
+                              height: 17,
+                              cursor: (!hasVideo || isRunning || isQueued || isBatchExecutionActive) ? 'not-allowed' : 'pointer',
+                              accentColor: isFullyDone ? '#10B981' : '#FF8577',
+                              flexShrink: 0,
+                            }}
                           />
                           <span style={{
                             fontSize: '0.74rem',
@@ -4171,7 +4090,7 @@ export default function GeminiRouteModal({
                         borderTop: '1px solid rgba(255, 255, 255, 0.06)',
                       }}>
                         <div>
-                          {(isGeneratingBatchTTS && (activeTtsEpisodeIds.has(ep.id) || activeTtsEpisodeId === ep.id)) ? (
+                          {(isGeneratingBatchTTS && activeTtsEpisodeId === ep.id) ? (
                             <span style={{
                               color: '#FF8577',
                               fontWeight: 700,
@@ -4185,6 +4104,21 @@ export default function GeminiRouteModal({
                             }}>
                               <Loader2 size={12} className="animate-spin" color="#FF8577" />
                               <span>កំពុង Render សំឡេង... ({ttsLiveStats[ep.id]?.current || 0}/{ttsLiveStats[ep.id]?.total || segmentCount || '...'})</span>
+                            </span>
+                          ) : (isGeneratingBatchTTS && activeTtsEpisodeIds.has(ep.id)) ? (
+                            <span style={{
+                              color: '#FBBF24',
+                              fontWeight: 600,
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 5,
+                              background: 'rgba(245, 158, 11, 0.12)',
+                              padding: '2px 8px',
+                              borderRadius: 9999,
+                              border: '1px solid rgba(245, 158, 11, 0.35)',
+                            }}>
+                              <span style={{ display: 'inline-block', width: 6, height: 6, borderRadius: '50%', background: '#FBBF24' }}></span>
+                              <span>⏳ រង់ចាំក្នុង Queue</span>
                             </span>
                           ) : (isSeparatingBatchDemucs && activeDemucsEpisodeId === ep.id) ? (
                             <span style={{
@@ -4200,6 +4134,36 @@ export default function GeminiRouteModal({
                             }}>
                               <Loader2 size={12} className="animate-spin" color="#38bdf8" />
                               <span>កំពុងបំបែកសំឡេង Demucs... ({demucsLiveStats[ep.id]?.percent || 0}%)</span>
+                            </span>
+                          ) : (isSeparatingBatchDemucs && activeDemucsEpisodeIds.has(ep.id)) ? (
+                            <span style={{
+                              color: '#94A3B8',
+                              fontWeight: 600,
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 5,
+                              background: 'rgba(148, 163, 184, 0.12)',
+                              padding: '2px 8px',
+                              borderRadius: 9999,
+                              border: '1px solid rgba(148, 163, 184, 0.3)',
+                            }}>
+                              <span style={{ display: 'inline-block', width: 6, height: 6, borderRadius: '50%', background: '#94A3B8' }}></span>
+                              <span>⏳ រង់ចាំ Demucs Queue</span>
+                            </span>
+                          ) : (runningPipelineEpIds && runningPipelineEpIds.has(ep.id)) ? (
+                            <span style={{
+                              color: '#818CF8',
+                              fontWeight: 700,
+                              display: 'flex',
+                              alignItems: 'center',
+                              gap: 5,
+                              background: 'rgba(99, 102, 241, 0.15)',
+                              padding: '2px 8px',
+                              borderRadius: 9999,
+                              border: '1px solid rgba(129, 140, 248, 0.4)',
+                            }}>
+                              <Loader2 size={12} className="animate-spin" color="#818CF8" />
+                              <span>កំពុងដំណើរការ Auto-Pipeline...</span>
                             </span>
                           ) : segmentsMissingAfterJob ? (
                             <span style={{
@@ -4339,43 +4303,16 @@ export default function GeminiRouteModal({
                           )}
                         </div>
 
-                        {/* Right: Clean Action Buttons (▶ ផលិតទាំង 3 ជំហាន + បើកក្នុង Studio) */}
+                        {/* Right: Clean Action Buttons (▶ ផលិតទាំង 3 ជំហាន via DubbingStepButton + បើកក្នុង Studio) */}
                         <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
                           {!isFullyDone && (
-                            <button
-                              type="button"
+                            <DubbingStepButton
+                              step="all3"
+                              episodes={[ep]}
+                              variant="card"
+                              setupOptions={{ pipelineMode, dubbingMode, genre, narratorGender, customDirection }}
                               data-testid={`btn-auto-run-ep-${ep.id}`}
-                              disabled={isRunning || isQueued || runningPipelineEpIds.has(ep.id)}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                runEpisodeFullPipeline(ep);
-                              }}
-                              className="btn-tactile"
-                              style={{
-                                padding: '4px 10px',
-                                borderRadius: 6,
-                                background: runningPipelineEpIds.has(ep.id)
-                                  ? 'rgba(255, 255, 255, 0.08)'
-                                  : 'linear-gradient(135deg, #4F46E5 0%, #0284C7 100%)',
-                                border: '1px solid #818CF8',
-                                color: '#FFFFFF',
-                                fontSize: '0.68rem',
-                                fontWeight: 800,
-                                cursor: (isRunning || isQueued || runningPipelineEpIds.has(ep.id)) ? 'not-allowed' : 'pointer',
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                gap: 4,
-                                boxShadow: '0 2px 8px rgba(79, 70, 229, 0.3)',
-                              }}
-                              title="ដំណើរការស្វ័យប្រវត្តិទាំង 3 ជំហានសម្រាប់ភាគនេះ (Translate/Repair ➔ AI Voice ➔ Clean BGM)"
-                            >
-                              {runningPipelineEpIds.has(ep.id) ? (
-                                <Loader2 size={10} className="animate-spin" />
-                              ) : (
-                                <Play size={10} fill="currentColor" />
-                              )}
-                              <span>▶ ផលិតទាំង 3 ជំហាន</span>
-                            </button>
+                            />
                           )}
 
                           {hasScript && onSwitchEpisode && (
@@ -4432,7 +4369,7 @@ export default function GeminiRouteModal({
           flexShrink: 0,
         }}>
           <span>
-            សរុប {episodes.length} ភាគ ({overallStagePercent}% Ready){unsavedCompletedJobsCount > 0 ? ` • ⚠️ ${unsavedCompletedJobsCount} not saved` : ''} • 💡 ចុចលើ Card ដើម្បី Select ឬ Deselect ភាគ
+            សរុប {episodes.length} ភាគ ({overallStagePercent}% Ready){unsavedCompletedJobsCount > 0 ? ` • ⚠️ ${unsavedCompletedJobsCount} not saved` : ''} • {isBatchExecutionActive ? '🔒 កំពុងដំណើរការ Batch មិនអាចផ្លាស់ប្តូរការជ្រើសរើសបានទេ' : '💡 ចុចលើ Card ដើម្បី Select ឬ Deselect ភាគ'}
           </span>
           <button
             type="button"

@@ -6,6 +6,7 @@ import { previewVoiceApi } from '../../services/api';
 import ClipInspectorPanel from './ClipInspectorPanel';
 import AudioDuckingPanel from './AudioDuckingPanel';
 import ExportSettingsPanel from './ExportSettingsPanel';
+import { DubbingStepButton, useDubbingFeature } from '../../features/dubbing-runner';
 import './VoiceSettings.css';
 
 const DEFAULT_SUPPORTED_VOICES = [
@@ -900,6 +901,28 @@ export default function VoiceSettings({
           onCopyCaption={handleCopyCaption}
           copiedCaption={copiedCaption}
         />
+        {activeEpisode && (
+          <div style={{ padding: '8px 12px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6, background: 'rgba(15, 23, 42, 0.65)', borderTop: '1px solid rgba(255, 255, 255, 0.06)' }}>
+            <span style={{ fontSize: '0.72rem', color: '#94A3B8', fontWeight: 600 }}>
+              EP{activeEpisode.episodeNumber || activeEpisode.id} AI Audio:
+            </span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <DubbingStepButton
+                step="voice"
+                episodes={[activeEpisode]}
+                variant="pill"
+                setupOptions={{ voiceId: settings?.voiceId }}
+              />
+              <DubbingStepButton
+                step="all3"
+                episodes={[activeEpisode]}
+                variant="pill"
+                setupOptions={{ voiceId: settings?.voiceId }}
+              />
+            </div>
+          </div>
+        )}
+
       </div>
 
       {/* Sticky Bottom Export Rendered Video CTA Bar */}

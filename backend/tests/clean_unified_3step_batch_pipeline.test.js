@@ -39,11 +39,14 @@ test('Step 2: Unified 1-Click 3-step pipeline engine for batch & individual card
 
 test('Step 3: Decluttered top header - script setup collapsed & single compact progress summary', () => {
   const modal = read(FRONTEND_SRC, 'components', 'dashboard', 'GeminiRouteModal.jsx');
+  const cardsBarPath = path.join(FRONTEND_SRC, 'features', 'dubbing-runner', 'DubbingStepCardsBar.jsx');
+  const cardsBar = fs.existsSync(cardsBarPath) ? fs.readFileSync(cardsBarPath, 'utf8') : '';
+  const combined = modal + '\n' + cardsBar;
   assert.match(modal, /const\s+\[isScriptSetupExpanded,\s*setIsScriptSetupExpanded\]\s*=\s*useState\(false\)/);
-  assert.match(modal, /gridTemplateColumns:\s*'repeat\(3,\s*minmax\(0,\s*1fr\)\)'/);
-  assert.match(modal, /📝 1\. Script ខ្មែរ:/);
-  assert.match(modal, /🎙️ 2\. សំឡេង AI:/);
-  assert.match(modal, /🔇 3\. Clean BGM:/);
+  assert.match(combined, /gridTemplateColumns:\s*'repeat\(3,\s*minmax\(0,\s*1fr\)\)'/);
+  assert.match(combined, /📝 1\. Script ខ្មែរ:/);
+  assert.match(combined, /🎙️ 2\. សំឡេង AI:/);
+  assert.match(combined, /🔇 3\. Clean BGM:/);
 });
 
 test('Step 4: Route runner console drawers default collapsed to preserve screen height', () => {
@@ -54,4 +57,16 @@ test('Step 4: Route runner console drawers default collapsed to preserve screen 
   assert.match(translateCard, /const\s+\[showConsole,\s*setShowConsole\]\s*=\s*useState\(false\)/);
   assert.match(ttsCard, /const\s+\[showConsole,\s*setShowConsole\]\s*=\s*useState\(false\)/);
   assert.match(demucsCard, /const\s+\[showConsole,\s*setShowConsole\]\s*=\s*useState\(false\)/);
+});
+
+test('Step 5: Selection locking and accurate queued status during active batch runs', () => {
+  const modal = read(FRONTEND_SRC, 'components', 'dashboard', 'GeminiRouteModal.jsx');
+  assert.match(modal, /const\s+isBatchExecutionActive\s*=\s*Boolean\(/);
+  assert.match(modal, /hasActiveTranslateQueue/);
+  assert.match(modal, /if\s*\(isBatchExecutionActive\)\s*return;/);
+  assert.match(modal, /disabled=\{isBatchExecutionActive\}/);
+  assert.match(modal, /data-testid="selection-locked-badge"/);
+  assert.match(modal, /!isBatchExecutionActive\s*&&\s*!isRunning\s*&&\s*!isQueued\s*&&\s*toggleSelect\(ep\.id\)/);
+  assert.match(modal, /disabled=\{!hasVideo\s*\|\|\s*isRunning\s*\|\|\s*isQueued\s*\|\|\s*isBatchExecutionActive\}/);
+  assert.match(modal, /⏳ រង់ចាំក្នុង Queue/);
 });

@@ -442,6 +442,18 @@ function separateAudio(options = {}) {
   return executeDemucsWorker(options, targetDir, cleanKey);
 }
 
+function killAllDemucsSystemProcesses() {
+  let killed = 0;
+  if (process.platform === 'win32') {
+    try {
+      const { execSync } = require('child_process');
+      execSync('powershell -NoProfile -Command "Get-Process -Name python -ErrorAction SilentlyContinue | Where-Object { $_.WorkingSet64 -gt 400MB } | Stop-Process -Force -ErrorAction SilentlyContinue"', { stdio: 'ignore' });
+      killed++;
+    } catch (_) {}
+  }
+  return killed;
+}
+
 function killSeparationJob(identifier = 'all') {
   let killed = 0;
   console.log(`[AudioSeparation] 🛑 Kill Demucs command received for: ${identifier}`);
@@ -469,6 +481,8 @@ function killSeparationJob(identifier = 'all') {
     }
     activeSeparationJobs.clear();
     activeSeparationProgress.clear();
+    // System-wide sweep on Windows to eliminate orphaned/detached Python demucs workers
+    killAllDemucsSystemProcesses();
   } else {
     const cleanId = normalizeSeparationKey(identifier);
     const proc = activeSeparationJobs.get(identifier) || activeSeparationJobs.get(cleanId);
@@ -511,6 +525,7 @@ process.on('SIGTERM', cleanupActiveSeparations);
 module.exports = {
   separateAudio,
   killSeparationJob,
+  killAllDemucsSystemProcesses,
   cancelSeparationJob,
   getSeparationCacheDir,
   getSeparationProgress,

@@ -24,6 +24,7 @@ import { JobQueueProvider } from './context/JobQueueContext';
 import { StudioProvider } from './context/StudioContext';
 import { ModalProvider, useModalState } from './context/ModalContext';
 import { WorkspaceProvider, useStudioWorkspaceState } from './context/WorkspaceContext';
+import { DubbingRunnerProvider } from './features/dubbing-runner';
 
 // Hoisted immutable fallbacks (prevents prop churning and broken memoization)
 const EMPTY_SEGMENTS = Object.freeze([]);
@@ -773,7 +774,11 @@ export default function App() {
       <ModalProvider value={modalState}>
         <WorkspaceProvider value={workspaceState}>
           <StudioProvider value={studioActions}>
-            <div className="capcut-app-container">
+            <DubbingRunnerProvider
+              activeSeries={series.activeSeries}
+              refreshSeries={series.refreshSeriesFromServer}
+            >
+              <div className="capcut-app-container">
         {/* Top Application Navbar */}
         <Navbar
           apiKey={persistence.apiKey}
@@ -1168,6 +1173,7 @@ export default function App() {
           />
         </ErrorBoundary>
             </div>
+            </DubbingRunnerProvider>
           </StudioProvider>
         </WorkspaceProvider>
       </ModalProvider>
