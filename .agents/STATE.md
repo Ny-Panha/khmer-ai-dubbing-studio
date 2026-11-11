@@ -21,7 +21,7 @@
 4. **Verification & Quality Gates**:
    - `npm --prefix frontend run lint` (`oxlint`): **PASS (0 errors, 425 warnings)**
    - `npm --prefix frontend run build` (`vite build`): **PASS (654ms, 0 errors, 2026 modules transformed)**
-   - Test suites: **PASS (31/31 PASS across batch studio & upgrade suites)**
+   - `node --test backend/tests/*.test.js` (Full Suite across all 47 test files): **229 PASS / 0 FAIL / 1 SKIPPED (duration 14.08s)**
    - Code freeze strictly observed: `GeminiRouteModal.jsx`, backend, and dubbing-runner untouched.
 
 ## Active Environment
