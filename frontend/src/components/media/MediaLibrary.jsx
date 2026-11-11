@@ -1,14 +1,14 @@
 import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import { Film, Sparkles, Subtitles, Layers, AlertCircle, Plus, CheckCircle2, ArrowRight } from 'lucide-react';
-import { uploadVideoFile } from '../services/api';
-import { parseTimeToSeconds, parseTimestampToSeconds, formatMinSec } from '../utils/timestampUtils';
-import { deleteSegmentByIdOrIndex } from '../utils/timelineUtils';
-import { filterScriptSegments } from '../utils/scriptSearchUtils';
+import { uploadVideoFile } from '../../services/api';
+import { parseTimeToSeconds, parseTimestampToSeconds, formatMinSec } from '../../utils/timestampUtils';
+import { deleteSegmentByIdOrIndex } from '../../utils/timelineUtils';
+import { filterScriptSegments } from '../../utils/scriptSearchUtils';
 
-import MediaUploadTab from './media/MediaUploadTab';
-import DubbingModeTab from './media/DubbingModeTab';
-import ScriptReviewTab from './media/ScriptReviewTab';
-import EpisodesTab from './media/EpisodesTab';
+import MediaUploadTab from './MediaUploadTab';
+import DubbingModeTab from './DubbingModeTab';
+import ScriptReviewTab from './ScriptReviewTab';
+import EpisodesTab from './EpisodesTab';
 import './MediaLibrary.css';
 
 const RECAP_PRESETS = [

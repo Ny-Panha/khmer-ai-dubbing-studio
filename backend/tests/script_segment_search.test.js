@@ -42,7 +42,7 @@ test('filterScriptSegments matches exact card number (#37 / 37 / ៣៧), keeps 
 
 test('Script search UI wiring uses filterScriptSegments and preserves original index #37 in virtual list', () => {
   const mediaLibraryCode = fs.readFileSync(
-    path.resolve(__dirname, '../../frontend/src/components/MediaLibrary.jsx'),
+    path.resolve(__dirname, '../../frontend/src/components/media/MediaLibrary.jsx'),
     'utf8'
   );
   const scriptReviewCode = fs.readFileSync(
@@ -76,7 +76,7 @@ test('resolveVoiceClipStartSec & computeTimelineScrollForTime accurately target 
 test('Clicking segment in 3. Subs wires to App handleSelectSegmentFromScript -> TimelineEditor timelineFocusRequest', () => {
   const appCode = fs.readFileSync(path.resolve(__dirname, '../../frontend/src/App.jsx'), 'utf8');
   const scriptReviewCode = fs.readFileSync(path.resolve(__dirname, '../../frontend/src/components/media/ScriptReviewTab.jsx'), 'utf8');
-  const timelineCode = fs.readFileSync(path.resolve(__dirname, '../../frontend/src/components/TimelineEditor.jsx'), 'utf8');
+  const timelineCode = fs.readFileSync(path.resolve(__dirname, '../../frontend/src/components/timeline/TimelineEditor.jsx'), 'utf8');
 
   assert.ok(appCode.includes('const handleSelectSegmentFromScript = useCallback'));
   assert.ok(appCode.includes('resolveVoiceClipStartSec(targetSeg'));

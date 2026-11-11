@@ -44,6 +44,7 @@ export default function ClipInspectorPanel({
   onSegmentChineseChange = null,
 }) {
   const [copiedChinese, setCopiedChinese] = useState(false);
+  const [switchingVoiceTarget, setSwitchingVoiceTarget] = useState(null);
   const [isRetranslating, setIsRetranslating] = useState(false);
   const [retranslateData, setRetranslateData] = useState(null);
   const [retranslateError, setRetranslateError] = useState(null);
@@ -1049,13 +1050,24 @@ export default function ClipInspectorPanel({
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 6 }}>
                   <button
                     type="button"
-                    onClick={() => {
-                      onClipVoiceChange(selectedSegment.id || selectedSegmentIndex, 'km-KH-PisethNeural', selectedSegmentIndex);
+                    data-testid="voice-switch-male-btn"
+                    onClick={async () => {
+                      setSwitchingVoiceTarget('MALE');
+                      const minSpin = new Promise((r) => setTimeout(r, 300));
+                      try {
+                        await Promise.all([
+                          Promise.resolve(onClipVoiceChange(selectedSegment.id || selectedSegmentIndex, 'km-KH-PisethNeural', selectedSegmentIndex)),
+                          minSpin,
+                        ]);
+                      } finally {
+                        setSwitchingVoiceTarget(null);
+                      }
                     }}
-                    disabled={regeneratingId === (selectedSegment.id || selectedSegmentIndex)}
+                    disabled={regeneratingId === (selectedSegment.id || selectedSegmentIndex) || switchingVoiceTarget !== null}
                     style={{
                       padding: '8px 6px',
-                      fontSize: '0.72rem',
+                      fontSize: '0.8125rem',
+                      lineHeight: 'var(--khmer-line-height, 1.68)',
                       borderRadius: 6,
                       border: `1.5px solid ${isPisethActive ? 'rgba(56, 189, 248, 0.7)' : 'rgba(255,255,255,0.08)'}`,
                       background: isPisethActive ? 'linear-gradient(135deg, rgba(2, 132, 199, 0.35), rgba(14, 165, 233, 0.2))' : 'rgba(255, 255, 255, 0.03)',
@@ -1065,23 +1077,37 @@ export default function ClipInspectorPanel({
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'center',
-                      gap: 4,
+                      gap: 5,
                       transition: 'all 0.15s ease',
                       boxShadow: isPisethActive ? '0 2px 8px rgba(56, 189, 248, 0.25)' : 'none'
                     }}
                     title="ប្តូរទៅសំឡេងប្រុស (Piseth Neural)"
                   >
+                    {switchingVoiceTarget === 'MALE' ? (
+                      <Loader2 size={13} className="animate-spin" style={{ color: '#38bdf8' }} />
+                    ) : null}
                     <span>👨 ប្រុស</span>
                   </button>
                   <button
                     type="button"
-                    onClick={() => {
-                      onClipVoiceChange(selectedSegment.id || selectedSegmentIndex, 'km-KH-SreymomNeural', selectedSegmentIndex);
+                    data-testid="voice-switch-female-btn"
+                    onClick={async () => {
+                      setSwitchingVoiceTarget('FEMALE');
+                      const minSpin = new Promise((r) => setTimeout(r, 300));
+                      try {
+                        await Promise.all([
+                          Promise.resolve(onClipVoiceChange(selectedSegment.id || selectedSegmentIndex, 'km-KH-SreymomNeural', selectedSegmentIndex)),
+                          minSpin,
+                        ]);
+                      } finally {
+                        setSwitchingVoiceTarget(null);
+                      }
                     }}
-                    disabled={regeneratingId === (selectedSegment.id || selectedSegmentIndex)}
+                    disabled={regeneratingId === (selectedSegment.id || selectedSegmentIndex) || switchingVoiceTarget !== null}
                     style={{
                       padding: '8px 6px',
-                      fontSize: '0.72rem',
+                      fontSize: '0.8125rem',
+                      lineHeight: 'var(--khmer-line-height, 1.68)',
                       borderRadius: 6,
                       border: `1.5px solid ${isSreymomActive ? 'rgba(244, 114, 182, 0.8)' : 'rgba(255,255,255,0.08)'}`,
                       background: isSreymomActive ? 'linear-gradient(135deg, rgba(219, 39, 119, 0.38), rgba(244, 114, 182, 0.25))' : 'rgba(255, 255, 255, 0.03)',
@@ -1091,12 +1117,15 @@ export default function ClipInspectorPanel({
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'center',
-                      gap: 4,
+                      gap: 5,
                       transition: 'all 0.15s ease',
                       boxShadow: isSreymomActive ? '0 2px 8px rgba(244, 114, 182, 0.3)' : 'none'
                     }}
                     title="ប្តូរទៅសំឡេងស្រី (Sreymom Neural)"
                   >
+                    {switchingVoiceTarget === 'FEMALE' ? (
+                      <Loader2 size={13} className="animate-spin" style={{ color: '#f472b6' }} />
+                    ) : null}
                     <span>👩 ស្រី</span>
                   </button>
                 </div>

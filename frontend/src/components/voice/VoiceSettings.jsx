@@ -1,11 +1,11 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Sliders } from 'lucide-react';
-import { parseTimeToSeconds } from '../utils/timestampUtils';
-import { previewVoiceApi } from '../services/api';
+import { Sliders, Download, Loader2, ChevronDown, ChevronRight, Users } from 'lucide-react';
+import { parseTimeToSeconds } from '../../utils/timestampUtils';
+import { previewVoiceApi } from '../../services/api';
 
-import ClipInspectorPanel from './voice/ClipInspectorPanel';
-import AudioDuckingPanel from './voice/AudioDuckingPanel';
-import ExportSettingsPanel from './voice/ExportSettingsPanel';
+import ClipInspectorPanel from './ClipInspectorPanel';
+import AudioDuckingPanel from './AudioDuckingPanel';
+import ExportSettingsPanel from './ExportSettingsPanel';
 import './VoiceSettings.css';
 
 const DEFAULT_SUPPORTED_VOICES = [
@@ -317,6 +317,7 @@ export default function VoiceSettings({
   // Collapsible Accordion sections
   const [openSections, setOpenSections] = useState({
     clip: true,
+    characters: false,
     mixing: true,
     export: true,
   });
@@ -782,6 +783,92 @@ export default function VoiceSettings({
           onToggleDeliveryType={onToggleDeliveryType}
         />
 
+        {/* Section 0.5: Character Voice Mapping Accordion Card */}
+        <div className="inspector-card-group" data-testid="inspector-character-mapping-card">
+          <div
+            onClick={() => toggleSection('characters')}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              cursor: 'pointer',
+              userSelect: 'none',
+              paddingBottom: openSections.characters ? 8 : 0,
+              borderBottom: openSections.characters ? '1px solid var(--line)' : 'none',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <Users size={14} color="var(--primary-accent)" />
+              <span style={{ fontSize: '0.8125rem', fontWeight: 700, color: 'var(--text-primary)', lineHeight: 'var(--khmer-line-height, 1.68)' }}>
+                កំណត់សំឡេងតួអង្គ (Character Voice Mapping)
+              </span>
+            </div>
+            {openSections.characters ? <ChevronDown size={14} color="var(--text-dim)" /> : <ChevronRight size={14} color="var(--text-dim)" />}
+          </div>
+          {openSections.characters && (
+            <div style={{ paddingTop: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <span style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)', lineHeight: 'var(--khmer-line-height, 1.68)' }}>
+                សំឡេងគោល (Default Narrator / Primary Voice):
+              </span>
+              <select
+                value={settings?.voiceId || currentVoice?.id || 'km-KH-PisethNeural'}
+                onChange={(e) => handleChange('voiceId', e.target.value)}
+                className="inspector-select"
+              >
+                {renderVoiceOptions()}
+              </select>
+              {Object.keys(speakerRegistry || {}).length > 0 && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 4 }}>
+                  {Object.entries(speakerRegistry).map(([spkKey, spkInfo]) => {
+                    const currentSpkVoice = spkInfo?.voiceId || 'km-KH-PisethNeural';
+                    const isFemale = currentSpkVoice.toLowerCase().includes('sreymom');
+                    return (
+                      <div
+                        key={spkKey}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'space-between',
+                          gap: 8,
+                          padding: '6px 8px',
+                          borderRadius: 6,
+                          background: 'rgba(9, 10, 15, 0.55)',
+                          border: '1px solid var(--line)',
+                        }}
+                      >
+                        <span style={{ fontSize: '0.8125rem', fontWeight: 600, color: isFemale ? 'var(--voice-female)' : 'var(--voice-male)' }}>
+                          {spkInfo?.name || spkKey}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            onUpdateSpeakerVoice?.(
+                              spkKey,
+                              isFemale ? 'km-KH-PisethNeural' : 'km-KH-SreymomNeural'
+                            )
+                          }
+                          style={{
+                            padding: '3px 8px',
+                            borderRadius: 5,
+                            fontSize: '0.8125rem',
+                            fontWeight: 600,
+                            border: '1px solid var(--line)',
+                            background: isFemale ? 'rgba(236, 72, 153, 0.16)' : 'rgba(59, 130, 246, 0.16)',
+                            color: '#fff',
+                            cursor: 'pointer',
+                          }}
+                        >
+                          {isFemale ? '👩 ស្រីមុំ' : '👨 ពិសិដ្ឋ'}
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
         {/* Section 1: Audio Mixing */}
         <AudioDuckingPanel
           isOpen={openSections.mixing}
@@ -813,6 +900,29 @@ export default function VoiceSettings({
           onCopyCaption={handleCopyCaption}
           copiedCaption={copiedCaption}
         />
+      </div>
+
+      {/* Sticky Bottom Export Rendered Video CTA Bar */}
+      <div className="inspector-sticky-footer" data-testid="inspector-sticky-export-bar">
+        <button
+          type="button"
+          onClick={onRenderVideo}
+          disabled={!selectedVideo || isRendering}
+          className="inspector-sticky-export-btn"
+          title="Export Rendered Video (Ctrl+E)"
+        >
+          {isRendering ? (
+            <>
+              <Loader2 size={15} className="animate-spin" />
+              <span>កំពុង Render វីដេអូ ({renderProgress || 5}%)...</span>
+            </>
+          ) : (
+            <>
+              <Download size={15} />
+              <span>{renderedVideo ? 'Re-Export Rendered Video' : 'Export Rendered Video'}</span>
+            </>
+          )}
+        </button>
       </div>
     </div>
   );

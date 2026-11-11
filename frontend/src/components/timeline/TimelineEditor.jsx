@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { formatMinSec, getSegmentAudioDuration } from '../utils/timestampUtils';
+import { formatMinSec, getSegmentAudioDuration } from '../../utils/timestampUtils';
 import {
   getPixelsPerSecond,
   trimClip,
@@ -8,18 +8,20 @@ import {
   deleteSegmentByIdOrIndex,
   resolveSegmentAtTime,
   computeTimelineScrollForTime,
-} from '../utils/timelineUtils';
+} from '../../utils/timelineUtils';
 
-import TimelineToolbar from './timeline/TimelineToolbar';
-import TimelineTrackHeaders from './timeline/TimelineTrackHeaders';
-import TimelineTracksCanvas from './timeline/TimelineTracksCanvas';
+import TimelineToolbar from './TimelineToolbar';
+import TimelineTrackHeaders from './TimelineTrackHeaders';
+import TimelineTracksCanvas from './TimelineTracksCanvas';
 import './TimelineEditor.css';
 
-const TRACK_HEADER_WIDTH = 112;
+const TRACK_HEADER_WIDTH = 148;
 
 function TimelineEditor({
   videoRef = null,
   currentTime = 0,
+  playheadTimeRef = null,
+  subscribePlayhead = null,
   duration = 0,
   isPlaying = false,
   onSeek,
@@ -76,6 +78,7 @@ function TimelineEditor({
   const [lockedTracks, setLockedTracks] = useState({ video: false, voice: false, subs: false, cleanBgm: false });
   const [hiddenTracks, setHiddenTracks] = useState({ video: false, voice: false, subs: false, cleanBgm: false });
   const [mutedTracks, setMutedTracks] = useState({ video: false, voice: false, subs: false, cleanBgm: false });
+  const [soloTracks, setSoloTracks] = useState({ video: false, voice: false, subs: false, cleanBgm: false });
   // Persistent toggle for Auto-Center playhead (Default: ON / true - remembered in localStorage)
   const [autoCenter, setAutoCenter] = useState(() => {
     try {
@@ -118,12 +121,25 @@ function TimelineEditor({
   const [dragOverTrack, setDragOverTrack] = useState(null);
   const [userVideoTrackCount, setUserVideoTrackCount] = useState(1);
 
-  // Dynamic Multi-Track Layer Allocation (Clean Pro CapCut Dual-Track Layout)
-  // Consolidates dialogue onto Row 0 (single clean straight line); overlaps drop cleanly into Row 1
+  // Dynamic Multi-Track Layer Allocation (Smart VOICE 1 Male / VOICE 2 Female & Stagger Routing)
   const { segmentRows, calculatedVoiceRows, highestUsedVoiceRow = 0, calculatedSubRows } = React.useMemo(() => {
     if (!scriptSegments || scriptSegments.length === 0) {
       return { segmentRows: [], calculatedVoiceRows: 1, highestUsedVoiceRow: 0, calculatedSubRows: 1 };
     }
+
+    const resolveIsFemale = (seg) => {
+      const speakerName = String(seg?.speaker || seg?.speakerName || '').trim();
+      const explicitGender = String(seg?.speakerGender || seg?.gender || '').toUpperCase().trim();
+      const isExplicitFemale = explicitGender === 'FEMALE' || explicitGender === 'GIRL' || explicitGender === 'WOMAN' || speakerName.includes('ស្រី');
+      const isExplicitMale = explicitGender === 'MALE' || explicitGender === 'BOY' || explicitGender === 'MAN' || speakerName.includes('ប្រុស');
+      const activeVoiceId = String(
+        seg?.voiceId ||
+        (speakerRegistry && (speakerRegistry[seg?.speakerId]?.voiceId || speakerRegistry[speakerName]?.voiceId)) ||
+        (isExplicitFemale ? 'km-KH-SreymomNeural' : (isExplicitMale ? 'km-KH-PisethNeural' : (voiceSettings?.voiceId || 'km-KH-PisethNeural')))
+      );
+      const isSreymom = activeVoiceId.includes('Sreymom') || activeVoiceId === 'km';
+      return isExplicitFemale || (isSreymom && !isExplicitMale);
+    };
 
     const rowEndTimes = [0, 0];
 
@@ -152,12 +168,38 @@ function TimelineEditor({
         return userR;
       }
 
-      // Default: Place on Row 0 (Main Voice Line)
+      // If segment already has trackRow === 1 (from Auto-Align or Add Segment), honor it if non-colliding
+      if (seg.trackRow === 1 && rawStart >= (rowEndTimes[1] || 0) - 0.05) {
+        rowEndTimes[1] = rawEnd;
+        return 1;
+      }
+
+      // Automatic speaker-lane routing: Male (ប្រុស) -> VOICE 1 (0), Female (ស្រី) -> VOICE 2 (1)
+      const isFemale = resolveIsFemale(seg);
+      if (isFemale) {
+        if (rawStart >= (rowEndTimes[1] || 0) - 0.05) {
+          rowEndTimes[1] = rawEnd;
+          return 1;
+        }
+        if (rawStart >= (rowEndTimes[0] || 0) - 0.05) {
+          rowEndTimes[0] = rawEnd;
+          return 0;
+        }
+        const pickRow = (rowEndTimes[1] || 0) <= (rowEndTimes[0] || 0) ? 1 : 0;
+        rowEndTimes[pickRow] = Math.max(rowEndTimes[pickRow] || 0, rawEnd);
+        return pickRow;
+      }
+
+      // Male / Default: Place on Row 0 (VOICE 1), or stagger overlapping / back-to-back clips (gap < 0.15s) onto VOICE 2 (Row 1)
+      const gapOnRow0 = rawStart - (rowEndTimes[0] || 0);
+      if (idx > 0 && gapOnRow0 < 0.15 && rawStart >= (rowEndTimes[1] || 0) - 0.05) {
+        rowEndTimes[1] = rawEnd;
+        return 1;
+      }
       if (rawStart >= (rowEndTimes[0] || 0) - 0.05) {
         rowEndTimes[0] = rawEnd;
         return 0;
       }
-      // If collision on Row 0, use Row 1 (Secondary Voice Line)
       if (rawStart >= (rowEndTimes[1] || 0) - 0.05) {
         rowEndTimes[1] = rawEnd;
         return 1;
@@ -181,7 +223,7 @@ function TimelineEditor({
       highestUsedVoiceRow,
       calculatedSubRows: 1, // Subtitles always sit on 1 unified continuous track
     };
-  }, [scriptSegments]);
+  }, [scriptSegments, speakerRegistry, voiceSettings]);
 
   // Canonical timing helper for adjacent clip collision prevention and magnetic edge snapping
   const getSegEffectiveRange = useCallback((seg, idx) => {
@@ -450,6 +492,18 @@ function TimelineEditor({
   const ppsRef = useRef(getPixelsPerSecond(zoom));
   ppsRef.current = getPixelsPerSecond(zoom);
 
+  // Subscribe playhead DOM element directly to 60fps RAF playback engine
+  useEffect(() => {
+    if (typeof subscribePlayhead !== 'function') return undefined;
+    return subscribePlayhead((liveTime) => {
+      if (isScrubbingRef.current) return;
+      if (playheadRef.current && Number.isFinite(liveTime)) {
+        const nextX = Math.max(0, liveTime * (ppsRef.current || 45));
+        playheadRef.current.style.transform = `translate3d(${nextX}px, 0, 0)`;
+      }
+    });
+  }, [subscribePlayhead]);
+
   useEffect(() => {
     selectedSegmentIdRef.current = selectedSegmentId;
     lastSyncedInspectorIdRef.current = selectedSegmentId;
@@ -667,13 +721,15 @@ function TimelineEditor({
     const container = timelineBodyRef.current;
     const clientWidth = container.clientWidth;
     if (clientWidth <= 0) return;
-    const activeTime = (videoRef?.current && !isNaN(videoRef.current.currentTime)) ? videoRef.current.currentTime : currentTime;
+    const activeTime = Number.isFinite(playheadTimeRef?.current)
+      ? playheadTimeRef.current
+      : ((videoRef?.current && !isNaN(videoRef.current.currentTime)) ? videoRef.current.currentTime : currentTime);
     const playheadAbsoluteX = activeTime * pps + TRACK_HEADER_WIDTH;
     const centerThreshold = clientWidth / 2;
     const targetScroll = playheadAbsoluteX > centerThreshold ? Math.max(0, Math.round(playheadAbsoluteX - centerThreshold)) : 0;
 
     container.scrollTo({ left: targetScroll, behavior: 'smooth' });
-  }, [currentTime, pps, videoRef]);
+  }, [currentTime, pps, videoRef, playheadTimeRef]);
 
   const performScrub = useCallback((newTime) => {
     onSeek(newTime);
@@ -1695,6 +1751,7 @@ function TimelineEditor({
           if (onSplitClip) onSplitClip(time, activeSplitTarget);
         }}
         currentTime={currentTime}
+        duration={totalDuration}
         handleDeleteSelected={handleDeleteSelected}
         canDelete={canDelete}
         canDeleteSubtitle={canDeleteSubtitle}
@@ -1735,6 +1792,8 @@ function TimelineEditor({
           setHiddenTracks={setHiddenTracks}
           mutedTracks={mutedTracks}
           setMutedTracks={setMutedTracks}
+          soloTracks={soloTracks}
+          setSoloTracks={setSoloTracks}
           audioGenerated={audioGenerated}
           videoRowCount={videoRowCount}
           voiceRowCount={voiceRowCount}
@@ -1742,6 +1801,10 @@ function TimelineEditor({
           showSubtitles={showSubtitles}
           selectedVideo={selectedVideo}
           scriptSegments={scriptSegments}
+          videoClips={videoClips}
+          onToggleMuteAllCuts={onToggleMuteAllCuts}
+          voiceSettings={voiceSettings}
+          onUpdateVoiceSettings={onUpdateVoiceSettings}
         />
 
         <TimelineTracksCanvas
@@ -1761,6 +1824,7 @@ function TimelineEditor({
           handleScrub={handleScrub}
           videoClips={videoClips}
           hiddenTracks={hiddenTracks}
+          mutedTracks={mutedTracks}
           dragState={dragState}
           activeClipId={activeClipId}
           handleVideoMouseDown={handleVideoMouseDown}

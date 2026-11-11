@@ -1,16 +1,16 @@
 import React, { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo } from 'react';
 import { Video, Upload, Loader2, AlertCircle } from 'lucide-react';
-import { parseTimeToSeconds } from '../utils/timestampUtils';
-import { mapSourceToTimelineTime, mapTimelineToSourceTime } from '../utils/timelineUtils';
-import { findLeadingSilenceFromChannels, computeSegmentAudioSyncTarget } from '../utils/audioSyncUtils';
-import { uploadVideoFile } from '../services/api';
-import { createAudioRecoveryManager } from '../utils/audioAutoRecovery';
-import { resolveDefaultAspectRatio, inferRenderedAspectRatio, sanitizeAspectRatio } from '../utils/projectStorage';
+import { parseTimeToSeconds } from '../../utils/timestampUtils';
+import { mapSourceToTimelineTime, mapTimelineToSourceTime } from '../../utils/timelineUtils';
+import { findLeadingSilenceFromChannels, computeSegmentAudioSyncTarget } from '../../utils/audioSyncUtils';
+import { uploadVideoFile } from '../../services/api';
+import { createAudioRecoveryManager } from '../../utils/audioAutoRecovery';
+import { resolveDefaultAspectRatio, inferRenderedAspectRatio, sanitizeAspectRatio } from '../../utils/projectStorage';
 
-import { PlayerTopBar, PlayerBottomBar } from './player/PlayerControls';
-import LiveSubtitleOverlay from './player/LiveSubtitleOverlay';
-import AntiTheftOverlay from './player/AntiTheftOverlay';
-import LogoOverlay from './player/LogoOverlay';
+import { PlayerTopBar, PlayerBottomBar } from './PlayerControls';
+import LiveSubtitleOverlay from './LiveSubtitleOverlay';
+import AntiTheftOverlay from './AntiTheftOverlay';
+import LogoOverlay from './LogoOverlay';
 import './VideoPlayerPreview.css';
 
 function VideoPlayerPreview({
@@ -26,6 +26,8 @@ function VideoPlayerPreview({
   onRenderVideo,
   videoRef,
   currentTime,
+  playheadTimeRef = null,
+  subscribePlayhead = null,
   duration,
   isPlaying = false,
   onPlayPause,
@@ -33,6 +35,8 @@ function VideoPlayerPreview({
   onTimeUpdate,
   onLoadedMetadata,
   voiceSettings = {},
+  onUpdateVoiceSettings = null,
+  onAspectRatioChange = null,
   onEnded,
   fullAudioUrl = null,
   audioGenerated = false,
@@ -1652,12 +1656,17 @@ function VideoPlayerPreview({
       {/* Player Bottom Control Bar */}
       <PlayerBottomBar
         currentTime={currentTime}
+        playheadTimeRef={playheadTimeRef}
+        subscribePlayhead={subscribePlayhead}
         duration={duration}
         onSeek={onSeek}
         currentVideoSrc={currentVideoSrc}
         isPlaying={isPlaying}
         onPlayPause={onPlayPause}
         voiceSettings={voiceSettings}
+        onUpdateVoiceSettings={onUpdateVoiceSettings}
+        onAspectRatioChange={onAspectRatioChange}
+        activeSegment={activeSegment}
         toggleFullscreen={toggleFullscreen}
         isFullscreen={isFullscreen}
         renderedVideo={renderedVideo}

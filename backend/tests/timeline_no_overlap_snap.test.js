@@ -4,11 +4,11 @@ const fs = require('fs');
 const path = require('path');
 
 test('TimelineEditor: Static audit for Audio No-Overlap Clamp & Edge Snapping', () => {
-  const file = path.resolve(__dirname, '../../frontend/src/components/TimelineEditor.jsx');
+  const file = path.resolve(__dirname, '../../frontend/src/components/timeline/TimelineEditor.jsx');
   const code = fs.readFileSync(file, 'utf8');
 
   // Verify getSegmentAudioDuration import
-  assert.ok(code.includes("import { formatMinSec, getSegmentAudioDuration } from '../utils/timestampUtils'"),
+  assert.ok(code.includes('getSegmentAudioDuration') && code.includes('utils/timestampUtils'),
     'TimelineEditor must import getSegmentAudioDuration');
 
   // Verify getSegEffectiveRange helper

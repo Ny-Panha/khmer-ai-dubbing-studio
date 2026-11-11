@@ -6,11 +6,16 @@ const ffprobeInstaller = require("@ffprobe-installer/ffprobe");
 const ffmpeg = require("fluent-ffmpeg");
 const audioSeparationService = require("./audioSeparationService");
 const { ffmpegHeavySemaphore, createAbortError } = require("../utils/asyncSemaphore");
+const { registerProcess, unregisterProcess } = require("../utils/processRegistry");
 
 function attachAbortKill(proc, signal, onAbortCallback) {
+  if (proc && proc.pid) {
+    registerProcess(proc, { type: "ffmpeg" });
+  }
   if (!signal || !proc) return () => {};
   const onAbort = () => {
     try {
+      unregisterProcess(proc);
       if (process.platform === "win32" && proc.pid) {
         spawn("taskkill", ["/pid", String(proc.pid), "/T", "/F"], {
           windowsHide: true,

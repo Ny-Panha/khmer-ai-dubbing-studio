@@ -1,17 +1,16 @@
-import React, { useState, useRef, useCallback, useEffect } from 'react';
+import React, { useRef, useCallback, useEffect } from 'react';
 import { AlertTriangle, X } from 'lucide-react';
-import Navbar from './components/Navbar';
+import Navbar from './components/layout/Navbar';
 import ErrorBoundary from './components/common/ErrorBoundary';
 import JobDashboardModal from './components/dashboard/JobDashboardModal';
 import GeminiRouteModal from './components/dashboard/GeminiRouteModal';
 import GeminiQuotaModal from './components/dashboard/GeminiQuotaModal';
 import BatchExportStudioModal from './components/dashboard/BatchExportStudioModal';
-import MediaLibrary from './components/MediaLibrary';
-import VideoPlayerPreview from './components/VideoPlayerPreview';
-import VoiceSettings from './components/VoiceSettings';
-import TimelineEditor from './components/TimelineEditor';
+import MediaLibrary from './components/media/MediaLibrary';
+import VideoPlayerPreview from './components/player/VideoPlayerPreview';
+import VoiceSettings from './components/voice/VoiceSettings';
+import TimelineEditor from './components/timeline/TimelineEditor';
 import {
-  loadSavedVoiceSettings,
   saveVoiceSettings,
   saveEpisodeState,
   resolveDefaultAspectRatio,
@@ -21,6 +20,9 @@ import {
 import { isSegmentMatch, resolveVoiceClipStartSec } from './utils/timelineUtils';
 import { parseTimeToSeconds } from './utils/timestampUtils';
 import { JobQueueProvider } from './context/JobQueueContext';
+import { StudioProvider } from './context/StudioContext';
+import { ModalProvider, useModalState } from './context/ModalContext';
+import { WorkspaceProvider, useStudioWorkspaceState } from './context/WorkspaceContext';
 
 // Hoisted immutable fallbacks (prevents prop churning and broken memoization)
 const EMPTY_SEGMENTS = Object.freeze([]);
@@ -105,31 +107,61 @@ function resolveSubtitleSampleSeekTime(segments = [], currentTimeSec = 0) {
 import { useResizablePanels } from './hooks/useResizablePanels';
 import { useWorkspaceMedia } from './hooks/useWorkspaceMedia';
 import { useUndoRedo } from './hooks/useUndoRedo';
-import { useVideoPlayback } from './hooks/useVideoPlayback';
+import { usePlaybackEngine } from './hooks/usePlaybackEngine';
 import { useAudioDubbing } from './hooks/useAudioDubbing';
 import { useVideoRender } from './hooks/useVideoRender';
 import { useScriptWorkflow } from './hooks/useScriptWorkflow';
 import { useClipOperations } from './hooks/useClipOperations';
 import { useProjectPersistence } from './hooks/useProjectPersistence';
 import { useSeriesManager } from './hooks/useSeriesManager';
+import { useShortcuts } from './hooks/useShortcuts';
+import { useStudioActions } from './hooks/useStudioActions';
 
 export default function App() {
-  const [leftTab, setLeftTab] = useState('media');
-  const [showJobDashboard, setShowJobDashboard] = useState(false);
-  const [showGeminiRouteModal, setShowGeminiRouteModal] = useState(false);
-  const [showGeminiQuotaModal, setShowGeminiQuotaModal] = useState(false);
-  const [showBatchExportStudioModal, setShowBatchExportStudioModal] = useState(false);
-  const [exportStudioSelectedEpIds, setExportStudioSelectedEpIds] = useState([]);
-  const [exportStudioAllowOriginalAudio, setExportStudioAllowOriginalAudio] = useState(false);
+  const modalState = useModalState();
+  const {
+    showJobDashboard,
+    showGeminiRouteModal,
+    showGeminiQuotaModal,
+    showBatchExportStudioModal,
+    exportStudioSelectedEpIds,
+    setExportStudioSelectedEpIds,
+    exportStudioAllowOriginalAudio,
+    setExportStudioAllowOriginalAudio,
+    handleOpenJobDashboard,
+    handleCloseJobDashboard,
+    handleOpenGeminiRoute,
+    handleCloseGeminiRoute,
+    handleOpenGeminiQuota,
+    handleCloseGeminiQuota,
+    handleOpenBatchExportStudio,
+    handleCloseBatchExportStudio,
+    isAnyModalOpen,
+  } = modalState;
+
+  const workspaceState = useStudioWorkspaceState();
+  const {
+    leftTab,
+    setLeftTab,
+    scriptData,
+    setScriptData,
+    speakerRegistry,
+    setSpeakerRegistry,
+    voiceSettings,
+    setVoiceSettings,
+    audioGenerated,
+    setAudioGenerated,
+    audioOutdated,
+    setAudioOutdated,
+    fullAudioPath,
+    setFullAudioPath,
+    fullAudioUrl,
+    setFullAudioUrl,
+    timelineFocusRequest,
+    setTimelineFocusRequest,
+  } = workspaceState;
+
   const lastExportStudioSeriesRef = useRef(null);
-  const [scriptData, setScriptData] = useState(null);
-  const [speakerRegistry, setSpeakerRegistry] = useState({});
-  const [voiceSettings, setVoiceSettings] = useState(loadSavedVoiceSettings);
-  const [audioGenerated, setAudioGenerated] = useState(false);
-  const [audioOutdated, setAudioOutdated] = useState(false);
-  const [fullAudioPath, setFullAudioPath] = useState(null);
-  const [fullAudioUrl, setFullAudioUrl] = useState(null);
-  const [timelineFocusRequest, setTimelineFocusRequest] = useState(null);
 
   const topSuiteRef = useRef(null);
   const videoRef = useRef(null);
@@ -163,10 +195,17 @@ export default function App() {
   const handleSetScriptError = useCallback((err) => scriptRef.current.setScriptError?.(err), []);
   const handleSetIsGeneratingScript = useCallback((gen) => scriptRef.current.setIsGeneratingScript?.(gen), []);
 
-  // 1. Resizable 3-Column Panels Hook
+  // 1. Resizable 3-Column & Bottom Timeline Panels Hook
   const {
     leftPanelWidth,
     rightPanelWidth,
+    timelineHeight,
+    isLeftCollapsed,
+    isRightCollapsed,
+    isTimelineCollapsed,
+    toggleLeftPanel,
+    toggleRightPanel,
+    toggleTimelinePanel,
     activeSplitter,
     handleStartSplitterDrag
   } = useResizablePanels(topSuiteRef);
@@ -254,8 +293,8 @@ export default function App() {
   });
   undoRedoRef.current = undoRedo;
 
-  // 5. Video Playback & Time Tracking Hook
-  const playback = useVideoPlayback({
+  // 5. Video Playback & 60fps RAF Time Tracking Engine Hook
+  const playback = usePlaybackEngine({
     videoRef,
     videoClips: media.videoClips,
     setVideoClips: media.setVideoClips,
@@ -633,16 +672,6 @@ export default function App() {
   const handleRenameSeries = useCallback((...args) => seriesRef.current.handleRenameSeries?.(...args), []);
   const handleResetAllEpisodes = useCallback((...args) => seriesRef.current.handleResetAllEpisodes?.(...args), []);
 
-  // Modal navigation callbacks
-  const handleOpenJobDashboard = useCallback(() => setShowJobDashboard(true), []);
-  const handleCloseJobDashboard = useCallback(() => setShowJobDashboard(false), []);
-  const handleOpenGeminiRoute = useCallback(() => setShowGeminiRouteModal(true), []);
-  const handleCloseGeminiRoute = useCallback(() => setShowGeminiRouteModal(false), []);
-  const handleOpenGeminiQuota = useCallback(() => setShowGeminiQuotaModal(true), []);
-  const handleCloseGeminiQuota = useCallback(() => setShowGeminiQuotaModal(false), []);
-  const handleOpenBatchExportStudio = useCallback(() => setShowBatchExportStudioModal(true), []);
-  const handleCloseBatchExportStudio = useCallback(() => setShowBatchExportStudioModal(false), []);
-
   // Persist Export Studio episode selections while app remains open
   useEffect(() => {
     const eps = Array.isArray(series.activeSeries?.episodes) ? series.activeSeries.episodes : [];
@@ -708,9 +737,39 @@ export default function App() {
     ? null
     : render.renderedVideo;
 
+  useShortcuts({
+    isModalOpen: isAnyModalOpen,
+    onPlayPause: handlePlayPause,
+    onSeek: handleSeek,
+    currentTime: playback.currentTime,
+    duration: playback.duration,
+    onSplitClip: handleSplitClip,
+    onDeleteClip: handleDeleteClip,
+    onDeleteSegment: handleDeleteSegment,
+    activeClipId: media.activeClipId,
+    selectedSegmentId: media.selectedSegmentId,
+    onUndo: handleUndo,
+    onRedo: handleRedo,
+    onRenderVideo: handleRenderVideo,
+  });
+
+  const studioActions = useStudioActions({
+    clipsRef,
+    scriptRef,
+    audioRef,
+    undoRedoRef,
+    playbackRef,
+    renderRef,
+    mediaRef,
+    seriesRef,
+  });
+
   return (
     <JobQueueProvider isAnyJobViewOpen={true}>
-      <div className="capcut-app-container">
+      <ModalProvider value={modalState}>
+        <WorkspaceProvider value={workspaceState}>
+          <StudioProvider value={studioActions}>
+            <div className="capcut-app-container">
         {/* Top Application Navbar */}
         <Navbar
           apiKey={persistence.apiKey}
@@ -745,6 +804,12 @@ export default function App() {
           batchRender={render.batchRender}
           currentAspectRatio={currentAspectRatio}
           onAspectRatioChange={handleAspectRatioChange}
+          isLeftCollapsed={isLeftCollapsed}
+          isRightCollapsed={isRightCollapsed}
+          isTimelineCollapsed={isTimelineCollapsed}
+          onToggleLeftPanel={toggleLeftPanel}
+          onToggleRightPanel={toggleRightPanel}
+          onToggleTimelinePanel={toggleTimelinePanel}
         />
 
         {/* Backend Offline Dismissible Warning Banner / Toast */}
@@ -764,11 +829,17 @@ export default function App() {
         )}
 
         {/* Main Video Editing Workspace */}
-        <main className="capcut-main-workspace">
+        <main className={`capcut-main-workspace ${activeSplitter ? 'is-resizing' : ''}`}>
           {/* Top 3-Column Suite: Left Tools | Video Monitor | Contextual Inspector */}
           <div className="capcut-top-suite" ref={topSuiteRef}>
             {/* 1. Left Panel: Media Library, AI Script, Subtitles */}
-            <div className="top-suite-col-left" style={{ width: leftPanelWidth }}>
+            <div
+              className="top-suite-col-left"
+              style={{
+                width: leftPanelWidth,
+                display: isLeftCollapsed ? 'none' : undefined,
+              }}
+            >
               <ErrorBoundary inline name="Media Library">
                 <MediaLibrary
                   apiKey={persistence.apiKey}
@@ -825,11 +896,13 @@ export default function App() {
             </div>
 
             {/* Left Resizer Splitter (Drag Left / Right) */}
-            <div
-              className={`capcut-panel-splitter ${activeSplitter === 'left' ? 'is-active' : ''}`}
-              onMouseDown={(e) => handleStartSplitterDrag(e, 'left')}
-              title="Drag left or right to resize Media Library panel"
-            />
+            {!isLeftCollapsed && (
+              <div
+                className={`capcut-panel-splitter ${activeSplitter === 'left' ? 'is-active' : ''}`}
+                onMouseDown={(e) => handleStartSplitterDrag(e, 'left')}
+                title="Drag left or right to resize Media Library panel"
+              />
+            )}
 
             {/* 2. Center Panel: Video Preview Monitor */}
             <div className="top-suite-col-center">
@@ -847,6 +920,8 @@ export default function App() {
                   onRenderVideo={handleRenderVideo}
                   videoRef={videoRef}
                   currentTime={playback.currentTime}
+                  playheadTimeRef={playback.playheadTimeRef}
+                  subscribePlayhead={playback.subscribePlayhead}
                   duration={playback.duration}
                   isPlaying={playback.isPlaying}
                   onPlayPause={handlePlayPause}
@@ -854,6 +929,8 @@ export default function App() {
                   onTimeUpdate={handleTimeUpdate}
                   onLoadedMetadata={handleLoadedMetadata}
                   voiceSettings={voiceSettings || EMPTY_OBJECT}
+                  onUpdateVoiceSettings={handleUpdateVoiceSettings}
+                  onAspectRatioChange={handleAspectRatioChange}
                   onEnded={handleVideoEnded}
                   fullAudioUrl={audio.fullAudioUrl}
                   audioGenerated={audio.audioGenerated}
@@ -866,14 +943,22 @@ export default function App() {
             </div>
 
             {/* Right Resizer Splitter (Drag Left / Right) */}
-            <div
-              className={`capcut-panel-splitter ${activeSplitter === 'right' ? 'is-active' : ''}`}
-              onMouseDown={(e) => handleStartSplitterDrag(e, 'right')}
-              title="Drag left or right to resize Inspector panel"
-            />
+            {!isRightCollapsed && (
+              <div
+                className={`capcut-panel-splitter ${activeSplitter === 'right' ? 'is-active' : ''}`}
+                onMouseDown={(e) => handleStartSplitterDrag(e, 'right')}
+                title="Drag left or right to resize Inspector panel"
+              />
+            )}
 
             {/* 3. Right Panel: Khmer Voice (TTS), Audio Ducking, Export Settings */}
-            <div className="top-suite-col-right" style={{ width: rightPanelWidth }}>
+            <div
+              className="top-suite-col-right"
+              style={{
+                width: rightPanelWidth,
+                display: isRightCollapsed ? 'none' : undefined,
+              }}
+            >
               <ErrorBoundary inline name="Inspector">
                 <VoiceSettings
                   settings={voiceSettings || EMPTY_OBJECT}
@@ -931,13 +1016,30 @@ export default function App() {
             </div>
           </div>
 
+          {/* Horizontal Resizer Splitter (Drag Up / Down for Timeline Height 220px–450px) */}
+          {!isTimelineCollapsed && (
+            <div
+              className={`capcut-panel-splitter-horizontal ${activeSplitter === 'timeline' ? 'is-active' : ''}`}
+              onMouseDown={(e) => handleStartSplitterDrag(e, 'timeline')}
+              title="Drag up or down to resize Timeline height (220px–450px)"
+            />
+          )}
+
           {/* Bottom Multi-Track Timeline */}
-          <div className="capcut-bottom-timeline">
+          <div
+            className="capcut-bottom-timeline"
+            style={{
+              height: timelineHeight,
+              display: isTimelineCollapsed ? 'none' : undefined,
+            }}
+          >
             <ErrorBoundary inline name="Timeline">
               <TimelineEditor
                 videoRef={videoRef}
                 activeTab={leftTab}
                 currentTime={playback.currentTime}
+                playheadTimeRef={playback.playheadTimeRef}
+                subscribePlayhead={playback.subscribePlayhead}
                 duration={playback.duration}
                 isPlaying={playback.isPlaying}
                 onSeek={handleSeek}
@@ -1046,7 +1148,10 @@ export default function App() {
             onOpenBatchModal={handleOpenGeminiRoute}
           />
         </ErrorBoundary>
-      </div>
+            </div>
+          </StudioProvider>
+        </WorkspaceProvider>
+      </ModalProvider>
     </JobQueueProvider>
   );
 }

@@ -4,11 +4,11 @@ const fs = require('fs');
 const path = require('path');
 
 test('Timeline Subtitles Toggle: Static Architecture & VIEW-ONLY Boundary Audit', () => {
-  const timelineEditorPath = path.resolve(__dirname, '../../frontend/src/components/TimelineEditor.jsx');
+  const timelineEditorPath = path.resolve(__dirname, '../../frontend/src/components/timeline/TimelineEditor.jsx');
   const timelineToolbarPath = path.resolve(__dirname, '../../frontend/src/components/timeline/TimelineToolbar.jsx');
   const trackHeadersPath = path.resolve(__dirname, '../../frontend/src/components/timeline/TimelineTrackHeaders.jsx');
   const tracksCanvasPath = path.resolve(__dirname, '../../frontend/src/components/timeline/TimelineTracksCanvas.jsx');
-  const playerPreviewPath = path.resolve(__dirname, '../../frontend/src/components/VideoPlayerPreview.jsx');
+  const playerPreviewPath = path.resolve(__dirname, '../../frontend/src/components/player/VideoPlayerPreview.jsx');
   const videoRoutesPath = path.resolve(__dirname, '../routes/videoRoutes.js');
 
   const editorCode = fs.readFileSync(timelineEditorPath, 'utf8');

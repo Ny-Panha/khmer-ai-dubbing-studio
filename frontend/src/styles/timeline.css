@@ -1,0 +1,80 @@
+/* ==========================================================================
+   Khmer AI Dubbing Studio (CapCut Pro 2026) — Multi-Track Timeline Engine
+   ========================================================================== */
+
+/* Bottom 290px Locked Timeline Container */
+.capcut-bottom-timeline {
+  height: 290px !important;
+  min-height: 290px !important;
+  max-height: 290px !important;
+  background: #12141D !important;
+  border: 1px solid rgba(255, 255, 255, 0.07) !important;
+  border-radius: 10px !important;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  flex-shrink: 0;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
+}
+
+.capcut-timeline-container {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: #12141D !important;
+  border-radius: 10px;
+}
+
+.capcut-timeline-toolbar {
+  height: 38px;
+  min-height: 38px;
+  background: rgba(9, 10, 15, 0.85) !important;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07) !important;
+}
+
+/* Timecode & Tabular Monospace Enforcement */
+.timeline-timecode,
+.timecode-display,
+.time-readout,
+.ruler-tick-label,
+[class*="timecode"] {
+  font-family: var(--font-mono) !important;
+  font-variant-numeric: tabular-nums !important;
+}
+
+/* Character & Track Color System:
+   - Female Sreymom: #EC4899 (Pink)
+   - Male Piseth: #3B82F6 (Blue)
+   - Subtitles: #8B5CF6 (Violet)
+*/
+.voice-segment-block.female,
+.voice-segment-block[data-gender="FEMALE"],
+.voice-clip-female {
+  border-color: rgba(236, 72, 153, 0.65) !important;
+  background: linear-gradient(180deg, rgba(236, 72, 153, 0.24) 0%, rgba(236, 72, 153, 0.12) 100%) !important;
+}
+
+.voice-segment-block.male,
+.voice-segment-block[data-gender="MALE"],
+.voice-clip-male {
+  border-color: rgba(59, 130, 246, 0.65) !important;
+  background: linear-gradient(180deg, rgba(59, 130, 246, 0.24) 0%, rgba(59, 130, 246, 0.12) 100%) !important;
+}
+
+.subtitle-segment-block,
+.timeline-subtitle-clip {
+  border-color: rgba(139, 92, 246, 0.65) !important;
+  background: linear-gradient(180deg, rgba(139, 92, 246, 0.24) 0%, rgba(139, 92, 246, 0.12) 100%) !important;
+}
+
+/* Active Clip Highlighting (CapCut Cyan) */
+.voice-segment-block.selected,
+.subtitle-segment-block.selected,
+.timeline-video-clip.selected {
+  outline: 2px solid #00E5FF !important;
+  box-shadow: 0 0 14px rgba(0, 229, 255, 0.35) !important;
+}
+

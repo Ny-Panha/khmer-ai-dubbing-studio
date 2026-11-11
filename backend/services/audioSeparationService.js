@@ -7,6 +7,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
+const { registerProcess, unregisterProcess } = require('../utils/processRegistry');
 
 const activeSeparationJobs = new Map();
 const activeSeparationProgress = new Map();
@@ -238,6 +239,7 @@ function executeDemucsWorker(options, targetDir, cleanKey) {
       env: spawnEnv,
     });
 
+    registerProcess(child, { type: 'demucs', jobId, label: cleanKey });
     activeSeparationJobs.set(jobId, child);
     activeSeparationJobs.set(cleanKey, child);
 
@@ -284,6 +286,7 @@ function executeDemucsWorker(options, targetDir, cleanKey) {
     child.on('error', (err) => {
       isDemucsRunning = false;
       currentDemucsMedia = null;
+      unregisterProcess(child);
       activeSeparationJobs.delete(jobId);
       activeSeparationJobs.delete(cleanKey);
       activeSeparationProgress.set(cleanKey, {
@@ -304,6 +307,7 @@ function executeDemucsWorker(options, targetDir, cleanKey) {
     child.on('close', (code) => {
       isDemucsRunning = false;
       currentDemucsMedia = null;
+      unregisterProcess(child);
       activeSeparationJobs.delete(jobId);
       activeSeparationJobs.delete(cleanKey);
       if (code !== 0) {

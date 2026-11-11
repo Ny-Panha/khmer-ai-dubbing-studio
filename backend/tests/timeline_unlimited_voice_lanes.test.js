@@ -32,7 +32,7 @@ test('Requirement 1: Dynamic voice lane count formula verification', () => {
 test('Requirement 1 & 2: Static audit for unlimited lanes and drag badges', () => {
   const canvasPath = path.resolve(__dirname, '../../frontend/src/components/timeline/TimelineTracksCanvas.jsx');
   const headersPath = path.resolve(__dirname, '../../frontend/src/components/timeline/TimelineTrackHeaders.jsx');
-  const editorPath = path.resolve(__dirname, '../../frontend/src/components/TimelineEditor.jsx');
+  const editorPath = path.resolve(__dirname, '../../frontend/src/components/timeline/TimelineEditor.jsx');
   const utilsPath = path.resolve(__dirname, '../../frontend/src/utils/timelineUtils.js');
 
   const canvasCode = fs.readFileSync(canvasPath, 'utf8');

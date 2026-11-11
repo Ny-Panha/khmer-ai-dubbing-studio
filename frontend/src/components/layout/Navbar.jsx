@@ -1,10 +1,11 @@
 import React, { useState, useContext, useEffect } from 'react';
 import { 
-  Key, HelpCircle, Download, Loader2, RotateCcw, X, Trash2, Film, Plus, Cpu, Layers, Activity
+  Key, HelpCircle, Download, Loader2, RotateCcw, X, Trash2, Film, Plus, Cpu, Layers, Activity,
+  PanelLeft, PanelRight, PanelBottom
 } from 'lucide-react';
-import { isCorruptedOrMojibakeTitle } from '../utils/projectStorage';
-import { useGeminiQuotaMonitor, runQuotaCheck } from '../hooks/useGeminiQuotaMonitor';
-import { JobQueueContext } from '../context/jobQueueStore';
+import { isCorruptedOrMojibakeTitle } from '../../utils/projectStorage';
+import { useGeminiQuotaMonitor, runQuotaCheck } from '../../hooks/useGeminiQuotaMonitor';
+import { JobQueueContext } from '../../context/jobQueueStore';
 import ShortcutsModal from './ShortcutsModal';
 import './Navbar.css';
 
@@ -41,6 +42,12 @@ export default function Navbar({
   activeJobCount = 0,
   currentAspectRatio = '16:9',
   onAspectRatioChange = null,
+  isLeftCollapsed = false,
+  isRightCollapsed = false,
+  isTimelineCollapsed = false,
+  onToggleLeftPanel = null,
+  onToggleRightPanel = null,
+  onToggleTimelinePanel = null,
 }) {
   const [showKeyModal, setShowKeyModal] = useState(false);
   const [showShortcutsModal, setShowShortcutsModal] = useState(false);
@@ -137,6 +144,53 @@ export default function Navbar({
 
         {/* Right: Actions, Shortcuts, Key & Export CTA */}
         <div className="navbar-right-actions">
+          {/* Workspace Panel Collapse / Expand Toggles (Laptop 1366x768 & 1440x900) */}
+          {(onToggleLeftPanel || onToggleTimelinePanel || onToggleRightPanel) && (
+            <div
+              className="navbar-aspect-toggle"
+              role="group"
+              aria-label="Workspace Panel Toggles"
+              title="បិទ/បើកផ្ទាំងការងារ (Left Media | Bottom Timeline | Right Inspector)"
+            >
+              {onToggleLeftPanel && (
+                <button
+                  type="button"
+                  data-testid="toggle-left-panel-btn"
+                  onClick={onToggleLeftPanel}
+                  aria-pressed={!isLeftCollapsed}
+                  className={`navbar-aspect-btn ${!isLeftCollapsed ? 'active' : ''}`}
+                  title={isLeftCollapsed ? 'បើកផ្ទាំងឆ្វេង (Show Left Media Library)' : 'បង្រួមផ្ទាំងឆ្វេង (Collapse Left Panel)'}
+                >
+                  <PanelLeft size={13} />
+                </button>
+              )}
+              {onToggleTimelinePanel && (
+                <button
+                  type="button"
+                  data-testid="toggle-timeline-panel-btn"
+                  onClick={onToggleTimelinePanel}
+                  aria-pressed={!isTimelineCollapsed}
+                  className={`navbar-aspect-btn ${!isTimelineCollapsed ? 'active' : ''}`}
+                  title={isTimelineCollapsed ? 'បើកផ្ទាំង Timeline ខាងក្រោម (Show Timeline)' : 'បង្រួមផ្ទាំង Timeline (Collapse Timeline)'}
+                >
+                  <PanelBottom size={13} />
+                </button>
+              )}
+              {onToggleRightPanel && (
+                <button
+                  type="button"
+                  data-testid="toggle-right-panel-btn"
+                  onClick={onToggleRightPanel}
+                  aria-pressed={!isRightCollapsed}
+                  className={`navbar-aspect-btn ${!isRightCollapsed ? 'active' : ''}`}
+                  title={isRightCollapsed ? 'បើកផ្ទាំងស្តាំ (Show Right Inspector)' : 'បង្រួមផ្ទាំងស្តាំ (Collapse Right Inspector)'}
+                >
+                  <PanelRight size={13} />
+                </button>
+              )}
+            </div>
+          )}
+
           {/* Quick Aspect Ratio Switcher (16:9 Landscape / 9:16 Portrait) — Syncs Preview & Auto Export */}
           <div
             className="navbar-aspect-toggle"

@@ -154,7 +154,7 @@ test('resolveStickyVoiceSettings, inferRenderedAspectRatio, and sanitizeAndHealS
 test('Workspace isolation, containment guards, and panel NaN guards exist in frontend source', () => {
   const appCode = fs.readFileSync(path.resolve(__dirname, '../../frontend/src/App.jsx'), 'utf8');
   const playerCode = fs.readFileSync(
-    path.resolve(__dirname, '../../frontend/src/components/VideoPlayerPreview.jsx'),
+    path.resolve(__dirname, '../../frontend/src/components/player/VideoPlayerPreview.jsx'),
     'utf8'
   );
   const panelsCode = fs.readFileSync(
@@ -181,11 +181,11 @@ test('Workspace isolation, containment guards, and panel NaN guards exist in fro
 test('Subtitle controls exit stale renderedVideo, preserve time across src swap, and keep span-scoped styles & cqw sizing', () => {
   const appCode = fs.readFileSync(path.resolve(__dirname, '../../frontend/src/App.jsx'), 'utf8');
   const playerCode = fs.readFileSync(
-    path.resolve(__dirname, '../../frontend/src/components/VideoPlayerPreview.jsx'),
+    path.resolve(__dirname, '../../frontend/src/components/player/VideoPlayerPreview.jsx'),
     'utf8'
   );
   const playerCss = fs.readFileSync(
-    path.resolve(__dirname, '../../frontend/src/components/VideoPlayerPreview.css'),
+    path.resolve(__dirname, '../../frontend/src/components/player/VideoPlayerPreview.css'),
     'utf8'
   );
   const overlayCode = fs.readFileSync(
@@ -218,7 +218,7 @@ test('Subtitle controls exit stale renderedVideo, preserve time across src swap,
 
 test('Voice gender switch (handleClipVoiceChange) does not auto-play segment audio', () => {
   const voiceSettingsCode = fs.readFileSync(
-    path.resolve(__dirname, '../../frontend/src/components/VoiceSettings.jsx'),
+    path.resolve(__dirname, '../../frontend/src/components/voice/VoiceSettings.jsx'),
     'utf8'
   );
   const voiceChangeBlockMatch = voiceSettingsCode.match(

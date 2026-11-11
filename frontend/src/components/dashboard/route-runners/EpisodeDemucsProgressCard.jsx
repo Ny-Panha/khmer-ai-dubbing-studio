@@ -265,12 +265,12 @@ export default function EpisodeDemucsProgressCard({ liveStats, ep, onKill, onReq
       </div>
 
       {/* Collapsible Live Console Terminal Drawer */}
-      <div style={{
-        background: '#070b14',
-        border: `1px solid ${isFailed ? 'rgba(239, 68, 68, 0.35)' : (isDone ? 'rgba(16, 185, 129, 0.35)' : 'rgba(56, 189, 248, 0.35)')}`,
-        borderRadius: 7,
+      <div className="demucs-console-drawer" style={{
+        background: '#07080C',
+        border: `1px solid ${isFailed ? 'rgba(239, 68, 68, 0.35)' : (isDone ? 'rgba(16, 185, 129, 0.35)' : 'rgba(0, 229, 255, 0.35)')}`,
+        borderRadius: 8,
         overflow: 'hidden',
-        boxShadow: 'inset 0 2px 10px rgba(0, 0, 0, 0.8)',
+        boxShadow: 'inset 0 2px 10px rgba(0, 0, 0, 0.85)',
       }}>
         {/* Console Header Toggle */}
         <button

@@ -5,9 +5,9 @@ const path = require('path');
 
 test('+ ឃ្លា Add Segment: renders draft/no-audio segments on VOICE lanes and computes slotSpan cleanly', () => {
   const canvasPath = path.resolve(__dirname, '../../frontend/src/components/timeline/TimelineTracksCanvas.jsx');
-  const editorPath = path.resolve(__dirname, '../../frontend/src/components/TimelineEditor.jsx');
+  const editorPath = path.resolve(__dirname, '../../frontend/src/components/timeline/TimelineEditor.jsx');
   const opsPath = path.resolve(__dirname, '../../frontend/src/hooks/useClipOperations.js');
-  const cssPath = path.resolve(__dirname, '../../frontend/src/components/TimelineEditor.css');
+  const cssPath = path.resolve(__dirname, '../../frontend/src/components/timeline/TimelineEditor.css');
 
   const canvasCode = fs.readFileSync(canvasPath, 'utf8');
   const editorCode = fs.readFileSync(editorPath, 'utf8');

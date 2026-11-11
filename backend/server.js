@@ -23,6 +23,8 @@ const { ensurePipelineWorkerRegistered } = require("./services/pipeline/jobWorke
 
 // Middlewares & Modular Route Handlers
 const { registerLiveDotenvFiles } = require("./services/geminiKeyManager.js");
+const { killAllProcesses } = require("./utils/processRegistry.js");
+const { validateJsonBodyEnvelope } = require("./middleware/validateRequest.js");
 const mediaStreamMiddleware = require("./middleware/mediaStream.js");
 const systemRoutes = require("./routes/systemRoutes.js");
 const scriptRoutes = require("./routes/scriptRoutes.js");
@@ -34,10 +36,18 @@ const seriesRoutes = require("./routes/seriesRoutes.js");
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// Enable CORS & JSON parsing
+// Scoped JSON body parsers: 5MB standard limit, 50MB strictly for project/subtitle/series sync endpoints
+const standardJsonParser = express.json({ limit: "5mb" });
+const highPayloadJsonParser = express.json({ limit: "50mb" });
+const highPayloadUrlEncodedParser = express.urlencoded({ extended: true, limit: "50mb" });
+
+// Enable CORS & scoped JSON parsing
 app.use(cors());
-app.use(express.json({ limit: "50mb" }));
-app.use(express.urlencoded({ extended: true, limit: "50mb" }));
+app.use("/api/series", highPayloadJsonParser, highPayloadUrlEncodedParser);
+app.use("/api", highPayloadJsonParser, highPayloadUrlEncodedParser);
+app.use(standardJsonParser);
+app.use(express.urlencoded({ extended: true, limit: "5mb" }));
+app.use(validateJsonBodyEnvelope);
 
 // 1. Resilient Media Streaming & Static Uploads
 app.use("/uploads", mediaStreamMiddleware);
@@ -114,6 +124,10 @@ if (require.main === module) {
   const handleShutdown = () => {
     if (isShuttingDown) return;
     isShuttingDown = true;
+
+    try {
+      killAllProcesses();
+    } catch (_) {}
 
     if (typeof jobRoutes.closeAllJobStreams === "function") {
       jobRoutes.closeAllJobStreams();

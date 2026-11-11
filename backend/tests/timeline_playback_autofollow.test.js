@@ -6,7 +6,7 @@ const path = require('path');
 const { resolveSegmentAtTime } = require('../../frontend/src/utils/timelineUtils.js');
 
 test('Playback Auto-Follow: Static Architecture & Guards Audit', () => {
-  const timelineEditorPath = path.resolve(__dirname, '../../frontend/src/components/TimelineEditor.jsx');
+  const timelineEditorPath = path.resolve(__dirname, '../../frontend/src/components/timeline/TimelineEditor.jsx');
   const code = fs.readFileSync(timelineEditorPath, 'utf8');
 
   // 1. isPlaying must NOT be in the auto-follow early return guard

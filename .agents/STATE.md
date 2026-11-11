@@ -1,6 +1,136 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
+- **Environment**: Antigravity IDE (`/agents` Spec-Kit SDD — Timeline UI, Features & Workflow Fix)
+- **Timestamp**: 2026-11-11T10:47:00+07:00
+
+## Summary: Completed 4-Step Timeline UI, Features & Workflow Fix (`timeline_ui_and_workflow_fix_prompt.md`)
+1. **Spec-Kit SDD Artifacts (`.specify/`)**:
+   - Created and verified [`.specify/specs/timeline-ui-and-workflow-fix.md`](file:///e:/khmer_ai_dubbing_studio/.specify/specs/timeline-ui-and-workflow-fix.md), [`.specify/plans/timeline-ui-and-workflow-fix.md`](file:///e:/khmer_ai_dubbing_studio/.specify/plans/timeline-ui-and-workflow-fix.md), and [`.specify/tasks/timeline-ui-and-workflow-fix.md`](file:///e:/khmer_ai_dubbing_studio/.specify/tasks/timeline-ui-and-workflow-fix.md) (`5/5` tasks `[x]`).
+2. **Step 1 — Timeline Toolbar Workflow Hierarchy & Duplicate Plus Sign Fix**:
+   - Updated [`frontend/src/components/timeline/TimelineToolbar.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/timeline/TimelineToolbar.jsx):
+     - Fixed duplicate `+ + ឃ្លា` label to `<Plus size={13} /> <span>ថែមឃ្លា</span>`.
+     - Organized Left section into 3 workflow groups: Group A (`Undo`/`Redo`/`Split`/`Delete`/`ថែមឃ្លា`), Group B (`Full Video | Auto-Cut by Subs` segmented pill toggle), Group C (`Auto-Align`, `Bridge Gaps`, and neutral slate `Reset Timing`).
+     - Added Center live monospace timecode readout (`00:00.00 / 00:12.50`).
+     - Organized Right section with `Snap` & `Subs` toggle pills (cyan when `Snap ON`, violet when `Subs ON`) and `0.5x–3.0x` zoom slider + Fit (`1.0x`) + Auto-Center (`🎯`).
+3. **Step 2 — Track Headers Truncation Fix (`CLEAN BGM`) & Two-Way Mute Synchronization**:
+   - Updated [`frontend/src/components/timeline/TimelineTrackHeaders.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/timeline/TimelineTrackHeaders.jsx), [`TimelineEditor.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/timeline/TimelineEditor.jsx), and [`TimelineEditor.css`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/timeline/TimelineEditor.css):
+     - Widened `.track-headers-column` / `.capcut-track-headers` and `TRACK_HEADER_WIDTH` to `148px` so `CLEAN BGM` never truncates to `CLEAN B`.
+     - Added `3px` colored left status bars (`#00e5ff` Video, `#3b82f6` Voice 1, `#ec4899` Voice 2, `#8b5cf6` Subtitles, `#10b981` Clean BGM), `22px x 22px` `Mute`/`Solo`/`Lock` buttons, and `VOICE 1` (`👨/គោល`) / `VOICE 2` (`👩/បន្ទាប់`) sub-badges.
+     - Synchronized `VIDEO 1` Mute with `onToggleMuteAllCuts(true)` and `CLEAN BGM` Mute with `voiceSettings.duckingVolume` (`0` vs `0.15`), and dimmed muted lanes (`opacity: 0.45`, grayscale waveform, `MUTED` badge).
+4. **Step 3 — Smart `VOICE 1` / `VOICE 2` Routing, Semantic Colors & Responsive Clip Labels**:
+   - Updated [`frontend/src/components/timeline/TimelineTracksCanvas.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/timeline/TimelineTracksCanvas.jsx) and [`TimelineEditor.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/timeline/TimelineEditor.jsx):
+     - Routed Male (`ប្រុស`) clips to `VOICE 1` (`row 0`) and Female (`ស្រី`) clips or tight back-to-back clips (`gap < 0.15s`) to `VOICE 2` (`row 1`).
+     - Styled Male voice clips in deep studio blue (`oklch(0.28 0.08 250)`, `#38bdf8` top bar, `#60a5fa` waveform) and Female voice clips in deep studio rose (`oklch(0.28 0.09 350)`, `#f472b6` top bar, `#f472b6` waveform).
+     - Added responsive clip labels (`< 48px`: centered `#N`; `48px..94px`: `#N ប្រុស/ស្រី`; `>= 95px`: `#N ប្រុស/ស្រី` + 1-line Khmer dialogue preview in `Kantumruy Pro` `11px`) and rich multi-line tooltips (`#N [speaker] (start - end)\n"khmerText"`).
+5. **Step 4 — Playhead vs Selection Accent Separation**:
+   - Updated [`frontend/src/components/timeline/TimelineEditor.css`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/timeline/TimelineEditor.css) to style `.timeline-playhead`, `.playhead-handle`, `.playhead-line`, and `.playhead-time-pill` in high-contrast **CapCut Coral Red (`#ff3b5c`)** with `0 0 6px rgba(255, 59, 92, 0.5)` glow and `z-index: 60`, while keeping `#38BDF8` / `#00e5ff` exclusively for `.selected` clip outlines and `.clip-trim-handle` grips.
+6. **Verification**:
+   - Added [`backend/tests/timeline_ui_workflow_fix.test.js`](file:///e:/khmer_ai_dubbing_studio/backend/tests/timeline_ui_workflow_fix.test.js).
+   - `node --test` across 7 timeline & full-stack verification test files: **19/19 PASS (`0 fail`)**.
+   - `npm --prefix frontend run lint`: **PASS (`767ms`, 0 errors)**.
+   - `npm --prefix frontend run build`: **PASS (`572ms`, 0 errors)**.
+
+## Active Environment
+- **Backend**: Live at `http://localhost:5000`.
+- **Frontend**: Live at `http://localhost:5173`.
+- **Next Steps**: Refresh browser (`Ctrl + Shift + R`) to verify the new `148px` track headers (`CLEAN BGM`), 3-stage toolbar with center timecode, smart `VOICE 1`/`VOICE 2` routing, and CapCut Coral Red (`#ff3b5c`) playhead.
+
+---
+
+## Previous Session
+- **Environment**: Antigravity IDE (`/agents` Spec-Kit SDD — Full-Stack Structure & CapCut Pro UI Refactor)
+- **Timestamp**: 2026-11-11T10:17:30+07:00
+
+## Summary: Completed 3-Phase Full-Stack Architecture & CapCut Pro NLE Refactor (`khmer_ai_dubbing_studio_refactor_prompt.md`)
+1. **Spec-Kit SDD Artifacts (`.specify/`)**:
+   - Created [`.specify/specs/fullstack-capcut-pro-refactor.md`](file:///e:/khmer_ai_dubbing_studio/.specify/specs/fullstack-capcut-pro-refactor.md), [`.specify/plans/fullstack-capcut-pro-refactor.md`](file:///e:/khmer_ai_dubbing_studio/.specify/plans/fullstack-capcut-pro-refactor.md), and [`.specify/tasks/fullstack-capcut-pro-refactor.md`](file:///e:/khmer_ai_dubbing_studio/.specify/tasks/fullstack-capcut-pro-refactor.md).
+2. **Phase 1 — Frontend Architecture, Hooks, Contexts & Barrel Exports**:
+   - Created [`frontend/src/hooks/usePlaybackEngine.js`](file:///e:/khmer_ai_dubbing_studio/frontend/src/hooks/usePlaybackEngine.js) with 60fps `requestAnimationFrame` playhead ref subscription (`playheadTimeRef`, `subscribePlayhead`).
+   - Created [`frontend/src/context/ModalContext.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/context/ModalContext.jsx) (`ModalProvider`, `useModalManager`) and [`frontend/src/context/WorkspaceContext.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/context/WorkspaceContext.jsx) (`WorkspaceProvider`, `useStudioWorkspace`).
+   - Added clean barrel `index.js` files across `frontend/src/components/{layout,media,player,voice,timeline}/` and wired into [`frontend/src/App.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/App.jsx).
+3. **Phase 2 — Modern CapCut Pro / DaVinci NLE UI Upgrade**:
+   - Updated [`frontend/src/styles/tokens.css`](file:///e:/khmer_ai_dubbing_studio/frontend/src/styles/tokens.css) and [`frontend/src/styles/layout.css`](file:///e:/khmer_ai_dubbing_studio/frontend/src/styles/layout.css) with OKLCH semantic track tokens (`oklch(0.72 0.14 195)`, `oklch(0.70 0.17 350)`, `oklch(0.68 0.16 250)`, `oklch(0.68 0.17 295)`), `--khmer-line-height: 1.68`, minimum `13px` Khmer badge/button sizing, and horizontal/vertical split-pane resizer bars.
+   - Extended [`frontend/src/hooks/useResizablePanels.js`](file:///e:/khmer_ai_dubbing_studio/frontend/src/hooks/useResizablePanels.js) & [`frontend/src/components/layout/Navbar.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/layout/Navbar.jsx) with bottom timeline vertical resizing (`220px–450px`) and Left/Bottom/Right panel collapse/expand toggles.
+   - Upgraded [`frontend/src/components/player/PlayerControls.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/player/PlayerControls.jsx) & [`VideoPlayerPreview.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/player/VideoPlayerPreview.jsx) with precision `HH:MM:SS.ms` timecode, `16:9 | 9:16 | 1:1 | Fit` selector, and live Audio Ducking dB meter.
+   - Upgraded [`frontend/src/components/voice/VoiceSettings.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/voice/VoiceSettings.jsx) & [`ClipInspectorPanel.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/voice/ClipInspectorPanel.jsx) with `Character Voice Mapping` accordion card, inline optimistic voice-switch spinner (`~300ms`), and sticky bottom `Export Rendered Video` CTA bar.
+   - Upgraded [`frontend/src/components/timeline/TimelineTrackHeaders.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/timeline/TimelineTrackHeaders.jsx), [`TimelineTracksCanvas.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/timeline/TimelineTracksCanvas.jsx), and [`TimelineEditor.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/timeline/TimelineEditor.jsx) with `transform: translate3d(x, 0, 0)` 60fps playhead and Solo (`S`) / Mute (`M`) / Lock (`🔒`) track header controls.
+4. **Phase 3 — Backend Structure & Reliability Hardening**:
+   - Created [`backend/utils/processRegistry.js`](file:///e:/khmer_ai_dubbing_studio/backend/utils/processRegistry.js) and [`backend/middleware/validateRequest.js`](file:///e:/khmer_ai_dubbing_studio/backend/middleware/validateRequest.js).
+   - Wired `processRegistry` and scoped `5mb` standard JSON limit (`50mb` for series/script sync routes) into [`backend/server.js`](file:///e:/khmer_ai_dubbing_studio/backend/server.js), [`backend/services/audioSeparationService.js`](file:///e:/khmer_ai_dubbing_studio/backend/services/audioSeparationService.js), and [`backend/services/ffmpegService.js`](file:///e:/khmer_ai_dubbing_studio/backend/services/ffmpegService.js).
+5. **Phase 5 — Evidence-Based Verification**:
+   - Added [`backend/tests/fullstack_refactor_verification.test.js`](file:///e:/khmer_ai_dubbing_studio/backend/tests/fullstack_refactor_verification.test.js).
+   - `node --test` across 7 backend & frontend regression test suites: **33/33 PASS**.
+   - `npm --prefix frontend run lint`: **PASS (`794ms`, 0 errors)**.
+   - `npm --prefix frontend run build`: **PASS (`559ms`, 0 errors)**.
+
+## Active Environment
+- **Backend**: Live at `http://localhost:5000`.
+- **Frontend**: Live at `http://localhost:5173`.
+- **Next Steps**: Refresh browser (`Ctrl + Shift + R`) to test the resizable bottom timeline, Navbar panel collapse toggles, live Ducking dB meter, and sticky Export CTA bar.
+
+---
+
+## Previous Session
+- **Environment**: Antigravity IDE (`Clean Architecture, Modular CSS, Studio Hooks & CapCut Pro 2026 UI Overhaul`)
+- **Timestamp**: 2026-11-11T00:38:00+07:00
+
+## Summary: Completed 4-Step Clean Architecture & CapCut Pro Studio 2026 Overhaul
+1. **Step 1 — Clean Folder Structure & Modular CSS**:
+   - Organized all top-level loose files in `frontend/src/components/` into domain folders:
+     - [`components/layout/Navbar.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/layout/Navbar.jsx), [`components/layout/ShortcutsModal.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/layout/ShortcutsModal.jsx), [`components/layout/WorkflowStepper.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/layout/WorkflowStepper.jsx)
+     - [`components/media/MediaLibrary.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/media/MediaLibrary.jsx)
+     - [`components/player/VideoPlayerPreview.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/player/VideoPlayerPreview.jsx)
+     - [`components/voice/VoiceSettings.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/voice/VoiceSettings.jsx)
+     - [`components/timeline/TimelineEditor.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/timeline/TimelineEditor.jsx)
+   - Split [`frontend/src/index.css`](file:///e:/khmer_ai_dubbing_studio/frontend/src/index.css) into 5 modular CSS stylesheets in `frontend/src/styles/`:
+     - [`styles/tokens.css`](file:///e:/khmer_ai_dubbing_studio/frontend/src/styles/tokens.css)
+     - [`styles/layout.css`](file:///e:/khmer_ai_dubbing_studio/frontend/src/styles/layout.css)
+     - [`styles/timeline.css`](file:///e:/khmer_ai_dubbing_studio/frontend/src/styles/timeline.css)
+     - [`styles/components.css`](file:///e:/khmer_ai_dubbing_studio/frontend/src/styles/components.css)
+     - [`styles/modals.css`](file:///e:/khmer_ai_dubbing_studio/frontend/src/styles/modals.css)
+2. **Step 2 — Custom Hooks & Studio Context**:
+   - Created [`frontend/src/hooks/useShortcuts.js`](file:///e:/khmer_ai_dubbing_studio/frontend/src/hooks/useShortcuts.js) for global keyboard shortcuts (`Space`, `Ctrl+B`, `Delete`/`Backspace`, `ArrowLeft`/`ArrowRight`, `Ctrl+Z`/`Ctrl+Y`, `Ctrl+E`).
+   - Created [`frontend/src/hooks/useStudioActions.js`](file:///e:/khmer_ai_dubbing_studio/frontend/src/hooks/useStudioActions.js) and [`frontend/src/context/StudioContext.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/context/StudioContext.jsx) to centralize `onUpdateSegments`, `onUpdateScript`, `repairBroken`, and `voiceSwitch` callbacks.
+3. **Step 3 — CapCut Pro Studio 2026 UI/UX Overhaul**:
+   - Locked `100vw x 100vh` desktop grid (`48px` Navbar, `1fr` 3-column workspace, `290px` bottom timeline) on `#090A0F` canvas with `gap: 6px; padding: 6px;`, `#12141D` panels, `10px` radius, `1px solid rgba(255, 255, 255, 0.07)` borders, and `4px` scrollbars.
+   - Enforced Khmer typography (`'Inter', 'Kantumruy Pro', sans-serif`, `line-height: 1.65`) and `'JetBrains Mono'` (`tabular-nums`) for timecodes and console logs.
+   - Applied CapCut Cyan (`#00E5FF`) & AI Purple (`#7C5CFC`) accents, character colors (`#EC4899` Pink Sreymom, `#3B82F6` Blue Piseth, `#8B5CF6` Violet Subtitles), `blur(16px)` glassmorphic modals, and `#07080C` terminal log boxes.
+4. **Step 4 — Verification**:
+   - `npm --prefix frontend run build`: **PASS (`800ms`, 0 errors)**.
+   - `npm --prefix frontend run lint`: **PASS (`956ms`, 0 errors)**.
+   - Full Backend & Frontend Regression Test Suites (10 test files, 39 tests): **39/39 PASS**.
+
+## Active Environment
+- **Backend**: Live at `http://localhost:5000`.
+- **Frontend**: Live at `http://localhost:5173`.
+- **Next Steps**: Refresh browser (`Ctrl + Shift + R`) to inspect the newly refactored CapCut Pro Studio 2026 workspace.
+
+---
+
+## Previous Session
+- **Environment**: Antigravity IDE (`Git Commit & Push to Origin Main`)
+- **Timestamp**: 2026-11-11T00:01:30+07:00
+
+## Summary: Successfully Pushed to GitHub Repository
+1. **Commit**: `a03545c` (`feat: real-time Demucs progress logs, multi-key quota pool, repair service & updated README`)
+2. **Branch**: `main` -> `origin/main` ([https://github.com/Ny-Panha/khmer-ai-dubbing-studio.git](https://github.com/Ny-Panha/khmer-ai-dubbing-studio.git))
+3. **Pushed Files (33 files)**:
+   - Updated master [`README.MD`](file:///e:/khmer_ai_dubbing_studio/README.MD)
+   - Real-time Demucs Progress server-client sync ([`audioSeparationService.js`](file:///e:/khmer_ai_dubbing_studio/backend/services/audioSeparationService.js), [`audioRoutes.js`](file:///e:/khmer_ai_dubbing_studio/backend/routes/audioRoutes.js), [`GeminiRouteModal.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/dashboard/GeminiRouteModal.jsx))
+   - Gemini Multi-Key Pool & Quota Manager ([`geminiKeyManager.js`](file:///e:/khmer_ai_dubbing_studio/backend/services/geminiKeyManager.js), [`GeminiQuotaModal.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/dashboard/GeminiQuotaModal.jsx))
+   - Auto-repair broken segments service & quality guards ([`repairBrokenService.js`](file:///e:/khmer_ai_dubbing_studio/backend/services/repairBrokenService.js), [`translationQuality.js`](file:///e:/khmer_ai_dubbing_studio/backend/utils/translationQuality.js))
+   - Common Studio Confirm Dialog ([`StudioConfirmDialog.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/common/StudioConfirmDialog.jsx))
+4. **Security Scan**: Zero API keys or secrets staged; working tree 100% clean.
+
+## Active Environment
+- **Backend**: Live on task-5358 (`http://localhost:5000`).
+- **Frontend**: Live on task-5366 (`http://localhost:5173`).
+- **Git Remote**: `https://github.com/Ny-Panha/khmer-ai-dubbing-studio.git` (Up to date).
+
+---
+
+## Previous Session
 - **Environment**: Antigravity IDE (`Documentation Update & Full Architecture Sync`)
 - **Timestamp**: 2026-11-10T23:56:30+07:00
 

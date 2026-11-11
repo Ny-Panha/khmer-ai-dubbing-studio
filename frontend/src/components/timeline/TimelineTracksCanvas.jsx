@@ -21,6 +21,7 @@ function TimelineTracksCanvas({
   handleScrub,
   videoClips,
   hiddenTracks,
+  mutedTracks = {},
   dragState,
   activeClipId,
   handleVideoMouseDown,
@@ -133,11 +134,24 @@ function TimelineTracksCanvas({
     };
   }, [scrollContainerRef, pps]);
 
-  // Smart Multi-Track Layer Allocation (Clean Dual-Track Layout)
-  // Non-overlapping segments sit on Row 0 (Single straight line), overlapping dialogue flows cleanly into Row 1
+  // Smart Multi-Track Layer Allocation (VOICE 1 Male / VOICE 2 Female & Stagger Routing)
   const internalSegmentRows = React.useMemo(() => {
     if (!scriptSegments || scriptSegments.length === 0) return [];
     const endTimes = [0, 0];
+
+    const resolveIsFemale = (seg) => {
+      const speakerName = String(seg?.speaker || seg?.speakerName || '').trim();
+      const explicitGender = String(seg?.speakerGender || seg?.gender || '').toUpperCase().trim();
+      const isExplicitFemale = explicitGender === 'FEMALE' || explicitGender === 'GIRL' || explicitGender === 'WOMAN' || speakerName.includes('ស្រី');
+      const isExplicitMale = explicitGender === 'MALE' || explicitGender === 'BOY' || explicitGender === 'MAN' || speakerName.includes('ប្រុស');
+      const activeVoiceId = String(
+        seg?.voiceId ||
+        (speakerRegistry && (speakerRegistry[seg?.speakerId]?.voiceId || speakerRegistry[speakerName]?.voiceId)) ||
+        (isExplicitFemale ? 'km-KH-SreymomNeural' : (isExplicitMale ? 'km-KH-PisethNeural' : (voiceSettings?.voiceId || 'km-KH-PisethNeural')))
+      );
+      const isSreymom = activeVoiceId.includes('Sreymom') || activeVoiceId === 'km';
+      return isExplicitFemale || (isSreymom && !isExplicitMale);
+    };
 
     return scriptSegments.map((seg, idx) => {
       const rawStart = (typeof seg.audioStartSec === 'number' && !isNaN(seg.audioStartSec))
@@ -165,12 +179,37 @@ function TimelineTracksCanvas({
         ? seg.audioEndSec
         : (rawStart + realAudioDuration);
 
-      if (typeof seg.trackRow === 'number') {
+      if (typeof seg.trackRow === 'number' && (seg.userShifted || seg.trackRow >= 2)) {
         const r = Math.max(0, seg.trackRow);
         endTimes[r] = Math.max(endTimes[r] || 0, rawEnd);
         return r;
       }
 
+      if (seg.trackRow === 1 && rawStart >= (endTimes[1] || 0) - 0.05) {
+        endTimes[1] = rawEnd;
+        return 1;
+      }
+
+      const isFemale = resolveIsFemale(seg);
+      if (isFemale) {
+        if (rawStart >= (endTimes[1] || 0) - 0.05) {
+          endTimes[1] = rawEnd;
+          return 1;
+        }
+        if (rawStart >= (endTimes[0] || 0) - 0.05) {
+          endTimes[0] = rawEnd;
+          return 0;
+        }
+        const r = (endTimes[1] || 0) <= (endTimes[0] || 0) ? 1 : 0;
+        endTimes[r] = Math.max(endTimes[r] || 0, rawEnd);
+        return r;
+      }
+
+      const gapOnRow0 = rawStart - (endTimes[0] || 0);
+      if (idx > 0 && gapOnRow0 < 0.15 && rawStart >= (endTimes[1] || 0) - 0.05) {
+        endTimes[1] = rawEnd;
+        return 1;
+      }
       if (rawStart >= (endTimes[0] || 0) - 0.05) {
         endTimes[0] = rawEnd;
         return 0;
@@ -183,7 +222,7 @@ function TimelineTracksCanvas({
       endTimes[r] = Math.max(endTimes[r] || 0, rawEnd);
       return r;
     });
-  }, [scriptSegments]);
+  }, [scriptSegments, speakerRegistry, voiceSettings]);
 
   const activeSegmentRows = externalSegmentRows || internalSegmentRows;
 
@@ -290,13 +329,24 @@ function TimelineTracksCanvas({
     const overMarker = isOver ? ` +${overSec.toFixed(1)}s` : '';
     const trimMarker = (seg.audioTrimmed || seg.userTrimmed) ? ' ✂' : '';
     const pendingMarker = !hasAudio ? ' • គ្មានសំឡេង' : '';
-    const khmerPreview = (seg.khmer || seg.khmerText || seg.khmerTranslatedText || '').trim();
+    const khmerPreview = (seg.khmer || seg.khmerText || seg.khmerTranslatedText || seg.text || '').trim();
+    const speakerGenderLabel = isFemale ? 'ស្រី' : 'ប្រុស';
+    const speakerTooltipLabel = speakerName || speakerGenderLabel;
 
-    // Voice clip label: "#N ប្រុស" / "#N ស្រី" (+ OVER marker or draft marker)
-    const voiceLabel = `#${idx + 1} ${isFemale ? 'ស្រី' : 'ប្រុស'}${overMarker}${trimMarker}${pendingMarker}`;
+    // Responsive Clip Label Rendering based on calculated clip pixel width (clipWidthPx = audioWidth):
+    // - clipWidthPx < 48px: compact badge "#6" centered, hiding "ប្រុស/ស្រី" so it never cuts off as "#..."
+    // - 48px <= clipWidthPx < 95px: "#6 ប្រុស" cleanly
+    // - clipWidthPx >= 95px: "#6 ប្រុស" on top + 1-line preview of Khmer dialogue text in Kantumruy Pro (11px)
+    const clipWidthPx = audioWidth;
+    const isCompactClip = clipWidthPx < 48;
+    const isWideClip = clipWidthPx >= 95;
+    const compactIdLabel = `#${idx + 1}`;
+    const mediumVoiceLabel = `#${idx + 1} ${speakerGenderLabel}${overMarker}${trimMarker}`;
+    const fullVoiceLabel = `#${idx + 1} ${speakerGenderLabel}${overMarker}${trimMarker}${pendingMarker}`;
+    const voiceLabel = isCompactClip ? compactIdLabel : (isWideClip ? fullVoiceLabel : mediumVoiceLabel);
 
-    const isSliver = audioWidth < 5;
-    const canRenderLabel = audioWidth >= 32;
+    const isSliver = clipWidthPx < 5;
+    const canRenderLabel = clipWidthPx >= 18;
 
     return (
       <React.Fragment key={`voice-wrap-${seg._uid || `${seg.id ?? idx}-${idx}`}`}>
@@ -324,7 +374,7 @@ function TimelineTracksCanvas({
             }
             onSeek(startSec);
           }}
-          className={`voice-segment-block ${isFemale ? 'voice-female' : 'voice-male'} ${!hasAudio ? 'is-pending-audio' : ''} ${isSelected ? 'selected' : ''} ${isSliver ? 'clip-sliver' : ''}`}
+          className={`voice-segment-block ${isFemale ? 'voice-female' : 'voice-male'} ${!hasAudio ? 'is-pending-audio' : ''} ${isSelected ? 'selected' : ''} ${isSliver ? 'clip-sliver' : ''} ${isCompactClip ? 'is-compact-clip' : ''}`}
           style={{
             cursor: isDragging ? 'grabbing' : 'grab',
             left: audioLeft,
@@ -334,7 +384,7 @@ function TimelineTracksCanvas({
             transition: isDragging ? 'none' : undefined,
             pointerEvents: isDragging && dragState?.mode === 'move' ? 'none' : 'auto',
           }}
-          title={`[${formatMinSec(startSec)} - ${formatMinSec(endSec)}] ${voiceLabel}\n"${khmerPreview || '(មិនទាន់មានអត្ថបទ / រង់ចាំសំឡេង)'}"`}
+          title={`#${idx + 1} [${speakerTooltipLabel}] (${startSec.toFixed(1)}s - ${endSec.toFixed(1)}s)\n"${khmerPreview || '(មិនទាន់មានអត្ថបទ / រង់ចាំសំឡេង)'}"`}
         >
           {/* Left Trim Handle - visible only on selected clip */}
           {isSelected && !isSliver && (
@@ -353,49 +403,54 @@ function TimelineTracksCanvas({
 
           {!isSliver && (
             <>
-              {/* Row 1: Label Line (12px, 500, single line truncate) */}
-              <div className="clip-label-line">
+              {/* Row 1: Responsive Label Line */}
+              <div className={`clip-label-line ${isCompactClip ? 'compact-centered' : ''}`}>
                 {canRenderLabel && (
-                  <span className={`clip-label-text ${isOver ? 'is-over' : ''}`}>
+                  <span className={`clip-label-text ${isOver ? 'is-over' : ''} ${isCompactClip ? 'clip-compact-id' : ''}`}>
                     {voiceLabel}
                   </span>
                 )}
               </div>
 
-              {/* Row 2: Content Row (Waveform peaks for voiced clips, draft hint for pending/+ ឃ្លា clips) */}
-              <div className="clip-content-row voice-content-row">
-                {hasAudio ? (
-                  audioWidth >= 20 && (
-                    <div
-                      className="voice-waveform-bars"
-                      style={{
-                        width: `${Math.min(audioWidth, Math.max(16, (realAudioDuration * pps) - 2))}px`,
-                        maxWidth: '100%',
-                      }}
-                    >
-                      {Array.from({ length: Math.min(40, Math.max(4, Math.floor(((realAudioDuration * pps) - 10) / 6))) }).map((_, wIdx) => {
-                        const pattern = [30, 65, 90, 45, 80, 100, 55, 35, 75, 85, 40, 70, 25, 60, 80, 95, 50, 65, 35, 85];
-                        const hPercent = pattern[wIdx % pattern.length];
-                        return (
-                          <span
-                            key={wIdx}
-                            className="waveform-bar"
-                            style={{
-                              height: `${hPercent}%`,
-                            }}
-                          />
-                        );
-                      })}
-                    </div>
-                  )
-                ) : (
-                  audioWidth >= 24 && (
-                    <span className="voice-draft-hint">
-                      {khmerPreview || '+ សរសេរអក្សរ & Generate'}
-                    </span>
-                  )
-                )}
-              </div>
+              {/* Row 2: Content Row (1-line Khmer preview on wide clips >= 95px + waveform peaks, or draft hint) */}
+              {!isCompactClip && (
+                <div className="clip-content-row voice-content-row">
+                  {isWideClip && khmerPreview && (
+                    <span className="voice-khmer-dialogue-preview">{khmerPreview}</span>
+                  )}
+                  {hasAudio ? (
+                    audioWidth >= 20 && (
+                      <div
+                        className="voice-waveform-bars"
+                        style={{
+                          width: `${Math.min(audioWidth, Math.max(16, (realAudioDuration * pps) - 2))}px`,
+                          maxWidth: '100%',
+                        }}
+                      >
+                        {Array.from({ length: Math.min(40, Math.max(4, Math.floor(((realAudioDuration * pps) - 10) / 6))) }).map((_, wIdx) => {
+                          const pattern = [30, 65, 90, 45, 80, 100, 55, 35, 75, 85, 40, 70, 25, 60, 80, 95, 50, 65, 35, 85];
+                          const hPercent = pattern[wIdx % pattern.length];
+                          return (
+                            <span
+                              key={wIdx}
+                              className="waveform-bar"
+                              style={{
+                                height: `${hPercent}%`,
+                              }}
+                            />
+                          );
+                        })}
+                      </div>
+                    )
+                  ) : (
+                    !isWideClip && audioWidth >= 24 && (
+                      <span className="voice-draft-hint">
+                        {khmerPreview || '+ សរសេរអក្សរ & Generate'}
+                      </span>
+                    )
+                  )}
+                </div>
+              )}
             </>
           )}
 
@@ -725,16 +780,20 @@ function TimelineTracksCanvas({
         />
       )}
 
-      {/* App Accent (Blue) Playhead Line (2px line + small top accent handle, no red time flag) */}
+      {/* Hardware-Accelerated Playhead Line (transform: translate3d(x, 0, 0) for 60fps scrubbing) */}
       {selectedVideo && totalDuration > 0 && (
         <div 
           ref={playheadRef}
-          className="timeline-playhead"
+          className="timeline-playhead capcut-playhead-line"
           style={{ 
             left: 0,
+            transform: `translate3d(${playheadX}px, 0, 0)`,
             willChange: 'transform'
           }}
         >
+          <span ref={playheadTimeTextRef} className="playhead-time-pill">
+            {formatMinSec(currentTime)}
+          </span>
           <div 
             className="playhead-handle" 
             title="Drag to scrub playhead"
@@ -744,7 +803,7 @@ function TimelineTracksCanvas({
               handleScrub(e);
             }}
           />
-          <div className="playhead-line" />
+          <div className="playhead-line capcut-playhead-stem" />
         </div>
       )}
 
@@ -752,12 +811,19 @@ function TimelineTracksCanvas({
       {Array.from({ length: Math.max(1, videoRowCount) }).map((_, rIdx) => {
         const trackKey = `video_${rIdx}`;
         const isHidden = Boolean(hiddenTracks[trackKey] || (rIdx === 0 && hiddenTracks.video));
+        const dialogueClips = Array.isArray(videoClips) ? videoClips.filter((c) => c.isDialogue) : [];
+        const targetVideoClips = dialogueClips.length > 0 ? dialogueClips : (Array.isArray(videoClips) ? videoClips : []);
+        const areAllCutsMuted = targetVideoClips.length > 0 && targetVideoClips.every((c) => Boolean(c.isMuted));
+        const isMuted = Boolean(
+          mutedTracks?.[trackKey] ||
+          (rIdx === 0 && (mutedTracks?.video || areAllCutsMuted))
+        );
         const isDragOver = dragOverTrack === trackKey || (rIdx === 0 && dragOverTrack === 'video');
 
         return (
           <div 
             key={`video-lane-${rIdx}`}
-            className={`track-lane video-lane ${rIdx > 0 ? 'video-lane-sub' : ''} ${isDragOver ? 'is-drag-over' : ''}`}
+            className={`track-lane video-lane ${rIdx > 0 ? 'video-lane-sub' : ''} ${isDragOver ? 'is-drag-over' : ''} ${isMuted ? 'is-track-muted' : ''}`}
             data-track-type="video"
             data-track-row={rIdx}
             data-track-key={trackKey}
@@ -823,11 +889,14 @@ function TimelineTracksCanvas({
             style={{ 
               width: totalWidth || '100%',
               minWidth: totalWidth || '100%',
-              opacity: isHidden ? 0.2 : 1, 
+              opacity: isHidden ? 0.2 : (isMuted ? 0.45 : 1), 
               pointerEvents: isHidden ? 'none' : 'auto',
               borderBottom: '1px solid rgba(255, 255, 255, 0.06)',
             }}
           >
+            {isMuted && (
+              <span className="track-muted-badge">MUTED</span>
+            )}
             {/* Drop Visual Helper Badge */}
             {isDragOver && (
               <div className="track-drop-indicator-badge">
@@ -875,6 +944,7 @@ function TimelineTracksCanvas({
       {Array.from({ length: Math.max(2, voiceRowCount || 2) }).map((_, rIdx) => {
         const trackKey = `voice_${rIdx}`;
         const isHidden = Boolean(hiddenTracks[trackKey] || (rIdx === 0 && hiddenTracks.voice));
+        const isMuted = Boolean(mutedTracks?.[trackKey] || (rIdx === 0 && mutedTracks?.voice));
         const isDragOver = dragOverTrack === trackKey;
         const highestUsedVoiceRow = (scriptSegments || []).reduce((max, s) => {
           const r = (typeof s.trackRow === 'number' && s.trackRow >= 0) ? s.trackRow : 0;
@@ -889,7 +959,7 @@ function TimelineTracksCanvas({
         return (
           <div 
             key={`voice-lane-${rIdx}`}
-            className={`track-lane voice-lane ${rIdx > 0 ? 'voice-lane-sub' : ''} ${isDragOver ? 'is-drag-over' : ''}`}
+            className={`track-lane voice-lane ${rIdx > 0 ? 'voice-lane-sub' : ''} ${isDragOver ? 'is-drag-over' : ''} ${isMuted ? 'is-track-muted' : ''}`}
             data-track-type="voice"
             data-track-row={rIdx}
             data-track-key={trackKey}
@@ -929,11 +999,14 @@ function TimelineTracksCanvas({
             style={{ 
               width: totalWidth || '100%',
               minWidth: totalWidth || '100%',
-              opacity: isHidden ? 0.2 : 1, 
+              opacity: isHidden ? 0.2 : (isMuted ? 0.45 : 1), 
               pointerEvents: isHidden ? 'none' : 'auto',
               borderBottom: '1px solid rgba(255, 255, 255, 0.06)',
             }}
           >
+            {isMuted && (
+              <span className="track-muted-badge">MUTED</span>
+            )}
             {isDragOver && (
               <div className="track-drop-indicator-badge voice">
                 <span>{isNewLane ? `Drop to create VOICE ${rIdx + 1}` : `Drop to place on VOICE ${rIdx + 1} (A${rIdx + 1})`}</span>
@@ -1066,40 +1139,50 @@ function TimelineTracksCanvas({
       })}
 
       {/* Clean BGM Track Lane (Height: 40px) */}
-      <div 
-        className="track-lane clean-bgm-lane"
-        data-track-type="clean-bgm"
-        style={{ 
-          width: totalWidth || '100%',
-          minWidth: totalWidth || '100%',
-          height: 40,
-          opacity: hiddenTracks?.cleanBgm ? 0.2 : 1, 
-          pointerEvents: hiddenTracks?.cleanBgm ? 'none' : 'auto',
-          borderBottom: '1px solid oklch(0.25 0.01 250)',
-        }}
-      >
-        {selectedVideo && totalDuration > 0 ? (
-          <div
-            className="clean-bgm-block"
-            style={{
-              left: 0,
-              width: Math.max(2, totalDuration * pps - 2),
-              top: 4,
-              height: 32,
+      {(() => {
+        const isBgmMuted = Boolean(
+          mutedTracks?.cleanBgm || (voiceSettings && typeof voiceSettings.duckingVolume === 'number' && voiceSettings.duckingVolume === 0)
+        );
+        return (
+          <div 
+            className={`track-lane clean-bgm-lane ${isBgmMuted ? 'is-track-muted' : ''}`}
+            data-track-type="clean-bgm"
+            style={{ 
+              width: totalWidth || '100%',
+              minWidth: totalWidth || '100%',
+              height: 40,
+              opacity: hiddenTracks?.cleanBgm ? 0.2 : (isBgmMuted ? 0.45 : 1), 
+              pointerEvents: hiddenTracks?.cleanBgm ? 'none' : 'auto',
+              borderBottom: '1px solid oklch(0.25 0.01 250)',
             }}
-            title={`CLEAN BGM [0.0s - ${totalDuration.toFixed(1)}s]`}
           >
-            {totalDuration * pps >= 32 && (
-              <div className="clip-label-line">
-                <span className="clip-label-text">CLEAN BGM</span>
-              </div>
+            {isBgmMuted && (
+              <span className="track-muted-badge">MUTED</span>
             )}
-            <div className="clip-content-row clean-bgm-content-row" />
+            {selectedVideo && totalDuration > 0 ? (
+              <div
+                className="clean-bgm-block"
+                style={{
+                  left: 0,
+                  width: Math.max(2, totalDuration * pps - 2),
+                  top: 4,
+                  height: 32,
+                }}
+                title={`CLEAN BGM [0.0s - ${totalDuration.toFixed(1)}s]`}
+              >
+                {totalDuration * pps >= 32 && (
+                  <div className="clip-label-line">
+                    <span className="clip-label-text">CLEAN BGM</span>
+                  </div>
+                )}
+                <div className="clip-content-row clean-bgm-content-row" />
+              </div>
+            ) : (
+              <span className="empty-lane-placeholder-text">CLEAN BGM (Background Music & SFX Track)</span>
+            )}
           </div>
-        ) : (
-          <span className="empty-lane-placeholder-text">CLEAN BGM (Background Music & SFX Track)</span>
-        )}
-      </div>
+        );
+      })()}
     </div>
   );
 }
@@ -1116,6 +1199,7 @@ function areTimelineTracksCanvasPropsEqual(prev, next) {
   // translate3d transforms. Bypassing React re-renders of 1,000+ timeline DOM elements keeps playback and scrubbing at pure 60fps!
   if (prev.videoClips !== next.videoClips) return false;
   if (prev.scriptSegments !== next.scriptSegments) return false;
+  if (prev.segmentRows !== next.segmentRows) return false;
   if (prev.activeClipId !== next.activeClipId) return false;
   if (prev.selectedSegmentId !== next.selectedSegmentId) return false;
   if (prev.selectedAudioId !== next.selectedAudioId) return false;
@@ -1125,6 +1209,7 @@ function areTimelineTracksCanvasPropsEqual(prev, next) {
   if (prev.totalDuration !== next.totalDuration) return false;
   if (prev.totalWidth !== next.totalWidth) return false;
   if (prev.hiddenTracks !== next.hiddenTracks) return false;
+  if (prev.mutedTracks !== next.mutedTracks) return false;
   if (prev.voiceRowCount !== next.voiceRowCount) return false;
   if (prev.subRowCount !== next.subRowCount) return false;
   if (prev.videoRowCount !== next.videoRowCount) return false;

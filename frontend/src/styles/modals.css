@@ -1,0 +1,112 @@
+/* ==========================================================================
+   Khmer AI Dubbing Studio (CapCut Pro 2026) — Glassmorphism Modals & Console
+   ========================================================================== */
+
+/* Glassmorphic Modal Backdrop */
+.modal-backdrop,
+.jd-modal-overlay,
+.gemini-route-backdrop,
+.studio-confirm-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(9, 10, 15, 0.78) !important;
+  backdrop-filter: blur(16px) !important;
+  -webkit-backdrop-filter: blur(16px) !important;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.modal-dialog,
+.jd-modal-container {
+  background: rgba(18, 20, 29, 0.96) !important;
+  backdrop-filter: blur(16px) !important;
+  -webkit-backdrop-filter: blur(16px) !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  border-radius: 12px !important;
+  padding: 20px 24px;
+  max-width: 460px;
+  width: 90%;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.8), 0 0 0 1px rgba(0, 229, 255, 0.08) !important;
+}
+
+/* Terminal-Grade Console Log Drawer (#07080C + JetBrains Mono) */
+.demucs-console-drawer,
+.live-console-drawer,
+.jd-log-console,
+.terminal-log-box,
+[class*="console-log"],
+[class*="log-drawer"] {
+  background: #07080C !important;
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+  border-radius: 8px !important;
+  font-family: var(--font-mono) !important;
+  font-variant-numeric: tabular-nums !important;
+  color: #E2E8F0;
+  box-shadow: inset 0 2px 10px rgba(0, 0, 0, 0.75);
+}
+
+/* Vibrant Glowing Progress Bars */
+.jd-progress-fill,
+.demucs-progress-fill,
+.route-progress-fill {
+  background: linear-gradient(90deg, #7C5CFC 0%, #00E5FF 100%) !important;
+  box-shadow: 0 0 12px rgba(0, 229, 255, 0.45);
+}
+
+/* Backend Offline Dismissible Toast / Banner */
+.backend-offline-banner {
+  position: fixed;
+  top: 56px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px;
+  background-color: rgba(18, 20, 29, 0.95);
+  border: 1px solid rgba(245, 158, 11, 0.5);
+  border-radius: 10px;
+  color: #FEF3C7;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.65;
+  max-width: 90vw;
+  pointer-events: auto;
+  animation: bannerFadeIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.backend-offline-banner button {
+  background: transparent;
+  border: none;
+  color: #94A3B8;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  padding: 2px;
+  margin-left: 8px;
+  border-radius: 4px;
+  transition: color 0.15s ease, background-color 0.15s ease;
+}
+
+.backend-offline-banner button:hover {
+  color: #FFFFFF;
+  background-color: rgba(255, 255, 255, 0.1);
+}
+
+@keyframes bannerFadeIn {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -8px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
