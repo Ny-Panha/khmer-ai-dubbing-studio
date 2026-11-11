@@ -12,7 +12,7 @@ export default function EpisodeTtsProgressCard({ liveStats, ep, onKill = null, o
   const total = liveStats?.total || ep?.scriptData?.segments?.length || ep?.scriptData?.totalSegments || 1;
   const targetPercent = Math.min(100, Math.max(0, liveStats?.percent ?? Math.round((current / (total || 1)) * 100)));
   const [smoothProgress, setSmoothProgress] = useState(targetPercent || 1);
-  const [showConsole, setShowConsole] = useState(true);
+  const [showConsole, setShowConsole] = useState(false);
   const [showKillConfirm, setShowKillConfirm] = useState(false);
   const consoleBottomRef = useRef(null);
 
@@ -91,7 +91,7 @@ export default function EpisodeTtsProgressCard({ liveStats, ep, onKill = null, o
               textOverflow: 'ellipsis',
               letterSpacing: '-0.01em',
             }}>
-              {isFailed ? '⚠️ បរាជ័យក្នុងការបង្កើតសំឡេង' : (isDone ? '🎉 សំឡេងខ្មែរ AI រួចរាល់ ១០០%' : '🎙️ កំពុងសំយោគសំឡេងខ្មែរ (Edge-TTS)...')}
+              {isFailed ? '⚠️ បរាជ័យក្នុងការបង្កើតសំឡេង' : (isDone ? '🎉 🎙️ 2. AI Translate Voice រួចរាល់ ១០០%' : '🎙️ 2. AI កំពុងបង្កើតសំឡេងខ្មែរ (Edge-TTS)...')}
             </div>
             <div style={{
               fontSize: '0.68rem',

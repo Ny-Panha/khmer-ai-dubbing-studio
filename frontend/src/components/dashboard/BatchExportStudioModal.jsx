@@ -63,16 +63,16 @@ export default function BatchExportStudioModal({
 
       let notReadyReason = null;
       if (!hasVideo) {
-        notReadyReason = 'គ្មានវីដេអូដើម (No Video)';
+        notReadyReason = '⚠️ គ្មានវីដេអូ';
       } else if (!hasScript) {
-        notReadyReason = 'មិនទាន់មាន Script (No Script)';
+        notReadyReason = '⚠️ គ្មាន Script';
       } else if (!hasVoice) {
         if (ep.audioOutdated) {
-          notReadyReason = 'សំឡេងហួសសម័យ (Audio Outdated)';
+          notReadyReason = '⚠️ សំឡេងមិនទាន់អាប់ដេត';
         } else if (brokenSummary.totalBrokenCount > 0) {
-          notReadyReason = `នៅខ្វះ/ខូច ${brokenSummary.totalBrokenCount} ឃ្លា`;
+          notReadyReason = `⚠️ នៅខ្វះ/ខូច ${brokenSummary.totalBrokenCount} ឃ្លា`;
         } else {
-          notReadyReason = 'មិនទាន់មានសំឡេងខ្មែរ (No Voice)';
+          notReadyReason = '⚠️ គ្មានសំឡេង AI';
         }
       }
 
@@ -591,7 +591,7 @@ export default function BatchExportStudioModal({
                             color: !hasVideo ? '#FCA5A5' : '#FBBF24',
                           }}
                         >
-                          <AlertTriangle size={11} style={{ flexShrink: 0 }} />
+                          {!notReadyReason.includes('⚠️') && <AlertTriangle size={11} style={{ flexShrink: 0 }} />}
                           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                             {notReadyReason}
                           </span>

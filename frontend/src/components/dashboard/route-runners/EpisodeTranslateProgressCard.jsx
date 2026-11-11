@@ -20,7 +20,7 @@ export default function EpisodeTranslateProgressCard({
     ? 0
     : Math.min(100, Math.max(0, Number(activeJob?.progress || 0)));
   const [smoothProgress, setSmoothProgress] = useState(targetProgress || (isQueued ? 0 : 1));
-  const [showConsole, setShowConsole] = useState(true);
+  const [showConsole, setShowConsole] = useState(false);
   const [showKillConfirm, setShowKillConfirm] = useState(false);
   const consoleBottomRef = useRef(null);
 
@@ -164,10 +164,10 @@ export default function EpisodeTranslateProgressCard({
               letterSpacing: '-0.01em',
             }}>
               {isFailed
-                ? '⚠️ Translation បរាជ័យ (Stage Error)'
+                ? '⚠️ 1. Translate Script បរាជ័យ (Stage Error)'
                 : (isDone
-                  ? '🎉 Translate ជោគជ័យ 100%'
-                  : (isQueued ? `⏳ ក្នុង Queue (រង់ចាំ Route Key #${assignedKeyNum})` : 'កំពុងវិភាគ & បង្កើត Script...'))}
+                  ? '🎉 📝 1. Translate Script ជោគជ័យ 100%'
+                  : (isQueued ? `⏳ 📝 1. Translate Script (រង់ចាំ Route Key #${assignedKeyNum})` : '📝 1. កំពុងវិភាគ & បកប្រែ Script...'))}
             </div>
             <div
               style={{

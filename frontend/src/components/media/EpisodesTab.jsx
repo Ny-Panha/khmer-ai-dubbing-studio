@@ -26,6 +26,7 @@ export default function EpisodesTab({
   onFileUpload,
   isUploading = false,
   onTabChange,
+  onRefreshSeries = null,
 }) {
   const [editingTitleId, setEditingTitleId] = useState(null);
   const [tempTitle, setTempTitle] = useState('');
@@ -38,6 +39,7 @@ export default function EpisodesTab({
   const [replaceEpisodes, setReplaceEpisodes] = useState(false); // default: false (append, never silent replace)
   const [isSplitting, setIsSplitting] = useState(false);
   const [splitError, setSplitError] = useState(null);
+  const [splitNotice, setSplitNotice] = useState(null); // { type: 'success', text } inline banner after split
 
   const activeDuration = videoMetadata?.durationSec || videoMetadata?.duration || duration || selectedVideo?.durationSec || selectedVideo?.duration || activeEpisode?.video?.durationSec || activeEpisode?.duration || 0;
 
@@ -57,7 +59,7 @@ export default function EpisodesTab({
   const handleAutoSplit = async () => {
     const rawRef = selectedVideo?.videoId || selectedVideo?.videoPath || activeEpisode?.video?.videoId || activeEpisode?.videoFile || activeEpisode?.sourceVideoPath;
     if (!rawRef) {
-      alert('សូម Import ឬ ជ្រើសរើសវីដេអូវែងជាមុនសិន!');
+      setSplitError('សូម Import ឬ ជ្រើសរើសវីដេអូវែងជាមុនសិន!');
       return;
     }
 
@@ -72,6 +74,7 @@ export default function EpisodesTab({
     try {
       setIsSplitting(true);
       setSplitError(null);
+      setSplitNotice(null);
       const res = await splitVideoEpisodesApi({
         videoId: rawRef,
         seriesId: activeSeries?.id || seriesId || 'drama_project',
@@ -81,13 +84,15 @@ export default function EpisodesTab({
         replaceEpisodes: Boolean(replaceEpisodes),
       });
 
-      alert(`🎉 ${res.message || 'បានកាត់បំបែកវីដេអូជាភាគៗជោគជ័យ!'}`);
       setShowSplitModal(false);
-      window.location.reload();
+      // SPA refresh: pull fresh series from server instead of a full page reload
+      if (typeof onRefreshSeries === 'function') {
+        try { await onRefreshSeries(); } catch (refreshErr) { console.warn('[EpisodesTab] refresh after split failed:', refreshErr); }
+      }
+      setSplitNotice({ type: 'success', text: `✅ ${res?.message || 'បានកាត់បំបែកវីដេអូជាភាគៗជោគជ័យ!'}` });
     } catch (err) {
       console.error(err);
       setSplitError(err.message || 'កាត់បំបែកវីដេអូបរាជ័យ');
-      alert('កាត់បំបែកវីដេអូបរាជ័យ: ' + (err.message || err));
     } finally {
       setIsSplitting(false);
     }
@@ -316,6 +321,39 @@ export default function EpisodesTab({
             </button>
           </div>
         </div>
+
+        {splitNotice && (
+          <div
+            role="status"
+            data-testid="episode-split-status-banner"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 8,
+              padding: '6px 10px',
+              borderRadius: 6,
+              fontSize: '0.74rem',
+              fontWeight: 600,
+              color: '#6EE7B7',
+              background: 'rgba(16, 185, 129, 0.12)',
+              border: '1px solid rgba(52, 211, 153, 0.35)',
+            }}
+          >
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
+              <CheckCircle2 size={13} />
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{splitNotice.text}</span>
+            </span>
+            <button
+              type="button"
+              onClick={() => setSplitNotice(null)}
+              aria-label="បិទសារ (Dismiss)"
+              style={{ background: 'none', border: 'none', color: 'inherit', cursor: 'pointer', fontSize: '0.9rem', lineHeight: 1, padding: 2 }}
+            >
+              ×
+            </button>
+          </div>
+        )}
 
         {episodes.map((ep, idx) => {
           const isActive = ep.id === episodeId;

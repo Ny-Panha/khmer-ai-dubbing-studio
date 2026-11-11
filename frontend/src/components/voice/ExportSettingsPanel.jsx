@@ -39,19 +39,19 @@ export default function ExportSettingsPanel({
         setInternalStage(renderStage);
       } else {
         setInternalProgress(1);
-        setInternalStage('1/4 បង្កើត Khmer .ASS Subtitles & ផ្ទុក Fonts');
+        setInternalStage('1/4 បង្កើតអក្សរខ្មែរ .ASS');
         timer = setInterval(() => {
           setInternalProgress((prev) => {
             let next = prev;
             if (prev < 25) {
               next = prev + 2;
-              if (next >= 25) setInternalStage('2/4 រៀបចំ Smart Ducking 85% & សំឡេង');
+              if (next >= 25) setInternalStage('2/4 បន្ថយសំឡេងដើម Smart Ducking');
             } else if (prev < 55) {
               next = prev + 1;
-              if (next >= 55) setInternalStage('3/4 FFmpeg កំពុង Encode វីដេអូ & ដុត Subtitles');
+              if (next >= 55) setInternalStage('3/4 បញ្ចូលសំឡេងខ្មែរ AI & Clean BGM');
             } else if (prev < 85) {
               next = prev + 1;
-              if (next >= 85) setInternalStage('4/4 Export ចូល Downloads Folder លើ PC');
+              if (next >= 85) setInternalStage('4/4 Render វីដេអូ MP4');
             } else if (prev < 97) {
               if (Math.random() > 0.4) next = prev + 1;
             }
@@ -78,13 +78,13 @@ export default function ExportSettingsPanel({
   const displayProgress = renderProgress > 0 ? renderProgress : internalProgress;
   const currentStageText = renderStage || internalStage || (
     displayProgress < 25 
-      ? '1/4 បង្កើត Khmer .ASS Subtitles & ផ្ទុក Fonts'
+      ? '1/4 បង្កើតអក្សរខ្មែរ .ASS'
       : displayProgress < 55 
-        ? '2/4 រៀបចំ Smart Ducking 85% & សំឡេង'
+        ? '2/4 បន្ថយសំឡេងដើម Smart Ducking'
         : displayProgress < 85 
-          ? '3/4 FFmpeg កំពុង Encode វីដេអូ & ដុត Subtitles'
+          ? '3/4 បញ្ចូលសំឡេងខ្មែរ AI & Clean BGM'
           : displayProgress < 100 
-            ? '4/4 កំពុង Export ចូល Downloads Folder លើ PC...'
+            ? '4/4 Render វីដេអូ MP4'
             : '🎉 រួចរាល់ 100%!'
   );
   return (

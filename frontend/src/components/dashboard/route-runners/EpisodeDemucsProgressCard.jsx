@@ -14,15 +14,10 @@ export default function EpisodeDemucsProgressCard({ liveStats, ep, onKill, onReq
   const isQueued = !isCurrentRunning && !isDone && !isFailed;
   const targetPercent = isQueued ? 0 : Math.min(100, Math.max(0, liveStats?.percent ?? 5));
   const [smoothProgress, setSmoothProgress] = useState(targetPercent || 0);
-  const [showConsole, setShowConsole] = useState(!isQueued);
+  const [showConsole, setShowConsole] = useState(false);
   const [showKillConfirm, setShowKillConfirm] = useState(false);
   const consoleBottomRef = useRef(null);
 
-  useEffect(() => {
-    if (isCurrentRunning && !isQueued) {
-      setShowConsole(true);
-    }
-  }, [isCurrentRunning, isQueued]);
 
   useEffect(() => {
     if (smoothProgress === targetPercent) return;
@@ -97,7 +92,7 @@ export default function EpisodeDemucsProgressCard({ liveStats, ep, onKill, onReq
               textOverflow: 'ellipsis',
               letterSpacing: '-0.01em',
             }}>
-              {isFailed ? '⚠️ បរាជ័យក្នុងការបំបែកសំឡេង' : (isDone ? '🎉 បំបែកសំឡេងដើម Demucs រួចរាល់ ១០០%' : (isQueued ? '⏳ រង់ចាំក្នុង Queue (Waiting in Queue)' : '🎧 កំពុងបំបែកសំឡេងដើម (Demucs AI)...'))}
+              {isFailed ? '⚠️ បរាជ័យក្នុងការបិទសំឡេងចិន' : (isDone ? '🎉 🔇 3. AI បិទសំឡេងចិន (រក្សាភ្លេង BGM ដើម) រួចរាល់' : (isQueued ? '⏳ 🔇 3. AI បិទសំឡេងចិន — រង់ចាំក្នុង Queue' : '🔇 3. AI កំពុងបិទសំឡេងចិន (រក្សាភ្លេង BGM ដើម)...'))}
             </div>
             <div style={{
               fontSize: '0.68rem',

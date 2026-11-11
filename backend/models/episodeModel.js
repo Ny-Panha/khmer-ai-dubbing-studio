@@ -190,6 +190,13 @@ function sanitizeSeriesEpisodes(series) {
       }
     }
 
+    // 4. Ensure scriptData.segments contains zero null / non-object entries
+    if (cloned.scriptData && Array.isArray(cloned.scriptData.segments)) {
+      cloned.scriptData.segments = cloned.scriptData.segments.filter(
+        (seg) => seg && typeof seg === 'object'
+      );
+    }
+
     sanitizedEpisodes.push(cloned);
   }
 

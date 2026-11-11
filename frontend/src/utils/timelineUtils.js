@@ -335,6 +335,7 @@ export function findAssociatedSegmentIndices(clip, segments = []) {
   const clipSegId = clip.segmentId ? String(clip.segmentId) : null;
 
   return segments.map((seg, idx) => {
+    if (!seg || typeof seg !== 'object') return -1;
     // 1. Explicit segmentId, segmentIndex or clipId match
     if (seg.clipId && clip.id && String(seg.clipId) === String(clip.id)) {
       return idx;
@@ -596,6 +597,7 @@ export function autoSplitVideoBySegments(segments = [], totalDuration = 0, video
 
   // Parse segments into sorted numeric intervals (prioritizing canonical numeric seconds)
   const intervals = segments.map((seg, idx) => {
+    if (!seg || typeof seg !== 'object') return { start: 0, end: 0 };
     const rawStart = (typeof seg.audioStartSec === 'number' && !isNaN(seg.audioStartSec))
       ? seg.audioStartSec
       : ((typeof seg.startSec === 'number' && !isNaN(seg.startSec))
@@ -711,19 +713,21 @@ export function autoSplitVideoBySegments(segments = [], totalDuration = 0, video
 export function sanitizeScriptData(scriptData) {
   if (!scriptData) return scriptData;
   if (!Array.isArray(scriptData.segments)) return scriptData;
-  const sanitizedSegments = scriptData.segments.map((seg, idx) => {
-    const cn = (seg.chineseText || seg.originalChineseText || seg.originalText || seg.original || seg.chinese || '').trim();
-    return {
-      ...seg,
-      id: idx + 1,
-      segmentId: idx + 1,
-      chineseText: cn,
-      originalChineseText: cn,
-      originalText: cn,
-      original: cn,
-      _uid: seg._uid || `seg_${idx + 1}_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
-    };
-  });
+  const sanitizedSegments = scriptData.segments
+    .filter((seg) => seg && typeof seg === 'object')
+    .map((seg, idx) => {
+      const cn = (seg.chineseText || seg.originalChineseText || seg.originalText || seg.original || seg.chinese || '').trim();
+      return {
+        ...seg,
+        id: idx + 1,
+        segmentId: idx + 1,
+        chineseText: cn,
+        originalChineseText: cn,
+        originalText: cn,
+        original: cn,
+        _uid: seg._uid || `seg_${idx + 1}_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+      };
+    });
   return {
     ...scriptData,
     segments: sanitizedSegments,
@@ -740,6 +744,7 @@ export function resolveSegmentAtTime(segments, targetTime) {
 
   // Find segments where targetTime is within canonical [startSec, endSec)
   const matches = segments.filter((seg) => {
+    if (!seg || typeof seg !== 'object') return false;
     const s = (typeof seg.startSec === 'number' && !isNaN(seg.startSec))
       ? seg.startSec
       : ((typeof seg.audioStartSec === 'number' && !isNaN(seg.audioStartSec))
@@ -1120,8 +1125,10 @@ export function resetSegmentsToSourceTiming(segments = [], totalDuration = 0) {
   const trackLastEnds = [0, 0];
   const subTrackLastEnds = [0, 0, 0];
 
-  return segments.map((seg, idx) => {
-    const srcStart = (typeof seg.startSec === 'number' && !isNaN(seg.startSec))
+  return segments
+    .filter((seg) => seg && typeof seg === 'object')
+    .map((seg, idx) => {
+      const srcStart = (typeof seg.startSec === 'number' && !isNaN(seg.startSec))
       ? seg.startSec
       : ((typeof seg.sourceStartSec === 'number' && !isNaN(seg.sourceStartSec))
         ? seg.sourceStartSec

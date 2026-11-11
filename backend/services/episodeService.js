@@ -199,6 +199,40 @@ function applySafeDiskHydration(ep, cleanSeries, seriesDir, resolvedProjectsDir 
     }
   }
 
+  // 0. Video Hydration Check: Auto-detect existing video files on disk if ep.video is missing or incomplete
+  const epVideoDir = path.join(seriesDir, 'episodes', ep.id, 'video');
+  const hasExistingVideoOnDisk = ep.video && ep.video.videoPath && fs.existsSync(ep.video.videoPath);
+  if (!hasExistingVideoOnDisk && fs.existsSync(epVideoDir)) {
+    try {
+      const vFiles = fs.readdirSync(epVideoDir).filter((f) => f.endsWith('.mp4') && !f.startsWith('.tmp'));
+      if (vFiles.length > 0) {
+        // Pick source video if present, else first
+        const vFile = vFiles.find((f) => f.includes('source')) || vFiles[0];
+        const vPath = path.join(epVideoDir, vFile);
+        const vStat = fs.statSync(vPath);
+        if (vStat.size > 0) {
+          const vUrl = `/uploads/projects/${cleanSeries}/episodes/${ep.id}/video/${vFile}`;
+          ep.video = {
+            videoId: `projects/${cleanSeries}/episodes/${ep.id}/video/${vFile}`,
+            fileName: vFile,
+            originalFilename: vFile,
+            displayTitle: ep.displayTitle || ep.title || `Episode ${ep.episodeNumber || ep.id}`,
+            videoUrl: vUrl,
+            videoPath: vPath,
+            sizeMB: parseFloat((vStat.size / (1024 * 1024)).toFixed(2)),
+            size: (vStat.size / (1024 * 1024)).toFixed(1) + ' MB',
+          };
+          ep.videoFile = vUrl;
+          ep.sourceVideoPath = vPath;
+          if (!ep.status || ep.status === 'idle') {
+            ep.status = 'uploaded';
+          }
+          mutated = true;
+        }
+      }
+    } catch (_) {}
+  }
+
   // 1. Hydration Check: Auto-recover scriptData from completed jobs on disk if missing
   if (!ep.scriptData || !Array.isArray(ep.scriptData.segments) || ep.scriptData.segments.length === 0) {
     const epJobsDir = path.join(seriesDir, 'episodes', ep.id, 'jobs');
@@ -442,7 +476,12 @@ function getSeriesMetadata(seriesId, options = {}) {
 
       let needsSave = false;
       if (Array.isArray(sanitized.episodes)) {
-        for (const ep of sanitized.episodes) {
+        for (let i = 0; i < sanitized.episodes.length; i++) {
+          const ep = sanitized.episodes[i];
+          const rawEp = data.episodes?.[i];
+          if (rawEp?.scriptData?.segments?.length !== ep.scriptData?.segments?.length) {
+            needsSave = true;
+          }
           if (applySafeDiskHydration(ep, cleanSeries, seriesDir, projectsDir)) {
             needsSave = true;
           }

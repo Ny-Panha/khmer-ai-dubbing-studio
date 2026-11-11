@@ -382,6 +382,7 @@ function MediaLibrary({
           onFileUpload={(file, targetEpId) => handleFileUpload(file, targetEpId)}
           isUploading={isUploading}
           onTabChange={onTabChange}
+          onRefreshSeries={onRefreshSeries}
         />
       )}
 

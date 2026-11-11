@@ -14,6 +14,12 @@ export default function AudioDuckingPanel({
 }) {
   const duckingVal = settings?.duckingVolume !== undefined ? settings.duckingVolume : 0.15;
   const khmerVal = settings?.khmerVolume !== undefined ? settings.khmerVolume : 1.0;
+  // Linear gain -> dB readout (0 = -∞ dB)
+  const toDb = (gain) => {
+    if (!(gain > 0)) return '-∞ dB';
+    const db = 20 * Math.log10(gain);
+    return `${db > 0 ? '+' : ''}${db.toFixed(1)} dB`;
+  };
 
   return (
     <div className="inspector-card-group">
@@ -116,8 +122,9 @@ export default function AudioDuckingPanel({
               <span className="slider-label">
                 {settings?.enableDemucs ? 'Background Music Volume (BGM & SFX):' : 'Original Background Audio:'}
               </span>
-              <span className="slider-val" style={{ color: duckingVal === 0 ? 'var(--color-error)' : 'var(--primary-accent)', fontWeight: 700 }}>
+              <span className="slider-val" style={{ color: duckingVal === 0 ? 'var(--color-error)' : 'var(--primary-accent)', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>
                 {duckingVal === 0 ? 'Muted (0%)' : `${Math.round(duckingVal * 100)}%`}
+                <span style={{ marginLeft: 6, fontWeight: 500, opacity: 0.7 }}>{toDb(duckingVal)}</span>
               </span>
             </div>
             <input
@@ -141,8 +148,9 @@ export default function AudioDuckingPanel({
           <div style={{ marginBottom: 12 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
               <span className="slider-label">Khmer Voice Boost:</span>
-              <span className="slider-val" style={{ color: 'var(--color-success)', fontWeight: 700 }}>
+              <span className="slider-val" style={{ color: 'var(--color-success)', fontWeight: 700, fontVariantNumeric: 'tabular-nums' }}>
                 {Math.round(khmerVal * 100)}%
+                <span style={{ marginLeft: 6, fontWeight: 500, opacity: 0.7 }}>{toDb(khmerVal)}</span>
               </span>
             </div>
             <input

@@ -79,23 +79,36 @@ function getFileContentFingerprint(filePath) {
 /**
  * Compute unique cache key for separated audio
  */
-function resolvePythonBinary() {
-  if (process.env.PYTHON_BIN && fs.existsSync(process.env.PYTHON_BIN)) {
-    return process.env.PYTHON_BIN;
+/**
+ * Resolve a Python interpreter portably (no machine-specific paths).
+ * Order: PYTHON_BIN env -> project/backend .venv -> per-user Python installs (Windows) -> PATH (python / python3).
+ * If Demucs is not installed in the resolved interpreter, separateAudio() falls back to the FFmpeg path as before.
+ */
+function resolvePythonBinary(env = process.env, platform = process.platform) {
+  if (env.PYTHON_BIN && fs.existsSync(env.PYTHON_BIN)) {
+    return env.PYTHON_BIN;
   }
+
+  const isWin = platform === 'win32';
+  const venvRel = isWin ? path.join('Scripts', 'python.exe') : path.join('bin', 'python');
   const candidatePaths = [
-    'C:\\Users\\nhastar\\AppData\\Local\\Programs\\Python\\Python311\\python.exe',
-    'C:\\Users\\nhastar\\AppData\\Local\\Programs\\Python\\Python310\\python.exe',
-    path.join(process.env.LOCALAPPDATA || '', 'Programs\\Python\\Python311\\python.exe'),
-    'python',
-    'python3',
+    path.join(__dirname, '..', '..', '.venv', venvRel),
+    path.join(__dirname, '..', '.venv', venvRel),
   ];
+
+  if (isWin && env.LOCALAPPDATA) {
+    // Keep historical preference (3.11 / 3.10 first): Demucs + torch wheels are most commonly installed there.
+    for (const ver of ['Python311', 'Python310', 'Python312', 'Python313']) {
+      candidatePaths.push(path.join(env.LOCALAPPDATA, 'Programs', 'Python', ver, 'python.exe'));
+    }
+  }
+
   for (const p of candidatePaths) {
-    if (p.includes('\\') && fs.existsSync(p)) {
+    if (fs.existsSync(p)) {
       return p;
     }
   }
-  return 'python';
+  return isWin ? 'python' : 'python3';
 }
 
 function getSeparationCacheDir(audioPath, model = 'htdemucs') {
@@ -503,5 +516,6 @@ module.exports = {
   getSeparationProgress,
   isSeparationBusy,
   getCurrentSeparationMedia,
+  resolvePythonBinary,
 };
 

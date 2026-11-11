@@ -6,6 +6,7 @@ const { spawn, spawnSync } = require('child_process');
 const { extractAudio } = require('../../ffmpegService');
 const { classifySegmentAcousticGender, computeYinPitch } = require('../../audioClassifierService');
 const { senseVoiceSemaphore, createAbortError } = require('../../../utils/asyncSemaphore');
+const { resolvePythonBinary } = require('../../audioSeparationService');
 
 function sleepOrAbortStage4(ms, signal) {
   if (!signal) {
@@ -57,15 +58,8 @@ function runSenseVoiceWorker({
       return reject(createAbortError('SenseVoice worker aborted before start'));
     }
 
-    let pythonExe = process.env.PYTHON_BIN;
-    if (!pythonExe || !fs.existsSync(pythonExe)) {
-      const candidates = [
-        'C:\\Users\\nhastar\\AppData\\Local\\Programs\\Python\\Python311\\python.exe',
-        'C:\\Users\\nhastar\\AppData\\Local\\Programs\\Python\\Python310\\python.exe',
-        'python',
-      ];
-      pythonExe = candidates.find((c) => c.includes('\\') && fs.existsSync(c)) || 'python';
-    }
+    // Portable discovery shared with Demucs: PYTHON_BIN -> .venv -> per-user installs -> PATH
+    const pythonExe = resolvePythonBinary();
     const args = [
       workerPath,
       '--audio', audioPath,

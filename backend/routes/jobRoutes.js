@@ -262,6 +262,18 @@ router.post("/generate", async (req, res) => {
 
     ensurePipelineWorkerRegistered(productionJobQueue);
 
+    // If force re-translate is requested and an active job/lock exists, cancel it cleanly first
+    if ((req.body.force === true || req.body.confirmed === true) && productionJobQueue.hasActiveJobForEpisode(seriesId, episodeId)) {
+      const active = productionJobQueue.getActiveJobForEpisode(seriesId, episodeId);
+      if (active?.jobId) {
+        cancelJobRenderProcess(active.jobId);
+        cancelJob(active.jobId);
+        clearTransientJobApiKey(active.jobId);
+      }
+      productionJobQueue.releaseEpisodeLock(seriesId, episodeId);
+      console.log(`[Job Dispatch] 🔄 Force Re-Run: Cancelled previous active job for ${seriesId}/${episodeId}`);
+    }
+
     const { jobData } = createJob({
       seriesId,
       episodeId,

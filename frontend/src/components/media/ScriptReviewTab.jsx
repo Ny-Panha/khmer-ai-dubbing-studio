@@ -2,7 +2,7 @@ import React from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import {
   Search, X, Play, Pause, RefreshCw, Trash2, Subtitles, AlertCircle, AlertTriangle,
-  User, Mic, Volume2, Sparkles, Languages, Edit3, Check, CheckCircle2,
+  User, Volume2, Sparkles, Languages, Edit3, Check, CheckCircle2,
   Loader2, MessageSquare, HelpCircle, Wrench
 } from 'lucide-react';
 import { parseTimeToSeconds } from '../../utils/formatTime';
@@ -18,6 +18,7 @@ import {
   isSegmentVoiceBroken,
   scanEpisodeBrokenSegments,
 } from '../../utils/translationQuality';
+import { resolveVoiceMeta } from '../../utils/voiceCatalog';
 
 function DebouncedScriptTextarea({ value, onChange, onBlur, placeholder, className, style, rows = 2 }) {
   const [localVal, setLocalVal] = React.useState(value || '');
@@ -221,22 +222,31 @@ const CaptionItemCard = React.memo(function CaptionItemCard({
             </span>
           )}
 
-          {/* Voice Actor Chip */}
-          <span style={{
-            fontSize: '0.62rem',
-            padding: '1px 5px',
-            borderRadius: 4,
-            background: 'rgba(255, 255, 255, 0.04)',
-            color: '#94a3b8',
-            border: '1px solid rgba(255, 255, 255, 0.08)',
-            fontWeight: 500,
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 3
-          }}>
-            <Mic size={9} />
-            <span>{(seg.voiceId || seg.khmerVoiceId || '').includes('Sreymom') ? 'Sreymom' : 'Piseth'}</span>
-          </span>
+          {/* Voice Actor Chip (resolved from voice catalog) */}
+          {(() => {
+            const voiceMeta = resolveVoiceMeta(seg);
+            return (
+              <span
+                data-testid="segment-voice-chip"
+                style={{
+                  fontSize: '0.62rem',
+                  padding: '1px 5px',
+                  borderRadius: 4,
+                  background: 'rgba(255, 255, 255, 0.04)',
+                  color: voiceMeta.gender === 'FEMALE' ? '#f9a8d4' : '#7dd3fc',
+                  border: '1px solid rgba(255, 255, 255, 0.08)',
+                  fontWeight: 500,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 3
+                }}
+                title={voiceMeta.id}
+              >
+                <span aria-hidden="true">{voiceMeta.icon}</span>
+                <span>{voiceMeta.label}</span>
+              </span>
+            );
+          })()}
 
           {/* Single Consolidated Status Pill */}
           {seg.textStatus === 'generating' ? (
@@ -515,7 +525,7 @@ function ScriptReviewTab({
   onToggleDeliveryType = null,
 }) {
   const parentRef = React.useRef(null);
-  const [filterMode, setFilterMode] = React.useState('all'); // 'all' | 'missing'
+  const [filterMode, setFilterMode] = React.useState('all'); // 'all' | 'male' | 'female' | 'missing'
   const [isRepairingEpisode, setIsRepairingEpisode] = React.useState(false);
   const [repairJobId, setRepairJobId] = React.useState(null);
   const [repairStatusBanner, setRepairStatusBanner] = React.useState(null);
@@ -642,6 +652,17 @@ function ScriptReviewTab({
 
   const missingTextCount = brokenScan.totalBrokenCount;
 
+  // One pass: resolve voice gender per visible segment for filter pills + counts
+  const voiceGenderCounts = React.useMemo(() => {
+    let male = 0;
+    let female = 0;
+    for (const seg of filteredSegments) {
+      if (resolveVoiceMeta(seg).gender === 'FEMALE') female += 1;
+      else male += 1;
+    }
+    return { male, female };
+  }, [filteredSegments]);
+
   const displayedSegments = React.useMemo(() => {
     if (filterMode === 'missing') {
       return filteredSegments.filter(
@@ -649,6 +670,10 @@ function ScriptReviewTab({
           isSegmentTextBroken(seg, repeatedJunkSet) ||
           isSegmentVoiceBroken(seg, { repeatedJunkSet })
       );
+    }
+    if (filterMode === 'male' || filterMode === 'female') {
+      const wanted = filterMode === 'female' ? 'FEMALE' : 'MALE';
+      return filteredSegments.filter((seg) => resolveVoiceMeta(seg).gender === wanted);
     }
     return filteredSegments;
   }, [filteredSegments, filterMode, repeatedJunkSet]);
@@ -769,8 +794,8 @@ function ScriptReviewTab({
           Segments ({scriptData?.segments?.length || 0})
         </span>
 
-        {/* Filter Chips: ទាំងអស់ vs ខ្វះអត្ថបទ (Missing text) */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        {/* Filter Chips: ទាំងអស់ / ប្រុស / ស្រី / ឃ្លាខូច */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
           <button
             type="button"
             onClick={() => setFilterMode('all')}
@@ -793,6 +818,41 @@ function ScriptReviewTab({
             <span style={{ opacity: 0.75, fontSize: '0.64rem' }}>({filteredSegments.length})</span>
           </button>
 
+          {[
+            { mode: 'male', icon: '👨', label: 'ប្រុស', count: voiceGenderCounts.male, tone: '56, 189, 248', text: '#7dd3fc' },
+            { mode: 'female', icon: '👩', label: 'ស្រី', count: voiceGenderCounts.female, tone: '244, 114, 182', text: '#f9a8d4' },
+          ].map((pill) => {
+            const active = filterMode === pill.mode;
+            return (
+              <button
+                key={pill.mode}
+                type="button"
+                data-testid={`script-filter-${pill.mode}`}
+                aria-pressed={active}
+                onClick={() => setFilterMode(active ? 'all' : pill.mode)}
+                style={{
+                  padding: '2px 8px',
+                  fontSize: '0.70rem',
+                  borderRadius: 12,
+                  border: '1px solid',
+                  borderColor: active ? `rgba(${pill.tone}, 0.7)` : 'rgba(255, 255, 255, 0.12)',
+                  background: active ? `rgba(${pill.tone}, 0.18)` : 'transparent',
+                  color: active ? pill.text : 'var(--text-dim)',
+                  cursor: 'pointer',
+                  fontWeight: active ? 700 : 400,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 4,
+                }}
+                title={`បង្ហាញតែឃ្លាសំឡេង${pill.label}`}
+              >
+                <span aria-hidden="true">{pill.icon}</span>
+                <span>{pill.label}</span>
+                <span style={{ opacity: 0.75, fontSize: '0.64rem', fontVariantNumeric: 'tabular-nums' }}>({pill.count})</span>
+              </button>
+            );
+          })}
+
           <button
             type="button"
             onClick={() => setFilterMode('missing')}
@@ -810,10 +870,10 @@ function ScriptReviewTab({
               alignItems: 'center',
               gap: 4,
             }}
-            title="បង្ហាញតែឃ្លាដែលគ្មានអត្ថបទខ្មែរ (Missing text)"
+            title="បង្ហាញតែឃ្លាខូច ឬខ្វះសំឡេង (Broken text / missing voice)"
           >
             <AlertCircle size={10} />
-            <span>ខ្វះអត្ថបទ</span>
+            <span>ឃ្លាខូច/ខ្វះសំឡេង</span>
             <span
               style={{
                 fontSize: '0.64rem',
@@ -952,6 +1012,10 @@ function ScriptReviewTab({
             <p style={{ fontSize: '0.76rem', margin: 0, color: 'var(--text-dim)' }}>
               គ្រប់ឃ្លាទាំងអស់មានអត្ថបទខ្មែររួចរាល់ហើយ! (All segments have Khmer text)
             </p>
+          </div>
+        ) : (filterMode === 'male' || filterMode === 'female') ? (
+          <div style={{ textAlign: 'center', padding: '24px 15px', color: 'var(--text-dim)', fontSize: '0.78rem', border: '1px dashed var(--border-subtle)', borderRadius: 'var(--radius-sm)' }}>
+            គ្មានឃ្លាសំឡេង{filterMode === 'female' ? 'ស្រី' : 'ប្រុស'}ទេ
           </div>
         ) : (
           <div style={{ textAlign: 'center', padding: '30px 15px', color: 'var(--text-muted)', border: '1px dashed var(--border-subtle)', borderRadius: 'var(--radius-sm)' }}>

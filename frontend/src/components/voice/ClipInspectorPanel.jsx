@@ -1395,7 +1395,7 @@ export default function ClipInspectorPanel({
                   ) : (
                     <>
                       <Volume2 size={13} color={autoplayBlocked ? "#facc15" : undefined} />
-                      <span>ស្តាប់សំឡេង (Play)</span>
+                      <span>🔊 ស្តាប់សាកល្បង</span>
                     </>
                   )}
                 </button>

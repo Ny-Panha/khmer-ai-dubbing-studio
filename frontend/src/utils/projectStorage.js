@@ -627,7 +627,10 @@ function createStorageOptimizedSeriesList(seriesList) {
               ...ep.scriptData,
               hasScript: true,
               totalSegments: totalCount,
-              segments: ep.scriptData.segments.map(trimSegmentForStorage),
+              segments: (ep.scriptData.segments || [])
+                .filter((s) => s && typeof s === 'object')
+                .map(trimSegmentForStorage)
+                .filter(Boolean),
             },
           };
         }

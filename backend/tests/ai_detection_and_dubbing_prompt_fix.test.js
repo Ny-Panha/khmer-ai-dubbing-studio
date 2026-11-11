@@ -288,3 +288,45 @@ test('Step 7: Direct URL Route System (/home, /studio, /batch, /quota, /export, 
   assert.match(navbarJsx, /data-testid="navbar-studio-route-btn"/);
   assert.match(appJsx, /<HomeDashboard/);
 });
+
+test('Step 8: Batch Studio 3-Step Runners, 2-Row Control Bar, Episode Card Stage Modules, and Duplicate Job Guard', () => {
+  const jobRoutesSource = fs.readFileSync(path.join(__dirname, '..', 'routes', 'jobRoutes.js'), 'utf8');
+  const geminiModalJsx = fs.readFileSync(path.join(__dirname, '..', '..', 'frontend', 'src', 'components', 'dashboard', 'GeminiRouteModal.jsx'), 'utf8');
+  const demucsJsx = fs.readFileSync(path.join(__dirname, '..', '..', 'frontend', 'src', 'components', 'dashboard', 'route-runners', 'EpisodeDemucsProgressCard.jsx'), 'utf8');
+  const ttsJsx = fs.readFileSync(path.join(__dirname, '..', '..', 'frontend', 'src', 'components', 'dashboard', 'route-runners', 'EpisodeTtsProgressCard.jsx'), 'utf8');
+  const translateJsx = fs.readFileSync(path.join(__dirname, '..', '..', 'frontend', 'src', 'components', 'dashboard', 'route-runners', 'EpisodeTranslateProgressCard.jsx'), 'utf8');
+
+  // 1. Backend: Auto-cancels active job on force re-translate
+  assert.match(jobRoutesSource, /Force Re-Run: Cancelled previous active job/);
+  assert.match(jobRoutesSource, /cancelJobRenderProcess\(active\.jobId\)/);
+
+  // 2. Top Batch Action Bar: 2-Row Layout with 4 Prominent Primary Execution Buttons
+  assert.match(geminiModalJsx, /data-testid="batch-primary-execution-row"/);
+  assert.match(geminiModalJsx, /data-testid="btn-batch-primary-cta"/);
+  assert.match(geminiModalJsx, /data-testid="btn-batch-primary-tts"/);
+  assert.match(geminiModalJsx, /data-testid="btn-batch-primary-demucs"/);
+  assert.match(geminiModalJsx, /data-testid="btn-batch-run-all"/);
+
+  // 3. Secondary Row: Segmented View Filter defaulting to All 3 Steps
+  assert.match(geminiModalJsx, /data-testid="batch-card-view-filter"/);
+  assert.match(geminiModalJsx, /data-testid="filter-view-all"/);
+  assert.match(geminiModalJsx, /data-testid="filter-view-translate"/);
+  assert.match(geminiModalJsx, /data-testid="filter-view-tts"/);
+  assert.match(geminiModalJsx, /data-testid="filter-view-demucs"/);
+
+  // 4. Episode Card 3 Stage Modules & Inline Actions
+  assert.match(geminiModalJsx, /📝 1\. Translate Script/);
+  assert.match(geminiModalJsx, /🎙️ 2\. AI Translate Voice/);
+  assert.match(geminiModalJsx, /🔇 3\. AI បិទសំឡេងចិន \(រក្សាភ្លេង BGM ដើម\)/);
+  assert.match(geminiModalJsx, /handleRunAll3Steps/);
+
+  // 5. Duplicate Active Job Guard in executeBatchTranslateEnqueue
+  assert.match(geminiModalJsx, /Pre-filter active jobs when force: false to prevent 409 DUPLICATE_ACTIVE_JOB/);
+  assert.match(geminiModalJsx, /duplicateRaceCount/);
+  assert.match(geminiModalJsx, /រំលង.*ភាគដែលកំពុងដំណើរការស្រាប់/);
+
+  // 6. Runner Card Labels Clarified in Khmer
+  assert.match(demucsJsx, /🔇 3\. AI បិទសំឡេងចិន \(រក្សាភ្លេង BGM ដើម\)/);
+  assert.match(ttsJsx, /🎙️ 2\. AI Translate Voice/);
+  assert.match(translateJsx, /📝 1\. Translate Script/);
+});

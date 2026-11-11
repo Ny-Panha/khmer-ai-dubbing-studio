@@ -1,6 +1,148 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
+- **Environment**: Antigravity IDE (Clean Unified 3-Step Auto-Pipeline & Batch UI Fix)
+- **Timestamp**: 2026-11-11T17:15:00+07:00
+
+## Summary: Implemented Clean Unified 3-Step Auto-Pipeline & Batch UI Fix
+1. **Eliminated Blocking Warning Modal (`⚠️ សូមជ្រើសរើសភាគជាមុនសិន`)**:
+   - In [`GeminiRouteModal.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/dashboard/GeminiRouteModal.jsx): `handleStartBatchTranslate`, `handleBatchGenerateTTS`, `handleBatchDemucsSeparation`, and `handleRunAll3Steps` now use Smart Auto-Targeting. If 0 checkboxes are selected (`selectedEpIds.size === 0`), they automatically target remaining unscripted / unvoiced / undemucsed / incomplete episodes, update `selectedEpIds`, and run immediately without throwing the blocker dialog.
+2. **Fixed Broken Selection Pills**:
+   - Added `allSelectableEpisodes` and `incompleteEpisodes` (`!hasScript || brokenCount > 0 || !hasAudio || !hasDemucs`).
+   - Cleaned selection pills:
+     - `ទាំងអស់ (${episodes.length} ភាគ)` (`21 ភាគ`)
+     - `ភាគមិនទាន់ចប់ (${incompleteEpisodes.length} ភាគ)`
+     - `២ ភាគដំបូង (2 EPs)`
+     - `៤ ភាគដំបូង (4 EPs)`
+     - `ដកជ្រើសរើស (Clear)` (visible when `selectedEpIds.size > 0`)
+3. **Unified 1-Click 3-Step Auto-Pipeline Engine (`runEpisodeFullPipeline`)**:
+   - Added `runEpisodeFullPipeline(ep)`: Sequentially runs:
+     1. Translate/Repair Script (`executeBatchTranslateEnqueue` / `handleRepairBrokenSegments`)
+     2. AI Khmer Voice TTS (`handleBatchGenerateTTS`)
+     3. Demucs AI Clean BGM (`handleBatchDemucsSeparation`)
+   - Added `▶ ផលិតទាំង 3 ជំហាន` button to every Episode Card footer (`btn-auto-run-ep-`).
+   - Integrated Master CTA `🚀 ផលិតស្វ័យប្រវត្តិទាំង 3 ជំហាន (Run All 3 Steps)` on the top bar.
+4. **Decluttered Top Header & Toolbar (Zero Overflow, < 140px Height)**:
+   - `isScriptSetupExpanded = false` by default (collapsed into a clean 1-line summary bar).
+   - Replaced 3 giant stacked progress bars with a sleek single-row `grid-cols-3` summary pill row (`📝 1. Script`, `🎙️ 2. សំឡេង AI`, `🔇 3. Clean BGM`).
+   - Consolidated 2 overflowing toolbar rows into 1 clean wrapping studio control bar with primary CTA, secondary compact step buttons, view filters, stops, and export.
+5. **Collapsed Console Logs by Default**:
+   - In [`EpisodeTranslateProgressCard.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/dashboard/route-runners/EpisodeTranslateProgressCard.jsx), [`EpisodeTtsProgressCard.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/dashboard/route-runners/EpisodeTtsProgressCard.jsx), and [`EpisodeDemucsProgressCard.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/dashboard/route-runners/EpisodeDemucsProgressCard.jsx): `showConsole = false` by default, leaving maximum vertical space for episode cards.
+6. **Automated Verification**:
+   - `npm --prefix frontend run lint`: **PASS (`0 errors`)**.
+   - `npm --prefix frontend run build`: **PASS (`1.24s`, `0 errors`)**.
+   - `node --test backend/tests/clean_unified_3step_batch_pipeline.test.js`: **PASS (`5/5 PASS`)**.
+   - `node --test backend/tests/full_project_master_upgrade.test.js`: **PASS (`8/8 PASS`)**.
+   - Combined test suite: **PASS (`13/13 PASS`)**.
+
+## Active Environment
+- **Backend API**: `http://localhost:5000`
+- **Frontend App**: `http://localhost:5173`
+- **Next Steps**: Refresh `http://localhost:5173/` in browser to test the sleek, unified 3-step auto-pipeline.
+
+---
+
+## Previous Session
+
+## Summary: Fixed Null Segment Crash in `sanitizeScriptData` & Healed `series.json`
+1. **Root Cause**:
+   - `series.json` had 792 `null` entries inside `ep.scriptData.segments` (e.g. `ep_1` had 251 null items in its segment array).
+   - When `useSeriesManager.js` initialized, `sanitizeScriptData(ep.scriptData)` mapped over the array without checking if `seg` was an object: `const cn = seg.chineseText...` threw `TypeError: Cannot read properties of null (reading 'chineseText')`, triggering React `ErrorBoundary`.
+2. **Defensive Fixes Applied**:
+   - In [`timelineUtils.js`](file:///e:/khmer_ai_dubbing_studio/frontend/src/utils/timelineUtils.js): Added `.filter((seg) => seg && typeof seg === 'object')` in `sanitizeScriptData`, `resolveSegmentAtTime`, and timeline clip generation to guarantee zero crashes on corrupt/null entries.
+   - In [`projectStorage.js`](file:///e:/khmer_ai_dubbing_studio/frontend/src/utils/projectStorage.js): Filtered nulls in `trimSegmentForStorage` and `createStorageOptimizedSeriesList`.
+   - In [`episodeModel.js`](file:///e:/khmer_ai_dubbing_studio/backend/models/episodeModel.js) & [`episodeService.js`](file:///e:/khmer_ai_dubbing_studio/backend/services/episodeService.js): Added auto-healing in `sanitizeSeriesEpisodes` to remove nulls and persist clean arrays to disk on read.
+   - Healed [`series_1793898268958/series.json`](file:///e:/khmer_ai_dubbing_studio/backend/uploads/projects/series_1793898268958/series.json): Removed 792 null elements; all 21 episodes are now 100% valid.
+3. **Verification**:
+   - `npm --prefix frontend run lint`: **PASS (`0 errors`)**.
+   - `npm --prefix frontend run build`: **PASS (`587ms`, `0 errors`)**.
+   - `node --test backend/tests/full_project_master_upgrade.test.js`: **PASS (`8/8 PASS`)**.
+
+## Active Environment
+- **Backend**: Live at `http://localhost:5000`.
+- **Frontend**: Live at `http://localhost:5173`.
+- **Next Steps**: Refresh browser at `http://localhost:5173` — App renders cleanly without ErrorBoundary crash.
+
+---
+
+## Previous Session
+
+## Summary: Completed Full-Project Master Upgrade (All 5 Phases + 5-Pillar Design System)
+1. **Phase 1 (UTF-8 Integrity & Mojibake Regression Guard)**:
+   - Scanned all source files across `frontend/src/` and `backend/` for `\uFFFD` (zero occurrences found).
+   - Created automated regression suite in [`backend/tests/full_project_master_upgrade.test.js`](file:///e:/khmer_ai_dubbing_studio/backend/tests/full_project_master_upgrade.test.js) asserting 0 `\uFFFD` across repository.
+2. **Phase 2 (Batch Generate Studio 3-Step UI & Queue Fix)**:
+   - 2-row top control bar in [`GeminiRouteModal.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/dashboard/GeminiRouteModal.jsx) with 4 primary action buttons:
+     - `📝 1. Translate Script (${targetTranslateLeft} ភាគ)` (Studio Blue)
+     - `🎙️ 2. AI Translate Voice (${targetAudioLeft} ភាគ)` (Studio Pink/Purple)
+     - `🔇 3. AI បិទសំឡេងចិន (${targetDemucsLeft} ភាគ)` (Studio Emerald)
+     - `⚡ Run All 3 Steps (Auto-Pipeline)` (linear gradient indigo-cyan)
+   - Default view renders all 3 step cards inside every episode card (`EP1`, `EP2`...) with 1-click inline actions.
+   - Guarded duplicate active jobs in `jobRoutes.js` and `GeminiRouteModal.jsx` (skip running jobs on `force: false`, cancel/replace on `force: true`).
+3. **Phase 3 (Left Panel SPA Workflow Polish)**:
+   - In [`EpisodesTab.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/media/EpisodesTab.jsx): Removed `window.location.reload()` and browser `alert()`. Replaced with SPA reactive refresh via `onRefreshSeries` and inline status banner.
+   - In [`voiceCatalog.js`](file:///e:/khmer_ai_dubbing_studio/frontend/src/utils/voiceCatalog.js) & [`ScriptReviewTab.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/media/ScriptReviewTab.jsx): Replaced hardcoded binary `'Sreymom' : 'Piseth'` with dynamic voice catalog resolution (`👨 ពិសិដ្ឋ` / `👩 ស្រីមុំ`). Added 4 filter pills: `ទាំងអស់ (${total})`, `👨 ប្រុស (${maleCount})`, `👩 ស្រី (${femaleCount})`, `⚠️ ឃ្លាខូច/ខ្វះសំឡេង (${brokenCount})`.
+4. **Phase 4 (Right Inspector Ducking, Stages & Sticky Export CTA)**:
+   - In [`AudioDuckingPanel.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/voice/AudioDuckingPanel.jsx): Added real-time dB calculation readout (`20 * log10(gain)`) next to volume percentages (`tabular-nums`).
+   - In [`ExportSettingsPanel.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/voice/ExportSettingsPanel.jsx): Standardized 4 export stage labels (`1/4 បង្កើតអក្សរខ្មែរ .ASS`, `2/4 បន្ថយសំឡេងដើម Smart Ducking`, `3/4 បញ្ចូលសំឡេងខ្មែរ AI & Clean BGM`, `4/4 Render វីដេអូ MP4`).
+   - In [`ClipInspectorPanel.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/voice/ClipInspectorPanel.jsx): Optimistic 300ms spinner on voice switch and direct `🔊 ស្តាប់សាកល្បង` button.
+   - In [`VoiceSettings.css`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/voice/VoiceSettings.css): Pinned Export Rendered Video CTA with `position: sticky; bottom: 0;` and blur backdrop.
+5. **Phase 5 (Cross-Platform Python Discovery & Gemini Model Catalog Sync)**:
+   - In [`audioSeparationService.js`](file:///e:/khmer_ai_dubbing_studio/backend/services/audioSeparationService.js) & [`stage4_analyzeDialogueAudio.js`](file:///e:/khmer_ai_dubbing_studio/backend/services/pipeline/stages/stage4_analyzeDialogueAudio.js): Removed machine-specific path `C:\Users\nhastar\...`. Replaced with portable `resolvePythonBinary()` (`PYTHON_BIN` -> `.venv` -> `LOCALAPPDATA` -> `python`/`python3`).
+   - In [`BatchExportStudioModal.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/dashboard/BatchExportStudioModal.jsx): Cleaned unready episode badges (`⚠️ គ្មានវីដេអូ`, `⚠️ គ្មាន Script`, `⚠️ សំឡេងមិនទាន់អាប់ដេត`, `⚠️ គ្មានសំឡេង AI`).
+   - Synchronized and verified all Gemini fallback model IDs against `backend/services/geminiModelCatalog.js`.
+6. **Verification Evidence**:
+   - `npm --prefix frontend run lint`: **PASS (`0 errors`)**.
+   - `npm --prefix frontend run build`: **PASS (`618ms`, `0 errors`)**.
+   - `node --test backend/tests/full_project_master_upgrade.test.js`: **PASS (`7/7 PASS`)**.
+   - Total backend test suite: **PASS (`213 PASS / 0 FAIL / 1 SKIPPED`)**.
+
+## Active Environment
+- **Backend**: Live at `http://localhost:5000`.
+- **Frontend**: Live at `http://localhost:5173`.
+- **Next Steps**: Project is ready for end-to-end production use and git commit.
+
+---
+
+## Previous Session
+- **Environment**: Antigravity IDE (`/agents @batch_studio_ui_and_3step_runners_fix.md` — 3-Step AI Runners & Top Action Bar Upgrade)
+- **Timestamp**: 2026-11-11T15:20:00+07:00
+
+## Summary: Upgraded Batch Generate Studio with 2-Row Control Bar, 3-Stage Episode Cards, and Duplicate Active Job Guard
+1. **Step 1 (Top Batch Action Bar — 2-Row Studio Control Bar)**:
+   - **Row 1 (Primary Batch Execution)**: 4 prominent, color-coded buttons always visible:
+     - `📝 1. Translate Script (${targetTranslateLeft} ភាគ)` (`#0284C7`, blue)
+     - `🎙️ 2. AI Translate Voice (${targetAudioLeft} ភាគ)` (`#BE185D`, pink)
+     - `🔇 3. AI បិទសំឡេងចិន (${targetDemucsLeft} ភាគ)` (`#059669`, emerald)
+     - `⚡ Run All 3 Steps (Auto-Pipeline)` (linear gradient indigo-cyan)
+   - **Row 2 (Secondary Utility & View Filter)**:
+     - Segmented View Filter defaulting to `🎛️ បង្ហាញទាំង 3 មុខងារ (All 3 Steps)` + `Translate` + `សំឡេងខ្មែរ AI` + `AI បិទសំឡេងចិន`
+     - `↺ Re-Translate (FORCE)`
+     - `🔧 ជួសជុលប្រយោគខូច & Generate ឡើងវិញ (${repairButtonCount})`
+     - Contextual `Kill Translate / Kill TTS / Kill Demucs` buttons
+     - Aspect ratio controls (`16:9` | `9:16`) + `🎬 Open Export Studio`
+2. **Step 2 (Episode Cards — All 3 Stage Modules with 1-Click Inline Action Buttons)**:
+   - Default view (`All 3 Steps`) renders all 3 stage blocks inside each card (`EP1`, `EP2`...):
+     - **Stage 1 (Translate Script)**: Segment count, Fast OCR badge, status, and inline actions `[📝 បកប្រែ Script]`, `[🔧 ជួសជុល]`, `[↺ បកប្រែឡើងវិញ]`.
+     - **Stage 2 (AI Translate Voice)**: Voiced count, live progress runner, and inline actions `[🎙️ បង្កើតសំឡេងខ្មែរ AI]`, `[🔊 បង្កើតឡើងវិញ]`.
+     - **Stage 3 (AI បិទសំឡេងចិន / Demucs Clean BGM)**: Demucs status, live progress runner, and inline actions `[🔇 បិទសំឡេងចិន]`, `[↺ ធ្វើម្ដងទៀត]`.
+3. **Step 3 (Duplicate Active Job Guard & Force Auto-Cancel)**:
+   - In [`backend/routes/jobRoutes.js`](file:///e:/khmer_ai_dubbing_studio/backend/routes/jobRoutes.js): Automatically cancels previous active jobs, clears transient API keys, and releases locks on `force: true`.
+   - In [`GeminiRouteModal.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/dashboard/GeminiRouteModal.jsx): `executeBatchTranslateEnqueue` pre-filters running/queued episodes on `force: false`, catches duplicate job 409 responses, and shows friendly informational toasts (`"រំលង X ភាគដែលកំពុងដំណើរការស្រាប់"`).
+4. **Verification**:
+   - `npm --prefix frontend run lint`: **PASS (`0 errors`)**.
+   - `npm --prefix frontend run build`: **PASS (`919ms`, `0 errors`)**.
+   - `node --test`: **PASS (`205/205 PASS`)**.
+   - `node --test backend/tests/ai_detection_and_dubbing_prompt_fix.test.js`: **PASS (`8/8 PASS`)**.
+
+## Active Environment
+- **Backend**: Live at `http://localhost:5000`.
+- **Frontend**: Live at `http://localhost:5173`.
+- **Next Steps**: Test and verify the upgraded Batch Studio UI at `http://localhost:5173/batch`.
+
+---
+
+## Previous Session
 - **Environment**: Antigravity IDE (`Git Push to Origin Main`)
 - **Timestamp**: 2026-11-11T14:30:30+07:00
 
