@@ -1,6 +1,33 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
+- **Environment**: Antigravity IDE (/agents: Phase 2 Module 1 — geminiRouteSelectors.js Extracted & Verified)
+- **Timestamp**: 2026-11-11T23:15:00+07:00
+
+## Summary: Completed Phase 2 Module 1 (geminiRouteSelectors.js)
+1. **Module 1 Pure Selectors Extracted (`frontend/src/features/gemini-route/utils/geminiRouteSelectors.js`)**:
+   - Extracted pure calculations from `GeminiRouteModal.jsx`: `selectSelectedTargetEpisodes`, `selectPartitionedSelectedEpisodes`, `selectCompletedAudioCount`, `selectCompletedDemucsCount`, `selectUnDemucsEpisodes`, `selectUnAudioEpisodes`, `selectOverallStagePercent`, `selectTargetCounters`, `selectIsBatchExecutionActive`, `selectStageCompletionFlags`.
+   - Reused existing pure helpers from `components/dashboard/geminiRouteHelpers.js` (`computeSeriesTranslateSummary`, `getEpisodesBrokenSummary`, etc.).
+   - Pure utility module with zero React dependencies.
+2. **Wired into `GeminiRouteModal.jsx`**:
+   - Replaced inlined selection, completion, and target calculations with the extracted selectors.
+   - Retained strict regex and assertion compatibility (`const isBatchExecutionActive = Boolean(...)`).
+3. **Verification & Quality Gates**:
+   - `npm --prefix frontend run lint` (`oxlint`): **PASS (0 errors)**
+   - `npm --prefix frontend run build` (`vite build`): **PASS (626ms, 0 errors, 2027 modules transformed)**
+   - Targeted Test Suites: **31/31 PASS**
+   - Live Smoke Test: **HTTP 200 OK** (`http://localhost:5173/batch` & `http://localhost:5000/api/health`)
+   - Pre-change backup: `.backups/20261111_231123/GeminiRouteModal.jsx`
+   - Code freeze strictly observed outside Module 1.
+
+## Active Environment
+- **Backend API**: `http://localhost:5000`
+- **Frontend App**: `http://localhost:5173`
+- **Next Steps**: Await Nha's review and approval before proceeding to Module 2 (`useEpisodeSelection.js`).
+
+---
+
+## Previous Session
 - **Environment**: Antigravity IDE (/agents: Phase 1 API Service Modularization Complete)
 - **Timestamp**: 2026-11-11T22:55:00+07:00
 

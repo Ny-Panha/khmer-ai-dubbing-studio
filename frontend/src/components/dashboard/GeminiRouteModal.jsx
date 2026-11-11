@@ -37,6 +37,16 @@ import EpisodeTtsProgressCard from './route-runners/EpisodeTtsProgressCard';
 import EpisodeDemucsProgressCard from './route-runners/EpisodeDemucsProgressCard';
 import StudioConfirmDialog from '../common/StudioConfirmDialog';
 import { DubbingStepCardsBar, DubbingStepButton, useDubbingFeature } from '../../features/dubbing-runner';
+import {
+  selectSelectedTargetEpisodes,
+  selectCompletedAudioCount,
+  selectCompletedDemucsCount,
+  selectUnDemucsEpisodes,
+  selectUnAudioEpisodes,
+  selectOverallStagePercent,
+  selectTargetCounters,
+  selectIsBatchExecutionActive,
+} from '../../features/gemini-route/utils/geminiRouteSelectors';
 
 const EMPTY_EPISODES = [];
 
@@ -462,17 +472,16 @@ export default function GeminiRouteModal({
 
   // Unified batch execution active flag: locks episode selection & prevents race conditions
   const isBatchExecutionActive = Boolean(
-    isStartingBatch ||
-    hasActiveTranslateQueue ||
-    isGeneratingBatchTTS ||
-    isSeparatingBatchDemucs ||
-    isRepairingBroken ||
-    (runningPipelineEpIds && runningPipelineEpIds.size > 0) ||
-    (runnerStates?.translate?.status === 'running') ||
-    (runnerStates?.voice?.status === 'running') ||
-    (runnerStates?.clean_bgm?.status === 'running') ||
-    (runnerStates?.all3?.status === 'running') ||
-    (runnerActiveEpIds && runnerActiveEpIds.size > 0)
+    selectIsBatchExecutionActive({
+      isStartingBatch,
+      hasActiveTranslateQueue,
+      isGeneratingBatchTTS,
+      isSeparatingBatchDemucs,
+      isRepairingBroken,
+      runningPipelineEpIds,
+      runnerStates,
+      runnerActiveEpIds,
+    })
   );
 
   // Trigger series refresh automatically whenever a queued/running translate job finishes via SSE
@@ -746,7 +755,7 @@ export default function GeminiRouteModal({
   } = translateSummary;
 
   const selectedTargetEpisodes = useMemo(
-    () => episodes.filter((ep) => selectedEpIds.has(ep.id)),
+    () => selectSelectedTargetEpisodes(episodes, selectedEpIds),
     [episodes, selectedEpIds]
   );
   const {
@@ -776,7 +785,7 @@ export default function GeminiRouteModal({
 
   // Total completed audio across all episodes (uses segment-level broken scan)
   const completedAudioCount = useMemo(() => {
-    return episodes.filter((ep) => checkEpisodeHasAudioReady(ep, completedTtsEpIds, ttsLiveStats)).length;
+    return selectCompletedAudioCount(episodes, completedTtsEpIds, ttsLiveStats);
   }, [episodes, completedTtsEpIds, ttsLiveStats]);
 
   const unAudioCount = Math.max(0, episodes.length - completedAudioCount);
@@ -784,14 +793,16 @@ export default function GeminiRouteModal({
 
   // Total completed Demucs (Clean BGM) across all episodes
   const completedDemucsCount = useMemo(() => {
-    return episodes.filter((ep) => checkEpisodeHasDemucsReady(ep, completedDemucsEpIds, demucsLiveStats)).length;
+    return selectCompletedDemucsCount(episodes, completedDemucsEpIds, demucsLiveStats);
   }, [episodes, completedDemucsEpIds, demucsLiveStats]);
 
   const unDemucsCount = Math.max(0, episodes.length - completedDemucsCount);
   const demucsPercent = computeClampedStagePercent(completedDemucsCount, episodes.length);
-  const overallStagePercent = computeClampedStagePercent(
-    healthyScriptedCount + completedAudioCount + completedDemucsCount,
-    episodes.length * 3
+  const overallStagePercent = selectOverallStagePercent(
+    healthyScriptedCount,
+    completedAudioCount,
+    completedDemucsCount,
+    episodes.length
   );
 
   // Completion flags across the whole series (episode flags NEVER override segment-level broken counts)
@@ -805,10 +816,7 @@ export default function GeminiRouteModal({
 
   // Selected episodes that still need Demucs separation
   const unDemucsSelectedEpisodes = useMemo(() => {
-    return episodes.filter((ep) => {
-      const isDone = checkEpisodeHasDemucsReady(ep, completedDemucsEpIds, demucsLiveStats);
-      return selectedEpIds.has(ep.id) && !isDone;
-    });
+    return selectUnDemucsEpisodes(episodes, selectedEpIds, completedDemucsEpIds, demucsLiveStats);
   }, [episodes, selectedEpIds, completedDemucsEpIds, demucsLiveStats]);
 
   const allSelectedDemucsCompleted = useMemo(() => {
@@ -818,10 +826,7 @@ export default function GeminiRouteModal({
 
   // Selected episodes that still need audio generation (filter out already completed)
   const unAudioSelectedEpisodes = useMemo(() => {
-    return episodes.filter((ep) => {
-      const isDone = checkEpisodeHasAudioReady(ep, completedTtsEpIds, ttsLiveStats);
-      return selectedEpIds.has(ep.id) && !isDone;
-    });
+    return selectUnAudioEpisodes(episodes, selectedEpIds, completedTtsEpIds, ttsLiveStats);
   }, [episodes, selectedEpIds, completedTtsEpIds, ttsLiveStats]);
 
   const allSelectedAudioCompleted = useMemo(() => {
@@ -2922,11 +2927,25 @@ export default function GeminiRouteModal({
 
           {/* ── 5. SINGLE UNIFIED ACTIONS & CONTROLS TOOLBAR (Wrapping, Never Overflowing) ── */}
           {(() => {
-            const targetCount = selectedEpIds.size > 0 ? selectedEpIds.size : (incompleteEpisodes.length > 0 ? incompleteEpisodes.length : episodes.length);
-            const targetTranslateLeft = selectedEpIds.size > 0 ? unscriptedSelectedEpisodes.length : remainingCount;
-            const targetAudioLeft = selectedEpIds.size > 0 ? unAudioSelectedEpisodes.length : unAudioCount;
-            const targetDemucsLeft = selectedEpIds.size > 0 ? unDemucsSelectedEpisodes.length : unDemucsCount;
-            const repairBrokenCount = (selectedEpIds.size > 0 ? selectedBrokenSummary?.textBrokenCount : seriesBrokenSummary?.textBrokenCount) || 0;
+            const {
+              targetCount,
+              targetTranslateLeft,
+              targetAudioLeft,
+              targetDemucsLeft,
+              repairBrokenCount,
+            } = selectTargetCounters({
+              selectedCount: selectedEpIds.size,
+              unscriptedSelectedCount: unscriptedSelectedEpisodes.length,
+              remainingTranslateCount: remainingCount,
+              unAudioSelectedCount: unAudioSelectedEpisodes.length,
+              unAudioSeriesCount: unAudioCount,
+              unDemucsSelectedCount: unDemucsSelectedEpisodes.length,
+              unDemucsSeriesCount: unDemucsCount,
+              selectedTextBrokenCount: selectedBrokenSummary?.textBrokenCount,
+              seriesTextBrokenCount: seriesBrokenSummary?.textBrokenCount,
+              incompleteEpisodesCount: incompleteEpisodes.length,
+              totalEpisodesCount: episodes.length,
+            });
 
             const isRunAllRunning = isBatchExecutionActive;
 
