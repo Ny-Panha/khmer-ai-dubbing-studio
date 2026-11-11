@@ -1,6 +1,37 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
+- **Environment**: Antigravity IDE (/agents: Phase 1 API Service Modularization Complete)
+- **Timestamp**: 2026-11-11T22:55:00+07:00
+
+## Summary: Completed Phase 1 Frontend API Modularization (Zero Breaking Changes)
+1. **Reconciliation & Full Export Inventory (39/39 functions accounted for)**:
+   - Reconciled the discrepancy from the audit: The 3 functions omitted from the table subtotal were `client.js` connectivity/health exports (`notifyBackendOffline`, `notifyBackendOnline`, `checkBackendHealth`). Total = 3 + 4 + 14 + 2 + 9 + 7 = 39 functions.
+2. **Created Modular Domain Services (`frontend/src/services/api/`)**:
+   - `client.js`: Base network infrastructure (`parseResponseJson`, `checkBackendHealth`, offline/online handlers).
+   - `pipelineApi.js` (4 functions): `generateScriptApi`, `retranslateSegmentApi`, `fetchGeminiKeysStatusApi`, `updateGeminiQuotaSettingsApi`.
+   - `jobsApi.js` (14 functions): `startGenerationJob`, `getJobStatus`, `cancelJobApi`, `killTranslateJobApi`, `fetchJobsListApi`, `pauseJobApi`, `resumeJobApi`, `retryJobApi`, `startBatchRenderApi`, `fetchBatchRenderProgressApi`, `fetchLatestBatchRenderApi`, `killBatchRenderApi`, `startRepairBrokenJobApi`, `fetchJobStatusApi`.
+   - `subtitlesApi.js` (2 functions): `syncTimelineAudioApi`, `importSubtitlesApi`.
+   - `audioApi.js` (9 functions): `fetchTtsVoices`, `previewVoiceApi`, `generateAudioApi`, `generateSingleSegmentAudio`, `killTtsApi`, `separateAudioApi`, `getSeparationProgressApi`, `getSeparationStatusApi`, `killSeparationApi`.
+   - `mediaApi.js` (7 functions): `fetchVideoMetadata`, `fetchVideoThumbnails`, `uploadVideoFile`, `renderVideoApi`, `splitVideoEpisodesApi`, `syncSeriesApi`, `deleteEpisodeApi`.
+   - `index.js`: Clean barrel export for all domains.
+3. **Backward Compatibility Facade (`frontend/src/services/api.js`)**:
+   - Retained as a thin re-export facade with zero breaking changes for all 22 consuming files.
+   - Preserves static assertion and regex compatibility for backend test suites (`replaceEpisodes`, `alreadyCompleted`, and Demucs endpoints).
+4. **Verification & Quality Gates**:
+   - `npm --prefix frontend run lint` (`oxlint`): **PASS (0 errors, 425 warnings)**
+   - `npm --prefix frontend run build` (`vite build`): **PASS (654ms, 0 errors, 2026 modules transformed)**
+   - Test suites: **PASS (31/31 PASS across batch studio & upgrade suites)**
+   - Code freeze strictly observed: `GeminiRouteModal.jsx`, backend, and dubbing-runner untouched.
+
+## Active Environment
+- **Backend API**: `http://localhost:5000`
+- **Frontend App**: `http://localhost:5173`
+- **Next Steps**: Await Nha's instruction to proceed to Phase 2 (Extract Custom Hooks from GeminiRouteModal.jsx).
+
+---
+
+## Previous Session
 - **Environment**: Antigravity IDE (/agents: Frontend Architecture Audit & Git Push Sync)
 - **Timestamp**: 2026-11-11T22:48:00+07:00
 
