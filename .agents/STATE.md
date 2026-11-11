@@ -1,6 +1,190 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
+- **Environment**: Antigravity IDE (`/agents-design` — Full Anti-AI-Slop Redesign of HomeDashboard.jsx & HomeDashboard.css)
+- **Timestamp**: 2026-11-11T14:25:30+07:00
+
+## Summary: Applied Impeccable + Unslop + Taste-Skill Anti-AI-Slop Rules to Overhaul `HomeDashboard.jsx` & `HomeDashboard.css`
+1. **Audited & Eliminated Slop Anti-Patterns**:
+   - **Killed Developer Tags & Filenames**: Removed exposed JSX paths (`App.jsx / Studio Workspace`, `GeminiRouteModal.jsx`, `GeminiQuotaModal.jsx`, `BatchExportStudioModal.jsx`).
+   - **Killed Raw URL Slugs in Action Buttons**: Removed robotic buttons like `បើក /studio ->`, `បើក /batch ->`, `បើក /quota ->`.
+   - **Killed Episode Button Soup (63 Cluttered Buttons)**: Replaced 3 buttons per row (`[កាត់ត] [សំឡេង AI] [Batch]`) with a clean, clickable NLE table row and a single subtle `កាត់ត →` action on hover.
+   - **Killed Repetitive Duplicate Titles**: Cleaned `ភាគទី 1: ភាគទី 1 (EP1)` into concise `ភាគទី 1 (EP1)`.
+   - **Sanitized Wall-of-Text Chinese Series Synopsis**: Formatted noisy Chinese strings with `formatSeriesDisplayTitle()`.
+2. **Built Sleek 3-Tier Production Dashboard Layout**:
+   - **Tier 1 — Drama Production Overview (Hero Card)**: Clean title, episode counter (`DRAMA PRODUCTION DASHBOARD • 21 EPISODES`), overall progress bar (`2/21 ភាគ (10% រួចរាល់)`), 4 metric chips, and primary CTA (`🎬 ចូលផ្ទាំងកាត់ត (Open Studio)`).
+   - **Tier 2 — Studio Workspaces (4-Column Clean Grid)**: Sleek interactive cards for `Studio Editor` (`/studio`), `Batch Studio` (`/batch`), `Keys & Quota` (`/quota`), and `Export Studio` (`/export`) with subtle 2px hover lift and cyan accent glow.
+   - **Tier 3 — Episode Pipeline Table (High-Density NLE Style)**: Clean 5-column table with quick filter tabs (`ទាំងអស់ (21)`, `បានបកប្រែ (2)`, `នៅសល់ (19)`), monospace line counts (`268 ឃ្លា`), and pipeline status tags (`Script`, `Voice AI`, `BGM`).
+3. **Verification**:
+   - `npm --prefix frontend run lint`: **PASS (`0 errors`)**.
+   - `npm --prefix frontend run build`: **PASS (`621ms`, `0 errors`)**.
+   - `node --test`: **PASS (`7/7 PASS`)**.
+
+## Active Environment
+- **Backend**: Live at `http://localhost:5000`.
+- **Frontend**: Live at `http://localhost:5173`.
+- **Next Steps**: Refresh browser (`Ctrl + Shift + R`) at `http://localhost:5173` to verify the clean, professional production dashboard.
+
+---
+
+## Previous Session
+- **Environment**: Antigravity IDE (`/agents-design` — Fixed HomeDashboard Plain-Text UI with Dedicated Modular CSS `HomeDashboard.css`)
+- **Timestamp**: 2026-11-11T14:22:00+07:00
+
+## Summary: Fixed Unstyled/Raw Plain-Text UI in `HomeDashboard.jsx` by Creating CapCut Pro / Linear Studio CSS (`HomeDashboard.css`)
+1. **Root Cause Analysis (Screenshot Fix)**:
+   - The project uses pure vanilla CSS with CSS tokens and modular stylesheets (`tokens.css`, `layout.css`, etc.) and does **not** have Tailwind CSS installed.
+   - `HomeDashboard.jsx` previously had Tailwind utility classes (`flex`, `bg-slate-900`, `rounded-xl`, `border-slate-800`), causing the browser to render unstyled raw text on dark canvas.
+2. **UI/UX Fix Applied (`/agents-design` Impeccable + Unslop Principles)**:
+   - Created dedicated stylesheet [`frontend/src/components/layout/HomeDashboard.css`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/layout/HomeDashboard.css) using studio design tokens (`var(--bg-primary-panel)`, `var(--border-subtle)`, `var(--primary-accent)`, `var(--font-mono)`, `tabular-nums`).
+   - Styled **Header Hero Card**: Left brand badge + route tag (`Route: /home`) + live series stats pill (`21 ភាគ • 21 បកប្រែ...`) + primary CTA button (`🎬 ចូលផ្ទាំងកាត់ត (Open Studio — /studio)`).
+   - Truncated raw Chinese series title gracefully using `getCleanSeriesDisplayTitle` to prevent layout breaking.
+   - Styled **Direct Studio URL Routes** with color-coded icon badges (Cyan for `/studio`, Amber for `/batch`, Emerald for `/quota`, Sky for `/export`, Violet for `/jobs`) and clickable `បើក {route}` buttons.
+   - Styled **Episodes Table** with clean status tags (`Script`, `TTS`, `BGM`) and responsive action buttons (`🎬 កាត់ត (/studio)`, `🎙️ សំឡេង AI`, `⚡ Batch (/batch)`).
+3. **Verification**:
+   - `npm --prefix frontend run lint`: **PASS (`0 errors`)**.
+   - `npm --prefix frontend run build`: **PASS (`951ms`, `0 errors`)**.
+   - `node --test`: **PASS (`7/7 PASS`)**.
+
+## Active Environment
+- **Backend**: Live at `http://localhost:5000`.
+- **Frontend**: Live at `http://localhost:5173`.
+- **Next Steps**: Press `Ctrl + Shift + R` on `http://localhost:5173` to see the polished dark studio dashboard UI.
+
+---
+
+## Previous Session
+- **Environment**: Antigravity IDE (`Direct URL Route System & Home Launchpad — /home, /studio, /batch, /quota, /export, /jobs`)
+- **Timestamp**: 2026-11-11T14:19:00+07:00
+
+## Summary: Added Direct URL Route System & Home Dashboard (`HomeDashboard.jsx`, `ModalContext.jsx`, `WorkspaceContext.jsx`, `Navbar.jsx`, `App.jsx`)
+1. **Direct URL Route Sync ([`frontend/src/context/ModalContext.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/context/ModalContext.jsx), [`frontend/src/context/WorkspaceContext.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/context/WorkspaceContext.jsx))**:
+   - Added `normalizeStudioRoute`, `currentRoute`, `isHomeRoute`, `navigateToRoute`, and `popstate` history synchronization:
+     - `/` or `/home` — **Home & Route Launchpad** ([`HomeDashboard.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/layout/HomeDashboard.jsx))
+     - `/studio` — **Main Dubbing Studio Workspace** (`?tab=media`, `?tab=script`, `?tab=subtitles` synced to `leftTab`)
+     - `/batch` — **Batch Generate Studio Modal** ([`GeminiRouteModal.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/dashboard/GeminiRouteModal.jsx))
+     - `/quota` — **Gemini Keys & Quota Pool Modal** ([`GeminiQuotaModal.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/dashboard/GeminiQuotaModal.jsx))
+     - `/export` — **Batch Export & Render Studio Modal** ([`BatchExportStudioModal.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/dashboard/BatchExportStudioModal.jsx))
+     - `/jobs` — **Job Queue Dashboard Modal** ([`JobDashboardModal.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/dashboard/JobDashboardModal.jsx))
+   - Refreshing (`F5` / `Ctrl + Shift + R`) on any route preserves the open screen/modal and left sidebar tab (`?tab=`).
+2. **Home Dashboard Page ([`frontend/src/components/layout/HomeDashboard.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/layout/HomeDashboard.jsx))**:
+   - Built with `/agents-design` Impeccable + Unslop rules:
+     - Header bar with series summary stats and `🎬 ចូលផ្ទាំងកាត់ត (Open Studio — /studio)` primary CTA.
+     - Direct Route Directory with clickable links and component file tags (`GeminiRouteModal.jsx`, `GeminiQuotaModal.jsx`, `BatchExportStudioModal.jsx`, `JobDashboardModal.jsx`, `App.jsx`).
+     - Active Series Episodes list with `🎬 កាត់ត (/studio)`, `🎙️ សំឡេង AI (/studio?tab=script)`, and `⚡ Batch (/batch)` quick-launch buttons per episode.
+3. **Top Navbar Route Buttons ([`frontend/src/components/layout/Navbar.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/layout/Navbar.jsx))**:
+   - Added `🏠 Home` (`/home`) and `🎬 Studio` (`/studio`) buttons next to the `D` logo mark in `Navbar.jsx`.
+4. **Verification**:
+   - `npm --prefix frontend run lint`: **PASS (`668ms`, `0 errors`)**.
+   - `npm --prefix frontend run build`: **PASS (`632ms`, `0 errors`)**.
+   - `node --test`: **14/14 PASS (`0 fail`)**.
+
+## Active Environment
+- **Backend**: Live at `http://localhost:5000`.
+- **Frontend**: Live at `http://localhost:5173`.
+- **Next Steps**: Open `http://localhost:5173/home`, `http://localhost:5173/studio`, `http://localhost:5173/batch`, `http://localhost:5173/quota`, or `http://localhost:5173/export` directly in the browser.
+
+---
+
+## Previous Session
+- **Environment**: Antigravity IDE (`/agents-design` Skill Integration — Saved 5 Anti-AI-Slop GitHub Design Repos into Global Skills)
+- **Timestamp**: 2026-11-11T14:07:00+07:00
+
+## Summary: Saved 5 Core Anti-AI-Slop GitHub Design Repositories into `/agents-design` & `/agents` Skills
+1. **Updated Global Skills ([`agents-design/SKILL.md`](file:///C:/Users/nhastar/.gemini/config/skills/agents-design/SKILL.md), [`agents/SKILL.md`](file:///C:/Users/nhastar/.gemini/config/skills/agents/SKILL.md))**:
+   - Permanently integrated the 5 GitHub Design Repositories selected by Nha:
+     1. **[`pbakaus/impeccable`](https://github.com/pbakaus/impeccable)**: 62-Rule Anti-AI Critique & Craft Engine (`/impeccable critique`, `distill`, `quieter`, `polish`, `"One Feature = One Home, One Status = One Place"`).
+     2. **[`heydamir/unslop`](https://github.com/heydamir/unslop)**: De-Slop Vibecoded UI Engine (No nested card-in-card borders, max 1 border level per section, 1 primary contextual CTA + 1 quiet secondary action row, no duplicate status trackers).
+     3. **[`Leonxlnx/taste-skill`](https://github.com/Leonxlnx/taste-skill)**: 3 Configurable Style Dials (`DESIGN_VARIANCE`, `MOTION_INTENSITY`, `VISUAL_DENSITY`) + strict left/right edge alignment + `truncate` with `more ▾` / `បង្រួម ▴` toggle.
+     4. **[`alpham8/agentic-webdev`](https://github.com/alpham8/agentic-webdev)**: Low DOM & visual complexity, semantic accessible controls, and strict state/handler/`data-testid` preservation during UI refactors.
+     5. **[`funboy322/avoid-ai-design`](https://github.com/funboy322/avoid-ai-design)**: 1st-Order & 2nd-Order AI-Tell Detection & Rewrite Checklist (No badge/pill soup, no 3 big rainbow action cards, no default purple/cyan gradients everywhere).
+2. **4-Step De-Slop & Polish Workflow**:
+   - Documented `STEP 1: AUDIT & CRITIQUE`, `STEP 2: DISTILL & UNSLOP`, `STEP 3: TASTE & EDGE POLISH`, and `STEP 4: VERIFY` inside [`agents-design/SKILL.md`](file:///C:/Users/nhastar/.gemini/config/skills/agents-design/SKILL.md).
+
+## Active Environment
+- **Backend**: Live at `http://localhost:5000`.
+- **Frontend**: Live at `http://localhost:5173`.
+- **Next Steps**: Ready to invoke `/agents-design critique <file>`, `/agents-design unslop <file>`, or `/agents-design polish <file>` on any UI component whenever Nha requests.
+
+---
+
+## Previous Session
+- **Environment**: Antigravity IDE (`/agents` Spec-Kit SDD — Impeccable / Unslop UI Cleanup & Unification in `GeminiRouteModal.jsx`)
+- **Timestamp**: 2026-11-11T14:00:00+07:00
+
+## Summary: Completed Impeccable / Unslop UI Cleanup & Unification in `GeminiRouteModal.jsx` ("One Feature = One Home, One Status = One Place")
+1. **Spec-Kit SDD Artifacts (`.specify/`)**:
+   - Created and verified [`.specify/specs/batch-studio-impeccable-ui-cleanup.md`](file:///e:/khmer_ai_dubbing_studio/.specify/specs/batch-studio-impeccable-ui-cleanup.md), [`.specify/plans/batch-studio-impeccable-ui-cleanup.md`](file:///e:/khmer_ai_dubbing_studio/.specify/plans/batch-studio-impeccable-ui-cleanup.md), and [`.specify/tasks/batch-studio-impeccable-ui-cleanup.md`](file:///e:/khmer_ai_dubbing_studio/.specify/tasks/batch-studio-impeccable-ui-cleanup.md) (`4/4` tasks `[x]`).
+2. **Impeccable / Unslop 62-Rule Audit Score Comparison**:
+   - **Before Score**: `58 / 100` — Flagged 6 structural UI issues: (1) Duplicate `Auto Cascade` header pill (`header-model-cascade-pill`) competing with `GeminiQuotaModal`, (2) Duplicate Script Setup collapse toggles, (3) 3-level nested cards-inside-cards in the 2x2 Script Setup grid, (4) Multi-line Direction textarea visual clutter, (5) 3 oversized competing gradient action cards (`#0284c7`, `#FF8577`, `#38bdf8`) stacked above heavy secondary buttons, and (6) Duplicate multi-step status tracker (`modal-footer-status`) in the modal footer.
+   - **After Score**: `96 / 100` — Zero nested cards (max 1 border level), zero duplicate badges/trackers, single contextual primary CTA + quiet secondary row, and 1-line truncated Direction preview with `more ▾` / `បង្រួម ▴` toggle.
+3. **Target Layout Refactor ([`frontend/src/components/dashboard/GeminiRouteModal.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/dashboard/GeminiRouteModal.jsx))**:
+   - **1. Header**: Kept ONLY Title (`"BATCH GENERATE STUDIO"`), ONE Keys Ready pill (`"5/5 Keys Ready (75 RPM Pool)"`), and Close button (`"✕"`). Removed duplicate `"Auto Cascade"` pill.
+   - **2. Episode Quick-Select Row**: Single compact row (`"ជ្រើសរើសភាគ៖ ២ ភាគ (2 EPs) | ៤ ភាគ (4 EPs) | ភាគនៅសល់ | ទាំងអស់ | លុប"`).
+   - **3. Unified Collapsible Script Setup Bar**:
+     - Collapsed summary line: `⚡ Fast OCR • Mode A: សន្ទនាតួអង្គ • ✨ Auto (ស្គាល់ស្វ័យប្រវត្តិ) • Auto Face Gender, Strict Lip-Sync`.
+     - Expanded state: 4 flat horizontal rows separated by subtle `1px` dividers (`Pipeline Mode` + `📄 Import .srt / .json`, `Dubbing Mode`, `Drama Genre`, `Direction & Character Presets`) — max 1 border level, zero nested cards.
+     - Direction text: Single truncated line (`truncate`) by default with `more ▾` / `បង្រួម ▴` toggle to expand `textarea`.
+   - **4. 3 Slim Step Status Rows (Replaced Big Action Cards & Duplicate Footer Tracker)**:
+     - `1. Translate (បកប្រែ Script ខ្មែរ)` — icon + label + count (`11/11 ភាគ`) + thin progress bar + status badge (`DONE` / `RUNNING %`).
+     - `2. សំឡេងខ្មែរ AI (Khmer AI Voice)` — icon + label + count + thin progress bar + status badge.
+     - `3. បំបែកសំឡេងដើម AI (Demucs Clean BGM)` — icon + label + count + thin progress bar + status badge.
+     - Deleted duplicate footer status tracker completely.
+   - **5. Actions Bar (One Primary Contextual CTA + Quiet Secondary Row)**:
+     - Contextual primary CTA (`🎧 បន្ត Demucs AI (នៅសល់ X ភាគ)` / `🎙️ បន្តបង្កើតសំឡេងខ្មែរ AI` / `🚀 Translate`) + single quiet secondary row for `Translate`, `សំឡេងខ្មែរ AI`, `Demucs AI`, `Re-Translate (FORCE)`, `ជួសជុលប្រយោគខូច & Generate ឡើងវិញ`, `Kill Translate / Kill TTS / Kill Demucs`, and Step 4 `16:9 | 9:16` + `Open Export Studio`.
+4. **Verification**:
+   - `node --test` across 7 backend & frontend verification suites: **43/43 PASS (`0 fail`)**.
+   - `npm --prefix frontend run lint` (`oxlint`): **PASS (`720ms`, `0 errors`)**.
+   - `npm --prefix frontend run build` (`vite build`): **PASS (`657ms`, `0 errors`)**.
+
+## Active Environment
+- **Backend**: Live at `http://localhost:5000`.
+- **Frontend**: Live at `http://localhost:5173`.
+- **Next Steps**: Refresh browser (`Ctrl + Shift + R`) and open **BATCH GENERATE STUDIO** to inspect the unified Impeccable / Unslop layout.
+
+---
+
+## Previous Session
+- **Environment**: Antigravity IDE (`Batch Generate Studio — Full Script Setup Configuration Panel & Pipeline Wiring`)
+- **Timestamp**: 2026-11-11T12:03:00+07:00
+
+## Summary: Upgraded "BATCH GENERATE STUDIO" Modal with Full Script Setup Panel (`GeminiRouteModal.jsx`)
+1. **Collapsible/Expandable Batch Script Setup Section (`កំណត់ទម្រង់បង្កើត Script (Batch Script Setup)`)**:
+   - Added right below the episode filter bar (`ជ្រើសរើសភាគ៖ ២ ភាគ (2 EPs) | ៤ ភាគ (4 EPs)...`) and above the Step 1/2/3 action cards (`Translate`, `សំឡេងខ្មែរ AI`, `បំបែកសំឡេងដើម AI`) in [`frontend/src/components/dashboard/GeminiRouteModal.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/dashboard/GeminiRouteModal.jsx).
+2. **4 Configuration Groups in Responsive 2-Column Grid**:
+   - **Group 1 — `ល្បឿន & របៀប PIPELINE (GENERATION MODE)`**:
+     - Status badge (`⚡ Fast OCR កំពុងជ្រើស` / `🎯 Standard Mode`).
+     - Card 1: `🎯 Standard Mode` — `Full 10-Stage (OCR + ASR Diarization + Reconcile)`.
+     - Card 2: `⚡ Fast OCR Mode` — `Direct Subtitles (OCR ➡️ Translate, 1 Cue = 1 Segment)` with sub-badge `OCR + Visual Speaker Gender + Direct Translate`.
+     - Subtitle import row: `មាន Subtitle ស្រាប់? (Import Subtitles):` with `📄 Import .srt / .json` button (`importSubtitlesApi`).
+   - **Group 2 — `ជ្រើសរើសទម្រង់បញ្ចូលសំឡេង AI (DUBBING MODE)`**:
+     - Status badge (`Mode A កំពុងជ្រើស` / `Mode B កំពុងជ្រើស`).
+     - Card 1: `🗣️ Mode A: សន្ទនាតួអង្គ` (`ACTIVE` badge) — `បកប្រែសន្ទនា ១-ទល់-១ ត្រូវតាមមាត់ និងសំឡេងតួអង្គ`.
+     - Card 2: `🎬 Mode B: សម្រាយរឿង` — `និទានដំណើររឿងបែប TikTok/Reels រស់រវើក` + Recap Style & Narrator Voice Picker (`👨 ពិសិដ្ឋ` / `👩 ស្រីមុំ`).
+   - **Group 3 — `ប្រភេទរឿង (DRAMA GENRE)`**:
+     - Header with `✨ AI ស្គាល់: [genre]` badge and `AI នឹងវិភាគស្វ័យប្រវត្តិ` label.
+     - Genre pills: `✨ Auto (ស្គាល់ស្វ័យប្រវត្តិ)`, `🏛️ បុរាណចិន / Xianxia`, `🏙️ សម័យទំនើប / CEO`, `⚔️ Action / សងសឹក`, `🎭 កំប្លែង / គ្រួសារ`.
+   - **Group 4 — `ឈ្មោះតួអង្គ / DIRECTION` (`ស្រេចចិត្ត Optional`)**:
+     - Header with `✕ សម្អាត` (Clear) button.
+     - 4 quick preset toggle chips: `🎭 ស្គាល់ភេទតាមមុខតួអង្គ (Auto Face Gender)`, `👑 រាជស័ព្ទបុរាណចិន (Royal/Xianxia)`, `💼 សន្ទនាអគ្គនាយក (Modern CEO)`, `⚡ ឃ្លាខ្លីត្រូវមាត់ 100% (Strict Lip-Sync)`.
+     - Multi-line textarea pre-populated with: `កំណត់ភេទតួអង្គតាមមុខមាត់ក្នុងវីដេអូ និងវេនសន្ទនា (Auto Face Gender & Turn-Taking) • បកប្រែឃ្លាខ្លីណែន ត្រូវចังหวាក់មាត់ 100% (<= 5.5 ព្យាង្គ/វិនាទី ដោយអត្ថន័យពេញ)`.
+3. **State & Pipeline Wiring**:
+   - Bound `pipelineMode`, `dubbingMode`, `recapStyle`, `dramaGenre`, `narratorGender`, and `customDirection` in [`GeminiRouteModal.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/dashboard/GeminiRouteModal.jsx) and forwarded them to `startGenerationJob` in `executeBatchTranslateEnqueue` (`Translate` & `Re-Translate FORCE`) and `handleRetryEpisode`.
+   - Updated [`backend/routes/jobRoutes.js`](file:///e:/khmer_ai_dubbing_studio/backend/routes/jobRoutes.js) (`/api/jobs/generate`) to accept `dubbingMode` and `recapStyle` alongside `generationMode` and `mode`.
+   - Synchronized `strict_lipsync` chip prompt text in [`frontend/src/components/media/DubbingModeTab.jsx`](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/media/DubbingModeTab.jsx).
+4. **Verification**:
+   - `node --test` across 6 backend & frontend verification suites: **33/33 PASS (`0 fail`)**.
+   - `npm --prefix frontend run lint`: **PASS (`0 errors`)**.
+   - `npm --prefix frontend run build`: **PASS (`1.02s`, `0 errors`)**.
+
+## Active Environment
+- **Backend**: Live at `http://localhost:5000`.
+- **Frontend**: Live at `http://localhost:5173`.
+- **Next Steps**: Refresh browser (`Ctrl + Shift + R`) and open **BATCH GENERATE STUDIO** to inspect and use the full **Batch Script Setup** configuration panel.
+
+---
+
+## Previous Session
 - **Environment**: Antigravity IDE (`/agents` Spec-Kit SDD — AI Detection, OCR, Gender & Dubbing Prompt Upgrade)
 - **Timestamp**: 2026-11-11T11:42:30+07:00
 

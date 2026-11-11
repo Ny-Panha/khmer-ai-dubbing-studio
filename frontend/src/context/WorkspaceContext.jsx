@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useMemo } from 'react';
+import React, { createContext, useContext, useState, useCallback, useMemo } from 'react';
 import {
   loadSavedVoiceSettings,
   saveVoiceSettings,
@@ -42,8 +42,37 @@ export const WorkspaceContext = createContext(DEFAULT_WORKSPACE_CONTEXT);
 /**
  * Custom hook to manage core project/episode workspace state & projectStorage persistence
  */
+function getInitialLeftTab() {
+  if (typeof window === 'undefined' || !window.location) return 'media';
+  try {
+    const params = new URLSearchParams(window.location.search || '');
+    const rawTab = (params.get('tab') || '').trim().toLowerCase();
+    if (rawTab === 'script' || rawTab === 'voice' || rawTab === 'ai') return 'script';
+    if (rawTab === 'subtitles' || rawTab === 'subs' || rawTab === 'text') return 'subtitles';
+    if (rawTab === 'media' || rawTab === 'video') return 'media';
+  } catch {
+    // ignore URLSearchParams errors
+  }
+  return 'media';
+}
+
 export function useStudioWorkspaceState() {
-  const [leftTab, setLeftTab] = useState('media');
+  const [leftTab, setLeftTabState] = useState(getInitialLeftTab);
+  const setLeftTab = useCallback((nextTab) => {
+    setLeftTabState((prev) => {
+      const resolved = typeof nextTab === 'function' ? nextTab(prev) : nextTab;
+      if (typeof window !== 'undefined' && window.history && window.location) {
+        const path = window.location.pathname || '';
+        if (path === '/studio' && (resolved === 'media' || resolved === 'script' || resolved === 'subtitles')) {
+          const nextSearch = `?tab=${resolved}`;
+          if (window.location.search !== nextSearch) {
+            window.history.replaceState({ route: '/studio', tab: resolved }, '', `/studio${nextSearch}`);
+          }
+        }
+      }
+      return resolved;
+    });
+  }, []);
   const [scriptData, setScriptData] = useState(null);
   const [speakerRegistry, setSpeakerRegistry] = useState({});
   const [voiceSettings, setVoiceSettings] = useState(loadSavedVoiceSettings);

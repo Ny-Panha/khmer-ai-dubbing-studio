@@ -1,7 +1,7 @@
 import React, { useState, useContext, useEffect } from 'react';
 import { 
   Key, HelpCircle, Download, Loader2, RotateCcw, X, Trash2, Film, Plus, Cpu, Layers, Activity,
-  PanelLeft, PanelRight, PanelBottom
+  PanelLeft, PanelRight, PanelBottom, Home
 } from 'lucide-react';
 import { isCorruptedOrMojibakeTitle } from '../../utils/projectStorage';
 import { useGeminiQuotaMonitor, runQuotaCheck } from '../../hooks/useGeminiQuotaMonitor';
@@ -48,6 +48,8 @@ export default function Navbar({
   onToggleLeftPanel = null,
   onToggleRightPanel = null,
   onToggleTimelinePanel = null,
+  currentRoute = '/studio',
+  onNavigateRoute = null,
 }) {
   const [showKeyModal, setShowKeyModal] = useState(false);
   const [showShortcutsModal, setShowShortcutsModal] = useState(false);
@@ -79,11 +81,51 @@ export default function Navbar({
   return (
     <>
       <header className="capcut-navbar">
-        {/* Left: Brand Mark, Batch Generate, Keys & Quota, and Jobs */}
+        {/* Left: Brand Mark, Home, Studio, Batch Generate, Keys & Quota, and Jobs */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-          <div className="concat-app-mark" title="DragonDub AI Studio">
+          <button
+            type="button"
+            onClick={() => onNavigateRoute && onNavigateRoute('/home')}
+            className="concat-app-mark"
+            style={{ cursor: 'pointer', border: 'none' }}
+            title="DragonDub AI Studio — Go to Home (/home)"
+          >
             <span>D</span>
-          </div>
+          </button>
+
+          {onNavigateRoute && (
+            <>
+              <button
+                type="button"
+                data-testid="navbar-home-route-btn"
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onNavigateRoute('/home');
+                }}
+                className={`navbar-gemini-route-btn ${currentRoute === '/home' ? 'active' : ''}`}
+                title="Home & Route Launchpad (/home)"
+              >
+                <Home size={14} />
+                <span>Home</span>
+              </button>
+
+              <button
+                type="button"
+                data-testid="navbar-studio-route-btn"
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onNavigateRoute('/studio');
+                }}
+                className={`navbar-gemini-route-btn ${currentRoute === '/studio' ? 'active' : ''}`}
+                title="Main Dubbing Studio Workspace (/studio)"
+              >
+                <Film size={14} />
+                <span>Studio</span>
+              </button>
+            </>
+          )}
 
           <button
             type="button"

@@ -217,3 +217,74 @@ test('Step 4: MediaLibrary top tabs prevent truncation and DubbingModeTab render
   assert.match(dubbingModeTabJsx, /💼 សន្ទនាអគ្គនាយក \(Modern CEO\)/);
   assert.match(dubbingModeTabJsx, /⚡ ឃ្លាខ្លីត្រូវមាត់ 100% \(Strict Lip-Sync\)/);
 });
+
+test('Step 5: Batch Generate Studio (GeminiRouteModal) renders full 4-group Batch Script Setup panel and wires parameters into startGenerationJob', () => {
+  const geminiModalJsx = fs.readFileSync(
+    path.join(__dirname, '..', '..', 'frontend', 'src', 'components', 'dashboard', 'GeminiRouteModal.jsx'),
+    'utf8'
+  );
+
+  // 1. Collapsible Batch Script Setup section & 4 configuration groups
+  assert.match(geminiModalJsx, /កំណត់ទម្រង់បង្កើត Script \(Batch Script Setup\)/);
+  assert.match(geminiModalJsx, /data-testid="batch-setup-group-pipeline"/);
+  assert.match(geminiModalJsx, /data-testid="batch-setup-group-dubbing-mode"/);
+  assert.match(geminiModalJsx, /data-testid="batch-setup-group-genre"/);
+  assert.match(geminiModalJsx, /data-testid="batch-setup-group-direction"/);
+
+  // 2. Group 1, 2, 3, 4 content & badges
+  assert.match(geminiModalJsx, /OCR \+ Visual Speaker Gender \+ Direct Translate/);
+  assert.match(geminiModalJsx, /📄 Import \.srt \/ \.json/);
+  assert.match(geminiModalJsx, /Mode A: សន្ទនាតួអង្គ/);
+  assert.match(geminiModalJsx, /Mode B: សម្រាយរឿង/);
+  assert.match(geminiModalJsx, /🎭 កំប្លែង \/ គ្រួសារ/);
+  assert.match(geminiModalJsx, /បកប្រែឃ្លាខ្លីណែន ត្រូវចังหวាក់មាត់ 100% \(<= 5\.5 ព្យាង្គ\/វិនាទី ដោយអត្ថន័យពេញ\)/);
+
+  // 3. State & Pipeline Wiring to startGenerationJob
+  assert.match(geminiModalJsx, /generationMode:\s*pipelineMode/);
+  assert.match(geminiModalJsx, /customPrompt:\s*customDirection/);
+  assert.match(geminiModalJsx, /genre:\s*dramaGenre/);
+});
+
+test('Step 6: Impeccable / Unslop UI cleanup in GeminiRouteModal removes duplicate cascade/footer trackers and renders 3 slim step rows + 1 primary CTA + quiet secondary row', () => {
+  const geminiModalJsx = fs.readFileSync(
+    path.join(__dirname, '..', '..', 'frontend', 'src', 'components', 'dashboard', 'GeminiRouteModal.jsx'),
+    'utf8'
+  );
+
+  // 1. Header has no duplicate Auto Cascade pill
+  assert.equal(geminiModalJsx.includes('data-testid="header-model-cascade-pill"'), false);
+
+  // 2. Truncated 1-line Direction preview with more / បង្រួម toggle
+  assert.match(geminiModalJsx, /data-testid="batch-direction-more-toggle"/);
+  assert.match(geminiModalJsx, /isDirectionExpanded\s*\?\s*'បង្រួម ▴'\s*:\s*'more ▾'/);
+
+  // 3. 3 Slim Step Status Rows & duplicate footer tracker removed
+  assert.match(geminiModalJsx, /data-testid="batch-step-status-rows"/);
+  assert.match(geminiModalJsx, /1\. Translate \(បកប្រែ Script ខ្មែរ\)/);
+  assert.match(geminiModalJsx, /2\. សំឡេងខ្មែរ AI \(Khmer AI Voice\)/);
+  assert.match(geminiModalJsx, /3\. បំបែកសំឡេងដើម AI \(Demucs Clean BGM\)/);
+  assert.equal(geminiModalJsx.includes('data-testid="modal-footer-status"'), false);
+
+  // 4. 1 Primary Contextual CTA + Quiet Secondary Row
+  assert.match(geminiModalJsx, /data-testid="btn-batch-primary-cta"/);
+  assert.match(geminiModalJsx, /data-testid="batch-quiet-secondary-actions"/);
+  assert.match(geminiModalJsx, /🎧 បន្ត Demucs AI \(នៅសល់ \$\{targetDemucsLeft\} ភាគ\)/);
+});
+
+test('Step 7: Direct URL Route System (/home, /studio, /batch, /quota, /export, /jobs) and HomeDashboard.jsx are wired and persistent across refresh', () => {
+  const rootDir = path.join(__dirname, '..', '..', 'frontend', 'src');
+  const modalContextJsx = fs.readFileSync(path.join(rootDir, 'context', 'ModalContext.jsx'), 'utf8');
+  const homeDashboardJsx = fs.readFileSync(path.join(rootDir, 'components', 'layout', 'HomeDashboard.jsx'), 'utf8');
+  const navbarJsx = fs.readFileSync(path.join(rootDir, 'components', 'layout', 'Navbar.jsx'), 'utf8');
+  const appJsx = fs.readFileSync(path.join(rootDir, 'App.jsx'), 'utf8');
+
+  assert.match(modalContextJsx, /export function normalizeStudioRoute/);
+  assert.match(modalContextJsx, /window\.history\.pushState/);
+  assert.match(modalContextJsx, /window\.addEventListener\('popstate'/);
+  assert.match(homeDashboardJsx, /data-testid="home-dashboard-view"/);
+  assert.match(homeDashboardJsx, /data-testid="home-route-directory"/);
+  assert.match(homeDashboardJsx, /data-testid="btn-home-open-studio"/);
+  assert.match(navbarJsx, /data-testid="navbar-home-route-btn"/);
+  assert.match(navbarJsx, /data-testid="navbar-studio-route-btn"/);
+  assert.match(appJsx, /<HomeDashboard/);
+});

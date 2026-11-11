@@ -1,8 +1,42 @@
-import React, { createContext, useContext, useState, useCallback, useMemo } from 'react';
+import React, { createContext, useContext, useState, useCallback, useEffect, useMemo } from 'react';
 
 const NOOP = () => {};
 
+/**
+ * Normalize browser pathname into canonical DragonDub Studio routes:
+ * - '/' or '/home' -> '/home' (Home & Route Launchpad)
+ * - '/studio'      -> '/studio' (Main 3-Column Dubbing Studio + Timeline)
+ * - '/batch'       -> '/batch' (Batch Generate Studio Modal)
+ * - '/quota'       -> '/quota' (Gemini Keys & Quota Pool Modal)
+ * - '/export'      -> '/export' (Batch Export & Render Studio Modal)
+ * - '/jobs'        -> '/jobs' (Production Job Queue Dashboard Modal)
+ */
+export function normalizeStudioRoute(rawPath) {
+  const cleaned = String(rawPath || '/')
+    .split('?')[0]
+    .split('#')[0]
+    .trim()
+    .toLowerCase()
+    .replace(/\/+$/, '') || '/';
+
+  if (cleaned === '/' || cleaned === '/home') return '/home';
+  if (cleaned === '/studio') return '/studio';
+  if (cleaned === '/batch' || cleaned === '/studio/batch') return '/batch';
+  if (cleaned === '/quota' || cleaned === '/keys' || cleaned === '/studio/quota') return '/quota';
+  if (cleaned === '/export' || cleaned === '/studio/export') return '/export';
+  if (cleaned === '/jobs' || cleaned === '/studio/jobs') return '/jobs';
+  return '/home';
+}
+
+function getInitialBrowserRoute() {
+  if (typeof window === 'undefined' || !window.location) return '/studio';
+  return normalizeStudioRoute(window.location.pathname);
+}
+
 const DEFAULT_MODAL_CONTEXT = Object.freeze({
+  currentRoute: '/studio',
+  isHomeRoute: false,
+  navigateToRoute: NOOP,
   showJobDashboard: false,
   setShowJobDashboard: NOOP,
   showGeminiRouteModal: false,
@@ -33,27 +67,98 @@ const DEFAULT_MODAL_CONTEXT = Object.freeze({
 export const ModalContext = createContext(DEFAULT_MODAL_CONTEXT);
 
 /**
- * Custom hook to manage studio modal visibility states cleanly
+ * Custom hook to manage studio routes and modal visibility states cleanly.
+ * Syncs with browser URL so refreshing (F5) preserves the open view/modal.
  */
 export function useModalState() {
-  const [showJobDashboard, setShowJobDashboard] = useState(false);
-  const [showGeminiRouteModal, setShowGeminiRouteModal] = useState(false);
-  const [showGeminiQuotaModal, setShowGeminiQuotaModal] = useState(false);
-  const [showBatchExportStudioModal, setShowBatchExportStudioModal] = useState(false);
+  const initialRoute = getInitialBrowserRoute();
+  const [currentRoute, setCurrentRoute] = useState(initialRoute);
+  const [showJobDashboard, setShowJobDashboard] = useState(initialRoute === '/jobs');
+  const [showGeminiRouteModal, setShowGeminiRouteModal] = useState(initialRoute === '/batch');
+  const [showGeminiQuotaModal, setShowGeminiQuotaModal] = useState(initialRoute === '/quota');
+  const [showBatchExportStudioModal, setShowBatchExportStudioModal] = useState(initialRoute === '/export');
   const [showShortcutsModal, setShowShortcutsModal] = useState(false);
   const [exportStudioSelectedEpIds, setExportStudioSelectedEpIds] = useState([]);
   const [exportStudioAllowOriginalAudio, setExportStudioAllowOriginalAudio] = useState(false);
 
-  const handleOpenJobDashboard = useCallback(() => setShowJobDashboard(true), []);
-  const handleCloseJobDashboard = useCallback(() => setShowJobDashboard(false), []);
-  const handleOpenGeminiRoute = useCallback(() => setShowGeminiRouteModal(true), []);
-  const handleCloseGeminiRoute = useCallback(() => setShowGeminiRouteModal(false), []);
-  const handleOpenGeminiQuota = useCallback(() => setShowGeminiQuotaModal(true), []);
-  const handleCloseGeminiQuota = useCallback(() => setShowGeminiQuotaModal(false), []);
-  const handleOpenBatchExportStudio = useCallback(() => setShowBatchExportStudioModal(true), []);
-  const handleCloseBatchExportStudio = useCallback(() => setShowBatchExportStudioModal(false), []);
+  const applyRouteState = useCallback((normalizedRoute, searchQuery = '', pushHistory = true) => {
+    setCurrentRoute(normalizedRoute);
+    setShowGeminiRouteModal(normalizedRoute === '/batch');
+    setShowGeminiQuotaModal(normalizedRoute === '/quota');
+    setShowBatchExportStudioModal(normalizedRoute === '/export');
+    setShowJobDashboard(normalizedRoute === '/jobs');
+
+    if (pushHistory && typeof window !== 'undefined' && window.history) {
+      const targetUrl = `${normalizedRoute}${searchQuery || ''}`;
+      const currentFull = `${window.location.pathname}${window.location.search || ''}`;
+      if (currentFull !== targetUrl) {
+        window.history.pushState({ route: normalizedRoute }, '', targetUrl);
+      }
+    }
+  }, []);
+
+  const navigateToRoute = useCallback(
+    (rawTarget, options = {}) => {
+      const str = String(rawTarget || '/studio');
+      const qIdx = str.indexOf('?');
+      const pathPart = qIdx >= 0 ? str.slice(0, qIdx) : str;
+      const searchPart = qIdx >= 0 ? str.slice(qIdx) : (options.search || '');
+      const normalized = normalizeStudioRoute(pathPart);
+      applyRouteState(normalized, searchPart, options.replace ? false : true);
+      if (options.replace && typeof window !== 'undefined' && window.history) {
+        window.history.replaceState({ route: normalized }, '', `${normalized}${searchPart}`);
+      }
+    },
+    [applyRouteState]
+  );
+
+  // Sync browser Back / Forward buttons (popstate)
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const handlePopState = () => {
+      const nextRoute = normalizeStudioRoute(window.location.pathname);
+      applyRouteState(nextRoute, window.location.search || '', false);
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [applyRouteState]);
+
+  const handleOpenJobDashboard = useCallback(() => {
+    applyRouteState('/jobs', '', true);
+  }, [applyRouteState]);
+
+  const handleCloseJobDashboard = useCallback(() => {
+    applyRouteState('/studio', '', true);
+  }, [applyRouteState]);
+
+  const handleOpenGeminiRoute = useCallback(() => {
+    applyRouteState('/batch', '', true);
+  }, [applyRouteState]);
+
+  const handleCloseGeminiRoute = useCallback(() => {
+    applyRouteState('/studio', '', true);
+  }, [applyRouteState]);
+
+  const handleOpenGeminiQuota = useCallback(() => {
+    applyRouteState('/quota', '', true);
+  }, [applyRouteState]);
+
+  const handleCloseGeminiQuota = useCallback(() => {
+    applyRouteState('/studio', '', true);
+  }, [applyRouteState]);
+
+  const handleOpenBatchExportStudio = useCallback(() => {
+    applyRouteState('/export', '', true);
+  }, [applyRouteState]);
+
+  const handleCloseBatchExportStudio = useCallback(() => {
+    applyRouteState('/studio', '', true);
+  }, [applyRouteState]);
+
   const handleOpenShortcutsModal = useCallback(() => setShowShortcutsModal(true), []);
   const handleCloseShortcutsModal = useCallback(() => setShowShortcutsModal(false), []);
+
+  const isHomeRoute = currentRoute === '/home';
 
   const isAnyModalOpen = Boolean(
     showJobDashboard ||
@@ -65,6 +170,9 @@ export function useModalState() {
 
   return useMemo(
     () => ({
+      currentRoute,
+      isHomeRoute,
+      navigateToRoute,
       showJobDashboard,
       setShowJobDashboard,
       showGeminiRouteModal,
@@ -92,6 +200,9 @@ export function useModalState() {
       isAnyModalOpen,
     }),
     [
+      currentRoute,
+      isHomeRoute,
+      navigateToRoute,
       showJobDashboard,
       showGeminiRouteModal,
       showGeminiQuotaModal,
@@ -123,4 +234,3 @@ export function ModalProvider({ value, children }) {
 export function useModalManager() {
   return useContext(ModalContext) || DEFAULT_MODAL_CONTEXT;
 }
-

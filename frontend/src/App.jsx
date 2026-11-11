@@ -1,6 +1,7 @@
 import React, { useRef, useCallback, useEffect } from 'react';
 import { AlertTriangle, X } from 'lucide-react';
 import Navbar from './components/layout/Navbar';
+import HomeDashboard from './components/layout/HomeDashboard';
 import ErrorBoundary from './components/common/ErrorBoundary';
 import JobDashboardModal from './components/dashboard/JobDashboardModal';
 import GeminiRouteModal from './components/dashboard/GeminiRouteModal';
@@ -120,6 +121,9 @@ import { useStudioActions } from './hooks/useStudioActions';
 export default function App() {
   const modalState = useModalState();
   const {
+    currentRoute,
+    isHomeRoute,
+    navigateToRoute,
     showJobDashboard,
     showGeminiRouteModal,
     showGeminiQuotaModal,
@@ -810,6 +814,8 @@ export default function App() {
           onToggleLeftPanel={toggleLeftPanel}
           onToggleRightPanel={toggleRightPanel}
           onToggleTimelinePanel={toggleTimelinePanel}
+          currentRoute={currentRoute}
+          onNavigateRoute={navigateToRoute}
         />
 
         {/* Backend Offline Dismissible Warning Banner / Toast */}
@@ -828,7 +834,19 @@ export default function App() {
           </div>
         )}
 
-        {/* Main Video Editing Workspace */}
+        {/* Home & Route Launchpad (/ or /home) vs Main Video Editing Workspace (/studio, /batch, /quota, /export, /jobs) */}
+        {isHomeRoute ? (
+          <ErrorBoundary inline name="Home Dashboard">
+            <HomeDashboard
+              activeSeries={series.activeSeries}
+              activeEpisode={series.activeEpisode}
+              episodeId={series.episodeId}
+              onNavigateRoute={navigateToRoute}
+              onSwitchEpisode={handleSwitchEpisode}
+              onTabChange={setLeftTab}
+            />
+          </ErrorBoundary>
+        ) : (
         <main className={`capcut-main-workspace ${activeSplitter ? 'is-resizing' : ''}`}>
           {/* Top 3-Column Suite: Left Tools | Video Monitor | Contextual Inspector */}
           <div className="capcut-top-suite" ref={topSuiteRef}>
@@ -1088,6 +1106,7 @@ export default function App() {
             </ErrorBoundary>
           </div>
         </main>
+        )}
 
         {/* DragonDub Production Job Queue Dashboard Modal (Phase 4.4) */}
         <ErrorBoundary inline name="Job Dashboard" onReset={handleCloseJobDashboard}>

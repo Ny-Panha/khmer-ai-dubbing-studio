@@ -150,7 +150,9 @@ router.post("/generate", async (req, res) => {
       videoId,
       videoFileName,
       mode: rawMode = "dialogue",
+      dubbingMode: rawDubbingMode,
       generationMode: rawGenMode,
+      recapStyle = "story_recap",
       customPrompt = "",
       narratorGender = "male",
       genre = "auto",
@@ -164,7 +166,10 @@ router.post("/generate", async (req, res) => {
     } = req.body;
 
     const generationMode = rawGenMode || (rawMode === 'fast_ocr' ? 'fast_ocr' : 'standard');
-    const mode = generationMode === 'fast_ocr' ? GENERATION_MODES.FAST_OCR : rawMode;
+    const effectiveDubbingMode = rawDubbingMode || (rawMode === 'recap' ? 'recap' : 'dialogue');
+    const mode = effectiveDubbingMode === 'recap'
+      ? GENERATION_MODES.MODE_B_RECAP
+      : (generationMode === 'fast_ocr' ? GENERATION_MODES.FAST_OCR : rawMode);
 
     const rawVideoRef = videoPath || (videoFileName ? (path.isAbsolute(videoFileName) ? videoFileName : path.join(uploadsDir, videoFileName)) : null) || videoId;
     const resolvedVideoPath = rawVideoRef ? resolveMediaFile(rawVideoRef) : null;
