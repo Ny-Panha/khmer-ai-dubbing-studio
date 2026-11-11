@@ -1,6 +1,35 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
+- **Environment**: Antigravity IDE (/agents: Phase 2 Module 2 — useEpisodeSelection.js Extracted & Verified)
+- **Timestamp**: 2026-11-11T23:38:00+07:00
+
+## Summary: Completed Phase 2 Module 2 (useEpisodeSelection.js)
+1. **Module 2 Custom Hook Extracted (`frontend/src/features/gemini-route/hooks/useEpisodeSelection.js` & `index.js`)**:
+   - Extracted episode multi-selection state (`selectedEpIds`, `setSelectedEpIds`), memoized sets (`allSelectableEpisodes`, `episodesWithVideo`, `pendingEpisodes`, `incompleteEpisodes`), readiness checker (`isEpisodeFullyDone`), and selection action handlers (`toggleSelect`, `handleSelectCount`, `handleSelectAllEpisodes`, `handleSelectIncompleteEpisodes`, `handleClearSelection`, `handleSelectAllUnscripted`, `handleSelectAll`, `handleSelectAllWithVideo`).
+   - Integrated auto-select on open `useEffect` with default pick of first 4 incomplete episodes.
+   - Preserved selection locking when `isBatchExecutionActive` is true.
+   - Clean barrel export added to `frontend/src/features/gemini-route/hooks/index.js`.
+2. **Wired into `GeminiRouteModal.jsx`**:
+   - Replaced inlined selection states, `useEffect`, and handlers with `useEpisodeSelection`.
+   - Preserved `const isBatchExecutionActive = Boolean(...)` and delegated `toggleSelect` with `if (isBatchExecutionActive) return;` to guarantee static test assertions.
+3. **Verification & Quality Gates**:
+   - `npm --prefix frontend run lint` (`oxlint`): **PASS (0 errors, 428 warnings)**
+   - `npm --prefix frontend run build` (`vite build`): **PASS (637ms, 0 errors, 2028 modules transformed)**
+   - Targeted Backend Test Suites: **31/31 PASS**
+   - Full Backend Test Suites (`node --test backend/tests/*.test.js`): **229 PASS / 0 FAIL / 1 SKIPPED (duration 14.19s)**
+   - Live Smoke Test: **HTTP 200 OK** (`http://localhost:5173/batch`, `/`, `/home`)
+   - Pre-change backup: `.backups/20261111_233451/GeminiRouteModal.jsx`
+   - Code freeze strictly observed outside Module 2.
+
+## Active Environment
+- **Backend API**: `http://localhost:5000`
+- **Frontend App**: `http://localhost:5173`
+- **Next Steps**: Await Nha's review and approval before proceeding to Module 3 (`useSubtitleImport.js`).
+
+---
+
+## Previous Session
 - **Environment**: Antigravity IDE (/agents: Phase 2 Module 1 — geminiRouteSelectors.js Extracted & Verified)
 - **Timestamp**: 2026-11-11T23:15:00+07:00
 

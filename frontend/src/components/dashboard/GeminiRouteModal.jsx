@@ -37,6 +37,7 @@ import EpisodeTtsProgressCard from './route-runners/EpisodeTtsProgressCard';
 import EpisodeDemucsProgressCard from './route-runners/EpisodeDemucsProgressCard';
 import StudioConfirmDialog from '../common/StudioConfirmDialog';
 import { DubbingStepCardsBar, DubbingStepButton, useDubbingFeature } from '../../features/dubbing-runner';
+import { useEpisodeSelection } from '../../features/gemini-route/hooks/useEpisodeSelection';
 import {
   selectSelectedTargetEpisodes,
   selectCompletedAudioCount,
@@ -111,7 +112,6 @@ export default function GeminiRouteModal({
   const { runnerStates, activeEpisodeIds: runnerActiveEpIds } = useDubbingFeature(episodes);
 
   // Selection & Batch Script Setup configuration state
-  const [selectedEpIds, setSelectedEpIds] = useState(new Set());
   const [cardStageView, setCardStageView] = useState('all'); // 'all' | 'translate' | 'tts' | 'demucs'
   const [pipelineMode, setPipelineMode] = useState(
     activeEpisode?.generationMode ||
@@ -484,6 +484,38 @@ export default function GeminiRouteModal({
     })
   );
 
+  // Episode Multi-Selection & Quick-Select Workflow Hook (Phase 2 Module 2)
+  const {
+    selectedEpIds,
+    setSelectedEpIds,
+    allSelectableEpisodes,
+    episodesWithVideo,
+    pendingEpisodes,
+    incompleteEpisodes,
+    isEpisodeFullyDone,
+    toggleSelect: rawToggleSelect,
+    handleSelectCount,
+    handleSelectAllEpisodes,
+    handleSelectIncompleteEpisodes,
+    handleClearSelection,
+    handleSelectAllUnscripted,
+    handleSelectAll,
+    handleSelectAllWithVideo,
+  } = useEpisodeSelection({
+    episodes,
+    isOpen,
+    isBatchExecutionActive,
+    completedTtsEpIds,
+    ttsLiveStats,
+    completedDemucsEpIds,
+    demucsLiveStats,
+  });
+
+  const toggleSelect = (id) => {
+    if (isBatchExecutionActive) return;
+    rawToggleSelect(id);
+  };
+
   // Trigger series refresh automatically whenever a queued/running translate job finishes via SSE
   const seenCompletedJobsRef = useRef(new Set());
   const hasInitializedSseRef = useRef(false);
@@ -628,89 +660,6 @@ export default function GeminiRouteModal({
       setIsImportingSubtitles(false);
     }
   };
-
-  // Check if an episode is 100% completed across all 3 steps (Translate + Audio TTS + Clean BGM)
-  // Truly ready only when hasScript && brokenSegmentCount === 0 && hasAudio && !audioOutdated && hasDemucs
-  const isEpisodeFullyDone = useCallback((ep) => {
-    if (!ep) return false;
-    const hasScript = checkEpisodeHasScript(ep);
-    const brokenScan = getEpisodeBrokenSummary ? getEpisodeBrokenSummary(ep) : null;
-    const hasBroken = (brokenScan?.totalBrokenCount || 0) > 0;
-    const hasAudio = checkEpisodeHasAudioReady(ep, completedTtsEpIds, ttsLiveStats);
-    const hasDemucs = checkEpisodeHasDemucsReady(ep, completedDemucsEpIds, demucsLiveStats);
-    return Boolean(hasScript && !hasBroken && hasAudio && !ep?.audioOutdated && hasDemucs);
-  }, [completedTtsEpIds, ttsLiveStats, completedDemucsEpIds, demucsLiveStats]);
-
-  // All selectable episodes ordered sequentially (guaranteed to include all episodes in series)
-  const allSelectableEpisodes = useMemo(() => {
-    return (Array.isArray(episodes) ? episodes : [])
-      .slice()
-      .sort((a, b) => (Number(a.episodeNumber) || 0) - (Number(b.episodeNumber) || 0));
-  }, [episodes]);
-
-  // Episodes with a video file (or all episodes if none flagged)
-  const episodesWithVideo = useMemo(() => {
-    const vids = allSelectableEpisodes.filter((ep) => Boolean(ep?.video || ep?.videoFile || ep?.sourceVideoPath || ep?.videoPath || ep?.filePath));
-    return vids.length > 0 ? vids : allSelectableEpisodes;
-  }, [allSelectableEpisodes]);
-
-  // Episodes that still have pending work (Step 1, Step 2, or Step 3 or broken segments)
-  const pendingEpisodes = useMemo(() => {
-    return allSelectableEpisodes.filter((ep) => !isEpisodeFullyDone(ep));
-  }, [allSelectableEpisodes, isEpisodeFullyDone]);
-
-  const incompleteEpisodes = pendingEpisodes;
-
-  // Auto-select episodes by default on open (pending work if any, else all episodes)
-  useEffect(() => {
-    if (isOpen && episodes.length > 0 && selectedEpIds.size === 0 && !isBatchExecutionActive) {
-      if (incompleteEpisodes.length > 0) {
-        const toPick = incompleteEpisodes.slice(0, Math.min(4, incompleteEpisodes.length));
-        setSelectedEpIds(new Set(toPick.map((ep) => ep.id)));
-      } else if (allSelectableEpisodes.length > 0) {
-        setSelectedEpIds(new Set(allSelectableEpisodes.map((ep) => ep.id)));
-      }
-    }
-  }, [isOpen, episodes.length, incompleteEpisodes, allSelectableEpisodes, isBatchExecutionActive]);
-
-  const toggleSelect = (id) => {
-    if (isBatchExecutionActive) return;
-    const next = new Set(selectedEpIds);
-    if (next.has(id)) next.delete(id);
-    else next.add(id);
-    setSelectedEpIds(next);
-  };
-
-  const handleSelectCount = (count) => {
-    if (isBatchExecutionActive) return;
-    const pool = incompleteEpisodes.length > 0 ? incompleteEpisodes : allSelectableEpisodes;
-    const picked = pool.slice(0, count);
-    setSelectedEpIds(new Set(picked.map((ep) => ep.id)));
-  };
-
-  const handleSelectAllEpisodes = () => {
-    if (isBatchExecutionActive) return;
-    setSelectedEpIds(new Set(allSelectableEpisodes.map((ep) => ep.id)));
-  };
-
-  const handleSelectIncompleteEpisodes = () => {
-    if (isBatchExecutionActive) return;
-    setSelectedEpIds(new Set(incompleteEpisodes.map((ep) => ep.id)));
-  };
-
-  const handleClearSelection = () => {
-    if (isBatchExecutionActive) return;
-    setSelectedEpIds(new Set());
-  };
-
-  const handleSelectAllUnscripted = () => {
-    if (isBatchExecutionActive) return;
-    const unscripted = allSelectableEpisodes.filter((ep) => !checkEpisodeHasScript(ep));
-    setSelectedEpIds(new Set(unscripted.map((ep) => ep.id)));
-  };
-
-  const handleSelectAll = handleSelectIncompleteEpisodes;
-  const handleSelectAllWithVideo = handleSelectAllEpisodes;
 
   // Selected export readiness & shared aspect ratio for Step 4 handoff to Export Studio
   const checkEpHasVoiceReady = useCallback((ep) => {
