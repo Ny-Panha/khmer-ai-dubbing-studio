@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Sliders, Download, Loader2, ChevronDown, ChevronRight, Users } from 'lucide-react';
+import { Sliders, ChevronDown, ChevronRight, Users } from 'lucide-react';
 import { parseTimeToSeconds } from '../../utils/timestampUtils';
 import { previewVoiceApi } from '../../services/api';
 
@@ -923,29 +923,6 @@ export default function VoiceSettings({
           </div>
         )}
 
-      </div>
-
-      {/* Sticky Bottom Export Rendered Video CTA Bar */}
-      <div className="inspector-sticky-footer" data-testid="inspector-sticky-export-bar">
-        <button
-          type="button"
-          onClick={onRenderVideo}
-          disabled={!selectedVideo || isRendering}
-          className="inspector-sticky-export-btn"
-          title="Export Rendered Video (Ctrl+E)"
-        >
-          {isRendering ? (
-            <>
-              <Loader2 size={15} className="animate-spin" />
-              <span>កំពុង Render វីដេអូ ({renderProgress || 5}%)...</span>
-            </>
-          ) : (
-            <>
-              <Download size={15} />
-              <span>{renderedVideo ? 'Re-Export Rendered Video' : 'Export Rendered Video'}</span>
-            </>
-          )}
-        </button>
       </div>
     </div>
   );

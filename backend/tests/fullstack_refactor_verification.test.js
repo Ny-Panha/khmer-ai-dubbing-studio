@@ -76,18 +76,18 @@ test('Phase 2: CapCut Pro OKLCH tokens, Khmer line-height 1.68, resizable split 
   assert.match(navbarCode, /toggle-timeline-panel-btn/);
   assert.match(navbarCode, /toggle-right-panel-btn/);
 
-  // 3. Player controls: precision timecode, 16:9 | 9:16, and live Ducking dB meter
+  // 3. Player controls: precision timecode, live Ducking dB meter, and Navbar aspect switcher
   assert.match(playerControlsCode, /formatPrecisionTimecode/);
   assert.match(playerControlsCode, /player-ducking-db-meter/);
-  assert.match(playerControlsCode, /id:\s*'16:9'/);
-  assert.match(playerControlsCode, /id:\s*'9:16'/);
-  assert.doesNotMatch(playerControlsCode, /id:\s*'1:1'/);
-  assert.doesNotMatch(playerControlsCode, /id:\s*'fit'/);
-  assert.match(playerControlsCode, /player-ratio-\$\{opt\.id\}/);
+  assert.match(navbarCode, /navbar-aspect-toggle/);
+  assert.match(navbarCode, /16:9/);
+  assert.match(navbarCode, /9:16/);
+  assert.match(playerControlsCode, /player-framing-control-group/);
+  assert.match(playerControlsCode, /player-keyframe-controls/);
 
-  // 4. Right Inspector: Character Voice Mapping accordion, sticky Export CTA, and inline voice switch spinner
+  // 4. Right Inspector: Character Voice Mapping accordion and inline voice switch spinner
   assert.match(voiceSettingsCode, /inspector-character-mapping-card/);
-  assert.match(voiceSettingsCode, /inspector-sticky-export-bar/);
+  assert.doesNotMatch(voiceSettingsCode, /inspector-sticky-export-bar/);
   assert.match(clipInspectorCode, /switchingVoiceTarget/);
 
   // 5. Timeline: translate3d 60fps playhead and Solo (S) / Mute (M) / Lock track headers

@@ -541,7 +541,7 @@ function resolvePriorSegmentAudioPath(segment = {}, uploadsDir = "") {
  * 3. បង្កើតសំឡេងសម្រាប់ឃ្លាមួយ (Single Segment) រួមជាមួយ Auto Time-Stretch (atempo)
  */
 async function generateSingleSegmentAudio(segment, uploadsDir, options = {}) {
-  const { autoStretch = true, maxSpeed = 1.35, pitch = "+0Hz" } = options;
+  const { autoStretch = true, maxSpeed = 1.50, pitch = "+0Hz" } = options;
 
   if (!fs.existsSync(uploadsDir)) {
     fs.mkdirSync(uploadsDir, { recursive: true });
@@ -795,8 +795,10 @@ async function generateSingleSegmentAudio(segment, uploadsDir, options = {}) {
         const safeSlotTarget = Math.max(0.20, parseFloat((availableSlotDuration - MIN_COLLISION_SAFETY_MARGIN_SEC).toFixed(3)));
 
         const ratio = actualDuration / safeSlotTarget;
-        const shouldStretch = ratio > 1.02 && ratio <= 1.30;
-        const targetSpeed = Math.min(maxSpeed || 1.25, ratio);
+        // Auto-fit speech speed (1.05x - 1.50x): Speed up overflowing speech so dialogue finishes all words without cut
+        const maxAllowedStretchSpeed = Math.max(1.50, maxSpeed || 1.50);
+        const shouldStretch = ratio > 1.02;
+        const targetSpeed = Math.min(maxAllowedStretchSpeed, ratio);
 
         if (shouldStretch) {
           try {
@@ -811,7 +813,7 @@ async function generateSingleSegmentAudio(segment, uploadsDir, options = {}) {
               allowSlowdown: false,
             });
             finalDuration = stretchResult.finalDuration;
-            originalDuration = stretchResult.originalDuration;
+            originalDuration = stretchResult.finalDuration;
             appliedSpeed = stretchResult.appliedSpeed;
           } catch (stretchErr) {
             console.warn(`[TTSService] ⚠️ autoStretchTtsAudio error (${stretchErr.message}), keeping original audio duration`);
@@ -1030,7 +1032,7 @@ function cancelTtsJob(targetKey = 'all') {
  */
 async function generateBatchSegmentsAudio(segments = [], uploadsDir, options = {}) {
   const concurrency = Math.max(1, Math.min(10, Number(options.concurrency || 3)));
-  const { autoStretch = true, maxSpeed = 1.35 } = options;
+  const { autoStretch = true, maxSpeed = 1.50 } = options;
   const results = new Array(segments.length);
   let currentIndex = 0;
 

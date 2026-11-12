@@ -8,9 +8,61 @@ import StudioConfirmDialog from '../../common/StudioConfirmDialog';
  * and collapsible Live Console Terminal Drawer for Step 2 (Khmer TTS Voice Studio).
  */
 export default function EpisodeTtsProgressCard({ liveStats, ep, onKill = null, onRequestConfirm = null }) {
-  const current = liveStats?.current || 0;
-  const total = liveStats?.total || ep?.scriptData?.segments?.length || ep?.scriptData?.totalSegments || 1;
-  const targetPercent = Math.min(100, Math.max(0, liveStats?.percent ?? Math.round((current / (total || 1)) * 100)));
+  const [internalLiveStats, setInternalLiveStats] = useState(null);
+
+  useEffect(() => {
+    const sId = ep?.seriesId || 'drama_project';
+    const epId = ep?.id;
+    const totalSegs = ep?.scriptData?.segments?.length || ep?.scriptData?.totalSegments || 1;
+    if (!epId) return;
+
+    let active = true;
+    const poll = async () => {
+      try {
+        const res = await fetch(`/api/tts/progress?seriesId=${sId}&episodeId=${epId}&total=${totalSegs}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data && data.success && active) {
+          const cur = data.current || 0;
+          const tot = data.total || totalSegs;
+          const epPct = tot > 0 ? Math.min(100, Math.round((cur / tot) * 100)) : 0;
+          if (cur > 0 || epPct > 0) {
+            setInternalLiveStats({
+              current: cur,
+              total: tot,
+              percent: epPct,
+              message: `កំពុងសំយោគ ${cur}/${tot} ឃ្លា (${epPct}%)...`,
+              logs: [
+                {
+                  time: new Date().toLocaleTimeString(),
+                  progress: epPct,
+                  message: `🎙️ សំយោគសំឡេង: ${cur}/${tot} ឃ្លា (${epPct}%)`,
+                },
+              ],
+            });
+          }
+        }
+      } catch (_) {}
+    };
+
+    poll();
+    const timer = setInterval(poll, 1000);
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, [ep]);
+
+  const currentLive = (internalLiveStats && Number(internalLiveStats.percent || 0) > Number(liveStats?.percent || 0))
+    ? {
+        ...internalLiveStats,
+        logs: (internalLiveStats.logs?.length || 0) >= (liveStats?.logs?.length || 0) ? internalLiveStats.logs : (liveStats?.logs || []),
+      }
+    : (liveStats || internalLiveStats);
+
+  const current = currentLive?.current || 0;
+  const total = currentLive?.total || ep?.scriptData?.segments?.length || ep?.scriptData?.totalSegments || 1;
+  const targetPercent = Math.min(100, Math.max(0, currentLive?.percent ?? Math.round((current / (total || 1)) * 100)));
   const [smoothProgress, setSmoothProgress] = useState(targetPercent || 1);
   const [showConsole, setShowConsole] = useState(false);
   const [showKillConfirm, setShowKillConfirm] = useState(false);
@@ -33,9 +85,9 @@ export default function EpisodeTtsProgressCard({ liveStats, ep, onKill = null, o
     return () => clearTimeout(timer);
   }, [targetPercent, smoothProgress]);
 
-  const isDone = Boolean(liveStats?.isDone || smoothProgress >= 100);
-  const isFailed = Boolean(liveStats?.isFailed);
-  const logs = Array.isArray(liveStats?.logs) ? liveStats.logs : [];
+  const isDone = Boolean(currentLive?.isDone || smoothProgress >= 100);
+  const isFailed = Boolean(currentLive?.isFailed);
+  const logs = Array.isArray(currentLive?.logs) ? currentLive.logs : [];
 
   useEffect(() => {
     if (consoleBottomRef.current) {
@@ -265,12 +317,12 @@ export default function EpisodeTtsProgressCard({ liveStats, ep, onKill = null, o
       </div>
 
       {/* Collapsible Live Console Terminal Drawer */}
-      <div style={{
-        background: '#070b14',
-        border: `1px solid ${isFailed ? 'rgba(239, 68, 68, 0.35)' : (isDone ? 'rgba(16, 185, 129, 0.35)' : 'rgba(255, 133, 119, 0.35)')}`,
-        borderRadius: 7,
+      <div className="tts-console-drawer" style={{
+        background: '#07080C',
+        border: `1px solid ${isFailed ? 'rgba(239, 68, 68, 0.35)' : (isDone ? 'rgba(16, 185, 129, 0.35)' : 'rgba(244, 114, 182, 0.35)')}`,
+        borderRadius: 8,
         overflow: 'hidden',
-        boxShadow: 'inset 0 2px 10px rgba(0, 0, 0, 0.8)',
+        boxShadow: 'inset 0 2px 10px rgba(0, 0, 0, 0.85)',
       }}>
         {/* Console Header Toggle */}
         <button

@@ -28,6 +28,7 @@ const {
   getLatestBatchExportJob,
   cancelBatchExportJob,
 } = require("../services/batchExportService");
+const { analyzeEpisodeFraming } = require("../services/smartReframeService");
 
 const router = express.Router();
 
@@ -317,6 +318,8 @@ router.post("/render-video", async (req, res) => {
         aspectRatio: targetAspectRatio,
         verticalStyle,
         videoClips,
+        framingKeyframes: req.body?.framingKeyframes || [],
+        framingOverrides: req.body?.framingOverrides || [],
         antiTheft: antiTheft || req.body?.voiceSettings?.antiTheft || null,
         logoSettings: resolvedLogoPath ? {
           ...rawLogo,
@@ -564,7 +567,7 @@ router.post("/split-video-episodes", async (req, res) => {
       res.setTimeout(0);
     }
 
-    const { videoPath, videoId, seriesId, episodeId, durationMinutes, durationSeconds, episodeCount, replaceEpisodes = false } = req.body;
+    const { videoPath, videoId, seriesId, episodeId, durationMinutes, durationSeconds, episodeCount, replaceEpisodes = false, deleteOriginalSource = true } = req.body;
     const rawVideoRef = videoPath || videoId;
     if (!rawVideoRef) {
       return res.status(400).json({ success: false, error: "videoPath or videoId is required" });
@@ -766,6 +769,22 @@ router.post("/split-video-episodes", async (req, res) => {
 
     const { currentSeries, builtEpisodes, sourceEpisodeFound } = splitPersistResult;
 
+    // Option A: Automatically delete the original uncut source video now that all chunks have been created and saved
+    const shouldDeleteOriginal = (deleteOriginalSource !== false && deleteOriginalSource !== 'false');
+    if (shouldDeleteOriginal && inputVideoPath && fs.existsSync(inputVideoPath)) {
+      const isPathUsedByChunks = builtEpisodes.some(
+        (ep) => ep.sourceVideoPath && path.resolve(ep.sourceVideoPath).toLowerCase() === path.resolve(inputVideoPath).toLowerCase()
+      );
+      if (!isPathUsedByChunks) {
+        try {
+          fs.unlinkSync(inputVideoPath);
+          console.log(`[Split Endpoint] 🗑️ Cleaned up original uncut source video: ${inputVideoPath}`);
+        } catch (delErr) {
+          console.warn(`[Split Endpoint] Failed to delete original uncut video ${inputVideoPath}:`, delErr.message);
+        }
+      }
+    }
+
     const totalSeriesCount = currentSeries.episodes.length;
     console.log(`[Split Endpoint] ✅ Successfully split video into ${builtEpisodes.length} episodes for "${cleanSeries}" (Series total: ${totalSeriesCount} episodes, source replaced: ${sourceEpisodeFound})`);
 
@@ -780,6 +799,176 @@ router.post("/split-video-episodes", async (req, res) => {
     });
   } catch (err) {
     console.error("[Split Video Error]:", err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.post("/analyze-framing", async (req, res) => {
+  try {
+    const { seriesId, episodeId, videoPath: customVideoPath } = req.body;
+    if (!seriesId || !episodeId) {
+      return res.status(400).json({ success: false, error: "seriesId and episodeId are required" });
+    }
+
+    const seriesData = getSeriesMetadata(seriesId);
+    if (!seriesData || !Array.isArray(seriesData.episodes)) {
+      return res.status(404).json({ success: false, error: "Series or episodes not found" });
+    }
+
+    const ep = seriesData.episodes.find((e) => e.id === episodeId || String(e.episodeNumber) === String(episodeId));
+    if (!ep) {
+      return res.status(404).json({ success: false, error: "Episode not found" });
+    }
+
+    const rawVideoRef = customVideoPath || ep.videoPath || ep.sourceVideoPath || ep.videoFile;
+    const resolvedVideoPath = resolveMediaFile(rawVideoRef, seriesId);
+    if (!resolvedVideoPath || !fs.existsSync(resolvedVideoPath)) {
+      return res.status(400).json({ success: false, error: "Valid video file not found for episode" });
+    }
+
+    const segments = ep.segments || [];
+    if (segments.length === 0) {
+      return res.json({ success: true, segments: [], count: 0, message: "No segments to analyze" });
+    }
+
+    console.log(`[SmartReframe] 🎯 Analyzing 9:16 Face Framing for ${seriesId} [${ep.id || ep.episodeNumber}] (${segments.length} segments)...`);
+    const analyzed = await analyzeEpisodeFraming({ videoPath: resolvedVideoPath, segments });
+
+    ep.segments = analyzed;
+    ep.framingAnalyzed = true;
+    ep.framingAnalyzedAt = new Date().toISOString();
+    saveSeriesMetadata(seriesData);
+
+    console.log(`[SmartReframe] ✅ Finished framing analysis for ${segments.length} segments.`);
+    res.json({ success: true, segments: analyzed, count: analyzed.length });
+  } catch (err) {
+    console.error("[SmartReframe Error]:", err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.post("/update-segment-crop", async (req, res) => {
+  try {
+    const { seriesId, episodeId, segmentId, cropX, cropPosition, rangeStart, rangeEnd } = req.body;
+    if (!seriesId || !episodeId || segmentId === undefined) {
+      return res.status(400).json({ success: false, error: "seriesId, episodeId, and segmentId are required" });
+    }
+
+    const seriesData = getSeriesMetadata(seriesId);
+    if (!seriesData || !Array.isArray(seriesData.episodes)) {
+      return res.status(404).json({ success: false, error: "Series or episodes not found" });
+    }
+
+    const ep = seriesData.episodes.find((e) => e.id === episodeId || String(e.episodeNumber) === String(episodeId));
+    if (!ep || !Array.isArray(ep.segments)) {
+      return res.status(404).json({ success: false, error: "Episode or segments not found" });
+    }
+
+    const numCrop = Number(cropX);
+    const clampedCrop = !isNaN(numCrop) ? Math.max(5, Math.min(95, numCrop)) : 50;
+    const resolvedPos = cropPosition || (clampedCrop < 35 ? "left" : clampedCrop > 65 ? "right" : "center");
+
+    let updated = false;
+    const isGap = String(segmentId).startsWith("gap_") || rangeStart !== undefined;
+
+    if (!isGap && Array.isArray(ep.segments)) {
+      ep.segments = ep.segments.map((s, idx) => {
+        const match = (s._uid && s._uid === segmentId) || (s.id !== undefined && String(s.id) === String(segmentId)) || (idx === Number(segmentId));
+        if (match) {
+          updated = true;
+          return {
+            ...s,
+            cropX: clampedCrop,
+            cropPosition: resolvedPos,
+            manualCrop: true,
+          };
+        }
+        return s;
+      });
+    }
+
+    // Always purge any corrupt whole-episode overrides
+    if (Array.isArray(ep.framingOverrides)) {
+      ep.framingOverrides = ep.framingOverrides.filter((o) => !(o.startSec === 0 && o.endSec > 30));
+    }
+
+    if (!updated && (isGap || rangeStart !== undefined)) {
+      const rStart = Number(rangeStart) || 0;
+      const rEnd = Number(rangeEnd) || (rStart + 2);
+      // Guard: Never create an override spanning the whole episode
+      if (!(rStart === 0 && rEnd > 30) && (rEnd - rStart <= 35)) {
+        ep.framingOverrides = ep.framingOverrides || [];
+        const existingIdx = ep.framingOverrides.findIndex((o) => o.id === segmentId || (Math.abs(o.startSec - rStart) < 0.2));
+        if (existingIdx >= 0) {
+          ep.framingOverrides[existingIdx] = {
+            ...ep.framingOverrides[existingIdx],
+            cropX: clampedCrop,
+            cropPosition: resolvedPos,
+            startSec: rStart,
+            endSec: rEnd,
+            manualCrop: true,
+          };
+        } else {
+          ep.framingOverrides.push({
+            id: segmentId || `gap_${Date.now()}`,
+            cropX: clampedCrop,
+            cropPosition: resolvedPos,
+            startSec: rStart,
+            endSec: rEnd,
+            manualCrop: true,
+          });
+        }
+        updated = true;
+      }
+    }
+
+    if (updated) {
+      saveSeriesMetadata(seriesData);
+    }
+
+    res.json({ success: true, updated, cropX: clampedCrop, cropPosition: resolvedPos, framingOverrides: ep.framingOverrides || [] });
+  } catch (err) {
+    console.error("[Update Crop Error]:", err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.post("/update-framing-keyframes", async (req, res) => {
+  try {
+    const { seriesId, episodeId, keyframes = [] } = req.body;
+    if (!seriesId || !episodeId) {
+      return res.status(400).json({ success: false, error: "seriesId and episodeId are required" });
+    }
+
+    const seriesData = getSeriesMetadata(seriesId);
+    if (!seriesData || !Array.isArray(seriesData.episodes)) {
+      return res.status(404).json({ success: false, error: "Series or episodes not found" });
+    }
+
+    const ep = seriesData.episodes.find((e) => e.id === episodeId || String(e.episodeNumber) === String(episodeId));
+    if (!ep) {
+      return res.status(404).json({ success: false, error: "Episode not found" });
+    }
+
+    const cleanKeyframes = (Array.isArray(keyframes) ? keyframes : [])
+      .map((k) => ({
+        id: k.id || `kf_${Math.round(Number(k.time) * 1000)}_${Math.random().toString(36).substr(2, 4)}`,
+        time: parseFloat(Number(k.time).toFixed(2)),
+        cropX: Math.max(5, Math.min(95, Number(k.cropX) || 50)),
+        cropPosition: k.cropPosition || (Number(k.cropX) < 35 ? "left" : Number(k.cropX) > 65 ? "right" : "center"),
+      }))
+      .filter((k) => Number.isFinite(k.time) && k.time >= 0)
+      .sort((a, b) => a.time - b.time);
+
+    ep.framingKeyframes = cleanKeyframes;
+    if (ep.scriptData) {
+      ep.scriptData.framingKeyframes = cleanKeyframes;
+    }
+    saveSeriesMetadata(seriesData);
+
+    res.json({ success: true, keyframes: cleanKeyframes });
+  } catch (err) {
+    console.error("[Update Framing Keyframes Error]:", err);
     res.status(500).json({ success: false, error: err.message });
   }
 });

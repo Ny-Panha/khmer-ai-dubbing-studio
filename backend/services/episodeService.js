@@ -199,35 +199,44 @@ function applySafeDiskHydration(ep, cleanSeries, seriesDir, resolvedProjectsDir 
     }
   }
 
-  // 0. Video Hydration Check: Auto-detect existing video files on disk if ep.video is missing or incomplete
+  // 0. Video Hydration Check: Auto-detect existing video files on disk if ep.video is missing or incomplete,
+  // or if ep.video points to an uncut source video when a specific chunk exists
   const epVideoDir = path.join(seriesDir, 'episodes', ep.id, 'video');
-  const hasExistingVideoOnDisk = ep.video && ep.video.videoPath && fs.existsSync(ep.video.videoPath);
-  if (!hasExistingVideoOnDisk && fs.existsSync(epVideoDir)) {
+  if (fs.existsSync(epVideoDir)) {
     try {
       const vFiles = fs.readdirSync(epVideoDir).filter((f) => f.endsWith('.mp4') && !f.startsWith('.tmp'));
       if (vFiles.length > 0) {
-        // Pick source video if present, else first
-        const vFile = vFiles.find((f) => f.includes('source')) || vFiles[0];
+        // Specific episode chunk file (e.g. series_*_ep_1_source.mp4 or *chunk*) has highest priority
+        const specificChunkFile = vFiles.find((f) => f.includes(`_${ep.id}_`) || f.includes('chunk_source'));
+        const vFile = specificChunkFile || vFiles.find((f) => f.includes('source')) || vFiles[0];
         const vPath = path.join(epVideoDir, vFile);
-        const vStat = fs.statSync(vPath);
-        if (vStat.size > 0) {
-          const vUrl = `/uploads/projects/${cleanSeries}/episodes/${ep.id}/video/${vFile}`;
-          ep.video = {
-            videoId: `projects/${cleanSeries}/episodes/${ep.id}/video/${vFile}`,
-            fileName: vFile,
-            originalFilename: vFile,
-            displayTitle: ep.displayTitle || ep.title || `Episode ${ep.episodeNumber || ep.id}`,
-            videoUrl: vUrl,
-            videoPath: vPath,
-            sizeMB: parseFloat((vStat.size / (1024 * 1024)).toFixed(2)),
-            size: (vStat.size / (1024 * 1024)).toFixed(1) + ' MB',
-          };
-          ep.videoFile = vUrl;
-          ep.sourceVideoPath = vPath;
-          if (!ep.status || ep.status === 'idle') {
-            ep.status = 'uploaded';
+
+        const currentPath = ep.video?.videoPath || ep.sourceVideoPath;
+        const currentMatchesDisk = currentPath && fs.existsSync(currentPath);
+        const shouldUpgradeToSpecificChunk = specificChunkFile && (!currentMatchesDisk || (currentPath && !currentPath.includes(`_${ep.id}_`) && !currentPath.includes('chunk_source')));
+
+        if (!currentMatchesDisk || shouldUpgradeToSpecificChunk) {
+          const vStat = fs.statSync(vPath);
+          if (vStat.size > 0) {
+            const vUrl = `/uploads/projects/${cleanSeries}/episodes/${ep.id}/video/${vFile}`;
+            ep.video = {
+              ...(ep.video || {}),
+              videoId: `projects/${cleanSeries}/episodes/${ep.id}/video/${vFile}`,
+              fileName: vFile,
+              originalFilename: vFile,
+              displayTitle: ep.displayTitle || ep.title || `Episode ${ep.episodeNumber || ep.id}`,
+              videoUrl: vUrl,
+              videoPath: vPath,
+              sizeMB: parseFloat((vStat.size / (1024 * 1024)).toFixed(2)),
+              size: (vStat.size / (1024 * 1024)).toFixed(1) + ' MB',
+            };
+            ep.videoFile = vUrl;
+            ep.sourceVideoPath = vPath;
+            if (!ep.status || ep.status === 'idle') {
+              ep.status = 'uploaded';
+            }
+            mutated = true;
           }
-          mutated = true;
         }
       }
     } catch (_) {}
@@ -524,24 +533,31 @@ function getSeriesMetadata(seriesId, options = {}) {
     } catch (_) {}
   }
 
-  // Fallback: discover existing episode directories on disk
+  // Fallback: discover existing episode directories on disk (numerically sorted 1..N)
   const discoveredEpisodes = [];
   const epBaseDir = path.join(seriesDir, 'episodes');
   if (fs.existsSync(epBaseDir)) {
     try {
-      const entries = fs.readdirSync(epBaseDir, { withFileTypes: true });
+      const entries = fs.readdirSync(epBaseDir, { withFileTypes: true })
+        .filter((ent) => ent.isDirectory())
+        .sort((a, b) => {
+          const matchA = a.name.match(/^ep_(\d+)/i);
+          const matchB = b.name.match(/^ep_(\d+)/i);
+          const numA = matchA ? parseInt(matchA[1], 10) : Number.MAX_SAFE_INTEGER;
+          const numB = matchB ? parseInt(matchB[1], 10) : Number.MAX_SAFE_INTEGER;
+          if (numA !== numB) return numA - numB;
+          return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+        });
       for (const ent of entries) {
-        if (ent.isDirectory()) {
-          const epNumMatch = ent.name.match(/^ep_(\d+)/i);
-          const epNum = epNumMatch ? parseInt(epNumMatch[1], 10) : discoveredEpisodes.length + 1;
-          const discoveredEp = createEpisode({
-            id: ent.name,
-            episodeNumber: epNum,
-            title: `ភាគទី ${epNum} (EP${epNum})`,
-          });
-          applySafeDiskHydration(discoveredEp, cleanSeries, seriesDir, projectsDir);
-          discoveredEpisodes.push(discoveredEp);
-        }
+        const epNumMatch = ent.name.match(/^ep_(\d+)/i);
+        const epNum = epNumMatch ? parseInt(epNumMatch[1], 10) : discoveredEpisodes.length + 1;
+        const discoveredEp = createEpisode({
+          id: ent.name,
+          episodeNumber: epNum,
+          title: `ភាគទី ${epNum} (EP${epNum})`,
+        });
+        applySafeDiskHydration(discoveredEp, cleanSeries, seriesDir, projectsDir);
+        discoveredEpisodes.push(discoveredEp);
       }
     } catch (_) {}
   }
@@ -893,9 +909,30 @@ async function syncSeriesMetadataSafely(seriesId, incomingSeries, options = {}) 
           : ((resolvedScriptData?.segments?.length > 0) ? 'translated' : ((incEp.video || diskEp.video) ? 'uploaded' : 'idle'));
       }
 
+      // Defensive Video & Duration Protection:
+      // If disk has an authoritative split chunk video or valid duration,
+      // never let a stale client /sync payload revert it to the uncut full video or duration: 0
+      const diskVideoPath = diskEp.sourceVideoPath || diskEp.video?.videoPath;
+      const diskHasChunkVideo = diskVideoPath && fs.existsSync(diskVideoPath) && (diskVideoPath.includes(`_${diskEp.id}_`) || diskVideoPath.includes('chunk_source'));
+      const incVideoPath = incEp.sourceVideoPath || incEp.video?.videoPath;
+      const incIsUncutStale = incVideoPath && diskHasChunkVideo && !incVideoPath.includes(`_${diskEp.id}_`) && !incVideoPath.includes('chunk_source') && (Number(incEp.duration) > (Number(diskEp.duration) * 1.5 || 1200));
+
+      const resolvedVideo = (diskHasChunkVideo && incIsUncutStale) ? diskEp.video : (incEp.video || diskEp.video);
+      const resolvedVideoFile = (diskHasChunkVideo && incIsUncutStale) ? diskEp.videoFile : (incEp.videoFile || diskEp.videoFile);
+      const resolvedSourceVideoPath = (diskHasChunkVideo && incIsUncutStale) ? diskEp.sourceVideoPath : (incEp.sourceVideoPath || diskEp.sourceVideoPath);
+      const resolvedDuration = (diskHasChunkVideo && incIsUncutStale)
+        ? (diskEp.duration || 0)
+        : ((incEp.duration && Number(incEp.duration) > 0) ? Number(incEp.duration) : (diskEp.duration || 0));
+      const resolvedMetadata = incEp.metadata || diskEp.metadata || (resolvedDuration > 0 ? { duration: resolvedDuration, durationSec: resolvedDuration } : null);
+
       return {
         ...diskEp,
         ...incEp,
+        video: resolvedVideo,
+        videoFile: resolvedVideoFile,
+        sourceVideoPath: resolvedSourceVideoPath,
+        duration: resolvedDuration,
+        metadata: resolvedMetadata,
         scriptData: resolvedScriptData,
         status: finalStatus,
         generationMode: incEp.generationMode || diskEp.generationMode,

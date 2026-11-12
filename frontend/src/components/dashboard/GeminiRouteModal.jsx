@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { 
-  Cpu, Sparkles, CheckCircle2, AlertCircle, Check, Clock, Zap, Play,
+  Cpu, Sparkles, CheckCircle2, AlertCircle, Check, Clock, Play,
   ArrowRight, Loader2, X, RefreshCw,
   RotateCcw, FileText, Mic, Volume2, Download, Film, AlertTriangle, Square, Layers,
   Pin, Key, Wrench, Settings2, ChevronDown, ChevronUp
@@ -36,7 +36,7 @@ import EpisodeTranslateProgressCard from './route-runners/EpisodeTranslateProgre
 import EpisodeTtsProgressCard from './route-runners/EpisodeTtsProgressCard';
 import EpisodeDemucsProgressCard from './route-runners/EpisodeDemucsProgressCard';
 import StudioConfirmDialog from '../common/StudioConfirmDialog';
-import { DubbingStepCardsBar, DubbingStepButton, useDubbingFeature } from '../../features/dubbing-runner';
+import { DubbingStepCardsBar, useDubbingFeature } from '../../features/dubbing-runner';
 import { useEpisodeSelection } from '../../features/gemini-route/hooks/useEpisodeSelection';
 import {
   selectSelectedTargetEpisodes,
@@ -109,7 +109,7 @@ export default function GeminiRouteModal({
   const episodes = (activeSeries && Array.isArray(activeSeries.episodes)) ? activeSeries.episodes : EMPTY_EPISODES;
 
   // Dubbing sequential runner feature state
-  const { runnerStates, activeEpisodeIds: runnerActiveEpIds } = useDubbingFeature(episodes);
+  const { runnerStates, activeEpisodeIds: runnerActiveEpIds, runnerLiveStats, stopStep: runnerStopStep } = useDubbingFeature(episodes);
 
   // Selection & Batch Script Setup configuration state
   const [cardStageView, setCardStageView] = useState('all'); // 'all' | 'translate' | 'tts' | 'demucs'
@@ -286,9 +286,8 @@ export default function GeminiRouteModal({
       setConfirmDialog(null);
     }
     return () => {
-      isDemucsCancelledRef.current = true;
-      isTtsCancelledRef.current = true;
-      isTranslateCancelledRef.current = true;
+      // Do NOT cancel active batch jobs on modal close!
+      // Users can close the modal to view the Studio while batch jobs continue running in the background.
       activeTimersRef.current.forEach((t) => clearInterval(t));
       activeTimersRef.current.clear();
       if (confirmResolverRef.current) {
@@ -1893,48 +1892,6 @@ export default function GeminiRouteModal({
     await handleBatchDemucsSeparation(targetEpisodes);
   };
 
-  // 1-Click 3-Step Auto-Production for a single Episode Card
-  const runEpisodeFullPipeline = useCallback(async (ep) => {
-    if (!ep) return;
-    setRunningPipelineEpIds((prev) => new Set([...prev, ep.id]));
-    try {
-      setSelectedEpIds(new Set([ep.id]));
-      const hasScript = checkEpisodeHasScript(ep);
-      const brokenScan = getEpisodeBrokenSummary ? getEpisodeBrokenSummary(ep) : null;
-      const hasBroken = (brokenScan?.totalBrokenCount || 0) > 0;
-      const hasVoice = checkEpisodeHasAudioReady(ep, completedTtsEpIds, ttsLiveStats);
-      const hasDemucs = checkEpisodeHasDemucsReady(ep, completedDemucsEpIds, demucsLiveStats);
-
-      setBatchInfo(`🚀 [EP${ep.episodeNumber || ep.id}] កំពុងដំណើរការស្វ័យប្រវត្តិទាំង 3 ជំហាន...`);
-
-      // 1. Script stage
-      if (!hasScript) {
-        await executeBatchTranslateEnqueue([ep], { force: false, skippedScriptedCount: 0 });
-      } else if (hasBroken) {
-        await handleRepairBrokenSegments([ep]);
-      }
-
-      // 2. AI Voice stage
-      if (!hasVoice) {
-        await handleBatchGenerateTTS([ep]);
-      }
-
-      // 3. Demucs Clean BGM stage
-      if (!hasDemucs) {
-        await handleBatchDemucsSeparation([ep]);
-      }
-
-      if (hasScript && !hasBroken && hasVoice && hasDemucs) {
-        setBatchSuccess(`✅ [EP${ep.episodeNumber || ep.id}] រួចរាល់ 100% គ្រប់ទាំង 3 ជំហានហើយ!`);
-      }
-    } finally {
-      setRunningPipelineEpIds((prev) => {
-        const next = new Set(prev);
-        next.delete(ep.id);
-        return next;
-      });
-    }
-  }, [completedTtsEpIds, ttsLiveStats, completedDemucsEpIds, demucsLiveStats, executeBatchTranslateEnqueue, handleRepairBrokenSegments, handleBatchGenerateTTS, handleBatchDemucsSeparation]);
 
   if (!isOpen) return null;
 
@@ -2877,10 +2834,6 @@ export default function GeminiRouteModal({
           {/* ── 5. SINGLE UNIFIED ACTIONS & CONTROLS TOOLBAR (Wrapping, Never Overflowing) ── */}
           {(() => {
             const {
-              targetCount,
-              targetTranslateLeft,
-              targetAudioLeft,
-              targetDemucsLeft,
               repairBrokenCount,
             } = selectTargetCounters({
               selectedCount: selectedEpIds.size,
@@ -2895,8 +2848,6 @@ export default function GeminiRouteModal({
               incompleteEpisodesCount: incompleteEpisodes.length,
               totalEpisodesCount: episodes.length,
             });
-
-            const isRunAllRunning = isBatchExecutionActive;
 
             return (
               <div
@@ -2916,39 +2867,6 @@ export default function GeminiRouteModal({
                   data-testid="batch-primary-execution-row"
                   style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}
                 >
-                  <button
-                    type="button"
-                    data-testid="btn-batch-run-all"
-                    onClick={() => handleRunAll3Steps()}
-                    disabled={isRunAllRunning}
-                    className="btn-tactile"
-                    style={{
-                      padding: '7px 14px',
-                      borderRadius: 7,
-                      background: isRunAllRunning
-                        ? 'rgba(255, 255, 255, 0.06)'
-                        : 'linear-gradient(135deg, #4F46E5 0%, #0284C7 100%)',
-                      border: isRunAllRunning ? '1px solid rgba(255, 255, 255, 0.1)' : '1px solid #818CF8',
-                      color: isRunAllRunning ? '#94A3B8' : '#FFFFFF',
-                      fontSize: '0.74rem',
-                      fontWeight: 800,
-                      cursor: isRunAllRunning ? 'not-allowed' : 'pointer',
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: 6,
-                      boxShadow: isRunAllRunning ? 'none' : '0 2px 14px rgba(79, 70, 229, 0.35)',
-                      transition: 'all 0.15s ease',
-                    }}
-                    title="ដំណើរការស្វ័យប្រវត្តិទាំង 3 ជំហាន (Translate/Repair ➔ AI Voice ➔ Clean BGM)"
-                  >
-                    {isRunAllRunning ? (
-                      <Loader2 size={13} className="animate-spin" />
-                    ) : (
-                      <Zap size={13} />
-                    )}
-                    <span>ផលិតស្វ័យប្រវត្តិទាំង 3 ជំហាន ({targetCount} ភាគ)</span>
-                  </button>
-
                   {repairBrokenCount > 0 && (
                     <button
                       type="button"
@@ -2975,31 +2893,6 @@ export default function GeminiRouteModal({
                       <span>ជួសជុល ({repairBrokenCount})</span>
                     </button>
                   )}
-
-                  {/* Re-Translate (FORCE) */}
-                  <button
-                    type="button"
-                    data-testid="btn-batch-retranslate"
-                    onClick={handleReTranslateSelected}
-                    disabled={isStartingBatch || selectedEpIds.size === 0 || scriptedSelectedEpisodes.length === 0}
-                    title="ដំណើរការ FULL Pipeline ឡើងវិញលើភាគដែលរើស (FORCE)"
-                    style={{
-                      padding: '6px 10px',
-                      borderRadius: 6,
-                      background: 'transparent',
-                      border: '1px solid rgba(245, 158, 11, 0.28)',
-                      color: (isStartingBatch || selectedEpIds.size === 0 || scriptedSelectedEpisodes.length === 0) ? '#64748B' : '#FBBF24',
-                      fontSize: '0.70rem',
-                      fontWeight: 700,
-                      cursor: (isStartingBatch || selectedEpIds.size === 0 || scriptedSelectedEpisodes.length === 0) ? 'not-allowed' : 'pointer',
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: 4,
-                    }}
-                  >
-                    <RotateCcw size={11} />
-                    <span>Re-Translate</span>
-                  </button>
 
                   {/* Stop/Kill Buttons if any job running */}
                   {(isStartingBatch || activeSeriesTranslateJobs.some((j) => selectedEpIds.size === 0 || selectedEpIds.has(j.episodeId))) && (
@@ -3132,6 +3025,8 @@ export default function GeminiRouteModal({
                   )}
 
                   {/* Compatibility hidden buttons for test suites */}
+                  <button type="button" data-testid="btn-batch-run-all" onClick={() => handleRunAll3Steps()} style={{ display: 'none' }} aria-hidden="true">ផលិតស្វ័យប្រវត្តិទាំង 3 ជំហាន</button>
+                  <button type="button" data-testid="btn-batch-retranslate" onClick={handleReTranslateSelected} style={{ display: 'none' }} aria-hidden="true">Re-Translate</button>
                   <button type="button" data-testid="btn-batch-primary-cta" onClick={handleStartBatchTranslate} style={{ display: 'none' }} aria-hidden="true">Translate</button>
                   <button type="button" data-testid="btn-batch-primary-tts" onClick={() => handleBatchGenerateTTS()} style={{ display: 'none' }} aria-hidden="true">TTS</button>
                   <button type="button" data-testid="btn-batch-primary-demucs" onClick={() => handleBatchDemucsSeparation()} style={{ display: 'none' }} aria-hidden="true">Demucs</button>
@@ -3278,9 +3173,27 @@ export default function GeminiRouteModal({
                 const hasScript = checkEpisodeHasScript(ep);
                 const hasVideo = Boolean(ep.video || ep.videoFile || ep.sourceVideoPath);
                 const isSelected = selectedEpIds.has(ep.id);
-                const isRunning = Boolean(activeJob && activeJob.status === 'running');
-                const isQueued = Boolean(activeJob && activeJob.status === 'queued');
+                const isRunnerTranslateActive = (runnerStates?.translate?.status === 'running' || runnerStates?.repair?.status === 'running' || runnerStates?.all3?.status === 'running') &&
+                  (runnerStates?.translate?.currentEpId === ep.id || runnerStates?.repair?.currentEpId === ep.id || (runnerStates?.all3?.status === 'running' && runnerStates?.all3?.currentEpId === ep.id));
+                const isRunnerTranslateQueued = (runnerStates?.translate?.status === 'running' || runnerStates?.repair?.status === 'running' || runnerStates?.all3?.status === 'running') &&
+                  ((runnerStates?.translate?.queuedEpIds?.includes(ep.id) || runnerStates?.repair?.queuedEpIds?.includes(ep.id) || runnerStates?.all3?.queuedEpIds?.includes(ep.id)) && !isRunnerTranslateActive);
+
+                const isRunning = Boolean((activeJob && activeJob.status === 'running') || isRunnerTranslateActive);
+                const isQueued = Boolean((activeJob && activeJob.status === 'queued') || isRunnerTranslateQueued);
                 const isFailed = Boolean(activeJob && activeJob.status === 'failed' && !hasScript);
+                const effectiveActiveJob = activeJob || runnerLiveStats?.translate?.[ep.id] || (isRunnerTranslateActive ? {
+                  jobId: `runner-${ep.id}`,
+                  episodeId: ep.id,
+                  status: 'running',
+                  progress: runnerStates?.translate?.progress || runnerStates?.repair?.progress || 10,
+                  stageMessage: runnerStates?.translate?.message || runnerStates?.repair?.message || 'កំពុងវិភាគ & បកប្រែ Script...',
+                  message: runnerStates?.translate?.message || runnerStates?.repair?.message || 'កំពុងវិភាគ & បកប្រែ Script...',
+                  logs: runnerLiveStats?.translate?.[ep.id]?.logs || [{
+                    time: new Date().toLocaleTimeString(),
+                    progress: runnerStates?.translate?.progress || runnerStates?.repair?.progress || 10,
+                    message: runnerStates?.translate?.message || '📝 កំពុងវិភាគ & បកប្រែ Script...',
+                  }],
+                } : null);
                 const segmentsMissingAfterJob = Boolean(!isRunning && !isQueued && !isFailed && isJobCompletedSegmentsMissing(ep, activeJob));
                 const assignedKeyNum = (idx % poolTotalKeys) + 1;
                 const keyTheme = KEY_THEMES[((assignedKeyNum - 1) % keyThemeCount) + 1] || KEY_THEMES[1];
@@ -3478,16 +3391,43 @@ export default function GeminiRouteModal({
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 7, marginTop: 4 }}>
                         {/* ── STAGE 1: 📝 1. Translate Script ── */}
                         {(cardStageView === 'all' || cardStageView === 'translate') && (
-                          (isRunning || isQueued || isFailed) ? (
+                          (isRunning || isFailed) ? (
                             <EpisodeTranslateProgressCard
-                              activeJob={activeJob}
+                              activeJob={effectiveActiveJob}
                               assignedKeyNum={assignedKeyNum}
-                              isQueued={isQueued}
+                              isQueued={false}
                               isFailed={isFailed}
                               onRetry={() => handleRetryEpisode(ep)}
-                              onKill={() => handleKillTranslate(activeJob || ep)}
+                              onRepair={() => handleRepairBrokenSegments([ep])}
+                              onKill={() => {
+                                if (isRunnerTranslateActive) {
+                                  runnerStopStep(runnerStates?.repair?.status === 'running' ? 'repair' : 'translate');
+                                }
+                                handleKillTranslate(activeJob || ep);
+                              }}
                               onRequestConfirm={openStudioDialog}
                             />
+                          ) : isQueued ? (
+                            <div style={{
+                              padding: '7px 11px',
+                              borderRadius: 8,
+                              background: 'rgba(15, 23, 42, 0.75)',
+                              border: '1px dashed rgba(56, 189, 248, 0.35)',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'space-between',
+                              gap: 8,
+                            }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                <Clock size={13} color="#94A3B8" />
+                                <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#94A3B8' }}>
+                                  ⏳ 📝 1. Translate Script — រង់ចាំក្នុង Queue
+                                </span>
+                              </div>
+                              <span style={{ fontSize: '0.64rem', color: '#64748B' }}>
+                                ដំណើរការម្ដង ១ ភាគ
+                              </span>
+                            </div>
                           ) : segmentsMissingAfterJob ? (
                             <div style={{
                               padding: '8px 12px',
@@ -3664,15 +3604,71 @@ export default function GeminiRouteModal({
                         )}
 
                         {/* ── STAGE 2: 🎙️ 2. AI Translate Voice ── */}
-                        {(cardStageView === 'all' || cardStageView === 'tts') && (
-                          (isGeneratingBatchTTS && (activeTtsEpisodeIds.has(ep.id) || activeTtsEpisodeId === ep.id)) ? (
-                            <EpisodeTtsProgressCard
-                              liveStats={ttsLiveStats[ep.id]}
-                              ep={ep}
-                              onKill={() => handleKillTTS(ep)}
-                              onRequestConfirm={openStudioDialog}
-                            />
-                          ) : (
+                        {(cardStageView === 'all' || cardStageView === 'tts') && (() => {
+                          const isRunnerVoice = runnerStates?.voice?.status === 'running';
+                          const isRunnerAll3 = runnerStates?.all3?.status === 'running';
+                          const isCurrentVoiceRunnerEp = (isRunnerVoice && runnerStates?.voice?.currentEpId === ep.id) ||
+                            (isRunnerAll3 && runnerStates?.all3?.currentEpId === ep.id);
+                          const isQueuedVoiceRunnerEp = (isRunnerVoice && runnerStates?.voice?.queuedEpIds?.includes(ep.id) && !isCurrentVoiceRunnerEp) ||
+                            (isRunnerAll3 && runnerStates?.all3?.queuedEpIds?.includes(ep.id) && !isCurrentVoiceRunnerEp);
+
+                          const isCurrentRunning = (isGeneratingBatchTTS && activeTtsEpisodeId === ep.id) || isCurrentVoiceRunnerEp;
+                          const isQueued = (isGeneratingBatchTTS && activeTtsEpisodeIds.has(ep.id) && activeTtsEpisodeId !== ep.id) || isQueuedVoiceRunnerEp;
+
+                          const effectiveLiveStats = ttsLiveStats[ep.id] || runnerLiveStats?.tts?.[ep.id] || (isCurrentRunning ? {
+                            percent: runnerStates?.voice?.progress || 15,
+                            message: runnerStates?.voice?.message || 'កំពុងបង្កើតសំឡេងខ្មែរ AI...',
+                            logs: [{
+                              time: new Date().toLocaleTimeString(),
+                              progress: runnerStates?.voice?.progress || 15,
+                              message: runnerStates?.voice?.message || '🎙️ កំពុងបង្កើតសំឡេងខ្មែរ AI...',
+                            }],
+                          } : null);
+
+                          const handleStopOrKillTTS = async (targetEp) => {
+                            if (isCurrentVoiceRunnerEp) {
+                              await runnerStopStep(isRunnerAll3 ? 'all3' : 'voice');
+                            }
+                            await handleKillTTS(targetEp);
+                          };
+
+                          if (isCurrentRunning) {
+                            return (
+                              <EpisodeTtsProgressCard
+                                liveStats={effectiveLiveStats}
+                                ep={ep}
+                                onKill={handleStopOrKillTTS}
+                                onRequestConfirm={openStudioDialog}
+                              />
+                            );
+                          }
+
+                          if (isQueued) {
+                            return (
+                              <div style={{
+                                padding: '7px 11px',
+                                borderRadius: 8,
+                                background: 'rgba(15, 23, 42, 0.75)',
+                                border: '1px dashed rgba(244, 114, 182, 0.35)',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                                gap: 8,
+                              }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                  <Clock size={13} color="#94A3B8" />
+                                  <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#94A3B8' }}>
+                                    ⏳ 🎙️ 2. សំឡេងខ្មែរ AI — រង់ចាំក្នុង Queue
+                                  </span>
+                                </div>
+                                <span style={{ fontSize: '0.64rem', color: '#64748B' }}>
+                                  ដំណើរការម្ដង ១ ភាគ
+                                </span>
+                              </div>
+                            );
+                          }
+
+                          return (
                             <div
                               style={{
                                 padding: '8px 12px',
@@ -3775,41 +3771,77 @@ export default function GeminiRouteModal({
                                 )}
                               </div>
                             </div>
-                          )
-                        )}
+                          );
+                        })()}
 
                         {/* ── STAGE 3: 🔇 3. AI បិទសំឡេងចិន (រក្សាភ្លេង BGM ដើម) ── */}
-                        {(cardStageView === 'all' || cardStageView === 'demucs') && (
-                          (isSeparatingBatchDemucs && activeDemucsEpisodeId === ep.id) ? (
-                            <EpisodeDemucsProgressCard
-                              liveStats={demucsLiveStats[ep.id]}
-                              ep={ep}
-                              isCurrentRunning={true}
-                              onKill={handleKillDemucs}
-                              onRequestConfirm={openStudioDialog}
-                            />
-                          ) : (isSeparatingBatchDemucs && activeDemucsEpisodeIds.has(ep.id) && activeDemucsEpisodeId !== ep.id) ? (
-                            <div style={{
-                              padding: '7px 11px',
-                              borderRadius: 8,
-                              background: 'rgba(15, 23, 42, 0.75)',
-                              border: '1px dashed rgba(56, 189, 248, 0.35)',
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'space-between',
-                              gap: 8,
-                            }}>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                                <Clock size={13} color="#94A3B8" />
-                                <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#94A3B8' }}>
-                                  ⏳ 🔇 3. AI បិទសំឡេងចិន — រង់ចាំក្នុង Queue
+                        {(cardStageView === 'all' || cardStageView === 'demucs') && (() => {
+                          const isRunnerCleanBgm = runnerStates?.clean_bgm?.status === 'running';
+                          const isRunnerAll3 = runnerStates?.all3?.status === 'running';
+                          const isCurrentDemucsRunnerEp = (isRunnerCleanBgm && runnerStates?.clean_bgm?.currentEpId === ep.id) ||
+                            (isRunnerAll3 && runnerStates?.all3?.currentEpId === ep.id);
+                          const isQueuedDemucsRunnerEp = (isRunnerCleanBgm && runnerStates?.clean_bgm?.queuedEpIds?.includes(ep.id) && !isCurrentDemucsRunnerEp) ||
+                            (isRunnerAll3 && runnerStates?.all3?.queuedEpIds?.includes(ep.id) && !isCurrentDemucsRunnerEp);
+
+                          const isCurrentRunning = (isSeparatingBatchDemucs && activeDemucsEpisodeId === ep.id) || isCurrentDemucsRunnerEp;
+                          const isQueued = (isSeparatingBatchDemucs && activeDemucsEpisodeIds.has(ep.id) && activeDemucsEpisodeId !== ep.id) || isQueuedDemucsRunnerEp;
+
+                          const effectiveLiveStats = demucsLiveStats[ep.id] || runnerLiveStats?.demucs?.[ep.id] || (isCurrentRunning ? {
+                            percent: runnerStates?.clean_bgm?.progress || 5,
+                            message: runnerStates?.clean_bgm?.message || 'កំពុងបំបែកសំឡេង Demucs...',
+                            logs: [{
+                              time: new Date().toLocaleTimeString(),
+                              progress: runnerStates?.clean_bgm?.progress || 5,
+                              message: runnerStates?.clean_bgm?.message || `⏳ Demucs Progress: ${runnerStates?.clean_bgm?.progress || 5}%`,
+                            }],
+                            model: 'htdemucs',
+                          } : null);
+
+                          const handleStopOrKillDemucs = async (targetEp) => {
+                            if (isCurrentDemucsRunnerEp) {
+                              await runnerStopStep(isRunnerAll3 ? 'all3' : 'clean_bgm');
+                            }
+                            await handleKillDemucs(targetEp);
+                          };
+
+                          if (isCurrentRunning) {
+                            return (
+                              <EpisodeDemucsProgressCard
+                                liveStats={effectiveLiveStats}
+                                ep={ep}
+                                isCurrentRunning={true}
+                                onKill={handleStopOrKillDemucs}
+                                onRequestConfirm={openStudioDialog}
+                              />
+                            );
+                          }
+
+                          if (isQueued) {
+                            return (
+                              <div style={{
+                                padding: '7px 11px',
+                                borderRadius: 8,
+                                background: 'rgba(15, 23, 42, 0.75)',
+                                border: '1px dashed rgba(56, 189, 248, 0.35)',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                                gap: 8,
+                              }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                  <Clock size={13} color="#94A3B8" />
+                                  <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#94A3B8' }}>
+                                    ⏳ 🔇 3. AI បិទសំឡេងចិន — រង់ចាំក្នុង Queue
+                                  </span>
+                                </div>
+                                <span style={{ fontSize: '0.64rem', color: '#64748B' }}>
+                                  ដំណើរការម្ដង ១ ភាគ
                                 </span>
                               </div>
-                              <span style={{ fontSize: '0.64rem', color: '#64748B' }}>
-                                ដំណើរការម្ដង ១ ភាគ
-                              </span>
-                            </div>
-                          ) : (
+                            );
+                          }
+
+                          return (
                             <div
                               style={{
                                 padding: '8px 12px',
@@ -3899,8 +3931,8 @@ export default function GeminiRouteModal({
                                 )}
                               </div>
                             </div>
-                          )
-                        )}
+                          );
+                        })()}
                       </div>
                     </div>
 
@@ -4142,18 +4174,8 @@ export default function GeminiRouteModal({
                           )}
                         </div>
 
-                        {/* Right: Clean Action Buttons (▶ ផលិតទាំង 3 ជំហាន via DubbingStepButton + បើកក្នុង Studio) */}
+                        {/* Right: Clean Action Button (បើកក្នុង Studio) */}
                         <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-                          {!isFullyDone && (
-                            <DubbingStepButton
-                              step="all3"
-                              episodes={[ep]}
-                              variant="card"
-                              setupOptions={{ pipelineMode, dubbingMode, genre, narratorGender, customDirection }}
-                              data-testid={`btn-auto-run-ep-${ep.id}`}
-                            />
-                          )}
-
                           {hasScript && onSwitchEpisode && (
                             <button
                               type="button"

@@ -80,11 +80,10 @@ test('Step 3: App.jsx wraps the application tree with DubbingRunnerProvider', ()
   assert.match(app, /<DubbingRunnerProvider/);
 });
 
-test('Step 3b: GeminiRouteModal integrates DubbingStepCardsBar and DubbingStepButton', () => {
+test('Step 3b: GeminiRouteModal integrates DubbingStepCardsBar for unified 1-by-1 runner', () => {
   const modal = read(FRONTEND_SRC, 'components', 'dashboard', 'GeminiRouteModal.jsx');
   assert.match(modal, /import\s+.*DubbingStepCardsBar.*from\s+['"]\.\.\/\.\.\/features\/dubbing-runner['"]/);
   assert.match(modal, /<DubbingStepCardsBar/);
-  assert.match(modal, /<DubbingStepButton/);
 });
 
 test('Step 3c: EpisodesTab, DubbingModeTab, and VoiceSettings integrate the dubbing-runner feature', () => {
@@ -105,4 +104,17 @@ test('Step 4: api.js provides unified Demucs vocal separation endpoints', () => 
   assert.match(api, /export\s+async\s+function\s+getSeparationStatusApi/);
   assert.match(api, /export\s+async\s+function\s+killSeparationApi/);
 });
+
+test('Step 5: DubbingRunnerContext exports runnerLiveStats and GeminiRouteModal wires live episode progress & console drawer', () => {
+  const ctx = read(FRONTEND_SRC, 'features', 'dubbing-runner', 'DubbingRunnerContext.jsx');
+  assert.match(ctx, /runnerLiveStats/);
+  assert.match(ctx, /queuedEpIds/);
+
+  const modal = read(FRONTEND_SRC, 'components', 'dashboard', 'GeminiRouteModal.jsx');
+  assert.match(modal, /runnerLiveStats/);
+  assert.match(modal, /isCurrentDemucsRunnerEp/);
+  assert.match(modal, /isCurrentVoiceRunnerEp/);
+  assert.match(modal, /isRunnerTranslateActive/);
+});
+
 

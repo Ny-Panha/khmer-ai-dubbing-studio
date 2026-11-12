@@ -24,6 +24,89 @@ export function PlayerTopBar() {
   return null;
 }
 
+/**
+ * Direct Editable Number Input for Framing Percentage (5% - 95%)
+ */
+function FramingCropNumberInput({ value, onChange }) {
+  const [localVal, setLocalVal] = React.useState(String(Math.round(value)));
+  const isFocusedRef = React.useRef(false);
+
+  React.useEffect(() => {
+    if (!isFocusedRef.current) {
+      setLocalVal(String(Math.round(value)));
+    }
+  }, [value]);
+
+  const commitValue = (valStr) => {
+    const num = parseInt(valStr, 10);
+    if (!isNaN(num)) {
+      const clamped = Math.max(5, Math.min(95, num));
+      setLocalVal(String(clamped));
+      onChange?.(clamped);
+    } else {
+      setLocalVal(String(Math.round(value)));
+    }
+  };
+
+  return (
+    <div
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        background: 'rgba(15, 23, 42, 0.85)',
+        border: '1px solid rgba(56, 189, 248, 0.35)',
+        borderRadius: 4,
+        padding: '0 3px',
+        height: 20,
+      }}
+    >
+      <input
+        type="number"
+        min="5"
+        max="95"
+        step="1"
+        value={localVal}
+        onFocus={(e) => {
+          isFocusedRef.current = true;
+          e.target.select();
+        }}
+        onBlur={(e) => {
+          isFocusedRef.current = false;
+          commitValue(e.target.value);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            e.currentTarget.blur();
+          }
+        }}
+        onChange={(e) => {
+          const raw = e.target.value;
+          setLocalVal(raw);
+          const num = parseInt(raw, 10);
+          if (!isNaN(num) && num >= 5 && num <= 95) {
+            onChange?.(num);
+          }
+        }}
+        style={{
+          width: 26,
+          background: 'transparent',
+          border: 'none',
+          outline: 'none',
+          color: '#38BDF8',
+          fontSize: '0.70rem',
+          fontFamily: 'monospace',
+          fontWeight: 700,
+          textAlign: 'right',
+          padding: 0,
+          margin: 0,
+        }}
+        title="វាយបញ្ចូលលេខ % ផ្ទាល់ (5 - 95%) ឬចុចព្រួញ ឡើង/ចុះ"
+      />
+      <span style={{ fontSize: '0.62rem', color: '#94A3B8', fontWeight: 600, paddingLeft: 1 }}>%</span>
+    </div>
+  );
+}
+
 export function PlayerBottomBar({
   currentTime,
   playheadTimeRef = null,
@@ -41,6 +124,13 @@ export function PlayerBottomBar({
   isFullscreen = false,
   renderedVideo = null,
   onResetToPreview = null,
+  onUpdateActiveCrop = null,
+  onAnalyzeFraming = null,
+  isAnalyzingFraming = false,
+  activeCropX = null,
+  framingKeyframes = [],
+  onToggleKeyframe = null,
+  onSeekToKeyframe = null,
 }) {
   const currentTimeSpanRef = useRef(null);
 
@@ -62,19 +152,6 @@ export function PlayerBottomBar({
     : `${Math.max(-48, Math.round(20 * Math.log10(Math.max(0.01, duckVol)) * 10) / 10).toFixed(1)} dB`;
   const meterPercent = duckVol <= 0.001 ? 0 : Math.min(100, Math.max(8, Math.round(effectiveLinearGain * 100)));
 
-  const handleSelectRatio = (ratioVal) => {
-    if (ratioVal === 'fit') {
-      if (onUpdateVoiceSettings) {
-        onUpdateVoiceSettings({ ...(voiceSettings || {}), aspectRatio: null });
-      }
-      return;
-    }
-    if (onAspectRatioChange) {
-      onAspectRatioChange(ratioVal);
-    } else if (onUpdateVoiceSettings) {
-      onUpdateVoiceSettings({ ...(voiceSettings || {}), aspectRatio: ratioVal });
-    }
-  };
 
   return (
     <div className="player-bottom-bar">
@@ -121,52 +198,183 @@ export function PlayerBottomBar({
         </button>
       </div>
 
-      {/* Aspect Ratio Selector (16:9 | 9:16 | 1:1 | Fit) + Live Audio Ducking dB Meter + Fullscreen */}
+      {/* 9:16 Framing Control (Smooth Slider / CapCut Keyframes / AI Auto) + Live Audio Ducking dB Meter + Fullscreen */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'nowrap' }}>
-        {/* Aspect Ratio Selector Pill */}
-        <div
-          className="player-ratio-selector-group"
-          role="group"
-          aria-label="Viewport Aspect Ratio"
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 2,
-            background: 'rgba(9, 10, 15, 0.72)',
-            border: '1px solid var(--line)',
-            borderRadius: 6,
-            padding: 2,
-          }}
-        >
-          {[
-            { id: '16:9', label: '16:9' },
-            { id: '9:16', label: '9:16' },
-          ].map((opt) => {
-            const isActive = rawRatio === opt.id;
-            return (
-              <button
-                key={opt.id}
-                type="button"
-                data-testid={`player-ratio-${opt.id}`}
-                onClick={() => handleSelectRatio(opt.id)}
+        {/* 9:16 Framing Control (Slider / CapCut Keyframes / AI Auto) */}
+        {rawRatio === '9:16' && (() => {
+          const activeVal = activeCropX !== null && activeCropX !== undefined
+            ? Number(activeCropX)
+            : (activeSegment?.cropX !== undefined && activeSegment?.cropX !== null
+              ? Number(activeSegment.cropX)
+              : (activeSegment?.cropPosition === 'left' ? 20 : (activeSegment?.cropPosition === 'right' ? 80 : 50)));
+
+          return (
+            <div
+              className="player-framing-control-group"
+              data-testid="player-framing-control-group"
+              role="group"
+              aria-label="9:16 Framing Position"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 3,
+                background: 'rgba(9, 10, 15, 0.72)',
+                border: '1px solid rgba(255, 255, 255, 0.12)',
+                borderRadius: 6,
+                padding: '2px 4px',
+              }}
+            >
+              {/* Direct Smooth Slider & Exact Number Input (Type or Drag) */}
+              <div
                 style={{
-                  background: isActive ? 'rgba(0, 229, 255, 0.16)' : 'transparent',
-                  color: isActive ? 'var(--primary-accent)' : 'var(--text-secondary)',
-                  border: isActive ? '1px solid rgba(0, 229, 255, 0.4)' : '1px solid transparent',
-                  borderRadius: 4,
-                  padding: '2px 6px',
-                  fontSize: '0.72rem',
-                  fontWeight: isActive ? 700 : 500,
-                  cursor: 'pointer',
-                  lineHeight: 1.3,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 4,
+                  padding: '0 4px',
                 }}
-                title={`Aspect Ratio: ${opt.label}`}
               >
-                {opt.label}
-              </button>
-            );
-          })}
-        </div>
+                <input
+                  type="range"
+                  min="5"
+                  max="95"
+                  step="1"
+                  value={Math.round(activeVal)}
+                  onChange={(e) => onUpdateActiveCrop && onUpdateActiveCrop(Number(e.target.value))}
+                  title={`ទាញរំកិល Crop X: ${Math.round(activeVal)}% (ឬវាយបញ្ចូលលេខក្នុងប្រអប់ក្បែរនេះ)`}
+                  style={{
+                    width: 150,
+                    height: 5,
+                    accentColor: '#38BDF8',
+                    cursor: 'ew-resize',
+                  }}
+                />
+                <FramingCropNumberInput
+                  value={activeVal}
+                  onChange={(val) => onUpdateActiveCrop && onUpdateActiveCrop(val)}
+                />
+              </div>
+
+              {/* CapCut-style Keyframe (💎) Controls */}
+              {(() => {
+                const curT = Number.isFinite(currentTime) ? currentTime : 0;
+                const sortedKfs = [...(framingKeyframes || [])].sort((a, b) => a.time - b.time);
+                const nearestKf = sortedKfs.find((k) => Math.abs(k.time - curT) <= 0.35);
+                const hasKfAtPlayhead = Boolean(nearestKf);
+                const hasPrevKf = sortedKfs.some((k) => k.time < curT - 0.1);
+                const hasNextKf = sortedKfs.some((k) => k.time > curT + 0.1);
+
+                return (
+                  <div
+                    className="player-keyframe-controls"
+                    data-testid="player-keyframe-controls"
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 2,
+                      padding: '0 4px',
+                      borderLeft: '1px solid rgba(255, 255, 255, 0.12)',
+                    }}
+                  >
+                    {/* Jump to Prev Keyframe */}
+                    <button
+                      type="button"
+                      disabled={!hasPrevKf}
+                      onClick={() => onSeekToKeyframe && onSeekToKeyframe('prev')}
+                      title="លោតទៅ Keyframe មុន (Previous Keyframe)"
+                      style={{
+                        background: 'transparent',
+                        border: 'none',
+                        color: hasPrevKf ? '#94A3B8' : 'rgba(255,255,255,0.2)',
+                        padding: '1px 3px',
+                        fontSize: '0.62rem',
+                        cursor: hasPrevKf ? 'pointer' : 'default',
+                      }}
+                    >
+                      ◀◆
+                    </button>
+
+                    {/* Toggle Keyframe (Add / Remove Diamond) */}
+                    <button
+                      type="button"
+                      data-testid="btn-toggle-keyframe"
+                      onClick={() => onToggleKeyframe && onToggleKeyframe()}
+                      title={
+                        hasKfAtPlayhead
+                          ? `លុប Keyframe ត្រង់ ${nearestKf.time.toFixed(1)}s (${Math.round(nearestKf.cropX)}%)`
+                          : `ដៅ Keyframe ថ្មី (💎) ត្រង់ ${curT.toFixed(1)}s`
+                      }
+                      style={{
+                        background: hasKfAtPlayhead
+                          ? 'rgba(56, 189, 248, 0.25)'
+                          : 'rgba(255, 255, 255, 0.08)',
+                        color: hasKfAtPlayhead ? '#38BDF8' : '#E2E8F0',
+                        border: hasKfAtPlayhead
+                          ? '1px solid rgba(56, 189, 248, 0.6)'
+                          : '1px solid rgba(255, 255, 255, 0.2)',
+                        borderRadius: 4,
+                        padding: '1px 5px',
+                        fontSize: '0.65rem',
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 2,
+                      }}
+                    >
+                      {hasKfAtPlayhead ? '◆ −' : '◇ +'}
+                      <span style={{ fontSize: '0.60rem', color: hasKfAtPlayhead ? '#38BDF8' : '#94A3B8' }}>
+                        💎
+                      </span>
+                    </button>
+
+                    {/* Jump to Next Keyframe */}
+                    <button
+                      type="button"
+                      disabled={!hasNextKf}
+                      onClick={() => onSeekToKeyframe && onSeekToKeyframe('next')}
+                      title="លោតទៅ Keyframe បន្ទាប់ (Next Keyframe)"
+                      style={{
+                        background: 'transparent',
+                        border: 'none',
+                        color: hasNextKf ? '#94A3B8' : 'rgba(255,255,255,0.2)',
+                        padding: '1px 3px',
+                        fontSize: '0.62rem',
+                        cursor: hasNextKf ? 'pointer' : 'default',
+                      }}
+                    >
+                      ◆▶
+                    </button>
+                  </div>
+                );
+              })()}
+
+              {onAnalyzeFraming && (
+                <button
+                  type="button"
+                  data-testid="btn-ai-auto-framing"
+                  onClick={onAnalyzeFraming}
+                  disabled={isAnalyzingFraming}
+                  title="ស្កេន AI Face Tracking ស្វ័យប្រវត្តគ្រប់ Segment ក្នុងភាគនេះ"
+                  style={{
+                    background: isAnalyzingFraming ? 'rgba(168, 85, 247, 0.3)' : 'rgba(168, 85, 247, 0.12)',
+                    color: '#C084FC',
+                    border: '1px solid rgba(168, 85, 247, 0.35)',
+                    borderRadius: 4,
+                    padding: '2px 6px',
+                    fontSize: '0.68rem',
+                    fontWeight: 600,
+                    cursor: isAnalyzingFraming ? 'wait' : 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 3,
+                  }}
+                >
+                  {isAnalyzingFraming ? '⏳ ស្កេន...' : '✨ AI Auto'}
+                </button>
+              )}
+            </div>
+          );
+        })()}
 
         {/* Live Audio Ducking dB Meter */}
         <div

@@ -215,3 +215,15 @@ export async function killSeparationApi({ videoPath = '', jobId = 'all' } = {}) 
   return await parseResponseJson(res, 'Failed to kill separation');
 }
 
+/**
+ * Auto-Fit Speech Speed (1.05x - 1.50x) for red/overflowing/trimmed clips
+ */
+export async function autoFitSpeechSpeedApi({ seriesId, episodeId, maxSpeed = 1.50, targetSegmentIds = null, segments = null } = {}) {
+  const res = await fetch('/api/audio/autofit-speed', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ seriesId, episodeId, maxSpeed, targetSegmentIds, segments }),
+  });
+  return await parseResponseJson(res, 'Failed to auto-fit speech speed');
+}
+

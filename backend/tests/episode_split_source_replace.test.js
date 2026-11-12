@@ -152,9 +152,8 @@ test('Scenario 1: Fresh series with 1 long video -> Auto-Split replaces full-vid
     const fullEpExists = savedSeries.episodes.some((e) => Math.abs(e.duration - fullDurationSec) < 1);
     assert.equal(fullEpExists, false, 'No episode with full-video duration may exist in metadata');
 
-    // The source video file on disk must NOT have been deleted
-    assert.ok(fs.existsSync(fullVideoPath), 'The original source video file on disk must be preserved');
-    assert.deepEqual(fs.readFileSync(fullVideoPath), initialBytes, 'Original source video content intact');
+    // The source video file on disk must be cleaned up to free disk space (Option A)
+    assert.equal(fs.existsSync(fullVideoPath), false, 'The original uncut source video file on disk must be cleaned up');
 
     // All chunks have valid video and sequential display numbering 1..11
     savedSeries.episodes.forEach((ep, idx) => {
@@ -284,9 +283,8 @@ test('Scenario 2: Series with 3 real episodes -> split episode 2 with append mod
     assert.equal(savedSeries.episodes[4].episodeNumber, 5, 'Episode 3 display number follows sequential order 1..N');
     assert.equal(savedSeries.episodes[4].title, 'ភាគទី 5: The Finale');
 
-    // 4. Source episode 2 video on disk must remain intact
-    assert.equal(fs.existsSync(ep2File), true);
-    assert.deepEqual(fs.readFileSync(ep2File), ep2Bytes, 'Source ep2 video on disk must not be deleted');
+    // 4. Source episode 2 uncut video on disk is cleaned up (Option A)
+    assert.equal(fs.existsSync(ep2File), false, 'Source ep2 video on disk must be cleaned up');
 
     // 5. No ID collisions
     const allIds = savedSeries.episodes.map((e) => e.id);

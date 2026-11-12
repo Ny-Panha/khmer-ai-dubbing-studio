@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Terminal, ChevronDown, ChevronUp, AlertCircle, CheckCircle2, Clock, Loader2, RotateCcw } from 'lucide-react';
+import { Terminal, ChevronDown, ChevronUp, AlertCircle, CheckCircle2, Clock, Loader2, RotateCcw, Wrench } from 'lucide-react';
 import StudioConfirmDialog from '../../common/StudioConfirmDialog';
 
 /**
@@ -13,12 +13,13 @@ export default function EpisodeTranslateProgressCard({
   isQueued,
   isFailed = false,
   onRetry = null,
+  onRepair = null,
   onKill = null,
   onRequestConfirm = null,
 }) {
   const targetProgress = isQueued
     ? 0
-    : Math.min(100, Math.max(0, Number(activeJob?.progress || 0)));
+    : Math.min(100, Math.max(0, Number(activeJob?.progress ?? activeJob?.percent ?? 0)));
   const [smoothProgress, setSmoothProgress] = useState(targetProgress || (isQueued ? 0 : 1));
   const [showConsole, setShowConsole] = useState(false);
   const [showKillConfirm, setShowKillConfirm] = useState(false);
@@ -51,7 +52,7 @@ export default function EpisodeTranslateProgressCard({
     }
   }, [logs.length, smoothProgress, showConsole]);
 
-  const rawMessage = activeJob?.stageMessage || '';
+  const rawMessage = activeJob?.stageMessage || activeJob?.message || '';
   const message = isFailed
     ? (rawMessage ? rawMessage.replace(/^បរាជ័យ:\s*/, '') : 'ការងារបានបរាជ័យ')
     : (rawMessage || (isQueued ? `ក្នុង Queue (រង់ចាំ Route Key #${assignedKeyNum})...` : 'ដំណើរការ AI Pipeline...'));
@@ -184,36 +185,66 @@ export default function EpisodeTranslateProgressCard({
           </div>
         </div>
 
-        {/* Counter or Retry Button on Failure / Kill Button */}
+        {/* Counter or Retry/Repair Buttons on Failure / Kill Button */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0, marginLeft: 8 }}>
           {isFailed ? (
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                if (typeof onRetry === 'function') onRetry();
-              }}
-              style={{
-                background: 'linear-gradient(135deg, rgba(239, 68, 68, 0.28) 0%, rgba(220, 38, 38, 0.45) 100%)',
-                border: '1px solid rgba(239, 68, 68, 0.65)',
-                color: '#ffffff',
-                borderRadius: 6,
-                padding: '4px 10px',
-                fontSize: '0.70rem',
-                fontWeight: 800,
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 5,
-                boxShadow: '0 0 14px rgba(239, 68, 68, 0.35)',
-                transition: 'all 0.15s ease',
-                flexShrink: 0,
-              }}
-              title="Retry ដំណើរការ Translation ឡើងវិញ"
-            >
-              <RotateCcw size={12} />
-              <span>Retry 🔄</span>
-            </button>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+              {typeof onRepair === 'function' && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onRepair();
+                  }}
+                  style={{
+                    background: 'linear-gradient(135deg, rgba(251, 146, 60, 0.28) 0%, rgba(234, 88, 12, 0.45) 100%)',
+                    border: '1px solid rgba(251, 146, 60, 0.65)',
+                    color: '#ffedd5',
+                    borderRadius: 6,
+                    padding: '4px 9px',
+                    fontSize: '0.70rem',
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 4,
+                    boxShadow: '0 0 10px rgba(251, 146, 60, 0.3)',
+                    flexShrink: 0,
+                  }}
+                  title="ជួសជុលតែឃ្លាដែលខូច (Repair broken segments)"
+                >
+                  <Wrench size={11} />
+                  <span>ជួសជុល</span>
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (typeof onRetry === 'function') onRetry();
+                }}
+                style={{
+                  background: 'linear-gradient(135deg, rgba(239, 68, 68, 0.28) 0%, rgba(220, 38, 38, 0.45) 100%)',
+                  border: '1px solid rgba(239, 68, 68, 0.65)',
+                  color: '#ffffff',
+                  borderRadius: 6,
+                  padding: '4px 10px',
+                  fontSize: '0.70rem',
+                  fontWeight: 800,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 5,
+                  boxShadow: '0 0 14px rgba(239, 68, 68, 0.35)',
+                  transition: 'all 0.15s ease',
+                  flexShrink: 0,
+                }}
+                title="Retry ដំណើរការ Translation ឡើងវិញ (ធ្វើឡើងវិញ)"
+              >
+                <RotateCcw size={12} />
+                <span>ធ្វើឡើងវិញ (Retry)</span>
+              </button>
+            </div>
           ) : (
             <>
               {!isDone && onKill && (
@@ -392,12 +423,12 @@ export default function EpisodeTranslateProgressCard({
       </div>
 
       {/* Collapsible Live Console Terminal Drawer */}
-      <div style={{
-        background: '#070b14',
-        border: `1px solid ${isFailed ? 'rgba(239, 68, 68, 0.35)' : 'rgba(56, 189, 248, 0.25)'}`,
-        borderRadius: 7,
+      <div className="translate-console-drawer" style={{
+        background: '#07080C',
+        border: `1px solid ${isFailed ? 'rgba(239, 68, 68, 0.35)' : 'rgba(56, 189, 248, 0.35)'}`,
+        borderRadius: 8,
         overflow: 'hidden',
-        boxShadow: 'inset 0 2px 10px rgba(0, 0, 0, 0.8)',
+        boxShadow: 'inset 0 2px 10px rgba(0, 0, 0, 0.85)',
       }}>
         {/* Console Header Toggle */}
         <button
@@ -419,7 +450,7 @@ export default function EpisodeTranslateProgressCard({
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <Terminal size={11} color={isFailed ? '#ef4444' : '#38bdf8'} />
             <span style={{ fontSize: '0.64rem', fontWeight: 800, color: '#94a3b8', letterSpacing: '0.04em' }}>
-              CONSOLE LOGS (Key #{assignedKeyNum})
+              CONSOLE LOGS (Gemini AI Key #{assignedKeyNum})
             </span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>

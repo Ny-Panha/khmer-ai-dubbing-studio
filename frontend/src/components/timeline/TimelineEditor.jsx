@@ -34,6 +34,7 @@ function TimelineEditor({
   onDeleteClip,
   onDeleteSegment = null,
   scriptSegments = [],
+  framingKeyframes = [],
   onUpdateSegments,
   voiceSettings = {},
   onUpdateVoiceSettings,
@@ -47,6 +48,7 @@ function TimelineEditor({
   onResetFullVideo = null,
   onBridgeGaps = null,
   onAutoAlignNoOverlap = null,
+  onAutoFitSpeechSpeed = null,
   onResetToSourceTiming = null,
   onAddSegment = null,
   onToggleMuteSegment = null,
@@ -1551,42 +1553,6 @@ function TimelineEditor({
     }
   }, [lastSelectedType, canDeleteSubtitle, canDeleteVideo, selectedSegKey, scriptSegments, onDeleteSegment, onUpdateSegments, onSelectSegment, onDeleteClip, onSelectClip, activeClipId]);
 
-  useEffect(() => {
-    const handleKeyDown = (e) => {
-      if (['INPUT', 'TEXTAREA'].includes(e.target.tagName)) return;
-
-      if (e.code === 'Space') {
-        e.preventDefault();
-        onPlayPause();
-      } else if (e.code === 'KeyB' && (e.ctrlKey || e.metaKey)) {
-        e.preventDefault();
-        const activeSplitTarget = lastSelectedType === 'video'
-          ? (activeClipId || selectedSegKey)
-          : (selectedSegKey || activeClipId);
-        if (onSplitClip) onSplitClip(currentTime, activeSplitTarget);
-      } else if ((e.code === 'KeyZ' && (e.ctrlKey || e.metaKey)) && !e.shiftKey) {
-        e.preventDefault();
-        if (onUndo && canUndo) onUndo();
-      } else if (((e.code === 'KeyZ' && (e.ctrlKey || e.metaKey) && e.shiftKey) || (e.code === 'KeyY' && (e.ctrlKey || e.metaKey)))) {
-        e.preventDefault();
-        if (onRedo && canRedo) onRedo();
-      } else if (e.code === 'Delete' || e.code === 'Backspace') {
-        if (canDelete) {
-          e.preventDefault();
-          handleDeleteSelected();
-        }
-      } else if (e.code === 'ArrowLeft') {
-        e.preventDefault();
-        onSeek(Math.max(0, currentTime - 1));
-      } else if (e.code === 'ArrowRight') {
-        e.preventDefault();
-        onSeek(Math.min(totalDuration, currentTime + 1));
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onPlayPause, onSplitClip, onSeek, onUndo, onRedo, canUndo, canRedo, currentTime, totalDuration, canDelete, handleDeleteSelected]);
 
   // 1. Pure 60FPS Hardware GPU Playhead Animation & 1:1 In-Sync Smooth Center Scroll
   useEffect(() => {
@@ -1762,6 +1728,7 @@ function TimelineEditor({
         scriptSegments={scriptSegments}
         onBridgeGaps={onBridgeGaps}
         onAutoAlignNoOverlap={onAutoAlignNoOverlap}
+        onAutoFitSpeechSpeed={onAutoFitSpeechSpeed}
         onResetToSourceTiming={onResetToSourceTiming}
         onAddSegment={onAddSegment}
         snappingEnabled={snappingEnabled}
@@ -1833,6 +1800,7 @@ function TimelineEditor({
           audioGenerated={audioGenerated}
           showSubtitles={showSubtitles}
           scriptSegments={scriptSegments}
+          framingKeyframes={framingKeyframes}
           selectedSegmentId={selectedSegmentId}
           selectedAudioId={selectedAudioId}
           setSelectedAudioId={setSelectedAudioId}

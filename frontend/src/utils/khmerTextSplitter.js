@@ -94,20 +94,53 @@ export function getLivePagedSubtitle(seg, currentTime, parseTimeToSeconds) {
   if (!text) return '';
   if (!isLongKhmerSubtitle(text)) return text;
 
-  const s = (typeof seg.startSec === 'number' && !isNaN(seg.startSec))
-    ? seg.startSec
-    : ((typeof seg.audioStartSec === 'number' && !isNaN(seg.audioStartSec))
-      ? seg.audioStartSec
+  const hasVoice = Boolean(
+    seg.audioUrl ||
+    seg.audioPath ||
+    seg.rawAudioPath ||
+    seg.audioFile ||
+    seg.rawAudioFile ||
+    seg.ttsStatus === 'ready' ||
+    seg.status === 'audio_ready' ||
+    (typeof seg.finalAudioDuration === 'number' && seg.finalAudioDuration > 0) ||
+    (typeof seg.audioDuration === 'number' && seg.audioDuration > 0) ||
+    (typeof seg.audioDurationSec === 'number' && seg.audioDurationSec > 0)
+  );
+
+  const s = (hasVoice && typeof seg.audioStartSec === 'number' && !isNaN(seg.audioStartSec))
+    ? seg.audioStartSec
+    : ((typeof seg.startSec === 'number' && !isNaN(seg.startSec))
+      ? seg.startSec
       : (parseTimeToSeconds ? parseTimeToSeconds(seg.start ?? seg.startTime, 0) : 0));
 
-  let e = (typeof seg.endSec === 'number' && !isNaN(seg.endSec))
-    ? seg.endSec
-    : ((typeof seg.audioEndSec === 'number' && !isNaN(seg.audioEndSec))
-      ? seg.audioEndSec
-      : (parseTimeToSeconds ? parseTimeToSeconds(seg.end ?? seg.endTime, s + (seg.audioDurationSec || 2.5)) : s + (seg.audioDurationSec || 2.5)));
+  const realAudioDur = hasVoice
+    ? ((typeof seg.finalAudioDuration === 'number' && seg.finalAudioDuration > 0)
+      ? seg.finalAudioDuration
+      : ((typeof seg.audioDurationSec === 'number' && seg.audioDurationSec > 0 && !isNaN(seg.audioDurationSec))
+        ? seg.audioDurationSec
+        : ((typeof seg.audioDuration === 'number' && seg.audioDuration > 0)
+          ? seg.audioDuration
+          : ((typeof seg.originalAudioDuration === 'number' && seg.originalAudioDuration > 0)
+            ? seg.originalAudioDuration
+            : ((typeof seg.rawAudioDur === 'number' && seg.rawAudioDur > 0)
+              ? seg.rawAudioDur
+              : null)))))
+    : null;
 
-  if (isNaN(e) || e <= s || (e - s) < 0.6) {
-    e = s + Math.max(1.8, Math.min(6.0, text.length * 0.16));
+  const isTrimmed = Boolean(seg.audioTrimmed || seg.userTrimmed);
+  let e;
+  if (isTrimmed && typeof seg.audioEndSec === 'number' && !isNaN(seg.audioEndSec)) {
+    e = seg.audioEndSec;
+  } else if (realAudioDur && realAudioDur > 0) {
+    e = s + realAudioDur;
+  } else if (typeof seg.endSec === 'number' && !isNaN(seg.endSec)) {
+    e = seg.endSec;
+  } else {
+    e = parseTimeToSeconds ? parseTimeToSeconds(seg.end ?? seg.endTime, s + 2.5) : (s + 2.5);
+  }
+
+  if (isNaN(e) || e <= s || (e - s) < 0.2) {
+    e = s + Math.max(1.2, Math.min(5.0, text.length * 0.16));
   }
 
   const dur = Math.max(1.5, e - s);

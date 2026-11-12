@@ -5,6 +5,7 @@ import {
   checkEpisodeHasScript,
   checkEpisodeHasAudioReady,
   checkEpisodeHasDemucsReady,
+  checkEpisodeHasAutoFitReady,
 } from '../../components/dashboard/geminiRouteHelpers';
 
 /**
@@ -28,6 +29,7 @@ export default function DubbingStepButton({
     runSingleTranslate,
     runSingleVoice,
     runSingleCleanBgm,
+    runSingleAutoFitSpeed,
     runSingleEpisodeAll3,
     runSequentialStep,
     stopStep,
@@ -47,6 +49,7 @@ export default function DubbingStepButton({
     if (!singleEp) return false;
     if (step === 'translate') return checkEpisodeHasScript(singleEp);
     if (step === 'voice') return checkEpisodeHasAudioReady(singleEp, null, null) && !singleEp.audioOutdated;
+    if (step === 'autofit') return checkEpisodeHasAudioReady(singleEp, null, null) && checkEpisodeHasAutoFitReady(singleEp);
     if (step === 'clean_bgm') return checkEpisodeHasDemucsReady(singleEp, null, null);
     if (step === 'all3') {
       return (
@@ -72,6 +75,7 @@ export default function DubbingStepButton({
       } else {
         if (step === 'translate') await runSingleTranslate(singleEp, setupOptions);
         else if (step === 'voice') await runSingleVoice(singleEp, setupOptions);
+        else if (step === 'autofit') await runSingleAutoFitSpeed(singleEp, setupOptions);
         else if (step === 'clean_bgm') await runSingleCleanBgm(singleEp, setupOptions);
         else if (step === 'all3') await runSingleEpisodeAll3(singleEp, setupOptions);
       }

@@ -1,7 +1,7 @@
 import React from 'react';
 import {
   Plus, Undo2, Redo2, Scissors, Trash2, Film, Sparkles, RotateCcw,
-  ZoomOut, ZoomIn, Maximize2, LocateFixed, Magnet, Link2, MessageSquare
+  ZoomOut, ZoomIn, Maximize2, LocateFixed, Magnet, MessageSquare, Zap
 } from 'lucide-react';
 import { formatMinSec } from '../../utils/timestampUtils';
 
@@ -25,6 +25,7 @@ export default function TimelineToolbar({
   scriptSegments,
   onBridgeGaps = null,
   onAutoAlignNoOverlap = null,
+  onAutoFitSpeechSpeed = null,
   onResetToSourceTiming = null,
   snappingEnabled = true,
   setSnappingEnabled = null,
@@ -153,18 +154,19 @@ export default function TimelineToolbar({
             </button>
           )}
 
-          {onBridgeGaps && (
+          {onAutoFitSpeechSpeed && (
             <button
               type="button"
-              onClick={() => onBridgeGaps && onBridgeGaps()}
-              className="timeline-pill-tool tool-neutral"
-              title="🔗 Bridge Gaps: ភ្ជាប់ចន្លោះស្ងាត់រវាង Clip (Close dead silence gaps)"
-              disabled={(!videoClips || videoClips.length <= 1) && (!scriptSegments || scriptSegments.length <= 1)}
+              onClick={() => onAutoFitSpeechSpeed && onAutoFitSpeechSpeed()}
+              className="timeline-pill-tool tool-amber"
+              title="⚡ Auto-Fit Speed (1.05x - 1.50x): ពន្លឿនឃ្លាពណ៌ក្រហមឱ្យនិយាយទាន់ និងចប់គ្រប់អក្សរ (No cut audio)"
+              disabled={!scriptSegments || scriptSegments.length === 0}
             >
-              <Link2 size={12} />
-              <span>Bridge Gaps</span>
+              <Zap size={12} />
+              <span>Auto-Fit Speed</span>
             </button>
           )}
+
 
           {onResetToSourceTiming && (
             <button

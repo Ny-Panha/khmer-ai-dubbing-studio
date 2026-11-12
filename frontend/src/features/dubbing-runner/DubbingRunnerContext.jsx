@@ -8,28 +8,38 @@ import {
   separateAudioApi,
   getSeparationProgressApi,
   killSeparationApi,
+  autoFitSpeechSpeedApi,
 } from '../../services/api';
 import {
   checkEpisodeHasScript,
   checkEpisodeHasAudioReady,
   checkEpisodeHasDemucsReady,
+  checkEpisodeHasAutoFitReady,
   getEpisodeBrokenSummary,
 } from '../../components/dashboard/geminiRouteHelpers';
 
 const DubbingRunnerContext = createContext(null);
 
 export function DubbingRunnerProvider({ children, activeSeries, refreshSeries }) {
-  // Global runners state per step: 'translate' | 'repair' | 'voice' | 'clean_bgm' | 'all3'
+  // Global runners state per step: 'translate' | 'repair' | 'voice' | 'clean_bgm' | 'autofit' | 'all3'
   const [runnerStates, setRunnerStates] = useState({
     translate: { status: 'idle', currentEpId: null, currentEpIndex: 0, totalEps: 0, progress: 0, message: '' },
     repair: { status: 'idle', currentEpId: null, currentEpIndex: 0, totalEps: 0, progress: 0, message: '' },
     voice: { status: 'idle', currentEpId: null, currentEpIndex: 0, totalEps: 0, progress: 0, message: '' },
     clean_bgm: { status: 'idle', currentEpId: null, currentEpIndex: 0, totalEps: 0, progress: 0, message: '' },
+    autofit: { status: 'idle', currentEpId: null, currentEpIndex: 0, totalEps: 0, progress: 0, message: '' },
     all3: { status: 'idle', currentEpId: null, currentEpIndex: 0, totalEps: 0, progress: 0, message: '' },
   });
 
   // Track currently processing episode IDs across all runners
   const [activeEpisodeIds, setActiveEpisodeIds] = useState(new Set());
+
+  // Detailed live statistics & console logs per episode for rich UI parity with Studio
+  const [runnerLiveStats, setRunnerLiveStats] = useState({
+    translate: {},
+    demucs: {},
+    tts: {},
+  });
 
   // Abort controllers per step for clean instantaneous stop
   const abortControllersRef = useRef({
@@ -37,6 +47,7 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
     repair: null,
     voice: null,
     clean_bgm: null,
+    autofit: null,
     all3: null,
   });
 
@@ -87,7 +98,29 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
       throw new Error(jobRes?.error || 'Failed to start translation job');
     }
 
+    setRunnerLiveStats((prev) => ({
+      ...prev,
+      translate: {
+        ...prev.translate,
+        [ep.id]: {
+          percent: 5,
+          stageMessage: 'ចាប់ផ្ដើមបកប្រែ Script (Gemini AI)...',
+          message: 'ចាប់ផ្ដើមបកប្រែ Script (Gemini AI)...',
+          logs: [
+            {
+              time: new Date().toLocaleTimeString(),
+              progress: 5,
+              message: `📝 ចាប់ផ្ដើមវិភាគវីដេអូ & បកប្រែ Script [EP${ep.episodeNumber || ep.id}]...`,
+            },
+          ],
+          isDone: false,
+          isFailed: false,
+        },
+      },
+    }));
+
     // Poll until 100% completed on disk
+    let lastLoggedProgress = -1;
     while (!signal?.aborted) {
       await new Promise((r) => setTimeout(r, 1500));
       if (signal?.aborted) {
@@ -97,13 +130,75 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
       const st = await getJobStatus(jobId, { seriesId, episodeId: ep.id, signal }).catch(() => null);
       const curStatus = st?.status || st?.job?.status;
       const progress = Number(st?.progress || st?.job?.progress || 0);
+      const stageMsg = st?.stageMessage || st?.job?.stageMessage || '';
+      const rawLogs = st?.logs || st?.job?.logs || [];
 
-      updateRunnerState('translate', { progress });
+      updateRunnerState('translate', { progress, message: stageMsg });
+
+      setRunnerLiveStats((prev) => {
+        const prevLogs = prev.translate?.[ep.id]?.logs || [];
+        let mergedLogs = [...prevLogs];
+        if (Array.isArray(rawLogs) && rawLogs.length > 0) {
+          mergedLogs = rawLogs;
+        } else if (progress !== lastLoggedProgress && stageMsg) {
+          mergedLogs.push({
+            time: new Date().toLocaleTimeString(),
+            progress,
+            message: stageMsg,
+          });
+        }
+        return {
+          ...prev,
+          translate: {
+            ...prev.translate,
+            [ep.id]: {
+              percent: progress,
+              stageMessage: stageMsg || `Gemini Translation: ${progress}%`,
+              message: stageMsg || `Gemini Translation: ${progress}%`,
+              logs: mergedLogs,
+              isDone: curStatus === 'completed',
+              isFailed: curStatus === 'failed',
+            },
+          },
+        };
+      });
+
+      if (progress !== lastLoggedProgress) {
+        lastLoggedProgress = progress;
+        console.log(`[Translate 📝] EP${ep.episodeNumber || ep.id}: ${progress}% - ${stageMsg || 'កំពុងដំណើរការ...'}`);
+      }
 
       if (curStatus === 'completed') {
+        console.log(`[Translate 📝] ✅ EP${ep.episodeNumber || ep.id}: 100% រួចរាល់!`);
+        setRunnerLiveStats((prev) => ({
+          ...prev,
+          translate: {
+            ...prev.translate,
+            [ep.id]: {
+              ...(prev.translate?.[ep.id] || {}),
+              percent: 100,
+              isDone: true,
+              stageMessage: 'បកប្រែ Script រួចរាល់ 100%',
+              message: 'បកប្រែ Script រួចរាល់ 100%',
+            },
+          },
+        }));
         return { success: true, jobId, data: st };
       }
       if (curStatus === 'failed') {
+        console.error(`[Translate 📝] ❌ EP${ep.episodeNumber || ep.id} បរាជ័យ:`, st?.error || st?.job?.error);
+        setRunnerLiveStats((prev) => ({
+          ...prev,
+          translate: {
+            ...prev.translate,
+            [ep.id]: {
+              ...(prev.translate?.[ep.id] || {}),
+              isFailed: true,
+              stageMessage: `បរាជ័យ: ${st?.error || st?.job?.error || 'Translation failed'}`,
+              message: `បរាជ័យ: ${st?.error || st?.job?.error || 'Translation failed'}`,
+            },
+          },
+        }));
         throw new Error(st?.error || st?.job?.error || 'Translation failed');
       }
     }
@@ -137,14 +232,25 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
 
     if (res?.jobId || res?.jobIds?.[0]) {
       const jId = res.jobId || res.jobIds[0];
+      let lastLoggedRepair = -1;
       while (!signal?.aborted) {
         await new Promise((r) => setTimeout(r, 1500));
         if (signal?.aborted) break;
         const statusRes = await getJobStatus(jId, { seriesId, episodeId: ep.id, signal }).catch(() => null);
-        if (statusRes?.status === 'completed' || statusRes?.job?.status === 'completed') {
+        const curStatus = statusRes?.status || statusRes?.job?.status;
+        const pct = Number(statusRes?.progress || statusRes?.job?.progress || 0);
+
+        if (pct !== lastLoggedRepair) {
+          lastLoggedRepair = pct;
+          console.log(`[Repair 🔧] EP${ep.episodeNumber || ep.id}: ${pct}% - ${statusRes?.stageMessage || 'កំពុងជួសជុល...'}`);
+        }
+
+        if (curStatus === 'completed') {
+          console.log(`[Repair 🔧] ✅ EP${ep.episodeNumber || ep.id}: 100% ជួសជុលរួចរាល់!`);
           break;
         }
-        if (statusRes?.status === 'failed' || statusRes?.job?.status === 'failed') {
+        if (curStatus === 'failed') {
+          console.error(`[Repair 🔧] ❌ EP${ep.episodeNumber || ep.id} ជួសជុលបរាជ័យ:`, statusRes?.error);
           throw new Error(statusRes?.error || 'Text repair failed');
         }
       }
@@ -172,23 +278,127 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
 
     updateRunnerState('voice', { message: `[EP${ep.episodeNumber || ep.id}] បង្កើតសំឡេងខ្មែរ AI (${segments.length} ឃ្លា)...` });
 
+    setRunnerLiveStats((prev) => ({
+      ...prev,
+      tts: {
+        ...prev.tts,
+        [ep.id]: {
+          percent: 15,
+          logs: [
+            {
+              time: new Date().toLocaleTimeString(),
+              progress: 15,
+              message: `🎙️ ចាប់ផ្ដើមបង្កើតសំឡេងខ្មែរ AI (${segments.length} ឃ្លា)...`,
+            },
+          ],
+          message: 'កំពុងបង្កើតសំឡេងខ្មែរ AI...',
+          isDone: false,
+          isFailed: false,
+        },
+      },
+    }));
+
     // Build speaker map if character mapping exists
     const speakerMap = options.speakerMap || {};
     const voiceId = options.voiceId || 'km-KH-PisethNeural';
 
-    const ttsRes = await generateAudioApi({
-      segments,
-      voiceId,
-      seriesId,
-      episodeId: ep.id,
-      videoId,
-      speakerMap,
-      signal,
-    });
+    console.log(`[Voice 🎙️] EP${ep.episodeNumber || ep.id}: កំពុងបង្កើតសំឡេង AI (${segments.length} ឃ្លា)...`);
+
+    let pollTimer = null;
+    let lastReportedCurrent = 0;
+    pollTimer = setInterval(async () => {
+      try {
+        const pRes = await fetch(`/api/tts/progress?seriesId=${seriesId}&episodeId=${ep.id}&total=${segments.length}`);
+        const pData = await pRes.json();
+        if (pData?.success) {
+          const cur = pData.current || 0;
+          const tot = pData.total || segments.length;
+          const pct = tot > 0 ? Math.min(95, Math.max(10, Math.round((cur / tot) * 100))) : 15;
+          updateRunnerState('voice', { progress: pct, message: `[EP${ep.episodeNumber || ep.id}] សំយោគ ${cur}/${tot} ឃ្លា (${pct}%)...` });
+          setRunnerLiveStats((prev) => {
+            const prevStats = prev.tts?.[ep.id] || { logs: [] };
+            const currentLogs = [...(prevStats.logs || [])];
+            if (cur > lastReportedCurrent) {
+              lastReportedCurrent = cur;
+              currentLogs.push({
+                time: new Date().toLocaleTimeString(),
+                progress: pct,
+                message: `🎙️ សំយោគសំឡេង: ${cur}/${tot} ឃ្លា (${pct}%)`,
+              });
+            }
+            return {
+              ...prev,
+              tts: {
+                ...prev.tts,
+                [ep.id]: {
+                  current: cur,
+                  total: tot,
+                  percent: pct,
+                  message: `កំពុងសំយោគ ${cur}/${tot} ឃ្លា (${pct}%)...`,
+                  logs: currentLogs,
+                  isDone: false,
+                  isFailed: false,
+                },
+              },
+            };
+          });
+        }
+      } catch (_) {}
+    }, 1200);
+
+    let ttsRes;
+    try {
+      ttsRes = await generateAudioApi({
+        segments,
+        voiceId,
+        seriesId,
+        episodeId: ep.id,
+        videoId,
+        speakerMap,
+        signal,
+      });
+    } finally {
+      if (pollTimer) clearInterval(pollTimer);
+    }
 
     if (!ttsRes?.success && ttsRes?.error) {
+      setRunnerLiveStats((prev) => ({
+        ...prev,
+        tts: {
+          ...prev.tts,
+          [ep.id]: {
+            ...(prev.tts[ep.id] || {}),
+            isFailed: true,
+            message: `❌ បរាជ័យ: ${ttsRes.error}`,
+          },
+        },
+      }));
+      console.error(`[Voice 🎙️] ❌ EP${ep.episodeNumber || ep.id} បរាជ័យ:`, ttsRes.error);
       throw new Error(ttsRes.error || 'TTS Generation failed');
     }
+
+    setRunnerLiveStats((prev) => ({
+      ...prev,
+      tts: {
+        ...prev.tts,
+        [ep.id]: {
+          ...(prev.tts[ep.id] || {}),
+          percent: 100,
+          isDone: true,
+          message: '✅ សំឡេងខ្មែរ AI រួចរាល់ 100%!',
+          logs: [
+            ...(prev.tts[ep.id]?.logs || []),
+            {
+              time: new Date().toLocaleTimeString(),
+              progress: 100,
+              message: `✅ បង្កើតសំឡេង ${segments.length} ឃ្លារួចរាល់ 100%!`,
+            },
+          ],
+        },
+      },
+    }));
+
+    console.log(`[Voice 🎙️] ✅ EP${ep.episodeNumber || ep.id}: 100% បង្កើតសំឡេងរួចរាល់!`);
 
     // Sync timeline audio tracks if available
     try {
@@ -219,6 +429,91 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
 
     updateRunnerState('clean_bgm', { message: `[EP${ep.episodeNumber || ep.id}] កំពុងបិទសំឡេងចិន (Demucs Clean BGM)...` });
 
+    setRunnerLiveStats((prev) => ({
+      ...prev,
+      demucs: {
+        ...prev.demucs,
+        [ep.id]: {
+          percent: 5,
+          logs: [
+            {
+              time: new Date().toLocaleTimeString(),
+              progress: 5,
+              message: `🎧 [EP${ep.episodeNumber || ep.id}] ចាប់ផ្ដើមបំបែកសំឡេងដើម (Demucs AI Model: ${options.model || 'htdemucs'})...`,
+            },
+          ],
+          message: 'AI Deep Learning Stem Separation...',
+          model: options.model || 'htdemucs',
+          isDone: false,
+          isFailed: false,
+        },
+      },
+    }));
+
+    // 1. Start concurrent real-time polling every 1000ms while Demucs worker is in-flight
+    let pollTimer = null;
+    let lastLoggedDemucsPct = -1;
+
+    const pollDemucs = async () => {
+      try {
+        const prog = await getSeparationProgressApi(videoRef, { signal }).catch(() => null);
+        if (prog) {
+          const pct = Math.min(100, Math.max(0, Number(prog.progress || prog.percent || 0)));
+          if (pct > 0) {
+            updateRunnerState('clean_bgm', {
+              progress: pct,
+              message: `[EP${ep.episodeNumber || ep.id}] កំពុងបិទសំឡេងចិន (Demucs ${pct}%)...`,
+            });
+          }
+
+          setRunnerLiveStats((prev) => {
+            const prevEp = prev.demucs?.[ep.id] || { logs: [] };
+            let mergedLogs = [...(prevEp.logs || [])];
+
+            if (Array.isArray(prog.logs) && prog.logs.length > 0) {
+              const seen = new Set(mergedLogs.map((l) => `${l.progress}_${l.message}`));
+              for (const sLog of prog.logs) {
+                const key = `${sLog.progress}_${sLog.message}`;
+                if (!seen.has(key)) {
+                  mergedLogs.push(sLog);
+                  seen.add(key);
+                }
+              }
+            } else if (pct > (mergedLogs[mergedLogs.length - 1]?.progress || 0)) {
+              mergedLogs.push({
+                time: new Date().toLocaleTimeString(),
+                progress: pct,
+                message: prog.message || `⏳ Demucs Progress: ${pct}%`,
+              });
+            }
+
+            return {
+              ...prev,
+              demucs: {
+                ...prev.demucs,
+                [ep.id]: {
+                  percent: pct > 0 ? pct : (prevEp.percent || 5),
+                  logs: mergedLogs.slice(-60),
+                  message: prog.message || `Demucs Separation: ${pct}%`,
+                  model: prog.model || options.model || 'htdemucs',
+                  isDone: Boolean(prog.status === 'completed' || (prog.isDone && prog.noVocalsUrl) || pct >= 100),
+                  isFailed: Boolean(prog.status === 'error' || prog.isFailed),
+                },
+              },
+            };
+          });
+
+          if (pct !== lastLoggedDemucsPct && pct > 0) {
+            lastLoggedDemucsPct = pct;
+            console.log(`[Clean BGM 🔇] EP${ep.episodeNumber || ep.id}: ${pct}% - ${prog.message || 'កំពុងបំបែកសំឡេង Demucs...'}`);
+          }
+        }
+      } catch (_) {}
+    };
+
+    pollDemucs();
+    pollTimer = setInterval(pollDemucs, 1000);
+
     let sepRes = null;
     try {
       sepRes = await separateAudioApi({
@@ -233,34 +528,61 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
       const isFatal = /memory|alloc_cpu|DefaultCPUAllocator|refused|code 1/i.test(String(err?.message || ''));
       if (isFatal) throw err;
       console.warn('[DubbingRunner] Separate audio initial POST error, checking progress:', err.message);
+    } finally {
+      if (pollTimer) clearInterval(pollTimer);
     }
 
-    // If response returned instantly with completed status
-    if (sepRes?.success && sepRes?.noVocalsUrl) {
-      return { success: true, noVocalsUrl: sepRes.noVocalsUrl };
-    }
-
-    // Poll separation progress until complete
-    while (!signal?.aborted) {
-      await new Promise((r) => setTimeout(r, 2000));
-      if (signal?.aborted) {
-        await killSeparationApi({ videoPath: videoRef, jobId: 'all' }).catch(() => {});
-        throw new Error('Demucs separation aborted by user');
-      }
-
-      const prog = await getSeparationProgressApi(videoRef, { signal }).catch(() => null);
-      if (prog) {
-        const pct = Math.min(100, Math.max(0, Number(prog.progress || prog.percent || 0)));
-        updateRunnerState('clean_bgm', { progress: pct });
-
-        if (prog.status === 'completed' || (prog.isDone && prog.noVocalsUrl)) {
-          return { success: true, noVocalsUrl: prog.noVocalsUrl };
+    // 2. If separateAudioApi returned without success (e.g. transient timeout), keep polling until completed
+    if (!sepRes?.success || !sepRes?.noVocalsUrl) {
+      while (!signal?.aborted) {
+        await new Promise((r) => setTimeout(r, 1200));
+        if (signal?.aborted) {
+          await killSeparationApi({ videoPath: videoRef, jobId: 'all' }).catch(() => {});
+          throw new Error('Demucs separation aborted by user');
         }
-        if (prog.status === 'error' || prog.isFailed) {
-          throw new Error(prog.error || prog.message || 'Demucs separation failed');
+
+        const prog = await getSeparationProgressApi(videoRef, { signal }).catch(() => null);
+        if (prog) {
+          const pct = Math.min(100, Math.max(0, Number(prog.progress || prog.percent || 0)));
+          updateRunnerState('clean_bgm', { progress: pct });
+
+          if (prog.status === 'completed' || (prog.isDone && prog.noVocalsUrl) || pct >= 100) {
+            sepRes = { success: true, noVocalsUrl: prog.noVocalsUrl, noVocalsPath: prog.noVocalsPath };
+            break;
+          }
+          if (prog.status === 'error' || prog.isFailed) {
+            console.error(`[Clean BGM 🔇] ❌ EP${ep.episodeNumber || ep.id} បរាជ័យ:`, prog.error || prog.message);
+            throw new Error(prog.error || prog.message || 'Demucs separation failed');
+          }
         }
       }
     }
+
+    // 3. Mark 100% completed
+    console.log(`[Clean BGM 🔇] ✅ EP${ep.episodeNumber || ep.id}: 100% រួចរាល់!`);
+    setRunnerLiveStats((prev) => ({
+      ...prev,
+      demucs: {
+        ...prev.demucs,
+        [ep.id]: {
+          ...(prev.demucs?.[ep.id] || {}),
+          percent: 100,
+          isDone: true,
+          isFailed: false,
+          message: 'Clean BGM រួចរាល់ ១០០%',
+          logs: [
+            ...(prev.demucs?.[ep.id]?.logs || []),
+            {
+              time: new Date().toLocaleTimeString(),
+              progress: 100,
+              message: '🎉 [AudioSeparation] ✅ Clean BGM រួចរាល់ 100%!',
+            },
+          ],
+        },
+      },
+    }));
+
+    return { success: true, noVocalsUrl: sepRes?.noVocalsUrl };
 
     return { success: false, aborted: true };
   }, [activeSeries?.id, updateRunnerState]);
@@ -285,6 +607,38 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
   }, [runSingleTranslate, runSingleVoice, runSingleCleanBgm, refreshSeries]);
 
   /**
+   * 4B. Auto-Fit Speech Speed for a Single Episode (1.05x - 1.50x)
+   * Speeds up any red/overflowing/trimmed segments so they fit subtitle slots without cutting off speech
+   */
+  const runSingleAutoFitSpeed = useCallback(async (ep, options = {}, signal = null) => {
+    if (!ep) return { success: false, error: 'No episode provided' };
+    const seriesId = activeSeries?.id || ep.seriesId || 'drama_project';
+    const epId = ep.id;
+
+    try {
+      if (signal?.aborted) return { success: false, aborted: true };
+
+      const res = await autoFitSpeechSpeedApi({
+        seriesId,
+        episodeId: epId,
+        maxSpeed: options.maxSpeed || 1.50,
+      });
+
+      if (res?.success) {
+        if (typeof refreshSeries === 'function') {
+          await refreshSeries();
+        }
+        return { success: true, fittedCount: res.fittedCount || 0 };
+      }
+      return { success: false, error: res?.error || 'Auto-fit speed failed' };
+    } catch (err) {
+      if (signal?.aborted) return { success: false, aborted: true };
+      console.error(`[DubbingRunner] Auto-fit speed failed for EP ${epId}:`, err);
+      return { success: false, error: err.message };
+    }
+  }, [activeSeries?.id, refreshSeries]);
+
+  /**
    * 5. Strict 1-by-1 Sequential Queue Runner (EP1 ➔ EP2 ➔ ... ➔ EPN)
    * Awaits 100% completion of episode N before triggering episode N+1.
    */
@@ -292,21 +646,46 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
     const allEpisodes = Array.isArray(activeSeries?.episodes) ? activeSeries.episodes : [];
 
     // Smart Auto-Targeting: If episodesList is empty, auto-target episodes needing this step
-    let queue = Array.isArray(episodesList) && episodesList.length > 0 ? episodesList : [];
-    if (queue.length === 0) {
+    let queue = Array.isArray(episodesList) && episodesList.length > 0 ? [...episodesList] : [];
+    if (stepType === 'repair') {
+      const candidates = queue.length > 0 ? queue : allEpisodes;
+      queue = candidates.filter((ep) => {
+        const scan = getEpisodeBrokenSummary(ep);
+        return (scan?.textBrokenCount > 0 || scan?.totalBrokenCount > 0 || ep.status === 'failed');
+      });
+      if (queue.length === 0) {
+        updateRunnerState('repair', { message: '✅ គ្រប់ភាគទាំងអស់មានអត្ថបទត្រឹមត្រូវ (គ្មានឃ្លាខូចទេ)' });
+        return { success: true, count: 0 };
+      }
+    } else if (stepType === 'autofit') {
+      const candidates = queue.length > 0 ? queue : allEpisodes;
+      queue = options.force
+        ? candidates.filter((ep) => checkEpisodeHasScript(ep) && checkEpisodeHasAudioReady(ep, null, null))
+        : candidates.filter((ep) => checkEpisodeHasScript(ep) && checkEpisodeHasAudioReady(ep, null, null) && !checkEpisodeHasAutoFitReady(ep));
+      if (queue.length === 0) {
+        const voiced = candidates.filter((ep) => checkEpisodeHasScript(ep) && checkEpisodeHasAudioReady(ep, null, null));
+        if (voiced.length > 0) {
+          queue = voiced;
+        } else {
+          updateRunnerState('autofit', { message: 'មិនទាន់មានភាគដែលមានសំឡេងសម្រាប់ Auto-Fit ទេ' });
+          return { success: true, count: 0 };
+        }
+      }
+    } else if (options.force) {
+      if (queue.length === 0) {
+        queue = (stepType === 'voice')
+          ? allEpisodes.filter((ep) => checkEpisodeHasScript(ep))
+          : allEpisodes;
+      }
+    } else if (queue.length === 0) {
       if (stepType === 'translate') {
         queue = allEpisodes.filter((ep) => !checkEpisodeHasScript(ep));
-      } else if (stepType === 'repair') {
-        queue = allEpisodes.filter((ep) => checkEpisodeHasScript(ep) && (getEpisodeBrokenSummary(ep)?.textBrokenCount || 0) > 0);
       } else if (stepType === 'voice') {
         queue = allEpisodes.filter((ep) => checkEpisodeHasScript(ep) && (!checkEpisodeHasAudioReady(ep, null, null) || ep.audioOutdated));
       } else if (stepType === 'clean_bgm') {
         queue = allEpisodes.filter((ep) => !checkEpisodeHasDemucsReady(ep, null, null));
       } else if (stepType === 'all3') {
         queue = allEpisodes.filter((ep) => !checkEpisodeHasScript(ep) || !checkEpisodeHasAudioReady(ep, null, null) || !checkEpisodeHasDemucsReady(ep, null, null));
-      }
-      if (queue.length === 0 && options.force) {
-        queue = allEpisodes;
       }
     }
 
@@ -324,13 +703,17 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
       currentEpIndex: 1,
       totalEps: queue.length,
       currentEpId: queue[0]?.id || null,
+      queuedEpIds: queue.map((e) => e.id),
       progress: 0,
       message: `ចាប់ផ្តើមរត់ 1-by-1 លើ ${queue.length} ភាគ...`,
     });
 
     try {
       for (let idx = 0; idx < queue.length; idx++) {
-        if (controller.signal.aborted) break;
+        if (controller.signal.aborted) {
+          console.log(`[1-by-1 Runner] 🛑 បញ្ឈប់ដំណើរការ ${stepType} ដោយអ្នកប្រើប្រាស់`);
+          break;
+        }
         const currentEp = queue[idx];
 
         setActiveEpisodeIds((prev) => new Set([...prev, currentEp.id]));
@@ -339,8 +722,11 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
           currentEpIndex: idx + 1,
           totalEps: queue.length,
           currentEpId: currentEp.id,
+          queuedEpIds: queue.map((e) => e.id),
           message: `កំពុងរត់ EP${currentEp.episodeNumber || currentEp.id} (${idx + 1}/${queue.length})...`,
         });
+
+        console.log(`%c[1-by-1 Runner] 🚀 [EP${currentEp.episodeNumber || currentEp.id}] ចាប់ផ្ដើម ${stepType.toUpperCase()} (${idx + 1}/${queue.length})...`, 'color: #38bdf8; font-weight: bold;');
 
         // Await 100% completion of single episode step before proceeding to next!
         if (stepType === 'translate') {
@@ -351,6 +737,8 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
           await runSingleVoice(currentEp, options, controller.signal);
         } else if (stepType === 'clean_bgm') {
           await runSingleCleanBgm(currentEp, options, controller.signal);
+        } else if (stepType === 'autofit') {
+          await runSingleAutoFitSpeed(currentEp, options, controller.signal);
         } else if (stepType === 'all3') {
           await runSingleEpisodeAll3(currentEp, options, controller.signal);
         }
@@ -365,6 +753,8 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
           await refreshSeries();
         }
       }
+
+      console.log(`%c[1-by-1 Runner] 🎉 ជោគជ័យ 100% លើគ្រប់ទាំង ${queue.length} ភាគសម្រាប់ ${stepType.toUpperCase()}!`, 'color: #34d399; font-weight: bold;');
 
       updateRunnerState(stepType, {
         status: 'idle',
@@ -391,7 +781,7 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
         return next;
       });
     }
-  }, [activeSeries?.episodes, updateRunnerState, runSingleTranslate, runSingleTextRepair, runSingleVoice, runSingleCleanBgm, runSingleEpisodeAll3, refreshSeries]);
+  }, [activeSeries?.episodes, updateRunnerState, runSingleTranslate, runSingleTextRepair, runSingleVoice, runSingleCleanBgm, runSingleAutoFitSpeed, runSingleEpisodeAll3, refreshSeries]);
 
   /**
    * Stop an active sequential runner cleanly (Guarantees both UI loop & Backend processes are terminated)
@@ -428,10 +818,12 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
   const value = {
     runnerStates,
     activeEpisodeIds,
+    runnerLiveStats,
     runSingleTranslate,
     runSingleTextRepair,
     runSingleVoice,
     runSingleCleanBgm,
+    runSingleAutoFitSpeed,
     runSingleEpisodeAll3,
     runSequentialStep,
     stopStep,

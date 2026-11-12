@@ -29,11 +29,9 @@ test('Step 1b: Elimination of blocking warning modal when selectedEpIds is empty
   assert.doesNotMatch(modal, /សូមជ្រើសរើសភាគដែលចង់ដំណើរការ Auto-Pipeline ទាំង 3 មុខងារ/);
 });
 
-test('Step 2: Unified 1-Click 3-step pipeline engine for batch & individual cards', () => {
+test('Step 2: Unified 3-step pipeline engine for batch & individual cards', () => {
   const modal = read(FRONTEND_SRC, 'components', 'dashboard', 'GeminiRouteModal.jsx');
-  assert.match(modal, /runEpisodeFullPipeline/);
-  assert.match(modal, /btn-auto-run-ep-/);
-  assert.match(modal, /▶ ផលិតទាំង 3 ជំហាន/);
+  assert.match(modal, /handleRunAll3Steps/);
   assert.match(modal, /ផលិតស្វ័យប្រវត្តិទាំង 3 ជំហាន/);
 });
 
@@ -43,10 +41,10 @@ test('Step 3: Decluttered top header - script setup collapsed & single compact p
   const cardsBar = fs.existsSync(cardsBarPath) ? fs.readFileSync(cardsBarPath, 'utf8') : '';
   const combined = modal + '\n' + cardsBar;
   assert.match(modal, /const\s+\[isScriptSetupExpanded,\s*setIsScriptSetupExpanded\]\s*=\s*useState\(false\)/);
-  assert.match(combined, /gridTemplateColumns:\s*'repeat\(3,\s*minmax\(0,\s*1fr\)\)'/);
+  assert.match(combined, /gridTemplateColumns:\s*'repeat\((3|4|auto-fit),\s*minmax\(/);
   assert.match(combined, /1\. Script ខ្មែរ:/);
   assert.match(combined, /2\. សំឡេង AI:/);
-  assert.match(combined, /3\. Clean BGM:/);
+  assert.match(combined, /Clean BGM:/);
 });
 
 test('Step 4: Route runner console drawers default collapsed to preserve screen height', () => {

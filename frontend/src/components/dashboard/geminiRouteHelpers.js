@@ -82,6 +82,20 @@ export function checkEpisodeHasDemucsReady(ep, completedDemucsEpIds = null, demu
   );
 }
 
+export function checkEpisodeHasAutoFitReady(ep) {
+  if (!ep) return false;
+  const segments = getStoredEpisodeSegments(ep);
+  if (!segments || segments.length === 0) return false;
+  if (ep.autoFitted || ep.scriptData?.autoFitted) return true;
+  const hasOverflow = segments.some((s) => Boolean(
+    (s.overflowSec && s.overflowSec > 0.05) ||
+    s.audioTrimmed ||
+    s.userTrimmed ||
+    s.lipSyncStatus === 'LIP_SYNC_OVERFLOW'
+  ));
+  return !hasOverflow && Boolean(ep.scriptData || ep.audioGenerated);
+}
+
 export function getEpisodeSegmentCount(ep) {
   return getStoredEpisodeSegments(ep).length;
 }

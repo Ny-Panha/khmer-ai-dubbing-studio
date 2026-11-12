@@ -265,7 +265,7 @@ test('Step 6: Impeccable / Unslop UI cleanup in GeminiRouteModal removes duplica
   assert.match(combinedJsx, /data-testid="batch-step-status-rows"/);
   assert.match(combinedJsx, /1\. Script ខ្មែរ/);
   assert.match(combinedJsx, /2\. សំឡេង AI/);
-  assert.match(combinedJsx, /3\. Clean BGM/);
+  assert.match(combinedJsx, /(3|4)\. Clean BGM/);
   assert.equal(geminiModalJsx.includes('data-testid="modal-footer-status"'), false);
 
   // 4. Unified single action row

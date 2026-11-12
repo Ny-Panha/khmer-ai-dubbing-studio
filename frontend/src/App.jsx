@@ -496,6 +496,7 @@ export default function App() {
   const handleResetFullVideo = useCallback((...args) => clipsRef.current.handleResetFullVideo?.(...args), []);
   const handleBridgeGaps = useCallback((...args) => clipsRef.current.handleBridgeGaps?.(...args), []);
   const handleAutoAlignNoOverlap = useCallback((...args) => clipsRef.current.handleAutoAlignNoOverlap?.(...args), []);
+  const handleAutoFitSpeechSpeed = useCallback((...args) => clipsRef.current.handleAutoFitSpeechSpeed?.(...args), []);
   const handleResetToSourceTiming = useCallback((...args) => clipsRef.current.handleResetToSourceTiming?.(...args), []);
   const handleAddSegmentAtTime = useCallback((...args) => clipsRef.current.handleAddSegmentAtTime?.(...args), []);
   const handleAddClipToTimeline = useCallback((t, asset) => {
@@ -955,6 +956,7 @@ export default function App() {
                   onUpdateVoiceSettings={handleUpdateVoiceSettings}
                   onAspectRatioChange={handleAspectRatioChange}
                   onEnded={handleVideoEnded}
+                  onUpdateSegments={handleUpdateTimelineSegments}
                   fullAudioUrl={audio.fullAudioUrl}
                   audioGenerated={audio.audioGenerated}
                   audioOutdated={audio.audioOutdated}
@@ -1075,6 +1077,7 @@ export default function App() {
                 onDeleteClip={handleDeleteClip}
                 onDeleteSegment={handleDeleteSegment}
                 scriptSegments={scriptData?.segments || EMPTY_SEGMENTS}
+                framingKeyframes={scriptData?.framingKeyframes || []}
                 onUpdateSegments={handleUpdateTimelineSegments}
                 onToggleMuteSegment={handleToggleMuteSegment}
                 onToggleMuteVideoClip={handleToggleMuteVideoClip}
@@ -1093,6 +1096,7 @@ export default function App() {
                 onResetFullVideo={handleResetFullVideo}
                 onBridgeGaps={handleBridgeGaps}
                 onAutoAlignNoOverlap={handleAutoAlignNoOverlap}
+                onAutoFitSpeechSpeed={handleAutoFitSpeechSpeed}
                 onResetToSourceTiming={handleResetToSourceTiming}
                 onAddSegment={handleAddSegmentAtTime}
                 canUndo={undoRedo.canUndo}

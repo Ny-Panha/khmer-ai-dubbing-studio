@@ -90,6 +90,9 @@ export default function EpisodesTab({
       if (typeof onRefreshSeries === 'function') {
         try { await onRefreshSeries(); } catch (refreshErr) { console.warn('[EpisodesTab] refresh after split failed:', refreshErr); }
       }
+      if (typeof onSwitchEpisode === 'function' && Array.isArray(res?.series?.episodes) && res.series.episodes.length > 0) {
+        try { onSwitchEpisode(res.series.episodes[0].id); } catch (_) {}
+      }
       setSplitNotice({ type: 'success', text: `✅ ${res?.message || 'បានកាត់បំបែកវីដេអូជាភាគៗជោគជ័យ!'}` });
     } catch (err) {
       console.error(err);

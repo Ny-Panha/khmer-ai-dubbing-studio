@@ -40,6 +40,9 @@ export function useShortcuts({
       // Space: Play / Pause
       if (e.code === 'Space' && !isMod && !e.altKey) {
         e.preventDefault();
+        if (typeof document !== 'undefined' && document.activeElement && document.activeElement.tagName === 'BUTTON') {
+          document.activeElement.blur();
+        }
         onPlayPause?.();
         return;
       }

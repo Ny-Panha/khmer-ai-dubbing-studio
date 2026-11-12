@@ -784,6 +784,15 @@ export function useSeriesManager({
         const prevRv = sanitizeRenderedVideo(prevActiveEp?.renderedVideo);
         const serverRvUrl = typeof serverRv === 'string' ? serverRv : (serverRv?.outputVideoUrl || serverRv?.videoUrl || null);
         const prevRvUrl = typeof prevRv === 'string' ? prevRv : (prevRv?.outputVideoUrl || prevRv?.videoUrl || null);
+        const videoChanged = Boolean(
+          currentActiveEp && (
+            (currentActiveEp.video?.videoId || null) !== (prevActiveEp?.video?.videoId || null) ||
+            (currentActiveEp.video?.videoUrl || null) !== (prevActiveEp?.video?.videoUrl || null) ||
+            (currentActiveEp.videoFile || null) !== (prevActiveEp?.videoFile || null) ||
+            (currentActiveEp.sourceVideoPath || null) !== (prevActiveEp?.sourceVideoPath || null) ||
+            (currentActiveEp.duration && prevActiveEp?.duration && Math.abs(currentActiveEp.duration - prevActiveEp.duration) > 1)
+          )
+        );
         const audioOrBgmChanged = Boolean(
           currentActiveEp && (
             Boolean(currentActiveEp.audioGenerated) !== Boolean(prevActiveEp?.audioGenerated) ||
@@ -796,8 +805,8 @@ export function useSeriesManager({
         if (
           currentActiveEp &&
           !serverOlderThanWorkspace &&
-          (nextSegLen > 0 || audioOrBgmChanged) &&
-          (workspaceSegLen === 0 || nextSegLen !== prevSegLen || nextUpdatedAt > prevUpdatedAt || audioOrBgmChanged)
+          (nextSegLen > 0 || audioOrBgmChanged || videoChanged) &&
+          (workspaceSegLen === 0 || nextSegLen !== prevSegLen || nextUpdatedAt > prevUpdatedAt || audioOrBgmChanged || videoChanged)
         ) {
           applyEpisodeToWorkspace(currentActiveEp);
         }

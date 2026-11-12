@@ -54,6 +54,7 @@ function TimelineTracksCanvas({
   onToggleMuteVideoClip = null,
   onImportClick = null,
   onVideoSelected = null,
+  framingKeyframes = [],
   seriesId = null,
   episodeId = null,
 }) {
@@ -162,16 +163,16 @@ function TimelineTracksCanvas({
       const slotSpan = (typeof seg.audioEndSec === 'number' && !isNaN(seg.audioEndSec) && seg.audioEndSec > rawStart)
         ? (seg.audioEndSec - rawStart)
         : (slotEnd > slotStart ? (slotEnd - slotStart) : 2.5);
-      const realAudioDuration = (typeof seg.originalAudioDuration === 'number' && seg.originalAudioDuration > 0)
-        ? seg.originalAudioDuration
-        : ((typeof seg.rawAudioDur === 'number' && seg.rawAudioDur > 0)
-          ? seg.rawAudioDur
-          : ((typeof seg.finalAudioDuration === 'number' && seg.finalAudioDuration > 0)
-            ? seg.finalAudioDuration
-            : ((typeof seg.audioDuration === 'number' && seg.audioDuration > 0)
-              ? seg.audioDuration
-              : ((typeof seg.audioDurationSec === 'number' && seg.audioDurationSec > 0 && !isNaN(seg.audioDurationSec))
-                ? seg.audioDurationSec
+      const realAudioDuration = (typeof seg.finalAudioDuration === 'number' && seg.finalAudioDuration > 0)
+        ? seg.finalAudioDuration
+        : ((typeof seg.audioDurationSec === 'number' && seg.audioDurationSec > 0 && !isNaN(seg.audioDurationSec))
+          ? seg.audioDurationSec
+          : ((typeof seg.audioDuration === 'number' && seg.audioDuration > 0)
+            ? seg.audioDuration
+            : ((typeof seg.originalAudioDuration === 'number' && seg.originalAudioDuration > 0)
+              ? seg.originalAudioDuration
+              : ((typeof seg.rawAudioDur === 'number' && seg.rawAudioDur > 0)
+                ? seg.rawAudioDur
                 : slotSpan))));
       const isTrimmed = Boolean(seg.audioTrimmed || seg.userTrimmed);
       // Voice clip box strictly matches true audio duration [audioStartSec, audioStartSec + realAudioDuration]
@@ -266,16 +267,16 @@ function TimelineTracksCanvas({
     const slotSpan = (typeof seg.audioEndSec === 'number' && !isNaN(seg.audioEndSec) && seg.audioEndSec > rawStart)
       ? (seg.audioEndSec - rawStart)
       : (slotEnd > slotStart ? (slotEnd - slotStart) : 2.5);
-    const realAudioDuration = (typeof seg.originalAudioDuration === 'number' && seg.originalAudioDuration > 0)
-      ? seg.originalAudioDuration
-      : ((typeof seg.rawAudioDur === 'number' && seg.rawAudioDur > 0)
-        ? seg.rawAudioDur
-        : ((typeof seg.finalAudioDuration === 'number' && seg.finalAudioDuration > 0)
-          ? seg.finalAudioDuration
-          : ((typeof seg.audioDuration === 'number' && seg.audioDuration > 0)
-            ? seg.audioDuration
-            : ((typeof seg.audioDurationSec === 'number' && seg.audioDurationSec > 0 && !isNaN(seg.audioDurationSec))
-              ? seg.audioDurationSec
+    const realAudioDuration = (typeof seg.finalAudioDuration === 'number' && seg.finalAudioDuration > 0)
+      ? seg.finalAudioDuration
+      : ((typeof seg.audioDurationSec === 'number' && seg.audioDurationSec > 0 && !isNaN(seg.audioDurationSec))
+        ? seg.audioDurationSec
+        : ((typeof seg.audioDuration === 'number' && seg.audioDuration > 0)
+          ? seg.audioDuration
+          : ((typeof seg.originalAudioDuration === 'number' && seg.originalAudioDuration > 0)
+            ? seg.originalAudioDuration
+            : ((typeof seg.rawAudioDur === 'number' && seg.rawAudioDur > 0)
+              ? seg.rawAudioDur
               : slotSpan))));
     const isTrimmed = Boolean(seg.audioTrimmed || seg.userTrimmed);
     // Voice clip box strictly matches true audio duration [audioStartSec, audioStartSec + realAudioDuration]
@@ -475,13 +476,47 @@ function TimelineTracksCanvas({
 
   const renderSubSegment = (seg, idx) => {
     const isDragging = (dragState?.itemType === 'audio' || dragState?.itemType === 'subtitle') && dragState?.index === idx;
-    // STEP 2B: subtitle clip = segment's own [startSec, endSec] only
-    const rawStart = (typeof seg.startSec === 'number' && !isNaN(seg.startSec))
-      ? seg.startSec
-      : parseTimeToSeconds(seg.start, idx * 4);
-    const rawEnd = (typeof seg.endSec === 'number' && !isNaN(seg.endSec))
-      ? seg.endSec
-      : parseTimeToSeconds(seg.end, rawStart + 2.5);
+    const hasVoice = Boolean(
+      seg.audioUrl ||
+      seg.audioPath ||
+      seg.rawAudioPath ||
+      seg.audioFile ||
+      seg.rawAudioFile ||
+      seg.ttsStatus === 'ready' ||
+      seg.status === 'audio_ready' ||
+      (typeof seg.finalAudioDuration === 'number' && seg.finalAudioDuration > 0) ||
+      (typeof seg.audioDuration === 'number' && seg.audioDuration > 0) ||
+      (typeof seg.audioDurationSec === 'number' && seg.audioDurationSec > 0)
+    );
+
+    const rawStart = (hasVoice && typeof seg.audioStartSec === 'number' && !isNaN(seg.audioStartSec))
+      ? seg.audioStartSec
+      : ((typeof seg.startSec === 'number' && !isNaN(seg.startSec))
+        ? seg.startSec
+        : parseTimeToSeconds(seg.start, idx * 4));
+
+    const realAudioDur = hasVoice
+      ? ((typeof seg.finalAudioDuration === 'number' && seg.finalAudioDuration > 0)
+        ? seg.finalAudioDuration
+        : ((typeof seg.audioDurationSec === 'number' && seg.audioDurationSec > 0 && !isNaN(seg.audioDurationSec))
+          ? seg.audioDurationSec
+          : ((typeof seg.audioDuration === 'number' && seg.audioDuration > 0)
+            ? seg.audioDuration
+            : ((typeof seg.originalAudioDuration === 'number' && seg.originalAudioDuration > 0)
+              ? seg.originalAudioDuration
+              : ((typeof seg.rawAudioDur === 'number' && seg.rawAudioDur > 0)
+                ? seg.rawAudioDur
+                : null)))))
+      : null;
+
+    const isTrimmed = Boolean(seg.audioTrimmed || seg.userTrimmed);
+    const rawEnd = (isTrimmed && typeof seg.audioEndSec === 'number' && !isNaN(seg.audioEndSec))
+      ? seg.audioEndSec
+      : (realAudioDur && realAudioDur > 0
+        ? (rawStart + realAudioDur)
+        : ((typeof seg.endSec === 'number' && !isNaN(seg.endSec))
+          ? seg.endSec
+          : parseTimeToSeconds(seg.end, rawStart + 2.5)));
 
     const isClipMovingAssociated = dragState?.itemType === 'video' && dragState?.mode === 'move' && associatedClipSegIndices.has(idx);
     const clipMoveDelta = isClipMovingAssociated ? (dragState.currentStart - dragState.origStart) : 0;
@@ -778,6 +813,51 @@ function TimelineTracksCanvas({
           className="timeline-snap-line"
           style={{ left: snapLineTime * pps }}
         />
+      )}
+
+      {/* CapCut-style 9:16 Framing Keyframe Diamonds (💎) */}
+      {Array.isArray(framingKeyframes) && framingKeyframes.length > 0 && (
+        <div 
+          className="timeline-keyframes-overlay"
+          style={{
+            position: 'absolute',
+            top: 24,
+            left: 0,
+            right: 0,
+            height: 14,
+            pointerEvents: 'none',
+            zIndex: 22,
+          }}
+        >
+          {framingKeyframes.map((kf) => {
+            const isNearPlayhead = Math.abs(kf.time - currentTime) <= 0.25;
+            return (
+              <div
+                key={kf.id}
+                data-testid={`timeline-keyframe-${kf.id}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (onSeek) onSeek(kf.time);
+                }}
+                title={`Keyframe (💎) ត្រង់ ${kf.time.toFixed(2)}s (${Math.round(kf.cropX)}%)`}
+                style={{
+                  position: 'absolute',
+                  left: `${kf.time * pps}px`,
+                  top: '50%',
+                  transform: 'translate(-50%, -50%) rotate(45deg)',
+                  width: isNearPlayhead ? 12 : 9,
+                  height: isNearPlayhead ? 12 : 9,
+                  backgroundColor: isNearPlayhead ? '#38BDF8' : '#F59E0B',
+                  border: isNearPlayhead ? '2px solid #FFFFFF' : '1.5px solid #FFFFFF',
+                  boxShadow: isNearPlayhead ? '0 0 6px rgba(56, 189, 248, 0.95)' : '0 0 4px rgba(245, 158, 11, 0.85)',
+                  cursor: 'pointer',
+                  pointerEvents: 'auto',
+                  transition: 'all 0.15s ease',
+                }}
+              />
+            );
+          })}
+        </div>
       )}
 
       {/* Hardware-Accelerated Playhead Line (transform: translate3d(x, 0, 0) for 60fps scrubbing) */}
@@ -1217,6 +1297,7 @@ function areTimelineTracksCanvasPropsEqual(prev, next) {
   if (prev.voiceSettings !== next.voiceSettings) return false;
   if (prev.showSubtitles !== next.showSubtitles) return false;
   if (prev.snapLineTime !== next.snapLineTime) return false;
+  if (prev.framingKeyframes !== next.framingKeyframes) return false;
   if (prev.selectedVideo !== next.selectedVideo) return false;
   if (prev.seriesId !== next.seriesId || prev.episodeId !== next.episodeId) return false;
 

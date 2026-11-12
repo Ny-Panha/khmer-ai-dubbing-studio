@@ -149,6 +149,21 @@ function createEpisode({
 function sanitizeSeriesEpisodes(series) {
   if (!series || !Array.isArray(series.episodes)) return series;
 
+  // Natural numeric sort episodes so ep_1, ep_2, ... ep_9, ep_10, ep_11 are always ordered correctly
+  series.episodes.sort((a, b) => {
+    const numA = (a && a.episodeNumber !== undefined && a.episodeNumber !== null && !isNaN(Number(a.episodeNumber))) ? Number(a.episodeNumber) : null;
+    const numB = (b && b.episodeNumber !== undefined && b.episodeNumber !== null && !isNaN(Number(b.episodeNumber))) ? Number(b.episodeNumber) : null;
+    if (numA !== null && numB !== null && numA !== numB) {
+      return numA - numB;
+    }
+    const matchA = String(a?.id || '').match(/^ep_(\d+)/i);
+    const matchB = String(b?.id || '').match(/^ep_(\d+)/i);
+    const idNumA = matchA ? parseInt(matchA[1], 10) : Number.MAX_SAFE_INTEGER;
+    const idNumB = matchB ? parseInt(matchB[1], 10) : Number.MAX_SAFE_INTEGER;
+    if (idNumA !== idNumB) return idNumA - idNumB;
+    return String(a?.id || '').localeCompare(String(b?.id || ''), undefined, { numeric: true, sensitivity: 'base' });
+  });
+
   const seenIds = new Set();
   const sanitizedEpisodes = [];
 

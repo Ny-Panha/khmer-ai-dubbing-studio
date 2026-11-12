@@ -13,7 +13,7 @@ import {
 import { parseTimeToSeconds, formatTimecode, formatMinSec, getSegmentAudioDuration } from '../utils/timestampUtils';
 import { splitKhmerTextIntoHalves, splitSegmentIntoNaturalSentences } from '../utils/khmerTextSplitter';
 import { buildSpeakerRegistry } from '../utils/speakerUtils';
-import { syncTimelineAudioApi, notifyBackendOffline, notifyBackendOnline } from '../services/api';
+import { syncTimelineAudioApi, autoFitSpeechSpeedApi, notifyBackendOffline, notifyBackendOnline } from '../services/api';
 
 /**
  * Lightweight, non-intrusive floating in-app toast for timeline feedback (e.g. split guard)
@@ -602,6 +602,75 @@ export function useClipOperations({
     setFullAudioPath,
   ]);
 
+  // Auto-fit speech speed (1.05x - 1.50x) for red/overflowing/trimmed clips
+  const handleAutoFitSpeechSpeed = useCallback(async (customMaxSpeed = 1.50) => {
+    const currentSegments = scriptData?.segments;
+    if (!Array.isArray(currentSegments) || currentSegments.length === 0) {
+      showInAppToast('⚠️ មិនមានឃ្លាណាមួយសម្រាប់ Auto-Fit ទេ');
+      return;
+    }
+
+    try {
+      pushUndoSnapshot(videoClips, currentSegments);
+    } catch (_) {}
+
+    showInAppToast('⚡ កំពុងពន្លឿនឃ្លាពណ៌ក្រហម (1.05x - 1.50x) ឱ្យនិយាយទាន់ និងចប់គ្រប់អក្សរ...');
+
+    try {
+      const res = await autoFitSpeechSpeedApi({
+        seriesId,
+        episodeId,
+        maxSpeed: customMaxSpeed,
+        segments: currentSegments,
+      });
+
+      if (res?.success && Array.isArray(res.segments)) {
+        const nextScriptData = {
+          ...scriptData,
+          segments: res.segments,
+          updatedAt: Date.now(),
+        };
+        setScriptData(nextScriptData);
+
+        if (res.fittedCount > 0) {
+          showInAppToast(`⚡ បានពន្លឿន ${res.fittedCount} ឃ្លាឱ្យនិយាយចប់គ្រប់អក្សរ និង Fit តាម Subtitle ជោគជ័យ!`);
+        } else {
+          showInAppToast('✅ គ្រប់ឃ្លាទាំងអស់គឺ Fit តាម Subtitle រួចរាល់ហើយ គ្មានឃ្លាលើសម៉ោងទេ!');
+        }
+
+        // Re-sync timeline audio preview
+        try {
+          const syncRes = await syncTimelineAudioApi(
+            res.segments,
+            getProjectName() || 'drama_project',
+            getVideoId(),
+            episodeId,
+            seriesId
+          );
+          if (syncRes?.fullAudioUrl && typeof setFullAudioUrl === 'function') {
+            setFullAudioUrl(`${syncRes.fullAudioUrl.split('?')[0]}?t=${Date.now()}`);
+          }
+          if (syncRes?.fullAudioPath && typeof setFullAudioPath === 'function') {
+            setFullAudioPath(syncRes.fullAudioPath);
+          }
+          notifyBackendOnline();
+        } catch (_) {}
+      }
+    } catch (err) {
+      console.error('[useClipOperations] handleAutoFitSpeechSpeed failed:', err);
+      showInAppToast(`❌ បរាជ័យក្នុងការពន្លឿនសំឡេង៖ ${err.message}`);
+    }
+  }, [
+    scriptData,
+    videoClips,
+    seriesId,
+    episodeId,
+    pushUndoSnapshot,
+    setScriptData,
+    setFullAudioUrl,
+    setFullAudioPath,
+  ]);
+
   // Reset all segments to exact original Chinese video timestamps (0% drift)
   const handleResetToSourceTiming = useCallback(async () => {
     const currentSegments = scriptData?.segments;
@@ -1014,6 +1083,7 @@ export function useClipOperations({
     handleResetFullVideo,
     handleBridgeGaps,
     handleAutoAlignNoOverlap,
+    handleAutoFitSpeechSpeed,
     handleResetToSourceTiming,
     handleSelectClip,
     handleDeleteClip,

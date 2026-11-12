@@ -13,6 +13,31 @@ import AntiTheftOverlay from './AntiTheftOverlay';
 import LogoOverlay from './LogoOverlay';
 import './VideoPlayerPreview.css';
 
+export function interpolateKeyframeCrop(keyframes, time) {
+  if (!Array.isArray(keyframes) || keyframes.length === 0) return null;
+  const sorted = [...keyframes]
+    .filter((k) => Number.isFinite(k.time) && k.time >= 0)
+    .sort((a, b) => a.time - b.time);
+  if (sorted.length === 0) return null;
+  if (sorted.length === 1 || time <= sorted[0].time) return sorted[0].cropX;
+  if (time >= sorted[sorted.length - 1].time) return sorted[sorted.length - 1].cropX;
+
+  for (let i = 0; i < sorted.length - 1; i++) {
+    const k0 = sorted[i];
+    const k1 = sorted[i + 1];
+    if (time >= k0.time && time <= k1.time) {
+      const dur = k1.time - k0.time;
+      if (dur <= 0.001) return k0.cropX;
+      const alpha = Math.max(0, Math.min(1, (time - k0.time) / dur));
+      // Cosine ease-in-out for smooth camera pan
+      const ease = (1 - Math.cos(alpha * Math.PI)) / 2;
+      const val = k0.cropX + (k1.cropX - k0.cropX) * ease;
+      return Math.round(val * 10) / 10;
+    }
+  }
+  return sorted[sorted.length - 1].cropX;
+}
+
 function VideoPlayerPreview({
   selectedVideo,
   videoMetadata = null,
@@ -37,6 +62,7 @@ function VideoPlayerPreview({
   voiceSettings = {},
   onUpdateVoiceSettings = null,
   onAspectRatioChange = null,
+  onUpdateSegments = null,
   onEnded,
   fullAudioUrl = null,
   audioGenerated = false,
@@ -488,15 +514,17 @@ function VideoPlayerPreview({
     const nearbySegs = segments.map((seg, idx) => ({ seg, idx })).filter(({ seg }) => {
       if (seg.muted || seg.isMuted) return false;
       const s = (typeof seg.audioStartSec === 'number' && !isNaN(seg.audioStartSec)) ? seg.audioStartSec : (seg.startSec || 0);
-      const rawAudioDur = (typeof seg.originalAudioDuration === 'number' && seg.originalAudioDuration > 0)
-        ? seg.originalAudioDuration
-        : ((typeof seg.rawAudioDur === 'number' && seg.rawAudioDur > 0)
-          ? seg.rawAudioDur
-          : ((typeof seg.finalAudioDuration === 'number' && seg.finalAudioDuration > 0)
-            ? seg.finalAudioDuration
-            : ((typeof seg.audioDuration === 'number' && seg.audioDuration > 0)
-              ? seg.audioDuration
-              : ((typeof seg.audioDurationSec === 'number' && !isNaN(seg.audioDurationSec)) ? seg.audioDurationSec : 2.5))));
+      const rawAudioDur = (typeof seg.finalAudioDuration === 'number' && seg.finalAudioDuration > 0)
+        ? seg.finalAudioDuration
+        : ((typeof seg.audioDurationSec === 'number' && !isNaN(seg.audioDurationSec))
+          ? seg.audioDurationSec
+          : ((typeof seg.audioDuration === 'number' && seg.audioDuration > 0)
+            ? seg.audioDuration
+            : ((typeof seg.originalAudioDuration === 'number' && seg.originalAudioDuration > 0)
+              ? seg.originalAudioDuration
+              : ((typeof seg.rawAudioDur === 'number' && seg.rawAudioDur > 0)
+                ? seg.rawAudioDur
+                : 2.5))));
       const isTrimmed = Boolean(seg.audioTrimmed || seg.userTrimmed);
       const effectiveEnd = (isTrimmed && typeof seg.audioEndSec === 'number')
         ? seg.audioEndSec
@@ -1288,22 +1316,60 @@ function VideoPlayerPreview({
   // Pre-index segment intervals once per script update for O(log N) lookup during playback
   const indexedSegments = React.useMemo(() => {
     if (!scriptData?.segments || scriptData.segments.length === 0) return [];
-    return scriptData.segments.map((seg) => {
-      // STEP 2B: subtitle clip = segment's own [startSec, endSec] only
-      const s = (typeof seg.startSec === 'number' && !isNaN(seg.startSec))
-        ? seg.startSec
-        : parseTimeToSeconds(seg.start ?? seg.startTime, 0);
+    const list = scriptData.segments.map((seg, idx) => {
+      const hasVoice = Boolean(
+        seg.audioUrl ||
+        seg.audioPath ||
+        seg.rawAudioPath ||
+        seg.audioFile ||
+        seg.rawAudioFile ||
+        seg.ttsStatus === 'ready' ||
+        seg.status === 'audio_ready' ||
+        (typeof seg.finalAudioDuration === 'number' && seg.finalAudioDuration > 0) ||
+        (typeof seg.audioDuration === 'number' && seg.audioDuration > 0) ||
+        (typeof seg.audioDurationSec === 'number' && seg.audioDurationSec > 0)
+      );
 
-      let e = (typeof seg.endSec === 'number' && !isNaN(seg.endSec))
-        ? seg.endSec
-        : parseTimeToSeconds(seg.end ?? seg.endTime, s + 2.5);
+      const s = (hasVoice && typeof seg.audioStartSec === 'number' && !isNaN(seg.audioStartSec))
+        ? seg.audioStartSec
+        : ((typeof seg.startSec === 'number' && !isNaN(seg.startSec))
+          ? seg.startSec
+          : parseTimeToSeconds(seg.start ?? seg.startTime, idx * 4));
 
-      if (isNaN(e) || e <= s || (e - s) < 0.6) {
+      const realAudioDur = hasVoice
+        ? ((typeof seg.finalAudioDuration === 'number' && seg.finalAudioDuration > 0)
+          ? seg.finalAudioDuration
+          : ((typeof seg.audioDurationSec === 'number' && seg.audioDurationSec > 0 && !isNaN(seg.audioDurationSec))
+            ? seg.audioDurationSec
+            : ((typeof seg.audioDuration === 'number' && seg.audioDuration > 0)
+              ? seg.audioDuration
+              : ((typeof seg.originalAudioDuration === 'number' && seg.originalAudioDuration > 0)
+                ? seg.originalAudioDuration
+                : ((typeof seg.rawAudioDur === 'number' && seg.rawAudioDur > 0)
+                  ? seg.rawAudioDur
+                  : null)))))
+        : null;
+
+      const isTrimmed = Boolean(seg.audioTrimmed || seg.userTrimmed);
+      let e;
+      if (isTrimmed && typeof seg.audioEndSec === 'number' && !isNaN(seg.audioEndSec)) {
+        e = seg.audioEndSec;
+      } else if (realAudioDur && realAudioDur > 0) {
+        // Subtitle strictly closes when voice speech finishes
+        e = s + realAudioDur;
+      } else if (typeof seg.endSec === 'number' && !isNaN(seg.endSec)) {
+        e = seg.endSec;
+      } else {
+        e = parseTimeToSeconds(seg.end ?? seg.endTime, s + 2.5);
+      }
+
+      if (isNaN(e) || e <= s || (e - s) < 0.2) {
         const textLen = String(seg.khmer || seg.khmerText || seg.khmerTranslatedText || seg.original || '').trim().length || 8;
-        e = s + Math.max(1.8, Math.min(6.0, textLen * 0.16));
+        e = s + Math.max(1.2, Math.min(5.0, textLen * 0.16));
       }
       return { start: s, end: e, seg };
     });
+    return list.sort((a, b) => a.start - b.start);
   }, [scriptData?.segments]);
 
   // Fast O(log N) active segment lookup for smooth 60fps subtitle overlay
@@ -1356,6 +1422,443 @@ function VideoPlayerPreview({
   const frameModeClass = safeAspectRatio === '9:16'
     ? 'is-aspect-frame is-portrait-frame'
     : (safeAspectRatio === '1:1' ? 'is-aspect-frame is-square-frame' : 'is-aspect-frame is-landscape-frame');
+
+  const [isAnalyzingFraming, setIsAnalyzingFraming] = useState(false);
+  const [isDraggingCrop, setIsDraggingCrop] = useState(false);
+  const [liveDragCropX, setLiveDragCropX] = useState(null);
+  const dragStartXRef = useRef(0);
+  const dragStartCropXRef = useRef(50);
+  const hasDraggedRef = useRef(false);
+
+  const is916Crop = !renderedVideo && aspectRatio === '9:16' && verticalStyle === 'crop' && isSourceLandscape;
+
+  // Active framing lookup: maps playhead time to the active scene/segment (per-segment framing)
+  const activeFramingInfo = React.useMemo(() => {
+    const t = effectiveTimelineTime;
+    const segs = indexedSegments || [];
+    const allSegments = scriptData?.segments || [];
+
+    // Filter out corrupted whole-episode overrides (e.g. from previous bug covering whole video)
+    const validOverrides = (scriptData?.framingOverrides || []).filter(
+      (o) => !(o.startSec === 0 && o.endSec > 30)
+    );
+
+    // 1. Direct match in an indexed speech segment (voice box)
+    if (activeSegment) {
+      const segCropX = activeSegment.cropX !== undefined && activeSegment.cropX !== null && !isNaN(Number(activeSegment.cropX))
+        ? Number(activeSegment.cropX)
+        : null;
+      const resolvedCropX = segCropX !== null
+        ? segCropX
+        : (activeSegment.cropPosition === 'left' ? 20 : activeSegment.cropPosition === 'right' ? 80 : 50);
+
+      return {
+        type: 'segment',
+        id: activeSegment._uid || activeSegment.id,
+        segment: activeSegment,
+        startSec: activeSegment.startSec,
+        endSec: activeSegment.endSec,
+        cropX: resolvedCropX,
+        cropPosition: activeSegment.cropPosition || (resolvedCropX < 35 ? 'left' : resolvedCropX > 65 ? 'right' : 'center'),
+      };
+    }
+
+    // 2. Video clip under playhead: resolve which segment is linked to this video cut
+    if (Array.isArray(videoClips) && videoClips.length > 0) {
+      const activeClip = videoClips.find((c) => t >= c.start && t < c.end);
+      if (activeClip) {
+        const linkedSeg = allSegments.find((s, idx) => {
+          if (s.clipId && activeClip.id && String(s.clipId) === String(activeClip.id)) return true;
+          if (activeClip.segmentId && (String(s.id) === String(activeClip.segmentId) || String(s._uid) === String(activeClip.segmentId))) return true;
+          if (activeClip.segmentIndex && (s.id === activeClip.segmentIndex || (idx + 1) === activeClip.segmentIndex)) return true;
+          return false;
+        });
+
+        if (linkedSeg) {
+          const segCropX = linkedSeg.cropX !== undefined && linkedSeg.cropX !== null && !isNaN(Number(linkedSeg.cropX))
+            ? Number(linkedSeg.cropX)
+            : null;
+          const resolvedCropX = segCropX !== null
+            ? segCropX
+            : (linkedSeg.cropPosition === 'left' ? 20 : linkedSeg.cropPosition === 'right' ? 80 : 50);
+
+          return {
+            type: 'segment',
+            id: linkedSeg._uid || linkedSeg.id,
+            segment: linkedSeg,
+            startSec: activeClip.start,
+            endSec: activeClip.end,
+            cropX: resolvedCropX,
+            cropPosition: linkedSeg.cropPosition || (resolvedCropX < 35 ? 'left' : resolvedCropX > 65 ? 'right' : 'center'),
+          };
+        }
+      }
+    }
+
+    // 3. Spanning dialogue interval: each segment naturally owns the camera until the next segment begins
+    if (segs.length > 0) {
+      let prevSeg = null;
+      let nextSeg = null;
+      for (let i = 0; i < segs.length; i++) {
+        if (segs[i].end <= t) {
+          prevSeg = segs[i];
+        } else if (segs[i].start > t && !nextSeg) {
+          nextSeg = segs[i];
+          break;
+        }
+      }
+
+      // The active scene belongs to prevSeg (or nextSeg if before first segment)
+      const targetSegItem = prevSeg || nextSeg;
+      if (targetSegItem && targetSegItem.seg) {
+        const sObj = targetSegItem.seg;
+        const segCropX = sObj.cropX !== undefined && sObj.cropX !== null && !isNaN(Number(sObj.cropX))
+          ? Number(sObj.cropX)
+          : null;
+        const resolvedCropX = segCropX !== null
+          ? segCropX
+          : (sObj.cropPosition === 'left' ? 20 : sObj.cropPosition === 'right' ? 80 : 50);
+
+        return {
+          type: 'segment',
+          id: sObj._uid || sObj.id,
+          segment: sObj,
+          startSec: prevSeg ? prevSeg.end : 0,
+          endSec: nextSeg ? nextSeg.start : (duration || 1000),
+          cropX: resolvedCropX,
+          cropPosition: sObj.cropPosition || (resolvedCropX < 35 ? 'left' : resolvedCropX > 65 ? 'right' : 'center'),
+        };
+      }
+    }
+
+    // 4. Custom localized override (only if reasonable duration <= 30s)
+    const directOverride = validOverrides.find((o) => t >= o.startSec && t <= o.endSec && (o.endSec - o.startSec <= 30));
+    if (directOverride) {
+      return {
+        type: 'override',
+        id: directOverride.id,
+        startSec: directOverride.startSec,
+        endSec: directOverride.endSec,
+        cropX: directOverride.cropX,
+        cropPosition: directOverride.cropPosition,
+      };
+    }
+
+    return {
+      type: 'default',
+      id: 'default',
+      startSec: 0,
+      endSec: duration || 1000,
+      cropX: 50,
+      cropPosition: 'center',
+    };
+  }, [effectiveTimelineTime, indexedSegments, scriptData?.framingOverrides, scriptData?.segments, activeSegment, videoClips, duration]);
+
+  // Keyframe crop calculation (highest priority when keyframes exist)
+  const keyframeCropX = React.useMemo(() => {
+    const kfs = scriptData?.framingKeyframes;
+    if (Array.isArray(kfs) && kfs.length > 0) {
+      return interpolateKeyframeCrop(kfs, effectiveTimelineTime);
+    }
+    return null;
+  }, [scriptData?.framingKeyframes, effectiveTimelineTime]);
+
+  // 60FPS Silky-Smooth Keyframe Camera Pan Animation during Video Playback (bypasses 200ms React state updates)
+  useEffect(() => {
+    if (typeof subscribePlayhead !== 'function') return undefined;
+
+    return subscribePlayhead((liveTime) => {
+      const v = videoRef?.current;
+      if (!v || !is916Crop || isDraggingCrop) return;
+
+      const kfs = scriptData?.framingKeyframes;
+      if (Array.isArray(kfs) && kfs.length > 0) {
+        const cropVal = interpolateKeyframeCrop(kfs, liveTime);
+        if (cropVal !== null) {
+          v.style.objectPosition = `${cropVal}% 50%`;
+        }
+      }
+    });
+  }, [subscribePlayhead, is916Crop, isDraggingCrop, scriptData?.framingKeyframes, videoRef]);
+
+  const activeCropX = React.useMemo(() => {
+    if (keyframeCropX !== null) {
+      return keyframeCropX;
+    }
+    if (activeFramingInfo.cropX !== undefined && activeFramingInfo.cropX !== null && !isNaN(Number(activeFramingInfo.cropX))) {
+      return Number(activeFramingInfo.cropX);
+    }
+    if (activeFramingInfo.cropPosition === 'left') return 20;
+    if (activeFramingInfo.cropPosition === 'right') return 80;
+    return 50;
+  }, [keyframeCropX, activeFramingInfo]);
+
+  const effectiveCropX = liveDragCropX !== null ? liveDragCropX : activeCropX;
+
+  // Toggle Keyframe (Add or Delete diamond at current playhead)
+  const handleToggleKeyframe = useCallback(async () => {
+    const t = effectiveTimelineTime;
+    const kfs = [...(scriptData?.framingKeyframes || [])];
+    const existingIdx = kfs.findIndex((k) => Math.abs(k.time - t) <= 0.35);
+
+    let nextKfs = [];
+    if (existingIdx >= 0) {
+      // Delete keyframe
+      nextKfs = kfs.filter((_, idx) => idx !== existingIdx);
+    } else {
+      // Add new keyframe with current effectiveCropX
+      const curCrop = effectiveCropX;
+      const resolvedPos = curCrop < 35 ? 'left' : curCrop > 65 ? 'right' : 'center';
+      const newKf = {
+        id: `kf_${Math.round(t * 1000)}_${Math.random().toString(36).substr(2, 4)}`,
+        time: parseFloat(t.toFixed(2)),
+        cropX: Math.round(curCrop),
+        cropPosition: resolvedPos,
+      };
+      nextKfs = [...kfs, newKf].sort((a, b) => a.time - b.time);
+    }
+
+    if (scriptData) {
+      scriptData.framingKeyframes = nextKfs;
+    }
+    if (onUpdateSegments && scriptData?.segments) {
+      onUpdateSegments([...scriptData.segments]);
+    }
+
+    if (seriesId && episodeId) {
+      try {
+        await fetch('/api/video/update-framing-keyframes', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ seriesId, episodeId, keyframes: nextKfs }),
+        });
+      } catch (err) {
+        console.warn('[Keyframe Update Warning]:', err);
+      }
+    }
+  }, [effectiveTimelineTime, scriptData, effectiveCropX, onUpdateSegments, seriesId, episodeId]);
+
+  // Jump to Prev / Next Keyframe
+  const handleSeekToKeyframe = useCallback((dir) => {
+    const t = effectiveTimelineTime;
+    const kfs = (scriptData?.framingKeyframes || []).sort((a, b) => a.time - b.time);
+    if (kfs.length === 0) return;
+
+    if (dir === 'prev') {
+      const prevs = kfs.filter((k) => k.time < t - 0.1);
+      if (prevs.length > 0 && onSeek) {
+        onSeek(prevs[prevs.length - 1].time);
+      }
+    } else {
+      const nexts = kfs.filter((k) => k.time > t + 0.1);
+      if (nexts.length > 0 && onSeek) {
+        onSeek(nexts[0].time);
+      }
+    }
+  }, [effectiveTimelineTime, scriptData?.framingKeyframes, onSeek]);
+
+  const keyframeSaveTimerRef = useRef(null);
+  const handleUpdateActiveCrop = useCallback(async (newCropVal, posName) => {
+    const t = effectiveTimelineTime;
+    const clampedCrop = Math.max(5, Math.min(95, Number(newCropVal)));
+    const resolvedPos = posName || (clampedCrop < 35 ? 'left' : clampedCrop > 65 ? 'right' : 'center');
+
+    // Immediately update live video preview style so dragging is instant and 60fps buttery smooth
+    if (videoRef?.current && is916Crop) {
+      videoRef.current.style.objectPosition = `${clampedCrop}% 50%`;
+    }
+
+    // If keyframes exist, updating crop near an existing keyframe updates that keyframe, or auto-creates one at playhead (CapCut style)
+    const kfs = scriptData?.framingKeyframes;
+    if (Array.isArray(kfs) && kfs.length > 0) {
+      const existingKfIdx = kfs.findIndex((k) => Math.abs(k.time - t) <= 0.35);
+      let nextKfs = [];
+      if (existingKfIdx >= 0) {
+        nextKfs = [...kfs];
+        nextKfs[existingKfIdx] = {
+          ...nextKfs[existingKfIdx],
+          cropX: clampedCrop,
+          cropPosition: resolvedPos,
+        };
+      } else {
+        const newKf = {
+          id: `kf_${Math.round(t * 1000)}_${Math.random().toString(36).substr(2, 4)}`,
+          time: parseFloat(t.toFixed(2)),
+          cropX: clampedCrop,
+          cropPosition: resolvedPos,
+        };
+        nextKfs = [...kfs, newKf].sort((a, b) => a.time - b.time);
+      }
+
+      scriptData.framingKeyframes = nextKfs;
+      if (onUpdateSegments && scriptData?.segments) {
+        onUpdateSegments([...scriptData.segments]);
+      }
+      if (seriesId && episodeId) {
+        if (keyframeSaveTimerRef.current) clearTimeout(keyframeSaveTimerRef.current);
+        keyframeSaveTimerRef.current = setTimeout(() => {
+          fetch('/api/video/update-framing-keyframes', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ seriesId, episodeId, keyframes: nextKfs }),
+          }).catch(() => {});
+        }, 200);
+      }
+      return;
+    }
+    const framing = activeFramingInfo;
+
+    if (framing.type === 'segment' && framing.id) {
+      const segId = framing.id;
+      if (onUpdateSegments && scriptData?.segments) {
+        const updated = scriptData.segments.map((s) => {
+          const match = (s._uid && s._uid === segId) ||
+                        (s.id !== undefined && s.id !== null && String(s.id) === String(segId)) ||
+                        (framing.segment && (s === framing.segment || (s._uid && s._uid === framing.segment._uid) || (s.id !== undefined && s.id === framing.segment.id)));
+          if (match) {
+            return {
+              ...s,
+              cropX: clampedCrop,
+              cropPosition: resolvedPos,
+              manualCrop: true,
+            };
+          }
+          return s;
+        });
+
+        // Purge any corrupted whole-episode overrides from scriptData
+        if (scriptData) {
+          if (Array.isArray(scriptData.framingOverrides)) {
+            scriptData.framingOverrides = scriptData.framingOverrides.filter(
+              (o) => !(o.startSec === 0 && o.endSec > 30)
+            );
+          }
+        }
+
+        onUpdateSegments(updated);
+      }
+    } else {
+      // Localized override (only for tight intervals <= 30s)
+      const rangeDur = (framing.endSec || 0) - (framing.startSec || 0);
+      if (rangeDur <= 30) {
+        const overrides = [...(scriptData?.framingOverrides || [])].filter((o) => !(o.startSec === 0 && o.endSec > 30));
+        const existingIdx = overrides.findIndex((o) => o.id === framing.id || Math.abs(o.startSec - framing.startSec) < 0.2);
+        const newOverride = {
+          id: framing.id,
+          startSec: framing.startSec,
+          endSec: framing.endSec,
+          cropX: clampedCrop,
+          cropPosition: resolvedPos,
+          manualCrop: true,
+        };
+        if (existingIdx >= 0) {
+          overrides[existingIdx] = newOverride;
+        } else {
+          overrides.push(newOverride);
+        }
+
+        if (scriptData) {
+          scriptData.framingOverrides = overrides;
+        }
+        if (onUpdateSegments && scriptData?.segments) {
+          onUpdateSegments([...scriptData.segments]);
+        }
+      }
+    }
+
+    if (seriesId && episodeId) {
+      try {
+        await fetch('/api/video/update-segment-crop', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            seriesId,
+            episodeId,
+            segmentId: framing.id,
+            cropX: clampedCrop,
+            cropPosition: resolvedPos,
+            rangeStart: framing.startSec,
+            rangeEnd: framing.endSec,
+          }),
+        });
+      } catch (err) {
+        console.warn('[Update Crop Backend Warning]:', err);
+      }
+    }
+  }, [activeFramingInfo, onUpdateSegments, scriptData, seriesId, episodeId]);
+
+  const handleVideoMouseDown = useCallback((e) => {
+    if (!is916Crop || e.button !== 0) return;
+    dragStartXRef.current = e.clientX;
+    dragStartCropXRef.current = effectiveCropX;
+    hasDraggedRef.current = false;
+    setIsDraggingCrop(true);
+
+    const rect = videoRef?.current?.getBoundingClientRect();
+    const frameW = rect?.width || 360;
+    const sensitivity = 70.0 / Math.max(120, frameW);
+    let latestVal = dragStartCropXRef.current;
+
+    const onMouseMove = (moveEvt) => {
+      const deltaX = moveEvt.clientX - dragStartXRef.current;
+      if (Math.abs(deltaX) > 2) {
+        hasDraggedRef.current = true;
+      }
+      const nextCrop = Math.max(5, Math.min(95, dragStartCropXRef.current - (deltaX * sensitivity)));
+      latestVal = Math.round(nextCrop * 10) / 10;
+      setLiveDragCropX(latestVal);
+    };
+
+    const onMouseUp = () => {
+      setIsDraggingCrop(false);
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+
+      if (hasDraggedRef.current) {
+        handleUpdateActiveCrop(latestVal);
+      }
+      setLiveDragCropX(null);
+    };
+
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+  }, [is916Crop, effectiveCropX, videoRef, handleUpdateActiveCrop]);
+
+  const handleVideoClick = useCallback((e) => {
+    if (hasDraggedRef.current) {
+      hasDraggedRef.current = false;
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
+    if (onPlayPause) {
+      onPlayPause();
+    }
+  }, [onPlayPause]);
+
+  const handleAnalyzeFraming = useCallback(async () => {
+    if (!seriesId || !episodeId || isAnalyzingFraming) return;
+    setIsAnalyzingFraming(true);
+    try {
+      const res = await fetch('/api/video/analyze-framing', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          seriesId,
+          episodeId,
+          videoPath: selectedVideo?.path || selectedVideo?.filePath || null,
+        }),
+      });
+      const data = await res.json();
+      if (data.success && Array.isArray(data.segments) && onUpdateSegments) {
+        onUpdateSegments(data.segments);
+      }
+    } catch (err) {
+      console.error('[Analyze Framing Failed]:', err);
+    } finally {
+      setIsAnalyzingFraming(false);
+    }
+  }, [seriesId, episodeId, selectedVideo, onUpdateSegments, isAnalyzingFraming]);
 
   const framedStageStyle = React.useMemo(() => {
     const padPx = isFullscreen ? 24 : 16;
@@ -1423,7 +1926,8 @@ function VideoPlayerPreview({
                 onTimeUpdate={handleInternalTimeUpdate}
                 onSeeked={handleInternalSeeked}
                 onLoadedMetadata={handleInternalLoadedMetadata}
-                onClick={onPlayPause}
+                onMouseDown={handleVideoMouseDown}
+                onClick={handleVideoClick}
                 onDoubleClick={toggleFullscreen}
                 onEnded={onEnded}
                 style={{
@@ -1432,7 +1936,14 @@ function VideoPlayerPreview({
                   maxWidth: '100%',
                   maxHeight: '100%',
                   objectFit: videoObjectFit,
-                  cursor: 'pointer',
+                  objectPosition: is916Crop
+                    ? `${effectiveCropX}% 50%`
+                    : '50% 50%',
+                  transition: isDraggingCrop || (isPlaying && (scriptData?.framingKeyframes?.length || 0) > 0)
+                    ? 'none'
+                    : 'object-position 0.25s cubic-bezier(0.2, 0.8, 0.4, 1)',
+                  cursor: is916Crop ? (isDraggingCrop ? 'grabbing' : 'grab') : 'pointer',
+                  userSelect: 'none',
                   display: 'block',
                   backgroundColor: '#000000',
                 }}
@@ -1681,6 +2192,13 @@ function VideoPlayerPreview({
         isFullscreen={isFullscreen}
         renderedVideo={renderedVideo}
         onResetToPreview={onResetToPreview || (() => setRenderedVideo && setRenderedVideo(null))}
+        onUpdateActiveCrop={handleUpdateActiveCrop}
+        onAnalyzeFraming={handleAnalyzeFraming}
+        isAnalyzingFraming={isAnalyzingFraming}
+        activeCropX={effectiveCropX}
+        framingKeyframes={scriptData?.framingKeyframes || []}
+        onToggleKeyframe={handleToggleKeyframe}
+        onSeekToKeyframe={handleSeekToKeyframe}
       />
     </div>
   );

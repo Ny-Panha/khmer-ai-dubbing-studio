@@ -6,6 +6,7 @@ import {
 import { isCorruptedOrMojibakeTitle } from '../../utils/projectStorage';
 import { useGeminiQuotaMonitor, runQuotaCheck } from '../../hooks/useGeminiQuotaMonitor';
 import { JobQueueContext } from '../../context/jobQueueStore';
+import { useDubbingRunnerContext } from '../../features/dubbing-runner/DubbingRunnerContext';
 import ShortcutsModal from './ShortcutsModal';
 import './Navbar.css';
 
@@ -78,6 +79,13 @@ export default function Navbar({
     ? `${quotaSummary.readyKeys}/${quotaSummary.totalKeys} Keys`
     : 'Keys';
 
+  const runnerContext = useDubbingRunnerContext();
+  const runnerStates = runnerContext?.runnerStates || {};
+  const activeRunnerStep = ['clean_bgm', 'voice', 'translate', 'repair', 'all3'].find(
+    (step) => runnerStates[step]?.status === 'running'
+  );
+  const activeRunnerState = activeRunnerStep ? runnerStates[activeRunnerStep] : null;
+
   return (
     <>
       <header className="capcut-navbar">
@@ -137,10 +145,17 @@ export default function Navbar({
             }}
             className={`navbar-gemini-route-btn ${isGeminiRouteActive ? 'active' : ''}`}
             title="Batch Generate Studio (Translate, Khmer AI Voice, Demucs & Batch Export)"
+            style={activeRunnerStep ? { borderColor: '#38BDF8', background: 'rgba(56, 189, 248, 0.15)' } : undefined}
           >
-            <Layers size={14} />
+            <Layers size={14} className={activeRunnerStep ? 'animate-pulse' : ''} />
             <span>Batch Generate</span>
-            <span className="gemini-badge-chip">{episodesCount > 0 ? `${episodesCount} EPs` : 'Batch'}</span>
+            {activeRunnerStep ? (
+              <span className="gemini-badge-chip" style={{ background: '#0284C7', color: '#FFFFFF', fontWeight: 800 }}>
+                {activeRunnerStep === 'clean_bgm' ? '🔇 Demucs' : (activeRunnerStep === 'voice' ? '🎙️ Voice' : (activeRunnerStep === 'repair' ? '🔧 Repair' : '📝 Script'))}: {activeRunnerState?.progress || 0}%
+              </span>
+            ) : (
+              <span className="gemini-badge-chip">{episodesCount > 0 ? `${episodesCount} EPs` : 'Batch'}</span>
+            )}
           </button>
 
           {onOpenGeminiQuota && (

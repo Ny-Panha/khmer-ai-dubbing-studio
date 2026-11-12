@@ -8,16 +8,53 @@ import StudioConfirmDialog from '../../common/StudioConfirmDialog';
  * and collapsible Live Console Terminal Drawer for Step 3 (Demucs AI Clean BGM & Vocal Separation).
  */
 export default function EpisodeDemucsProgressCard({ liveStats, ep, onKill, onRequestConfirm = null, isCurrentRunning = true }) {
-  const modelName = liveStats?.model || ep?.demucsModel || ep?.model || 'htdemucs';
-  const isDone = Boolean(liveStats?.isDone || (liveStats?.percent ?? 0) >= 100);
-  const isFailed = Boolean(liveStats?.isFailed);
+  const [internalLiveStats, setInternalLiveStats] = useState(null);
+
+  useEffect(() => {
+    if (!isCurrentRunning) return;
+    const videoRef = ep?.videoPath || ep?.sourceVideoPath || ep?.videoFile || (typeof ep?.video === 'string' ? ep?.video : ep?.video?.videoPath) || '';
+    if (!videoRef) return;
+
+    let active = true;
+    const poll = async () => {
+      try {
+        const res = await fetch(`/api/audio/separation-progress?videoPath=${encodeURIComponent(videoRef)}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data && data.success && active) {
+          const pct = Math.min(100, Math.max(0, Number(data.progress || 0)));
+          if (pct > 0 || (Array.isArray(data.logs) && data.logs.length > 0)) {
+            setInternalLiveStats(data);
+          }
+        }
+      } catch (_) {}
+    };
+
+    poll();
+    const timer = setInterval(poll, 1000);
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, [isCurrentRunning, ep]);
+
+  const currentLive = (internalLiveStats && Number(internalLiveStats.progress || 0) > Number(liveStats?.percent || 0))
+    ? {
+        ...internalLiveStats,
+        percent: internalLiveStats.progress,
+        logs: (internalLiveStats.logs?.length || 0) >= (liveStats?.logs?.length || 0) ? internalLiveStats.logs : (liveStats?.logs || []),
+      }
+    : (liveStats || internalLiveStats);
+
+  const modelName = currentLive?.model || ep?.demucsModel || ep?.model || 'htdemucs';
+  const isDone = Boolean(currentLive?.isDone || currentLive?.status === 'completed' || (currentLive?.percent ?? 0) >= 100);
+  const isFailed = Boolean(currentLive?.isFailed || currentLive?.status === 'error');
   const isQueued = !isCurrentRunning && !isDone && !isFailed;
-  const targetPercent = isQueued ? 0 : Math.min(100, Math.max(0, liveStats?.percent ?? 5));
+  const targetPercent = isQueued ? 0 : Math.min(100, Math.max(0, currentLive?.percent ?? currentLive?.progress ?? 5));
   const [smoothProgress, setSmoothProgress] = useState(targetPercent || 0);
   const [showConsole, setShowConsole] = useState(false);
   const [showKillConfirm, setShowKillConfirm] = useState(false);
   const consoleBottomRef = useRef(null);
-
 
   useEffect(() => {
     if (smoothProgress === targetPercent) return;
@@ -36,7 +73,7 @@ export default function EpisodeDemucsProgressCard({ liveStats, ep, onKill, onReq
     return () => clearTimeout(timer);
   }, [targetPercent, smoothProgress]);
 
-  const logs = Array.isArray(liveStats?.logs) ? liveStats.logs : [];
+  const logs = Array.isArray(currentLive?.logs) ? currentLive.logs : [];
 
   useEffect(() => {
     if (consoleBottomRef.current) {
@@ -101,7 +138,7 @@ export default function EpisodeDemucsProgressCard({ liveStats, ep, onKill, onReq
               overflow: 'hidden',
               textOverflow: 'ellipsis',
             }}>
-              {isFailed ? 'សូមពិនិត្យមើល Console Logs ខាងក្រោម...' : (isDone ? 'Clean BGM & Sound Effects Isolated' : (isQueued ? 'រង់ចាំភាគមុនបញ្ចប់ (ដំណើរការ ១ ភាគម្ដង ដើម្បីការពារកុំឱ្យ CPU គាំង)' : (liveStats?.message || `AI Deep Learning Stem Separation (${modelName})...`)))}
+              {isFailed ? 'សូមពិនិត្យមើល Console Logs ខាងក្រោម...' : (isDone ? 'Clean BGM & Sound Effects Isolated' : (isQueued ? 'រង់ចាំភាគមុនបញ្ចប់ (ដំណើរការ ១ ភាគម្ដង ដើម្បីការពារកុំឱ្យ CPU គាំង)' : (currentLive?.message || `AI Deep Learning Stem Separation (${modelName})...`)))}
             </div>
           </div>
         </div>

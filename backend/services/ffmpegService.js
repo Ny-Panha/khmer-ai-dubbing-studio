@@ -5,6 +5,7 @@ const ffmpegInstaller = require("@ffmpeg-installer/ffmpeg");
 const ffprobeInstaller = require("@ffprobe-installer/ffprobe");
 const ffmpeg = require("fluent-ffmpeg");
 const audioSeparationService = require("./audioSeparationService");
+const { buildDynamicVerticalCropXExpr } = require("./smartReframeService");
 const { ffmpegHeavySemaphore, createAbortError } = require("../utils/asyncSemaphore");
 const { registerProcess, unregisterProcess } = require("../utils/processRegistry");
 
@@ -604,7 +605,7 @@ async function trimTtsSilence(
 async function autoStretchTtsAudio({
   inputAudioPath,
   targetDuration,
-  maxSpeed = 1.35,
+  maxSpeed = 1.50,
   minSpeed = 0.95,
   leadInCushionSec = 0.025,  // 25ms lead-in: eliminates Edge TTS +220ms lag while protecting Khmer aspirated consonants (ក ខ ច ឆ ត ថ ប ផ ស)
   leadOutCushionSec = 0.060, // 60ms decay cushion protects final syllable and tail consonants
@@ -1106,13 +1107,37 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
   const dialogueLines = segments
     .filter((seg) => (seg.khmerText || seg.khmer) && String(seg.khmerText || seg.khmer).trim().length > 0)
     .map((seg) => {
-      const startSec = Number(seg.startSeconds ?? seg.startSec ?? seg.audioStartSec ?? parseTimeToSec(seg.start, 0));
-      const rawDur = Number(
-        seg.audioDuration ?? seg.duration ?? seg.audioDurationSec ?? (seg.endSeconds ? seg.endSeconds - startSec : (seg.endSec ? seg.endSec - startSec : 2.5))
+      const hasVoice = Boolean(
+        seg.audioUrl || seg.audioPath || seg.rawAudioPath || seg.audioFile || seg.rawAudioFile ||
+        seg.ttsStatus === "ready" || seg.status === "audio_ready" ||
+        (typeof seg.finalAudioDuration === "number" && seg.finalAudioDuration > 0) ||
+        (typeof seg.audioDuration === "number" && seg.audioDuration > 0) ||
+        (typeof seg.audioDurationSec === "number" && seg.audioDurationSec > 0)
       );
-      // Strictly prevent 0.01s or micro-durations from flashing in burned subtitles
-      const safeDuration = (!rawDur || isNaN(rawDur) || rawDur < 0.6)
-        ? Math.max(1.5, Math.min(6.0, String(seg.khmerText || seg.khmer || "").length * 0.16))
+
+      const startSec = Number(
+        (hasVoice && seg.audioStartSec !== undefined && seg.audioStartSec !== null && !isNaN(Number(seg.audioStartSec)))
+          ? seg.audioStartSec
+          : (seg.startSec ?? seg.startSeconds ?? parseTimeToSec(seg.start, 0))
+      );
+
+      const realAudioDur = hasVoice
+        ? (seg.finalAudioDuration ?? seg.audioDurationSec ?? seg.audioDuration ?? seg.originalAudioDuration ?? seg.rawAudioDur)
+        : null;
+
+      const isTrimmed = Boolean(seg.audioTrimmed || seg.userTrimmed);
+      let rawDur;
+      if (isTrimmed && typeof seg.audioEndSec === "number" && !isNaN(seg.audioEndSec)) {
+        rawDur = seg.audioEndSec - startSec;
+      } else if (realAudioDur && !isNaN(realAudioDur) && realAudioDur > 0) {
+        rawDur = Number(realAudioDur);
+      } else {
+        rawDur = Number(seg.duration ?? (seg.endSec ? seg.endSec - startSec : (seg.endSeconds ? seg.endSeconds - startSec : 2.5)));
+      }
+
+      // Match voice clip timing: when voice is present, end right when speech ends (with minimal min clamp for ultra-short clips)
+      const safeDuration = (!rawDur || isNaN(rawDur) || rawDur <= 0.1)
+        ? Math.max(1.2, Math.min(5.0, String(seg.khmerText || seg.khmer || "").length * 0.16))
         : rawDur;
       const endSec = startSec + safeDuration;
 
@@ -1312,10 +1337,14 @@ function buildVerticalVideoFilterChain({
   blurRadius = 24,
   blurPower = 2,
   darkenBrightness = -0.08,
+  segments = [],
+  framingOverrides = [],
+  framingKeyframes = [],
 } = {}) {
   const isCrop = verticalStyle === "crop";
+  const cropXExpr = isCrop ? buildDynamicVerticalCropXExpr(segments, 1080, framingOverrides, framingKeyframes) : "(in_w-1080)/2";
   const baseScaleFilter = isCrop
-    ? "scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920:(in_w-1080)/2:(in_h-1920)/2,setsar=1"
+    ? `scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920:${cropXExpr}:(in_h-1920)/2,setsar=1`
     : "scale=1080:-2:force_original_aspect_ratio=decrease,pad=1080:1920:(1080-iw)/2:(1920-ih)/2:color=black,setsar=1";
 
   if (!blurSubtitleBand) {
@@ -1356,6 +1385,8 @@ function renderDubbedVideoWithDucking(options = {}) {
   const videoClips = options.videoClips || [];
   const antiTheft = options.antiTheft || null;
   const logoSettings = options.logoSettings || null;
+  const framingKeyframes = options.framingKeyframes || [];
+  const framingOverrides = options.framingOverrides || [];
   const allowOriginalAudio = Boolean(options.allowOriginalAudio);
   const onProgress = typeof options.onProgress === "function" ? options.onProgress : null;
   const expectedDurationSec = Number(options.expectedDurationSec) || 0;
@@ -1739,6 +1770,9 @@ function renderDubbedVideoWithDucking(options = {}) {
             outputLabel: "[base_vert]",
             verticalStyle,
             blurSubtitleBand: shouldBlurVerticalSubBand,
+            segments,
+            framingOverrides,
+            framingKeyframes,
           }),
           `[base_vert]${assFilter}[final_video]`
         );
@@ -1766,6 +1800,9 @@ function renderDubbedVideoWithDucking(options = {}) {
           outputLabel: "[final_video]",
           verticalStyle,
           blurSubtitleBand: shouldBlurVerticalSubBand,
+          segments,
+          framingOverrides,
+          framingKeyframes,
         })
       );
       videoMapArg = "[final_video]";
@@ -2162,17 +2199,40 @@ function generateSrtFile(segments, outputPath) {
 
   let srtContent = "";
   segments.forEach((seg, index) => {
-    let startSec = typeof seg.startSec === "number" && !isNaN(seg.startSec)
-      ? seg.startSec
-      : parseTimeToSec(seg.start, index * 4);
-    let endSec = typeof seg.endSec === "number" && !isNaN(seg.endSec)
-      ? seg.endSec
-      : parseTimeToSec(seg.end, startSec + 3.5);
+    const hasVoice = Boolean(
+      seg.audioUrl || seg.audioPath || seg.rawAudioPath || seg.audioFile || seg.rawAudioFile ||
+      seg.ttsStatus === "ready" || seg.status === "audio_ready" ||
+      (typeof seg.finalAudioDuration === "number" && seg.finalAudioDuration > 0) ||
+      (typeof seg.audioDuration === "number" && seg.audioDuration > 0) ||
+      (typeof seg.audioDurationSec === "number" && seg.audioDurationSec > 0)
+    );
+
+    let startSec = Number(
+      (hasVoice && seg.audioStartSec !== undefined && seg.audioStartSec !== null && !isNaN(Number(seg.audioStartSec)))
+        ? seg.audioStartSec
+        : (typeof seg.startSec === "number" && !isNaN(seg.startSec) ? seg.startSec : parseTimeToSec(seg.start, index * 4))
+    );
+
+    const realAudioDur = hasVoice
+      ? (seg.finalAudioDuration ?? seg.audioDurationSec ?? seg.audioDuration ?? seg.originalAudioDuration ?? seg.rawAudioDur)
+      : null;
+
+    const isTrimmed = Boolean(seg.audioTrimmed || seg.userTrimmed);
+    let endSec;
+    if (isTrimmed && typeof seg.audioEndSec === "number" && !isNaN(seg.audioEndSec)) {
+      endSec = seg.audioEndSec;
+    } else if (realAudioDur && !isNaN(realAudioDur) && realAudioDur > 0) {
+      endSec = startSec + Number(realAudioDur);
+    } else if (typeof seg.endSec === "number" && !isNaN(seg.endSec)) {
+      endSec = seg.endSec;
+    } else {
+      endSec = parseTimeToSec(seg.end, startSec + 2.5);
+    }
 
     const srtDur = endSec - startSec;
-    if (endSec <= startSec || isNaN(srtDur) || srtDur < 0.6) {
+    if (endSec <= startSec || isNaN(srtDur) || srtDur <= 0.1) {
       const textLen = (seg.khmerText || seg.khmer || "").length || 8;
-      endSec = parseFloat((startSec + Math.max(1.8, Math.min(6.0, textLen * 0.16))).toFixed(2));
+      endSec = parseFloat((startSec + Math.max(1.2, Math.min(5.0, textLen * 0.16))).toFixed(2));
     }
 
     const startTime = toSrtTime(startSec);

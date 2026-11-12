@@ -19,6 +19,8 @@ output/
 __pycache__/
 *.py[cod]
 *$py.class
+test_smart_crop.py
+*.xml
 
 # Large Models & Binaries (>100MB exceeds GitHub limit)
 *.onnx

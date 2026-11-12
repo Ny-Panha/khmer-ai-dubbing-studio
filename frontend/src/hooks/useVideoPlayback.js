@@ -274,8 +274,15 @@ export function useVideoPlayback({
     }
   }, [duration, renderedVideo, videoClips, videoRef]);
 
+  const lastPlayPauseTimeRef = useRef(0);
   const handlePlayPause = useCallback(() => {
     if (!videoRef?.current) return;
+    const now = performance.now();
+    if (now - lastPlayPauseTimeRef.current < 150) {
+      return;
+    }
+    lastPlayPauseTimeRef.current = now;
+
     const v = videoRef.current;
     const realDur = v.duration || 0;
     const totalDur = Math.max(duration > 0 ? duration : 0, realDur > 0 ? realDur : 0);

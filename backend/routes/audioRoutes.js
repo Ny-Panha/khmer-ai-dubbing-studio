@@ -24,7 +24,7 @@ const {
   generateVoicePreview,
 } = require("../services/ttsService");
 const { detectSpeakerGender } = require("../models/speakerRegistry");
-const { createSynchronizedNarrationAudio, parseTimeToSec } = require("../services/ffmpegService");
+const { createSynchronizedNarrationAudio, parseTimeToSec, autoStretchTtsAudio, getMediaDuration } = require("../services/ffmpegService");
 const audioSeparationService = require("../services/audioSeparationService");
 const { withSeriesMetadataLock, updateSeriesMetadata } = require("../services/episodeService");
 
@@ -253,7 +253,7 @@ router.post("/generate-audio", async (req, res) => {
       rate: rawBodyRate,
       userCustomSpeed: rawBodyUserCustomSpeed,
       autoStretch = true,
-      maxSpeed = 1.45,
+      maxSpeed = 1.50,
       speakerMap = {},
       projectName,
       videoId,
@@ -1123,6 +1123,177 @@ router.post("/sync-audio", async (req, res) => {
   } catch (error) {
     console.error("Audio sync error:", error);
     res.status(500).json({ error: error.message || "Failed to re-sync timeline audio" });
+  }
+});
+
+/**
+ * 7. Auto-Fit Speech Speed (1.05x - 1.50x)
+ * Speeds up overflowing / red / trimmed segments so they fit their subtitle slot without cutting off words.
+ */
+router.post(["/audio/autofit-speed", "/autofit-speed"], async (req, res) => {
+  try {
+    const {
+      seriesId,
+      episodeId,
+      maxSpeed = 1.50,
+      targetSegmentIds = null,
+      segments: clientSegments = null,
+    } = req.body;
+
+    if (!seriesId) {
+      return res.status(400).json({ success: false, error: "seriesId is required" });
+    }
+
+    const seriesMetaPath = path.join(uploadsDir, "projects", seriesId, "series.json");
+    if (!fs.existsSync(seriesMetaPath)) {
+      return res.status(404).json({ success: false, error: `Series not found: ${seriesId}` });
+    }
+
+    let seriesData = JSON.parse(fs.readFileSync(seriesMetaPath, "utf8"));
+    const episodes = seriesData.episodes || [];
+    const epIndex = episodes.findIndex((e) => String(e.id) === String(episodeId) || Number(e.episodeNumber) === Number(episodeId));
+    if (epIndex === -1) {
+      return res.status(404).json({ success: false, error: `Episode not found: ${episodeId}` });
+    }
+
+    const ep = episodes[epIndex];
+    let segments = clientSegments && Array.isArray(clientSegments) && clientSegments.length > 0
+      ? clientSegments
+      : (ep.scriptData?.segments || []);
+
+    if (!Array.isArray(segments) || segments.length === 0) {
+      return res.status(400).json({ success: false, error: "No segments found to auto-fit" });
+    }
+
+    const targetSet = Array.isArray(targetSegmentIds) && targetSegmentIds.length > 0
+      ? new Set(targetSegmentIds.map(String))
+      : null;
+
+    let fittedCount = 0;
+    const updatedSegments = [...segments];
+
+    for (let i = 0; i < updatedSegments.length; i++) {
+      const seg = { ...updatedSegments[i] };
+      if (targetSet && !targetSet.has(String(seg.id ?? i))) {
+        continue;
+      }
+
+      // Check audio file existence
+      const resolvedAudio = resolveMediaFile(seg.audioFile || seg.audioPath || (seg.audioUrl ? path.basename(seg.audioUrl) : null));
+      if (!resolvedAudio || !fs.existsSync(resolvedAudio)) {
+        continue;
+      }
+
+      const slotStart = typeof seg.startSec === "number" ? seg.startSec : parseTimeToSec(seg.start, i * 4);
+      const slotEnd = typeof seg.endSec === "number" ? seg.endSec : parseTimeToSec(seg.end, slotStart + 2.5);
+      const slotDur = Math.max(0.2, slotEnd - slotStart);
+
+      const currentDur = await getMediaDuration(resolvedAudio);
+      if (!currentDur || currentDur <= 0) continue;
+
+      const overSec = currentDur - slotDur;
+      const isRedOrTrimmed = overSec >= 0.10 || Boolean(seg.audioTrimmed);
+
+      if (isRedOrTrimmed) {
+        // Target slot duration with safe margin (e.g. 50ms)
+        const safeTarget = Math.max(0.25, parseFloat((slotDur - 0.05).toFixed(3)));
+        const ratio = currentDur / safeTarget;
+        const speedToApply = Math.min(Number(maxSpeed || 1.50), Math.max(1.05, ratio));
+
+        try {
+          const stretchRes = await autoStretchTtsAudio({
+            inputAudioPath: resolvedAudio,
+            targetDuration: safeTarget,
+            maxSpeed: speedToApply,
+            minSpeed: 1.0,
+            allowSlowdown: false,
+          });
+
+          const newDur = stretchRes.finalDuration;
+          seg.audioDurationSec = newDur;
+          seg.audioDuration = newDur;
+          seg.finalAudioDuration = newDur;
+          seg.rawAudioDur = newDur;
+          seg.originalAudioDuration = newDur;
+          seg.audioStartSec = slotStart;
+          seg.audioEndSec = parseFloat((slotStart + newDur).toFixed(2));
+          seg.audioTrimmed = false;
+          seg.userTrimmed = false;
+          seg.speed = parseFloat(stretchRes.appliedSpeed.toFixed(2));
+          seg.appliedSpeed = parseFloat(stretchRes.appliedSpeed.toFixed(2));
+          seg.userCustomSpeed = false;
+          seg.audioOutdated = false;
+
+          updatedSegments[i] = seg;
+          fittedCount++;
+        } catch (stretchErr) {
+          console.warn(`[Auto-Fit Speed] Failed to stretch segment #${seg.id}: ${stretchErr.message}`);
+        }
+      }
+    }
+
+    ep.autoFitted = true;
+    if (ep.scriptData) {
+      ep.scriptData.autoFitted = true;
+    }
+
+    if (fittedCount > 0) {
+      ep.scriptData = {
+        ...ep.scriptData,
+        segments: updatedSegments,
+        updatedAt: Date.now(),
+        autoFitted: true,
+      };
+      episodes[epIndex] = ep;
+      seriesData.episodes = episodes;
+      fs.writeFileSync(seriesMetaPath, JSON.stringify(seriesData, null, 2), "utf8");
+
+      // Re-sync master narration audio
+      try {
+        const { audioDir, cleanSeries, cleanEpisode, isEpisode } = ensureProjectDirs(seriesId, episodeId, seriesId);
+        const fullAudioFilename = isEpisode ? `${cleanEpisode}_narration_khmer.mp3` : `${cleanSeries}_narration_khmer.mp3`;
+        const fullAudioPath = path.join(audioDir, fullAudioFilename);
+
+        const syncSegs = updatedSegments
+          .filter((s) => !s.muted && !s.isMuted)
+          .map((s) => {
+            const foundPath = resolveMediaFile(s.audioFile || s.audioPath || (s.audioUrl ? path.basename(s.audioUrl) : null));
+            if (!foundPath || !fs.existsSync(foundPath)) return null;
+            return {
+              ...s,
+              audioPath: foundPath,
+              audioStartSec: typeof s.audioStartSec === "number" ? s.audioStartSec : s.startSec,
+              startSec: typeof s.startSec === "number" ? s.startSec : s.audioStartSec,
+              audioEndSec: s.audioEndSec,
+              audioDurationSec: s.audioDurationSec,
+              audioOffset: 0,
+              audioTrimmed: false,
+            };
+          })
+          .filter(Boolean);
+
+        if (syncSegs.length > 0) {
+          await createSynchronizedNarrationAudio(syncSegs, fullAudioPath);
+        }
+      } catch (syncErr) {
+        console.warn(`[Auto-Fit Speed] Notice re-syncing master narration: ${syncErr.message}`);
+      }
+    } else {
+      episodes[epIndex] = ep;
+      seriesData.episodes = episodes;
+      fs.writeFileSync(seriesMetaPath, JSON.stringify(seriesData, null, 2), "utf8");
+    }
+
+    return res.json({
+      success: true,
+      fittedCount,
+      totalCount: segments.length,
+      segments: updatedSegments,
+      message: `⚡ បានពន្លឿន ${fittedCount} ឃ្លា (1.05x - ${maxSpeed}x) ឱ្យនិយាយទាន់ និងចប់គ្រប់អក្សរដោយជោគជ័យ!`
+    });
+  } catch (error) {
+    console.error("[Auto-Fit Speed] Error:", error);
+    return res.status(500).json({ success: false, error: error.message || "Failed to auto-fit speed" });
   }
 });
 
