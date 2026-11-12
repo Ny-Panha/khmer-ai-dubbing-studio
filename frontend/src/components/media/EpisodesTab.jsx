@@ -1,13 +1,20 @@
 import React, { useState } from 'react';
 import { 
-  Film, Sparkles, Mic, Download, Plus, Trash2, Edit2, CheckCircle2, 
-  Clock, BookOpen, Layers, ArrowRight, Check, AlertCircle, Play, Scissors, Loader2
+  Film, FileText, Sparkles, Mic, Download, Plus, Trash2, Edit2, CheckCircle2, 
+  Clock, BookOpen, Layers, ArrowRight, Check, AlertCircle, Play, Scissors, Loader2,
+  ChevronDown, ChevronRight, Zap
 } from 'lucide-react';
 import { splitVideoEpisodesApi } from '../../services/api';
 import { formatTimecode } from '../../utils/formatTime';
 import { isCorruptedOrMojibakeTitle } from '../../utils/projectStorage';
 import { checkEpisodeHasScript, getEpisodeSegmentCount } from '../dashboard/geminiRouteHelpers';
 import { DubbingStepButton, useDubbingFeature } from '../../features/dubbing-runner';
+
+function formatEpisodeDisplayTitle(title, episodeNumber) {
+  if (!title) return `ភាគទី ${episodeNumber} (EP${episodeNumber})`;
+  // Clean double prefix like "ភាគទី 1: ភាគទី 1 (EP1)" -> "ភាគទី 1 (EP1)"
+  return String(title).replace(/^(?:ភាគទី|ភាគ|EP|Episode)\s*[:#\s]*\d+\s*:\s*(ភាគទី\s*\d+.*)$/i, '$1');
+}
 
 export default function EpisodesTab({
   seriesList = [],
@@ -41,6 +48,7 @@ export default function EpisodesTab({
   const [isSplitting, setIsSplitting] = useState(false);
   const [splitError, setSplitError] = useState(null);
   const [splitNotice, setSplitNotice] = useState(null); // { type: 'success', text } inline banner after split
+  const [isGlossaryExpanded, setIsGlossaryExpanded] = useState(false);
 
   const activeDuration = videoMetadata?.durationSec || videoMetadata?.duration || duration || selectedVideo?.durationSec || selectedVideo?.duration || activeEpisode?.video?.durationSec || activeEpisode?.duration || 0;
 
@@ -226,50 +234,74 @@ export default function EpisodesTab({
       {glossaryChars.length > 0 && (
         <div
           style={{
-            background: 'rgba(56, 189, 248, 0.05)',
-            border: '1px solid rgba(56, 189, 248, 0.2)',
+            background: 'rgba(56, 189, 248, 0.04)',
+            border: '1px solid rgba(56, 189, 248, 0.18)',
             borderRadius: 'var(--radius-sm)',
-            padding: '10px 12px',
+            padding: '8px 12px',
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
-            <BookOpen size={13} color="var(--accent-cyan)" />
-            <span style={{ fontSize: '0.72rem', fontWeight: 800, color: 'var(--accent-cyan)', textTransform: 'uppercase' }}>
-              Series Character Glossary (រក្សាឈ្មោះតួអង្គឆ្លងភាគ)
-            </span>
-          </div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-            {glossaryChars.map((ch, idx) => (
-              <span
-                key={ch.name || idx}
-                style={{
-                  fontSize: '0.70rem',
-                  padding: '3px 8px',
-                  borderRadius: 4,
-                  background: 'rgba(30, 41, 59, 0.8)',
-                  border: '1px solid rgba(56, 189, 248, 0.3)',
-                  color: '#e2e8f0',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 4,
-                }}
-              >
-                <strong>{ch.name}</strong>
-                {ch.khmerName && ch.khmerName !== ch.name && (
-                  <span style={{ color: 'var(--accent-cyan)' }}>→ {ch.khmerName}</span>
-                )}
-                {(() => {
-                  const g = String(ch.gender || '').toLowerCase();
-                  const isFemale = g === 'female' || (ch.voiceId && ch.voiceId.includes('Sreymom')) || (ch.name && /ស្រី|នាង|យាយ|ម៉ែ|កញ្ញា|ជំទាវ/i.test(ch.name));
-                  return (
-                    <span style={{ fontSize: '0.62rem', color: isFemale ? '#f472b6' : '#60a5fa' }}>
-                      ({isFemale ? 'ស្រី' : 'ប្រុស'})
-                    </span>
-                  );
-                })()}
+          <button
+            type="button"
+            onClick={() => setIsGlossaryExpanded((prev) => !prev)}
+            style={{
+              width: '100%',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              background: 'none',
+              border: 'none',
+              padding: 0,
+              cursor: 'pointer',
+              color: 'var(--accent-cyan)',
+            }}
+            title="ចុចដើម្បីបង្ហាញ ឬលាក់បញ្ជីតួអង្គ (Toggle Glossary)"
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <BookOpen size={13} color="var(--accent-cyan)" />
+              <span style={{ fontSize: '0.72rem', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.03em' }}>
+                Character Glossary ({glossaryChars.length} តួអង្គ)
               </span>
-            ))}
-          </div>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '0.68rem', color: '#94a3b8' }}>
+              <span>{isGlossaryExpanded ? 'បង្រួម' : 'ពង្រីក'}</span>
+              {isGlossaryExpanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
+            </div>
+          </button>
+
+          {isGlossaryExpanded && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8, paddingTop: 8, borderTop: '1px solid rgba(56, 189, 248, 0.12)' }}>
+              {glossaryChars.map((ch, idx) => (
+                <span
+                  key={ch.name || idx}
+                  style={{
+                    fontSize: '0.68rem',
+                    padding: '2px 7px',
+                    borderRadius: 4,
+                    background: 'rgba(15, 23, 42, 0.8)',
+                    border: '1px solid rgba(56, 189, 248, 0.25)',
+                    color: '#e2e8f0',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 4,
+                  }}
+                >
+                  <strong>{ch.name}</strong>
+                  {ch.khmerName && ch.khmerName !== ch.name && (
+                    <span style={{ color: 'var(--accent-cyan)' }}>→ {ch.khmerName}</span>
+                  )}
+                  {(() => {
+                    const g = String(ch.gender || '').toLowerCase();
+                    const isFemale = g === 'female' || (ch.voiceId && ch.voiceId.includes('Sreymom')) || (ch.name && /ស្រី|នាង|យាយ|ម៉ែ|កញ្ញា|ជំទាវ/i.test(ch.name));
+                    return (
+                      <span style={{ fontSize: '0.62rem', color: isFemale ? '#f472b6' : '#60a5fa' }}>
+                        ({isFemale ? 'ស្រី' : 'ប្រុស'})
+                      </span>
+                    );
+                  })()}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
       )}
 
@@ -318,10 +350,10 @@ export default function EpisodesTab({
                 background: 'linear-gradient(135deg, #0284c7, #0369a1)',
                 borderColor: '#38bdf8',
               }}
-              title="Create next episode (EP2, EP3...)"
+              title="បង្កើតភាគបន្ទាប់ (Create next episode)"
             >
               <Plus size={13} />
-              <span>+ Add Episode</span>
+              <span>Add Episode</span>
             </button>
           </div>
         </div>
@@ -368,41 +400,50 @@ export default function EpisodesTab({
           const segmentCount = getEpisodeSegmentCount(ep);
           const hasAudio = Boolean(ep.audioGenerated && !ep.audioOutdated);
           const isExported = Boolean(ep.renderedVideo);
+          const displayTitle = formatEpisodeDisplayTitle(ep.title, ep.episodeNumber || idx + 1);
 
           return (
             <div
               key={ep.id || idx}
+              onClick={() => {
+                if (!isActive && onSwitchEpisode) {
+                  onSwitchEpisode(ep.id);
+                }
+              }}
               style={{
-                background: isActive ? 'rgba(255, 133, 119, 0.08)' : 'var(--bg-secondary-panel)',
-                border: isActive ? '1px solid #FF8577' : '1px solid var(--border-subtle)',
-                boxShadow: isActive ? '0 0 14px rgba(203, 245, 63, 0.15)' : 'none',
+                background: isActive ? 'rgba(56, 189, 248, 0.08)' : 'var(--bg-secondary-panel)',
+                border: isActive ? '1px solid #38bdf8' : '1px solid var(--border-subtle)',
+                boxShadow: isActive ? '0 0 12px rgba(56, 189, 248, 0.16)' : 'none',
                 borderRadius: 'var(--radius-sm)',
-                padding: '12px 14px',
+                padding: '10px 12px',
                 display: 'flex',
                 flexDirection: 'column',
                 gap: 8,
                 transition: 'all 0.15s ease-out',
                 position: 'relative',
+                cursor: isActive ? 'default' : 'pointer',
               }}
+              title={isActive ? 'ភាគកំពុងបើកក្នុង Workspace' : 'ចុចលើ Card ដើម្បីបើកភាគនេះ (Click to open)'}
             >
-              {/* Top Row: Title & Badges */}
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 0 }}>
+              {/* Top Row: EP Number, Title, Rename, Duration & Delete */}
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 7, flex: 1, minWidth: 0 }}>
                   <span
                     style={{
-                      fontSize: '0.74rem',
+                      fontSize: '0.72rem',
                       fontWeight: 800,
                       padding: '2px 7px',
                       borderRadius: 4,
-                      background: isActive ? '#FF8577' : 'rgba(255, 255, 255, 0.1)',
+                      background: isActive ? '#38bdf8' : 'rgba(255, 255, 255, 0.08)',
                       color: isActive ? '#0B132B' : '#ffffff',
+                      flexShrink: 0,
                     }}
                   >
                     EP{ep.episodeNumber || idx + 1}
                   </span>
 
                   {editingTitleId === ep.id ? (
-                    <div style={{ display: 'flex', gap: 4, flex: 1 }}>
+                    <div style={{ display: 'flex', gap: 4, flex: 1 }} onClick={(e) => e.stopPropagation()}>
                       <input
                         type="text"
                         value={tempTitle}
@@ -425,7 +466,7 @@ export default function EpisodesTab({
                       </button>
                     </div>
                   ) : (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, overflow: 'hidden' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 5, overflow: 'hidden', flex: 1 }}>
                       <span
                         style={{
                           fontSize: '0.84rem',
@@ -437,14 +478,17 @@ export default function EpisodesTab({
                         }}
                         title={ep.title}
                       >
-                        {ep.title}
+                        {displayTitle}
                       </span>
                       <button
                         type="button"
-                        onClick={() => handleStartRenameEpisode(ep)}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleStartRenameEpisode(ep);
+                        }}
                         className="btn-ghost"
-                        style={{ padding: 2, color: 'var(--text-muted)' }}
-                        title="Rename episode"
+                        style={{ padding: '2px 4px', color: 'var(--text-muted)' }}
+                        title="ប្តូរឈ្មោះភាគ (Rename episode)"
                       >
                         <Edit2 size={11} />
                       </button>
@@ -452,251 +496,217 @@ export default function EpisodesTab({
                   )}
                 </div>
 
-                {/* Active Indicator & Delete */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  {isActive ? (
+                {/* Right Top Actions: Duration, Active Badge, Delete */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                  {epDuration > 0 && (
                     <span
                       style={{
-                        fontSize: '0.68rem',
+                        color: 'var(--accent-cyan)',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 3,
+                        fontSize: '0.72rem',
+                        fontWeight: 600,
+                        fontVariantNumeric: 'tabular-nums',
+                      }}
+                      title={`Duration: ${formatTimecode(epDuration)}`}
+                    >
+                      <Clock size={11} />
+                      {formatTimecode(epDuration)}
+                    </span>
+                  )}
+
+                  {isActive && (
+                    <span
+                      style={{
+                        fontSize: '0.66rem',
                         fontWeight: 700,
                         color: '#38bdf8',
-                        background: 'rgba(56, 189, 248, 0.15)',
+                        background: 'rgba(56, 189, 248, 0.14)',
                         border: '1px solid rgba(56, 189, 248, 0.4)',
-                        padding: '2px 6px',
+                        padding: '1px 6px',
                         borderRadius: 4,
                       }}
                     >
-                      Active Episode
+                      Active
                     </span>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => onSwitchEpisode && onSwitchEpisode(ep.id)}
-                      className="btn-secondary"
-                      style={{ padding: '3px 8px', fontSize: '0.72rem', gap: 4 }}
-                      title="Switch workspace to this episode"
-                    >
-                      <span>Open</span>
-                      <ArrowRight size={11} />
-                    </button>
                   )}
 
                   <button
                     type="button"
-                    onClick={() => {
+                    onClick={(e) => {
+                      e.stopPropagation();
                       if (window.confirm(`តើអ្នកប្រាកដជាចង់លុប ${ep.title} នេះមែនទេ?`)) {
                         onDeleteEpisode && onDeleteEpisode(ep.id);
                       }
                     }}
                     className="btn-danger-ghost"
                     style={{ padding: 4 }}
-                    title="Delete this episode"
+                    title="លុបភាគនេះ (Delete this episode)"
                   >
                     <Trash2 size={12} />
                   </button>
                 </div>
               </div>
 
-              {/* Middle Row: Video Info */}
-              {hasVideo && currentVideo ? (
-                <div
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 8,
-                    background: 'rgba(0,0,0,0.2)',
-                    padding: '6px 10px',
-                    borderRadius: 4,
-                    fontSize: '0.75rem',
-                  }}
-                >
-                  <Film size={14} color="var(--primary-accent)" />
-                  <span
-                    style={{
-                      color: 'var(--text-primary)',
-                      fontWeight: 600,
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
-                      flex: 1,
-                    }}
-                    title={currentVideo.originalFilename || currentVideo.displayTitle || currentVideo.fileName}
-                  >
-                    {currentVideo.displayTitle || currentVideo.originalFilename || currentVideo.fileName}
-                  </span>
-                  {epDuration > 0 && (
-                    <span style={{ color: 'var(--accent-cyan)', display: 'flex', alignItems: 'center', gap: 3 }}>
-                      <Clock size={11} />
-                      {formatTimecode(epDuration)}
-                    </span>
-                  )}
-                </div>
-              ) : (
-                <div
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    background: 'rgba(255,255,255,0.02)',
-                    border: '1px dashed var(--border-subtle)',
-                    padding: '8px 10px',
-                    borderRadius: 4,
-                  }}
-                >
-                  <span style={{ fontSize: '0.74rem', color: 'var(--text-dim)' }}>
-                    មិនទាន់មានវីដេអូសម្រាប់ភាគនេះទេ (No video imported)
-                  </span>
-
-                  <label
-                    style={{
-                      cursor: isUploading ? 'not-allowed' : 'pointer',
-                      fontSize: '0.72rem',
-                      color: 'var(--primary-accent)',
-                      fontWeight: 700,
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 4,
-                      background: 'rgba(76, 141, 255, 0.1)',
-                      border: '1px solid rgba(76, 141, 255, 0.3)',
-                      padding: '3px 8px',
-                      borderRadius: 4,
-                    }}
-                  >
-                    <input
-                      type="file"
-                      accept="video/*"
-                      onChange={(e) => handleEpisodeFileInput(e, ep.id)}
-                      disabled={isUploading}
-                      style={{ display: 'none' }}
-                    />
-                    <Plus size={11} />
-                    <span>Import Video</span>
-                  </label>
-                </div>
-              )}
-
-              {/* Bottom Row: Status Badges */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginTop: 2 }}>
-                <span
-                  style={{
-                    fontSize: '0.68rem',
-                    padding: '2px 6px',
-                    borderRadius: 3,
-                    background: hasVideo ? 'rgba(52, 211, 153, 0.1)' : 'rgba(255, 255, 255, 0.04)',
-                    color: hasVideo ? '#34d399' : 'var(--text-dim)',
-                    border: `1px solid ${hasVideo ? 'rgba(52, 211, 153, 0.3)' : 'transparent'}`,
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 3,
-                  }}
-                >
-                  <Film size={10} />
-                  <span>{hasVideo ? 'Video Ready' : 'No Video'}</span>
-                </span>
-
-                {/* Generation Mode Badge */}
-                {ep.generationMode === 'fast_ocr' || ep.scriptData?.generationMode === 'fast_ocr' ? (
-                  <span
-                    style={{
-                      fontSize: '0.68rem',
-                      fontWeight: 700,
-                      padding: '2px 6px',
-                      borderRadius: 3,
-                      background: 'rgba(234, 179, 8, 0.15)',
-                      color: '#eab308',
-                      border: '1px solid rgba(234, 179, 8, 0.35)',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 3,
-                    }}
-                    title="Fast OCR Mode (Stage 3 ➡️ Translation)"
-                  >
-                    ⚡ Fast OCR
-                  </span>
-                ) : (
-                  (hasScript || ep.generationMode === 'standard' || ep.scriptData?.generationMode === 'standard') && (
+              {/* Bottom Row: Status Icons (React Icons) + Quick Dubbing Action */}
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 6,
+                  flexWrap: 'wrap',
+                  paddingTop: 4,
+                  borderTop: '1px solid rgba(255, 255, 255, 0.04)',
+                }}
+              >
+                {/* Status Chips with React Icons */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
+                  {/* Video Icon Chip */}
+                  {hasVideo ? (
                     <span
                       style={{
                         fontSize: '0.68rem',
-                        fontWeight: 600,
                         padding: '2px 6px',
-                        borderRadius: 3,
-                        background: 'rgba(147, 51, 234, 0.12)',
-                        color: '#c084fc',
-                        border: '1px solid rgba(147, 51, 234, 0.3)',
-                        display: 'flex',
+                        borderRadius: 4,
+                        background: 'rgba(52, 211, 153, 0.1)',
+                        color: '#34d399',
+                        border: '1px solid rgba(52, 211, 153, 0.3)',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 3,
+                        fontWeight: 600,
+                      }}
+                      title={currentVideo?.displayTitle || currentVideo?.originalFilename || 'Video Ready'}
+                    >
+                      <Film size={11} />
+                      <span>Video</span>
+                    </span>
+                  ) : (
+                    <label
+                      onClick={(e) => e.stopPropagation()}
+                      style={{
+                        cursor: isUploading ? 'not-allowed' : 'pointer',
+                        fontSize: '0.68rem',
+                        color: '#f87171',
+                        fontWeight: 600,
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 3,
+                        background: 'rgba(239, 68, 68, 0.08)',
+                        border: '1px dashed rgba(239, 68, 68, 0.35)',
+                        padding: '2px 6px',
+                        borderRadius: 4,
+                      }}
+                      title="ចុចដើម្បី Import វីដេអូសម្រាប់ភាគនេះ"
+                    >
+                      <input
+                        type="file"
+                        accept="video/*"
+                        onChange={(e) => handleEpisodeFileInput(e, ep.id)}
+                        disabled={isUploading}
+                        style={{ display: 'none' }}
+                      />
+                      <Film size={11} />
+                      <span>+ Video</span>
+                    </label>
+                  )}
+
+                  {/* Fast OCR Mode Icon Chip */}
+                  {(ep.generationMode === 'fast_ocr' || ep.scriptData?.generationMode === 'fast_ocr') && (
+                    <span
+                      style={{
+                        fontSize: '0.68rem',
+                        fontWeight: 700,
+                        padding: '2px 6px',
+                        borderRadius: 4,
+                        background: 'rgba(234, 179, 8, 0.14)',
+                        color: '#eab308',
+                        border: '1px solid rgba(234, 179, 8, 0.35)',
+                        display: 'inline-flex',
                         alignItems: 'center',
                         gap: 3,
                       }}
-                      title="Standard Mode (Full 10-Stage Pipeline)"
+                      title="Fast OCR Mode"
                     >
-                      🎯 Standard
+                      <Zap size={10} />
+                      <span>OCR</span>
                     </span>
-                  )
-                )}
+                  )}
 
-                <span
-                  style={{
-                    fontSize: '0.68rem',
-                    padding: '2px 6px',
-                    borderRadius: 3,
-                    background: hasScript ? 'rgba(56, 189, 248, 0.1)' : 'rgba(255, 255, 255, 0.04)',
-                    color: hasScript ? '#38bdf8' : 'var(--text-dim)',
-                    border: `1px solid ${hasScript ? 'rgba(56, 189, 248, 0.3)' : 'transparent'}`,
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 3,
-                  }}
-                >
-                  <Sparkles size={10} />
-                  <span>{hasScript ? `Script (${segmentCount} ឃ្លា)` : 'No Script'}</span>
-                </span>
-
-                <span
-                  style={{
-                    fontSize: '0.68rem',
-                    padding: '2px 6px',
-                    borderRadius: 3,
-                    background: hasAudio ? 'rgba(168, 85, 247, 0.1)' : 'rgba(255, 255, 255, 0.04)',
-                    color: hasAudio ? '#c084fc' : 'var(--text-dim)',
-                    border: `1px solid ${hasAudio ? 'rgba(168, 85, 247, 0.3)' : 'transparent'}`,
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 3,
-                  }}
-                >
-                  <Mic size={10} />
-                  <span>{hasAudio ? 'Voice Track A1' : 'No Voice'}</span>
-                </span>
-
-                {isExported && (
+                  {/* Script Icon Chip */}
                   <span
                     style={{
                       fontSize: '0.68rem',
                       padding: '2px 6px',
-                      borderRadius: 3,
-                      background: 'rgba(34, 197, 94, 0.15)',
-                      color: '#4ade80',
-                      border: '1px solid rgba(34, 197, 94, 0.4)',
-                      display: 'flex',
+                      borderRadius: 4,
+                      background: hasScript ? 'rgba(56, 189, 248, 0.1)' : 'rgba(255, 255, 255, 0.04)',
+                      color: hasScript ? '#38bdf8' : 'var(--text-dim)',
+                      border: `1px solid ${hasScript ? 'rgba(56, 189, 248, 0.3)' : 'transparent'}`,
+                      display: 'inline-flex',
                       alignItems: 'center',
                       gap: 3,
+                      fontWeight: 600,
                     }}
+                    title={hasScript ? `Script ខ្មែរ: ${segmentCount} ឃ្លា` : 'មិនទាន់មាន Script'}
                   >
-                    <Download size={10} />
-                    <span>Rendered MP4</span>
+                    <FileText size={11} />
+                    <span>{hasScript ? `${segmentCount} ឃ្លា` : 'Script'}</span>
                   </span>
-                )}
-              </div>
 
-              {/* Episode Quick 1-by-1 Dubbing Action */}
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 6, paddingTop: 6, borderTop: '1px solid rgba(255, 255, 255, 0.05)' }}>
-                <DubbingStepButton
-                  step="all3"
-                  episodes={[ep]}
-                  variant="pill"
-                  onComplete={onRefreshSeries}
-                />
+                  {/* Voice AI Icon Chip */}
+                  <span
+                    style={{
+                      fontSize: '0.68rem',
+                      padding: '2px 6px',
+                      borderRadius: 4,
+                      background: hasAudio ? 'rgba(168, 85, 247, 0.1)' : 'rgba(255, 255, 255, 0.04)',
+                      color: hasAudio ? '#c084fc' : 'var(--text-dim)',
+                      border: `1px solid ${hasAudio ? 'rgba(168, 85, 247, 0.3)' : 'transparent'}`,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 3,
+                      fontWeight: 600,
+                    }}
+                    title={hasAudio ? 'សំឡេងខ្មែរ AI រួចរាល់' : 'មិនទាន់មានសំឡេង AI'}
+                  >
+                    <Mic size={11} />
+                    <span>Voice</span>
+                  </span>
+
+                  {/* Rendered MP4 Icon Chip */}
+                  {isExported && (
+                    <span
+                      style={{
+                        fontSize: '0.68rem',
+                        padding: '2px 6px',
+                        borderRadius: 4,
+                        background: 'rgba(34, 197, 94, 0.15)',
+                        color: '#4ade80',
+                        border: '1px solid rgba(34, 197, 94, 0.4)',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 3,
+                        fontWeight: 600,
+                      }}
+                      title="Rendered MP4 វីដេអូពេញរួចរាល់"
+                    >
+                      <Download size={11} />
+                      <span>Rendered</span>
+                    </span>
+                  )}
+                </div>
+
+                {/* Dubbing Quick Action Button */}
+                <div onClick={(e) => e.stopPropagation()} style={{ marginLeft: 'auto' }}>
+                  <DubbingStepButton
+                    step="all3"
+                    episodes={[ep]}
+                    variant="pill"
+                    onComplete={onRefreshSeries}
+                  />
+                </div>
               </div>
             </div>
           );

@@ -33,10 +33,7 @@ export default function SponsorOverlay({
   const animFrameRef = useRef(null);
   const [videoLoaded, setVideoLoaded] = useState(false);
 
-  // If sponsor ads not enabled, no video URL, or viewing already-rendered video, skip overlay
-  if (!enableSponsor || !sponsorVideoUrl || renderedVideo) {
-    return null;
-  }
+  const shouldRender = Boolean(enableSponsor && sponsorVideoUrl && !renderedVideo);
 
   // Check timing visibility
   let isTimeVisible = true;
@@ -54,6 +51,7 @@ export default function SponsorOverlay({
 
   // Video playback sync with player
   useEffect(() => {
+    if (!shouldRender) return;
     const vid = videoRef.current;
     if (!vid) return;
 
@@ -65,10 +63,11 @@ export default function SponsorOverlay({
     } else {
       vid.pause();
     }
-  }, [isPlaying, isTimeVisible, sponsorMuteAudio, sponsorVolume]);
+  }, [shouldRender, isPlaying, isTimeVisible, sponsorMuteAudio, sponsorVolume]);
 
   // Real-time canvas chroma key green-screen processing
   useEffect(() => {
+    if (!shouldRender) return;
     const vid = videoRef.current;
     const canvas = canvasRef.current;
     if (!vid || !canvas || !videoLoaded) return;
@@ -159,6 +158,8 @@ export default function SponsorOverlay({
         return { bottom: bottomOffset, left: `${marginPx}px` };
     }
   };
+
+  if (!shouldRender) return null;
 
   return (
     <div

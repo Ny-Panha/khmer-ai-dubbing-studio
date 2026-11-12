@@ -1,19 +1,37 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
-- **Environment**: Antigravity IDE (Fix ReferenceError Zap in GeminiRouteModal)
-- **Timestamp**: 2026-11-12T20:09:00+07:00
+- **Environment**: Antigravity IDE (/agents-design: EpisodesTab UI Cleanup & React Icons Integration)
+- **Timestamp**: 2026-11-12T20:57:00+07:00
 
-## Summary: Fixed ReferenceError Zap is not defined in GeminiRouteModal
-1. **User Request & Symptom**:
-   - `App.jsx:1127 ReferenceError: Zap is not defined at GeminiRouteModal.jsx:3906:78`
-2. **Root Cause**:
-   - In `GeminiRouteModal.jsx`, `<Zap size={10} />` was added to the Auto-Fit button, but `Zap` was not imported from `lucide-react`.
-3. **Fix Implemented**:
-   - Added `Zap` to the `lucide-react` import statement on line 6 of `frontend/src/components/dashboard/GeminiRouteModal.jsx`.
-4. **Verification**:
-   - `npm --prefix frontend run build`: **PASS (581ms, 0 errors)**.
-   - Pushed commit `dfcf001` to `origin main`.
+## Summary: /agents-design Cleaned EpisodesTab UI, Replaced Badge Soup with React Icons & Clickable Cards
+1. **User Request & Goal**:
+   - `/agents-design fix UI ng text ban text klas ot brer baj dak tea hxx mean icon srul click UI clean` + `1. brer icon react`.
+   - Eliminate text badge soup, remove redundant titles and duplicated text, replace verbose status badges with clean, interactive React Icons (`lucide-react`), make cards clickable for fast episode switching, and collapse glossary tags to save screen space.
+2. **Changes Made**:
+   - **`frontend/src/components/media/EpisodesTab.jsx`**:
+     - **Clean React Icons**: Imported and integrated Lucide React SVG icons (`Film`, `FileText`, `Mic`, `Zap`, `Clock`, `Plus`, `Trash2`, `Edit2`, `CheckCircle2`, `BookOpen`, `Layers`, `Scissors`, `Download`, `ChevronDown`, `ChevronRight`).
+     - **Title De-duplication**: Added `formatEpisodeDisplayTitle` to clean up accidental double prefixes (e.g. `ភាគទី 1: ភាគទី 1 (EP1)` -> `ភាគទី 1 (EP1)`).
+     - **Removed Redundant Middle Row**: Eliminated the redundant middle video box that previously repeated the episode title right beneath the main title.
+     - **Clickable Episode Cards**: Whole card now has `onClick` to smoothly switch episodes (`onSwitchEpisode(ep.id)`), with clean hover states and glowing cyan active border.
+     - **Clean Status & Action Chips**: Replaced 5 verbose text badges (`Video Ready`, `Voice Track A1`, `Script (267 ឃ្លា)`, etc.) with sleek React icon chips (`Film` Video, `FileText` Script count, `Mic` Voice AI, `Zap` OCR, `Download` Rendered), with tooltips and high legibility.
+     - **Collapsible Character Glossary**: Added `isGlossaryExpanded` state with a clean toggle button (`Character Glossary (X តួអង្គ)` + `▾`) to reclaim vertical screen height.
+     - **Button Label Fix**: Fixed `+ + Add Episode` double-plus to `<Plus size={13} /> <span>Add Episode</span>`.
+   - **`frontend/src/components/player/SponsorOverlay.jsx`**:
+     - Fixed React `rules-of-hooks` conditional effect by placing early return after all `useEffect` hooks.
+3. **Verification**:
+   - `npm --prefix frontend run lint` (`oxlint`): **PASS (0 errors)**.
+   - `npm --prefix frontend run build` (`vite build`): **PASS (641ms, 0 errors)**.
+   - Node Test Suites: **27/27 PASS (100%)**.
+
+## Active Environment
+- Backend API: `http://localhost:5000` (Listening)
+- Frontend Vite: `http://localhost:5173` (Listening)
+- Active Series: `series_1793898268958`
+- GitHub Repo: `https://github.com/Ny-Panha/khmer-ai-dubbing-studio` (Private)
+
+## Next Steps
+- Await Nha's review on the refreshed EpisodesTab UI.
 
 ## Active Environment
 - Backend API: `http://localhost:5000` (Listening)
