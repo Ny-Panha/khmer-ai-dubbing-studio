@@ -11,6 +11,7 @@ import { PlayerTopBar, PlayerBottomBar } from './PlayerControls';
 import LiveSubtitleOverlay from './LiveSubtitleOverlay';
 import AntiTheftOverlay from './AntiTheftOverlay';
 import LogoOverlay from './LogoOverlay';
+import SponsorOverlay from './SponsorOverlay';
 import './VideoPlayerPreview.css';
 
 export function interpolateKeyframeCrop(keyframes, time) {
@@ -2090,6 +2091,17 @@ function VideoPlayerPreview({
                 aspectRatio={aspectRatio}
                 verticalStyle={verticalStyle}
                 videoMeta={videoMeta}
+              />
+
+              {/* Sponsor Ads Live Overlay (Green Screen Video) */}
+              <SponsorOverlay
+                voiceSettings={voiceSettings}
+                renderedVideo={renderedVideo}
+                aspectRatio={aspectRatio}
+                verticalStyle={verticalStyle}
+                videoMeta={videoMeta}
+                currentTime={currentTime}
+                isPlaying={isPlaying}
               />
             </div>
           ) : (

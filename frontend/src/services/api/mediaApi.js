@@ -224,6 +224,7 @@ export async function renderVideoApi({
   speakerMap = {},
   antiTheft = null,
   logoSettings = null,
+  sponsorSettings = null,
   videoTitle = null,
 }) {
   let effectiveAspectRatio = aspectRatio;
@@ -269,6 +270,7 @@ export async function renderVideoApi({
       speakerMap,
       antiTheft,
       logoSettings,
+      sponsorSettings,
     }),
   });
 

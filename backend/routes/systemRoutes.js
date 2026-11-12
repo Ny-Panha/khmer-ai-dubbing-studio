@@ -484,5 +484,49 @@ router.post("/upload", (req, res) => {
   });
 });
 
+/**
+ * Sponsor Video Upload (Green Screen MP4/MOV/WebM)
+ */
+router.post(["/upload-sponsor-video", "/sponsor/upload"], (req, res) => {
+  upload.single("file")(req, res, (err) => {
+    if (err) {
+      return res.status(400).json({ success: false, error: err.message });
+    }
+    if (!req.file) {
+      return res.status(400).json({ success: false, error: "No sponsor video file provided" });
+    }
+
+    try {
+      const sponsorDir = path.join(uploadsDir, "sponsor");
+      if (!fs.existsSync(sponsorDir)) {
+        fs.mkdirSync(sponsorDir, { recursive: true });
+      }
+
+      const ext = path.extname(req.file.originalname).toLowerCase() || ".mp4";
+      const targetFileName = `sponsor_${Date.now()}_${uuidv4().substring(0, 8)}${ext}`;
+      const targetFilePath = path.join(sponsorDir, targetFileName);
+
+      try {
+        fs.renameSync(req.file.path, targetFilePath);
+      } catch {
+        fs.copyFileSync(req.file.path, targetFilePath);
+        try { fs.unlinkSync(req.file.path); } catch {}
+      }
+
+      const videoUrl = `/uploads/sponsor/${targetFileName}`;
+      res.json({
+        success: true,
+        videoUrl,
+        videoPath: targetFilePath,
+        filename: targetFileName,
+        originalName: req.file.originalname,
+        size: req.file.size,
+      });
+    } catch (saveErr) {
+      res.status(500).json({ success: false, error: saveErr.message });
+    }
+  });
+});
+
 module.exports = router;
 

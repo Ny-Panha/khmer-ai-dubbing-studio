@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import {
   Clapperboard, Subtitles, Loader2, ChevronUp, ChevronDown,
-  CheckCircle2, ShieldCheck, Image, Upload
+  CheckCircle2, ShieldCheck, Image, Upload, Video, Tv, Trash2, VolumeX, Sparkles
 } from 'lucide-react';
 import { resolveDefaultAspectRatio, sanitizeAspectRatio } from '../../utils/projectStorage';
 
@@ -19,6 +19,33 @@ export default function ExportSettingsPanel({
 }) {
   const [internalProgress, setInternalProgress] = useState(0);
   const [internalStage, setInternalStage] = useState('');
+  const [isUploadingSponsor, setIsUploadingSponsor] = useState(false);
+  const [sponsorUploadError, setSponsorUploadError] = useState(null);
+
+  const handleSponsorUpload = async (file) => {
+    if (!file) return;
+    setIsUploadingSponsor(true);
+    setSponsorUploadError(null);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const res = await fetch('/api/upload-sponsor-video', {
+        method: 'POST',
+        body: formData,
+      });
+      const data = await res.json();
+      if (data.success && data.videoUrl) {
+        onSettingChange('sponsorVideoUrl', data.videoUrl);
+        onSettingChange('sponsorVideoPath', data.videoPath);
+      } else {
+        setSponsorUploadError(data.error || 'Upload failed');
+      }
+    } catch (err) {
+      setSponsorUploadError(err.message || 'Network error');
+    } finally {
+      setIsUploadingSponsor(false);
+    }
+  };
 
   const srcW = Number(videoMetadata?.width || selectedVideo?.width || activeEpisode?.metadata?.width || activeEpisode?.video?.width) || 0;
   const srcH = Number(videoMetadata?.height || selectedVideo?.height || activeEpisode?.metadata?.height || activeEpisode?.video?.height) || 0;
@@ -403,6 +430,330 @@ export default function ExportSettingsPanel({
                       onChange={(e) => onSettingChange('logoOpacity', Number(e.target.value))}
                       style={{ width: '100%', accentColor: '#eab308' }}
                     />
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* 🎬 Sponsor Ads (Green Screen Video) Switch */}
+          <div style={{ marginTop: 10, marginBottom: 12, borderTop: '1px solid rgba(255, 255, 255, 0.08)', paddingTop: 10 }}>
+            <label className="checkbox-container" style={{ marginBottom: settings?.enableSponsor ? 10 : 6 }}>
+              <input
+                type="checkbox"
+                checked={Boolean(settings?.enableSponsor)}
+                onChange={(e) => onSettingChange('enableSponsor', e.target.checked)}
+              />
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <Tv size={15} color="#10B981" />
+                <span style={{ fontSize: '0.8rem', color: '#10B981', fontWeight: 700 }}>
+                  🎬 Sponsor Ads (Green Screen Video)
+                </span>
+                {settings?.enableSponsor && (
+                  <span style={{ fontSize: '0.65rem', background: 'rgba(16, 185, 129, 0.2)', color: '#34D399', padding: '1px 6px', borderRadius: 10 }}>
+                    {settings?.sponsorTimingMode === 'interval' ? 'Interval' : (settings?.sponsorTimingMode === 'custom' ? 'Custom' : 'Loop')}
+                  </span>
+                )}
+              </div>
+            </label>
+
+            {settings?.enableSponsor && (
+              <div style={{
+                background: 'rgba(15, 23, 42, 0.6)',
+                border: '1px solid rgba(16, 185, 129, 0.3)',
+                borderRadius: 8,
+                padding: '10px 10px',
+                marginBottom: 12,
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 10,
+              }}>
+                {/* 1. Video Upload & Preview */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <div style={{
+                    width: 72,
+                    height: 44,
+                    borderRadius: 6,
+                    overflow: 'hidden',
+                    border: '1.5px solid rgba(16, 185, 129, 0.6)',
+                    background: '#000',
+                    flexShrink: 0,
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    boxShadow: '0 2px 8px rgba(0,0,0,0.5)',
+                  }}>
+                    {settings?.sponsorVideoUrl ? (
+                      <video
+                        src={settings.sponsorVideoUrl}
+                        autoPlay
+                        loop
+                        muted
+                        playsInline
+                        style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+                      />
+                    ) : (
+                      <Tv size={20} color="#64748b" />
+                    )}
+                  </div>
+
+                  <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <label style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        gap: 6,
+                        background: 'rgba(16, 185, 129, 0.15)',
+                        border: '1px solid rgba(16, 185, 129, 0.4)',
+                        color: '#34D399',
+                        padding: '5px 9px',
+                        borderRadius: 5,
+                        fontSize: '0.70rem',
+                        fontWeight: 600,
+                        cursor: isUploadingSponsor ? 'not-allowed' : 'pointer',
+                        textAlign: 'center',
+                        flex: 1,
+                      }}>
+                        {isUploadingSponsor ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />}
+                        <span>{isUploadingSponsor ? 'កំពុង Upload...' : '📁 Upload Sponsor Video'}</span>
+                        <input
+                          type="file"
+                          accept="video/mp4,video/quicktime,video/webm"
+                          style={{ display: 'none' }}
+                          disabled={isUploadingSponsor}
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (file) handleSponsorUpload(file);
+                          }}
+                        />
+                      </label>
+
+                      {settings?.sponsorVideoUrl && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            onSettingChange('sponsorVideoUrl', null);
+                            onSettingChange('sponsorVideoPath', null);
+                          }}
+                          style={{
+                            padding: '4px 6px',
+                            background: 'rgba(239, 68, 68, 0.15)',
+                            border: '1px solid rgba(239, 68, 68, 0.4)',
+                            borderRadius: 5,
+                            color: '#F87171',
+                            cursor: 'pointer',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                          }}
+                          title="លុប Video Sponsor ចេញ"
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                      )}
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onSettingChange('sponsorVideoUrl', '/assets/sample_sponsor_green.mp4');
+                        onSettingChange('sponsorVideoPath', 'frontend/public/assets/sample_sponsor_green.mp4');
+                      }}
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 4,
+                        background: 'transparent',
+                        border: 'none',
+                        color: '#94a3b8',
+                        fontSize: '0.66rem',
+                        cursor: 'pointer',
+                        padding: '1px 0',
+                      }}
+                    >
+                      🍿 ប្រើ Video គំរូ Dragon Sponsor (Green Screen)
+                    </button>
+                    {sponsorUploadError && (
+                      <span style={{ fontSize: '0.64rem', color: '#F87171' }}>{sponsorUploadError}</span>
+                    )}
+                  </div>
+                </div>
+
+                {/* 2. Auto Chroma Key (Green Screen Removal) */}
+                <div style={{
+                  background: 'rgba(0, 0, 0, 0.25)',
+                  padding: '6px 8px',
+                  borderRadius: 6,
+                  border: '1px solid rgba(16, 185, 129, 0.2)',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 6,
+                }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={settings?.sponsorChromaKey !== false}
+                      onChange={(e) => onSettingChange('sponsorChromaKey', e.target.checked)}
+                      style={{ accentColor: '#10B981' }}
+                    />
+                    <span style={{ fontSize: '0.70rem', color: '#E2E8F0', fontWeight: 600 }}>
+                      🟢 កាត់ពណ៌បៃតងស្វ័យប្រវត្តិ (Chroma Key Green Screen)
+                    </span>
+                  </label>
+
+                  {settings?.sponsorChromaKey !== false && (
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                      <span style={{ fontSize: '0.65rem', color: '#94A3B8' }}>ភាពម៉ត់ចត់ (Sensitivity)</span>
+                      <input
+                        type="range"
+                        min="0.10"
+                        max="0.45"
+                        step="0.02"
+                        value={settings?.sponsorChromaSimilarity ?? 0.28}
+                        onChange={(e) => onSettingChange('sponsorChromaSimilarity', Number(e.target.value))}
+                        style={{ flex: 1, accentColor: '#10B981' }}
+                      />
+                      <span style={{ fontSize: '0.65rem', color: '#34D399', fontFamily: 'monospace', width: 32, textAlign: 'right' }}>
+                        {Math.round((settings?.sponsorChromaSimilarity ?? 0.28) * 100)}%
+                      </span>
+                    </div>
+                  )}
+                </div>
+
+                {/* 3. Position & Timing Mode */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+                  <div>
+                    <span style={{ fontSize: '0.68rem', color: '#94a3b8', display: 'block', marginBottom: 2 }}>
+                      📍 ទីតាំង Sponsor
+                    </span>
+                    <select
+                      value={settings?.sponsorPosition || 'bottom-left'}
+                      onChange={(e) => onSettingChange('sponsorPosition', e.target.value)}
+                      className="inspector-select"
+                      style={{ width: '100%', padding: '4px 6px', fontSize: '0.72rem' }}
+                    >
+                      <option value="bottom-left">ជ្រុងក្រោមឆ្វេង (Bottom Left)</option>
+                      <option value="bottom-right">ជ្រុងក្រោមស្តាំ (Bottom Right)</option>
+                      <option value="top-right">ជ្រុងលើស្តាំ (Top Right)</option>
+                      <option value="top-left">ជ្រុងលើឆ្វេង (Top Left)</option>
+                      <option value="bottom-center">កណ្តាលក្រោម (Bottom Center)</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <span style={{ fontSize: '0.68rem', color: '#94a3b8', display: 'block', marginBottom: 2 }}>
+                      ⏱️ ពេលណាត្រូវលោត (Timing)
+                    </span>
+                    <select
+                      value={settings?.sponsorTimingMode || 'loop'}
+                      onChange={(e) => onSettingChange('sponsorTimingMode', e.target.value)}
+                      className="inspector-select"
+                      style={{ width: '100%', padding: '4px 6px', fontSize: '0.72rem' }}
+                    >
+                      <option value="loop">🔁 ចាក់ Loop រហូត (Loop All)</option>
+                      <option value="interval">⏰ ចន្លោះពេល (Interval)</option>
+                      <option value="custom">🎯 កំណត់ម៉ោង (Custom Time)</option>
+                    </select>
+                  </div>
+                </div>
+
+                {/* 4. Timing Config (if interval or custom) */}
+                {settings?.sponsorTimingMode === 'interval' && (
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, background: 'rgba(0,0,0,0.2)', padding: '6px 8px', borderRadius: 6 }}>
+                    <div>
+                      <span style={{ fontSize: '0.64rem', color: '#94a3b8', display: 'block' }}>រៀងរាល់ (Cycle)</span>
+                      <select
+                        value={settings?.sponsorIntervalSec || 60}
+                        onChange={(e) => onSettingChange('sponsorIntervalSec', Number(e.target.value))}
+                        className="inspector-select"
+                        style={{ width: '100%', padding: '3px 5px', fontSize: '0.68rem' }}
+                      >
+                        <option value={30}>30 វិនាទីម្តង</option>
+                        <option value={60}>1 នាទីម្តង</option>
+                        <option value={90}>1.5 នាទីម្តង</option>
+                        <option value={120}>2 នាទីម្តង</option>
+                        <option value={180}>3 នាទីម្តង</option>
+                      </select>
+                    </div>
+                    <div>
+                      <span style={{ fontSize: '0.64rem', color: '#94a3b8', display: 'block' }}>រយៈពេលបង្ហាញ (Duration)</span>
+                      <select
+                        value={settings?.sponsorDurationSec || 10}
+                        onChange={(e) => onSettingChange('sponsorDurationSec', Number(e.target.value))}
+                        className="inspector-select"
+                        style={{ width: '100%', padding: '3px 5px', fontSize: '0.68rem' }}
+                      >
+                        <option value={5}>5 វិនាទី</option>
+                        <option value={8}>8 វិនាទី</option>
+                        <option value={10}>10 វិនាទី</option>
+                        <option value={15}>15 វិនាទី</option>
+                      </select>
+                    </div>
+                  </div>
+                )}
+
+                {settings?.sponsorTimingMode === 'custom' && (
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, background: 'rgba(0,0,0,0.2)', padding: '6px 8px', borderRadius: 6 }}>
+                    <div>
+                      <span style={{ fontSize: '0.64rem', color: '#94a3b8', display: 'block' }}>ចាប់ពី Start (s)</span>
+                      <input
+                        type="number"
+                        min="0"
+                        step="1"
+                        value={settings?.sponsorStartSec ?? 0}
+                        onChange={(e) => onSettingChange('sponsorStartSec', Math.max(0, Number(e.target.value) || 0))}
+                        className="inspector-select"
+                        style={{ width: '100%', padding: '3px 5px', fontSize: '0.68rem' }}
+                      />
+                    </div>
+                    <div>
+                      <span style={{ fontSize: '0.64rem', color: '#94a3b8', display: 'block' }}>ដល់ End (s)</span>
+                      <input
+                        type="number"
+                        min="1"
+                        step="1"
+                        value={settings?.sponsorEndSec ?? 15}
+                        onChange={(e) => onSettingChange('sponsorEndSec', Math.max(1, Number(e.target.value) || 15))}
+                        className="inspector-select"
+                        style={{ width: '100%', padding: '3px 5px', fontSize: '0.68rem' }}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {/* 5. Size (Scale) & Audio Mute */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, alignItems: 'center' }}>
+                  <div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 2 }}>
+                      <span style={{ fontSize: '0.68rem', color: '#94a3b8' }}>ទំហំ Scale</span>
+                      <span style={{ fontSize: '0.68rem', color: '#34D399', fontFamily: 'monospace' }}>
+                        {settings?.sponsorScale || 25}%
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min="15"
+                      max="50"
+                      step="2"
+                      value={settings?.sponsorScale || 25}
+                      onChange={(e) => onSettingChange('sponsorScale', Number(e.target.value))}
+                      style={{ width: '100%', accentColor: '#10B981' }}
+                    />
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'center', paddingTop: 10 }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+                      <input
+                        type="checkbox"
+                        checked={settings?.sponsorMuteAudio !== false}
+                        onChange={(e) => onSettingChange('sponsorMuteAudio', e.target.checked)}
+                        style={{ accentColor: '#10B981' }}
+                      />
+                      <VolumeX size={14} color="#34D399" />
+                      <span style={{ fontSize: '0.68rem', color: '#E2E8F0', fontWeight: 600 }}>
+                        🔇 បិទសំឡេង Sponsor
+                      </span>
+                    </label>
                   </div>
                 </div>
               </div>

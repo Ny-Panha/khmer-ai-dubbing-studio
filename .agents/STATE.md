@@ -1,29 +1,30 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
-- **Environment**: Antigravity IDE (Batch Auto-Fit Speed 1-by-1 Runner + GitHub Private + Sync)
-- **Timestamp**: 2026-11-12T19:00:00+07:00
+- **Environment**: Antigravity IDE (Fix Voice Clip Positioning Drift on Timeline)
+- **Timestamp**: 2026-11-12T19:10:00+07:00
 
-## Summary: Batch Auto-Fit Speed 1-by-1 Runner & GitHub Private Repository
-1. **User Requests**:
-   - `add muy mk for tver 1 tver all tea tver muy job sin jam jol muy tt` (Option 1: Add Batch Auto-Fit Speed (All EPs) 1-by-1 in Batch Generate Studio).
-   - `push, hx do vea tv dak private` (Push changes to GitHub and set repository to private).
-2. **GitHub Visibility Changed to Private**:
-   - Updated GitHub repository `https://github.com/Ny-Panha/khmer-ai-dubbing-studio` to **Private** using GitHub API. Verified `visibility: "private"`.
-3. **Batch Auto-Fit Speed 1-by-1 Runner**:
-   - `frontend/src/features/dubbing-runner/DubbingStepCardsBar.jsx`:
-     - Added Step 3 Runner Card: `⚡ 3. Auto-Fit:` with `[ Run 1-by-1 ]` and `[ ធ្វើឡើងវិញ ]` buttons.
-     - Real-time progress bar, percentage indicator (`stats.autofitPercent`), and completed episode counts (`stats.autofitCount`).
-   - `frontend/src/features/dubbing-runner/DubbingRunnerContext.jsx`:
-     - Added `autofit` step state and `runSingleAutoFitSpeed(ep, options, signal)` function.
-     - Wired sequential 1-by-1 processing across selected/all episodes.
+## Summary: Fixed Voice Track Clip Position Fallback (Root Cause of Segment #10 at 00:36)
+1. **User Request & Symptom**:
+   - `nh click lg tv auto hcc neak ? fix code lerng error` with screenshot showing playhead at `00:17.00` with segment `#10` on video, but the audio clip `#10 ប្រុស` was drawn far away at `00:36` on the `VOICE 1` track.
+2. **Root Cause**:
+   - In `frontend/src/components/timeline/TimelineTracksCanvas.jsx` (lines 158, 262, 1114):
+     `const rawStart = (typeof seg.audioStartSec === 'number' && !isNaN(seg.audioStartSec)) ? seg.audioStartSec : parseTimeToSeconds(seg.start, idx * 4);`
+   - In episodes like `ep_5`, segments have `startSec: 17`, while `audioStartSec` and `start` (string) were `undefined`.
+   - When `audioStartSec` and `start` were missing, `parseTimeToSeconds(undefined, idx * 4)` fell back to `idx * 4`!
+   - For segment #10 (`idx = 9`), `9 * 4 = 36` seconds (`00:36`)!
+   - This caused audio clips to stagger out into 4-second increments (`00:00`, `00:04`, `00:08`, `00:12` ... `00:36`).
+3. **Fix Implemented**:
+   - `frontend/src/components/timeline/TimelineTracksCanvas.jsx`:
+     - Updated `internalSegmentRows`, `renderVoiceSegment`, and viewport culling to fallback to `seg.startSec`:
+       `((typeof seg.startSec === 'number' && !isNaN(seg.startSec)) ? seg.startSec : parseTimeToSeconds(seg.start, idx * 4))`
+     - Voice clips now immediately snap to their exact video segment timestamp (`00:17.00`).
    - `backend/routes/audioRoutes.js`:
-     - `POST /api/audio/autofit-speed` saves `ep.autoFitted = true` and `ep.scriptData.autoFitted = true` to `series.json`.
+     - In `POST /api/audio/autofit-speed`, ensured `seg.audioStartSec = slotStart` and `seg.audioEndSec = slotStart + currentDur` are initialized for all processed audio segments.
 4. **Verification**:
-   - `npm --prefix frontend run build`: **PASS (687ms, 0 errors)**
-   - `npm --prefix backend test`: **231/231 PASS (100%, 232 tests, 0 fails, 1 skipped)**
-5. **Git Commit & Push**:
-   - Committed all changes and pushed cleanly to `origin main`.
+   - `npm --prefix frontend run build`: **PASS (589ms, 0 errors)**
+   - `npm --prefix backend test`: **231/231 PASS (100%)**
+   - Committed (`7017ced`) and pushed to `origin main`.
 
 ## Active Environment
 - Backend API: `http://localhost:5000` (Listening)

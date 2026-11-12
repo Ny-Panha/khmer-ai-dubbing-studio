@@ -136,6 +136,7 @@ router.post("/render-video", async (req, res) => {
       subtitleOptions = {},
       antiTheft = null,
       logoSettings = null,
+      sponsorSettings = null,
     } = req.body;
 
     const rawVideoRef = videoPath || videoId || (videoFileName ? path.join(uploadsDir, videoFileName) : null);
@@ -301,6 +302,24 @@ router.post("/render-video", async (req, res) => {
       }
     }
 
+    // Resolve Sponsor Ads Video (Green Screen MP4 / MOV / WebM)
+    let resolvedSponsorPath = null;
+    const rawSponsor = sponsorSettings || req.body?.voiceSettings?.sponsorSettings || req.body?.voiceSettings || null;
+    if (rawSponsor && (rawSponsor.enableSponsor || rawSponsor.enabled) && (rawSponsor.sponsorVideoUrl || rawSponsor.sponsorVideoPath || rawSponsor.videoUrl || rawSponsor.videoPath)) {
+      const vidVal = rawSponsor.sponsorVideoPath || rawSponsor.videoPath || rawSponsor.sponsorVideoUrl || rawSponsor.videoUrl;
+      if (typeof vidVal === "string") {
+        const candidate1 = path.join(__dirname, "../../frontend/public", vidVal.replace(/^\//, ""));
+        const candidate2 = path.join(uploadsDir, path.basename(vidVal));
+        const candidate3 = path.join(uploadsDir, "sponsor", path.basename(vidVal));
+        const candidate4 = resolveMediaFile(vidVal);
+        if (fs.existsSync(candidate1)) resolvedSponsorPath = candidate1;
+        else if (fs.existsSync(candidate2)) resolvedSponsorPath = candidate2;
+        else if (fs.existsSync(candidate3)) resolvedSponsorPath = candidate3;
+        else if (candidate4 && fs.existsSync(candidate4)) resolvedSponsorPath = candidate4;
+        else if (fs.existsSync(vidVal)) resolvedSponsorPath = vidVal;
+      }
+    }
+
     let renderResult;
     try {
       renderResult = await renderDubbedVideoWithDucking({
@@ -324,6 +343,10 @@ router.post("/render-video", async (req, res) => {
         logoSettings: resolvedLogoPath ? {
           ...rawLogo,
           logoPath: resolvedLogoPath,
+        } : null,
+        sponsorSettings: resolvedSponsorPath ? {
+          ...rawSponsor,
+          sponsorPath: resolvedSponsorPath,
         } : null,
       });
     } finally {

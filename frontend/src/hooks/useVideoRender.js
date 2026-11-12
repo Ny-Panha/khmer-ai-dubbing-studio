@@ -228,6 +228,30 @@ export function useVideoRender({
     };
   }, [getLatestVoiceSettings]);
 
+  const buildSponsorOptions = useCallback(() => {
+    const activeSettings = getLatestVoiceSettings();
+    return {
+      enabled: Boolean(activeSettings?.enableSponsor),
+      enableSponsor: Boolean(activeSettings?.enableSponsor),
+      sponsorVideoUrl: activeSettings?.sponsorVideoUrl,
+      sponsorVideoPath: activeSettings?.sponsorVideoPath,
+      videoUrl: activeSettings?.sponsorVideoUrl,
+      videoPath: activeSettings?.sponsorVideoPath,
+      position: activeSettings?.sponsorPosition || 'bottom-left',
+      scale: Number(activeSettings?.sponsorScale) || 25,
+      opacity: Number(activeSettings?.sponsorOpacity) || 1.0,
+      chromaKey: activeSettings?.sponsorChromaKey !== false,
+      chromaSimilarity: Number(activeSettings?.sponsorChromaSimilarity) || 0.28,
+      timingMode: activeSettings?.sponsorTimingMode || 'loop',
+      intervalSec: Number(activeSettings?.sponsorIntervalSec) || 60,
+      durationSec: Number(activeSettings?.sponsorDurationSec) || 10,
+      startSec: Number(activeSettings?.sponsorStartSec) || 0,
+      endSec: Number(activeSettings?.sponsorEndSec) || 15,
+      muteAudio: activeSettings?.sponsorMuteAudio !== false,
+      volume: Number(activeSettings?.sponsorVolume) || 0.5,
+    };
+  }, [getLatestVoiceSettings]);
+
   const handleStartBatchRender = useCallback(async ({
     episodeIds = [],
     mode = 'merge',
@@ -264,6 +288,7 @@ export function useVideoRender({
         enableDemucs: Boolean(activeSettings?.enableDemucs),
         antiTheft: buildAntiTheftOptions(),
         logoSettings: buildLogoOptions(),
+        sponsorSettings: buildSponsorOptions(),
       };
 
       const episodeOverrides = {};
@@ -422,6 +447,7 @@ export function useVideoRender({
 
       const antiTheftOptions = buildAntiTheftOptions();
       const logoOptions = buildLogoOptions();
+      const sponsorOptions = buildSponsorOptions();
 
       // Resolve effective export aspect ratio:
       // 1. User manual select in voiceSettings.aspectRatio takes precedence.
@@ -465,6 +491,7 @@ export function useVideoRender({
         speakerMap,
         antiTheft: antiTheftOptions,
         logoSettings: logoOptions,
+        sponsorSettings: sponsorOptions,
       });
 
       clearInterval(progressTimer);

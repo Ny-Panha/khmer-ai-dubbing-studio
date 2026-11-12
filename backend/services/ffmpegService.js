@@ -1632,6 +1632,23 @@ function renderDubbedVideoWithDucking(options = {}) {
       console.log(`[FFmpegService] 🖼️ Logo watermark input detected at index [${logoInputIndex}:v]: ${path.basename(logoSettings.logoPath)}`);
     }
 
+    // Sponsor Ads (Green Screen Video) Input
+    let sponsorInputIndex = -1;
+    const sponsorSettings = options.sponsorSettings || null;
+    const hasSponsor = Boolean(
+      sponsorSettings &&
+      (sponsorSettings.enabled || sponsorSettings.enableSponsor) &&
+      sponsorSettings.sponsorPath &&
+      fs.existsSync(sponsorSettings.sponsorPath)
+    );
+
+    if (hasSponsor) {
+      const currentInputCount = args.reduce((acc, curr) => (curr === "-i" ? acc + 1 : acc), 0);
+      sponsorInputIndex = currentInputCount;
+      args.push("-stream_loop", "-1", "-i", getSafeCliPath(sponsorSettings.sponsorPath));
+      console.log(`[FFmpegService] 🎬 Sponsor video input detected at index [${sponsorInputIndex}:v]: ${path.basename(sponsorSettings.sponsorPath)}`);
+    }
+
     // NLE multi-clip cuts and trims on VIDEO 1
     let baseVideoSource = "[0:v:0]";
 
@@ -1870,6 +1887,71 @@ function renderDubbedVideoWithDucking(options = {}) {
       }
     }
 
+    // Overlay Sponsor Ads Video (Green Screen Chroma Key)
+    if (hasSponsor && sponsorInputIndex >= 0) {
+      const scalePercent = Math.max(10, Math.min(60, Number(sponsorSettings.scale || sponsorSettings.sponsorScale) || 25));
+      const targetW = targetAspectRatio === "9:16"
+        ? Math.round(1080 * (scalePercent / 100))
+        : Math.round(1920 * (scalePercent / 100));
+      // Ensure even dimensions for H.264
+      const safeScaledW = Math.max(80, targetW - (targetW % 2));
+      const pos = sponsorSettings.position || sponsorSettings.sponsorPosition || "bottom-left";
+      const margin = Math.max(10, Math.min(100, Math.round(Number(sponsorSettings.margin || sponsorSettings.sponsorMargin || 20))));
+      const topMargin = (targetAspectRatio === "9:16" && verticalStyle !== "crop") ? (656 + margin) : margin;
+      const bottomMargin = (targetAspectRatio === "9:16" && verticalStyle !== "crop") ? (656 + margin) : margin;
+      const useChromaKey = sponsorSettings.chromaKey !== false && sponsorSettings.sponsorChromaKey !== false;
+      const sim = Math.max(0.1, Math.min(0.5, Number(sponsorSettings.chromaSimilarity || sponsorSettings.sponsorChromaSimilarity || 0.30)));
+      const smooth = Math.max(0.05, Math.min(0.3, Number(sponsorSettings.chromaSmoothness || sponsorSettings.sponsorSmoothness || 0.10)));
+
+      let sponsorPrepFilter = `[${sponsorInputIndex}:v]`;
+      if (useChromaKey) {
+        sponsorPrepFilter += `colorkey=0x00FF00:${sim.toFixed(2)}:${smooth.toFixed(2)},format=rgba,`;
+      } else {
+        sponsorPrepFilter += `format=rgba,`;
+      }
+      sponsorPrepFilter += `scale=${safeScaledW}:-2[sponsor_prepared]`;
+      filterComplexParts.push(sponsorPrepFilter);
+
+      let vCurrent = videoMapArg.startsWith("[") ? videoMapArg : `[${videoMapArg}]`;
+      if (videoMapArg === "0:v:0") {
+        vCurrent = "[0:v:0]";
+      }
+
+      let overlayX = `${margin}`;
+      let overlayY = `main_h-overlay_h-${bottomMargin}`;
+      if (pos === "bottom-right") {
+        overlayX = `main_w-overlay_w-${margin}`;
+        overlayY = `main_h-overlay_h-${bottomMargin}`;
+      } else if (pos === "top-left") {
+        overlayX = `${margin}`;
+        overlayY = `${topMargin}`;
+      } else if (pos === "top-right") {
+        overlayX = `main_w-overlay_w-${margin}`;
+        overlayY = `${topMargin}`;
+      } else if (pos === "bottom-center") {
+        overlayX = `(main_w-overlay_w)/2`;
+        overlayY = `main_h-overlay_h-${bottomMargin}`;
+      }
+
+      // Timing mode: loop vs interval vs custom
+      const timingMode = sponsorSettings.timingMode || sponsorSettings.sponsorTimingMode || "loop";
+      let enableExpr = "";
+      if (timingMode === "interval") {
+        const intervalSec = Math.max(10, Number(sponsorSettings.intervalSec || sponsorSettings.sponsorIntervalSec || 60));
+        const durSec = Math.max(2, Number(sponsorSettings.durationSec || sponsorSettings.sponsorDurationSec || 10));
+        enableExpr = `:enable='lt(mod(t,${intervalSec}),${durSec})'`;
+      } else if (timingMode === "custom") {
+        const startSec = Math.max(0, Number(sponsorSettings.startSec || sponsorSettings.sponsorStartSec || 0));
+        const endSec = Math.max(startSec + 1, Number(sponsorSettings.endSec || sponsorSettings.sponsorEndSec || 15));
+        enableExpr = `:enable='between(t,${startSec},${endSec})'`;
+      }
+
+      filterComplexParts.push(
+        `${vCurrent}[sponsor_prepared]overlay=x=${overlayX}:y=${overlayY}:shortest=1${enableExpr}[v_with_sponsor]`
+      );
+      videoMapArg = "[v_with_sponsor]";
+    }
+
     const fullFilterString = filterComplexParts.join(";");
 
     // In modern FFmpeg, pass filter complex graph directly to -filter_complex (prevents unrecognized option filter_complex_script error)
@@ -1878,7 +1960,7 @@ function renderDubbedVideoWithDucking(options = {}) {
     args.push("-map", videoMapArg, "-map", "[final_audio]");
 
     const isVideoFiltered = (videoMapArg !== "0:v:0" && videoMapArg !== "[0:v:0]");
-    if (!hasBurnableSubs && !hasLogo && !isVideoFiltered && !hasCustomCuts) {
+    if (!hasBurnableSubs && !hasLogo && !hasSponsor && !isVideoFiltered && !hasCustomCuts) {
       args.push("-c:v", "copy");
     } else {
       if (checkQsvSupport()) {
