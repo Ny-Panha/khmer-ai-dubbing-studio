@@ -39,6 +39,7 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
     translate: {},
     demucs: {},
     tts: {},
+    autofit: {},
   });
 
   // Abort controllers per step for clean instantaneous stop
@@ -618,6 +619,21 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
     try {
       if (signal?.aborted) return { success: false, aborted: true };
 
+      setRunnerLiveStats((prev) => ({
+        ...prev,
+        autofit: {
+          ...prev.autofit,
+          [epId]: {
+            percent: 15,
+            message: `⚡ [EP${ep.episodeNumber || epId}] ចាប់ផ្តើមវិភាគសំឡេង...`,
+            logs: [{
+              time: new Date().toLocaleTimeString(),
+              message: `⚡ [EP${ep.episodeNumber || epId}] ចាប់ផ្តើមវិភាគសំឡេងដែលវែងលើស (Red / Trimmed segments)...`,
+            }],
+          },
+        },
+      }));
+
       const res = await autoFitSpeechSpeedApi({
         seriesId,
         episodeId: epId,
@@ -625,15 +641,62 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
       });
 
       if (res?.success) {
+        setRunnerLiveStats((prev) => ({
+          ...prev,
+          autofit: {
+            ...prev.autofit,
+            [epId]: {
+              percent: 100,
+              isDone: true,
+              message: `✅ Auto-Fit រួចរាល់: បានពន្លឿន ${res.fittedCount || 0} ឃ្លា`,
+              logs: Array.isArray(res.logs) && res.logs.length > 0 ? res.logs : [
+                {
+                  time: new Date().toLocaleTimeString(),
+                  message: `✅ Auto-Fit Speed ជោគជ័យ: បានពន្លឿន ${res.fittedCount || 0} ឃ្លា ឱ្យ Fit ស្មើនឹង Subtitle ១០០%`,
+                },
+              ],
+            },
+          },
+        }));
+
         if (typeof refreshSeries === 'function') {
           await refreshSeries();
         }
         return { success: true, fittedCount: res.fittedCount || 0 };
       }
+
+      setRunnerLiveStats((prev) => ({
+        ...prev,
+        autofit: {
+          ...prev.autofit,
+          [epId]: {
+            percent: 100,
+            isFailed: true,
+            message: `❌ ${res?.error || 'Auto-fit speed failed'}`,
+            logs: [
+              { time: new Date().toLocaleTimeString(), message: `❌ ${res?.error || 'Auto-fit speed failed'}` },
+            ],
+          },
+        },
+      }));
       return { success: false, error: res?.error || 'Auto-fit speed failed' };
     } catch (err) {
       if (signal?.aborted) return { success: false, aborted: true };
       console.error(`[DubbingRunner] Auto-fit speed failed for EP ${epId}:`, err);
+      setRunnerLiveStats((prev) => ({
+        ...prev,
+        autofit: {
+          ...prev.autofit,
+          [epId]: {
+            percent: 100,
+            isFailed: true,
+            message: `❌ បរាជ័យ: ${err.message}`,
+            logs: [
+              { time: new Date().toLocaleTimeString(), message: `❌ Auto-Fit Error: ${err.message}` },
+            ],
+          },
+        },
+      }));
       return { success: false, error: err.message };
     }
   }, [activeSeries?.id, refreshSeries]);

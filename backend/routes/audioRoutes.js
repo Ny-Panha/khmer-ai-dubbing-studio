@@ -32,6 +32,7 @@ const router = express.Router();
 
 const activeSyncJobs = new Map();
 const activeBatchStages = new Map();
+const autoFitProgressMap = new Map();
 
 function countUniqueSegmentMp3s(mp3s = []) {
   const uniqueSegIds = new Set();
@@ -1131,15 +1132,17 @@ router.post("/sync-audio", async (req, res) => {
  * Speeds up overflowing / red / trimmed segments so they fit their subtitle slot without cutting off words.
  */
 router.post(["/audio/autofit-speed", "/autofit-speed"], async (req, res) => {
-  try {
-    const {
-      seriesId,
-      episodeId,
-      maxSpeed = 1.50,
-      targetSegmentIds = null,
-      segments: clientSegments = null,
-    } = req.body;
+  const {
+    seriesId,
+    episodeId,
+    maxSpeed = 1.50,
+    targetSegmentIds = null,
+    segments: clientSegments = null,
+  } = req.body;
 
+  const progressKey = `${seriesId}:${episodeId}`;
+
+  try {
     if (!seriesId) {
       return res.status(400).json({ success: false, error: "seriesId is required" });
     }
@@ -1164,6 +1167,23 @@ router.post(["/audio/autofit-speed", "/autofit-speed"], async (req, res) => {
     if (!Array.isArray(segments) || segments.length === 0) {
       return res.status(400).json({ success: false, error: "No segments found to auto-fit" });
     }
+
+    const initialLogs = [
+      {
+        time: new Date().toLocaleTimeString(),
+        message: `⚡ [EP${ep.episodeNumber || ep.id}] ចាប់ផ្តើមវិភាគសំឡេងដែលវែងលើស (${segments.length} segments)...`,
+      },
+    ];
+
+    autoFitProgressMap.set(progressKey, {
+      status: 'running',
+      progress: 5,
+      current: 0,
+      total: segments.length,
+      fittedCount: 0,
+      message: `កំពុងវិភាគសំឡេង ${segments.length} ឃ្លា...`,
+      logs: initialLogs,
+    });
 
     const targetSet = Array.isArray(targetSegmentIds) && targetSegmentIds.length > 0
       ? new Set(targetSegmentIds.map(String))
@@ -1226,8 +1246,28 @@ router.post(["/audio/autofit-speed", "/autofit-speed"], async (req, res) => {
 
           updatedSegments[i] = seg;
           fittedCount++;
+
+          const pEntry = autoFitProgressMap.get(progressKey);
+          if (pEntry) {
+            pEntry.current = i + 1;
+            pEntry.fittedCount = fittedCount;
+            pEntry.progress = Math.min(85, Math.round(((i + 1) / segments.length) * 80) + 5);
+            pEntry.message = `⚡ Auto-Stretch Seg #${seg.id ?? (i + 1)} (${fittedCount} ឃ្លា fit)...`;
+            pEntry.logs.push({
+              time: new Date().toLocaleTimeString(),
+              message: `⚡ Auto-Stretch: ${currentDur.toFixed(2)}s ➔ ${newDur.toFixed(2)}s (Target: ${safeTarget.toFixed(2)}s | Speed: ${stretchRes.appliedSpeed.toFixed(2)}x)`,
+            });
+            if (pEntry.logs.length > 50) pEntry.logs.shift();
+          }
         } catch (stretchErr) {
           console.warn(`[Auto-Fit Speed] Failed to stretch segment #${seg.id}: ${stretchErr.message}`);
+          const pEntry = autoFitProgressMap.get(progressKey);
+          if (pEntry) {
+            pEntry.logs.push({
+              time: new Date().toLocaleTimeString(),
+              message: `⚠️ Stretch warning Seg #${seg.id ?? (i + 1)}: ${stretchErr.message}`,
+            });
+          }
         }
       } else {
         if (typeof seg.audioStartSec !== "number" || isNaN(seg.audioStartSec)) {
@@ -1249,6 +1289,15 @@ router.post(["/audio/autofit-speed", "/autofit-speed"], async (req, res) => {
     fs.writeFileSync(seriesMetaPath, JSON.stringify(seriesData, null, 2), "utf8");
 
     if (fittedCount > 0) {
+      const pEntry = autoFitProgressMap.get(progressKey);
+      if (pEntry) {
+        pEntry.progress = 90;
+        pEntry.message = `កំពុង Sync Master Narration...`;
+        pEntry.logs.push({
+          time: new Date().toLocaleTimeString(),
+          message: `🎙️ Hierarchical Audio Sync: Dividing ${updatedSegments.length} segments into batches of 40...`,
+        });
+      }
 
       // Re-sync master narration audio
       try {
@@ -1276,6 +1325,13 @@ router.post(["/audio/autofit-speed", "/autofit-speed"], async (req, res) => {
 
         if (syncSegs.length > 0) {
           await createSynchronizedNarrationAudio(syncSegs, fullAudioPath);
+          const pEntrySync = autoFitProgressMap.get(progressKey);
+          if (pEntrySync) {
+            pEntrySync.logs.push({
+              time: new Date().toLocaleTimeString(),
+              message: `🎙️ Master Narration បាន Sync រួចរាល់ (${syncSegs.length} segments via batches)`,
+            });
+          }
         }
       } catch (syncErr) {
         console.warn(`[Auto-Fit Speed] Notice re-syncing master narration: ${syncErr.message}`);
@@ -1286,16 +1342,64 @@ router.post(["/audio/autofit-speed", "/autofit-speed"], async (req, res) => {
       fs.writeFileSync(seriesMetaPath, JSON.stringify(seriesData, null, 2), "utf8");
     }
 
+    const finalLogs = autoFitProgressMap.get(progressKey)?.logs || [];
+    finalLogs.push({
+      time: new Date().toLocaleTimeString(),
+      message: `✅ Auto-Fit Speed ជោគជ័យ: បានពន្លឿន ${fittedCount} ឃ្លា ឱ្យ Fit ស្មើនឹង Subtitle ១០០%`,
+    });
+
+    autoFitProgressMap.set(progressKey, {
+      status: 'completed',
+      progress: 100,
+      current: segments.length,
+      total: segments.length,
+      fittedCount,
+      message: `✅ Auto-Fit រួចរាល់: បានពន្លឿន ${fittedCount} ឃ្លា`,
+      logs: finalLogs,
+    });
+
     return res.json({
       success: true,
       fittedCount,
       totalCount: segments.length,
       segments: updatedSegments,
+      logs: finalLogs,
       message: `⚡ បានពន្លឿន ${fittedCount} ឃ្លា (1.05x - ${maxSpeed}x) ឱ្យនិយាយទាន់ និងចប់គ្រប់អក្សរដោយជោគជ័យ!`
     });
   } catch (error) {
     console.error("[Auto-Fit Speed] Error:", error);
+    const pEntryErr = autoFitProgressMap.get(progressKey);
+    if (pEntryErr) {
+      pEntryErr.status = 'error';
+      pEntryErr.error = error.message;
+      pEntryErr.logs.push({
+        time: new Date().toLocaleTimeString(),
+        message: `❌ បរាជ័យ: ${error.message}`,
+      });
+    }
     return res.status(500).json({ success: false, error: error.message || "Failed to auto-fit speed" });
+  }
+});
+
+/**
+ * 7B. Auto-Fit Real-time Progress & Console Logs Endpoint
+ */
+router.get(["/audio/autofit-progress", "/autofit-progress"], (req, res) => {
+  try {
+    const { seriesId, episodeId } = req.query;
+    const key = `${seriesId}:${episodeId}`;
+    const entry = autoFitProgressMap.get(key) || {
+      status: 'idle',
+      progress: 0,
+      current: 0,
+      total: 0,
+      fittedCount: 0,
+      message: '',
+      logs: [],
+    };
+    return res.json({ success: true, ...entry });
+  } catch (err) {
+    return res.json({ success: true, status: 'idle', progress: 0, logs: [] });
   }
 });
 

@@ -31,9 +31,10 @@ import {
   isTranslateQueueEnqueueBanner,
 } from './geminiRouteHelpers';
 
-// 3 Dedicated Route Progress Runners (Step 1: Translate, Step 2: Khmer TTS, Step 3: Demucs)
+// 4 Dedicated Route Progress Runners (Step 1: Translate, Step 2: Khmer TTS, Step 3: Auto-Fit, Step 4: Demucs)
 import EpisodeTranslateProgressCard from './route-runners/EpisodeTranslateProgressCard';
 import EpisodeTtsProgressCard from './route-runners/EpisodeTtsProgressCard';
+import EpisodeAutoFitProgressCard from './route-runners/EpisodeAutoFitProgressCard';
 import EpisodeDemucsProgressCard from './route-runners/EpisodeDemucsProgressCard';
 import StudioConfirmDialog from '../common/StudioConfirmDialog';
 import { DubbingStepCardsBar, useDubbingFeature } from '../../features/dubbing-runner';
@@ -109,7 +110,7 @@ export default function GeminiRouteModal({
   const episodes = (activeSeries && Array.isArray(activeSeries.episodes)) ? activeSeries.episodes : EMPTY_EPISODES;
 
   // Dubbing sequential runner feature state
-  const { runnerStates, activeEpisodeIds: runnerActiveEpIds, runnerLiveStats, stopStep: runnerStopStep } = useDubbingFeature(episodes);
+  const { runnerStates, activeEpisodeIds: runnerActiveEpIds, runnerLiveStats, stopStep: runnerStopStep, runSingleAutoFitSpeed } = useDubbingFeature(episodes);
 
   // Selection & Batch Script Setup configuration state
   const [cardStageView, setCardStageView] = useState('all'); // 'all' | 'translate' | 'tts' | 'demucs'
@@ -3774,7 +3775,143 @@ export default function GeminiRouteModal({
                           );
                         })()}
 
-                        {/* ── STAGE 3: 🔇 3. AI បិទសំឡេងចិន (រក្សាភ្លេង BGM ដើម) ── */}
+                        {/* ── STAGE 3: ⚡ 3. Auto-Fit Speed (WSOLA + Atempo Fit Subtitles) ── */}
+                        {(cardStageView === 'all' || cardStageView === 'autofit') && (() => {
+                          const isRunnerAutoFit = runnerStates?.autofit?.status === 'running';
+                          const isCurrentAutoFitRunnerEp = isRunnerAutoFit && runnerStates?.autofit?.currentEpId === ep.id;
+                          const isQueuedAutoFitRunnerEp = isRunnerAutoFit && runnerStates?.autofit?.queuedEpIds?.includes(ep.id) && !isCurrentAutoFitRunnerEp;
+
+                          const isCurrentRunning = isCurrentAutoFitRunnerEp;
+                          const isQueued = isQueuedAutoFitRunnerEp;
+
+                          const effectiveLiveStats = runnerLiveStats?.autofit?.[ep.id] || (isCurrentRunning ? {
+                            percent: runnerStates?.autofit?.progress || 10,
+                            message: runnerStates?.autofit?.message || 'កំពុង Auto-Fit Speed...',
+                            logs: [{
+                              time: new Date().toLocaleTimeString(),
+                              progress: runnerStates?.autofit?.progress || 10,
+                              message: runnerStates?.autofit?.message || '⚡ កំពុង Auto-Fit Speed...',
+                            }],
+                          } : null);
+
+                          const handleStopAutoFit = async () => {
+                            if (isCurrentAutoFitRunnerEp) {
+                              await runnerStopStep('autofit');
+                            }
+                          };
+
+                          if (isCurrentRunning) {
+                            return (
+                              <EpisodeAutoFitProgressCard
+                                liveStats={effectiveLiveStats}
+                                ep={ep}
+                                isCurrentRunning={true}
+                                onKill={handleStopAutoFit}
+                                onRequestConfirm={openStudioDialog}
+                              />
+                            );
+                          }
+
+                          if (isQueued) {
+                            return (
+                              <div style={{
+                                padding: '7px 11px',
+                                borderRadius: 8,
+                                background: 'rgba(15, 23, 42, 0.75)',
+                                border: '1px dashed rgba(251, 191, 36, 0.35)',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                                gap: 8,
+                              }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                  <Clock size={13} color="#94A3B8" />
+                                  <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#94A3B8' }}>
+                                    ⏳ ⚡ 3. Auto-Fit Speed — រង់ចាំក្នុង Queue
+                                  </span>
+                                </div>
+                                <span style={{ fontSize: '0.64rem', color: '#64748B' }}>
+                                  ដំណើរការម្ដង ១ ភាគ
+                                </span>
+                              </div>
+                            );
+                          }
+
+                          const isAutoFitted = Boolean(ep.autoFitted || ep.scriptData?.autoFitted);
+
+                          return (
+                            <div
+                              style={{
+                                padding: '8px 12px',
+                                borderRadius: 10,
+                                background: isAutoFitted ? 'rgba(251, 191, 36, 0.08)' : 'rgba(255, 255, 255, 0.03)',
+                                border: `1px solid ${isAutoFitted ? 'rgba(251, 191, 36, 0.28)' : 'rgba(255, 255, 255, 0.08)'}`,
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'space-between',
+                                gap: 8,
+                              }}
+                            >
+                              <div style={{ minWidth: 0, flex: 1 }}>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                                  <span style={{ fontSize: '0.74rem', fontWeight: 800, color: isAutoFitted ? '#FBBF24' : '#CBD5E1' }}>
+                                    ⚡ 3. Auto-Fit Speed
+                                  </span>
+                                  {isAutoFitted && (
+                                    <span style={{
+                                      fontSize: '0.62rem',
+                                      fontWeight: 800,
+                                      padding: '1px 6px',
+                                      borderRadius: 9999,
+                                      background: 'rgba(251, 191, 36, 0.2)',
+                                      color: '#FBBF24',
+                                      border: '1px solid rgba(251, 191, 36, 0.4)',
+                                    }}>
+                                      ✓ FITTED
+                                    </span>
+                                  )}
+                                </div>
+                                <div style={{ fontSize: '0.66rem', color: isAutoFitted ? '#94A3B8' : '#64748B', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                  {isAutoFitted
+                                    ? '✅ សំឡេងខ្មែរ Fit ល្មមស្មើនឹង Subtitle ១០០%'
+                                    : (isAudioReady ? 'ពន្លឿនឃ្លាក្រហមឱ្យ Fit ស្មើនឹង Subtitle' : 'រង់ចាំបង្កើតសំឡេង AI ជាមុនសិន')}
+                                </div>
+                              </div>
+
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0 }}>
+                                <button
+                                  type="button"
+                                  disabled={!isAudioReady || isRunnerAutoFit}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    if (runSingleAutoFitSpeed) {
+                                      runSingleAutoFitSpeed(ep);
+                                    }
+                                  }}
+                                  style={{
+                                    padding: '3px 8px',
+                                    borderRadius: 6,
+                                    background: isAutoFitted ? 'transparent' : 'rgba(251, 191, 36, 0.15)',
+                                    border: `1px solid ${isAutoFitted ? 'rgba(251, 191, 36, 0.35)' : 'rgba(251, 191, 36, 0.45)'}`,
+                                    color: '#FBBF24',
+                                    fontSize: '0.66rem',
+                                    fontWeight: 700,
+                                    cursor: (!isAudioReady || isRunnerAutoFit) ? 'not-allowed' : 'pointer',
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    gap: 3,
+                                  }}
+                                  title={isAutoFitted ? 'ពន្លឿន Auto-Fit Speed ឡើងវិញ' : 'ពន្លឿន Auto-Fit Speed'}
+                                >
+                                  {isAutoFitted ? <RotateCcw size={10} /> : <Zap size={10} />}
+                                  <span>{isAutoFitted ? 'ធ្វើឡើងវិញ' : 'Auto-Fit'}</span>
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })()}
+
+                        {/* ── STAGE 4: 🔇 4. AI បិទសំឡេងចិន (រក្សាភ្លេង BGM ដើម) ── */}
                         {(cardStageView === 'all' || cardStageView === 'demucs') && (() => {
                           const isRunnerCleanBgm = runnerStates?.clean_bgm?.status === 'running';
                           const isRunnerAll3 = runnerStates?.all3?.status === 'running';

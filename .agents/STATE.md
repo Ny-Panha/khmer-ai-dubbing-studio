@@ -1,25 +1,34 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
-- **Environment**: Antigravity IDE (Fix 404 on /api/video/update-framing-keyframes)
-- **Timestamp**: 2026-11-12T19:48:00+07:00
+- **Environment**: Antigravity IDE (Auto-Fit Speed Live Console Drawer in Batch Studio)
+- **Timestamp**: 2026-11-12T20:06:00+07:00
 
-## Summary: Fixed 404 Route Not Found on Framing Endpoints
+## Summary: Added Live Console Terminal Drawer & Progress Card for Step 3 (Auto-Fit Speed)
 1. **User Request & Symptom**:
-   - `api/video/update-framing-keyframes:1 Failed to load resource: the server responded with a status of 404 (Not Found)`
-2. **Root Cause**:
-   - Frontend `VideoPlayerPreview.jsx` called `/api/video/update-framing-keyframes`, `/api/video/update-segment-crop`, and `/api/video/analyze-framing`.
-   - `backend/server.js` mounted `videoRoutes` at `/api`, while `videoRoutes.js` registered `/update-framing-keyframes` (without `/video` prefix).
-   - Express could not match `/api/video/...` and returned 404 Not Found.
-3. **Fix Implemented**:
-   - `backend/routes/videoRoutes.js`:
-     - Added array path aliases: `["/analyze-framing", "/video/analyze-framing"]`, `["/update-segment-crop", "/video/update-segment-crop"]`, `["/update-framing-keyframes", "/video/update-framing-keyframes"]`.
-   - `backend/server.js`:
-     - Mounted `videoRoutes` under both prefixes: `app.use(["/api", "/api/video"], videoRoutes);`.
-4. **Verification**:
-   - Created `backend/tests/framing_routes_endpoint.test.js`: **4/4 PASS (100%)**.
-   - Full backend test suite: **238/238 PASS (100%)**.
-   - Frontend Vite build: **PASS (611ms, 0 errors)**.
+   - `ot mean consol doch tang 1 2 4 jg na ti3?@[Quote]`
+   - User noted that Step 1 (Translate), Step 2 (Voice), and Step 4 (Demucs) all have dynamic progress cards with a collapsible Live Console Terminal Drawer (`CONSOLE LOGS`), whereas Step 3 (Auto-Fit) had no console and was running silently in the background while backend terminal was logging stretch/sync events.
+2. **Changes Made**:
+   - **Frontend UI & Runner**:
+     - Created `frontend/src/components/dashboard/route-runners/EpisodeAutoFitProgressCard.jsx`:
+       - Glowing amber/yellow `#FBBF24` progress card with real-time percentage (0% - 100%).
+       - 4 milestones: `1. Scan Overflow`, `2. Time-Stretch`, `3. Re-Align`, `4. Re-Sync`.
+       - Collapsible Live Console Terminal Drawer (`CONSOLE LOGS (Auto-Fit Speech Speed Engine)`) with auto-scroll and timestamped logs.
+       - Stop button to cancel active run.
+     - Updated `frontend/src/components/dashboard/GeminiRouteModal.jsx`:
+       - Integrated `EpisodeAutoFitProgressCard` for active episode when Auto-Fit runs.
+       - Added Step 3 row `⚡ 3. Auto-Fit Speed` to each episode card with `✓ FITTED` badge and action button.
+     - Updated `frontend/src/features/dubbing-runner/DubbingRunnerContext.jsx`:
+       - Added `autofit: {}` to `runnerLiveStats` with real-time progress and logs.
+   - **Backend API**:
+     - Updated `backend/routes/audioRoutes.js`:
+       - Added `autoFitProgressMap` in-memory progress and log buffer.
+       - Added `GET /api/audio/autofit-progress` endpoint for live polling by progress cards.
+       - Populated real-time log lines for segment auto-stretching and master narration synchronization.
+3. **Verification**:
+   - Created `backend/tests/autofit_live_console.test.js`: **3/3 PASS (100%)**.
+   - Full backend test suite: **241/241 PASS (100%)**.
+   - Frontend Vite build: **PASS (603ms, 0 errors)**.
 
 ## Active Environment
 - Backend API: `http://localhost:5000` (Listening)
