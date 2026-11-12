@@ -320,3 +320,40 @@ select:disabled {
   animation: spin 1s linear infinite;
 }
 
+/* Icon-only and Ghost Buttons (Dark Theme Safe - No White Box) */
+.btn-ghost {
+  background: transparent !important;
+  border: none !important;
+  color: var(--text-muted, #94a3b8) !important;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  border-radius: 4px;
+  transition: all 0.15s ease;
+}
+
+.btn-ghost:hover {
+  color: var(--accent-cyan, #38bdf8) !important;
+  background: rgba(56, 189, 248, 0.14) !important;
+}
+
+.btn-danger-ghost {
+  background: transparent !important;
+  border: none !important;
+  color: var(--text-muted, #94a3b8) !important;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  border-radius: 4px;
+  transition: all 0.15s ease;
+}
+
+.btn-danger-ghost:hover {
+  color: #f87171 !important;
+  background: rgba(239, 68, 68, 0.16) !important;
+}
+

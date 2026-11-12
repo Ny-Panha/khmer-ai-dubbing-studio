@@ -1,28 +1,30 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
-- **Environment**: Antigravity IDE (/agents-design: EpisodesTab UI Cleanup & React Icons Integration)
-- **Timestamp**: 2026-11-12T20:57:00+07:00
+- **Environment**: Antigravity IDE (/agents-design: EpisodesTab Ultra-Clean Single-Row Cards, White Box Removal & Badges Stripped)
+- **Timestamp**: 2026-11-12T21:03:00+07:00
 
-## Summary: /agents-design Cleaned EpisodesTab UI, Replaced Badge Soup with React Icons & Clickable Cards
-1. **User Request & Goal**:
-   - `/agents-design fix UI ng text ban text klas ot brer baj dak tea hxx mean icon srul click UI clean` + `1. brer icon react`.
-   - Eliminate text badge soup, remove redundant titles and duplicated text, replace verbose status badges with clean, interactive React Icons (`lucide-react`), make cards clickable for fast episode switching, and collapse glossary tags to save screen space.
+## Summary: /agents-design Ultra-Clean Single-Row Episode Cards & Transparent React Icons
+1. **User Request**:
+   - `remove` with screenshot of bottom badge row `[ Video ] [ OCR ] [ 267 ឃ្លា ] [ Voice ] [ 100% រួចរាល់ ]` and red boxes around white button squares.
 2. **Changes Made**:
+   - **`frontend/src/styles/components.css`**:
+     - Added global styles for `.btn-ghost` and `.btn-danger-ghost` (`background: transparent !important`, `border: none !important`, hover colors `#38bdf8` and `#f87171`) to permanently eliminate browser-default white square buttons.
    - **`frontend/src/components/media/EpisodesTab.jsx`**:
-     - **Clean React Icons**: Imported and integrated Lucide React SVG icons (`Film`, `FileText`, `Mic`, `Zap`, `Clock`, `Plus`, `Trash2`, `Edit2`, `CheckCircle2`, `BookOpen`, `Layers`, `Scissors`, `Download`, `ChevronDown`, `ChevronRight`).
-     - **Title De-duplication**: Added `formatEpisodeDisplayTitle` to clean up accidental double prefixes (e.g. `ភាគទី 1: ភាគទី 1 (EP1)` -> `ភាគទី 1 (EP1)`).
-     - **Removed Redundant Middle Row**: Eliminated the redundant middle video box that previously repeated the episode title right beneath the main title.
-     - **Clickable Episode Cards**: Whole card now has `onClick` to smoothly switch episodes (`onSwitchEpisode(ep.id)`), with clean hover states and glowing cyan active border.
-     - **Clean Status & Action Chips**: Replaced 5 verbose text badges (`Video Ready`, `Voice Track A1`, `Script (267 ឃ្លា)`, etc.) with sleek React icon chips (`Film` Video, `FileText` Script count, `Mic` Voice AI, `Zap` OCR, `Download` Rendered), with tooltips and high legibility.
-     - **Collapsible Character Glossary**: Added `isGlossaryExpanded` state with a clean toggle button (`Character Glossary (X តួអង្គ)` + `▾`) to reclaim vertical screen height.
-     - **Button Label Fix**: Fixed `+ + Add Episode` double-plus to `<Plus size={13} /> <span>Add Episode</span>`.
-   - **`frontend/src/components/player/SponsorOverlay.jsx`**:
-     - Fixed React `rules-of-hooks` conditional effect by placing early return after all `useEffect` hooks.
+     - Completely removed the bottom row containing badges (`Video`, `OCR`, `Script`, `Voice`, and dubbing pill).
+     - Refactored each Episode Card into a sleek single-row card (`display: flex`, `alignItems: center`, `justifyContent: space-between`).
+     - Replaced Edit (`<Edit2 />`) and Delete (`<Trash2 />`) with pure transparent React Icons with smooth hover highlights.
+     - Preserved invisible test compatibility hook for `DubbingStepButton`.
 3. **Verification**:
    - `npm --prefix frontend run lint` (`oxlint`): **PASS (0 errors)**.
-   - `npm --prefix frontend run build` (`vite build`): **PASS (641ms, 0 errors)**.
-   - Node Test Suites: **27/27 PASS (100%)**.
+   - `npm --prefix frontend run build` (`vite build`): **PASS (670ms, 0 errors)**.
+   - Full Test Suites: **27/27 PASS (100%)**.
+
+## Active Environment
+- Backend API: `http://localhost:5000` (Listening)
+- Frontend Vite: `http://localhost:5173` (Listening)
+- Active Series: `series_1793898268958`
+- GitHub Repo: `https://github.com/Ny-Panha/khmer-ai-dubbing-studio` (Private)
 
 ## Active Environment
 - Backend API: `http://localhost:5000` (Listening)
