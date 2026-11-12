@@ -1,46 +1,42 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
-- **Environment**: Antigravity IDE (/agents-design DubbingModeTab State B Form De-slop & Icon Upgrade)
-- **Timestamp**: 2026-11-12T21:36:00+07:00
+- **Environment**: Antigravity IDE (/agents-design Batch Studio /batch Form De-slop & Icon Upgrade)
+- **Timestamp**: 2026-11-12T21:44:00+07:00
 
-## Summary: DubbingModeTab State B (Re-generation Form) De-slopped & Upgraded to Lucide Icons
+## Summary: Batch Studio (/batch - GeminiRouteModal) De-slopped & Upgraded to Lucide Icons
 1. **User Request**:
-   - `/agents-design fix UI ng text ban text klas ot brer baj dak tea hxx mean icon srul click UI clean` with uploaded image `media_1794493584736_0b4ab8d8.jpg`.
-2. **De-slopping & Impeccable Refactoring**:
-   - **Generation Mode**:
-     - Removed redundant right-side header badge (`Standard កំពុងជ្រើស` / `Fast OCR កំពុងជ្រើស`).
-     - Removed verbose multi-line description paragraphs ("Full 10-Stage (OCR + ASR Diarization + Reconcile)", "Direct Subtitles (OCR ➡️ Translate, 1 Cue = 1 Segment)").
-     - Integrated Lucide React `<Layers size={13} />` for Standard Mode and `<Zap size={13} />` for Fast OCR Mode with clean checkmark indicators.
-     - Preserved `data-testid="fast-ocr-summary-pill"` with `OCR + Visual Speaker Gender + Direct Translate` for 100% test compatibility.
-   - **Dubbing Mode (Mode A vs Mode B)**:
-     - Removed redundant header badge (`Mode A កំពុងជ្រើស`).
-     - Removed giant card layout, tacky AI neon drop-shadows, and bloated explanatory paragraphs ("បកប្រែសន្ទនា...", "និទានដំណើររឿង...").
-     - Replaced emojis with Lucide React `<MessageSquare size={14} />` and `<Film size={14} />` in high-density 2-column segmented studio buttons with active state checkmarks.
-   - **Recap Style & Narrator Picker**:
-     - Modernized radio selectors and replaced cartoon emojis `👨` and `👩` with `<Mic size={11} /> ពិសិដ្ឋ` and `<Mic size={11} /> ស្រីមុំ`.
-   - **Drama Genre**:
-     - Removed redundant text `បានជ្រើសរើសដោយដៃ`.
-     - Replaced emojis with Lucide React icons: `<Sparkles /> Auto`, `<BookOpen /> បុរាណចិន`, `<Building2 /> សម័យទំនើប`, `<Zap /> Action`, `<Smile /> កំប្លែង`.
-   - **Direction & 1-Click Smart Prompt Chips**:
-     - Cleaned visible chip buttons: replaced messy emojis with Lucide icons (`<UserCheck />`, `<Crown />`, `<Briefcase />`, `<Zap />`) and concise Khmer labels (`ស្គាល់ភេទតាមមុខ`, `រាជស័ព្ទបុរាណចិន`, `សន្ទនាអគ្គនាយក`, `ឃ្លាខ្លីត្រូវមាត់ 100%`).
-     - Preserved backend regex test assertions (`ai_detection_and_dubbing_prompt_fix.test.js:215-218`).
-     - Shortened textarea placeholder to clean, concise text.
+   - `http://localhost:5173/batch/agents-design fix UI ng text ban text klas ot brer baj dak tea hxx mean icon srul click UI clean`
+2. **De-slopping & Impeccable Refactoring on `/batch` (`GeminiRouteModal.jsx`)**:
+   - **Batch Pipeline Setup (Row 1)**:
+     - Replaced emoji `🎯` and verbose text `(Full 10-Stage: OCR + ASR Diarization + Reconcile)` with clean `<Layers size={12} /> Standard Mode` and checkmark indicator.
+     - Replaced emoji `⚡` and verbose text with `<Zap size={12} /> Fast OCR Mode` while preserving test badge `(OCR + Visual Speaker Gender + Direct Translate)` and `📄 Import .srt / .json`.
+   - **Dubbing Mode (Row 2)**:
+     - Cleaned verbose subtitles: `(បកប្រែសន្ទនា ១-ទល់-១ ត្រូវតាមមាត់)` and `(TikTok/Reels Narration)`.
+     - Replaced emojis with Lucide React `<MessageSquare size={12} /> Mode A: សន្ទនាតួអង្គ` and `<Film size={12} /> Mode B: សម្រាយរឿង`.
+     - Replaced narrator emojis `👨` and `👩` with `<Mic size={10} /> ពិសិដ្ឋ` and `<Mic size={10} /> ស្រីមុំ`.
+   - **Drama Genre (Row 3)**:
+     - Rendered Lucide icons `<Sparkles />`, `<BookOpen />`, `<Building2 />`, `<Zap />`, `<Smile />` with concise short labels (`Auto`, `បុរាណចិន`, `សម័យទំនើប`, `Action`, `កំប្លែង`).
+     - Kept full strings in `GENRE_OPTIONS` for test regex matching.
+   - **Direction & Smart Prompt Chips (Row 4)**:
+     - Replaced emojis with Lucide icons (`<UserCheck />`, `<Crown />`, `<Briefcase />`, `<Zap />`) and concise labels (`ស្គាល់ភេទតាមមុខ`, `រាជស័ព្ទបុរាណចិន`, `សន្ទនាអគ្គនាយក`, `ឃ្លាខ្លីត្រូវមាត់ 100%`).
+     - Shortened textarea placeholder to clean, concise Khmer prompt text.
 3. **Verification**:
    - `npm --prefix frontend run lint` (`oxlint`): **0 errors (PASS)**.
-   - `npm --prefix frontend run build` (`vite build`): **PASS (708ms, 0 errors)**.
+   - `npm --prefix frontend run build` (`vite build`): **PASS (985ms, 0 errors)**.
    - `node --test backend/tests/ai_detection_and_dubbing_prompt_fix.test.js`: **8/8 PASS (100%)**.
-   - `node --test backend/tests/tts_smart_skip_and_progress.test.js backend/tests/reusable_1by1_dubbing_feature.test.js`: **16/16 PASS (100%)**.
+   - `node --test backend/tests/clean_unified_3step_batch_pipeline.test.js`: **6/6 PASS (100%)**.
    - `node --test backend/tests/full_project_master_upgrade.test.js`: **8/8 PASS (100%)**.
 
 ## Active Environment
 - Backend API: `http://localhost:5000` (Listening)
 - Frontend Vite: `http://localhost:5173` (Listening)
 - Active Series: `series_1793898268958`
-- GitHub Repo: `https://github.com/Ny-Panha/khmer-ai-dubbing_studio` (Private)
+- Route URL: `http://localhost:5173/batch`
+- GitHub Repo: `https://github.com/Ny-Panha/khmer-ai-dubbing-studio` (Private)
 
 ## Next Steps
-- Await Nha's feedback on the refined Re-generation form and UI interactions.
+- Await Nha's review of the `/batch` page and Studio UI.
 
 ## Active Environment
 - Backend API: `http://localhost:5000` (Listening)

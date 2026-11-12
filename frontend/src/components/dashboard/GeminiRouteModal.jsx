@@ -3,7 +3,7 @@ import {
   Cpu, Sparkles, CheckCircle2, AlertCircle, Check, Clock, Play,
   ArrowRight, Loader2, X, RefreshCw,
   RotateCcw, FileText, Mic, Volume2, Download, Film, AlertTriangle, Square, Layers,
-  Pin, Key, Wrench, Settings2, ChevronDown, ChevronUp, Zap
+  Pin, Key, Wrench, Settings2, ChevronDown, ChevronUp, Zap, MessageSquare, Crown, Briefcase, UserCheck, Building2, Smile, BookOpen
 } from 'lucide-react';
 import {
   startGenerationJob,
@@ -53,34 +53,42 @@ import {
 const EMPTY_EPISODES = [];
 
 const GENRE_OPTIONS = [
-  { id: 'auto', label: '✨ Auto (ស្គាល់ស្វ័យប្រវត្តិ)', hint: 'AI វិភាគ Audio + OCR កំណត់ប្រភេទរឿងស្វ័យប្រវត្តិ' },
-  { id: 'ancient', label: '🏛️ បុរាណចិន / Xianxia', hint: 'រឿងគុណនិយម, Wuxia, សម្អាតកាយ, វិញ្ញាណ, លោកម្ចាស់, ព្រឹទ្ធាចារ្យ' },
-  { id: 'modern', label: '🏙️ សម័យទំនើប / CEO', hint: 'រឿងស្នេហា, CEO, ក្រុមហ៊ុន, លោកប្រធាន, អ្នកស្រី, បង/អូន' },
-  { id: 'action', label: '⚔️ Action / សងសឹក', hint: 'រឿងប្រយុទ្ធ, ប៉ូលិស, ឧក្រិដ្ឋកម្ម, ស៊ើបអង្កេត, ចង្វាក់សន្ទនារហ័ស' },
-  { id: 'comedy', label: '🎭 កំប្លែង / គ្រួសារ', hint: 'រឿងកំប្លែងសើចចុកពោះ, ភាសាកំប្លុកកំប្លែងធម្មជាតិ' },
+  { id: 'auto', label: '✨ Auto (ស្គាល់ស្វ័យប្រវត្តិ)', shortLabel: 'Auto', icon: Sparkles, hint: 'AI វិភាគ Audio + OCR កំណត់ប្រភេទរឿងស្វ័យប្រវត្តិ' },
+  { id: 'ancient', label: '🏛️ បុរាណចិន / Xianxia', shortLabel: 'បុរាណចិន', icon: BookOpen, hint: 'រឿងគុណនិយម, Wuxia, សម្អាតកាយ, វិញ្ញាណ, លោកម្ចាស់, ព្រឹទ្ធាចារ្យ' },
+  { id: 'modern', label: '🏙️ សម័យទំនើប / CEO', shortLabel: 'សម័យទំនើប', icon: Building2, hint: 'រឿងស្នេហា, CEO, ក្រុមហ៊ុន, លោកប្រធាន, អ្នកស្រី, បង/អូន' },
+  { id: 'action', label: '⚔️ Action / សងសឹក', shortLabel: 'Action', icon: Zap, hint: 'រឿងប្រយុទ្ធ, ប៉ូលិស, ឧក្រិដ្ឋកម្ម, ស៊ើបអង្កេត, ចង្វាក់សន្ទនារហ័ស' },
+  { id: 'comedy', label: '🎭 កំប្លែង / គ្រួសារ', shortLabel: 'កំប្លែង', icon: Smile, hint: 'រឿងកំប្លែងសើចចុកពោះ, ភាសាកំប្លុកកំប្លែងធម្មជាតិ' },
 ];
 
 const SMART_PROMPT_CHIPS = [
   {
     id: 'auto_face_gender',
     label: '🎭 ស្គាល់ភេទតាមមុខតួអង្គ (Auto Face Gender)',
+    shortLabel: 'ស្គាល់ភេទតាមមុខ',
+    icon: UserCheck,
     promptText: 'កំណត់ភេទតួអង្គតាមមុខមាត់ក្នុងវីដេអូ និងវេនសន្ទនា (Auto Face Gender & Turn-Taking)',
   },
   {
     id: 'royal_xianxia',
     label: '👑 រាជស័ព្ទបុរាណចិន (Royal/Xianxia)',
+    shortLabel: 'រាជស័ព្ទបុរាណចិន',
+    icon: Crown,
     promptText: 'រឿងបុរាណចិន/គុណនិយម ប្រើរាជស័ព្ទ និងពាក្យគុណនិយម (ទូលបង្គំ, ព្រះអង្គ, ម្ចាស់ក្សត្រី, លោកម្ចាស់)',
     genreId: 'ancient',
   },
   {
     id: 'modern_ceo',
     label: '💼 សន្ទនាអគ្គនាយក (Modern CEO)',
+    shortLabel: 'សន្ទនាអគ្គនាយក',
+    icon: Briefcase,
     promptText: 'រឿងសម័យទំនើប CEO ប្រើភាសាធម្មជាតិសម័យទំនើប (លោកប្រធាន, អ្នកនាង, បង/អូន, ខ្ញុំ/លោក)',
     genreId: 'modern',
   },
   {
     id: 'strict_lipsync',
     label: '⚡ ឃ្លាខ្លីត្រូវមាត់ 100% (Strict Lip-Sync)',
+    shortLabel: 'ឃ្លាខ្លីត្រូវមាត់ 100%',
+    icon: Zap,
     promptText: 'បកប្រែឃ្លាខ្លីណែន ត្រូវចังหวាក់មាត់ 100% (<= 5.5 ព្យាង្គ/វិនាទី ដោយអត្ថន័យពេញ)',
   },
 ];
@@ -2421,8 +2429,9 @@ export default function GeminiRouteModal({
                   }}
                 >
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                    <span style={{ fontSize: '0.70rem', color: '#94A3B8', fontWeight: 700, minWidth: 118 }}>
-                      ល្បឿន &amp; PIPELINE:
+                    <span style={{ fontSize: '0.70rem', color: '#94A3B8', fontWeight: 700, minWidth: 118, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                      <Zap size={11} color="#38BDF8" />
+                      <span>ល្បឿន &amp; PIPELINE:</span>
                     </span>
                     <button
                       type="button"
@@ -2437,10 +2446,16 @@ export default function GeminiRouteModal({
                         color: pipelineMode === 'standard' ? '#C084FC' : '#CBD5E1',
                         border: pipelineMode === 'standard' ? '1px solid rgba(168, 85, 247, 0.5)' : '1px solid transparent',
                         cursor: 'pointer',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 6,
+                        transition: 'all 0.15s ease',
                       }}
                       title="Full 10-Stage (OCR + ASR Diarization + Reconcile)"
                     >
-                      🎯 Standard Mode (Full 10-Stage: OCR + ASR Diarization + Reconcile)
+                      <Layers size={12} />
+                      <span>Standard Mode</span>
+                      {pipelineMode === 'standard' && <Check size={11} />}
                     </button>
                     <button
                       type="button"
@@ -2458,20 +2473,26 @@ export default function GeminiRouteModal({
                         display: 'inline-flex',
                         alignItems: 'center',
                         gap: 6,
+                        transition: 'all 0.15s ease',
                       }}
                       title="Direct Subtitles (OCR ➡️ Translate, 1 Cue = 1 Segment)"
                     >
-                      <span>⚡ Fast OCR Mode</span>
+                      <Zap size={12} />
+                      <span>Fast OCR Mode</span>
                       <span
                         data-testid="batch-fast-ocr-summary-pill"
                         style={{
                           fontSize: '0.64rem',
                           opacity: 0.9,
                           fontWeight: 600,
+                          padding: '1px 5px',
+                          borderRadius: 3,
+                          background: pipelineMode === 'fast_ocr' ? 'rgba(234, 179, 8, 0.2)' : 'rgba(255, 255, 255, 0.06)',
                         }}
                       >
                         (OCR + Visual Speaker Gender + Direct Translate)
                       </span>
+                      {pipelineMode === 'fast_ocr' && <Check size={11} />}
                     </button>
                   </div>
 
@@ -2491,6 +2512,7 @@ export default function GeminiRouteModal({
                       type="button"
                       disabled={isImportingSubtitles}
                       onClick={() => subtitleFileInputRef.current?.click()}
+                      title="📄 Import .srt / .json"
                       style={{
                         padding: '4px 10px',
                         borderRadius: 6,
@@ -2535,8 +2557,9 @@ export default function GeminiRouteModal({
                   }}
                 >
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                    <span style={{ fontSize: '0.70rem', color: '#94A3B8', fontWeight: 700, minWidth: 118 }}>
-                      ទម្រង់សំឡេង AI:
+                    <span style={{ fontSize: '0.70rem', color: '#94A3B8', fontWeight: 700, minWidth: 118, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                      <MessageSquare size={11} color="#38BDF8" />
+                      <span>ទម្រង់សំឡេង AI:</span>
                     </span>
                     <button
                       type="button"
@@ -2551,10 +2574,16 @@ export default function GeminiRouteModal({
                         color: dubbingMode === 'dialogue' ? '#38BDF8' : '#CBD5E1',
                         border: dubbingMode === 'dialogue' ? '1px solid rgba(56, 189, 248, 0.5)' : '1px solid transparent',
                         cursor: 'pointer',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 6,
+                        transition: 'all 0.15s ease',
                       }}
                       title="បកប្រែសន្ទនា ១-ទល់-១ ត្រូវតាមមាត់ និងសំឡេងតួអង្គ"
                     >
-                      🗣️ Mode A: សន្ទនាតួអង្គ (បកប្រែសន្ទនា ១-ទល់-១ ត្រូវតាមមាត់)
+                      <MessageSquare size={12} />
+                      <span>Mode A: សន្ទនាតួអង្គ</span>
+                      {dubbingMode === 'dialogue' && <Check size={11} />}
                     </button>
                     <button
                       type="button"
@@ -2572,10 +2601,16 @@ export default function GeminiRouteModal({
                         color: dubbingMode === 'recap' ? '#C084FC' : '#CBD5E1',
                         border: dubbingMode === 'recap' ? '1px solid rgba(168, 85, 247, 0.5)' : '1px solid transparent',
                         cursor: 'pointer',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 6,
+                        transition: 'all 0.15s ease',
                       }}
                       title="និទានដំណើររឿងបែប TikTok/Reels រស់រវើក"
                     >
-                      🎬 Mode B: សម្រាយរឿង (TikTok/Reels Narration)
+                      <Film size={12} />
+                      <span>Mode B: សម្រាយរឿង</span>
+                      {dubbingMode === 'recap' && <Check size={11} />}
                     </button>
                   </div>
 
@@ -2616,9 +2651,12 @@ export default function GeminiRouteModal({
                             color: '#FFF',
                             cursor: 'pointer',
                             fontWeight: narratorGender === 'male' ? 700 : 500,
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 4,
                           }}
                         >
-                          👨 ពិសិដ្ឋ
+                          <Mic size={10} /> ពិសិដ្ឋ
                         </button>
                         <button
                           type="button"
@@ -2632,9 +2670,12 @@ export default function GeminiRouteModal({
                             color: '#FFF',
                             cursor: 'pointer',
                             fontWeight: narratorGender === 'female' ? 700 : 500,
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 4,
                           }}
                         >
-                          👩 ស្រីមុំ
+                          <Mic size={10} /> ស្រីមុំ
                         </button>
                       </div>
                     </div>
@@ -2653,11 +2694,13 @@ export default function GeminiRouteModal({
                     gap: 6,
                   }}
                 >
-                  <span style={{ fontSize: '0.70rem', color: '#94A3B8', fontWeight: 700, minWidth: 118 }}>
-                    ប្រភេទរឿង (GENRE):
+                  <span style={{ fontSize: '0.70rem', color: '#94A3B8', fontWeight: 700, minWidth: 118, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                    <BookOpen size={11} color="#38BDF8" />
+                    <span>ប្រភេទរឿង (GENRE):</span>
                   </span>
                   {GENRE_OPTIONS.map((g) => {
                     const isSelected = dramaGenre === g.id;
+                    const GenreIcon = g.icon || Sparkles;
                     return (
                       <button
                         key={g.id}
@@ -2666,7 +2709,7 @@ export default function GeminiRouteModal({
                         onClick={() => setDramaGenre(g.id)}
                         title={g.hint}
                         style={{
-                          padding: '4px 10px',
+                          padding: '4px 9px',
                           fontSize: '0.70rem',
                           borderRadius: 6,
                           border: isSelected ? '1px solid rgba(56, 189, 248, 0.55)' : '1px solid transparent',
@@ -2674,10 +2717,14 @@ export default function GeminiRouteModal({
                           color: isSelected ? '#38BDF8' : '#CBD5E1',
                           cursor: 'pointer',
                           fontWeight: isSelected ? 700 : 500,
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 4,
                           transition: 'all 0.15s ease',
                         }}
                       >
-                        {g.label}
+                        <GenreIcon size={11} />
+                        <span>{g.shortLabel || g.label}</span>
                       </button>
                     );
                   })}
@@ -2699,17 +2746,20 @@ export default function GeminiRouteModal({
                       data-testid="batch-smart-prompt-chips"
                       style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 5 }}
                     >
-                      <span style={{ fontSize: '0.70rem', color: '#94A3B8', fontWeight: 700, minWidth: 118 }}>
-                        DIRECTION:
+                      <span style={{ fontSize: '0.70rem', color: '#94A3B8', fontWeight: 700, minWidth: 118, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                        <Settings2 size={11} color="#38BDF8" />
+                        <span>DIRECTION:</span>
                       </span>
                       {SMART_PROMPT_CHIPS.map((chip) => {
                         const currentText = String(customDirection || '');
-                        const isChipActive = currentText.includes(chip.promptText) || currentText.includes(chip.label);
+                        const isChipActive = currentText.includes(chip.promptText) || currentText.includes(chip.label) || (chip.shortLabel && currentText.includes(chip.shortLabel));
+                        const ChipIcon = chip.icon || Sparkles;
                         return (
                           <button
                             key={chip.id}
                             type="button"
                             data-testid={`batch-smart-prompt-chip-${chip.id}`}
+                            title={chip.promptText}
                             onClick={() => {
                               if (chip.genreId && dubbingMode === 'dialogue') {
                                 setDramaGenre(chip.genreId);
@@ -2718,6 +2768,7 @@ export default function GeminiRouteModal({
                                 const nextText = currentText
                                   .replace(chip.promptText, '')
                                   .replace(chip.label, '')
+                                  .replace(chip.shortLabel || '', '')
                                   .replace(/\s*•\s*•\s*/g, ' • ')
                                   .replace(/^\s*•\s*|\s*•\s*$/g, '')
                                   .trim();
@@ -2736,10 +2787,14 @@ export default function GeminiRouteModal({
                               color: isChipActive ? '#38BDF8' : '#CBD5E1',
                               border: isChipActive ? '1px solid rgba(56, 189, 248, 0.5)' : '1px solid transparent',
                               cursor: 'pointer',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 4,
                               transition: 'all 0.15s ease',
                             }}
                           >
-                            {chip.label}
+                            <ChipIcon size={11} color={isChipActive ? '#38BDF8' : '#94A3B8'} />
+                            <span>{chip.shortLabel || chip.label}</span>
                           </button>
                         );
                       })}
@@ -2802,8 +2857,8 @@ export default function GeminiRouteModal({
                     value={customDirection}
                     onChange={(e) => setCustomDirection(e.target.value)}
                     placeholder={dubbingMode === 'dialogue'
-                      ? 'ឧ. រឿងភាគបុរាណចិន, តួប្រុសឈ្មោះ លីនហ្វេង... (អាចចុច Chip ខាងលើ ឬទុកទំនេរបាន)'
-                      : 'ឧ. សម្រាយបែបរន្ធត់ ជក់ចិត្ត ផ្តោតលើប្រយុទ្ធ... (អាចចុច Chip ខាងលើ ឬទុកទំនេរបាន)'}
+                      ? 'ឧ. រឿងភាគបុរាណចិន, តួប្រុសឈ្មោះ លីនហ្វេង...'
+                      : 'ឧ. សម្រាយបែបរន្ធត់ ជក់ចិត្ត ផ្តោតលើប្រយុទ្ធ...'}
                     style={{
                       display: isDirectionExpanded ? 'block' : 'none',
                       width: '100%',
