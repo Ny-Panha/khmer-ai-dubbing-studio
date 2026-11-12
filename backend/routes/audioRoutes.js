@@ -1229,24 +1229,26 @@ router.post(["/audio/autofit-speed", "/autofit-speed"], async (req, res) => {
         } catch (stretchErr) {
           console.warn(`[Auto-Fit Speed] Failed to stretch segment #${seg.id}: ${stretchErr.message}`);
         }
+      } else {
+        if (typeof seg.audioStartSec !== "number" || isNaN(seg.audioStartSec)) {
+          seg.audioStartSec = slotStart;
+          seg.audioEndSec = parseFloat((slotStart + currentDur).toFixed(2));
+          updatedSegments[i] = seg;
+        }
       }
     }
 
     ep.autoFitted = true;
     if (ep.scriptData) {
       ep.scriptData.autoFitted = true;
+      ep.scriptData.segments = updatedSegments;
+      ep.scriptData.updatedAt = Date.now();
     }
+    episodes[epIndex] = ep;
+    seriesData.episodes = episodes;
+    fs.writeFileSync(seriesMetaPath, JSON.stringify(seriesData, null, 2), "utf8");
 
     if (fittedCount > 0) {
-      ep.scriptData = {
-        ...ep.scriptData,
-        segments: updatedSegments,
-        updatedAt: Date.now(),
-        autoFitted: true,
-      };
-      episodes[epIndex] = ep;
-      seriesData.episodes = episodes;
-      fs.writeFileSync(seriesMetaPath, JSON.stringify(seriesData, null, 2), "utf8");
 
       // Re-sync master narration audio
       try {

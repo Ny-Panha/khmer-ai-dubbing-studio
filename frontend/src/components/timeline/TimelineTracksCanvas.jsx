@@ -157,7 +157,9 @@ function TimelineTracksCanvas({
     return scriptSegments.map((seg, idx) => {
       const rawStart = (typeof seg.audioStartSec === 'number' && !isNaN(seg.audioStartSec))
         ? seg.audioStartSec 
-        : parseTimeToSeconds(seg.start, idx * 4);
+        : ((typeof seg.startSec === 'number' && !isNaN(seg.startSec))
+          ? seg.startSec
+          : parseTimeToSeconds(seg.start, idx * 4));
       const slotStart = (typeof seg.startSec === 'number' && !isNaN(seg.startSec)) ? seg.startSec : parseTimeToSeconds(seg.start, idx * 4);
       const slotEnd = (typeof seg.endSec === 'number' && !isNaN(seg.endSec)) ? seg.endSec : parseTimeToSeconds(seg.end, slotStart + 3.0);
       const slotSpan = (typeof seg.audioEndSec === 'number' && !isNaN(seg.audioEndSec) && seg.audioEndSec > rawStart)
@@ -261,7 +263,9 @@ function TimelineTracksCanvas({
     const isDragging = (dragState?.itemType === 'audio' || dragState?.itemType === 'subtitle') && dragState?.index === idx;
     const rawStart = (typeof seg.audioStartSec === 'number' && !isNaN(seg.audioStartSec))
       ? seg.audioStartSec 
-      : parseTimeToSeconds(seg.start, idx * 4);
+      : ((typeof seg.startSec === 'number' && !isNaN(seg.startSec))
+        ? seg.startSec
+        : parseTimeToSeconds(seg.start, idx * 4));
     const slotStart = (typeof seg.startSec === 'number' && !isNaN(seg.startSec)) ? seg.startSec : parseTimeToSeconds(seg.start, idx * 4);
     const slotEnd = (typeof seg.endSec === 'number' && !isNaN(seg.endSec)) ? seg.endSec : parseTimeToSeconds(seg.end, slotStart + 3.0);
     const slotSpan = (typeof seg.audioEndSec === 'number' && !isNaN(seg.audioEndSec) && seg.audioEndSec > rawStart)
@@ -1111,7 +1115,11 @@ function TimelineTracksCanvas({
                 );
 
                 if (!isDragging && !isSelected) {
-                  const vStart = (typeof seg.audioStartSec === 'number' && !isNaN(seg.audioStartSec)) ? seg.audioStartSec : parseTimeToSeconds(seg.start, idx * 4);
+                  const vStart = (typeof seg.audioStartSec === 'number' && !isNaN(seg.audioStartSec))
+                    ? seg.audioStartSec
+                    : ((typeof seg.startSec === 'number' && !isNaN(seg.startSec))
+                      ? seg.startSec
+                      : parseTimeToSeconds(seg.start, idx * 4));
                   const vEnd = ((seg.audioTrimmed || seg.userTrimmed) && typeof seg.audioEndSec === 'number') ? seg.audioEndSec : (typeof seg.audioEndSec === 'number' && !isNaN(seg.audioEndSec) ? seg.audioEndSec : vStart + 3.0);
                   if (vEnd < visibleRange.start || vStart > visibleRange.end) {
                     return null;
