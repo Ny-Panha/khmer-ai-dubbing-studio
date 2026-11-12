@@ -722,16 +722,29 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
       }
     } else if (stepType === 'autofit') {
       const candidates = queue.length > 0 ? queue : allEpisodes;
+      let unfitted = candidates.filter((ep) => checkEpisodeHasScript(ep) && checkEpisodeHasAudioReady(ep, null, null) && !checkEpisodeHasAutoFitReady(ep));
+
+      // If the passed selection is already all fitted, fall back to any remaining unfitted episodes in allEpisodes!
+      if (unfitted.length === 0 && !options.force) {
+        unfitted = allEpisodes.filter((ep) => checkEpisodeHasScript(ep) && checkEpisodeHasAudioReady(ep, null, null) && !checkEpisodeHasAutoFitReady(ep));
+      }
+
       queue = options.force
         ? candidates.filter((ep) => checkEpisodeHasScript(ep) && checkEpisodeHasAudioReady(ep, null, null))
-        : candidates.filter((ep) => checkEpisodeHasScript(ep) && checkEpisodeHasAudioReady(ep, null, null) && !checkEpisodeHasAutoFitReady(ep));
+        : unfitted;
+
       if (queue.length === 0) {
-        const voiced = candidates.filter((ep) => checkEpisodeHasScript(ep) && checkEpisodeHasAudioReady(ep, null, null));
-        if (voiced.length > 0) {
-          queue = voiced;
+        const remainingUnfitted = allEpisodes.filter((ep) => checkEpisodeHasScript(ep) && checkEpisodeHasAudioReady(ep, null, null) && !checkEpisodeHasAutoFitReady(ep));
+        if (remainingUnfitted.length > 0 && !options.force) {
+          queue = remainingUnfitted;
         } else {
-          updateRunnerState('autofit', { message: 'មិនទាន់មានភាគដែលមានសំឡេងសម្រាប់ Auto-Fit ទេ' });
-          return { success: true, count: 0 };
+          const voiced = (queue.length > 0 ? queue : allEpisodes).filter((ep) => checkEpisodeHasScript(ep) && checkEpisodeHasAudioReady(ep, null, null));
+          if (voiced.length > 0) {
+            queue = voiced;
+          } else {
+            updateRunnerState('autofit', { message: 'មិនទាន់មានភាគដែលមានសំឡេងសម្រាប់ Auto-Fit ទេ' });
+            return { success: true, count: 0 };
+          }
         }
       }
     } else if (options.force) {

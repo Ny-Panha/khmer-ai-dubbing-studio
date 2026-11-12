@@ -55,14 +55,13 @@ export function useEpisodeSelection({
 
   const incompleteEpisodes = pendingEpisodes;
 
-  // Auto-select episodes by default on open (pending work if any, else all episodes)
+  // Auto-select episodes by default on open (all selectable episodes by default)
   useEffect(() => {
     if (isOpen && episodes.length > 0 && selectedEpIds.size === 0 && !isBatchExecutionActive) {
-      if (incompleteEpisodes.length > 0) {
-        const toPick = incompleteEpisodes.slice(0, Math.min(4, incompleteEpisodes.length));
-        setSelectedEpIds(new Set(toPick.map((ep) => ep.id)));
-      } else if (allSelectableEpisodes.length > 0) {
+      if (allSelectableEpisodes.length > 0) {
         setSelectedEpIds(new Set(allSelectableEpisodes.map((ep) => ep.id)));
+      } else if (incompleteEpisodes.length > 0) {
+        setSelectedEpIds(new Set(incompleteEpisodes.map((ep) => ep.id)));
       }
     }
   }, [isOpen, episodes.length, incompleteEpisodes, allSelectableEpisodes, isBatchExecutionActive]);
