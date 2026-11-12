@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
-  Sparkles, Languages, BookOpen, Loader2, AlertCircle, ArrowRight, CheckCircle2, Mic, Volume2, Film, RefreshCw, ChevronDown, ChevronUp, Settings2, FileText, Check, Terminal, FileUp
+  Sparkles, Languages, BookOpen, Loader2, AlertCircle, ArrowRight, CheckCircle2, Mic, Volume2, Film, RefreshCw, ChevronDown, ChevronUp, Settings2, FileText, Check, Terminal, FileUp, Zap, Layers, MessageSquare
 } from 'lucide-react';
 import { importSubtitlesApi } from '../../services/api';
 import { DubbingStepButton, useDubbingFeature } from '../../features/dubbing-runner';
@@ -570,21 +570,25 @@ export default function DubbingModeTab({
             </div>
 
             {/* Badges */}
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginBottom: 12 }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 12 }}>
               {generationMode === 'fast_ocr' ? (
-                <span style={{ fontSize: '11px', fontWeight: 700, background: 'rgba(234, 179, 8, 0.15)', color: '#eab308', padding: '2px 8px', borderRadius: 4, border: '1px solid rgba(234, 179, 8, 0.35)' }}>
-                  ⚡ Fast OCR
+                <span style={{ fontSize: '11px', fontWeight: 600, background: 'rgba(234, 179, 8, 0.12)', color: '#eab308', padding: '2px 8px', borderRadius: 4, border: '1px solid rgba(234, 179, 8, 0.3)', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                  <Zap size={11} />
+                  <span>Fast OCR</span>
                 </span>
               ) : (
-                <span style={{ fontSize: '11px', fontWeight: 600, background: 'rgba(147, 51, 234, 0.12)', color: '#c084fc', padding: '2px 8px', borderRadius: 4, border: '1px solid rgba(147, 51, 234, 0.3)' }}>
-                  🎯 Standard
+                <span style={{ fontSize: '11px', fontWeight: 600, background: 'rgba(147, 51, 234, 0.12)', color: '#c084fc', padding: '2px 8px', borderRadius: 4, border: '1px solid rgba(147, 51, 234, 0.3)', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                  <Layers size={11} />
+                  <span>Standard</span>
                 </span>
               )}
-              <span style={{ fontSize: '11px', background: 'rgba(255, 255, 255, 0.04)', color: '#cbd5e1', padding: '2px 8px', borderRadius: 4, border: '1px solid rgba(255, 255, 255, 0.08)' }}>
-                {dubbingMode === 'dialogue' ? '🗣️ Mode A: សន្ទនាតួអង្គ' : '🎬 Mode B: សម្រាយរឿង'}
+              <span style={{ fontSize: '11px', background: 'rgba(255, 255, 255, 0.04)', color: '#cbd5e1', padding: '2px 8px', borderRadius: 4, border: '1px solid rgba(255, 255, 255, 0.08)', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                <MessageSquare size={11} />
+                <span>{dubbingMode === 'dialogue' ? 'សន្ទនាតួអង្គ' : 'សម្រាយរឿង'}</span>
               </span>
-              <span style={{ fontSize: '11px', background: 'rgba(56, 189, 248, 0.1)', color: '#38bdf8', padding: '2px 8px', borderRadius: 4, border: '1px solid rgba(56, 189, 248, 0.25)' }}>
-                {selectedGenre === 'ancient' ? '🏛️ បុរាណចិន' : (selectedGenre === 'modern' ? '🏙️ សម័យទំនើប' : (selectedGenre === 'action' ? '⚔️ Action' : (selectedGenre === 'comedy' ? '🎭 កំប្លែង' : '✨ ' + selectedGenre)))}
+              <span style={{ fontSize: '11px', background: 'rgba(56, 189, 248, 0.1)', color: '#38bdf8', padding: '2px 8px', borderRadius: 4, border: '1px solid rgba(56, 189, 248, 0.25)', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                <Sparkles size={11} />
+                <span>{selectedGenre === 'ancient' ? 'បុរាណចិន' : (selectedGenre === 'modern' ? 'សម័យទំនើប' : (selectedGenre === 'action' ? 'Action' : (selectedGenre === 'comedy' ? 'កំប្លែង' : selectedGenre)))}</span>
               </span>
             </div>
 
@@ -631,13 +635,13 @@ export default function DubbingModeTab({
           >
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, gap: 6, flexWrap: 'wrap' }}>
               <div style={{ fontSize: '11px', color: '#94A3B8', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.4px', display: 'flex', alignItems: 'center', gap: 6 }}>
-                <Mic size={14} color="#FF8577" />
+                <Mic size={14} color="#38bdf8" />
                 <span>ជំហានទី ៣ ៖ បង្កើតសំឡេងខ្មែរ AI (Voice Studio)</span>
               </div>
               {hasExistingAudio && !isThisEpisodeGeneratingAudio && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <span style={{ fontSize: '10px', background: pendingOrOutdatedCount > 0 ? 'rgba(251, 191, 36, 0.15)' : 'rgba(52, 211, 153, 0.15)', color: pendingOrOutdatedCount > 0 ? '#fbbf24' : '#34D399', padding: '2px 8px', borderRadius: 9999, fontWeight: 700, border: pendingOrOutdatedCount > 0 ? '1px solid rgba(251, 191, 36, 0.35)' : '1px solid rgba(52, 211, 153, 0.3)' }}>
-                    {pendingOrOutdatedCount > 0 ? `⚠️ ខ្វះ / កែប្រែ ${pendingOrOutdatedCount} ឃ្លា` : '✅ សំឡេង AI រួចរាល់'}
+                  <span style={{ fontSize: '10px', background: pendingOrOutdatedCount > 0 ? 'rgba(251, 191, 36, 0.15)' : 'rgba(52, 211, 153, 0.15)', color: pendingOrOutdatedCount > 0 ? '#fbbf24' : '#34D399', padding: '2px 8px', borderRadius: 4, fontWeight: 700, border: pendingOrOutdatedCount > 0 ? '1px solid rgba(251, 191, 36, 0.35)' : '1px solid rgba(52, 211, 153, 0.3)' }}>
+                    {pendingOrOutdatedCount > 0 ? `ខ្វះ / កែប្រែ ${pendingOrOutdatedCount} ឃ្លា` : 'សំឡេង AI រួចរាល់'}
                   </span>
                   {pendingOrOutdatedCount > 0 && onNavigateToVoice && (
                     <button
@@ -652,7 +656,7 @@ export default function DubbingModeTab({
                         background: 'rgba(255, 255, 255, 0.05)',
                         color: '#cbd5e1',
                         border: '1px solid rgba(255, 255, 255, 0.12)',
-                        borderRadius: 9999,
+                        borderRadius: 4,
                         padding: '2px 7px',
                         cursor: 'pointer',
                         fontWeight: 600,
@@ -680,24 +684,28 @@ export default function DubbingModeTab({
                 className="btn-tactile"
                 style={{
                   width: '100%',
-                  padding: '11px 16px',
-                  borderRadius: 9999,
-                  border: 'none',
-                  background: isThisEpisodeGeneratingAudio ? '#192744' : 'linear-gradient(135deg, #FF8577 0%, #f43f5e 100%)',
-                  color: isThisEpisodeGeneratingAudio ? '#64748B' : '#0B132B',
+                  padding: '10px 14px',
+                  borderRadius: 6,
+                  border: '1px solid rgba(56, 189, 248, 0.35)',
+                  background: isThisEpisodeGeneratingAudio
+                    ? 'rgba(15, 23, 42, 0.8)'
+                    : (pendingOrOutdatedCount > 0
+                      ? 'linear-gradient(135deg, #0284c7 0%, #0369a1 100%)'
+                      : 'linear-gradient(135deg, #0284c7 0%, #2563eb 100%)'),
+                  color: isThisEpisodeGeneratingAudio ? '#64748B' : '#ffffff',
                   fontSize: '12px',
-                  fontWeight: 800,
+                  fontWeight: 700,
                   cursor: isThisEpisodeGeneratingAudio ? 'not-allowed' : 'pointer',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'space-between',
-                  boxShadow: isThisEpisodeGeneratingAudio ? 'none' : '0 4px 16px rgba(255, 133, 119, 0.35)',
+                  boxShadow: isThisEpisodeGeneratingAudio ? 'none' : '0 2px 10px rgba(2, 132, 199, 0.25)',
                   transition: 'all 0.18s cubic-bezier(0.16, 1, 0.3, 1)',
                 }}
               >
                 {isThisEpisodeGeneratingAudio ? (
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <Loader2 size={14} className="animate-spin" color="#FF8577" />
+                    <Loader2 size={14} className="animate-spin" color="#38bdf8" />
                     <span>កំពុងបង្កើតសំឡេងខ្មែរ AI... {displayAudioProgress}%</span>
                   </div>
                 ) : (
@@ -731,28 +739,26 @@ export default function DubbingModeTab({
                 className="btn-tactile"
                 style={{
                   width: '100%',
-                  padding: '11px 16px',
-                  borderRadius: 9999,
-                  border: isCleanBgReady ? '1px solid rgba(52, 211, 153, 0.45)' : '1px solid rgba(56, 189, 248, 0.35)',
+                  padding: '10px 14px',
+                  borderRadius: 6,
+                  border: isCleanBgReady ? '1px solid rgba(52, 211, 153, 0.35)' : '1px solid rgba(255, 255, 255, 0.1)',
                   background: isSeparatingAudio
-                    ? '#192744'
-                    : isCleanBgReady
-                      ? 'rgba(52, 211, 153, 0.12)'
-                      : 'rgba(56, 189, 248, 0.1)',
+                    ? 'rgba(15, 23, 42, 0.8)'
+                    : (isCleanBgReady
+                      ? 'rgba(52, 211, 153, 0.08)'
+                      : 'rgba(255, 255, 255, 0.03)'),
                   color: isSeparatingAudio
                     ? '#94A3B8'
-                    : isCleanBgReady
-                      ? '#34D399'
-                      : '#38BDF8',
+                    : (isCleanBgReady ? '#34D399' : '#94A3B8'),
                   fontSize: '12px',
-                  fontWeight: 800,
+                  fontWeight: 600,
                   cursor: (isSeparatingAudio || !selectedVideo) ? 'not-allowed' : 'pointer',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'space-between',
                   boxShadow: isCleanBgReady
-                    ? '0 0 10px rgba(52, 211, 153, 0.15)'
-                    : '0 2px 10px rgba(56, 189, 248, 0.2)',
+                    ? '0 0 8px rgba(52, 211, 153, 0.15)'
+                    : 'none',
                   transition: 'all 0.18s cubic-bezier(0.16, 1, 0.3, 1)',
                 }}
                 title="បំបែកកាត់សំឡេងចិន ចម្រាញ់យកតែ BGM & SFX (Demucs AI)"
@@ -770,7 +776,7 @@ export default function DubbingModeTab({
                       background: 'rgba(56, 189, 248, 0.25)',
                       color: '#38BDF8',
                       padding: '2px 8px',
-                      borderRadius: 10,
+                      borderRadius: 4,
                       fontWeight: 800,
                       letterSpacing: '0.5px'
                     }}>
@@ -783,18 +789,19 @@ export default function DubbingModeTab({
                       <Volume2 size={14} style={{ flexShrink: 0 }} />
                       <span style={{ whiteSpace: 'nowrap' }}>
                         {isCleanBgReady
-                          ? '✅ Clean BGM រួចរាល់ 100% (Demucs AI)'
-                          : '🎧 បំបែកសំឡេងដើម AI (Demucs AI)'}
+                          ? 'Clean BGM (Demucs AI)'
+                          : 'បំបែកសំឡេងដើម (Demucs AI)'}
                       </span>
                     </div>
                     <span style={{
                       fontSize: '10px',
-                      background: isCleanBgReady ? 'rgba(74, 222, 128, 0.2)' : 'rgba(0, 229, 255, 0.2)',
+                      background: isCleanBgReady ? 'rgba(74, 222, 128, 0.15)' : 'rgba(255, 255, 255, 0.08)',
+                      color: isCleanBgReady ? '#4ade80' : '#94a3b8',
                       padding: '2px 6px',
                       borderRadius: 4,
                       fontWeight: 800,
                     }}>
-                      {isCleanBgReady ? 'READY' : 'SEPARATE'}
+                      {isCleanBgReady ? '100% READY' : 'SEPARATE'}
                     </span>
                   </>
                 )}

@@ -1,32 +1,37 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
-- **Environment**: Antigravity IDE (/agents-design: Right Inspector Panel De-Slop & Unslop Overflow Fix)
-- **Timestamp**: 2026-11-12T21:20:00+07:00
+- **Environment**: Antigravity IDE (/agents-design: Tabs 2 & 3 De-Slop & Unslop Visual Polish)
+- **Timestamp**: 2026-11-12T21:28:00+07:00
 
-## Summary: /agents-design Inspector Panel Text Clipping & Emoji Soup Elimination
+## Summary: /agents-design De-Slop for DubbingModeTab & ScriptReviewTab
 1. **User Request**:
-   - `/agents-design` with screenshot (`media_1794492561873_70f14412.jpg`) showing Right Inspector Panel (`ClipInspectorPanel.jsx` / `VoiceSettings.jsx`).
-   - Severe text truncation and overflow on narrow sidebar: `✨ AI កែប្រែ (Re-Transl...`, `Mute All C...`, `1.00x • ធម្មតា (Nor...`, vehicle emojis cramped `🐢 ⚡ 🚀 🏎️`, double emoji soup (`🔊 🎬`, `🔊 🔇`, `🔊 🗣️`, `👨`, `👩`), and bottom action buttons cut off on the right (`✂️ កាត់ឃ្លា...`).
-2. **Root Cause Analysis (5 GitHub Design Repos: pbakaus/impeccable & heydamir/unslop)**:
-   - **Nested Card-in-Card Syndrome**: Triple-nested containers with 10px + 10px + 10px padding wasted 60px+ of horizontal space on a 320px panel.
-   - **Emoji & Parenthetical Clutter**: Double emojis + long English translations inside buttons forced width beyond container bounds.
-   - **One-Row Competing Buttons**: 3 buttons with `minWidth: 110px` on one row exceeded panel width, clipping `កាត់ឃ្លា (Split)`.
+   - `/agents-design` with 2 screenshots:
+     - Image 1: `media_1794493168249_32219801.png` showing `DubbingModeTab.jsx` (`2. សំឡេង AI`).
+     - Image 2: `media_1794493180116_2539b9bf.png` showing `ScriptReviewTab.jsx` (`3. អត្ថបទ`).
+2. **Problems Identified**:
+   - **`DubbingModeTab.jsx`**:
+     - Emoji badge soup (`🎯 Standard`, `🪶 Mode A: សន្ទនាតួអង្គ`, `🏛️ បុរាណចិន`).
+     - Giant glowing red pill button (`borderRadius: 9999`, heavy drop shadow) for Step 3 Voice Studio.
+     - Double-status indicator in Demucs button (`✅ Clean BGM ... 100%` + `READY` badge).
+   - **`ScriptReviewTab.jsx`**:
+     - Missing timestamps rendered blank empty boxes `[ - ]` due to unhandled undefined `seg.start`/`seg.end`.
+     - Cartoon emoji badges (`👨` and `👩`) in filter pills and segment cards.
+     - Unicode/emojis `💭 ក្នុងចិត្ត` and `🔊 ធម្មតា` in card headers.
 3. **Changes Made**:
-   - **`frontend/src/components/voice/ClipInspectorPanel.jsx`**:
-     - *Eliminated Card-in-Card Nesting*: Flattened to single 8px padded container (`.inspector-card-group`), reclaiming 24px+ width.
-     - *AI Re-Translate*: Simplified to clean Lucide `<Sparkles size={11} /> <span>AI កែប្រែ</span>`, removing double emoji `✨` and overflowing `(Re-Translate)` text.
-     - *Delivery Mode Switcher*: Replaced raw emojis `🎙️`/`💭` with Lucide `<Mic />`, `<Volume2 />`, `<MessageSquare />`, and 2-column grid.
-     - *Voice Switch Buttons*: Replaced cartoon emojis `👨 ប្រុស` and `👩 ស្រី` with `<User size={13} /> <span>ប្រុស (Piseth)</span>` and `<UserCheck size={13} /> <span>ស្រី (Sreymom)</span>`.
-     - *Audio & Mute Controls*: Separated Audio Ready status to top, placed mute toggles in a balanced 3-column grid (`វីដេអូដើម` / `Mute All` / `សំឡេង AI`) with Lucide `<Film />`, `<Volume2 />`, `<VolumeX />` without clipping.
-     - *Clip Speed Presets*: Removed vehicle emojis `🐢`, `⚡`, `🚀`, `🏎️` in favor of clean tabular numbers `0.75x`, `1.0x`, `1.25x`, `1.5x`, and shortened speed badge to prevent overflow.
-     - *Bottom Action Grid*: Separated into 2 well-proportioned rows: Row 1 = 50/50 Primary Actions (`[ Play ] [ Generate ]`), Row 2 = Secondary Editing Actions (`[ Split (flex: 1) ] [ Delete (75px) ]`).
-   - **`frontend/src/components/voice/VoiceSettings.jsx`**:
-     - Cleaned emoji badges in voice selector optgroups and speaker voice override buttons.
+   - **`frontend/src/components/media/DubbingModeTab.jsx`**:
+     - Cleaned metadata badge row with Lucide React icons (`<Zap />`, `<Layers />`, `<MessageSquare />`, `<Sparkles />`).
+     - Replaced giant glowing red pill with modern studio-grade action button (`borderRadius: 6`, professional cyan/sky gradient).
+     - Cleaned Demucs Clean BGM button to single clear status badge (`100% READY` or `SEPARATE`).
+   - **`frontend/src/components/media/ScriptReviewTab.jsx`**:
+     - Guaranteed timestamp rendering by falling back to `formatMinSec(seg.startSec)` and `formatMinSec(seg.endSec)`, permanently fixing blank `[ - ]` inputs.
+     - Replaced cartoon emojis (`👨`, `👩`) with crisp Lucide React icons (`<User />`, `<UserCheck />`).
+     - Replaced delivery type emojis with Lucide `<MessageSquare size={10} /> <span>ក្នុងចិត្ត</span>` and `<Volume2 size={10} /> <span>ធម្មតា</span>`.
+     - Standardized filter pill radius to consistent 4px.
 4. **Verification**:
    - `npm --prefix frontend run lint` (`oxlint`): **PASS (0 errors)**.
-   - `npm --prefix frontend run build` (`vite build`): **PASS (627ms, 0 errors)**.
-   - Automated Test Suite (`backend/tests/*.test.js`): **241/241 PASS (100%)**.
+   - `npm --prefix frontend run build` (`vite build`): **PASS (1.38s, 0 errors)**.
+   - Targeted Tests: **22/22 PASS (100%)**.
 
 ## Active Environment
 - Backend API: `http://localhost:5000` (Listening)
@@ -35,7 +40,7 @@
 - GitHub Repo: `https://github.com/Ny-Panha/khmer-ai-dubbing-studio` (Private)
 
 ## Next Steps
-- Await Nha's review on the cleaned, non-overflowing Inspector Panel.
+- Await Nha's review on Tabs 2 & 3 polished UI.
 
 ## Active Environment
 - Backend API: `http://localhost:5000` (Listening)

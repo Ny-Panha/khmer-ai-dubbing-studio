@@ -2,10 +2,11 @@ import React from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import {
   Search, X, Play, Pause, RefreshCw, Trash2, Subtitles, AlertCircle, AlertTriangle,
-  User, Volume2, Sparkles, Languages, Edit3, Check, CheckCircle2,
+  User, UserCheck, Volume2, Sparkles, Languages, Edit3, Check, CheckCircle2,
   Loader2, MessageSquare, HelpCircle, Wrench
 } from 'lucide-react';
 import { parseTimeToSeconds } from '../../utils/formatTime';
+import { formatMinSec } from '../../utils/timestampUtils';
 import { cleanKhmerText } from '../../utils/cleanKhmer';
 import {
   retranslateSegmentApi,
@@ -167,7 +168,7 @@ const CaptionItemCard = React.memo(function CaptionItemCard({
           <div style={{ display: 'inline-flex', alignItems: 'center', gap: 2, background: 'rgba(255, 255, 255, 0.04)', padding: '1px 4px', borderRadius: 4, border: '1px solid rgba(255, 255, 255, 0.06)' }}>
             <input
               type="text"
-              value={seg.start}
+              value={seg.start || (typeof seg.startSec === 'number' ? formatMinSec(seg.startSec) : '00:00')}
               onChange={(e) => handleSegmentChange(idx, 'start', e.target.value)}
               style={{ width: 44, padding: '1px 2px', fontSize: '0.70rem', textAlign: 'center', background: 'transparent', color: '#cbd5e1', border: 'none', outline: 'none' }}
               title="Start time (mm:ss)"
@@ -175,7 +176,7 @@ const CaptionItemCard = React.memo(function CaptionItemCard({
             <span style={{ fontSize: '0.65rem', color: '#64748b' }}>-</span>
             <input
               type="text"
-              value={seg.end}
+              value={seg.end || (typeof seg.endSec === 'number' ? formatMinSec(seg.endSec) : '00:00')}
               onChange={(e) => handleSegmentChange(idx, 'end', e.target.value)}
               style={{ width: 44, padding: '1px 2px', fontSize: '0.70rem', textAlign: 'center', background: 'transparent', color: '#cbd5e1', border: 'none', outline: 'none' }}
               title="End time (mm:ss)"
@@ -225,6 +226,7 @@ const CaptionItemCard = React.memo(function CaptionItemCard({
           {/* Voice Actor Chip (resolved from voice catalog) */}
           {(() => {
             const voiceMeta = resolveVoiceMeta(seg);
+            const isFemale = voiceMeta.gender === 'FEMALE';
             return (
               <span
                 data-testid="segment-voice-chip"
@@ -232,17 +234,17 @@ const CaptionItemCard = React.memo(function CaptionItemCard({
                   fontSize: '0.62rem',
                   padding: '1px 5px',
                   borderRadius: 4,
-                  background: 'rgba(255, 255, 255, 0.04)',
-                  color: voiceMeta.gender === 'FEMALE' ? '#f9a8d4' : '#7dd3fc',
-                  border: '1px solid rgba(255, 255, 255, 0.08)',
-                  fontWeight: 500,
+                  background: isFemale ? 'rgba(244, 114, 182, 0.12)' : 'rgba(56, 189, 248, 0.12)',
+                  color: isFemale ? '#f472b6' : '#38bdf8',
+                  border: `1px solid ${isFemale ? 'rgba(244, 114, 182, 0.25)' : 'rgba(56, 189, 248, 0.25)'}`,
+                  fontWeight: 600,
                   display: 'inline-flex',
                   alignItems: 'center',
                   gap: 3
                 }}
                 title={voiceMeta.id}
               >
-                <span aria-hidden="true">{voiceMeta.icon}</span>
+                {isFemale ? <UserCheck size={9} strokeWidth={2.4} /> : <User size={9} strokeWidth={2.4} />}
                 <span>{voiceMeta.label}</span>
               </span>
             );
@@ -254,8 +256,9 @@ const CaptionItemCard = React.memo(function CaptionItemCard({
               <Loader2 size={10} className="animate-spin" />
             </span>
           ) : seg.deliveryType === 'inner_thought' ? (
-            <span style={{ fontSize: '0.62rem', color: '#d8b4fe', background: 'rgba(168, 85, 247, 0.15)', border: '1px dashed #c084fc', padding: '1px 5px', borderRadius: 4, fontWeight: 600 }} title="និយាយក្នុងចិត្ត">
-              💭 ក្នុងចិត្ត
+            <span style={{ fontSize: '0.62rem', color: '#d8b4fe', background: 'rgba(168, 85, 247, 0.15)', border: '1px dashed #c084fc', padding: '1px 5px', borderRadius: 4, fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 3 }} title="និយាយក្នុងចិត្ត">
+              <MessageSquare size={9} />
+              <span>ក្នុងចិត្ត</span>
             </span>
           ) : isTextEmpty ? (
             <span
@@ -337,13 +340,13 @@ const CaptionItemCard = React.memo(function CaptionItemCard({
               }}
               style={{
                 fontSize: '0.62rem',
-                padding: '2px 5px',
+                padding: '2px 6px',
                 fontWeight: 600,
                 borderRadius: 4,
                 cursor: 'pointer',
                 display: 'inline-flex',
                 alignItems: 'center',
-                gap: 3,
+                gap: 4,
                 border: seg.deliveryType === 'inner_thought' ? '1px dashed #c084fc' : '1px solid rgba(255, 255, 255, 0.08)',
                 background: seg.deliveryType === 'inner_thought' ? 'rgba(168, 85, 247, 0.18)' : 'rgba(255, 255, 255, 0.03)',
                 color: seg.deliveryType === 'inner_thought' ? '#d8b4fe' : '#94a3b8',
@@ -352,7 +355,17 @@ const CaptionItemCard = React.memo(function CaptionItemCard({
               }}
               title={seg.deliveryType === 'inner_thought' ? "ប្តូរទៅជា និយាយធម្មតា" : "ប្តូរទៅជា និយាយក្នុងចិត្ត (Inner Thought)"}
             >
-              {seg.deliveryType === 'inner_thought' ? '💭 ក្នុងចិត្ត' : '🔊 ធម្មតា'}
+              {seg.deliveryType === 'inner_thought' ? (
+                <>
+                  <MessageSquare size={10} />
+                  <span>ក្នុងចិត្ត</span>
+                </>
+              ) : (
+                <>
+                  <Volume2 size={10} />
+                  <span>ធម្មតា</span>
+                </>
+              )}
             </button>
           )}
 
@@ -802,13 +815,13 @@ function ScriptReviewTab({
             style={{
               padding: '2px 8px',
               fontSize: '0.70rem',
-              borderRadius: 12,
+              borderRadius: 4,
               border: '1px solid',
               borderColor: filterMode === 'all' ? 'var(--primary-accent, #6366f1)' : 'rgba(255, 255, 255, 0.12)',
               background: filterMode === 'all' ? 'rgba(99, 102, 241, 0.2)' : 'transparent',
               color: filterMode === 'all' ? '#fff' : 'var(--text-dim)',
               cursor: 'pointer',
-              fontWeight: filterMode === 'all' ? 700 : 400,
+              fontWeight: filterMode === 'all' ? 700 : 500,
               display: 'inline-flex',
               alignItems: 'center',
               gap: 4,
@@ -819,8 +832,8 @@ function ScriptReviewTab({
           </button>
 
           {[
-            { mode: 'male', icon: '👨', label: 'ប្រុស', count: voiceGenderCounts.male, tone: '56, 189, 248', text: '#7dd3fc' },
-            { mode: 'female', icon: '👩', label: 'ស្រី', count: voiceGenderCounts.female, tone: '244, 114, 182', text: '#f9a8d4' },
+            { mode: 'male', icon: <User size={11} strokeWidth={2.4} />, label: 'ប្រុស', count: voiceGenderCounts.male, tone: '56, 189, 248', text: '#7dd3fc' },
+            { mode: 'female', icon: <UserCheck size={11} strokeWidth={2.4} />, label: 'ស្រី', count: voiceGenderCounts.female, tone: '244, 114, 182', text: '#f9a8d4' },
           ].map((pill) => {
             const active = filterMode === pill.mode;
             return (
@@ -833,20 +846,20 @@ function ScriptReviewTab({
                 style={{
                   padding: '2px 8px',
                   fontSize: '0.70rem',
-                  borderRadius: 12,
+                  borderRadius: 4,
                   border: '1px solid',
                   borderColor: active ? `rgba(${pill.tone}, 0.7)` : 'rgba(255, 255, 255, 0.12)',
                   background: active ? `rgba(${pill.tone}, 0.18)` : 'transparent',
                   color: active ? pill.text : 'var(--text-dim)',
                   cursor: 'pointer',
-                  fontWeight: active ? 700 : 400,
+                  fontWeight: active ? 700 : 500,
                   display: 'inline-flex',
                   alignItems: 'center',
                   gap: 4,
                 }}
                 title={`បង្ហាញតែឃ្លាសំឡេង${pill.label}`}
               >
-                <span aria-hidden="true">{pill.icon}</span>
+                <span aria-hidden="true" style={{ display: 'inline-flex', alignItems: 'center' }}>{pill.icon}</span>
                 <span>{pill.label}</span>
                 <span style={{ opacity: 0.75, fontSize: '0.64rem', fontVariantNumeric: 'tabular-nums' }}>({pill.count})</span>
               </button>
@@ -859,13 +872,13 @@ function ScriptReviewTab({
             style={{
               padding: '2px 8px',
               fontSize: '0.70rem',
-              borderRadius: 12,
+              borderRadius: 4,
               border: '1px solid',
               borderColor: filterMode === 'missing' ? '#ef4444' : (missingTextCount > 0 ? 'rgba(239, 68, 68, 0.4)' : 'rgba(255, 255, 255, 0.12)'),
               background: filterMode === 'missing' ? 'rgba(239, 68, 68, 0.25)' : (missingTextCount > 0 ? 'rgba(239, 68, 68, 0.08)' : 'transparent'),
               color: filterMode === 'missing' ? '#fca5a5' : (missingTextCount > 0 ? '#ef4444' : 'var(--text-dim)'),
               cursor: 'pointer',
-              fontWeight: filterMode === 'missing' ? 700 : 400,
+              fontWeight: filterMode === 'missing' ? 700 : 500,
               display: 'inline-flex',
               alignItems: 'center',
               gap: 4,
