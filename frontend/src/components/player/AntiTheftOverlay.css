@@ -19,10 +19,10 @@
   bottom: 2%;
 }
 
-/* Native 9:16 Vertical Video */
+/* Native 9:16 Vertical Video (Positioned cleanly above bottom blur strip & subtitles: ~18.5%) */
 .anti-theft-overlay-root.pos-bottom.aspect-9-16-vertical,
 .anti-theft-overlay-root.pos-bottom.aspect-9-16 {
-  bottom: 12%;
+  bottom: 16.5%;
 }
 
 /* When 16:9 landscape video is centered in 9:16 vertical canvas (Letterbox):

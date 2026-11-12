@@ -1,46 +1,46 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
-- **Environment**: Antigravity IDE (/agents-design: Tabs 2 & 3 De-Slop & Unslop Visual Polish)
-- **Timestamp**: 2026-11-12T21:28:00+07:00
+- **Environment**: Antigravity IDE (/agents-design DubbingModeTab State B Form De-slop & Icon Upgrade)
+- **Timestamp**: 2026-11-12T21:36:00+07:00
 
-## Summary: /agents-design De-Slop for DubbingModeTab & ScriptReviewTab
+## Summary: DubbingModeTab State B (Re-generation Form) De-slopped & Upgraded to Lucide Icons
 1. **User Request**:
-   - `/agents-design` with 2 screenshots:
-     - Image 1: `media_1794493168249_32219801.png` showing `DubbingModeTab.jsx` (`2. សំឡេង AI`).
-     - Image 2: `media_1794493180116_2539b9bf.png` showing `ScriptReviewTab.jsx` (`3. អត្ថបទ`).
-2. **Problems Identified**:
-   - **`DubbingModeTab.jsx`**:
-     - Emoji badge soup (`🎯 Standard`, `🪶 Mode A: សន្ទនាតួអង្គ`, `🏛️ បុរាណចិន`).
-     - Giant glowing red pill button (`borderRadius: 9999`, heavy drop shadow) for Step 3 Voice Studio.
-     - Double-status indicator in Demucs button (`✅ Clean BGM ... 100%` + `READY` badge).
-   - **`ScriptReviewTab.jsx`**:
-     - Missing timestamps rendered blank empty boxes `[ - ]` due to unhandled undefined `seg.start`/`seg.end`.
-     - Cartoon emoji badges (`👨` and `👩`) in filter pills and segment cards.
-     - Unicode/emojis `💭 ក្នុងចិត្ត` and `🔊 ធម្មតា` in card headers.
-3. **Changes Made**:
-   - **`frontend/src/components/media/DubbingModeTab.jsx`**:
-     - Cleaned metadata badge row with Lucide React icons (`<Zap />`, `<Layers />`, `<MessageSquare />`, `<Sparkles />`).
-     - Replaced giant glowing red pill with modern studio-grade action button (`borderRadius: 6`, professional cyan/sky gradient).
-     - Cleaned Demucs Clean BGM button to single clear status badge (`100% READY` or `SEPARATE`).
-   - **`frontend/src/components/media/ScriptReviewTab.jsx`**:
-     - Guaranteed timestamp rendering by falling back to `formatMinSec(seg.startSec)` and `formatMinSec(seg.endSec)`, permanently fixing blank `[ - ]` inputs.
-     - Replaced cartoon emojis (`👨`, `👩`) with crisp Lucide React icons (`<User />`, `<UserCheck />`).
-     - Replaced delivery type emojis with Lucide `<MessageSquare size={10} /> <span>ក្នុងចិត្ត</span>` and `<Volume2 size={10} /> <span>ធម្មតា</span>`.
-     - Standardized filter pill radius to consistent 4px.
-4. **Verification**:
-   - `npm --prefix frontend run lint` (`oxlint`): **PASS (0 errors)**.
-   - `npm --prefix frontend run build` (`vite build`): **PASS (1.38s, 0 errors)**.
-   - Targeted Tests: **22/22 PASS (100%)**.
+   - `/agents-design fix UI ng text ban text klas ot brer baj dak tea hxx mean icon srul click UI clean` with uploaded image `media_1794493584736_0b4ab8d8.jpg`.
+2. **De-slopping & Impeccable Refactoring**:
+   - **Generation Mode**:
+     - Removed redundant right-side header badge (`Standard កំពុងជ្រើស` / `Fast OCR កំពុងជ្រើស`).
+     - Removed verbose multi-line description paragraphs ("Full 10-Stage (OCR + ASR Diarization + Reconcile)", "Direct Subtitles (OCR ➡️ Translate, 1 Cue = 1 Segment)").
+     - Integrated Lucide React `<Layers size={13} />` for Standard Mode and `<Zap size={13} />` for Fast OCR Mode with clean checkmark indicators.
+     - Preserved `data-testid="fast-ocr-summary-pill"` with `OCR + Visual Speaker Gender + Direct Translate` for 100% test compatibility.
+   - **Dubbing Mode (Mode A vs Mode B)**:
+     - Removed redundant header badge (`Mode A កំពុងជ្រើស`).
+     - Removed giant card layout, tacky AI neon drop-shadows, and bloated explanatory paragraphs ("បកប្រែសន្ទនា...", "និទានដំណើររឿង...").
+     - Replaced emojis with Lucide React `<MessageSquare size={14} />` and `<Film size={14} />` in high-density 2-column segmented studio buttons with active state checkmarks.
+   - **Recap Style & Narrator Picker**:
+     - Modernized radio selectors and replaced cartoon emojis `👨` and `👩` with `<Mic size={11} /> ពិសិដ្ឋ` and `<Mic size={11} /> ស្រីមុំ`.
+   - **Drama Genre**:
+     - Removed redundant text `បានជ្រើសរើសដោយដៃ`.
+     - Replaced emojis with Lucide React icons: `<Sparkles /> Auto`, `<BookOpen /> បុរាណចិន`, `<Building2 /> សម័យទំនើប`, `<Zap /> Action`, `<Smile /> កំប្លែង`.
+   - **Direction & 1-Click Smart Prompt Chips**:
+     - Cleaned visible chip buttons: replaced messy emojis with Lucide icons (`<UserCheck />`, `<Crown />`, `<Briefcase />`, `<Zap />`) and concise Khmer labels (`ស្គាល់ភេទតាមមុខ`, `រាជស័ព្ទបុរាណចិន`, `សន្ទនាអគ្គនាយក`, `ឃ្លាខ្លីត្រូវមាត់ 100%`).
+     - Preserved backend regex test assertions (`ai_detection_and_dubbing_prompt_fix.test.js:215-218`).
+     - Shortened textarea placeholder to clean, concise text.
+3. **Verification**:
+   - `npm --prefix frontend run lint` (`oxlint`): **0 errors (PASS)**.
+   - `npm --prefix frontend run build` (`vite build`): **PASS (708ms, 0 errors)**.
+   - `node --test backend/tests/ai_detection_and_dubbing_prompt_fix.test.js`: **8/8 PASS (100%)**.
+   - `node --test backend/tests/tts_smart_skip_and_progress.test.js backend/tests/reusable_1by1_dubbing_feature.test.js`: **16/16 PASS (100%)**.
+   - `node --test backend/tests/full_project_master_upgrade.test.js`: **8/8 PASS (100%)**.
 
 ## Active Environment
 - Backend API: `http://localhost:5000` (Listening)
 - Frontend Vite: `http://localhost:5173` (Listening)
 - Active Series: `series_1793898268958`
-- GitHub Repo: `https://github.com/Ny-Panha/khmer-ai-dubbing-studio` (Private)
+- GitHub Repo: `https://github.com/Ny-Panha/khmer-ai-dubbing_studio` (Private)
 
 ## Next Steps
-- Await Nha's review on Tabs 2 & 3 polished UI.
+- Await Nha's feedback on the refined Re-generation form and UI interactions.
 
 ## Active Environment
 - Backend API: `http://localhost:5000` (Listening)

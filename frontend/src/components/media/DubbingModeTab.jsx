@@ -1,39 +1,47 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
-  Sparkles, Languages, BookOpen, Loader2, AlertCircle, ArrowRight, CheckCircle2, Mic, Volume2, Film, RefreshCw, ChevronDown, ChevronUp, Settings2, FileText, Check, Terminal, FileUp, Zap, Layers, MessageSquare
+  Sparkles, Languages, BookOpen, Loader2, AlertCircle, ArrowRight, CheckCircle2, Mic, Volume2, Film, RefreshCw, ChevronDown, ChevronUp, Settings2, FileText, Check, Terminal, FileUp, Zap, Layers, MessageSquare, Crown, Briefcase, UserCheck, Building2, Smile
 } from 'lucide-react';
 import { importSubtitlesApi } from '../../services/api';
 import { DubbingStepButton, useDubbingFeature } from '../../features/dubbing-runner';
 
 const GENRE_OPTIONS = [
-  { id: 'auto', label: '✨ Auto (ស្គាល់ស្វ័យប្រវត្តិ)', hint: 'AI វិភាគ Audio + OCR កំណត់ប្រភេទរឿងស្វ័យប្រវត្តិ' },
-  { id: 'ancient', label: '🏛️ បុរាណចិន / Xianxia', hint: 'រឿងគុណនិយម, Wuxia, សម្អាតកាយ, វិញ្ញាណ, លោកម្ចាស់, ព្រឹទ្ធាចារ្យ' },
-  { id: 'modern', label: '🏙️ សម័យទំនើប / CEO', hint: 'រឿងស្នេហា, CEO, ក្រុមហ៊ុន, លោកប្រធាន, អ្នកស្រី, បង/អូន' },
-  { id: 'action', label: '⚔️ Action / សងសឹក', hint: 'រឿងប្រយុទ្ធ, ប៉ូលិស, ឧក្រិដ្ឋកម្ម, ស៊ើបអង្កេត, ចង្វាក់សន្ទនារហ័ស' },
-  { id: 'comedy', label: '🎭 កំប្លែង / គ្រួសារ', hint: 'រឿងកំប្លែងសើចចុកពោះ, ភាសាកំប្លុកកំប្លែងធម្មជាតិ' },
+  { id: 'auto', label: '✨ Auto (ស្គាល់ស្វ័យប្រវត្តិ)', shortLabel: 'Auto', icon: Sparkles, hint: 'AI វិភាគ Audio + OCR កំណត់ប្រភេទរឿងស្វ័យប្រវត្តិ' },
+  { id: 'ancient', label: '🏛️ បុរាណចិន / Xianxia', shortLabel: 'បុរាណចិន', icon: BookOpen, hint: 'រឿងគុណនិយម, Wuxia, សម្អាតកាយ, វិញ្ញាណ, លោកម្ចាស់, ព្រឹទ្ធាចារ្យ' },
+  { id: 'modern', label: '🏙️ សម័យទំនើប / CEO', shortLabel: 'សម័យទំនើប', icon: Building2, hint: 'រឿងស្នេហា, CEO, ក្រុមហ៊ុន, លោកប្រធាន, អ្នកស្រី, បង/អូន' },
+  { id: 'action', label: '⚔️ Action / សងសឹក', shortLabel: 'Action', icon: Zap, hint: 'រឿងប្រយុទ្ធ, ប៉ូលិស, ឧក្រិដ្ឋកម្ម, ស៊ើបអង្កេត, ចង្វាក់សន្ទនារហ័ស' },
+  { id: 'comedy', label: '🎭 កំប្លែង / គ្រួសារ', shortLabel: 'កំប្លែង', icon: Smile, hint: 'រឿងកំប្លែងសើចចុកពោះ, ភាសាកំប្លុកកំប្លែងធម្មជាតិ' },
 ];
 
 const SMART_PROMPT_CHIPS = [
   {
     id: 'auto_face_gender',
     label: '🎭 ស្គាល់ភេទតាមមុខតួអង្គ (Auto Face Gender)',
+    shortLabel: 'ស្គាល់ភេទតាមមុខ',
+    icon: UserCheck,
     promptText: 'កំណត់ភេទតួអង្គតាមមុខមាត់ក្នុងវីដេអូ និងវេនសន្ទនា (Auto Face Gender & Turn-Taking)',
   },
   {
     id: 'royal_xianxia',
     label: '👑 រាជស័ព្ទបុរាណចិន (Royal/Xianxia)',
+    shortLabel: 'រាជស័ព្ទបុរាណចិន',
+    icon: Crown,
     promptText: 'រឿងបុរាណចិន/គុណនិយម ប្រើរាជស័ព្ទ និងពាក្យគុណនិយម (ទូលបង្គំ, ព្រះអង្គ, ម្ចាស់ក្សត្រី, លោកម្ចាស់)',
     genreId: 'ancient',
   },
   {
     id: 'modern_ceo',
     label: '💼 សន្ទនាអគ្គនាយក (Modern CEO)',
+    shortLabel: 'សន្ទនាអគ្គនាយក',
+    icon: Briefcase,
     promptText: 'រឿងសម័យទំនើប CEO ប្រើភាសាធម្មជាតិសម័យទំនើប (លោកប្រធាន, អ្នកនាង, បង/អូន, ខ្ញុំ/លោក)',
     genreId: 'modern',
   },
   {
     id: 'strict_lipsync',
     label: '⚡ ឃ្លាខ្លីត្រូវមាត់ 100% (Strict Lip-Sync)',
+    shortLabel: 'ឃ្លាខ្លីត្រូវមាត់ 100%',
+    icon: Zap,
     promptText: 'បកប្រែឃ្លាខ្លីណែន ត្រូវចังหวាក់មាត់ 100% (<= 5.5 ព្យាង្គ/វិនាទី ដោយអត្ថន័យពេញ)',
   },
 ];
@@ -885,9 +893,9 @@ export default function DubbingModeTab({
         </div>
       ) : (
         /* ── State B: Creation / Re-generation Form ── */
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: '14px', background: 'linear-gradient(180deg, #121622 0%, #0d1017 100%)', borderRadius: 10, border: '1px solid #1f2638', boxShadow: '0 4px 20px rgba(0, 0, 0, 0.4)', marginBottom: 12 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '12px 14px', background: 'linear-gradient(180deg, #121622 0%, #0d1017 100%)', borderRadius: 8, border: '1px solid rgba(255, 255, 255, 0.08)', boxShadow: '0 4px 20px rgba(0, 0, 0, 0.4)', marginBottom: 12 }}>
           {hasExistingScript && (
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid rgba(255, 255, 255, 0.08)', paddingBottom: 8, marginBottom: 4 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid rgba(255, 255, 255, 0.06)', paddingBottom: 8, marginBottom: 2 }}>
               <span style={{ fontSize: '11.5px', color: '#f8fafc', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}>
                 <Settings2 size={13} color="#38bdf8" />
                 <span>បង្កើត Script ឡើងវិញ (Re-generate Script)</span>
@@ -895,33 +903,25 @@ export default function DubbingModeTab({
               <button
                 type="button"
                 onClick={() => setShowRegenerateForm(false)}
-                style={{ background: 'none', border: 'none', color: '#94a3b8', fontSize: '11px', cursor: 'pointer', fontWeight: 600 }}
+                style={{ background: 'none', border: 'none', color: '#94a3b8', fontSize: '11px', cursor: 'pointer', fontWeight: 600, padding: '2px 6px', borderRadius: 4, transition: 'color 0.15s' }}
+                onMouseEnter={(e) => e.target.style.color = '#f1f5f9'}
+                onMouseLeave={(e) => e.target.style.color = '#94a3b8'}
               >
-                ✕ បិទ / ត្រឡប់ក្រោយ (Close)
+                ✕ បិទ (Close)
               </button>
             </div>
           )}
 
           {/* Generation Mode Toggle (Standard vs Fast OCR) */}
-          <div style={{ background: 'rgba(0, 0, 0, 0.25)', padding: '10px 12px', borderRadius: 8, border: '1px solid rgba(255, 255, 255, 0.08)' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-              <label style={{ fontSize: '11px', color: '#cbd5e1', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                ល្បឿន & របៀប Pipeline (Generation Mode)
+          <div style={{ background: 'rgba(0, 0, 0, 0.22)', padding: '9px 11px', borderRadius: 7, border: '1px solid rgba(255, 255, 255, 0.06)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 7 }}>
+              <label style={{ fontSize: '10.5px', color: '#94a3b8', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.4px', display: 'flex', alignItems: 'center', gap: 6 }}>
+                <Zap size={12} color="#38bdf8" />
+                <span>ល្បឿន & របៀប Pipeline (Generation Mode)</span>
               </label>
-              <span style={{
-                fontSize: '10px',
-                color: generationMode === 'fast_ocr' ? '#eab308' : '#c084fc',
-                fontWeight: 700,
-                background: generationMode === 'fast_ocr' ? 'rgba(234, 179, 8, 0.12)' : 'rgba(192, 132, 252, 0.12)',
-                padding: '2px 7px',
-                borderRadius: 4,
-                border: `1px solid ${generationMode === 'fast_ocr' ? 'rgba(234, 179, 8, 0.3)' : 'rgba(192, 132, 252, 0.3)'}`
-              }}>
-                {generationMode === 'fast_ocr' ? '⚡ Fast OCR កំពុងជ្រើស' : '🎯 Standard កំពុងជ្រើស'}
-              </span>
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 8 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 7 }}>
               <button
                 type="button"
                 onClick={() => setGenerationMode('standard')}
@@ -929,18 +929,20 @@ export default function DubbingModeTab({
                   padding: '8px 10px',
                   borderRadius: 6,
                   border: generationMode === 'standard' ? '1.5px solid #a855f7' : '1px solid rgba(255, 255, 255, 0.08)',
-                  background: generationMode === 'standard' ? 'rgba(147, 51, 234, 0.2)' : 'rgba(15, 23, 42, 0.6)',
-                  color: generationMode === 'standard' ? '#f1f5f9' : '#94a3b8',
+                  background: generationMode === 'standard' ? 'rgba(147, 51, 234, 0.18)' : 'rgba(15, 23, 42, 0.6)',
                   cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  transition: 'all 0.15s ease',
                   textAlign: 'left',
                 }}
               >
-                <div style={{ fontSize: '11.5px', fontWeight: 700, color: generationMode === 'standard' ? '#c084fc' : '#f1f5f9' }}>
-                  🎯 Standard Mode
-                </div>
-                <div style={{ fontSize: '10px', color: '#94a3b8', marginTop: 2 }}>
-                  Full 10-Stage (OCR + ASR Diarization + Reconcile)
-                </div>
+                <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '11.5px', fontWeight: 700, color: generationMode === 'standard' ? '#c084fc' : '#e2e8f0' }}>
+                  <Layers size={13} />
+                  <span>Standard Mode</span>
+                </span>
+                {generationMode === 'standard' && <Check size={13} color="#c084fc" />}
               </button>
 
               <button
@@ -948,38 +950,38 @@ export default function DubbingModeTab({
                 data-testid="fast-ocr-toggle"
                 onClick={() => setGenerationMode('fast_ocr')}
                 style={{
-                  padding: '8px 10px',
+                  padding: '7px 10px',
                   borderRadius: 6,
                   border: generationMode === 'fast_ocr' ? '1.5px solid #eab308' : '1px solid rgba(255, 255, 255, 0.08)',
                   background: generationMode === 'fast_ocr' ? 'rgba(234, 179, 8, 0.15)' : 'rgba(15, 23, 42, 0.6)',
-                  color: generationMode === 'fast_ocr' ? '#f1f5f9' : '#94a3b8',
                   cursor: 'pointer',
-                  textAlign: 'left',
                   display: 'flex',
                   flexDirection: 'column',
                   gap: 3,
+                  transition: 'all 0.15s ease',
+                  textAlign: 'left',
                 }}
               >
-                <div style={{ fontSize: '11.5px', fontWeight: 700, color: generationMode === 'fast_ocr' ? '#eab308' : '#f1f5f9' }}>
-                  ⚡ Fast OCR Mode
-                </div>
-                <div style={{ fontSize: '10px', color: '#94a3b8' }}>
-                  Direct Subtitles (OCR ➡️ Translate, 1 Cue = 1 Segment)
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+                  <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: '11.5px', fontWeight: 700, color: generationMode === 'fast_ocr' ? '#eab308' : '#e2e8f0' }}>
+                    <Zap size={13} />
+                    <span>Fast OCR Mode</span>
+                  </span>
+                  {generationMode === 'fast_ocr' && <Check size={13} color="#eab308" />}
                 </div>
                 <div
                   data-testid="fast-ocr-summary-pill"
                   style={{
-                    marginTop: 2,
                     display: 'inline-flex',
                     alignItems: 'center',
                     alignSelf: 'flex-start',
-                    padding: '1.5px 6px',
-                    borderRadius: 4,
-                    fontSize: '9.5px',
-                    fontWeight: 700,
-                    background: generationMode === 'fast_ocr' ? 'rgba(234, 179, 8, 0.22)' : 'rgba(255, 255, 255, 0.06)',
-                    color: generationMode === 'fast_ocr' ? '#fde047' : '#cbd5e1',
-                    border: generationMode === 'fast_ocr' ? '1px solid rgba(234, 179, 8, 0.45)' : '1px solid rgba(255, 255, 255, 0.1)',
+                    padding: '1.5px 5px',
+                    borderRadius: 3,
+                    fontSize: '9px',
+                    fontWeight: 600,
+                    background: generationMode === 'fast_ocr' ? 'rgba(234, 179, 8, 0.2)' : 'rgba(255, 255, 255, 0.05)',
+                    color: generationMode === 'fast_ocr' ? '#fde047' : '#94a3b8',
+                    border: generationMode === 'fast_ocr' ? '1px solid rgba(234, 179, 8, 0.35)' : '1px solid rgba(255, 255, 255, 0.08)',
                   }}
                 >
                   OCR + Visual Speaker Gender + Direct Translate
@@ -988,7 +990,7 @@ export default function DubbingModeTab({
             </div>
 
             {/* Import .srt / .json Button */}
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingTop: 8, borderTop: '1px solid rgba(255, 255, 255, 0.06)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingTop: 6, borderTop: '1px solid rgba(255, 255, 255, 0.06)' }}>
               <span style={{ fontSize: '10.5px', color: '#94a3b8' }}>មាន Subtitle ស្រាប់? (Import Subtitles):</span>
               <div>
                 <input
@@ -1007,9 +1009,9 @@ export default function DubbingModeTab({
                   disabled={isImportingSubtitles}
                   onClick={() => fileInputRef.current?.click()}
                   style={{
-                    padding: '4px 10px',
+                    padding: '3px 8px',
                     borderRadius: 5,
-                    fontSize: '11px',
+                    fontSize: '10.5px',
                     fontWeight: 600,
                     background: 'rgba(56, 189, 248, 0.12)',
                     color: '#38bdf8',
@@ -1020,7 +1022,7 @@ export default function DubbingModeTab({
                     gap: 5,
                   }}
                 >
-                  {isImportingSubtitles ? <Loader2 size={12} className="spin" /> : <FileText size={12} />}
+                  {isImportingSubtitles ? <Loader2 size={11} className="spin" /> : <FileText size={11} />}
                   <span>Import .srt / .json</span>
                 </button>
               </div>
@@ -1028,13 +1030,13 @@ export default function DubbingModeTab({
 
             {/* Import Feedback */}
             {importSuccess && (
-              <div style={{ marginTop: 8, padding: '6px 10px', borderRadius: 4, background: 'rgba(16, 185, 129, 0.15)', border: '1px solid rgba(16, 185, 129, 0.3)', color: '#34d399', fontSize: '10.5px' }}>
+              <div style={{ marginTop: 6, padding: '5px 8px', borderRadius: 4, background: 'rgba(16, 185, 129, 0.15)', border: '1px solid rgba(16, 185, 129, 0.3)', color: '#34d399', fontSize: '10.5px' }}>
                 ✓ {importSuccess}
               </div>
             )}
             {importErrors.length > 0 && (
-              <div style={{ marginTop: 8, padding: '8px 10px', borderRadius: 4, background: 'rgba(239, 68, 68, 0.12)', border: '1px solid rgba(239, 68, 68, 0.3)', color: '#f87171', fontSize: '10.5px' }}>
-                <div style={{ fontWeight: 700, marginBottom: 4 }}>⚠️ បញ្ហាពេល Import Subtitle (Validation Errors):</div>
+              <div style={{ marginTop: 6, padding: '6px 8px', borderRadius: 4, background: 'rgba(239, 68, 68, 0.12)', border: '1px solid rgba(239, 68, 68, 0.3)', color: '#f87171', fontSize: '10.5px' }}>
+                <div style={{ fontWeight: 700, marginBottom: 3 }}>⚠️ បញ្ហាពេល Import Subtitle (Validation Errors):</div>
                 <ul style={{ margin: 0, paddingLeft: 16 }}>
                   {importErrors.map((err, i) => (
                     <li key={i}>{err}</li>
@@ -1046,63 +1048,44 @@ export default function DubbingModeTab({
 
         {/* 1. Mode A / Mode B Selection */}
         <div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-            <label style={{ fontSize: '11px', color: '#cbd5e1', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span>ជ្រើសរើសទម្រង់បញ្ចូលសំឡេង AI (Dubbing Mode)</span>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+            <label style={{ fontSize: '10.5px', color: '#94a3b8', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.4px', display: 'flex', alignItems: 'center', gap: 6 }}>
+              <MessageSquare size={12} color="#38bdf8" />
+              <span>ទម្រង់បញ្ចូលសំឡេង AI (Dubbing Mode)</span>
             </label>
-            <span style={{ 
-              fontSize: '10.5px', 
-              color: dubbingMode === 'dialogue' ? '#38bdf8' : '#c084fc', 
-              fontWeight: 700,
-              background: dubbingMode === 'dialogue' ? 'rgba(56, 189, 248, 0.12)' : 'rgba(192, 132, 252, 0.12)',
-              padding: '2px 7px',
-              borderRadius: 4,
-              border: `1px solid ${dubbingMode === 'dialogue' ? 'rgba(56, 189, 248, 0.3)' : 'rgba(192, 132, 252, 0.3)'}`
-            }}>
-              {dubbingMode === 'dialogue' ? 'Mode A កំពុងជ្រើស' : 'Mode B កំពុងជ្រើស'}
-            </span>
           </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-            {/* Mode A Card */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+            {/* Mode A Button */}
             <button
               type="button"
               onClick={() => setDubbingMode('dialogue')}
               style={{
-                padding: '13px 12px',
-                borderRadius: 10,
+                padding: '9px 12px',
+                borderRadius: 6,
                 border: dubbingMode === 'dialogue' ? '1.5px solid #38bdf8' : '1px solid rgba(255, 255, 255, 0.08)',
                 background: dubbingMode === 'dialogue' 
-                  ? 'linear-gradient(145deg, rgba(2, 132, 199, 0.28) 0%, rgba(14, 165, 233, 0.12) 100%)' 
-                  : 'rgba(15, 19, 28, 0.75)',
-                boxShadow: dubbingMode === 'dialogue' ? '0 4px 18px rgba(56, 189, 248, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.15)' : 'none',
+                  ? 'rgba(56, 189, 248, 0.14)' 
+                  : 'rgba(15, 23, 42, 0.6)',
                 textAlign: 'left',
                 cursor: 'pointer',
-                transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
-                position: 'relative',
+                transition: 'all 0.15s ease',
                 display: 'flex',
-                flexDirection: 'column',
-                gap: 6,
+                alignItems: 'center',
+                justifyContent: 'space-between',
               }}
             >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontWeight: 800, fontSize: '12px', color: dubbingMode === 'dialogue' ? '#38bdf8' : '#f1f5f9', letterSpacing: '0.01em', display: 'flex', alignItems: 'center', gap: 5 }}>
-                  <span style={{ fontSize: '13px' }}>🗣️</span>
-                  <span>Mode A: សន្ទនាតួអង្គ</span>
-                </span>
-                {dubbingMode === 'dialogue' ? (
-                  <span style={{ fontSize: '9px', background: '#0284c7', color: '#fff', padding: '2px 6px', borderRadius: 4, fontWeight: 800, letterSpacing: '0.04em', boxShadow: '0 0 10px rgba(2, 132, 199, 0.7)' }}>
-                    ACTIVE
-                  </span>
-                ) : (
-                  <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'rgba(255, 255, 255, 0.2)' }} />
-                )}
-              </div>
-              <div style={{ fontSize: '10.5px', color: dubbingMode === 'dialogue' ? '#cbd5e1' : '#94a3b8', lineHeight: 1.5, fontFamily: "'Kantumruy Pro', sans-serif" }}>
-                បកប្រែសន្ទនា ១-ទល់-១ ត្រូវតាមមាត់ និងសំឡេងតួអង្គ
-              </div>
+              <span style={{ fontWeight: 700, fontSize: '12px', color: dubbingMode === 'dialogue' ? '#38bdf8' : '#e2e8f0', display: 'flex', alignItems: 'center', gap: 7 }}>
+                <MessageSquare size={14} />
+                <span>Mode A: សន្ទនាតួអង្គ</span>
+              </span>
+              {dubbingMode === 'dialogue' ? (
+                <Check size={13} color="#38bdf8" />
+              ) : (
+                <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'rgba(255, 255, 255, 0.2)' }} />
+              )}
             </button>
 
-            {/* Mode B Card */}
+            {/* Mode B Button */}
             <button
               type="button"
               onClick={() => {
@@ -1110,148 +1093,135 @@ export default function DubbingModeTab({
                 if (recapStyle !== 'story_recap' && recapStyle !== 'fast_recap') setRecapStyle('story_recap');
               }}
               style={{
-                padding: '13px 12px',
-                borderRadius: 10,
+                padding: '9px 12px',
+                borderRadius: 6,
                 border: dubbingMode === 'recap' ? '1.5px solid #c084fc' : '1px solid rgba(255, 255, 255, 0.08)',
                 background: dubbingMode === 'recap' 
-                  ? 'linear-gradient(145deg, rgba(147, 51, 234, 0.28) 0%, rgba(168, 85, 247, 0.12) 100%)' 
-                  : 'rgba(15, 19, 28, 0.75)',
-                boxShadow: dubbingMode === 'recap' ? '0 4px 18px rgba(168, 85, 247, 0.25), inset 0 1px 0 rgba(255, 255, 255, 0.15)' : 'none',
+                  ? 'rgba(192, 132, 252, 0.14)' 
+                  : 'rgba(15, 23, 42, 0.6)',
                 textAlign: 'left',
                 cursor: 'pointer',
-                transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
-                position: 'relative',
+                transition: 'all 0.15s ease',
                 display: 'flex',
-                flexDirection: 'column',
-                gap: 6,
+                alignItems: 'center',
+                justifyContent: 'space-between',
               }}
             >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontWeight: 800, fontSize: '12px', color: dubbingMode === 'recap' ? '#c084fc' : '#f1f5f9', letterSpacing: '0.01em', display: 'flex', alignItems: 'center', gap: 5 }}>
-                  <span style={{ fontSize: '13px' }}>🎬</span>
-                  <span>Mode B: សម្រាយរឿង</span>
-                </span>
-                {dubbingMode === 'recap' ? (
-                  <span style={{ fontSize: '9px', background: '#9333ea', color: '#fff', padding: '2px 6px', borderRadius: 4, fontWeight: 800, letterSpacing: '0.04em', boxShadow: '0 0 10px rgba(147, 51, 234, 0.7)' }}>
-                    ACTIVE
-                  </span>
-                ) : (
-                  <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'rgba(255, 255, 255, 0.2)' }} />
-                )}
-              </div>
-              <div style={{ fontSize: '10.5px', color: dubbingMode === 'recap' ? '#cbd5e1' : '#94a3b8', lineHeight: 1.5, fontFamily: "'Kantumruy Pro', sans-serif" }}>
-                និទានដំណើររឿងបែប TikTok/Reels រស់រវើក
-              </div>
+              <span style={{ fontWeight: 700, fontSize: '12px', color: dubbingMode === 'recap' ? '#c084fc' : '#e2e8f0', display: 'flex', alignItems: 'center', gap: 7 }}>
+                <Film size={14} />
+                <span>Mode B: សម្រាយរឿង</span>
+              </span>
+              {dubbingMode === 'recap' ? (
+                <Check size={13} color="#c084fc" />
+              ) : (
+                <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'rgba(255, 255, 255, 0.2)' }} />
+              )}
             </button>
           </div>
         </div>
 
         {/* 2. Recap Style (Mode B only) */}
         {dubbingMode === 'recap' && (
-          <div style={{ background: '#0b0f19', padding: '10px', borderRadius: 8, border: '1px solid #1e293b', display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <div style={{ background: '#0b0f19', padding: '9px 11px', borderRadius: 6, border: '1px solid #1e293b', display: 'flex', flexDirection: 'column', gap: 7 }}>
             <label style={{ fontSize: '10px', color: '#94a3b8', fontWeight: 600, display: 'block', textTransform: 'uppercase', letterSpacing: '0.4px' }}>
               ជ្រើសរើសទម្រង់សម្រាយ (Recap Style)
             </label>
 
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
-              <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, cursor: 'pointer' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 7 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', padding: '6px 8px', borderRadius: 5, background: recapStyle === 'story_recap' ? 'rgba(56, 189, 248, 0.12)' : 'rgba(255, 255, 255, 0.03)', border: recapStyle === 'story_recap' ? '1px solid rgba(56, 189, 248, 0.4)' : '1px solid rgba(255, 255, 255, 0.06)' }}>
                 <input
                   type="radio"
                   name="recapStyle"
                   value="story_recap"
                   checked={recapStyle === 'story_recap'}
                   onChange={(e) => setRecapStyle(e.target.value)}
-                  style={{ marginTop: 2, accentColor: '#3b82f6', flexShrink: 0 }}
+                  style={{ accentColor: '#38bdf8', margin: 0 }}
                 />
-                <div>
-                  <div style={{ color: '#f8fafc', fontSize: '11px', fontWeight: 700 }}>សម្រាយសាច់រឿងកុន (Story Recap)</div>
-                  <div style={{ fontSize: '10px', color: '#64748b', marginTop: 2, lineHeight: 1.3 }}>និទានដំណើររឿងរស់រវើក — ពេញ 100+ ឃ្លា</div>
-                </div>
+                <span style={{ color: '#f8fafc', fontSize: '11px', fontWeight: 600 }}>សម្រាយសាច់រឿង</span>
               </label>
 
-              <label style={{ display: 'flex', alignItems: 'flex-start', gap: 8, cursor: 'pointer' }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', padding: '6px 8px', borderRadius: 5, background: recapStyle === 'fast_recap' ? 'rgba(56, 189, 248, 0.12)' : 'rgba(255, 255, 255, 0.03)', border: recapStyle === 'fast_recap' ? '1px solid rgba(56, 189, 248, 0.4)' : '1px solid rgba(255, 255, 255, 0.06)' }}>
                 <input
                   type="radio"
                   name="recapStyle"
                   value="fast_recap"
                   checked={recapStyle === 'fast_recap'}
                   onChange={(e) => setRecapStyle(e.target.value)}
-                  style={{ marginTop: 2, accentColor: '#3b82f6', flexShrink: 0 }}
+                  style={{ accentColor: '#38bdf8', margin: 0 }}
                 />
-                <div>
-                  <div style={{ color: '#f8fafc', fontSize: '11px', fontWeight: 700 }}>សង្ខេបដំណើររឿងរហ័ស (Fast Recap)</div>
-                  <div style={{ fontSize: '10px', color: '#64748b', marginTop: 2, lineHeight: 1.3 }}>ព្រឹត្តិការណ៍សំខាន់ — ខ្លី ទាន់ ក្ដៅ</div>
-                </div>
+                <span style={{ color: '#f8fafc', fontSize: '11px', fontWeight: 600 }}>សង្ខេបដំណើររឿងរហ័ស</span>
               </label>
             </div>
 
             {/* Narrator Voice Picker */}
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingTop: 8, borderTop: '1px solid #1e293b' }}>
-              <span style={{ fontSize: '11px', color: '#cbd5e1' }}>សំឡេងអ្នកនិទានរឿង:</span>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingTop: 6, borderTop: '1px solid rgba(255, 255, 255, 0.06)' }}>
+              <span style={{ fontSize: '10.5px', color: '#cbd5e1' }}>សំឡេងអ្នកនិទានរឿង:</span>
               <div style={{ display: 'flex', gap: 5 }}>
                 <button
                   type="button"
                   onClick={() => setNarratorGender('male')}
                   style={{
-                    padding: '3px 9px', fontSize: '11px', borderRadius: 5,
+                    padding: '3px 8px', fontSize: '10.5px', borderRadius: 5,
                     border: 'none',
                     background: narratorGender === 'male' ? '#2563eb' : '#1e293b',
                     color: '#fff', cursor: 'pointer',
                     fontWeight: narratorGender === 'male' ? 700 : 400,
+                    display: 'flex', alignItems: 'center', gap: 4,
                     transition: 'all 0.15s',
                   }}
                 >
-                  👨 ពិសិដ្ឋ
+                  <Mic size={11} /> ពិសិដ្ឋ
                 </button>
                 <button
                   type="button"
                   onClick={() => setNarratorGender('female')}
                   style={{
-                    padding: '3px 9px', fontSize: '11px', borderRadius: 5,
+                    padding: '3px 8px', fontSize: '10.5px', borderRadius: 5,
                     border: 'none',
                     background: narratorGender === 'female' ? '#db2777' : '#1e293b',
                     color: '#fff', cursor: 'pointer',
                     fontWeight: narratorGender === 'female' ? 700 : 400,
+                    display: 'flex', alignItems: 'center', gap: 4,
                     transition: 'all 0.15s',
                   }}
                 >
-                  👩 ស្រីមុំ
+                  <Mic size={11} /> ស្រីមុំ
                 </button>
               </div>
             </div>
           </div>
         )}
 
-
         {/* Drama Genre Selector (ជ្រើសរើសប្រភេទរឿង / Auto Detect Genre) */}
         {dubbingMode === 'dialogue' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <label style={{ fontSize: '10.5px', color: '#cbd5e1', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.4px', display: 'flex', alignItems: 'center', gap: 6 }}>
+              <label style={{ fontSize: '10.5px', color: '#94a3b8', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.4px', display: 'flex', alignItems: 'center', gap: 6 }}>
+                <BookOpen size={12} color="#38bdf8" />
                 <span>ប្រភេទរឿង (Drama Genre)</span>
-                {scriptData?.detectedGenre && (
-                  <span style={{
-                    fontSize: '9px',
-                    background: 'rgba(56, 189, 248, 0.15)',
-                    color: '#38bdf8',
-                    border: '1px solid rgba(56, 189, 248, 0.3)',
-                    padding: '1px 6px',
-                    borderRadius: 4,
-                    fontWeight: 600,
-                    textTransform: 'none',
-                  }}>
-                    ✨ AI ស្គាល់: {scriptData.detectedGenre}
-                  </span>
-                )}
               </label>
-              <span style={{ fontSize: '9.5px', color: '#94a3b8' }}>
-                {selectedGenre === 'auto' ? 'AI នឹងវិភាគស្វ័យប្រវត្តិ' : 'បានជ្រើសរើសដោយដៃ'}
-              </span>
+              {scriptData?.detectedGenre && (
+                <span style={{
+                  fontSize: '9.5px',
+                  background: 'rgba(56, 189, 248, 0.12)',
+                  color: '#38bdf8',
+                  border: '1px solid rgba(56, 189, 248, 0.3)',
+                  padding: '1.5px 6px',
+                  borderRadius: 4,
+                  fontWeight: 600,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 4,
+                }}>
+                  <Sparkles size={10} /> AI: {scriptData.detectedGenre}
+                </span>
+              )}
             </div>
 
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
               {GENRE_OPTIONS.map((g) => {
                 const isSelected = selectedGenre === g.id;
+                const GenreIcon = g.icon || Sparkles;
                 return (
                   <button
                     key={g.id}
@@ -1271,12 +1241,13 @@ export default function DubbingModeTab({
                       fontWeight: isSelected ? 700 : 500,
                       display: 'flex',
                       alignItems: 'center',
-                      gap: 4,
+                      gap: 5,
                       transition: 'all 0.15s ease',
                       boxShadow: isSelected ? '0 0 10px rgba(56, 189, 248, 0.25)' : 'none',
                     }}
                   >
-                    <span>{g.label}</span>
+                    <GenreIcon size={12} />
+                    <span>{g.shortLabel || g.label}</span>
                   </button>
                 );
               })}
@@ -1287,10 +1258,10 @@ export default function DubbingModeTab({
         {/* 3. Optional Direction + 1-Click Smart Prompt Chips */}
         <div>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-            <label style={{ fontSize: '10.5px', color: '#cbd5e1', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.4px', display: 'flex', alignItems: 'center', gap: 5 }}>
+            <label style={{ fontSize: '10.5px', color: '#94a3b8', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.4px', display: 'flex', alignItems: 'center', gap: 5 }}>
               <span>{dubbingMode === 'dialogue' ? 'ឈ្មោះតួអង្គ / Direction' : 'ទិសដៅសម្រាយបន្ថែម (Direction)'}</span>
-              <span style={{ fontSize: '9.5px', color: '#94a3b8', background: 'rgba(255, 255, 255, 0.08)', padding: '1px 5px', borderRadius: 3, fontWeight: 500, textTransform: 'none' }}>
-                ស្រេចចិត្ត (Optional)
+              <span style={{ fontSize: '9px', color: '#64748b', background: 'rgba(255, 255, 255, 0.06)', padding: '1px 5px', borderRadius: 3, fontWeight: 500, textTransform: 'none' }}>
+                ស្រេចចិត្ត
               </span>
             </label>
             {promptInput && (
@@ -1317,12 +1288,14 @@ export default function DubbingModeTab({
           >
             {SMART_PROMPT_CHIPS.map((chip) => {
               const currentText = String(promptInput || '');
-              const isChipActive = currentText.includes(chip.promptText) || currentText.includes(chip.label);
+              const isChipActive = currentText.includes(chip.promptText) || currentText.includes(chip.label) || (chip.shortLabel && currentText.includes(chip.shortLabel));
+              const ChipIcon = chip.icon || Sparkles;
               return (
                 <button
                   key={chip.id}
                   type="button"
                   data-testid={`smart-prompt-chip-${chip.id}`}
+                  title={chip.promptText}
                   onClick={() => {
                     if (chip.genreId && dubbingMode === 'dialogue') {
                       setSelectedGenre(chip.genreId);
@@ -1331,6 +1304,7 @@ export default function DubbingModeTab({
                       const nextText = currentText
                         .replace(chip.promptText, '')
                         .replace(chip.label, '')
+                        .replace(chip.shortLabel || '', '')
                         .replace(/\s*•\s*•\s*/g, ' • ')
                         .replace(/^\s*•\s*|\s*•\s*$/g, '')
                         .trim();
@@ -1343,7 +1317,7 @@ export default function DubbingModeTab({
                   style={{
                     padding: '3.5px 8px',
                     borderRadius: 6,
-                    fontSize: '10px',
+                    fontSize: '10.5px',
                     fontWeight: isChipActive ? 700 : 500,
                     fontFamily: "'Kantumruy Pro', 'Battambang', system-ui, sans-serif",
                     background: isChipActive
@@ -1354,10 +1328,14 @@ export default function DubbingModeTab({
                       ? '1px solid rgba(56, 189, 248, 0.55)'
                       : '1px solid rgba(255, 255, 255, 0.09)',
                     cursor: 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 5,
                     transition: 'all 0.15s ease',
                   }}
                 >
-                  {chip.label}
+                  <ChipIcon size={12} color={isChipActive ? '#38bdf8' : '#94a3b8'} />
+                  <span>{chip.shortLabel || chip.label}</span>
                 </button>
               );
             })}
@@ -1368,8 +1346,8 @@ export default function DubbingModeTab({
             value={promptInput}
             onChange={(e) => setPromptInput(e.target.value)}
             placeholder={dubbingMode === 'dialogue'
-              ? 'ឧ. រឿងភាគបុរាណចិន, តួប្រុសឈ្មោះ លីនហ្វេង... (អាចចុច Chip ខាងលើ ឬទុកទំនេរបាន)'
-              : 'ឧ. សម្រាយបែបរន្ធត់ ជក់ចិត្ត ផ្តោតលើប្រយុទ្ធ... (អាចចុច Chip ខាងលើ ឬទុកទំនេរបាន)'}
+              ? 'ឧ. រឿងភាគបុរាណចិន, តួប្រុសឈ្មោះ លីនហ្វេង...'
+              : 'ឧ. សម្រាយបែបរន្ធត់ ជក់ចិត្ត ផ្តោតលើប្រយុទ្ធ...'}
             style={{
               width: '100%', padding: '9px 12px', borderRadius: 8,
               background: '#0a0d15', border: '1px solid #1e2536',

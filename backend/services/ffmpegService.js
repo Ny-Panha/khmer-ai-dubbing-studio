@@ -965,8 +965,12 @@ function generateKhmerAssSubtitleFile({
         textY = ribbonY + Math.round(ribbonH / 2);
         watermarkY = ribbonY + ribbonH + 24;
       } else {
-        // Sits exactly inside the bottom of the video frame - NEVER in black letterbox void!
-        ribbonY = vBottom - ribbonH;
+        // Sits cleanly inside the video frame. For 9:16 crop, sits directly above the 1592 blur subtitle band!
+        if (verticalStyle === "crop") {
+          ribbonY = Math.round(1592 - ribbonH - 8);
+        } else {
+          ribbonY = vBottom - ribbonH;
+        }
         textY = ribbonY + Math.round(ribbonH / 2);
         watermarkY = ribbonY - 12;
       }
