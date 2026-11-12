@@ -538,34 +538,62 @@ export default function ClipInspectorPanel({
         border: '1px solid rgba(255, 255, 255, 0.08)'
       }}>
         {/* 1. Chinese Original Header */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6, gap: 8, flexWrap: 'wrap' }}>
           <label style={{ fontSize: '0.72rem', color: '#38bdf8', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 5 }}>
             <span style={{ background: 'rgba(56, 189, 248, 0.15)', border: '1px solid rgba(56, 189, 248, 0.3)', padding: '1px 5px', borderRadius: 3, fontSize: '0.62rem', fontWeight: 800 }}>CN</span>
             <span>អត្ថបទដើមចិន (Original):</span>
           </label>
           {(localChineseText || originalChinese) && (
-            <button
-              type="button"
-              onClick={handleCopyChinese}
-              style={{
-                background: 'rgba(255, 255, 255, 0.05)',
-                border: '1px solid rgba(255, 255, 255, 0.1)',
-                borderRadius: 4,
-                color: copiedChinese ? '#4ade80' : 'var(--text-dim)',
-                cursor: 'pointer',
-                fontSize: '0.66rem',
-                fontWeight: 600,
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 3,
-                padding: '2px 6px',
-                transition: 'all 0.15s ease',
-              }}
-              title="Copy Chinese dialogue text"
-            >
-              {copiedChinese ? <Check size={11} /> : <Copy size={11} />}
-              <span>{copiedChinese ? 'Copied' : 'Copy'}</span>
-            </button>
+            <div style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+              <button
+                type="button"
+                data-testid="btn-ai-retranslate"
+                onClick={handleAiRetranslate}
+                disabled={isRetranslating}
+                style={{
+                  background: 'linear-gradient(135deg, rgba(168, 85, 247, 0.28), rgba(139, 92, 246, 0.18))',
+                  border: '1px solid rgba(168, 85, 247, 0.55)',
+                  borderRadius: 4,
+                  color: '#d8b4fe',
+                  cursor: isRetranslating ? 'wait' : 'pointer',
+                  fontSize: '0.66rem',
+                  fontWeight: 700,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 3,
+                  padding: '2px 7px',
+                  whiteSpace: 'nowrap',
+                  transition: 'all 0.15s ease',
+                }}
+                title="AI Re-Translate: ឱ្យ AI បកប្រែជាភាសាកុនបុរាណ ៣ ជម្រើសភ្លាមៗ"
+              >
+                {isRetranslating ? <Loader2 size={11} className="spin animate-spin" /> : <Sparkles size={11} color="#d8b4fe" />}
+                <span>{isRetranslating ? 'កំពុងគិត...' : 'AI កែប្រែ'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleCopyChinese}
+                style={{
+                  background: 'rgba(255, 255, 255, 0.05)',
+                  border: '1px solid rgba(255, 255, 255, 0.1)',
+                  borderRadius: 4,
+                  color: copiedChinese ? '#4ade80' : 'var(--text-dim)',
+                  cursor: 'pointer',
+                  fontSize: '0.66rem',
+                  fontWeight: 600,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 3,
+                  padding: '2px 6px',
+                  transition: 'all 0.15s ease',
+                }}
+                title="Copy Chinese dialogue text"
+              >
+                {copiedChinese ? <Check size={11} /> : <Copy size={11} />}
+                <span>{copiedChinese ? 'Copied' : 'Copy'}</span>
+              </button>
+            </div>
           )}
         </div>
         <textarea
@@ -591,80 +619,49 @@ export default function ClipInspectorPanel({
           }}
         />
 
-        {/* AI Re-Translation Action Button (Clean, 1-Line, Never Squished) */}
-        {(localChineseText || originalChinese) && (
-          <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-              <button
-                type="button"
-                data-testid="btn-ai-retranslate"
-                onClick={handleAiRetranslate}
-                disabled={isRetranslating}
-                style={{
-                  background: 'linear-gradient(135deg, rgba(168, 85, 247, 0.28), rgba(139, 92, 246, 0.18))',
-                  border: '1px solid rgba(168, 85, 247, 0.55)',
-                  borderRadius: 4,
-                  color: '#d8b4fe',
-                  cursor: isRetranslating ? 'wait' : 'pointer',
-                  fontSize: '0.68rem',
-                  fontWeight: 700,
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 4,
-                  padding: '3px 8px',
-                  whiteSpace: 'nowrap',
-                  transition: 'all 0.15s ease',
-                }}
-                title="AI Re-Translate: ឱ្យ AI បកប្រែជាភាសាកុនបុរាណ ៣ ជម្រើសភ្លាមៗ"
-              >
-                {isRetranslating ? <Loader2 size={11} className="spin animate-spin" /> : <Sparkles size={11} color="#d8b4fe" />}
-                <span>{isRetranslating ? 'កំពុងគិត...' : 'AI កែប្រែ'}</span>
-              </button>
-            </div>
-
-            {retranslateError && (
-              <div
-                data-testid="retranslate-error-banner"
-                style={{
-                  padding: '6px 8px',
-                  background: 'rgba(239, 68, 68, 0.14)',
-                  border: '1px solid rgba(239, 68, 68, 0.45)',
-                  borderRadius: 5,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  gap: 8,
-                }}
-              >
-                <span style={{ fontSize: '0.7rem', color: '#fca5a5', display: 'flex', alignItems: 'center', gap: 5, lineHeight: 1.4 }}>
-                  <AlertCircle size={12} color="#ef4444" style={{ flexShrink: 0 }} />
-                  <span>{retranslateError}</span>
-                </span>
-                <button
-                  type="button"
-                  onClick={handleAiRetranslate}
-                  disabled={isRetranslating}
-                  style={{
-                    padding: '2px 7px',
-                    fontSize: '0.66rem',
-                    background: 'rgba(239, 68, 68, 0.85)',
-                    color: '#ffffff',
-                    border: 'none',
-                    borderRadius: 4,
-                    cursor: isRetranslating ? 'wait' : 'pointer',
-                    fontWeight: 700,
-                    whiteSpace: 'nowrap',
-                    flexShrink: 0,
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 3,
-                  }}
-                >
-                  <RefreshCw size={10} />
-                  <span>សាកម្ដងទៀត</span>
-                </button>
-              </div>
-            )}
+        {/* Retranslate Error Banner if failed */}
+        {retranslateError && (
+          <div
+            data-testid="retranslate-error-banner"
+            style={{
+              marginTop: 6,
+              padding: '6px 8px',
+              background: 'rgba(239, 68, 68, 0.14)',
+              border: '1px solid rgba(239, 68, 68, 0.45)',
+              borderRadius: 5,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 8,
+            }}
+          >
+            <span style={{ fontSize: '0.7rem', color: '#fca5a5', display: 'flex', alignItems: 'center', gap: 5, lineHeight: 1.4 }}>
+              <AlertCircle size={12} color="#ef4444" style={{ flexShrink: 0 }} />
+              <span>{retranslateError}</span>
+            </span>
+            <button
+              type="button"
+              onClick={handleAiRetranslate}
+              disabled={isRetranslating}
+              style={{
+                padding: '2px 7px',
+                fontSize: '0.66rem',
+                background: 'rgba(239, 68, 68, 0.85)',
+                color: '#ffffff',
+                border: 'none',
+                borderRadius: 4,
+                cursor: isRetranslating ? 'wait' : 'pointer',
+                fontWeight: 700,
+                whiteSpace: 'nowrap',
+                flexShrink: 0,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 3,
+              }}
+            >
+              <RefreshCw size={10} />
+              <span>សាកម្ដងទៀត</span>
+            </button>
           </div>
         )}
 

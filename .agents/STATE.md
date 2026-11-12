@@ -1,47 +1,30 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
-- **Environment**: Antigravity IDE (/agents-design Batch Export Studio /export Form De-slop & Icon Upgrade)
-- **Timestamp**: 2026-11-12T21:53:00+07:00
+- **Environment**: Antigravity IDE (Inspector Move AI Retranslate Button Near Copy)
+- **Timestamp**: 2026-11-12T22:11:00+07:00
 
-## Summary: Batch Export Studio (/export - BatchExportStudioModal) De-slopped & Upgraded to Lucide Icons
+## Summary: Move AI Re-Translate Button Near Copy in ClipInspectorPanel
 1. **User Request**:
-   - `http://localhost:5173/export/agents-design fix UI ng text ban text klas ot brer baj dak tea hxx mean icon srul click UI clean`
-2. **De-slopping & Impeccable Refactoring on `/export` (`BatchExportStudioModal.jsx`)**:
-   - **Header & Subtitle**:
-     - Removed redundant explanatory subtitle paragraph (`ជ្រើសរើសភាគ ពិនិត្យភាពរួចរាល់...`).
-     - Upgraded close button to `✕ បិទ (Close)`.
-   - **Filter Actions**:
-     - Upgraded buttons to Lucide React icons with clean labels:
-       - `<CheckSquare size={11} /> ទាំងអស់ ({episodesWithVideo.length})`
-       - `<Mic size={11} /> មាន Voice ({...})`
-       - `<X size={11} /> ដកជ្រើសរើស`
-   - **Episode Readiness Badges**:
-     - Replaced plain text badges with Lucide React icons for high-density, professional studio look:
-       - `<FileText size={10} /> Script ✓/✗`
-       - `<Mic size={10} /> Voice ✓/✗`
-       - `<Volume2 size={10} /> Demucs ✓/✗`
-     - Preserved all 4 Khmer warning regex strings tested by backend suite (`/⚠️\s*គ្មានវីដេអូ/`, `/⚠️\s*គ្មាន\s*Script/`, `/⚠️\s*សំឡេងមិនទាន់អាប់ដេត/`, `/⚠️\s*គ្មានសំឡេង\s*AI/`).
-   - **Audio Checkbox**:
-     - Simplified label from `Allow Original Audio (រួមបញ្ចូលភាគអត់ Voice ដោយប្រើសំឡេងដើម)` to `Allow Original Audio (សំឡេងដើមបើគ្មាន Voice)`.
-   - **Primary Action Buttons**:
-     - Shortened labels: `Export Full Video ({eligibleItems.length} ភាគ)` and `Batch Export ({eligibleItems.length} ភាគ)`.
-   - **Finished Files Banner**:
-     - Replaced cartoon emoji `🎬` with Lucide React `<Film size={14} color="#34D399" />`.
+   - `move dak near copy` with screenshot circling the `[AI កែប្រែ / កំពុងគិត...]` button and pointing an arrow to the header next to `[Copy]`.
+2. **Changes Made**:
+   - `frontend/src/components/voice/ClipInspectorPanel.jsx`:
+     - Relocated `<button data-testid="btn-ai-retranslate">` from below the Chinese textarea up into the Chinese header row right next to `<button handleCopyChinese>`.
+     - Grouped both buttons into `<div style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>`.
+     - Kept `<div data-testid="retranslate-error-banner">` below the textarea so any translation errors continue to display cleanly with retry button.
 3. **Verification**:
    - `npm --prefix frontend run lint` (`oxlint`): **0 errors (PASS)**.
-   - `npm --prefix frontend run build` (`vite build`): **PASS (756ms, 0 errors)**.
-   - `node --test backend/tests/full_project_master_upgrade.test.js`: **8/8 PASS (100%)**.
+   - `npm --prefix frontend run build` (`vite build`): **PASS (609ms, 0 errors)**.
+   - `node --test backend/tests/empty_text_guard.test.js backend/tests/full_project_master_upgrade.test.js`: **11/11 PASS (100%)**.
 
 ## Active Environment
 - Backend API: `http://localhost:5000` (Listening)
 - Frontend Vite: `http://localhost:5173` (Listening)
 - Active Series: `series_1793898268958`
-- Route URL: `http://localhost:5173/export`
 - GitHub Repo: `https://github.com/Ny-Panha/khmer-ai-dubbing-studio` (Private)
 
 ## Next Steps
-- Await Nha's review of the `/export` Batch Export Studio modal and Studio UI.
+- Await Nha's review of the Inspector panel layout.
 
 ## Active Environment
 - Backend API: `http://localhost:5000` (Listening)
