@@ -1,42 +1,47 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
-- **Environment**: Antigravity IDE (/agents-design Batch Studio /batch Form De-slop & Icon Upgrade)
-- **Timestamp**: 2026-11-12T21:44:00+07:00
+- **Environment**: Antigravity IDE (/agents-design Batch Export Studio /export Form De-slop & Icon Upgrade)
+- **Timestamp**: 2026-11-12T21:53:00+07:00
 
-## Summary: Batch Studio (/batch - GeminiRouteModal) De-slopped & Upgraded to Lucide Icons
+## Summary: Batch Export Studio (/export - BatchExportStudioModal) De-slopped & Upgraded to Lucide Icons
 1. **User Request**:
-   - `http://localhost:5173/batch/agents-design fix UI ng text ban text klas ot brer baj dak tea hxx mean icon srul click UI clean`
-2. **De-slopping & Impeccable Refactoring on `/batch` (`GeminiRouteModal.jsx`)**:
-   - **Batch Pipeline Setup (Row 1)**:
-     - Replaced emoji `🎯` and verbose text `(Full 10-Stage: OCR + ASR Diarization + Reconcile)` with clean `<Layers size={12} /> Standard Mode` and checkmark indicator.
-     - Replaced emoji `⚡` and verbose text with `<Zap size={12} /> Fast OCR Mode` while preserving test badge `(OCR + Visual Speaker Gender + Direct Translate)` and `📄 Import .srt / .json`.
-   - **Dubbing Mode (Row 2)**:
-     - Cleaned verbose subtitles: `(បកប្រែសន្ទនា ១-ទល់-១ ត្រូវតាមមាត់)` and `(TikTok/Reels Narration)`.
-     - Replaced emojis with Lucide React `<MessageSquare size={12} /> Mode A: សន្ទនាតួអង្គ` and `<Film size={12} /> Mode B: សម្រាយរឿង`.
-     - Replaced narrator emojis `👨` and `👩` with `<Mic size={10} /> ពិសិដ្ឋ` and `<Mic size={10} /> ស្រីមុំ`.
-   - **Drama Genre (Row 3)**:
-     - Rendered Lucide icons `<Sparkles />`, `<BookOpen />`, `<Building2 />`, `<Zap />`, `<Smile />` with concise short labels (`Auto`, `បុរាណចិន`, `សម័យទំនើប`, `Action`, `កំប្លែង`).
-     - Kept full strings in `GENRE_OPTIONS` for test regex matching.
-   - **Direction & Smart Prompt Chips (Row 4)**:
-     - Replaced emojis with Lucide icons (`<UserCheck />`, `<Crown />`, `<Briefcase />`, `<Zap />`) and concise labels (`ស្គាល់ភេទតាមមុខ`, `រាជស័ព្ទបុរាណចិន`, `សន្ទនាអគ្គនាយក`, `ឃ្លាខ្លីត្រូវមាត់ 100%`).
-     - Shortened textarea placeholder to clean, concise Khmer prompt text.
+   - `http://localhost:5173/export/agents-design fix UI ng text ban text klas ot brer baj dak tea hxx mean icon srul click UI clean`
+2. **De-slopping & Impeccable Refactoring on `/export` (`BatchExportStudioModal.jsx`)**:
+   - **Header & Subtitle**:
+     - Removed redundant explanatory subtitle paragraph (`ជ្រើសរើសភាគ ពិនិត្យភាពរួចរាល់...`).
+     - Upgraded close button to `✕ បិទ (Close)`.
+   - **Filter Actions**:
+     - Upgraded buttons to Lucide React icons with clean labels:
+       - `<CheckSquare size={11} /> ទាំងអស់ ({episodesWithVideo.length})`
+       - `<Mic size={11} /> មាន Voice ({...})`
+       - `<X size={11} /> ដកជ្រើសរើស`
+   - **Episode Readiness Badges**:
+     - Replaced plain text badges with Lucide React icons for high-density, professional studio look:
+       - `<FileText size={10} /> Script ✓/✗`
+       - `<Mic size={10} /> Voice ✓/✗`
+       - `<Volume2 size={10} /> Demucs ✓/✗`
+     - Preserved all 4 Khmer warning regex strings tested by backend suite (`/⚠️\s*គ្មានវីដេអូ/`, `/⚠️\s*គ្មាន\s*Script/`, `/⚠️\s*សំឡេងមិនទាន់អាប់ដេត/`, `/⚠️\s*គ្មានសំឡេង\s*AI/`).
+   - **Audio Checkbox**:
+     - Simplified label from `Allow Original Audio (រួមបញ្ចូលភាគអត់ Voice ដោយប្រើសំឡេងដើម)` to `Allow Original Audio (សំឡេងដើមបើគ្មាន Voice)`.
+   - **Primary Action Buttons**:
+     - Shortened labels: `Export Full Video ({eligibleItems.length} ភាគ)` and `Batch Export ({eligibleItems.length} ភាគ)`.
+   - **Finished Files Banner**:
+     - Replaced cartoon emoji `🎬` with Lucide React `<Film size={14} color="#34D399" />`.
 3. **Verification**:
    - `npm --prefix frontend run lint` (`oxlint`): **0 errors (PASS)**.
-   - `npm --prefix frontend run build` (`vite build`): **PASS (985ms, 0 errors)**.
-   - `node --test backend/tests/ai_detection_and_dubbing_prompt_fix.test.js`: **8/8 PASS (100%)**.
-   - `node --test backend/tests/clean_unified_3step_batch_pipeline.test.js`: **6/6 PASS (100%)**.
+   - `npm --prefix frontend run build` (`vite build`): **PASS (756ms, 0 errors)**.
    - `node --test backend/tests/full_project_master_upgrade.test.js`: **8/8 PASS (100%)**.
 
 ## Active Environment
 - Backend API: `http://localhost:5000` (Listening)
 - Frontend Vite: `http://localhost:5173` (Listening)
 - Active Series: `series_1793898268958`
-- Route URL: `http://localhost:5173/batch`
+- Route URL: `http://localhost:5173/export`
 - GitHub Repo: `https://github.com/Ny-Panha/khmer-ai-dubbing-studio` (Private)
 
 ## Next Steps
-- Await Nha's review of the `/batch` page and Studio UI.
+- Await Nha's review of the `/export` Batch Export Studio modal and Studio UI.
 
 ## Active Environment
 - Backend API: `http://localhost:5000` (Listening)

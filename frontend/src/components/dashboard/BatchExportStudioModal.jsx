@@ -1,7 +1,7 @@
 import React, { useMemo, useEffect } from 'react';
 import {
   Film, Layers, Download, Loader2, CheckCircle2, AlertTriangle, AlertCircle,
-  Square, X, Check, Clock
+  Square, X, Check, Clock, FileText, Mic, Volume2, CheckSquare
 } from 'lucide-react';
 import { resolveDefaultAspectRatio, sanitizeAspectRatio } from '../../utils/projectStorage';
 import {
@@ -330,9 +330,6 @@ export default function BatchExportStudioModal({
                   </span>
                 )}
               </div>
-              <p style={{ margin: '2px 0 0 0', fontSize: '0.72rem', color: '#94A3B8' }}>
-                ជ្រើសរើសភាគ ពិនិត្យភាពរួចរាល់ (Script / Voice / Demucs) រួច Export បញ្ចូលគ្នា ឬ Export ដាច់ដោយឡែក
-              </p>
             </div>
           </div>
 
@@ -355,7 +352,7 @@ export default function BatchExportStudioModal({
             }}
           >
             <X size={14} />
-            <span>បិទផ្ទាំង (Close)</span>
+            <span>✕ បិទ (Close)</span>
           </button>
         </div>
 
@@ -417,9 +414,13 @@ export default function BatchExportStudioModal({
                     fontSize: '0.71rem',
                     fontWeight: 700,
                     cursor: isBatchRunning ? 'not-allowed' : 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 4,
                   }}
                 >
-                  Select All ({episodesWithVideo.length})
+                  <CheckSquare size={11} />
+                  <span>ទាំងអស់ ({episodesWithVideo.length})</span>
                 </button>
                 <button
                   type="button"
@@ -435,9 +436,13 @@ export default function BatchExportStudioModal({
                     fontSize: '0.71rem',
                     fontWeight: 700,
                     cursor: isBatchRunning ? 'not-allowed' : 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 4,
                   }}
                 >
-                  មាន Voice ({episodesWithVideo.filter((item) => item.hasVoice).length})
+                  <Mic size={11} />
+                  <span>មាន Voice ({episodesWithVideo.filter((item) => item.hasVoice).length})</span>
                 </button>
                 <button
                   type="button"
@@ -453,9 +458,13 @@ export default function BatchExportStudioModal({
                     fontSize: '0.71rem',
                     fontWeight: 700,
                     cursor: isBatchRunning ? 'not-allowed' : 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 4,
                   }}
                 >
-                  Clear
+                  <X size={11} />
+                  <span>ដកជ្រើសរើស</span>
                 </button>
               </div>
             </div>
@@ -536,7 +545,7 @@ export default function BatchExportStudioModal({
                         </span>
                       </div>
 
-                      {/* Readiness Badges: Script ✓/✗, Voice ✓/✗, Demucs ✓/✗ */}
+                      {/* Readiness Badges: Script, Voice, Demucs with Lucide icons */}
                       <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
                         <span
                           style={{
@@ -547,9 +556,13 @@ export default function BatchExportStudioModal({
                             background: hasScript ? 'rgba(16, 185, 129, 0.16)' : 'rgba(239, 68, 68, 0.16)',
                             color: hasScript ? '#6EE7B7' : '#FCA5A5',
                             border: hasScript ? '1px solid rgba(52, 211, 153, 0.3)' : '1px solid rgba(248, 113, 113, 0.3)',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 3,
                           }}
                         >
-                          Script {hasScript ? '✓' : '✗'}
+                          <FileText size={10} />
+                          <span>Script {hasScript ? '✓' : '✗'}</span>
                         </span>
                         <span
                           style={{
@@ -560,9 +573,13 @@ export default function BatchExportStudioModal({
                             background: hasVoice ? 'rgba(16, 185, 129, 0.16)' : 'rgba(245, 158, 11, 0.16)',
                             color: hasVoice ? '#6EE7B7' : '#FCD34D',
                             border: hasVoice ? '1px solid rgba(52, 211, 153, 0.3)' : '1px solid rgba(251, 191, 36, 0.32)',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 3,
                           }}
                         >
-                          Voice {hasVoice ? '✓' : '✗'}
+                          <Mic size={10} />
+                          <span>Voice {hasVoice ? '✓' : '✗'}</span>
                         </span>
                         <span
                           style={{
@@ -573,9 +590,13 @@ export default function BatchExportStudioModal({
                             background: hasDemucs ? 'rgba(56, 189, 248, 0.16)' : 'rgba(148, 163, 184, 0.1)',
                             color: hasDemucs ? '#7DD3FC' : '#94A3B8',
                             border: hasDemucs ? '1px solid rgba(56, 189, 248, 0.3)' : '1px solid rgba(148, 163, 184, 0.2)',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 3,
                           }}
                         >
-                          Demucs {hasDemucs ? '✓' : '✗'}
+                          <Volume2 size={10} />
+                          <span>Demucs {hasDemucs ? '✓' : '✗'}</span>
                         </span>
                       </div>
 
@@ -758,7 +779,7 @@ export default function BatchExportStudioModal({
                 onChange={(e) => onChangeAllowOriginalAudio?.(e.target.checked)}
                 style={{ margin: 0, accentColor: '#38BDF8' }}
               />
-              <span>Allow Original Audio (រួមបញ្ចូលភាគអត់ Voice ដោយប្រើសំឡេងដើម)</span>
+              <span>Allow Original Audio (សំឡេងដើមបើគ្មាន Voice)</span>
             </label>
           </section>
 
@@ -825,7 +846,7 @@ export default function BatchExportStudioModal({
               }}
             >
               {isBatchRunning && batchJob?.mode === 'merge' ? <Loader2 size={16} className="animate-spin" /> : <Film size={16} />}
-              <span>Export 1 Full Video (Merge {eligibleItems.length} ភាគ)</span>
+              <span>Export Full Video ({eligibleItems.length} ភាគ)</span>
             </button>
 
             <button
@@ -854,7 +875,7 @@ export default function BatchExportStudioModal({
               }}
             >
               {isBatchRunning && batchJob?.mode === 'separate' ? <Loader2 size={16} className="animate-spin" /> : <Layers size={16} />}
-              <span>Batch Export All ({eligibleItems.length} ភាគដាច់ដោយឡែក)</span>
+              <span>Batch Export ({eligibleItems.length} ភាគ)</span>
             </button>
           </section>
 
@@ -1053,8 +1074,9 @@ export default function BatchExportStudioModal({
                   }}
                 >
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
-                    <span style={{ fontSize: '0.78rem', fontWeight: 800, color: '#F8FAFC' }}>
-                      🎬 {batchJob.mergedResult.outputFilename || 'Full_Merged_Khmer_Dubbed.mp4'}
+                    <span style={{ fontSize: '0.78rem', fontWeight: 800, color: '#F8FAFC', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                      <Film size={14} color="#34D399" />
+                      <span>{batchJob.mergedResult.outputFilename || 'Full_Merged_Khmer_Dubbed.mp4'}</span>
                     </span>
                     <span style={{ fontSize: '0.68rem', color: '#94A3B8' }}>
                       វីដេអូបញ្ចូលគ្នា {batchJob.mergedResult.mergedCount || ''} ភាគ • រក្សាទុកក្នុង Downloads រួចរាល់
