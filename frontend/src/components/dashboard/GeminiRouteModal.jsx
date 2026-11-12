@@ -3,7 +3,7 @@ import {
   Cpu, Sparkles, CheckCircle2, AlertCircle, Check, Clock, Play,
   ArrowRight, Loader2, X, RefreshCw,
   RotateCcw, FileText, Mic, Volume2, Download, Film, AlertTriangle, Square, Layers,
-  Pin, Key, Wrench, Settings2, ChevronDown, ChevronUp
+  Pin, Key, Wrench, Settings2, ChevronDown, ChevronUp, Zap
 } from 'lucide-react';
 import {
   startGenerationJob,
