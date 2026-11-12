@@ -1,7 +1,8 @@
 import React, { useRef, useEffect } from 'react';
 import {
   Maximize2, Minimize2, Clock, SkipBack, Play, Pause,
-  SkipForward, VolumeX, Volume2
+  SkipForward, VolumeX, Volume2, Diamond, ChevronLeft, ChevronRight,
+  Sparkles, Loader2
 } from 'lucide-react';
 import { formatTimecode } from '../../utils/formatTime';
 
@@ -242,8 +243,8 @@ export function PlayerBottomBar({
                   onChange={(e) => onUpdateActiveCrop && onUpdateActiveCrop(Number(e.target.value))}
                   title={`ទាញរំកិល Crop X: ${Math.round(activeVal)}% (ឬវាយបញ្ចូលលេខក្នុងប្រអប់ក្បែរនេះ)`}
                   style={{
-                    width: 150,
-                    height: 5,
+                    width: 110,
+                    height: 4,
                     accentColor: '#38BDF8',
                     cursor: 'ew-resize',
                   }}
@@ -254,7 +255,7 @@ export function PlayerBottomBar({
                 />
               </div>
 
-              {/* CapCut-style Keyframe (💎) Controls */}
+              {/* CapCut-style Keyframe Controls (Pure Lucide React Icons) */}
               {(() => {
                 const curT = Number.isFinite(currentTime) ? currentTime : 0;
                 const sortedKfs = [...(framingKeyframes || [])].sort((a, b) => a.time - b.time);
@@ -285,12 +286,15 @@ export function PlayerBottomBar({
                         background: 'transparent',
                         border: 'none',
                         color: hasPrevKf ? '#94A3B8' : 'rgba(255,255,255,0.2)',
-                        padding: '1px 3px',
-                        fontSize: '0.62rem',
+                        padding: '2px 3px',
                         cursor: hasPrevKf ? 'pointer' : 'default',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        borderRadius: 3,
                       }}
                     >
-                      ◀◆
+                      <ChevronLeft size={13} />
                     </button>
 
                     {/* Toggle Keyframe (Add / Remove Diamond) */}
@@ -301,30 +305,31 @@ export function PlayerBottomBar({
                       title={
                         hasKfAtPlayhead
                           ? `លុប Keyframe ត្រង់ ${nearestKf.time.toFixed(1)}s (${Math.round(nearestKf.cropX)}%)`
-                          : `ដៅ Keyframe ថ្មី (💎) ត្រង់ ${curT.toFixed(1)}s`
+                          : `ដៅ Keyframe ថ្មី (Diamond) ត្រង់ ${curT.toFixed(1)}s`
                       }
                       style={{
                         background: hasKfAtPlayhead
-                          ? 'rgba(56, 189, 248, 0.25)'
-                          : 'rgba(255, 255, 255, 0.08)',
-                        color: hasKfAtPlayhead ? '#38BDF8' : '#E2E8F0',
+                          ? 'rgba(56, 189, 248, 0.22)'
+                          : 'rgba(255, 255, 255, 0.06)',
+                        color: hasKfAtPlayhead ? '#38BDF8' : '#94A3B8',
                         border: hasKfAtPlayhead
-                          ? '1px solid rgba(56, 189, 248, 0.6)'
-                          : '1px solid rgba(255, 255, 255, 0.2)',
+                          ? '1px solid rgba(56, 189, 248, 0.55)'
+                          : '1px solid rgba(255, 255, 255, 0.15)',
                         borderRadius: 4,
-                        padding: '1px 5px',
-                        fontSize: '0.65rem',
-                        fontWeight: 700,
+                        padding: '2px 5px',
                         cursor: 'pointer',
                         display: 'inline-flex',
                         alignItems: 'center',
+                        justifyContent: 'center',
                         gap: 2,
+                        transition: 'all 0.15s ease',
                       }}
                     >
-                      {hasKfAtPlayhead ? '◆ −' : '◇ +'}
-                      <span style={{ fontSize: '0.60rem', color: hasKfAtPlayhead ? '#38BDF8' : '#94A3B8' }}>
-                        💎
-                      </span>
+                      <Diamond
+                        size={11}
+                        fill={hasKfAtPlayhead ? '#38BDF8' : 'none'}
+                        color={hasKfAtPlayhead ? '#38BDF8' : '#94A3B8'}
+                      />
                     </button>
 
                     {/* Jump to Next Keyframe */}
@@ -337,12 +342,15 @@ export function PlayerBottomBar({
                         background: 'transparent',
                         border: 'none',
                         color: hasNextKf ? '#94A3B8' : 'rgba(255,255,255,0.2)',
-                        padding: '1px 3px',
-                        fontSize: '0.62rem',
+                        padding: '2px 3px',
                         cursor: hasNextKf ? 'pointer' : 'default',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        borderRadius: 3,
                       }}
                     >
-                      ◆▶
+                      <ChevronRight size={13} />
                     </button>
                   </div>
                 );
@@ -356,20 +364,33 @@ export function PlayerBottomBar({
                   disabled={isAnalyzingFraming}
                   title="ស្កេន AI Face Tracking ស្វ័យប្រវត្តគ្រប់ Segment ក្នុងភាគនេះ"
                   style={{
-                    background: isAnalyzingFraming ? 'rgba(168, 85, 247, 0.3)' : 'rgba(168, 85, 247, 0.12)',
+                    background: isAnalyzingFraming ? 'rgba(168, 85, 247, 0.25)' : 'rgba(168, 85, 247, 0.12)',
                     color: '#C084FC',
                     border: '1px solid rgba(168, 85, 247, 0.35)',
                     borderRadius: 4,
-                    padding: '2px 6px',
+                    padding: '3px 7px',
                     fontSize: '0.68rem',
-                    fontWeight: 600,
+                    fontWeight: 700,
                     cursor: isAnalyzingFraming ? 'wait' : 'pointer',
                     display: 'inline-flex',
                     alignItems: 'center',
-                    gap: 3,
+                    gap: 4,
+                    flexShrink: 0,
+                    whiteSpace: 'nowrap',
+                    transition: 'all 0.15s ease',
                   }}
                 >
-                  {isAnalyzingFraming ? '⏳ ស្កេន...' : '✨ AI Auto'}
+                  {isAnalyzingFraming ? (
+                    <>
+                      <Loader2 size={11} className="animate-spin" />
+                      <span>ស្កេន...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles size={11} color="#C084FC" />
+                      <span>AI Auto</span>
+                    </>
+                  )}
                 </button>
               )}
             </div>
@@ -389,6 +410,9 @@ export function PlayerBottomBar({
             borderRadius: 6,
             background: 'rgba(9, 10, 15, 0.72)',
             border: '1px solid var(--line)',
+            flexShrink: 0,
+            whiteSpace: 'nowrap',
+            minWidth: 'fit-content',
           }}
         >
           {duckVol === 0 ? (
@@ -398,11 +422,12 @@ export function PlayerBottomBar({
           )}
           <div
             style={{
-              width: 34,
+              width: 30,
               height: 5,
               borderRadius: 999,
               background: 'rgba(255, 255, 255, 0.1)',
               overflow: 'hidden',
+              flexShrink: 0,
             }}
           >
             <div
@@ -420,10 +445,12 @@ export function PlayerBottomBar({
           <span
             style={{
               fontFamily: 'var(--font-mono)',
-              fontSize: '0.72rem',
+              fontSize: '0.70rem',
               color: duckVol === 0 ? 'var(--color-error)' : 'var(--text-secondary)',
               fontWeight: 600,
               fontVariantNumeric: 'tabular-nums',
+              whiteSpace: 'nowrap',
+              display: 'inline-block',
             }}
           >
             {dbValue}
