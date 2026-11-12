@@ -826,7 +826,7 @@ router.post("/split-video-episodes", async (req, res) => {
   }
 });
 
-router.post("/analyze-framing", async (req, res) => {
+router.post(["/analyze-framing", "/video/analyze-framing"], async (req, res) => {
   try {
     const { seriesId, episodeId, videoPath: customVideoPath } = req.body;
     if (!seriesId || !episodeId) {
@@ -870,7 +870,7 @@ router.post("/analyze-framing", async (req, res) => {
   }
 });
 
-router.post("/update-segment-crop", async (req, res) => {
+router.post(["/update-segment-crop", "/video/update-segment-crop"], async (req, res) => {
   try {
     const { seriesId, episodeId, segmentId, cropX, cropPosition, rangeStart, rangeEnd } = req.body;
     if (!seriesId || !episodeId || segmentId === undefined) {
@@ -956,7 +956,7 @@ router.post("/update-segment-crop", async (req, res) => {
   }
 });
 
-router.post("/update-framing-keyframes", async (req, res) => {
+router.post(["/update-framing-keyframes", "/video/update-framing-keyframes"], async (req, res) => {
   try {
     const { seriesId, episodeId, keyframes = [] } = req.body;
     if (!seriesId || !episodeId) {

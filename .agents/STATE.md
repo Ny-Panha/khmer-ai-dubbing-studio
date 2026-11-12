@@ -1,40 +1,34 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
-- **Environment**: Antigravity IDE (Fix Voice Clip Positioning Drift on Timeline)
-- **Timestamp**: 2026-11-12T19:10:00+07:00
+- **Environment**: Antigravity IDE (Fix 404 on /api/video/update-framing-keyframes)
+- **Timestamp**: 2026-11-12T19:48:00+07:00
 
-## Summary: Fixed Voice Track Clip Position Fallback (Root Cause of Segment #10 at 00:36)
+## Summary: Fixed 404 Route Not Found on Framing Endpoints
 1. **User Request & Symptom**:
-   - `nh click lg tv auto hcc neak ? fix code lerng error` with screenshot showing playhead at `00:17.00` with segment `#10` on video, but the audio clip `#10 ប្រុស` was drawn far away at `00:36` on the `VOICE 1` track.
+   - `api/video/update-framing-keyframes:1 Failed to load resource: the server responded with a status of 404 (Not Found)`
 2. **Root Cause**:
-   - In `frontend/src/components/timeline/TimelineTracksCanvas.jsx` (lines 158, 262, 1114):
-     `const rawStart = (typeof seg.audioStartSec === 'number' && !isNaN(seg.audioStartSec)) ? seg.audioStartSec : parseTimeToSeconds(seg.start, idx * 4);`
-   - In episodes like `ep_5`, segments have `startSec: 17`, while `audioStartSec` and `start` (string) were `undefined`.
-   - When `audioStartSec` and `start` were missing, `parseTimeToSeconds(undefined, idx * 4)` fell back to `idx * 4`!
-   - For segment #10 (`idx = 9`), `9 * 4 = 36` seconds (`00:36`)!
-   - This caused audio clips to stagger out into 4-second increments (`00:00`, `00:04`, `00:08`, `00:12` ... `00:36`).
+   - Frontend `VideoPlayerPreview.jsx` called `/api/video/update-framing-keyframes`, `/api/video/update-segment-crop`, and `/api/video/analyze-framing`.
+   - `backend/server.js` mounted `videoRoutes` at `/api`, while `videoRoutes.js` registered `/update-framing-keyframes` (without `/video` prefix).
+   - Express could not match `/api/video/...` and returned 404 Not Found.
 3. **Fix Implemented**:
-   - `frontend/src/components/timeline/TimelineTracksCanvas.jsx`:
-     - Updated `internalSegmentRows`, `renderVoiceSegment`, and viewport culling to fallback to `seg.startSec`:
-       `((typeof seg.startSec === 'number' && !isNaN(seg.startSec)) ? seg.startSec : parseTimeToSeconds(seg.start, idx * 4))`
-     - Voice clips now immediately snap to their exact video segment timestamp (`00:17.00`).
-   - `backend/routes/audioRoutes.js`:
-     - In `POST /api/audio/autofit-speed`, ensured `seg.audioStartSec = slotStart` and `seg.audioEndSec = slotStart + currentDur` are initialized for all processed audio segments.
+   - `backend/routes/videoRoutes.js`:
+     - Added array path aliases: `["/analyze-framing", "/video/analyze-framing"]`, `["/update-segment-crop", "/video/update-segment-crop"]`, `["/update-framing-keyframes", "/video/update-framing-keyframes"]`.
+   - `backend/server.js`:
+     - Mounted `videoRoutes` under both prefixes: `app.use(["/api", "/api/video"], videoRoutes);`.
 4. **Verification**:
-   - `npm --prefix frontend run build`: **PASS (589ms, 0 errors)**
-   - `npm --prefix backend test`: **231/231 PASS (100%)**
-   - Committed (`7017ced`) and pushed to `origin main`.
+   - Created `backend/tests/framing_routes_endpoint.test.js`: **4/4 PASS (100%)**.
+   - Full backend test suite: **238/238 PASS (100%)**.
+   - Frontend Vite build: **PASS (611ms, 0 errors)**.
 
 ## Active Environment
 - Backend API: `http://localhost:5000` (Listening)
 - Frontend Vite: `http://localhost:5173` (Listening)
 - Active Series: `series_1793898268958`
-- Active Episode: `ep_3`
 - GitHub Repo: `https://github.com/Ny-Panha/khmer-ai-dubbing-studio` (Private)
 
 ## Next Steps
-- Inform Nha in Khmer that the repo is now Private, Batch Auto-Fit Speed 1-by-1 is live, and all code is committed & pushed.
+- Inform Nha in Khmer that Sponsor Ads (Green Screen) is fully complete with live preview and video export.
 
 ## Active Environment
 - Backend API: `http://localhost:5000` (Listening)

@@ -56,7 +56,7 @@ app.use("/uploads", mediaStreamMiddleware);
 app.use("/api", systemRoutes);
 app.use("/api", scriptRoutes);
 app.use("/api", audioRoutes);
-app.use("/api", videoRoutes);
+app.use(["/api", "/api/video"], videoRoutes);
 app.use("/api/jobs", jobRoutes);
 app.use("/api/series", seriesRoutes);
 
