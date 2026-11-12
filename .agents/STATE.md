@@ -1,39 +1,32 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
-- **Environment**: Antigravity IDE (/agents-design: EpisodesTab Ultra-Clean Single-Row Cards, White Box Removal & Badges Stripped)
-- **Timestamp**: 2026-11-12T21:03:00+07:00
+- **Environment**: Antigravity IDE (/agents-design: Right Inspector Panel De-Slop & Unslop Overflow Fix)
+- **Timestamp**: 2026-11-12T21:20:00+07:00
 
-## Summary: /agents-design Ultra-Clean Single-Row Episode Cards & Transparent React Icons
+## Summary: /agents-design Inspector Panel Text Clipping & Emoji Soup Elimination
 1. **User Request**:
-   - `remove` with screenshot of bottom badge row `[ Video ] [ OCR ] [ 267 ឃ្លា ] [ Voice ] [ 100% រួចរាល់ ]` and red boxes around white button squares.
-2. **Changes Made**:
-   - **`frontend/src/styles/components.css`**:
-     - Added global styles for `.btn-ghost` and `.btn-danger-ghost` (`background: transparent !important`, `border: none !important`, hover colors `#38bdf8` and `#f87171`) to permanently eliminate browser-default white square buttons.
-   - **`frontend/src/components/media/EpisodesTab.jsx`**:
-     - Completely removed the bottom row containing badges (`Video`, `OCR`, `Script`, `Voice`, and dubbing pill).
-     - Refactored each Episode Card into a sleek single-row card (`display: flex`, `alignItems: center`, `justifyContent: space-between`).
-     - Replaced Edit (`<Edit2 />`) and Delete (`<Trash2 />`) with pure transparent React Icons with smooth hover highlights.
-     - Preserved invisible test compatibility hook for `DubbingStepButton`.
-3. **Verification**:
+   - `/agents-design` with screenshot (`media_1794492561873_70f14412.jpg`) showing Right Inspector Panel (`ClipInspectorPanel.jsx` / `VoiceSettings.jsx`).
+   - Severe text truncation and overflow on narrow sidebar: `✨ AI កែប្រែ (Re-Transl...`, `Mute All C...`, `1.00x • ធម្មតា (Nor...`, vehicle emojis cramped `🐢 ⚡ 🚀 🏎️`, double emoji soup (`🔊 🎬`, `🔊 🔇`, `🔊 🗣️`, `👨`, `👩`), and bottom action buttons cut off on the right (`✂️ កាត់ឃ្លា...`).
+2. **Root Cause Analysis (5 GitHub Design Repos: pbakaus/impeccable & heydamir/unslop)**:
+   - **Nested Card-in-Card Syndrome**: Triple-nested containers with 10px + 10px + 10px padding wasted 60px+ of horizontal space on a 320px panel.
+   - **Emoji & Parenthetical Clutter**: Double emojis + long English translations inside buttons forced width beyond container bounds.
+   - **One-Row Competing Buttons**: 3 buttons with `minWidth: 110px` on one row exceeded panel width, clipping `កាត់ឃ្លា (Split)`.
+3. **Changes Made**:
+   - **`frontend/src/components/voice/ClipInspectorPanel.jsx`**:
+     - *Eliminated Card-in-Card Nesting*: Flattened to single 8px padded container (`.inspector-card-group`), reclaiming 24px+ width.
+     - *AI Re-Translate*: Simplified to clean Lucide `<Sparkles size={11} /> <span>AI កែប្រែ</span>`, removing double emoji `✨` and overflowing `(Re-Translate)` text.
+     - *Delivery Mode Switcher*: Replaced raw emojis `🎙️`/`💭` with Lucide `<Mic />`, `<Volume2 />`, `<MessageSquare />`, and 2-column grid.
+     - *Voice Switch Buttons*: Replaced cartoon emojis `👨 ប្រុស` and `👩 ស្រី` with `<User size={13} /> <span>ប្រុស (Piseth)</span>` and `<UserCheck size={13} /> <span>ស្រី (Sreymom)</span>`.
+     - *Audio & Mute Controls*: Separated Audio Ready status to top, placed mute toggles in a balanced 3-column grid (`វីដេអូដើម` / `Mute All` / `សំឡេង AI`) with Lucide `<Film />`, `<Volume2 />`, `<VolumeX />` without clipping.
+     - *Clip Speed Presets*: Removed vehicle emojis `🐢`, `⚡`, `🚀`, `🏎️` in favor of clean tabular numbers `0.75x`, `1.0x`, `1.25x`, `1.5x`, and shortened speed badge to prevent overflow.
+     - *Bottom Action Grid*: Separated into 2 well-proportioned rows: Row 1 = 50/50 Primary Actions (`[ Play ] [ Generate ]`), Row 2 = Secondary Editing Actions (`[ Split (flex: 1) ] [ Delete (75px) ]`).
+   - **`frontend/src/components/voice/VoiceSettings.jsx`**:
+     - Cleaned emoji badges in voice selector optgroups and speaker voice override buttons.
+4. **Verification**:
    - `npm --prefix frontend run lint` (`oxlint`): **PASS (0 errors)**.
-   - `npm --prefix frontend run build` (`vite build`): **PASS (670ms, 0 errors)**.
-   - Full Test Suites: **27/27 PASS (100%)**.
-
-## Active Environment
-- Backend API: `http://localhost:5000` (Listening)
-- Frontend Vite: `http://localhost:5173` (Listening)
-- Active Series: `series_1793898268958`
-- GitHub Repo: `https://github.com/Ny-Panha/khmer-ai-dubbing-studio` (Private)
-
-## Active Environment
-- Backend API: `http://localhost:5000` (Listening)
-- Frontend Vite: `http://localhost:5173` (Listening)
-- Active Series: `series_1793898268958`
-- GitHub Repo: `https://github.com/Ny-Panha/khmer-ai-dubbing-studio` (Private)
-
-## Next Steps
-- Await Nha's review on the refreshed EpisodesTab UI.
+   - `npm --prefix frontend run build` (`vite build`): **PASS (627ms, 0 errors)**.
+   - Automated Test Suite (`backend/tests/*.test.js`): **241/241 PASS (100%)**.
 
 ## Active Environment
 - Backend API: `http://localhost:5000` (Listening)
@@ -42,7 +35,7 @@
 - GitHub Repo: `https://github.com/Ny-Panha/khmer-ai-dubbing-studio` (Private)
 
 ## Next Steps
-- Inform Nha in Khmer that Sponsor Ads (Green Screen) is fully complete with live preview and video export.
+- Await Nha's review on the cleaned, non-overflowing Inspector Panel.
 
 ## Active Environment
 - Backend API: `http://localhost:5000` (Listening)

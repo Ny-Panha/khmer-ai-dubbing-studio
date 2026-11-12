@@ -3,7 +3,7 @@ import React, { useState } from 'react';
 import {
   Mic, Edit3, Sparkles, Loader2, Scissors, CheckCircle2,
   Volume2, VolumeX, RefreshCw, Trash2, AlertCircle, Pause,
-  Copy, Check
+  Copy, Check, User, UserCheck, Play, Film, MessageSquare
 } from 'lucide-react';
 import { isLongKhmerSubtitle } from '../../utils/khmerTextSplitter';
 import { retranslateSegmentApi } from '../../services/api';
@@ -175,8 +175,9 @@ export default function ClipInspectorPanel({
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Film size={14} color="#38bdf8" />
             <span style={{ fontSize: '0.85rem', fontWeight: 700, color: '#e0f2fe' }}>
-              🎬 Video Clip: {selectedClip.name || 'Clip'}
+              Video Clip: {selectedClip.name || 'Clip'}
             </span>
             <span style={{ fontSize: '0.72rem', color: 'var(--accent-cyan)', background: 'rgba(0, 229, 255, 0.12)', padding: '2px 6px', borderRadius: 4 }}>
               {durSec.toFixed(2)}s
@@ -214,12 +215,12 @@ export default function ClipInspectorPanel({
                   {isClipMuted ? (
                     <>
                       <VolumeX size={14} color="#f87171" />
-                      <span>🔇 បានបិទសំឡេងដើម (Muted)</span>
+                      <span>បានបិទសំឡេង (Muted)</span>
                     </>
                   ) : (
                     <>
                       <Volume2 size={14} color="var(--accent-cyan)" />
-                      <span>🎬 បិទសំឡេងដើម (Mute Video Audio)</span>
+                      <span>បិទសំឡេងដើម</span>
                     </>
                   )}
                 </button>
@@ -527,148 +528,145 @@ export default function ClipInspectorPanel({
   const effectiveVoiceId = isSreymomActive ? 'km-KH-SreymomNeural' : 'km-KH-PisethNeural';
 
   return (
-    <div className="inspector-card-group">
+    <div className="inspector-card-group" style={{ padding: '8px' }}>
+      {/* Dialogue & Translation Card (Chinese Source + Khmer Target) */}
       <div style={{
-          border: '1px solid rgba(255, 255, 255, 0.08)',
-          background: '#161922',
-          borderRadius: 6,
-          padding: '10px',
-        }}>
+        marginBottom: 10,
+        padding: '8px',
+        background: 'rgba(20, 20, 30, 0.65)',
+        borderRadius: 6,
+        border: '1px solid rgba(255, 255, 255, 0.08)'
+      }}>
+        {/* 1. Chinese Original Header */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+          <label style={{ fontSize: '0.72rem', color: '#38bdf8', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 5 }}>
+            <span style={{ background: 'rgba(56, 189, 248, 0.15)', border: '1px solid rgba(56, 189, 248, 0.3)', padding: '1px 5px', borderRadius: 3, fontSize: '0.62rem', fontWeight: 800 }}>CN</span>
+            <span>អត្ថបទដើមចិន (Original):</span>
+          </label>
+          {(localChineseText || originalChinese) && (
+            <button
+              type="button"
+              onClick={handleCopyChinese}
+              style={{
+                background: 'rgba(255, 255, 255, 0.05)',
+                border: '1px solid rgba(255, 255, 255, 0.1)',
+                borderRadius: 4,
+                color: copiedChinese ? '#4ade80' : 'var(--text-dim)',
+                cursor: 'pointer',
+                fontSize: '0.66rem',
+                fontWeight: 600,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 3,
+                padding: '2px 6px',
+                transition: 'all 0.15s ease',
+              }}
+              title="Copy Chinese dialogue text"
+            >
+              {copiedChinese ? <Check size={11} /> : <Copy size={11} />}
+              <span>{copiedChinese ? 'Copied' : 'Copy'}</span>
+            </button>
+          )}
+        </div>
+        <textarea
+          rows={2}
+          value={localChineseText}
+          onChange={handleChineseTextChange}
+          onBlur={handleChineseTextBlur}
+          placeholder="បញ្ចូល ឬកែសម្រួលអត្ថបទដើមចិននៅទីនេះ..."
+          style={{
+            width: '100%',
+            boxSizing: 'border-box',
+            fontSize: '0.86rem',
+            color: '#f3f4f6',
+            lineHeight: 1.5,
+            background: 'rgba(0, 0, 0, 0.25)',
+            padding: '6px 8px',
+            borderRadius: 4,
+            border: '1px solid rgba(255, 255, 255, 0.08)',
+            outline: 'none',
+            resize: 'vertical',
+            fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Microsoft YaHei", sans-serif',
+            transition: 'all 0.2s ease',
+          }}
+        />
 
-          {/* Dialogue & Translation Card (Chinese Source + Khmer Target) */}
-          <div style={{
-            marginBottom: 10,
-            padding: '8px 10px',
-            background: 'rgba(20, 20, 30, 0.65)',
-            borderRadius: 6,
-            border: '1px solid rgba(255, 255, 255, 0.1)'
-          }}>
-            {/* 1. Chinese Original Header */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-              <label style={{ fontSize: '0.72rem', color: '#38bdf8', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 5 }}>
-                <span style={{ background: 'rgba(56, 189, 248, 0.15)', border: '1px solid rgba(56, 189, 248, 0.3)', padding: '1px 5px', borderRadius: 3, fontSize: '0.62rem', fontWeight: 800 }}>CN</span>
-                <span>អត្ថបទដើមចិន (Original):</span>
-              </label>
-              {(localChineseText || originalChinese) && (
+        {/* AI Re-Translation Action Button (Clean, 1-Line, Never Squished) */}
+        {(localChineseText || originalChinese) && (
+          <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                data-testid="btn-ai-retranslate"
+                onClick={handleAiRetranslate}
+                disabled={isRetranslating}
+                style={{
+                  background: 'linear-gradient(135deg, rgba(168, 85, 247, 0.28), rgba(139, 92, 246, 0.18))',
+                  border: '1px solid rgba(168, 85, 247, 0.55)',
+                  borderRadius: 4,
+                  color: '#d8b4fe',
+                  cursor: isRetranslating ? 'wait' : 'pointer',
+                  fontSize: '0.68rem',
+                  fontWeight: 700,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 4,
+                  padding: '3px 8px',
+                  whiteSpace: 'nowrap',
+                  transition: 'all 0.15s ease',
+                }}
+                title="AI Re-Translate: ឱ្យ AI បកប្រែជាភាសាកុនបុរាណ ៣ ជម្រើសភ្លាមៗ"
+              >
+                {isRetranslating ? <Loader2 size={11} className="spin animate-spin" /> : <Sparkles size={11} color="#d8b4fe" />}
+                <span>{isRetranslating ? 'កំពុងគិត...' : 'AI កែប្រែ'}</span>
+              </button>
+            </div>
+
+            {retranslateError && (
+              <div
+                data-testid="retranslate-error-banner"
+                style={{
+                  padding: '6px 8px',
+                  background: 'rgba(239, 68, 68, 0.14)',
+                  border: '1px solid rgba(239, 68, 68, 0.45)',
+                  borderRadius: 5,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 8,
+                }}
+              >
+                <span style={{ fontSize: '0.7rem', color: '#fca5a5', display: 'flex', alignItems: 'center', gap: 5, lineHeight: 1.4 }}>
+                  <AlertCircle size={12} color="#ef4444" style={{ flexShrink: 0 }} />
+                  <span>{retranslateError}</span>
+                </span>
                 <button
                   type="button"
-                  onClick={handleCopyChinese}
+                  onClick={handleAiRetranslate}
+                  disabled={isRetranslating}
                   style={{
-                    background: 'rgba(255, 255, 255, 0.05)',
-                    border: '1px solid rgba(255, 255, 255, 0.1)',
+                    padding: '2px 7px',
+                    fontSize: '0.66rem',
+                    background: 'rgba(239, 68, 68, 0.85)',
+                    color: '#ffffff',
+                    border: 'none',
                     borderRadius: 4,
-                    color: copiedChinese ? '#4ade80' : 'var(--text-dim)',
-                    cursor: 'pointer',
-                    fontSize: '0.68rem',
-                    fontWeight: 600,
-                    display: 'flex',
+                    cursor: isRetranslating ? 'wait' : 'pointer',
+                    fontWeight: 700,
+                    whiteSpace: 'nowrap',
+                    flexShrink: 0,
+                    display: 'inline-flex',
                     alignItems: 'center',
                     gap: 3,
-                    padding: '2px 6px',
-                    transition: 'all 0.15s ease',
                   }}
-                  title="Copy Chinese dialogue text"
                 >
-                  {copiedChinese ? <Check size={11} /> : <Copy size={11} />}
-                  <span>{copiedChinese ? 'Copied' : 'Copy'}</span>
+                  <RefreshCw size={10} />
+                  <span>សាកម្ដងទៀត</span>
                 </button>
-              )}
-            </div>
-            <textarea
-              rows={2}
-              value={localChineseText}
-              onChange={handleChineseTextChange}
-              onBlur={handleChineseTextBlur}
-              placeholder="បញ្ចូល ឬកែសម្រួលអត្ថបទដើមចិននៅទីនេះ..."
-              style={{
-                width: '100%',
-                boxSizing: 'border-box',
-                fontSize: '0.86rem',
-                color: '#f3f4f6',
-                lineHeight: 1.5,
-                background: 'rgba(0, 0, 0, 0.25)',
-                padding: '6px 8px',
-                borderRadius: 4,
-                border: '1px solid rgba(255, 255, 255, 0.08)',
-                outline: 'none',
-                resize: 'vertical',
-                fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Microsoft YaHei", sans-serif',
-                transition: 'all 0.2s ease',
-              }}
-            />
-
-            {/* AI Re-Translation Action Button (Clean, 1-Line, Never Squished) */}
-            {(localChineseText || originalChinese) && (
-              <div style={{ marginTop: 6, display: 'flex', flexDirection: 'column', gap: 6 }}>
-                <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                  <button
-                    type="button"
-                    data-testid="btn-ai-retranslate"
-                    onClick={handleAiRetranslate}
-                    disabled={isRetranslating}
-                    style={{
-                      background: 'linear-gradient(135deg, rgba(168, 85, 247, 0.28), rgba(139, 92, 246, 0.18))',
-                      border: '1px solid rgba(168, 85, 247, 0.55)',
-                      borderRadius: 4,
-                      color: '#d8b4fe',
-                      cursor: isRetranslating ? 'wait' : 'pointer',
-                      fontSize: '0.68rem',
-                      fontWeight: 700,
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: 4,
-                      padding: '3px 8px',
-                      whiteSpace: 'nowrap',
-                      transition: 'all 0.15s ease',
-                    }}
-                    title="✨ AI Re-Translate: ឱ្យ AI បកប្រែជាភាសាកុនបុរាណ ៣ ជម្រើសភ្លាមៗ"
-                  >
-                    {isRetranslating ? <Loader2 size={11} className="spin animate-spin" /> : <Sparkles size={11} color="#d8b4fe" />}
-                    <span>{isRetranslating ? 'កំពុងគិត...' : '✨ AI កែប្រែ (Re-Translate)'}</span>
-                  </button>
-                </div>
-
-                {retranslateError && (
-                  <div
-                    data-testid="retranslate-error-banner"
-                    style={{
-                      padding: '6px 8px',
-                      background: 'rgba(239, 68, 68, 0.14)',
-                      border: '1px solid rgba(239, 68, 68, 0.45)',
-                      borderRadius: 5,
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      gap: 8,
-                    }}
-                  >
-                    <span style={{ fontSize: '0.7rem', color: '#fca5a5', display: 'flex', alignItems: 'center', gap: 5, lineHeight: 1.4 }}>
-                      <AlertCircle size={12} color="#ef4444" style={{ flexShrink: 0 }} />
-                      <span>{retranslateError}</span>
-                    </span>
-                    <button
-                      type="button"
-                      onClick={handleAiRetranslate}
-                      disabled={isRetranslating}
-                      style={{
-                        padding: '2px 7px',
-                        fontSize: '0.66rem',
-                        background: 'rgba(239, 68, 68, 0.85)',
-                        color: '#ffffff',
-                        border: 'none',
-                        borderRadius: 4,
-                        cursor: isRetranslating ? 'wait' : 'pointer',
-                        fontWeight: 700,
-                        whiteSpace: 'nowrap',
-                        flexShrink: 0,
-                      }}
-                    >
-                      🔄 សាកម្ដងទៀត
-                    </button>
-                  </div>
-                )}
               </div>
             )}
+          </div>
+        )}
 
             {/* Subtle Gradient Divider between Chinese Source & Khmer Target */}
             <div style={{
@@ -756,11 +754,11 @@ export default function ClipInspectorPanel({
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: '0.72rem', color: '#d8b4fe', fontWeight: 700 }}>
                         <Sparkles size={12} color="#c084fc" />
-                        <span>ជម្រើសបកប្រែដោយ AI (ចុចលើមួយណា យកមួយនោះភ្លាម)៖</span>
+                        <span>ជម្រើសបកប្រែដោយ AI៖</span>
                       </div>
                       {retranslateData.note && (
-                        <span style={{ fontSize: '0.68rem', color: '#cbd5e1', fontStyle: 'italic', background: 'rgba(255,255,255,0.06)', padding: '1px 6px', borderRadius: 4 }}>
-                          💡 {retranslateData.note}
+                        <span style={{ fontSize: '0.66rem', color: '#cbd5e1', background: 'rgba(255,255,255,0.06)', padding: '1px 6px', borderRadius: 4 }}>
+                          {retranslateData.note}
                         </span>
                       )}
                     </div>
@@ -900,10 +898,14 @@ export default function ClipInspectorPanel({
                         borderRadius: 4,
                         cursor: 'pointer',
                         fontWeight: 700,
-                        whiteSpace: 'nowrap'
+                        whiteSpace: 'nowrap',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 4,
                       }}
                     >
-                      🔄 សាកល្បងម្ដងទៀត
+                      <RefreshCw size={11} />
+                      <span>សាកល្បងម្ដងទៀត</span>
                     </button>
                   </div>
                 )}
@@ -940,7 +942,7 @@ export default function ClipInspectorPanel({
                     ) : (
                       <>
                         <Sparkles size={12} />
-                        <span>🎙️ Generate សំឡេងតាមអត្ថបទដែលកែថ្មីនេះ</span>
+                        <span>Generate សំឡេងតាមអត្ថបទថ្មី</span>
                       </>
                     )}
                   </button>
@@ -958,9 +960,9 @@ export default function ClipInspectorPanel({
                 transition: 'all 0.2s ease',
               }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-                  <span style={{ fontSize: '0.70rem', color: '#94a3b8', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 4 }}>
-                    <span>{isThought ? '💭' : '🎙️'}</span>
-                    <span>ទម្រង់នៃការនិយាយ (Delivery Type):</span>
+                  <span style={{ fontSize: '0.70rem', color: '#94a3b8', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                    {isThought ? <MessageSquare size={12} color="#d8b4fe" /> : <Mic size={12} color="#38bdf8" />}
+                    <span>ទម្រង់នៃការនិយាយ (Delivery):</span>
                   </span>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
                     {selectedSegment.deliveryOverride && (
@@ -972,13 +974,12 @@ export default function ClipInspectorPanel({
                 </div>
 
                 {/* Sleek Segmented Switcher */}
-                <div style={{ display: 'flex', gap: 4, background: 'rgba(255, 255, 255, 0.03)', padding: '2px', borderRadius: 6, border: '1px solid rgba(255, 255, 255, 0.05)', marginBottom: 6 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4, background: 'rgba(255, 255, 255, 0.03)', padding: '2px', borderRadius: 6, border: '1px solid rgba(255, 255, 255, 0.05)', marginBottom: 6 }}>
                   <button
                     type="button"
                     onClick={() => onToggleDeliveryType && onToggleDeliveryType(selectedSegment.id || selectedSegmentIndex, 'out_loud', true, selectedSegmentIndex)}
                     disabled={isGenerating}
                     style={{
-                      flex: 1,
                       padding: '5px 8px',
                       fontSize: '0.70rem',
                       borderRadius: 4,
@@ -995,7 +996,8 @@ export default function ClipInspectorPanel({
                     }}
                     title="ប្តូរទៅជាការនិយាយសន្ទនាធម្មតា (Normal Speech without Reverb)"
                   >
-                    <span>🔊 និយាយធម្មតា</span>
+                    <Volume2 size={12} />
+                    <span>និយាយធម្មតា</span>
                   </button>
 
                   <button
@@ -1003,7 +1005,6 @@ export default function ClipInspectorPanel({
                     onClick={() => onToggleDeliveryType && onToggleDeliveryType(selectedSegment.id || selectedSegmentIndex, 'inner_thought', true, selectedSegmentIndex)}
                     disabled={isGenerating}
                     style={{
-                      flex: 1,
                       padding: '5px 8px',
                       fontSize: '0.70rem',
                       borderRadius: 4,
@@ -1020,13 +1021,15 @@ export default function ClipInspectorPanel({
                     }}
                     title="ប្តូរទៅជាការនិយាយក្នុងចិត្ត ដោយបន្ថែម Reverb Effect (Inner Thought Monologue)"
                   >
-                    <span>💭 និយាយក្នុងចិត្ត</span>
+                    <MessageSquare size={12} />
+                    <span>និយាយក្នុងចិត្ត</span>
                   </button>
                 </div>
 
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.64rem', color: isThought ? '#d8b4fe' : '#64748b' }}>
-                  <span>
-                    {isThought ? '✨ Reverb Active (aecho)' : '✨ Direct Voice Output'}
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                    <Sparkles size={10} color={isThought ? '#d8b4fe' : '#64748b'} />
+                    <span>{isThought ? 'Reverb Active (aecho)' : 'Direct Voice Output'}</span>
                   </span>
                   {selectedSegment.deliveryConfidence !== null && typeof selectedSegment.deliveryConfidence === 'number' && (
                     <span>Confidence: {Math.round(selectedSegment.deliveryConfidence * 100)}%</span>
@@ -1085,8 +1088,10 @@ export default function ClipInspectorPanel({
                   >
                     {switchingVoiceTarget === 'MALE' ? (
                       <Loader2 size={13} className="animate-spin" style={{ color: '#38bdf8' }} />
-                    ) : null}
-                    <span>👨 ប្រុស</span>
+                    ) : (
+                      <User size={13} />
+                    )}
+                    <span>ប្រុស (Piseth)</span>
                   </button>
                   <button
                     type="button"
@@ -1125,8 +1130,10 @@ export default function ClipInspectorPanel({
                   >
                     {switchingVoiceTarget === 'FEMALE' ? (
                       <Loader2 size={13} className="animate-spin" style={{ color: '#f472b6' }} />
-                    ) : null}
-                    <span>👩 ស្រី</span>
+                    ) : (
+                      <UserCheck size={13} />
+                    )}
+                    <span>ស្រី (Sreymom)</span>
                   </button>
                 </div>
               </div>
@@ -1135,120 +1142,123 @@ export default function ClipInspectorPanel({
               {(() => {
                 return (
                   <>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8, fontSize: '0.74rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6, fontSize: '0.74rem' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                         {selectedSegment.audioUrl ? (
-                          <span style={{ fontSize: '0.66rem', color: selectedSegment.audioOutdated ? 'var(--color-warning)' : 'var(--color-success)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: 3 }}>
+                          <span style={{ fontSize: '0.66rem', color: selectedSegment.audioOutdated ? 'var(--color-warning)' : 'var(--color-success)', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                             <CheckCircle2 size={11} /> {selectedSegment.audioOutdated ? 'អត្ថបទកែ (Outdated)' : 'Audio Ready'}
                           </span>
                         ) : (
                           <span style={{ fontSize: '0.66rem', color: 'var(--text-dim)' }}>Audio Pending</span>
                         )}
                       </div>
+                    </div>
 
-                      {/* Dual Mute / Unmute Controls: Video Original Audio & Khmer AI Voice */}
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                        {/* 1. Mute Original Video Audio Button */}
-                        {onToggleMuteVideoClip && (associatedClip || selectedClip) && (
+                    {/* Dual Mute / Unmute Controls: Video Original Audio & Khmer AI Voice */}
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 5, marginBottom: 8 }}>
+                      {/* 1. Mute Original Video Audio Button */}
+                      {onToggleMuteVideoClip && (associatedClip || selectedClip) && (
+                        <button
+                          type="button"
+                          onClick={() => onToggleMuteVideoClip((associatedClip || selectedClip).id)}
+                          title={(associatedClip || selectedClip).isMuted ? "បានបិទសំឡេងវីដេអូដើម (Muted) - ចុចដើម្បីបើកវិញ" : "ចុចដើម្បីបិទសំឡេងដើមនៃ Video Clip នេះ (Mute Original Audio)"}
+                          style={{
+                            padding: '4px 6px',
+                            fontSize: '0.68rem',
+                            fontWeight: 600,
+                            borderRadius: 4,
+                            cursor: 'pointer',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            gap: 4,
+                            border: `1px solid ${(associatedClip || selectedClip).isMuted ? 'rgba(239, 68, 68, 0.7)' : 'rgba(0, 229, 255, 0.4)'}`,
+                            background: (associatedClip || selectedClip).isMuted ? 'rgba(239, 68, 68, 0.25)' : 'rgba(0, 229, 255, 0.1)',
+                            color: (associatedClip || selectedClip).isMuted ? '#f87171' : 'var(--accent-cyan)',
+                            transition: 'all 0.15s ease',
+                          }}
+                        >
+                          {(associatedClip || selectedClip).isMuted ? (
+                            <>
+                              <VolumeX size={11} color="#f87171" />
+                              <span style={{ whiteSpace: 'nowrap' }}>វីដេអូ Muted</span>
+                            </>
+                          ) : (
+                            <>
+                              <Film size={11} color="var(--accent-cyan)" />
+                              <span style={{ whiteSpace: 'nowrap' }}>វីដេអូដើម</span>
+                            </>
+                          )}
+                        </button>
+                      )}
+
+                      {/* 1-Click: Mute All Cuts Shortcut */}
+                      {onToggleMuteAllCuts && videoClips && videoClips.length > 1 && (() => {
+                        const dialogueClips = videoClips.filter((c) => c.isDialogue);
+                        const targetClips = dialogueClips.length > 0 ? dialogueClips : videoClips;
+                        const areAllCutsMuted = targetClips.length > 0 && targetClips.every((c) => Boolean(c.isMuted));
+                        return (
                           <button
                             type="button"
-                            onClick={() => onToggleMuteVideoClip((associatedClip || selectedClip).id)}
-                            title={(associatedClip || selectedClip).isMuted ? "បានបិទសំឡេងវីដេអូដើម (Muted) - ចុចដើម្បីបើកវិញ" : "ចុចដើម្បីបិទសំឡេងដើមនៃ Video Clip នេះ (Mute Original Audio)"}
+                            onClick={() => onToggleMuteAllCuts(true)}
+                            title={areAllCutsMuted ? "ចុចដើម្បីបើកសំឡេងដើម Clip កាត់ទាំងអស់ឡើងវិញ" : "ចុចដើម្បីបិទសំឡេងដើម Clip កាត់ទាំងអស់ដោយ 1-Click"}
                             style={{
-                              padding: '4px 9px',
-                              fontSize: '0.72rem',
-                              fontWeight: 700,
+                              padding: '4px 6px',
+                              fontSize: '0.68rem',
+                              fontWeight: 600,
                               borderRadius: 4,
                               cursor: 'pointer',
                               display: 'inline-flex',
                               alignItems: 'center',
-                              gap: 5,
-                              border: `1px solid ${(associatedClip || selectedClip).isMuted ? 'rgba(239, 68, 68, 0.7)' : 'rgba(0, 229, 255, 0.4)'}`,
-                              background: (associatedClip || selectedClip).isMuted ? 'rgba(239, 68, 68, 0.25)' : 'rgba(0, 229, 255, 0.1)',
-                              color: (associatedClip || selectedClip).isMuted ? '#f87171' : 'var(--accent-cyan)',
+                              justifyContent: 'center',
+                              gap: 4,
+                              border: '1px solid rgba(239, 68, 68, 0.45)',
+                              background: areAllCutsMuted ? 'rgba(239, 68, 68, 0.25)' : 'rgba(239, 68, 68, 0.1)',
+                              color: areAllCutsMuted ? '#fca5a5' : '#f87171',
                               transition: 'all 0.15s ease',
                             }}
                           >
-                            {(associatedClip || selectedClip).isMuted ? (
-                              <>
-                                <VolumeX size={12} color="#f87171" />
-                                <span>🔇 សំឡេងដើម (Muted)</span>
-                              </>
-                            ) : (
-                              <>
-                                <Volume2 size={12} color="var(--accent-cyan)" />
-                                <span>🎬 សំឡេងដើម (Orig Audio)</span>
-                              </>
-                            )}
+                            {areAllCutsMuted ? <VolumeX size={11} color="#fca5a5" /> : <Volume2 size={11} color="#f87171" />}
+                            <span style={{ whiteSpace: 'nowrap' }}>{areAllCutsMuted ? 'Unmute All' : 'Mute All'}</span>
                           </button>
-                        )}
+                        );
+                      })()}
 
-                        {/* 1-Click: Mute All Cuts Shortcut */}
-                        {onToggleMuteAllCuts && videoClips && videoClips.length > 1 && (() => {
-                          const dialogueClips = videoClips.filter((c) => c.isDialogue);
-                          const targetClips = dialogueClips.length > 0 ? dialogueClips : videoClips;
-                          const areAllCutsMuted = targetClips.length > 0 && targetClips.every((c) => Boolean(c.isMuted));
-                          return (
-                            <button
-                              type="button"
-                              onClick={() => onToggleMuteAllCuts(true)}
-                              title={areAllCutsMuted ? "ចុចដើម្បីបើកសំឡេងដើម Clip កាត់ទាំងអស់ឡើងវិញ" : "ចុចដើម្បីបិទសំឡេងដើម Clip កាត់ទាំងអស់ដោយ 1-Click"}
-                              style={{
-                                padding: '4px 9px',
-                                fontSize: '0.72rem',
-                                fontWeight: 700,
-                                borderRadius: 4,
-                                cursor: 'pointer',
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                gap: 4,
-                                border: '1px solid rgba(239, 68, 68, 0.45)',
-                                background: areAllCutsMuted ? 'rgba(239, 68, 68, 0.25)' : 'rgba(239, 68, 68, 0.1)',
-                                color: areAllCutsMuted ? '#fca5a5' : '#f87171',
-                                transition: 'all 0.15s ease',
-                              }}
-                            >
-                              {areAllCutsMuted ? <VolumeX size={12} color="#fca5a5" /> : <Volume2 size={12} color="#f87171" />}
-                              <span>{areAllCutsMuted ? 'Unmute All Cuts' : '🔇 Mute All Cuts'}</span>
-                            </button>
-                          );
-                        })()}
-
-                        {/* 2. Single Clip Mute / Unmute Toggle (Khmer AI Voice) */}
-                        {onToggleMuteSegment && (
-                          <button
-                            type="button"
-                            onClick={() => onToggleMuteSegment(selectedSegment.id || selectedSegmentIndex)}
-                            title={selectedSegment.muted ? "ចុចដើម្បីបើកសំឡេង AI ខ្មែរឡើងវិញ (Unmute Voice)" : "ចុចដើម្បីបិទសំឡេង AI ខ្មែរតែឃ្លានេះ (Mute Voice)"}
-                            style={{
-                              padding: '4px 9px',
-                              fontSize: '0.72rem',
-                              fontWeight: 700,
-                              borderRadius: 4,
-                              cursor: 'pointer',
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              gap: 5,
-                              border: `1px solid ${selectedSegment.muted ? 'rgba(239, 68, 68, 0.7)' : 'rgba(255, 255, 255, 0.2)'}`,
-                              background: selectedSegment.muted ? 'rgba(239, 68, 68, 0.25)' : 'rgba(255, 255, 255, 0.08)',
-                              color: selectedSegment.muted ? '#f87171' : 'var(--text-secondary)',
-                              transition: 'all 0.15s ease',
-                            }}
-                          >
-                            {selectedSegment.muted ? (
-                              <>
-                                <VolumeX size={12} color="#f87171" />
-                                <span>🔇 សំឡេង AI (Muted)</span>
-                              </>
-                            ) : (
-                              <>
-                                <Volume2 size={12} color="#38bdf8" />
-                                <span>🔊 សំឡេង AI (Voice)</span>
-                              </>
-                            )}
-                          </button>
-                        )}
-                      </div>
+                      {/* 2. Single Clip Mute / Unmute Toggle (Khmer AI Voice) */}
+                      {onToggleMuteSegment && (
+                        <button
+                          type="button"
+                          onClick={() => onToggleMuteSegment(selectedSegment.id || selectedSegmentIndex)}
+                          title={selectedSegment.muted ? "ចុចដើម្បីបើកសំឡេង AI ខ្មែរឡើងវិញ (Unmute Voice)" : "ចុចដើម្បីបិទសំឡេង AI ខ្មែរតែឃ្លានេះ (Mute Voice)"}
+                          style={{
+                            padding: '4px 6px',
+                            fontSize: '0.68rem',
+                            fontWeight: 600,
+                            borderRadius: 4,
+                            cursor: 'pointer',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            gap: 4,
+                            border: `1px solid ${selectedSegment.muted ? 'rgba(239, 68, 68, 0.7)' : 'rgba(255, 255, 255, 0.2)'}`,
+                            background: selectedSegment.muted ? 'rgba(239, 68, 68, 0.25)' : 'rgba(255, 255, 255, 0.08)',
+                            color: selectedSegment.muted ? '#f87171' : 'var(--text-secondary)',
+                            transition: 'all 0.15s ease',
+                          }}
+                        >
+                          {selectedSegment.muted ? (
+                            <>
+                              <VolumeX size={11} color="#f87171" />
+                              <span style={{ whiteSpace: 'nowrap' }}>AI Muted</span>
+                            </>
+                          ) : (
+                            <>
+                              <Volume2 size={11} color="#38bdf8" />
+                              <span style={{ whiteSpace: 'nowrap' }}>សំឡេង AI</span>
+                            </>
+                          )}
+                        </button>
+                      )}
                     </div>
 
                     {/* Speaking Rate for this selected segment */}
@@ -1267,24 +1277,24 @@ export default function ClipInspectorPanel({
 
                       const getClipSpeedLabel = (spd) => {
                         if (spd <= 0.6) return 'យឺតខ្លាំង';
-                        if (spd <= 0.85) return 'យឺត (Slow)';
-                        if (spd <= 1.15) return 'ធម្មតា (Normal)';
-                        if (spd <= 1.4) return 'លឿន (Fast)';
-                        return 'ញាប់ (Rapid)';
+                        if (spd <= 0.85) return 'យឺត';
+                        if (spd <= 1.15) return 'ធម្មតា';
+                        if (spd <= 1.4) return 'លឿន';
+                        return 'ញាប់';
                       };
 
                       const clipPresets = [
-                        { label: '🐢 0.75x', val: 0.75 },
-                        { label: '⚡ 1.0x', val: 1.0 },
-                        { label: '🚀 1.25x', val: 1.25 },
-                        { label: '🏎️ 1.5x', val: 1.5 },
+                        { label: '0.75x', val: 0.75 },
+                        { label: '1.0x', val: 1.0 },
+                        { label: '1.25x', val: 1.25 },
+                        { label: '1.5x', val: 1.5 },
                       ];
 
                       return (
                         <div style={{ marginBottom: 10, padding: '7px 9px', background: 'rgba(255,255,255,0.02)', borderRadius: 6, border: '1px solid rgba(255,255,255,0.06)' }}>
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 5 }}>
-                            <span style={{ fontSize: '0.72rem', color: 'var(--text-dim)', fontWeight: 600 }}>
-                              ល្បឿនឃ្លានេះ (Clip Speed):
+                            <span style={{ fontSize: '0.70rem', color: 'var(--text-dim)', fontWeight: 600 }}>
+                              ល្បឿន (Clip Speed):
                             </span>
                             <span style={{
                               fontSize: '0.68rem',
@@ -1292,7 +1302,8 @@ export default function ClipInspectorPanel({
                               background: 'rgba(56, 189, 248, 0.12)',
                               padding: '1px 7px',
                               borderRadius: 4,
-                              fontWeight: 700
+                              fontWeight: 700,
+                              whiteSpace: 'nowrap'
                             }}>
                               {segSpeedNum.toFixed(2)}x • {getClipSpeedLabel(segSpeedNum)}
                             </span>
@@ -1356,160 +1367,173 @@ export default function ClipInspectorPanel({
                 );
               })()}
 
-              {/* Action Buttons: Listen & Regenerate */}
-              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                {/* 1. Manual Play/Listen Button */}
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (selectedSegment.audioUrl && onPlaySegmentAudio) {
-                      onPlaySegmentAudio(selectedSegment.audioUrl, selectedSegment.id || selectedSegmentIndex, true);
-                    }
-                  }}
-                  disabled={!selectedSegment.audioUrl || isGenerating}
-                  className={String(playingSegmentId) === String(selectedSegment.id || selectedSegmentIndex) ? "btn-accent" : "btn-secondary"}
-                  style={{
-                    flex: 1,
-                    minWidth: '110px',
-                    padding: '7px 8px',
-                    fontSize: '0.74rem',
-                    justifyContent: 'center',
-                    background: String(playingSegmentId) === String(selectedSegment.id || selectedSegmentIndex)
-                      ? 'linear-gradient(135deg, #10b981 0%, #059669 100%)'
-                      : (autoplayBlocked ? 'rgba(234, 179, 8, 0.18)' : undefined),
-                    borderColor: String(playingSegmentId) === String(selectedSegment.id || selectedSegmentIndex)
-                      ? '#34d399'
-                      : (autoplayBlocked ? '#eab308' : undefined),
-                    color: String(playingSegmentId) === String(selectedSegment.id || selectedSegmentIndex)
-                      ? '#ffffff'
-                      : (autoplayBlocked ? '#fef08a' : undefined),
-                    fontWeight: 600,
-                  }}
-                  title={selectedSegment.audioUrl ? "ចុចស្តាប់សំឡេងឃ្លានេះ (Play audio)" : "មិនទាន់មានសំឡេងសម្រាប់ឃ្លានេះទេ"}
-                >
-                  {String(playingSegmentId) === String(selectedSegment.id || selectedSegmentIndex) ? (
-                    <>
-                      <Pause size={13} />
-                      <span>កំពុងចាក់... (Pause)</span>
-                    </>
-                  ) : (
-                    <>
-                      <Volume2 size={13} color={autoplayBlocked ? "#facc15" : undefined} />
-                      <span>🔊 ស្តាប់សាកល្បង</span>
-                    </>
-                  )}
-                </button>
-
-                {/* 2. Regenerate Button or One-Click Translate Remedy */}
-                {isKhmerEmpty ? (
+              {/* Action Buttons: Listen, Regenerate & Tools */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+                  {/* 1. Manual Play/Listen Button */}
                   <button
                     type="button"
-                    onClick={handleTranslateThisLine}
-                    disabled={isRetranslating}
-                    className="btn-primary"
+                    onClick={() => {
+                      if (selectedSegment.audioUrl && onPlaySegmentAudio) {
+                        onPlaySegmentAudio(selectedSegment.audioUrl, selectedSegment.id || selectedSegmentIndex, true);
+                      }
+                    }}
+                    disabled={!selectedSegment.audioUrl || isGenerating}
+                    className={String(playingSegmentId) === String(selectedSegment.id || selectedSegmentIndex) ? "btn-accent" : "btn-secondary"}
                     style={{
-                      flex: 1,
-                      minWidth: '110px',
                       padding: '7px 8px',
                       fontSize: '0.74rem',
                       justifyContent: 'center',
-                      background: 'linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)',
-                      color: '#ffffff',
-                      border: 'none',
-                      cursor: isRetranslating ? 'not-allowed' : 'pointer',
-                      fontWeight: 700,
+                      background: String(playingSegmentId) === String(selectedSegment.id || selectedSegmentIndex)
+                        ? 'linear-gradient(135deg, #10b981 0%, #059669 100%)'
+                        : (autoplayBlocked ? 'rgba(234, 179, 8, 0.18)' : undefined),
+                      borderColor: String(playingSegmentId) === String(selectedSegment.id || selectedSegmentIndex)
+                        ? '#34d399'
+                        : (autoplayBlocked ? '#eab308' : undefined),
+                      color: String(playingSegmentId) === String(selectedSegment.id || selectedSegmentIndex)
+                        ? '#ffffff'
+                        : (autoplayBlocked ? '#fef08a' : undefined),
+                      fontWeight: 600,
                       display: 'inline-flex',
                       alignItems: 'center',
                       gap: 5,
-                      boxShadow: '0 2px 8px rgba(99, 102, 241, 0.35)',
                     }}
-                    title="បកប្រែឃ្លានេះជាភាសាខ្មែរតាមរយៈ AI (Translate this line) — មិនអាចបង្កើតសំឡេងបានទេ — គ្មានអត្ថបទខ្មែរ (Missing text)"
+                    title="🔊 ស្តាប់សាកល្បង (Play audio)"
                   >
-                    {isRetranslating ? (
+                    {String(playingSegmentId) === String(selectedSegment.id || selectedSegmentIndex) ? (
                       <>
-                        <Loader2 size={13} className="pulse-glow" />
-                        <span>កំពុងបកប្រែ...</span>
+                        <Pause size={13} />
+                        <span>កំពុងចាក់...</span>
                       </>
                     ) : (
                       <>
-                        <Sparkles size={13} />
-                        <span>បកប្រែឃ្លានេះ</span>
+                        <Play size={13} fill="currentColor" color={autoplayBlocked ? "#facc15" : undefined} />
+                        <span>ស្តាប់សាកល្បង</span>
                       </>
                     )}
                   </button>
-                ) : (() => {
-                  const isRegenerating = regeneratingId === (selectedSegment.id || selectedSegmentIndex);
-                  return (
+
+                  {/* 2. Regenerate Button or One-Click Translate Remedy */}
+                  {isKhmerEmpty ? (
                     <button
                       type="button"
-                      onClick={() => onSingleRegen(selectedSegment.id || selectedSegmentIndex, selectedSegmentIndex, localKhmerText)}
-                      disabled={isRegenerating}
-                      className={selectedSegment.audioUrl ? "btn-secondary" : "btn-primary"}
+                      onClick={handleTranslateThisLine}
+                      disabled={isRetranslating}
+                      className="btn-primary"
                       style={{
-                        flex: 1,
-                        minWidth: '110px',
                         padding: '7px 8px',
                         fontSize: '0.74rem',
                         justifyContent: 'center',
-                        cursor: 'pointer',
+                        background: 'linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)',
+                        color: '#ffffff',
+                        border: 'none',
+                        cursor: isRetranslating ? 'not-allowed' : 'pointer',
+                        fontWeight: 700,
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 5,
+                        boxShadow: '0 2px 8px rgba(99, 102, 241, 0.35)',
                       }}
-                      title="Regenerate speech for this segment"
+                      title="បកប្រែឃ្លានេះជាភាសាខ្មែរតាមរយៈ AI (Translate this line)"
                     >
-                      {isRegenerating ? (
+                      {isRetranslating ? (
                         <>
                           <Loader2 size={13} className="pulse-glow" />
-                          <span>កំពុងបង្កើត...</span>
+                          <span>កំពុងបកប្រែ...</span>
                         </>
                       ) : (
                         <>
-                          <RefreshCw size={13} />
-                          <span>{selectedSegment.audioUrl ? 'Generate ឡើងវិញ' : 'Generate ឃ្លានេះ'}</span>
+                          <Sparkles size={13} />
+                          <span>បកប្រែឃ្លានេះ</span>
                         </>
                       )}
                     </button>
-                  );
-                })()}
+                  ) : (() => {
+                    const isRegenerating = regeneratingId === (selectedSegment.id || selectedSegmentIndex);
+                    return (
+                      <button
+                        type="button"
+                        onClick={() => onSingleRegen(selectedSegment.id || selectedSegmentIndex, selectedSegmentIndex, localKhmerText)}
+                        disabled={isRegenerating}
+                        className={selectedSegment.audioUrl ? "btn-secondary" : "btn-primary"}
+                        style={{
+                          padding: '7px 8px',
+                          fontSize: '0.74rem',
+                          justifyContent: 'center',
+                          cursor: 'pointer',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 5,
+                        }}
+                        title="Regenerate speech for this segment"
+                      >
+                        {isRegenerating ? (
+                          <>
+                            <Loader2 size={13} className="pulse-glow" />
+                            <span>កំពុងបង្កើត...</span>
+                          </>
+                        ) : (
+                          <>
+                            <RefreshCw size={13} />
+                            <span>{selectedSegment.audioUrl ? 'Generate ឡើងវិញ' : 'Generate'}</span>
+                          </>
+                        )}
+                      </button>
+                    );
+                  })()}
+                </div>
 
-                {/* 3. Split Segment at Playhead */}
-                {onSplitClip && (
-                  <button
-                    type="button"
-                    onClick={() => onSplitClip(currentTime, selectedSegment.id || selectedSegmentIndex)}
-                    className="btn-secondary"
-                    style={{
-                      padding: '6px 10px',
-                      fontSize: '0.74rem',
-                      justifyContent: 'center',
-                      color: 'var(--accent-cyan, #38bdf8)',
-                      borderColor: 'rgba(56, 189, 248, 0.35)',
-                      background: 'rgba(56, 189, 248, 0.08)',
-                    }}
-                    title="កាត់ឃ្លានេះជាពីរត្រង់ Playhead (Split Segment at Playhead - Ctrl+B)"
-                  >
-                    <Scissors size={13} color="var(--accent-cyan)" />
-                    <span>កាត់ឃ្លា (Split)</span>
-                  </button>
-                )}
+                {/* Secondary Row: Split & Delete */}
+                {(onSplitClip || onDeleteSegment) && (
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    {onSplitClip && (
+                      <button
+                        type="button"
+                        onClick={() => onSplitClip(currentTime, selectedSegment.id || selectedSegmentIndex)}
+                        className="btn-secondary"
+                        style={{
+                          flex: 1,
+                          padding: '6px 10px',
+                          fontSize: '0.72rem',
+                          justifyContent: 'center',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 5,
+                          color: 'var(--accent-cyan, #38bdf8)',
+                          borderColor: 'rgba(56, 189, 248, 0.35)',
+                          background: 'rgba(56, 189, 248, 0.08)',
+                        }}
+                        title="កាត់ឃ្លានេះជាពីរត្រង់ Playhead (Split Segment at Playhead - Ctrl+B)"
+                      >
+                        <Scissors size={13} color="var(--accent-cyan)" />
+                        <span>កាត់ឃ្លា (Split)</span>
+                      </button>
+                    )}
 
-                {/* 4. Delete Segment Button */}
-                {onDeleteSegment && (
-                  <button
-                    type="button"
-                    onClick={() => onDeleteSegment(selectedSegment._uid || (selectedSegment.id !== undefined && selectedSegment.id !== null ? selectedSegment.id : selectedSegmentIndex))}
-                    className="btn-secondary"
-                    style={{
-                      padding: '6px 10px',
-                      fontSize: '0.74rem',
-                      justifyContent: 'center',
-                      color: '#f87171',
-                      borderColor: 'rgba(239, 68, 68, 0.3)',
-                      background: 'rgba(239, 68, 68, 0.08)'
-                    }}
-                    title="លុបឃ្លានេះចោល (Delete Segment)"
-                  >
-                    <Trash2 size={13} color="#f87171" />
-                    <span>លុប</span>
-                  </button>
+                    {onDeleteSegment && (
+                      <button
+                        type="button"
+                        onClick={() => onDeleteSegment(selectedSegment._uid || (selectedSegment.id !== undefined && selectedSegment.id !== null ? selectedSegment.id : selectedSegmentIndex))}
+                        className="btn-secondary"
+                        style={{
+                          width: onSplitClip ? '75px' : '100%',
+                          padding: '6px 10px',
+                          fontSize: '0.72rem',
+                          justifyContent: 'center',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 5,
+                          color: '#f87171',
+                          borderColor: 'rgba(239, 68, 68, 0.3)',
+                          background: 'rgba(239, 68, 68, 0.08)'
+                        }}
+                        title="លុបឃ្លានេះចោល (Delete Segment)"
+                      >
+                        <Trash2 size={13} color="#f87171" />
+                        <span>លុប</span>
+                      </button>
+                    )}
+                  </div>
                 )}
               </div>
 
@@ -1550,7 +1574,6 @@ export default function ClipInspectorPanel({
                   <span>Audio Error: {playbackError}</span>
                 </div>
               )}
-      </div>
     </div>
   );
 }

@@ -20,7 +20,7 @@ const DEFAULT_SUPPORTED_VOICES = [
     provider: 'edge-tts',
     providerName: 'Microsoft Edge TTS (Neural)',
     libraryId: 'edge-neural',
-    libraryName: '🏛️ ឃ្លាំង Microsoft Edge Neural',
+    libraryName: 'ឃ្លាំង Microsoft Edge Neural',
     notes: 'សំឡេងប្រុសខ្មែរបែប Neural ពី Microsoft Edge ច្បាស់និងមាំទាំ'
   },
   {
@@ -33,7 +33,7 @@ const DEFAULT_SUPPORTED_VOICES = [
     provider: 'edge-tts',
     providerName: 'Microsoft Edge TTS (Neural)',
     libraryId: 'edge-neural',
-    libraryName: '🏛️ ឃ្លាំង Microsoft Edge Neural',
+    libraryName: 'ឃ្លាំង Microsoft Edge Neural',
     notes: 'សំឡេងស្រីខ្មែរបែប Neural ពី Microsoft Edge រលូននិងពិរោះរណ្តំ'
   }
 ];
@@ -724,7 +724,7 @@ export default function VoiceSettings({
 
   const renderVoiceOptions = () => (
     <>
-      <optgroup label="🏛️ ឃ្លាំង Microsoft Edge Neural (ពិសិដ្ឋ & ស្រីមុំ)" style={{ background: '#181A20', color: 'var(--accent-cyan)' }}>
+      <optgroup label="ឃ្លាំង Microsoft Edge Neural (ពិសិដ្ឋ & ស្រីមុំ)" style={{ background: '#181A20', color: 'var(--accent-cyan)' }}>
         {allVoices.map(v => (
           <option key={v.id} value={v.id} style={{ background: '#1c1f26', color: '#fff' }}>
             {v.displayName || v.name}
@@ -859,7 +859,7 @@ export default function VoiceSettings({
                             cursor: 'pointer',
                           }}
                         >
-                          {isFemale ? '👩 ស្រីមុំ' : '👨 ពិសិដ្ឋ'}
+                          {isFemale ? 'ស្រី (ស្រីមុំ)' : 'ប្រុស (ពិសិដ្ឋ)'}
                         </button>
                       </div>
                     );
