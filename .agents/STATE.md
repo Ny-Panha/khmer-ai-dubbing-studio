@@ -1,38 +1,37 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
-- **Environment**: Antigravity IDE (Demucs Separation 26% Freeze Diagnosis & Polling Resilience)
-- **Timestamp**: 2026-11-13T10:54:00+07:00
+- **Environment**: Antigravity IDE (502 Bad Gateway / ECONNREFUSED Diagnosis & Cache Cleanup)
+- **Timestamp**: 2026-11-13T15:56:00+07:00
 
-## Summary: Demucs Separation 26% Freeze Diagnosis & Polling Loop Fix
+## Summary: 502 Bad Gateway / ECONNREFUSED Diagnosis & Cache Purge
 1. **User Request**:
-   - `u mes vea keang nv ng ?` with screenshot showing Demucs Separation card stuck at 26% (`[10:32:18 am] ⏳ Demucs Progress: 26%`).
+   - Error logs showing `502 (Bad Gateway)` and `Backend server is temporarily unreachable (ECONNREFUSED). Please verify backend is running on port 5000.` along with `Demucs worker exited with code 1`.
 2. **Diagnosis & Root Cause**:
-   - **Why it froze**:
-     - At 10:32 AM, the background Python Demucs worker was running for EP13/14 and reached 26%.
-     - A system cleanup process unexpectedly terminated Python processes on the host machine.
-     - Once the Python process terminated, the backend endpoint returned `{ status: 'idle', progress: 0 }`.
-     - In `frontend/src/features/dubbing-runner/DubbingRunnerContext.jsx`, the fallback polling `while` loop did not check for `status === 'idle'` after a job had already started, causing the frontend to loop forever waiting for completion while the UI displayed the last received progress (26%).
-   - **Data on disk**: 12 episodes (`EP1-EP12`) have valid Clean BGM (`no_vocals.wav`) completed. The remaining 9 episodes (`EP13-EP21`) are intact and ready to continue.
-3. **Defensive Fix**:
-   - `frontend/src/features/dubbing-runner/DubbingRunnerContext.jsx`:
-     - Added `hadProgress` and `idleCount` tracking to the separation polling loop.
-     - If the worker process goes idle or terminates while polling, it gracefully breaks out and fails with a clear warning instead of hanging the UI indefinitely.
-4. **Verification**:
-   - `npm --prefix frontend run lint` (`oxlint`): **0 errors (PASS)**.
-   - `npm --prefix frontend run build` (`vite build`): **PASS (687ms, 0 errors)**.
-   - `node --test backend/tests/empty_text_guard.test.js backend/tests/full_project_master_upgrade.test.js`: **11/11 PASS (100%)**.
+   - **Why 502 / ECONNREFUSED occurred**:
+     - At ~3:00 PM, the Node.js backend server (port 5000) was briefly stopped / restarted.
+     - While port 5000 was offline, Vite's dev proxy intercepted frontend requests and returned `502 (Bad Gateway)`.
+     - Backend has since been restarted and is now **online and healthy** (PID 1496, `geminiConfigured: true`, `status: 'ok'`).
+   - **Current Data Status**:
+     - **EP1 - EP13** have valid Clean BGM (Demucs) completed (`13 / 21 = 62%`).
+     - Incomplete cache folders for EP14 were safely purged so EP14 starts fresh.
+     - Only **8 episodes remaining**: `EP14` through `EP21`.
+3. **Verification**:
+   - Backend API: `http://localhost:5000/api/health` -> `status: 'ok'` (PASS).
+   - Frontend Vite: `http://localhost:5173` -> Listening (PASS).
+   - Clean BGM completed caches verified: 13/13 valid files.
 
 ## Active Environment
-- Backend API: `http://localhost:5000` (Listening)
+- Backend API: `http://localhost:5000` (Online & Healthy)
 - Frontend Vite: `http://localhost:5173` (Listening)
 - Active Series: `series_1793898268958`
-- Clean BGM Status: 12/21 Episodes completed (57%)
-- Pending Clean BGM: 9 Episodes (`EP13-EP21`)
+- Clean BGM Status: 13/21 Episodes completed (62%)
+- Pending Clean BGM: 8 Episodes (`EP14-EP21`)
 - GitHub Repo: `https://github.com/Ny-Panha/khmer-ai-dubbing-studio` (Private)
 
 ## Next Steps
-- Guide Nha to click `[ 🛑 Kill ]` (or press `F5`) to reset the frozen state, then click `▶ Run 1-by-1` on the Clean BGM card to resume from EP13 onwards.
+- Inform Nha that both Backend (5000) and Frontend (5173) are already online.
+- Advise Nha to press `F5` in the browser to refresh, then click `▶ Run 1-by-1` on Card 4 (Clean BGM) to process the remaining 8 episodes (`EP14-EP21`).
 
 ## Active Environment
 - Backend API: `http://localhost:5000` (Listening)
