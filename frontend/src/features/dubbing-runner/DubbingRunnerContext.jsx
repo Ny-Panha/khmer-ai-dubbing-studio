@@ -535,6 +535,8 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
 
     // 2. If separateAudioApi returned without success (e.g. transient timeout), keep polling until completed
     if (!sepRes?.success || !sepRes?.noVocalsUrl) {
+      let idleCount = 0;
+      let hadProgress = false;
       while (!signal?.aborted) {
         await new Promise((r) => setTimeout(r, 1200));
         if (signal?.aborted) {
@@ -545,6 +547,7 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
         const prog = await getSeparationProgressApi(videoRef, { signal }).catch(() => null);
         if (prog) {
           const pct = Math.min(100, Math.max(0, Number(prog.progress || prog.percent || 0)));
+          if (pct > 0) hadProgress = true;
           updateRunnerState('clean_bgm', { progress: pct });
 
           if (prog.status === 'completed' || (prog.isDone && prog.noVocalsUrl) || pct >= 100) {
@@ -554,6 +557,20 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
           if (prog.status === 'error' || prog.isFailed) {
             console.error(`[Clean BGM 🔇] ❌ EP${ep.episodeNumber || ep.id} បរាជ័យ:`, prog.error || prog.message);
             throw new Error(prog.error || prog.message || 'Demucs separation failed');
+          }
+          if (prog.status === 'idle') {
+            idleCount++;
+            if (hadProgress || idleCount >= 5) {
+              console.warn(`[Clean BGM 🔇] Demucs process is idle/stopped for EP${ep.episodeNumber || ep.id}`);
+              throw new Error('Demucs process ended unexpectedly');
+            }
+          } else {
+            idleCount = 0;
+          }
+        } else {
+          idleCount++;
+          if (idleCount >= 6) {
+            throw new Error('Demucs separation endpoint unreachable');
           }
         }
       }

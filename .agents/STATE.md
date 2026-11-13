@@ -1,34 +1,38 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
-- **Environment**: Antigravity IDE (Clean BGM 10/21 Progress Diagnosis & Card Label De-slop)
-- **Timestamp**: 2026-11-13T08:47:00+07:00
+- **Environment**: Antigravity IDE (Demucs Separation 26% Freeze Diagnosis & Polling Resilience)
+- **Timestamp**: 2026-11-13T10:54:00+07:00
 
-## Summary: Clean BGM 10/21 Progress Diagnosis & Card Label De-slop
+## Summary: Demucs Separation 26% Freeze Diagnosis & Polling Loop Fix
 1. **User Request**:
-   - `nh run hxhx tea vea ot 100?` with screenshot of `4. Clean BGM: 10/21 48% [▶ Run 1-by-1] [↻ ធ្វើឡើងវិញ]`.
-2. **Diagnosis & Investigation**:
-   - **Data on disk (`series.json`)**: 10 out of 21 episodes currently have Clean BGM (Demucs) completed (`EP1-EP8, EP11, EP12`).
-   - The remaining 11 episodes (`EP9, EP10, EP13-EP21`) have not been processed yet (10 / 21 = 47.6% ≈ 48%).
-   - All 21 episodes have valid source video files on disk.
-   - User simply needs to click `▶ Run 1-by-1` on Card 4 to process the remaining 11 episodes.
-3. **UI Polish**:
-   - `frontend/src/features/dubbing-runner/DubbingStepCardsBar.jsx`:
-     - Cleaned up ratio labels from `{count}/{total} ភាគ` to `{count}/{total}` across all 4 cards (`translate`, `voice`, `autofit`, `clean_bgm`).
-     - Eliminates text overlap between the Khmer label and the percentage pill badge (`48%`) on narrow card widths.
+   - `u mes vea keang nv ng ?` with screenshot showing Demucs Separation card stuck at 26% (`[10:32:18 am] ⏳ Demucs Progress: 26%`).
+2. **Diagnosis & Root Cause**:
+   - **Why it froze**:
+     - At 10:32 AM, the background Python Demucs worker was running for EP13/14 and reached 26%.
+     - A system cleanup process unexpectedly terminated Python processes on the host machine.
+     - Once the Python process terminated, the backend endpoint returned `{ status: 'idle', progress: 0 }`.
+     - In `frontend/src/features/dubbing-runner/DubbingRunnerContext.jsx`, the fallback polling `while` loop did not check for `status === 'idle'` after a job had already started, causing the frontend to loop forever waiting for completion while the UI displayed the last received progress (26%).
+   - **Data on disk**: 12 episodes (`EP1-EP12`) have valid Clean BGM (`no_vocals.wav`) completed. The remaining 9 episodes (`EP13-EP21`) are intact and ready to continue.
+3. **Defensive Fix**:
+   - `frontend/src/features/dubbing-runner/DubbingRunnerContext.jsx`:
+     - Added `hadProgress` and `idleCount` tracking to the separation polling loop.
+     - If the worker process goes idle or terminates while polling, it gracefully breaks out and fails with a clear warning instead of hanging the UI indefinitely.
 4. **Verification**:
    - `npm --prefix frontend run lint` (`oxlint`): **0 errors (PASS)**.
-   - `npm --prefix frontend run build` (`vite build`): **PASS (910ms, 0 errors)**.
-   - `node --test backend/tests/reusable_1by1_dubbing_feature.test.js`: **10/10 PASS (100%)**.
+   - `npm --prefix frontend run build` (`vite build`): **PASS (687ms, 0 errors)**.
+   - `node --test backend/tests/empty_text_guard.test.js backend/tests/full_project_master_upgrade.test.js`: **11/11 PASS (100%)**.
 
 ## Active Environment
 - Backend API: `http://localhost:5000` (Listening)
 - Frontend Vite: `http://localhost:5173` (Listening)
 - Active Series: `series_1793898268958`
+- Clean BGM Status: 12/21 Episodes completed (57%)
+- Pending Clean BGM: 9 Episodes (`EP13-EP21`)
 - GitHub Repo: `https://github.com/Ny-Panha/khmer-ai-dubbing-studio` (Private)
 
 ## Next Steps
-- Await Nha's review of the Inspector panel layout.
+- Guide Nha to click `[ 🛑 Kill ]` (or press `F5`) to reset the frozen state, then click `▶ Run 1-by-1` on the Clean BGM card to resume from EP13 onwards.
 
 ## Active Environment
 - Backend API: `http://localhost:5000` (Listening)
