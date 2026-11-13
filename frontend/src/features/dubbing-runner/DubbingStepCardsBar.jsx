@@ -77,7 +77,7 @@ export default function DubbingStepCardsBar({ episodes = [], selectedEpIds = nul
             1. Script ខ្មែរ:
           </span>
           <span style={{ fontSize: '0.70rem', color: '#94A3B8', whiteSpace: 'nowrap' }}>
-            {stats.scriptedCount}/{stats.total} ភាគ
+            {stats.scriptedCount}/{stats.total}
           </span>
         </div>
 
@@ -235,7 +235,7 @@ export default function DubbingStepCardsBar({ episodes = [], selectedEpIds = nul
             2. សំឡេង AI:
           </span>
           <span style={{ fontSize: '0.70rem', color: '#94A3B8', whiteSpace: 'nowrap' }}>
-            {stats.voicedCount}/{stats.total} ភាគ
+            {stats.voicedCount}/{stats.total}
           </span>
         </div>
 
@@ -369,7 +369,7 @@ export default function DubbingStepCardsBar({ episodes = [], selectedEpIds = nul
             3. Auto-Fit:
           </span>
           <span style={{ fontSize: '0.70rem', color: '#94A3B8', whiteSpace: 'nowrap' }}>
-            {stats.autofitCount}/{stats.voicedCount || stats.total} ភាគ
+            {stats.autofitCount}/{stats.voicedCount || stats.total}
           </span>
         </div>
 
@@ -504,7 +504,7 @@ export default function DubbingStepCardsBar({ episodes = [], selectedEpIds = nul
             4. Clean BGM:
           </span>
           <span style={{ fontSize: '0.70rem', color: '#94A3B8', whiteSpace: 'nowrap' }}>
-            {stats.cleanBgmCount}/{stats.total} ភាគ
+            {stats.cleanBgmCount}/{stats.total}
           </span>
         </div>
 

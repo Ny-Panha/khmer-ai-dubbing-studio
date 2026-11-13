@@ -1,21 +1,25 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
-- **Environment**: Antigravity IDE (Inspector Move AI Retranslate Button Near Copy)
-- **Timestamp**: 2026-11-12T22:11:00+07:00
+- **Environment**: Antigravity IDE (Clean BGM 10/21 Progress Diagnosis & Card Label De-slop)
+- **Timestamp**: 2026-11-13T08:47:00+07:00
 
-## Summary: Move AI Re-Translate Button Near Copy in ClipInspectorPanel
+## Summary: Clean BGM 10/21 Progress Diagnosis & Card Label De-slop
 1. **User Request**:
-   - `move dak near copy` with screenshot circling the `[AI កែប្រែ / កំពុងគិត...]` button and pointing an arrow to the header next to `[Copy]`.
-2. **Changes Made**:
-   - `frontend/src/components/voice/ClipInspectorPanel.jsx`:
-     - Relocated `<button data-testid="btn-ai-retranslate">` from below the Chinese textarea up into the Chinese header row right next to `<button handleCopyChinese>`.
-     - Grouped both buttons into `<div style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>`.
-     - Kept `<div data-testid="retranslate-error-banner">` below the textarea so any translation errors continue to display cleanly with retry button.
-3. **Verification**:
+   - `nh run hxhx tea vea ot 100?` with screenshot of `4. Clean BGM: 10/21 48% [▶ Run 1-by-1] [↻ ធ្វើឡើងវិញ]`.
+2. **Diagnosis & Investigation**:
+   - **Data on disk (`series.json`)**: 10 out of 21 episodes currently have Clean BGM (Demucs) completed (`EP1-EP8, EP11, EP12`).
+   - The remaining 11 episodes (`EP9, EP10, EP13-EP21`) have not been processed yet (10 / 21 = 47.6% ≈ 48%).
+   - All 21 episodes have valid source video files on disk.
+   - User simply needs to click `▶ Run 1-by-1` on Card 4 to process the remaining 11 episodes.
+3. **UI Polish**:
+   - `frontend/src/features/dubbing-runner/DubbingStepCardsBar.jsx`:
+     - Cleaned up ratio labels from `{count}/{total} ភាគ` to `{count}/{total}` across all 4 cards (`translate`, `voice`, `autofit`, `clean_bgm`).
+     - Eliminates text overlap between the Khmer label and the percentage pill badge (`48%`) on narrow card widths.
+4. **Verification**:
    - `npm --prefix frontend run lint` (`oxlint`): **0 errors (PASS)**.
-   - `npm --prefix frontend run build` (`vite build`): **PASS (609ms, 0 errors)**.
-   - `node --test backend/tests/empty_text_guard.test.js backend/tests/full_project_master_upgrade.test.js`: **11/11 PASS (100%)**.
+   - `npm --prefix frontend run build` (`vite build`): **PASS (910ms, 0 errors)**.
+   - `node --test backend/tests/reusable_1by1_dubbing_feature.test.js`: **10/10 PASS (100%)**.
 
 ## Active Environment
 - Backend API: `http://localhost:5000` (Listening)
