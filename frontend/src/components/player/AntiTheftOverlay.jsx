@@ -1,4 +1,5 @@
-import React from 'react';
+import React, { useState } from 'react';
+import { ArrowUpDown, X } from 'lucide-react';
 import './AntiTheftOverlay.css';
 
 export default function AntiTheftOverlay({
@@ -7,7 +8,10 @@ export default function AntiTheftOverlay({
   aspectRatio = '16:9',
   verticalStyle = 'pad',
   videoMeta = null,
+  onUpdateVoiceSettings = null,
 }) {
+  const [isHovered, setIsHovered] = useState(false);
+
   if (!voiceSettings?.enableAntiTheft || renderedVideo) {
     return null;
   }
@@ -40,8 +44,32 @@ export default function AntiTheftOverlay({
     ? 'size-large'
     : (antiTheftSize === 'medium' ? 'size-medium' : 'size-small');
 
+  const handleTogglePosition = (e) => {
+    e.stopPropagation();
+    if (onUpdateVoiceSettings) {
+      onUpdateVoiceSettings({
+        ...voiceSettings,
+        marqueePosition: marqueePosition === 'bottom' ? 'top' : 'bottom',
+      });
+    }
+  };
+
+  const handleHideRibbon = (e) => {
+    e.stopPropagation();
+    if (onUpdateVoiceSettings) {
+      onUpdateVoiceSettings({
+        ...voiceSettings,
+        enableAntiTheft: false,
+      });
+    }
+  };
+
   return (
-    <div className={`anti-theft-overlay-root ${posClass} ${aspectClass} ${sizeClass}`}>
+    <div
+      className={`anti-theft-overlay-root ${posClass} ${aspectClass} ${sizeClass}`}
+      onMouseEnter={() => setIsHovered(true)}
+      onMouseLeave={() => setIsHovered(false)}
+    >
       {/* 1. Static Copyright Watermark Badge */}
       {enableWatermark && watermarkText && (
         <div
@@ -53,7 +81,7 @@ export default function AntiTheftOverlay({
       )}
 
       {/* 2. Semi-transparent Running Marquee Ribbon */}
-      <div className="anti-theft-marquee-ribbon">
+      <div className="anti-theft-marquee-ribbon" style={{ pointerEvents: 'auto' }}>
         <div
           className="anti-theft-marquee-track"
           style={{
@@ -63,6 +91,29 @@ export default function AntiTheftOverlay({
         >
           <span>{repeatedText}</span>
         </div>
+
+        {/* Quick controls on hover */}
+        {isHovered && onUpdateVoiceSettings && (
+          <div className="anti-theft-quick-bar" onClick={(e) => e.stopPropagation()}>
+            <button
+              type="button"
+              className="anti-theft-btn"
+              onClick={handleTogglePosition}
+              title={marqueePosition === 'bottom' ? "រំកិលទៅខាងលើ (Move to Top)" : "រំកិលទៅខាងក្រោម (Move to Bottom)"}
+            >
+              <ArrowUpDown size={11} />
+              <span>{marqueePosition === 'bottom' ? 'ដាក់លើ' : 'ដាក់ក្រោម'}</span>
+            </button>
+            <button
+              type="button"
+              className="anti-theft-btn danger"
+              onClick={handleHideRibbon}
+              title="លាក់របាររក្សាសិទ្ធិ (Hide Banner)"
+            >
+              <X size={11} />
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

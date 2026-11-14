@@ -170,3 +170,51 @@
 .anti-theft-overlay-root.size-large .anti-theft-marquee-track {
   font-size: 0.88rem;
 }
+
+/* Quick hover controls for AntiTheft banner */
+.anti-theft-marquee-ribbon {
+  position: relative;
+}
+
+.anti-theft-quick-bar {
+  position: absolute;
+  top: 50%;
+  right: 10px;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(15, 23, 42, 0.92);
+  border: 1px solid rgba(56, 189, 248, 0.4);
+  border-radius: 12px;
+  padding: 2px 5px;
+  z-index: 28;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+}
+
+.anti-theft-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 6px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  color: #cbd5e1;
+  font-size: 0.65rem;
+  cursor: pointer;
+  transition: all 0.12s ease;
+}
+
+.anti-theft-btn:hover {
+  background: rgba(56, 189, 248, 0.25);
+  color: #38bdf8;
+  border-color: #38bdf8;
+}
+
+.anti-theft-btn.danger:hover {
+  background: rgba(239, 68, 68, 0.25);
+  color: #ef4444;
+  border-color: #ef4444;
+}
+
