@@ -1,27 +1,27 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
-- **Environment**: Antigravity IDE (Git Push & Repository Cleanup)
-- **Timestamp**: 2026-11-14T17:03:40+07:00
+- **Environment**: Antigravity IDE (Workspace Cleanup - Delete Unused Folders)
+- **Timestamp**: 2026-11-14T17:29:15+07:00
 
-## Summary: Code Committed & Pushed
-1. **Root Project (`khmer-ai-dubbing-studio`)**:
-   - Pushed successfully to `origin/main` (`Ny-Panha/khmer-ai-dubbing-studio.git`).
-   - Cleaned up prompt files, updated batch export studio, audio/video services, and Gemini route modal.
-   - Added `telegram_vip_bot/` to root `.gitignore` to keep repositories clean and isolated.
-2. **Sub-Project (`telegram_vip_bot`)**:
-   - Protected sensitive files: created `.gitignore` (ignoring `.env`, `node_modules/`, `data/`).
-   - Created safe `.env.example`.
-   - Initial commit created cleanly (`277ed8f`) with 0 sensitive token leaks.
-   - Ready to push once GitHub repository remote is linked.
+## Summary: Unused Folders Cleaned Up
+1. **Removed 18 Obsolete `.agents/backup_*` Folders**:
+   - Cleaned up old duplicate code backups from October 2026 (`backup_audio_instant_preview_*`, `backup_stage_fixes_*`, etc.).
+   - Executed clean `git rm -r` and committed (`2ca5708`), deleting 42 stale files / ~65,000 lines of obsolete duplicate code.
+2. **Removed Obsolete Test Projects in `backend/uploads/projects`**:
+   - Deleted leftover mock test directories: `series_prior_cleanup_*`, `series_route_test`, `series_test_clipspeed_*`, `test_batch_http_*`.
+   - Kept active series completely intact: `series_1793898268958` (37.4 GB).
+3. **Cleaned Build & Cache Artifacts**:
+   - Deleted `.agents/scratch/`.
+   - Deleted Python `__pycache__/` in backend.
+   - Cleaned `frontend/dist/`.
 
 ## Active Environment
 - Backend API: `http://localhost:5000` (Listening)
 - Frontend Vite: `http://localhost:5173` (Listening)
 - Telegram Bot: `dragontown_member_bot` (Active, PID task-432)
-- VIP Supergroup: `Dragon Town VIP 🎬` (`-1004237997546`)
+- Active Series: `series_1793898268958` (Safe and intact)
 
 ## Next Steps
-- Link GitHub remote for `telegram_vip_bot` and push when needed:
-  `git -C telegram_vip_bot remote add origin https://github.com/<username>/<repo-name>.git`
-  `git -C telegram_vip_bot push -u origin main`
+- Continue development or dubbing workflows.
+- Ready to push or test whenever Nha requests.
