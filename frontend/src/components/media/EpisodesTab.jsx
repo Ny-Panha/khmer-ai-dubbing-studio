@@ -50,6 +50,74 @@ export default function EpisodesTab({
   const [splitError, setSplitError] = useState(null);
   const [splitNotice, setSplitNotice] = useState(null); // { type: 'success', text } inline banner after split
   const [isGlossaryExpanded, setIsGlossaryExpanded] = useState(false);
+  const [showNewSeriesModal, setShowNewSeriesModal] = useState(false);
+  const [newSeriesTitle, setNewSeriesTitle] = useState('');
+  const [isCreatingSeries, setIsCreatingSeries] = useState(false);
+  const [createSeriesError, setCreateSeriesError] = useState(null);
+
+  const handleConfirmCreateNewSeries = async () => {
+    const cleanTitle = (newSeriesTitle || '').trim();
+    if (!cleanTitle) {
+      setCreateSeriesError('សូមបញ្ចូលឈ្មោះ Series ថ្មី!');
+      return;
+    }
+
+    const exists = (seriesList || []).some(
+      (s) => (s?.title && s.title.trim().toLowerCase() === cleanTitle.toLowerCase()) ||
+             (s?.id && s.id.toLowerCase() === cleanTitle.toLowerCase())
+    );
+    if (exists) {
+      setCreateSeriesError('Series នេះមានរួចហើយ! សូមដាក់ឈ្មោះផ្សេងដើម្បីកុំឱ្យជាន់គ្នា។');
+      return;
+    }
+
+    try {
+      setIsCreatingSeries(true);
+      setCreateSeriesError(null);
+
+      const newSeriesId = `series_${Date.now()}`;
+      const res = await fetch('/api/series', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          series: {
+            id: newSeriesId,
+            title: cleanTitle,
+            createdAt: Date.now(),
+            episodes: [],
+            glossary: { characters: [], terms: [] },
+            cast: [],
+          },
+        }),
+      });
+
+      const data = await res.json();
+      if (!data?.success) {
+        throw new Error(data?.error || 'Failed to create series');
+      }
+
+      setShowNewSeriesModal(false);
+      setNewSeriesTitle('');
+
+      // Switch to new series
+      if (typeof onSwitchSeries === 'function') {
+        await onSwitchSeries(newSeriesId);
+      } else {
+        localStorage.setItem('dragondub_active_series_id', newSeriesId);
+        window.location.reload();
+      }
+
+      // Switch tab to Media tab (1. វីដេអូ) so user can import video into fresh workspace immediately
+      if (typeof onTabChange === 'function') {
+        onTabChange('media');
+      }
+    } catch (err) {
+      console.error(err);
+      setCreateSeriesError(err.message || 'Error creating series');
+    } finally {
+      setIsCreatingSeries(false);
+    }
+  };
 
   const activeDuration = videoMetadata?.durationSec || videoMetadata?.duration || duration || selectedVideo?.durationSec || selectedVideo?.duration || activeEpisode?.video?.durationSec || activeEpisode?.duration || 0;
 
@@ -177,17 +245,41 @@ export default function EpisodesTab({
             </span>
           </div>
 
-          <span 
-            style={{ 
-              fontSize: '0.70rem', 
-              color: 'var(--text-dim)', 
-              background: 'rgba(255,255,255,0.06)', 
-              padding: '2px 8px', 
-              borderRadius: 10 
-            }}
-          >
-            {episodes.length} Episodes
-          </span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <button
+              type="button"
+              onClick={() => { setShowNewSeriesModal(true); setCreateSeriesError(null); }}
+              style={{
+                padding: '2px 8px',
+                fontSize: '0.70rem',
+                fontWeight: 700,
+                borderRadius: 9999,
+                background: 'linear-gradient(135deg, #FF8577 0%, #f43f5e 100%)',
+                color: '#0B132B',
+                border: 'none',
+                cursor: 'pointer',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 4,
+              }}
+              title="បង្កើត Series / រឿងភាគថ្មី"
+            >
+              <Plus size={11} strokeWidth={3} />
+              <span>+ Series ថ្មី</span>
+            </button>
+
+            <span 
+              style={{ 
+                fontSize: '0.70rem', 
+                color: 'var(--text-dim)', 
+                background: 'rgba(255,255,255,0.06)', 
+                padding: '2px 8px', 
+                borderRadius: 10 
+              }}
+            >
+              {episodes.length} Episodes
+            </span>
+          </div>
         </div>
 
         {isEditingSeriesTitle ? (
@@ -215,39 +307,41 @@ export default function EpisodesTab({
           </div>
         ) : (
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            {seriesList && seriesList.length > 1 ? (
-              <select
-                value={activeSeries?.id || ''}
-                onChange={(e) => {
-                  if (e.target.value && onSwitchSeries) {
-                    onSwitchSeries(e.target.value);
-                  }
-                }}
-                className="capcut-input"
-                style={{
-                  flex: 1,
-                  fontSize: '0.88rem',
-                  fontWeight: 700,
-                  color: '#F8FAFC',
-                  background: 'rgba(15, 23, 42, 0.75)',
-                  border: '1px solid rgba(56, 189, 248, 0.35)',
-                  borderRadius: 8,
-                  padding: '5px 8px',
-                  cursor: 'pointer',
-                  outline: 'none',
-                }}
-              >
-                {seriesList.map((s) => (
-                  <option key={s.id} value={s.id} style={{ background: '#0F172A', color: '#F8FAFC' }}>
-                    🎬 {(!isCorruptedOrMojibakeTitle(s.title) && s.title) || s.id} ({s.episodes?.length || 0} EPs)
-                  </option>
-                ))}
-              </select>
-            ) : (
-              <h3 style={{ margin: 0, fontSize: '0.98rem', fontWeight: 700, color: '#f1f5f9', flex: 1 }}>
-                {(!isCorruptedOrMojibakeTitle(activeSeries?.title) && activeSeries?.title) || 'រឿងភាគ (Series 1)'}
-              </h3>
-            )}
+            <select
+              value={activeSeries?.id || ''}
+              onChange={(e) => {
+                if (e.target.value === '__NEW__') {
+                  setShowNewSeriesModal(true);
+                  setCreateSeriesError(null);
+                  return;
+                }
+                if (e.target.value && onSwitchSeries) {
+                  onSwitchSeries(e.target.value);
+                }
+              }}
+              className="capcut-input"
+              style={{
+                flex: 1,
+                fontSize: '0.88rem',
+                fontWeight: 700,
+                color: '#F8FAFC',
+                background: 'rgba(15, 23, 42, 0.75)',
+                border: '1px solid rgba(56, 189, 248, 0.35)',
+                borderRadius: 8,
+                padding: '5px 8px',
+                cursor: 'pointer',
+                outline: 'none',
+              }}
+            >
+              {(seriesList && seriesList.length > 0 ? seriesList : [activeSeries]).filter(Boolean).map((s) => (
+                <option key={s.id} value={s.id} style={{ background: '#0F172A', color: '#F8FAFC' }}>
+                  🎬 {(!isCorruptedOrMojibakeTitle(s.title) && s.title) || s.id} ({s.episodes?.length || 0} EPs)
+                </option>
+              ))}
+              <option value="__NEW__" style={{ background: '#0F172A', color: '#FF8577', fontWeight: 'bold' }}>
+                ➕ + បង្កើត Series ថ្មី (New Drama)...
+              </option>
+            </select>
 
             <button
               type="button"
@@ -887,6 +981,117 @@ export default function EpisodesTab({
                     </span>
                   </>
                 )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* New Series Modal */}
+      {showNewSeriesModal && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0, 0, 0, 0.75)',
+            backdropFilter: 'blur(4px)',
+            zIndex: 9999,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 20,
+          }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !isCreatingSeries) setShowNewSeriesModal(false);
+          }}
+        >
+          <div
+            style={{
+              background: '#0F172A',
+              border: '1px solid rgba(255, 133, 119, 0.35)',
+              borderRadius: 16,
+              padding: 24,
+              maxWidth: 420,
+              width: '100%',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 16,
+              boxShadow: '0 20px 40px rgba(0,0,0,0.5)',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: '#FF8577' }}>
+              <Layers size={20} />
+              <h3 style={{ margin: 0, fontSize: '1.05rem', fontWeight: 800, color: '#F8FAFC' }}>
+                + បង្កើត Series / រឿងភាគថ្មី
+              </h3>
+            </div>
+
+            <p style={{ margin: 0, fontSize: '0.80rem', color: '#94A3B8', lineHeight: 1.5 }}>
+              បង្កើតរឿងភាគថ្មីទទេរស្អាត (Season ថ្មី) ដោយគ្មានចម្លងតួអង្គ ឬវីដេអូពីរឿងចាស់ឡើយ។ ក្រោយបង្កើតរួច នឹងបើកចូលផ្ទាំង Upload វីដេអូដោយស្វ័យប្រវត្តិ។
+            </p>
+
+            {createSeriesError && (
+              <div style={{ padding: '8px 12px', background: 'rgba(244, 63, 94, 0.15)', border: '1px solid #f43f5e', borderRadius: 8, color: '#fca5a5', fontSize: '0.78rem' }}>
+                {createSeriesError}
+              </div>
+            )}
+
+            <input
+              type="text"
+              placeholder="បញ្ចូលឈ្មោះ Series ថ្មី (ឧ. ឈ្មោះរឿង - Season 2)..."
+              value={newSeriesTitle}
+              onChange={(e) => {
+                setNewSeriesTitle(e.target.value);
+                if (createSeriesError) setCreateSeriesError(null);
+              }}
+              className="capcut-input"
+              style={{
+                fontSize: '0.90rem',
+                padding: '10px 12px',
+                borderRadius: 8,
+                background: 'rgba(255,255,255,0.05)',
+                border: '1px solid rgba(255,255,255,0.15)',
+                color: '#fff',
+                width: '100%',
+              }}
+              autoFocus
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') handleConfirmCreateNewSeries();
+                if (e.key === 'Escape' && !isCreatingSeries) setShowNewSeriesModal(false);
+              }}
+            />
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10 }}>
+              <button
+                type="button"
+                onClick={() => setShowNewSeriesModal(false)}
+                className="btn-ghost"
+                style={{ padding: '8px 16px', fontSize: '0.80rem' }}
+                disabled={isCreatingSeries}
+              >
+                បោះបង់ (Cancel)
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmCreateNewSeries}
+                className="btn-primary"
+                style={{
+                  padding: '8px 18px',
+                  fontSize: '0.82rem',
+                  fontWeight: 700,
+                  background: 'linear-gradient(135deg, #FF8577 0%, #f43f5e 100%)',
+                  color: '#0B132B',
+                  border: 'none',
+                  borderRadius: 8,
+                  cursor: isCreatingSeries ? 'not-allowed' : 'pointer',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                }}
+                disabled={isCreatingSeries}
+              >
+                {isCreatingSeries ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
+                <span>បង្កើត Series ថ្មី</span>
               </button>
             </div>
           </div>
