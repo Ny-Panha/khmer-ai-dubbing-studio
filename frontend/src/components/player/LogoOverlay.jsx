@@ -19,8 +19,10 @@ export default function LogoOverlay({
     logoMargin = 20,
   } = voiceSettings || {};
 
+  const rootRef = useRef(null);
   const [isHovered, setIsHovered] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
+  const [dragDelta, setDragDelta] = useState({ x: 0, y: 0 });
   const dragStartRef = useRef(null);
 
   if (!enableLogo || !logoImage || renderedVideo) {
@@ -57,11 +59,15 @@ export default function LogoOverlay({
     if (e.button !== 0) return;
     e.stopPropagation();
     e.preventDefault();
+
     setIsDragging(true);
+    setDragDelta({ x: 0, y: 0 });
     dragStartRef.current = { x: e.clientX, y: e.clientY };
 
     const onMouseMove = (moveEvt) => {
-      // Dragging active
+      const dx = moveEvt.clientX - dragStartRef.current.x;
+      const dy = moveEvt.clientY - dragStartRef.current.y;
+      setDragDelta({ x: dx, y: dy });
     };
 
     const onMouseUp = (upEvt) => {
@@ -71,11 +77,30 @@ export default function LogoOverlay({
 
       const dx = upEvt.clientX - (dragStartRef.current?.x || 0);
       const dy = upEvt.clientY - (dragStartRef.current?.y || 0);
+      setDragDelta({ x: 0, y: 0 });
 
-      // If user moved more than 20px, determine the quadrant to snap to
-      if (Math.hypot(dx, dy) > 20 && onUpdateVoiceSettings) {
-        const isRight = upEvt.clientX > window.innerWidth / 2;
-        const isBottom = upEvt.clientY > window.innerHeight / 2;
+      // If clicked without dragging (< 6px movement), cycle corner to next position
+      if (Math.hypot(dx, dy) < 6 && onUpdateVoiceSettings) {
+        const cycleMap = {
+          'top-right': 'bottom-right',
+          'bottom-right': 'bottom-left',
+          'bottom-left': 'top-left',
+          'top-left': 'top-right',
+          'both': 'top-right',
+        };
+        const nextPos = cycleMap[logoPosition] || 'top-right';
+        onUpdateVoiceSettings({ ...voiceSettings, logoPosition: nextPos });
+        return;
+      }
+
+      // If dragged, find quadrant relative to the player canvas
+      if (Math.hypot(dx, dy) >= 6 && onUpdateVoiceSettings && rootRef.current) {
+        const rect = rootRef.current.getBoundingClientRect();
+        const relX = upEvt.clientX - rect.left;
+        const relY = upEvt.clientY - rect.top;
+        const isRight = relX >= rect.width / 2;
+        const isBottom = relY >= rect.height / 2;
+
         let targetPos = 'top-right';
         if (!isRight && !isBottom) targetPos = 'top-left';
         else if (isRight && !isBottom) targetPos = 'top-right';
@@ -90,65 +115,73 @@ export default function LogoOverlay({
     window.addEventListener('mouseup', onMouseUp);
   };
 
-  const renderLogoItem = (posName, styleObj) => (
-    <div
-      className={`logo-overlay-item ${shapeClass} ${isHovered ? 'hovered' : ''} ${isDragging ? 'dragging' : ''}`}
-      style={{
-        ...styleObj,
-        width: `${size}px`,
-        height: `${size}px`,
-        opacity,
-        cursor: 'grab',
-      }}
-      onMouseEnter={() => setIsHovered(true)}
-      onMouseLeave={() => setIsHovered(false)}
-      onMouseDown={handleLogoMouseDown}
-      title="ចុចអូស (Drag) ឬចុចជ្រើសរើសជ្រុងដើម្បីប្តូរទីតាំង Logo"
-    >
-      <img src={logoImage} alt="Watermark Logo" draggable={false} />
+  const renderLogoItem = (posName, styleObj) => {
+    const isThisDragged = isDragging;
+    const transformStyle = isThisDragged
+      ? `translate(${dragDelta.x}px, ${dragDelta.y}px)`
+      : 'none';
 
-      {/* Quick Corner Switcher Popover on Hover */}
-      {isHovered && !isDragging && (
-        <div className="logo-hover-controls" onClick={(e) => e.stopPropagation()}>
-          <button
-            type="button"
-            className={`corner-btn ${logoPosition === 'top-left' ? 'active' : ''}`}
-            onClick={(e) => handleCornerSelect(e, 'top-left')}
-            title="ផ្លាស់ប្តូរទៅ ឆ្វេងលើ (Top-Left)"
-          >
-            ↖
-          </button>
-          <button
-            type="button"
-            className={`corner-btn ${logoPosition === 'top-right' ? 'active' : ''}`}
-            onClick={(e) => handleCornerSelect(e, 'top-right')}
-            title="ផ្លាស់ប្តូរទៅ ស្តាំលើ (Top-Right)"
-          >
-            ↗
-          </button>
-          <button
-            type="button"
-            className={`corner-btn ${logoPosition === 'bottom-left' ? 'active' : ''}`}
-            onClick={(e) => handleCornerSelect(e, 'bottom-left')}
-            title="ផ្លាស់ប្តូរទៅ ឆ្វេងក្រោម (Bottom-Left)"
-          >
-            ↙
-          </button>
-          <button
-            type="button"
-            className={`corner-btn ${logoPosition === 'bottom-right' ? 'active' : ''}`}
-            onClick={(e) => handleCornerSelect(e, 'bottom-right')}
-            title="ផ្លាស់ប្តូរទៅ ស្តាំក្រោម (Bottom-Right)"
-          >
-            ↘
-          </button>
-        </div>
-      )}
-    </div>
-  );
+    return (
+      <div
+        className={`logo-overlay-item ${shapeClass} ${isHovered ? 'hovered' : ''} ${isThisDragged ? 'dragging' : ''}`}
+        style={{
+          ...styleObj,
+          width: `${size}px`,
+          height: `${size}px`,
+          opacity,
+          transform: transformStyle,
+          cursor: isThisDragged ? 'grabbing' : 'grab',
+        }}
+        onMouseEnter={() => setIsHovered(true)}
+        onMouseLeave={() => setIsHovered(false)}
+        onMouseDown={handleLogoMouseDown}
+        title="ចុច (Click) ដើម្បីប្តូរជ្រុង ឬអូស (Drag) ទៅជ្រុងដែលចង់ដាក់"
+      >
+        <img src={logoImage} alt="Watermark Logo" draggable={false} />
+
+        {/* Quick Corner Switcher Popover on Hover */}
+        {isHovered && !isDragging && (
+          <div className="logo-hover-controls" onClick={(e) => e.stopPropagation()}>
+            <button
+              type="button"
+              className={`corner-btn ${logoPosition === 'top-left' ? 'active' : ''}`}
+              onClick={(e) => handleCornerSelect(e, 'top-left')}
+              title="ឆ្វេងលើ (Top-Left)"
+            >
+              ↖
+            </button>
+            <button
+              type="button"
+              className={`corner-btn ${logoPosition === 'top-right' ? 'active' : ''}`}
+              onClick={(e) => handleCornerSelect(e, 'top-right')}
+              title="ស្តាំលើ (Top-Right)"
+            >
+              ↗
+            </button>
+            <button
+              type="button"
+              className={`corner-btn ${logoPosition === 'bottom-left' ? 'active' : ''}`}
+              onClick={(e) => handleCornerSelect(e, 'bottom-left')}
+              title="ឆ្វេងក្រោម (Bottom-Left)"
+            >
+              ↙
+            </button>
+            <button
+              type="button"
+              className={`corner-btn ${logoPosition === 'bottom-right' ? 'active' : ''}`}
+              onClick={(e) => handleCornerSelect(e, 'bottom-right')}
+              title="ស្តាំក្រោម (Bottom-Right)"
+            >
+              ↘
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  };
 
   return (
-    <div className="logo-overlay-root">
+    <div className="logo-overlay-root" ref={rootRef}>
       {renderLeft && renderLogoItem('top-left', { top: topOffset, left: `${margin}px` })}
       {renderRight && renderLogoItem('top-right', { top: topOffset, right: `${margin}px` })}
       {renderBottomLeft && renderLogoItem('bottom-left', { bottom: bottomOffset, left: `${margin}px` })}

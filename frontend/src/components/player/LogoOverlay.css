@@ -28,10 +28,11 @@
 
 .logo-overlay-item.dragging {
   cursor: grabbing !important;
-  opacity: 0.75;
-  transform: scale(1.08);
+  opacity: 0.88;
+  transition: none !important;
   outline: 2px solid #38bdf8;
   outline-offset: 4px;
+  z-index: 999;
 }
 
 .logo-overlay-item img {

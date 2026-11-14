@@ -111,7 +111,7 @@ export default function VideoTransformControls({
             title={isPanModeActive ? "បិទ Hand Tool (Pan Mode)" : "បើក Hand Tool (ចុចអូស Move វីដេអូសេរី)"}
           >
             <Move size={13} />
-            <span>Move</span>
+            <span>{isPanModeActive ? '✋ Move ON' : 'Move'}</span>
           </button>
 
           {/* 4. Reset View Button */}

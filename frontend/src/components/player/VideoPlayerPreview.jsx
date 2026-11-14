@@ -154,9 +154,13 @@ function VideoPlayerPreview({
   const videoZoom = Number(voiceSettings?.videoZoom) || 1.0;
   const videoPanX = Number(voiceSettings?.videoPanX) || 0;
   const videoPanY = Number(voiceSettings?.videoPanY) || 0;
+  const [livePan, setLivePan] = useState(null);
   const [isPanModeActive, setIsPanModeActive] = useState(false);
   const [isPanning, setIsPanning] = useState(false);
   const panStartRef = useRef({ x: 0, y: 0, panX: 0, panY: 0 });
+
+  const effectivePanX = livePan !== null ? livePan.x : videoPanX;
+  const effectivePanY = livePan !== null ? livePan.y : videoPanY;
 
   const handleUpdateTransform = useCallback(({ zoom, panX, panY }) => {
     if (onUpdateVoiceSettings) {
@@ -170,6 +174,7 @@ function VideoPlayerPreview({
   }, [onUpdateVoiceSettings, voiceSettings, videoZoom, videoPanX, videoPanY]);
 
   const handleResetTransform = useCallback(() => {
+    setLivePan(null);
     if (onUpdateVoiceSettings) {
       onUpdateVoiceSettings({
         ...voiceSettings,
@@ -181,8 +186,15 @@ function VideoPlayerPreview({
   }, [onUpdateVoiceSettings, voiceSettings]);
 
   const handleTogglePanMode = useCallback(() => {
-    setIsPanModeActive((prev) => !prev);
-  }, []);
+    setIsPanModeActive((prev) => {
+      const next = !prev;
+      // Auto zoom to 1.15x if activating move from 1.0x so user can pan freely
+      if (next && videoZoom <= 1.0) {
+        handleUpdateTransform({ zoom: 1.15, panX: videoPanX, panY: videoPanY });
+      }
+      return next;
+    });
+  }, [videoZoom, videoPanX, videoPanY, handleUpdateTransform]);
 
   const handleWheelZoom = useCallback((e) => {
     if (e.ctrlKey || isPanModeActive) {
@@ -1839,74 +1851,81 @@ function VideoPlayerPreview({
   const handleVideoMouseDown = useCallback((e) => {
     if (e.button !== 0) return;
 
-    // 1. Pan Mode or Zoom Drag (Free move in any direction X and Y)
-    if (isPanModeActive || videoZoom > 1.0) {
-      panStartRef.current = {
-        x: e.clientX,
-        y: e.clientY,
-        panX: videoPanX,
-        panY: videoPanY,
-      };
+    // 1. 9:16 Framing Crop Drag (Legacy mode for portrait crop when Pan tool is not active)
+    if (is916Crop && !isPanModeActive && videoZoom <= 1.0) {
+      dragStartXRef.current = e.clientX;
+      dragStartCropXRef.current = effectiveCropX;
       hasDraggedRef.current = false;
-      setIsPanning(true);
+      setIsDraggingCrop(true);
 
-      const onPanMove = (moveEvt) => {
-        const dx = moveEvt.clientX - panStartRef.current.x;
-        const dy = moveEvt.clientY - panStartRef.current.y;
-        if (Math.hypot(dx, dy) > 2) {
+      const rect = videoRef?.current?.getBoundingClientRect();
+      const frameW = rect?.width || 360;
+      const sensitivity = 70.0 / Math.max(120, frameW);
+      let latestVal = dragStartCropXRef.current;
+
+      const onMouseMove = (moveEvt) => {
+        const deltaX = moveEvt.clientX - dragStartXRef.current;
+        if (Math.abs(deltaX) > 2) {
           hasDraggedRef.current = true;
         }
-        const nextX = Math.round(panStartRef.current.panX + dx);
-        const nextY = Math.round(panStartRef.current.panY + dy);
-        handleUpdateTransform({ zoom: videoZoom, panX: nextX, panY: nextY });
+        const nextCrop = Math.max(5, Math.min(95, dragStartCropXRef.current - (deltaX * sensitivity)));
+        latestVal = Math.round(nextCrop * 10) / 10;
+        setLiveDragCropX(latestVal);
       };
 
-      const onPanUp = () => {
-        setIsPanning(false);
-        window.removeEventListener('mousemove', onPanMove);
-        window.removeEventListener('mouseup', onPanUp);
+      const onMouseUp = () => {
+        setIsDraggingCrop(false);
+        window.removeEventListener('mousemove', onMouseMove);
+        window.removeEventListener('mouseup', onMouseUp);
+
+        if (hasDraggedRef.current) {
+          handleUpdateActiveCrop(latestVal);
+        }
+        setLiveDragCropX(null);
       };
 
-      window.addEventListener('mousemove', onPanMove);
-      window.addEventListener('mouseup', onPanUp);
+      window.addEventListener('mousemove', onMouseMove);
+      window.addEventListener('mouseup', onMouseUp);
       return;
     }
 
-    // 2. 9:16 Framing Crop Drag (Horizontal framing)
-    if (!is916Crop) return;
-    dragStartXRef.current = e.clientX;
-    dragStartCropXRef.current = effectiveCropX;
+    // 2. Universal Video Pan Drag (Works across 16:9 landscape, zoomed view, or Hand tool)
+    panStartRef.current = {
+      x: e.clientX,
+      y: e.clientY,
+      panX: videoPanX,
+      panY: videoPanY,
+    };
     hasDraggedRef.current = false;
-    setIsDraggingCrop(true);
+    let latestX = videoPanX;
+    let latestY = videoPanY;
 
-    const rect = videoRef?.current?.getBoundingClientRect();
-    const frameW = rect?.width || 360;
-    const sensitivity = 70.0 / Math.max(120, frameW);
-    let latestVal = dragStartCropXRef.current;
-
-    const onMouseMove = (moveEvt) => {
-      const deltaX = moveEvt.clientX - dragStartXRef.current;
-      if (Math.abs(deltaX) > 2) {
+    const onPanMove = (moveEvt) => {
+      const dx = moveEvt.clientX - panStartRef.current.x;
+      const dy = moveEvt.clientY - panStartRef.current.y;
+      if (Math.hypot(dx, dy) > 3) {
         hasDraggedRef.current = true;
+        setIsPanning(true);
       }
-      const nextCrop = Math.max(5, Math.min(95, dragStartCropXRef.current - (deltaX * sensitivity)));
-      latestVal = Math.round(nextCrop * 10) / 10;
-      setLiveDragCropX(latestVal);
-    };
-
-    const onMouseUp = () => {
-      setIsDraggingCrop(false);
-      window.removeEventListener('mousemove', onMouseMove);
-      window.removeEventListener('mouseup', onMouseUp);
-
       if (hasDraggedRef.current) {
-        handleUpdateActiveCrop(latestVal);
+        latestX = Math.round(panStartRef.current.panX + dx);
+        latestY = Math.round(panStartRef.current.panY + dy);
+        setLivePan({ x: latestX, y: latestY });
       }
-      setLiveDragCropX(null);
     };
 
-    window.addEventListener('mousemove', onMouseMove);
-    window.addEventListener('mouseup', onMouseUp);
+    const onPanUp = () => {
+      setIsPanning(false);
+      window.removeEventListener('mousemove', onPanMove);
+      window.removeEventListener('mouseup', onPanUp);
+      if (hasDraggedRef.current) {
+        handleUpdateTransform({ zoom: videoZoom, panX: latestX, panY: latestY });
+      }
+      setLivePan(null);
+    };
+
+    window.addEventListener('mousemove', onPanMove);
+    window.addEventListener('mouseup', onPanUp);
   }, [isPanModeActive, videoZoom, videoPanX, videoPanY, handleUpdateTransform, is916Crop, effectiveCropX, videoRef, handleUpdateActiveCrop]);
 
   const handleVideoClick = useCallback((e) => {
@@ -2038,8 +2057,8 @@ function VideoPlayerPreview({
                   objectPosition: is916Crop
                     ? `${effectiveCropX}% 50%`
                     : '50% 50%',
-                  transform: (videoZoom > 1.0 || videoPanX !== 0 || videoPanY !== 0)
-                    ? `translate(${videoPanX}px, ${videoPanY}px) scale(${videoZoom})`
+                  transform: (videoZoom > 1.0 || effectivePanX !== 0 || effectivePanY !== 0)
+                    ? `translate(${effectivePanX}px, ${effectivePanY}px) scale(${videoZoom})`
                     : 'none',
                   transformOrigin: 'center center',
                   transition: (isPanning || isDraggingCrop || (isPlaying && (scriptData?.framingKeyframes?.length || 0) > 0))
