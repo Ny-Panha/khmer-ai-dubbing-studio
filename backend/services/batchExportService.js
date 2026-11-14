@@ -372,6 +372,7 @@ function formatPublicJobSnapshot(job) {
     currentEpisodeId: job.currentEpisodeId,
     currentEpisodeNumber: job.currentEpisodeNumber,
     currentEpisodeTitle: job.currentEpisodeTitle,
+    currentEpisodePercent: typeof job.currentEpisodePercent === "number" ? job.currentEpisodePercent : 0,
     skippedEpisodes: job.skippedEpisodes,
     outputs: job.outputs,
     mergedResult: job.mergedResult,
@@ -473,6 +474,7 @@ async function startBatchExportJob({
     currentEpisodeId: plan.eligible[0]?.episodeId || null,
     currentEpisodeNumber: plan.eligible[0]?.episodeNumber || null,
     currentEpisodeTitle: plan.eligible[0]?.title || "",
+    currentEpisodePercent: 0,
     skippedEpisodes: plan.skipped,
     outputs: [],
     mergedResult: null,
@@ -587,6 +589,7 @@ async function runBatchExportWorker({
       job.currentEpisodeId = epPlan.episodeId;
       job.currentEpisodeNumber = epPlan.episodeNumber;
       job.currentEpisodeTitle = epPlan.title;
+      job.currentEpisodePercent = 0;
 
       let epAspectRatio = batchForcedAspectRatio;
       if (!epAspectRatio) {
@@ -613,68 +616,92 @@ async function runBatchExportWorker({
       const epOutputFilename = `${seriesTitle}_EP${epPlan.episodeNumber}${audioTag}${ratioSuffix}.mp4`;
       const epOutputPath = path.join(epPlan.videoDir, epOutputFilename);
 
-      if (fs.existsSync(epOutputPath)) {
-        try { fs.unlinkSync(epOutputPath); } catch (_) {}
-      }
-
       const epStartPct = Math.round((i / totalCount) * renderWeight);
       const epEndPct = Math.round(((i + 1) / totalCount) * renderWeight);
 
-      job.progress = Math.max(job.progress, epStartPct);
-      job.stage = `ភាគ ${i + 1}/${totalCount} (EP${epPlan.episodeNumber}): កំពុង Render${epPlan.useOriginalAudio ? " (សំឡេងដើម)" : " សំឡេងខ្មែរ & Subtitles"}...`;
-      job.updatedAt = Date.now();
-
-      let expectedDur = epPlan.durationSec || 0;
-      if (!expectedDur) {
+      // Check if episode video is already fully rendered on disk
+      let alreadyRenderedOnDisk = false;
+      if (fs.existsSync(epOutputPath) && !exportSettings.forceReRender) {
         try {
-          expectedDur = await getMediaDuration(epPlan.inputVideoPath);
+          const stat = fs.statSync(epOutputPath);
+          if (stat.size > 2 * 1024 * 1024) {
+            alreadyRenderedOnDisk = true;
+          }
         } catch (_) {}
       }
 
-      const subtitleOptions = {
-        ...(exportSettings.subtitleOptions || {}),
-        fontName: exportSettings.subtitleOptions?.fontName || "Khmer OS Battambang",
-        fontSize: exportSettings.subtitleOptions?.fontSize || null,
-        subtitleSize: exportSettings.subtitleOptions?.subtitleSize || exportSettings.subtitleSize || null,
-        textColor:
-          exportSettings.subtitleOptions?.textColor ||
-          (subtitleColor === "yellow" ? "#FFE600" : "#FFFFFF"),
-        outlineColor: exportSettings.subtitleOptions?.outlineColor || "#000000",
-        subtitleStyle: exportSettings.subtitleOptions?.subtitleStyle || subtitleStyle,
-        aspectRatio: epAspectRatio,
-        verticalStyle,
-        marginV: exportSettings.subtitleOptions?.marginV || null,
-      };
+      let renderRes = null;
+      if (alreadyRenderedOnDisk) {
+        console.log(`[BatchExport] ⚡ Episode EP${epPlan.episodeNumber} is already rendered (${epOutputFilename}). Reusing existing file.`);
+        renderRes = { outputVideoPath: epOutputPath, renderTimeSeconds: 0 };
+        job.currentEpisodePercent = 100;
+        job.stage = `ភាគ ${i + 1}/${totalCount} (EP${epPlan.episodeNumber}): ប្រើប្រាស់វីដេអូដែល Render រួចស្រាប់ (Skip)...`;
+        job.updatedAt = Date.now();
+      } else {
+        if (fs.existsSync(epOutputPath)) {
+          try { fs.unlinkSync(epOutputPath); } catch (_) {}
+        }
 
-      const renderRes = await renderDubbedVideoWithDucking({
-        jobId: job.jobId,
-        signal,
-        inputVideoPath: epPlan.inputVideoPath,
-        masterAudioPath: epPlan.hasVoice ? epPlan.masterAudioPath : null,
-        fullAudioPath: epPlan.hasVoice ? epPlan.masterAudioPath : null,
-        segments: epPlan.hasVoice ? epPlan.preparedSegments : [],
-        outputVideoPath: epOutputPath,
-        soundMode,
-        enableDemucs: epPlan.hasVoice ? enableDemucs : false,
-        separatedBgAudioPath: epPlan.hasVoice && enableDemucs ? epPlan.separatedBgAudioPath : null,
-        bgVolume: effectiveBgVolume,
-        khmerVolume: effectiveKhmerVolume,
-        burnSubtitles: epPlan.hasVoice ? burnSubtitles : false,
-        subtitleOptions,
-        aspectRatio: epAspectRatio,
-        verticalStyle,
-        videoClips: epPlan.videoClips,
-        antiTheft,
-        logoSettings: resolvedLogoPath ? { ...rawLogo, logoPath: resolvedLogoPath } : null,
-        allowOriginalAudio: epPlan.useOriginalAudio,
-        expectedDurationSec: expectedDur,
-        onProgress: ({ percent }) => {
-          const scaled = epStartPct + Math.round(((percent || 0) / 100) * Math.max(1, epEndPct - epStartPct));
-          job.progress = Math.max(job.progress, Math.min(renderWeight, scaled));
-          job.stage = `ភាគ ${i + 1}/${totalCount} (EP${epPlan.episodeNumber}): កំពុង Encode FFmpeg ${percent}%...`;
-          job.updatedAt = Date.now();
-        },
-      });
+        job.progress = Math.max(job.progress, epStartPct);
+        job.stage = `ភាគ ${i + 1}/${totalCount} (EP${epPlan.episodeNumber}): កំពុង Render 0%${epPlan.useOriginalAudio ? " (សំឡេងដើម)" : " សំឡេងខ្មែរ & Subtitles"}...`;
+        job.updatedAt = Date.now();
+
+        let expectedDur = epPlan.durationSec || 0;
+        if (!expectedDur) {
+          try {
+            expectedDur = await getMediaDuration(epPlan.inputVideoPath);
+          } catch (_) {}
+        }
+
+        const subtitleOptions = {
+          ...(exportSettings.subtitleOptions || {}),
+          fontName: exportSettings.subtitleOptions?.fontName || "Khmer OS Battambang",
+          fontSize: exportSettings.subtitleOptions?.fontSize || null,
+          subtitleSize: exportSettings.subtitleOptions?.subtitleSize || exportSettings.subtitleSize || null,
+          textColor:
+            exportSettings.subtitleOptions?.textColor ||
+            (subtitleColor === "yellow" ? "#FFE600" : "#FFFFFF"),
+          outlineColor: exportSettings.subtitleOptions?.outlineColor || "#000000",
+          subtitleStyle: exportSettings.subtitleOptions?.subtitleStyle || subtitleStyle,
+          aspectRatio: epAspectRatio,
+          verticalStyle,
+          marginV: exportSettings.subtitleOptions?.marginV || null,
+        };
+
+        renderRes = await renderDubbedVideoWithDucking({
+          jobId: job.jobId,
+          signal,
+          inputVideoPath: epPlan.inputVideoPath,
+          masterAudioPath: epPlan.hasVoice ? epPlan.masterAudioPath : null,
+          fullAudioPath: epPlan.hasVoice ? epPlan.masterAudioPath : null,
+          segments: epPlan.hasVoice ? epPlan.preparedSegments : [],
+          outputVideoPath: epOutputPath,
+          soundMode,
+          enableDemucs: epPlan.hasVoice ? enableDemucs : false,
+          separatedBgAudioPath: epPlan.hasVoice && enableDemucs ? epPlan.separatedBgAudioPath : null,
+          bgVolume: effectiveBgVolume,
+          khmerVolume: effectiveKhmerVolume,
+          burnSubtitles: epPlan.hasVoice ? burnSubtitles : false,
+          subtitleOptions,
+          aspectRatio: epAspectRatio,
+          verticalStyle,
+          videoClips: epPlan.videoClips,
+          antiTheft,
+          logoSettings: resolvedLogoPath ? { ...rawLogo, logoPath: resolvedLogoPath } : null,
+          allowOriginalAudio: epPlan.useOriginalAudio,
+          expectedDurationSec: expectedDur,
+          onProgress: ({ percent }) => {
+            const epPct = Math.max(1, Math.min(99, Number(percent) || 0));
+            job.currentEpisodePercent = epPct;
+            const scaled = epStartPct + Math.round((epPct / 100) * Math.max(1, epEndPct - epStartPct));
+            job.progress = Math.max(job.progress, Math.min(renderWeight, scaled));
+            job.stage = `ភាគ ${i + 1}/${totalCount} (EP${epPlan.episodeNumber}): កំពុង Encode FFmpeg ${epPct}% (សរុប ${job.progress}%)...`;
+            job.updatedAt = Date.now();
+          },
+        });
+      }
+
+      job.currentEpisodePercent = 100;
 
       const relVideoPath = `projects/${cleanSeries}/episodes/${epPlan.cleanEpisode}/video/${epOutputFilename}`;
       const videoUrl = `/uploads/${relVideoPath}`;
@@ -768,8 +795,9 @@ async function runBatchExportWorker({
       job.currentEpisodeId = null;
       job.currentEpisodeNumber = null;
       job.currentEpisodeTitle = `ផ្គុំ ${renderedFilePaths.length} ភាគ ចូលគ្នាជា ១ វីដេអូពេញ...`;
+      job.currentEpisodePercent = 0;
       job.progress = Math.max(job.progress, 81);
-      job.stage = `🎞️ កំពុងផ្គុំ (Merge) ${renderedFilePaths.length} ភាគ បញ្ចូលគ្នាជា ១ វីដេអូពេញ...`;
+      job.stage = `🎞️ កំពុងផ្គុំ (Merge) ${renderedFilePaths.length} ភាគ បញ្ចូលគ្នាជា ១ វីដេអូពេញ (0%)...`;
       job.updatedAt = Date.now();
 
       const mergeRes = await mergeVideosConcat({
@@ -779,12 +807,16 @@ async function runBatchExportWorker({
         jobId: job.jobId,
         signal,
         onProgress: ({ percent }) => {
-          const scaled = 80 + Math.round(((percent || 0) / 100) * 18);
+          const mergePct = Math.max(1, Math.min(99, Number(percent) || 0));
+          job.currentEpisodePercent = mergePct;
+          const scaled = 80 + Math.round((mergePct / 100) * 18);
           job.progress = Math.max(job.progress, Math.min(98, scaled));
-          job.stage = `🎞️ កំពុងផ្គុំ (Merge) ${renderedFilePaths.length} ភាគ (${percent || 0}%)...`;
+          job.stage = `🎞️ កំពុងផ្គុំ (Merge) ${renderedFilePaths.length} ភាគ (${mergePct}% | សរុប ${job.progress}%)...`;
           job.updatedAt = Date.now();
         },
       });
+
+      job.currentEpisodePercent = 100;
 
       let mergedDownloadsPath = null;
       if (targetDownloadsDir && fs.existsSync(mergedOutputPath)) {

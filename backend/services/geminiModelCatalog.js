@@ -101,6 +101,20 @@ const GEMINI_MODEL_CATALOG = [
     notes: 'High-accuracy Flash model (20 RPD/key).',
   },
   {
+    id: 'gemini-4-hydrogen',
+    displayName: 'Gemini 4 Hydrogen',
+    category: 'Text-out • Flash',
+    roleTag: 'Next-Gen Pool',
+    usableInDubbing: true,
+    usableInApp: true,
+    inCascade: true,
+    deprecated: false,
+    rpmLimit: 5,
+    tpmLimit: 250000,
+    rpdLimit: 20,
+    notes: 'Next-gen Gemini 4 Hydrogen model (20 RPD/key bucket).',
+  },
+  {
     id: 'gemini-2.5-flash',
     displayName: 'Gemini 2.5 Flash',
     category: 'Text-out • Flash',
@@ -284,9 +298,14 @@ function isUsableDubbingModel(modelId) {
   return DUBBING_CASCADE_MODELS.includes(clean);
 }
 
-function buildOrderedCascadeModels(preferredOrRequested = 'auto', fallbackList = DUBBING_CASCADE_MODELS) {
+function buildOrderedCascadeModels(preferredOrRequested = 'auto', fallbackList = null) {
   const clean = String(preferredOrRequested || '').trim();
-  const base = Array.isArray(fallbackList) && fallbackList.length > 0 ? fallbackList : DUBBING_CASCADE_MODELS;
+  const envList = process.env.GEMINI_CASCADE_MODELS
+    ? process.env.GEMINI_CASCADE_MODELS.split(',').map((s) => s.trim()).filter(Boolean)
+    : null;
+  const base = (Array.isArray(fallbackList) && fallbackList.length > 0)
+    ? fallbackList
+    : (envList && envList.length > 0 ? envList : DUBBING_CASCADE_MODELS);
   const seen = new Set();
   const ordered = [];
 

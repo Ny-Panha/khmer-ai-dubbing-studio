@@ -155,6 +155,16 @@ export function useVideoRender({
       } catch (err) {
         if (err?.status === 404) {
           stopBatchPolling();
+          setBatchJob((prev) =>
+            prev && prev.status === 'running'
+              ? {
+                  ...prev,
+                  status: 'failed',
+                  stage: '⚠️ Job មិនមាននៅលើ Server ទេ (អាចមកពី Server Restarted)',
+                  error: 'Job not found on server',
+                }
+              : prev
+          );
         }
       } finally {
         isPollingInFlightRef.current = false;

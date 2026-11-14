@@ -211,6 +211,45 @@ export default function GeminiRouteModal({
       setDemucsLiveStats({});
     }
 
+    // Proactively check if backend has an active in-progress Demucs job (auto-reconnect on open/refresh)
+    fetch('/api/audio/separation-progress')
+      .then((res) => res.json())
+      .then((pData) => {
+        if (cancelled) return;
+        if (pData?.success && pData.status === 'separating' && Array.isArray(episodes)) {
+          const actMedia = String(pData.activeMedia || '').toLowerCase();
+          const targetEp = episodes.find((ep) => {
+            const vRef = String(ep.video?.videoPath || ep.video?.videoUrl || ep.videoFile || ep.sourceVideoPath || '').toLowerCase();
+            const baseName = vRef.split(/[/\\]/).pop().split('?')[0];
+            return (actMedia && baseName && (actMedia.includes(baseName) || baseName.includes(actMedia))) ||
+                   (actMedia && actMedia.includes(`ep_${ep.episodeNumber || ep.id}`)) ||
+                   (pData.message && pData.message.includes(`ep_${ep.episodeNumber || ep.id}`));
+          }) || episodes.find((ep) => !checkEpisodeHasDemucsReady(ep, null, null));
+
+          if (targetEp) {
+            setIsSeparatingBatchDemucs(true);
+            setActiveDemucsEpisodeId(targetEp.id);
+            setActiveDemucsEpisodeIds(new Set([targetEp.id]));
+            const dPct = Math.min(100, Math.max(5, pData.progress || 5));
+            setDemucsLiveStats((prev) => ({
+              ...prev,
+              [targetEp.id]: {
+                percent: dPct,
+                isDone: false,
+                logs: Array.isArray(pData.logs) && pData.logs.length > 0 ? pData.logs : [{
+                  time: new Date().toLocaleTimeString(),
+                  progress: dPct,
+                  message: pData.message || `⏳ Demucs Progress: ${dPct}%`,
+                }],
+                message: pData.message || `Demucs AI Stem Separation... (${dPct}%)`,
+                model: pData.model || 'htdemucs',
+              },
+            }));
+          }
+        }
+      })
+      .catch(() => {});
+
     const targetSeriesId = activeSeries?.id || seriesId;
     if (targetSeriesId) {
       fetch(`/api/series/${targetSeriesId}`)
@@ -271,32 +310,21 @@ export default function GeminiRouteModal({
     }
   }, []);
 
-  // Cleanup all running polling timers and pending loops when modal closes or unmounts
+  // When modal closes, only clean up pending confirm dialogs.
+  // Active batch jobs (Demucs, TTS, Translation) MUST CONTINUE running in the background!
   useEffect(() => {
     if (!isOpen) {
-      isDemucsCancelledRef.current = true;
-      isTtsCancelledRef.current = true;
-      isTranslateCancelledRef.current = true;
-      setIsSeparatingBatchDemucs(false);
-      setIsGeneratingBatchTTS(false);
-      setIsStartingBatch(false);
-      activeTimersRef.current.forEach((t) => clearInterval(t));
-      activeTimersRef.current.clear();
-      // Transmit kill to backend so no zombie Demucs or Jobs continue running when modal closes
-      fetch('/api/audio/separate-kill', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ jobId: 'all' }),
-      }).catch(() => {});
       if (confirmResolverRef.current) {
         try { confirmResolverRef.current(false); } catch (_) {}
         confirmResolverRef.current = null;
       }
       setConfirmDialog(null);
     }
+  }, [isOpen]);
+
+  // Clean up timers ONLY on true unmount (e.g. app teardown or page navigation)
+  useEffect(() => {
     return () => {
-      // Do NOT cancel active batch jobs on modal close!
-      // Users can close the modal to view the Studio while batch jobs continue running in the background.
       activeTimersRef.current.forEach((t) => clearInterval(t));
       activeTimersRef.current.clear();
       if (confirmResolverRef.current) {
@@ -304,7 +332,7 @@ export default function GeminiRouteModal({
         confirmResolverRef.current = null;
       }
     };
-  }, [isOpen]);
+  }, []);
 
   const handleKillTranslate = async (targetOrJob = null) => {
     try {
@@ -1693,6 +1721,11 @@ export default function GeminiRouteModal({
             const data = await res.json().catch(() => ({}));
             if (res.ok && data.success) {
               sepResult = data;
+            } else if (res.status === 409 || data.busy) {
+              // 409 Conflict: Demucs is already actively running on backend for this episode!
+              // Seamlessly attach and wait for the in-progress backend job instead of failing!
+              console.log(`[Batch Demucs] Demucs job already active on backend for ${ep.id} (409 Conflict / busy). Attaching to active progress...`);
+              postErrorMsg = null;
             } else if (res.status !== 502) {
               postErrorMsg = data.error || 'Server error';
             }
@@ -1790,7 +1823,7 @@ export default function GeminiRouteModal({
                 ],
               },
             }));
-            const isFatal = /memory|alloc_cpu|DefaultCPUAllocator|refused|code 1|500/i.test(String(postErrorMsg || ''));
+            const isFatal = /DefaultCPUAllocator|ENOMEM|out of memory/i.test(String(postErrorMsg || ''));
             if (isFatal) {
               setBatchError(`❌ ការបំបែកសំឡេង Demucs ជួបបញ្ហា RAM / Memory (${postErrorMsg || ''}) — បានបញ្ឈប់ដំណើរការភាគបន្ទាប់ជាស្វ័យប្រវត្តិ!`);
               break;

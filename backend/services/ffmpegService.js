@@ -1346,7 +1346,10 @@ function buildVerticalVideoFilterChain({
   framingKeyframes = [],
 } = {}) {
   const isCrop = verticalStyle === "crop";
-  const cropXExpr = isCrop ? buildDynamicVerticalCropXExpr(segments, 1080, framingOverrides, framingKeyframes) : "(in_w-1080)/2";
+  const rawCropX = isCrop ? buildDynamicVerticalCropXExpr(segments, 1080, framingOverrides, framingKeyframes) : "(in_w-1080)/2";
+  const cropXExpr = (rawCropX && rawCropX.startsWith("'") && rawCropX.endsWith("'"))
+    ? rawCropX
+    : (rawCropX && rawCropX.includes("between") ? `'${rawCropX}'` : (rawCropX || "(in_w-1080)/2"));
   const baseScaleFilter = isCrop
     ? `scale=1080:1920:force_original_aspect_ratio=increase,crop=1080:1920:${cropXExpr}:(in_h-1920)/2,setsar=1`
     : "scale=1080:-2:force_original_aspect_ratio=decrease,pad=1080:1920:(1080-iw)/2:(1920-ih)/2:color=black,setsar=1";
@@ -1370,6 +1373,41 @@ function buildVerticalVideoFilterChain({
     `[v_vert_band_src]crop=1080:${h}:0:${y},boxblur=luma_radius=${requestedR}:luma_power=${power}:chroma_radius=${chromaR}:chroma_power=${power},eq=brightness=${brightness.toFixed(2)}[v_vert_sub_blur]`,
     `[v_vert_main][v_vert_sub_blur]overlay=0:${y}${outputLabel}`,
   ];
+}
+
+/**
+ * Determines whether video clips actually contain user edits, cuts, or trims,
+ * or if they are simply a contiguous 1-to-1 representation of the untouched source video.
+ */
+function detectActualCustomCuts(validClips = [], totalDuration = 0) {
+  if (!Array.isArray(validClips) || validClips.length === 0) return false;
+  if (validClips.length === 1) {
+    const c = validClips[0];
+    const sIn = Number(c.sourceStart) || 0;
+    const sOut = Number(c.sourceEnd) || 0;
+    const cStart = Number(c.start) || 0;
+    const cEnd = Number(c.end) || 0;
+    if (sIn > 0.05 || (sOut > 0 && totalDuration > 0 && Math.abs(sOut - totalDuration) > 0.5)) return true;
+    if (Math.abs((sOut - sIn) - (cEnd - cStart)) > 0.1) return true;
+    return false;
+  }
+
+  // If clips are continuous without gaps, shifts, or trims, treat as untouched original
+  let prevEnd = 0;
+  for (let i = 0; i < validClips.length; i++) {
+    const c = validClips[i];
+    const cStart = Number(c.start) || 0;
+    const cEnd = Number(c.end) || 0;
+    const sIn = Number(c.sourceStart ?? cStart) || 0;
+    const sOut = Number(c.sourceEnd ?? cEnd) || 0;
+
+    if (Math.abs(cStart - prevEnd) > 0.05) return true;
+    if (Math.abs(sIn - cStart) > 0.05 || Math.abs(sOut - cEnd) > 0.05) return true;
+    if (Math.abs((sOut - sIn) - (cEnd - cStart)) > 0.1) return true;
+
+    prevEnd = cEnd;
+  }
+  return false;
 }
 
 function renderDubbedVideoWithDucking(options = {}) {
@@ -1656,12 +1694,7 @@ function renderDubbedVideoWithDucking(options = {}) {
     // NLE multi-clip cuts and trims on VIDEO 1
     let baseVideoSource = "[0:v:0]";
 
-    const hasCustomCuts = validClips.length > 1 || (
-      validClips.length === 1 && (
-        (Number(validClips[0].sourceStart) > 0.05) ||
-        (Number(validClips[0].sourceEnd) > 0 && Math.abs(Number(validClips[0].sourceEnd) - Number(validClips[0].sourceStart) - (Number(validClips[0].end) - Number(validClips[0].start))) > 0.1)
-      )
-    );
+    const hasCustomCuts = detectActualCustomCuts(validClips, effectiveExpectedDur);
 
     if (hasCustomCuts) {
       validClips.forEach((c, cIdx) => {
@@ -1956,6 +1989,7 @@ function renderDubbedVideoWithDucking(options = {}) {
       videoMapArg = "[v_with_sponsor]";
     }
 
+    filterComplexParts.forEach((p, idx) => console.log(`[FFmpegService] Part [${idx}] len=${p.length}: ${p.slice(0, 100)}`));
     const fullFilterString = filterComplexParts.join(";");
 
     // In modern FFmpeg, pass filter complex graph directly to -filter_complex (prevents unrecognized option filter_complex_script error)
@@ -2008,10 +2042,27 @@ function renderDubbedVideoWithDucking(options = {}) {
         activeRenderProcess.kill("SIGTERM");
       } catch (_) {}
     }
-    const proc = spawn(FFMPEG_PATH, args, {
-      stdio: ["ignore", "ignore", "pipe"],
-      windowsHide: true,
+    const cliLength = args.map((a) => (a.includes(" ") ? `"${a}"` : a)).join(" ").length;
+    console.log(`[FFmpegService] 📏 Total CLI command length: ${cliLength} characters (Windows max: 32,767)`);
+    args.forEach((a, idx) => {
+      if (a.length > 200) console.log(`[FFmpegService] ⚠️ Large Arg [${idx}] (${args[idx-1] || ''}): len=${a.length}, start=${a.slice(0, 100)}`);
     });
+    let proc;
+    try {
+      proc = spawn(FFMPEG_PATH, args, {
+        stdio: ["ignore", "ignore", "pipe"],
+        windowsHide: true,
+      });
+    } catch (spawnErr) {
+      console.error(`[FFmpegService] ❌ Failed to spawn FFmpeg process:`, spawnErr);
+      if (tempAssPath && fs.existsSync(tempAssPath)) {
+        try { fs.unlinkSync(tempAssPath); } catch (_) {}
+      }
+      if (tempFilterScriptPath && fs.existsSync(tempFilterScriptPath)) {
+        try { fs.unlinkSync(tempFilterScriptPath); } catch (_) {}
+      }
+      return reject(new Error(`FFmpeg Spawn Failed: ${spawnErr.message}`));
+    }
     activeRenderProcess = proc;
     const regRecord = { proc, tempOutputPath: tempOutputVideoPath, interrupted: false, paused: false, cancelled: false };
     if (jobId) {
@@ -2033,6 +2084,7 @@ function renderDubbedVideoWithDucking(options = {}) {
         "abort",
         () => {
           try {
+            clearInterval(renderWatchdog);
             regRecord.interrupted = true;
             regRecord.cancelled = true;
             proc.kill("SIGTERM");
@@ -2046,18 +2098,30 @@ function renderDubbedVideoWithDucking(options = {}) {
       );
     }
     let stderrLog = "";
+    let lastActivityTime = Date.now();
+    const renderWatchdog = setInterval(() => {
+      if (Date.now() - lastActivityTime > 120000 && !regRecord.cancelled && !regRecord.interrupted) {
+        clearInterval(renderWatchdog);
+        console.error(`[FFmpegService] ⚠️ Render watchdog timeout (no activity for 120s) - killing hanging FFmpeg process...`);
+        try {
+          proc.kill("SIGKILL");
+        } catch (_) {}
+      }
+    }, 10000);
 
     proc.stderr.on("data", (data) => {
+      lastActivityTime = Date.now();
       const text = data.toString();
       stderrLog += text;
-      const timeMatch = text.match(/time=(\d{2}):(\d{2}):(\d{2})\.(\d{2})/);
+      const timeMatch = text.match(/time=\s*(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?/i);
       if (timeMatch) {
         const hh = Number(timeMatch[1]) || 0;
         const mm = Number(timeMatch[2]) || 0;
         const ss = Number(timeMatch[3]) || 0;
-        const cs = Number(timeMatch[4]) || 0;
-        const timeSec = hh * 3600 + mm * 60 + ss + cs / 100;
-        const timeStr = `${timeMatch[1]}:${timeMatch[2]}:${timeMatch[3]}.${timeMatch[4]}`;
+        const fracStr = timeMatch[4] || "0";
+        const frac = Number("0." + fracStr) || 0;
+        const timeSec = hh * 3600 + mm * 60 + ss + frac;
+        const timeStr = `${timeMatch[1]}:${timeMatch[2]}:${timeMatch[3]}`;
         process.stdout.write(`\r[FFmpegService] ⏳ Rendering: time=${timeStr}`);
         if (onProgress && effectiveExpectedDur > 0) {
           const pct = Math.max(1, Math.min(99, Math.round((timeSec / effectiveExpectedDur) * 100)));
@@ -2069,6 +2133,7 @@ function renderDubbedVideoWithDucking(options = {}) {
     });
 
     proc.on("close", (code) => {
+      clearInterval(renderWatchdog);
       if (jobId) jobRenderProcesses.delete(jobId);
       if (activeRenderProcess === proc) activeRenderProcess = null;
 
@@ -2129,6 +2194,7 @@ function renderDubbedVideoWithDucking(options = {}) {
     });
 
     proc.on("error", (err) => {
+      clearInterval(renderWatchdog);
       if (jobId) jobRenderProcesses.delete(jobId);
       if (activeRenderProcess === proc) activeRenderProcess = null;
       if (fs.existsSync(tempOutputVideoPath)) {
@@ -3892,15 +3958,16 @@ async function mergeVideosConcat({
       proc.stderr.on("data", (data) => {
         const text = data.toString();
         stderrLog += text;
-        const timeMatch = text.match(/time=(\d{2}):(\d{2}):(\d{2})\.(\d{2})/);
+        const timeMatch = text.match(/time=\s*(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?/i);
         if (timeMatch && typeof onProgress === "function" && expectedDur > 0) {
-          const timeSec =
-            (Number(timeMatch[1]) || 0) * 3600 +
-            (Number(timeMatch[2]) || 0) * 60 +
-            (Number(timeMatch[3]) || 0) +
-            (Number(timeMatch[4]) || 0) / 100;
+          const hh = Number(timeMatch[1]) || 0;
+          const mm = Number(timeMatch[2]) || 0;
+          const ss = Number(timeMatch[3]) || 0;
+          const fracStr = timeMatch[4] || "0";
+          const frac = Number("0." + fracStr) || 0;
+          const timeSec = hh * 3600 + mm * 60 + ss + frac;
           const pct = Math.max(1, Math.min(99, Math.round((timeSec / expectedDur) * 100)));
-          const timeStr = `${timeMatch[1]}:${timeMatch[2]}:${timeMatch[3]}.${timeMatch[4]}`;
+          const timeStr = `${timeMatch[1]}:${timeMatch[2]}:${timeMatch[3]}`;
           try {
             onProgress({ percent: pct, timeSec, timeStr });
           } catch (_) {}

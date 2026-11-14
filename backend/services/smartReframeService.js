@@ -101,10 +101,27 @@ function buildDynamicVerticalCropXExpr(segments = [], targetCropW = 1080, framin
     });
   }
 
+  // Fast Path: If all segments/overrides are default center (0.50), avoid massive eval expressions
+  const hasCustomCrop = bridged.some((b) => Math.abs(b.ratio - 0.50) > 0.01);
+  if (!hasCustomCrop) {
+    return `(in_w-${targetCropW})/2`;
+  }
+
+  // Merge contiguous intervals with identical ratios to keep expression compact
+  const mergedBridged = [];
+  for (const b of bridged) {
+    const last = mergedBridged[mergedBridged.length - 1];
+    if (last && Math.abs(last.ratio - b.ratio) < 0.005 && b.start <= last.end + 0.2) {
+      last.end = Math.max(last.end, b.end);
+    } else {
+      mergedBridged.push({ ...b });
+    }
+  }
+
   const terms = [];
   const maskTerms = [];
 
-  for (const b of bridged) {
+  for (const b of mergedBridged) {
     terms.push(`between(t,${b.start.toFixed(2)},${b.end.toFixed(2)})*${b.ratio.toFixed(2)}`);
     maskTerms.push(`between(t,${b.start.toFixed(2)},${b.end.toFixed(2)})`);
   }
@@ -113,7 +130,8 @@ function buildDynamicVerticalCropXExpr(segments = [], targetCropW = 1080, framin
   const termsSum = terms.join("+");
 
   // Formula: (in_w - targetCropW) * [ (1 - min(1, maskSum)) * 0.50 + termsSum ]
-  return `(in_w-${targetCropW})*((1-min(1,${maskSum}))*0.50+${termsSum})`;
+  // Quoted with single quotes so FFmpeg filtergraph treats the arithmetic expression as a single parameter
+  return `'(in_w-${targetCropW})*((1-min(1,${maskSum}))*0.50+${termsSum})'`;
 }
 
 /**

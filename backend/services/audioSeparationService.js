@@ -240,10 +240,10 @@ function executeDemucsWorker(options, targetDir, cleanKey) {
 
     const spawnEnv = {
       ...process.env,
-      OMP_NUM_THREADS: '3',
-      MKL_NUM_THREADS: '3',
-      OPENBLAS_NUM_THREADS: '3',
-      NUMEXPR_NUM_THREADS: '3',
+      OMP_NUM_THREADS: '4',
+      MKL_NUM_THREADS: '4',
+      OPENBLAS_NUM_THREADS: '4',
+      NUMEXPR_NUM_THREADS: '4',
     };
 
     const child = spawn(pythonBin, args, {
@@ -324,7 +324,21 @@ function executeDemucsWorker(options, targetDir, cleanKey) {
       activeSeparationJobs.delete(jobId);
       activeSeparationJobs.delete(cleanKey);
       if (code !== 0) {
-        const errMsg = `Demucs worker exited with code ${code}: ${stderrData || stdoutData}`;
+        let cleanDetail = '';
+        if (stdoutData) {
+          try {
+            const parsed = JSON.parse(stdoutData.trim());
+            if (parsed.message) cleanDetail = parsed.message;
+          } catch (_) {
+            const lines = stdoutData.trim().split('\n').filter(l => l.trim() && !l.includes('%|') && !l.includes('seconds/s'));
+            if (lines.length > 0) cleanDetail = lines[lines.length - 1];
+          }
+        }
+        if (!cleanDetail && stderrData) {
+          const lines = stderrData.trim().split('\n').filter(l => l.trim() && !l.includes('%|') && !l.includes('seconds/s'));
+          cleanDetail = lines.slice(-4).join(' ');
+        }
+        const errMsg = `Demucs worker exited with code ${code}${cleanDetail ? `: ${cleanDetail}` : ''}`;
         activeSeparationProgress.set(cleanKey, {
           progress: 0,
           status: 'error',
@@ -447,7 +461,7 @@ function killAllDemucsSystemProcesses() {
   if (process.platform === 'win32') {
     try {
       const { execSync } = require('child_process');
-      execSync('powershell -NoProfile -Command "Get-Process -Name python -ErrorAction SilentlyContinue | Where-Object { $_.WorkingSet64 -gt 400MB } | Stop-Process -Force -ErrorAction SilentlyContinue"', { stdio: 'ignore' });
+      execSync('powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter \\"Name = \'python.exe\'\\" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like \'*demucs*\' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }"', { stdio: 'ignore' });
       killed++;
     } catch (_) {}
   }

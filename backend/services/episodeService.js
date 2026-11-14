@@ -1022,9 +1022,23 @@ function deleteEpisode(seriesId, episodeId) {
   const cleanEp = sanitizeEpisodeId(episodeId);
 
   const series = getSeriesMetadata(cleanSeries, { forceDisk: true });
+  if (!series) {
+    return { success: false, error: `Series ${cleanSeries} not found.` };
+  }
+
   const targetEp = (series.episodes || []).find((e) => String(e.id) === cleanEp);
   if (!targetEp) {
-    return { success: false, error: `Episode ${cleanEp} not found in series ${cleanSeries}.` };
+    // Idempotent: If episode already removed or not found, return clean success without 400 Bad Request
+    const epDir = path.join(PROJECTS_DIR, cleanSeries, 'episodes', cleanEp);
+    if (fs.existsSync(epDir)) {
+      try { fs.rmSync(epDir, { recursive: true, force: true }); } catch (_) {}
+    }
+    return {
+      success: true,
+      alreadyDeleted: true,
+      message: `Episode ${cleanEp} is already deleted or not found in series ${cleanSeries}.`,
+      remainingEpisodes: series.episodes || [],
+    };
   }
 
   // Filter out the deleted episode from metadata
@@ -1064,6 +1078,11 @@ function deleteEpisode(seriesId, episodeId) {
   }
 
   saveSeriesMetadata(series);
+
+  const epDir = path.join(PROJECTS_DIR, cleanSeries, 'episodes', cleanEp);
+  if (fs.existsSync(epDir)) {
+    try { fs.rmSync(epDir, { recursive: true, force: true }); } catch (_) {}
+  }
 
   console.log(`[EpisodeService] Deleted Episode ${cleanEp} from series "${cleanSeries}". Remaining episodes re-indexed sequentially (1..${series.episodes.length}).`);
   return { success: true, remainingEpisodes: series.episodes };

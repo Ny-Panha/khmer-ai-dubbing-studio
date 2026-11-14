@@ -44,6 +44,9 @@ logs/
 *.log
 npm-debug.log*
 
+# Sub-projects / standalone bots
+telegram_vip_bot/
+
 # OS and Editor
 .DS_Store
 Thumbs.db

@@ -201,21 +201,19 @@ def main():
             input_audio
         ]
 
-        # Low-overhead CPU throttling & below-normal priority so laptop stays cool (<50% CPU, <2GB RAM)
+        # Full performance configuration for 10-core CPU with 32GB RAM (No throttle, no RAM limit)
         demucs_env = os.environ.copy()
-        demucs_env["OMP_NUM_THREADS"] = "3"
-        demucs_env["MKL_NUM_THREADS"] = "3"
-        demucs_env["OPENBLAS_NUM_THREADS"] = "3"
-        demucs_env["NUMEXPR_NUM_THREADS"] = "3"
+        demucs_env["OMP_NUM_THREADS"] = "4"
+        demucs_env["MKL_NUM_THREADS"] = "4"
+        demucs_env["OPENBLAS_NUM_THREADS"] = "4"
+        demucs_env["NUMEXPR_NUM_THREADS"] = "4"
 
         creationflags = 0
-        if sys.platform.startswith("win"):
-            creationflags = getattr(subprocess, "BELOW_NORMAL_PRIORITY_CLASS", 0x00004000)
 
         # Execute demucs process with live stderr streaming for real-time progress
         process = subprocess.Popen(
             cmd,
-            stdout=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
             bufsize=1,
@@ -236,6 +234,7 @@ def main():
         atexit.register(_cleanup_subproc)
 
         err_lines = []
+        progress_lines = []
         buf = []
         try:
             while True:
@@ -247,12 +246,23 @@ def main():
                 if ch in ('\r', '\n'):
                     line = ''.join(buf).strip()
                     if line:
-                        err_lines.append(line)
+                        if '%|' in line or 'seconds/s' in line or 's/seconds' in line:
+                            progress_lines.append(line)
+                        else:
+                            err_lines.append(line)
                         sys.stderr.write(line + "\n")
                         sys.stderr.flush()
                     buf = []
                 else:
                     buf.append(ch)
+
+            if buf:
+                line = ''.join(buf).strip()
+                if line:
+                    if '%|' in line or 'seconds/s' in line or 's/seconds' in line:
+                        progress_lines.append(line)
+                    else:
+                        err_lines.append(line)
 
             process.wait()
         except (KeyboardInterrupt, SystemExit):
@@ -264,7 +274,19 @@ def main():
         finally:
             atexit.unregister(_cleanup_subproc)
         if process.returncode != 0:
-            err_msg = "\n".join(err_lines[-10:]) if err_lines else "Demucs process failed"
+            stdout_rem, stderr_rem = process.communicate()
+            if stderr_rem:
+                for rem in stderr_rem.splitlines():
+                    rem_clean = rem.strip()
+                    if rem_clean and not ('%|' in rem_clean or 'seconds/s' in rem_clean):
+                        err_lines.append(rem_clean)
+            if stdout_rem:
+                for rem in stdout_rem.splitlines():
+                    rem_clean = rem.strip()
+                    if rem_clean:
+                        err_lines.append(rem_clean)
+            meaningful_err = [l for l in err_lines if not ('%|' in l or 'seconds/s' in l)]
+            err_msg = "\n".join(meaningful_err[-6:]) if meaningful_err else ("\n".join(progress_lines[-2:]) if progress_lines else "Demucs process failed")
             raise RuntimeError(f"Demucs failed with exit code {process.returncode}: {err_msg}")
 
         # Demucs output layout: <temp_work_dir>/<model_name>/<audio_basename_no_ext>/

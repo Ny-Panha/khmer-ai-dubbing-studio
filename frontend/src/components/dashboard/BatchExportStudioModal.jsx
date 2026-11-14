@@ -60,6 +60,10 @@ export default function BatchExportStudioModal({
       );
       const hasVoice = Boolean(checkEpisodeHasAudioReady(ep) || hasActiveLocalVoice);
       const hasDemucs = Boolean(checkEpisodeHasDemucsReady(ep));
+      const hasRendered = Boolean(
+        ep?.renderedVideo?.success &&
+        (ep?.renderedVideo?.outputFilename || ep?.renderedVideo?.videoUrl)
+      );
 
       let notReadyReason = null;
       if (!hasVideo) {
@@ -84,6 +88,7 @@ export default function BatchExportStudioModal({
         hasScript,
         hasVoice,
         hasDemucs,
+        hasRendered,
         isReady: hasVideo && hasScript && hasVoice,
         notReadyReason,
       };
@@ -184,12 +189,16 @@ export default function BatchExportStudioModal({
           output: out,
         });
       } else if (isCurrent) {
+        const epPct = typeof batchJob.currentEpisodePercent === 'number' && batchJob.currentEpisodePercent > 0
+          ? `${batchJob.currentEpisodePercent}%`
+          : '0%';
         rows.push({
           episodeId: item.ep.id,
           epNum: item.epNum,
           title: item.title,
           state: 'running',
-          label: `កំពុង Render (${batchJob.currentIndex || 1}/${batchJob.totalCount || 1})...`,
+          label: `កំពុង Render ${epPct} (${batchJob.currentIndex || 1}/${batchJob.totalCount || 1})`,
+          percent: typeof batchJob.currentEpisodePercent === 'number' ? batchJob.currentEpisodePercent : 0,
         });
       } else if (skip) {
         rows.push({
@@ -446,6 +455,35 @@ export default function BatchExportStudioModal({
                 </button>
                 <button
                   type="button"
+                  data-testid="export-studio-select-unrendered"
+                  disabled={isBatchRunning}
+                  onClick={() =>
+                    onChangeSelectedEpIds?.(
+                      episodesWithVideo
+                        .filter((item) => item.hasVoice && !item.hasRendered)
+                        .map((item) => item.ep.id)
+                    )
+                  }
+                  style={{
+                    padding: '4px 10px',
+                    borderRadius: 6,
+                    background: 'rgba(99, 102, 241, 0.14)',
+                    border: '1px solid rgba(129, 140, 248, 0.38)',
+                    color: '#A5B4FC',
+                    fontSize: '0.71rem',
+                    fontWeight: 700,
+                    cursor: isBatchRunning ? 'not-allowed' : 'pointer',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    gap: 4,
+                  }}
+                  title="ជ្រើសរើសតែភាគដែលមាន Voice ហើយមិនទាន់បាន Export"
+                >
+                  <Film size={11} />
+                  <span>មិនទាន់ Export ({episodesWithVideo.filter((item) => item.hasVoice && !item.hasRendered).length})</span>
+                </button>
+                <button
+                  type="button"
                   data-testid="export-studio-clear-all"
                   disabled={isBatchRunning || selectedItems.length === 0}
                   onClick={() => onChangeSelectedEpIds?.([])}
@@ -485,7 +523,7 @@ export default function BatchExportStudioModal({
                 }}
               >
                 {episodeReadinessList.map((item) => {
-                  const { ep, epNum, title, hasVideo, hasScript, hasVoice, hasDemucs, isReady, notReadyReason } = item;
+                  const { ep, epNum, title, hasVideo, hasScript, hasVoice, hasDemucs, hasRendered, isReady, notReadyReason } = item;
                   const isChecked = selectedSet.has(String(ep.id));
                   return (
                     <label
@@ -598,6 +636,26 @@ export default function BatchExportStudioModal({
                           <Volume2 size={10} />
                           <span>Demucs {hasDemucs ? '✓' : '✗'}</span>
                         </span>
+                        {hasRendered && (
+                          <span
+                            style={{
+                              fontSize: '0.65rem',
+                              fontWeight: 700,
+                              padding: '1px 6px',
+                              borderRadius: 4,
+                              background: 'rgba(99, 102, 241, 0.2)',
+                              color: '#A5B4FC',
+                              border: '1px solid rgba(129, 140, 248, 0.4)',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 3,
+                            }}
+                            title="ភាគនេះបាន Render រួចរាល់ 100% ហើយ"
+                          >
+                            <Film size={10} />
+                            <span>Rendered ✓</span>
+                          </span>
+                        )}
                       </div>
 
                       {/* Not-Ready Reason Flag */}
@@ -917,8 +975,26 @@ export default function BatchExportStudioModal({
                       {batchJob.elapsedSeconds}s
                     </span>
                   )}
+                  {batchJob.status === 'running' && (
+                    <span
+                      style={{
+                        fontSize: '0.75rem',
+                        fontWeight: 800,
+                        fontFamily: 'monospace',
+                        color: '#38BDF8',
+                        background: 'rgba(56, 189, 248, 0.15)',
+                        border: '1px solid rgba(56, 189, 248, 0.35)',
+                        padding: '2px 8px',
+                        borderRadius: 6,
+                      }}
+                    >
+                      {batchJob.currentEpisodeNumber
+                        ? `EP${batchJob.currentEpisodeNumber}: ${batchJob.currentEpisodePercent || 0}%`
+                        : `Merge: ${batchJob.currentEpisodePercent || 0}%`}
+                    </span>
+                  )}
                   <span style={{ fontSize: '0.92rem', fontWeight: 900, fontFamily: 'monospace', color: batchJob.status === 'completed' ? '#34D399' : '#38BDF8' }}>
-                    {batchJob.progress || 0}%
+                    {batchJob.status === 'completed' ? '100%' : `សរុប ${batchJob.progress || 0}%`}
                   </span>
                   {batchJob.status === 'running' ? (
                     <button
@@ -986,10 +1062,9 @@ export default function BatchExportStudioModal({
                       key={row.episodeId}
                       style={{
                         display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        gap: 6,
-                        padding: '5px 8px',
+                        flexDirection: 'column',
+                        gap: 4,
+                        padding: '6px 8px',
                         borderRadius: 6,
                         fontSize: '0.7rem',
                         background: row.state === 'completed'
@@ -1006,30 +1081,44 @@ export default function BatchExportStudioModal({
                           : '1px solid rgba(255, 255, 255, 0.08)',
                       }}
                     >
-                      <span style={{ fontWeight: 700, color: '#E2E8F0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        EP{row.epNum}
-                      </span>
-                      <span
-                        style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: 4,
-                          fontWeight: 700,
-                          color: row.state === 'completed'
-                            ? '#34D399'
-                            : row.state === 'running'
-                            ? '#38BDF8'
-                            : row.state === 'skipped'
-                            ? '#FBBF24'
-                            : '#94A3B8',
-                          flexShrink: 0,
-                        }}
-                      >
-                        {row.state === 'completed' && <Check size={11} />}
-                        {row.state === 'running' && <Loader2 size={11} className="animate-spin" />}
-                        {row.state === 'queued' && <Clock size={11} />}
-                        <span>{row.label}</span>
-                      </span>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6 }}>
+                        <span style={{ fontWeight: 700, color: '#E2E8F0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          EP{row.epNum}
+                        </span>
+                        <span
+                          style={{
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 4,
+                            fontWeight: 700,
+                            color: row.state === 'completed'
+                              ? '#34D399'
+                              : row.state === 'running'
+                              ? '#38BDF8'
+                              : row.state === 'skipped'
+                              ? '#FBBF24'
+                              : '#94A3B8',
+                            flexShrink: 0,
+                          }}
+                        >
+                          {row.state === 'completed' && <Check size={11} />}
+                          {row.state === 'running' && <Loader2 size={11} className="animate-spin" />}
+                          {row.state === 'queued' && <Clock size={11} />}
+                          <span>{row.label}</span>
+                        </span>
+                      </div>
+                      {row.state === 'running' && (
+                        <div style={{ width: '100%', height: 3, background: 'rgba(255, 255, 255, 0.12)', borderRadius: 2, overflow: 'hidden' }}>
+                          <div
+                            style={{
+                              width: `${Math.max(4, row.percent || 0)}%`,
+                              height: '100%',
+                              background: 'linear-gradient(90deg, #38BDF8, #818CF8)',
+                              transition: 'width 0.25s ease',
+                            }}
+                          />
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -1054,7 +1143,7 @@ export default function BatchExportStudioModal({
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
                 <span style={{ fontSize: '0.8rem', fontWeight: 800, color: '#6EE7B7', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
                   <CheckCircle2 size={15} color="#34D399" />
-                  <span>ឯកសារវីដេអូដែលបាន Export រួចរាល់ (Finished Files)</span>
+                  <span>ឯកសារវីដេអូដែលបាន Export រួចរាល់ ({Array.isArray(batchJob.outputs) ? `${batchJob.outputs.length} ភាគ` : 'Finished Files'})</span>
                 </span>
               </div>
 
@@ -1107,7 +1196,7 @@ export default function BatchExportStudioModal({
 
               {/* Per-Episode Produced Files */}
               {Array.isArray(batchJob.outputs) && batchJob.outputs.length > 0 && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 180, overflowY: 'auto' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 380, overflowY: 'auto' }}>
                   {batchJob.outputs.map((out) => (
                     <div
                       key={out.episodeId || out.outputFilename}

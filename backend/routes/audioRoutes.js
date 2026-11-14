@@ -935,6 +935,9 @@ router.get("/audio/separation-progress", (req, res) => {
     const { videoPath, videoFileName, videoId } = req.query;
     const rawVideoRef = videoPath || videoId || videoFileName;
     const progressData = audioSeparationService.getSeparationProgress(rawVideoRef);
+    const activeMedia = typeof audioSeparationService.getCurrentSeparationMedia === 'function'
+      ? audioSeparationService.getCurrentSeparationMedia()
+      : null;
     let noVocalsUrl = null;
     const noVocalsPath = progressData?.noVocalsPath || null;
     if (noVocalsPath && fs.existsSync(noVocalsPath)) {
@@ -951,6 +954,7 @@ router.get("/audio/separation-progress", (req, res) => {
       logs: progressData?.logs || [],
       noVocalsUrl,
       noVocalsPath,
+      activeMedia,
     });
   } catch (err) {
     return res.json({ success: true, progress: 0, status: 'idle', model: 'htdemucs' });
