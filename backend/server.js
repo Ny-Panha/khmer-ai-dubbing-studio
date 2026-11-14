@@ -124,6 +124,15 @@ if (require.main === module) {
     });
   };
 
+  // Top-Level Resilience Guards: Prevent socket disconnects or unhandled async errors from crashing the Node process
+  process.on("uncaughtException", (err) => {
+    console.error("[Backend Guard] ⚠️ Caught uncaughtException (prevented server crash):", err?.stack || err?.message || err);
+  });
+
+  process.on("unhandledRejection", (reason) => {
+    console.error("[Backend Guard] ⚠️ Caught unhandledRejection (prevented server crash):", reason?.stack || reason?.message || reason);
+  });
+
   startListen();
 
   let isShuttingDown = false;

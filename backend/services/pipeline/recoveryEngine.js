@@ -298,27 +298,64 @@ function recoverDanglingJobs({
           resumeStage: latestCheckpoint.stage,
         });
       } else {
-        // No valid checkpoint found: mark job failed with diagnostic message
-        job.status = JOB_STATUS.FAILED;
-        job.error = 'WORKER_INTERRUPTED';
-        job.completedAt = job.completedAt || Date.now();
-        job.stageMessage = 'ការងារត្រូវបានរំខានដោយសារ Server បាន Restart ឬ Worker បានដាច់ (Worker Interrupted)';
-        job.updatedAt = Date.now();
+        const retryCount = Number(job.retryPolicy?.retryCount || 0);
+        const maxRetries = Number(job.retryPolicy?.maxRetries ?? 3);
+        const canAutoRetry = retryCount < maxRetries;
 
-        releaseJobLease(job, workerId);
+        if (canAutoRetry) {
+          // Auto-recover to queued: increments retry count and allows worker to resume cleanly (chunk caches on disk are preserved!)
+          job.status = JOB_STATUS.QUEUED;
+          job.retryPolicy = {
+            ...(job.retryPolicy || {}),
+            retryCount: retryCount + 1,
+            lastError: 'WORKER_INTERRUPTED_AUTO_RECOVERED',
+            recoverable: true,
+          };
+          job.stageMessage = `បានស្ដារការងារឡើងវិញដោយស្វ័យប្រវត្តបន្ទាប់ពី Server Restart (Auto-resuming attempt ${retryCount + 1}/${maxRetries}...)`;
+          job.recoveryInfo = {
+            recoveredAt: Date.now(),
+            action: 'auto_retry_interrupted_worker',
+            attempt: retryCount + 1,
+          };
+          job.updatedAt = Date.now();
 
-        try {
-          const filePath = getJobFilePath(job.seriesId, job.episodeId, job.jobId, baseUploadsDir);
-          atomicWriteJson(filePath, job);
-        } catch (_) {}
+          releaseJobLease(job, workerId);
 
-        failedCount++;
-        results.push({
-          jobId: job.jobId,
-          status: JOB_STATUS.FAILED,
-          action: 'marked_failed_missing_checkpoint',
-          reason: 'WORKER_INTERRUPTED',
-        });
+          try {
+            const filePath = getJobFilePath(job.seriesId, job.episodeId, job.jobId, baseUploadsDir);
+            atomicWriteJson(filePath, job);
+          } catch (_) {}
+
+          recoveredCount++;
+          results.push({
+            jobId: job.jobId,
+            status: JOB_STATUS.QUEUED,
+            action: 'auto_retry_queued',
+            attempt: retryCount + 1,
+          });
+        } else {
+          // No valid checkpoint and exceeded retries: mark job failed with diagnostic message
+          job.status = JOB_STATUS.FAILED;
+          job.error = 'WORKER_INTERRUPTED';
+          job.completedAt = job.completedAt || Date.now();
+          job.stageMessage = 'ការងារត្រូវបានរំខានដោយសារ Server បាន Restart ឬ Worker បានដាច់ (Worker Interrupted)';
+          job.updatedAt = Date.now();
+
+          releaseJobLease(job, workerId);
+
+          try {
+            const filePath = getJobFilePath(job.seriesId, job.episodeId, job.jobId, baseUploadsDir);
+            atomicWriteJson(filePath, job);
+          } catch (_) {}
+
+          failedCount++;
+          results.push({
+            jobId: job.jobId,
+            status: JOB_STATUS.FAILED,
+            action: 'marked_failed_missing_checkpoint',
+            reason: 'WORKER_INTERRUPTED',
+          });
+        }
       }
     }
   }

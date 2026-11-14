@@ -88,8 +88,11 @@ export async function runQuotaCheck(probeMode = 'models', { allModels = false } 
     return res;
   } catch (err) {
     if (err?.name !== 'AbortError') {
-      console.error('Failed to check keys quota:', err);
-      if (safeMode !== 'stats') {
+      if (safeMode === 'stats') {
+        // Quiet non-blocking warning for background telemetry polling
+        console.warn('[Gemini Quota Monitor] Background stats check skipped (backend temporarily busy or reconnecting):', err?.message || err);
+      } else {
+        console.error('Failed to check keys quota:', err);
         updateStore({ quotaError: err?.message || 'មិនអាចពិនិត្យ Quota Keys បានទេ' });
       }
     }
