@@ -2078,7 +2078,17 @@ function VideoPlayerPreview({
                 />
               )}
 
-              {/* Subtitle Overlay */}
+              {/* Anti-Theft Running Marquee & Watermark Live Overlay (z-index: 1) */}
+              <AntiTheftOverlay
+                voiceSettings={voiceSettings}
+                renderedVideo={renderedVideo}
+                aspectRatio={aspectRatio}
+                verticalStyle={verticalStyle}
+                videoMeta={videoMeta}
+                onUpdateVoiceSettings={onUpdateVoiceSettings}
+              />
+
+              {/* Subtitle Overlay (z-index: 20 - sits on top of anti-theft banner) */}
               <LiveSubtitleOverlay
                 activeSegment={activeSegment}
                 voiceSettings={voiceSettings}
@@ -2087,16 +2097,6 @@ function VideoPlayerPreview({
                 aspectRatio={aspectRatio}
                 verticalStyle={verticalStyle}
                 videoMeta={videoMeta}
-              />
-
-              {/* Anti-Theft Running Marquee & Watermark Live Overlay */}
-              <AntiTheftOverlay
-                voiceSettings={voiceSettings}
-                renderedVideo={renderedVideo}
-                aspectRatio={aspectRatio}
-                verticalStyle={verticalStyle}
-                videoMeta={videoMeta}
-                onUpdateVoiceSettings={onUpdateVoiceSettings}
               />
 
               {/* Logo Watermark Live Overlay (សងខាង / ជ្រុងលើ) */}
