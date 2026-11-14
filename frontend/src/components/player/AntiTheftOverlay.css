@@ -105,6 +105,45 @@
   padding: 3.5px 0;
   min-height: 24px;
   transition: all 0.15s ease;
+  pointer-events: auto !important;
+  cursor: ns-resize !important;
+  user-select: none;
+}
+
+.anti-theft-overlay-root:hover .anti-theft-marquee-ribbon,
+.anti-theft-overlay-root.hovered .anti-theft-marquee-ribbon {
+  border-top-color: rgba(56, 189, 248, 0.6);
+  border-bottom-color: rgba(56, 189, 248, 0.6);
+  box-shadow: 0 0 16px rgba(56, 189, 248, 0.25);
+}
+
+.anti-theft-marquee-ribbon.is-dragging-ribbon {
+  cursor: grabbing !important;
+  background: rgba(15, 23, 42, 0.90) !important;
+  border-top: 1.5px solid #38bdf8 !important;
+  border-bottom: 1.5px solid #38bdf8 !important;
+  box-shadow: 0 0 20px rgba(56, 189, 248, 0.4) !important;
+}
+
+.ribbon-drag-indicator {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: rgba(15, 23, 42, 0.92);
+  border: 1px solid rgba(56, 189, 248, 0.5);
+  border-radius: 12px;
+  padding: 2px 10px;
+  color: #38bdf8;
+  font-size: 0.68rem;
+  font-weight: 600;
+  pointer-events: none;
+  z-index: 26;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.7);
+  white-space: nowrap;
 }
 
 .anti-theft-marquee-track {

@@ -1018,7 +1018,12 @@ function generateKhmerAssSubtitleFile({
         textY = ribbonY + Math.round(ribbonH / 2);
         watermarkY = ribbonY + ribbonH + 26;
       } else {
-        ribbonY = 1080 - ribbonH - 16;
+        const bottomPct = Number(antiTheft.antiTheftBottomPercent ?? antiTheft.bottomPercent);
+        if (Number.isFinite(bottomPct) && bottomPct > 0) {
+          ribbonY = Math.round(1080 - (1080 * (bottomPct / 100)) - ribbonH);
+        } else {
+          ribbonY = 1080 - ribbonH - 16;
+        }
         textY = ribbonY + Math.round(ribbonH / 2);
         watermarkY = ribbonY - 12;
       }

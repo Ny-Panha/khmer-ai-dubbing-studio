@@ -244,6 +244,23 @@ export default function VideoTransformControls({
                     </button>
                   </div>
                 </div>
+
+                <div className="popup-section">
+                  <div className="slider-row-header">
+                    <span>កម្ពស់របារ (Bottom Height):</span>
+                    <span className="value-label" style={{ color: '#38bdf8' }}>{Math.round(voiceSettings?.antiTheftBottomPercent || 2)}%</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="1"
+                    max="60"
+                    step="1"
+                    value={Math.round(voiceSettings?.antiTheftBottomPercent || 2)}
+                    onChange={(e) => onUpdateVoiceSettings?.({ ...voiceSettings, antiTheftBottomPercent: Number(e.target.value), marqueePosition: 'bottom' })}
+                    className="compact-range"
+                    style={{ accentColor: '#38bdf8' }}
+                  />
+                </div>
               </div>
             )}
           </div>
