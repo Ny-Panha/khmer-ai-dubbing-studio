@@ -150,65 +150,6 @@ function VideoPlayerPreview({
   const isPlayPendingRef = useRef(false);
   const playStartTimeRef = useRef(0);
 
-  // 🔍 Interactive Video Pan & Zoom State (Customizable Video View)
-  const videoZoom = Number(voiceSettings?.videoZoom) || 1.0;
-  const videoPanX = Number(voiceSettings?.videoPanX) || 0;
-  const videoPanY = Number(voiceSettings?.videoPanY) || 0;
-  const [livePan, setLivePan] = useState(null);
-  const [isPanModeActive, setIsPanModeActive] = useState(false);
-  const [isPanning, setIsPanning] = useState(false);
-  const panStartRef = useRef({ x: 0, y: 0, panX: 0, panY: 0 });
-
-  const effectivePanX = livePan !== null ? livePan.x : videoPanX;
-  const effectivePanY = livePan !== null ? livePan.y : videoPanY;
-
-  const handleUpdateTransform = useCallback(({ zoom, panX, panY }) => {
-    if (onUpdateVoiceSettings) {
-      onUpdateVoiceSettings({
-        ...voiceSettings,
-        videoZoom: typeof zoom === 'number' ? zoom : videoZoom,
-        videoPanX: typeof panX === 'number' ? panX : videoPanX,
-        videoPanY: typeof panY === 'number' ? panY : videoPanY,
-      });
-    }
-  }, [onUpdateVoiceSettings, voiceSettings, videoZoom, videoPanX, videoPanY]);
-
-  const handleResetTransform = useCallback(() => {
-    setLivePan(null);
-    if (onUpdateVoiceSettings) {
-      onUpdateVoiceSettings({
-        ...voiceSettings,
-        videoZoom: 1.0,
-        videoPanX: 0,
-        videoPanY: 0,
-      });
-    }
-  }, [onUpdateVoiceSettings, voiceSettings]);
-
-  const handleTogglePanMode = useCallback(() => {
-    setIsPanModeActive((prev) => {
-      const next = !prev;
-      // Auto zoom to 1.15x if activating move from 1.0x so user can pan freely
-      if (next && videoZoom <= 1.0) {
-        handleUpdateTransform({ zoom: 1.15, panX: videoPanX, panY: videoPanY });
-      }
-      return next;
-    });
-  }, [videoZoom, videoPanX, videoPanY, handleUpdateTransform]);
-
-  const handleWheelZoom = useCallback((e) => {
-    if (e.ctrlKey || isPanModeActive) {
-      e.preventDefault();
-      const delta = e.deltaY < 0 ? 0.1 : -0.1;
-      const nextZoom = Math.max(1.0, Math.min(3.0, Math.round((videoZoom + delta) * 10) / 10));
-      handleUpdateTransform({
-        zoom: nextZoom,
-        panX: nextZoom === 1.0 ? 0 : videoPanX,
-        panY: nextZoom === 1.0 ? 0 : videoPanY,
-      });
-    }
-  }, [isPanModeActive, videoZoom, videoPanX, videoPanY, handleUpdateTransform]);
-
   // BUG-013: Bounded Audio Auto-Recovery State & Manager
   const [narrationError, setNarrationError] = useState(null);
   const recoveryManagerRef = useRef(null);
@@ -1851,8 +1792,8 @@ function VideoPlayerPreview({
   const handleVideoMouseDown = useCallback((e) => {
     if (e.button !== 0) return;
 
-    // 1. 9:16 Framing Crop Drag (Legacy mode for portrait crop when Pan tool is not active)
-    if (is916Crop && !isPanModeActive && videoZoom <= 1.0) {
+    // Only allow drag for 9:16 portrait crop framing. Normal landscape video stays 100% locked!
+    if (is916Crop) {
       dragStartXRef.current = e.clientX;
       dragStartCropXRef.current = effectiveCropX;
       hasDraggedRef.current = false;
@@ -1886,47 +1827,8 @@ function VideoPlayerPreview({
 
       window.addEventListener('mousemove', onMouseMove);
       window.addEventListener('mouseup', onMouseUp);
-      return;
     }
-
-    // 2. Universal Video Pan Drag (Works across 16:9 landscape, zoomed view, or Hand tool)
-    panStartRef.current = {
-      x: e.clientX,
-      y: e.clientY,
-      panX: videoPanX,
-      panY: videoPanY,
-    };
-    hasDraggedRef.current = false;
-    let latestX = videoPanX;
-    let latestY = videoPanY;
-
-    const onPanMove = (moveEvt) => {
-      const dx = moveEvt.clientX - panStartRef.current.x;
-      const dy = moveEvt.clientY - panStartRef.current.y;
-      if (Math.hypot(dx, dy) > 3) {
-        hasDraggedRef.current = true;
-        setIsPanning(true);
-      }
-      if (hasDraggedRef.current) {
-        latestX = Math.round(panStartRef.current.panX + dx);
-        latestY = Math.round(panStartRef.current.panY + dy);
-        setLivePan({ x: latestX, y: latestY });
-      }
-    };
-
-    const onPanUp = () => {
-      setIsPanning(false);
-      window.removeEventListener('mousemove', onPanMove);
-      window.removeEventListener('mouseup', onPanUp);
-      if (hasDraggedRef.current) {
-        handleUpdateTransform({ zoom: videoZoom, panX: latestX, panY: latestY });
-      }
-      setLivePan(null);
-    };
-
-    window.addEventListener('mousemove', onPanMove);
-    window.addEventListener('mouseup', onPanUp);
-  }, [isPanModeActive, videoZoom, videoPanX, videoPanY, handleUpdateTransform, is916Crop, effectiveCropX, videoRef, handleUpdateActiveCrop]);
+  }, [is916Crop, effectiveCropX, videoRef, handleUpdateActiveCrop]);
 
   const handleVideoClick = useCallback((e) => {
     if (hasDraggedRef.current) {
@@ -2022,16 +1924,9 @@ function VideoPlayerPreview({
           style={framedStageStyle}
         >
           {currentVideoSrc ? (
-            <div className="player-stage-viewport" data-testid="player-stage-viewport" onWheel={handleWheelZoom}>
-              {/* Floating Interactive Video Customizer & Pan/Zoom Toolbar */}
+            <div className="player-stage-viewport" data-testid="player-stage-viewport">
+              {/* Floating Overlay Customizer (Logo & Banner) */}
               <VideoTransformControls
-                videoZoom={videoZoom}
-                videoPanX={videoPanX}
-                videoPanY={videoPanY}
-                onUpdateTransform={handleUpdateTransform}
-                onResetTransform={handleResetTransform}
-                isPanModeActive={isPanModeActive}
-                onTogglePanMode={handleTogglePanMode}
                 voiceSettings={voiceSettings}
                 onUpdateVoiceSettings={onUpdateVoiceSettings}
                 aspectRatio={aspectRatio}
@@ -2057,16 +1952,12 @@ function VideoPlayerPreview({
                   objectPosition: is916Crop
                     ? `${effectiveCropX}% 50%`
                     : '50% 50%',
-                  transform: (videoZoom > 1.0 || effectivePanX !== 0 || effectivePanY !== 0)
-                    ? `translate(${effectivePanX}px, ${effectivePanY}px) scale(${videoZoom})`
-                    : 'none',
+                  transform: 'none',
                   transformOrigin: 'center center',
-                  transition: (isPanning || isDraggingCrop || (isPlaying && (scriptData?.framingKeyframes?.length || 0) > 0))
+                  transition: (isDraggingCrop || (isPlaying && (scriptData?.framingKeyframes?.length || 0) > 0))
                     ? 'none'
-                    : 'object-position 0.25s cubic-bezier(0.2, 0.8, 0.4, 1), transform 0.15s ease',
-                  cursor: (isPanModeActive || videoZoom > 1.0)
-                    ? (isPanning ? 'grabbing' : 'grab')
-                    : (is916Crop ? (isDraggingCrop ? 'grabbing' : 'grab') : 'pointer'),
+                    : 'object-position 0.25s cubic-bezier(0.2, 0.8, 0.4, 1)',
+                  cursor: is916Crop ? (isDraggingCrop ? 'grabbing' : 'grab') : 'pointer',
                   userSelect: 'none',
                   display: 'block',
                   backgroundColor: '#000000',

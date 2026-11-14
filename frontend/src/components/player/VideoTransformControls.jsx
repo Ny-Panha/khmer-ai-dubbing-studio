@@ -1,47 +1,22 @@
 import React, { useState } from 'react';
 import {
-  ZoomIn, ZoomOut, Move, RotateCcw, Image as ImageIcon,
-  Shield, Eye, EyeOff, Sliders, ChevronDown, Check, Sparkles
+  Image as ImageIcon,
+  Shield, Eye, EyeOff, Sliders, ChevronDown
 } from 'lucide-react';
 import './VideoTransformControls.css';
 
 /**
- * Modern floating glassmorphism toolbar for interactive video zoom, pan,
- * watermark logo positioning, and bottom banner controls directly on the player.
+ * Modern floating glassmorphism toolbar for customizing
+ * watermark logo positioning/size and bottom anti-theft banner.
+ * (Video panning/moving is strictly locked to prevent unwanted video shifting)
  */
 export default function VideoTransformControls({
-  videoZoom = 1.0,
-  videoPanX = 0,
-  videoPanY = 0,
-  onUpdateTransform,
-  onResetTransform,
-  isPanModeActive = false,
-  onTogglePanMode,
   voiceSettings = {},
   onUpdateVoiceSettings,
   aspectRatio = '16:9',
 }) {
   const [activeMenu, setActiveMenu] = useState(null); // 'logo' | 'ribbon' | null
   const [isCollapsed, setIsCollapsed] = useState(false);
-
-  const zoomPercent = Math.round(videoZoom * 100);
-
-  const handleZoomChange = (delta) => {
-    const nextZoom = Math.max(1.0, Math.min(3.0, Math.round((videoZoom + delta) * 10) / 10));
-    onUpdateTransform({
-      zoom: nextZoom,
-      panX: nextZoom === 1.0 ? 0 : videoPanX,
-      panY: nextZoom === 1.0 ? 0 : videoPanY,
-    });
-  };
-
-  const handleSetExactZoom = (zoomVal) => {
-    onUpdateTransform({
-      zoom: zoomVal,
-      panX: zoomVal === 1.0 ? 0 : videoPanX,
-      panY: zoomVal === 1.0 ? 0 : videoPanY,
-    });
-  };
 
   const currentLogoPos = voiceSettings?.logoPosition || 'top-right';
   const currentLogoSize = voiceSettings?.logoSize || 72;
@@ -60,7 +35,7 @@ export default function VideoTransformControls({
         type="button"
         className="transform-btn collapse-toggle-btn"
         onClick={() => setIsCollapsed(!isCollapsed)}
-        title={isCollapsed ? "បង្ហាញ Tool កែទំហំ & Move វីដេអូ" : "បង្រួម Tool"}
+        title={isCollapsed ? "បង្ហាញ Tool កែ Logo & Banner" : "បង្រួម Tool"}
       >
         <Sliders size={13} />
         {!isCollapsed && <span className="toolbar-label">Customize</span>}
@@ -68,69 +43,9 @@ export default function VideoTransformControls({
 
       {!isCollapsed && (
         <>
-          {/* Divider */}
           <div className="toolbar-divider" />
 
-          {/* 2. Video Zoom Controls */}
-          <div className="toolbar-group zoom-group">
-            <button
-              type="button"
-              className="transform-btn icon-btn"
-              onClick={() => handleZoomChange(-0.1)}
-              disabled={videoZoom <= 1.0}
-              title="Zoom Out (បង្រួម)"
-            >
-              <ZoomOut size={13} />
-            </button>
-
-            <button
-              type="button"
-              className={`transform-btn zoom-badge-btn ${videoZoom > 1.0 ? 'active' : ''}`}
-              onClick={() => handleSetExactZoom(videoZoom > 1.0 ? 1.0 : 1.25)}
-              title="ចុចដើម្បីកំណត់ Zoom (Click to toggle 100% / 125%)"
-            >
-              <span>{zoomPercent}%</span>
-            </button>
-
-            <button
-              type="button"
-              className="transform-btn icon-btn"
-              onClick={() => handleZoomChange(0.1)}
-              disabled={videoZoom >= 3.0}
-              title="Zoom In (ពង្រីក)"
-            >
-              <ZoomIn size={13} />
-            </button>
-          </div>
-
-          {/* 3. Hand Tool (Pan Mode) */}
-          <button
-            type="button"
-            className={`transform-btn tool-toggle-btn ${isPanModeActive ? 'active' : ''}`}
-            onClick={onTogglePanMode}
-            title={isPanModeActive ? "បិទ Hand Tool (Pan Mode)" : "បើក Hand Tool (ចុចអូស Move វីដេអូសេរី)"}
-          >
-            <Move size={13} />
-            <span>{isPanModeActive ? '✋ Move ON' : 'Move'}</span>
-          </button>
-
-          {/* 4. Reset View Button */}
-          {(videoZoom > 1.0 || videoPanX !== 0 || videoPanY !== 0) && (
-            <button
-              type="button"
-              className="transform-btn reset-btn"
-              onClick={onResetTransform}
-              title="Reset View ទៅដើមវិញ (100% Center)"
-            >
-              <RotateCcw size={12} />
-              <span>Reset</span>
-            </button>
-          )}
-
-          {/* Divider */}
-          <div className="toolbar-divider" />
-
-          {/* 5. Logo Watermark Quick Popover */}
+          {/* 2. Logo Watermark Quick Popover */}
           <div className="toolbar-dropdown-host">
             <button
               type="button"
@@ -198,7 +113,7 @@ export default function VideoTransformControls({
             )}
           </div>
 
-          {/* 6. AntiTheft Ribbon Quick Popover */}
+          {/* 3. AntiTheft Ribbon Quick Popover */}
           <div className="toolbar-dropdown-host">
             <button
               type="button"
