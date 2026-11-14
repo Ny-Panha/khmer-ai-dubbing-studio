@@ -11,6 +11,7 @@ import { PlayerTopBar, PlayerBottomBar } from './PlayerControls';
 import LiveSubtitleOverlay from './LiveSubtitleOverlay';
 import AntiTheftOverlay from './AntiTheftOverlay';
 import LogoOverlay from './LogoOverlay';
+import CornerMaskOverlay from './CornerMaskOverlay';
 import SponsorOverlay from './SponsorOverlay';
 import VideoTransformControls from './VideoTransformControls';
 import './VideoPlayerPreview.css';
@@ -2107,6 +2108,15 @@ function VideoPlayerPreview({
                 verticalStyle={verticalStyle}
                 videoMeta={videoMeta}
                 onUpdateVoiceSettings={onUpdateVoiceSettings}
+              />
+
+              {/* Corner Disclaimer / Watermark Blocker Mask */}
+              <CornerMaskOverlay
+                voiceSettings={voiceSettings}
+                renderedVideo={renderedVideo}
+                aspectRatio={aspectRatio}
+                verticalStyle={verticalStyle}
+                videoMeta={videoMeta}
               />
 
               {/* Sponsor Ads Live Overlay (Green Screen Video) */}

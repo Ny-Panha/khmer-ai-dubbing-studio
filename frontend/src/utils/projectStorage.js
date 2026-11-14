@@ -35,6 +35,13 @@ export const DEFAULT_VOICE_SETTINGS = {
   logoOpacity: 0.9,
   logoShape: 'circle',
   logoMargin: 20,
+  enableCornerMask: false,
+  cornerMaskText: '«រឿងប្រឌិតសុទ្ធសាធ • ហាមចម្លង»',
+  cornerMaskStyle: 'badge',
+  cornerMaskPosition: 'top-right',
+  cornerMaskWidth: 220,
+  cornerMaskHeight: 54,
+  cornerMaskOpacity: 0.95,
 };
 
 export const VALID_ASPECT_RATIOS = Object.freeze(['16:9', '9:16', '1:1']);

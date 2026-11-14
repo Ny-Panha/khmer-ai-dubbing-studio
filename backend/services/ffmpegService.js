@@ -847,6 +847,7 @@ function generateKhmerAssSubtitleFile({
   aspectRatio = "16:9",
   verticalStyle = "pad",
   antiTheft = null,
+  cornerMask = null,
   totalDuration = null,
   sourceDimensions = null,
 }) {
@@ -1096,6 +1097,66 @@ Style: AntiTheftWatermark,${fontName},${watermarkFontSize},${watermarkAssColor},
     }
   }
 
+  // 🛡️ Corner Blocker / Disclaimer Mask Events & Styles
+  let cornerMaskStyles = "";
+  const cornerMaskEvents = [];
+  const isCornerMaskActive = Boolean(cornerMask && (cornerMask.enabled || cornerMask.enableCornerMask));
+  if (isCornerMaskActive) {
+    let maxTimeSec = Number(totalDuration) || 0;
+    if (maxTimeSec <= 0 && segments.length > 0) {
+      segments.forEach((seg) => {
+        const s = Number(seg.startSeconds ?? seg.startSec ?? seg.audioStartSec ?? parseTimeToSec(seg.start, 0));
+        const d = Number(seg.audioDuration ?? seg.duration ?? seg.audioDurationSec ?? 2.5);
+        if (s + d > maxTimeSec) maxTimeSec = s + d;
+      });
+    }
+    if (maxTimeSec <= 0) maxTimeSec = 3600;
+    maxTimeSec += 2;
+    const totalEndAss = formatSecondsToAssTime(maxTimeSec);
+
+    const baseW = Number(cornerMask.width) || 220;
+    const baseH = Number(cornerMask.height) || 54;
+    const scale = playResX / 1000;
+    const maskW = Math.round(baseW * scale);
+    const maskH = Math.round(baseH * scale);
+    const maskPos = cornerMask.position || "top-right";
+    const maskStyle = cornerMask.style || "badge";
+    const maskText = cornerMask.text || "«រឿងប្រឌិតសុទ្ធសាធ • ហាមចម្លង»";
+
+    let maskX = playResX - maskW - 30;
+    let maskY = (aspectRatio === "9:16" && verticalStyle !== "crop") ? 676 : 30;
+
+    if (maskPos === "top-left") {
+      maskX = 30;
+      maskY = (aspectRatio === "9:16" && verticalStyle !== "crop") ? 676 : 30;
+    } else if (maskPos === "bottom-right") {
+      maskX = playResX - maskW - 30;
+      maskY = (aspectRatio === "9:16" && verticalStyle !== "crop") ? (1920 - 676 - maskH) : (playResY - maskH - 30);
+    } else if (maskPos === "bottom-left") {
+      maskX = 30;
+      maskY = (aspectRatio === "9:16" && verticalStyle !== "crop") ? (1920 - 676 - maskH) : (playResY - maskH - 30);
+    }
+
+    const textFontSize = Math.max(16, Math.round(maskH * 0.28));
+    cornerMaskStyles = `
+Style: CornerMaskBox,${fontName},10,&H00000000,&H00000000,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1
+Style: CornerMaskText,${fontName},${textFontSize},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,2,1,5,0,0,0,1`;
+
+    const boxAlpha = maskStyle === "solid" ? "00" : "18";
+    cornerMaskEvents.push(
+      `Dialogue: 1,0:00:00.00,${totalEndAss},CornerMaskBox,,0,0,0,,{\\p1\\c&H121216&\\1a&H${boxAlpha}&\\bord1.5\\3c&H404050&\\shad0\\pos(${maskX},${maskY})}m 0 0 l ${maskW} 0 l ${maskW} ${maskH} l 0 ${maskH}{\\p0}`
+    );
+
+    if (maskStyle !== "blur" && maskText && maskText.trim()) {
+      const cleanMaskText = sanitizeKhmerSubtitleText(maskText);
+      const textCenterX = maskX + Math.round(maskW / 2);
+      const textCenterY = maskY + Math.round(maskH / 2);
+      cornerMaskEvents.push(
+        `Dialogue: 2,0:00:00.00,${totalEndAss},CornerMaskText,,0,0,0,,{\\pos(${textCenterX},${textCenterY})\\an5}${cleanMaskText}`
+      );
+    }
+  }
+
   const assHeader = `[Script Info]
 Title: Khmer AI Dubbing Studio Subtitles
 ScriptType: v4.00+
@@ -1107,7 +1168,7 @@ PlayResY: ${playResY}
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,${fontName},${effFontSize},${primaryAssColor},&H000000FF,${outlineAssColor},${backBoxColor},-1,0,0,0,100,100,0,0,${borderStyle},${outlineWidth},${shadowWidth},2,60,60,${effMarginV},1${antiTheftStyles}
+Style: Default,${fontName},${effFontSize},${primaryAssColor},&H000000FF,${outlineAssColor},${backBoxColor},-1,0,0,0,100,100,0,0,${borderStyle},${outlineWidth},${shadowWidth},2,60,60,${effMarginV},1${antiTheftStyles}${cornerMaskStyles}
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -1158,11 +1219,11 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
       return `Dialogue: 0,${startAss},${endAss},Default,${speakerName},0,0,0,,{\\fad(0,0)}${cleanText}`;
     });
 
-  const allEvents = [...antiTheftEvents, ...dialogueLines];
+  const allEvents = [...antiTheftEvents, ...cornerMaskEvents, ...dialogueLines];
   const fullAssContent = assHeader + allEvents.join("\n") + "\n";
 
   fs.writeFileSync(outputPath, "\uFEFF" + fullAssContent, "utf8");
-  console.log(`[FFmpegService] 📝 បានបង្កើត File Subtitle ខ្មែរ (.ass)៖ ${path.basename(outputPath)} (Anti-theft: ${isAntiTheftActive ? 'Active' : 'Off'})`);
+  console.log(`[FFmpegService] 📝 បានបង្កើត File Subtitle ខ្មែរ (.ass)៖ ${path.basename(outputPath)} (Anti-theft: ${isAntiTheftActive ? 'Active' : 'Off'}, Corner-mask: ${isCornerMaskActive ? 'Active' : 'Off'})`);
 
   return outputPath;
 }
@@ -1431,6 +1492,7 @@ function renderDubbedVideoWithDucking(options = {}) {
   const verticalStyle = options.verticalStyle || subtitleOptions?.verticalStyle || "pad";
   const videoClips = options.videoClips || [];
   const antiTheft = options.antiTheft || null;
+  const cornerMask = options.cornerMask || null;
   const logoSettings = options.logoSettings || null;
   const framingKeyframes = options.framingKeyframes || [];
   const framingOverrides = options.framingOverrides || [];
@@ -1734,8 +1796,9 @@ function renderDubbedVideoWithDucking(options = {}) {
       }
     }
     const hasAntiTheft = Boolean(antiTheft && (antiTheft.enabled || antiTheft.enableAntiTheft));
+    const hasCornerMask = Boolean(cornerMask && (cornerMask.enabled || cornerMask.enableCornerMask));
     const hasBurnableSubs = Boolean(burnSubtitles && validSegments.length > 0);
-    const shouldBurnAss = Boolean(hasBurnableSubs || hasAntiTheft);
+    const shouldBurnAss = Boolean(hasBurnableSubs || hasAntiTheft || hasCornerMask);
     const isSourcePortrait = Boolean(
       sourceDimensions &&
       Number(sourceDimensions.height) > Number(sourceDimensions.width)
@@ -1812,6 +1875,7 @@ function renderDubbedVideoWithDucking(options = {}) {
         aspectRatio: targetAspectRatio,
         verticalStyle,
         antiTheft: hasAntiTheft ? antiTheft : null,
+        cornerMask: hasCornerMask ? cornerMask : null,
         totalDuration: calculatedDuration > 0 ? calculatedDuration : null,
         sourceDimensions,
       });

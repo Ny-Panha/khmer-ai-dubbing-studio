@@ -238,6 +238,19 @@ export function useVideoRender({
     };
   }, [getLatestVoiceSettings]);
 
+  const buildCornerMaskOptions = useCallback(() => {
+    const activeSettings = getLatestVoiceSettings();
+    return {
+      enabled: Boolean(activeSettings?.enableCornerMask),
+      text: activeSettings?.cornerMaskText ?? '«រឿងប្រឌិតសុទ្ធសាធ • ហាមចម្លង»',
+      style: activeSettings?.cornerMaskStyle || 'badge',
+      position: activeSettings?.cornerMaskPosition || 'top-right',
+      width: Number(activeSettings?.cornerMaskWidth) || 220,
+      height: Number(activeSettings?.cornerMaskHeight) || 54,
+      opacity: Number(activeSettings?.cornerMaskOpacity) || 0.95,
+    };
+  }, [getLatestVoiceSettings]);
+
   const buildSponsorOptions = useCallback(() => {
     const activeSettings = getLatestVoiceSettings();
     return {
@@ -298,6 +311,7 @@ export function useVideoRender({
         enableDemucs: Boolean(activeSettings?.enableDemucs),
         antiTheft: buildAntiTheftOptions(),
         logoSettings: buildLogoOptions(),
+        cornerMask: buildCornerMaskOptions(),
         sponsorSettings: buildSponsorOptions(),
       };
 
@@ -350,6 +364,7 @@ export function useVideoRender({
     fullAudioPath,
     buildAntiTheftOptions,
     buildLogoOptions,
+    buildCornerMaskOptions,
     startBatchPolling,
   ]);
 
@@ -457,6 +472,7 @@ export function useVideoRender({
 
       const antiTheftOptions = buildAntiTheftOptions();
       const logoOptions = buildLogoOptions();
+      const cornerMaskOptions = buildCornerMaskOptions();
       const sponsorOptions = buildSponsorOptions();
 
       // Resolve effective export aspect ratio:
@@ -501,6 +517,7 @@ export function useVideoRender({
         speakerMap,
         antiTheft: antiTheftOptions,
         logoSettings: logoOptions,
+        cornerMask: cornerMaskOptions,
         sponsorSettings: sponsorOptions,
       });
 

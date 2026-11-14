@@ -136,6 +136,7 @@ router.post("/render-video", async (req, res) => {
       subtitleOptions = {},
       antiTheft = null,
       logoSettings = null,
+      cornerMask = null,
       sponsorSettings = null,
     } = req.body;
 
@@ -344,6 +345,7 @@ router.post("/render-video", async (req, res) => {
           ...rawLogo,
           logoPath: resolvedLogoPath,
         } : null,
+        cornerMask: cornerMask || req.body?.voiceSettings?.cornerMask || null,
         sponsorSettings: resolvedSponsorPath ? {
           ...rawSponsor,
           sponsorPath: resolvedSponsorPath,

@@ -1,13 +1,14 @@
 import React, { useState } from 'react';
 import {
   Image as ImageIcon,
-  Shield, Eye, EyeOff, Sliders, ChevronDown
+  Shield, Eye, EyeOff, Sliders, ChevronDown, ShieldCheck
 } from 'lucide-react';
 import './VideoTransformControls.css';
 
 /**
  * Modern floating glassmorphism toolbar for customizing
- * watermark logo positioning/size and bottom anti-theft banner.
+ * watermark logo positioning/size, corner disclaimer blocker mask,
+ * and bottom anti-theft banner.
  * (Video panning/moving is strictly locked to prevent unwanted video shifting)
  */
 export default function VideoTransformControls({
@@ -15,7 +16,7 @@ export default function VideoTransformControls({
   onUpdateVoiceSettings,
   aspectRatio = '16:9',
 }) {
-  const [activeMenu, setActiveMenu] = useState(null); // 'logo' | 'ribbon' | null
+  const [activeMenu, setActiveMenu] = useState(null); // 'logo' | 'mask' | 'ribbon' | null
   const [isCollapsed, setIsCollapsed] = useState(false);
 
   const currentLogoPos = voiceSettings?.logoPosition || 'top-right';
@@ -23,6 +24,13 @@ export default function VideoTransformControls({
   const isLogoEnabled = Boolean(voiceSettings?.enableLogo);
   const isRibbonEnabled = voiceSettings?.enableAntiTheft !== false;
   const currentRibbonPos = voiceSettings?.marqueePosition || 'bottom';
+
+  const isMaskEnabled = Boolean(voiceSettings?.enableCornerMask);
+  const currentMaskPos = voiceSettings?.cornerMaskPosition || 'top-right';
+  const currentMaskStyle = voiceSettings?.cornerMaskStyle || 'badge';
+  const currentMaskWidth = voiceSettings?.cornerMaskWidth || 220;
+  const currentMaskHeight = voiceSettings?.cornerMaskHeight || 54;
+  const currentMaskText = voiceSettings?.cornerMaskText ?? '«រឿងប្រឌិតសុទ្ធសាធ • ហាមចម្លង»';
 
   return (
     <div
@@ -35,7 +43,7 @@ export default function VideoTransformControls({
         type="button"
         className="transform-btn collapse-toggle-btn"
         onClick={() => setIsCollapsed(!isCollapsed)}
-        title={isCollapsed ? "បង្ហាញ Tool កែ Logo & Banner" : "បង្រួម Tool"}
+        title={isCollapsed ? "បង្ហាញ Tool កែ Logo, Mask & Banner" : "បង្រួម Tool"}
       >
         <Sliders size={13} />
         {!isCollapsed && <span className="toolbar-label">Customize</span>}
@@ -113,7 +121,112 @@ export default function VideoTransformControls({
             )}
           </div>
 
-          {/* 3. AntiTheft Ribbon Quick Popover */}
+          {/* 3. Corner Blocker / Mask Quick Popover */}
+          <div className="toolbar-dropdown-host">
+            <button
+              type="button"
+              className={`transform-btn dropdown-btn ${isMaskEnabled ? 'active-highlight' : ''}`}
+              onClick={() => setActiveMenu(activeMenu === 'mask' ? null : 'mask')}
+              title="សារ៉េប្រអប់បិទបាំង Watermark / Disclaimer ចិន"
+            >
+              <ShieldCheck size={13} color={isMaskEnabled ? '#38bdf8' : 'currentColor'} />
+              <span>Mask</span>
+              <ChevronDown size={11} />
+            </button>
+
+            {activeMenu === 'mask' && (
+              <div className="transform-menu-popup" style={{ width: 260 }}>
+                <div className="popup-header">
+                  <span>ប្រអប់បិទបាំង (Corner Mask)</span>
+                  <label className="toggle-switch-compact">
+                    <input
+                      type="checkbox"
+                      checked={isMaskEnabled}
+                      onChange={(e) => onUpdateVoiceSettings?.({ ...voiceSettings, enableCornerMask: e.target.checked })}
+                    />
+                    <span className="slider-round" />
+                  </label>
+                </div>
+
+                <div className="popup-section">
+                  <span className="popup-section-title">អក្សរបិទបាំង (Text):</span>
+                  <input
+                    type="text"
+                    value={currentMaskText}
+                    onChange={(e) => onUpdateVoiceSettings?.({ ...voiceSettings, cornerMaskText: e.target.value, enableCornerMask: true })}
+                    placeholder="អក្សរបិទបាំង..."
+                    style={{
+                      width: '100%',
+                      background: 'rgba(0,0,0,0.5)',
+                      border: '1px solid rgba(56, 189, 248, 0.4)',
+                      color: '#fff',
+                      borderRadius: 4,
+                      padding: '3px 6px',
+                      fontSize: '0.70rem',
+                      outline: 'none',
+                      boxSizing: 'border-box',
+                    }}
+                  />
+                </div>
+
+                <div className="popup-section">
+                  <span className="popup-section-title">ទីតាំង (Position):</span>
+                  <div className="position-grid two-col">
+                    <button
+                      type="button"
+                      className={`pos-chip ${currentMaskPos === 'top-right' ? 'active' : ''}`}
+                      onClick={() => onUpdateVoiceSettings?.({ ...voiceSettings, cornerMaskPosition: 'top-right', enableCornerMask: true })}
+                    >
+                      ↗ ស្តាំលើ (Top Right)
+                    </button>
+                    <button
+                      type="button"
+                      className={`pos-chip ${currentMaskPos === 'top-left' ? 'active' : ''}`}
+                      onClick={() => onUpdateVoiceSettings?.({ ...voiceSettings, cornerMaskPosition: 'top-left', enableCornerMask: true })}
+                    >
+                      ↖ ឆ្វេងលើ (Top Left)
+                    </button>
+                  </div>
+                </div>
+
+                <div className="popup-section">
+                  <div className="slider-row-header">
+                    <span>បណ្តោយ (Width):</span>
+                    <span className="value-label" style={{ color: '#38bdf8' }}>{currentMaskWidth}px</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="100"
+                    max="360"
+                    step="5"
+                    value={currentMaskWidth}
+                    onChange={(e) => onUpdateVoiceSettings?.({ ...voiceSettings, cornerMaskWidth: Number(e.target.value), enableCornerMask: true })}
+                    className="compact-range"
+                    style={{ accentColor: '#38bdf8' }}
+                  />
+                </div>
+
+                <div className="popup-section">
+                  <div className="slider-row-header">
+                    <span>កម្ពស់ (Height):</span>
+                    <span className="value-label" style={{ color: '#38bdf8' }}>{currentMaskHeight}px</span>
+                  </div>
+                  <input
+                    type="range"
+                    min="24"
+                    max="100"
+                    step="2"
+                    value={currentMaskHeight}
+                    onChange={(e) => onUpdateVoiceSettings?.({ ...voiceSettings, cornerMaskHeight: Number(e.target.value), enableCornerMask: true })}
+                    className="compact-range"
+                    style={{ accentColor: '#38bdf8' }}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* 4. AntiTheft Ribbon Quick Popover */}
           <div className="toolbar-dropdown-host">
             <button
               type="button"

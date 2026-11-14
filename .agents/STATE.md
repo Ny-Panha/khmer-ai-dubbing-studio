@@ -1,20 +1,25 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
-- **Environment**: Antigravity IDE (Z-Index Hierarchy Fix: Subtitle Over Banner)
-- **Timestamp**: 2026-11-15T03:18:30+07:00
+- **Environment**: Antigravity IDE (Feature Added: Corner Mask / Disclaimer Blocker)
+- **Timestamp**: 2026-11-15T05:52:00+07:00
 
-## Summary: Subtitle Z-Index Priority Fixed
-1. **Fixed Layer Stacking**:
-   - `AntiTheftOverlay.css`: `.anti-theft-overlay-root` set to `z-index: 1` (was 18).
-   - `VideoPlayerPreview.css`: `.live-subtitle-overlay` set to `z-index: 20` (was 10), and `.preview-crop-sub-blur-strip` set to `z-index: 0`.
-   - `VideoPlayerPreview.jsx`: Reordered JSX elements so `<AntiTheftOverlay>` is rendered before `<LiveSubtitleOverlay>`.
-2. **Outcome**:
-   - The anti-theft banner ("រក្សាសិទ្ធិដោយ ៖ DragonDub AI") sits directly on top of the raw video to cover source watermarks/Chinese subs.
-   - The yellow Khmer subtitles ("ចប់ហើយ លើកនេះចប់ពិតមែនហើយ") sit on top of the anti-theft ribbon at `z-index: 20`, perfectly visible, clear, and unblurred.
+## Summary: Added Corner Mask / Disclaimer Blocker Feature
+1. **Feature Implementation (ប្រអប់បិទបាំង Disclaimer / Watermark ចិន)**:
+   - Added in Inspector right next to `Logo Watermark` in `ExportSettingsPanel.jsx`.
+   - Added `[ Mask ▾ ]` quick-customizer popover in `VideoTransformControls.jsx` on the player.
+   - Live Player Preview: Created `CornerMaskOverlay.jsx` & `CornerMaskOverlay.css` positioned at `top-right` (or `top-left`, etc.) to cover Chinese disclaimers like *"虚构剧情，请勿代入现实 内含微恐元素，请谨慎观看"*.
+   - Export Burning: `ffmpegService.js` burns `CornerMaskBox` and `CornerMaskText` via ASS subtitles when exporting to MP4.
+2. **Custom Controls**:
+   - `enableCornerMask`: Toggle switch on/off.
+   - `cornerMaskText`: Customizable Khmer text (default `«រឿងប្រឌិតសុទ្ធសាធ • ហាមចម្លង»` or custom title/channel).
+   - `cornerMaskStyle`: `badge` (dark box + text), `blur` (frosted blur patch), `solid` (solid black).
+   - `cornerMaskPosition`: `top-right` (matching Chinese disclaimers), `top-left`, `bottom-right`, `bottom-left`.
+   - `cornerMaskWidth` (100px - 380px) & `cornerMaskHeight` (24px - 120px) sliders.
 3. **Verification**:
-   - `npm --prefix frontend run build` completed with 0 errors (632ms).
-   - `backend/tests/workspace_player_containment.test.js` all 7 tests pass.
+   - Frontend build: 0 errors (984ms).
+   - Backend containment tests: 7/7 passed.
+   - ASS subtitle test: `CornerMaskBox` & `CornerMaskText` generated cleanly.
 
 ## Active Environment
 - Backend API: `http://localhost:5000` (Listening)

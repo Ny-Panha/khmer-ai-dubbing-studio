@@ -436,6 +436,140 @@ export default function ExportSettingsPanel({
             )}
           </div>
 
+          {/* 🛡️ Corner Blocker / Disclaimer Mask (ប្រអប់បិទបាំង Watermark / Disclaimer ចិន) */}
+          <div style={{ marginTop: 10, marginBottom: 12, borderTop: '1px solid rgba(255, 255, 255, 0.08)', paddingTop: 10 }}>
+            <label className="checkbox-container" style={{ marginBottom: settings?.enableCornerMask ? 10 : 6 }}>
+              <input
+                type="checkbox"
+                checked={Boolean(settings?.enableCornerMask)}
+                onChange={(e) => onSettingChange('enableCornerMask', e.target.checked)}
+              />
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <ShieldCheck size={15} color="#38bdf8" />
+                <span style={{ fontSize: '0.8rem', color: '#38bdf8', fontWeight: 700 }}>
+                  ប្រអប់បិទបាំង Disclaimer / Watermark
+                </span>
+                {settings?.enableCornerMask && (
+                  <span style={{ fontSize: '0.65rem', background: 'rgba(56, 189, 248, 0.2)', color: '#38bdf8', padding: '1px 6px', borderRadius: 10 }}>
+                    {settings?.cornerMaskPosition === 'top-left' ? 'ឆ្វេងលើ' : 'ស្តាំលើ (Top Right)'}
+                  </span>
+                )}
+              </div>
+            </label>
+
+            {settings?.enableCornerMask && (
+              <div style={{
+                background: 'rgba(15, 23, 42, 0.6)',
+                border: '1px solid rgba(56, 189, 248, 0.3)',
+                borderRadius: 8,
+                padding: '10px 10px',
+                marginBottom: 12,
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 10
+              }}>
+                {/* 1. Custom Disclaimer / Watermark Text Input */}
+                <div>
+                  <span style={{ fontSize: '0.68rem', color: '#94a3b8', display: 'block', marginBottom: 3 }}>
+                    ✍️ អក្សរបិទបាំង (Custom Disclaimer / Text)
+                  </span>
+                  <input
+                    type="text"
+                    value={settings?.cornerMaskText ?? '«រឿងប្រឌិតសុទ្ធសាធ • ហាមចម្លង»'}
+                    onChange={(e) => onSettingChange('cornerMaskText', e.target.value)}
+                    placeholder="បញ្ចូលអក្សរដើម្បីបាំងពីលើ (ឬទុកទំនេរដើម្បីបាំងសុទ្ធ)..."
+                    style={{
+                      width: '100%',
+                      background: 'rgba(0,0,0,0.4)',
+                      border: '1px solid rgba(56, 189, 248, 0.4)',
+                      color: '#ffffff',
+                      borderRadius: 5,
+                      padding: '5px 8px',
+                      fontSize: '0.72rem',
+                      fontFamily: 'inherit',
+                      outline: 'none',
+                    }}
+                  />
+                </div>
+
+                {/* 2. Position & Style Row */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+                  <div>
+                    <span style={{ fontSize: '0.68rem', color: '#94a3b8', display: 'block', marginBottom: 2 }}>
+                      📍 ទីតាំងបិទ (Position)
+                    </span>
+                    <select
+                      value={settings?.cornerMaskPosition || 'top-right'}
+                      onChange={(e) => onSettingChange('cornerMaskPosition', e.target.value)}
+                      className="inspector-select"
+                      style={{ width: '100%', padding: '4px 6px', fontSize: '0.72rem' }}
+                    >
+                      <option value="top-right">ជ្រុងលើស្តាំ (Top Right - ដូចចិន)</option>
+                      <option value="top-left">ជ្រុងលើឆ្វេង (Top Left)</option>
+                      <option value="bottom-right">ជ្រុងក្រោមស្តាំ (Bottom Right)</option>
+                      <option value="bottom-left">ជ្រុងក្រោមឆ្វេង (Bottom Left)</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <span style={{ fontSize: '0.68rem', color: '#94a3b8', display: 'block', marginBottom: 2 }}>
+                      🎨 ម៉ូដប្រអប់ (Style)
+                    </span>
+                    <select
+                      value={settings?.cornerMaskStyle || 'badge'}
+                      onChange={(e) => onSettingChange('cornerMaskStyle', e.target.value)}
+                      className="inspector-select"
+                      style={{ width: '100%', padding: '4px 6px', fontSize: '0.72rem' }}
+                    >
+                      <option value="badge">🏷️ ប្រអប់អក្សរ (Badge + Text)</option>
+                      <option value="blur">🌫️ ប្រអប់ Blur (Blur Patch)</option>
+                      <option value="solid">⬛ ប្រអប់ខ្មៅសុទ្ធ (Solid Black)</option>
+                    </select>
+                  </div>
+                </div>
+
+                {/* 3. Sliders: Width & Height */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                  <div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 2 }}>
+                      <span style={{ fontSize: '0.68rem', color: '#94a3b8' }}>បណ្តោយ (Width)</span>
+                      <span style={{ fontSize: '0.68rem', color: '#38bdf8', fontFamily: 'monospace' }}>
+                        {settings?.cornerMaskWidth || 220}px
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min="100"
+                      max="380"
+                      step="5"
+                      value={settings?.cornerMaskWidth || 220}
+                      onChange={(e) => onSettingChange('cornerMaskWidth', Number(e.target.value))}
+                      style={{ width: '100%', accentColor: '#38bdf8' }}
+                    />
+                  </div>
+
+                  <div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 2 }}>
+                      <span style={{ fontSize: '0.68rem', color: '#94a3b8' }}>កម្ពស់ (Height)</span>
+                      <span style={{ fontSize: '0.68rem', color: '#38bdf8', fontFamily: 'monospace' }}>
+                        {settings?.cornerMaskHeight || 54}px
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min="24"
+                      max="120"
+                      step="2"
+                      value={settings?.cornerMaskHeight || 54}
+                      onChange={(e) => onSettingChange('cornerMaskHeight', Number(e.target.value))}
+                      style={{ width: '100%', accentColor: '#38bdf8' }}
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
           {/* 🎬 Sponsor Ads (Green Screen Video) Switch */}
           <div style={{ marginTop: 10, marginBottom: 12, borderTop: '1px solid rgba(255, 255, 255, 0.08)', paddingTop: 10 }}>
             <label className="checkbox-container" style={{ marginBottom: settings?.enableSponsor ? 10 : 6 }}>
