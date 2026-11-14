@@ -74,6 +74,7 @@ function MediaLibrary({
   seriesId = null,
   episodeId = null,
   seriesGlossary = null,
+  onSwitchSeries = null,
   onSwitchEpisode = null,
   onCreateEpisode = null,
   onDeleteEpisode = null,
@@ -374,6 +375,7 @@ function MediaLibrary({
           seriesId={seriesId}
           episodeId={episodeId}
           seriesGlossary={seriesGlossary}
+          onSwitchSeries={onSwitchSeries}
           onSwitchEpisode={onSwitchEpisode}
           onCreateEpisode={onCreateEpisode}
           onDeleteEpisode={onDeleteEpisode}
@@ -400,10 +402,12 @@ function MediaLibrary({
           onAddClipToTimeline={onAddClipToTimeline}
           onRemoveVideo={onRemoveVideo}
           onTabChange={onTabChange}
+          seriesList={seriesList}
           activeSeries={activeSeries}
           activeEpisode={activeEpisode}
           seriesId={seriesId}
           episodeId={episodeId}
+          onSwitchSeries={onSwitchSeries}
         />
       )}
 

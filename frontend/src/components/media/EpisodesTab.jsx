@@ -26,6 +26,7 @@ export default function EpisodesTab({
   seriesId = null,
   episodeId = null,
   seriesGlossary = null,
+  onSwitchSeries = null,
   onSwitchEpisode,
   onCreateEpisode,
   onDeleteEpisode,
@@ -213,10 +214,41 @@ export default function EpisodesTab({
             </button>
           </div>
         ) : (
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <h3 style={{ margin: 0, fontSize: '0.98rem', fontWeight: 700, color: '#f1f5f9' }}>
-              {(!isCorruptedOrMojibakeTitle(activeSeries?.title) && activeSeries?.title) || 'រឿងភាគ (Series 1)'}
-            </h3>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            {seriesList && seriesList.length > 1 ? (
+              <select
+                value={activeSeries?.id || ''}
+                onChange={(e) => {
+                  if (e.target.value && onSwitchSeries) {
+                    onSwitchSeries(e.target.value);
+                  }
+                }}
+                className="capcut-input"
+                style={{
+                  flex: 1,
+                  fontSize: '0.88rem',
+                  fontWeight: 700,
+                  color: '#F8FAFC',
+                  background: 'rgba(15, 23, 42, 0.75)',
+                  border: '1px solid rgba(56, 189, 248, 0.35)',
+                  borderRadius: 8,
+                  padding: '5px 8px',
+                  cursor: 'pointer',
+                  outline: 'none',
+                }}
+              >
+                {seriesList.map((s) => (
+                  <option key={s.id} value={s.id} style={{ background: '#0F172A', color: '#F8FAFC' }}>
+                    🎬 {(!isCorruptedOrMojibakeTitle(s.title) && s.title) || s.id} ({s.episodes?.length || 0} EPs)
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <h3 style={{ margin: 0, fontSize: '0.98rem', fontWeight: 700, color: '#f1f5f9', flex: 1 }}>
+                {(!isCorruptedOrMojibakeTitle(activeSeries?.title) && activeSeries?.title) || 'រឿងភាគ (Series 1)'}
+              </h3>
+            )}
+
             <button
               type="button"
               onClick={handleStartRenameSeries}

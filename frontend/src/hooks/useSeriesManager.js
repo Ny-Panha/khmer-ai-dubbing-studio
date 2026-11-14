@@ -575,6 +575,84 @@ export function useSeriesManager({
     applyEpisodeToWorkspace,
   ]);
 
+  // 1b. Switch to another series
+  const handleSwitchSeries = useCallback(async (targetSeriesId) => {
+    if (!targetSeriesId || targetSeriesId === activeSeriesIdState) return;
+    isTransitioningRef.current = true;
+    try {
+      // 1. Save current workspace snapshot to current series/episode
+      if (activeSeriesIdState && activeEpisodeIdRef.current) {
+        const snapshot = getCurrentWorkspaceSnapshot();
+        saveEpisodeState(activeSeriesIdState, activeEpisodeIdRef.current, snapshot);
+      }
+
+      // 2. Set active series pointer
+      setActiveSeriesId(targetSeriesId);
+      setActiveSeriesIdState(targetSeriesId);
+
+      // 3. Find target series from state or disk
+      let targetSeries = (latestSeriesListRef.current || []).find((s) => s.id === targetSeriesId);
+      try {
+        const res = await fetch(`/api/series/${targetSeriesId}`);
+        const data = await res.json();
+        if (data?.success && data.series) {
+          targetSeries = data.series;
+          setSeriesList((prev) => {
+            const exists = (prev || []).some((s) => s.id === data.series.id);
+            const updated = exists
+              ? prev.map((s) => (s.id === data.series.id ? data.series : s))
+              : [...(prev || []), data.series];
+            try { saveSeriesList(updated); } catch (_) {}
+            return updated;
+          });
+        }
+      } catch (_) {}
+
+      // Refresh full list from server
+      try {
+        const allRes = await fetch('/api/series');
+        const allData = await allRes.json();
+        if (allData?.success && Array.isArray(allData.series)) {
+          const healed = sanitizeAndHealSeriesList(allData.series);
+          setSeriesList(healed);
+          try { saveSeriesList(healed); } catch (_) {}
+        }
+      } catch (_) {}
+
+      const firstEp = (targetSeries?.episodes || [])[0] || null;
+      if (firstEp) {
+        setActiveEpisodeId(firstEp.id);
+        setActiveEpisodeIdState(firstEp.id);
+        activeEpisodeIdRef.current = firstEp.id;
+        applyEpisodeToWorkspace(firstEp);
+      } else {
+        setActiveEpisodeId(null);
+        setActiveEpisodeIdState(null);
+        activeEpisodeIdRef.current = null;
+        if (callbacksRef.current.setSelectedVideo) callbacksRef.current.setSelectedVideo(null);
+        if (callbacksRef.current.setVideoMetadata) callbacksRef.current.setVideoMetadata(null);
+        if (callbacksRef.current.setScriptData) callbacksRef.current.setScriptData(null);
+        if (callbacksRef.current.setSpeakerRegistry) callbacksRef.current.setSpeakerRegistry({});
+        if (callbacksRef.current.setAudioGenerated) callbacksRef.current.setAudioGenerated(false);
+        if (callbacksRef.current.setAudioOutdated) callbacksRef.current.setAudioOutdated(false);
+        if (callbacksRef.current.setFullAudioPath) callbacksRef.current.setFullAudioPath(null);
+        if (callbacksRef.current.setFullAudioUrl) callbacksRef.current.setFullAudioUrl(null);
+        if (callbacksRef.current.setDuration) callbacksRef.current.setDuration(0);
+        if (callbacksRef.current.setCurrentTime) callbacksRef.current.setCurrentTime(0);
+        if (callbacksRef.current.setVideoClips) callbacksRef.current.setVideoClips([]);
+        if (callbacksRef.current.setRenderedVideo) callbacksRef.current.setRenderedVideo(null);
+        if (callbacksRef.current.setVideoThumbnails) callbacksRef.current.setVideoThumbnails([]);
+        if (callbacksRef.current.setMediaAssets) callbacksRef.current.setMediaAssets([]);
+        if (callbacksRef.current.clearHistory) callbacksRef.current.clearHistory();
+        if (callbacksRef.current.setLeftTab) callbacksRef.current.setLeftTab('media');
+      }
+    } finally {
+      setTimeout(() => {
+        isTransitioningRef.current = false;
+      }, 100);
+    }
+  }, [activeSeriesIdState, getCurrentWorkspaceSnapshot, applyEpisodeToWorkspace]);
+
   // 2. Create and switch to a new episode
   const handleCreateEpisode = useCallback((customTitle = null) => {
     const safeTitle = (typeof customTitle === 'string' && customTitle.trim()) ? customTitle.trim() : null;
@@ -825,6 +903,7 @@ export function useSeriesManager({
     episodeId: activeEpisodeIdState,
     seriesGlossary,
     refreshSeriesFromServer,
+    handleSwitchSeries,
     handleSwitchEpisode,
     handleCreateEpisode,
     handleDeleteEpisode,

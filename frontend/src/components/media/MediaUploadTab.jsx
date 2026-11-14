@@ -3,7 +3,7 @@ import {
   FolderPlus, Loader2, AlertCircle, Sparkles, ArrowRight, Film, 
   Check, Trash2, Clock, Monitor, HardDrive, RefreshCw, Scissors, Info
 } from 'lucide-react';
-import { splitVideoEpisodesApi } from '../../services/api';
+import { splitVideoEpisodesApi, uploadVideoFile } from '../../services/api';
 import { formatTimecode } from '../../utils/formatTime';
 
 export default function MediaUploadTab({
@@ -17,10 +17,12 @@ export default function MediaUploadTab({
   duration = 0,
   onRemoveVideo = null,
   onTabChange,
+  seriesList = [],
   activeSeries = null,
   activeEpisode = null,
   seriesId = null,
   episodeId = null,
+  onSwitchSeries = null,
 }) {
   const [showSplitModal, setShowSplitModal] = useState(false);
   const [splitMode, setSplitMode] = useState('minutes'); // 'minutes' | 'episodes'
@@ -28,6 +30,12 @@ export default function MediaUploadTab({
   const [replaceEpisodes, setReplaceEpisodes] = useState(false); // default: false (append, never silent replace)
   const [isSplitting, setIsSplitting] = useState(false);
   const [splitError, setSplitError] = useState(null);
+
+  // Target Series Choice state: (a) 'current' | (b) 'new'
+  const [uploadTarget, setUploadTarget] = useState('current');
+  const [newSeriesName, setNewSeriesName] = useState('');
+  const [targetError, setTargetError] = useState(null);
+  const [isCustomUploading, setIsCustomUploading] = useState(false);
 
   const activeDuration = videoMetadata?.durationSec || duration || selectedVideo?.durationSec || 0;
   const hasVideo = Boolean(selectedVideo?.videoId || selectedVideo?.videoUrl);
@@ -64,10 +72,47 @@ export default function MediaUploadTab({
     try {
       setIsSplitting(true);
       setSplitError(null);
+
+      let targetSeriesId = activeSeries?.id || seriesId || selectedVideo?.seriesId || 'drama_project';
+      if (uploadTarget === 'new') {
+        const cleanName = (newSeriesName || '').trim();
+        if (!cleanName) {
+          const msg = 'សូមបញ្ចូលឈ្មោះ Series ថ្មី!';
+          setSplitError(msg);
+          alert(msg);
+          return;
+        }
+        const exists = (seriesList || []).some(
+          (s) => (s?.title && s.title.trim().toLowerCase() === cleanName.toLowerCase()) ||
+                 (s?.id && s.id.toLowerCase() === cleanName.toLowerCase())
+        );
+        if (exists) {
+          const msg = 'Series នេះមានរួចហើយ! សូមដាក់ឈ្មោះផ្សេងដើម្បីកុំឱ្យជាន់គ្នា។';
+          setSplitError(msg);
+          alert(msg);
+          return;
+        }
+        targetSeriesId = `series_${Date.now()}`;
+        await fetch('/api/series', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            series: {
+              id: targetSeriesId,
+              title: cleanName,
+              createdAt: Date.now(),
+              episodes: [],
+              glossary: { characters: [], terms: [] },
+              cast: [],
+            },
+          }),
+        });
+      }
+
       const res = await splitVideoEpisodesApi({
         videoId: rawRef,
         videoPath: selectedVideo?.videoPath,
-        seriesId: activeSeries?.id || seriesId || selectedVideo?.seriesId || 'drama_project',
+        seriesId: targetSeriesId,
         episodeId: activeEpisode?.id || selectedVideo?.episodeId,
         durationMinutes: splitMode === 'minutes' ? parsedVal : undefined,
         episodeCount: splitMode === 'episodes' ? parsedVal : undefined,
@@ -76,7 +121,16 @@ export default function MediaUploadTab({
 
       alert(`🎉 ${res.message || 'បានកាត់បំបែកវីដេអូជាភាគៗជោគជ័យ!'}`);
       setShowSplitModal(false);
-      window.location.reload();
+      if (uploadTarget === 'new') {
+        if (typeof onSwitchSeries === 'function') {
+          await onSwitchSeries(targetSeriesId);
+        } else {
+          localStorage.setItem('dragondub_active_series_id', targetSeriesId);
+          window.location.reload();
+        }
+      } else {
+        window.location.reload();
+      }
     } catch (err) {
       console.error(err);
       setSplitError(err.message || 'កាត់បំបែកវីដេអូបរាជ័យ');
@@ -86,14 +140,215 @@ export default function MediaUploadTab({
     }
   };
 
+  const handleFileUploadWithTarget = async (e) => {
+    const file = e?.target?.files?.[0] || (e instanceof File ? e : null);
+    if (!file) return;
+
+    if (uploadTarget === 'current') {
+      await handleFileUpload(e);
+      return;
+    }
+
+    const cleanName = (newSeriesName || '').trim();
+    if (!cleanName) {
+      const msg = 'សូមបញ្ចូលឈ្មោះ Series ថ្មី!';
+      setTargetError(msg);
+      alert(msg);
+      if (e?.target) e.target.value = '';
+      return;
+    }
+
+    const exists = (seriesList || []).some(
+      (s) => (s?.title && s.title.trim().toLowerCase() === cleanName.toLowerCase()) ||
+             (s?.id && s.id.toLowerCase() === cleanName.toLowerCase())
+    );
+    if (exists) {
+      const msg = 'Series នេះមានរួចហើយ! សូមដាក់ឈ្មោះផ្សេងដើម្បីកុំឱ្យជាន់គ្នា។';
+      setTargetError(msg);
+      alert(msg);
+      if (e?.target) e.target.value = '';
+      return;
+    }
+
+    try {
+      setIsCustomUploading(true);
+      setTargetError(null);
+
+      // 1. Create the series FIRST using existing POST /series
+      // Starts EMPTY: no episodes, EMPTY glossary, EMPTY cast — copy NOTHING from SS1
+      const newSeriesId = `series_${Date.now()}`;
+      const createRes = await fetch('/api/series', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          series: {
+            id: newSeriesId,
+            title: cleanName,
+            createdAt: Date.now(),
+            episodes: [],
+            glossary: { characters: [], terms: [] },
+            cast: [],
+          },
+        }),
+      });
+      const createData = await createRes.json();
+      if (!createData?.success) {
+        throw new Error(createData?.error || 'Failed to create new series');
+      }
+
+      // 2. Upload video file into NEW seriesId
+      const vidObj = await uploadVideoFile(file, {
+        seriesId: newSeriesId,
+        episodeId: 'ep_1',
+        projectName: newSeriesId,
+      });
+
+      // 3. Create Episode 1 in backend series.json
+      const epRes = await fetch(`/api/series/${newSeriesId}/episodes`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          customTitle: 'ភាគទី 1 (EP1)',
+          requestedNumber: 1,
+        }),
+      });
+      const epData = await epRes.json();
+      const createdEp = epData?.episode || { id: 'ep_1', episodeNumber: 1, title: 'ភាគទី 1 (EP1)' };
+
+      // 4. Attach uploaded video to Episode 1 in series.json
+      await fetch(`/api/series/${newSeriesId}/sync`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          series: {
+            id: newSeriesId,
+            title: cleanName,
+            createdAt: Date.now(),
+            glossary: { characters: [], terms: [] },
+            cast: [],
+            episodes: [
+              {
+                ...createdEp,
+                video: vidObj,
+                videoFile: vidObj.videoId || vidObj.videoPath,
+                duration: vidObj.durationSec || 0,
+                status: 'uploaded',
+              },
+            ],
+          },
+        }),
+      });
+
+      // 5. Switch activeSeries to the new series
+      if (typeof onSwitchSeries === 'function') {
+        await onSwitchSeries(newSeriesId);
+      } else {
+        localStorage.setItem('dragondub_active_series_id', newSeriesId);
+        localStorage.setItem('dragondub_active_episode_id', createdEp.id);
+        window.location.reload();
+      }
+
+      setUploadTarget('current');
+      setNewSeriesName('');
+      if (onTabChange) onTabChange('script');
+    } catch (err) {
+      console.error(err);
+      setTargetError(err.message || 'Upload failed');
+      alert('Upload failed: ' + (err.message || err));
+    } finally {
+      setIsCustomUploading(false);
+      if (e?.target) e.target.value = '';
+    }
+  };
+
   return (
     <div className="media-tab-content" style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-      {(uploadError || splitError) && (
+      {(uploadError || splitError || targetError) && (
         <div className="error-banner">
           <AlertCircle size={15} />
-          <span>{uploadError || splitError}</span>
+          <span>{uploadError || splitError || targetError}</span>
         </div>
       )}
+
+      {/* Target Series Choice: (a) Current Series vs (b) + Series ថ្មី */}
+      <div
+        style={{
+          background: 'rgba(15, 23, 42, 0.65)',
+          border: '1px solid rgba(255, 255, 255, 0.08)',
+          borderRadius: 12,
+          padding: '10px 14px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 8,
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: '0.74rem', fontWeight: 700, color: '#94A3B8' }}>
+            គោលដៅ Upload:
+          </span>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <button
+              type="button"
+              onClick={() => { setUploadTarget('current'); setTargetError(null); }}
+              style={{
+                padding: '4px 10px',
+                borderRadius: 9999,
+                fontSize: '0.72rem',
+                fontWeight: 600,
+                border: uploadTarget === 'current' ? '1px solid #38BDF8' : '1px solid rgba(255, 255, 255, 0.1)',
+                background: uploadTarget === 'current' ? 'rgba(56, 189, 248, 0.15)' : 'rgba(255, 255, 255, 0.04)',
+                color: uploadTarget === 'current' ? '#38BDF8' : '#94A3B8',
+                cursor: 'pointer',
+                transition: 'all 0.15s ease',
+              }}
+            >
+              Series បច្ចុប្បន្ន — {activeSeries?.title || 'Series 1'}
+            </button>
+            <button
+              type="button"
+              onClick={() => { setUploadTarget('new'); setTargetError(null); }}
+              style={{
+                padding: '4px 10px',
+                borderRadius: 9999,
+                fontSize: '0.72rem',
+                fontWeight: 600,
+                border: uploadTarget === 'new' ? '1px solid #FF8577' : '1px solid rgba(255, 255, 255, 0.1)',
+                background: uploadTarget === 'new' ? 'rgba(255, 133, 119, 0.15)' : 'rgba(255, 255, 255, 0.04)',
+                color: uploadTarget === 'new' ? '#FF8577' : '#94A3B8',
+                cursor: 'pointer',
+                transition: 'all 0.15s ease',
+              }}
+            >
+              ＋ Series ថ្មី
+            </button>
+          </div>
+        </div>
+
+        {uploadTarget === 'new' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 2 }}>
+            <input
+              type="text"
+              placeholder="បញ្ចូលឈ្មោះ Series ថ្មី (ឧ. រឿងភាគថ្មី - Season 2)..."
+              value={newSeriesName}
+              onChange={(e) => {
+                setNewSeriesName(e.target.value);
+                if (targetError) setTargetError(null);
+              }}
+              className="capcut-input"
+              style={{
+                fontSize: '0.80rem',
+                padding: '6px 10px',
+                borderRadius: 8,
+                background: 'rgba(0, 0, 0, 0.35)',
+                border: targetError ? '1px solid #F43F5E' : '1px solid rgba(255, 133, 119, 0.4)',
+                color: '#F8FAFC',
+                width: '100%',
+              }}
+              autoFocus
+            />
+          </div>
+        )}
+      </div>
 
       {hasVideo ? (
         /* 1. Active Video Card (Clean, Single Card, Zero-Duplicate) */
@@ -277,19 +532,19 @@ export default function MediaUploadTab({
                 <input
                   type="file"
                   accept="video/*"
-                  onChange={handleFileUpload}
-                  disabled={isUploading}
+                  onChange={handleFileUploadWithTarget}
+                  disabled={isUploading || isCustomUploading}
                   style={{ display: 'none' }}
                 />
-                {isUploading ? (
+                {(isUploading || isCustomUploading) ? (
                   <>
                     <Loader2 size={13} className="animate-spin" />
-                    <span>កំពុងប្តូរវីដេអូ...</span>
+                    <span>កំពុង{uploadTarget === 'new' ? 'បង្កើត & Upload' : 'ប្តូរវីដេអូ'}...</span>
                   </>
                 ) : (
                   <>
                     <RefreshCw size={13} />
-                    <span>ប្តូរវីដេអូ (Replace)</span>
+                    <span>{uploadTarget === 'new' ? '+ Upload ចូល Series ថ្មី' : 'ប្តូរវីដេអូ (Replace)'}</span>
                   </>
                 )}
               </label>
@@ -499,19 +754,19 @@ export default function MediaUploadTab({
             <input
               type="file"
               accept="video/*"
-              onChange={handleFileUpload}
-              disabled={isUploading}
+              onChange={handleFileUploadWithTarget}
+              disabled={isUploading || isCustomUploading}
               style={{ display: 'none' }}
             />
-            {isUploading ? (
+            {(isUploading || isCustomUploading) ? (
               <>
                 <Loader2 size={15} className="animate-spin" color="#0B132B" />
-                <span>កំពុង Upload & រៀបចំវីដេអូ...</span>
+                <span>កំពុង{uploadTarget === 'new' ? 'បង្កើត Series & Upload' : 'Upload & រៀបចំវីដេអូ'}...</span>
               </>
             ) : (
               <>
                 <FolderPlus size={15} color="#0B132B" />
-                <span>+ ជ្រើសរើសវីដេអូ (Import Video)</span>
+                <span>{uploadTarget === 'new' ? '+ បង្កើត & Upload ចូល Series ថ្មី' : '+ ជ្រើសរើសវីដេអូ (Import Video)'}</span>
               </>
             )}
           </label>

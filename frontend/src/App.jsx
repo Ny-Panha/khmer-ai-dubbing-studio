@@ -909,6 +909,7 @@ export default function App() {
                   seriesId={series.seriesId}
                   episodeId={series.episodeId}
                   seriesGlossary={series.seriesGlossary}
+                  onSwitchSeries={series.handleSwitchSeries}
                   onSwitchEpisode={handleSwitchEpisode}
                   onCreateEpisode={handleCreateEpisode}
                   onDeleteEpisode={handleDeleteEpisode}
