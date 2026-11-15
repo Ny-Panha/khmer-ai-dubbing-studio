@@ -49,6 +49,7 @@
 - Branch: `chore/remove-ppocr-local` (tracking `origin/chore/remove-ppocr-local`)
 
 ## Next Steps
-- Branch `feat/ppocr-local-ocr` deleted cleanly (both local and origin remote).
+- Branches `feat/ppocr-local-ocr` & `fix/ocr-gemini-default` deleted cleanly (local and origin remote).
+- Python Paddle packages (`paddleocr`, `paddlepaddle`, `paddlex`) and model cache (`~/.paddlex`) uninstalled/cleaned.
 - Open PR for `chore/remove-ppocr-local` into `main` or base branch when ready.
 - Do NOT merge directly to main.
