@@ -11,7 +11,6 @@ const { formatSecondsToTimecode } = require('../pipelineTypes');
 const { createAbortError } = require('../../../utils/asyncSemaphore');
 const { VISION_CASCADE_MODELS } = require('../../geminiModelCatalog');
 const { geminiQuotaTracker } = require('../../geminiQuotaTracker');
-const { extractSubtitlesPPOCR } = require('../../ppocrService');
 
 function sleepOrAbort(ms, signal) {
   if (!signal) {
@@ -214,19 +213,13 @@ async function callGeminiVisionWithRetry(aiClient, modelName, contents, maxRetri
 async function extractChineseSubtitles({
   videoPath,
   durationSec,
-  aiClient = null,
+  aiClient,
   modelName = null,
   baseStepSec = 0.75,
   startOffsetSec = 0,
   signal = null,
-  ocrEngine = null,
-  workerScriptOverride = '',
 }) {
-  const configuredEngine = String(ocrEngine || process.env.OCR_ENGINE || 'ppocr-local').toLowerCase().trim();
-  let activeEngine = configuredEngine === 'gemini-vision' ? 'gemini-vision' : 'ppocr-local';
-  const effectiveModel = activeEngine === 'ppocr-local'
-    ? 'ppocr-local'
-    : (modelName || geminiQuotaTracker.getPreferredPrimaryModel(CASCADE_VISION_MODELS[0]));
+  const effectiveModel = modelName || geminiQuotaTracker.getPreferredPrimaryModel(CASCADE_VISION_MODELS[0]);
   const checkAbort = () => {
     if (signal?.aborted) {
       throw createAbortError('Stage 3 OCR aborted');
@@ -238,8 +231,8 @@ async function extractChineseSubtitles({
   if (!videoPath || !fs.existsSync(videoPath)) {
     throw new Error(`[Stage 3 Extract Subtitles] Video file not found: ${videoPath}`);
   }
-  if (!aiClient && activeEngine === 'gemini-vision') {
-    throw new Error('[Stage 3 Extract Subtitles] Gemini AI client is required when using Gemini Vision OCR');
+  if (!aiClient) {
+    throw new Error('[Stage 3 Extract Subtitles] Gemini AI client is required');
   }
 
   const cachePath = getOcrCachePath(videoPath, startOffsetSec, durationSec, effectiveModel);
@@ -510,77 +503,26 @@ Return JSON ONLY matching this schema:
       }
     }
 
-    // 3. Perform OCR: PP-OCR Local Worker primary with Gemini Vision Fallback
-    ocrWallTimeMs = 0;
+    // 3. Batch frames (15 frames per call) to Gemini Vision with Bounded Concurrency (2 batches at a time)
+    console.log(`[Stage 3 Extract Subtitles] Running Gemini Vision OCR on ${framesToAnalyze.length} candidate frames...`);
     const ocrStartTime = Date.now();
-
-    if (activeEngine === 'ppocr-local') {
-      try {
-        console.log(`[Stage 3 Extract Subtitles] 🚀 Running local PP-OCR worker on ${framesToAnalyze.length} candidate frames (threads=8)...`);
-        const ppocrRes = await extractSubtitlesPPOCR({
-          frames: framesToAnalyze,
-          signal,
-          threads: 8,
-          limitSideLen: 960,
-          workerScriptOverride: workerScriptOverride || process.env.TEST_PPOCR_WORKER_PATH || '',
-        });
-        ocrWallTimeMs = ppocrRes.wallTimeMs || (Date.now() - ocrStartTime);
-
-        for (const f of ppocrRes.frames || []) {
-          const fallbackTime = f.timestampSec;
-          const rawChinese = String(f.textZh || f.chineseText || '').trim();
-          const cText = stripDecorativeSubtitleNoise(rawChinese);
-          const hasCleanText = Boolean(f.hasText && normalizeChineseChars(cText).length > 0);
-
-          rawObservations.push({
-            timestampSec: fallbackTime,
-            reportedSec: fallbackTime,
-            hasText: hasCleanText,
-            textZh: hasCleanText ? cText : '',
-            chineseText: hasCleanText ? cText : '',
-            position: f.position || 'bottom_subtitle',
-            isSharp: f.isSharp !== false,
-            visualGender: 'unknown',
-            speakerGender: 'unknown',
-            speakerVisualHint: '',
-            deliveryType: 'dialogue',
-            genderConfidence: 0.5,
-            engine: 'ppocr-local',
-          });
-        }
-      } catch (ppocrErr) {
-        if (ppocrErr?.name === 'AbortError' || signal?.aborted) {
-          throw ppocrErr?.name === 'AbortError' ? ppocrErr : createAbortError('Stage 3 OCR aborted');
-        }
-        console.warn(`[Stage 3 Extract Subtitles] ⚠️ PP-OCR local worker failed (${ppocrErr.message}). Falling back to Gemini Vision OCR...`);
-        if (!aiClient) {
-          throw new Error(`[Stage 3 Extract Subtitles] PP-OCR worker failed (${ppocrErr.message}) and no Gemini AI client is available for fallback.`);
-        }
-        activeEngine = 'gemini-vision';
-        rawObservations.length = 0;
-      }
+    const BATCH_SIZE = 15;
+    const batchList = [];
+    for (let i = 0; i < framesToAnalyze.length; i += BATCH_SIZE) {
+      batchList.push(framesToAnalyze.slice(i, i + BATCH_SIZE));
     }
 
-    if (activeEngine === 'gemini-vision') {
-      console.log(`[Stage 3 Extract Subtitles] Running Gemini Vision OCR on ${framesToAnalyze.length} candidate frames...`);
-      const BATCH_SIZE = 15;
-      const batchList = [];
-      for (let i = 0; i < framesToAnalyze.length; i += BATCH_SIZE) {
-        batchList.push(framesToAnalyze.slice(i, i + BATCH_SIZE));
-      }
+    const CONCURRENCY = 2;
+    for (let bIdx = 0; bIdx < batchList.length; bIdx += CONCURRENCY) {
+      checkAbort();
+      const activeBatches = batchList.slice(bIdx, bIdx + CONCURRENCY);
+      await Promise.all(activeBatches.map((batch) => executeVisionBatch(batch)));
 
-      const CONCURRENCY = 2;
-      for (let bIdx = 0; bIdx < batchList.length; bIdx += CONCURRENCY) {
-        checkAbort();
-        const activeBatches = batchList.slice(bIdx, bIdx + CONCURRENCY);
-        await Promise.all(activeBatches.map((batch) => executeVisionBatch(batch)));
-
-        if (bIdx + CONCURRENCY < batchList.length) {
-          await sleepOrAbort(400, signal);
-        }
+      if (bIdx + CONCURRENCY < batchList.length) {
+        await sleepOrAbort(400, signal);
       }
-      ocrWallTimeMs = Date.now() - ocrStartTime;
     }
+    ocrWallTimeMs = Date.now() - ocrStartTime;
 
     // Sort observations chronologically
     rawObservations.sort((a, b) => a.timestampSec - b.timestampSec);
@@ -671,45 +613,7 @@ Return JSON ONLY matching this schema:
         }
 
         if (tieFrames.length > 0) {
-          if (activeEngine === 'ppocr-local') {
-            try {
-              const tieRes = await extractSubtitlesPPOCR({
-                frames: tieFrames,
-                signal,
-                threads: 8,
-                limitSideLen: 960,
-                workerScriptOverride: workerScriptOverride || process.env.TEST_PPOCR_WORKER_PATH || '',
-              });
-              for (const f of tieRes.frames || []) {
-                const fallbackTime = f.timestampSec;
-                const rawChinese = String(f.textZh || f.chineseText || '').trim();
-                const cText = stripDecorativeSubtitleNoise(rawChinese);
-                const hasCleanText = Boolean(f.hasText && normalizeChineseChars(cText).length > 0);
-                rawObservations.push({
-                  timestampSec: fallbackTime,
-                  reportedSec: fallbackTime,
-                  hasText: hasCleanText,
-                  textZh: hasCleanText ? cText : '',
-                  chineseText: hasCleanText ? cText : '',
-                  position: f.position || 'bottom_subtitle',
-                  isSharp: f.isSharp !== false,
-                  visualGender: 'unknown',
-                  speakerGender: 'unknown',
-                  speakerVisualHint: '',
-                  deliveryType: 'dialogue',
-                  genderConfidence: 0.5,
-                  engine: 'ppocr-local',
-                });
-              }
-            } catch (tiePpocrErr) {
-              console.warn(`[Stage 3 OCR] PP-OCR tie-break failed (${tiePpocrErr.message}), trying Vision fallback`);
-              if (aiClient) {
-                await executeVisionBatch(tieFrames);
-              }
-            }
-          } else if (aiClient) {
-            await executeVisionBatch(tieFrames);
-          }
+          await executeVisionBatch(tieFrames);
         }
 
         // Resolve each disagreement using tie-break read
@@ -762,14 +666,11 @@ Return JSON ONLY matching this schema:
               ? 'female'
               : (votes.male > votes.female && votes.male > 0 ? 'male' : 'unknown');
 
-            const resolvedPosition = obsA?.position || obsB?.position || obsTie?.position || 'bottom_subtitle';
-
             evaluatedCueStates.push({
               ...cs,
               textZh: resolvedText,
               originalChineseText: resolvedText,
               chineseText: resolvedText,
-              position: resolvedPosition,
               ocrConfidence,
               reviewNeeded,
               ocrDisagreement,
@@ -1027,11 +928,8 @@ Return JSON ONLY matching this schema:
     };
   });
 
-  const engineSummary = activeEngine === 'ppocr-local'
-    ? `ppocr-local (PP-OCRv5 mobile, wall time: ${(ocrWallTimeMs / 1000).toFixed(1)}s, ${finalizedVisualSegments.length} cues)`
-    : `gemini-vision (${effectiveModel}, api calls: ${apiCallsCount}, ${finalizedVisualSegments.length} cues)`;
-
-  console.log(`[Stage 3 Extract Subtitles] OCR engine: ${engineSummary}`);
+  const ocrWallTimeSec = (ocrWallTimeMs / 1000).toFixed(1);
+  console.log(`[Stage 3 Extract Subtitles] OCR engine: gemini-vision (${effectiveModel}, wall time: ${ocrWallTimeSec}s, api calls: ${apiCallsCount}, ${finalizedVisualSegments.length} cues)`);
   console.log(`[Stage 3 Extract Subtitles] Completed with ${finalizedVisualSegments.length} deduplicated visual segments detected from ${rawObservations.length} observations.`);
 
   const result = {
@@ -1044,8 +942,8 @@ Return JSON ONLY matching this schema:
       baseStepSec,
       apiCallsCount,
       retriesCount,
-      modelUsed: activeEngine === 'ppocr-local' ? 'PP-OCRv5_mobile' : effectiveModel,
-      ocrEngine: activeEngine,
+      modelUsed: effectiveModel,
+      ocrEngine: 'gemini-vision',
       wallTimeMs: ocrWallTimeMs,
       hasVisualSubtitles: finalizedVisualSegments.length > 0,
       ocrNotice: lastBatchError || null,
@@ -1055,7 +953,7 @@ Return JSON ONLY matching this schema:
   if (cachePath && finalizedVisualSegments.length > 0) {
     try {
       fs.writeFileSync(cachePath, JSON.stringify(result, null, 2), 'utf8');
-      console.log(`[Stage 3 OCR] 💾 Cached ${visualSegments.length} segments to ${path.basename(cachePath)}`);
+      console.log(`[Stage 3 OCR] 💾 Cached ${finalizedVisualSegments.length} segments to ${path.basename(cachePath)}`);
     } catch (_) {}
   }
 
