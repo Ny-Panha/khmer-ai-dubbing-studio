@@ -99,18 +99,18 @@ export default function DubbingModeTab({
   const [isAutoCompacting, setIsAutoCompacting] = useState(false);
   const [compactProgress, setCompactProgress] = useState({ current: 0, total: 0 });
   const [compactBanner, setCompactBanner] = useState(null);
+  const [showCompactConfirm, setShowCompactConfirm] = useState(false);
 
-  const handleAutoCompactAll = async () => {
+  const handleAutoCompactAll = () => {
+    const segments = scriptData?.segments || [];
+    if (isAutoCompacting || segments.length === 0) return;
+    setShowCompactConfirm(true);
+  };
+
+  const executeAutoCompact = async () => {
     const segments = scriptData?.segments || [];
     if (isAutoCompacting || segments.length === 0) return;
     const count = segments.length;
-    const confirmed = window.confirm(
-      `📝 បញ្ជាក់ការបម្លែងគ្រប់ Script ទាំងអស់ (${count} ឃ្លា) ទៅជា «ខ្លីចំអត្ថន័យ» (Auto Compact)?\n\n` +
-      `• AI នឹងកែសម្រួលគ្រប់ឃ្លាទាំងអស់ (1 ដល់ ${count}) ឱ្យខ្លី ចំខ្លឹមសារ ១០០% (បែប Subtitle កុនចិន/ហុងកុង ទំនើប)\n` +
-      `• កាត់បន្ថយពាក្យសម្ដីវែងអន្លាយ ដើម្បីឱ្យសំឡេងនិយាយរលូន ត្រូវនឹងមាត់តួអង្គ (Lip-sync) និងមិនហៀរជាន់ឃ្លាបន្ទាប់\n` +
-      `• រក្សាទុកទិន្នន័យដោយស្វ័យប្រវត្តិ។`
-    );
-    if (!confirmed) return;
 
     setIsAutoCompacting(true);
     setCompactProgress({ current: 0, total: count });
@@ -2030,6 +2030,132 @@ export default function DubbingModeTab({
         </div>
       )}
 
+      {/* ── Custom Studio Auto-Compact Confirmation Modal ── */}
+      {showCompactConfirm && (
+        <div
+          data-testid="modal-dubbing-compact-confirm"
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: 'rgba(0, 0, 0, 0.78)',
+            backdropFilter: 'blur(8px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 99999,
+            padding: 16,
+          }}
+          onClick={() => !isAutoCompacting && setShowCompactConfirm(false)}
+        >
+          <div
+            style={{
+              background: 'linear-gradient(180deg, #181428 0%, #0f121d 100%)',
+              border: '1px solid rgba(168, 85, 247, 0.45)',
+              borderRadius: 12,
+              padding: '22px 24px',
+              maxWidth: 460,
+              width: '100%',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 14,
+              boxShadow: '0 24px 50px rgba(0, 0, 0, 0.8), 0 0 25px rgba(168, 85, 247, 0.2)',
+              color: '#f1f5f9',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal Header */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid rgba(255, 255, 255, 0.08)', paddingBottom: 10 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.92rem', fontWeight: 800, color: '#f3e8ff' }}>
+                <Sparkles size={18} color="#c084fc" />
+                <span>បម្លែងគ្រប់ Script ជា «ខ្លីចំអត្ថន័យ» (Auto Compact)</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowCompactConfirm(false)}
+                style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer', padding: 2 }}
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, fontSize: '0.80rem', color: '#cbd5e1', lineHeight: 1.55 }}>
+              <div style={{ background: 'rgba(168, 85, 247, 0.1)', border: '1px solid rgba(168, 85, 247, 0.25)', borderRadius: 8, padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <div style={{ fontWeight: 700, color: '#e9d5ff', fontSize: '0.84rem' }}>
+                  តើអ្នកចង់បម្លែងគ្រប់ Script ទាំង {scriptData?.segments?.length || 0} ឃ្លា?
+                </div>
+                <div style={{ color: '#d8b4fe', fontSize: '0.76rem' }}>
+                  AI នឹងបកប្រែឡើងវិញជាភាសា Subtitle ខ្លី ចំខ្លឹមសារ ១០០% (បែបកុនចិន/ហុងកុង ទំនើប)
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 7, paddingLeft: 4 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <Check size={14} color="#34d399" style={{ flexShrink: 0 }} />
+                  <span><strong>ខ្លី ចំអត្ថន័យ ១០០%៖</strong> កាត់បន្ថយពាក្យសម្ដីវែងអូសបន្លាយឥតប្រយោជន៍</span>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <Check size={14} color="#34d399" style={{ flexShrink: 0 }} />
+                  <span><strong>Lip-sync ត្រូវមាត់៖</strong> ជួយឱ្យសំឡេង AI និយាយរលូន មិនហៀរជាន់ឃ្លាបន្ទាប់</span>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <Check size={14} color="#34d399" style={{ flexShrink: 0 }} />
+                  <span><strong>Auto-Save៖</strong> រក្សាទុកទិន្នន័យដោយស្វ័យប្រវត្តក្នុង project</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Modal Actions */}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 4, paddingTop: 10, borderTop: '1px solid rgba(255, 255, 255, 0.08)' }}>
+              <button
+                type="button"
+                onClick={() => setShowCompactConfirm(false)}
+                style={{
+                  padding: '8px 16px',
+                  borderRadius: 6,
+                  border: '1px solid rgba(255, 255, 255, 0.12)',
+                  background: 'transparent',
+                  color: '#94a3b8',
+                  fontSize: '0.78rem',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                }}
+              >
+                បោះបង់ (Cancel)
+              </button>
+              <button
+                type="button"
+                data-testid="btn-confirm-compact-now-dubbing"
+                onClick={() => {
+                  setShowCompactConfirm(false);
+                  executeAutoCompact();
+                }}
+                style={{
+                  padding: '8px 18px',
+                  borderRadius: 6,
+                  border: '1px solid rgba(168, 85, 247, 0.7)',
+                  background: 'linear-gradient(135deg, #9333ea 0%, #7c3aed 100%)',
+                  color: '#ffffff',
+                  fontSize: '0.78rem',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  boxShadow: '0 2px 10px rgba(147, 51, 234, 0.4)',
+                }}
+              >
+                <Sparkles size={14} />
+                <span>បម្លែងទាំងអស់ឥឡូវនេះ (Start Auto Compact)</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Re-TTS Confirmation Modal (Prevents accidental 500-segment overwrite) */}
       {showConfirmReTts && (
         <div
@@ -2131,6 +2257,132 @@ export default function DubbingModeTab({
                 }}
               >
                 Re-TTS ទាំងអស់ ({validTextSegments.length})
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Custom Studio Auto-Compact Confirmation Modal ── */}
+      {showCompactConfirm && (
+        <div
+          data-testid="modal-dubbing-compact-confirm"
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: 'rgba(0, 0, 0, 0.78)',
+            backdropFilter: 'blur(8px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 99999,
+            padding: 16,
+          }}
+          onClick={() => !isAutoCompacting && setShowCompactConfirm(false)}
+        >
+          <div
+            style={{
+              background: 'linear-gradient(180deg, #181428 0%, #0f121d 100%)',
+              border: '1px solid rgba(168, 85, 247, 0.45)',
+              borderRadius: 12,
+              padding: '22px 24px',
+              maxWidth: 460,
+              width: '100%',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 14,
+              boxShadow: '0 24px 50px rgba(0, 0, 0, 0.8), 0 0 25px rgba(168, 85, 247, 0.2)',
+              color: '#f1f5f9',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Modal Header */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', borderBottom: '1px solid rgba(255, 255, 255, 0.08)', paddingBottom: 10 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.92rem', fontWeight: 800, color: '#f3e8ff' }}>
+                <Sparkles size={18} color="#c084fc" />
+                <span>បម្លែងគ្រប់ Script ជា «ខ្លីចំអត្ថន័យ» (Auto Compact)</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowCompactConfirm(false)}
+                style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer', padding: 2 }}
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10, fontSize: '0.80rem', color: '#cbd5e1', lineHeight: 1.55 }}>
+              <div style={{ background: 'rgba(168, 85, 247, 0.1)', border: '1px solid rgba(168, 85, 247, 0.25)', borderRadius: 8, padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <div style={{ fontWeight: 700, color: '#e9d5ff', fontSize: '0.84rem' }}>
+                  តើអ្នកចង់បម្លែងគ្រប់ Script ទាំង {scriptData?.segments?.length || 0} ឃ្លា?
+                </div>
+                <div style={{ color: '#d8b4fe', fontSize: '0.76rem' }}>
+                  AI នឹងបកប្រែឡើងវិញជាភាសា Subtitle ខ្លី ចំខ្លឹមសារ ១០០% (បែបកុនចិន/ហុងកុង ទំនើប)
+                </div>
+              </div>
+
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 7, paddingLeft: 4 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <Check size={14} color="#34d399" style={{ flexShrink: 0 }} />
+                  <span><strong>ខ្លី ចំអត្ថន័យ ១០០%៖</strong> កាត់បន្ថយពាក្យសម្ដីវែងអូសបន្លាយឥតប្រយោជន៍</span>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <Check size={14} color="#34d399" style={{ flexShrink: 0 }} />
+                  <span><strong>Lip-sync ត្រូវមាត់៖</strong> ជួយឱ្យសំឡេង AI និយាយរលូន មិនហៀរជាន់ឃ្លាបន្ទាប់</span>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <Check size={14} color="#34d399" style={{ flexShrink: 0 }} />
+                  <span><strong>Auto-Save៖</strong> រក្សាទុកទិន្នន័យដោយស្វ័យប្រវត្តក្នុង project</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Modal Actions */}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 4, paddingTop: 10, borderTop: '1px solid rgba(255, 255, 255, 0.08)' }}>
+              <button
+                type="button"
+                onClick={() => setShowCompactConfirm(false)}
+                style={{
+                  padding: '8px 16px',
+                  borderRadius: 6,
+                  border: '1px solid rgba(255, 255, 255, 0.12)',
+                  background: 'transparent',
+                  color: '#94a3b8',
+                  fontSize: '0.78rem',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                }}
+              >
+                បោះបង់ (Cancel)
+              </button>
+              <button
+                type="button"
+                data-testid="btn-confirm-compact-now-dubbing"
+                onClick={() => {
+                  setShowCompactConfirm(false);
+                  executeAutoCompact();
+                }}
+                style={{
+                  padding: '8px 18px',
+                  borderRadius: 6,
+                  border: '1px solid rgba(168, 85, 247, 0.7)',
+                  background: 'linear-gradient(135deg, #9333ea 0%, #7c3aed 100%)',
+                  color: '#ffffff',
+                  fontSize: '0.78rem',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  boxShadow: '0 2px 10px rgba(147, 51, 234, 0.4)',
+                }}
+              >
+                <Sparkles size={14} />
+                <span>បម្លែងទាំងអស់ឥឡូវនេះ (Start Auto Compact)</span>
               </button>
             </div>
           </div>
