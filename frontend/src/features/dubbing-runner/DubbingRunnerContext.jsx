@@ -560,7 +560,8 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
           }
           if (prog.status === 'idle') {
             idleCount++;
-            if (hadProgress || idleCount >= 5) {
+            // Give 10 consecutive ticks (12s) before declaring Demucs idle, avoiding false early aborts
+            if (idleCount >= 10) {
               console.warn(`[Clean BGM 🔇] Demucs process is idle/stopped for EP${ep.episodeNumber || ep.id}`);
               throw new Error('Demucs process ended unexpectedly');
             }
@@ -569,7 +570,8 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
           }
         } else {
           idleCount++;
-          if (idleCount >= 6) {
+          // Give 15 consecutive failed polls (18s) of network grace period under heavy CPU load
+          if (idleCount >= 15) {
             throw new Error('Demucs separation endpoint unreachable');
           }
         }
