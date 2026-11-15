@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
-  Sparkles, Languages, BookOpen, Loader2, AlertCircle, ArrowRight, CheckCircle2, Mic, Volume2, Film, RefreshCw, ChevronDown, ChevronUp, Settings2, FileText, Check, Terminal, FileUp, Zap, Layers, MessageSquare, Crown, Briefcase, UserCheck, Building2, Smile
+  Sparkles, Languages, BookOpen, Loader2, AlertCircle, ArrowRight, CheckCircle2, Mic, Volume2, Film, RefreshCw, ChevronDown, ChevronUp, Settings2, FileText, Check, Terminal, FileUp, Zap, Layers, MessageSquare, Crown, Briefcase, UserCheck, Building2, Smile, X
 } from 'lucide-react';
 import { importSubtitlesApi, retranslateAllSegmentsApi } from '../../services/api';
 import { DubbingStepButton, useDubbingFeature } from '../../features/dubbing-runner';
