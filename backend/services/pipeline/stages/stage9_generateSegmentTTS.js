@@ -123,12 +123,17 @@ async function generateSegmentTTS({
       const segSpkName = String(seg.speaker || seg.speakerName || '').trim();
       const isGenericSegSpk = !segSpkName || segSpkName === 'តួអង្គ' || segSpkName.toLowerCase() === 'speaker';
       const localReg = speakerRegistry || seg.speakerRegistry || {};
-      const registryVoice =
-        (seg.speakerId && localReg[seg.speakerId]?.voiceId) ||
-        (!isGenericSegSpk && localReg[segSpkName]?.voiceId) ||
-        null;
-      const isManualSeg = Boolean(seg.userOverridden || seg.voiceAssignmentSource === 'manual' || seg.voiceOverride);
-      const normSegGender = String(seg.voiceGender || seg.gender || seg.speakerGender || '').trim().toLowerCase();
+      const regEntry =
+        (seg.speakerId && localReg[seg.speakerId]) ||
+        (!isGenericSegSpk && localReg[segSpkName]) ||
+        Object.values(localReg).find((r) => r && (
+          (r.speakerId && (r.speakerId === seg.speakerId || r.id === seg.speakerId)) ||
+          (!isGenericSegSpk && (r.speakerName === segSpkName || r.name === segSpkName))
+        )) || null;
+      const registryVoice = regEntry?.voiceId || null;
+      const regIsManual = Boolean(regEntry?.userOverridden) || regEntry?.voiceAssignmentSource === 'manual';
+      const isManualSeg = Boolean(seg.userOverridden || seg.voiceAssignmentSource === 'manual' || seg.voiceOverride) || regIsManual;
+      const normSegGender = String(regEntry?.voiceGender || seg.voiceGender || seg.gender || seg.speakerGender || '').trim().toLowerCase();
       let knownSegGender = (normSegGender === 'female' || normSegGender === 'f' || normSegGender === 'girl')
         ? 'female'
         : ((normSegGender === 'male' || normSegGender === 'm' || normSegGender === 'boy') ? 'male' : '');
@@ -141,9 +146,11 @@ async function generateSegmentTTS({
         ? 'km-KH-SreymomNeural'
         : (knownSegGender === 'male' ? 'km-KH-PisethNeural' : null);
 
-      const chosenVoiceId = isManualSeg
-        ? (seg.voiceOverride || seg.voiceId || seg.khmerVoiceId || seg.voice || registryVoice || genderDerivedVoice || defaultVoiceId)
-        : (registryVoice || genderDerivedVoice || seg.khmerVoiceId || seg.voiceId || seg.voice || defaultVoiceId);
+      const chosenVoiceId = regIsManual && registryVoice
+        ? registryVoice
+        : (isManualSeg
+            ? (seg.voiceOverride || seg.voiceId || seg.khmerVoiceId || seg.voice || registryVoice || genderDerivedVoice || defaultVoiceId)
+            : (registryVoice || genderDerivedVoice || seg.khmerVoiceId || seg.voiceId || seg.voice || defaultVoiceId));
       seg.khmerVoiceId = chosenVoiceId;
       seg.voiceId = chosenVoiceId;
       seg.voice = chosenVoiceId;

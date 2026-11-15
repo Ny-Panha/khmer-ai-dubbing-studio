@@ -22,6 +22,7 @@ import {
 import { generateVideoThumbnails } from '../utils/thumbnailUtils';
 import { fetchVideoThumbnails } from '../services/api';
 import { normalizeClips, sanitizeScriptData } from '../utils/timelineUtils';
+import { applySpeakerVoiceToSegments } from '../utils/speakerUtils';
 
 /**
  * Custom Hook for Series & Multi-Episode Management
@@ -156,11 +157,20 @@ export function useSeriesManager({
     if (cb.setVideoMetadata) {
       cb.setVideoMetadata(ep.metadata || null);
     }
-    if (cb.setScriptData) {
-      cb.setScriptData(ep.scriptData ? sanitizeScriptData(ep.scriptData) : null);
-    }
+    const activeRegistry = ep.speakerRegistry || {};
     if (cb.setSpeakerRegistry) {
-      cb.setSpeakerRegistry(ep.speakerRegistry || {});
+      cb.setSpeakerRegistry(activeRegistry);
+    }
+    if (cb.setScriptData) {
+      if (ep.scriptData) {
+        const sanitized = sanitizeScriptData(ep.scriptData);
+        if (sanitized?.segments && Object.keys(activeRegistry).length > 0) {
+          sanitized.segments = applySpeakerVoiceToSegments(sanitized.segments, activeRegistry);
+        }
+        cb.setScriptData(sanitized);
+      } else {
+        cb.setScriptData(null);
+      }
     }
     if (cb.setAudioGenerated) {
       cb.setAudioGenerated(Boolean(ep.audioGenerated));

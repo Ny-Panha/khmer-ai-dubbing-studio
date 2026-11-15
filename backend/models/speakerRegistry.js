@@ -477,7 +477,12 @@ function syncSegmentsWithSpeakerRegistry(segments = [], customSpeakerVoiceMap = 
     const fallbackIsFemale = titleKw === "FEMALE" || (titleKw !== "MALE" && (seg.voiceGender === "female" || /(?:^|_)female(?:_|$)/i.test(spkKey) || (typeof seg.pitchHz === "number" && seg.pitchHz >= 170)));
     const fallbackGender = fallbackIsFemale ? "female" : "male";
     const fallbackVoice = fallbackIsFemale ? "km-KH-SreymomNeural" : "km-KH-PisethNeural";
-    const reg = finalizedRegistry[spkKey] || (!isGenericRaw ? finalizedRegistry[normSpeaker] : null) || {
+    const reg = finalizedRegistry[spkKey] ||
+      (!isGenericRaw ? finalizedRegistry[normSpeaker] : null) ||
+      Object.values(finalizedRegistry).find((r) => r && (
+        (r.speakerId && (r.speakerId === spkKey || r.speakerId === explicitId)) ||
+        (!isGenericRaw && (r.speaker === rawSpeaker || r.name === rawSpeaker || r.speakerName === rawSpeaker))
+      )) || {
       speakerId: spkKey,
       speaker: rawSpeaker,
       voiceGender: fallbackIsFemale ? "female" : "unknown",
@@ -493,17 +498,22 @@ function syncSegmentsWithSpeakerRegistry(segments = [], customSpeakerVoiceMap = 
       badgeColor: fallbackIsFemale ? "#ec4899" : "#3b82f6",
     };
 
+    const isRegManual = Boolean(reg.userOverridden) || reg.voiceAssignmentSource === "manual";
     const isUserOverridden = Boolean(seg.userOverridden);
-    const isManualOverride = isUserOverridden || seg.voiceAssignmentSource === "manual" || Boolean(seg.voiceOverride);
-    const activeVoice = isManualOverride
-      ? (isUserOverridden
-          ? (seg.voiceOverride || seg.voiceId || seg.khmerVoiceId || seg.voice || reg.khmerVoiceId)
-          : (seg.voiceOverride || seg.khmerVoiceId || seg.voiceId || seg.voice || reg.khmerVoiceId))
-      : reg.khmerVoiceId;
+    const isManualOverride = isUserOverridden || isRegManual || seg.voiceAssignmentSource === "manual" || Boolean(seg.voiceOverride);
+    const activeVoice = (isRegManual && (reg.khmerVoiceId || reg.voiceId))
+      ? (reg.khmerVoiceId || reg.voiceId)
+      : (isManualOverride
+          ? (isUserOverridden
+              ? (seg.voiceOverride || seg.voiceId || seg.khmerVoiceId || seg.voice || reg.khmerVoiceId)
+              : (seg.voiceOverride || seg.khmerVoiceId || seg.voiceId || seg.voice || reg.khmerVoiceId))
+          : reg.khmerVoiceId);
     const isFemale = String(activeVoice).includes("Sreymom");
-    const activeGender = (isUserOverridden && (seg.voiceGender === "female" || seg.voiceGender === "male"))
-      ? seg.voiceGender
-      : (isFemale ? "female" : "male");
+    const activeGender = isRegManual
+      ? (isFemale ? "female" : "male")
+      : ((isUserOverridden && (seg.voiceGender === "female" || seg.voiceGender === "male"))
+          ? seg.voiceGender
+          : (isFemale ? "female" : "male"));
     const activeProfile = getVoiceProfile(activeGender, activeVoice);
     const isNarrator = rawSpeaker.toLowerCase().includes("narrator") || rawSpeaker.includes("អ្នកសម្រាយរឿង") || rawSpeaker.includes("旁白");
     const safeSpkKey = isNarrator ? "spk_narrator" : spkKey;
@@ -526,9 +536,11 @@ function syncSegmentsWithSpeakerRegistry(segments = [], customSpeakerVoiceMap = 
       speakerId: isUserOverridden && seg.speakerId ? seg.speakerId : (reg.speakerId || safeSpkKey),
       speaker: isUserOverridden ? (seg.speaker || reg.speaker) : reg.speaker,
       speakerName: isUserOverridden ? (seg.speakerName || seg.speaker || reg.speaker) : reg.speaker,
-      voiceGender: isUserOverridden
-        ? (seg.voiceGender || (isFemale ? "female" : "male"))
-        : (isManualOverride ? (isFemale ? "female" : "male") : reg.voiceGender),
+      voiceGender: isRegManual
+        ? (isFemale ? "female" : "male")
+        : (isUserOverridden
+            ? (seg.voiceGender || (isFemale ? "female" : "male"))
+            : (isManualOverride ? (isFemale ? "female" : "male") : reg.voiceGender)),
       gender: activeGender,
       speakerGender: isFemale ? "FEMALE" : (activeGender === "female" ? "FEMALE" : (reg.voiceGender === "unknown" && !isManualOverride ? "UNKNOWN" : "MALE")),
       genderConfidence: isUserOverridden ? (seg.genderConfidence ?? null) : reg.genderConfidence,

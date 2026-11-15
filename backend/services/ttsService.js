@@ -570,24 +570,37 @@ async function generateSingleSegmentAudio(segment, uploadsDir, options = {}) {
   const speakerKeyName = String(segment.speaker || segment.speakerName || "").trim();
   const isGenericSpk = !speakerKeyName || speakerKeyName === "តួអង្គ" || speakerKeyName.toLowerCase() === "speaker";
   const spkReg = options.speakerRegistry || segment.speakerRegistry || {};
-  const regEntry = (segment.speakerId && spkReg[segment.speakerId]) || (!isGenericSpk && spkReg[speakerKeyName]) || null;
+  const regEntry =
+    (segment.speakerId && spkReg[segment.speakerId]) ||
+    (!isGenericSpk && spkReg[speakerKeyName]) ||
+    Object.values(spkReg).find((r) => r && (
+      (r.speakerId && (r.speakerId === segment.speakerId || r.id === segment.speakerId)) ||
+      (!isGenericSpk && (r.speakerName === speakerKeyName || r.name === speakerKeyName))
+    )) ||
+    null;
   const mapVoice = options.speakerMap
     ? ((segment.speakerId && options.speakerMap[segment.speakerId]) || (!isGenericSpk && options.speakerMap[speakerKeyName]) || null)
     : null;
   const registryVoice = regEntry?.voiceId || regEntry?.khmerVoiceId || mapVoice || null;
-  const isManualSegment = Boolean(segment.userOverridden || segment.voiceAssignmentSource === "manual" || segment.voiceOverride);
+  const regIsManual = Boolean(regEntry?.userOverridden) || regEntry?.voiceAssignmentSource === "manual";
+  const isManualSegment = Boolean(segment.userOverridden || segment.voiceAssignmentSource === "manual" || segment.voiceOverride) || regIsManual;
 
-  const knownSegGender =
-    normalizeKnownGender(segment.voiceGender) ||
-    normalizeKnownGender(segment.gender) ||
-    normalizeKnownGender(segment.speakerGender) ||
-    normalizeKnownGender(regEntry?.voiceGender || regEntry?.gender) ||
-    normalizeKnownGender(detectSpeakerGender(speakerKeyName, "", textToSpeak));
+  const knownSegGender = regIsManual
+    ? (normalizeKnownGender(regEntry?.voiceGender || regEntry?.gender) || normalizeKnownGender(segment.voiceGender))
+    : (
+        normalizeKnownGender(segment.voiceGender) ||
+        normalizeKnownGender(segment.gender) ||
+        normalizeKnownGender(segment.speakerGender) ||
+        normalizeKnownGender(regEntry?.voiceGender || regEntry?.gender) ||
+        normalizeKnownGender(detectSpeakerGender(speakerKeyName, "", textToSpeak))
+      );
 
   const segGender = knownSegGender || "unknown";
   let rawAssignedVoice;
   if (options.forceVoice && options.voiceId) {
     rawAssignedVoice = options.voiceId;
+  } else if (regIsManual && registryVoice) {
+    rawAssignedVoice = registryVoice;
   } else if (isManualSegment) {
     rawAssignedVoice = segment.voiceOverride || segment.khmerVoiceId || segment.voiceId || segment.voice || registryVoice || options.voiceId;
   } else if (registryVoice) {

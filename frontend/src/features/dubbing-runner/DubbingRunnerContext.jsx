@@ -17,6 +17,7 @@ import {
   checkEpisodeHasAutoFitReady,
   getEpisodeBrokenSummary,
 } from '../../components/dashboard/geminiRouteHelpers';
+import { applySpeakerVoiceToSegments } from '../../utils/speakerUtils';
 
 const DubbingRunnerContext = createContext(null);
 
@@ -267,10 +268,12 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
     const seriesId = activeSeries?.id || ep.seriesId || 'drama_project';
     const videoId = ep.videoId || ep.videoFile || ep.video?.videoId || ep.videoPath || '';
 
-    const segments = ep.scriptData?.segments || [];
-    if (!Array.isArray(segments) || segments.length === 0) {
+    const baseSegments = ep.scriptData?.segments || [];
+    if (!Array.isArray(baseSegments) || baseSegments.length === 0) {
       return { success: false, skipped: true, reason: 'no_segments' };
     }
+
+    const segments = applySpeakerVoiceToSegments(baseSegments, ep.speakerRegistry || {});
 
     const hasAudio = checkEpisodeHasAudioReady(ep, null, null);
     if (hasAudio && !ep.audioOutdated && !options.force) {
@@ -299,8 +302,16 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
       },
     }));
 
-    // Build speaker map if character mapping exists
-    const speakerMap = options.speakerMap || {};
+    // Build comprehensive speaker map from options and episode's speakerRegistry
+    const speakerMap = { ...(options.speakerMap || {}) };
+    const epRegistry = ep.speakerRegistry || {};
+    Object.entries(epRegistry).forEach(([key, val]) => {
+      if (val?.voiceId) {
+        speakerMap[key] = val.voiceId;
+        if (val.speakerName) speakerMap[val.speakerName] = val.voiceId;
+        if (val.name) speakerMap[val.name] = val.voiceId;
+      }
+    });
     const voiceId = options.voiceId || 'km-KH-PisethNeural';
 
     console.log(`[Voice 🎙️] EP${ep.episodeNumber || ep.id}: កំពុងបង្កើតសំឡេង AI (${segments.length} ឃ្លា)...`);

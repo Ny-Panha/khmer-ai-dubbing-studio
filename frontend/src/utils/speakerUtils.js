@@ -197,21 +197,54 @@ export function applySpeakerVoiceToSegments(segments = [], speakerRegistry = {})
     const rawName = (seg.speaker || seg.speakerName || 'តួអង្គ').trim();
     const isGeneric = !rawName || rawName === 'តួអង្គ' || rawName.toLowerCase() === 'speaker';
     const spkId = seg.speakerId || getSpeakerId(rawName);
-    const reg = speakerRegistry[spkId] || (!isGeneric ? speakerRegistry[rawName] : null);
 
-    const isManual = Boolean(seg.userOverridden) || seg.voiceAssignmentSource === 'manual' || Boolean(seg.voiceOverride) || Boolean(reg?.userOverridden);
-    const regKnownGender = (reg?.gender === 'FEMALE' || reg?.gender === 'MALE') ? reg.gender : '';
-    const segKnownGender = (seg.speakerGender === 'FEMALE' || seg.speakerGender === 'MALE') ? seg.speakerGender : '';
-    const titleGender = !isManual ? detectSpeakerGender(rawName, '', seg.khmerText || seg.khmer || '') : 'UNKNOWN';
-    const gender = titleGender !== 'UNKNOWN'
-      ? titleGender
-      : (regKnownGender || segKnownGender || detectSpeakerGender(rawName, seg.gender || seg.voiceGender, seg.khmerText || seg.khmer || ''));
-    const voiceGender = gender === 'FEMALE' ? 'female' : (gender === 'MALE' ? 'male' : (reg?.voiceGender || 'unknown'));
-    const voiceId = isManual
-      ? (seg.voiceOverride || seg.khmerVoiceId || seg.voiceId || reg?.khmerVoiceId || reg?.voiceId || getDefaultVoiceForGender(gender))
-      : (gender !== 'UNKNOWN'
-          ? getDefaultVoiceForGender(gender)
-          : (reg?.khmerVoiceId || reg?.voiceId || seg.khmerVoiceId || seg.voiceId || getDefaultVoiceForGender(gender)));
+    // Look up registry entry flexibly (by spkId, by rawName, or by matching speakerName in entry)
+    const reg = (speakerRegistry && (
+      speakerRegistry[spkId] ||
+      (!isGeneric ? speakerRegistry[rawName] : null) ||
+      Object.values(speakerRegistry).find((r) => r && (
+        (r.speakerId && (r.speakerId === spkId || r.speakerId === seg.speakerId)) ||
+        (r.id && (r.id === spkId || r.id === seg.speakerId)) ||
+        (!isGeneric && ((r.speakerName && r.speakerName === rawName) || (r.name && r.name === rawName)))
+      ))
+    )) || null;
+
+    const regIsManual = Boolean(reg?.userOverridden) || reg?.voiceAssignmentSource === 'manual';
+    const segIsManual = Boolean(seg.userOverridden) || seg.voiceAssignmentSource === 'manual' || Boolean(seg.voiceOverride);
+    const isManual = regIsManual || segIsManual;
+
+    let voiceId;
+    let voiceGender;
+    let gender;
+
+    // Explicit user character override takes top priority
+    if (regIsManual && reg?.voiceId) {
+      voiceId = reg.voiceId;
+      const isFemale = voiceId.toLowerCase().includes('sreymom');
+      voiceGender = isFemale ? 'female' : 'male';
+      gender = isFemale ? 'FEMALE' : 'MALE';
+    } else if (segIsManual && (seg.voiceOverride || seg.voiceId)) {
+      voiceId = seg.voiceOverride || seg.voiceId;
+      const isFemale = voiceId.toLowerCase().includes('sreymom');
+      voiceGender = isFemale ? 'female' : 'male';
+      gender = isFemale ? 'FEMALE' : 'MALE';
+    } else {
+      const regKnownGender = (reg?.gender === 'FEMALE' || reg?.gender === 'MALE') ? reg.gender : '';
+      const segKnownGender = (seg.speakerGender === 'FEMALE' || seg.speakerGender === 'MALE') ? seg.speakerGender : '';
+      const titleGender = detectSpeakerGender(rawName, '', seg.khmerText || seg.khmer || '');
+      gender = titleGender !== 'UNKNOWN'
+        ? titleGender
+        : (regKnownGender || segKnownGender || detectSpeakerGender(rawName, seg.gender || seg.voiceGender, seg.khmerText || seg.khmer || ''));
+      voiceGender = gender === 'FEMALE' ? 'female' : (gender === 'MALE' ? 'male' : (reg?.voiceGender || 'unknown'));
+      voiceId = gender !== 'UNKNOWN'
+        ? getDefaultVoiceForGender(gender)
+        : (reg?.khmerVoiceId || reg?.voiceId || seg.khmerVoiceId || seg.voiceId || getDefaultVoiceForGender(gender));
+    }
+
+    const isFemale = voiceGender === 'female' || gender === 'FEMALE';
+    const voiceLabel = isFemale ? 'ស្រីមុំ (Sreymom)' : 'ពិសិដ្ឋ (Piseth)';
+    const avatar = isFemale ? '👩' : '👨';
+    const badgeColor = isFemale ? '#ec4899' : '#38bdf8';
     const speed = seg.speed || reg?.speed || 'normal';
 
     const segId = seg.segmentId || seg.id || `seg_${idx + 1}`;
@@ -234,10 +267,16 @@ export function applySpeakerVoiceToSegments(segments = [], speakerRegistry = {})
       speakerId: spkId,
       speakerGender: gender,
       voiceGender,
+      gender: voiceGender,
       genderConfidence: reg?.genderConfidence ?? seg.genderConfidence ?? (voiceGender === 'unknown' ? 0.5 : 0.85),
       voiceId,
       khmerVoiceId: voiceId,
+      voice: voiceId,
+      voiceLabel,
+      avatar,
+      badgeColor,
       voiceAssignmentSource: isManual ? 'manual' : 'automatic',
+      userOverridden: isManual,
       speed,
       voiceProvider: 'edge-tts',
       translationStatus: seg.translationStatus || (khmerTrans ? 'translated' : (origChinese ? 'review_needed' : 'pending')),

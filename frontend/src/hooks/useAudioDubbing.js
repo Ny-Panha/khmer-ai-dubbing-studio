@@ -155,47 +155,105 @@ const FALLBACK_VOICE_CATALOG = {
 
   // Update a Character's assigned voice across the whole project
   const handleUpdateSpeakerVoice = (speakerId, newVoiceId, newSpeed = 'normal') => {
-    setSpeakerRegistry((prev) => {
-      const existing = prev[speakerId] || {};
-      const updatedSpk = {
-        ...existing,
-        id: speakerId,
-        speakerId: speakerId,
-        voiceId: newVoiceId,
-        speed: newSpeed,
-        userOverridden: true,
+    const isFemale = String(newVoiceId || '').toLowerCase().includes('sreymom');
+    const targetGender = isFemale ? 'female' : 'male';
+    const targetGenderUpper = isFemale ? 'FEMALE' : 'MALE';
+    const voiceLabel = isFemale ? 'ស្រីមុំ (Sreymom)' : 'ពិសិដ្ឋ (Piseth)';
+    const avatar = isFemale ? '👩' : '👨';
+    const badgeColor = isFemale ? '#ec4899' : '#38bdf8';
+
+    const existing = (speakerRegistry && speakerRegistry[speakerId]) || {};
+    const targetName = (existing.speakerName || existing.name || (typeof speakerId === 'string' && !speakerId.startsWith('spk_') ? speakerId : '')).trim();
+
+    const updatedSpk = {
+      ...existing,
+      id: speakerId,
+      speakerId: speakerId,
+      speakerName: targetName || existing.speakerName || speakerId,
+      name: targetName || existing.name || speakerId,
+      gender: targetGenderUpper,
+      voiceGender: targetGender,
+      voiceId: newVoiceId,
+      khmerVoiceId: newVoiceId,
+      voice: newVoiceId,
+      voiceLabel,
+      avatar,
+      badgeColor,
+      speed: newSpeed,
+      userOverridden: true,
+      voiceAssignmentSource: 'manual',
+    };
+
+    const newReg = {
+      ...(speakerRegistry || {}),
+      [speakerId]: updatedSpk,
+    };
+    if (targetName && targetName !== speakerId) {
+      newReg[targetName] = {
+        ...updatedSpk,
+        speakerName: targetName,
+        name: targetName,
       };
-      const newReg = {
-        ...prev,
-        [speakerId]: updatedSpk,
+    }
+
+    setSpeakerRegistry(newReg);
+
+    let updatedSegments = null;
+    setScriptData((sPrev) => {
+      if (!sPrev?.segments) return sPrev;
+
+      updatedSegments = sPrev.segments.map((seg) => {
+        const rawName = (seg.speaker || seg.speakerName || '').trim();
+        const matches =
+          seg.speakerId === speakerId ||
+          (targetName && (rawName === targetName || seg.speakerName === targetName)) ||
+          (existing.id && seg.speakerId === existing.id) ||
+          (typeof speakerId === 'string' && rawName && rawName.length >= 2 && speakerId.includes(rawName));
+
+        if (matches) {
+          return {
+            ...seg,
+            voiceId: newVoiceId,
+            khmerVoiceId: newVoiceId,
+            voice: newVoiceId,
+            voiceGender: targetGender,
+            gender: targetGender,
+            speakerGender: targetGenderUpper,
+            voiceLabel,
+            avatar,
+            badgeColor,
+            voiceOverride: newVoiceId,
+            voiceAssignmentSource: 'manual',
+            userOverridden: true,
+            speed: newSpeed,
+            voiceProvider: 'edge-tts',
+            audioOutdated: true,
+          };
+        }
+        return seg;
+      });
+
+      return {
+        ...sPrev,
+        segments: updatedSegments,
+        updatedAt: Date.now(),
       };
-
-      if (scriptData?.segments) {
-        const updatedSegments = scriptData.segments.map((seg) => {
-          const rawName = (seg.speaker || seg.speakerName || '').trim();
-          const matches = 
-            seg.speakerId === speakerId || 
-            rawName === existing.name || 
-            getSpeakerId(rawName) === speakerId;
-
-          if (matches) {
-            return {
-              ...seg,
-              speakerId: speakerId,
-              voiceId: newVoiceId,
-              speed: newSpeed,
-              voiceProvider: 'edge-tts',
-              audioOutdated: true,
-            };
-          }
-          return seg;
-        });
-        setScriptData((sPrev) => (sPrev ? { ...sPrev, segments: updatedSegments, updatedAt: Date.now() } : sPrev));
-        setAudioOutdated(true);
-      }
-
-      return newReg;
     });
+
+    setAudioOutdated(true);
+
+    const saveFn = onSaveEpisodeBackground || handleSaveEpisodeBackground;
+    if (saveFn && updatedSegments) {
+      saveFn({
+        scriptData: {
+          ...(scriptData || {}),
+          segments: updatedSegments,
+          updatedAt: Date.now(),
+        },
+        speakerRegistry: newReg,
+        audioOutdated: true,
+      });
+    }
   };
 
   // Override an individual segment's speaking rate and auto-regenerate its speech audio
