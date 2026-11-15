@@ -225,7 +225,7 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
     const res = await startRepairBrokenJobApi({
       seriesId,
       targetEpisodeIds: [ep.id],
-      modelName: options.modelName || 'gemini-2.5-flash',
+      modelName: options.modelName || 'gemini-3.8-flash',
       repairText: true,
       repairVoice: false,
       skipTts: true,

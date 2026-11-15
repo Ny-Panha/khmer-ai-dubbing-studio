@@ -52,8 +52,7 @@ test('Stage 6 Cascade: Rescues across full 10-model cascade (down to gemini-flas
         if (
           model === 'gemini-3.5-flash-lite' ||
           model === 'gemini-flash-lite-latest' ||
-          model === 'gemini-3.6-flash' ||
-          model === 'gemini-2.5-flash'
+          model === 'gemini-3.6-flash'
         ) {
           const err = new Error('RESOURCE_EXHAUSTED: 429 Quota exceeded');
           err.status = 429;
@@ -72,6 +71,7 @@ test('Stage 6 Cascade: Rescues across full 10-model cascade (down to gemini-flas
         if (
           model === 'gemini-3.7-flash' ||
           model === 'gemini-3.8-flash' ||
+          model === 'gemini-4-hydrogen' ||
           model === 'gemini-3-flash-preview'
         ) {
           const err = new Error('503 Service Unavailable');

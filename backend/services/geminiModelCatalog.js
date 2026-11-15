@@ -115,20 +115,6 @@ const GEMINI_MODEL_CATALOG = [
     notes: 'Next-gen Gemini 4 Hydrogen model (20 RPD/key bucket).',
   },
   {
-    id: 'gemini-2.5-flash',
-    displayName: 'Gemini 2.5 Flash',
-    category: 'Text-out • Flash',
-    roleTag: 'Multimodal',
-    usableInDubbing: true,
-    usableInApp: true,
-    inCascade: true,
-    deprecated: false,
-    rpmLimit: 5,
-    tpmLimit: 250000,
-    rpdLimit: 20,
-    notes: 'Reliable 2.5 Flash backup (separate 20 RPD/key bucket).',
-  },
-  {
     id: 'gemini-3-flash-preview',
     displayName: 'Gemini 3 Flash',
     category: 'Text-out • Flash',
@@ -215,6 +201,20 @@ const GEMINI_MODEL_CATALOG = [
     notes: 'Retired by Google for API calls (replaced by Gemini 3.5 Flash Lite).',
   },
   {
+    id: 'gemini-2.5-flash',
+    displayName: 'Gemini 2.5 Flash',
+    category: 'Text-out • Deprecated',
+    roleTag: '404 Retired',
+    usableInDubbing: false,
+    usableInApp: false,
+    inCascade: false,
+    deprecated: true,
+    rpmLimit: 5,
+    tpmLimit: 250000,
+    rpdLimit: 20,
+    notes: 'Retired by Google for API calls (replaced by Gemini 3.8 Flash).',
+  },
+  {
     id: 'gemini-2.5-pro',
     displayName: 'Gemini 2.5 Pro',
     category: 'Text-out • Pro',
@@ -264,11 +264,11 @@ const DUBBING_CASCADE_MODELS = GEMINI_MODEL_CATALOG
   .filter((m) => m.usableInDubbing && m.inCascade)
   .map((m) => m.id);
 
-// Stage 3 Vision OCR keeps gemini-2.5-flash immediately after 3.5-flash-lite for proven OCR accuracy + compatibility
+// Stage 3 Vision OCR keeps gemini-3.8-flash immediately after 3.5-flash-lite for proven OCR accuracy + compatibility
 const VISION_CASCADE_MODELS = [
   'gemini-3.5-flash-lite',
-  'gemini-2.5-flash',
-  ...DUBBING_CASCADE_MODELS.filter((id) => id !== 'gemini-3.5-flash-lite' && id !== 'gemini-2.5-flash'),
+  'gemini-3.8-flash',
+  ...DUBBING_CASCADE_MODELS.filter((id) => id !== 'gemini-3.5-flash-lite' && id !== 'gemini-3.8-flash'),
 ];
 
 function getModelCatalogEntry(modelId) {

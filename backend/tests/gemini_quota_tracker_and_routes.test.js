@@ -275,7 +275,7 @@ test('GeminiQuotaTracker isolates per-(key, model) 429 cooldowns and prioritizes
   assert.equal(DUBBING_CASCADE_MODELS.length, 10);
   assert.equal(DUBBING_CASCADE_MODELS.includes('gemini-3.5-transcribe'), false);
   assert.equal(isUsableDubbingModel('gemini-3.5-transcribe'), false);
-  assert.equal(VISION_CASCADE_MODELS[1], 'gemini-2.5-flash');
+  assert.equal(VISION_CASCADE_MODELS[1], 'gemini-3.8-flash');
 
   // Mark primary Flash-Lite models 429 RPD exhausted on both keys, plus stale 503 on 3.6-flash
   tracker.recordRateLimit(
@@ -318,7 +318,7 @@ test('GeminiQuotaTracker isolates per-(key, model) 429 cooldowns and prioritizes
   assert.equal(m36.liveStatus, 'ready', 'Real request success clears prior 503 probe status');
   assert.equal(m36.pool.tpmUsed, 450);
   assert.equal(m25.liveStatus, 'deprecated');
-  assert.equal(snap.quotaSummary.readyCascadeModelsCount, 8);
+  assert.equal(snap.quotaSummary.readyCascadeModelsCount, 9);
   assert.equal(snap.quotaSummary.readyKeys, 0, 'Primary 3.5-flash-lite is 429 on both keys under auto mode');
   assert.equal(snap.quotaSummary.appTodayRequests, 3, 'App counter preserves actual 3 requests instead of inflating to daily limit');
 

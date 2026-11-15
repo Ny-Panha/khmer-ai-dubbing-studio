@@ -299,7 +299,7 @@ function groupTranscriptionWordsIntoSegments(transcriptionPart, startOffsetSec =
  * Works even when NO on-screen subtitles exist.
  * 
  * 1. Primary: gemini-3.5-transcribe with speaker diarization & word-level timestamps.
- * 2. Fallback: Multimodal Gemini cascade (gemini-3.5-flash-lite, gemini-2.5-flash, gemini-3.5-flash).
+ * 2. Fallback: Multimodal Gemini cascade (gemini-3.5-flash-lite, gemini-3.8-flash, gemini-3.5-flash).
  * 3. Acoustic Pitch (YIN algorithm) verification for speaker gender identification.
  * 
  * @param {object} params

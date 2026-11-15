@@ -145,7 +145,7 @@ test('GeminiKeyPool & 504 Timeout Resilience Suite', async (t) => {
 
     assert.ok(resp, 'Must succeed when cascaded to next model');
     assert.strictEqual(attemptedModels[0], 'gemini-3.5-flash-lite', 'First tried requested model');
-    assert.strictEqual(attemptedModels.includes('gemini-2.5-flash'), true, 'Cascaded to alternative model on 504');
+    assert.strictEqual(attemptedModels.includes('gemini-3.8-flash'), true, 'Cascaded to alternative model on 504');
   });
 
   await t.test('6. Unrecoverable cascade failure throws clear error for chunk failure', async () => {
