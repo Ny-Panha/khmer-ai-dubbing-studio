@@ -8,6 +8,7 @@ const {
   createSmartGenAIClient,
   extractAllGeminiKeys,
   isAuthOrInvalidKeyError,
+  isModelUnavailableError,
   isQuotaOrRateLimitError,
 } = require("./geminiKeyManager");
 const {
@@ -88,6 +89,7 @@ function getGeminiClient(customApiKey) {
 function isModelFallbackEligibleError(err) {
   if (!err) return false;
   if (isAuthOrInvalidKeyError(err)) return false;
+  if (err.modelUnavailable === true || isModelUnavailableError(err)) return true;
   if (isQuotaOrRateLimitError(err)) return true;
 
   const status = err.status || err.statusCode;

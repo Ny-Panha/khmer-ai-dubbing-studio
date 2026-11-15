@@ -1,6 +1,6 @@
 const { GENERATION_MODES, formatSecondsToTimecode } = require('../pipelineTypes');
 const { detectSpeakerGender } = require('../../../models/speakerRegistry');
-const { isAuthOrInvalidKeyError, isQuotaOrRateLimitError } = require('../../geminiKeyManager');
+const { isAuthOrInvalidKeyError, isModelUnavailableError, isQuotaOrRateLimitError } = require('../../geminiKeyManager');
 const { DUBBING_CASCADE_MODELS } = require('../../geminiModelCatalog');
 const { geminiQuotaTracker } = require('../../geminiQuotaTracker');
 const {
@@ -2087,7 +2087,7 @@ Return JSON ONLY:
         }
         lastModeBErr = err;
         console.warn(`[Stage 6 Mode B] Recap model '${candidateModel}' failed:`, sanitizedMsg);
-        const canCascade = isQuotaOrRateLimitError(err) || isModelNotFoundError(err) || isTimeoutLikeError(err);
+        const canCascade = isQuotaOrRateLimitError(err) || err?.modelUnavailable === true || isModelUnavailableError(err) || isModelNotFoundError(err) || isTimeoutLikeError(err);
         if (!canCascade) break;
       }
     }
