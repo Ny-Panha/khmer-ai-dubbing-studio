@@ -302,8 +302,33 @@ router.post("/dubbing/retranslate-all", async (req, res) => {
     if (!Array.isArray(segments) || segments.length === 0) {
       return res.status(400).json({ success: false, error: "Segments array is required" });
     }
-    const updated = await retranslateBatchDialogues(segments, req.body?.apiKey, options);
-    res.json({ success: true, segments: updated });
+    const targetOptions = {
+      style: options.style || "compact",
+      ...options,
+    };
+    const updated = await retranslateBatchDialogues(segments, req.body?.apiKey, targetOptions);
+
+    // If seriesId and episodeId provided, atomically update series.json on disk
+    if (seriesId && episodeId) {
+      await withSeriesMetadataLock(seriesId, () =>
+        updateSeriesMetadata(seriesId, (freshSeries) => {
+          const freshTargetEp = (freshSeries?.episodes || []).find((e) => String(e.id) === String(episodeId));
+          if (!freshTargetEp || !freshTargetEp.scriptData) return false;
+
+          const segmentMap = new Map();
+          updated.forEach((s) => segmentMap.set(String(s.id || s.index), s));
+
+          freshTargetEp.scriptData.segments = (freshTargetEp.scriptData.segments || []).map((orig) => {
+            const match = segmentMap.get(String(orig.id || orig.index));
+            return match ? { ...orig, ...match } : orig;
+          });
+          freshTargetEp.scriptData.updatedAt = Date.now();
+          return true;
+        })
+      );
+    }
+
+    res.json({ success: true, segments: updated, count: updated.length });
   } catch (err) {
     const formatted = formatRetranslateRouteError(err);
     console.error(`[API] /api/dubbing/retranslate-all error (${formatted.statusCode}):`, formatted.error);

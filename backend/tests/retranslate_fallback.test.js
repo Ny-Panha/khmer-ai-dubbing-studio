@@ -196,4 +196,41 @@ test('Retranslate Model Fallback & Route Error Mapping Suite', async (t) => {
       await new Promise((resolve) => server.close(resolve));
     }
   });
+
+  await t.test('7. /api/dubbing/retranslate-all supports 1-click auto compact and updates segments', async () => {
+    const mockAiClient = {
+      models: {
+        generateContent: async ({ contents }) => {
+          assert.ok(contents[0].includes('ខ្លីចំអត្ថន័យ'));
+          return {
+            text: JSON.stringify([
+              { id: 1, khmerText: 'មួយប្រភេទ ៥០ពិន្ទុ' },
+              { id: 2, khmerText: 'យកមកឱ្យយើងទាំង ៣' },
+            ]),
+          };
+        },
+      },
+    };
+
+    const updated = await retranslateBatchDialogues(
+      [
+        { id: 1, originalChineseText: '每种50分', startSec: 28, endSec: 30 },
+        { id: 2, originalChineseText: '给本座三', startSec: 30, endSec: 32 },
+      ],
+      null,
+      {
+        aiClient: mockAiClient,
+        style: 'compact',
+        timeoutMs: 2000,
+      }
+    );
+
+    assert.equal(updated.length, 2);
+    assert.equal(updated[0].khmerText, 'មួយប្រភេទ ៥០ពិន្ទុ');
+    assert.equal(updated[0].translationStyle, 'compact');
+    assert.equal(updated[0].audioOutdated, true);
+    assert.equal(updated[1].khmerText, 'យកមកឱ្យយើងទាំង ៣');
+    assert.equal(updated[1].translationStyle, 'compact');
+    assert.equal(updated[1].audioOutdated, true);
+  });
 });

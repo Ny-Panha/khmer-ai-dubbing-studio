@@ -1503,6 +1503,8 @@ async function retranslateBatchDialogues(segments, customApiKey = null, options 
 
   const BATCH_SIZE = 25;
   const updatedSegments = [...segments];
+  const translationStyle = options.style || options.translationStyle || 'compact';
+  const isCompact = translationStyle === 'compact';
 
   for (let i = 0; i < segments.length; i += BATCH_SIZE) {
     const batch = segments.slice(i, i + BATCH_SIZE);
@@ -1536,6 +1538,11 @@ async function retranslateBatchDialogues(segments, customApiKey = null, options 
     if (inputLines.length === 0) continue;
 
     const batchPrompt = `អ្នកគឺជាអ្នកដឹកនាំការបញ្ចូលសំឡេង និងជាអ្នកជំនាញបកប្រែកុនភាគចិន-ខ្មែរអាជីព។
+${isCompact ? `ស្ទីលបកប្រែជាកំហិត៖ 📝 ខ្លីចំអត្ថន័យ (COMPACT & DIRECT DUBBING SUBTITLE STYLE)
+- ត្រូវបកប្រែជាភាសាខ្មែរ «ខ្លីបំផុត ចំខ្លឹមសារ ងាយយល់ ១០០%» (បែប Subtitle កុនចិន/ហុងកុង ទំនើប)។
+- ហាមដាច់ខាតកុំបកប្រែវែងអន្លាយ ឬបន្ថែមពាក្យអូសបន្លាយឥតប្រយោជន៍ (ឧ. "每种50分" ➜ ត្រូវបកត្រឹម "មួយប្រភេទ ៥០ពិន្ទុ" ហាមបកវែង "ប្រភេទនីមួយៗបាន ៥០ពិន្ទុ")។
+- ត្រូវកាត់ពាក្យឱ្យខ្លីបំផុតតែរក្សាន័យដើមពេញលេញ ដើម្បីឱ្យសំឡេងនិយាយរលូន ត្រូវនឹងមាត់តួអង្គ (Lip-sync) មិនហៀរជាន់គ្នា និងមិនបង្ខំល្បឿន atempo!
+- គោរពកំហិតពាក្យ "maxKhmerWords" យ៉ាងតឹងរ៉ឹងបំផុត។` : ''}
 សូមបកប្រែប្រយោគចិនទាំងអស់ខាងក្រោមនេះជាភាសាខ្មែរសម្រាប់បញ្ចូលសំឡេងកុនភាគ (Cinema Drama Spoken Khmer) ឱ្យបានត្រឹមត្រូវន័យដើម ១០០% (ហាមបកខុសចំនួនលេខ, ហាមច្រឡំអត្ថន័យ) ស្របតាមបរិបទជាក់ស្តែងនៃសាច់រឿង (ទាំងរឿងសម័យ រឿងបុរាណ Action ឬមនោសញ្ចេតនា)។
 
 ច្បាប់តឹងរ៉ឹង៖
@@ -1589,6 +1596,7 @@ ${JSON.stringify(inputLines, null, 2)}
               khmerTranslatedText: cleanKhmer,
               khmerText: cleanKhmer,
               khmer: cleanKhmer,
+              translationStyle,
               textStatus: "retranslated",
               audioOutdated: true,
             };

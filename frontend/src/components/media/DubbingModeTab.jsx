@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   Sparkles, Languages, BookOpen, Loader2, AlertCircle, ArrowRight, CheckCircle2, Mic, Volume2, Film, RefreshCw, ChevronDown, ChevronUp, Settings2, FileText, Check, Terminal, FileUp, Zap, Layers, MessageSquare, Crown, Briefcase, UserCheck, Building2, Smile
 } from 'lucide-react';
-import { importSubtitlesApi } from '../../services/api';
+import { importSubtitlesApi, retranslateAllSegmentsApi } from '../../services/api';
 import { DubbingStepButton, useDubbingFeature } from '../../features/dubbing-runner';
 
 const GENRE_OPTIONS = [
@@ -94,6 +94,79 @@ export default function DubbingModeTab({
   const [separationProgress, setSeparationProgress] = useState(0);
   const [isCleanBgReady, setIsCleanBgReady] = useState(false);
   const [separationError, setSeparationError] = useState(null);
+
+  // 1-Click Auto Compact "📝 ខ្លីចំអត្ថន័យ" state
+  const [isAutoCompacting, setIsAutoCompacting] = useState(false);
+  const [compactProgress, setCompactProgress] = useState({ current: 0, total: 0 });
+  const [compactBanner, setCompactBanner] = useState(null);
+
+  const handleAutoCompactAll = async () => {
+    const segments = scriptData?.segments || [];
+    if (isAutoCompacting || segments.length === 0) return;
+    const count = segments.length;
+    const confirmed = window.confirm(
+      `📝 បញ្ជាក់ការបម្លែងគ្រប់ Script ទាំងអស់ (${count} ឃ្លា) ទៅជា «ខ្លីចំអត្ថន័យ» (Auto Compact)?\n\n` +
+      `• AI នឹងកែសម្រួលគ្រប់ឃ្លាទាំងអស់ (1 ដល់ ${count}) ឱ្យខ្លី ចំខ្លឹមសារ ១០០% (បែប Subtitle កុនចិន/ហុងកុង ទំនើប)\n` +
+      `• កាត់បន្ថយពាក្យសម្ដីវែងអន្លាយ ដើម្បីឱ្យសំឡេងនិយាយរលូន ត្រូវនឹងមាត់តួអង្គ (Lip-sync) និងមិនហៀរជាន់ឃ្លាបន្ទាប់\n` +
+      `• រក្សាទុកទិន្នន័យដោយស្វ័យប្រវត្តិ។`
+    );
+    if (!confirmed) return;
+
+    setIsAutoCompacting(true);
+    setCompactProgress({ current: 0, total: count });
+    setCompactBanner(null);
+
+    const BATCH_CHUNK = 25;
+    let currentSegments = [...segments];
+    let failedCount = 0;
+
+    try {
+      for (let i = 0; i < count; i += BATCH_CHUNK) {
+        const slice = currentSegments.slice(i, i + BATCH_CHUNK);
+        try {
+          const res = await retranslateAllSegmentsApi({
+            segments: slice,
+            seriesId: activeSeries?.id || episodeId,
+            episodeId,
+            options: { style: 'compact' },
+            apiKey: undefined,
+          });
+          if (res?.success && Array.isArray(res.segments)) {
+            const resultMap = new Map();
+            res.segments.forEach((s) => resultMap.set(String(s.id || s.index), s));
+            currentSegments = currentSegments.map((orig) => {
+              const match = resultMap.get(String(orig.id || orig.index));
+              return match ? { ...orig, ...match } : orig;
+            });
+            if (typeof onUpdateScript === 'function') {
+              onUpdateScript({
+                ...scriptData,
+                segments: currentSegments,
+              });
+            }
+          }
+        } catch (sliceErr) {
+          console.warn(`[DubbingModeTab AutoCompact] Batch ${i}-${i + BATCH_CHUNK} failed:`, sliceErr);
+          failedCount++;
+        }
+        setCompactProgress({ current: Math.min(i + BATCH_CHUNK, count), total: count });
+      }
+
+      setCompactBanner({
+        type: failedCount === 0 ? 'success' : 'partial',
+        text: failedCount === 0
+          ? `✅ បានបម្លែងគ្រប់ Script ទាំង ${count} ទៅជា «ខ្លីចំអត្ថន័យ» រួចរាល់ 100%! (អ្នកអាចចុច Re-TTS ដើម្បីបង្កើតសំឡេងថ្មីបាន)`
+          : `⚠️ បម្លែងបានភាគច្រើន (មាន ${failedCount} batch ជួបបញ្ហា network/quota) — សូមចុចបម្លែងម្ដងទៀត`,
+      });
+    } catch (err) {
+      setCompactBanner({
+        type: 'error',
+        text: err.message || 'ការបម្លែង script បរាជ័យ',
+      });
+    } finally {
+      setIsAutoCompacting(false);
+    }
+  };
   const hasExistingScript = Boolean(scriptData?.segments && scriptData.segments.length > 0);
   const hasExistingAudio = Boolean(scriptData?.segments?.some(s => s.audioUrl || s.audioPath || s.audioFile));
   const validTextSegments = (scriptData?.segments || []).filter((s) =>
@@ -629,6 +702,97 @@ export default function DubbingModeTab({
               </span>
               <ArrowRight size={14} color="#94a3b8" style={{ flexShrink: 0 }} />
             </button>
+
+            {/* ⚡ 1-Click Auto Compact "📝 ខ្លីចំអត្ថន័យ" Action */}
+            <button
+              type="button"
+              data-testid="btn-dubbing-auto-compact"
+              onClick={handleAutoCompactAll}
+              disabled={isAutoCompacting || !scriptData?.segments?.length}
+              style={{
+                width: '100%',
+                marginTop: 6,
+                padding: '8px 12px',
+                borderRadius: 6,
+                border: '1px solid rgba(168, 85, 247, 0.45)',
+                background: isAutoCompacting
+                  ? 'rgba(168, 85, 247, 0.16)'
+                  : 'linear-gradient(135deg, rgba(168, 85, 247, 0.22) 0%, rgba(139, 92, 246, 0.16) 100%)',
+                color: '#d8b4fe',
+                fontSize: '11.5px',
+                fontWeight: 700,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                cursor: isAutoCompacting ? 'not-allowed' : 'pointer',
+                transition: 'all 0.15s ease',
+              }}
+              title="បម្លែងគ្រប់ឃ្លាទាំងអស់ (1..259) ទៅជា «📝 ខ្លីចំអត្ថន័យ» ដោយស្វ័យប្រវត្ត"
+            >
+              <span style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+                {isAutoCompacting ? (
+                  <Loader2 size={14} className="animate-spin" color="#c084fc" style={{ flexShrink: 0 }} />
+                ) : (
+                  <Sparkles size={14} color="#c084fc" style={{ flexShrink: 0 }} />
+                )}
+                <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {isAutoCompacting
+                    ? `កំពុងបម្លែងជា «ខ្លីចំអត្ថន័យ» (${compactProgress.current}/${compactProgress.total})...`
+                    : `📝 បម្លែងគ្រប់ Script ជា «ខ្លីចំអត្ថន័យ» (Auto 1..${scriptData.segments.length})`}
+                </span>
+              </span>
+              <span style={{
+                fontSize: '9.5px',
+                background: 'rgba(168, 85, 247, 0.25)',
+                color: '#f3e8ff',
+                padding: '1px 6px',
+                borderRadius: 4,
+                fontWeight: 800,
+                flexShrink: 0,
+              }}>
+                COMPACT
+              </span>
+            </button>
+
+            {compactBanner && (
+              <div
+                style={{
+                  marginTop: 6,
+                  padding: '6px 9px',
+                  borderRadius: 6,
+                  fontSize: '11px',
+                  fontWeight: 600,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: 6,
+                  background: compactBanner.type === 'success'
+                    ? 'rgba(168, 85, 247, 0.16)'
+                    : compactBanner.type === 'partial'
+                    ? 'rgba(245, 158, 11, 0.16)'
+                    : 'rgba(239, 68, 68, 0.15)',
+                  border: compactBanner.type === 'success'
+                    ? '1px solid rgba(168, 85, 247, 0.45)'
+                    : compactBanner.type === 'partial'
+                    ? '1px solid rgba(245, 158, 11, 0.45)'
+                    : '1px solid rgba(239, 68, 68, 0.45)',
+                  color: compactBanner.type === 'success'
+                    ? '#d8b4fe'
+                    : compactBanner.type === 'partial'
+                    ? '#FDE68A'
+                    : '#FCA5A5',
+                }}
+              >
+                <span>{compactBanner.text}</span>
+                <button
+                  type="button"
+                  onClick={() => setCompactBanner(null)}
+                  style={{ background: 'none', border: 'none', color: 'inherit', cursor: 'pointer', padding: 1 }}
+                >
+                  <X size={12} />
+                </button>
+              </div>
+            )}
           </div>
 
           {/* 2. Step 3 Voice Studio Card */}

@@ -760,53 +760,72 @@ export default function ClipInspectorPanel({
                       )}
                     </div>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-                      {retranslateData.options.map((opt, i) => (
-                        <button
-                          key={i}
-                          type="button"
-                          onClick={() => handleApplyOption(opt.text)}
-                          style={{
-                            display: 'flex',
-                            alignItems: 'flex-start',
-                            gap: 8,
-                            padding: '6px 8px',
-                            background: 'rgba(30, 26, 46, 0.85)',
-                            border: '1px solid rgba(168, 85, 247, 0.25)',
-                            borderRadius: 4,
-                            color: '#f1f5f9',
-                            fontSize: '0.78rem',
-                            textAlign: 'left',
-                            cursor: 'pointer',
-                            lineHeight: 1.5,
-                            transition: 'all 0.15s ease',
-                          }}
-                          onMouseEnter={(e) => {
-                            e.currentTarget.style.background = 'rgba(168, 85, 247, 0.25)';
-                            e.currentTarget.style.borderColor = '#c084fc';
-                            e.currentTarget.style.transform = 'translateX(2px)';
-                          }}
-                          onMouseLeave={(e) => {
-                            e.currentTarget.style.background = 'rgba(30, 26, 46, 0.85)';
-                            e.currentTarget.style.borderColor = 'rgba(168, 85, 247, 0.25)';
-                            e.currentTarget.style.transform = 'none';
-                          }}
-                          title="ចុចដើម្បីជ្រើសរើសឃ្លានេះ និងបង្កើតសំឡេងថ្មីដោយស្វ័យប្រវត្តិ"
-                        >
-                          <span style={{
-                            flexShrink: 0,
-                            fontSize: '0.66rem',
-                            padding: '1px 6px',
-                            borderRadius: 4,
-                            background: opt.style === 'classical' ? 'rgba(59, 130, 246, 0.3)' : (opt.style === 'dramatic' ? 'rgba(239, 68, 68, 0.3)' : 'rgba(16, 185, 129, 0.3)'),
-                            color: opt.style === 'classical' ? '#93c5fd' : (opt.style === 'dramatic' ? '#fca5a5' : '#6ee7b7'),
-                            border: '1px solid rgba(255, 255, 255, 0.12)',
-                            fontWeight: 700,
-                          }}>
-                            {opt.label}
-                          </span>
-                          <span style={{ flex: 1 }}>{cleanKhmerText(opt.text)}</span>
-                        </button>
-                      ))}
+                      {retranslateData.options.map((opt, i) => {
+                        const isCompactOpt = opt.style === 'compact' || String(opt.label || '').includes('ខ្លីចំអត្ថន័យ');
+                        return (
+                          <button
+                            key={i}
+                            type="button"
+                            onClick={() => handleApplyOption(opt.text)}
+                            style={{
+                              display: 'flex',
+                              alignItems: 'flex-start',
+                              gap: 8,
+                              padding: isCompactOpt ? '7px 9px' : '6px 8px',
+                              background: isCompactOpt ? 'rgba(168, 85, 247, 0.18)' : 'rgba(30, 26, 46, 0.85)',
+                              border: isCompactOpt ? '1.5px solid rgba(168, 85, 247, 0.65)' : '1px solid rgba(168, 85, 247, 0.25)',
+                              borderRadius: 4,
+                              color: '#f1f5f9',
+                              fontSize: '0.78rem',
+                              textAlign: 'left',
+                              cursor: 'pointer',
+                              lineHeight: 1.5,
+                              boxShadow: isCompactOpt ? '0 0 10px rgba(168, 85, 247, 0.2)' : 'none',
+                              transition: 'all 0.15s ease',
+                            }}
+                            onMouseEnter={(e) => {
+                              e.currentTarget.style.background = isCompactOpt ? 'rgba(168, 85, 247, 0.32)' : 'rgba(168, 85, 247, 0.25)';
+                              e.currentTarget.style.borderColor = '#c084fc';
+                              e.currentTarget.style.transform = 'translateX(2px)';
+                            }}
+                            onMouseLeave={(e) => {
+                              e.currentTarget.style.background = isCompactOpt ? 'rgba(168, 85, 247, 0.18)' : 'rgba(30, 26, 46, 0.85)';
+                              e.currentTarget.style.borderColor = isCompactOpt ? 'rgba(168, 85, 247, 0.65)' : 'rgba(168, 85, 247, 0.25)';
+                              e.currentTarget.style.transform = 'none';
+                            }}
+                            title="ចុចដើម្បីជ្រើសរើសឃ្លានេះ និងបង្កើតសំឡេងថ្មីដោយស្វ័យប្រវត្តិ"
+                          >
+                            <span style={{
+                              flexShrink: 0,
+                              fontSize: '0.66rem',
+                              padding: '1px 6px',
+                              borderRadius: 4,
+                              background: opt.style === 'classical' ? 'rgba(59, 130, 246, 0.3)' : (opt.style === 'dramatic' ? 'rgba(239, 68, 68, 0.3)' : 'rgba(168, 85, 247, 0.35)'),
+                              color: opt.style === 'classical' ? '#93c5fd' : (opt.style === 'dramatic' ? '#fca5a5' : '#e9d5ff'),
+                              border: isCompactOpt ? '1px solid rgba(168, 85, 247, 0.6)' : '1px solid rgba(255, 255, 255, 0.12)',
+                              fontWeight: 700,
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 4,
+                            }}>
+                              <span>{opt.label}</span>
+                              {isCompactOpt && (
+                                <span style={{
+                                  fontSize: '0.58rem',
+                                  background: '#9333ea',
+                                  color: '#ffffff',
+                                  padding: '0 4px',
+                                  borderRadius: 3,
+                                  fontWeight: 800,
+                                }}>
+                                  ណែនាំ
+                                </span>
+                              )}
+                            </span>
+                            <span style={{ flex: 1, fontWeight: isCompactOpt ? 600 : 400 }}>{cleanKhmerText(opt.text)}</span>
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
                 )}

@@ -465,6 +465,7 @@ function MediaLibrary({
           onTranslateSegment={onTranslateSegment}
           handleDeleteSegment={handleDeleteSegment}
           onToggleDeliveryType={onToggleDeliveryType}
+          onUpdateScript={onUpdateScript}
         />
       )}
 

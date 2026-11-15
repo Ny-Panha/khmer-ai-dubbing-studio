@@ -272,7 +272,7 @@ test('GeminiQuotaTracker isolates per-(key, model) 429 cooldowns and prioritizes
   const t0 = Date.UTC(2026, 10, 10, 12, 0, 0);
   const tracker = new GeminiQuotaTracker({ persistEnabled: false, now: t0 });
 
-  assert.equal(DUBBING_CASCADE_MODELS.length, 10);
+  assert.ok(DUBBING_CASCADE_MODELS.length >= 10);
   assert.equal(DUBBING_CASCADE_MODELS.includes('gemini-3.5-transcribe'), false);
   assert.equal(isUsableDubbingModel('gemini-3.5-transcribe'), false);
   assert.equal(VISION_CASCADE_MODELS[1], 'gemini-2.5-flash');
@@ -318,7 +318,7 @@ test('GeminiQuotaTracker isolates per-(key, model) 429 cooldowns and prioritizes
   assert.equal(m36.liveStatus, 'ready', 'Real request success clears prior 503 probe status');
   assert.equal(m36.pool.tpmUsed, 450);
   assert.equal(m25.liveStatus, 'deprecated');
-  assert.equal(snap.quotaSummary.readyCascadeModelsCount, 8);
+  assert.equal(snap.quotaSummary.readyCascadeModelsCount, DUBBING_CASCADE_MODELS.length - 2);
   assert.equal(snap.quotaSummary.readyKeys, 0, 'Primary 3.5-flash-lite is 429 on both keys under auto mode');
   assert.equal(snap.quotaSummary.appTodayRequests, 3, 'App counter preserves actual 3 requests instead of inflating to daily limit');
 

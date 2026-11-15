@@ -1,51 +1,35 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
-- **Environment**: Antigravity IDE (Feature Added: Local SenseVoice-Small ASR for Standard Pipeline)
-- **Timestamp**: 2026-11-15T09:58:00+07:00
-- **Branch**: `feat/sensevoice-local-asr` (Commit: `78573b1`)
+- **Environment**: Antigravity IDE (Feature Added: 1-Click Auto Compact "📝 ខ្លីចំអត្ថន័យ" for All Script Lines 1..N)
+- **Timestamp**: 2026-11-15T12:42:00+07:00
+- **Branch**: `feat/sensevoice-local-asr`
 
-## Summary: Fixed Character Voice Mapping Propagation & Badge Sync
-1. **Character Voice Mapping Propagation Fix (`useAudioDubbing.js`, `speakerUtils.js`, `useSeriesManager.js`)**:
-   - Fixed bug where changing a character voice to `ប្រុស (ពិសិដ្ឋ)` in `Character Voice Mapping` updated `speakerRegistry`, but left segments with `voiceGender: 'female'`, `voiceId: 'km-KH-SreymomNeural'`, and pink badges.
-   - Now updating `voiceId`, `khmerVoiceId`, `voiceGender`, `gender`, `speakerGender`, `voiceLabel`, `avatar`, and `badgeColor` across all matching segments.
-   - Added automatic reconciliation in `useSeriesManager.js` (`handleSelectEpisode`) so whenever an episode loads, user overrides in `ep.speakerRegistry` are immediately applied to the segments.
-   - Synchronized `onSaveEpisodeBackground` so changes persist to disk/backend instantly.
-2. **TTS Service & Batch Runner Voice Alignment (`ttsService.js`, `stage9_generateSegmentTTS.js`, `DubbingRunnerContext.jsx`)**:
-   - Upgraded `stage9_generateSegmentTTS.js` and `ttsService.js` to prioritize user-overridden registry voices over automated pitch/gender defaults.
-   - `DubbingRunnerContext.jsx` now reconciles segments with `applySpeakerVoiceToSegments` and passes `speakerMap` directly to `generateAudioApi`.
-   - Updated existing active project data (`series_1794653630301/series.json`) so `លី ធានវៃ` segments are marked male / Piseth and ready for clean re-synthesis.
-3. **Free Drag & Drop Watermark Logo (`LogoOverlay.jsx`, `VideoTransformControls.jsx`, `ffmpegService.js`)**:
-   - Enabled 360° free dragging of the logo watermark anywhere on the video canvas.
-   - Synchronized with FFmpeg video export via `(main_w-overlay_w)*xPct : (main_h-overlay_h)*yPct`.
-2. **Worker Implementation (`backend/workers/sensevoice_worker.py`)**:
-   - Primary: FunASR with `SenseVoiceSmall` + `FSMN-VAD` (sentence timestamps) + `CAM++` (speaker diarization).
-   - CPU-only execution (zero CUDA assumption), models downloaded and cached locally.
-   - Built-in YIN fundamental frequency (F0) pitch estimation per speech segment.
-   - Secondary on-device fallback to `sherpa-onnx` using existing local ONNX model in `backend/models/sense-voice`.
-3. **Speaker & Pitch Contract Preservation**:
-   - `speakerId`: Multi-speaker clustered labels (`spk_1`, `spk_2`, etc.).
-   - `pitchHz` & `acousticF0`: Real fundamental pitch in Hertz (e.g. 142.86 Hz male, 215.4 Hz female).
-   - `audioGender` & `acousticGender`: Reliable male/female classification, ensuring Stage 5 Reconcile receives 100% of the required data without gender degradation.
-4. **Node Wrapper (`backend/services/senseVoiceService.js`)**:
-   - Mirroring Demucs audio separation worker pattern: process registry tracking, graceful termination (`taskkill /T /F` on Windows), 300s episode timeout, and comprehensive stderr error surfacing without swallowing.
-5. **Routing & Visible Fallback (`stage4_analyzeDialogueAudio.js` & `dubbingPipeline.js`)**:
-   - Standard pipeline routes to local SenseVoice ASR first.
-   - On worker failure, missing model, or timeout: cleanly catches the error and falls back to Cloud Gemini ASR (`gemini-3.5-transcribe` / multimodal).
-   - Visible logging in both console and job progress: `ASR engine: sensevoice-local` or `ASR engine: gemini (fallback — <reason>)`.
-6. **Clean BGM Runner Fix (`DubbingRunnerContext.jsx`)**:
-   - Resolved premature abort bug where a single idle poll while Demucs was processing triggered `Demucs process ended unexpectedly`. Increased idle threshold to 10 ticks (12s) and network grace period to 15 ticks (18s).
-7. **Verification & Evidence**:
-   - `backend/tests/sensevoice_worker.test.js`: 2/2 passed.
-   - `backend/tests/sensevoice_fallback.test.js`: 1/1 passed.
-   - `backend/tests/stage4_sense_voice_integration.test.js`: 1/1 passed.
-   - Frontend build: `npm run build` passed with 0 errors.
+## Summary: 1-Click Auto Compact "📝 ខ្លីចំអត្ថន័យ" for All Episodes & Lines (1..259)
+1. **Pipeline Stage 6 & Mode A Translation Mandate (`stage6_generateModeSpecificScript.js`)**:
+   - Injected mandatory translation style directive for `📝 ខ្លីចំអត្ថន័យ (COMPACT & PUNCHY SUBTITLE STYLE)`.
+   - Added direct Chinese -> Khmer exemplars (`每种50分` ➜ `មួយប្រភេទ ៥០ពិន្ទុ`, `给本座三` ➜ `យកមកឱ្យយើងទាំង ៣`, `全是合体大佬` ➜ `សុទ្ធតែកំពូលអ្នកក្បាច់គុន!`).
+   - Ensures newly generated scripts across all batches naturally adopt short, punchy, subtitle-ready lines that preserve 100% meaning without syllable bloat.
+2. **Backend Batch Auto-Compact & Disk Persistence (`geminiService.js`, `scriptRoutes.js`)**:
+   - Enhanced `retranslateBatchDialogues` to accept and default to `style: 'compact'`, injecting the compact subtitle mandate into `batchPrompt` and tagging updated segments with `translationStyle: 'compact'`, `textStatus: 'retranslated'`, and `audioOutdated: true`.
+   - Updated `POST /api/dubbing/retranslate-all` to support `{ style: 'compact' }` and atomically persist updated segment arrays into `series.json` using `withSeriesMetadataLock`.
+3. **Frontend 1-Click Actions & Live Progress (`ScriptReviewTab.jsx`, `DubbingModeTab.jsx`, `ClipInspectorPanel.jsx`)**:
+   - `ScriptReviewTab.jsx`: Added prominent toolbar action `[📝 AI បម្លែងគ្រប់ Script ជា «ខ្លីចំអត្ថន័យ» (Auto 1..259)]` with confirmation dialog, live chunk progress (`25/259...`), state update via `onUpdateScript`, and disk refresh.
+   - `DubbingModeTab.jsx`: Added quick 1-click action in Card 2 `[📝 បម្លែងគ្រប់ Script ជា «ខ្លីចំអត្ថន័យ» (Auto 1..259)]`.
+   - `ClipInspectorPanel.jsx`: Highlighted the `📝 ខ្លីចំអត្ថន័យ` option chip with a distinct purple border/glow and `(ណែនាំ / Default)` badge matching the user's manual preference.
+   - `pipelineApi.js`: Exported `retranslateAllSegmentsApi`.
+4. **Verification & Evidence**:
+   - `backend/tests/retranslate_fallback.test.js`: 8/8 passed (including new test for `/api/dubbing/retranslate-all` compact style).
+   - `backend/tests/gemini_quota_tracker_and_routes.test.js`: 5/5 passed.
+   - `backend/tests/stage6_translation_fallback_and_tts_guard.test.js`: 10/10 passed.
+   - Frontend build (`npm run build`): Passed cleanly with 0 errors in 641ms.
 
 ## Active Environment
 - Backend API: `http://localhost:5000` (Listening)
 - Frontend Vite: `http://localhost:5173` (Listening)
-- Active Series: `series_1793898268958` (Safe and intact)
-- Active Branch: `feat/sensevoice-local-asr` (Pushed to origin, unmerged to main)
+- Active Series: `series_1794653630301` (EP1 has 259 segments)
+- Active Branch: `feat/sensevoice-local-asr`
 
 ## Next Steps
-- Run full episode Generate Script in Standard Mode from the UI to observe live progress log: `ASR engine: sensevoice-local`.
+- User can click the new `[📝 AI បម្លែងគ្រប់ Script ជា «ខ្លីចំអត្ថន័យ» (Auto 1..259)]` button directly in Studio or Script Review Tab to transform all 259 lines in one click.
+- Click `[Re-TTS ទាំងអស់]` in Voice Studio to re-synthesize audio for all updated lines.

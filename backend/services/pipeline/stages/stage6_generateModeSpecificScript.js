@@ -1258,6 +1258,7 @@ async function generateModeSpecificScript({
   narratorGender = 'male',
   seriesGlossary = {},
   genre = 'auto',
+  translationStyle = 'compact',
   signal = null,
   fallbackModels = STAGE6_CASCADE_MODELS,
   retryDelayMs = 1500,
@@ -1417,7 +1418,16 @@ ${getGenrePromptGuidelines(effectiveGenre)}
 ${genreGlossarySection}
 ${customGlossaryPrompt}
 
-2. GENRE-SPECIFIC KHMER VOCABULARY & LIP-SYNC PACING RULE (<= 5.5 syllables/sec):
+2. MANDATORY DUBBING TRANSLATION STYLE: 📝 ខ្លីចំអត្ថន័យ (COMPACT & PUNCHY SUBTITLE STYLE):
+- ត្រូវបកប្រែជាភាសាខ្មែរ «ខ្លីបំផុត ចំខ្លឹមសារ ងាយយល់ ១០០%» (បែប Subtitle កុនចិន/ហុងកុង ទំនើប)។
+- ហាមដាច់ខាតកុំបកប្រែវែងអន្លាយ ឬបន្ថែមពាក្យអូសបន្លាយឥតប្រយោជន៍! ឧទាហរណ៍ជាក់ស្ដែង៖
+  * "每种50分" ➜ ត្រូវបក "មួយប្រភេទ ៥០ពិន្ទុ" (ហាមបកវែង "ប្រភេទនីមួយៗបាន ៥០ពិន្ទុ")
+  * "给本座三" ➜ ត្រូវបក "យកមកឱ្យយើងទាំង ៣"
+  * "全是合体大佬" ➜ ត្រូវបក "សុទ្ធតែកំពូលអ្នកក្បាច់គុន!"
+  * "完了这次真的完了" ➜ ត្រូវបក "ចប់ហើយ លើកនេះចប់មែនទែនហើយ"
+- គោរពកំហិតពាក្យខ្លីបំផុតតាម "maxKhmerWords" ដើម្បីឱ្យសំឡេង TTS ខ្មែរនិយាយទាន់មាត់តួអង្គ (Lip-sync) និងមិនហៀរជាន់ឃ្លាបន្ទាប់!
+
+3. GENRE-SPECIFIC KHMER VOCABULARY & LIP-SYNC PACING RULE (<= 5.5 syllables/sec):
 - រឿងបុរាណ / រាជវាំង / គុណនិយម (ancient)៖ ប្រើរាជស័ព្ទ និងពាក្យគុណនិយមខ្មែរពិតប្រាកដ (ព្រះអង្គ, ព្រះនាង, ទូលបង្គំ, ខ្ញុំម្ចាស់, ម្ចាស់បង, សិស្សប្អូន, គ្រូពេទ្យទេព, បក្ស, ថាមពលធាតុ)។
 - រឿងសម័យទំនើប / អគ្គនាយក (ceo / modern)៖ ប្រើភាសាសន្ទនាទំនើបច្បាស់ៗ (លោកប្រធាន, អ្នកនាង, លេខា, អគ្គនាយក, បង, អូន, ខ្ញុំ)។ ហាមយកពាក្យគុណនិយមទៅប្រើក្នុងរឿងសម័យទំនើប!
 - រឿង Action / ប្រយុទ្ធ (action)៖ ប្រើឃ្លាបញ្ជាខ្លីៗ មុតមាំ (បញ្ឈប់ភ្លាម!, ថយក្រោយ!, ហ៊ានណាស់!)។

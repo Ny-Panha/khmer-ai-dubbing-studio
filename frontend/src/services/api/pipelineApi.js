@@ -90,6 +90,37 @@ export async function retranslateSegmentApi(chineseText, context = {}) {
 }
 
 /**
+ * Batch AI Re-Translate Segments (1-Click Auto Compact: "📝 ខ្លីចំអត្ថន័យ")
+ * @param {{ segments: Array, seriesId?: string, episodeId?: string, options?: Object, apiKey?: string, signal?: AbortSignal }} params
+ */
+export async function retranslateAllSegmentsApi({
+  segments = [],
+  seriesId = null,
+  episodeId = null,
+  options = {},
+  apiKey = null,
+  signal = null,
+} = {}) {
+  const effectiveApiKey = apiKey || localStorage.getItem('GEMINI_API_KEY') || '';
+  const res = await fetch('/api/dubbing/retranslate-all', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    signal,
+    body: JSON.stringify({
+      segments,
+      seriesId,
+      episodeId,
+      options: {
+        style: 'compact',
+        ...options,
+      },
+      apiKey: effectiveApiKey,
+    }),
+  });
+  return await parseResponseJson(res, 'Failed to batch retranslate segments');
+}
+
+/**
  * Fetch realtime Gemini API keys status and quota health
  * @param {{ probe?: 'models' | 'live' | 'matrix' | 'stats', model?: string, allModels?: boolean, signal?: AbortSignal }} [options]
  */

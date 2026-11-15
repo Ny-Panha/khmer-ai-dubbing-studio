@@ -10,6 +10,7 @@ import { formatMinSec } from '../../utils/timestampUtils';
 import { cleanKhmerText } from '../../utils/cleanKhmer';
 import {
   retranslateSegmentApi,
+  retranslateAllSegmentsApi,
   startRepairBrokenJobApi,
   fetchJobStatusApi,
 } from '../../services/api';
@@ -536,12 +537,18 @@ function ScriptReviewTab({
   onTranslateSegment = null,
   handleDeleteSegment,
   onToggleDeliveryType = null,
+  onUpdateScript = null,
 }) {
   const parentRef = React.useRef(null);
   const [filterMode, setFilterMode] = React.useState('all'); // 'all' | 'male' | 'female' | 'missing'
   const [isRepairingEpisode, setIsRepairingEpisode] = React.useState(false);
   const [repairJobId, setRepairJobId] = React.useState(null);
   const [repairStatusBanner, setRepairStatusBanner] = React.useState(null);
+
+  // 1-Click Auto Compact "📝 ខ្លីចំអត្ថន័យ" state
+  const [isAutoCompacting, setIsAutoCompacting] = React.useState(false);
+  const [compactProgress, setCompactProgress] = React.useState({ current: 0, total: 0 });
+  const [compactBanner, setCompactBanner] = React.useState(null);
 
   const totalSegments = scriptData?.segments || [];
   const repeatedJunkSet = React.useMemo(
@@ -558,6 +565,8 @@ function ScriptReviewTab({
     setRepairStatusBanner(null);
     setRepairJobId(null);
     setIsRepairingEpisode(false);
+    setCompactBanner(null);
+    setIsAutoCompacting(false);
   }, [episodeId]);
 
   // Poll active episode repair job until terminal status
@@ -660,6 +669,77 @@ function ScriptReviewTab({
         type: 'error',
         text: err.message || 'ការជួសជុលឃ្លាខូចបរាជ័យ',
       });
+    }
+  };
+
+  const handleAutoCompactAllSegments = async () => {
+    if (isAutoCompacting || !totalSegments.length) return;
+    const count = totalSegments.length;
+    const confirmed = window.confirm(
+      `📝 បញ្ជាក់ការបម្លែងគ្រប់ Script ទាំងអស់ (${count} ឃ្លា) ទៅជា «ខ្លីចំអត្ថន័យ» (Auto Compact)?\n\n` +
+      `• AI នឹងកែសម្រួលគ្រប់ឃ្លាទាំងអស់ (1 ដល់ ${count}) ឱ្យខ្លី ចំខ្លឹមសារ ១០០% (បែប Subtitle កុនចិន/ហុងកុង ទំនើប)\n` +
+      `• កាត់បន្ថយពាក្យសម្ដីវែងអន្លាយ ដើម្បីឱ្យសំឡេងនិយាយរលូន ត្រូវនឹងមាត់តួអង្គ (Lip-sync) និងមិនហៀរជាន់ឃ្លាបន្ទាប់\n` +
+      `• រក្សាទុកទិន្នន័យដោយស្វ័យប្រវត្តិ។`
+    );
+    if (!confirmed) return;
+
+    setIsAutoCompacting(true);
+    setCompactProgress({ current: 0, total: count });
+    setCompactBanner(null);
+
+    const BATCH_CHUNK = 25;
+    let currentSegments = [...totalSegments];
+    let failedCount = 0;
+
+    try {
+      for (let i = 0; i < count; i += BATCH_CHUNK) {
+        const slice = currentSegments.slice(i, i + BATCH_CHUNK);
+        try {
+          const res = await retranslateAllSegmentsApi({
+            segments: slice,
+            seriesId,
+            episodeId,
+            options: { style: 'compact' },
+            apiKey: apiKey || undefined,
+          });
+          if (res?.success && Array.isArray(res.segments)) {
+            const resultMap = new Map();
+            res.segments.forEach((s) => resultMap.set(String(s.id || s.index), s));
+            currentSegments = currentSegments.map((orig) => {
+              const match = resultMap.get(String(orig.id || orig.index));
+              return match ? { ...orig, ...match } : orig;
+            });
+            if (typeof onUpdateScript === 'function') {
+              onUpdateScript({
+                ...scriptData,
+                segments: currentSegments,
+              });
+            }
+          }
+        } catch (sliceErr) {
+          console.warn(`[AutoCompact] Batch ${i}-${i + BATCH_CHUNK} failed:`, sliceErr);
+          failedCount++;
+        }
+        setCompactProgress({ current: Math.min(i + BATCH_CHUNK, count), total: count });
+      }
+
+      if (typeof onRefreshSeries === 'function') {
+        try { await onRefreshSeries(); } catch (_) {}
+      }
+
+      setCompactBanner({
+        type: failedCount === 0 ? 'success' : 'partial',
+        text: failedCount === 0
+          ? `✅ បានបម្លែងគ្រប់ Script ទាំង ${count} ទៅជា «ខ្លីចំអត្ថន័យ» រួចរាល់ 100%! (អ្នកអាចចុច Re-TTS ដើម្បីបង្កើតសំឡេងថ្មីបាន)`
+          : `⚠️ បម្លែងបានភាគច្រើន (មាន ${failedCount} batch ជួបបញ្ហា network/quota) — សូមពិនិត្យ ឬចុចបម្លែងម្ដងទៀត`,
+      });
+    } catch (err) {
+      setCompactBanner({
+        type: 'error',
+        text: err.message || 'ការបម្លែង script បរាជ័យ',
+      });
+    } finally {
+      setIsAutoCompacting(false);
     }
   };
 
@@ -802,10 +882,97 @@ function ScriptReviewTab({
         </div>
       )}
 
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8, gap: 8, flexShrink: 0 }}>
-        <span style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--text-secondary)' }}>
-          Segments ({scriptData?.segments?.length || 0})
-        </span>
+      {compactBanner && (
+        <div
+          data-testid="script-compact-status-banner"
+          style={{
+            marginBottom: 8,
+            padding: '6px 9px',
+            borderRadius: 7,
+            fontSize: '0.71rem',
+            fontWeight: 700,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 6,
+            flexShrink: 0,
+            background: compactBanner.type === 'success'
+              ? 'rgba(168, 85, 247, 0.16)'
+              : compactBanner.type === 'partial'
+              ? 'rgba(245, 158, 11, 0.16)'
+              : 'rgba(239, 68, 68, 0.15)',
+            border: compactBanner.type === 'success'
+              ? '1px solid rgba(168, 85, 247, 0.55)'
+              : compactBanner.type === 'partial'
+              ? '1px solid rgba(245, 158, 11, 0.45)'
+              : '1px solid rgba(239, 68, 68, 0.45)',
+            color: compactBanner.type === 'success'
+              ? '#d8b4fe'
+              : compactBanner.type === 'partial'
+              ? '#FDE68A'
+              : '#FCA5A5',
+          }}
+        >
+          <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <Sparkles size={12} color="#c084fc" />
+            <span>{compactBanner.text}</span>
+          </span>
+          <button
+            type="button"
+            onClick={() => setCompactBanner(null)}
+            style={{ background: 'none', border: 'none', color: 'inherit', cursor: 'pointer', padding: 1 }}
+          >
+            <X size={12} />
+          </button>
+        </div>
+      )}
+
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8, gap: 8, flexWrap: 'wrap', flexShrink: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: '0.82rem', fontWeight: 700, color: 'var(--text-secondary)' }}>
+            Segments ({scriptData?.segments?.length || 0})
+          </span>
+
+          {/* ⚡ 1-Click Auto Compact All Segments Button */}
+          {totalSegments.length > 0 && (
+            <button
+              type="button"
+              data-testid="btn-script-auto-compact"
+              onClick={handleAutoCompactAllSegments}
+              disabled={isAutoCompacting}
+              style={{
+                padding: '3px 9px',
+                fontSize: '0.70rem',
+                borderRadius: 5,
+                border: '1px solid rgba(168, 85, 247, 0.55)',
+                background: isAutoCompacting
+                  ? 'rgba(168, 85, 247, 0.18)'
+                  : 'linear-gradient(135deg, rgba(168, 85, 247, 0.22) 0%, rgba(139, 92, 246, 0.16) 100%)',
+                color: isAutoCompacting ? '#c084fc' : '#d8b4fe',
+                cursor: isAutoCompacting ? 'not-allowed' : 'pointer',
+                fontWeight: 700,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 5,
+                whiteSpace: 'nowrap',
+                boxShadow: isAutoCompacting ? 'none' : '0 1px 6px rgba(168, 85, 247, 0.15)',
+                transition: 'all 0.15s ease',
+              }}
+              title="បម្លែងគ្រប់ឃ្លាទាំងអស់ (1..259) ទៅជា «📝 ខ្លីចំអត្ថន័យ» ដោយស្វ័យប្រវត្ត"
+            >
+              {isAutoCompacting ? (
+                <Loader2 size={11} className="animate-spin" color="#c084fc" />
+              ) : (
+                <Sparkles size={11} color="#c084fc" />
+              )}
+              <span>
+                {isAutoCompacting
+                  ? `កំពុងបម្លែងជា «ខ្លីចំអត្ថន័យ» (${compactProgress.current}/${compactProgress.total})...`
+                  : `📝 AI បម្លែងគ្រប់ Script ជា «ខ្លីចំអត្ថន័យ» (Auto 1..${totalSegments.length})`}
+              </span>
+            </button>
+          )}
+        </div>
 
         {/* Filter Chips: ទាំងអស់ / ប្រុស / ស្រី / ឃ្លាខូច */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
