@@ -2,8 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
   Sparkles, Languages, BookOpen, Loader2, AlertCircle, ArrowRight, CheckCircle2, Mic, Volume2, Film, RefreshCw, ChevronDown, ChevronUp, Settings2, FileText, Check, Terminal, FileUp, Zap, Layers, MessageSquare, Crown, Briefcase, UserCheck, Building2, Smile, X
 } from 'lucide-react';
-import { importSubtitlesApi, retranslateAllSegmentsApi } from '../../services/api';
-import { DubbingStepButton, useDubbingFeature } from '../../features/dubbing-runner';
+import { retranslateAllSegmentsApi } from '../../services/api';
 
 const GENRE_OPTIONS = [
   { id: 'auto', label: '✨ Auto (ស្គាល់ស្វ័យប្រវត្តិ)', shortLabel: 'Auto', icon: Sparkles, hint: 'AI វិភាគ Audio + OCR កំណត់ប្រភេទរឿងស្វ័យប្រវត្តិ' },
@@ -80,11 +79,6 @@ export default function DubbingModeTab({
     scriptData?.generationMode ||
     'standard'
   );
-  const [isImportingSubtitles, setIsImportingSubtitles] = useState(false);
-  const [importErrors, setImportErrors] = useState([]);
-  const [importSuccess, setImportSuccess] = useState(null);
-  const fileInputRef = useRef(null);
-
   const [narratorGender, setNarratorGender] = useState('male');
   const [selectedGenre, setSelectedGenre] = useState(scriptData?.genre || scriptData?.detectedGenre || 'auto');
   const [showRegenerateForm, setShowRegenerateForm] = useState(false);
@@ -189,59 +183,6 @@ export default function DubbingModeTab({
       setGenerationMode(detectedMode);
     }
   }, [activeEpisode?.generationMode, activeEpisode?.scriptData?.generationMode, scriptData?.generationMode]);
-
-  const handleImportSubtitleFile = async (file) => {
-    if (!file) return;
-    setImportErrors([]);
-    setImportSuccess(null);
-    setIsImportingSubtitles(true);
-
-    try {
-      const reader = new FileReader();
-      reader.onload = async (e) => {
-        try {
-          const content = e.target.result;
-          const ext = file.name.split('.').pop().toLowerCase();
-          const fileType = ext === 'json' ? 'json' : 'srt';
-
-          const res = await importSubtitlesApi({
-            fileContent: content,
-            fileType,
-            seriesId: seriesId || 'drama_project',
-            episodeId: episodeId || 'ep_1',
-            defaultGender: narratorGender,
-            force: true,
-            confirmed: true,
-          });
-
-          if (res.success && res.segments) {
-            setImportSuccess(`Import ជោគជ័យ ${res.count || res.segments.length} ឃ្លា!`);
-            setGenerationMode('fast_ocr');
-            if (onUpdateScript) {
-              onUpdateScript({
-                ...(scriptData || {}),
-                mode: 'fast_ocr',
-                generationMode: 'fast_ocr',
-                segments: res.segments,
-              });
-            }
-          }
-          if (res.validationErrors?.length > 0) {
-            setImportErrors(res.validationErrors);
-          }
-        } catch (err) {
-          const errList = err.data?.validationErrors || [err.message || 'Import Subtitle failed'];
-          setImportErrors(errList);
-        } finally {
-          setIsImportingSubtitles(false);
-        }
-      };
-      reader.readAsText(file, 'utf-8');
-    } catch (err) {
-      setImportErrors([err.message || 'Failed to read file']);
-      setIsImportingSubtitles(false);
-    }
-  };
 
   useEffect(() => {
     if (scriptData?.genre) {
@@ -433,12 +374,13 @@ export default function DubbingModeTab({
       setSmoothProgress((prev) => {
         if (prev < target) {
           return prev + 1;
-        } else if (prev < 95 && target < 95) {
-          return prev + 1;
+        }
+        if (prev > target) {
+          return target;
         }
         return prev;
       });
-    }, 240);
+    }, 120);
 
     return () => clearInterval(interval);
   }, [isThisEpisodeGeneratingScript, displayProgress, hasExistingScript]);
@@ -1152,62 +1094,6 @@ export default function DubbingModeTab({
                 </div>
               </button>
             </div>
-
-            {/* Import .srt / .json Button */}
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingTop: 6, borderTop: '1px solid rgba(255, 255, 255, 0.06)' }}>
-              <span style={{ fontSize: '10.5px', color: '#94a3b8' }}>មាន Subtitle ស្រាប់? (Import Subtitles):</span>
-              <div>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept=".srt,.json"
-                  style={{ display: 'none' }}
-                  onChange={(e) => {
-                    const file = e.target.files?.[0];
-                    if (file) handleImportSubtitleFile(file);
-                    e.target.value = '';
-                  }}
-                />
-                <button
-                  type="button"
-                  disabled={isImportingSubtitles}
-                  onClick={() => fileInputRef.current?.click()}
-                  style={{
-                    padding: '3px 8px',
-                    borderRadius: 5,
-                    fontSize: '10.5px',
-                    fontWeight: 600,
-                    background: 'rgba(56, 189, 248, 0.12)',
-                    color: '#38bdf8',
-                    border: '1px solid rgba(56, 189, 248, 0.3)',
-                    cursor: isImportingSubtitles ? 'not-allowed' : 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 5,
-                  }}
-                >
-                  {isImportingSubtitles ? <Loader2 size={11} className="spin" /> : <FileText size={11} />}
-                  <span>Import .srt / .json</span>
-                </button>
-              </div>
-            </div>
-
-            {/* Import Feedback */}
-            {importSuccess && (
-              <div style={{ marginTop: 6, padding: '5px 8px', borderRadius: 4, background: 'rgba(16, 185, 129, 0.15)', border: '1px solid rgba(16, 185, 129, 0.3)', color: '#34d399', fontSize: '10.5px' }}>
-                ✓ {importSuccess}
-              </div>
-            )}
-            {importErrors.length > 0 && (
-              <div style={{ marginTop: 6, padding: '6px 8px', borderRadius: 4, background: 'rgba(239, 68, 68, 0.12)', border: '1px solid rgba(239, 68, 68, 0.3)', color: '#f87171', fontSize: '10.5px' }}>
-                <div style={{ fontWeight: 700, marginBottom: 3 }}>⚠️ បញ្ហាពេល Import Subtitle (Validation Errors):</div>
-                <ul style={{ margin: 0, paddingLeft: 16 }}>
-                  {importErrors.map((err, i) => (
-                    <li key={i}>{err}</li>
-                  ))}
-                </ul>
-              </div>
-            )}
           </div>
 
         {/* 1. Mode A / Mode B Selection */}
@@ -1797,80 +1683,55 @@ export default function DubbingModeTab({
           </div>
         )}
 
-        {/* Generate Button */}
-        <button
-          type="button"
-          onClick={() => {
-            if (!isThisEpisodeGeneratingScript && selectedVideo) {
-              if (hasExistingScript) {
-                setShowConfirmRetranslate(true);
-                return;
+        {/* Generate Button (Hidden while generating since Progress Monitor Card tracks progress above) */}
+        {!isThisEpisodeGeneratingScript && (
+          <button
+            type="button"
+            onClick={() => {
+              if (selectedVideo) {
+                if (hasExistingScript) {
+                  setShowConfirmRetranslate(true);
+                  return;
+                }
+                handleTriggerScript({ narratorGender, genre: selectedGenre, generationMode });
               }
-              handleTriggerScript({ narratorGender, genre: selectedGenre, generationMode });
-            }
-          }}
-          disabled={isThisEpisodeGeneratingScript || !selectedVideo}
-          style={{
-            width: '100%',
-            padding: '12px 14px',
-            borderRadius: 9,
-            border: 'none',
-            background: isThisEpisodeGeneratingScript
-              ? '#1e293b'
-              : !selectedVideo
+            }}
+            disabled={!selectedVideo}
+            style={{
+              width: '100%',
+              padding: '12px 14px',
+              borderRadius: 9,
+              border: 'none',
+              background: !selectedVideo
                 ? 'rgba(255, 255, 255, 0.08)'
                 : dubbingMode === 'dialogue'
                   ? 'linear-gradient(135deg, #0284c7 0%, #2563eb 100%)'
                   : 'linear-gradient(135deg, #7c3aed 0%, #9333ea 100%)',
-            color: '#ffffff',
-            fontWeight: 700,
-            fontSize: '12.5px',
-            fontFamily: "'Kantumruy Pro', 'Inter', sans-serif",
-            cursor: isThisEpisodeGeneratingScript || !selectedVideo ? 'not-allowed' : 'pointer',
-            boxShadow: !selectedVideo || isThisEpisodeGeneratingScript 
-              ? 'none' 
-              : dubbingMode === 'dialogue'
-                ? '0 4px 18px rgba(37, 99, 235, 0.4)'
-                : '0 4px 18px rgba(147, 51, 234, 0.4)',
-            position: 'relative',
-            overflow: 'hidden',
-            opacity: !selectedVideo ? 0.5 : 1,
-            transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
-          }}
-        >
-          <div style={{ position: 'relative', zIndex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7 }}>
-            {isThisEpisodeGeneratingScript ? (
-              <>
-                <Loader2 size={15} className="animate-spin" />
-                <span>⏳ [{smoothProgress}%] {currentStageText || 'Gemini AI កំពុងវិភាគ & បកប្រែ...'}</span>
-              </>
-            ) : (
-              <>
-                <Sparkles size={15} />
-                <span>
-                  {dubbingMode === 'dialogue'
-                    ? 'បង្កើតសេណារីយ៉ូសន្ទនា (Generate Dialogue)'
-                    : 'បង្កើតអត្ថបទសម្រាយរឿង (Generate Recap)'}
-                </span>
-              </>
-            )}
-          </div>
-        </button>
-
-        {activeEpisode && (
-          <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <DubbingStepButton
-              step="all3"
-              episodes={[activeEpisode]}
-              variant="card"
-              setupOptions={{
-                pipelineMode: generationMode,
-                dubbingMode,
-                genre: selectedGenre,
-                narratorGender,
-              }}
-            />
-          </div>
+              color: '#ffffff',
+              fontWeight: 700,
+              fontSize: '12.5px',
+              fontFamily: "'Kantumruy Pro', 'Inter', sans-serif",
+              cursor: !selectedVideo ? 'not-allowed' : 'pointer',
+              boxShadow: !selectedVideo
+                ? 'none' 
+                : dubbingMode === 'dialogue'
+                  ? '0 4px 18px rgba(37, 99, 235, 0.4)'
+                  : '0 4px 18px rgba(147, 51, 234, 0.4)',
+              position: 'relative',
+              overflow: 'hidden',
+              opacity: !selectedVideo ? 0.5 : 1,
+              transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
+            }}
+          >
+            <div style={{ position: 'relative', zIndex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7 }}>
+              <Sparkles size={15} />
+              <span>
+                {dubbingMode === 'dialogue'
+                  ? 'បង្កើតសេណារីយ៉ូសន្ទនា (Generate Dialogue)'
+                  : 'បង្កើតអត្ថបទសម្រាយរឿង (Generate Recap)'}
+              </span>
+            </div>
+          </button>
         )}
 
         {!selectedVideo && (

@@ -104,7 +104,9 @@ export default function EpisodesTab({
         await onSwitchSeries(newSeriesId);
       } else {
         localStorage.setItem('dragondub_active_series_id', newSeriesId);
-        window.location.reload();
+        if (typeof onRefreshSeries === 'function') {
+          await onRefreshSeries();
+        }
       }
 
       // Switch tab to Media tab (1. វីដេអូ) so user can import video into fresh workspace immediately

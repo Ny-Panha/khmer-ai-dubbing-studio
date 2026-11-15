@@ -383,4 +383,36 @@ test('GeminiKeyPool & 504 Timeout Resilience Suite', async (t) => {
       assert.notStrictEqual(result.activeKey, failingKey, 'Result must be obtained from a different active key');
     });
   });
+
+  await t.test('9. 503 Model Unavailable in callGeminiVisionWithRetry cascades immediately without burning retries and marks modelUsed', async () => {
+    const attemptedModels = [];
+    let firstModelCalls = 0;
+
+    const mockAiClient = {
+      models: {
+        generateContent: async ({ model }) => {
+          attemptedModels.push(model);
+          if (model === 'gemini-3.5-flash-lite') {
+            firstModelCalls++;
+            const err = new Error('503 Service Unavailable: High demand');
+            err.status = 503;
+            err.modelUnavailable = true;
+            throw err;
+          }
+          return { text: () => '{"frames":[]}' };
+        },
+      },
+    };
+
+    const resp = await callGeminiVisionWithRetry(
+      mockAiClient,
+      'gemini-3.5-flash-lite',
+      [{ text: 'test' }],
+      2 // maxRetries=2
+    );
+
+    assert.ok(resp, 'Must succeed when cascaded to next model');
+    assert.strictEqual(firstModelCalls, 1, 'Must cascade immediately on 503 without burning 2nd attempt in Stage 3');
+    assert.strictEqual(resp.modelUsed, attemptedModels[1], 'Must tag modelUsed on returned response');
+  });
 });

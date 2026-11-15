@@ -1944,6 +1944,9 @@ function VideoPlayerPreview({
                 onClick={handleVideoClick}
                 onDoubleClick={toggleFullscreen}
                 onEnded={onEnded}
+                onError={() => {
+                  console.warn('[VideoPlayerPreview] Video source failed to load or file deleted:', currentVideoSrc);
+                }}
                 style={{
                   width: '100%',
                   height: '100%',

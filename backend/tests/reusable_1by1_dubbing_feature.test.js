@@ -86,12 +86,9 @@ test('Step 3b: GeminiRouteModal integrates DubbingStepCardsBar for unified 1-by-
   assert.match(modal, /<DubbingStepCardsBar/);
 });
 
-test('Step 3c: EpisodesTab, DubbingModeTab, and VoiceSettings integrate the dubbing-runner feature', () => {
+test('Step 3c: EpisodesTab and VoiceSettings integrate the dubbing-runner feature', () => {
   const epTab = read(FRONTEND_SRC, 'components', 'media', 'EpisodesTab.jsx');
   assert.match(epTab, /DubbingStepButton/);
-
-  const dubTab = read(FRONTEND_SRC, 'components', 'media', 'DubbingModeTab.jsx');
-  assert.match(dubTab, /DubbingStepButton/);
 
   const voiceTab = read(FRONTEND_SRC, 'components', 'voice', 'VoiceSettings.jsx');
   assert.match(voiceTab, /DubbingStepButton/);

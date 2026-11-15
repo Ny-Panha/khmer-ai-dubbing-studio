@@ -7,7 +7,7 @@ const {
   sanitizeSeriesEpisodes,
 } = require('../models/episodeModel');
 
-const { uploadsDir: UPLOADS_DIR } = require('../utils/pathUtils');
+const { uploadsDir: UPLOADS_DIR, resolveMediaFile } = require('../utils/pathUtils');
 const PROJECTS_DIR = path.join(UPLOADS_DIR, 'projects');
 
 // In-memory concurrency locks per series to serialize all read-modify-write operations on series.json
@@ -240,6 +240,46 @@ function applySafeDiskHydration(ep, cleanSeries, seriesDir, resolvedProjectsDir 
         }
       }
     } catch (_) {}
+  }
+
+  // Validate existing ep.video reference against disk
+  if (ep.video) {
+    const rawRef = ep.video.videoPath || ep.video.videoId || ep.video.videoUrl;
+    const resolvedPath = rawRef ? resolveMediaFile(rawRef) : null;
+    const exists = resolvedPath && fs.existsSync(resolvedPath);
+    if (!exists) {
+      let foundAlt = false;
+      if (fs.existsSync(epVideoDir)) {
+        try {
+          const vFiles = fs.readdirSync(epVideoDir).filter((f) => f.endsWith('.mp4') && !f.startsWith('.tmp'));
+          if (vFiles.length > 0) foundAlt = true;
+        } catch (_) {}
+      }
+      if (!foundAlt) {
+        // Video file was deleted or missing from disk: clear stale reference to avoid 404 cascades
+        ep.video = null;
+        ep.videoFile = null;
+        ep.sourceVideoPath = null;
+        if (ep.status === 'uploaded') {
+          ep.status = (ep.scriptData?.segments?.length > 0) ? 'translated' : 'idle';
+        }
+        mutated = true;
+      }
+    }
+  }
+
+  // Validate existing videoClips against disk
+  if (Array.isArray(ep.videoClips) && ep.videoClips.length > 0) {
+    const validClips = ep.videoClips.filter((clip) => {
+      const clipRef = clip?.videoPath || clip?.videoId || clip?.videoUrl;
+      if (!clipRef) return false;
+      const resClip = resolveMediaFile(clipRef);
+      return resClip && fs.existsSync(resClip);
+    });
+    if (validClips.length !== ep.videoClips.length) {
+      ep.videoClips = validClips;
+      mutated = true;
+    }
   }
 
   // 1. Hydration Check: Auto-recover scriptData from completed jobs on disk if missing

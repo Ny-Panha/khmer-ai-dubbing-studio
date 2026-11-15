@@ -11,6 +11,7 @@ const { formatSecondsToTimecode } = require('../pipelineTypes');
 const { createAbortError } = require('../../../utils/asyncSemaphore');
 const { VISION_CASCADE_MODELS } = require('../../geminiModelCatalog');
 const { geminiQuotaTracker } = require('../../geminiQuotaTracker');
+const { isModelUnavailableError } = require('../../geminiKeyManager');
 
 function sleepOrAbort(ms, signal) {
   if (!signal) {
@@ -171,6 +172,9 @@ async function callGeminiVisionWithRetry(aiClient, modelName, contents, maxRetri
             responseMimeType: 'application/json',
           },
         });
+        if (resp && typeof resp === 'object') {
+          resp.modelUsed = currentModel;
+        }
         return resp;
       } catch (err) {
         if (err?.name === 'AbortError' || signal?.aborted) {
@@ -182,7 +186,8 @@ async function callGeminiVisionWithRetry(aiClient, modelName, contents, maxRetri
         if (!isRetryable) {
           throw err;
         }
-        if (attempt >= maxRetries) {
+        const isUnavailable = err?.modelUnavailable === true || isModelUnavailableError(err);
+        if (isUnavailable || attempt >= maxRetries) {
           console.warn(`[Stage 3 OCR] Model ${currentModel} hit 429/503/504/timeout (${err.message}). Falling back to alternative cascade model...`);
           break;
         }
@@ -219,7 +224,7 @@ async function extractChineseSubtitles({
   startOffsetSec = 0,
   signal = null,
 }) {
-  const effectiveModel = modelName || geminiQuotaTracker.getPreferredPrimaryModel(CASCADE_VISION_MODELS[0]);
+  let effectiveModel = modelName || geminiQuotaTracker.getPreferredPrimaryModel(CASCADE_VISION_MODELS[0]);
   const checkAbort = () => {
     if (signal?.aborted) {
       throw createAbortError('Stage 3 OCR aborted');
@@ -448,6 +453,10 @@ Return JSON ONLY matching this schema:
       try {
         apiCallsCount++;
         const resp = await callGeminiVisionWithRetry(aiClient, effectiveModel, contents, 2, signal);
+        if (resp?.modelUsed && resp.modelUsed !== effectiveModel) {
+          console.log(`[Stage 3 OCR] 🔄 Switched sticky Vision model from '${effectiveModel}' to '${resp.modelUsed}' for subsequent batches`);
+          effectiveModel = resp.modelUsed;
+        }
         const rawText = typeof resp.text === 'function' ? resp.text() : resp.text;
         if (rawText) {
           const clean = rawText.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();

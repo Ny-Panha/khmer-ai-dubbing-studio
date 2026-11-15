@@ -63,7 +63,7 @@ router.post("/video-thumbnails", async (req, res) => {
 
     const resolvedVideoPath = resolveMediaFile(rawRef);
     if (!resolvedVideoPath || !fs.existsSync(resolvedVideoPath)) {
-      return res.status(404).json({ error: "Video file not found" });
+      return res.json({ success: true, count: 0, thumbnails: [] });
     }
 
     // Determine episode directory if provided or deduce from path
@@ -87,7 +87,7 @@ router.get("/video-thumbnails", async (req, res) => {
     if (!videoId) return res.status(400).json({ error: "videoId is required" });
     const resolvedVideoPath = resolveMediaFile(videoId);
     if (!resolvedVideoPath || !fs.existsSync(resolvedVideoPath)) {
-      return res.status(404).json({ error: "Video file not found" });
+      return res.json({ success: true, count: 0, thumbnails: [] });
     }
     let targetEpisodeDir = null;
     if (resolvedVideoPath.includes("episodes")) {

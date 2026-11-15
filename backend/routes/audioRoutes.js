@@ -779,7 +779,7 @@ router.post("/audio/separation-status", async (req, res) => {
     }
     const inputVideoPath = resolveMediaFile(rawVideoRef);
     if (!inputVideoPath || !fs.existsSync(inputVideoPath)) {
-      return res.status(404).json({ success: false, error: "Video file not found" });
+      return res.json({ success: true, available: false, message: "Video file not found or not on disk" });
     }
     const cacheDir = audioSeparationService.getSeparationCacheDir(inputVideoPath);
     const noVocalsPath = path.join(cacheDir, "no_vocals.wav");
@@ -829,7 +829,7 @@ router.post("/audio/separate", async (req, res) => {
     const rawVideoRef = videoPath || videoId || videoFileName;
     const inputVideoPath = resolveMediaFile(rawVideoRef);
     if (!inputVideoPath || !fs.existsSync(inputVideoPath)) {
-      return res.status(404).json({ success: false, error: "Video file not found" });
+      return res.json({ success: true, available: false, message: "Video file not found or not on disk" });
     }
 
     // Check busy lock before streaming 200 keep-alive headers so 409 conflict remains an immediate HTTP 409 JSON response

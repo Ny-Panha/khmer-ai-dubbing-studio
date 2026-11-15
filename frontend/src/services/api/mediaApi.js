@@ -25,21 +25,22 @@ export async function fetchVideoMetadata(videoId) {
  * @param {number} duration
  */
 export async function fetchVideoThumbnails(videoId, duration = 30) {
+  if (!videoId) return [];
   try {
     const res = await fetch('/api/video-thumbnails', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ videoId, duration }),
     });
-    if (!res.ok) return null;
-    const data = await res.json();
-    if (data.success && Array.isArray(data.thumbnails)) {
+    if (!res.ok) return [];
+    const data = await res.json().catch(() => null);
+    if (data?.success && Array.isArray(data.thumbnails)) {
       return data.thumbnails.map(t => (typeof t === 'string' ? t : t.url));
     }
   } catch (err) {
     console.warn('Backend video thumbnails fetch notice:', err.message);
   }
-  return null;
+  return [];
 }
 
 /**
