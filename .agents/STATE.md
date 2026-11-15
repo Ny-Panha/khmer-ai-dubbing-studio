@@ -3,14 +3,21 @@
 ## Last Session
 - **Environment**: Antigravity IDE (Feature Added: Local SenseVoice-Small ASR for Standard Pipeline)
 - **Timestamp**: 2026-11-15T09:58:00+07:00
-- **Branch**: `feat/sensevoice-local-asr` (Commit: `4b0730b`)
+- **Branch**: `feat/sensevoice-local-asr` (Commit: `78573b1`)
 
-## Summary: Added SenseVoice-Small Local ASR Engine & Watermark Logo Free Drag & Drop
-1. **Free Drag & Drop Watermark Logo (`LogoOverlay.jsx`, `VideoTransformControls.jsx`, `ffmpegService.js`)**:
-   - Enabled 360° free dragging of the logo watermark anywhere on the video canvas (not restricted to 4 corner snaps).
-   - Real-time coordinates pill during drag: shows `X: % | Y: %` live.
-   - Synchronized with FFmpeg video export via `(main_w-overlay_w)*xPct : (main_h-overlay_h)*yPct` so rendered video matches the exact preview position 100%.
-   - Added quick presets: ↖ Top-Left, ↗ Top-Right, 🎯 Center, ↙ Bottom-Left, ↘ Bottom-Right, ↔ Both.
+## Summary: Fixed Character Voice Mapping Propagation & Badge Sync
+1. **Character Voice Mapping Propagation Fix (`useAudioDubbing.js`, `speakerUtils.js`, `useSeriesManager.js`)**:
+   - Fixed bug where changing a character voice to `ប្រុស (ពិសិដ្ឋ)` in `Character Voice Mapping` updated `speakerRegistry`, but left segments with `voiceGender: 'female'`, `voiceId: 'km-KH-SreymomNeural'`, and pink badges.
+   - Now updating `voiceId`, `khmerVoiceId`, `voiceGender`, `gender`, `speakerGender`, `voiceLabel`, `avatar`, and `badgeColor` across all matching segments.
+   - Added automatic reconciliation in `useSeriesManager.js` (`handleSelectEpisode`) so whenever an episode loads, user overrides in `ep.speakerRegistry` are immediately applied to the segments.
+   - Synchronized `onSaveEpisodeBackground` so changes persist to disk/backend instantly.
+2. **TTS Service & Batch Runner Voice Alignment (`ttsService.js`, `stage9_generateSegmentTTS.js`, `DubbingRunnerContext.jsx`)**:
+   - Upgraded `stage9_generateSegmentTTS.js` and `ttsService.js` to prioritize user-overridden registry voices over automated pitch/gender defaults.
+   - `DubbingRunnerContext.jsx` now reconciles segments with `applySpeakerVoiceToSegments` and passes `speakerMap` directly to `generateAudioApi`.
+   - Updated existing active project data (`series_1794653630301/series.json`) so `លី ធានវៃ` segments are marked male / Piseth and ready for clean re-synthesis.
+3. **Free Drag & Drop Watermark Logo (`LogoOverlay.jsx`, `VideoTransformControls.jsx`, `ffmpegService.js`)**:
+   - Enabled 360° free dragging of the logo watermark anywhere on the video canvas.
+   - Synchronized with FFmpeg video export via `(main_w-overlay_w)*xPct : (main_h-overlay_h)*yPct`.
 2. **Worker Implementation (`backend/workers/sensevoice_worker.py`)**:
    - Primary: FunASR with `SenseVoiceSmall` + `FSMN-VAD` (sentence timestamps) + `CAM++` (speaker diarization).
    - CPU-only execution (zero CUDA assumption), models downloaded and cached locally.
