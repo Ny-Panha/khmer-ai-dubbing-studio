@@ -1,31 +1,48 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
-- **Environment**: Antigravity IDE (Full-Stack Crash Recovery & Missing Icon Fix)
-- **Timestamp**: 2026-11-15T13:46:00+07:00
-- **Branch**: `main` (synchronized with `feat/sensevoice-local-asr`)
+- **Environment**: Antigravity IDE (SenseVoice Worker Optimization & Progress Logging)
+- **Branch**: `feat/sensevoice-local-asr`
+- **Timestamp**: 2026-11-15T14:25:00+07:00
 
-## Summary: Root Cause Resolution for Browser Console Errors
-1. **Fixed `ReferenceError: X is not defined` in `DubbingModeTab.jsx`**:
-   - In commit `1124f40`, `<X size={16} />` was added to the custom Auto-Compact confirmation modal close button, but `X` was missing from the `lucide-react` import statement.
-   - Added `X` into `lucide-react` imports at line 3 of `DubbingModeTab.jsx`.
-2. **Fixed `502 Bad Gateway / ECONNRESET` on Port 5000**:
-   - Backend Express server on port 5000 was temporarily stopped, causing Vite reverse proxy to return 502 Bad Gateway on all `/api/*` endpoints (`/api/generate-audio`, `/api/jobs`, `/api/health`, etc.).
-   - Backend is now running healthy on port 5000 (verified via `/api/health` and `/api/gemini/keys-status`).
-3. **Fixed 404s for `CornerMaskOverlay` & `VideoTransformControls` + Hook Order Crash**:
-   - Workspace branch was accidentally checked out to older `main` (which lagged 25 commits behind `feat/sensevoice-local-asr`), removing component files on disk while Vite was running.
-   - Hot module replacement (HMR) between the two branch revisions corrupted React's hook order queue.
-   - Fast-forward merged `feat/sensevoice-local-asr` into `main` so both branches are 100% synchronized with all latest features.
-4. **Verification**:
-   - `npm --prefix frontend run build`: PASS (0 errors, 616ms).
-   - `node --test backend/tests/pipeline_stages.test.js backend/tests/retranslate_fallback.test.js`: PASS (12/12 passed).
-   - Port verification: Both 5000 (Backend API) and 5173 (Frontend Vite) are actively listening.
+## Summary: SenseVoice Worker Apparent Hang & Slowness Resolution
+1. **`--prepare` Mode**:
+   - Added `--prepare` CLI flag that downloads & caches models (`iic/SenseVoiceSmall`, `fsmn-vad`, `cam++`) with visible progress bar (loggers unsuppressed during prepare).
+   - Logs `[SenseVoice Worker] models ready` upon completion.
+2. **CPU Threading Utilization**:
+   - Defaulted `--threads` to 8 (previously 2).
+   - Applied `torch.set_num_threads(threads)` to PyTorch runtime before AutoModel initialization and passed to Sherpa-ONNX fallback.
+3. **YIN Pitch Optimization (0.47s vs 2–3 mins)**:
+   - Capped pitch calculation to the middle `min(2.0s, segment length)` slice of each audio segment.
+   - Set `hop_size = 1024` (previously 512).
+   - Output fields (`pitchHz`, `acousticF0`, `acousticGender`, `acousticConfidence`, `audioGender`) remain 100% contract-identical.
+4. **CPU-Friendly Diarization Batching**:
+   - Lowered `batch_size_s` from 300 to 60 in `model.generate()`.
+5. **Real-time Per-Stage Logging**:
+   - Added explicit timing logs (`stderr` with `flush=True`):
+     - `[SenseVoice Worker] Model load start/done`
+     - `[SenseVoice Worker] Generate start/done`
+     - `[SenseVoice Worker] Pitch stage start/done` with progress reported every 10 segments.
+     - `[SenseVoice Worker] Total funasr time` & `Total execution time`.
+
+## Verification & Benchmarks (i5-1235U CPU-Only)
+- **Test File**: `backend/uploads/projects/series_1794653630301/episodes/ep_1/video/ep_1_source.mp4` (Duration: 286.56s / 4.77 mins)
+- **Stage Breakdown (Cached Standalone Run)**:
+  - Model load: 17.39s (ModelScope check & weight loading into memory)
+  - Generate (SenseVoice ASR + CAM++ diarization): 42.57s (**dominant stage**, ~7x real-time RTF ~0.145 on CPU)
+  - Pitch analysis: **0.47s** (down from 2-3 minutes!)
+  - Total FunASR pipeline: 66.91s
+  - Total worker execution (including FFmpeg 16k mono extraction): 69.05s
+  - Output segments: 16 valid Chinese dialogue segments
+- **Stage 4 Real Pipeline Verification**:
+  - `[Stage 4 Analyze Audio] ASR engine: sensevoice-local (funasr-sensevoice, wall time: 29.4s, 2 segments)`
+- **Test Suite**:
+  - `npm test` (`node --test tests/*.test.js`): **244 passed, 0 failed, 2 skipped** (17.08s).
 
 ## Active Environment
-- Backend API: `http://localhost:5000` (Listening, Status OK)
-- Frontend Vite: `http://localhost:5173` (Listening)
-- Active Series: `series_1794653630301`
-- Active Branch: `main`
+- Backend API: `http://localhost:5000`
+- Frontend Vite: `http://localhost:5173`
+- SenseVoice Worker: `backend/workers/sensevoice_worker.py` (CPU 8-thread optimized)
 
 ## Next Steps
-- Refresh browser (`Ctrl + F5` or `F5`) at `http://localhost:5173` to load the freshly synchronized components cleanly.
+- SenseVoice local worker is fully verified, non-blocking, and reports granular progress to stderr.

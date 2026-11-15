@@ -16,6 +16,7 @@ import argparse
 import json
 import re
 import math
+import time
 import subprocess
 import tempfile
 import traceback
@@ -34,13 +35,17 @@ if sys.platform.startswith("win"):
 
 def parse_args():
     parser = argparse.ArgumentParser(description="DragonDub SenseVoice-Small Local ASR Worker")
-    parser.add_argument("--audio", required=True, help="Path to input audio or video file")
+    parser.add_argument("--audio", default="", help="Path to input audio or video file")
     parser.add_argument("--model_dir", default="", help="Optional model cache directory")
     parser.add_argument("--device", default="cpu", help="Inference device: cpu (default)")
     parser.add_argument("--start_offset", type=float, default=0.0, help="Timeline offset in seconds")
     parser.add_argument("--output_json", default="", help="Optional path to write output JSON")
-    parser.add_argument("--threads", type=int, default=2, help="CPU thread count (default 2)")
-    return parser.parse_args()
+    parser.add_argument("--threads", type=int, default=8, help="CPU thread count (default 8)")
+    parser.add_argument("--prepare", action="store_true", help="Download and cache models then exit")
+    args = parser.parse_args()
+    if not args.prepare and not args.audio:
+        parser.error("the following arguments are required: --audio")
+    return args
 
 
 def ensure_wav_16k_mono(audio_path):
@@ -82,12 +87,19 @@ def compute_yin_pitch(samples, sample_rate=16000, threshold=0.15):
     if len(samples) < 1024:
         return 0.0, 0.0, "unknown"
 
+    # Cap: analyse only the middle min(2.0s, segment length) slice
+    max_samples = int(2.0 * sample_rate)
+    if len(samples) > max_samples:
+        mid = len(samples) // 2
+        half = max_samples // 2
+        samples = samples[mid - half:mid - half + max_samples]
+
     min_freq = 80
     max_freq = 340
     min_lag = int(sample_rate / max_freq)  # ~47
     max_lag = int(sample_rate / min_freq)  # ~200
     window_size = 1024
-    hop_size = 512
+    hop_size = 1024  # Capped for speed (prev 512)
     num_frames = (len(samples) - window_size - max_lag) // hop_size
 
     if num_frames <= 0:
@@ -164,19 +176,55 @@ def clean_sensevoice_text(text):
     return cleaned.strip()
 
 
-def run_funasr_pipeline(audio_path, start_offset=0.0):
+def handle_prepare(args):
+    """
+    --prepare mode: ONLY downloads + loads the models and exits.
+    Download progress visible (does not suppress modelscope logger).
+    Logs "[SenseVoice Worker] models ready" at the end.
+    """
+    sys.stderr.write(f"[SenseVoice Worker] Preparing models (SenseVoiceSmall + FSMN-VAD + CAM++), threads={args.threads}...\n")
+    sys.stderr.flush()
+
+    import torch
+    torch.set_num_threads(args.threads)
+
+    t0 = time.time()
+    from funasr import AutoModel
+    # Note: Do not suppress modelscope/funasr loggers so download progress is visible
+    model = AutoModel(
+        model="iic/SenseVoiceSmall",
+        vad_model="fsmn-vad",
+        spk_model="cam++",
+        disable_update=True,
+        hub="ms",
+        device=args.device,
+    )
+    t1 = time.time()
+    sys.stderr.write(f"[SenseVoice Worker] Model load done in {t1 - t0:.2f}s\n")
+    sys.stderr.write("[SenseVoice Worker] models ready\n")
+    sys.stderr.flush()
+    sys.exit(0)
+
+
+def run_funasr_pipeline(audio_path, start_offset=0.0, threads=8):
     """
     Executes FunASR SenseVoiceSmall + FSMN-VAD + CAM++ diarization pipeline.
     """
+    import torch
+    torch.set_num_threads(threads)
+
+    t_total_start = time.time()
+
     with contextlib.redirect_stdout(sys.stderr):
         from funasr import AutoModel
 
-        # Suppress verbose modelscope and funasr logs
+        # Suppress verbose modelscope and funasr logs during normal run
         import logging
         logging.getLogger("modelscope").setLevel(logging.ERROR)
         logging.getLogger("funasr").setLevel(logging.ERROR)
 
-        sys.stderr.write("[SenseVoice Worker] Initializing FunASR (SenseVoiceSmall + FSMN-VAD + CAM++)...\n")
+        t_load_start = time.time()
+        sys.stderr.write(f"[SenseVoice Worker] Model load start (threads={threads})...\n")
         sys.stderr.flush()
 
         model = AutoModel(
@@ -187,17 +235,24 @@ def run_funasr_pipeline(audio_path, start_offset=0.0):
             hub="ms",
             device="cpu",
         )
+        t_load_done = time.time()
+        sys.stderr.write(f"[SenseVoice Worker] Model load done ({t_load_done - t_load_start:.2f}s)\n")
+        sys.stderr.flush()
 
-        sys.stderr.write("[SenseVoice Worker] Running inference with speaker diarization...\n")
+        t_gen_start = time.time()
+        sys.stderr.write("[SenseVoice Worker] Generate start (batch_size_s=60)...\n")
         sys.stderr.flush()
 
         res = model.generate(
             input=audio_path,
-            batch_size_s=300,
+            batch_size_s=60,
             hotword="",
             merge_vad=True,
             merge_thr=0.8,
         )
+        t_gen_done = time.time()
+        sys.stderr.write(f"[SenseVoice Worker] Generate done ({t_gen_done - t_gen_start:.2f}s)\n")
+        sys.stderr.flush()
 
     if not res or len(res) == 0:
         return []
@@ -215,6 +270,11 @@ def run_funasr_pipeline(audio_path, start_offset=0.0):
                 "end": int(raw_items.get("timestamp", [[0, 2000]])[-1][-1] if raw_items.get("timestamp") else 2000),
                 "spk": 0
             }]
+
+    t_pitch_start = time.time()
+    total_raw = len(segments_raw)
+    sys.stderr.write(f"[SenseVoice Worker] Pitch stage start ({total_raw} raw segments)...\n")
+    sys.stderr.flush()
 
     audio_samples, sr, _ = ensure_wav_16k_mono(audio_path)
     final_segments = []
@@ -269,10 +329,22 @@ def run_funasr_pipeline(audio_path, start_offset=0.0):
             "evidenceSource": "audio_asr",
         })
 
+        if (idx + 1) % 10 == 0 or (idx + 1) == total_raw:
+            sys.stderr.write(f"[SenseVoice Worker] Pitch analysis progress: {idx + 1}/{total_raw} segments\n")
+            sys.stderr.flush()
+
+    t_pitch_done = time.time()
+    sys.stderr.write(f"[SenseVoice Worker] Pitch stage done ({t_pitch_done - t_pitch_start:.2f}s, {len(final_segments)} valid Chinese segments)\n")
+    sys.stderr.flush()
+
+    t_total_done = time.time()
+    sys.stderr.write(f"[SenseVoice Worker] Total funasr time: {t_total_done - t_total_start:.2f}s (load: {t_load_done - t_load_start:.2f}s, generate: {t_gen_done - t_gen_start:.2f}s, pitch: {t_pitch_done - t_pitch_start:.2f}s)\n")
+    sys.stderr.flush()
+
     return final_segments
 
 
-def run_sherpa_onnx_fallback(audio_path, model_dir="", start_offset=0.0):
+def run_sherpa_onnx_fallback(audio_path, model_dir="", start_offset=0.0, threads=8):
     """
     Offline Sherpa-ONNX fallback if FunASR is unavailable.
     Uses pre-downloaded ONNX models in backend/models/sense-voice.
@@ -301,13 +373,13 @@ def run_sherpa_onnx_fallback(audio_path, model_dir="", start_offset=0.0):
     tokens_file = os.path.join(resolved_dir, "tokens.txt")
     vad_file = os.path.join(resolved_dir, "silero_vad.onnx")
 
-    sys.stderr.write(f"[SenseVoice Worker] Falling back to Sherpa-ONNX model at {resolved_dir}...\n")
+    sys.stderr.write(f"[SenseVoice Worker] Falling back to Sherpa-ONNX model at {resolved_dir} (threads={threads})...\n")
     sys.stderr.flush()
 
     recognizer = sherpa_onnx.OfflineRecognizer.from_sense_voice(
         model=model_file,
         tokens=tokens_file,
-        num_threads=2,
+        num_threads=threads,
         language="auto",
         use_itn=True,
     )
@@ -320,7 +392,7 @@ def run_sherpa_onnx_fallback(audio_path, model_dir="", start_offset=0.0):
         window_size=512,
         max_speech_duration=6.5,
     )
-    vad_config = sherpa_onnx.VadModelConfig(silero_vad=silero_config, sample_rate=16000, num_threads=1)
+    vad_config = sherpa_onnx.VadModelConfig(silero_vad=silero_config, sample_rate=16000, num_threads=max(1, threads // 4))
     vad = sherpa_onnx.VoiceActivityDetector(vad_config, buffer_size_in_seconds=60)
 
     audio_samples, sr, _ = ensure_wav_16k_mono(audio_path)
@@ -393,7 +465,13 @@ def run_sherpa_onnx_fallback(audio_path, model_dir="", start_offset=0.0):
 
 def main():
     args = parse_args()
+
+    if args.prepare:
+        handle_prepare(args)
+        return
+
     temp_wav_path = None
+    t_main_start = time.time()
 
     try:
         if not os.path.isfile(args.audio):
@@ -408,7 +486,11 @@ def main():
 
         # 1. Primary: FunASR (SenseVoiceSmall + FSMN-VAD + CAM++)
         try:
-            speech_segments = run_funasr_pipeline(effective_audio, start_offset=args.start_offset)
+            speech_segments = run_funasr_pipeline(
+                effective_audio,
+                start_offset=args.start_offset,
+                threads=args.threads
+            )
         except Exception as funasr_err:
             sys.stderr.write(f"[SenseVoice Worker] FunASR pipeline failed ({funasr_err}). Attempting Sherpa-ONNX fallback...\n")
             sys.stderr.flush()
@@ -417,7 +499,8 @@ def main():
                 speech_segments = run_sherpa_onnx_fallback(
                     effective_audio,
                     model_dir=args.model_dir,
-                    start_offset=args.start_offset
+                    start_offset=args.start_offset,
+                    threads=args.threads
                 )
                 engine_used = "sherpa-onnx-sensevoice"
             except Exception as onnx_err:
@@ -435,6 +518,10 @@ def main():
         if args.output_json:
             with open(args.output_json, "w", encoding="utf-8") as f:
                 f.write(output_json)
+
+        t_main_total = time.time() - t_main_start
+        sys.stderr.write(f"[SenseVoice Worker] Total execution time: {t_main_total:.2f}s\n")
+        sys.stderr.flush()
 
         print(output_json)
         sys.exit(0)
