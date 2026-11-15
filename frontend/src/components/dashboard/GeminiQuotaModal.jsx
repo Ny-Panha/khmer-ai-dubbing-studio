@@ -32,7 +32,6 @@ const FALLBACK_CASCADE_OPTIONS = [
   { id: 'gemini-3.6-flash', displayName: 'Gemini 3.6 Flash', perKey: { rpmLimit: 5, rpdLimit: 20 } },
   { id: 'gemini-3.7-flash', displayName: 'Gemini 3.7 Flash', perKey: { rpmLimit: 5, rpdLimit: 20 } },
   { id: 'gemini-3.8-flash', displayName: 'Gemini 3.8 Flash', perKey: { rpmLimit: 5, rpdLimit: 20 } },
-  { id: 'gemini-2.5-flash', displayName: 'Gemini 2.5 Flash', perKey: { rpmLimit: 5, rpdLimit: 20 } },
   { id: 'gemini-3-flash-preview', displayName: 'Gemini 3 Flash', perKey: { rpmLimit: 5, rpdLimit: 20 } },
   { id: 'gemini-flash-latest', displayName: 'Gemini Flash Latest', perKey: { rpmLimit: 5, rpdLimit: 20 } },
 ];
