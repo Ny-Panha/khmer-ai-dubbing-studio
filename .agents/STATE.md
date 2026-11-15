@@ -49,5 +49,6 @@
 - Branch: `chore/remove-ppocr-local` (tracking `origin/chore/remove-ppocr-local`)
 
 ## Next Steps
+- Branch `feat/ppocr-local-ocr` deleted cleanly (both local and origin remote).
 - Open PR for `chore/remove-ppocr-local` into `main` or base branch when ready.
 - Do NOT merge directly to main.
