@@ -10,6 +10,7 @@ const {
   resetLiveDotenvFiles,
   GeminiKeyPool,
   isAuthOrInvalidKeyError,
+  isModelUnavailableError,
   isQuotaOrRateLimitError,
   markKeyAsInvalid,
   isKeyInvalid,
@@ -28,20 +29,34 @@ test('GeminiKeyPool & 504 Timeout Resilience Suite', async (t) => {
     resetInvalidKeys();
   });
 
-  await t.test('1. Error classification: 401/403 vs 429/503/504', () => {
+  await t.test('1. Error classification: 401/403 vs 503/504 vs 429', () => {
     // 401 / 403
     assert.strictEqual(isAuthOrInvalidKeyError({ status: 401, message: 'API key not valid' }), true);
     assert.strictEqual(isAuthOrInvalidKeyError({ message: 'Request had invalid authentication credentials. Expected OAuth 2 access token, login cookie or other valid authentication credential. (401 UNAUTHENTICATED)' }), true);
     assert.strictEqual(isAuthOrInvalidKeyError({ status: 403, message: 'PERMISSION_DENIED' }), true);
     assert.strictEqual(isAuthOrInvalidKeyError({ message: 'ACCESS_TOKEN_TYPE_UNSUPPORTED' }), true);
 
-    // 401/403 must NOT be classified as quota error
+    // 401/403 must NOT be classified as model unavailable or quota error
+    assert.strictEqual(isModelUnavailableError({ status: 401, message: 'API key not valid' }), false);
     assert.strictEqual(isQuotaOrRateLimitError({ status: 401, message: 'API key not valid' }), false);
     assert.strictEqual(isQuotaOrRateLimitError({ status: 403, message: 'PERMISSION_DENIED' }), false);
 
-    // 429 / 503 are quota errors
+    // 503 / 504 model unavailable classifier (must return true for isModelUnavailableError, and false for isQuotaOrRateLimitError)
+    assert.strictEqual(isModelUnavailableError({ status: 503, message: 'Service Unavailable' }), true);
+    assert.strictEqual(isModelUnavailableError({ message: 'This model is currently experiencing high demand.' }), true);
+    assert.strictEqual(isModelUnavailableError({ status: 504, message: 'Deadline Exceeded' }), true);
+    assert.strictEqual(isModelUnavailableError({ message: '504 DEADLINE_EXCEEDED' }), true);
+    assert.strictEqual(isModelUnavailableError({ message: 'Service is temporarily unavailable' }), true);
+
+    // 503 / 504 must NOT be classified as key quota/rate limit error
+    assert.strictEqual(isQuotaOrRateLimitError({ status: 503, message: 'Service Unavailable' }), false);
+    assert.strictEqual(isQuotaOrRateLimitError({ message: 'This model is currently experiencing high demand.' }), false);
+    assert.strictEqual(isQuotaOrRateLimitError({ status: 504, message: 'Deadline Exceeded' }), false);
+
+    // 429 is a quota error (NOT model unavailable)
     assert.strictEqual(isQuotaOrRateLimitError({ status: 429, message: 'RESOURCE_EXHAUSTED' }), true);
-    assert.strictEqual(isQuotaOrRateLimitError({ status: 503, message: 'Service Unavailable' }), true);
+    assert.strictEqual(isQuotaOrRateLimitError({ message: 'Quota exceeded for quota metric' }), true);
+    assert.strictEqual(isModelUnavailableError({ status: 429, message: 'RESOURCE_EXHAUSTED' }), false);
 
     // 504 vision error classifier
     assert.strictEqual(isRetryableVisionError({ status: 504, message: '504 Gateway Timeout' }), true);
@@ -234,5 +249,138 @@ test('GeminiKeyPool & 504 Timeout Resilience Suite', async (t) => {
       }
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
+  });
+
+  await t.test('8. 503/504 Model Unavailable handling in runWithPool', async (t2) => {
+    const fakeKeys = 'AIzaSyFakeKey1_ValidLen,AIzaSyFakeKey2_ValidLen,AIzaSyFakeKey3_ValidLen';
+
+    await t2.test('(a) execFn always throws 503 -> throws after at most 2 attempts, 0 key rotations, tagged modelUnavailable', async () => {
+      const client = createSmartGenAIClient(fakeKeys, { modelUnavailableDelayMs: 0 });
+      let execCalls = 0;
+      let rotateCalls = 0;
+      const origRotateKey = client.pool.rotateKey.bind(client.pool);
+      client.pool.rotateKey = (reason) => {
+        rotateCalls++;
+        return origRotateKey(reason);
+      };
+
+      const warnings = [];
+      const origWarn = console.warn;
+      console.warn = (...args) => warnings.push(args.join(' '));
+
+      try {
+        const err503 = new Error('503 This model is currently experiencing high demand.');
+        err503.status = 503;
+
+        await assert.rejects(
+          async () => {
+            await client.runWithPool(
+              async () => {
+                execCalls++;
+                throw err503;
+              },
+              { getModel: () => 'gemini-503-model-a', backoffDelayMs: 0 }
+            );
+          },
+          (err) => {
+            assert.strictEqual(err.status, 503);
+            assert.strictEqual(err.modelUnavailable, true, 'Error must be tagged modelUnavailable');
+            return true;
+          }
+        );
+
+        assert.strictEqual(execCalls, 2, 'Must stop after at most 2 attempts on 503');
+        assert.strictEqual(rotateCalls, 0, 'rotateKey must NEVER be called for 503/model-unavailable');
+        const loggedBusy = warnings.some((w) =>
+          w.includes('[GeminiKeyPool] ⚠️ Model gemini-503-model-a busy (503) after 2 attempts — handing back for cascade switch.')
+        );
+        assert.strictEqual(loggedBusy, true, 'Must log clear single line on 503 exhaustion without "hit quota or limit"');
+      } finally {
+        console.warn = origWarn;
+      }
+    });
+
+    await t2.test('(b) execFn throws 503 once then succeeds -> returns result (2 calls total, 0 key rotations)', async () => {
+      const client = createSmartGenAIClient(fakeKeys, { modelUnavailableDelayMs: 0 });
+      let execCalls = 0;
+      let rotateCalls = 0;
+      const origRotateKey = client.pool.rotateKey.bind(client.pool);
+      client.pool.rotateKey = (reason) => {
+        rotateCalls++;
+        return origRotateKey(reason);
+      };
+
+      const result = await client.runWithPool(
+        async () => {
+          execCalls++;
+          if (execCalls === 1) {
+            const err503 = new Error('503 UNAVAILABLE');
+            err503.status = 503;
+            throw err503;
+          }
+          return { success: true, data: 'recovered_after_retry' };
+        },
+        { getModel: () => 'gemini-503-model-b', backoffDelayMs: 0 }
+      );
+
+      assert.deepStrictEqual(result, { success: true, data: 'recovered_after_retry' });
+      assert.strictEqual(execCalls, 2, 'Must succeed on second attempt (2 calls total)');
+      assert.strictEqual(rotateCalls, 0, 'rotateKey must NEVER be called when retrying 503 on same model');
+    });
+
+    await t2.test('(c) execFn throws 429 -> existing rotation behavior still works (key rotates, succeeds on next key)', async () => {
+      const client = createSmartGenAIClient(fakeKeys);
+      let execCalls = 0;
+      let rotateCalls = 0;
+      const origRotateKey = client.pool.rotateKey.bind(client.pool);
+      client.pool.rotateKey = (reason) => {
+        rotateCalls++;
+        return origRotateKey(reason);
+      };
+
+      const initialKey = client.pool.getCurrentKey();
+      const result = await client.runWithPool(
+        async () => {
+          execCalls++;
+          if (execCalls === 1) {
+            const err429 = new Error('429 RESOURCE_EXHAUSTED: Rate limit exceeded');
+            err429.status = 429;
+            throw err429;
+          }
+          return { success: true, activeKey: client.pool.getCurrentKey() };
+        },
+        { getModel: () => 'gemini-429-model-c' }
+      );
+
+      assert.strictEqual(result.success, true);
+      assert.strictEqual(execCalls, 2, 'Executes once on failing key and once on rotated key');
+      assert.strictEqual(rotateCalls, 1, 'Key rotated exactly once for 429');
+      assert.notStrictEqual(result.activeKey, initialKey, 'Must use next key after 429');
+    });
+
+    await t2.test('(d) execFn throws 401 -> key is marked invalid and removed, as before', async () => {
+      const client = createSmartGenAIClient(fakeKeys);
+      let execCalls = 0;
+      const initialKeyCount = client.pool.getKeyCount();
+      const failingKey = client.pool.getCurrentKey();
+
+      const result = await client.runWithPool(
+        async () => {
+          execCalls++;
+          if (execCalls === 1) {
+            const err401 = new Error('401 API key not valid');
+            err401.status = 401;
+            throw err401;
+          }
+          return { success: true, activeKey: client.pool.getCurrentKey() };
+        },
+        { getModel: () => 'gemini-401-model-d' }
+      );
+
+      assert.strictEqual(result.success, true);
+      assert.strictEqual(isKeyInvalid(failingKey), true, 'Key that hit 401 must be marked invalid');
+      assert.strictEqual(client.pool.getKeyCount(), initialKeyCount - 1, 'Key count must be reduced by 1');
+      assert.notStrictEqual(result.activeKey, failingKey, 'Result must be obtained from a different active key');
+    });
   });
 });

@@ -1,31 +1,35 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
-- **Environment**: Antigravity IDE (Full-Stack Crash Recovery & Missing Icon Fix)
-- **Timestamp**: 2026-11-15T13:46:00+07:00
-- **Branch**: `main` (synchronized with `feat/sensevoice-local-asr`)
+- **Environment**: Antigravity IDE (`fix/pool-503-model-busy`)
+- **Timestamp**: 2026-11-15T15:31:00+07:00
+- **Branch**: `fix/pool-503-model-busy`
 
-## Summary: Root Cause Resolution for Browser Console Errors
-1. **Fixed `ReferenceError: X is not defined` in `DubbingModeTab.jsx`**:
-   - In commit `1124f40`, `<X size={16} />` was added to the custom Auto-Compact confirmation modal close button, but `X` was missing from the `lucide-react` import statement.
-   - Added `X` into `lucide-react` imports at line 3 of `DubbingModeTab.jsx`.
-2. **Fixed `502 Bad Gateway / ECONNRESET` on Port 5000**:
-   - Backend Express server on port 5000 was temporarily stopped, causing Vite reverse proxy to return 502 Bad Gateway on all `/api/*` endpoints (`/api/generate-audio`, `/api/jobs`, `/api/health`, etc.).
-   - Backend is now running healthy on port 5000 (verified via `/api/health` and `/api/gemini/keys-status`).
-3. **Fixed 404s for `CornerMaskOverlay` & `VideoTransformControls` + Hook Order Crash**:
-   - Workspace branch was accidentally checked out to older `main` (which lagged 25 commits behind `feat/sensevoice-local-asr`), removing component files on disk while Vite was running.
-   - Hot module replacement (HMR) between the two branch revisions corrupted React's hook order queue.
-   - Fast-forward merged `feat/sensevoice-local-asr` into `main` so both branches are 100% synchronized with all latest features.
+## Summary: Gemini Key Pool 503 (Model Busy) Handling
+1. **Isolated 503 / 504 Classifier (`isModelUnavailableError`)**:
+   - In `backend/services/geminiKeyManager.js`, added `isModelUnavailableError(err)`: checks status 503 / 504 and messages containing `unavailable`, `high demand`, `deadline_exceeded`, or `deadline exceeded`.
+   - Updated `isQuotaOrRateLimitError(err)` to return `false` whenever `isModelUnavailableError(err)` claims the error (removing 503 / high-demand overlap).
+2. **Dedicated 503 / 504 Handling in `runWithPool`**:
+   - **No Key Rotation**: 503/504 indicates Google model infrastructure overload; keys are not rotated.
+   - **Attempt Budget**: At most 2 attempts total (initial attempt + 1 retry on the same key with ~2s backoff).
+   - **Cascade Handoff**: On exhaustion after attempt 2, tags `err.modelUnavailable = true`, logs `[GeminiKeyPool] ⚠️ Model <modelName> busy (503) after 2 attempts — handing back for cascade switch.`, and throws the error for caller model cascade.
+   - **Pacing / Quota Tracker**: Preserved `geminiQuotaTracker.recordRateLimit(currentKey, err, ...)` call to maintain cooldown tracking.
+3. **Attempt Counts Per Error Class**:
+   - **401 / 403 (Invalid Key)**: 1 attempt. Key is marked invalid and removed from rotation permanently. Next key continues.
+   - **429 (Key Quota / Rate Limit)**: Up to `pool.getKeyCount() * 2` attempts (e.g. up to 12 attempts across 6 keys). Rotates key on every attempt.
+   - **503 / 504 (Model Busy / Overload)**: At most 2 attempts on the exact same key without rotation, then thrown for cascade.
 4. **Verification**:
-   - `npm --prefix frontend run build`: PASS (0 errors, 616ms).
-   - `node --test backend/tests/pipeline_stages.test.js backend/tests/retranslate_fallback.test.js`: PASS (12/12 passed).
-   - Port verification: Both 5000 (Backend API) and 5173 (Frontend Vite) are actively listening.
+   - Extended `backend/tests/gemini_key_pool_and_504_retry.test.js` with mocked test 8 covering (a) 503 always throws -> 2 attempts, 0 rotations, tagged; (b) 503 once then succeeds -> 2 attempts, 0 rotations; (c) 429 rotates key; (d) 401 invalidates key: **13/13 tests PASS**.
+   - Full backend test suite: 246 passed.
+   - **Caller Cascade Finding Reported (Per Rule 3)**:
+     - `backend/services/geminiService.js: isModelFallbackEligibleError` and `backend/services/pipeline/stages/stage6_generateModeSpecificScript.js: canCascade` (Mode B) previously relied on `isQuotaOrRateLimitError` to cascade on 503. Because `isQuotaOrRateLimitError` now returns `false` for 503, callers without `isModelUnavailableError(err)` will not cascade on 503 unless updated.
 
 ## Active Environment
-- Backend API: `http://localhost:5000` (Listening, Status OK)
+- Backend API: `http://localhost:5000` (Listening)
 - Frontend Vite: `http://localhost:5173` (Listening)
 - Active Series: `series_1794653630301`
-- Active Branch: `main`
+- Active Branch: `fix/pool-503-model-busy`
 
 ## Next Steps
-- Refresh browser (`Ctrl + F5` or `F5`) at `http://localhost:5173` to load the freshly synchronized components cleanly.
+- Create PR for `fix/pool-503-model-busy` into `main`.
+- In a follow-up task, update `isModelFallbackEligibleError` in `backend/services/geminiService.js` and `canCascade` in `stage6_generateModeSpecificScript.js` to also check `isModelUnavailableError(err)` or `err.modelUnavailable`.

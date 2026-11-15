@@ -161,24 +161,43 @@ function isAuthOrInvalidKeyError(err) {
 }
 
 /**
- * Checks if an error is a temporary rate limit or quota error (429 / 503).
- * Note: 401/403 are explicitly NOT treated as quota/rate limits.
+ * Checks if an error indicates the target model is temporarily unavailable / overloaded (503 / 504).
+ * This is a model-level condition across Google's infrastructure, NOT a key-specific quota limit.
  */
-function isQuotaOrRateLimitError(err) {
+function isModelUnavailableError(err) {
   if (!err) return false;
   if (isAuthOrInvalidKeyError(err)) return false;
   const status = err.status || err.statusCode;
   const msg = String(err.message || err.toString() || '').toLowerCase();
   return (
-    status === 429 ||
     status === 503 ||
-    msg.includes('429') ||
+    status === 504 ||
     msg.includes('503') ||
+    msg.includes('504') ||
+    msg.includes('unavailable') ||
+    msg.includes('high demand') ||
+    msg.includes('deadline_exceeded') ||
+    msg.includes('deadline exceeded')
+  );
+}
+
+/**
+ * Checks if an error is a temporary rate limit or quota error (429).
+ * Note: 401/403 and 503/504 are explicitly NOT treated as key-level quota/rate limits.
+ */
+function isQuotaOrRateLimitError(err) {
+  if (!err) return false;
+  if (isAuthOrInvalidKeyError(err)) return false;
+  if (isModelUnavailableError(err)) return false;
+  const status = err.status || err.statusCode;
+  const msg = String(err.message || err.toString() || '').toLowerCase();
+  return (
+    status === 429 ||
+    msg.includes('429') ||
     msg.includes('resource_exhausted') ||
     msg.includes('quota') ||
     msg.includes('rate limit') ||
     msg.includes('too many requests') ||
-    msg.includes('high demand') ||
     msg.includes('fetch failed') ||
     msg.includes('network') ||
     msg.includes('econnreset') ||
@@ -326,7 +345,8 @@ class GeminiKeyPool {
  * to the next key when a 429 / Quota / Resource Exhausted error occurs,
  * and permanently disables invalid 401/403 keys from the rotation.
  */
-function createSmartGenAIClient(initialKeyInput = null) {
+function createSmartGenAIClient(initialKeyInput = null, options = {}) {
+  const defaultUnavailableDelayMs = options?.modelUnavailableDelayMs ?? 2000;
   const pool = new GeminiKeyPool(initialKeyInput);
   if (pool.getKeyCount() === 0) {
     if (pool.getTotalKeyCount() > 0) {
@@ -349,13 +369,18 @@ function createSmartGenAIClient(initialKeyInput = null) {
     return pool.getCurrentKey();
   }
 
-  async function runWithPool(execFn, { getModel = () => null, errorLabel = 'Quota Exceeded' } = {}) {
+  async function runWithPool(execFn, { getModel = () => null, errorLabel = 'Quota Exceeded', backoffDelayMs = null } = {}) {
     let lastErr = null;
     let quotaAttempts = 0;
+    let modelUnavailableAttempts = 0;
+    const unavailableDelayMs = backoffDelayMs ?? defaultUnavailableDelayMs;
 
     while (pool.getKeyCount() > 0) {
       const modelName = getModel();
-      const currentKey = selectReadyKeyIfAvailable(modelName);
+      // On 503/504 model-unavailable retry, keep the same key without rotating.
+      const currentKey = modelUnavailableAttempts > 0
+        ? pool.getCurrentKey()
+        : selectReadyKeyIfAvailable(modelName);
       const pacingDelay = geminiQuotaTracker.getRecommendedPacingDelayMs(currentKey);
       if (pacingDelay > 0) {
         await new Promise((r) => setTimeout(r, pacingDelay));
@@ -392,7 +417,33 @@ function createSmartGenAIClient(initialKeyInput = null) {
           continue;
         }
 
-        // 2. Temporary Quota / Rate Limit (429 / 503)
+        // 2. Model Overload / High Demand (503 / 504)
+        if (isModelUnavailableError(err)) {
+          try {
+            geminiQuotaTracker.recordRateLimit(currentKey, err, {
+              model: modelName,
+              latencyMs: Date.now() - startedAt,
+            });
+          } catch (_) {}
+
+          modelUnavailableAttempts++;
+          if (modelUnavailableAttempts >= 2) {
+            const status = err.status || err.statusCode || 503;
+            console.warn(
+              `[GeminiKeyPool] ⚠️ Model ${modelName || 'requested model'} busy (${status}) after ${modelUnavailableAttempts} attempts — handing back for cascade switch.`
+            );
+            if (err && typeof err === 'object') {
+              err.modelUnavailable = true;
+            }
+            throw err;
+          }
+          if (unavailableDelayMs > 0) {
+            await new Promise((r) => setTimeout(r, unavailableDelayMs));
+          }
+          continue;
+        }
+
+        // 3. Temporary Quota / Rate Limit (429)
         if (isQuotaOrRateLimitError(err)) {
           try {
             geminiQuotaTracker.recordRateLimit(currentKey, err, {
@@ -464,6 +515,7 @@ function createSmartGenAIClient(initialKeyInput = null) {
     models: modelsProxy,
     files: filesProxy,
     interactions: interactionsProxy,
+    runWithPool,
     get pool() {
       return pool;
     },
@@ -484,6 +536,7 @@ module.exports = {
   GeminiKeyPool,
   createSmartGenAIClient,
   isAuthOrInvalidKeyError,
+  isModelUnavailableError,
   isQuotaOrRateLimitError,
   markKeyAsInvalid,
   isKeyInvalid,
