@@ -373,6 +373,8 @@ export default function ExportSettingsPanel({
                       <option value="both">✨ «សងខាង» ឆ្វេង & ស្តាំ (Both Sides)</option>
                       <option value="top-left">ជ្រុងលើឆ្វេង (Top Left)</option>
                       <option value="top-right">ជ្រុងលើស្តាំ (Top Right)</option>
+                      <option value="center">🎯 ចំកណ្តាល (Center)</option>
+                      <option value="custom">✨ ទីតាំងសេរី (Custom Free Drag)</option>
                       <option value="bottom-left">ជ្រុងក្រោមឆ្វេង (Bottom Left)</option>
                       <option value="bottom-right">ជ្រុងក្រោមស្តាំ (Bottom Right)</option>
                     </select>

@@ -17,12 +17,15 @@ export default function LogoOverlay({
     logoOpacity = 0.9,
     logoShape = 'circle',
     logoMargin = 20,
+    logoXPercent,
+    logoYPercent,
   } = voiceSettings || {};
 
   const rootRef = useRef(null);
   const [isHovered, setIsHovered] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [dragDelta, setDragDelta] = useState({ x: 0, y: 0 });
+  const [liveCoords, setLiveCoords] = useState(null);
   const dragStartRef = useRef(null);
 
   if (!enableLogo || !logoImage || renderedVideo) {
@@ -41,17 +44,41 @@ export default function LogoOverlay({
   const topOffset = is916Letterbox ? `calc(34.2% + ${margin}px)` : `${margin}px`;
   const bottomOffset = is916Letterbox ? `calc(34.2% + ${margin}px)` : `${margin}px`;
 
-  // Determine positions to render
-  const renderLeft = logoPosition === 'both' || logoPosition === 'top-left';
-  const renderRight = logoPosition === 'both' || logoPosition === 'top-right';
-  const renderBottomLeft = logoPosition === 'bottom-left';
-  const renderBottomRight = logoPosition === 'bottom-right';
+  // Free positioning: custom or center or explicit x/y percentages
+  const isCustom = logoPosition === 'custom' || logoPosition === 'center' || (typeof logoXPercent === 'number' && typeof logoYPercent === 'number');
+
+  const effectiveX = logoPosition === 'center'
+    ? 50
+    : (typeof logoXPercent === 'number' ? Math.max(0, Math.min(100, logoXPercent)) : 50);
+  const effectiveY = logoPosition === 'center'
+    ? 50
+    : (typeof logoYPercent === 'number' ? Math.max(0, Math.min(100, logoYPercent)) : 50);
+
+  // Determine preset positions to render
+  const renderLeft = !isCustom && (logoPosition === 'both' || logoPosition === 'top-left');
+  const renderRight = !isCustom && (logoPosition === 'both' || logoPosition === 'top-right');
+  const renderBottomLeft = !isCustom && (logoPosition === 'bottom-left');
+  const renderBottomRight = !isCustom && (logoPosition === 'bottom-right');
 
   const handleCornerSelect = (e, newPos) => {
     e.stopPropagation();
     e.preventDefault();
     if (onUpdateVoiceSettings) {
-      onUpdateVoiceSettings({ ...voiceSettings, logoPosition: newPos });
+      if (newPos === 'center') {
+        onUpdateVoiceSettings({
+          ...voiceSettings,
+          logoPosition: 'center',
+          logoXPercent: 50,
+          logoYPercent: 50,
+        });
+      } else {
+        onUpdateVoiceSettings({
+          ...voiceSettings,
+          logoPosition: newPos,
+          logoXPercent: undefined,
+          logoYPercent: undefined,
+        });
+      }
     }
   };
 
@@ -60,23 +87,53 @@ export default function LogoOverlay({
     e.stopPropagation();
     e.preventDefault();
 
+    const itemEl = e.currentTarget;
+    const itemRect = itemEl.getBoundingClientRect();
+    const rootEl = rootRef.current || itemEl.parentElement;
+    const rootRect = rootEl.getBoundingClientRect();
+
     setIsDragging(true);
     setDragDelta({ x: 0, y: 0 });
-    dragStartRef.current = { x: e.clientX, y: e.clientY };
+    setLiveCoords(null);
+
+    dragStartRef.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      itemRect,
+      rootRect,
+      wasCustom: isCustom,
+      initialXPercent: effectiveX,
+      initialYPercent: effectiveY,
+    };
 
     const onMouseMove = (moveEvt) => {
-      const dx = moveEvt.clientX - dragStartRef.current.x;
-      const dy = moveEvt.clientY - dragStartRef.current.y;
+      if (!dragStartRef.current) return;
+      const dx = moveEvt.clientX - dragStartRef.current.startX;
+      const dy = moveEvt.clientY - dragStartRef.current.startY;
       setDragDelta({ x: dx, y: dy });
+
+      // Calculate real-time coordinates for visual feedback
+      const curRootRect = rootRef.current ? rootRef.current.getBoundingClientRect() : dragStartRef.current.rootRect;
+      const curItemRect = dragStartRef.current.itemRect;
+      const newLeft = curItemRect.left - curRootRect.left + dx;
+      const newTop = curItemRect.top - curRootRect.top + dy;
+      const availW = Math.max(1, curRootRect.width - curItemRect.width);
+      const availH = Math.max(1, curRootRect.height - curItemRect.height);
+      const xPct = Math.max(0, Math.min(100, Math.round((newLeft / availW) * 1000) / 10));
+      const yPct = Math.max(0, Math.min(100, Math.round((newTop / availH) * 1000) / 10));
+      setLiveCoords({ xPct, yPct });
     };
 
     const onMouseUp = (upEvt) => {
       setIsDragging(false);
+      setLiveCoords(null);
       window.removeEventListener('mousemove', onMouseMove);
       window.removeEventListener('mouseup', onMouseUp);
 
-      const dx = upEvt.clientX - (dragStartRef.current?.x || 0);
-      const dy = upEvt.clientY - (dragStartRef.current?.y || 0);
+      if (!dragStartRef.current) return;
+
+      const dx = upEvt.clientX - dragStartRef.current.startX;
+      const dy = upEvt.clientY - dragStartRef.current.startY;
       setDragDelta({ x: 0, y: 0 });
 
       // If clicked without dragging (< 6px movement), cycle corner to next position
@@ -85,29 +142,38 @@ export default function LogoOverlay({
           'top-right': 'bottom-right',
           'bottom-right': 'bottom-left',
           'bottom-left': 'top-left',
-          'top-left': 'top-right',
+          'top-left': 'center',
+          'center': 'top-right',
           'both': 'top-right',
+          'custom': 'top-right',
         };
         const nextPos = cycleMap[logoPosition] || 'top-right';
-        onUpdateVoiceSettings({ ...voiceSettings, logoPosition: nextPos });
+        if (nextPos === 'center') {
+          onUpdateVoiceSettings({ ...voiceSettings, logoPosition: 'center', logoXPercent: 50, logoYPercent: 50 });
+        } else {
+          onUpdateVoiceSettings({ ...voiceSettings, logoPosition: nextPos, logoXPercent: undefined, logoYPercent: undefined });
+        }
         return;
       }
 
-      // If dragged, find quadrant relative to the player canvas
+      // If dragged (>= 6px), freely place anywhere on the video canvas (Free Move)
       if (Math.hypot(dx, dy) >= 6 && onUpdateVoiceSettings && rootRef.current) {
-        const rect = rootRef.current.getBoundingClientRect();
-        const relX = upEvt.clientX - rect.left;
-        const relY = upEvt.clientY - rect.top;
-        const isRight = relX >= rect.width / 2;
-        const isBottom = relY >= rect.height / 2;
+        const curRootRect = rootRef.current.getBoundingClientRect();
+        const curItemRect = dragStartRef.current.itemRect;
+        const newLeft = curItemRect.left - curRootRect.left + dx;
+        const newTop = curItemRect.top - curRootRect.top + dy;
+        const availW = Math.max(1, curRootRect.width - curItemRect.width);
+        const availH = Math.max(1, curRootRect.height - curItemRect.height);
 
-        let targetPos = 'top-right';
-        if (!isRight && !isBottom) targetPos = 'top-left';
-        else if (isRight && !isBottom) targetPos = 'top-right';
-        else if (!isRight && isBottom) targetPos = 'bottom-left';
-        else if (isRight && isBottom) targetPos = 'bottom-right';
+        const xPct = Math.max(0, Math.min(100, Math.round((newLeft / availW) * 1000) / 10));
+        const yPct = Math.max(0, Math.min(100, Math.round((newTop / availH) * 1000) / 10));
 
-        onUpdateVoiceSettings({ ...voiceSettings, logoPosition: targetPos });
+        onUpdateVoiceSettings({
+          ...voiceSettings,
+          logoPosition: 'custom',
+          logoXPercent: xPct,
+          logoYPercent: yPct,
+        });
       }
     };
 
@@ -115,31 +181,48 @@ export default function LogoOverlay({
     window.addEventListener('mouseup', onMouseUp);
   };
 
-  const renderLogoItem = (posName, styleObj) => {
+  const renderLogoItem = (posName, baseStyle = {}) => {
     const isThisDragged = isDragging;
-    const transformStyle = isThisDragged
-      ? `translate(${dragDelta.x}px, ${dragDelta.y}px)`
-      : 'none';
+
+    let itemStyle = {
+      ...baseStyle,
+      width: `${size}px`,
+      height: `${size}px`,
+      opacity,
+      cursor: isThisDragged ? 'grabbing' : 'grab',
+    };
+
+    if (isCustom) {
+      itemStyle.left = `${effectiveX}%`;
+      itemStyle.top = `${effectiveY}%`;
+      itemStyle.transform = isThisDragged
+        ? `translate(calc(-${effectiveX}% + ${dragDelta.x}px), calc(-${effectiveY}% + ${dragDelta.y}px))`
+        : `translate(-${effectiveX}%, -${effectiveY}%)`;
+    } else {
+      itemStyle.transform = isThisDragged
+        ? `translate(${dragDelta.x}px, ${dragDelta.y}px)`
+        : 'none';
+    }
 
     return (
       <div
         className={`logo-overlay-item ${shapeClass} ${isHovered ? 'hovered' : ''} ${isThisDragged ? 'dragging' : ''}`}
-        style={{
-          ...styleObj,
-          width: `${size}px`,
-          height: `${size}px`,
-          opacity,
-          transform: transformStyle,
-          cursor: isThisDragged ? 'grabbing' : 'grab',
-        }}
+        style={itemStyle}
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={() => setIsHovered(false)}
         onMouseDown={handleLogoMouseDown}
-        title="ចុច (Click) ដើម្បីប្តូរជ្រុង ឬអូស (Drag) ទៅជ្រុងដែលចង់ដាក់"
+        title="ចុច (Click) ប្តូរទីតាំង ឬអូស (Drag) ដាក់កន្លែងណាក៏បាន (Free Move)"
       >
         <img src={logoImage} alt="Watermark Logo" draggable={false} />
 
-        {/* Quick Corner Switcher Popover on Hover */}
+        {/* Real-time coordinates pill while dragging */}
+        {isThisDragged && liveCoords && (
+          <div className="logo-drag-coords-badge">
+            <span>X: {liveCoords.xPct}% | Y: {liveCoords.yPct}%</span>
+          </div>
+        )}
+
+        {/* Quick Position Switcher Popover on Hover */}
         {isHovered && !isDragging && (
           <div className="logo-hover-controls" onClick={(e) => e.stopPropagation()}>
             <button
@@ -157,6 +240,14 @@ export default function LogoOverlay({
               title="ស្តាំលើ (Top-Right)"
             >
               ↗
+            </button>
+            <button
+              type="button"
+              className={`corner-btn ${logoPosition === 'center' ? 'active' : ''}`}
+              onClick={(e) => handleCornerSelect(e, 'center')}
+              title="ចំកណ្តាល (Center)"
+            >
+              🎯
             </button>
             <button
               type="button"
@@ -182,6 +273,7 @@ export default function LogoOverlay({
 
   return (
     <div className="logo-overlay-root" ref={rootRef}>
+      {isCustom && renderLogoItem('custom')}
       {renderLeft && renderLogoItem('top-left', { top: topOffset, left: `${margin}px` })}
       {renderRight && renderLogoItem('top-right', { top: topOffset, right: `${margin}px` })}
       {renderBottomLeft && renderLogoItem('bottom-left', { bottom: bottomOffset, left: `${margin}px` })}

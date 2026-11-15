@@ -1985,6 +1985,18 @@ function renderDubbedVideoWithDucking(options = {}) {
           overlayExpr = `${margin}:main_h-overlay_h-${margin}`;
         } else if (pos === "bottom-right") {
           overlayExpr = `main_w-overlay_w-${margin}:main_h-overlay_h-${margin}`;
+        } else if (pos === "center") {
+          overlayExpr = `(main_w-overlay_w)/2:(main_h-overlay_h)/2`;
+        } else if (
+          pos === "custom" ||
+          (logoSettings.logoXPercent !== undefined && logoSettings.logoYPercent !== undefined) ||
+          (logoSettings.xPercent !== undefined && logoSettings.yPercent !== undefined)
+        ) {
+          const rawX = logoSettings.logoXPercent ?? logoSettings.xPercent ?? 50;
+          const rawY = logoSettings.logoYPercent ?? logoSettings.yPercent ?? 50;
+          const xPct = Math.max(0, Math.min(100, Number(rawX) || 50)) / 100;
+          const yPct = Math.max(0, Math.min(100, Number(rawY) || 50)) / 100;
+          overlayExpr = `(main_w-overlay_w)*${xPct.toFixed(4)}:(main_h-overlay_h)*${yPct.toFixed(4)}`;
         }
         filterComplexParts.push(
           `${vCurrent}[logo_prepared]overlay=${overlayExpr}[v_logo_single]`

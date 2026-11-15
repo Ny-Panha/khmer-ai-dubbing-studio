@@ -86,6 +86,7 @@ export default function VideoTransformControls({
                     {[
                       { id: 'top-left', label: '↖ ឆ្វេងលើ' },
                       { id: 'top-right', label: '↗ ស្តាំលើ' },
+                      { id: 'center', label: '🎯 កណ្តាល' },
                       { id: 'bottom-left', label: '↙ ឆ្វេងក្រោម' },
                       { id: 'bottom-right', label: '↘ ស្តាំក្រោម' },
                       { id: 'both', label: '↔ សងខាងលើ' },
@@ -94,12 +95,24 @@ export default function VideoTransformControls({
                         key={pos.id}
                         type="button"
                         className={`pos-chip ${currentLogoPos === pos.id ? 'active' : ''}`}
-                        onClick={() => onUpdateVoiceSettings?.({ ...voiceSettings, logoPosition: pos.id, enableLogo: true })}
+                        onClick={() => onUpdateVoiceSettings?.({
+                          ...voiceSettings,
+                          logoPosition: pos.id,
+                          logoXPercent: pos.id === 'center' ? 50 : undefined,
+                          logoYPercent: pos.id === 'center' ? 50 : undefined,
+                          enableLogo: true,
+                        })}
                       >
                         {pos.label}
                       </button>
                     ))}
                   </div>
+
+                  {currentLogoPos === 'custom' && (
+                    <div style={{ marginTop: '8px', padding: '4px 8px', borderRadius: '4px', background: 'rgba(56, 189, 248, 0.1)', border: '1px solid rgba(56, 189, 248, 0.3)', fontSize: '0.7rem', color: '#38bdf8', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                      <span>🎯 ទីតាំងសេរី (Free Drag): X {Math.round(voiceSettings?.logoXPercent ?? 50)}% | Y {Math.round(voiceSettings?.logoYPercent ?? 50)}%</span>
+                    </div>
+                  )}
                 </div>
 
                 <div className="popup-section">

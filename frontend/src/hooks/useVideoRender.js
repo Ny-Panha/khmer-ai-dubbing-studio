@@ -235,6 +235,8 @@ export function useVideoRender({
       opacity: Number(activeSettings?.logoOpacity) || 0.9,
       shape: activeSettings?.logoShape || 'circle',
       margin: Number(activeSettings?.logoMargin) || 20,
+      logoXPercent: activeSettings?.logoXPercent,
+      logoYPercent: activeSettings?.logoYPercent,
     };
   }, [getLatestVoiceSettings]);
 
