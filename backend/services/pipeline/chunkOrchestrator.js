@@ -275,11 +275,18 @@ async function runChunkedDubbingPipeline({
 
         checkAbort();
 
+        const ocrCuesCount = Array.isArray(ocrResult?.visualSegments) ? ocrResult.visualSegments.length : 0;
+
         if (mode === GENERATION_MODES.FAST_OCR) {
           console.log(`[ChunkOrchestrator] ⚡ Fast OCR Mode: Skipping Stage 4 (ASR) & Stage 5 (Reconcile) for Chunk ${cIdx + 1}`);
           chunkSegments = deduplicateFastOcrCues(ocrResult.visualSegments || [], narratorGender);
           visualOnlyCount = chunkSegments.length;
           fusedCount = 0;
+
+          console.log(`[ChunkOrchestrator] Chunk ${cIdx + 1} cues detected: ${ocrCuesCount} -> segments stored: ${chunkSegments.length}`);
+          if (ocrCuesCount !== chunkSegments.length) {
+            console.warn(`[ChunkOrchestrator] ⚠️ WARNING: Fast OCR 1:1 rule mismatch! cues detected: ${ocrCuesCount} -> segments stored: ${chunkSegments.length} (${ocrCuesCount} != ${chunkSegments.length})`);
+          }
         } else {
           // 2. Stage 4 Audio Diarization for this chunk
           report(
@@ -324,6 +331,7 @@ async function runChunkedDubbingPipeline({
           }
           visualOnlyCount = chunkReconciliation.reconciliationMeta?.visualOnlyCount || 0;
           fusedCount = chunkReconciliation.reconciliationMeta?.fusedSegmentsCount || 0;
+          console.log(`[ChunkOrchestrator] Chunk ${cIdx + 1} cues detected: ${ocrCuesCount} -> segments stored: ${chunkSegments.length} (Standard mode)`);
         }
 
         // Persist validated chunk result to disk for instant resumption

@@ -195,7 +195,14 @@ async function runDubbingPipeline({
       });
     }
 
+    const detectedCuesCount = Array.isArray(ocrResult?.visualSegments) ? ocrResult.visualSegments.length : 0;
     inputSegmentsForScript = deduplicateFastOcrCues(ocrResult.visualSegments || [], narratorGender);
+    const storedSegmentsCount = inputSegmentsForScript.length;
+
+    console.log(`[Pipeline] cues detected: ${detectedCuesCount} -> segments stored: ${storedSegmentsCount}`);
+    if (detectedCuesCount !== storedSegmentsCount) {
+      console.warn(`[Pipeline] ⚠️ WARNING: Fast OCR 1:1 rule mismatch! cues detected: ${detectedCuesCount} -> segments stored: ${storedSegmentsCount} (${detectedCuesCount} != ${storedSegmentsCount})`);
+    }
   } else {
     // Stage 4: Analyze Dialogue Audio & Diarization
     report('analyzeDialogueAudio', 50, 'កំពុងស្រង់ & វិភាគសំឡេងសន្ទនាចិនដើម និងភេទសំឡេង (Audio Diarization)...');
@@ -229,6 +236,7 @@ async function runDubbingPipeline({
     inputSegmentsForScript = (reconciliation.reconciledSegments || []).filter(
       (seg) => !isNonChineseAsrHallucination(seg)
     );
+    console.log(`[Pipeline] cues detected: ${ocrResult.visualSegments?.length || 0} -> segments stored: ${inputSegmentsForScript.length} (Standard mode)`);
   }
 
   checkAbort();
