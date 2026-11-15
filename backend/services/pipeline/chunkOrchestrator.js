@@ -285,7 +285,7 @@ async function runChunkedDubbingPipeline({
           report(
             'chunkASR',
             Math.min(70, Math.round(chunkPercent + (1 / chunks.length) * 35)),
-            `Chunk ${cIdx + 1}/${chunks.length}: កំពុងស្ដាប់សំឡេងតួអង្គចិន (Gemini ASR Audio)...`
+            `Chunk ${cIdx + 1}/${chunks.length}: កំពុងស្ដាប់សំឡេងតួអង្គចិន (ASR Audio Diarization)...`
           );
           const audioAnalysis = await analyzeDialogueAudio({
             videoPath,
@@ -295,6 +295,12 @@ async function runChunkedDubbingPipeline({
             startOffsetSec: chunk.startSec,
             signal,
           });
+
+          const chunkEngine = audioAnalysis?.audioMeta?.asrEngineUsed || 'unknown';
+          const chunkWallSec = audioAnalysis?.audioMeta?.wallTimeMs
+            ? ` (${(audioAnalysis.audioMeta.wallTimeMs / 1000).toFixed(1)}s)`
+            : '';
+          console.log(`[ChunkOrchestrator] 🎙️ Chunk ${cIdx + 1} ASR engine: ${chunkEngine}${chunkWallSec}`);
 
           checkAbort();
 

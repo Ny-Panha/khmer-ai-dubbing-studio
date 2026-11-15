@@ -208,6 +208,13 @@ async function runDubbingPipeline({
       signal,
     });
 
+    const engineNotice = audioAnalysis?.audioMeta?.asrEngineUsed || 'unknown';
+    const wallSec = audioAnalysis?.audioMeta?.wallTimeMs
+      ? ` (${(audioAnalysis.audioMeta.wallTimeMs / 1000).toFixed(1)}s)`
+      : '';
+    console.log(`[Pipeline] 🎙️ ASR engine: ${engineNotice}${wallSec}`);
+    report('analyzeDialogueAudio', 58, `ASR engine: ${engineNotice}${wallSec} (${audioAnalysis?.audioSegments?.length || 0} segments)`);
+
     checkAbort();
 
     // Stage 5: Reconcile Timeline Evidence & Legitimate Silence

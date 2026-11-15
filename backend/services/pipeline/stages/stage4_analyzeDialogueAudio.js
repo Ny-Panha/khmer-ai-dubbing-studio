@@ -7,6 +7,7 @@ const { extractAudio } = require('../../ffmpegService');
 const { classifySegmentAcousticGender, computeYinPitch } = require('../../audioClassifierService');
 const { senseVoiceSemaphore, createAbortError } = require('../../../utils/asyncSemaphore');
 const { resolvePythonBinary } = require('../../audioSeparationService');
+const { transcribeSenseVoice } = require('../../senseVoiceService');
 
 function sleepOrAbortStage4(ms, signal) {
   if (!signal) {
@@ -388,6 +389,8 @@ async function analyzeDialogueAudio({
 
   const audioSegments = [];
   let asrEngineUsed = 'none';
+  let fallbackReason = null;
+  let asrWallTimeMs = 0;
 
   try {
     checkAbort();
@@ -406,24 +409,20 @@ async function analyzeDialogueAudio({
     checkAbort();
 
     // ==============================================================
-    // STEP 1.5: PRIMARY ENGINE -> Local SenseVoice-Small ASR (Sherpa-ONNX)
-    // Bounded via senseVoiceSemaphore to prevent ONNX CPU oversubscription
+    // STEP 1.5: PRIMARY ENGINE -> Local SenseVoice-Small ASR
+    // Bounded via senseVoiceSemaphore to prevent CPU oversubscription
     // ==============================================================
-    const pythonWorkerPath = path.resolve(__dirname, '../../../workers/sense_voice_worker.py');
-    const senseVoiceModelDir = path.resolve(__dirname, '../../../models/sense-voice');
+    const pythonWorkerPath = path.resolve(__dirname, '../../../workers/sensevoice_worker.py');
 
-    if (fs.existsSync(pythonWorkerPath) && fs.existsSync(path.join(senseVoiceModelDir, 'tokens.txt'))) {
+    if (fs.existsSync(pythonWorkerPath)) {
       try {
         console.log(`[Stage 4 Analyze Audio] 🚀 Running Local SenseVoice-Small ASR (offset: ${startOffsetSec}s)...`);
         const localRes = await senseVoiceSemaphore.run(
-          () => runSenseVoiceWorker({
-            workerPath: pythonWorkerPath,
+          () => transcribeSenseVoice({
             audioPath: audioFilePath,
-            modelDir: senseVoiceModelDir,
             startOffsetSec,
-            numThreads: 2,
-            vadThreads: 1,
             signal,
+            timeoutMs: 300000,
           }),
           { signal }
         );
@@ -438,16 +437,25 @@ async function analyzeDialogueAudio({
             audioSegments.push(s);
           }
           if (audioSegments.length > 0) {
-            asrEngineUsed = 'sense-voice-small-onnx';
-            console.log(`[Stage 4 Analyze Audio] ⚡ Local SenseVoice succeeded with ${audioSegments.length} Chinese speech segments ($0.00 API cost)!`);
+            asrEngineUsed = 'sensevoice-local';
+            asrWallTimeMs = localRes.wallTimeMs || 0;
+            const wallSec = (asrWallTimeMs / 1000).toFixed(1);
+            console.log(`[Stage 4 Analyze Audio] ASR engine: sensevoice-local (${localRes.engine}, wall time: ${wallSec}s, ${audioSegments.length} segments)`);
           }
+        } else {
+          fallbackReason = 'sensevoice-worker returned 0 speech segments';
+          console.warn(`[Stage 4 Analyze Audio] Local SenseVoice returned 0 segments. ASR engine: gemini (fallback — ${fallbackReason})`);
         }
       } catch (senseVoiceErr) {
         if (senseVoiceErr?.name === 'AbortError' || signal?.aborted) {
           throw senseVoiceErr?.name === 'AbortError' ? senseVoiceErr : createAbortError('Stage 4 ASR aborted');
         }
-        console.warn(`[Stage 4 Analyze Audio] Local SenseVoice notice: ${senseVoiceErr.message}. Falling back to Cloud Gemini ASR.`);
+        fallbackReason = senseVoiceErr.message || String(senseVoiceErr);
+        console.warn(`[Stage 4 Analyze Audio] ASR engine: gemini (fallback — ${fallbackReason})`);
       }
+    } else {
+      fallbackReason = 'sensevoice_worker.py not found';
+      console.warn(`[Stage 4 Analyze Audio] ASR engine: gemini (fallback — ${fallbackReason})`);
     }
 
     checkAbort();
@@ -571,8 +579,8 @@ async function analyzeDialogueAudio({
 
         if (audioSegments.length > 0) {
           transcribeSuccess = true;
-          asrEngineUsed = 'gemini-3.5-transcribe';
-          console.log(`[Stage 4 Analyze Audio] gemini-3.5-transcribe succeeded with ${audioSegments.length} Chinese speech segments.`);
+          asrEngineUsed = fallbackReason ? `gemini (fallback — ${fallbackReason})` : 'gemini-3.5-transcribe';
+          console.log(`[Stage 4 Analyze Audio] ASR engine: ${asrEngineUsed} (succeeded with ${audioSegments.length} Chinese speech segments).`);
         } else {
           console.log(`[Stage 4 Analyze Audio] gemini-3.5-transcribe returned 0 segments.`);
         }
@@ -649,7 +657,8 @@ Return JSON ONLY matching this schema:
                 responseMimeType: 'application/json',
               },
             });
-            asrEngineUsed = fallbackModel;
+            asrEngineUsed = fallbackReason ? `gemini (fallback — ${fallbackReason})` : fallbackModel;
+            console.log(`[Stage 4 Analyze Audio] ASR engine: ${asrEngineUsed} (fallback model responded).`);
           } catch (callErr) {
             if (callErr?.name === 'AbortError' || signal?.aborted) {
               throw callErr?.name === 'AbortError' ? callErr : createAbortError('Stage 4 ASR aborted');
@@ -832,6 +841,8 @@ Return JSON ONLY matching this schema:
       startOffsetSec,
       durationSec,
       asrEngineUsed,
+      fallbackReason: fallbackReason || null,
+      wallTimeMs: asrWallTimeMs || null,
     },
   };
 
