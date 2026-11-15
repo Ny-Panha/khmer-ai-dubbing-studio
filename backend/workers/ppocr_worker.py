@@ -21,7 +21,7 @@ import contextlib
 
 # Windows DLL compatibility: initialize torch before paddle to prevent shm.dll [WinError 127]
 try:
-    import torch
+    import torch  # type: ignore
 except Exception:
     pass
 
@@ -119,7 +119,7 @@ def handle_prepare(args):
     sys.stderr.flush()
 
     t0 = time.time()
-    from paddleocr import PaddleOCR
+    from paddleocr import PaddleOCR  # type: ignore
 
     ocr = PaddleOCR(
         text_detection_model_name="PP-OCRv5_mobile_det",
@@ -317,7 +317,7 @@ def main():
         if not isinstance(candidate_frames, list):
             raise ValueError("Input JSON must contain an array of frame objects")
 
-        from paddleocr import PaddleOCR
+        from paddleocr import PaddleOCR  # type: ignore
 
         t_load_start = time.time()
         sys.stderr.write(f"[PP-OCR Worker] Model load start (threads={args.threads})...\n")
