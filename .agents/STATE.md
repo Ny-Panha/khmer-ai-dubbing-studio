@@ -1,6 +1,69 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
+- **Environment**: Codex IDE
+- **Branch**: `fix/delete-voice-routing` based on `fix/timeline-clip-selection` (base commit `1d5e464`)
+- **Timestamp**: 2026-11-17T00:19:24+07:00
+
+## Summary: Voice Delete Routing Fix
+- Delete now follows the most recently clicked `selectedClipKind`; toolbar and keyboard use the same resolver. Timeline click handlers synchronize `selectedClipKind` and the Split-only `lastSelectedType`.
+- Dialogue video deletion falls back to the largest segment timeline overlap above 0.05s and warns with the clip ID if none match. Segment deletion checks exact segment ID/index before timeline overlap.
+- Removed undeclared selection setter references in `handleDeleteSegment` that raised a `ReferenceError` before paired video deletion; deleting a video also clears the selected segment ID.
+- Verification: frontend tests 4/4; timeline regression tests 20/20; frontend build passed (2036 modules, existing >500 kB chunk warning). Throwaway real-app checks read `series.json` via API: video then voice #6 removed `_uid-6` and `clip-6`, rippled #7 from 12s to 10s on both tracks; reverse selection removed #4; plain voice #3 and video #5 deletes worked; one Ctrl+Z restored the 7 segment/clip records and original timeline ranges. Browser page errors: 0; throwaway series removed.
+
+## Active Environment
+- Backend API: `http://localhost:5000` (healthy)
+- Frontend UI: `http://localhost:5173` (Vite dev server running)
+- Branch: `fix/delete-voice-routing`, pushed to `origin/fix/delete-voice-routing`; main untouched.
+
+## Next Steps
+- Review `fix/delete-voice-routing` and open a PR when ready; do not merge to main.
+- Existing local `.agents/agents` file changes were left out of the routing commit.
+
+## Previous Session Record
+
+## Last Session
+- **Environment**: Codex IDE
+- **Branch**: `fix/delete-auto-clean` (based on `fix/timeline-clip-selection`, layered over `fix/voice-single-lane`)
+- **Timestamp**: 2026-11-16T23:30:00+07:00
+
+## Summary: Automatic Timeline Cleanup After Deletes
+- Added shared `alignTimelineFromSegments` pass: applies the existing single-lane voice alignment and rebuilds VIDEO 1 dialogue/Gap coverage from surviving segments while preserving source media ranges.
+- Auto-Align and toolbar, keyboard, Inspector, and linked-ripple deletes now use the shared pass; one pre-delete snapshot makes delete plus cleanup one Undo step. Deleted segment selection is cleared.
+- No custom context-menu delete handler exists in the frontend. Split, Reset Timing, drag/trim, and backend behavior were left out of scope.
+- Verification: frontend tests 5/5; ripple/voice regression tests 15/15; Vite production build passed. Isolated browser checks passed for keyboard delete, linked video ripple, Inspector delete, user-shifted clip preservation, one-step Ctrl+Z, and save/reload. Browser checks used fixture data and blocked API writes.
+- Branch was created from `fix/timeline-clip-selection` because it is based on `fix/voice-single-lane`; no main merge.
+
+## Active Environment
+- Backend API: `http://localhost:5000` (HTTP 200 health check)
+- Frontend UI: `http://localhost:5173` (Vite dev server running)
+- Branch: `fix/delete-auto-clean`
+
+## Next Steps
+- Review the pushed `fix/delete-auto-clean` branch and open a PR when ready; keep main unchanged.
+
+## Last Session
+- **Environment**: Codex IDE
+- **Branch**: fix/delete-auto-clean
+- **Timestamp**: 2026-11-16T23:22:16+07:00
+
+## Summary: Replaced Workspace Agent Files
+- Replaced the five old Markdown agents in .agents/agents with four complete agent definitions extracted from the provided attachment: engineering-minimal-change-engineer, design-ui-designer, engineering-codebase-onboarding-engineer, and product-sprint-prioritizer.
+- Removed only the five dragon-dub agent files previously shown in the user's screenshot.
+- Confirmed .agents/agents now contains exactly four Markdown agent files with name frontmatter.
+- The four user-level Codex TOML agents under C:\Users\nhastar\.codex\agents\ remain installed and TOML-parse successfully.
+- Code Reviewer (#5) was not added.
+
+## Active Environment
+- Branch: fix/delete-auto-clean.
+- Previous STATE.md lists Backend API http://localhost:5000 and UI http://localhost:5173; these services were not checked this session.
+- Workspace agent files: .agents/agents/.
+- Global Codex agent config: C:\Users\nhastar\.codex\agents\.
+
+## Next Steps
+- Refresh the IDE agent list if the four new workspace agents do not appear immediately.
+- Use one of the four agents by its name for the matching task.
+## Last Session
 - **Environment**: Antigravity IDE (`fix/timeline-clip-selection`)
 - **Branch**: `fix/timeline-clip-selection` (tracking `origin/fix/timeline-clip-selection`)
 - **Timestamp**: 2026-11-16T22:27:00+07:00
