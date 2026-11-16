@@ -686,7 +686,7 @@ function TimelineTracksCanvas({
               if (onSelectSegment) onSelectSegment(null);
             }
           }}
-          className={`video-clip-block ${isSelected ? 'selected' : ''} ${isDragging ? 'is-dragging' : ''} ${isSliver ? 'clip-sliver' : ''}`}
+          className={`video-clip-block ${isSelected ? 'selected' : ''} ${isDragging ? 'is-dragging' : ''} ${isSliver ? 'clip-sliver' : ''} ${clip.isMuted ? 'is-clip-muted' : ''}`}
           style={{
             cursor: isDragging ? 'grabbing' : 'grab',
             left: clipLeft,
@@ -696,7 +696,7 @@ function TimelineTracksCanvas({
             transition: isDragging ? 'none' : undefined,
             pointerEvents: isDragging ? 'none' : 'auto',
           }}
-          title={`${clip.name} [${startSec.toFixed(1)}s - ${endSec.toFixed(1)}s]`}
+          title={`${clip.name} [${startSec.toFixed(1)}s - ${endSec.toFixed(1)}s]${clip.isMuted ? ' (Muted 🔇)' : ''}`}
         >
           {/* Left Trim Handle - only when selected */}
           {isSelected && !isSliver && (
@@ -715,11 +715,16 @@ function TimelineTracksCanvas({
 
           {!isSliver && (
             <>
-              {/* Row 1: Label line (12px, 500, single line truncate, zero icons) */}
+              {/* Row 1: Label line (12px, 500, single line truncate) */}
               <div className="clip-label-line">
                 {canRenderLabel && (
                   <span className="clip-label-text" title={`${cleanName} (${(endSec - startSec).toFixed(1)}s)`}>
                     {cleanName}
+                  </span>
+                )}
+                {clip.isMuted && (
+                  <span className="clip-mini-muted-badge" title="សំឡេងវីដេអូដើមត្រូវបានបិទ (Muted 🔇)">
+                    <VolumeX size={10} color="#f87171" />
                   </span>
                 )}
               </div>

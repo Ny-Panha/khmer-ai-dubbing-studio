@@ -36,7 +36,7 @@ export default function AudioDuckingPanel({
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
           <span style={{ fontSize: '0.7rem', color: duckingVal === 0 ? 'var(--color-error)' : 'var(--accent-cyan)', fontWeight: 600 }}>
-            {duckingVal === 0 ? 'Mute 100%' : `Original ${Math.round(duckingVal * 100)}%`}
+            {duckingVal === 0 ? 'Mute on Voice (0%)' : `Original ${Math.round(duckingVal * 100)}%`}
           </span>
           {isOpen ? <ChevronUp size={14} color="var(--text-dim)" /> : <ChevronDown size={14} color="var(--text-dim)" />}
         </div>
@@ -137,6 +137,11 @@ export default function AudioDuckingPanel({
               className="capcut-slider"
               title="Adjust Original Drama Audio from 0% to 100%"
             />
+            {duckingVal === 0 && (
+              <div style={{ fontSize: '0.68rem', color: '#f87171', marginTop: 3 }}>
+                🔇 បិទសំឡេងនិយាយដើមលើឃ្លា Voice (Mute Speech) និងរក្សាភ្លេងធម្មតាលើចន្លោះ Gap
+              </div>
+            )}
             {duckingVal > 0 && duckingVal < 0.08 && (
               <div style={{ fontSize: '0.68rem', color: 'var(--accent-cyan)', marginTop: 3 }}>
                 💡 កម្រិតសំឡេងដើម ({Math.round(duckingVal * 100)}%) គឺស្រាលខ្លាំង (Whisper Level)។ ស្តង់ដារទូទៅគឺ 15%។

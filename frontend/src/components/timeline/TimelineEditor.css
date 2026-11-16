@@ -764,6 +764,26 @@
   letter-spacing: 0.04em;
 }
 
+.video-clip-block.is-clip-muted {
+  border-color: rgba(239, 68, 68, 0.45);
+}
+
+.video-clip-block.is-clip-muted .filmstrip-content-row {
+  opacity: 0.65;
+}
+
+.clip-mini-muted-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 4px;
+  background: rgba(239, 68, 68, 0.25);
+  border: 1px solid rgba(248, 113, 113, 0.35);
+  padding: 1px 3px;
+  border-radius: 3px;
+  vertical-align: middle;
+}
+
 /* Cross-Track Drag and Drop Target Highlighting */
 .track-lane.is-drag-over {
   outline: 2px dashed rgba(56, 189, 248, 0.6) !important;

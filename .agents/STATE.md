@@ -3,7 +3,27 @@
 ## Last Session
 - **Environment**: Antigravity IDE (`chore/remove-ppocr-local`)
 - **Branch**: `chore/remove-ppocr-local` (tracking `origin/chore/remove-ppocr-local`)
-- **Timestamp**: 2026-11-16T12:00:00+07:00
+- **Timestamp**: 2026-11-16T13:45:00+07:00
+
+## Summary: Timeline Dialogue Cut Mute (bit slg yy) & Gap Simple Audio Feature
+1. **Auto-Mute Dialogue Cuts in `autoSplitVideoBySegments` (`timelineUtils.js`)**:
+   - Dialogue video cuts (`#1, #2, #3...`) matching voice cues now default to `isMuted: true` (bit slg yy), muting original Chinese speech so the Khmer AI Voice speaks cleanly.
+   - Gap clips (`Gap`, `Outro`) remain `isMuted: false` (berk slg simple) preserving natural drama BGM and ambient sound effects between speeches.
+
+2. **Timeline Toolbar 1-Click Control (`TimelineToolbar.jsx`)**:
+   - Added `[🔇 Mute Voice Cuts] / [🔊 Voice Muted]` toggle button in Group B next to `Auto-Cut by Subs`.
+   - Allows 1-click bulk toggle of all dialogue cuts without touching gap clips.
+
+3. **Visual Feedback on Timeline Clips (`TimelineTracksCanvas.jsx` & `TimelineEditor.css`)**:
+   - Added mini `🔇` (`VolumeX`) badge and `.is-clip-muted` styling to muted video clips so the user can easily see dialogue clips are muted while Gap clips remain normal.
+
+4. **Player Preview Volume Handling (`VideoPlayerPreview.jsx` & `AudioDuckingPanel.jsx`)**:
+   - At 0% ducking (or when dialogue clips are muted), `VideoPlayerPreview.jsx` mutes during voice speech while cleanly unmuting original audio during gaps.
+
+5. **Verification**:
+   - Created unit test: `backend/tests/timeline_voice_cut_mute_gap_simple.test.js` (PASSED).
+   - Frontend build (`npm run build --prefix frontend`): Passed in 638ms.
+   - Test suites: 19 passed / 0 failed.
 
 ## Summary: Gemini Quota Modal De-Slop (/agents-design) & False 401 Quota Ban Fix
 1. **Frontend UI De-Slop & Polish (`GeminiQuotaModal.jsx`)**:

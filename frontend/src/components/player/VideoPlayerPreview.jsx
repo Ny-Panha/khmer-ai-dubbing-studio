@@ -1162,9 +1162,22 @@ function VideoPlayerPreview({
 
     const isDemucsActive = Boolean(voiceSettings?.enableDemucs && cleanBgAudioUrl);
 
-    if (duckVal === 0 || isCurrentVideoClipMuted || isDemucsActive) {
+    if (isDemucsActive) {
       if (!v.muted) v.muted = true;
       if (v.volume !== 0) v.volume = 0;
+    } else if (isCurrentVideoClipMuted) {
+      // Live Mute for muted video clips on dialogue (bit slg yy)
+      if (!v.muted) v.muted = true;
+      if (v.volume !== 0) v.volume = 0;
+    } else if (duckVal === 0) {
+      // Simple Ducking with 0% ducking: Mute during voice cues (bit slg yy), but UNMUTE during Gaps (berk slg simple)
+      if (isSpeaking) {
+        if (!v.muted) v.muted = true;
+        if (v.volume !== 0) v.volume = 0;
+      } else {
+        if (v.muted) v.muted = false;
+        if (v.volume !== 1.0) v.volume = 1.0;
+      }
     } else {
       if (v.muted) v.muted = false;
       // Proportional volume scaling: never force a 25% floor when user requests quiet audio (e.g. 1% -> 0.01)

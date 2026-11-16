@@ -1,7 +1,8 @@
 import React from 'react';
 import {
   Plus, Undo2, Redo2, Scissors, Trash2, Film, Sparkles, RotateCcw,
-  ZoomOut, ZoomIn, Maximize2, LocateFixed, Magnet, MessageSquare, Zap
+  ZoomOut, ZoomIn, Maximize2, LocateFixed, Magnet, MessageSquare, Zap,
+  Volume2, VolumeX
 } from 'lucide-react';
 import { formatMinSec } from '../../utils/timestampUtils';
 
@@ -129,13 +130,30 @@ export default function TimelineToolbar({
                 type="button"
                 onClick={onAutoSplitVideo}
                 className={`timeline-pill-tool timeline-segment-option ${isAutoCutMode ? 'is-active-mode' : ''}`}
-                title="✂️ Auto-Cut by Subs: កាត់ Video ជាកំណាត់ៗតាម Subtitle"
+                title="✂️ Auto-Cut by Subs: កាត់ Video ជាកំណាត់ៗតាម Subtitle (បិទសំឡេងនិយាយលើឃ្លា និងរក្សាភ្លេង Gap ស្វ័យប្រវត្តិ)"
                 disabled={!scriptSegments || scriptSegments.length === 0}
               >
                 <Scissors size={12} />
                 <span>Auto-Cut by Subs</span>
               </button>
             )}
+            {onToggleMuteAllCuts && videoClips && videoClips.length > 1 && (() => {
+              const dialogueClips = videoClips.filter((c) => c.isDialogue);
+              const targetClips = dialogueClips.length > 0 ? dialogueClips : videoClips;
+              const areAllCutsMuted = targetClips.length > 0 && targetClips.every((c) => Boolean(c.isMuted));
+              return (
+                <button
+                  type="button"
+                  onClick={() => onToggleMuteAllCuts(true)}
+                  className={`timeline-pill-tool timeline-segment-option ${areAllCutsMuted ? 'is-active-mode' : ''}`}
+                  title={areAllCutsMuted ? "🔊 បើកសំឡេងដើមលើឃ្លាទាំងអស់ឡើងវិញ" : "🔇 បិទសំឡេងនិយាយលើឃ្លាទាំងអស់ (រក្សាភ្លេង Gap ដើម)"}
+                  style={areAllCutsMuted ? { borderColor: 'rgba(239, 68, 68, 0.6)', color: '#f87171' } : {}}
+                >
+                  {areAllCutsMuted ? <VolumeX size={12} color="#f87171" /> : <Volume2 size={12} />}
+                  <span>{areAllCutsMuted ? 'Voice Muted' : 'Mute Voice Cuts'}</span>
+                </button>
+              );
+            })()}
           </div>
         )}
 

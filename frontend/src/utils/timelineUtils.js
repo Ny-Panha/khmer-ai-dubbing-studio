@@ -681,7 +681,7 @@ export function autoSplitVideoBySegments(segments = [], totalDuration = 0, video
       isDialogue: true,
       segmentIndex: it.index,
       segmentId: it.index,
-      isMuted: false,
+      isMuted: true, // Auto-mute dialogue cuts (bit slg yy) so Khmer Voice speaks cleanly while Gaps stay unmuted (berk slg simple)
     });
 
     curTime = clipEnd;
