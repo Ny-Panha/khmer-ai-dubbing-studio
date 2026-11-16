@@ -171,29 +171,55 @@ function isAuthOrInvalidKeyError(err) {
 }
 
 /**
- * Checks if an error is a temporary rate limit or quota error (429 / 503).
+ * Checks if an error is a model-level overload, service outage, or gateway timeout
+ * (503 Service Unavailable / High Demand, 504 Deadline Exceeded / Gateway Timeout).
+ * NOTE: Model overload is MODEL-SPECIFIC, NOT key-specific.
+ * Rotating API keys within the same model is useless and will only trigger false key cooldowns.
+ * The system must fast-fail out of the key pool immediately so the caller's model cascade
+ * can switch to a different model (e.g. from gemini-3.5-flash-lite to gemini-3.1-flash-lite).
+ */
+function isModelOverloadOrUnavailable(err) {
+  if (!err) return false;
+  const status = err.status || err.statusCode;
+  const msg = String(err.message || err.toString() || '').toLowerCase();
+  return (
+    status === 503 ||
+    status === 504 ||
+    msg.includes('503') ||
+    msg.includes('504') ||
+    msg.includes('high demand') ||
+    msg.includes('unavailable') ||
+    msg.includes('deadline exceeded') ||
+    msg.includes('deadline_exceeded') ||
+    msg.includes('deadline expired') ||
+    msg.includes('gateway timeout') ||
+    msg.includes('etimedout') ||
+    msg.includes('overloaded') ||
+    msg.includes('service unavailable')
+  );
+}
+
+/**
+ * Checks if an error is a temporary rate limit or quota error (429 RESOURCE_EXHAUSTED).
  * Note: 401/403 are explicitly NOT treated as quota/rate limits.
+ * Model-level 503/504 overloads are handled separately to avoid useless key rotation loops.
  */
 function isQuotaOrRateLimitError(err) {
   if (!err) return false;
   if (isAuthOrInvalidKeyError(err)) return false;
+  if (isModelOverloadOrUnavailable(err)) return false;
   const status = err.status || err.statusCode;
   const msg = String(err.message || err.toString() || '').toLowerCase();
   return (
     status === 429 ||
-    status === 503 ||
     msg.includes('429') ||
-    msg.includes('503') ||
     msg.includes('resource_exhausted') ||
     msg.includes('quota') ||
     msg.includes('rate limit') ||
     msg.includes('too many requests') ||
-    msg.includes('high demand') ||
     msg.includes('fetch failed') ||
     msg.includes('network') ||
     msg.includes('econnreset') ||
-    msg.includes('etimedout') ||
-    msg.includes('timeout') ||
     msg.includes('socket hang up')
   );
 }
@@ -402,7 +428,23 @@ function createSmartGenAIClient(initialKeyInput = null) {
           continue;
         }
 
-        // 2. Temporary Quota / Rate Limit (429 / 503)
+        // 2. Model Overload / 503 High Demand / 504 Timeout
+        // Fast-fail immediately without rotating keys so caller model cascade can switch models at 0ms delay!
+        if (isModelOverloadOrUnavailable(err)) {
+          if (modelName) {
+            try {
+              geminiQuotaTracker.recordModelProbeStatus(modelName, {
+                statusCode: err.status || err.statusCode || 503,
+                message: err.message,
+                latencyMs: Date.now() - startedAt,
+              });
+            } catch (_) {}
+          }
+          console.warn(`[GeminiKeyPool] ⚡ Model "${modelName || 'current'}" hit 503/504 high demand/timeout. Fast-failing immediately to caller cascade...`);
+          throw err;
+        }
+
+        // 3. Temporary Per-Key Quota / Rate Limit (429 RESOURCE_EXHAUSTED)
         if (isQuotaOrRateLimitError(err)) {
           try {
             geminiQuotaTracker.recordRateLimit(currentKey, err, {
@@ -495,6 +537,7 @@ module.exports = {
   createSmartGenAIClient,
   isAuthOrInvalidKeyError,
   isQuotaOrRateLimitError,
+  isModelOverloadOrUnavailable,
   markKeyAsInvalid,
   isKeyInvalid,
   getGlobalInvalidKeys,

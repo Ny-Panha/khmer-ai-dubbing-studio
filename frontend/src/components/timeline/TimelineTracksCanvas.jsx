@@ -142,9 +142,9 @@ function TimelineTracksCanvas({
 
     const resolveIsFemale = (seg) => {
       const speakerName = String(seg?.speaker || seg?.speakerName || '').trim();
-      const explicitGender = String(seg?.speakerGender || seg?.gender || '').toUpperCase().trim();
-      const isExplicitFemale = explicitGender === 'FEMALE' || explicitGender === 'GIRL' || explicitGender === 'WOMAN' || speakerName.includes('ស្រី');
-      const isExplicitMale = explicitGender === 'MALE' || explicitGender === 'BOY' || explicitGender === 'MAN' || speakerName.includes('ប្រុស');
+      const explicitGender = String(seg?.speakerGender || seg?.gender || seg?.voiceGender || '').toUpperCase().trim();
+      const isExplicitFemale = explicitGender === 'FEMALE' || explicitGender === 'GIRL' || explicitGender === 'WOMAN' || speakerName.includes('ស្រី') || speakerName.toLowerCase().includes('female');
+      const isExplicitMale = (explicitGender === 'MALE' || explicitGender === 'BOY' || explicitGender === 'MAN' || speakerName.includes('ប្រុស') || speakerName.toLowerCase().includes('male')) && !isExplicitFemale;
       const activeVoiceId = String(
         seg?.voiceId ||
         (speakerRegistry && (speakerRegistry[seg?.speakerId]?.voiceId || speakerRegistry[speakerName]?.voiceId)) ||
@@ -316,9 +316,9 @@ function TimelineTracksCanvas({
     );
 
     const speakerName = (seg.speaker || seg.speakerName || '').trim();
-    const explicitGender = String(seg.speakerGender || seg.gender || '').toUpperCase().trim();
-    const isExplicitFemale = explicitGender === 'FEMALE' || explicitGender === 'GIRL' || explicitGender === 'WOMAN';
-    const isExplicitMale = explicitGender === 'MALE' || explicitGender === 'BOY' || explicitGender === 'MAN';
+    const explicitGender = String(seg.speakerGender || seg.gender || seg.voiceGender || '').toUpperCase().trim();
+    const isExplicitFemale = explicitGender === 'FEMALE' || explicitGender === 'GIRL' || explicitGender === 'WOMAN' || speakerName.includes('ស្រី') || speakerName.toLowerCase().includes('female');
+    const isExplicitMale = (explicitGender === 'MALE' || explicitGender === 'BOY' || explicitGender === 'MAN' || speakerName.includes('ប្រុស') || speakerName.toLowerCase().includes('male')) && !isExplicitFemale;
 
     const activeVoiceId = seg.voiceId || 
       (speakerRegistry && (speakerRegistry[seg.speakerId]?.voiceId || speakerRegistry[speakerName]?.voiceId)) || 
@@ -652,10 +652,30 @@ function TimelineTracksCanvas({
     const isSelected = activeClipId === clip.id || isAssociatedWithSeg;
 
     const isSliver = clipWidth < 5;
-    const canRenderLabel = clipWidth >= 32;
-    const cleanName = (clip.name || 'Video Clip')
+    const canRenderLabel = clipWidth >= 22;
+    const isCompactClip = clipWidth < 52;
+    const rawCleanName = (clip.name || 'Video Clip')
       .replace(/\s*\(\d+(\.\d+)?s\)/g, '')
       .trim();
+
+    // Responsive, clean label for video clips:
+    // Narrow clips (< 52px): `#10` (clean centered badge, no truncated overflow text)
+    // Medium clips (52px - 90px): Clean gender `#10 ស្រី` or `#10 ប្រុស`
+    // Wide clips (>= 90px): Full clean name
+    let videoClipLabel = rawCleanName;
+    if (clip.isDialogue && clip.segmentIndex) {
+      if (isCompactClip) {
+        videoClipLabel = `#${clip.segmentIndex}`;
+      } else if (clipWidth < 90) {
+        const hasFemale = rawCleanName.includes('ស្រី');
+        const hasMale = rawCleanName.includes('ប្រុស');
+        if (hasFemale) {
+          videoClipLabel = `#${clip.segmentIndex} ស្រី`;
+        } else if (hasMale) {
+          videoClipLabel = `#${clip.segmentIndex} ប្រុស`;
+        }
+      }
+    }
 
     return (
       <React.Fragment key={clip.id}>
@@ -716,10 +736,10 @@ function TimelineTracksCanvas({
           {!isSliver && (
             <>
               {/* Row 1: Label line (12px, 500, single line truncate) */}
-              <div className="clip-label-line">
+              <div className={`clip-label-line ${isCompactClip ? 'compact-centered' : ''}`}>
                 {canRenderLabel && (
-                  <span className="clip-label-text" title={`${cleanName} (${(endSec - startSec).toFixed(1)}s)`}>
-                    {cleanName}
+                  <span className={`clip-label-text ${isCompactClip ? 'clip-compact-id' : ''}`} title={`${rawCleanName} (${(endSec - startSec).toFixed(1)}s)`}>
+                    {videoClipLabel}
                   </span>
                 )}
                 {clip.isMuted && (

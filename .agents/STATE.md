@@ -3,24 +3,26 @@
 ## Last Session
 - **Environment**: Antigravity IDE (`chore/remove-ppocr-local`)
 - **Branch**: `chore/remove-ppocr-local` (tracking `origin/chore/remove-ppocr-local`)
-- **Timestamp**: 2026-11-16T13:52:00+07:00
+- **Timestamp**: 2026-11-16T15:28:00+07:00
 
-## Summary: Timeline Selective Voice Clip Muting (kelang ot voice baj bit slg te)
-1. **Selective Clip Muting Based on Actual Voice Audio (`timelineUtils.js` & `useClipOperations.js`)**:
-   - `autoSplitVideoBySegments` and `handleToggleMuteAllCuts` now check `hasVoiceAudio` (presence of `audioFile`, `audioPath`, `audioUrl`, or `audioDurationSec > 0`).
-   - Only video cuts that ACTUALLY have voice audio generated get `isMuted: true` (bit slg yy).
-   - Video cuts that do NOT have voice audio (`kelang ot voice`) and `Gap` clips remain `isMuted: false` (berk slg simple) so ambient drama audio is never silenced!
+## Summary: Gemini 503 High Demand Fast-Fail & Timeline UI ឃ្លា Polish
+1. **503 High Demand Fast-Fail (`geminiKeyManager.js` & `geminiService.js`)**:
+   - **Root Cause**: 503 "This model is currently experiencing high demand" is a Google server-side model overload, not an API Key quota limit. Previously, `runWithPool` treated 503 as a rate limit and rotated Key #1 -> Key #2 -> Key #3 -> Key #4 on the exact same overloaded model!
+   - **Fix Applied**: Added `isModelOverloadOrUnavailable(err)`. On 503 or 504, `runWithPool` fast-fails immediately (0ms delay) without burning keys or triggering key cooldowns, allowing the caller's model cascade (`callGeminiVisionWithRetry` and `generateContentWithModelFallback`) to immediately switch models (e.g. fallback to `gemini-3.1-flash-lite`).
+   - Added unit test #8 in `gemini_key_pool_and_504_retry.test.js` verifying 503 throws on the first attempt without rotating keys.
 
-2. **Decoupled Track Header Mute from Cut Mutes (`TimelineTrackHeaders.jsx` & `TimelineTracksCanvas.jsx`)**:
-   - Removed `areAllCutsMuted` triggering track-level mute. The `VIDEO 1` track header and lane will no longer falsely show full-track red `🔇` or dim the whole lane when dialogue cuts are muted.
+2. **Accurate Quota Modal Header & Backend Sync (`geminiQuotaTracker.js`)**:
+   - Backend `isDailyExhausted` now checks `(inCooldown && keyModelCd.cooldownType === 'rpd_limit') || (rec.todayRequests >= dailyRpdPerKey)`.
+   - When a key reaches or exceeds the daily limit (e.g. 521 requests >= 500 limit), it is accurately marked exhausted and deducted from `readyKeys` and `totalRPM`, eliminating header badge discrepancy (e.g. no more "6/6 keys ready" while Key #4 shows "0 Left").
 
-3. **Speaking Intervals Strict Audio Guard (`VideoPlayerPreview.jsx`)**:
-   - `speakingIntervals` now requires actual audio (`hasAudio`), preventing un-voiced segments from falsely ducking or muting the video audio.
+3. **Timeline UI ឃ្លា & Gender Alignment (`TimelineTracksCanvas.jsx` & `TimelineEditor.jsx`)**:
+   - **Voice Gender Resolution**: In `renderVoiceSegment`, enhanced female detection to check `speakerName.includes('ស្រី')`, `seg.voiceGender`, and `female` tokens. Voice clips with female speakers now correctly render `#1 ស្រី` in pink (`voice-female`), aligning 1:1 with the `#1 ស្រី` video cut directly above it.
+   - **Responsive Video Clip Labels**: Video cuts on VIDEO 1 now render compact IDs (`#10`) on narrow clips (< 52px) and clean gender names (`#10 ស្រី` or `#10 ប្រុស`) on medium clips (52px - 90px), eliminating awkwardly truncated overflow text like `#10 ស្រី ចាប់...`.
 
 4. **Verification**:
-   - Created & updated unit test: `backend/tests/timeline_voice_cut_mute_gap_simple.test.js` (PASSED).
-   - Frontend build (`npm run build --prefix frontend`): Passed in 3.71s.
-   - All tests: 15 passed / 0 failed.
+   - All backend test suites passed: 15 passed / 0 failed.
+   - Frontend build (`npm run build --prefix frontend`): Passed in 1.56s.
+   - Backend daemon live on `http://localhost:5000`.
 
 ## Summary: Gemini Quota Modal De-Slop (/agents-design) & False 401 Quota Ban Fix
 1. **Frontend UI De-Slop & Polish (`GeminiQuotaModal.jsx`)**:

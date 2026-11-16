@@ -11,6 +11,7 @@ const {
   GeminiKeyPool,
   isAuthOrInvalidKeyError,
   isQuotaOrRateLimitError,
+  isModelOverloadOrUnavailable,
   markKeyAsInvalid,
   isKeyInvalid,
   resetInvalidKeys,
@@ -39,9 +40,12 @@ test('GeminiKeyPool & 504 Timeout Resilience Suite', async (t) => {
     assert.strictEqual(isQuotaOrRateLimitError({ status: 401, message: 'API key not valid' }), false);
     assert.strictEqual(isQuotaOrRateLimitError({ status: 403, message: 'PERMISSION_DENIED' }), false);
 
-    // 429 / 503 are quota errors
+    // 429 is per-key quota error
     assert.strictEqual(isQuotaOrRateLimitError({ status: 429, message: 'RESOURCE_EXHAUSTED' }), true);
-    assert.strictEqual(isQuotaOrRateLimitError({ status: 503, message: 'Service Unavailable' }), true);
+    // 503 / 504 are model overload errors (handled separately from key rotation)
+    assert.strictEqual(isModelOverloadOrUnavailable({ status: 503, message: 'This model is currently experiencing high demand. Spikes in demand are usually temporary.' }), true);
+    assert.strictEqual(isModelOverloadOrUnavailable({ status: 504, message: 'DEADLINE_EXCEEDED' }), true);
+    assert.strictEqual(isQuotaOrRateLimitError({ status: 503, message: 'This model is currently experiencing high demand.' }), false);
 
     // 504 vision error classifier
     assert.strictEqual(isRetryableVisionError({ status: 504, message: '504 Gateway Timeout' }), true);
@@ -234,5 +238,39 @@ test('GeminiKeyPool & 504 Timeout Resilience Suite', async (t) => {
       }
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
+  });
+
+  await t.test('8. 503 High Demand fast-fails immediately from createSmartGenAIClient without cycling keys', async () => {
+    const fakeKeys = 'AIzaSyFakeKey1_ValidLen,AIzaSyFakeKey2_ValidLen,AIzaSyFakeKey3_ValidLen';
+    const smartClient = createSmartGenAIClient(fakeKeys);
+    let attemptsCount = 0;
+
+    // Monkey-patch internal pool client caching for controlled test
+    smartClient.pool.clientCache.set('AIzaSyFakeKey1_ValidLen', {
+      models: {
+        generateContent: async () => {
+          attemptsCount++;
+          const err = new Error('503 UNAVAILABLE: This model is currently experiencing high demand. Spikes in demand are usually temporary.');
+          err.status = 503;
+          throw err;
+        },
+      },
+    });
+
+    const initialKey = smartClient.activeKey;
+
+    await assert.rejects(
+      async () => {
+        await smartClient.models.generateContent({
+          model: 'gemini-3.5-flash-lite',
+          contents: [{ text: 'test' }],
+        });
+      },
+      (err) => err.status === 503 || err.message.includes('high demand')
+    );
+
+    // CRITICAL: Must fast-fail on first key (1 attempt) instead of looping through all 3 keys!
+    assert.strictEqual(attemptsCount, 1, '503 High Demand must throw on 1st attempt without cycling keys');
+    assert.strictEqual(smartClient.activeKey, initialKey, 'Key must not be rotated on model overload');
   });
 });

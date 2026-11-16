@@ -131,9 +131,9 @@ function TimelineEditor({
 
     const resolveIsFemale = (seg) => {
       const speakerName = String(seg?.speaker || seg?.speakerName || '').trim();
-      const explicitGender = String(seg?.speakerGender || seg?.gender || '').toUpperCase().trim();
-      const isExplicitFemale = explicitGender === 'FEMALE' || explicitGender === 'GIRL' || explicitGender === 'WOMAN' || speakerName.includes('ស្រី');
-      const isExplicitMale = explicitGender === 'MALE' || explicitGender === 'BOY' || explicitGender === 'MAN' || speakerName.includes('ប្រុស');
+      const explicitGender = String(seg?.speakerGender || seg?.gender || seg?.voiceGender || '').toUpperCase().trim();
+      const isExplicitFemale = explicitGender === 'FEMALE' || explicitGender === 'GIRL' || explicitGender === 'WOMAN' || speakerName.includes('ស្រី') || speakerName.toLowerCase().includes('female');
+      const isExplicitMale = (explicitGender === 'MALE' || explicitGender === 'BOY' || explicitGender === 'MAN' || speakerName.includes('ប្រុស') || speakerName.toLowerCase().includes('male')) && !isExplicitFemale;
       const activeVoiceId = String(
         seg?.voiceId ||
         (speakerRegistry && (speakerRegistry[seg?.speakerId]?.voiceId || speakerRegistry[speakerName]?.voiceId)) ||

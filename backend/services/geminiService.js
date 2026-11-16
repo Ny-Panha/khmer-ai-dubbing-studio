@@ -9,6 +9,7 @@ const {
   extractAllGeminiKeys,
   isAuthOrInvalidKeyError,
   isQuotaOrRateLimitError,
+  isModelOverloadOrUnavailable,
 } = require("./geminiKeyManager");
 const {
   DUBBING_CASCADE_MODELS,
@@ -89,16 +90,21 @@ function isModelFallbackEligibleError(err) {
   if (!err) return false;
   if (isAuthOrInvalidKeyError(err)) return false;
   if (isQuotaOrRateLimitError(err)) return true;
+  if (isModelOverloadOrUnavailable(err)) return true;
 
   const status = err.status || err.statusCode;
   const msg = String(err.message || err.toString() || "").toLowerCase();
   return (
     status === 404 ||
+    status === 503 ||
     status === 504 ||
     msg.includes("404") ||
+    msg.includes("503") ||
     msg.includes("504") ||
     msg.includes("not_found") ||
     msg.includes("not found") ||
+    msg.includes("high demand") ||
+    msg.includes("unavailable") ||
     msg.includes("no longer available") ||
     msg.includes("deadline_exceeded") ||
     msg.includes("deadline expired") ||

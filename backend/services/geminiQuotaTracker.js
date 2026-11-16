@@ -775,7 +775,10 @@ class GeminiQuotaTracker {
         ? { inCooldown: false, cooldownSec: 0, cooldownType: null, cooldownUntil: 0, reason: null }
         : this.isKeyInCooldown(rawKey, now, activePrimaryModel);
       const inCooldown = !isInvalid && keyModelCd.inCooldown;
-      const isDailyExhausted = !isInvalid && inCooldown && keyModelCd.cooldownType === 'rpd_limit';
+      const isDailyExhausted = !isInvalid && (
+        (inCooldown && keyModelCd.cooldownType === 'rpd_limit') ||
+        ((rec.todayRequests || 0) >= dailyRpdPerKey)
+      );
       const isRateLimited = !isInvalid && inCooldown && !isDailyExhausted;
 
       const rpmUsed = rec.recentTimestamps.length;
