@@ -698,13 +698,19 @@ class GeminiQuotaTracker {
       }
       if (!hasReadyKey) {
         exhaustedOrRetired.push(modelId);
-      } else if (mRec?.lastProbeCode === 503) {
+      } else if (mRec?.lastProbeCode === 503 || mRec?.lastProbeCode === 504) {
         busyOrDegraded.push(modelId);
       } else {
         ready.push(modelId);
       }
     }
-    return [...ready, ...busyOrDegraded, ...exhaustedOrRetired];
+    // High-Quota Flash-Lite models (15 RPM, 500 RPD) should always take precedence over heavy Flash models
+    const isLiteModel = (id) => String(id).includes('flash-lite');
+    const sortedReady = [
+      ...ready.filter(isLiteModel),
+      ...ready.filter((id) => !isLiteModel(id)),
+    ];
+    return [...sortedReady, ...busyOrDegraded, ...exhaustedOrRetired];
   }
 
   /**

@@ -143,6 +143,24 @@ function isRetryableVisionError(err) {
   );
 }
 
+function isTimeoutOrOverloadError(err) {
+  const msg = String(err?.message || '').toUpperCase();
+  const status = err?.status || err?.code;
+  return (
+    status === 503 ||
+    status === 504 ||
+    msg.includes('503') ||
+    msg.includes('504') ||
+    msg.includes('DEADLINE_EXCEEDED') ||
+    msg.includes('DEADLINE EXPIRED') ||
+    msg.includes('GATEWAY TIMEOUT') ||
+    msg.includes('HIGH DEMAND') ||
+    msg.includes('UNAVAILABLE') ||
+    msg.includes('ETIMEDOUT') ||
+    msg.includes('TIMEOUT')
+  );
+}
+
 /**
  * Helper: Call Gemini Vision with multi-model cascade and exponential backoff retry on 429 / 503 / 504
  */
@@ -163,8 +181,16 @@ async function callGeminiVisionWithRetry(aiClient, modelName, contents, maxRetri
       if (signal?.aborted) {
         throw createAbortError('Stage 3 OCR aborted');
       }
+      let timeoutId = null;
       try {
-        const resp = await aiClient.models.generateContent({
+        const timeoutMs = 25000;
+        const timeoutPromise = new Promise((_, reject) => {
+          timeoutId = setTimeout(() => {
+            reject(new Error(`Timeout: Gemini Vision OCR on ${currentModel} exceeded ${timeoutMs}ms deadline`));
+          }, timeoutMs);
+        });
+
+        const callPromise = aiClient.models.generateContent({
           model: currentModel,
           contents,
           config: {
@@ -172,11 +198,16 @@ async function callGeminiVisionWithRetry(aiClient, modelName, contents, maxRetri
             responseMimeType: 'application/json',
           },
         });
+
+        const resp = await Promise.race([callPromise, timeoutPromise]);
+        clearTimeout(timeoutId);
+
         if (typeof onModelSuccess === 'function') {
           onModelSuccess(currentModel);
         }
         return resp;
       } catch (err) {
+        if (timeoutId) clearTimeout(timeoutId);
         if (err?.name === 'AbortError' || signal?.aborted) {
           throw err?.name === 'AbortError' ? err : createAbortError('Stage 3 OCR aborted');
         }
@@ -186,11 +217,20 @@ async function callGeminiVisionWithRetry(aiClient, modelName, contents, maxRetri
         if (!isRetryable) {
           throw err;
         }
-        if (attempt >= maxRetries) {
-          console.warn(`[Stage 3 OCR] Model ${currentModel} hit 429/503/504/timeout (${err.message}). Falling back to alternative cascade model...`);
+
+        // Fast-fail: If Google hits 504/503/Timeout/Overload, DO NOT hang retry on the same dead model!
+        // Immediately break to the next cascade model to prevent 4-5 minute stalls.
+        if (isTimeoutOrOverloadError(err) || attempt >= maxRetries) {
+          console.warn(`[Stage 3 OCR] Model ${currentModel} overloaded/timed out (${err.message}). Falling back immediately to next cascade model...`);
+          geminiQuotaTracker.recordModelProbeStatus(currentModel, {
+            statusCode: 504,
+            message: err.message,
+            latencyMs: 25000,
+          });
           break;
         }
-        const backoffMs = Math.min(3000, 1000 * attempt);
+
+        const backoffMs = Math.min(2000, 1000 * attempt);
         await sleepOrAbort(backoffMs, signal);
       }
     }
