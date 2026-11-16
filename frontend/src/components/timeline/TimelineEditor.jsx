@@ -6,6 +6,7 @@ import {
   moveClip,
   syncSegmentsWithMovedClip,
   deleteSegmentByIdOrIndex,
+  findSegmentIndex,
   resolveSegmentAtTime,
   computeTimelineScrollForTime,
 } from '../../utils/timelineUtils';
@@ -665,6 +666,7 @@ function TimelineEditor({
   useEffect(() => {
     if (!videoClips || videoClips.length !== 1 || !onUpdateClips) return;
     const singleClip = videoClips[0];
+    if (singleClip.name === 'Gap' || singleClip.id?.startsWith('clip-gap')) return;
     if ((singleClip.start || 0) === 0 && totalDuration > 15 && (singleClip.end || 0) < totalDuration - 2) {
       const healedClips = [{
         ...singleClip,
@@ -1488,10 +1490,10 @@ function TimelineEditor({
   const canDelete = Boolean(canDeleteSubtitle || canDeleteVideo);
 
   const handleDeleteSelected = useCallback(() => {
-    // 1. If user clicked/selected a Video Clip, delete the Video Clip!
-    if ((lastSelectedType === 'video' || selectedClipKind === 'video') && canDeleteVideo && onDeleteClip) {
+    if (selectedClipKind === 'video' && canDeleteVideo && onDeleteClip) {
       onDeleteClip(activeClipId);
       if (onSelectClip) onSelectClip(null);
+      if (onSelectSegment) onSelectSegment(null);
       if (onSelectClipKind) onSelectClipKind(null);
       setLastSelectedType('none');
       return;
@@ -1503,9 +1505,24 @@ function TimelineEditor({
       if (onDeleteSegment) {
         onDeleteSegment(selectedSegKey);
       } else {
-        const updated = deleteSegmentByIdOrIndex(scriptSegments, selectedSegKey);
-        if (onUpdateSegments) {
-          onUpdateSegments(updated, false, true);
+        const segmentIndex = findSegmentIndex(scriptSegments, selectedSegKey);
+        const segment = segmentIndex !== -1 ? scriptSegments[segmentIndex] : null;
+        const segmentKeys = [segment?.id, segment?.segmentId].filter((key) => key !== null && key !== undefined);
+        const matchingClip = videoClips.find((clip) =>
+          clip.isDialogue && segmentKeys.some((key) =>
+            [clip.segmentId, clip.segmentIndex].some((id) => id !== null && id !== undefined && String(id) === String(key))
+          )
+        );
+        if (matchingClip && onDeleteClip) {
+          onDeleteClip(matchingClip.id);
+        } else {
+          const segmentKey = segment
+            ? (segment._uid || segment.id || segment.segmentId || segmentIndex)
+            : selectedSegKey;
+          const updated = deleteSegmentByIdOrIndex(scriptSegments, segmentKey, { ripple: false, preserveIds: true });
+          if (onUpdateSegments) {
+            onUpdateSegments(updated, false, true);
+          }
         }
       }
       setSelectedSubId(null);
@@ -1519,13 +1536,12 @@ function TimelineEditor({
       return;
     }
 
-    // 3. Fallback: If only video clip was active
     if (canDeleteVideo && onDeleteClip) {
       onDeleteClip(activeClipId);
       if (onSelectClip) onSelectClip(null);
       setLastSelectedType('none');
     }
-  }, [lastSelectedType, canDeleteSubtitle, canDeleteVideo, selectedSegKey, scriptSegments, onDeleteSegment, onUpdateSegments, onSelectSegment, onDeleteClip, onSelectClip, activeClipId]);
+  }, [selectedClipKind, canDeleteSubtitle, canDeleteVideo, selectedSegKey, scriptSegments, onDeleteSegment, onUpdateSegments, onSelectSegment, onDeleteClip, onSelectClip, onSelectClipKind, activeClipId]);
 
 
   // 1. Pure 60FPS Hardware GPU Playhead Animation & 1:1 In-Sync Smooth Center Scroll

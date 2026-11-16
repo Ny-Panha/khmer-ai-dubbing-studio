@@ -273,6 +273,7 @@ function TimelineTracksCanvas({
     const audioLeft = startSec * pps;
     const audioWidth = Math.max(2, (endSec - startSec) * pps - 2);
     const segKey = seg._uid || (seg.id !== undefined && seg.id !== null ? seg.id : idx);
+    const segmentNumber = seg.segmentId ?? seg.id ?? idx + 1;
     const isDirectSegMatch = Boolean(
       (selectedSegmentId !== null && selectedSegmentId !== undefined && (
         (seg._uid && String(selectedSegmentId) === String(seg._uid)) || (seg.id !== undefined && seg.id !== null ? String(selectedSegmentId) === String(seg.id) : Number(selectedSegmentId) === idx)
@@ -282,7 +283,7 @@ function TimelineTracksCanvas({
       ))
     );
     const isAssociatedWithClip = Boolean(
-      activeClipId && videoClips?.some((c) => c.id === activeClipId && (c.segmentId === seg.id || c.segmentIndex === (idx + 1)))
+      activeClipId && videoClips?.some((c) => c.id === activeClipId && (c.segmentId === seg.id || c.segmentIndex === segmentNumber))
     );
     const isSelected = Boolean(
       (selectedClipKind === 'voice' || !selectedClipKind) && isDirectSegMatch
@@ -326,9 +327,9 @@ function TimelineTracksCanvas({
     const clipWidthPx = audioWidth;
     const isCompactClip = clipWidthPx < 48;
     const isWideClip = clipWidthPx >= 95;
-    const compactIdLabel = `#${idx + 1}${isOverrun ? '⚠️' : ''}`;
-    const mediumVoiceLabel = `#${idx + 1} ${speakerGenderLabel}${overMarker}${trimMarker}`;
-    const fullVoiceLabel = `#${idx + 1} ${speakerGenderLabel}${overMarker}${trimMarker}${pendingMarker}`;
+    const compactIdLabel = `#${segmentNumber}${isOverrun ? '⚠️' : ''}`;
+    const mediumVoiceLabel = `#${segmentNumber} ${speakerGenderLabel}${overMarker}${trimMarker}`;
+    const fullVoiceLabel = `#${segmentNumber} ${speakerGenderLabel}${overMarker}${trimMarker}${pendingMarker}`;
     const voiceLabel = isCompactClip ? compactIdLabel : (isWideClip ? fullVoiceLabel : mediumVoiceLabel);
 
     const isSliver = clipWidthPx < 5;
@@ -356,7 +357,7 @@ function TimelineTracksCanvas({
             setSelectedSubId(segKey);
             if (onSelectSegment) onSelectSegment(segKey);
             if (onSelectClip) {
-              const matchClip = videoClips?.find(c => c.segmentId === seg.id || c.segmentIndex === (idx + 1));
+              const matchClip = videoClips?.find(c => c.segmentId === seg.id || c.segmentIndex === segmentNumber);
               onSelectClip(matchClip ? matchClip.id : null);
             }
             onSeek(startSec);
@@ -371,7 +372,7 @@ function TimelineTracksCanvas({
             transition: isDragging ? 'none' : undefined,
             pointerEvents: isDragging && dragState?.mode === 'move' ? 'none' : 'auto',
           }}
-          title={`#${idx + 1} [${speakerTooltipLabel}] (${startSec.toFixed(1)}s - ${endSec.toFixed(1)}s)${isOverrun ? ` ⚠️ Audio Overrun (${Math.round((seg.overrunRatio || 0.4) * 100)}% cut)` : ''}\n"${khmerPreview || '(មិនទាន់មានអត្ថបទ / រង់ចាំសំឡេង)'}"`}
+          title={`#${segmentNumber} [${speakerTooltipLabel}] (${startSec.toFixed(1)}s - ${endSec.toFixed(1)}s)${isOverrun ? ` ⚠️ Audio Overrun (${Math.round((seg.overrunRatio || 0.4) * 100)}% cut)` : ''}\n"${khmerPreview || '(មិនទាន់មានអត្ថបទ / រង់ចាំសំឡេង)'}"`}
         >
           {/* Left Trim Handle - visible only on selected clip */}
           {isSelected && !isSliver && (
@@ -518,6 +519,7 @@ function TimelineTracksCanvas({
     const subLeft = startSec * pps;
     const subWidth = Math.max(2, (endSec - startSec) * pps - 2);
     const subKey = seg._uid || (seg.id !== undefined && seg.id !== null ? seg.id : idx);
+    const segmentNumber = seg.segmentId ?? seg.id ?? idx + 1;
     const isDirectSubMatch = Boolean(
       (selectedSubId !== null && selectedSubId !== undefined && (
         (seg._uid && String(selectedSubId) === String(seg._uid)) ||
@@ -529,7 +531,7 @@ function TimelineTracksCanvas({
       ))
     );
     const isAssociatedWithClip = Boolean(
-      activeClipId && videoClips?.some((c) => c.id === activeClipId && (c.segmentId === seg.id || c.segmentIndex === (idx + 1)))
+      activeClipId && videoClips?.some((c) => c.id === activeClipId && (c.segmentId === seg.id || c.segmentIndex === segmentNumber))
     );
     const isSelected = Boolean(
       (selectedClipKind === 'subtitle' || !selectedClipKind) && isDirectSubMatch
@@ -566,7 +568,7 @@ function TimelineTracksCanvas({
             setSelectedAudioId(subKey);
             if (onSelectSegment) onSelectSegment(subKey);
             if (onSelectClip) {
-              const matchClip = videoClips?.find(c => c.segmentId === seg.id || c.segmentIndex === (idx + 1));
+              const matchClip = videoClips?.find(c => c.segmentId === seg.id || c.segmentIndex === segmentNumber);
               onSelectClip(matchClip ? matchClip.id : null);
             }
             onSeek(startSec);
@@ -1138,7 +1140,7 @@ function TimelineTracksCanvas({
 
                 const isDragging = (dragState?.itemType === 'audio' || dragState?.itemType === 'subtitle') && dragState?.index === idx;
                 const isSelected = Boolean(
-                  (activeClipId && videoClips?.some((c) => c.id === activeClipId && (c.segmentId === seg.id || c.segmentIndex === (idx + 1)))) ||
+                  (activeClipId && videoClips?.some((c) => c.id === activeClipId && (c.segmentId === seg.id || c.segmentIndex === (seg.segmentId ?? seg.id ?? idx + 1)))) ||
                   (selectedSegmentId !== null && selectedSegmentId !== undefined && (
                     (seg._uid && String(selectedSegmentId) === String(seg._uid)) || (seg.id !== undefined && seg.id !== null ? String(selectedSegmentId) === String(seg.id) : Number(selectedSegmentId) === idx)
                   )) ||
@@ -1235,7 +1237,7 @@ function TimelineTracksCanvas({
 
                 const isDragging = (dragState?.itemType === 'audio' || dragState?.itemType === 'subtitle') && dragState?.index === idx;
                 const isSelected = Boolean(
-                  (activeClipId && videoClips?.some((c) => c.id === activeClipId && (c.segmentId === seg.id || c.segmentIndex === (idx + 1)))) ||
+                  (activeClipId && videoClips?.some((c) => c.id === activeClipId && (c.segmentId === seg.id || c.segmentIndex === (seg.segmentId ?? seg.id ?? idx + 1)))) ||
                   (selectedSegmentId !== null && selectedSegmentId !== undefined && (
                     (seg._uid && String(selectedSegmentId) === String(seg._uid)) || (seg.id !== undefined && seg.id !== null ? String(selectedSegmentId) === String(seg.id) : Number(selectedSegmentId) === idx)
                   )) ||

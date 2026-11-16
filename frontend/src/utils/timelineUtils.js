@@ -446,10 +446,12 @@ export function syncSegmentsWithMovedClip(clip, newStartOrClip, segments = []) {
  * @param {string} clipId 
  * @param {Object} [options]
  * @param {boolean} [options.allowEmpty=false]
+ * @param {boolean} [options.preserveIds=false]
+ * @param {boolean} [options.gapOnDelete=false]
  * @returns {Array}
  */
 export function deleteClipById(clips, clipId, options = {}) {
-  const { allowEmpty = true, ripple = true } = options;
+  const { allowEmpty = true, ripple = true, preserveIds = false, gapOnDelete = false } = options;
   if (!Array.isArray(clips) || clips.length === 0) return [];
   if (!allowEmpty && clips.length <= 1) return clips;
 
@@ -461,8 +463,40 @@ export function deleteClipById(clips, clipId, options = {}) {
   const targetEnd = Number.isFinite(targetClip.end) ? targetClip.end : targetStart;
   const dur = Math.max(0, parseFloat((targetEnd - targetStart).toFixed(3)));
 
-  const remaining = clips.filter((c) => c.id !== clipId);
-  if (remaining.length === 0) return [];
+  let remaining = clips.filter((c) => c.id !== clipId);
+  const isTargetDialogue = Boolean(targetClip.isDialogue || targetClip.segmentId || targetClip.segmentIndex || /^#\d+/.test(targetClip.name || ''));
+  if (remaining.length === 0 && !(gapOnDelete && isTargetDialogue)) return [];
+
+  if (gapOnDelete && isTargetDialogue) {
+    const gap = {
+      id: `clip-gap-delete-${Date.now()}`,
+      trackRow: targetClip.trackRow || 0,
+      trackId: targetClip.trackId || 'video-1',
+      start: targetStart,
+      end: targetEnd,
+      sourceStart: targetStart,
+      sourceEnd: targetEnd,
+      name: 'Gap',
+      isDialogue: false,
+      isMuted: false,
+    };
+    remaining = [...remaining, gap].sort((a, b) => a.start - b.start);
+    let gapIndex = remaining.findIndex((clip) => clip.id === gap.id);
+    const isGap = (clip) => clip && (clip.name === 'Gap' || clip.id?.startsWith('clip-gap'));
+    let gapStart = gap.start;
+    let gapEnd = gap.end;
+
+    if (gapIndex > 0 && isGap(remaining[gapIndex - 1]) && Math.abs(remaining[gapIndex - 1].end - gapStart) <= 0.02) {
+      gapStart = remaining[gapIndex - 1].start;
+      remaining.splice(gapIndex - 1, 1);
+      gapIndex -= 1;
+    }
+    if (gapIndex < remaining.length - 1 && isGap(remaining[gapIndex + 1]) && Math.abs(gapEnd - remaining[gapIndex + 1].start) <= 0.02) {
+      gapEnd = remaining[gapIndex + 1].end;
+      remaining.splice(gapIndex + 1, 1);
+    }
+    remaining[gapIndex] = { ...gap, start: gapStart, end: gapEnd, sourceStart: gapStart, sourceEnd: gapEnd };
+  }
 
   if (!ripple) {
     return remaining;
@@ -500,8 +534,7 @@ export function deleteClipById(clips, clipId, options = {}) {
   }
 
   // If a dialogue clip was deleted, re-index remaining dialogue clips sequentially (#1, #2, #3...)
-  const isTargetDialogue = Boolean(targetClip.isDialogue || targetClip.segmentId || targetClip.segmentIndex || /^#\d+/.test(targetClip.name || ''));
-  if (isTargetDialogue) {
+  if (!preserveIds && isTargetDialogue) {
     let dIdx = 1;
     shifted = shifted.map((c) => {
       const isClipDialogue = Boolean(c.isDialogue || c.segmentId || c.segmentIndex || /^#\d+/.test(c.name || ''));
@@ -593,13 +626,15 @@ export function findSegmentIndex(segments, key) {
 }
 
 /**
- * Delete a script segment by explicit ID or fallback index, and re-index sequentially.
+ * Delete a script segment by explicit ID or fallback index, and re-index sequentially by default.
  * @param {Array} segments
  * @param {string|number} segIdOrIdx
+ * @param {Object} [options]
+ * @param {boolean} [options.preserveIds=false]
  * @returns {Array}
  */
 export function deleteSegmentByIdOrIndex(segments, segIdOrIdx, options = {}) {
-  const { ripple = true } = options;
+  const { ripple = true, preserveIds = false } = options;
   if (!Array.isArray(segments) || segments.length === 0) return [];
   if (segIdOrIdx === null || segIdOrIdx === undefined) return segments;
 
@@ -619,13 +654,14 @@ export function deleteSegmentByIdOrIndex(segments, segIdOrIdx, options = {}) {
     : (parseTimeToSeconds ? parseTimeToSeconds(targetSeg.end, targetStart + 2.5) : targetStart + 2.5);
   const dur = Math.max(0, parseFloat((targetEnd - targetStart).toFixed(3)));
 
-  let filtered = segments
-    .filter((_, idx) => idx !== targetIndex)
-    .map((seg, newIdx) => ({
+  let filtered = segments.filter((_, idx) => idx !== targetIndex);
+  if (!preserveIds) {
+    filtered = filtered.map((seg, newIdx) => ({
       ...seg,
       id: newIdx + 1,
       segmentId: newIdx + 1,
     }));
+  }
 
   if (!ripple) {
     return filtered;
@@ -871,7 +907,7 @@ export function autoSplitVideoBySegments(segments = [], totalDuration = 0, video
 }
 
 /**
- * Ensures all segments have guaranteed unique sequential IDs (1..N) and unique _uid tokens for React keys
+ * Preserves segment identifiers and fills missing IDs while ensuring React keys exist
  */
 export function sanitizeScriptData(scriptData) {
   if (!scriptData) return scriptData;
@@ -882,8 +918,8 @@ export function sanitizeScriptData(scriptData) {
       const cn = (seg.chineseText || seg.originalChineseText || seg.originalText || seg.original || seg.chinese || '').trim();
       return {
         ...seg,
-        id: idx + 1,
-        segmentId: idx + 1,
+        id: seg.id ?? seg.segmentId ?? idx + 1,
+        segmentId: seg.segmentId ?? seg.id ?? idx + 1,
         chineseText: cn,
         originalChineseText: cn,
         originalText: cn,

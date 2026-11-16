@@ -1,6 +1,27 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
+- **Environment**: Codex IDE
+- **Branch**: `fix/delete-no-ripple` based on `fix/timeline-clip-selection` (`1d5e464`)
+- **Timestamp**: 2026-11-17T00:50:03+07:00
+
+## Summary: Remove-Only Timeline Delete
+- Timeline delete paths now remove a dialogue segment and its exact matching video clip without ripple, renumbering, shifting, or snap-to-zero. The removed video interval becomes a Gap; adjacent Gaps merge.
+- Stable IDs and numbers are retained by segment deletion, hydration, voice/subtitle timeline labels, script-review cards, and numeric search. Each delete path creates one undo snapshot; segment deletion still triggers audio re-sync using unchanged survivor timings.
+- Utility callers: `useClipOperations` delete handlers and `TimelineEditor` fallback explicitly request remove-only semantics. `MediaLibrary`'s standalone fallback and direct legacy tests keep default ripple/re-index semantics.
+- Verification: focused delete/search/selection tests 15/15; frontend build passed (2035 modules; existing large-chunk warning); Oxlint exited successfully with warnings. The broader backend suite did not finish and was stopped. `full_project_master_upgrade.test.js` has one unrelated existing failure in the EpisodesTab SPA-refresh assertion (7/8 tests passed).
+- Real-app checks (a)-(d) are **BLOCKED**: the shared browser page reports Backend Offline / 502, and the fresh frontend/backend launched inside the sandbox are not reachable from the integrated browser. No stored `series.json` or live Ctrl+Z result was verified.
+
+## Active Environment
+- Branch: `fix/delete-no-ripple`, based on `fix/timeline-clip-selection`; main untouched.
+- Shared browser UI: `http://localhost:5173/` (loads but backend offline). Sandbox-local frontend was started on `5174` and stopped after browser isolation was confirmed.
+- Backend `http://localhost:5000` was unreachable from the integrated browser; sandbox-launched service was stopped after the live check failed.
+
+## Next Steps
+- Re-run stored-data checks (a)-(d) with a reachable backend, including save/reload and one-step Ctrl+Z.
+- Review/open a PR for `fix/delete-no-ripple`; do not merge to main.
+
+## Last Session
 - **Environment**: Antigravity IDE (`fix/timeline-clip-selection`)
 - **Branch**: `fix/timeline-clip-selection` (tracking `origin/fix/timeline-clip-selection`)
 - **Timestamp**: 2026-11-16T22:27:00+07:00

@@ -1,86 +1,199 @@
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
-const path = require('path');
-const fs = require('fs');
+const path = require('node:path');
+const fs = require('node:fs');
+const { pathToFileURL } = require('node:url');
 
-describe('Timeline Ripple Delete & Auto-Shift Left Suite', () => {
-  // Read and compile timelineUtils functions for unit testing
+describe('Remove-only timeline delete', () => {
   const timelineUtilsPath = path.resolve(__dirname, '../../frontend/src/utils/timelineUtils.js');
-  const code = fs.readFileSync(timelineUtilsPath, 'utf8');
+  const timelineUtilsCode = fs.readFileSync(timelineUtilsPath, 'utf8');
 
-  // Verify function definitions
-  test('1. timelineUtils exports deleteClipById, deleteSegmentByIdOrIndex, and bridgeClipGaps with ripple support', () => {
-    assert.ok(code.includes('export function deleteClipById'), 'deleteClipById must be exported');
-    assert.ok(code.includes('export function deleteSegmentByIdOrIndex'), 'deleteSegmentByIdOrIndex must be exported');
-    assert.ok(code.includes('export function bridgeClipGaps'), 'bridgeClipGaps must be exported');
-    assert.ok(code.includes('ripple = true'), 'ripple option must be enabled by default');
-  });
-
-  test('2. Ripple delete on video clips shifts subsequent cuts left and snaps to 00:00', () => {
-    // Simulate deleteClipById behavior
-    const clips = [
-      { id: 'clip-1', start: 0, end: 5.5 },
-      { id: 'clip-2', start: 5.5, end: 8.0 },
-      { id: 'clip-3', start: 8.0, end: 12.0 },
-    ];
-
-    // Deleting clip-1 (duration 5.5s) must pull clip-2 and clip-3 to start at 00:00
-    const targetClip = clips[0];
-    const dur = targetClip.end - targetClip.start;
-    const remaining = clips.filter(c => c.id !== 'clip-1');
-
-    const shifted = remaining.map(c => ({
-      ...c,
-      start: parseFloat((c.start - dur).toFixed(3)),
-      end: parseFloat((c.end - dur).toFixed(3)),
+  test('middle segment delete preserves survivor IDs and exact timing values', async () => {
+    const { deleteSegmentByIdOrIndex, deleteClipById } = await import(pathToFileURL(timelineUtilsPath));
+    const segments = Array.from({ length: 5 }, (_, index) => ({
+      id: index + 1,
+      segmentId: index + 1,
+      _uid: `seg-${index + 1}`,
+      start: `00:0${index * 2}`,
+      end: `00:0${index * 2 + 2}`,
+      startSec: index * 2,
+      endSec: index * 2 + 2,
+      audioStartSec: index * 2 + 0.1,
+      audioEndSec: index * 2 + 1.9,
+      chineseText: `line ${index + 1}`,
     }));
 
-    assert.equal(shifted[0].start, 0, 'First remaining clip must snap to 00:00');
-    assert.equal(shifted[0].end, 2.5, 'First remaining clip end must be 2.5');
-    assert.equal(shifted[1].start, 2.5, 'Second remaining clip start must be 2.5');
-    assert.equal(shifted[1].end, 6.5, 'Second remaining clip end must be 6.5');
+    const updated = deleteSegmentByIdOrIndex(segments, segments[2]._uid, { ripple: false, preserveIds: true });
+    const clips = segments.map((segment) => ({
+      id: `clip-${segment.id}`,
+      name: `#${segment.id} Speaker`,
+      isDialogue: true,
+      segmentId: segment.segmentId,
+      segmentIndex: segment.id,
+      start: segment.startSec,
+      end: segment.endSec,
+    }));
+    const updatedClips = deleteClipById(clips, 'clip-3', {
+      allowEmpty: true,
+      ripple: false,
+      preserveIds: true,
+      gapOnDelete: true,
+    });
+
+    assert.deepEqual(updated.map((segment) => segment.id), [1, 2, 4, 5]);
+    assert.deepEqual(updated.map((segment) => segment.segmentId), [1, 2, 4, 5]);
+    assert.deepEqual(updated, segments.filter((segment) => segment.id !== 3));
+    assert.deepEqual(updatedClips.filter((clip) => clip.isDialogue), clips.filter((clip) => clip.id !== 'clip-3'));
   });
 
-  test('3. bridgeClipGaps snaps leading gap to 00:00 when first clip starts at > 0', () => {
-    assert.ok(code.includes('const leadOffset = sorted[0].start > 0.04 ? sorted[0].start : 0;'), 'bridgeClipGaps must calculate leadOffset');
+  test('script hydration preserves non-sequential segment numbers', async () => {
+    const { sanitizeScriptData } = await import(pathToFileURL(timelineUtilsPath));
+    const segments = [1, 2, 4, 5].map((id) => ({ id, segmentId: id, chineseText: `line ${id}` }));
+
+    const sanitized = sanitizeScriptData({ segments });
+
+    assert.deepEqual(sanitized.segments.map((segment) => segment.id), [1, 2, 4, 5]);
+    assert.deepEqual(sanitized.segments.map((segment) => segment.segmentId), [1, 2, 4, 5]);
   });
 
-  test('4. useClipOperations Auto-Align closes leading gap and pulls timeline to 00:00', () => {
-    const hookPath = path.resolve(__dirname, '../../frontend/src/hooks/useClipOperations.js');
-    const hookCode = fs.readFileSync(hookPath, 'utf8');
+  test('middle video delete leaves survivor clips unchanged and inserts one exact Gap', async () => {
+    const { deleteClipById, deleteSegmentByIdOrIndex } = await import(pathToFileURL(timelineUtilsPath));
+    const segments = Array.from({ length: 5 }, (_, index) => ({
+      id: index + 1,
+      segmentId: index + 1,
+      startSec: index * 2,
+      endSec: index * 2 + 2,
+    }));
+    const clips = Array.from({ length: 5 }, (_, index) => ({
+      id: `clip-${index + 1}`,
+      name: `#${index + 1} Speaker`,
+      isDialogue: true,
+      segmentId: index + 1,
+      segmentIndex: index + 1,
+      start: index * 2,
+      end: index * 2 + 2,
+      sourceStart: index * 2,
+      sourceEnd: index * 2 + 2,
+    }));
 
-    assert.ok(hookCode.includes('// 1. If leading gap exists'), 'handleAutoAlignNoOverlap must check leading gap');
-    assert.ok(hookCode.includes('setVideoClips(snappedClips)'), 'handleAutoAlignNoOverlap must snap video clips to 00:00');
-    assert.ok(hookCode.includes('deleteClipById(videoClips, targetClipId, { allowEmpty: true, ripple: true })'), 'handleDeleteClip must call deleteClipById with ripple: true');
+    const updated = deleteClipById(clips, 'clip-3', {
+      allowEmpty: true,
+      ripple: false,
+      preserveIds: true,
+      gapOnDelete: true,
+    });
+    const updatedSegments = deleteSegmentByIdOrIndex(segments, clips[2].segmentId, { ripple: false, preserveIds: true });
+
+    assert.deepEqual(
+      updated.filter((clip) => clip.isDialogue),
+      clips.filter((clip) => clip.id !== 'clip-3')
+    );
+    const gaps = updated.filter((clip) => clip.name === 'Gap');
+    assert.equal(gaps.length, 1);
+    assert.deepEqual([gaps[0].start, gaps[0].end], [4, 6]);
+    assert.deepEqual(updatedSegments.map((segment) => segment.id), [1, 2, 4, 5]);
   });
 
-  test('5. Deleting a Gap clip ripples subsequent video cuts and voice cues without removing voice segments', () => {
-    const hookPath = path.resolve(__dirname, '../../frontend/src/hooks/useClipOperations.js');
-    const hookCode = fs.readFileSync(hookPath, 'utf8');
+  test('deleting first or last item keeps every remaining start and end unchanged', async () => {
+    const { deleteSegmentByIdOrIndex, deleteClipById } = await import(pathToFileURL(timelineUtilsPath));
+    const segments = Array.from({ length: 5 }, (_, index) => ({
+      id: index + 1,
+      segmentId: index + 1,
+      startSec: index * 2,
+      endSec: index * 2 + 2,
+    }));
+    const clips = segments.map((segment) => ({
+      id: `clip-${segment.id}`,
+      isDialogue: true,
+      segmentId: segment.id,
+      segmentIndex: segment.id,
+      start: segment.startSec,
+      end: segment.endSec,
+    }));
 
-    assert.ok(hookCode.includes('// 1. User deleted a Gap clip'), 'handleDeleteClip must handle gap clips specifically');
-    assert.ok(hookCode.includes('s >= targetEnd - 0.02'), 'handleDeleteClip must ripple voice segments starting after gap end');
+    for (const id of [1, 5]) {
+      const updatedSegments = deleteSegmentByIdOrIndex(segments, id, { ripple: false, preserveIds: true });
+      assert.deepEqual(updatedSegments, segments.filter((segment) => segment.id !== id));
+
+      const updatedClips = deleteClipById(clips, `clip-${id}`, {
+        allowEmpty: true,
+        ripple: false,
+        preserveIds: true,
+        gapOnDelete: true,
+      });
+      assert.deepEqual(
+        updatedClips.filter((clip) => clip.isDialogue),
+        clips.filter((clip) => clip.id !== `clip-${id}`)
+      );
+      const gap = updatedClips.find((clip) => clip.name === 'Gap');
+      assert.deepEqual([gap.start, gap.end], [(id - 1) * 2, id * 2]);
+    }
   });
 
-  test('6. Deleting a Dialogue clip removes matching voice segment and ripples both tracks in lockstep', () => {
-    const hookPath = path.resolve(__dirname, '../../frontend/src/hooks/useClipOperations.js');
-    const hookCode = fs.readFileSync(hookPath, 'utf8');
+  test('deleted dialogue clip merges touching Gap neighbours into one span', async () => {
+    const { deleteClipById } = await import(pathToFileURL(timelineUtilsPath));
+    const clips = [
+      { id: 'gap-left', name: 'Gap', start: 0, end: 2 },
+      { id: 'clip-3', name: '#3 Speaker', isDialogue: true, segmentId: 3, start: 2, end: 4 },
+      { id: 'gap-right', name: 'Gap', start: 4, end: 7 },
+      { id: 'clip-4', name: '#4 Speaker', isDialogue: true, segmentId: 4, start: 7, end: 9 },
+    ];
 
-    assert.ok(hookCode.includes('// 2. User deleted a DIALOGUE clip: Remove matching voice segment(s) and ripple remaining'), 'handleDeleteClip must delete matching voice segment');
-    assert.ok(hookCode.includes('findAssociatedSegmentIndices(targetClip, scriptData.segments)'), 'handleDeleteClip must find associated segments');
+    const updated = deleteClipById(clips, 'clip-3', {
+      allowEmpty: true,
+      ripple: false,
+      preserveIds: true,
+      gapOnDelete: true,
+    });
+
+    assert.deepEqual(updated.filter((clip) => clip.name === 'Gap').map(({ start, end }) => [start, end]), [[0, 7]]);
+    assert.deepEqual(updated.find((clip) => clip.id === 'clip-4'), clips[3]);
   });
 
-  test('7. Deleting a Voice segment removes matching video cut and ripples both tracks', () => {
-    const hookPath = path.resolve(__dirname, '../../frontend/src/hooks/useClipOperations.js');
-    const hookCode = fs.readFileSync(hookPath, 'utf8');
+  test('legacy callers retain default ripple, snap, and re-index behavior', async () => {
+    const { deleteSegmentByIdOrIndex, deleteClipById } = await import(pathToFileURL(timelineUtilsPath));
+    const segments = [
+      { id: 1, startSec: 0, endSec: 2 },
+      { id: 2, startSec: 2, endSec: 4 },
+      { id: 3, startSec: 4, endSec: 6 },
+    ];
+    const clips = [
+      { id: 'clip-1', start: 0, end: 2, isDialogue: true, segmentId: 1 },
+      { id: 'clip-2', start: 2, end: 4, isDialogue: true, segmentId: 2, name: '#2 Speaker' },
+      { id: 'clip-3', start: 4, end: 6, isDialogue: true, segmentId: 3, name: '#3 Speaker' },
+    ];
 
-    assert.ok(hookCode.includes('deleteClipById(videoClips, matchingClip.id, { allowEmpty: true, ripple: true })'), 'handleDeleteSegment must delete matching video clip');
+    const shiftedSegments = deleteSegmentByIdOrIndex(segments, 2);
+    const shiftedClips = deleteClipById(clips, 'clip-2');
+    assert.deepEqual(shiftedSegments.map((segment) => segment.id), [1, 2]);
+    assert.equal(shiftedSegments[1].startSec, 2);
+    assert.equal(shiftedClips.find((clip) => clip.id === 'clip-3').start, 2);
+    assert.equal(shiftedClips.find((clip) => clip.id === 'clip-3').segmentId, 2);
   });
 
-  test('8. Auto-Align synchronizes dialogue voice segments to their matching video cuts', () => {
-    const hookPath = path.resolve(__dirname, '../../frontend/src/hooks/useClipOperations.js');
-    const hookCode = fs.readFileSync(hookPath, 'utf8');
+  test('delete handlers use remove-only options and selection kind overrides stale type', () => {
+    const hookCode = fs.readFileSync(path.resolve(__dirname, '../../frontend/src/hooks/useClipOperations.js'), 'utf8');
+    const editorCode = fs.readFileSync(path.resolve(__dirname, '../../frontend/src/components/timeline/TimelineEditor.jsx'), 'utf8');
+    const tracksCode = fs.readFileSync(path.resolve(__dirname, '../../frontend/src/components/timeline/TimelineTracksCanvas.jsx'), 'utf8');
+    const clipDeleteHandler = hookCode.slice(hookCode.indexOf('const handleDeleteClip'), hookCode.indexOf('// Update Clips'));
+    const segmentDeleteHandler = hookCode.slice(hookCode.indexOf('const handleDeleteSegment'), hookCode.indexOf('// Update Timeline Subtitles'));
 
-    assert.ok(hookCode.includes('// 2. Synchronize dialogue voice segments to their matching video cuts'), 'Auto-align must synchronize voice segments to video cuts');
+    assert.ok(hookCode.includes('deleteSegmentByIdOrIndex(segments, segmentKey, { ripple: false, preserveIds: true })'));
+    assert.ok(hookCode.includes('deleteSegmentByIdOrIndex(scriptData.segments, segmentKey, { ripple: false, preserveIds: true })'));
+    assert.ok(hookCode.includes('gapOnDelete: true'));
+    assert.ok(editorCode.includes("selectedClipKind === 'video' && canDeleteVideo"));
+    assert.ok(!editorCode.includes("lastSelectedType === 'video' || selectedClipKind === 'video'"));
+    assert.ok(editorCode.includes('{ ripple: false, preserveIds: true }'));
+    assert.ok(tracksCode.includes('const segmentNumber = seg.segmentId ?? seg.id ?? idx + 1;'));
+    assert.ok(tracksCode.includes('const compactIdLabel = `#${segmentNumber}'));
+    assert.equal((clipDeleteHandler.match(/pushUndoSnapshot\(/g) || []).length, 1);
+    assert.equal((segmentDeleteHandler.match(/pushUndoSnapshot\(/g) || []).length, 1);
+  });
+
+  test('Auto-Align gap closing behavior remains available', () => {
+    assert.ok(timelineUtilsCode.includes('export function bridgeClipGaps'));
+    const hookCode = fs.readFileSync(path.resolve(__dirname, '../../frontend/src/hooks/useClipOperations.js'), 'utf8');
+    assert.ok(hookCode.includes('// 1. If leading gap exists'));
+    assert.ok(hookCode.includes('setVideoClips(snappedClips)'));
   });
 });

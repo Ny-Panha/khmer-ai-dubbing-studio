@@ -1,5 +1,5 @@
 /**
- * Filter script segments by displayed card number (#1, #2, ... / "37" / "#37")
+ * Filter script segments by stable dialogue number (#1, #2, ... / "37" / "#37")
  * or by Khmer translation, Chinese source text, or speaker name.
  */
 export function filterScriptSegments(segments = [], searchQuery = '') {
@@ -12,26 +12,26 @@ export function filterScriptSegments(segments = [], searchQuery = '') {
     String(ch.charCodeAt(0) - 0x17e0)
   );
 
-  // Explicit "#37" -> match exact visual card line number (#idx + 1), or fallback to numeric seg.id if out of bounds
+  const matchLineNumber = (targetNum) => {
+    const matches = segments.filter((seg) => Number(seg?.segmentId ?? seg?.id) === targetNum);
+    if (matches.length > 0) return matches;
+    const legacyAtIndex = segments[targetNum - 1];
+    return legacyAtIndex && legacyAtIndex.id == null && legacyAtIndex.segmentId == null ? [legacyAtIndex] : [];
+  };
+
+  // Match the stable ID shown on each card; use the array position only for legacy items without IDs.
   const hashNumberMatch = asciiQuery.match(/^#\s*(\d+)$/);
   if (hashNumberMatch) {
     const targetNum = parseInt(hashNumberMatch[1], 10);
-    if (targetNum >= 1 && targetNum <= segments.length) {
-      return [segments[targetNum - 1]];
-    }
-    return segments.filter((seg) => {
-      const segIdNum = Number(seg?.segmentId ?? seg?.id);
-      return Number.isInteger(segIdNum) && segIdNum === targetNum;
-    });
+    return matchLineNumber(targetNum);
   }
 
-  // Bare number "37" -> prioritize exact card number (#37 = idx + 1) when in range;
-  // otherwise fallback to dialogue/speaker text search (e.g. searching "5000" inside dialogue)
+  // Bare numbers use the same stable dialogue number; out-of-range numbers can still match text.
   const bareNumberMatch = asciiQuery.match(/^(\d+)$/);
   if (bareNumberMatch) {
     const targetNum = parseInt(bareNumberMatch[1], 10);
     if (targetNum >= 1 && targetNum <= segments.length) {
-      return [segments[targetNum - 1]];
+      return matchLineNumber(targetNum);
     }
   }
 

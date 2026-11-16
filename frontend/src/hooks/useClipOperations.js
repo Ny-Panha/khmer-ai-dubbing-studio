@@ -819,7 +819,7 @@ export function useClipOperations({
     }
   };
 
-  // Delete Clip Tool (with automatic Ripple Delete & Video+Voice Track Sync)
+  // Delete a video clip and only its matching dialogue segment.
   const handleDeleteClip = (clipId = null) => {
     const targetClipId = clipId !== null && clipId !== undefined ? clipId : activeClipId;
     if (!targetClipId) return;
@@ -828,126 +828,36 @@ export function useClipOperations({
     if (!targetClip) return;
     pushUndoSnapshot(videoClips, scriptData?.segments || []);
 
-    const targetStart = Number.isFinite(targetClip.start) ? targetClip.start : 0;
-    const targetEnd = Number.isFinite(targetClip.end) ? targetClip.end : targetStart;
-    const dur = Math.max(0, parseFloat((targetEnd - targetStart).toFixed(3)));
-
-    const isGap = !targetClip.isDialogue && (
-      targetClip.name === 'Gap' || 
-      targetClip.id?.startsWith('clip-gap') || 
-      (!targetClip.segmentId && !targetClip.segmentIndex)
-    );
-
-    const updated = deleteClipById(videoClips, targetClipId, { allowEmpty: true, ripple: true });
+    const updated = deleteClipById(videoClips, targetClipId, {
+      allowEmpty: true,
+      ripple: false,
+      preserveIds: true,
+      gapOnDelete: true,
+    });
     setVideoClips(updated);
     setActiveClipId(updated[0]?.id || null);
 
-    // Ripple voice segments as well if they match or start after the deleted clip!
-    if (scriptData?.segments && scriptData.segments.length > 0) {
-      let nextSegments = scriptData.segments;
-
-      if (isGap) {
-        // 1. User deleted a Gap clip: Shift all voice segments starting at or after targetEnd left by dur
-        nextSegments = nextSegments.map((seg) => {
-          const s = typeof seg.startSec === 'number' ? seg.startSec : parseTimeToSeconds(seg.start, 0);
-          if (s >= targetEnd - 0.02) {
-            const segDur = typeof seg.duration === 'number' && seg.duration > 0
-              ? seg.duration
-              : ((typeof seg.endSec === 'number' ? seg.endSec : parseTimeToSeconds(seg.end, s + 2.5)) - s);
-            const newStart = Math.max(0, parseFloat((s - dur).toFixed(3)));
-            const newEnd = parseFloat((newStart + segDur).toFixed(3));
-            return {
-              ...seg,
-              start: formatTimecode(newStart),
-              end: formatTimecode(newEnd),
-              startSec: newStart,
-              endSec: newEnd,
-              audioStartSec: newStart,
-              audioEndSec: newEnd,
-            };
-          }
-          return seg;
-        });
-      } else {
-        // 2. User deleted a DIALOGUE clip: Remove matching voice segment(s) and ripple remaining
-        const associatedIndices = findAssociatedSegmentIndices(targetClip, scriptData.segments);
-        const associatedSet = new Set(associatedIndices);
-
-        if (associatedSet.size > 0) {
-          const remaining = scriptData.segments.filter((_, idx) => !associatedSet.has(idx));
-          nextSegments = remaining.map((seg, newIdx) => {
-            const s = typeof seg.startSec === 'number' ? seg.startSec : parseTimeToSeconds(seg.start, 0);
-            const segDur = typeof seg.duration === 'number' && seg.duration > 0
-              ? seg.duration
-              : ((typeof seg.endSec === 'number' ? seg.endSec : parseTimeToSeconds(seg.end, s + 2.5)) - s);
-            let newStart = s;
-            let newEnd = typeof seg.endSec === 'number' ? seg.endSec : s + segDur;
-            if (s >= targetStart - 0.02) {
-              newStart = Math.max(0, parseFloat((s - dur).toFixed(3)));
-              newEnd = parseFloat((newStart + segDur).toFixed(3));
-            }
-            return {
-              ...seg,
-              id: newIdx + 1,
-              segmentId: newIdx + 1,
-              start: formatTimecode(newStart),
-              end: formatTimecode(newEnd),
-              startSec: newStart,
-              endSec: newEnd,
-              audioStartSec: newStart,
-              audioEndSec: newEnd,
-            };
-          });
-        } else {
-          // Fallback: If no direct match found, shift subsequent segments left by dur
-          nextSegments = nextSegments.map((seg) => {
-            const s = typeof seg.startSec === 'number' ? seg.startSec : parseTimeToSeconds(seg.start, 0);
-            if (s >= targetEnd - 0.02) {
-              const segDur = typeof seg.duration === 'number' && seg.duration > 0
-                ? seg.duration
-                : ((typeof seg.endSec === 'number' ? seg.endSec : parseTimeToSeconds(seg.end, s + 2.5)) - s);
-              const newStart = Math.max(0, parseFloat((s - dur).toFixed(3)));
-              const newEnd = parseFloat((newStart + segDur).toFixed(3));
-              return {
-                ...seg,
-                start: formatTimecode(newStart),
-                end: formatTimecode(newEnd),
-                startSec: newStart,
-                endSec: newEnd,
-                audioStartSec: newStart,
-                audioEndSec: newEnd,
-              };
-            }
-            return seg;
-          });
-        }
+    const segments = scriptData?.segments || [];
+    const isDialogueClip = Boolean(targetClip.isDialogue || targetClip.segmentId || targetClip.segmentIndex || /^#\d+/.test(targetClip.name || ''));
+    if (segments.length > 0 && isDialogueClip) {
+      const clipKeys = [targetClip.segmentId, targetClip.segmentIndex].filter((key) => key !== null && key !== undefined);
+      let segmentIndex = -1;
+      for (const key of clipKeys) {
+        segmentIndex = segments.findIndex((segment) =>
+          [segment.id, segment.segmentId].some((id) => id !== null && id !== undefined && String(id) === String(key))
+        );
+        if (segmentIndex !== -1) break;
       }
-
-      // 3. Snap to 00:00: If leading video clip was snapped to 00:00, ensure voice starts at 00:00 too!
-      if (nextSegments.length > 0 && updated.length > 0 && updated[0].start === 0) {
-        const firstSegStart = typeof nextSegments[0].startSec === 'number' ? nextSegments[0].startSec : parseTimeToSeconds(nextSegments[0].start, 0);
-        if (firstSegStart > 0.04) {
-          nextSegments = nextSegments.map((seg) => {
-            const s = typeof seg.startSec === 'number' ? seg.startSec : parseTimeToSeconds(seg.start, 0);
-            const segDur = typeof seg.duration === 'number' && seg.duration > 0
-              ? seg.duration
-              : ((typeof seg.endSec === 'number' ? seg.endSec : parseTimeToSeconds(seg.end, s + 2.5)) - s);
-            const newStart = Math.max(0, parseFloat((s - firstSegStart).toFixed(3)));
-            const newEnd = parseFloat((newStart + segDur).toFixed(3));
-            return {
-              ...seg,
-              start: formatTimecode(newStart),
-              end: formatTimecode(newEnd),
-              startSec: newStart,
-              endSec: newEnd,
-              audioStartSec: newStart,
-              audioEndSec: newEnd,
-            };
-          });
-        }
+      if (segmentIndex === -1) {
+        segmentIndex = findAssociatedSegmentIndices(targetClip, segments)[0] ?? -1;
       }
-
-      handleUpdateTimelineSegments(nextSegments, true, true);
+      if (segmentIndex !== -1) {
+        const segment = segments[segmentIndex];
+        const segmentKey = segment._uid || segment.id || segment.segmentId || segmentIndex;
+        const nextSegments = deleteSegmentByIdOrIndex(segments, segmentKey, { ripple: false, preserveIds: true });
+        handleUpdateTimelineSegments(nextSegments, true, true);
+        if (setSelectedSegmentId) setSelectedSegmentId(null);
+      }
     }
   };
 
@@ -960,7 +870,7 @@ export function useClipOperations({
     }
   };
 
-  // Delete a Subtitle Segment (with automatic Ripple Delete & Video Sync)
+  // Delete a subtitle/voice segment and only its matching dialogue clip.
   const handleDeleteSegment = async (segIdOrIdx = null) => {
     if (!scriptData?.segments) return;
     const targetKey = segIdOrIdx !== null && segIdOrIdx !== undefined ? segIdOrIdx : selectedSegmentId;
@@ -970,7 +880,10 @@ export function useClipOperations({
     const targetSegIdx = findSegmentIndex(scriptData.segments, targetKey);
     const targetSeg = targetSegIdx !== -1 ? scriptData.segments[targetSegIdx] : null;
 
-    const updated = deleteSegmentByIdOrIndex(scriptData.segments, targetKey, { ripple: true });
+    const segmentKey = targetSeg
+      ? (targetSeg._uid || targetSeg.id || targetSeg.segmentId || targetSegIdx)
+      : targetKey;
+    const updated = deleteSegmentByIdOrIndex(scriptData.segments, segmentKey, { ripple: false, preserveIds: true });
     if (updated === scriptData.segments) return;
 
     if (syncAudioTimeoutRef?.current) clearTimeout(syncAudioTimeoutRef.current);
@@ -981,55 +894,37 @@ export function useClipOperations({
     }
     setScriptData(prev => prev ? ({ ...prev, segments: updated, updatedAt: Date.now() }) : null);
     if (setSelectedSegmentId) setSelectedSegmentId(null);
-    if (setSelectedAudioId) setSelectedAudioId(null);
-    if (setSelectedSubId) setSelectedSubId(null);
 
-    // If video cuts exist, delete matching video clip and ripple remaining video cuts!
     if (targetSeg && Array.isArray(videoClips) && videoClips.length > 0) {
       const sStart = typeof targetSeg.startSec === 'number' ? targetSeg.startSec : parseTimeToSeconds(targetSeg.start, 0);
       const sEnd = typeof targetSeg.endSec === 'number' ? targetSeg.endSec : parseTimeToSeconds(targetSeg.end, sStart + 2.5);
-
-      // Find matching video clip if video was cut into clips
-      const matchingClip = videoClips.find((c) =>
-        Boolean(
-          c.isDialogue && (
-            (targetSeg.id && (c.segmentId === targetSeg.id || String(c.segmentId) === String(targetSeg.id))) ||
-            (targetSeg.segmentId && (c.segmentId === targetSeg.segmentId || String(c.segmentId) === String(targetSeg.segmentId))) ||
-            (typeof targetSegIdx === 'number' && c.segmentIndex === targetSegIdx + 1) ||
-            (Math.max(c.start, sStart) < Math.min(c.end, sEnd) - 0.05)
-          )
+      const segmentKeys = [targetSeg.id, targetSeg.segmentId].filter((key) => key !== null && key !== undefined);
+      let matchingClip = videoClips.find((clip) =>
+        clip.isDialogue && segmentKeys.some((key) =>
+          clip.segmentId !== null && clip.segmentId !== undefined && String(clip.segmentId) === String(key)
         )
       );
-
+      if (!matchingClip) {
+        matchingClip = videoClips.find((clip) =>
+          clip.isDialogue && segmentKeys.some((key) =>
+            clip.segmentIndex !== null && clip.segmentIndex !== undefined && String(clip.segmentIndex) === String(key)
+          )
+        );
+      }
+      if (!matchingClip) {
+        matchingClip = videoClips.find((clip) =>
+          clip.isDialogue && Math.max(clip.start, sStart) < Math.min(clip.end, sEnd) - 0.05
+        );
+      }
       if (matchingClip) {
-        // Delete matching clip via deleteClipById (which ripples subsequent clips and re-indexes #1, #2, #3...)
-        const shiftedClips = deleteClipById(videoClips, matchingClip.id, { allowEmpty: true, ripple: true });
-        setVideoClips(shiftedClips);
-        setActiveClipId(shiftedClips[0]?.id || null);
-      } else {
-        // Fallback: ripple video cuts starting after sEnd by dur
-        const dur = Math.max(0, sEnd - sStart);
-        if (dur > 0.04) {
-          let shiftedClips = videoClips.map((c) => {
-            if (c.start >= sEnd - 0.02) {
-              const clipLen = c.end - c.start;
-              const newStart = Math.max(0, parseFloat((c.start - dur).toFixed(3)));
-              const newEnd = parseFloat((newStart + clipLen).toFixed(3));
-              return { ...c, start: newStart, end: newEnd };
-            }
-            return c;
-          });
-          if (shiftedClips.length > 0 && shiftedClips[0].start > 0.04 && updated.length > 0 && updated[0].startSec === 0) {
-            const leadGap = shiftedClips[0].start;
-            shiftedClips = shiftedClips.map((c) => {
-              const clipLen = c.end - c.start;
-              const newStart = Math.max(0, parseFloat((c.start - leadGap).toFixed(3)));
-              const newEnd = parseFloat((newStart + clipLen).toFixed(3));
-              return { ...c, start: newStart, end: newEnd };
-            });
-          }
-          setVideoClips(shiftedClips);
-        }
+        const remainingClips = deleteClipById(videoClips, matchingClip.id, {
+          allowEmpty: true,
+          ripple: false,
+          preserveIds: true,
+          gapOnDelete: true,
+        });
+        setVideoClips(remainingClips);
+        setActiveClipId(remainingClips[0]?.id || null);
       }
     }
 

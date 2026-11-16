@@ -90,6 +90,7 @@ const CaptionItemCard = React.memo(function CaptionItemCard({
   onToggleDeliveryType,
 }) {
   const [isTranslating, setIsTranslating] = React.useState(false);
+  const segmentNumber = seg.segmentId ?? seg.id ?? idx + 1;
   const startSec = typeof seg.startSec === 'number' ? seg.startSec : parseTimeToSeconds(seg.start, 0);
   const endSec = typeof seg.endSec === 'number' ? seg.endSec : parseTimeToSeconds(seg.end, startSec + 3.0);
   const segDuration = Math.max(0.1, endSec - startSec);
@@ -111,7 +112,7 @@ const CaptionItemCard = React.memo(function CaptionItemCard({
     if (isTranslating) return;
     const textToTranslate = (seg.chineseText || seg.originalChineseText || seg.originalText || seg.original || '').trim();
     if (!textToTranslate) {
-      alert(`Segment #${idx + 1} មិនមានអត្ថបទចិនដើមសម្រាប់បកប្រែទេ!`);
+      alert(`Segment #${segmentNumber} មិនមានអត្ថបទចិនដើមសម្រាប់បកប្រែទេ!`);
       return;
     }
     setIsTranslating(true);
@@ -162,7 +163,7 @@ const CaptionItemCard = React.memo(function CaptionItemCard({
         {/* Left: Index, Timing & Essential Speaker Badge */}
         <div style={{ display: 'flex', gap: 5, alignItems: 'center', flexWrap: 'wrap', flex: 1, minWidth: 0 }}>
           <span style={{ fontSize: '0.72rem', fontWeight: 800, color: 'var(--primary-accent)', minWidth: 20 }}>
-            #{idx + 1}
+            #{segmentNumber}
           </span>
 
           {/* Time Range Pill */}
