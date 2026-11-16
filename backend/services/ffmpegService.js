@@ -678,7 +678,7 @@ async function autoStretchTtsAudio({
       finalDuration: actualDuration,
       appliedSpeed: 1.0,
       leadInSec: Number((bounds.leadingSilence - safeStart).toFixed(3)),
-    effectiveLeadInCushionSec: Number(((bounds.leadingSilence - safeStart) / appliedSpeed).toFixed(3)),
+      effectiveLeadInCushionSec: Number((bounds.leadingSilence - safeStart).toFixed(3)),
     };
   }
 
@@ -707,7 +707,7 @@ async function autoStretchTtsAudio({
       finalDuration: actualDuration,
       appliedSpeed: 1.0,
       leadInSec: Number((bounds.leadingSilence - safeStart).toFixed(3)),
-    effectiveLeadInCushionSec: Number(((bounds.leadingSilence - safeStart) / appliedSpeed).toFixed(3)),
+      effectiveLeadInCushionSec: Number((bounds.leadingSilence - safeStart).toFixed(3)),
     };
   }
 

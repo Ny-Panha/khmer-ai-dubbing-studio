@@ -148,6 +148,8 @@ function VideoPlayerPreview({
   const lastPreloadCenterRef = useRef(-Infinity);
   const currentTimeRef = useRef(currentTime);
   currentTimeRef.current = currentTime;
+  const isPlayingRef = useRef(isPlaying);
+  isPlayingRef.current = isPlaying;
   const isPlayPendingRef = useRef(false);
   const playStartTimeRef = useRef(0);
 
@@ -212,6 +214,8 @@ function VideoPlayerPreview({
 
   const probeUrlLeadingSilence = useCallback((url) => {
     if (!url || typeof window === 'undefined') return;
+    // CRITICAL PERF: Never decode audio buffers in background during active video playback!
+    if (isPlayingRef.current) return;
     if (leadingSilenceCacheRef.current.has(url) || leadingSilenceInflightRef.current.has(url)) return;
 
     const AudioCtx = window.AudioContext || window.webkitAudioContext;
@@ -294,20 +298,24 @@ function VideoPlayerPreview({
     const now = Number.isFinite(centerTime) ? centerTime : (currentTimeRef.current || 0);
     lastPreloadCenterRef.current = now;
 
+    // During active playback, keep preload horizon compact to avoid thrashing audio decoders
+    const lookAheadSec = isPlayingRef.current ? 20 : 45;
+    const maxClips = isPlayingRef.current ? 6 : 14;
+
     const upcoming = sd.segments
       .map((seg) => {
         const s = (typeof seg.audioStartSec === 'number' && !isNaN(seg.audioStartSec)) ? seg.audioStartSec : (seg.startSec || 0);
         const rawUrl = seg.audioUrl || (seg.audioPath ? `/uploads/${seg.audioPath.replace(/\\/g, '/').replace(/^.*uploads\//, '')}` : null);
         return { seg, s, rawUrl };
       })
-      .filter(({ s, rawUrl }) => rawUrl && s >= (now - 2) && s <= (now + 45))
+      .filter(({ s, rawUrl }) => rawUrl && s >= (now - 2) && s <= (now + lookAheadSec))
       .sort((a, b) => Math.abs(a.s - now) - Math.abs(b.s - now))
-      .slice(0, 14);
+      .slice(0, maxClips);
 
     upcoming.forEach(({ seg, s, rawUrl }) => {
       getSegmentAudio(rawUrl, s);
       const rawOffset = (typeof seg.audioOffset === 'number' && !isNaN(seg.audioOffset)) ? seg.audioOffset : 0;
-      if (rawOffset === 0 && !seg.userTrimmed) {
+      if (!isPlayingRef.current && rawOffset === 0 && !seg.userTrimmed) {
         probeUrlLeadingSilence(rawUrl);
       }
     });
@@ -514,9 +522,15 @@ function VideoPlayerPreview({
     const segments = sd?.segments || [];
 
     // High-performance window filter: only inspect segments within active window of now
-    const nearbySegs = segments.map((seg, idx) => ({ seg, idx })).filter(({ seg }) => {
-      if (seg.muted || seg.isMuted) return false;
+    const nearbySegs = [];
+    for (let idx = 0; idx < segments.length; idx++) {
+      const seg = segments[idx];
+      if (seg.muted || seg.isMuted) continue;
       const s = (typeof seg.audioStartSec === 'number' && !isNaN(seg.audioStartSec)) ? seg.audioStartSec : (seg.startSec || 0);
+      if (s > (now + 0.35)) {
+        if (s > (now + 5)) break; // Segments are chronological; stop scanning once past window
+        continue;
+      }
       const rawAudioDur = (typeof seg.finalAudioDuration === 'number' && seg.finalAudioDuration > 0)
         ? seg.finalAudioDuration
         : ((typeof seg.audioDurationSec === 'number' && !isNaN(seg.audioDurationSec))
@@ -532,8 +546,10 @@ function VideoPlayerPreview({
       const effectiveEnd = (isTrimmed && typeof seg.audioEndSec === 'number')
         ? seg.audioEndSec
         : (s + rawAudioDur);
-      return now >= (s - 0.25) && now < (effectiveEnd + 0.3);
-    });
+      if (now >= (s - 0.25) && now < (effectiveEnd + 0.3)) {
+        nearbySegs.push({ seg, idx });
+      }
+    }
 
     // Cleanup active audios no longer in window
     Object.keys(activeSegmentAudiosRef.current).forEach((k) => {
@@ -597,23 +613,29 @@ function VideoPlayerPreview({
         inRange,
       } = syncTarget;
 
-      // Warm leading-silence probe 250ms ahead if user jumped straight to an un-preloaded clip
-      if (segAudioOffset === 0 && !seg.userTrimmed && !leadingSilenceCacheRef.current.has(rawUrl)) {
+      // Warm leading-silence probe only when paused or seeking (never during active playback)
+      if (!isPlayingRef.current && segAudioOffset === 0 && !seg.userTrimmed && !leadingSilenceCacheRef.current.has(rawUrl)) {
         probeUrlLeadingSilence(rawUrl);
       }
 
       // Smart Auto-Ducking on Overlapping Dialogues (50% Auto Duck):
-      // If next dialogue starts while this one is still speaking, auto-duck this clip to 50% volume!
-      const isOverlappedByNext = segments.some((nextSeg, nextIdx) => {
-        if (nextIdx <= idx) return false;
-        if (nextSeg.muted || nextSeg.isMuted) return false;
+      // Only check the next 3 adjacent dialogues instead of scanning the entire array
+      let isOverlappedByNext = false;
+      const scanLimit = Math.min(segments.length, idx + 4);
+      for (let nextIdx = idx + 1; nextIdx < scanLimit; nextIdx++) {
+        const nextSeg = segments[nextIdx];
+        if (nextSeg.muted || nextSeg.isMuted) continue;
         const nextStart = (typeof nextSeg.audioStartSec === 'number' && !isNaN(nextSeg.audioStartSec))
           ? nextSeg.audioStartSec
           : (typeof nextSeg.startSec === 'number' && !isNaN(nextSeg.startSec)
             ? nextSeg.startSec
             : parseTimeToSeconds(nextSeg.audioStart ?? nextSeg.start, 0));
-        return nextStart > segStart && nextStart < effectiveSegEnd && now >= (nextStart - 0.04);
-      });
+        if (nextStart > effectiveSegEnd) break;
+        if (nextStart > segStart && nextStart < effectiveSegEnd && now >= (nextStart - 0.04)) {
+          isOverlappedByNext = true;
+          break;
+        }
+      }
 
       const effectiveVol = isOverlappedByNext ? parseFloat((targetVol * 0.50).toFixed(2)) : targetVol;
 

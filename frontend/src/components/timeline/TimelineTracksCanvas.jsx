@@ -105,13 +105,14 @@ function TimelineTracksCanvas({
       const clientWidth = container.clientWidth || 1200;
       const safePps = pps > 0 ? pps : 45;
 
-      // Buffer ~3 seconds or 15% of viewport width
-      const bufferSec = Math.max(3.0, (clientWidth * 0.15) / safePps);
+      // Buffer ~8 seconds or 35% of viewport width for zero pop-in during 60fps playback
+      const bufferSec = Math.max(8.0, (clientWidth * 0.35) / safePps);
       const start = Math.max(0, (scrollLeft / safePps) - bufferSec);
       const end = ((scrollLeft + clientWidth) / safePps) + bufferSec;
 
       setVisibleRange((prev) => {
-        if (Math.abs(prev.start - start) < 0.5 && Math.abs(prev.end - end) < 0.5) {
+        // 2.0s hysteresis prevents continuous canvas DOM re-renders while playhead scrolls during playback
+        if (Math.abs(prev.start - start) < 2.0 && Math.abs(prev.end - end) < 2.0) {
           return prev;
         }
         return { start, end };

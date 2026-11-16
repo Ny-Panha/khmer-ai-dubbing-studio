@@ -615,18 +615,23 @@ function TimelineEditor({
 
         lastPlayheadSegKeyRef.current = segKey;
 
-        // Update local timeline highlights so user sees what is playing/active
-        if (String(selectedSegmentIdRef.current) !== String(segKey)) {
-          selectedSegmentIdRef.current = segKey;
-          setSelectedAudioId(segKey);
-          setSelectedSubId(segKey);
-        }
+        // PERF: When actively playing (isPlaying === true), DO NOT trigger App-level
+        // onSelectSegment(segKey) or timeline track selection state updates!
+        // Calling onSelectSegment forces the entire React tree (ScriptReviewTab with 500+ textareas,
+        // VoiceSettings inspector, and Timeline canvas) to re-render, causing severe video playback stutter.
+        // We only sync the Inspector selection when paused or seeking.
+        if (!isPlaying) {
+          if (String(selectedSegmentIdRef.current) !== String(segKey)) {
+            selectedSegmentIdRef.current = segKey;
+            setSelectedAudioId(segKey);
+            setSelectedSubId(segKey);
+          }
 
-        // Sync Inspector to current playhead segment (both during playback and when paused)
-        if (String(lastSyncedInspectorIdRef.current) !== String(segKey)) {
-          lastSyncedInspectorIdRef.current = segKey;
-          if (onSelectSegment) {
-            onSelectSegment(segKey);
+          if (String(lastSyncedInspectorIdRef.current) !== String(segKey)) {
+            lastSyncedInspectorIdRef.current = segKey;
+            if (onSelectSegment) {
+              onSelectSegment(segKey);
+            }
           }
         }
       }
@@ -636,6 +641,27 @@ function TimelineEditor({
     }
     // In gaps, preserve current selection so Inspector never disappears unexpectedly
   }, [currentTime, scriptSegments, dragState, isScrubbing, isPlaying, onSelectSegment, isEditingInspectorText]);
+
+  // On pause transition: immediately sync Inspector and timeline selection to current playhead segment
+  const prevIsPlayingRef = useRef(isPlaying);
+  useEffect(() => {
+    if (prevIsPlayingRef.current && !isPlaying && !dragState && !isScrubbing && !isScrubbingRef.current) {
+      const activeSeg = resolveSegmentAtTime(scriptSegments, currentTime);
+      if (activeSeg) {
+        const segKey = activeSeg._uid || (activeSeg.id !== undefined && activeSeg.id !== null ? activeSeg.id : scriptSegments.indexOf(activeSeg));
+        if (String(lastSyncedInspectorIdRef.current) !== String(segKey)) {
+          lastSyncedInspectorIdRef.current = segKey;
+          selectedSegmentIdRef.current = segKey;
+          setSelectedAudioId(segKey);
+          setSelectedSubId(segKey);
+          if (onSelectSegment) {
+            onSelectSegment(segKey);
+          }
+        }
+      }
+    }
+    prevIsPlayingRef.current = isPlaying;
+  }, [isPlaying, currentTime, scriptSegments, dragState, isScrubbing, onSelectSegment]);
 
   // Catch-up after editing: If follow-sync was skipped because user was typing in the Inspector,
   // catch up to the current playhead segment on blur/focusout even while paused

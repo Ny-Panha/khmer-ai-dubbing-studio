@@ -3,7 +3,29 @@
 ## Last Session
 - **Environment**: Antigravity IDE (`chore/remove-ppocr-local`)
 - **Branch**: `chore/remove-ppocr-local` (tracking `origin/chore/remove-ppocr-local`)
-- **Timestamp**: 2026-11-16T15:28:00+07:00
+- **Timestamp**: 2026-11-16T19:07:00+07:00
+
+## Summary: 60FPS Video Playback & Zero-Stutter Optimization (/agents)
+1. **Decouple Heavy Inspector Re-renders during Playback (`TimelineEditor.jsx`)**:
+   - **Root Cause**: Previously, while the video was playing, every time the playhead crossed into a speaking segment (every 1-2s), `TimelineEditor` fired `onSelectSegment(segKey)` and `setSelectedAudioId/SubId`. This forced a full-tree React re-render of `App.jsx`, `ScriptReviewTab` (500+ segment cards & textareas), `VoiceSettings`, and timeline tracks, causing noticeable micro-stutters/freezes ("reang keang keang").
+   - **Fix Applied**: Guarded selection state with `if (!isPlaying)`. During playback, the GPU playhead line advances smoothly via `translate3d` without triggering top-level React state re-renders. On pause transition or manual seeking, the Inspector and clip selection immediately snap and sync to the current segment.
+
+2. **Disable CPU-Heavy Audio Buffer Decoding during Playback (`VideoPlayerPreview.jsx`)**:
+   - **Root Cause**: The background silence detector was invoking `AudioContext.decodeAudioData` up to 14 times concurrently while the video was playing, stealing CPU/audio thread cycles.
+   - **Fix Applied**: `probeUrlLeadingSilence` now returns early when `isPlayingRef.current` is active, deferring heavy decoding to paused/idle time.
+   - **Fast Sorted Window Filtering**: In `syncSegmentAudiosAtTime`, replaced `.map().filter()` with a direct loop that breaks early when segments pass beyond the active window (`s > now + 5`), and constrained auto-ducking overlap check to adjacent dialogues instead of full-array scans.
+
+3. **Backend Video Range Stream 3MB Chunk Cap (`backend/middleware/mediaStream.js`)**:
+   - **Root Cause**: Open-ended Range requests (`Range: bytes=0-`) were piped uncapped (500MB+ into a single HTTP stream), choking Vite's dev proxy and Node.js socket buffers on seek/play.
+   - **Fix Applied**: Capped open-ended video range responses to 3MB chunks (`Content-Range: bytes start-(start+3MB-1)/fileSize`), allowing HTML5 `<video>` to buffer incrementally and seek instantaneously.
+
+4. **Timeline Canvas Viewport Hysteresis (`TimelineTracksCanvas.jsx`)**:
+   - Upgraded visible range buffer to 8 seconds with 2.0s hysteresis, preventing continuous SVG canvas rebuilds while playhead scrolls.
+
+5. **Verification**:
+   - Frontend build (`npm run build --prefix frontend`): Passed in 778ms (0 errors).
+   - Optimization test suite (`node --test backend/tests/playback_60fps_optimization.test.js`): 4 passed / 0 failed.
+   - Regression test suites (`timeline_voice_cut_mute_gap_simple.test.js`, `audio_sync_delay_fix.test.js`, etc.): 16 passed / 0 failed.
 
 ## Summary: Gemini 503 High Demand Fast-Fail & Timeline UI ឃ្លា Polish
 1. **503 High Demand Fast-Fail (`geminiKeyManager.js` & `geminiService.js`)**:

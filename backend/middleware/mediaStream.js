@@ -99,7 +99,15 @@ router.get(/^\/(.+\.(?:mp3|wav|ogg|m4a|aac|mp4|webm|mov))$/i, (req, res, next) =
     return s.pipe(res);
   }
 
-  const clampedEnd = Math.min(isNaN(end) ? fileSize - 1 : end, fileSize - 1);
+  // 🎥 Video Stream Optimization: Cap open-ended range requests (bytes=start-) to 3MB chunks
+  // This lets HTML5 <video> start playing immediately and seek with zero lag, instead of downloading 500MB+ in one go!
+  const isVideo = ext === ".mp4" || ext === ".webm" || ext === ".mov";
+  const CHUNK_SIZE = 3 * 1024 * 1024; // 3MB chunk for smooth streaming
+  let effectiveEnd = isNaN(end) ? fileSize - 1 : end;
+  if (!parts[1] && isVideo) {
+    effectiveEnd = Math.min(start + CHUNK_SIZE - 1, fileSize - 1);
+  }
+  const clampedEnd = Math.min(effectiveEnd, fileSize - 1);
   const chunksize = (clampedEnd - start) + 1;
   const fileStream = fs.createReadStream(filePath, { start, end: clampedEnd });
 
