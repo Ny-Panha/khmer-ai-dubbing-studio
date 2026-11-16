@@ -13,13 +13,17 @@ describe('CapCut-Style Per-Clip Selection Kind Suite', () => {
 
     const editorCode = fs.readFileSync('frontend/src/components/timeline/TimelineEditor.jsx', 'utf8');
     assert.ok(editorCode.includes('selectedClipKind = null'), 'TimelineEditor accepts selectedClipKind prop');
-    assert.ok(editorCode.includes("onSelectClipKind('voice')"), 'handleAudioMouseDown sets voice kind');
-    assert.ok(editorCode.includes("onSelectClipKind('video')"), 'handleVideoMouseDown sets video kind');
-    assert.ok(editorCode.includes("onSelectClipKind('subtitle')"), 'handleSubMouseDown sets subtitle kind');
-    assert.ok(editorCode.includes("onSelectClipKind(null)"), 'handleBackgroundMouseDown clears kind on empty click');
+    assert.ok(editorCode.includes("handleSelectClipKind('voice')"), 'handleAudioMouseDown sets voice kind');
+    assert.ok(editorCode.includes("handleSelectClipKind('video')"), 'handleVideoMouseDown sets video kind');
+    assert.ok(editorCode.includes("handleSelectClipKind('subtitle')"), 'handleSubMouseDown sets subtitle kind');
+    assert.ok(editorCode.includes('if (onSelectClipKind) onSelectClipKind(kind)'), 'kind handler synchronizes selection signals');
+    assert.ok(editorCode.includes('handleSelectClipKind(null)'), 'empty click clears kind');
 
     const canvasCode = fs.readFileSync('frontend/src/components/timeline/TimelineTracksCanvas.jsx', 'utf8');
     assert.ok(canvasCode.includes('selectedClipKind = null'), 'TimelineTracksCanvas accepts selectedClipKind prop');
+    assert.ok(canvasCode.includes("onSelectClipKind('voice')"), 'voice click sets voice kind');
+    assert.ok(canvasCode.includes("onSelectClipKind('video')"), 'video click sets video kind');
+    assert.ok(canvasCode.includes("onSelectClipKind('subtitle')"), 'subtitle click sets subtitle kind');
     assert.ok(canvasCode.includes('is-linked-clip'), 'TimelineTracksCanvas renders is-linked-clip class');
 
     const cssCode = fs.readFileSync('frontend/src/components/timeline/TimelineEditor.css', 'utf8');

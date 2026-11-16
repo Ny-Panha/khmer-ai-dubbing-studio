@@ -1,4 +1,5 @@
 import { useEffect } from 'react';
+import { resolveTimelineDeleteTarget } from '../utils/timelineDeleteRouting';
 
 /**
  * Global Desktop Studio Keyboard Shortcuts Hook (CapCut Pro 2026)
@@ -82,18 +83,13 @@ export function useShortcuts({
 
       // Delete / Backspace: Delete Selected Segment or Clip (respecting selectedClipKind)
       if ((e.key === 'Delete' || e.key === 'Backspace') && !isMod) {
-        if (selectedClipKind === 'video' && activeClipId) {
+        const deleteTarget = resolveTimelineDeleteTarget({ selectedClipKind, selectedSegmentId, activeClipId });
+        if (deleteTarget?.type === 'clip') {
           e.preventDefault();
-          onDeleteClip?.(activeClipId);
-        } else if ((selectedClipKind === 'voice' || selectedClipKind === 'subtitle') && selectedSegmentId !== null && selectedSegmentId !== undefined) {
+          onDeleteClip?.(deleteTarget.id);
+        } else if (deleteTarget?.type === 'segment') {
           e.preventDefault();
-          onDeleteSegment?.(selectedSegmentId);
-        } else if (selectedSegmentId !== null && selectedSegmentId !== undefined) {
-          e.preventDefault();
-          onDeleteSegment?.(selectedSegmentId);
-        } else if (activeClipId) {
-          e.preventDefault();
-          onDeleteClip?.(activeClipId);
+          onDeleteSegment?.(deleteTarget.id);
         }
         return;
       }

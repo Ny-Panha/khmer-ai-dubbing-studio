@@ -9,6 +9,7 @@ import {
   resolveSegmentAtTime,
   computeTimelineScrollForTime,
 } from '../../utils/timelineUtils';
+import { resolveTimelineDeleteTarget } from '../../utils/timelineDeleteRouting';
 
 import TimelineToolbar from './TimelineToolbar';
 import TimelineTrackHeaders from './TimelineTrackHeaders';
@@ -74,7 +75,11 @@ function TimelineEditor({
   const [zoom, setZoom] = useState(1);
   const [selectedSubId, setSelectedSubId] = useState(null);
   const [selectedAudioId, setSelectedAudioId] = useState(null);
-  const [lastSelectedType, setLastSelectedType] = useState('none'); // 'video' | 'audio' | 'subtitle' | 'none'
+  const [lastSelectedType, setLastSelectedType] = useState('none'); // Split target only; Delete routes by selectedClipKind.
+  const handleSelectClipKind = useCallback((kind) => {
+    setLastSelectedType(kind === 'voice' ? 'audio' : (kind || 'none'));
+    if (onSelectClipKind) onSelectClipKind(kind);
+  }, [onSelectClipKind]);
   const [isScrubbing, setIsScrubbing] = useState(false);
   const [dragState, setDragState] = useState(null);
   const [snappingEnabled, setSnappingEnabled] = useState(true);
@@ -741,14 +746,13 @@ function TimelineEditor({
     safeBlurInspectorInput();
     const isClipClick = Boolean(e.target?.closest?.('.video-clip-block, .voice-segment-block, .subtitle-segment-block, .clean-bgm-block, .timeline-keyframe'));
     if (!isClipClick) {
-      if (onSelectClipKind) onSelectClipKind(null);
+      handleSelectClipKind(null);
       if (onSelectClip) onSelectClip(null);
       if (onSelectSegment) onSelectSegment(null);
       selectedSegmentIdRef.current = null;
       lastSyncedInspectorIdRef.current = null;
       setSelectedAudioId(null);
       setSelectedSubId(null);
-      setLastSelectedType('none');
     }
     isScrubbingRef.current = true;
     setIsScrubbing(true);
@@ -768,8 +772,7 @@ function TimelineEditor({
     selectedSegmentIdRef.current = segKey;
     lastSyncedInspectorIdRef.current = segKey;
     lastUserSelectTimeRef.current = Date.now();
-    setLastSelectedType('audio');
-    if (onSelectClipKind) onSelectClipKind('voice');
+    handleSelectClipKind('voice');
     setSelectedAudioId(segKey);
     setSelectedSubId(segKey);
     if (onSelectSegment) onSelectSegment(segKey);
@@ -831,8 +834,7 @@ function TimelineEditor({
     selectedSegmentIdRef.current = subKey;
     lastSyncedInspectorIdRef.current = subKey;
     lastUserSelectTimeRef.current = Date.now();
-    setLastSelectedType('subtitle');
-    if (onSelectClipKind) onSelectClipKind('subtitle');
+    handleSelectClipKind('subtitle');
     const startSec = (typeof seg.startSec === 'number' && !isNaN(seg.startSec))
       ? seg.startSec
       : ((typeof seg.audioStartSec === 'number' && !isNaN(seg.audioStartSec))
@@ -885,8 +887,7 @@ function TimelineEditor({
 
     followSyncSkippedDueToEditingRef.current = false;
     lastUserSelectTimeRef.current = Date.now();
-    setLastSelectedType('video');
-    if (onSelectClipKind) onSelectClipKind('video');
+    handleSelectClipKind('video');
     if (onSelectClip) onSelectClip(clip.id);
 
     const targetSeg = scriptSegments?.find(s => s.id === clip.segmentId || s.id === clip.segmentIndex || (clip.segmentIndex && s.id === clip.segmentIndex));
@@ -1488,22 +1489,26 @@ function TimelineEditor({
   const canDelete = Boolean(canDeleteSubtitle || canDeleteVideo);
 
   const handleDeleteSelected = useCallback(() => {
-    // 1. If user clicked/selected a Video Clip, delete the Video Clip!
-    if ((lastSelectedType === 'video' || selectedClipKind === 'video') && canDeleteVideo && onDeleteClip) {
-      onDeleteClip(activeClipId);
+    const deleteTarget = resolveTimelineDeleteTarget({
+      selectedClipKind,
+      selectedSegmentId: selectedSegKey,
+      activeClipId,
+    });
+
+    if (deleteTarget?.type === 'clip' && canDeleteVideo && onDeleteClip) {
+      onDeleteClip(deleteTarget.id);
       if (onSelectClip) onSelectClip(null);
-      if (onSelectClipKind) onSelectClipKind(null);
-      setLastSelectedType('none');
+      if (onSelectSegment) onSelectSegment(null);
+      handleSelectClipKind(null);
       return;
     }
 
-    // 2. If user clicked an audio/subtitle segment (or video cannot be deleted), delete the segment!
-    if (canDeleteSubtitle) {
-      if (onSelectClipKind) onSelectClipKind(null);
+    if (deleteTarget?.type === 'segment' && canDeleteSubtitle) {
+      handleSelectClipKind(null);
       if (onDeleteSegment) {
-        onDeleteSegment(selectedSegKey);
+        onDeleteSegment(deleteTarget.id);
       } else {
-        const updated = deleteSegmentByIdOrIndex(scriptSegments, selectedSegKey);
+        const updated = deleteSegmentByIdOrIndex(scriptSegments, deleteTarget.id);
         if (onUpdateSegments) {
           onUpdateSegments(updated, false, true);
         }
@@ -1515,17 +1520,8 @@ function TimelineEditor({
       if (onSelectSegment) {
         onSelectSegment(null);
       }
-      setLastSelectedType('none');
-      return;
     }
-
-    // 3. Fallback: If only video clip was active
-    if (canDeleteVideo && onDeleteClip) {
-      onDeleteClip(activeClipId);
-      if (onSelectClip) onSelectClip(null);
-      setLastSelectedType('none');
-    }
-  }, [lastSelectedType, canDeleteSubtitle, canDeleteVideo, selectedSegKey, scriptSegments, onDeleteSegment, onUpdateSegments, onSelectSegment, onDeleteClip, onSelectClip, activeClipId]);
+  }, [selectedClipKind, canDeleteSubtitle, canDeleteVideo, selectedSegKey, scriptSegments, onDeleteSegment, onUpdateSegments, onSelectSegment, onDeleteClip, onSelectClip, activeClipId, handleSelectClipKind]);
 
 
   // 1. Pure 60FPS Hardware GPU Playhead Animation & 1:1 In-Sync Smooth Center Scroll
@@ -1777,7 +1773,7 @@ function TimelineEditor({
           framingKeyframes={framingKeyframes}
           selectedSegmentId={selectedSegmentId}
           selectedClipKind={selectedClipKind}
-          onSelectClipKind={onSelectClipKind}
+          onSelectClipKind={handleSelectClipKind}
           selectedAudioId={selectedAudioId}
           setSelectedAudioId={setSelectedAudioId}
           onSelectSegment={onSelectSegment}

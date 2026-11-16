@@ -870,7 +870,25 @@ export function useClipOperations({
         });
       } else {
         // 2. User deleted a DIALOGUE clip: Remove matching voice segment(s) and ripple remaining
-        const associatedIndices = findAssociatedSegmentIndices(targetClip, scriptData.segments);
+        let associatedIndices = findAssociatedSegmentIndices(targetClip, scriptData.segments);
+        if (associatedIndices.length === 0 && targetClip.isDialogue) {
+          let bestIndex = -1;
+          let bestOverlap = 0.05;
+          scriptData.segments.forEach((seg, idx) => {
+            const segmentStart = Number.isFinite(seg.startSec) ? seg.startSec : parseTimeToSeconds(seg.start, 0);
+            const segmentEnd = Number.isFinite(seg.endSec) ? seg.endSec : parseTimeToSeconds(seg.end, segmentStart);
+            const overlap = Math.min(targetEnd, segmentEnd) - Math.max(targetStart, segmentStart);
+            if (overlap > bestOverlap) {
+              bestIndex = idx;
+              bestOverlap = overlap;
+            }
+          });
+          if (bestIndex !== -1) {
+            associatedIndices = [bestIndex];
+          } else {
+            console.warn(`[useClipOperations] Dialogue clip ${targetClip.id} had no matching segment; shifting later segments only.`);
+          }
+        }
         const associatedSet = new Set(associatedIndices);
 
         if (associatedSet.size > 0) {
@@ -981,24 +999,24 @@ export function useClipOperations({
     }
     setScriptData(prev => prev ? ({ ...prev, segments: updated, updatedAt: Date.now() }) : null);
     if (setSelectedSegmentId) setSelectedSegmentId(null);
-    if (setSelectedAudioId) setSelectedAudioId(null);
-    if (setSelectedSubId) setSelectedSubId(null);
 
     // If video cuts exist, delete matching video clip and ripple remaining video cuts!
     if (targetSeg && Array.isArray(videoClips) && videoClips.length > 0) {
       const sStart = typeof targetSeg.startSec === 'number' ? targetSeg.startSec : parseTimeToSeconds(targetSeg.start, 0);
       const sEnd = typeof targetSeg.endSec === 'number' ? targetSeg.endSec : parseTimeToSeconds(targetSeg.end, sStart + 2.5);
 
-      // Find matching video clip if video was cut into clips
-      const matchingClip = videoClips.find((c) =>
+      // Prefer exact dialogue identifiers; only use timeline overlap when no exact id exists.
+      const exactMatchingClip = videoClips.find((c) =>
         Boolean(
           c.isDialogue && (
-            (targetSeg.id && (c.segmentId === targetSeg.id || String(c.segmentId) === String(targetSeg.id))) ||
-            (targetSeg.segmentId && (c.segmentId === targetSeg.segmentId || String(c.segmentId) === String(targetSeg.segmentId))) ||
-            (typeof targetSegIdx === 'number' && c.segmentIndex === targetSegIdx + 1) ||
-            (Math.max(c.start, sStart) < Math.min(c.end, sEnd) - 0.05)
+            (targetSeg.id !== undefined && targetSeg.id !== null && (c.segmentId === targetSeg.id || String(c.segmentId) === String(targetSeg.id))) ||
+            (targetSeg.segmentId !== undefined && targetSeg.segmentId !== null && (c.segmentId === targetSeg.segmentId || String(c.segmentId) === String(targetSeg.segmentId))) ||
+            (typeof targetSegIdx === 'number' && c.segmentIndex === targetSegIdx + 1)
           )
         )
+      );
+      const matchingClip = exactMatchingClip || videoClips.find((c) =>
+        Boolean(c.isDialogue && Math.min(c.end, sEnd) - Math.max(c.start, sStart) > 0.05)
       );
 
       if (matchingClip) {
