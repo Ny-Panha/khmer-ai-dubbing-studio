@@ -5,6 +5,7 @@ import {
   deleteSegmentByIdOrIndex,
   isSegmentMatch,
   findSegmentIndex,
+  findAssociatedSegmentIndices,
   autoSplitVideoBySegments,
   bridgeClipGaps,
   autoAlignVoiceSegments,
@@ -536,7 +537,87 @@ export function useClipOperations({
       console.warn('[useClipOperations] pushUndoSnapshot failed in handleAutoAlignNoOverlap:', err);
     }
 
-    // 1. Calculate canonical video duration
+    // 1. If leading gap exists (e.g. from deleting clips/segments at 00:00), snap everything to 00:00!
+    let leadOffset = 0;
+    const firstSegStart = typeof currentSegments[0].startSec === 'number'
+      ? currentSegments[0].startSec
+      : parseTimeToSeconds(currentSegments[0].start, 0);
+
+    const firstClipStart = Array.isArray(videoClips) && videoClips.length > 0 ? (videoClips[0].start || 0) : 0;
+
+    if (firstSegStart > 0.05 || firstClipStart > 0.05) {
+      leadOffset = Math.min(
+        firstSegStart > 0.05 ? firstSegStart : Infinity,
+        firstClipStart > 0.05 ? firstClipStart : Infinity
+      );
+      if (leadOffset === Infinity) leadOffset = 0;
+    }
+
+    // Snap video clips to 00:00 if leading gap exists
+    if (leadOffset > 0.04 && Array.isArray(videoClips) && videoClips.length > 0) {
+      const snappedClips = videoClips.map((c) => {
+        const clipLen = c.end - c.start;
+        const newStart = Math.max(0, parseFloat((c.start - leadOffset).toFixed(3)));
+        const newEnd = parseFloat((newStart + clipLen).toFixed(3));
+        return { ...c, start: newStart, end: newEnd };
+      });
+      setVideoClips(snappedClips);
+    }
+
+    // Snap voice segments to 00:00 if leadOffset > 0
+    let adjustedSegments = currentSegments;
+    if (leadOffset > 0.04) {
+      adjustedSegments = currentSegments.map((seg) => {
+        const s = typeof seg.startSec === 'number' ? seg.startSec : parseTimeToSeconds(seg.start, 0);
+        const segDur = typeof seg.duration === 'number' && seg.duration > 0
+          ? seg.duration
+          : ((typeof seg.endSec === 'number' ? seg.endSec : parseTimeToSeconds(seg.end, s + 2.5)) - s);
+        const newStart = Math.max(0, parseFloat((s - leadOffset).toFixed(3)));
+        const newEnd = parseFloat((newStart + segDur).toFixed(3));
+        return {
+          ...seg,
+          start: formatTimecode(newStart),
+          end: formatTimecode(newEnd),
+          startSec: newStart,
+          endSec: newEnd,
+          audioStartSec: newStart,
+          audioEndSec: newEnd,
+        };
+      });
+    }
+
+    // 2. Synchronize dialogue voice segments to their matching video cuts if video was cut into segments
+    if (Array.isArray(videoClips) && videoClips.length > 0) {
+      const dialogueClips = videoClips.filter((c) => c.isDialogue);
+      if (dialogueClips.length > 0) {
+        adjustedSegments = adjustedSegments.map((seg, idx) => {
+          // Find matching dialogue video clip
+          const matchingCut = dialogueClips.find((c) =>
+            (c.segmentId && (seg.id === c.segmentId || String(seg.id) === String(c.segmentId))) ||
+            (c.segmentIndex && (seg.id === c.segmentIndex || idx + 1 === c.segmentIndex))
+          );
+          if (matchingCut && typeof matchingCut.start === 'number') {
+            const segDur = typeof seg.duration === 'number' && seg.duration > 0
+              ? seg.duration
+              : ((typeof seg.endSec === 'number' ? seg.endSec : parseTimeToSeconds(seg.end, matchingCut.start + 2.5)) - (typeof seg.startSec === 'number' ? seg.startSec : matchingCut.start));
+            const newStart = matchingCut.start;
+            const newEnd = parseFloat((newStart + Math.max(0.3, segDur)).toFixed(3));
+            return {
+              ...seg,
+              start: formatTimecode(newStart),
+              end: formatTimecode(newEnd),
+              startSec: newStart,
+              endSec: newEnd,
+              audioStartSec: newStart,
+              audioEndSec: newEnd,
+            };
+          }
+          return seg;
+        });
+      }
+    }
+
+    // 3. Calculate canonical video duration
     const totalDur = Number(
       duration ||
       videoRef?.current?.duration ||
@@ -544,8 +625,8 @@ export function useClipOperations({
       0
     );
 
-    // 2. Align voice segments strictly anchored to sourceStartSec (Max Shift <= 0.35s, 0% video overflow)
-    const alignedSegments = autoAlignVoiceSegments(currentSegments, totalDur, {
+    // 4. Align voice segments strictly anchored to sourceStartSec (Max Shift <= 0.35s, 0% video overflow)
+    const alignedSegments = autoAlignVoiceSegments(adjustedSegments, totalDur, {
       minGapSec: 0.04,
       maxShiftSec: 0.35,
       maxPlaybackSpeed: 1.45,
@@ -738,14 +819,136 @@ export function useClipOperations({
     }
   };
 
-  // Delete Clip Tool
+  // Delete Clip Tool (with automatic Ripple Delete & Video+Voice Track Sync)
   const handleDeleteClip = (clipId = null) => {
     const targetClipId = clipId !== null && clipId !== undefined ? clipId : activeClipId;
     if (!targetClipId) return;
-    pushUndoSnapshot(videoClips);
-    const updated = deleteClipById(videoClips, targetClipId, { allowEmpty: true });
+
+    const targetClip = videoClips.find((c) => c.id === targetClipId);
+    if (!targetClip) return;
+    pushUndoSnapshot(videoClips, scriptData?.segments || []);
+
+    const targetStart = Number.isFinite(targetClip.start) ? targetClip.start : 0;
+    const targetEnd = Number.isFinite(targetClip.end) ? targetClip.end : targetStart;
+    const dur = Math.max(0, parseFloat((targetEnd - targetStart).toFixed(3)));
+
+    const isGap = !targetClip.isDialogue && (
+      targetClip.name === 'Gap' || 
+      targetClip.id?.startsWith('clip-gap') || 
+      (!targetClip.segmentId && !targetClip.segmentIndex)
+    );
+
+    const updated = deleteClipById(videoClips, targetClipId, { allowEmpty: true, ripple: true });
     setVideoClips(updated);
     setActiveClipId(updated[0]?.id || null);
+
+    // Ripple voice segments as well if they match or start after the deleted clip!
+    if (scriptData?.segments && scriptData.segments.length > 0) {
+      let nextSegments = scriptData.segments;
+
+      if (isGap) {
+        // 1. User deleted a Gap clip: Shift all voice segments starting at or after targetEnd left by dur
+        nextSegments = nextSegments.map((seg) => {
+          const s = typeof seg.startSec === 'number' ? seg.startSec : parseTimeToSeconds(seg.start, 0);
+          if (s >= targetEnd - 0.02) {
+            const segDur = typeof seg.duration === 'number' && seg.duration > 0
+              ? seg.duration
+              : ((typeof seg.endSec === 'number' ? seg.endSec : parseTimeToSeconds(seg.end, s + 2.5)) - s);
+            const newStart = Math.max(0, parseFloat((s - dur).toFixed(3)));
+            const newEnd = parseFloat((newStart + segDur).toFixed(3));
+            return {
+              ...seg,
+              start: formatTimecode(newStart),
+              end: formatTimecode(newEnd),
+              startSec: newStart,
+              endSec: newEnd,
+              audioStartSec: newStart,
+              audioEndSec: newEnd,
+            };
+          }
+          return seg;
+        });
+      } else {
+        // 2. User deleted a DIALOGUE clip: Remove matching voice segment(s) and ripple remaining
+        const associatedIndices = findAssociatedSegmentIndices(targetClip, scriptData.segments);
+        const associatedSet = new Set(associatedIndices);
+
+        if (associatedSet.size > 0) {
+          const remaining = scriptData.segments.filter((_, idx) => !associatedSet.has(idx));
+          nextSegments = remaining.map((seg, newIdx) => {
+            const s = typeof seg.startSec === 'number' ? seg.startSec : parseTimeToSeconds(seg.start, 0);
+            const segDur = typeof seg.duration === 'number' && seg.duration > 0
+              ? seg.duration
+              : ((typeof seg.endSec === 'number' ? seg.endSec : parseTimeToSeconds(seg.end, s + 2.5)) - s);
+            let newStart = s;
+            let newEnd = typeof seg.endSec === 'number' ? seg.endSec : s + segDur;
+            if (s >= targetStart - 0.02) {
+              newStart = Math.max(0, parseFloat((s - dur).toFixed(3)));
+              newEnd = parseFloat((newStart + segDur).toFixed(3));
+            }
+            return {
+              ...seg,
+              id: newIdx + 1,
+              segmentId: newIdx + 1,
+              start: formatTimecode(newStart),
+              end: formatTimecode(newEnd),
+              startSec: newStart,
+              endSec: newEnd,
+              audioStartSec: newStart,
+              audioEndSec: newEnd,
+            };
+          });
+        } else {
+          // Fallback: If no direct match found, shift subsequent segments left by dur
+          nextSegments = nextSegments.map((seg) => {
+            const s = typeof seg.startSec === 'number' ? seg.startSec : parseTimeToSeconds(seg.start, 0);
+            if (s >= targetEnd - 0.02) {
+              const segDur = typeof seg.duration === 'number' && seg.duration > 0
+                ? seg.duration
+                : ((typeof seg.endSec === 'number' ? seg.endSec : parseTimeToSeconds(seg.end, s + 2.5)) - s);
+              const newStart = Math.max(0, parseFloat((s - dur).toFixed(3)));
+              const newEnd = parseFloat((newStart + segDur).toFixed(3));
+              return {
+                ...seg,
+                start: formatTimecode(newStart),
+                end: formatTimecode(newEnd),
+                startSec: newStart,
+                endSec: newEnd,
+                audioStartSec: newStart,
+                audioEndSec: newEnd,
+              };
+            }
+            return seg;
+          });
+        }
+      }
+
+      // 3. Snap to 00:00: If leading video clip was snapped to 00:00, ensure voice starts at 00:00 too!
+      if (nextSegments.length > 0 && updated.length > 0 && updated[0].start === 0) {
+        const firstSegStart = typeof nextSegments[0].startSec === 'number' ? nextSegments[0].startSec : parseTimeToSeconds(nextSegments[0].start, 0);
+        if (firstSegStart > 0.04) {
+          nextSegments = nextSegments.map((seg) => {
+            const s = typeof seg.startSec === 'number' ? seg.startSec : parseTimeToSeconds(seg.start, 0);
+            const segDur = typeof seg.duration === 'number' && seg.duration > 0
+              ? seg.duration
+              : ((typeof seg.endSec === 'number' ? seg.endSec : parseTimeToSeconds(seg.end, s + 2.5)) - s);
+            const newStart = Math.max(0, parseFloat((s - firstSegStart).toFixed(3)));
+            const newEnd = parseFloat((newStart + segDur).toFixed(3));
+            return {
+              ...seg,
+              start: formatTimecode(newStart),
+              end: formatTimecode(newEnd),
+              startSec: newStart,
+              endSec: newEnd,
+              audioStartSec: newStart,
+              audioEndSec: newEnd,
+            };
+          });
+        }
+      }
+
+      handleUpdateTimelineSegments(nextSegments, true, true);
+    }
   };
 
   // Update Clips (Drag/Trim) with optional synchronized segments
@@ -757,14 +960,17 @@ export function useClipOperations({
     }
   };
 
-  // Delete a Subtitle Segment
+  // Delete a Subtitle Segment (with automatic Ripple Delete & Video Sync)
   const handleDeleteSegment = async (segIdOrIdx = null) => {
     if (!scriptData?.segments) return;
     const targetKey = segIdOrIdx !== null && segIdOrIdx !== undefined ? segIdOrIdx : selectedSegmentId;
     if (targetKey === null || targetKey === undefined) return;
 
     pushUndoSnapshot(videoClips, scriptData.segments);
-    const updated = deleteSegmentByIdOrIndex(scriptData.segments, targetKey);
+    const targetSegIdx = findSegmentIndex(scriptData.segments, targetKey);
+    const targetSeg = targetSegIdx !== -1 ? scriptData.segments[targetSegIdx] : null;
+
+    const updated = deleteSegmentByIdOrIndex(scriptData.segments, targetKey, { ripple: true });
     if (updated === scriptData.segments) return;
 
     if (syncAudioTimeoutRef?.current) clearTimeout(syncAudioTimeoutRef.current);
@@ -775,6 +981,57 @@ export function useClipOperations({
     }
     setScriptData(prev => prev ? ({ ...prev, segments: updated, updatedAt: Date.now() }) : null);
     if (setSelectedSegmentId) setSelectedSegmentId(null);
+    if (setSelectedAudioId) setSelectedAudioId(null);
+    if (setSelectedSubId) setSelectedSubId(null);
+
+    // If video cuts exist, delete matching video clip and ripple remaining video cuts!
+    if (targetSeg && Array.isArray(videoClips) && videoClips.length > 0) {
+      const sStart = typeof targetSeg.startSec === 'number' ? targetSeg.startSec : parseTimeToSeconds(targetSeg.start, 0);
+      const sEnd = typeof targetSeg.endSec === 'number' ? targetSeg.endSec : parseTimeToSeconds(targetSeg.end, sStart + 2.5);
+
+      // Find matching video clip if video was cut into clips
+      const matchingClip = videoClips.find((c) =>
+        Boolean(
+          c.isDialogue && (
+            (targetSeg.id && (c.segmentId === targetSeg.id || String(c.segmentId) === String(targetSeg.id))) ||
+            (targetSeg.segmentId && (c.segmentId === targetSeg.segmentId || String(c.segmentId) === String(targetSeg.segmentId))) ||
+            (typeof targetSegIdx === 'number' && c.segmentIndex === targetSegIdx + 1) ||
+            (Math.max(c.start, sStart) < Math.min(c.end, sEnd) - 0.05)
+          )
+        )
+      );
+
+      if (matchingClip) {
+        // Delete matching clip via deleteClipById (which ripples subsequent clips and re-indexes #1, #2, #3...)
+        const shiftedClips = deleteClipById(videoClips, matchingClip.id, { allowEmpty: true, ripple: true });
+        setVideoClips(shiftedClips);
+        setActiveClipId(shiftedClips[0]?.id || null);
+      } else {
+        // Fallback: ripple video cuts starting after sEnd by dur
+        const dur = Math.max(0, sEnd - sStart);
+        if (dur > 0.04) {
+          let shiftedClips = videoClips.map((c) => {
+            if (c.start >= sEnd - 0.02) {
+              const clipLen = c.end - c.start;
+              const newStart = Math.max(0, parseFloat((c.start - dur).toFixed(3)));
+              const newEnd = parseFloat((newStart + clipLen).toFixed(3));
+              return { ...c, start: newStart, end: newEnd };
+            }
+            return c;
+          });
+          if (shiftedClips.length > 0 && shiftedClips[0].start > 0.04 && updated.length > 0 && updated[0].startSec === 0) {
+            const leadGap = shiftedClips[0].start;
+            shiftedClips = shiftedClips.map((c) => {
+              const clipLen = c.end - c.start;
+              const newStart = Math.max(0, parseFloat((c.start - leadGap).toFixed(3)));
+              const newEnd = parseFloat((newStart + clipLen).toFixed(3));
+              return { ...c, start: newStart, end: newEnd };
+            });
+          }
+          setVideoClips(shiftedClips);
+        }
+      }
+    }
 
     const hasAudios = Boolean(updated.some(s => s.audioFile || s.audioPath || s.audioUrl));
     if (!hasAudios) {

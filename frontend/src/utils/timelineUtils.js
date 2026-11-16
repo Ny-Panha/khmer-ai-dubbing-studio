@@ -1,6 +1,7 @@
 import {
   parseTimeToSeconds,
   formatMinSec,
+  formatTimecode,
   getSegmentAudioDuration,
   hasSegmentAudio,
 } from './timestampUtils.js';
@@ -448,10 +449,78 @@ export function syncSegmentsWithMovedClip(clip, newStartOrClip, segments = []) {
  * @returns {Array}
  */
 export function deleteClipById(clips, clipId, options = {}) {
-  const { allowEmpty = true } = options;
+  const { allowEmpty = true, ripple = true } = options;
   if (!Array.isArray(clips) || clips.length === 0) return [];
   if (!allowEmpty && clips.length <= 1) return clips;
-  return clips.filter((c) => c.id !== clipId);
+
+  const targetIdx = clips.findIndex((c) => c.id === clipId);
+  if (targetIdx === -1) return clips;
+
+  const targetClip = clips[targetIdx];
+  const targetStart = Number.isFinite(targetClip.start) ? targetClip.start : 0;
+  const targetEnd = Number.isFinite(targetClip.end) ? targetClip.end : targetStart;
+  const dur = Math.max(0, parseFloat((targetEnd - targetStart).toFixed(3)));
+
+  const remaining = clips.filter((c) => c.id !== clipId);
+  if (remaining.length === 0) return [];
+
+  if (!ripple) {
+    return remaining;
+  }
+
+  // Ripple Delete: Shift all subsequent clips left by dur
+  let shifted = remaining.map((c) => {
+    if (c.start >= targetEnd - 0.02) {
+      const clipLen = Math.max(0.1, c.end - c.start);
+      const newStart = Math.max(0, parseFloat((c.start - dur).toFixed(3)));
+      const newEnd = parseFloat((newStart + clipLen).toFixed(3));
+      return {
+        ...c,
+        start: newStart,
+        end: newEnd,
+      };
+    }
+    return c;
+  });
+
+  // Snap to 00:00: If the leading clip was deleted and there's a dead space at the start (start > 0),
+  // pull all clips left so video starts cleanly at 00:00!
+  if (shifted.length > 0 && shifted[0].start > 0.04) {
+    const leadOffset = shifted[0].start;
+    shifted = shifted.map((c) => {
+      const clipLen = Math.max(0.1, c.end - c.start);
+      const newStart = Math.max(0, parseFloat((c.start - leadOffset).toFixed(3)));
+      const newEnd = parseFloat((newStart + clipLen).toFixed(3));
+      return {
+        ...c,
+        start: newStart,
+        end: newEnd,
+      };
+    });
+  }
+
+  // If a dialogue clip was deleted, re-index remaining dialogue clips sequentially (#1, #2, #3...)
+  const isTargetDialogue = Boolean(targetClip.isDialogue || targetClip.segmentId || targetClip.segmentIndex || /^#\d+/.test(targetClip.name || ''));
+  if (isTargetDialogue) {
+    let dIdx = 1;
+    shifted = shifted.map((c) => {
+      const isClipDialogue = Boolean(c.isDialogue || c.segmentId || c.segmentIndex || /^#\d+/.test(c.name || ''));
+      if (isClipDialogue) {
+        const curIdx = dIdx++;
+        const speakerPart = (c.name || '').replace(/^#\d+\s*/, '').trim() || 'Speaker';
+        return {
+          ...c,
+          isDialogue: true,
+          segmentIndex: curIdx,
+          segmentId: curIdx,
+          name: `#${curIdx} ${speakerPart}`,
+        };
+      }
+      return c;
+    });
+  }
+
+  return shifted;
 }
 
 /**
@@ -529,7 +598,8 @@ export function findSegmentIndex(segments, key) {
  * @param {string|number} segIdOrIdx
  * @returns {Array}
  */
-export function deleteSegmentByIdOrIndex(segments, segIdOrIdx) {
+export function deleteSegmentByIdOrIndex(segments, segIdOrIdx, options = {}) {
+  const { ripple = true } = options;
   if (!Array.isArray(segments) || segments.length === 0) return [];
   if (segIdOrIdx === null || segIdOrIdx === undefined) return segments;
 
@@ -540,13 +610,80 @@ export function deleteSegmentByIdOrIndex(segments, segIdOrIdx) {
     return segments;
   }
 
-  return segments
+  const targetSeg = segments[targetIndex];
+  const targetStart = typeof targetSeg.startSec === 'number'
+    ? targetSeg.startSec
+    : (parseTimeToSeconds ? parseTimeToSeconds(targetSeg.start, 0) : 0);
+  const targetEnd = typeof targetSeg.endSec === 'number'
+    ? targetSeg.endSec
+    : (parseTimeToSeconds ? parseTimeToSeconds(targetSeg.end, targetStart + 2.5) : targetStart + 2.5);
+  const dur = Math.max(0, parseFloat((targetEnd - targetStart).toFixed(3)));
+
+  let filtered = segments
     .filter((_, idx) => idx !== targetIndex)
     .map((seg, newIdx) => ({
       ...seg,
       id: newIdx + 1,
       segmentId: newIdx + 1,
     }));
+
+  if (!ripple) {
+    return filtered;
+  }
+
+  // Ripple Delete: Shift subsequent segments left by dur
+  if (dur > 0.001) {
+    filtered = filtered.map((seg) => {
+      const s = typeof seg.startSec === 'number'
+        ? seg.startSec
+        : (parseTimeToSeconds ? parseTimeToSeconds(seg.start, 0) : 0);
+      if (s >= targetEnd - 0.02) {
+        const segDur = typeof seg.duration === 'number' && seg.duration > 0
+          ? seg.duration
+          : ((typeof seg.endSec === 'number' ? seg.endSec : (parseTimeToSeconds ? parseTimeToSeconds(seg.end, s + 2.5) : s + 2.5)) - s);
+        const newStart = Math.max(0, parseFloat((s - dur).toFixed(3)));
+        const newEnd = parseFloat((newStart + segDur).toFixed(3));
+        return {
+          ...seg,
+          start: formatTimecode ? formatTimecode(newStart) : seg.start,
+          end: formatTimecode ? formatTimecode(newEnd) : seg.end,
+          startSec: newStart,
+          endSec: newEnd,
+          audioStartSec: newStart,
+          audioEndSec: newEnd,
+        };
+      }
+      return seg;
+    });
+  }
+
+  // Snap to 00:00: If leading segment was deleted and remaining segments start > 0, pull all to 00:00!
+  if (filtered.length > 0) {
+    const firstStart = typeof filtered[0].startSec === 'number'
+      ? filtered[0].startSec
+      : (parseTimeToSeconds ? parseTimeToSeconds(filtered[0].start, 0) : 0);
+    if (firstStart > 0.04) {
+      filtered = filtered.map((seg) => {
+        const s = typeof seg.startSec === 'number' ? seg.startSec : (parseTimeToSeconds ? parseTimeToSeconds(seg.start, 0) : 0);
+        const segDur = typeof seg.duration === 'number' && seg.duration > 0
+          ? seg.duration
+          : ((typeof seg.endSec === 'number' ? seg.endSec : (parseTimeToSeconds ? parseTimeToSeconds(seg.end, s + 2.5) : s + 2.5)) - s);
+        const newStart = Math.max(0, parseFloat((s - firstStart).toFixed(3)));
+        const newEnd = parseFloat((newStart + segDur).toFixed(3));
+        return {
+          ...seg,
+          start: formatTimecode ? formatTimecode(newStart) : seg.start,
+          end: formatTimecode ? formatTimecode(newEnd) : seg.end,
+          startSec: newStart,
+          endSec: newEnd,
+          audioStartSec: newStart,
+          audioEndSec: newEnd,
+        };
+      });
+    }
+  }
+
+  return filtered;
 }
 
 /**
@@ -557,16 +694,26 @@ export function deleteSegmentByIdOrIndex(segments, segIdOrIdx) {
  * @returns {Array}
  */
 export function bridgeClipGaps(clips = [], maxGapThreshold = Infinity) {
-  if (!Array.isArray(clips) || clips.length <= 1) return clips;
+  if (!Array.isArray(clips) || clips.length === 0) return [];
   const sorted = [...clips].sort((a, b) => a.start - b.start);
-  const bridged = [sorted[0]];
+
+  // Snap first clip to 0 if there is a leading gap at the start of the timeline!
+  const leadOffset = sorted[0].start > 0.04 ? sorted[0].start : 0;
+  const firstDur = sorted[0].end - sorted[0].start;
+  const firstStart = Math.max(0, parseFloat((sorted[0].start - leadOffset).toFixed(3)));
+  const bridged = [{
+    ...sorted[0],
+    start: firstStart,
+    end: parseFloat((firstStart + firstDur).toFixed(3)),
+  }];
 
   for (let i = 1; i < sorted.length; i++) {
     const prev = bridged[i - 1];
     const curr = sorted[i];
-    const gap = curr.start - prev.end;
+    const shiftedCurrStart = Math.max(0, curr.start - leadOffset);
+    const gap = shiftedCurrStart - prev.end;
 
-    if (gap > 0.05 && gap <= maxGapThreshold) {
+    if (gap > 0.04 && gap <= maxGapThreshold) {
       // Shift current clip to touch previous clip's end
       const dur = curr.end - curr.start;
       const newStart = prev.end;
@@ -577,7 +724,12 @@ export function bridgeClipGaps(clips = [], maxGapThreshold = Infinity) {
         end: newEnd,
       });
     } else {
-      bridged.push(curr);
+      const dur = curr.end - curr.start;
+      bridged.push({
+        ...curr,
+        start: shiftedCurrStart,
+        end: parseFloat((shiftedCurrStart + dur).toFixed(3)),
+      });
     }
   }
 

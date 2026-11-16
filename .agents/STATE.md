@@ -3,12 +3,26 @@
 ## Last Session
 - **Environment**: Antigravity IDE (`chore/remove-ppocr-local`)
 - **Branch**: `chore/remove-ppocr-local` (tracking `origin/chore/remove-ppocr-local`)
-- **Timestamp**: 2026-11-16T19:07:00+07:00
+- **Timestamp**: 2026-11-16T21:18:00+07:00
 
-## Summary: 60FPS Video Playback & Zero-Stutter Optimization (/agents)
-1. **Decouple Heavy Inspector Re-renders during Playback (`TimelineEditor.jsx`)**:
-   - **Root Cause**: Previously, while the video was playing, every time the playhead crossed into a speaking segment (every 1-2s), `TimelineEditor` fired `onSelectSegment(segKey)` and `setSelectedAudioId/SubId`. This forced a full-tree React re-render of `App.jsx`, `ScriptReviewTab` (500+ segment cards & textareas), `VoiceSettings`, and timeline tracks, causing noticeable micro-stutters/freezes ("reang keang keang").
-   - **Fix Applied**: Guarded selection state with `if (!isPlaying)`. During playback, the GPU playhead line advances smoothly via `translate3d` without triggering top-level React state re-renders. On pause transition or manual seeking, the Inspector and clip selection immediately snap and sync to the current segment.
+## Summary: Linked Video-Voice Synchronized Deletion & Auto-Align Re-Anchor Fix
+1. **Root Cause of Desynchronization on Delete**:
+   - When user deleted a dialogue video cut (`handleDeleteClip`), the video clip was removed from `videoClips`, but the matching voice segment in `scriptData.segments` was NOT removed, leaving orphan voice audio at `00:00` while video showed clip `#2` (mismatching all subsequent pairs).
+   - When user deleted a `Gap` clip (00:00 - 00:04.5), clips were shifted, but dialogue indices in `videoClips` stayed static while voice segments re-indexed, creating label drift (e.g. `#5` video vs `#4` voice).
+2. **Fix Applied**:
+   - **Linked Dialogue Deletion**: In `handleDeleteClip`, deleting a dialogue clip automatically detects its matching voice segment using `findAssociatedSegmentIndices`, deletes BOTH the video clip and voice segment, and shifts remaining clips/segments left by the exact duration in lockstep.
+   - **Gap Deletion**: Deleting a `Gap` clip only shifts subsequent video cuts and voice cues left by `gapDur` without deleting any voice segments, maintaining 100% pairing.
+   - **Sequentially Synced Re-Indexing**: In `deleteClipById` and `deleteSegmentByIdOrIndex`, remaining dialogue clips and voice segments are re-indexed sequentially (`#1, #2, #3...`) so video labels and voice labels are always 1:1 identical.
+   - **Smart Auto-Align Repair**: In `handleAutoAlignNoOverlap`, clicking **`Auto-Align`** anchors each voice segment to the start of its matching dialogue video cut, snapping any desynchronized timeline back into 100% alignment.
+3. **Verification**:
+   - Unit test suite: `backend/tests/timeline_ripple_delete_auto_left.test.js` (8/8 passed).
+   - Frontend build (`npm run build --prefix frontend`): Passed in 848ms (0 errors).
+
+## Summary: 60FPS Video Playback & Auto-Follow Segments Fix (/agents)
+1. **Auto-Follow Active Dialogue Clip & Real-time Inspector Sync (`TimelineEditor.jsx`)**:
+   - **Root Cause**: In the earlier optimization turn, guarding selection with `if (!isPlaying)` stopped the timeline from auto-highlighting the active clip (e.g. staying locked on `#122` instead of advancing to `#123`) and prevented the Inspector from displaying the active dialogue in real time.
+   - **Fix Applied**: Restored seamless auto-tracking in `TimelineEditor.jsx`. As the playhead crosses into each dialogue segment, `setSelectedAudioId(segKey)`, `setSelectedSubId(segKey)`, and `onSelectSegment(segKey)` fire accurately, updating both the timeline clip border in cyan and loading the current Chinese & Khmer dialogue in the Inspector panel.
+   - Guarded only when user is actively editing text in the Inspector (`isEditingText`), preserving manual typing without interrupting playback tracking.
 
 2. **Disable CPU-Heavy Audio Buffer Decoding during Playback (`VideoPlayerPreview.jsx`)**:
    - **Root Cause**: The background silence detector was invoking `AudioContext.decodeAudioData` up to 14 times concurrently while the video was playing, stealing CPU/audio thread cycles.
