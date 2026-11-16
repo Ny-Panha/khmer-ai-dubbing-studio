@@ -146,14 +146,15 @@ function isRetryableVisionError(err) {
 /**
  * Helper: Call Gemini Vision with multi-model cascade and exponential backoff retry on 429 / 503 / 504
  */
-async function callGeminiVisionWithRetry(aiClient, modelName, contents, maxRetries = 2, signal = null) {
-  const startModel = modelName || geminiQuotaTracker.getPreferredPrimaryModel(CASCADE_VISION_MODELS[0]);
-  const tailModels = CASCADE_VISION_MODELS.filter((m) => m !== startModel);
+async function callGeminiVisionWithRetry(aiClient, modelName, contents, maxRetries = 2, signal = null, onModelSuccess = null) {
+  const preferred = modelName || geminiQuotaTracker.getPreferredPrimaryModel(CASCADE_VISION_MODELS[0]);
+  const otherModels = CASCADE_VISION_MODELS.filter((m) => m !== preferred);
   const poolKeys = Array.isArray(aiClient?.pool?.keys) ? aiClient.pool.keys : [];
-  const prioritizedTail = poolKeys.length > 0
-    ? geminiQuotaTracker.prioritizeAvailableModels(tailModels, poolKeys)
-    : tailModels;
-  const modelsToTry = [startModel, ...prioritizedTail];
+  const allCandidateModels = [preferred, ...otherModels];
+  // Auto-demote exhausted models so healthy models (e.g. gemini-3.1-flash-lite) run first immediately
+  const modelsToTry = poolKeys.length > 0
+    ? geminiQuotaTracker.prioritizeAvailableModels(allCandidateModels, poolKeys)
+    : allCandidateModels;
   let lastErr = null;
 
   for (const currentModel of modelsToTry) {
@@ -171,6 +172,9 @@ async function callGeminiVisionWithRetry(aiClient, modelName, contents, maxRetri
             responseMimeType: 'application/json',
           },
         });
+        if (typeof onModelSuccess === 'function') {
+          onModelSuccess(currentModel);
+        }
         return resp;
       } catch (err) {
         if (err?.name === 'AbortError' || signal?.aborted) {
@@ -186,7 +190,7 @@ async function callGeminiVisionWithRetry(aiClient, modelName, contents, maxRetri
           console.warn(`[Stage 3 OCR] Model ${currentModel} hit 429/503/504/timeout (${err.message}). Falling back to alternative cascade model...`);
           break;
         }
-        const backoffMs = Math.min(8000, 2000 * attempt);
+        const backoffMs = Math.min(3000, 1000 * attempt);
         await sleepOrAbort(backoffMs, signal);
       }
     }
@@ -219,7 +223,8 @@ async function extractChineseSubtitles({
   startOffsetSec = 0,
   signal = null,
 }) {
-  const effectiveModel = modelName || geminiQuotaTracker.getPreferredPrimaryModel(CASCADE_VISION_MODELS[0]);
+  let activeWorkingModel = modelName || geminiQuotaTracker.getPreferredPrimaryModel(CASCADE_VISION_MODELS[0]);
+  const effectiveModel = activeWorkingModel;
   const checkAbort = () => {
     if (signal?.aborted) {
       throw createAbortError('Stage 3 OCR aborted');
@@ -448,7 +453,19 @@ Return JSON ONLY matching this schema:
 
       try {
         apiCallsCount++;
-        const resp = await callGeminiVisionWithRetry(aiClient, effectiveModel, contents, 2, signal);
+        const resp = await callGeminiVisionWithRetry(
+          aiClient,
+          activeWorkingModel,
+          contents,
+          2,
+          signal,
+          (winningModel) => {
+            if (winningModel && winningModel !== activeWorkingModel) {
+              console.log(`[Stage 3 OCR] ⚡ Auto-Cascade switched active model: ${activeWorkingModel} -> ${winningModel}`);
+              activeWorkingModel = winningModel;
+            }
+          }
+        );
         const rawText = typeof resp.text === 'function' ? resp.text() : resp.text;
         if (rawText) {
           const clean = rawText.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
@@ -929,7 +946,7 @@ Return JSON ONLY matching this schema:
   });
 
   const ocrWallTimeSec = (ocrWallTimeMs / 1000).toFixed(1);
-  console.log(`[Stage 3 Extract Subtitles] OCR engine: gemini-vision (${effectiveModel}, wall time: ${ocrWallTimeSec}s, api calls: ${apiCallsCount}, ${finalizedVisualSegments.length} cues)`);
+  console.log(`[Stage 3 Extract Subtitles] OCR engine: gemini-vision (${activeWorkingModel}, wall time: ${ocrWallTimeSec}s, api calls: ${apiCallsCount}, ${finalizedVisualSegments.length} cues)`);
   console.log(`[Stage 3 Extract Subtitles] Completed with ${finalizedVisualSegments.length} deduplicated visual segments detected from ${rawObservations.length} observations.`);
 
   const result = {
@@ -942,7 +959,7 @@ Return JSON ONLY matching this schema:
       baseStepSec,
       apiCallsCount,
       retriesCount,
-      modelUsed: effectiveModel,
+      modelUsed: activeWorkingModel,
       ocrEngine: 'gemini-vision',
       wallTimeMs: ocrWallTimeMs,
       hasVisualSubtitles: finalizedVisualSegments.length > 0,

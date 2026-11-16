@@ -12,18 +12,17 @@
    - **Progress & Usage Polish**: Added mini progress bars inside each key card showing real-time utilization (`todayRequests / perKeyDailyLimit`), tabular numbers (`fontVariantNumeric: 'tabular-nums'`), and clean subdued borders (`border-slate-800`), eliminating excessive neon box-shadows per `/agents-design` guidelines.
    - **Accurate Key Status**: Keys hitting the daily 500 RPD cap now show `🔴 អស់ Quota ថ្ងៃនេះ (429)` instead of a false `❌ 401 Key ខុស`.
 
-2. **Backend Quota Classification Fix**:
-   - `backend/services/geminiKeyManager.js`:
-     - In `isAuthOrInvalidKeyError`, guarded against quota/rate limit error text (`quota`, `resource_exhausted`, `rate limit`, `too many requests`, `high demand`).
-     - Removed loose `msg.includes('401') || msg.includes('403')` match that caused Google 429 daily exhaustion responses containing timestamps/offsets with 401/403 to falsely mark valid keys as dead and permanently ban them.
-   - `backend/services/geminiQuotaTracker.js`:
-     - Cleaned `isInvalid` flag when error message indicates quota exhaustion (`limit: 500` / `resource_exhausted`), properly transitioning keys to `cooldownType = 'rpd_limit'` without misclassifying them as invalid keys.
-   - Live cache cleaned in `backend/uploads/cache/gemini_quota_usage.json`.
+2. **Stage 3 OCR Auto-Model Cascade Optimization**:
+   - **Root Cause of Long Stalls**: When a primary model (e.g. `gemini-3.5-flash-lite`) was 429 exhausted, Stage 3 still forced it to run first on EVERY batch (up to 48 batches per chunk), looping through all 6 keys twice with backoff delays, wasting ~45s per batch (total ~35 minutes).
+   - **Fix Applied**:
+     - `callGeminiVisionWithRetry`: Prioritizes across ALL models (including preferred) with `geminiQuotaTracker.prioritizeAvailableModels` so exhausted models are immediately demoted to the end, and healthy cascade models (e.g. `gemini-3.1-flash-lite`) run first at 0ms delay.
+     - `activeWorkingModel`: Dynamically remembers the winning cascade model across batches, skipping dead models for all subsequent batches.
+     - `geminiKeyManager.js`: Reduced 429 key rotation retry from 2 full passes to 1 pass and trimmed rotation delay from 600ms to 200ms.
 
 3. **Verification**:
-   - Frontend build (`npm run build --prefix frontend`): **Passed in 623ms** with zero errors.
-   - Backend test suite (`gemini_key_pool_and_504_retry.test.js` & `gemini_quota_tracker_and_routes.test.js`): **13 passed / 0 failed**.
-   - Live endpoint `/api/gemini/keys-status?probe=stats`: All 6 keys reporting clean ready states.
+   - Frontend build (`npm run build --prefix frontend`): Passed in 590ms.
+   - Backend test suite (`gemini_key_pool_and_504_retry.test.js` & `gemini_quota_tracker_and_routes.test.js`): 13 passed / 0 failed.
+   - Fast OCR rule test (`fast_ocr_rule.test.js`): Passed.
 
 ## Active Environment
 - Backend API: `http://localhost:5000` (live daemon)
@@ -31,5 +30,5 @@
 - Branch: `chore/remove-ppocr-local`
 
 ## Next Steps
-- Pushed commits `81fc0c2`, `8a27902`, `52851ae`, `7729643`, and quota card fix to `origin/chore/remove-ppocr-local`.
+- Pushed commits to `origin/chore/remove-ppocr-local`.
 - When ready, merge `chore/remove-ppocr-local` via Pull Request.

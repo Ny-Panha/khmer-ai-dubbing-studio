@@ -413,11 +413,11 @@ function createSmartGenAIClient(initialKeyInput = null) {
 
           if (pool.getKeyCount() > 1) {
             quotaAttempts++;
-            if (quotaAttempts >= pool.getKeyCount() * 2) {
+            if (quotaAttempts >= pool.getKeyCount()) {
               throw err;
             }
             pool.rotateKey(err.message || `429 ${errorLabel}`);
-            await new Promise((r) => setTimeout(r, 600));
+            await new Promise((r) => setTimeout(r, 200));
             continue;
           }
         }
