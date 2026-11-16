@@ -1,9 +1,57 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
-- **Environment**: Antigravity IDE (`chore/remove-ppocr-local`)
-- **Branch**: `chore/remove-ppocr-local` (tracking `origin/chore/remove-ppocr-local`)
-- **Timestamp**: 2026-11-16T21:18:00+07:00
+- **Environment**: Antigravity IDE (`fix/voice-single-lane`)
+- **Branch**: `fix/voice-single-lane` (tracking `origin/fix/voice-single-lane`)
+- **Timestamp**: 2026-11-16T21:55:00+07:00
+
+## Summary: CapCut-Style Single Voice Lane (Lane 0) on Auto-Align
+1. **Problem Solved**:
+   - Previously, when Khmer TTS dialogue audio overran the next segment's start time, the code only clamped if `cutRatio <= 40%`; otherwise, it dropped the clip to `VOICE 2` (Lane 1). Furthermore, `TimelineTracksCanvas.jsx` and `TimelineEditor.jsx` dynamically checked `isFemale` or `gapOnRow0 < 0.15` and forced alternating clips into `VOICE 2`, causing dialogue clips to scatter back and forth across VOICE 1 / VOICE 2 (e.g. 79 clips scattered to Lane 1 in EP3).
+   - Under CapCut behavior, all auto-placed voice clips live sequentially on `VOICE 1` (Lane 0) in numeric order; clips NEVER drop to `VOICE 2/3` automatically. Clip N ends exactly where Clip N+1 begins, and overruns are resolved on Lane 0 by clamping previous clip's `audioEndSec` to next segment's `baseStart`.
+
+2. **Automatic trackRow Assignment Sites Found & Fixed**:
+   - **Site 1 (`frontend/src/utils/timelineUtils.js` - `autoAlignVoiceSegments`)**:
+     - Removed all drops to VOICE 2 (both `cutRatio > 40%` and subtitle overlap). Non-userShifted segments are ALWAYS assigned `targetRow = 0`.
+     - When previous Lane 0 clip overruns `baseStart`, clamps `prevLane0.audioEndSec = baseStart` (with `audioTrimmed = true`).
+     - When clamp cuts > 40% of audio, marks segment with `audioOverrun: true` and `overrunRatio`.
+     - Preserved `userShifted` segments (`trackRow`, `trackId`, `id`, `segmentId`, and start/end coordinates untouched).
+   - **Site 2 (`frontend/src/utils/timelineUtils.js` - `resetSegmentsToSourceTiming`)**:
+     - Removed automatic collision drop to row 1. Non-userShifted segments always stay on `trackRow = 0`.
+   - **Site 3 (`frontend/src/components/timeline/TimelineEditor.jsx` - `segmentRows`)**:
+     - Removed `resolveIsFemale` and `gapOnRow0 < 0.15` automatic lane routing. All non-userShifted segments return `0`.
+   - **Site 4 (`frontend/src/components/timeline/TimelineTracksCanvas.jsx` - `internalSegmentRows` & `renderVoiceSegment`)**:
+     - Removed `isFemale` and `gapOnRow0 < 0.15` routing.
+     - Added `.has-audio-overrun` warning border/glow and `⚠️` badge on clips with `seg.audioOverrun === true`.
+   - **Site 5 (`frontend/src/components/timeline/TimelineEditor.css`)**:
+     - Added red warning styles for `.voice-segment-block.has-audio-overrun` (`border-color: rgba(239, 68, 68, 0.85)` and `#f87171` text).
+   - **Site 6 (`backend/routes/audioRoutes.js` - `/sync-audio`)**:
+     - Automatically persists aligned segments (`trackRow: 0`, `audioEndSec`, `audioTrimmed`, `audioOverrun`) into `series.json` under `withSeriesMetadataLock`.
+
+3. **Verification Results**:
+   - **Unit Tests**:
+     - `backend/tests/auto_align_voice.test.js`: 6 passed / 0 failed (including requirements a, b, c).
+     - `backend/tests/timeline_unlimited_voice_lanes.test.js`: 5 passed / 0 failed.
+     - `backend/tests/timeline_ui_workflow_fix.test.js`: 4 passed / 0 failed.
+   - **Frontend Build**: `npm run build --prefix frontend` built in 620ms (0 errors).
+   - **Real-App Episode Verification (`Pseudo_Spiritual_Root` Episode 3)**:
+     - Total segments: 266.
+     - Stored `trackRow` distribution in `series.json`: `{ '0': 266 }` (100% of non-userShifted segments sit on Lane 0).
+     - `#8 -> #9` seam check at ~00:12: `#8` ends at `12.67s` (`audioTrimmed: true`, `audioOverrun: true`), `#9` starts at `12.67s`. Perfect seam, 0 gap, 0 double-voice.
+     - Total Lane 0 overlaps across all 266 segments: `0`.
+
+4. **Git Status**:
+   - Committed on `fix/voice-single-lane` (commit `618bce6`).
+   - Pushed to `origin/fix/voice-single-lane`. Not merged to `main`.
+
+## Active Environment
+- Backend API: `http://localhost:5000` (live daemon)
+- Frontend UI: `http://localhost:5173` (Vite dev server)
+- Branch: `fix/voice-single-lane`
+
+## Next Steps
+- Review `fix/voice-single-lane` on GitHub or test further user scenarios on the frontend UI.
+
 
 ## Summary: Linked Video-Voice Synchronized Deletion & Auto-Align Re-Anchor Fix
 1. **Root Cause of Desynchronization on Delete**:
