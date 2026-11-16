@@ -28,8 +28,8 @@
 ## Active Environment
 - Backend API: `http://localhost:5000` (live daemon)
 - Frontend UI: `http://localhost:5173` (Vite dev server)
-- Branch: `chore/remove-ppocr-local` (HEAD: `52851ae`)
+- Branch: `chore/remove-ppocr-local`
 
 ## Next Steps
-- Pushed commits `81fc0c2`, `8a27902`, and `52851ae` to `origin/chore/remove-ppocr-local`.
+- Pushed commits `81fc0c2`, `8a27902`, `52851ae`, `7729643`, and quota card fix to `origin/chore/remove-ppocr-local`.
 - When ready, merge `chore/remove-ppocr-local` via Pull Request.

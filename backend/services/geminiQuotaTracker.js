@@ -769,8 +769,7 @@ class GeminiQuotaTracker {
         ? { inCooldown: false, cooldownSec: 0, cooldownType: null, cooldownUntil: 0, reason: null }
         : this.isKeyInCooldown(rawKey, now, activePrimaryModel);
       const inCooldown = !isInvalid && keyModelCd.inCooldown;
-      const reachedDailyLimit = !isInvalid && ((rec.todayRequests || 0) >= dailyRpdPerKey);
-      const isDailyExhausted = !isInvalid && ((inCooldown && keyModelCd.cooldownType === 'rpd_limit') || reachedDailyLimit);
+      const isDailyExhausted = !isInvalid && inCooldown && keyModelCd.cooldownType === 'rpd_limit';
       const isRateLimited = !isInvalid && inCooldown && !isDailyExhausted;
 
       const rpmUsed = rec.recentTimestamps.length;
@@ -779,8 +778,8 @@ class GeminiQuotaTracker {
       const cooldownSec = inCooldown ? Math.max(1, Number(keyModelCd.cooldownSec) || 0) : 0;
       const rpmResetsInSec = isRateLimited ? Math.max(rollingRpmResetSec, cooldownSec) : rollingRpmResetSec;
 
-      const rpmLeft = isInvalid || inCooldown || isDailyExhausted ? 0 : Math.max(0, rpmPerKey - rpmUsed);
-      const rpmPercent = isInvalid || isDailyExhausted
+      const rpmLeft = isInvalid || inCooldown ? 0 : Math.max(0, rpmPerKey - rpmUsed);
+      const rpmPercent = isInvalid
         ? 100
         : isRateLimited
           ? 100

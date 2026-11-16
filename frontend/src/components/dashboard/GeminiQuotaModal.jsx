@@ -140,19 +140,19 @@ export default function GeminiQuotaModal({
 
   // Accurate per-key deduction for consistent header & monitor badges
   const activeExhaustedKeysCount = displayKeys.filter(
-    (k) => k.isDailyExhausted || k.status === 'daily_exhausted' || (k.dailyLeft !== undefined && k.dailyLeft <= 0) || ((k.todayRequests || 0) >= perKeyDailyLimit)
+    (k) => (k.todayRequests || 0) >= perKeyDailyLimit
   ).length;
   const activeInvalidKeysCount = displayKeys.filter(
-    (k) => (k.isInvalid || k.status === 'invalid' || k.status === 'error') && !k.isDailyExhausted && (k.dailyLeft ?? 1) > 0
+    (k) => (k.isInvalid || k.status === 'invalid' || k.status === 'error') && ((k.todayRequests || 0) < perKeyDailyLimit)
   ).length;
   const activeCooldownKeysCount = displayKeys.filter(
-    (k) => k.status === 'rate_limited' && !k.isDailyExhausted && (k.dailyLeft ?? 1) > 0
+    (k) => k.status === 'rate_limited' && ((k.todayRequests || 0) < perKeyDailyLimit)
   ).length;
 
   const totalKeys = displayKeys.length || (summary?.totalKeys ?? 6);
-  const dailyExhaustedKeys = Math.max(activeExhaustedKeysCount, summary?.dailyExhaustedKeys ?? 0);
-  const invalidKeys = Math.max(activeInvalidKeysCount, summary?.invalidKeys ?? 0);
-  const cooldownKeys = Math.max(activeCooldownKeysCount, summary?.cooldownKeys ?? 0);
+  const dailyExhaustedKeys = activeExhaustedKeysCount;
+  const invalidKeys = activeInvalidKeysCount;
+  const cooldownKeys = activeCooldownKeysCount;
   const readyKeys = Math.max(0, totalKeys - dailyExhaustedKeys - invalidKeys - cooldownKeys);
 
   const rpmPerKey = settings.rpmPerKey || 15;
@@ -961,14 +961,11 @@ export default function GeminiQuotaModal({
               {displayKeys.map((liveKeyData) => {
                 const kNum = liveKeyData.keyNum;
                 const theme = KEY_THEMES[((kNum - 1) % KEY_THEME_COUNT) + 1] || KEY_THEMES[1];
-                const keyDailyLeft = liveKeyData.dailyLeft ?? Math.max(0, perKeyDailyLimit - (liveKeyData.todayRequests || 0));
+                const keyDailyLeft = Math.max(0, perKeyDailyLimit - (liveKeyData.todayRequests || 0));
                 const keyPercent = Math.min(100, Math.round(((liveKeyData.todayRequests || 0) / perKeyDailyLimit) * 100));
                 const isDailyExhausted = !isCheckingQuota && (
-                  liveKeyData.status === 'daily_exhausted' ||
-                  Boolean(liveKeyData.isDailyExhausted) ||
                   keyDailyLeft <= 0 ||
-                  (liveKeyData.todayRequests || 0) >= perKeyDailyLimit ||
-                  ((liveKeyData.status === 'invalid' || liveKeyData.isInvalid) && (liveKeyData.todayRequests || 0) >= 300)
+                  (liveKeyData.todayRequests || 0) >= perKeyDailyLimit
                 );
                 const isRateLimited = !isCheckingQuota && !isDailyExhausted && liveKeyData.status === 'rate_limited';
                 const isInvalid = !isCheckingQuota && !isDailyExhausted && liveKeyData.status === 'invalid';

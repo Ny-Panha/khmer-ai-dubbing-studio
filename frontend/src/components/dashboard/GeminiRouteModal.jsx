@@ -2030,7 +2030,7 @@ export default function GeminiRouteModal({
               const hdrSummary = hdrView?.quotaSummary;
               const perKeyLimit = hdrView?.settings?.dailyRpdPerKey || 500;
               const exhaustedCount = hdrKeys.filter(
-                (k) => k.isDailyExhausted || k.status === 'daily_exhausted' || (k.dailyLeft !== undefined && k.dailyLeft <= 0) || ((k.todayRequests || 0) >= perKeyLimit)
+                (k) => (k.todayRequests || 0) >= perKeyLimit
               ).length;
               const hdrTotal = hdrSummary?.totalKeys ?? hdrView?.totalKeys ?? (hdrKeys.length || 6);
               const rawReady = hdrSummary?.readyKeys ?? hdrView?.activeCount ?? hdrTotal;
