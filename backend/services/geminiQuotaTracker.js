@@ -753,7 +753,14 @@ class GeminiQuotaTracker {
     const keyEntries = keysList.map((rawKey, idx) => {
       const rec = this._ensureRecord(rawKey, now);
       const forcedInvalid = Boolean(invalidKeysSet && invalidKeysSet.has(rawKey));
-      const isInvalid = forcedInvalid || rec.isInvalid;
+      const hasQuotaError = String(rec.lastErrorMessage || '').toLowerCase().includes('quota') ||
+        String(rec.lastErrorMessage || '').toLowerCase().includes('limit: 500') ||
+        String(rec.lastErrorMessage || '').toLowerCase().includes('resource_exhausted');
+      if (hasQuotaError && rec.isInvalid) {
+        rec.isInvalid = false;
+        rec.cooldownType = 'rpd_limit';
+      }
+      const isInvalid = !hasQuotaError && (forcedInvalid || rec.isInvalid);
       if (!isInvalid) {
         validKeyIds.push(rec.keyId);
       }

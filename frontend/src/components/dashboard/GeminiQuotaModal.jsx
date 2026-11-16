@@ -876,11 +876,31 @@ export default function GeminiQuotaModal({
               </div>
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.70rem' }}>
-                  <span style={{ color: '#94A3B8', fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" }}>
-                    Today ({dailyExhaustedKeys > 0 && dailyLeft === 0 ? primaryModelDisplay : 'RPD & Tokens'})
-                  </span>
-                  <span style={{ color: '#E2E8F0', fontWeight: 800, fontFamily: "'JetBrains Mono', monospace" }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.70rem', flexWrap: 'wrap', gap: 6 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ color: '#94A3B8', fontWeight: 700, fontFamily: "'JetBrains Mono', monospace" }}>
+                      Today ({dailyExhaustedKeys > 0 && dailyLeft === 0 ? primaryModelDisplay : 'RPD & Tokens'})
+                    </span>
+                    <span
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 4,
+                        padding: '1px 8px',
+                        borderRadius: 6,
+                        background: 'rgba(245, 158, 11, 0.14)',
+                        border: '1px solid rgba(245, 158, 11, 0.35)',
+                        color: '#FCD34D',
+                        fontWeight: 800,
+                        fontSize: '0.64rem',
+                        fontFamily: "'JetBrains Mono', monospace",
+                        fontVariantNumeric: 'tabular-nums',
+                      }}
+                    >
+                      ⏰ Reset ម៉ោង 3:00 PM ({dailyResetsInSec > 0 ? `សល់ ${formatQuotaDuration(dailyResetsInSec)}` : '0s'})
+                    </span>
+                  </div>
+                  <span style={{ color: '#E2E8F0', fontWeight: 800, fontFamily: "'JetBrains Mono', monospace", fontVariantNumeric: 'tabular-nums' }}>
                     {dailyExhaustedKeys > 0 && dailyLeft === 0
                       ? `0 left on ${primaryModelDisplay}`
                       : `${dailyLeft.toLocaleString()} of ${dailyTotal.toLocaleString()} left`}
@@ -898,7 +918,7 @@ export default function GeminiQuotaModal({
                     }}
                   />
                 </div>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.62rem', color: '#94A3B8', fontFamily: "'JetBrains Mono', monospace" }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.62rem', color: '#94A3B8', fontFamily: "'JetBrains Mono', monospace", fontVariantNumeric: 'tabular-nums' }}>
                   <span>
                     {dailyExhaustedKeys > 0 && appTodayRequests < dailyUsed
                       ? `App: ${appTodayRequests.toLocaleString()} req • Google ${reportedDailyLimitPerKey ? `${reportedDailyLimitPerKey}/key` : '429'} អស់ • ${formatCompactTokenCount(todayTokens)} tok`
@@ -911,27 +931,31 @@ export default function GeminiQuotaModal({
               </div>
             </div>
 
-            {/* Per-Key Breakdown Strip */}
+            {/* Per-Key Breakdown Strip (Clean Symmetrical 3x2 Grid) */}
             <div
               style={{
                 display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fit, minmax(205px, 1fr))',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
                 gap: 10,
               }}
             >
               {displayKeys.map((liveKeyData) => {
                 const kNum = liveKeyData.keyNum;
                 const theme = KEY_THEMES[((kNum - 1) % KEY_THEME_COUNT) + 1] || KEY_THEMES[1];
-                const isDailyExhausted = !isCheckingQuota && liveKeyData.status === 'daily_exhausted';
-                const isRateLimited = !isCheckingQuota && liveKeyData.status === 'rate_limited';
-                const isInvalid = !isCheckingQuota && liveKeyData.status === 'invalid';
-                const isError = !isCheckingQuota && liveKeyData.status === 'error';
+                const isDailyExhausted = !isCheckingQuota && (
+                  liveKeyData.status === 'daily_exhausted' ||
+                  Boolean(liveKeyData.isDailyExhausted) ||
+                  ((liveKeyData.status === 'invalid' || liveKeyData.isInvalid) && (liveKeyData.todayRequests || 0) >= 300)
+                );
+                const isRateLimited = !isCheckingQuota && !isDailyExhausted && liveKeyData.status === 'rate_limited';
+                const isInvalid = !isCheckingQuota && !isDailyExhausted && liveKeyData.status === 'invalid';
+                const isError = !isCheckingQuota && !isDailyExhausted && liveKeyData.status === 'error';
 
                 let badgeText = `${liveKeyData.rpmLeft ?? 15}/${liveKeyData.rpmLimit ?? 15} RPM`;
                 if (isCheckingQuota) {
                   badgeText = 'កំពុង Test...';
                 } else if (isDailyExhausted) {
-                  badgeText = 'អស់ថ្ងៃនេះ (429)';
+                  badgeText = 'អស់ Quota ថ្ងៃនេះ (429)';
                 } else if (isRateLimited) {
                   badgeText = liveKeyData.cooldownSec > 0
                     ? `Wait ${formatQuotaDuration(liveKeyData.cooldownSec)}`
@@ -944,52 +968,60 @@ export default function GeminiQuotaModal({
 
                 const badgeColor = isCheckingQuota
                   ? '#38BDF8'
-                  : (isDailyExhausted || isInvalid || isError)
+                  : isDailyExhausted
                     ? '#F87171'
                     : isRateLimited
                       ? '#FBBF24'
-                      : theme.color;
+                      : (isInvalid || isError)
+                        ? '#EF4444'
+                        : '#34D399';
                 const badgeBg = isCheckingQuota
-                  ? 'rgba(56, 189, 248, 0.15)'
-                  : (isDailyExhausted || isInvalid || isError)
-                    ? 'rgba(248, 113, 113, 0.15)'
+                  ? 'rgba(56, 189, 248, 0.12)'
+                  : isDailyExhausted
+                    ? 'rgba(248, 113, 113, 0.12)'
                     : isRateLimited
-                      ? 'rgba(251, 191, 36, 0.15)'
-                      : theme.bg;
+                      ? 'rgba(251, 191, 36, 0.12)'
+                      : (isInvalid || isError)
+                        ? 'rgba(239, 68, 68, 0.12)'
+                        : 'rgba(52, 211, 153, 0.10)';
                 const badgeBorder = isCheckingQuota
-                  ? 'rgba(56, 189, 248, 0.4)'
-                  : (isDailyExhausted || isInvalid || isError)
-                    ? 'rgba(248, 113, 113, 0.45)'
+                  ? 'rgba(56, 189, 248, 0.35)'
+                  : isDailyExhausted
+                    ? 'rgba(248, 113, 113, 0.35)'
                     : isRateLimited
-                      ? 'rgba(251, 191, 36, 0.45)'
-                      : theme.border;
+                      ? 'rgba(251, 191, 36, 0.35)'
+                      : (isInvalid || isError)
+                        ? 'rgba(239, 68, 68, 0.35)'
+                        : 'rgba(52, 211, 153, 0.28)';
                 const dotColor = isCheckingQuota
                   ? '#38BDF8'
-                  : (isDailyExhausted || isInvalid || isError)
+                  : isDailyExhausted
                     ? '#F87171'
                     : isRateLimited
                       ? '#FBBF24'
-                      : theme.dot;
+                      : (isInvalid || isError)
+                        ? '#EF4444'
+                        : '#34D399';
 
                 const keyDailyLeft = liveKeyData.dailyLeft ?? Math.max(0, perKeyDailyLimit - (liveKeyData.todayRequests || 0));
+                const keyPercent = Math.min(100, Math.round(((liveKeyData.todayRequests || 0) / perKeyDailyLimit) * 100));
 
                 return (
                   <div
                     key={kNum}
                     title={liveKeyData.lastErrorMessage || (liveKeyData.lastModelUsed ? `Last model: ${liveKeyData.lastModelUsed}` : `Key #${kNum}`)}
                     style={{
-                      background: 'rgba(22, 34, 58, 0.72)',
-                      border: `1px solid ${(isDailyExhausted || isInvalid || isError) ? 'rgba(248, 113, 113, 0.5)' : isRateLimited ? 'rgba(251, 191, 36, 0.5)' : theme.border}`,
+                      background: isDailyExhausted
+                        ? 'rgba(239, 68, 68, 0.05)'
+                        : isRateLimited
+                          ? 'rgba(245, 158, 11, 0.05)'
+                          : 'rgba(15, 23, 42, 0.72)',
+                      border: `1px solid ${isDailyExhausted ? 'rgba(248, 113, 113, 0.35)' : isRateLimited ? 'rgba(251, 191, 36, 0.35)' : 'rgba(255, 255, 255, 0.08)'}`,
                       borderRadius: 10,
-                      padding: '8px 11px',
+                      padding: '10px 12px',
                       display: 'flex',
                       flexDirection: 'column',
-                      gap: 5,
-                      boxShadow: (isDailyExhausted || isInvalid)
-                        ? '0 0 10px rgba(248, 113, 113, 0.18)'
-                        : isRateLimited
-                          ? '0 0 10px rgba(251, 191, 36, 0.18)'
-                          : '0 2px 8px rgba(0, 0, 0, 0.22)',
+                      gap: 6,
                     }}
                   >
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6 }}>
@@ -1000,15 +1032,15 @@ export default function GeminiQuotaModal({
                             height: 7,
                             borderRadius: '50%',
                             background: dotColor,
-                            boxShadow: `0 0 7px ${dotColor}`,
+                            boxShadow: `0 0 6px ${dotColor}`,
                             flexShrink: 0,
                           }}
                         />
-                        <span style={{ fontSize: '0.75rem', fontWeight: 800, color: '#F8FAFC' }}>Key #{kNum}</span>
+                        <span style={{ fontSize: '0.76rem', fontWeight: 800, color: '#F8FAFC' }}>Key #{kNum}</span>
                         {liveKeyData.masked && (
                           <code
                             style={{
-                              fontSize: '0.59rem',
+                              fontSize: '0.62rem',
                               background: 'rgba(0, 0, 0, 0.35)',
                               color: '#94A3B8',
                               padding: '1px 5px',
@@ -1023,12 +1055,12 @@ export default function GeminiQuotaModal({
                       </div>
                       <span
                         style={{
-                          fontSize: '0.62rem',
+                          fontSize: '0.63rem',
                           fontWeight: 800,
                           color: badgeColor,
                           background: badgeBg,
                           border: `1px solid ${badgeBorder}`,
-                          padding: '2px 6px',
+                          padding: '2px 7px',
                           borderRadius: 6,
                           display: 'flex',
                           alignItems: 'center',
@@ -1041,10 +1073,23 @@ export default function GeminiQuotaModal({
                       </span>
                     </div>
 
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.61rem', color: '#94A3B8', fontFamily: "'JetBrains Mono', monospace" }}>
+                    {/* Mini Usage Progress Bar */}
+                    <div style={{ width: '100%', height: 4, borderRadius: 9999, background: 'rgba(255, 255, 255, 0.07)', overflow: 'hidden' }}>
+                      <div
+                        style={{
+                          width: `${keyPercent}%`,
+                          height: '100%',
+                          borderRadius: 9999,
+                          background: isDailyExhausted ? '#F87171' : isRateLimited ? '#FBBF24' : '#38BDF8',
+                          transition: 'width 0.35s ease',
+                        }}
+                      />
+                    </div>
+
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.63rem', color: '#94A3B8', fontFamily: "'JetBrains Mono', monospace", fontVariantNumeric: 'tabular-nums' }}>
                       <span>
                         {isDailyExhausted
-                          ? `App: ${liveKeyData.todayRequests || 0} req • 429 (${liveKeyData.reportedDailyCap || perKeyDailyLimit}/ថ្ងៃ)`
+                          ? `${liveKeyData.todayRequests || 0}/${perKeyDailyLimit} req (អស់ Quota)`
                           : `Used: ${liveKeyData.todayRequests || 0} • Left: ${keyDailyLeft}`}
                       </span>
                       <span>{formatCompactTokenCount(liveKeyData.todayTokens || 0)} tok</span>

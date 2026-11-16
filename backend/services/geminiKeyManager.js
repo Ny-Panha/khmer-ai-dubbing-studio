@@ -147,11 +147,21 @@ function isAuthOrInvalidKeyError(err) {
   if (!err) return false;
   const status = err.status || err.statusCode;
   const msg = String(err.message || err.toString() || '').toLowerCase();
+
+  // Explicit quota and rate limit errors must NEVER be treated as invalid keys
+  if (
+    msg.includes('quota') ||
+    msg.includes('resource_exhausted') ||
+    msg.includes('rate limit') ||
+    msg.includes('too many requests') ||
+    msg.includes('high demand')
+  ) {
+    return false;
+  }
+
   return (
     status === 401 ||
     status === 403 ||
-    msg.includes('401') ||
-    msg.includes('403') ||
     msg.includes('unauthenticated') ||
     msg.includes('api key not valid') ||
     msg.includes('api_key_invalid') ||
