@@ -761,6 +761,7 @@ export default function App() {
     onDeleteSegment: handleDeleteSegment,
     activeClipId: media.activeClipId,
     selectedSegmentId: media.selectedSegmentId,
+    selectedClipKind: media.selectedClipKind,
     onUndo: handleUndo,
     onRedo: handleRedo,
     onRenderVideo: handleRenderVideo,
@@ -1037,6 +1038,10 @@ export default function App() {
                   onAutoSplitSegment={clips.handleAutoSplitSegment}
                   selectedSegmentId={media.selectedSegmentId}
                   onSelectSegment={media.setSelectedSegmentId}
+                  selectedClipKind={media.selectedClipKind}
+                  selectedClip={media.selectedClip}
+                  onSplitClip={handleSplitClip}
+                  onDeleteClip={handleDeleteClip}
                   onDeleteSegment={handleDeleteSegment}
                   onUpdateSegments={handleUpdateTimelineSegments}
                   onToggleMuteSegment={handleToggleMuteSegment}
@@ -1099,6 +1104,8 @@ export default function App() {
                 videoThumbnails={media.videoThumbnails || EMPTY_ARRAY}
                 selectedSegmentId={media.selectedSegmentId}
                 onSelectSegment={media.setSelectedSegmentId}
+                selectedClipKind={media.selectedClipKind}
+                onSelectClipKind={media.setSelectedClipKind}
                 timelineFocusRequest={timelineFocusRequest}
                 onAutoSplitVideo={handleAutoSplitVideo}
                 onResetFullVideo={handleResetFullVideo}

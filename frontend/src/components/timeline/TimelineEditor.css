@@ -968,6 +968,15 @@
   z-index: 20 !important;
 }
 
+/* Subtle linked counterpart clip outline (shows pairing without stealing primary selection) */
+.video-clip-block.is-linked-clip,
+.voice-segment-block.is-linked-clip,
+.subtitle-segment-block.is-linked-clip {
+  outline: 1px dashed rgba(56, 189, 248, 0.45) !important;
+  outline-offset: -1px !important;
+  z-index: 8 !important;
+}
+
 .video-clip-block.is-dragging,
 .voice-segment-block.is-dragging {
   outline: 2px solid var(--primary-accent, #38BDF8) !important;

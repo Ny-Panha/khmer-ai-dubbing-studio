@@ -30,6 +30,8 @@ function TimelineTracksCanvas({
   audioGenerated,
   scriptSegments,
   selectedSegmentId,
+  selectedClipKind = null,
+  onSelectClipKind = null,
   selectedAudioId,
   setSelectedAudioId,
   onSelectSegment,
@@ -271,17 +273,25 @@ function TimelineTracksCanvas({
     const audioLeft = startSec * pps;
     const audioWidth = Math.max(2, (endSec - startSec) * pps - 2);
     const segKey = seg._uid || (seg.id !== undefined && seg.id !== null ? seg.id : idx);
-    const isAssociatedWithClip = Boolean(
-      activeClipId && videoClips?.some((c) => c.id === activeClipId && (c.segmentId === seg.id || c.segmentIndex === (idx + 1)))
-    );
-    const isSelected = Boolean(
-      isAssociatedWithClip ||
+    const isDirectSegMatch = Boolean(
       (selectedSegmentId !== null && selectedSegmentId !== undefined && (
         (seg._uid && String(selectedSegmentId) === String(seg._uid)) || (seg.id !== undefined && seg.id !== null ? String(selectedSegmentId) === String(seg.id) : Number(selectedSegmentId) === idx)
       )) ||
       (selectedAudioId !== null && selectedAudioId !== undefined && (
         (seg._uid && String(selectedAudioId) === String(seg._uid)) || (seg.id !== undefined && seg.id !== null ? String(selectedAudioId) === String(seg.id) : Number(selectedAudioId) === idx)
       ))
+    );
+    const isAssociatedWithClip = Boolean(
+      activeClipId && videoClips?.some((c) => c.id === activeClipId && (c.segmentId === seg.id || c.segmentIndex === (idx + 1)))
+    );
+    const isSelected = Boolean(
+      (selectedClipKind === 'voice' || !selectedClipKind) && isDirectSegMatch
+    );
+    const isLinked = Boolean(
+      !isSelected && (
+        (selectedClipKind === 'video' && (isAssociatedWithClip || isDirectSegMatch)) ||
+        (selectedClipKind === 'subtitle' && isDirectSegMatch)
+      )
     );
 
     const speakerName = (seg.speaker || seg.speakerName || '').trim();
@@ -341,6 +351,7 @@ function TimelineTracksCanvas({
           onMouseDown={(e) => handleAudioMouseDown(e, seg, idx, 'move')}
           onClick={(e) => {
             e.stopPropagation();
+            if (onSelectClipKind) onSelectClipKind('voice');
             setSelectedAudioId(segKey);
             setSelectedSubId(segKey);
             if (onSelectSegment) onSelectSegment(segKey);
@@ -350,12 +361,12 @@ function TimelineTracksCanvas({
             }
             onSeek(startSec);
           }}
-          className={`voice-segment-block ${isFemale ? 'voice-female' : 'voice-male'} ${!hasAudio ? 'is-pending-audio' : ''} ${isSelected ? 'selected' : ''} ${isSliver ? 'clip-sliver' : ''} ${isCompactClip ? 'is-compact-clip' : ''} ${isOverrun ? 'has-audio-overrun' : ''}`}
+          className={`voice-segment-block ${isFemale ? 'voice-female' : 'voice-male'} ${!hasAudio ? 'is-pending-audio' : ''} ${isSelected ? 'selected' : ''} ${isLinked ? 'is-linked-clip' : ''} ${isSliver ? 'clip-sliver' : ''} ${isCompactClip ? 'is-compact-clip' : ''} ${isOverrun ? 'has-audio-overrun' : ''}`}
           style={{
             cursor: isDragging ? 'grabbing' : 'grab',
             left: audioLeft,
             width: audioWidth,
-            zIndex: isDragging ? 100 : (isSelected ? 20 : 5),
+            zIndex: isDragging ? 100 : (isSelected ? 20 : (isLinked ? 8 : 5)),
             transform: isDragging && dragState?.mode === 'move' && typeof dragState?.currentY === 'number' ? `translateY(${dragState.currentY}px)` : undefined,
             transition: isDragging ? 'none' : undefined,
             pointerEvents: isDragging && dragState?.mode === 'move' ? 'none' : 'auto',
@@ -507,17 +518,27 @@ function TimelineTracksCanvas({
     const subLeft = startSec * pps;
     const subWidth = Math.max(2, (endSec - startSec) * pps - 2);
     const subKey = seg._uid || (seg.id !== undefined && seg.id !== null ? seg.id : idx);
+    const isDirectSubMatch = Boolean(
+      (selectedSubId !== null && selectedSubId !== undefined && (
+        (seg._uid && String(selectedSubId) === String(seg._uid)) ||
+        (seg.id !== undefined && seg.id !== null ? String(selectedSubId) === String(seg.id) : Number(selectedSubId) === idx)
+      )) ||
+      (selectedSegmentId !== null && selectedSegmentId !== undefined && (
+        (seg._uid && String(selectedSegmentId) === String(seg._uid)) ||
+        (seg.id !== undefined && seg.id !== null ? String(selectedSegmentId) === String(seg.id) : Number(selectedSegmentId) === idx)
+      ))
+    );
     const isAssociatedWithClip = Boolean(
       activeClipId && videoClips?.some((c) => c.id === activeClipId && (c.segmentId === seg.id || c.segmentIndex === (idx + 1)))
     );
     const isSelected = Boolean(
-      isAssociatedWithClip ||
-      (selectedSegmentId !== null && selectedSegmentId !== undefined && (
-        (seg._uid && String(selectedSegmentId) === String(seg._uid)) || (seg.id !== undefined && seg.id !== null ? String(selectedSegmentId) === String(seg.id) : Number(selectedSegmentId) === idx)
-      )) ||
-      (selectedSubId !== null && selectedSubId !== undefined && (
-        (seg._uid && String(selectedSubId) === String(seg._uid)) || (seg.id !== undefined && seg.id !== null ? String(selectedSubId) === String(seg.id) : Number(selectedSubId) === idx)
-      ))
+      (selectedClipKind === 'subtitle' || !selectedClipKind) && isDirectSubMatch
+    );
+    const isLinked = Boolean(
+      !isSelected && (
+        (selectedClipKind === 'video' && (isAssociatedWithClip || isDirectSubMatch)) ||
+        (selectedClipKind === 'voice' && isDirectSubMatch)
+      )
     );
 
     const isSliver = subWidth < 5;
@@ -540,6 +561,7 @@ function TimelineTracksCanvas({
           onMouseDown={(e) => handleSubMouseDown(e, seg, idx, 'move')}
           onClick={(e) => {
             e.stopPropagation();
+            if (onSelectClipKind) onSelectClipKind('subtitle');
             setSelectedSubId(subKey);
             setSelectedAudioId(subKey);
             if (onSelectSegment) onSelectSegment(subKey);
@@ -549,12 +571,12 @@ function TimelineTracksCanvas({
             }
             onSeek(startSec);
           }}
-          className={`subtitle-segment-block ${isSelected ? 'selected' : ''} ${isSliver ? 'clip-sliver' : ''}`}
+          className={`subtitle-segment-block ${isSelected ? 'selected' : ''} ${isLinked ? 'is-linked-clip' : ''} ${isSliver ? 'clip-sliver' : ''}`}
           style={{
             cursor: isDragging ? 'grabbing' : 'grab',
             left: subLeft,
             width: subWidth,
-            zIndex: isDragging ? 100 : (isSelected ? 20 : 5),
+            zIndex: isDragging ? 100 : (isSelected ? 20 : (isLinked ? 8 : 5)),
             transform: isDragging && dragState?.mode === 'move' && typeof dragState?.currentY === 'number' ? `translateY(${dragState.currentY}px)` : undefined,
             transition: isDragging ? 'none' : undefined,
             pointerEvents: isDragging && dragState?.mode === 'move' ? 'none' : 'auto',
@@ -619,8 +641,21 @@ function TimelineTracksCanvas({
     // 2px gap between adjacent clips
     const clipWidth = Math.max(2, (endSec - startSec) * pps - 2);
     const clipLeft = startSec * pps;
-    const isAssociatedWithSeg = selectedSegmentId !== null && (clip.segmentId === selectedSegmentId || clip.segmentIndex === selectedSegmentId);
-    const isSelected = activeClipId === clip.id || isAssociatedWithSeg;
+    const isDirectClipMatch = Boolean(activeClipId && activeClipId === clip.id);
+    const isAssociatedWithSeg = Boolean(
+      selectedSegmentId !== null && selectedSegmentId !== undefined && (
+        clip.segmentId === selectedSegmentId ||
+        clip.segmentIndex === selectedSegmentId ||
+        String(clip.segmentId) === String(selectedSegmentId) ||
+        String(clip.segmentIndex) === String(selectedSegmentId)
+      )
+    );
+    const isSelected = Boolean(
+      (selectedClipKind === 'video' || !selectedClipKind) && isDirectClipMatch
+    );
+    const isLinked = Boolean(
+      !isSelected && (selectedClipKind === 'voice' || selectedClipKind === 'subtitle') && isAssociatedWithSeg
+    );
 
     const isSliver = clipWidth < 5;
     const canRenderLabel = clipWidth >= 22;
@@ -665,24 +700,26 @@ function TimelineTracksCanvas({
           onMouseDown={(e) => handleVideoMouseDown(e, clip, idx, 'move')}
           onClick={(e) => {
             e.stopPropagation();
+            if (onSelectClipKind) onSelectClipKind('video');
             if (onSelectClip) onSelectClip(clip.id);
             const targetSeg = scriptSegments?.find(s => s.id === clip.segmentId || s.id === clip.segmentIndex || (clip.segmentIndex && s.id === clip.segmentIndex));
             if (targetSeg) {
-              if (setSelectedAudioId) setSelectedAudioId(targetSeg.id);
-              if (setSelectedSubId) setSelectedSubId(targetSeg.id);
-              if (onSelectSegment) onSelectSegment(targetSeg.id);
+              const segKey = targetSeg._uid || targetSeg.id;
+              if (setSelectedAudioId) setSelectedAudioId(segKey);
+              if (setSelectedSubId) setSelectedSubId(segKey);
+              if (onSelectSegment) onSelectSegment(segKey);
             } else {
               if (setSelectedAudioId) setSelectedAudioId(null);
               if (setSelectedSubId) setSelectedSubId(null);
               if (onSelectSegment) onSelectSegment(null);
             }
           }}
-          className={`video-clip-block ${isSelected ? 'selected' : ''} ${isDragging ? 'is-dragging' : ''} ${isSliver ? 'clip-sliver' : ''} ${clip.isMuted ? 'is-clip-muted' : ''}`}
+          className={`video-clip-block ${isSelected ? 'selected' : ''} ${isLinked ? 'is-linked-clip' : ''} ${isDragging ? 'is-dragging' : ''} ${isSliver ? 'clip-sliver' : ''} ${clip.isMuted ? 'is-clip-muted' : ''}`}
           style={{
             cursor: isDragging ? 'grabbing' : 'grab',
             left: clipLeft,
             width: clipWidth,
-            zIndex: isDragging ? 100 : (isSelected ? 10 : 2),
+            zIndex: isDragging ? 100 : (isSelected ? 10 : (isLinked ? 6 : 2)),
             transform: isDragging && dragState?.currentY ? `translateY(${dragState.currentY}px)` : undefined,
             transition: isDragging ? 'none' : undefined,
             pointerEvents: isDragging ? 'none' : 'auto',

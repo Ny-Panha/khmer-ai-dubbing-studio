@@ -30,6 +30,7 @@ export function useWorkspaceMedia({
   const [videoThumbnails, setVideoThumbnails] = useState([]);
   const [activeClipId, setActiveClipId] = useState(null);
   const [selectedSegmentId, setSelectedSegmentId] = useState(null);
+  const [selectedClipKind, setSelectedClipKind] = useState(null); // 'video' | 'voice' | 'subtitle' | null
 
   // Video Loaded Handler - CapCut style import into Media Bin and VIDEO 1 track
   const handleVideoLoaded = async (vid) => {
@@ -362,6 +363,8 @@ export function useWorkspaceMedia({
     setActiveClipId,
     selectedSegmentId,
     setSelectedSegmentId,
+    selectedClipKind,
+    setSelectedClipKind,
     selectedClip,
     handleVideoLoaded,
     handleClearVideo,

@@ -57,6 +57,7 @@ export default function VoiceSettings({
   episodeId = null,
   batchRender = null,
   selectedClip = null,
+  selectedClipKind = null,
   onSplitClip,
   onDeleteClip,
   currentTime = 0,
@@ -754,6 +755,7 @@ export default function VoiceSettings({
           selectedSegment={selectedSegment}
           selectedSegmentIndex={selectedSegmentIndex}
           selectedClip={selectedClip}
+          selectedClipKind={selectedClipKind}
           onSegmentTextChange={handleSegmentTextChange}
           onSegmentTextBlur={handleSegmentTextBlur}
           onSegmentChineseChange={handleSegmentChineseChange}

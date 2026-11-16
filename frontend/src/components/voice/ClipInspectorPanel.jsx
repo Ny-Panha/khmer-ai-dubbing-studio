@@ -14,6 +14,7 @@ export default function ClipInspectorPanel({
   selectedSegment,
   selectedSegmentIndex,
   selectedClip,
+  selectedClipKind = null,
   onSegmentTextChange,
   onSegmentTextBlur,
   onSingleRegen,
@@ -153,11 +154,14 @@ export default function ClipInspectorPanel({
     return selectedClip || null;
   }, [videoClips, selectedSegment, selectedClip, selectedSegmentIndex]);
 
-  // Standalone Video Clip Inspector (e.g. for Gap or uncut video clips)
-  if (!selectedSegment && selectedClip) {
-    const isClipMuted = Boolean(selectedClip.isMuted);
-    const startSec = Number(selectedClip.start) || 0;
-    const endSec = Number(selectedClip.end) || 0;
+  // Video Clip Inspector: focused when selectedClipKind === 'video' or when only selectedClip is available
+  const isVideoMode = selectedClipKind === 'video' || (!selectedSegment && Boolean(selectedClip));
+  const targetVideoClip = selectedClip || associatedClip;
+
+  if (isVideoMode && targetVideoClip) {
+    const isClipMuted = Boolean(targetVideoClip.isMuted);
+    const startSec = Number(targetVideoClip.start) || 0;
+    const endSec = Number(targetVideoClip.end) || 0;
     const durSec = Math.max(0, endSec - startSec);
 
     return (
@@ -177,7 +181,7 @@ export default function ClipInspectorPanel({
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <Film size={14} color="#38bdf8" />
             <span style={{ fontSize: '0.85rem', fontWeight: 700, color: '#e0f2fe' }}>
-              Video Clip: {selectedClip.name || 'Clip'}
+              Video Clip: {targetVideoClip.name || 'Clip'}
             </span>
             <span style={{ fontSize: '0.72rem', color: 'var(--accent-cyan)', background: 'rgba(0, 229, 255, 0.12)', padding: '2px 6px', borderRadius: 4 }}>
               {durSec.toFixed(2)}s
@@ -195,7 +199,7 @@ export default function ClipInspectorPanel({
               {onToggleMuteVideoClip && (
                 <button
                   type="button"
-                  onClick={() => onToggleMuteVideoClip(selectedClip.id)}
+                  onClick={() => onToggleMuteVideoClip(targetVideoClip.id)}
                   title={isClipMuted ? "បានបិទសំឡេងដើម (Muted) - ចុចដើម្បីបើកវិញ" : "ចុចដើម្បីបិទសំឡេងវីដេអូដើម (Mute Original Audio)"}
                   style={{
                     padding: '6px 14px',
@@ -241,7 +245,7 @@ export default function ClipInspectorPanel({
               {onDeleteClip && (
                 <button
                   type="button"
-                  onClick={() => onDeleteClip(selectedClip.id)}
+                  onClick={() => onDeleteClip(targetVideoClip.id)}
                   className="btn-danger"
                   style={{ padding: '6px 12px', fontSize: '0.75rem', display: 'inline-flex', alignItems: 'center', gap: 5 }}
                 >
