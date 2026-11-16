@@ -1,24 +1,25 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
-- **Environment**: Codex IDE
+- **Environment**: Copilot SDK in VS Code
 - **Branch**: `fix/delete-no-ripple` based on `fix/timeline-clip-selection` (`1d5e464`)
-- **Timestamp**: 2026-11-17T00:50:03+07:00
+- **Timestamp**: 2026-11-17T01:05:00+07:00
 
-## Summary: Remove-Only Timeline Delete
-- Timeline delete paths now remove a dialogue segment and its exact matching video clip without ripple, renumbering, shifting, or snap-to-zero. The removed video interval becomes a Gap; adjacent Gaps merge.
-- Stable IDs and numbers are retained by segment deletion, hydration, voice/subtitle timeline labels, script-review cards, and numeric search. Each delete path creates one undo snapshot; segment deletion still triggers audio re-sync using unchanged survivor timings.
-- Utility callers: `useClipOperations` delete handlers and `TimelineEditor` fallback explicitly request remove-only semantics. `MediaLibrary`'s standalone fallback and direct legacy tests keep default ripple/re-index semantics.
-- Verification: focused delete/search/selection tests 15/15; frontend build passed (2035 modules; existing large-chunk warning); Oxlint exited successfully with warnings. The broader backend suite did not finish and was stopped. `full_project_master_upgrade.test.js` has one unrelated existing failure in the EpisodesTab SPA-refresh assertion (7/8 tests passed).
-- Real-app checks (a)-(d) are **BLOCKED**: the shared browser page reports Backend Offline / 502, and the fresh frontend/backend launched inside the sandbox are not reachable from the integrated browser. No stored `series.json` or live Ctrl+Z result was verified.
+## Summary: Continuous Remove-Only Timeline Delete
+- Video and voice delete handlers preserve surviving segment IDs, numbers, and times; remove the exact paired dialogue clip/segment first; create/merge a Gap; and keep audio re-sync and one-step undo.
+- `deleteClipById` now fills uncovered video-track spans to the supplied episode duration and joins all touching Gaps when called with explicit remove-only options. Legacy defaults still ripple/re-index.
+- All production `deleteSegmentByIdOrIndex` callers are remove-only: the `useClipOperations` handlers, `TimelineEditor` fallback, and `MediaLibrary` standalone fallback. All production `deleteClipById` callers are the two `useClipOperations` delete handlers and pass remove-only/Gap/duration options. Direct callers in `split_clip_selection_priority.test.js` and legacy tests omit options and retain default semantics.
+- Verification: focused delete/search/selection tests **23/23**; frontend build passed (**2035 modules**, existing large-chunk warning); Oxlint exited successfully with existing warnings.
+- Separate pre-existing failure: `full_project_master_upgrade.test.js` remains **7/8**, failing its unrelated `EpisodesTab` assertion that `window.location.reload()` must be removed.
+- Real-app stored-data checks and live Ctrl+Z are **BLOCKED**: the shared attachment page ID was unavailable and browser navigation controls reported no connected browser client. No `series.json` save/read-back or delete was performed.
 
 ## Active Environment
 - Branch: `fix/delete-no-ripple`, based on `fix/timeline-clip-selection`; main untouched.
-- Shared browser UI: `http://localhost:5173/` (loads but backend offline). Sandbox-local frontend was started on `5174` and stopped after browser isolation was confirmed.
-- Backend `http://localhost:5000` was unreachable from the integrated browser; sandbox-launched service was stopped after the live check failed.
+- Frontend build and local shell tests are available. The integrated browser loaded the studio shell and showed FFmpeg Online, but interactive browser control is unavailable in this session.
+- Pre-existing `.agents/` deletions, replacement agent files, and the prior Code Reviewer state note remain unrelated and must not be staged.
 
 ## Next Steps
-- Re-run stored-data checks (a)-(d) with a reachable backend, including save/reload and one-step Ctrl+Z.
+- Re-run middle voice/video deletion, first-item timing, and save/read-back checks in the integrated app when browser control is available; verify one-step Ctrl+Z restores original IDs and times.
 - Review/open a PR for `fix/delete-no-ripple`; do not merge to main.
 
 ## Last Session

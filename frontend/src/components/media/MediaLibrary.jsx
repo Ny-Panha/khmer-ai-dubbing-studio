@@ -272,7 +272,7 @@ function MediaLibrary({
       onDeleteSegment(segIdOrIdx);
       return;
     }
-    const updated = deleteSegmentByIdOrIndex(scriptData?.segments || [], segIdOrIdx);
+    const updated = deleteSegmentByIdOrIndex(scriptData?.segments || [], segIdOrIdx, { ripple: false, preserveIds: true });
     if (onUpdateSegments) {
       onUpdateSegments(updated);
     } else if (onUpdateScript) {

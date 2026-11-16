@@ -448,10 +448,11 @@ export function syncSegmentsWithMovedClip(clip, newStartOrClip, segments = []) {
  * @param {boolean} [options.allowEmpty=false]
  * @param {boolean} [options.preserveIds=false]
  * @param {boolean} [options.gapOnDelete=false]
+ * @param {number} [options.totalDuration]
  * @returns {Array}
  */
 export function deleteClipById(clips, clipId, options = {}) {
-  const { allowEmpty = true, ripple = true, preserveIds = false, gapOnDelete = false } = options;
+  const { allowEmpty = true, ripple = true, preserveIds = false, gapOnDelete = false, totalDuration } = options;
   if (!Array.isArray(clips) || clips.length === 0) return [];
   if (!allowEmpty && clips.length <= 1) return clips;
 
@@ -465,9 +466,9 @@ export function deleteClipById(clips, clipId, options = {}) {
 
   let remaining = clips.filter((c) => c.id !== clipId);
   const isTargetDialogue = Boolean(targetClip.isDialogue || targetClip.segmentId || targetClip.segmentIndex || /^#\d+/.test(targetClip.name || ''));
-  if (remaining.length === 0 && !(gapOnDelete && isTargetDialogue)) return [];
+  if (remaining.length === 0 && !gapOnDelete) return [];
 
-  if (gapOnDelete && isTargetDialogue) {
+  if (gapOnDelete) {
     const gap = {
       id: `clip-gap-delete-${Date.now()}`,
       trackRow: targetClip.trackRow || 0,
@@ -481,21 +482,52 @@ export function deleteClipById(clips, clipId, options = {}) {
       isMuted: false,
     };
     remaining = [...remaining, gap].sort((a, b) => a.start - b.start);
-    let gapIndex = remaining.findIndex((clip) => clip.id === gap.id);
     const isGap = (clip) => clip && (clip.name === 'Gap' || clip.id?.startsWith('clip-gap'));
-    let gapStart = gap.start;
-    let gapEnd = gap.end;
+    const coverageEnd = remaining.reduce(
+      (end, clip) => Math.max(end, Number.isFinite(clip.end) ? clip.end : 0),
+      Number.isFinite(totalDuration) ? totalDuration : 0
+    );
+    const covered = [];
+    let cursor = 0;
+    remaining.forEach((clip, index) => {
+      if (clip.start > cursor + 0.000001) {
+        covered.push({
+          ...gap,
+          id: `clip-gap-delete-${Date.now()}-${index}`,
+          start: cursor,
+          end: clip.start,
+          sourceStart: cursor,
+          sourceEnd: clip.start,
+        });
+      }
+      covered.push(clip);
+      cursor = Math.max(cursor, clip.end);
+    });
+    if (coverageEnd > cursor + 0.000001) {
+      covered.push({
+        ...gap,
+        id: `clip-gap-delete-${Date.now()}-end`,
+        start: cursor,
+        end: coverageEnd,
+        sourceStart: cursor,
+        sourceEnd: coverageEnd,
+      });
+    }
 
-    if (gapIndex > 0 && isGap(remaining[gapIndex - 1]) && Math.abs(remaining[gapIndex - 1].end - gapStart) <= 0.02) {
-      gapStart = remaining[gapIndex - 1].start;
-      remaining.splice(gapIndex - 1, 1);
-      gapIndex -= 1;
-    }
-    if (gapIndex < remaining.length - 1 && isGap(remaining[gapIndex + 1]) && Math.abs(gapEnd - remaining[gapIndex + 1].start) <= 0.02) {
-      gapEnd = remaining[gapIndex + 1].end;
-      remaining.splice(gapIndex + 1, 1);
-    }
-    remaining[gapIndex] = { ...gap, start: gapStart, end: gapEnd, sourceStart: gapStart, sourceEnd: gapEnd };
+    remaining = covered.reduce((merged, clip) => {
+      const previous = merged[merged.length - 1];
+      if (isGap(previous) && isGap(clip) && clip.start <= previous.end + 0.000001) {
+        merged[merged.length - 1] = {
+          ...previous,
+          end: Math.max(previous.end, clip.end),
+          sourceStart: previous.start,
+          sourceEnd: Math.max(previous.end, clip.end),
+        };
+      } else {
+        merged.push(clip);
+      }
+      return merged;
+    }, []);
   }
 
   if (!ripple) {

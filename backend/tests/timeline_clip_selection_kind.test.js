@@ -102,7 +102,7 @@ describe('CapCut-Style Per-Clip Selection Kind Suite', () => {
     assert.ok(inspectorCode.includes('onDeleteClip'), 'renders delete button in video mode');
   });
 
-  it('5. Operation safety: Delete and Split respect selection kind while preserving linked deletion ripple semantics', () => {
+  it('5. Operation safety: Delete and Split respect selection kind and paired remove-only deletion', () => {
     let deletedVideoId = null;
     let deletedSegmentId = null;
 

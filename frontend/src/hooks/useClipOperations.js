@@ -833,6 +833,7 @@ export function useClipOperations({
       ripple: false,
       preserveIds: true,
       gapOnDelete: true,
+      totalDuration: duration,
     });
     setVideoClips(updated);
     setActiveClipId(updated[0]?.id || null);
@@ -922,6 +923,7 @@ export function useClipOperations({
           ripple: false,
           preserveIds: true,
           gapOnDelete: true,
+          totalDuration: duration,
         });
         setVideoClips(remainingClips);
         setActiveClipId(remainingClips[0]?.id || null);

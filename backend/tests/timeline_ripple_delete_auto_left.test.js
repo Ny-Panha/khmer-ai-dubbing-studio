@@ -4,6 +4,20 @@ const path = require('node:path');
 const fs = require('node:fs');
 const { pathToFileURL } = require('node:url');
 
+function assertContinuousCoverage(clips, duration) {
+  const sorted = [...clips].sort((a, b) => a.start - b.start);
+  assert.ok(sorted.length > 0, 'video track must contain clips');
+  assert.equal(sorted[0].start, 0, 'video track starts at zero');
+  let end = 0;
+  for (const clip of sorted) {
+    assert.ok(clip.start >= end - 0.000001, `clip ${clip.id} does not overlap its predecessor`);
+    assert.ok(Math.abs(clip.start - end) <= 0.000001, `clip ${clip.id} touches its predecessor`);
+    assert.ok(clip.end - clip.start >= 0.1, `clip ${clip.id} is not a sub-0.1s sliver`);
+    end = clip.end;
+  }
+  assert.equal(end, duration, 'video track covers the full episode duration');
+}
+
 describe('Remove-only timeline delete', () => {
   const timelineUtilsPath = path.resolve(__dirname, '../../frontend/src/utils/timelineUtils.js');
   const timelineUtilsCode = fs.readFileSync(timelineUtilsPath, 'utf8');
@@ -38,12 +52,20 @@ describe('Remove-only timeline delete', () => {
       ripple: false,
       preserveIds: true,
       gapOnDelete: true,
+      totalDuration: 10,
     });
 
     assert.deepEqual(updated.map((segment) => segment.id), [1, 2, 4, 5]);
     assert.deepEqual(updated.map((segment) => segment.segmentId), [1, 2, 4, 5]);
     assert.deepEqual(updated, segments.filter((segment) => segment.id !== 3));
-    assert.deepEqual(updatedClips.filter((clip) => clip.isDialogue), clips.filter((clip) => clip.id !== 'clip-3'));
+    assert.deepEqual(
+      updatedClips.filter((clip) => clip.isDialogue),
+      clips.filter((clip) => clip.id !== 'clip-3')
+    );
+    const gaps = updatedClips.filter((clip) => clip.name === 'Gap');
+    assert.equal(gaps.length, 1);
+    assert.deepEqual([gaps[0].start, gaps[0].end], [4, 6]);
+    assertContinuousCoverage(updatedClips, 10);
   });
 
   test('script hydration preserves non-sequential segment numbers', async () => {
@@ -81,6 +103,7 @@ describe('Remove-only timeline delete', () => {
       ripple: false,
       preserveIds: true,
       gapOnDelete: true,
+      totalDuration: 10,
     });
     const updatedSegments = deleteSegmentByIdOrIndex(segments, clips[2].segmentId, { ripple: false, preserveIds: true });
 
@@ -92,6 +115,7 @@ describe('Remove-only timeline delete', () => {
     assert.equal(gaps.length, 1);
     assert.deepEqual([gaps[0].start, gaps[0].end], [4, 6]);
     assert.deepEqual(updatedSegments.map((segment) => segment.id), [1, 2, 4, 5]);
+    assertContinuousCoverage(updated, 10);
   });
 
   test('deleting first or last item keeps every remaining start and end unchanged', async () => {
@@ -120,6 +144,7 @@ describe('Remove-only timeline delete', () => {
         ripple: false,
         preserveIds: true,
         gapOnDelete: true,
+        totalDuration: 10,
       });
       assert.deepEqual(
         updatedClips.filter((clip) => clip.isDialogue),
@@ -127,15 +152,18 @@ describe('Remove-only timeline delete', () => {
       );
       const gap = updatedClips.find((clip) => clip.name === 'Gap');
       assert.deepEqual([gap.start, gap.end], [(id - 1) * 2, id * 2]);
+      assertContinuousCoverage(updatedClips, 10);
     }
   });
 
-  test('deleted dialogue clip merges touching Gap neighbours into one span', async () => {
+  test('deleted dialogue clip joins all touching Gaps on both sides into one span', async () => {
     const { deleteClipById } = await import(pathToFileURL(timelineUtilsPath));
     const clips = [
       { id: 'gap-left', name: 'Gap', start: 0, end: 2 },
-      { id: 'clip-3', name: '#3 Speaker', isDialogue: true, segmentId: 3, start: 2, end: 4 },
-      { id: 'gap-right', name: 'Gap', start: 4, end: 7 },
+      { id: 'gap-left-2', name: 'Gap', start: 2, end: 3 },
+      { id: 'clip-3', name: '#3 Speaker', isDialogue: true, segmentId: 3, start: 3, end: 4 },
+      { id: 'gap-right', name: 'Gap', start: 4, end: 5 },
+      { id: 'gap-right-2', name: 'Gap', start: 5, end: 7 },
       { id: 'clip-4', name: '#4 Speaker', isDialogue: true, segmentId: 4, start: 7, end: 9 },
     ];
 
@@ -144,10 +172,94 @@ describe('Remove-only timeline delete', () => {
       ripple: false,
       preserveIds: true,
       gapOnDelete: true,
+      totalDuration: 9,
     });
 
     assert.deepEqual(updated.filter((clip) => clip.name === 'Gap').map(({ start, end }) => [start, end]), [[0, 7]]);
-    assert.deepEqual(updated.find((clip) => clip.id === 'clip-4'), clips[3]);
+    assert.deepEqual(updated.find((clip) => clip.id === 'clip-4'), clips[5]);
+    assertContinuousCoverage(updated, 9);
+  });
+
+  test('deleted dialogue clip joins a single Gap on either side', async () => {
+    const { deleteClipById } = await import(pathToFileURL(timelineUtilsPath));
+    const cases = [
+      {
+        clips: [
+          { id: 'clip-1', name: '#1 Speaker', isDialogue: true, segmentId: 1, start: 0, end: 2 },
+          { id: 'gap-right', name: 'Gap', start: 2, end: 4 },
+          { id: 'clip-2', name: '#2 Speaker', isDialogue: true, segmentId: 2, start: 4, end: 6 },
+        ],
+        deletedId: 'clip-1',
+        gap: [0, 4],
+      },
+      {
+        clips: [
+          { id: 'clip-1', name: '#1 Speaker', isDialogue: true, segmentId: 1, start: 0, end: 2 },
+          { id: 'gap-left', name: 'Gap', start: 2, end: 4 },
+          { id: 'clip-2', name: '#2 Speaker', isDialogue: true, segmentId: 2, start: 4, end: 6 },
+        ],
+        deletedId: 'clip-2',
+        gap: [2, 6],
+      },
+    ];
+
+    for (const { clips, deletedId, gap } of cases) {
+      const updated = deleteClipById(clips, deletedId, {
+        allowEmpty: true,
+        ripple: false,
+        preserveIds: true,
+        gapOnDelete: true,
+        totalDuration: 6,
+      });
+      assert.deepEqual(updated.filter((clip) => clip.name === 'Gap').map(({ start, end }) => [start, end]), [gap]);
+      assert.deepEqual(updated.find((clip) => clip.id !== deletedId && clip.isDialogue), clips.find((clip) => clip.id !== deletedId && clip.isDialogue));
+      assertContinuousCoverage(updated, 6);
+    }
+  });
+
+  test('deleting a non-dialogue video clip also leaves a covered Gap', async () => {
+    const { deleteClipById } = await import(pathToFileURL(timelineUtilsPath));
+    const clips = [
+      { id: 'clip-a', name: 'Intro', start: 0, end: 2 },
+      { id: 'clip-b', name: 'Outro', start: 2, end: 4 },
+    ];
+
+    const updated = deleteClipById(clips, 'clip-a', {
+      allowEmpty: true,
+      ripple: false,
+      preserveIds: true,
+      gapOnDelete: true,
+      totalDuration: 4,
+    });
+
+    assert.deepEqual(updated.filter((clip) => clip.name === 'Gap').map(({ start, end }) => [start, end]), [[0, 2]]);
+    assert.deepEqual(updated.find((clip) => clip.id === 'clip-b'), clips[1]);
+    assertContinuousCoverage(updated, 4);
+  });
+
+  test('remove-only delete fills uncovered portions with explicit Gaps without moving survivors', async () => {
+    const { deleteClipById } = await import(pathToFileURL(timelineUtilsPath));
+    const clips = [
+      { id: 'clip-a', name: 'Before', start: 1, end: 2 },
+      { id: 'clip-delete', name: 'Middle', start: 2, end: 3 },
+      { id: 'clip-b', name: 'After', start: 4, end: 5 },
+    ];
+
+    const updated = deleteClipById(clips, 'clip-delete', {
+      allowEmpty: true,
+      ripple: false,
+      preserveIds: true,
+      gapOnDelete: true,
+      totalDuration: 6,
+    });
+
+    assert.deepEqual(updated.filter((clip) => clip.id !== 'clip-delete' && clip.name !== 'Gap'), [clips[0], clips[2]]);
+    assert.deepEqual(updated.filter((clip) => clip.name === 'Gap').map(({ start, end }) => [start, end]), [
+      [0, 1],
+      [2, 4],
+      [5, 6],
+    ]);
+    assertContinuousCoverage(updated, 6);
   });
 
   test('legacy callers retain default ripple, snap, and re-index behavior', async () => {
@@ -175,15 +287,19 @@ describe('Remove-only timeline delete', () => {
     const hookCode = fs.readFileSync(path.resolve(__dirname, '../../frontend/src/hooks/useClipOperations.js'), 'utf8');
     const editorCode = fs.readFileSync(path.resolve(__dirname, '../../frontend/src/components/timeline/TimelineEditor.jsx'), 'utf8');
     const tracksCode = fs.readFileSync(path.resolve(__dirname, '../../frontend/src/components/timeline/TimelineTracksCanvas.jsx'), 'utf8');
+    const mediaLibraryCode = fs.readFileSync(path.resolve(__dirname, '../../frontend/src/components/media/MediaLibrary.jsx'), 'utf8');
     const clipDeleteHandler = hookCode.slice(hookCode.indexOf('const handleDeleteClip'), hookCode.indexOf('// Update Clips'));
     const segmentDeleteHandler = hookCode.slice(hookCode.indexOf('const handleDeleteSegment'), hookCode.indexOf('// Update Timeline Subtitles'));
 
     assert.ok(hookCode.includes('deleteSegmentByIdOrIndex(segments, segmentKey, { ripple: false, preserveIds: true })'));
     assert.ok(hookCode.includes('deleteSegmentByIdOrIndex(scriptData.segments, segmentKey, { ripple: false, preserveIds: true })'));
     assert.ok(hookCode.includes('gapOnDelete: true'));
+    assert.ok(clipDeleteHandler.includes('totalDuration: duration'));
+    assert.ok(segmentDeleteHandler.includes('totalDuration: duration'));
     assert.ok(editorCode.includes("selectedClipKind === 'video' && canDeleteVideo"));
     assert.ok(!editorCode.includes("lastSelectedType === 'video' || selectedClipKind === 'video'"));
     assert.ok(editorCode.includes('{ ripple: false, preserveIds: true }'));
+    assert.ok(mediaLibraryCode.includes('{ ripple: false, preserveIds: true }'));
     assert.ok(tracksCode.includes('const segmentNumber = seg.segmentId ?? seg.id ?? idx + 1;'));
     assert.ok(tracksCode.includes('const compactIdLabel = `#${segmentNumber}'));
     assert.equal((clipDeleteHandler.match(/pushUndoSnapshot\(/g) || []).length, 1);
