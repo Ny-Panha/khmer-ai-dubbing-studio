@@ -302,6 +302,10 @@ export default function App() {
     setScriptData,
     activeClipId: media.activeClipId,
     setActiveClipId: media.setActiveClipId,
+    selectedSegmentId: media.selectedSegmentId,
+    setSelectedSegmentId: media.setSelectedSegmentId,
+    selectedClipKind: media.selectedClipKind,
+    setSelectedClipKind: media.setSelectedClipKind,
   });
   undoRedoRef.current = undoRedo;
 

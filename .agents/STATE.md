@@ -1,4 +1,23 @@
 # Antigravity Shared State (Sync Memory)
+## Last Session
+- **Environment**: Codex IDE
+- **Branch**: `fix/delete-auto-clean` (based on `fix/timeline-clip-selection`, layered over `fix/voice-single-lane`)
+- **Timestamp**: 2026-11-16T23:30:00+07:00
+
+## Summary: Automatic Timeline Cleanup After Deletes
+- Added shared `alignTimelineFromSegments` pass: applies the existing single-lane voice alignment and rebuilds VIDEO 1 dialogue/Gap coverage from surviving segments while preserving source media ranges.
+- Auto-Align and toolbar, keyboard, Inspector, and linked-ripple deletes now use the shared pass; one pre-delete snapshot makes delete plus cleanup one Undo step. Deleted segment selection is cleared.
+- No custom context-menu delete handler exists in the frontend. Split, Reset Timing, drag/trim, and backend behavior were left out of scope.
+- Verification: frontend tests 5/5; ripple/voice regression tests 15/15; Vite production build passed. Isolated browser checks passed for keyboard delete, linked video ripple, Inspector delete, user-shifted clip preservation, one-step Ctrl+Z, and save/reload. Browser checks used fixture data and blocked API writes.
+- Branch was created from `fix/timeline-clip-selection` because it is based on `fix/voice-single-lane`; no main merge.
+
+## Active Environment
+- Backend API: `http://localhost:5000` (HTTP 200 health check)
+- Frontend UI: `http://localhost:5173` (Vite dev server running)
+- Branch: `fix/delete-auto-clean`
+
+## Next Steps
+- Review the pushed `fix/delete-auto-clean` branch and open a PR when ready; keep main unchanged.
 
 ## Last Session
 - **Environment**: Antigravity IDE (`fix/timeline-clip-selection`)

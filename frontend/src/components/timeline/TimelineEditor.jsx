@@ -1525,7 +1525,7 @@ function TimelineEditor({
       if (onSelectClip) onSelectClip(null);
       setLastSelectedType('none');
     }
-  }, [lastSelectedType, canDeleteSubtitle, canDeleteVideo, selectedSegKey, scriptSegments, onDeleteSegment, onUpdateSegments, onSelectSegment, onDeleteClip, onSelectClip, activeClipId]);
+  }, [lastSelectedType, selectedClipKind, canDeleteSubtitle, canDeleteVideo, selectedSegKey, scriptSegments, onDeleteSegment, onUpdateSegments, onSelectSegment, onSelectClipKind, onDeleteClip, onSelectClip, activeClipId]);
 
 
   // 1. Pure 60FPS Hardware GPU Playhead Animation & 1:1 In-Sync Smooth Center Scroll

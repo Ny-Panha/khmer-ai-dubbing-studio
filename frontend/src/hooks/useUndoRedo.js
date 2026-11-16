@@ -34,24 +34,32 @@ export function useUndoRedo({
   setScriptData,
   activeClipId,
   setActiveClipId,
+  selectedSegmentId = null,
+  setSelectedSegmentId = null,
+  selectedClipKind = null,
+  setSelectedClipKind = null,
 }) {
   const [undoStack, setUndoStack] = useState([]);
   const [redoStack, setRedoStack] = useState([]);
 
-  const pushUndoSnapshot = useCallback((customClips, customSegments, customActiveClipId) => {
+  const pushUndoSnapshot = useCallback((customClips, customSegments, customActiveClipId, customSelectedSegmentId, customSelectedClipKind) => {
     const clipsToSave = customClips !== undefined ? customClips : videoClips;
     const segsToSave = customSegments !== undefined ? customSegments : (scriptData?.segments || []);
     const activeIdToSave = customActiveClipId !== undefined ? customActiveClipId : activeClipId;
+    const selectedSegmentIdToSave = customSelectedSegmentId !== undefined ? customSelectedSegmentId : selectedSegmentId;
+    const selectedClipKindToSave = customSelectedClipKind !== undefined ? customSelectedClipKind : selectedClipKind;
 
     const snapshot = {
       videoClips: safeClone(clipsToSave || []),
       segments: safeClone(segsToSave || []),
       activeClipId: activeIdToSave,
+      selectedSegmentId: selectedSegmentIdToSave,
+      selectedClipKind: selectedClipKindToSave,
     };
 
     setUndoStack((prev) => [...prev.slice(-30), snapshot]);
     setRedoStack([]); // Clear redo stack on new action
-  }, [videoClips, scriptData, activeClipId]);
+  }, [videoClips, scriptData, activeClipId, selectedSegmentId, selectedClipKind]);
 
   const handleUndo = useCallback(() => {
     setUndoStack((prevUndo) => {
@@ -64,6 +72,8 @@ export function useUndoRedo({
         videoClips: safeClone(videoClips || []),
         segments: safeClone(scriptData?.segments || []),
         activeClipId,
+        selectedSegmentId,
+        selectedClipKind,
       };
       setRedoStack((prevRedo) => [...prevRedo.slice(-30), currentSnapshot]);
 
@@ -77,10 +87,16 @@ export function useUndoRedo({
       if (targetSnapshot.activeClipId !== undefined) {
         setActiveClipId(targetSnapshot.activeClipId);
       }
+      if (targetSnapshot.selectedSegmentId !== undefined && setSelectedSegmentId) {
+        setSelectedSegmentId(targetSnapshot.selectedSegmentId);
+      }
+      if (targetSnapshot.selectedClipKind !== undefined && setSelectedClipKind) {
+        setSelectedClipKind(targetSnapshot.selectedClipKind);
+      }
 
       return remainingUndo;
     });
-  }, [videoClips, scriptData, activeClipId, setVideoClips, setScriptData, setActiveClipId]);
+  }, [videoClips, scriptData, activeClipId, selectedSegmentId, selectedClipKind, setVideoClips, setScriptData, setActiveClipId, setSelectedSegmentId, setSelectedClipKind]);
 
   const handleRedo = useCallback(() => {
     setRedoStack((prevRedo) => {
@@ -93,6 +109,8 @@ export function useUndoRedo({
         videoClips: safeClone(videoClips || []),
         segments: safeClone(scriptData?.segments || []),
         activeClipId,
+        selectedSegmentId,
+        selectedClipKind,
       };
       setUndoStack((prevUndo) => [...prevUndo.slice(-30), currentSnapshot]);
 
@@ -106,10 +124,16 @@ export function useUndoRedo({
       if (targetSnapshot.activeClipId !== undefined) {
         setActiveClipId(targetSnapshot.activeClipId);
       }
+      if (targetSnapshot.selectedSegmentId !== undefined && setSelectedSegmentId) {
+        setSelectedSegmentId(targetSnapshot.selectedSegmentId);
+      }
+      if (targetSnapshot.selectedClipKind !== undefined && setSelectedClipKind) {
+        setSelectedClipKind(targetSnapshot.selectedClipKind);
+      }
 
       return remainingRedo;
     });
-  }, [videoClips, scriptData, activeClipId, setVideoClips, setScriptData, setActiveClipId]);
+  }, [videoClips, scriptData, activeClipId, selectedSegmentId, selectedClipKind, setVideoClips, setScriptData, setActiveClipId, setSelectedSegmentId, setSelectedClipKind]);
 
   const clearHistory = useCallback(() => {
     setUndoStack([]);

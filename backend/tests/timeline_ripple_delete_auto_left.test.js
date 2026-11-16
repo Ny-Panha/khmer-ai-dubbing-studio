@@ -45,12 +45,17 @@ describe('Timeline Ripple Delete & Auto-Shift Left Suite', () => {
     assert.ok(code.includes('const leadOffset = sorted[0].start > 0.04 ? sorted[0].start : 0;'), 'bridgeClipGaps must calculate leadOffset');
   });
 
-  test('4. useClipOperations Auto-Align closes leading gap and pulls timeline to 00:00', () => {
+  test('4. Auto-Align and delete share the voice + video timeline cleanup pass', () => {
     const hookPath = path.resolve(__dirname, '../../frontend/src/hooks/useClipOperations.js');
     const hookCode = fs.readFileSync(hookPath, 'utf8');
+    const utilsCode = fs.readFileSync(timelineUtilsPath, 'utf8');
 
-    assert.ok(hookCode.includes('// 1. If leading gap exists'), 'handleAutoAlignNoOverlap must check leading gap');
-    assert.ok(hookCode.includes('setVideoClips(snappedClips)'), 'handleAutoAlignNoOverlap must snap video clips to 00:00');
+    assert.ok(hookCode.includes('alignTimelineFromSegments('), 'shared state pass must use the timeline utility');
+    assert.ok(hookCode.includes('runTimelineAlignmentPass({ segments: currentSegments, clips: videoClips, recordUndo: true })'), 'Auto-Align button must call the shared pass');
+    assert.ok(hookCode.includes('clips: updated,'), 'video delete must call the shared pass after its ripple');
+    assert.ok(hookCode.includes('clips: nextVideoClips,'), 'segment delete must call the shared pass after its linked ripple');
+    assert.ok(utilsCode.includes('export function alignTimelineFromSegments('), 'shared utility must align voice and rebuild video');
+    assert.ok(utilsCode.includes('if (seg.userShifted) return seg;'), 'user-shifted clips must stay fixed during pre-alignment');
     assert.ok(hookCode.includes('deleteClipById(videoClips, targetClipId, { allowEmpty: true, ripple: true })'), 'handleDeleteClip must call deleteClipById with ripple: true');
   });
 
@@ -77,10 +82,9 @@ describe('Timeline Ripple Delete & Auto-Shift Left Suite', () => {
     assert.ok(hookCode.includes('deleteClipById(videoClips, matchingClip.id, { allowEmpty: true, ripple: true })'), 'handleDeleteSegment must delete matching video clip');
   });
 
-  test('8. Auto-Align synchronizes dialogue voice segments to their matching video cuts', () => {
-    const hookPath = path.resolve(__dirname, '../../frontend/src/hooks/useClipOperations.js');
-    const hookCode = fs.readFileSync(hookPath, 'utf8');
+  test('8. Shared cleanup synchronizes dialogue voice segments to their matching video cuts', () => {
+    const utilsCode = fs.readFileSync(timelineUtilsPath, 'utf8');
 
-    assert.ok(hookCode.includes('// 2. Synchronize dialogue voice segments to their matching video cuts'), 'Auto-align must synchronize voice segments to video cuts');
+    assert.ok(utilsCode.includes('const matchingCut = dialogueClips.find'), 'Shared alignment must anchor voice to matching dialogue video cuts');
   });
 });
