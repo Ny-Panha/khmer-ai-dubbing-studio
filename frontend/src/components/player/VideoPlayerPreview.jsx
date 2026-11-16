@@ -1100,9 +1100,9 @@ function VideoPlayerPreview({
     if (!scriptData?.segments) return [];
     return scriptData.segments
       .filter((seg) => {
-        const hasText = Boolean((seg.khmer || seg.textKhmer || seg.text || seg.original || '').trim());
-        const hasAudio = Boolean(seg.audioFile || seg.audioPath || seg.audioUrl);
-        return !seg.muted && !seg.isMuted && (hasText || hasAudio);
+        const hasAudio = Boolean(seg.audioFile || seg.audioPath || seg.audioUrl || (typeof seg.audioDurationSec === 'number' && seg.audioDurationSec > 0));
+        // Only count as speaking if voice audio actually exists (bit tea kleang voice, kelang ot voice baj bit te)
+        return !seg.muted && !seg.isMuted && hasAudio;
       })
       .map((seg) => {
         const s = (typeof seg.audioStartSec === 'number' && !isNaN(seg.audioStartSec))

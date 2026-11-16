@@ -905,7 +905,7 @@ function TimelineTracksCanvas({
         const areAllCutsMuted = targetVideoClips.length > 0 && targetVideoClips.every((c) => Boolean(c.isMuted));
         const isMuted = Boolean(
           mutedTracks?.[trackKey] ||
-          (rIdx === 0 && (mutedTracks?.video || areAllCutsMuted))
+          (rIdx === 0 && mutedTracks?.video)
         );
         const isDragOver = dragOverTrack === trackKey || (rIdx === 0 && dragOverTrack === 'video');
 

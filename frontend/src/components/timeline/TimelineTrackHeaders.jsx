@@ -71,7 +71,7 @@ export default function TimelineTrackHeaders({
         const isLocked = Boolean(lockedTracks[trackKey] || (rIdx === 0 && lockedTracks.video));
         const isMuted = Boolean(
           mutedTracks[trackKey] ||
-          (rIdx === 0 && (mutedTracks.video || areAllCutsMuted))
+          (rIdx === 0 && mutedTracks.video)
         );
         const isSolo = Boolean(soloTracks[trackKey] || (rIdx === 0 && soloTracks.video));
 

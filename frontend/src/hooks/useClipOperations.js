@@ -952,25 +952,45 @@ export function useClipOperations({
     return newSeg;
   };
 
-  // 1-Click: Mute or Unmute ALL cut video clips at once (eliminates tedious one-by-one muting)
+  // 1-Click: Mute or Unmute ONLY video clips that actually have voice audio
   const handleToggleMuteAllCuts = (onlyDialogue = true) => {
     if (!videoClips || videoClips.length === 0) return;
     pushUndoSnapshot(videoClips, scriptData?.segments || []);
 
+    // Set of segment IDs or indices that actually have voice audio
+    const voiceSegIds = new Set();
+    (scriptData?.segments || []).forEach((s, idx) => {
+      const hasAudio = Boolean(
+        s.audioFile || s.audioPath || s.audioUrl || (typeof s.audioDurationSec === 'number' && s.audioDurationSec > 0)
+      );
+      if (hasAudio && !s.muted && !s.isMuted) {
+        if (s.id) voiceSegIds.add(String(s.id));
+        voiceSegIds.add(String(idx + 1));
+      }
+    });
+
+    const isClipWithVoice = (c) => {
+      if (!c.isDialogue) return false;
+      if (typeof c.hasVoice === 'boolean') return c.hasVoice;
+      if (voiceSegIds.size === 0) return true;
+      return voiceSegIds.has(String(c.segmentId)) || voiceSegIds.has(String(c.segmentIndex));
+    };
+
     const targetClips = onlyDialogue
-      ? videoClips.filter((c) => c.isDialogue)
+      ? videoClips.filter(isClipWithVoice)
       : videoClips;
 
-    const clipsToEvaluate = targetClips.length > 0 ? targetClips : videoClips;
-    const allAlreadyMuted = clipsToEvaluate.every((c) => Boolean(c.isMuted));
+    const clipsToEvaluate = targetClips.length > 0 ? targetClips : videoClips.filter((c) => c.isDialogue);
+    const allAlreadyMuted = clipsToEvaluate.length > 0 && clipsToEvaluate.every((c) => Boolean(c.isMuted));
     const nextMuteState = !allAlreadyMuted;
 
     const updated = videoClips.map((c) => {
-      if (onlyDialogue && targetClips.length > 0) {
-        if (c.isDialogue) {
+      if (onlyDialogue) {
+        if (isClipWithVoice(c)) {
           return { ...c, isMuted: nextMuteState };
         }
-        return c;
+        // Non-voice clips (Gap or dialogue without audio) are NEVER muted here
+        return { ...c, isMuted: false };
       }
       return { ...c, isMuted: nextMuteState };
     });

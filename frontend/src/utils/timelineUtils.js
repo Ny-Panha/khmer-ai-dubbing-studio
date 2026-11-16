@@ -611,12 +611,21 @@ export function autoSplitVideoBySegments(segments = [], totalDuration = 0, video
     const start = Math.max(0, Math.min(totalDuration, rawStart));
     const end = Math.max(start + 0.3, Math.min(totalDuration, rawEnd));
 
+    const hasVoiceAudio = Boolean(
+      seg.audioUrl ||
+      seg.audioFile ||
+      seg.audioPath ||
+      (typeof seg.audioDurationSec === 'number' && seg.audioDurationSec > 0)
+    ) && !seg.muted && !seg.isMuted;
+
     return {
       start: parseFloat(start.toFixed(2)),
       end: parseFloat(end.toFixed(2)),
       speaker: seg.speaker || `Line #${idx + 1}`,
       khmer: seg.khmer || '',
       index: idx + 1,
+      id: seg.id || idx + 1,
+      hasVoice: hasVoiceAudio,
     };
   }).filter((s) => s.end > s.start);
 
@@ -679,9 +688,11 @@ export function autoSplitVideoBySegments(segments = [], totalDuration = 0, video
       sourceEnd: clipEnd,
       name: `#${it.index} ${it.speaker}`,
       isDialogue: true,
+      hasVoice: Boolean(it.hasVoice),
       segmentIndex: it.index,
-      segmentId: it.index,
-      isMuted: true, // Auto-mute dialogue cuts (bit slg yy) so Khmer Voice speaks cleanly while Gaps stay unmuted (berk slg simple)
+      segmentId: it.id || it.index,
+      // ONLY mute if this dialogue segment ACTUALLY has a voice (bit tea kleang voice, kelang ot voice baj bit te)
+      isMuted: Boolean(it.hasVoice),
     });
 
     curTime = clipEnd;
