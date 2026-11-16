@@ -942,9 +942,13 @@ export default function GeminiQuotaModal({
               {displayKeys.map((liveKeyData) => {
                 const kNum = liveKeyData.keyNum;
                 const theme = KEY_THEMES[((kNum - 1) % KEY_THEME_COUNT) + 1] || KEY_THEMES[1];
+                const keyDailyLeft = liveKeyData.dailyLeft ?? Math.max(0, perKeyDailyLimit - (liveKeyData.todayRequests || 0));
+                const keyPercent = Math.min(100, Math.round(((liveKeyData.todayRequests || 0) / perKeyDailyLimit) * 100));
                 const isDailyExhausted = !isCheckingQuota && (
                   liveKeyData.status === 'daily_exhausted' ||
                   Boolean(liveKeyData.isDailyExhausted) ||
+                  keyDailyLeft <= 0 ||
+                  (liveKeyData.todayRequests || 0) >= perKeyDailyLimit ||
                   ((liveKeyData.status === 'invalid' || liveKeyData.isInvalid) && (liveKeyData.todayRequests || 0) >= 300)
                 );
                 const isRateLimited = !isCheckingQuota && !isDailyExhausted && liveKeyData.status === 'rate_limited';
@@ -955,7 +959,7 @@ export default function GeminiQuotaModal({
                 if (isCheckingQuota) {
                   badgeText = 'កំពុង Test...';
                 } else if (isDailyExhausted) {
-                  badgeText = 'អស់ Quota ថ្ងៃនេះ (429)';
+                  badgeText = '🔴 អស់ Quota (0 Left)';
                 } else if (isRateLimited) {
                   badgeText = liveKeyData.cooldownSec > 0
                     ? `Wait ${formatQuotaDuration(liveKeyData.cooldownSec)}`
@@ -963,7 +967,7 @@ export default function GeminiQuotaModal({
                 } else if (isInvalid || isError) {
                   badgeText = liveKeyData.badge || 'Key ខុស';
                 } else if (liveKeyData.lastProbeCode === 200 && (liveKeyData.rpmUsed || 0) === 0) {
-                  badgeText = '✓ Ready (200)';
+                  badgeText = keyPercent >= 80 ? `⚠️ សល់តែ ${keyDailyLeft}` : '✓ Ready (200)';
                 }
 
                 const badgeColor = isCheckingQuota
@@ -974,7 +978,9 @@ export default function GeminiQuotaModal({
                       ? '#FBBF24'
                       : (isInvalid || isError)
                         ? '#EF4444'
-                        : '#34D399';
+                        : keyPercent >= 80
+                          ? '#FBBF24'
+                          : '#34D399';
                 const badgeBg = isCheckingQuota
                   ? 'rgba(56, 189, 248, 0.12)'
                   : isDailyExhausted
@@ -983,7 +989,9 @@ export default function GeminiQuotaModal({
                       ? 'rgba(251, 191, 36, 0.12)'
                       : (isInvalid || isError)
                         ? 'rgba(239, 68, 68, 0.12)'
-                        : 'rgba(52, 211, 153, 0.10)';
+                        : keyPercent >= 80
+                          ? 'rgba(245, 158, 11, 0.12)'
+                          : 'rgba(52, 211, 153, 0.10)';
                 const badgeBorder = isCheckingQuota
                   ? 'rgba(56, 189, 248, 0.35)'
                   : isDailyExhausted
@@ -992,7 +1000,9 @@ export default function GeminiQuotaModal({
                       ? 'rgba(251, 191, 36, 0.35)'
                       : (isInvalid || isError)
                         ? 'rgba(239, 68, 68, 0.35)'
-                        : 'rgba(52, 211, 153, 0.28)';
+                        : keyPercent >= 80
+                          ? 'rgba(245, 158, 11, 0.35)'
+                          : 'rgba(52, 211, 153, 0.28)';
                 const dotColor = isCheckingQuota
                   ? '#38BDF8'
                   : isDailyExhausted
@@ -1001,10 +1011,9 @@ export default function GeminiQuotaModal({
                       ? '#FBBF24'
                       : (isInvalid || isError)
                         ? '#EF4444'
-                        : '#34D399';
-
-                const keyDailyLeft = liveKeyData.dailyLeft ?? Math.max(0, perKeyDailyLimit - (liveKeyData.todayRequests || 0));
-                const keyPercent = Math.min(100, Math.round(((liveKeyData.todayRequests || 0) / perKeyDailyLimit) * 100));
+                        : keyPercent >= 80
+                          ? '#FBBF24'
+                          : '#34D399';
 
                 return (
                   <div
@@ -1080,7 +1089,13 @@ export default function GeminiQuotaModal({
                           width: `${keyPercent}%`,
                           height: '100%',
                           borderRadius: 9999,
-                          background: isDailyExhausted ? '#F87171' : isRateLimited ? '#FBBF24' : '#38BDF8',
+                          background: isDailyExhausted
+                            ? '#F87171'
+                            : isRateLimited
+                              ? '#FBBF24'
+                              : keyPercent >= 80
+                                ? '#F59E0B'
+                                : '#38BDF8',
                           transition: 'width 0.35s ease',
                         }}
                       />
