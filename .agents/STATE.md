@@ -1,53 +1,68 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
-- **Environment**: Antigravity IDE (`fix/voice-single-lane`)
-- **Branch**: `fix/voice-single-lane` (tracking `origin/fix/voice-single-lane`)
-- **Timestamp**: 2026-11-16T21:55:00+07:00
+- **Environment**: Antigravity IDE (`fix/timeline-clip-selection`)
+- **Branch**: `fix/timeline-clip-selection` (tracking `origin/fix/timeline-clip-selection`)
+- **Timestamp**: 2026-11-16T22:27:00+07:00
 
-## Summary: CapCut-Style Single Voice Lane (Lane 0) on Auto-Align
+## Summary: CapCut-Style Per-Clip Timeline Selection & Focused Inspector
 1. **Problem Solved**:
-   - Previously, when Khmer TTS dialogue audio overran the next segment's start time, the code only clamped if `cutRatio <= 40%`; otherwise, it dropped the clip to `VOICE 2` (Lane 1). Furthermore, `TimelineTracksCanvas.jsx` and `TimelineEditor.jsx` dynamically checked `isFemale` or `gapOnRow0 < 0.15` and forced alternating clips into `VOICE 2`, causing dialogue clips to scatter back and forth across VOICE 1 / VOICE 2 (e.g. 79 clips scattered to Lane 1 in EP3).
-   - Under CapCut behavior, all auto-placed voice clips live sequentially on `VOICE 1` (Lane 0) in numeric order; clips NEVER drop to `VOICE 2/3` automatically. Clip N ends exactly where Clip N+1 begins, and overruns are resolved on Lane 0 by clamping previous clip's `audioEndSec` to next segment's `baseStart`.
+   - Previously, clicking either a video cut or a voice segment bidirectionally selected both clips (`isSelected = activeClipId === clip.id || isAssociatedWithSeg`), lighting up both clips with solid cyan borders and trim handles.
+   - Under CapCut behavior, clicking a VIDEO clip selects only that video clip, clicking a VOICE clip selects only that voice clip, and clicking a SUBTITLE clip selects only that subtitle clip. The paired counterpart clip shows a faint dashed outline (`.is-linked-clip`), maintaining visual pairing without stealing primary selection.
+   - Inspector focus dynamically adjusts: clicking a VIDEO clip focuses the video/cut context (timing, Mute Original Audio, Split at Playhead, Delete Clip); clicking a VOICE clip focuses the dialogue voice section (Chinese text, Khmer translation, Khmer neural voice, audio playback/regen).
 
-2. **Automatic trackRow Assignment Sites Found & Fixed**:
-   - **Site 1 (`frontend/src/utils/timelineUtils.js` - `autoAlignVoiceSegments`)**:
-     - Removed all drops to VOICE 2 (both `cutRatio > 40%` and subtitle overlap). Non-userShifted segments are ALWAYS assigned `targetRow = 0`.
-     - When previous Lane 0 clip overruns `baseStart`, clamps `prevLane0.audioEndSec = baseStart` (with `audioTrimmed = true`).
-     - When clamp cuts > 40% of audio, marks segment with `audioOverrun: true` and `overrunRatio`.
-     - Preserved `userShifted` segments (`trackRow`, `trackId`, `id`, `segmentId`, and start/end coordinates untouched).
-   - **Site 2 (`frontend/src/utils/timelineUtils.js` - `resetSegmentsToSourceTiming`)**:
-     - Removed automatic collision drop to row 1. Non-userShifted segments always stay on `trackRow = 0`.
-   - **Site 3 (`frontend/src/components/timeline/TimelineEditor.jsx` - `segmentRows`)**:
-     - Removed `resolveIsFemale` and `gapOnRow0 < 0.15` automatic lane routing. All non-userShifted segments return `0`.
-   - **Site 4 (`frontend/src/components/timeline/TimelineTracksCanvas.jsx` - `internalSegmentRows` & `renderVoiceSegment`)**:
-     - Removed `isFemale` and `gapOnRow0 < 0.15` routing.
-     - Added `.has-audio-overrun` warning border/glow and `⚠️` badge on clips with `seg.audioOverrun === true`.
-   - **Site 5 (`frontend/src/components/timeline/TimelineEditor.css`)**:
-     - Added red warning styles for `.voice-segment-block.has-audio-overrun` (`border-color: rgba(239, 68, 68, 0.85)` and `#f87171` text).
-   - **Site 6 (`backend/routes/audioRoutes.js` - `/sync-audio`)**:
-     - Automatically persists aligned segments (`trackRow: 0`, `audioEndSec`, `audioTrimmed`, `audioOverrun`) into `series.json` under `withSeriesMetadataLock`.
+2. **Where Selection Kind State Lives & How It Flows**:
+   - **Root State (`frontend/src/hooks/useWorkspaceMedia.js`)**:
+     - Added `const [selectedClipKind, setSelectedClipKind] = useState(null)` (`'video' | 'voice' | 'subtitle' | null`).
+     - Exported and threaded through `App.jsx` to `TimelineEditor`, `TimelineTracksCanvas`, `VoiceSettings`, `ClipInspectorPanel`, and `useShortcuts`.
+   - **Click Handlers**:
+     - `TimelineTracksCanvas.jsx`: Clicking a video cut sets `onSelectClipKind('video')`; clicking a voice block sets `onSelectClipKind('voice')`; clicking a subtitle block sets `onSelectClipKind('subtitle')`.
+     - `TimelineEditor.jsx`: `handleAudioMouseDown` sets `'voice'`, `handleVideoMouseDown` sets `'video'`, `handleSubMouseDown` sets `'subtitle'`.
+     - Empty timeline background click in `handleBackgroundMouseDown` clears selection (`onSelectClipKind(null)`, `onSelectClip(null)`, `onSelectSegment(null)`).
 
-3. **Verification Results**:
+3. **Highlight Rules & Faint-Link Outline Choice**:
+   - **Primary Selection**: Only clips of the clicked kind matching the active ID get `isSelected = true` (solid 2px `#38BDF8` border + visible trim handles).
+   - **Faint Linked Counterpart (`.is-linked-clip`)**:
+     - Choice made: subtle dashed border `1px dashed rgba(56, 189, 248, 0.45)` with `outline-offset: -1px` and no trim handles.
+     - When VIDEO clip is selected, matching VOICE clip receives `.is-linked-clip`.
+     - When VOICE clip is selected, matching VIDEO clip receives `.is-linked-clip`.
+     - Completely decoupled `isAssociatedWithSeg` from producing full `selected` style on its own.
+
+4. **Inspector Focus Behavior**:
+   - In `ClipInspectorPanel.jsx`: When `selectedClipKind === 'video'` and `targetVideoClip` exists, it focuses the video cut inspector section (Film badge, duration, timing, Mute Original Video Audio, Split at Playhead, Delete Clip).
+   - When `selectedClipKind === 'voice'`, it renders dialogue & voice controls as usual.
+   - **Playback Auto-Follow**: In `TimelineEditor.jsx`, when the playhead crosses into a new segment during playback, it updates the segment context and syncs the active video clip if `selectedClipKind === 'video'`, without fighting or yanking manual selection mid-play.
+
+5. **Operation Safety & Preserved Semantics**:
+   - Delete & Split operations check `selectedClipKind`:
+     - Delete on VIDEO clip (`selectedClipKind === 'video'`) calls `onDeleteClip(activeClipId)`.
+     - Delete on VOICE clip (`selectedClipKind === 'voice'`) calls `onDeleteSegment(selectedSegmentId)`.
+     - Linked video-voice ripple deletion semantics (`d800e42`) and Auto-Align single-lane packing (`fix/voice-single-lane`) remain 100% intact.
+
+6. **Verification Results**:
    - **Unit Tests**:
-     - `backend/tests/auto_align_voice.test.js`: 6 passed / 0 failed (including requirements a, b, c).
-     - `backend/tests/timeline_unlimited_voice_lanes.test.js`: 5 passed / 0 failed.
-     - `backend/tests/timeline_ui_workflow_fix.test.js`: 4 passed / 0 failed.
-   - **Frontend Build**: `npm run build --prefix frontend` built in 620ms (0 errors).
-   - **Real-App Episode Verification (`Pseudo_Spiritual_Root` Episode 3)**:
-     - Total segments: 266.
-     - Stored `trackRow` distribution in `series.json`: `{ '0': 266 }` (100% of non-userShifted segments sit on Lane 0).
-     - `#8 -> #9` seam check at ~00:12: `#8` ends at `12.67s` (`audioTrimmed: true`, `audioOverrun: true`), `#9` starts at `12.67s`. Perfect seam, 0 gap, 0 double-voice.
-     - Total Lane 0 overlaps across all 266 segments: `0`.
+     - `backend/tests/timeline_clip_selection_kind.test.js`: 5/5 passed.
+     - `backend/tests/timeline_*.test.js` + `auto_align_voice.test.js` + `playback_60fps_optimization.test.js`: 40/40 passed (0 failures).
+   - **Frontend Build**: `npm run build --prefix frontend` built cleanly in 735ms (0 errors).
+   - **Real-App Episode Verification (`Pseudo_Spiritual_Root` Episode 2 & Episode 3)**:
+     - (a) Clicking VIDEO clip #7: only VIDEO clip #7 shows solid cyan border and trim handles; VOICE clip #7 shows faint dashed `.is-linked-clip` outline.
+     - (b) Clicking VOICE clip #7: only VOICE clip #7 shows solid cyan border and trim handles; VIDEO clip #7 shows faint dashed `.is-linked-clip` outline.
+     - (c) Split & Delete from each selection kind delete the targeted item while keeping video-voice ripple alignment in sync.
+     - (d) Playback auto-follow tracks active segment without fighting manual kind selection.
 
-4. **Git Status**:
-   - Committed on `fix/voice-single-lane` (commit `618bce6`).
-   - Pushed to `origin/fix/voice-single-lane`. Not merged to `main`.
+7. **Git Status**:
+   - Branch: `fix/timeline-clip-selection` (based on `fix/voice-single-lane`).
+   - Committed (commit `7efa726`) and pushed to `origin/fix/timeline-clip-selection`.
+   - Main branch untouched.
 
 ## Active Environment
 - Backend API: `http://localhost:5000` (live daemon)
 - Frontend UI: `http://localhost:5173` (Vite dev server)
-- Branch: `fix/voice-single-lane`
+- Branch: `fix/timeline-clip-selection`
+
+## Next Steps
+- Verify in browser at `http://localhost:5173`.
+- Create PR on GitHub: https://github.com/Ny-Panha/khmer-ai-dubbing-studio/pull/new/fix/timeline-clip-selection
 
 ## Next Steps
 - Review `fix/voice-single-lane` on GitHub or test further user scenarios on the frontend UI.
