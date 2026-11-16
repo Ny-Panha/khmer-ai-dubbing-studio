@@ -54,7 +54,7 @@ test('autoAlignVoiceSegments: perfectly aligns voice clips to subtitle onsets wi
   }
 });
 
-test('autoAlignVoiceSegments: prevents simultaneous multi-track voice overlap and eliminates duplicates', () => {
+test('autoAlignVoiceSegments: prevents simultaneous voice overlap on Lane 0 and eliminates duplicates', () => {
   // Scenario matching Nha's screenshot at 02:14:
   // Segment #20: 3.5s long narration from 133.59 to 137.09
   // Segment #21: "ម្នាក់ទៀតហើយ" at 133.75s
@@ -97,14 +97,13 @@ test('autoAlignVoiceSegments: prevents simultaneous multi-track voice overlap an
   // 1. Duplicate #22 must be merged into #21 (only 2 distinct segments remain)
   assert.equal(aligned.length, 2, 'Duplicate "ម្នាក់ទៀតហើយ" within 2.5s must be merged');
 
-  // 2. Segment 0 (id 1) plays from 133.59 to ~137.09
-  assert.equal(aligned[0].startSec, 133.59);
-  assert.equal(aligned[0].endSec, 137.09);
+  // 2. Both clips sit sequentially on Lane 0 (VOICE 1) CapCut-style
+  assert.equal(aligned[0].trackRow, 0, 'Segment 0 must be on Lane 0');
+  assert.equal(aligned[1].trackRow, 0, 'Segment 1 must stay on Lane 0 (never drop to Lane 1)');
 
-  // 3. Segment 1 (id 2) drops down to Track 1 (VOICE 2) to prevent forward time-drift
-  // and stays anchored to its true video startSec (133.75):
-  assert.equal(aligned[1].trackRow, 1, 'Overlapping dialogue must drop down to Track 1 (VOICE 2)');
-  assert.equal(aligned[1].audioStartSec, 133.75, 'Dialogue onset must stay anchored to video mouth movement (0% drift)');
+  // 3. Segment 0 is clamped at Segment 1 start
+  assert.ok(aligned[0].audioEndSec <= aligned[1].audioStartSec + 0.01, 'Segment 0 must clamp before Segment 1 starts');
+  assert.equal(aligned[0].audioTrimmed, true, 'Segment 0 must be marked audioTrimmed');
 });
 
 test('autoAlignVoiceSegments: resolves over-long audio on Lane 0 by clamping previous audioEndSec without shifting N', () => {
@@ -172,10 +171,128 @@ test('autoAlignVoiceSegments: resolves over-long audio on Lane 0 by clamping pre
   assert.equal(aligned[2].audioStartSec, 43.60);
   assert.equal(aligned[2].audioTrimmed, false, '#19 is not trimmed');
 
-  // Verify Reset Timing restores source timing and drops #18 to VOICE 2
+  // Verify Reset Timing restores source timing on Lane 0
   const resetSegs = resetSegmentsToSourceTiming(aligned, 180.0);
   assert.equal(resetSegs[0].audioTrimmed, false, '#17 audioTrimmed must be reset');
-  assert.equal(resetSegs[1].trackRow, 1, 'Reset timing restores #18 to VOICE 2 as in source');
+  assert.equal(resetSegs[1].trackRow, 0, 'Reset timing keeps #18 on VOICE 1 (Lane 0)');
+});
+
+// User Requirements (a), (b), (c)
+test('Requirement (a): chain of segments with >40% overruns all land on trackRow 0 in order with clamped audioEndSec and audioOverrun: true', () => {
+  // Chain of 4 segments where each segment's audio overruns into the next by > 40%:
+  // Seg 1: start 0.0, audioDur 3.0s (ends 3.0). Next seg starts at 1.0s. Cut = 2.0s / 3.0s = 66.7% (> 40%)
+  // Seg 2: start 1.0, audioDur 3.0s (ends 4.0). Next seg starts at 2.0s. Cut = 2.0s / 3.0s = 66.7% (> 40%)
+  // Seg 3: start 2.0, audioDur 3.0s (ends 5.0). Next seg starts at 3.0s. Cut = 2.0s / 3.0s = 66.7% (> 40%)
+  // Seg 4: start 3.0, audioDur 1.5s (ends 4.5). No next segment.
+  const chain = [
+    { id: 1, startSec: 0.0, endSec: 1.0, audioDurationSec: 3.0, audioFile: 'seg_1.mp3' },
+    { id: 2, startSec: 1.0, endSec: 2.0, audioDurationSec: 3.0, audioFile: 'seg_2.mp3' },
+    { id: 3, startSec: 2.0, endSec: 3.0, audioDurationSec: 3.0, audioFile: 'seg_3.mp3' },
+    { id: 4, startSec: 3.0, endSec: 4.5, audioDurationSec: 1.5, audioFile: 'seg_4.mp3' },
+  ];
+
+  const aligned = autoAlignVoiceSegments(chain, 60.0);
+
+  assert.equal(aligned.length, 4);
+
+  // All 4 segments land on trackRow 0 in order
+  for (let i = 0; i < aligned.length; i++) {
+    assert.equal(aligned[i].trackRow, 0, `Segment #${aligned[i].id} must land on trackRow 0`);
+  }
+
+  // Seg 1: clamped at 1.0, audioTrimmed: true, audioOverrun: true
+  assert.equal(aligned[0].audioStartSec, 0.0);
+  assert.equal(aligned[0].audioEndSec, 1.0);
+  assert.equal(aligned[0].audioTrimmed, true);
+  assert.equal(aligned[0].audioOverrun, true, 'Seg 1 cut > 40% must have audioOverrun=true');
+  assert.ok(aligned[0].overrunRatio > 0.40, 'overrunRatio must be > 0.40');
+
+  // Seg 2: clamped at 2.0, audioTrimmed: true, audioOverrun: true
+  assert.equal(aligned[1].audioStartSec, 1.0);
+  assert.equal(aligned[1].audioEndSec, 2.0);
+  assert.equal(aligned[1].audioTrimmed, true);
+  assert.equal(aligned[1].audioOverrun, true, 'Seg 2 cut > 40% must have audioOverrun=true');
+
+  // Seg 3: clamped at 3.0, audioTrimmed: true, audioOverrun: true
+  assert.equal(aligned[2].audioStartSec, 2.0);
+  assert.equal(aligned[2].audioEndSec, 3.0);
+  assert.equal(aligned[2].audioTrimmed, true);
+  assert.equal(aligned[2].audioOverrun, true, 'Seg 3 cut > 40% must have audioOverrun=true');
+
+  // Seg 4: not clamped
+  assert.equal(aligned[3].audioStartSec, 3.0);
+  assert.equal(aligned[3].audioEndSec, 4.5);
+  assert.equal(aligned[3].audioTrimmed, false);
+  assert.equal(aligned[3].audioOverrun, false);
+});
+
+test('Requirement (b): a userShifted segment on row 2 is untouched by Auto-Align', () => {
+  const segments = [
+    { id: 1, startSec: 0.0, endSec: 2.0, audioDurationSec: 2.0, trackRow: 0, userShifted: false },
+    {
+      id: 2,
+      startSec: 5.5,
+      endSec: 9.0,
+      audioStartSec: 5.5,
+      audioEndSec: 9.0,
+      audioDurationSec: 3.5,
+      trackRow: 2, // User explicitly dragged to VOICE 3 (row 2)
+      userShifted: true,
+    },
+    { id: 3, startSec: 3.0, endSec: 6.0, audioDurationSec: 3.0, trackRow: 0, userShifted: false },
+  ];
+
+  const aligned = autoAlignVoiceSegments(segments, 60.0);
+
+  // Find userShifted segment
+  const userSeg = aligned.find(s => s.userShifted);
+  assert.ok(userSeg, 'userShifted segment must exist in aligned output');
+  assert.equal(userSeg.id, 2);
+  assert.equal(userSeg.trackRow, 2, 'userShifted segment must stay on trackRow 2');
+  assert.equal(userSeg.trackId, 'voice-3', 'trackId must stay voice-3');
+  assert.equal(userSeg.audioStartSec, 5.5, 'userShifted audioStartSec untouched');
+  assert.equal(userSeg.audioEndSec, 9.0, 'userShifted audioEndSec untouched');
+  assert.equal(userSeg.userShifted, true, 'userShifted must remain true');
+
+  // Non-userShifted segments 1 & 3 must be on trackRow 0
+  const nonShifted = aligned.filter(s => !s.userShifted);
+  assert.equal(nonShifted[0].trackRow, 0);
+  assert.equal(nonShifted[1].trackRow, 0);
+});
+
+test('Requirement (c): no two aligned Lane-0 clips overlap in [start, audioEndSec)', () => {
+  // Test a realistic episode pattern with 15 segments of irregular durations & heavy overruns
+  const rawSegments = [
+    { id: 1, startSec: 0.0, endSec: 1.5, audioDurationSec: 2.8 },
+    { id: 2, startSec: 1.2, endSec: 2.5, audioDurationSec: 3.2 },
+    { id: 3, startSec: 2.0, endSec: 3.8, audioDurationSec: 2.1 },
+    { id: 4, startSec: 4.5, endSec: 6.0, audioDurationSec: 1.8 },
+    { id: 5, startSec: 5.8, endSec: 7.2, audioDurationSec: 3.5 },
+    { id: 6, startSec: 7.0, endSec: 8.5, audioDurationSec: 2.4 },
+    { id: 7, startSec: 9.0, endSec: 10.0, audioDurationSec: 4.0 },
+    { id: 8, startSec: 10.5, endSec: 12.0, audioDurationSec: 3.0 },
+    { id: 9, startSec: 11.8, endSec: 13.0, audioDurationSec: 2.5 },
+    { id: 10, startSec: 13.5, endSec: 15.0, audioDurationSec: 3.1 },
+    { id: 11, startSec: 14.8, endSec: 16.0, audioDurationSec: 2.0 },
+    { id: 12, startSec: 16.5, endSec: 18.0, audioDurationSec: 4.2 },
+    { id: 13, startSec: 17.5, endSec: 19.0, audioDurationSec: 2.8 },
+    { id: 14, startSec: 20.0, endSec: 21.5, audioDurationSec: 1.9 },
+    { id: 15, startSec: 22.0, endSec: 23.5, audioDurationSec: 2.2 },
+  ];
+
+  const aligned = autoAlignVoiceSegments(rawSegments, 120.0);
+
+  const lane0Clips = aligned.filter(s => s.trackRow === 0);
+  assert.equal(lane0Clips.length, 15, 'All 15 non-userShifted clips must land on Lane 0');
+
+  for (let i = 0; i < lane0Clips.length - 1; i++) {
+    const cur = lane0Clips[i];
+    const nxt = lane0Clips[i + 1];
+    assert.ok(
+      cur.audioEndSec <= nxt.audioStartSec + 0.001,
+      `Lane 0 overlap violation between clip #${cur.id} [${cur.audioStartSec}, ${cur.audioEndSec}) and clip #${nxt.id} [${nxt.audioStartSec}, ${nxt.audioEndSec})`
+    );
+  }
 });
 
 

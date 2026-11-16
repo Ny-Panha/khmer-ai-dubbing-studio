@@ -129,21 +129,7 @@ function TimelineEditor({
       return { segmentRows: [], calculatedVoiceRows: 1, highestUsedVoiceRow: 0, calculatedSubRows: 1 };
     }
 
-    const resolveIsFemale = (seg) => {
-      const speakerName = String(seg?.speaker || seg?.speakerName || '').trim();
-      const explicitGender = String(seg?.speakerGender || seg?.gender || seg?.voiceGender || '').toUpperCase().trim();
-      const isExplicitFemale = explicitGender === 'FEMALE' || explicitGender === 'GIRL' || explicitGender === 'WOMAN' || speakerName.includes('ស្រី') || speakerName.toLowerCase().includes('female');
-      const isExplicitMale = (explicitGender === 'MALE' || explicitGender === 'BOY' || explicitGender === 'MAN' || speakerName.includes('ប្រុស') || speakerName.toLowerCase().includes('male')) && !isExplicitFemale;
-      const activeVoiceId = String(
-        seg?.voiceId ||
-        (speakerRegistry && (speakerRegistry[seg?.speakerId]?.voiceId || speakerRegistry[speakerName]?.voiceId)) ||
-        (isExplicitFemale ? 'km-KH-SreymomNeural' : (isExplicitMale ? 'km-KH-PisethNeural' : (voiceSettings?.voiceId || 'km-KH-PisethNeural')))
-      );
-      const isSreymom = activeVoiceId.includes('Sreymom') || activeVoiceId === 'km';
-      return isExplicitFemale || (isSreymom && !isExplicitMale);
-    };
-
-    const rowEndTimes = [0, 0];
+    const rowEndTimes = {};
 
     const rows = scriptSegments.map((seg, idx) => {
       const rawStart = (typeof seg.audioStartSec === 'number' && !isNaN(seg.audioStartSec))
@@ -163,53 +149,16 @@ function TimelineEditor({
         ? seg.audioEndSec 
         : (rawStart + audioDur);
 
-      // If user explicitly shifted and set trackRow, respect it completely (any integer >= 0)
-      if (typeof seg.trackRow === 'number' && (seg.userShifted || seg.trackRow >= 2)) {
+      // CapCut single-lane style: all auto-placed voice clips live sequentially on VOICE 1 (Lane 0).
+      // Only userShifted clips are placed on their explicitly chosen trackRow.
+      if (typeof seg.trackRow === 'number' && seg.userShifted) {
         const userR = Math.max(0, seg.trackRow);
         rowEndTimes[userR] = Math.max(rowEndTimes[userR] || 0, rawEnd);
         return userR;
       }
 
-      // If segment already has trackRow === 1 (from Auto-Align or Add Segment), honor it if non-colliding
-      if (seg.trackRow === 1 && rawStart >= (rowEndTimes[1] || 0) - 0.05) {
-        rowEndTimes[1] = rawEnd;
-        return 1;
-      }
-
-      // Automatic speaker-lane routing: Male (ប្រុស) -> VOICE 1 (0), Female (ស្រី) -> VOICE 2 (1)
-      const isFemale = resolveIsFemale(seg);
-      if (isFemale) {
-        if (rawStart >= (rowEndTimes[1] || 0) - 0.05) {
-          rowEndTimes[1] = rawEnd;
-          return 1;
-        }
-        if (rawStart >= (rowEndTimes[0] || 0) - 0.05) {
-          rowEndTimes[0] = rawEnd;
-          return 0;
-        }
-        const pickRow = (rowEndTimes[1] || 0) <= (rowEndTimes[0] || 0) ? 1 : 0;
-        rowEndTimes[pickRow] = Math.max(rowEndTimes[pickRow] || 0, rawEnd);
-        return pickRow;
-      }
-
-      // Male / Default: Place on Row 0 (VOICE 1), or stagger overlapping / back-to-back clips (gap < 0.15s) onto VOICE 2 (Row 1)
-      const gapOnRow0 = rawStart - (rowEndTimes[0] || 0);
-      if (idx > 0 && gapOnRow0 < 0.15 && rawStart >= (rowEndTimes[1] || 0) - 0.05) {
-        rowEndTimes[1] = rawEnd;
-        return 1;
-      }
-      if (rawStart >= (rowEndTimes[0] || 0) - 0.05) {
-        rowEndTimes[0] = rawEnd;
-        return 0;
-      }
-      if (rawStart >= (rowEndTimes[1] || 0) - 0.05) {
-        rowEndTimes[1] = rawEnd;
-        return 1;
-      }
-      // If both collide, pick the row that ends earlier
-      const pickRow = (rowEndTimes[0] || 0) <= (rowEndTimes[1] || 0) ? 0 : 1;
-      rowEndTimes[pickRow] = Math.max(rowEndTimes[pickRow] || 0, rawEnd);
-      return pickRow;
+      rowEndTimes[0] = Math.max(rowEndTimes[0] || 0, rawEnd);
+      return 0;
     });
 
     const maxSegmentTrackRow = (scriptSegments || []).reduce((max, s) => {

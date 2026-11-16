@@ -183,50 +183,18 @@ function TimelineTracksCanvas({
         ? seg.audioEndSec
         : (rawStart + realAudioDuration);
 
-      if (typeof seg.trackRow === 'number' && (seg.userShifted || seg.trackRow >= 2)) {
+      // CapCut single-lane style: all auto-placed voice clips live sequentially on VOICE 1 (Lane 0).
+      // Only userShifted clips keep their explicitly chosen trackRow.
+      if (typeof seg.trackRow === 'number' && seg.userShifted) {
         const r = Math.max(0, seg.trackRow);
         endTimes[r] = Math.max(endTimes[r] || 0, rawEnd);
         return r;
       }
 
-      if (seg.trackRow === 1 && rawStart >= (endTimes[1] || 0) - 0.05) {
-        endTimes[1] = rawEnd;
-        return 1;
-      }
-
-      const isFemale = resolveIsFemale(seg);
-      if (isFemale) {
-        if (rawStart >= (endTimes[1] || 0) - 0.05) {
-          endTimes[1] = rawEnd;
-          return 1;
-        }
-        if (rawStart >= (endTimes[0] || 0) - 0.05) {
-          endTimes[0] = rawEnd;
-          return 0;
-        }
-        const r = (endTimes[1] || 0) <= (endTimes[0] || 0) ? 1 : 0;
-        endTimes[r] = Math.max(endTimes[r] || 0, rawEnd);
-        return r;
-      }
-
-      const gapOnRow0 = rawStart - (endTimes[0] || 0);
-      if (idx > 0 && gapOnRow0 < 0.15 && rawStart >= (endTimes[1] || 0) - 0.05) {
-        endTimes[1] = rawEnd;
-        return 1;
-      }
-      if (rawStart >= (endTimes[0] || 0) - 0.05) {
-        endTimes[0] = rawEnd;
-        return 0;
-      }
-      if (rawStart >= (endTimes[1] || 0) - 0.05) {
-        endTimes[1] = rawEnd;
-        return 1;
-      }
-      const r = (endTimes[0] || 0) <= (endTimes[1] || 0) ? 0 : 1;
-      endTimes[r] = Math.max(endTimes[r] || 0, rawEnd);
-      return r;
+      endTimes[0] = Math.max(endTimes[0] || 0, rawEnd);
+      return 0;
     });
-  }, [scriptSegments, speakerRegistry, voiceSettings]);
+  }, [scriptSegments]);
 
   const activeSegmentRows = externalSegmentRows || internalSegmentRows;
 
@@ -331,8 +299,10 @@ function TimelineTracksCanvas({
     // STEP 3: OVER truthfulness. overSec = realAudioDuration - (slotEnd - slotStart)
     const slotDur = Math.max(0.1, slotEnd - slotStart);
     const overSec = hasAudio ? parseFloat((realAudioDuration - slotDur).toFixed(2)) : 0;
-    const isOver = hasAudio && (overSec >= 0.15 || Boolean(seg.audioTrimmed && overSec > 0.05));
-    const overMarker = isOver ? ` +${overSec.toFixed(1)}s` : '';
+    const isOverrun = Boolean(seg.audioOverrun);
+    const isOver = isOverrun || (hasAudio && (overSec >= 0.15 || Boolean(seg.audioTrimmed && overSec > 0.05)));
+    const overrunMarker = isOverrun ? ' ⚠️' : '';
+    const overMarker = isOver ? (isOverrun ? overrunMarker : ` +${overSec.toFixed(1)}s`) : '';
     const trimMarker = (seg.audioTrimmed || seg.userTrimmed) ? ' ✂' : '';
     const pendingMarker = !hasAudio ? ' • គ្មានសំឡេង' : '';
     const khmerPreview = (seg.khmer || seg.khmerText || seg.khmerTranslatedText || seg.text || '').trim();
@@ -346,7 +316,7 @@ function TimelineTracksCanvas({
     const clipWidthPx = audioWidth;
     const isCompactClip = clipWidthPx < 48;
     const isWideClip = clipWidthPx >= 95;
-    const compactIdLabel = `#${idx + 1}`;
+    const compactIdLabel = `#${idx + 1}${isOverrun ? '⚠️' : ''}`;
     const mediumVoiceLabel = `#${idx + 1} ${speakerGenderLabel}${overMarker}${trimMarker}`;
     const fullVoiceLabel = `#${idx + 1} ${speakerGenderLabel}${overMarker}${trimMarker}${pendingMarker}`;
     const voiceLabel = isCompactClip ? compactIdLabel : (isWideClip ? fullVoiceLabel : mediumVoiceLabel);
@@ -380,7 +350,7 @@ function TimelineTracksCanvas({
             }
             onSeek(startSec);
           }}
-          className={`voice-segment-block ${isFemale ? 'voice-female' : 'voice-male'} ${!hasAudio ? 'is-pending-audio' : ''} ${isSelected ? 'selected' : ''} ${isSliver ? 'clip-sliver' : ''} ${isCompactClip ? 'is-compact-clip' : ''}`}
+          className={`voice-segment-block ${isFemale ? 'voice-female' : 'voice-male'} ${!hasAudio ? 'is-pending-audio' : ''} ${isSelected ? 'selected' : ''} ${isSliver ? 'clip-sliver' : ''} ${isCompactClip ? 'is-compact-clip' : ''} ${isOverrun ? 'has-audio-overrun' : ''}`}
           style={{
             cursor: isDragging ? 'grabbing' : 'grab',
             left: audioLeft,
@@ -390,7 +360,7 @@ function TimelineTracksCanvas({
             transition: isDragging ? 'none' : undefined,
             pointerEvents: isDragging && dragState?.mode === 'move' ? 'none' : 'auto',
           }}
-          title={`#${idx + 1} [${speakerTooltipLabel}] (${startSec.toFixed(1)}s - ${endSec.toFixed(1)}s)\n"${khmerPreview || '(មិនទាន់មានអត្ថបទ / រង់ចាំសំឡេង)'}"`}
+          title={`#${idx + 1} [${speakerTooltipLabel}] (${startSec.toFixed(1)}s - ${endSec.toFixed(1)}s)${isOverrun ? ` ⚠️ Audio Overrun (${Math.round((seg.overrunRatio || 0.4) * 100)}% cut)` : ''}\n"${khmerPreview || '(មិនទាន់មានអត្ថបទ / រង់ចាំសំឡេង)'}"`}
         >
           {/* Left Trim Handle - visible only on selected clip */}
           {isSelected && !isSliver && (

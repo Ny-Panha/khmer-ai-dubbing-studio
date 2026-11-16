@@ -1116,6 +1116,55 @@ router.post("/sync-audio", async (req, res) => {
       activeSyncJobs.delete(fullAudioPath);
     }
 
+    // Auto-persist aligned segments (trackRow, audioEndSec, audioTrimmed, audioOverrun) to series.json
+    if (cleanSeries && cleanEpisode) {
+      try {
+        const metaPath = path.join(uploadsDir, "projects", cleanSeries, "series.json");
+        await withSeriesMetadataLock(cleanSeries, () => {
+          if (!fs.existsSync(metaPath)) return;
+          updateSeriesMetadata(cleanSeries, (seriesMeta) => {
+            const targetEp = (seriesMeta?.episodes || []).find(
+              (e) => String(e.id) === String(cleanEpisode) || String(e.episodeNumber) === String(cleanEpisode)
+            );
+            if (!targetEp || !targetEp.scriptData || !Array.isArray(targetEp.scriptData.segments)) return false;
+
+            const updatedMap = new Map();
+            for (const seg of segments) {
+              if (seg) {
+                const key = String(seg.id ?? seg.segmentId);
+                updatedMap.set(key, seg);
+              }
+            }
+
+            targetEp.scriptData.segments = targetEp.scriptData.segments.map((s, idx) => {
+              const updated = updatedMap.get(String(s.id ?? s.segmentId ?? (idx + 1)));
+              if (updated) {
+                return {
+                  ...s,
+                  trackRow: typeof updated.trackRow === "number" ? updated.trackRow : 0,
+                  trackId: updated.trackId || `voice-${(updated.trackRow || 0) + 1}`,
+                  audioStartSec: typeof updated.audioStartSec === "number" ? updated.audioStartSec : s.audioStartSec,
+                  audioEndSec: typeof updated.audioEndSec === "number" ? updated.audioEndSec : s.audioEndSec,
+                  audioDurationSec: typeof updated.audioDurationSec === "number" ? updated.audioDurationSec : s.audioDurationSec,
+                  audioTrimmed: Boolean(updated.audioTrimmed),
+                  audioOverrun: Boolean(updated.audioOverrun),
+                  overrunRatio: updated.overrunRatio,
+                  userShifted: Boolean(updated.userShifted),
+                };
+              }
+              return s;
+            });
+
+            targetEp.scriptData.updatedAt = Date.now();
+            console.log(`[Sync Audio] ✅ Auto-persisted ${segments.length} aligned segments to series.json for ${cleanSeries} [${cleanEpisode}]`);
+            return true;
+          });
+        });
+      } catch (saveErr) {
+        console.warn("[Sync Audio] Could not auto-persist aligned segments to series.json:", saveErr.message);
+      }
+    }
+
     res.json({
       success: true,
       projectName: cleanSeries,

@@ -114,9 +114,9 @@ test('Requirement 3: autoAlignVoiceSegments keeps userShifted trackRow sticky', 
   assert.equal(aligned6.trackRow, 4, 'Segment originally #6 must remain on trackRow 4 (VOICE 5)');
   assert.equal(aligned6.trackId, 'voice-5', 'Segment originally #6 trackId must be voice-5');
 
-  // Non-userShifted segments (1 & 2) keep automatic packing within 0 and 1
+  // Non-userShifted segments (1 & 2) live sequentially on Lane 0 (VOICE 1) CapCut-style
   assert.equal(aligned[0].trackRow, 0);
-  assert.equal(aligned[1].trackRow, 1);
+  assert.equal(aligned[1].trackRow, 0);
 });
 
 test('Requirement 4: Cross-lane drop stands without overlap push-back', () => {

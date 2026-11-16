@@ -70,11 +70,9 @@ test('Step 3: Smart VOICE 1 / VOICE 2 routing, semantic Male/Female colors, and 
   const canvasSource = fs.readFileSync(path.join(frontendDir, 'TimelineTracksCanvas.jsx'), 'utf8');
   const cssSource = fs.readFileSync(path.join(frontendDir, 'TimelineEditor.css'), 'utf8');
 
-  // 1. Smart routing: Female -> VOICE 2 (row 1) or tight gap < 0.15s -> VOICE 2 (row 1)
-  assert.match(editorSource, /const gapOnRow0 = rawStart - \(rowEndTimes\[0\] \|\| 0\);/);
-  assert.match(editorSource, /if \(idx > 0 && gapOnRow0 < 0\.15/);
-  assert.match(canvasSource, /const gapOnRow0 = rawStart - \(endTimes\[0\] \|\| 0\);/);
-  assert.match(canvasSource, /if \(idx > 0 && gapOnRow0 < 0\.15/);
+  // 1. CapCut single-lane style: all auto-placed voice clips live sequentially on VOICE 1 (Lane 0)
+  assert.match(editorSource, /CapCut single-lane style: all auto-placed voice clips live sequentially on VOICE 1/);
+  assert.match(canvasSource, /CapCut single-lane style: all auto-placed voice clips live sequentially on VOICE 1/);
 
   // 2. Semantic Voice Clip Colors (Male oklch(0.28 0.08 250) + #38bdf8 top border; Female oklch(0.28 0.09 350) + #f472b6 top border)
   assert.match(cssSource, /\.voice-segment-block\.voice-male[\s\S]*?background:\s*oklch\(0\.28 0\.08 250\);[\s\S]*?border-top:\s*2px solid #38bdf8;/);
@@ -84,7 +82,8 @@ test('Step 3: Smart VOICE 1 / VOICE 2 routing, semantic Male/Female colors, and 
   assert.match(canvasSource, /const isCompactClip = clipWidthPx < 48;/);
   assert.match(canvasSource, /const isWideClip = clipWidthPx >= 95;/);
   assert.match(canvasSource, /voice-khmer-dialogue-preview/);
-  assert.match(canvasSource, /title=\{`#\$\{idx \+ 1\} \[\$\{speakerTooltipLabel\}\] \(\$\{startSec\.toFixed\(1\)\}s - \$\{endSec\.toFixed\(1\)\}s\)\\n"\$\{khmerPreview/);
+  assert.match(canvasSource, /title=\{`#\$\{idx \+ 1\} \[\$\{speakerTooltipLabel\}\] \(\$\{startSec\.toFixed\(1\)\}s - \$\{endSec\.toFixed\(1\)\}s\)/);
+  assert.match(canvasSource, /"\$\{khmerPreview/);
   assert.match(cssSource, /\.voice-khmer-dialogue-preview\s*\{[\s\S]*?font-family:\s*'Kantumruy Pro'/);
 });
 
