@@ -5,7 +5,6 @@ import {
   deleteSegmentByIdOrIndex,
   isSegmentMatch,
   findSegmentIndex,
-  findAssociatedSegmentIndices,
   autoSplitVideoBySegments,
   bridgeClipGaps,
   autoAlignVoiceSegments,
@@ -850,7 +849,18 @@ export function useClipOperations({
         if (segmentIndex !== -1) break;
       }
       if (segmentIndex === -1) {
-        segmentIndex = findAssociatedSegmentIndices(targetClip, segments)[0] ?? -1;
+        const clipStart = Number.isFinite(targetClip.sourceStart) ? targetClip.sourceStart : targetClip.start;
+        const clipEnd = Number.isFinite(targetClip.sourceEnd) ? targetClip.sourceEnd : targetClip.end;
+        segmentIndex = segments.findIndex((segment) => {
+          if (!segment) return false;
+          const segmentStart = Number.isFinite(segment.sourceStartSec)
+            ? segment.sourceStartSec
+            : (Number.isFinite(segment.startSec) ? segment.startSec : parseTimeToSeconds(segment.start, 0));
+          const segmentEnd = Number.isFinite(segment.sourceEndSec)
+            ? segment.sourceEndSec
+            : (Number.isFinite(segment.endSec) ? segment.endSec : parseTimeToSeconds(segment.end, segmentStart + 2.5));
+          return Math.max(clipStart, segmentStart) < Math.min(clipEnd, segmentEnd);
+        });
       }
       if (segmentIndex !== -1) {
         const segment = segments[segmentIndex];

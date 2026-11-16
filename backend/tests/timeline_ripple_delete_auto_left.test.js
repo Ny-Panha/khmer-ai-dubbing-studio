@@ -295,6 +295,8 @@ describe('Remove-only timeline delete', () => {
     assert.ok(hookCode.includes('deleteSegmentByIdOrIndex(scriptData.segments, segmentKey, { ripple: false, preserveIds: true })'));
     assert.ok(hookCode.includes('gapOnDelete: true'));
     assert.ok(clipDeleteHandler.includes('totalDuration: duration'));
+    assert.ok(clipDeleteHandler.includes('Math.max(clipStart, segmentStart) < Math.min(clipEnd, segmentEnd)'));
+    assert.ok(clipDeleteHandler.indexOf('for (const key of clipKeys)') < clipDeleteHandler.indexOf('const clipStart ='));
     assert.ok(segmentDeleteHandler.includes('totalDuration: duration'));
     assert.ok(editorCode.includes("selectedClipKind === 'video' && canDeleteVideo"));
     assert.ok(!editorCode.includes("lastSelectedType === 'video' || selectedClipKind === 'video'"));
