@@ -138,11 +138,22 @@ export default function GeminiQuotaModal({
         dailyPercent: 0,
       }));
 
-  const readyKeys = summary?.readyKeys ?? liveView?.activeCount ?? displayKeys.length;
-  const totalKeys = summary?.totalKeys ?? liveView?.totalKeys ?? displayKeys.length;
-  const cooldownKeys = summary?.cooldownKeys ?? 0;
-  const dailyExhaustedKeys = summary?.dailyExhaustedKeys ?? 0;
-  const invalidKeys = summary?.invalidKeys ?? 0;
+  // Accurate per-key deduction for consistent header & monitor badges
+  const activeExhaustedKeysCount = displayKeys.filter(
+    (k) => k.isDailyExhausted || k.status === 'daily_exhausted' || (k.dailyLeft !== undefined && k.dailyLeft <= 0) || ((k.todayRequests || 0) >= perKeyDailyLimit)
+  ).length;
+  const activeInvalidKeysCount = displayKeys.filter(
+    (k) => (k.isInvalid || k.status === 'invalid' || k.status === 'error') && !k.isDailyExhausted && (k.dailyLeft ?? 1) > 0
+  ).length;
+  const activeCooldownKeysCount = displayKeys.filter(
+    (k) => k.status === 'rate_limited' && !k.isDailyExhausted && (k.dailyLeft ?? 1) > 0
+  ).length;
+
+  const totalKeys = displayKeys.length || (summary?.totalKeys ?? 6);
+  const dailyExhaustedKeys = Math.max(activeExhaustedKeysCount, summary?.dailyExhaustedKeys ?? 0);
+  const invalidKeys = Math.max(activeInvalidKeysCount, summary?.invalidKeys ?? 0);
+  const cooldownKeys = Math.max(activeCooldownKeysCount, summary?.cooldownKeys ?? 0);
+  const readyKeys = Math.max(0, totalKeys - dailyExhaustedKeys - invalidKeys - cooldownKeys);
 
   const rpmPerKey = settings.rpmPerKey || 15;
   const hdrRpmReady = readyKeys * rpmPerKey;
@@ -153,14 +164,22 @@ export default function GeminiQuotaModal({
   const hdrPillBg = noneReady ? 'rgba(248, 113, 113, 0.12)' : allReady ? 'rgba(52, 211, 153, 0.12)' : 'rgba(251, 191, 36, 0.12)';
   const hdrPillBorder = noneReady ? 'rgba(248, 113, 113, 0.35)' : allReady ? 'rgba(52, 211, 153, 0.3)' : 'rgba(251, 191, 36, 0.35)';
   const hdrPillShadow = noneReady ? '0 0 12px rgba(248, 113, 113, 0.2)' : allReady ? '0 0 12px rgba(52, 211, 153, 0.2)' : '0 0 12px rgba(251, 191, 36, 0.2)';
+
+  const hdrParts = [];
+  if (dailyExhaustedKeys > 0) hdrParts.push(`⚠️ ${dailyExhaustedKeys} អស់ Quota`);
+  if (invalidKeys > 0) hdrParts.push(`${invalidKeys} ខុស`);
+  if (cooldownKeys > 0) hdrParts.push(`${cooldownKeys} Cooldown`);
+
   const hdrPillLabel = totalKeys > 0
-    ? `${readyKeys}/${totalKeys} Keys Ready (${hdrRpmReady} RPM Pool)`
+    ? hdrParts.length > 0
+      ? `${readyKeys}/${totalKeys} Keys Ready (${hdrRpmReady} RPM) • ${hdrParts.join(', ')}`
+      : `${readyKeys}/${totalKeys} Keys Ready (${hdrRpmReady} RPM Pool)`
     : 'No Keys Configured';
 
   const rpmUsed = summary?.rpmUsed ?? 0;
-  const rpmTotal = summary?.rpmTotal ?? (totalKeys * rpmPerKey);
-  const rpmLeft = summary?.rpmLeft ?? Math.max(0, rpmTotal - rpmUsed);
-  const rpmPercent = summary?.rpmPercent ?? 0;
+  const rpmTotal = hdrRpmReady;
+  const rpmLeft = Math.max(0, rpmTotal - rpmUsed);
+  const rpmPercent = rpmTotal > 0 ? Math.min(100, Math.round((rpmUsed / rpmTotal) * 100)) : 0;
   const rpmResetsInSec = summary?.rpmResetsInSec ?? 0;
 
   const dailyUsed = summary?.dailyUsed ?? 0;
@@ -181,7 +200,7 @@ export default function GeminiQuotaModal({
   const isPinned = Boolean(preferredModel && preferredModel !== 'auto');
 
   let poolPillText = `${readyKeys}/${totalKeys} keys ready • ${hdrRpmReady} RPM`;
-  let poolPillColor = '#34D399';
+  let poolPillColor = allReady ? '#34D399' : '#FBBF24';
   if (isCheckingQuota) {
     poolPillText = '🔄 កំពុងផ្ទៀងផ្ទាត់ Quota ពិត...';
     poolPillColor = '#38BDF8';
@@ -195,10 +214,10 @@ export default function GeminiQuotaModal({
     }
   } else if (hasExhaustion || hasCooldown) {
     const parts = [];
+    if (dailyExhaustedKeys > 0) parts.push(`${dailyExhaustedKeys} អស់ Quota`);
     if (cooldownKeys > 0) parts.push(`${cooldownKeys} Cooldown`);
-    if (dailyExhaustedKeys > 0) parts.push(`${dailyExhaustedKeys} អស់ថ្ងៃនេះ`);
     if (invalidKeys > 0) parts.push(`${invalidKeys} ខុស`);
-    poolPillText = `${readyKeys}/${totalKeys} ready • ⚠️ ${parts.join(', ')}`;
+    poolPillText = `${readyKeys}/${totalKeys} ready • ${hdrRpmReady} RPM • ⚠️ ${parts.join(', ')}`;
     poolPillColor = '#FBBF24';
   }
 

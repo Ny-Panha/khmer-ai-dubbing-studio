@@ -2026,9 +2026,15 @@ export default function GeminiRouteModal({
             </h2>
             {(() => {
               const hdrView = applyElapsedCountdownToKeysHealth(keysHealth, quotaNowMs);
+              const hdrKeys = Array.isArray(hdrView?.keys) ? hdrView.keys : [];
               const hdrSummary = hdrView?.quotaSummary;
-              const hdrTotal = hdrSummary?.totalKeys ?? hdrView?.totalKeys ?? 4;
-              const hdrReady = hdrSummary?.readyKeys ?? hdrView?.activeCount ?? hdrTotal;
+              const perKeyLimit = hdrView?.settings?.dailyRpdPerKey || 500;
+              const exhaustedCount = hdrKeys.filter(
+                (k) => k.isDailyExhausted || k.status === 'daily_exhausted' || (k.dailyLeft !== undefined && k.dailyLeft <= 0) || ((k.todayRequests || 0) >= perKeyLimit)
+              ).length;
+              const hdrTotal = hdrSummary?.totalKeys ?? hdrView?.totalKeys ?? (hdrKeys.length || 6);
+              const rawReady = hdrSummary?.readyKeys ?? hdrView?.activeCount ?? hdrTotal;
+              const hdrReady = Math.max(0, Math.min(rawReady, hdrTotal - exhaustedCount));
               const hdrRpmPerKey = hdrView?.settings?.rpmPerKey || 15;
               const hdrRpmReady = hdrReady * hdrRpmPerKey;
               const allReady = hdrReady === hdrTotal && hdrTotal > 0;
@@ -2037,7 +2043,9 @@ export default function GeminiRouteModal({
               const pillBg = noneReady ? 'rgba(248, 113, 113, 0.10)' : allReady ? 'rgba(52, 211, 153, 0.10)' : 'rgba(251, 191, 36, 0.10)';
               const pillBorder = noneReady ? 'rgba(248, 113, 113, 0.30)' : allReady ? 'rgba(52, 211, 153, 0.28)' : 'rgba(251, 191, 36, 0.30)';
               const pillLabel = hdrTotal > 0
-                ? `${hdrReady}/${hdrTotal} Keys Ready (${hdrRpmReady} RPM Pool)`
+                ? allReady
+                  ? `${hdrReady}/${hdrTotal} Keys Ready (${hdrRpmReady} RPM Pool)`
+                  : `${hdrReady}/${hdrTotal} Keys Ready (${hdrRpmReady} RPM)${exhaustedCount > 0 ? ` • ⚠️ ${exhaustedCount} អស់ Quota` : ''}`
                 : 'No Keys Configured';
               return (
                 <button
