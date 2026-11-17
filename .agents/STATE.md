@@ -3,6 +3,61 @@
 ## Last Session
 - **Environment**: Antigravity IDE
 - **Branch**: `refactor/timeline-core-clean`
+- **Timestamp**: 2026-11-17T14:32:00+07:00
+
+## Summary: Phase 2 Step D — Rewire TRIM and MOVE to Pure TimelineOps
+- **Scope**: Re-wired all clip and segment TRIM and drag-MOVE paths to pure ops `timelineOps.trimClip` and `timelineOps.moveClip` in `TimelineEditor.jsx`. Replaced inline mutations and array splices. Preserved `pushUndoSnapshot` (one snapshot per completed drag on mouse-up, never per mouse-move), persistence on drag-end, snapping/magnet calculations (snapping determines target time; op validates and applies it), and selection updates. Subtitles remain strictly attached to their segments and follow segment moves. Overlapping video moves are rejected with explanatory reasons via toast notifications. Delete (Step A), Split (Step B), and Auto-Align/Reset (Step C) preserved. Old utils preserved.
+- **Changes Applied**:
+  1. `frontend/src/utils/timelineOps.js`:
+     - Extended `trimClip` to handle both video clips and voice/subtitle segments:
+       - Video left trim / right trim: clamps to source duration, checks overlap against adjacent clips on same track row, updates `start`/`end` and `sourceStart`/`sourceEnd`.
+       - Segment left trim / right trim: clamps to `MIN_CLIP_DURATION (0.2s)`, updates `startSec`/`endSec`, `audioStartSec`/`audioEndSec`, `duration`/`audioDurationSec`, and sets `audioTrimmed: true, userTrimmed: true`.
+       - Non-destructive: leaves other clips and segments completely untouched.
+       - Uses `findSegIdx(segments, clipId)` helper to avoid undeclared references and safely handles numeric segment IDs (e.g. index 0).
+     - Extended `moveClip` to handle both video clips and voice/subtitle segments:
+       - Video move: prevents overlapping clips on the same video track (`Math.max(safeStart, other.start) < Math.min(safeEnd, other.end) - 0.001`), returning `applied: false` with explanatory reason instead of overlapping.
+       - Segment move: moves segment along timeline (`startSec`, `endSec`, `audioStartSec`, `audioEndSec`), preserving duration and maintaining attached subtitles (`khmerText`, etc.) with optional `subTrackRow` support.
+       - Non-destructive: survivors retain original IDs and times.
+  2. `frontend/src/components/timeline/TimelineEditor.jsx`:
+     - Imported `trimClip as trimClipOp, moveClip as moveClipOp` from `../../utils/timelineOps`.
+     - Rewired `handleMouseUp`:
+       - Audio/subtitle move: dispatches to `moveClipOp(currentState, { clipId, newStart, trackRow, subTrackRow })`. If rejected, shows reason via toast; if applied, calls `onUpdateSegments(opResult.state.segments, false, true)` (pushing exactly one undo snapshot).
+       - Audio/subtitle trim: dispatches to `trimClipOp(currentState, { clipId, edge, newTime })`. If rejected, shows reason via toast; if applied, calls `onUpdateSegments(opResult.state.segments, false, true)`.
+       - Video trim: dispatches to `trimClipOp(currentState, { clipId, edge, newTime, maxSourceDuration })`. If rejected, shows reason via toast; if applied, calls `onUpdateClips(opResult.state.videoClips)`.
+       - Video move: dispatches to `moveClipOp(currentState, { clipId, newStart, trackRow })`. If rejected, shows reason via toast; if applied, syncs associated segments and calls `onUpdateClips(opResult.state.videoClips, updatedSegs)`.
+  3. `backend/tests/timeline_step_d_real_app_acceptance.test.js`:
+     - Created real-app acceptance test verifying operations against stored `series.json` on disk:
+       - Check 1: Trim clip right edge -> only its end changes in file; survivor clips and segments remain untouched.
+       - Check 2: Drag voice to new slot -> only it moves, attached subtitle follows.
+       - Check 3: Attempt overlapping video move -> rejected with visible reason, disk file completely unchanged.
+       - Check 4: Ctrl+Z restores exact prior state across trim and move operations.
+       - Check 5: Trim segment left and right edges -> updates audioTrimmed, startSec/endSec, keeping survivors untouched.
+- **Verification**:
+  - `npm --prefix frontend run build`: **2036 modules transformed**, built in 729ms (0 errors).
+  - Pure Ops R1-R4: `backend/tests/timeline_pure_ops_r1_r4.test.js` (**17/17 passed**).
+  - Toolbar Split Under Playhead: `backend/tests/timeline_toolbar_split_under_playhead.test.js` (**6/6 passed**).
+  - Auto-Align Voice Suite: `backend/tests/auto_align_voice.test.js` (**9/9 passed**).
+  - Step A Real-App Acceptance: `backend/tests/timeline_step_a_real_app_acceptance.test.js` (**3/3 passed**).
+  - Step B Real-App Acceptance: `backend/tests/timeline_step_b_real_app_acceptance.test.js` (**4/4 passed**).
+  - Step C Real-App Acceptance: `backend/tests/timeline_step_c_real_app_acceptance.test.js` (**5/5 passed**).
+  - Step D Real-App Acceptance: `backend/tests/timeline_step_d_real_app_acceptance.test.js` (**5/5 passed**).
+  - Frontend lint (`oxlint`): **0 errors**.
+  - Total timeline clean core tests: **49/49 passed**. Pre-existing failure: 1 in `backend/tests/timeline_ui_workflow_fix.test.js` (tooltip regex expectation).
+- **Git State**: Committed (`e4c330e`) and pushed to `origin/refactor/timeline-core-clean`.
+
+## Active Environment
+- Branch: `refactor/timeline-core-clean` (pushed to origin)
+- Backend API: `http://localhost:5000`
+- Frontend: `http://localhost:5173`
+
+## Next Steps
+- Phase 3: Playback mapping monotonic fix in `useVideoPlayback.js` (monotonic timeline time, lookup from last mapped clip).
+- Phase 4: Duration display verification (R7).
+- Phase 5: Clean up old unused utils and final acceptance sweep.
+
+## Last Session
+- **Environment**: Antigravity IDE
+- **Branch**: `refactor/timeline-core-clean`
 - **Timestamp**: 2026-11-17T14:24:00+07:00
 
 ## Summary: Phase 2 Step C — Rewire AUTO-ALIGN and RESET TIMING to Pure TimelineOps
