@@ -125,7 +125,7 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
     while (!signal?.aborted) {
       await new Promise((r) => setTimeout(r, 1500));
       if (signal?.aborted) {
-        await fetch(`/api/jobs/${encodeURIComponent(jobId)}/kill`, { method: 'POST' }).catch(() => {});
+        await fetch(`/api/jobs/${encodeURIComponent(jobId)}/cancel`, { method: 'POST' }).catch(() => {});
         throw new Error('Translation aborted by user');
       }
       const st = await getJobStatus(jobId, { seriesId, episodeId: ep.id, signal }).catch(() => null);
