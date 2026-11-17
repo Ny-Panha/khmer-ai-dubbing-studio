@@ -3,6 +3,52 @@
 ## Last Session
 - **Environment**: Antigravity IDE
 - **Branch**: `refactor/timeline-core-clean`
+- **Timestamp**: 2026-11-17T14:18:00+07:00
+
+## Summary: Phase 2 Step B — Rewire SPLIT to Pure TimelineOps
+- **Scope**: Re-wired SPLIT operations only in `useClipOperations` (`handleSplitClip`), removing ~300 lines of brittle inline text-splitting, timing computation, and manual slicing (`executeSplitSegment`). Split now dispatches cleanly to `timelineOps.splitSegment` and `timelineOps.splitClip`. Split routing in `TimelineEditor` / `TimelineToolbar` verified. Delete (Step A) preserved. Auto-align, trim, move left untouched. Old utils preserved.
+- **Changes Applied**:
+  1. `frontend/src/utils/timelineOps.js`:
+     - Declared `roundedSplit` before `isVirtualOrEmpty` duration checks to prevent Temporal Dead Zone ReferenceError.
+     - Enhanced `splitClip` to accept `clipDefaults` (e.g. `name`, `videoUrl`, `videoId`) for fresh episode virtual clip materialization.
+     - Updated `splitSegment` to return `newSegmentId: uid2`.
+     - Removed unused `formatTimecode` import and unused `slotEnd` declaration.
+  2. `frontend/src/hooks/useClipOperations.js`:
+     - Imported `splitClip as splitClipOp, splitSegment as splitSegmentOp` from `../utils/timelineOps`.
+     - Rewired `handleSplitClip`:
+       - Dispatches to `splitSegmentOp` only when a segment is explicitly selected and playhead is inside it. Selects `newSegmentId` upon split, pushes single undo snapshot, updates scriptData, and re-syncs timeline audio if generated.
+       - Dispatches to `splitClipOp` under playhead (dialogue, Gap, or fresh episode virtual clip) without requiring selection. Selects first resulting part (`activeClipId: firstPart.id`), pushes single undo snapshot, and updates `videoClips` + `videoClipsUpdatedAt`.
+       - If neither op applies, shows in-app toast with `clipOpResult.reason` (no silent failure).
+  3. `backend/tests/timeline_step_b_real_app_acceptance.test.js`:
+     - Created real-app acceptance test verifying operations against stored `series.json` on disk:
+       - Check 1: Split unselected dialogue clip at playhead -> 2 clips, segments identical in file; Ctrl+Z restores exact prior state.
+       - Check 2: Split Gap -> 2 Gaps, segments identical in file; Ctrl+Z restores exact prior state.
+       - Check 3: Split on fresh episode with no script -> 2 materialized clips in file; Ctrl+Z restores exact prior state.
+       - Check 4: Split selected segment (text halves split) -> videoClips identical in file; Ctrl+Z restores exact prior state.
+- **Verification**:
+  - `npm --prefix frontend run build`: **2036 modules transformed**, built in 620ms (0 errors).
+  - Pure Ops R1-R4: `backend/tests/timeline_pure_ops_r1_r4.test.js` (**17/17 passed**).
+  - Toolbar Split Under Playhead: `backend/tests/timeline_toolbar_split_under_playhead.test.js` (**6/6 passed**).
+  - Step A Real-App Acceptance: `backend/tests/timeline_step_a_real_app_acceptance.test.js` (**3/3 passed**).
+  - Step B Real-App Acceptance: `backend/tests/timeline_step_b_real_app_acceptance.test.js` (**4/4 passed**).
+  - Frontend lint (`oxlint`): **0 errors**.
+  - Total timeline clean core tests: **30/30 passed**. Pre-existing failure: 1 in `backend/tests/timeline_ui_workflow_fix.test.js` (tooltip regex expectation).
+- **Git State**: Committed (`4bcb1d4`) and pushed to `origin/refactor/timeline-core-clean`.
+
+## Active Environment
+- Branch: `refactor/timeline-core-clean` (pushed to origin)
+- Backend API: `http://localhost:5000`
+- Frontend: `http://localhost:5173`
+
+## Next Steps
+- Phase 2 Step C: Rewire AUTO-ALIGN and RESET TIMING to `timelineOps.autoAlign` and `timelineOps.resetTiming`.
+- Phase 2 Step D: Rewire TRIM and MOVE to `timelineOps.trimClip` and `timelineOps.moveClip`.
+- Phase 3: Playback mapping monotonic fix in `useVideoPlayback.js`.
+- Phase 4: Duration display verification (R7).
+
+## Last Session
+- **Environment**: Antigravity IDE
+- **Branch**: `refactor/timeline-core-clean`
 - **Timestamp**: 2026-11-17T14:07:00+07:00
 
 ## Summary: Phase 2 Step A — Rewire DELETE to Pure TimelineOps
