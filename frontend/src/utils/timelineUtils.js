@@ -2,8 +2,6 @@ import {
   parseTimeToSeconds,
   formatMinSec,
   formatTimecode,
-  getSegmentAudioDuration,
-  hasSegmentAudio,
 } from './timestampUtils.js';
 
 /**
@@ -821,97 +819,3 @@ function getSourceSubtitleEnd(s) {
   return start + 2.0;
 }
 
-
-
-/**
- * Reset all segments back to their exact original Chinese video timestamps (0% drift)
- *
- * @param {Array} segments
- * @param {number} [totalDuration=0]
- * @returns {Array}
- */
-export function resetSegmentsToSourceTiming(segments = [], totalDuration = 0) {
-  if (!Array.isArray(segments) || segments.length === 0) return [];
-  const hasValidVideoEnd = Number.isFinite(totalDuration) && totalDuration > 0;
-
-  const trackLastEnds = [0, 0];
-  const subTrackLastEnds = [0, 0, 0];
-
-  return segments
-    .filter((seg) => seg && typeof seg === 'object')
-    .map((seg, idx) => {
-      const srcStart = (typeof seg.startSec === 'number' && !isNaN(seg.startSec))
-      ? seg.startSec
-      : ((typeof seg.sourceStartSec === 'number' && !isNaN(seg.sourceStartSec))
-        ? seg.sourceStartSec
-        : idx * 3.5);
-    const rawSrcEnd = (typeof seg.endSec === 'number' && !isNaN(seg.endSec) && seg.endSec > srcStart)
-      ? seg.endSec
-      : ((typeof seg.sourceEndSec === 'number' && !isNaN(seg.sourceEndSec) && seg.sourceEndSec > srcStart)
-        ? seg.sourceEndSec
-        : srcStart + 2.2);
-
-    const safeStart = hasValidVideoEnd ? Math.min(srcStart, Math.max(0, totalDuration - 1.0)) : srcStart;
-    const safeEnd = hasValidVideoEnd ? Math.min(totalDuration, Math.max(safeStart + 0.4, rawSrcEnd)) : rawSrcEnd;
-    const dur = parseFloat((safeEnd - safeStart).toFixed(2));
-
-    // Preserve natural generated audio duration if audio exists (never squash audio to subtitle slot)
-    const hasAudio = hasSegmentAudio(seg);
-    const audioDur = hasAudio ? getSegmentAudioDuration(seg, dur) : dur;
-    const audioEndSec = parseFloat((safeStart + audioDur).toFixed(2));
-
-    // CapCut-style: non-userShifted segments always stay on Lane 0 (VOICE 1).
-    // userShifted segments keep their user-placed row.
-    const isUserShifted = Boolean(seg.userShifted);
-    const targetRow = (isUserShifted && typeof seg.trackRow === 'number')
-      ? Math.max(0, seg.trackRow)
-      : 0;
-    const effectiveEnd = hasAudio ? audioEndSec : safeEnd;
-    trackLastEnds[targetRow] = Math.max(trackLastEnds[targetRow] || 0, effectiveEnd);
-
-    // Determine subtitle track row dynamically to prevent overlapping subtitles
-    let targetSubRow = 0;
-    if (safeStart >= (subTrackLastEnds[0] || 0) - 0.04) {
-      targetSubRow = 0;
-    } else if (safeStart >= (subTrackLastEnds[1] || 0) - 0.04) {
-      targetSubRow = 1;
-    } else if (safeStart >= (subTrackLastEnds[2] || 0) - 0.04) {
-      targetSubRow = 2;
-    } else {
-      const sorted = [0, 1, 2].sort((a, b) => (subTrackLastEnds[a] || 0) - (subTrackLastEnds[b] || 0));
-      targetSubRow = sorted[0];
-    }
-    subTrackLastEnds[targetSubRow] = safeEnd;
-
-    return {
-      ...seg,
-      id: idx + 1,
-      segmentId: idx + 1,
-      sourceStartSec: parseFloat(safeStart.toFixed(2)),
-      sourceEndSec: parseFloat(safeEnd.toFixed(2)),
-      startSec: parseFloat(safeStart.toFixed(2)),
-      endSec: parseFloat(safeEnd.toFixed(2)),
-      duration: dur,
-      audioStartSec: parseFloat(safeStart.toFixed(2)),
-      audioEndSec: audioEndSec,
-      audioDurationSec: audioDur,
-      rawAudioDur: hasAudio ? audioDur : undefined,
-      audioTrimmed: false,
-      audioOverrun: false,
-      overrunRatio: undefined,
-      finalAudioDuration: hasAudio ? audioDur : seg.finalAudioDuration,
-      audioDuration: hasAudio ? audioDur : seg.audioDuration,
-      trackRow: targetRow,
-      trackId: `voice-${targetRow + 1}`,
-      subTrackRow: targetSubRow,
-      subTrackId: `subs-${targetSubRow + 1}`,
-      start: formatMinSec(safeStart),
-      end: formatMinSec(safeEnd),
-      startTime: formatMinSec(safeStart),
-      endTime: formatMinSec(safeEnd),
-      audioStart: formatMinSec(safeStart),
-      audioEnd: formatMinSec(safeEnd),
-      userShifted: isUserShifted,
-    };
-  });
-}

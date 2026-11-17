@@ -9,7 +9,6 @@ import {
   checkEpisodeHasAudioReady,
   checkEpisodeHasDemucsReady,
   computeClampedStagePercent,
-  partitionSelectedEpisodesForTranslate,
   computeSeriesTranslateSummary,
   getEpisodesBrokenSummary,
 } from '../../../components/dashboard/geminiRouteHelpers.js';
@@ -24,15 +23,6 @@ export function selectSelectedTargetEpisodes(episodes = [], selectedEpIds = new 
   const safeEpisodes = Array.isArray(episodes) ? episodes : [];
   const safeSelected = selectedEpIds instanceof Set ? selectedEpIds : new Set(selectedEpIds || []);
   return safeEpisodes.filter((ep) => safeSelected.has(ep?.id));
-}
-
-/**
- * Partition selected episodes into unscripted and scripted
- * @param {Array} selectedTargetEpisodes
- * @returns {{ unscriptedEpisodes: Array, scriptedEpisodes: Array }}
- */
-export function selectPartitionedSelectedEpisodes(selectedTargetEpisodes = []) {
-  return partitionSelectedEpisodesForTranslate(selectedTargetEpisodes);
 }
 
 /**
@@ -172,59 +162,6 @@ export function selectIsBatchExecutionActive({
     (runnerStates?.all3?.status === 'running') ||
     (runnerActiveEpIds && runnerActiveEpIds.size > 0)
   );
-}
-
-/**
- * Compute stage completion flags across whole series and current targets
- * @param {Object} params
- * @returns {Object}
- */
-export function selectStageCompletionFlags({
-  episodes = [],
-  selectedCount = 0,
-  isTranslateAllDone = false,
-  unscriptedSelectedCount = 0,
-  selectedTextBrokenCount = 0,
-  seriesTextBrokenCount = 0,
-  completedAudioCount = 0,
-  seriesTotalBrokenCount = 0,
-  completedDemucsCount = 0,
-  unAudioSelectedCount = 0,
-  unDemucsSelectedCount = 0,
-}) {
-  const totalEps = episodes.length;
-  const hasSelection = selectedCount > 0;
-
-  const isStep2TargetDone = hasSelection
-    ? (unscriptedSelectedCount === 0 && selectedTextBrokenCount === 0)
-    : (isTranslateAllDone && seriesTextBrokenCount === 0);
-
-  const isAudioAllDone = totalEps > 0 && completedAudioCount === totalEps && seriesTotalBrokenCount === 0;
-  const isDemucsAllDone = totalEps > 0 && completedDemucsCount === totalEps;
-  const isAll1To3Done = isTranslateAllDone && isAudioAllDone && isDemucsAllDone;
-  const is1And2Done = isTranslateAllDone && isAudioAllDone && !isDemucsAllDone;
-
-  const allSelectedDemucsCompleted = hasSelection ? unDemucsSelectedCount === 0 : false;
-  const allSelectedAudioCompleted = hasSelection
-    ? (unAudioSelectedCount === 0 && selectedTotalBrokenCount(selectedTextBrokenCount) === 0)
-    : false;
-
-  const isStep3TrulyDone = hasSelection ? allSelectedAudioCompleted : isAudioAllDone;
-
-  return {
-    isStep2TargetDone,
-    isAudioAllDone,
-    isDemucsAllDone,
-    isAll1To3Done,
-    is1And2Done,
-    allSelectedDemucsCompleted,
-    allSelectedAudioCompleted,
-    isStep3TrulyDone,
-  };
-}
-
-function selectedTotalBrokenCount(textBrokenCount) {
-  return Number(textBrokenCount || 0);
 }
 
 export {

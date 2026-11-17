@@ -1,4 +1,4 @@
-import React, { createContext, useContext } from 'react';
+import React, { createContext } from 'react';
 
 const NOOP = () => {};
 
@@ -14,9 +14,5 @@ export const StudioContext = createContext(DEFAULT_STUDIO_CONTEXT);
 export function StudioProvider({ value, children }) {
   const safeValue = value || DEFAULT_STUDIO_CONTEXT;
   return <StudioContext.Provider value={safeValue}>{children}</StudioContext.Provider>;
-}
-
-export function useStudioContext() {
-  return useContext(StudioContext) || DEFAULT_STUDIO_CONTEXT;
 }
 

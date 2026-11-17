@@ -1318,33 +1318,6 @@ export function extractGlossaryFromEpisode(scriptData, speakerRegistry) {
 }
 
 /**
- * Compatibility wrapper: saveActiveProject
- */
-export function saveActiveProject(projectData) {
-  const seriesId = getActiveSeriesId();
-  const episodeId = getActiveEpisodeId();
-  if (seriesId && episodeId) {
-    saveEpisodeState(seriesId, episodeId, projectData);
-  }
-}
-
-/**
- * Compatibility wrapper: loadActiveProject
- */
-export function loadActiveProject() {
-  const { episode } = loadActiveSeriesAndEpisode();
-  if (!episode || !episode.video) return null;
-  return {
-    ...episode,
-    videoId: episode.video.videoId,
-    fileName: episode.video.fileName,
-    videoUrl: episode.video.videoUrl,
-    videoPath: episode.video.videoPath,
-    size: episode.video.size,
-  };
-}
-
-/**
  * Compatibility wrapper: clearActiveProject
  */
 export function clearActiveProject() {
