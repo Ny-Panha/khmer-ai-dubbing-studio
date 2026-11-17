@@ -129,7 +129,7 @@ export default function EpisodeDemucsProgressCard({ liveStats, ep, onKill, onReq
               textOverflow: 'ellipsis',
               letterSpacing: '-0.01em',
             }}>
-              {isFailed ? '⚠️ បរាជ័យក្នុងការបិទសំឡេងចិន' : (isDone ? '🎉 🔇 3. AI បិទសំឡេងចិន (រក្សាភ្លេង BGM ដើម) រួចរាល់' : (isQueued ? '⏳ 🔇 3. AI បិទសំឡេងចិន — រង់ចាំក្នុង Queue' : '🔇 3. AI កំពុងបិទសំឡេងចិន (រក្សាភ្លេង BGM ដើម)...'))}
+              {isFailed ? '⚠️ បរាជ័យក្នុងការបិទសំឡេងចិន' : (isDone ? '🎉 🔇 4. AI បិទសំឡេងចិន (រក្សាភ្លេង BGM ដើម) រួចរាល់' : (isQueued ? '⏳ 🔇 4. AI បិទសំឡេងចិន — រង់ចាំក្នុង Queue' : '🔇 4. AI កំពុងបិទសំឡេងចិន (រក្សាភ្លេង BGM ដើម)...'))}
             </div>
             <div style={{
               fontSize: '0.68rem',

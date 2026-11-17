@@ -3934,6 +3934,33 @@ export default function GeminiRouteModal({
                           }
 
                           const isAutoFitted = Boolean(ep.autoFitted || ep.scriptData?.autoFitted);
+                          const storedSegs = Array.isArray(ep.scriptData?.segments) ? ep.scriptData.segments : [];
+                          let measuredFitCount = 0;
+                          let fittedSegCount = 0;
+                          for (const seg of storedSegs) {
+                            const sStart = Number(seg?.startSec);
+                            const sEnd = Number(seg?.endSec);
+                            const slotDur = (Number.isFinite(sStart) && Number.isFinite(sEnd) && sEnd > sStart)
+                              ? (sEnd - sStart)
+                              : Number(seg?.slotDuration || seg?.availableSlotDuration || seg?.duration || 0);
+                            const audioDur = Number(
+                              seg?.audioDurationSec
+                              ?? seg?.finalAudioDuration
+                              ?? seg?.audioDuration
+                              ?? ((Number.isFinite(Number(seg?.audioStartSec)) && Number.isFinite(Number(seg?.audioEndSec)))
+                                ? (Number(seg.audioEndSec) - Number(seg.audioStartSec))
+                                : 0)
+                            );
+                            if (slotDur > 0 && audioDur > 0) {
+                              measuredFitCount++;
+                              if ((audioDur - slotDur) < 0.10 && !seg?.audioTrimmed) {
+                                fittedSegCount++;
+                              }
+                            }
+                          }
+                          const storedFitPctText = measuredFitCount > 0
+                            ? `${((fittedSegCount / measuredFitCount) * 100).toFixed(1)}%`
+                            : null;
 
                           return (
                             <div
@@ -3969,7 +3996,9 @@ export default function GeminiRouteModal({
                                 </div>
                                 <div style={{ fontSize: '0.66rem', color: isAutoFitted ? '#94A3B8' : '#64748B', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                                   {isAutoFitted
-                                    ? '✅ សំឡេងខ្មែរ Fit ល្មមស្មើនឹង Subtitle ១០០%'
+                                    ? (storedFitPctText
+                                      ? `✅ សំឡេងខ្មែរ Fit ល្មមស្មើនឹង Subtitle ${storedFitPctText}`
+                                      : '✅ សំឡេងខ្មែរ Fit ល្មមស្មើនឹង Subtitle')
                                     : (isAudioReady ? 'ពន្លឿនឃ្លាក្រហមឱ្យ Fit ស្មើនឹង Subtitle' : 'រង់ចាំបង្កើតសំឡេង AI ជាមុនសិន')}
                                 </div>
                               </div>
@@ -4013,11 +4042,38 @@ export default function GeminiRouteModal({
                           const isRunnerAll3 = runnerStates?.all3?.status === 'running';
                           const isCurrentDemucsRunnerEp = (isRunnerCleanBgm && runnerStates?.clean_bgm?.currentEpId === ep.id) ||
                             (isRunnerAll3 && runnerStates?.all3?.currentEpId === ep.id);
-                          const isQueuedDemucsRunnerEp = (isRunnerCleanBgm && runnerStates?.clean_bgm?.queuedEpIds?.includes(ep.id) && !isCurrentDemucsRunnerEp) ||
-                            (isRunnerAll3 && runnerStates?.all3?.queuedEpIds?.includes(ep.id) && !isCurrentDemucsRunnerEp);
 
                           const isCurrentRunning = (isSeparatingBatchDemucs && activeDemucsEpisodeId === ep.id) || isCurrentDemucsRunnerEp;
-                          const isQueued = (isSeparatingBatchDemucs && activeDemucsEpisodeIds.has(ep.id) && activeDemucsEpisodeId !== ep.id) || isQueuedDemucsRunnerEp;
+
+                          const localWaitingIds = isSeparatingBatchDemucs
+                            ? Array.from(activeDemucsEpisodeIds).filter((id) => id !== activeDemucsEpisodeId)
+                            : [];
+                          const cleanBgmQueue = isRunnerCleanBgm && Array.isArray(runnerStates?.clean_bgm?.queuedEpIds)
+                            ? runnerStates.clean_bgm.queuedEpIds
+                            : [];
+                          const cleanBgmCurIdx = cleanBgmQueue.indexOf(runnerStates?.clean_bgm?.currentEpId);
+                          const runnerCleanBgmWaitingIds = isRunnerCleanBgm
+                            ? (cleanBgmCurIdx >= 0
+                              ? cleanBgmQueue.slice(cleanBgmCurIdx + 1)
+                              : cleanBgmQueue.filter((id) => id !== runnerStates?.clean_bgm?.currentEpId))
+                            : [];
+                          const all3Queue = isRunnerAll3 && Array.isArray(runnerStates?.all3?.queuedEpIds)
+                            ? runnerStates.all3.queuedEpIds
+                            : [];
+                          const all3CurIdx = all3Queue.indexOf(runnerStates?.all3?.currentEpId);
+                          const runnerAll3WaitingIds = isRunnerAll3
+                            ? (all3CurIdx >= 0
+                              ? all3Queue.slice(all3CurIdx + 1)
+                              : all3Queue.filter((id) => id !== runnerStates?.all3?.currentEpId))
+                            : [];
+
+                          const activeDemucsWaitingIds = localWaitingIds.length > 0
+                            ? localWaitingIds
+                            : (runnerCleanBgmWaitingIds.length > 0 ? runnerCleanBgmWaitingIds : runnerAll3WaitingIds);
+                          const demucsQueueIdx = !isCurrentRunning ? activeDemucsWaitingIds.indexOf(ep.id) : -1;
+                          const isQueued = demucsQueueIdx >= 0;
+                          const demucsQueuePos = demucsQueueIdx + 1;
+                          const demucsQueueTotal = activeDemucsWaitingIds.length;
 
                           const effectiveLiveStats = demucsLiveStats[ep.id] || runnerLiveStats?.demucs?.[ep.id] || (isCurrentRunning ? {
                             percent: runnerStates?.clean_bgm?.progress || 5,
@@ -4051,24 +4107,45 @@ export default function GeminiRouteModal({
 
                           if (isQueued) {
                             return (
-                              <div style={{
-                                padding: '7px 11px',
-                                borderRadius: 8,
-                                background: 'rgba(15, 23, 42, 0.75)',
-                                border: '1px dashed rgba(56, 189, 248, 0.35)',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'space-between',
-                                gap: 8,
-                              }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                                  <Clock size={13} color="#94A3B8" />
-                                  <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#94A3B8' }}>
-                                    ⏳ 🔇 3. AI បិទសំឡេងចិន — រង់ចាំក្នុង Queue
-                                  </span>
-                                </div>
-                                <span style={{ fontSize: '0.64rem', color: '#64748B' }}>
-                                  ដំណើរការម្ដង ១ ភាគ
+                              <div
+                                data-testid={`demucs-queued-row-${ep.id}`}
+                                style={{
+                                  padding: '5px 10px',
+                                  borderRadius: 8,
+                                  background: 'rgba(15, 23, 42, 0.55)',
+                                  border: '1px solid rgba(56, 189, 248, 0.22)',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'space-between',
+                                  gap: 8,
+                                }}
+                              >
+                                <span style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: 6,
+                                  fontSize: '0.72rem',
+                                  fontWeight: 700,
+                                  color: '#94A3B8',
+                                  minWidth: 0,
+                                  overflow: 'hidden',
+                                  textOverflow: 'ellipsis',
+                                  whiteSpace: 'nowrap',
+                                }}>
+                                  <Clock size={12} color="#38BDF8" style={{ flexShrink: 0 }} />
+                                  <span>🔇 4. AI បិទសំឡេងចិន</span>
+                                </span>
+                                <span
+                                  data-testid={`demucs-queue-pos-${ep.id}`}
+                                  style={{
+                                    fontSize: '0.68rem',
+                                    fontWeight: 700,
+                                    color: '#38BDF8',
+                                    whiteSpace: 'nowrap',
+                                    flexShrink: 0,
+                                  }}
+                                >
+                                  Queue លេខ {demucsQueuePos} / {demucsQueueTotal}
                                 </span>
                               </div>
                             );
@@ -4090,7 +4167,7 @@ export default function GeminiRouteModal({
                               <div style={{ minWidth: 0, flex: 1 }}>
                                 <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
                                   <span style={{ fontSize: '0.74rem', fontWeight: 800, color: isDemucsReady ? '#34D399' : '#CBD5E1' }}>
-                                    🔇 3. AI បិទសំឡេងចិន (រក្សាភ្លេង BGM ដើម)
+                                    🔇 4. AI បិទសំឡេងចិន (រក្សាភ្លេង BGM ដើម)
                                   </span>
                                   {isDemucsReady && (
                                     <span style={{

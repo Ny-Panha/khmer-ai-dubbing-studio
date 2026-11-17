@@ -1,6 +1,40 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
+- **Environment**: Antigravity IDE (`engineering-minimal-change-engineer` discipline)
+- **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-17T21:54:00+07:00
+
+## Summary: Batch Generate Studio (/batch) UI & Label Fixes — Step 4 Numbering, Compact Queued Demucs Row, True Auto-Fit % (COMPLETED)
+- **Scope**: UI + label fixes ONLY (zero pipeline, queue, or job behaviour changes).
+- **Minimal Changes Applied**:
+  1. `frontend/src/components/dashboard/GeminiRouteModal.jsx`:
+     - **Step Number**: Renumbered in-card Demucs row (idle/done & queued) from `🔇 3.` to `🔇 4.` so card steps read `1 -> 2 -> 3 -> 4` matching the top step boxes (`1 Script`, `2 Voice`, `3 Auto-Fit`, `4 Clean BGM`).
+     - **Queued Demucs Row**: Replaced the dashed placeholder box with ONE compact single-line status row (`29px` height, solid border) showing real queue position (`Queue លេខ X / Y`) computed strictly from remaining waiting episodes after the currently running episode in the active Demucs queue (`activeDemucsEpisodeIds`, `runnerStates.clean_bgm.queuedEpIds`, or `runnerStates.all3.queuedEpIds`). Finished and non-queued episodes never display a queued label. Actively running episode preserves the full rich `EpisodeDemucsProgressCard` (progress %, Kill button, console logs).
+     - **Auto-Fit Label**: Replaced hardcoded `Subtitle ១០០%` (visually resembling `900%`) with the true fit percentage derived from stored `ep.scriptData.segments` (`audioDurationSec ?? finalAudioDuration ?? audioDuration` vs `endSec - startSec`, `< 0.10s` & `!audioTrimmed`) formatted to 1 decimal (e.g. `96.4%`, `99.3%`, `87.3%`, `97.3%`); falls back to no percentage on legacy segments lacking duration metadata.
+  2. `frontend/src/components/dashboard/route-runners/EpisodeDemucsProgressCard.jsx`:
+     - Renumbered header labels from `🔇 3.` to `🔇 4.` for running/done/queued states.
+  3. `backend/tests/ai_detection_and_dubbing_prompt_fix.test.js` & `backend/tests/autofit_live_console.test.js`:
+     - Updated static step-number assertions from `🔇 3.` to `🔇 4.`.
+- **Verification Evidence**:
+  - Frontend production build (`npm --prefix frontend run build`): **PASS** (730ms, 0 errors).
+  - Batch test suites (`ai_detection_and_dubbing_prompt_fix.test.js`, `autofit_live_console.test.js`, `clean_unified_3step_batch_pipeline.test.js`, `reusable_1by1_dubbing_feature.test.js`): **27/27 PASS**.
+  - Real-app verification after full backend (`:5000`) & Vite (`:5173`) restart at `http://localhost:5173/batch` (Edge headless, 0 console/page errors):
+    - Idle: 23 cards all read `1-2-3-4` (`hasDemucs3: false`), zero `Subtitle ១០០%`/`900%`, Auto-Fit displays true stored percentages (`EP2 96.4%`, `EP3 99.3%`, `EP4 87.3%`, `EP5 97.3%`, `EP6 96.9%`), 0 queued rows.
+    - Running `4. Clean BGM` 1-by-1: `EP1`/`EP2` (not queued) show done (`queuePos: null`), `EP3` (running) shows full progress card + `🛑 Kill` + `CONSOLE LOGS`, `EP4..EP23` show compact `29px` solid rows (`Queue លេខ 1 / 20` .. `Queue លេខ 20 / 20`).
+    - Advancing to `EP5`: `EP3`/`EP4` clear queued state (`isQueuedRow: false`), `EP5` renders rich running card + `🛑 Kill`, `EP6..EP23` update live (`Queue លេខ 1 / 18`, `EP8` shifted `5 / 20` -> `3 / 18`, `EP10` shifted `7 / 20` -> `5 / 18`). After `Stop`: `0` queued rows.
+
+## Active Environment
+- **Backend API**: `http://localhost:5000` (freshly restarted)
+- **Frontend Studio**: `http://localhost:5173` (freshly restarted Vite dev server)
+- **Branch**: `chore/full-project-cleanup` (committed & pushed)
+
+## Next Steps
+- Refresh browser at `http://localhost:5173/batch` to verify visually.
+
+---
+
+## Previous Session
 - **Environment**: Antigravity IDE
 - **Branch**: `chore/full-project-cleanup`
 - **Timestamp**: 2026-11-17T21:43:00+07:00

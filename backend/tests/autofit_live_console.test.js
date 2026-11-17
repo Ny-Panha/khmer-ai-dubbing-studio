@@ -20,7 +20,7 @@ describe("Auto-Fit Speed Live Console & Episode Card Parity", () => {
     const code = fs.readFileSync(modalPath, "utf8");
     assert.ok(code.includes("EpisodeAutoFitProgressCard"), "Must import and use EpisodeAutoFitProgressCard");
     assert.ok(code.includes("⚡ 3. Auto-Fit Speed"), "Must render Stage 3 Auto-Fit Speed");
-    assert.ok(code.includes("🔇 3. AI បិទសំឡេងចិន"), "Must render Clean BGM");
+    assert.ok(code.includes("🔇 4. AI បិទសំឡេងចិន"), "Must render Clean BGM");
   });
 
   test("3. Backend audioRoutes provides GET /audio/autofit-progress and returns logs", () => {

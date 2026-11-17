@@ -319,7 +319,7 @@ test('Step 8: Batch Studio 3-Step Runners, 2-Row Control Bar, Episode Card Stage
   // 4. Episode Card 3 Stage Modules & Inline Actions
   assert.match(geminiModalJsx, /📝 1\. Translate Script/);
   assert.match(geminiModalJsx, /🎙️ 2\. AI Translate Voice/);
-  assert.match(geminiModalJsx, /🔇 3\. AI បិទសំឡេងចិន \(រក្សាភ្លេង BGM ដើម\)/);
+  assert.match(geminiModalJsx, /🔇 4\. AI បិទសំឡេងចិន \(រក្សាភ្លេង BGM ដើម\)/);
   assert.match(geminiModalJsx, /handleRunAll3Steps/);
 
   // 5. Duplicate Active Job Guard in executeBatchTranslateEnqueue
@@ -328,7 +328,7 @@ test('Step 8: Batch Studio 3-Step Runners, 2-Row Control Bar, Episode Card Stage
   assert.match(geminiModalJsx, /រំលង.*ភាគដែលកំពុងដំណើរការស្រាប់/);
 
   // 6. Runner Card Labels Clarified in Khmer
-  assert.match(demucsJsx, /🔇 3\. AI បិទសំឡេងចិន \(រក្សាភ្លេង BGM ដើម\)/);
+  assert.match(demucsJsx, /🔇 4\. AI បិទសំឡេងចិន \(រក្សាភ្លេង BGM ដើម\)/);
   assert.match(ttsJsx, /🎙️ 2\. AI Translate Voice/);
   assert.match(translateJsx, /📝 1\. Translate Script/);
 });
