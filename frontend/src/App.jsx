@@ -1023,9 +1023,6 @@ export default function App() {
                   episodeId={series.episodeId}
                   batchRender={render.batchRender}
                   duration={playback.duration}
-                  selectedClip={media.selectedClip}
-                  onSplitClip={handleSplitClip}
-                  onDeleteClip={handleDeleteClip}
                   currentTime={playback.currentTime}
                   isPlaying={playback.isPlaying}
                   scriptData={scriptData}
