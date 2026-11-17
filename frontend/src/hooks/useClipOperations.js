@@ -585,11 +585,12 @@ export function useClipOperations({
     notifyBackendOffline,
   ]);
 
-  // Select clip and seek playhead to its start
-  const handleSelectClip = (clipId) => {
+  // Select clip and seek playhead to its start (only seek when paused / explicit user gesture, never during continuous playback)
+  const handleSelectClip = (clipId, shouldSeek = true) => {
     setActiveClipId(clipId);
+    const isVideoPlaying = Boolean(videoRef?.current && !videoRef.current.paused);
     const target = videoClips.find((c) => c.id === clipId);
-    if (target && handleSeek) {
+    if (shouldSeek && !isVideoPlaying && target && handleSeek) {
       handleSeek(target.start);
     }
   };

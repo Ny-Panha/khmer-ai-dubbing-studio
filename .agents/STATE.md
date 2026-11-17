@@ -3,7 +3,48 @@
 ## Last Session
 - **Environment**: Antigravity IDE
 - **Branch**: `refactor/timeline-core-clean`
-- **Timestamp**: 2026-11-17T16:25:00+07:00
+- **Timestamp**: 2026-11-17T16:42:00+07:00
+
+## Summary: Bug Fix — Prevent Playing Loop & Enforce Monotonic Forward Playback Across Gaps (COMPLETED)
+- **Problem Diagnosed**:
+  - Owner reproduction: press Play — playback reaches the end of a segment and loops it: the picture jumps backward and replays the same section forever instead of continuing to the next segment.
+  - **Step 1 — Backward Seek Call Site & Root Cause Identified**:
+    1. **Primary backward seek call site (`TimelineEditor.jsx:595` -> `useClipOperations.js:593`)**:
+       - When the user had clicked a video clip or Gap prior to playing (`selectedClipKind === 'video'`), the auto-follow `useEffect` in `TimelineEditor.jsx` ran `onSelectClip(matchClip.id)` whenever a new segment started.
+       - `onSelectClip` dispatched to `handleSelectClip(clipId)` in `useClipOperations.js`, which called `handleSeek(target.start)` without checking if playback was active (`!isVideoPlaying`).
+       - `handleSeek` mapped `target.start` to source start time and set `videoRef.current.currentTime = targetTime`, actively seeking the `<video>` element backward (e.g. from 7.363s backward to 5.400s). The picture jumped back and replayed the segment in an infinite loop.
+    2. **Secondary transition stall at Gaps (`useVideoPlayback.js:214`)**:
+       - In `useVideoPlayback.js`, clip transition evaluated `nextClip = videoClips[currentClipIdx + 1]`. When the next clip was a Gap (e.g. 8.76s -> 12.0s between voice #3 and voice #4), it attempted to transition into the Gap instead of skipping to the next real dialogue clip (`#4` at 12.0s).
+- **Key Changes Implemented (Step 2 — Invariant Enforcement)**:
+  1. `frontend/src/hooks/useClipOperations.js`:
+     - Updated `handleSelectClip(clipId, shouldSeek = true)`.
+     - Added `const isVideoPlaying = Boolean(videoRef?.current && !videoRef.current.paused);` and guarded `handleSeek` with `if (shouldSeek && !isVideoPlaying && target && handleSeek)`.
+     - Selecting a clip while playing never triggers a seek; paused manual clicks continue to seek normally.
+  2. `frontend/src/components/timeline/TimelineEditor.jsx`:
+     - In auto-follow `useEffect`, passed `onSelectClip(matchClip.id, false)` to explicitly suppress seeking during active playback.
+  3. `frontend/src/hooks/useVideoPlayback.js`:
+     - Imported `isGapClip` from `../utils/timelineOps`.
+     - In `handleTimeUpdate`:
+       - Active clip tracking skips Gap clips (`if (isGapClip(c)) continue;`).
+       - On clip transition (`srcNow >= sEnd - 0.03`): Scans forward past Gaps to find `nextDialogueClip`.
+       - Invariant: Only seeks forward if `nextSrcStart > srcNow + 0.15` and never backward.
+       - If no next dialogue clip can be resolved, cleanly pauses playback (`v.pause(); setIsPlaying(false)`), never looping back.
+  4. `backend/tests/timeline_continuous_playback_no_loop.test.js`:
+     - Created regression suite:
+       - Test 1: Static code audit of `useClipOperations`, `TimelineEditor`, and `useVideoPlayback`.
+       - Test 2: Continuous playback simulation across segment boundaries and VIDEO Gap for 35+ seconds: asserts all seeks move forward (`to >= from`), Gap between #3 and #4 is bridged forward to 12.0s, and playback reaches 35+ seconds without looping.
+       - Test 3: Paused click stability on Gap and dialogue clips remains 100% intact.
+- **Verification Evidence**:
+  - Production build: `npm run build --prefix frontend` (Vite build passed in 660ms, 0 errors).
+  - Test suites: **87 passed, 0 failed** across 15 timeline suites (`node --test backend/tests/timeline_*.test.js`), 100% green.
+
+## Active Environment
+- **Backend API**: `http://localhost:5000` (`/api/health`)
+- **Frontend Studio**: `http://localhost:5173`
+- **Branch**: `refactor/timeline-core-clean`
+
+## Next Steps
+- Changes committed and pushed to `origin/refactor/timeline-core-clean`.
 
 ## Summary: Bug Fix — Lock Playhead & Manual Selection While Paused (COMPLETED)
 - **Problem Diagnosed**:

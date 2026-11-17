@@ -591,11 +591,11 @@ function TimelineEditor({
           }
         }
 
-        // When following video cuts during playback, track active video clip
+        // When following video cuts during playback, track active video clip (without triggering playback seek)
         if (isPlaying && selectedClipKind === 'video' && onSelectClip && videoClips && videoClips.length > 0) {
           const matchClip = videoClips.find(c => c.segmentId === activeSeg.id || c.segmentIndex === activeSeg.id);
           if (matchClip) {
-            onSelectClip(matchClip.id);
+            onSelectClip(matchClip.id, false);
           }
         }
       }
