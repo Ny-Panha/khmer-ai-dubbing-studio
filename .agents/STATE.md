@@ -7,6 +7,8 @@
 
 ## Summary: Final Cleanup — Retiring Legacy Editing Functions & Tests, Porting Living Suites to TimelineOps
 - **Scope**: Final cleanup step on branch `refactor/timeline-core-clean`:
+  0. **Hotfix Runtime ReferenceError**:
+     - Added missing `useMemo` to the React import in `frontend/src/hooks/useVideoPlayback.js` (`import { useState, useCallback, useRef, useEffect, useMemo } from 'react';`).
   1. **Zero Production Callers Proof**:
      - Executed: `git grep -n -E "deleteClipById|deleteSegmentByIdOrIndex|splitClipAtTime|autoAlignVoiceSegments" frontend/src/ ":!frontend/src/utils/timelineUtils.js"`
      - Result: **0 occurrences** (command exited with code 1, zero lines matched across all production files in `frontend/src/`).
