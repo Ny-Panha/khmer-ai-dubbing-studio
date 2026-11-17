@@ -3,7 +3,7 @@
 ## Last Session
 - **Environment**: Codex CLI + local Edge acceptance run
 - **Branch**: `fix/delete-no-ripple` based on `fix/timeline-clip-selection`
-- **Timestamp**: 2026-11-17T10:46:27+07:00
+- **Timestamp**: 2026-11-17T10:48:57+07:00
 
 ## Summary: Durable CapCut-Style Timeline Editing
 - Implemented track-independent remove-only deletion, stable selection-kind dispatch, first-class Gap merge/split/delete behavior, exact undo/redo persistence, and backend/local tombstones so stale autosaves, hydration, or Auto-Align cannot resurrect deleted dialogue.
@@ -16,7 +16,7 @@
 - Shared local acceptance servers remain listening on ports 5000 and 5173.
 
 ## Next Steps
-- Push `fix/delete-no-ripple`; do not merge to main.
+- No pending implementation work. `fix/delete-no-ripple` was pushed to origin at commit `64b1840`; main remains untouched.
 
 ## Last Session
 - **Environment**: Copilot SDK in VS Code
