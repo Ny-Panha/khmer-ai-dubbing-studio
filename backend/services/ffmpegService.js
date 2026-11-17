@@ -3947,6 +3947,7 @@ module.exports = {
   createSynchronizedNarrationAudio,
   getMediaInfo,
   getVideoMetadata,
+  getVideoDimensionsFast,
   getSafeCliPath,
   detectSpeechBounds,
   cancelJobRenderProcess,
