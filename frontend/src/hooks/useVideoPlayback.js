@@ -14,6 +14,20 @@ export function useVideoPlayback({
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
+  const lastMappedTimelineTimeRef = useRef(0);
+  const hasSeekedRef = useRef(false);
+
+  // Duration follows the timeline (R7): when videoClips has been edited, duration equals the end of the last video clip
+  const timelineDuration = useMemo(() => {
+    if (renderedVideo) {
+      return duration;
+    }
+    if (Array.isArray(videoClips) && videoClips.length > 0) {
+      const maxEnd = videoClips.reduce((max, c) => Math.max(max, Number(c.end) || 0), 0);
+      if (maxEnd > 0) return maxEnd;
+    }
+    return duration;
+  }, [duration, videoClips, renderedVideo]);
 
   const handleLoadedMetadata = () => {
     if (videoRef?.current) {
@@ -109,7 +123,7 @@ export function useVideoPlayback({
 
     const srcNow = currentMediaTime;
 
-    // Fast O(1) active clip tracking: check current clip bounds first before scanning array
+    // Fast O(1) active clip tracking: continue from the LAST mapped clip (check current, then next in timeline order)
     let currentClipIdx = activeClipIdxRef.current;
     if (currentClipIdx < 0 || currentClipIdx >= videoClips.length) {
       currentClipIdx = 0;
@@ -119,28 +133,45 @@ export function useVideoPlayback({
     const checkEnd = Number.isFinite(checkClip?.sourceEnd) ? checkClip.sourceEnd : (checkClip?.end || realDur);
 
     if (srcNow < (checkStart - 0.04) || srcNow >= checkEnd) {
-      // Check if it seamlessly advanced to the next adjacent clip
+      let foundIdx = -1;
+      // 1. Check if it seamlessly advanced to the next adjacent clip
       if (currentClipIdx + 1 < videoClips.length) {
         const nextC = videoClips[currentClipIdx + 1];
         const nStart = Number.isFinite(nextC?.sourceStart) ? nextC.sourceStart : (nextC?.start || 0);
         const nEnd = Number.isFinite(nextC?.sourceEnd) ? nextC.sourceEnd : (nextC?.end || realDur);
         if (srcNow >= (nStart - 0.04) && srcNow < nEnd) {
-          currentClipIdx = currentClipIdx + 1;
-        } else {
-          currentClipIdx = videoClips.findIndex((c) => {
-            const sStart = Number.isFinite(c.sourceStart) ? c.sourceStart : (Number.isFinite(c.start) ? c.start : 0);
-            const sEnd = Number.isFinite(c.sourceEnd) ? c.sourceEnd : (Number.isFinite(c.end) ? c.end : realDur);
-            return srcNow >= (sStart - 0.03) && srcNow < sEnd;
-          });
+          foundIdx = currentClipIdx + 1;
         }
-      } else {
-        currentClipIdx = videoClips.findIndex((c) => {
+      }
+
+      // 2. Search forward in timeline order from currentClipIdx + 2
+      if (foundIdx === -1) {
+        for (let i = currentClipIdx + 2; i < videoClips.length; i++) {
+          const c = videoClips[i];
           const sStart = Number.isFinite(c.sourceStart) ? c.sourceStart : (Number.isFinite(c.start) ? c.start : 0);
           const sEnd = Number.isFinite(c.sourceEnd) ? c.sourceEnd : (Number.isFinite(c.end) ? c.end : realDur);
-          return srcNow >= (sStart - 0.03) && srcNow < sEnd;
-        });
+          if (srcNow >= (sStart - 0.03) && srcNow < sEnd) {
+            foundIdx = i;
+            break;
+          }
+        }
       }
-      if (currentClipIdx !== -1) {
+
+      // 3. Fallback: only if seeking or srcNow moved before current clip, search backward from currentClipIdx - 1 down to 0
+      if (foundIdx === -1) {
+        for (let i = currentClipIdx - 1; i >= 0; i--) {
+          const c = videoClips[i];
+          const sStart = Number.isFinite(c.sourceStart) ? c.sourceStart : (Number.isFinite(c.start) ? c.start : 0);
+          const sEnd = Number.isFinite(c.sourceEnd) ? c.sourceEnd : (Number.isFinite(c.end) ? c.end : realDur);
+          if (srcNow >= (sStart - 0.03) && srcNow < sEnd) {
+            foundIdx = i;
+            break;
+          }
+        }
+      }
+
+      if (foundIdx !== -1) {
+        currentClipIdx = foundIdx;
         activeClipIdxRef.current = currentClipIdx;
       }
     }
@@ -153,7 +184,16 @@ export function useVideoPlayback({
       const cEnd = Number.isFinite(c.end) ? c.end : (cStart + (sEnd - sStart));
 
       const offset = Math.max(0, srcNow - sStart);
-      const tlTime = parseFloat((cStart + offset).toFixed(2));
+      let tlTime = parseFloat((cStart + offset).toFixed(2));
+
+      // Monotonic guarantee: While isPlaying and user has not seeked, mapped timeline time must never decrease
+      if (isPlaying && !hasSeekedRef.current && lastMappedTimelineTimeRef.current !== null && Number.isFinite(lastMappedTimelineTimeRef.current)) {
+        if (tlTime < lastMappedTimelineTimeRef.current) {
+          tlTime = lastMappedTimelineTimeRef.current;
+        }
+      }
+      hasSeekedRef.current = false;
+      lastMappedTimelineTimeRef.current = tlTime;
 
       // Optimized state update (~200ms, ~5fps for React tree) while GPU playhead runs at 60fps
       const now = performance.now();
@@ -248,12 +288,14 @@ export function useVideoPlayback({
   }, [isPlaying, videoRef]);
 
   const handleSeek = useCallback((time) => {
+    hasSeekedRef.current = true;
     activeClipIdxRef.current = 0;
     const rawTime = typeof time === 'number' && Number.isFinite(time) ? time : 0;
     const realDur = videoRef?.current?.duration || 0;
-    const totalDur = Math.max(duration > 0 ? duration : 0, realDur > 0 ? realDur : 0);
+    const totalDur = timelineDuration > 0 ? timelineDuration : (duration > 0 ? duration : realDur);
     const clampedTime = Math.max(0, totalDur > 0 ? Math.min(totalDur, rawTime) : rawTime);
     setCurrentTime(clampedTime);
+    lastMappedTimelineTimeRef.current = clampedTime;
 
     if (videoRef?.current) {
       let targetTime = clampedTime;
@@ -263,8 +305,16 @@ export function useVideoPlayback({
         const mapping = mapTimelineToSourceTime(clampedTime, videoClips);
         if (mapping.inClip && Number.isFinite(mapping.sourceTime)) {
           targetTime = mapping.sourceTime;
+          const targetIdx = videoClips.findIndex(c => c.id === mapping.clip?.id);
+          if (targetIdx !== -1) {
+            activeClipIdxRef.current = targetIdx;
+          }
         } else if (mapping.isGap && mapping.nextClip && Number.isFinite(mapping.nextClip.sourceStart)) {
           targetTime = mapping.nextClip.sourceStart;
+          const targetIdx = videoClips.findIndex(c => c.id === mapping.nextClip?.id);
+          if (targetIdx !== -1) {
+            activeClipIdxRef.current = targetIdx;
+          }
         }
       }
 
@@ -272,7 +322,7 @@ export function useVideoPlayback({
         videoRef.current.currentTime = targetTime;
       }
     }
-  }, [duration, renderedVideo, videoClips, videoRef]);
+  }, [duration, timelineDuration, renderedVideo, videoClips, videoRef]);
 
   const lastPlayPauseTimeRef = useRef(0);
   const handlePlayPause = useCallback(() => {
@@ -285,7 +335,7 @@ export function useVideoPlayback({
 
     const v = videoRef.current;
     const realDur = v.duration || 0;
-    const totalDur = Math.max(duration > 0 ? duration : 0, realDur > 0 ? realDur : 0);
+    const totalDur = timelineDuration > 0 ? timelineDuration : Math.max(duration > 0 ? duration : 0, realDur > 0 ? realDur : 0);
 
     if (v.paused) {
       if (v.ended || (totalDur > 0 && currentTime >= totalDur - 0.2)) {
@@ -297,11 +347,20 @@ export function useVideoPlayback({
           if (Math.abs(v.currentTime - mapping.sourceTime) > 0.04) {
             v.currentTime = mapping.sourceTime;
           }
+          const targetIdx = videoClips.findIndex(c => c.id === mapping.clip?.id);
+          if (targetIdx !== -1) {
+            activeClipIdxRef.current = targetIdx;
+          }
         } else if (mapping.isGap && mapping.nextClip && Number.isFinite(mapping.nextClip.sourceStart)) {
           // In gap: cue video to next clip start without forcing premature timeline jump
           v.currentTime = mapping.nextClip.sourceStart;
+          const targetIdx = videoClips.findIndex(c => c.id === mapping.nextClip?.id);
+          if (targetIdx !== -1) {
+            activeClipIdxRef.current = targetIdx;
+          }
         }
       }
+      lastMappedTimelineTimeRef.current = currentTime;
       if (!v.src && !v.currentSrc) return;
       if (v.error) {
         try { v.load(); } catch (_) {}
@@ -325,7 +384,7 @@ export function useVideoPlayback({
       v.pause();
       setIsPlaying(false);
     }
-  }, [currentTime, duration, renderedVideo, videoClips, handleSeek, videoRef]);
+  }, [currentTime, duration, timelineDuration, renderedVideo, videoClips, handleSeek, videoRef]);
 
   const handleVideoEnded = useCallback(() => {
     setIsPlaying(false);
@@ -334,7 +393,8 @@ export function useVideoPlayback({
   return {
     currentTime,
     setCurrentTime,
-    duration,
+    duration: timelineDuration,
+    rawDuration: duration,
     setDuration,
     isPlaying,
     setIsPlaying,

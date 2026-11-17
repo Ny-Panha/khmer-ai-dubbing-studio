@@ -1,14 +1,9 @@
 import { useCallback } from 'react';
 import {
-  splitClipAtTime,
-  deleteClipById,
-  deleteSegmentByIdOrIndex,
   isSegmentMatch,
   findSegmentIndex,
   autoSplitVideoBySegments,
   bridgeClipGaps,
-  autoAlignVoiceSegments,
-  resetSegmentsToSourceTiming,
 } from '../utils/timelineUtils';
 import {
   deleteSegment as deleteSegmentOp,
@@ -21,7 +16,7 @@ import {
   isGapClip,
 } from '../utils/timelineOps';
 import { parseTimeToSeconds, formatTimecode, formatMinSec, getSegmentAudioDuration } from '../utils/timestampUtils';
-import { splitKhmerTextIntoHalves, splitSegmentIntoNaturalSentences } from '../utils/khmerTextSplitter';
+import { splitSegmentIntoNaturalSentences } from '../utils/khmerTextSplitter';
 import { buildSpeakerRegistry } from '../utils/speakerUtils';
 import { syncTimelineAudioApi, autoFitSpeechSpeedApi, persistTimelineOperationApi, notifyBackendOffline, notifyBackendOnline } from '../services/api';
 import { saveTimelineOperationToLocalStorage } from '../utils/projectStorage';

@@ -22,6 +22,8 @@ export function usePlaybackEngine(params) {
   renderedVideoRef.current = renderedVideo;
   const durationRef = useRef(duration);
   durationRef.current = duration;
+  const lastMappedIdxRef = useRef(0);
+  const lastMappedTlTimeRef = useRef(0);
 
   const notifySubscribers = useCallback((nextTime) => {
     playheadTimeRef.current = nextTime;
@@ -35,6 +37,8 @@ export function usePlaybackEngine(params) {
   // Keep ref synchronized when paused or seeking
   useEffect(() => {
     if (Number.isFinite(currentTime)) {
+      lastMappedTlTimeRef.current = currentTime;
+      lastMappedIdxRef.current = 0;
       notifySubscribers(currentTime);
     }
   }, [currentTime, notifySubscribers]);
@@ -56,9 +60,10 @@ export function usePlaybackEngine(params) {
         let nextTimelineTime = rawMediaTime;
         const clips = videoClipsRef.current;
         if (!renderedVideoRef.current && Array.isArray(clips) && clips.length > 0) {
-          const mapped = mapSourceToTimelineTime(rawMediaTime, clips);
+          const mapped = mapSourceToTimelineTime(rawMediaTime, clips, lastMappedIdxRef.current);
           if (typeof mapped === 'number' && Number.isFinite(mapped)) {
-            nextTimelineTime = mapped;
+            nextTimelineTime = Math.max(lastMappedTlTimeRef.current || 0, mapped);
+            lastMappedTlTimeRef.current = nextTimelineTime;
           }
         }
         notifySubscribers(nextTimelineTime);

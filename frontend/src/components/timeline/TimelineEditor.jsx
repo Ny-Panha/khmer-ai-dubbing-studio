@@ -3,7 +3,6 @@ import { formatMinSec, getSegmentAudioDuration, parseTimeToSeconds } from '../..
 import {
   getPixelsPerSecond,
   syncSegmentsWithMovedClip,
-  deleteSegmentByIdOrIndex,
   findSegmentIndex,
   resolveSegmentAtTime,
   computeTimelineScrollForTime,
@@ -652,13 +651,20 @@ function TimelineEditor({
     };
   }, [isEditingInspectorText]);
 
+  const rafActiveClipIdxRef = useRef(0);
+  const rafLastMappedTimeRef = useRef(0);
+
+  // Duration follows the timeline (R7): ruler length, header duration, and player total equal the end of the last video clip after edits
   const totalDuration = React.useMemo(() => {
     const clipsMax = (videoClips || []).reduce((max, c) => Math.max(max, Number(c.end) || 0), 0);
     const subsMax = (scriptSegments || []).reduce((max, s) => {
       const end = Number(s.audioEndSec) || Number(s.endSec) || (Number(s.startSec) || 0) + (Number(s.audioDurationSec) || 3.0);
       return Math.max(max, end);
     }, 0);
-    return Math.max(duration > 0 ? duration : 0, clipsMax, subsMax);
+    if (clipsMax > 0) {
+      return Math.max(clipsMax, subsMax);
+    }
+    return Math.max(duration > 0 ? duration : 0, subsMax);
   }, [duration, videoClips, scriptSegments]);
 
   const pps = getPixelsPerSecond(zoom);
@@ -667,22 +673,22 @@ function TimelineEditor({
     return Math.max(1200, totalDuration * pps + TRACK_HEADER_WIDTH + 1000);
   }, [totalDuration, pps]);
 
-  // Auto-heal single truncated video clip: if video track only has 1 uncut clip ending prematurely (e.g. at 20s instead of totalDuration),
-  // automatically heal and stretch it to match totalDuration so video track and playhead never stop or freeze at 20s!
+  // Auto-heal single truncated video clip: only heal if uncut raw clip had premature end before metadata finished loading
   useEffect(() => {
     if (!videoClips || videoClips.length !== 1 || !onUpdateClips) return;
     const singleClip = videoClips[0];
     if (singleClip.name === 'Gap' || singleClip.id?.startsWith('clip-gap')) return;
-    if ((singleClip.start || 0) === 0 && totalDuration > 15 && (singleClip.end || 0) < totalDuration - 2) {
+    if (singleClip.userTrimmed || singleClip.audioTrimmed) return;
+    if ((singleClip.start || 0) === 0 && duration > 15 && (singleClip.end || 0) < duration - 2 && (singleClip.sourceEnd - singleClip.sourceStart === singleClip.end - singleClip.start)) {
       const healedClips = [{
         ...singleClip,
-        end: totalDuration,
-        sourceEnd: Math.max(Number(singleClip.sourceEnd) || 0, totalDuration),
-        duration: totalDuration,
+        end: duration,
+        sourceEnd: Math.max(Number(singleClip.sourceEnd) || 0, duration),
+        duration: duration,
       }];
       onUpdateClips(healedClips);
     }
-  }, [videoClips, totalDuration, onUpdateClips]);
+  }, [videoClips, duration, onUpdateClips]);
 
   const handleCenterPlayhead = useCallback(() => {
     if (!timelineBodyRef.current) return;
@@ -1254,6 +1260,7 @@ function TimelineEditor({
 
             if (dragState.mode === 'move') {
               const newStart = Math.max(0, parseFloat(dragState.currentStart.toFixed(2)));
+              // Dynamic trackId generation for voice lanes: `voice-${finalTargetRow + 1}`
               const opResult = moveClipOp(currentState, {
                 clipId: segKey,
                 newStart,
@@ -1578,15 +1585,58 @@ function TimelineEditor({
           const currentClips = videoClipsRef.current || videoClips || [];
           let tlTime = smoothSrcTime;
           if (currentClips && currentClips.length > 0) {
-            const c = currentClips.find((clip) => {
-              const sStart = Number.isFinite(clip.sourceStart) ? clip.sourceStart : (clip.start || 0);
-              const sEnd = Number.isFinite(clip.sourceEnd) ? clip.sourceEnd : (clip.end || (v.duration || 0));
-              return smoothSrcTime >= (sStart - 0.05) && smoothSrcTime <= (sEnd + 0.05);
-            });
-            if (c) {
+            let currentClipIdx = rafActiveClipIdxRef.current;
+            if (currentClipIdx < 0 || currentClipIdx >= currentClips.length) {
+              currentClipIdx = 0;
+            }
+            const checkClip = currentClips[currentClipIdx];
+            const checkStart = Number.isFinite(checkClip?.sourceStart) ? checkClip.sourceStart : (checkClip?.start || 0);
+            const checkEnd = Number.isFinite(checkClip?.sourceEnd) ? checkClip.sourceEnd : (checkClip?.end || (v.duration || 0));
+
+            let foundIdx = -1;
+            if (smoothSrcTime >= (checkStart - 0.04) && smoothSrcTime < checkEnd) {
+              foundIdx = currentClipIdx;
+            } else if (currentClipIdx + 1 < currentClips.length) {
+              const nextC = currentClips[currentClipIdx + 1];
+              const nStart = Number.isFinite(nextC?.sourceStart) ? nextC.sourceStart : (nextC?.start || 0);
+              const nEnd = Number.isFinite(nextC?.sourceEnd) ? nextC.sourceEnd : (nextC?.end || (v.duration || 0));
+              if (smoothSrcTime >= (nStart - 0.04) && smoothSrcTime < nEnd) {
+                foundIdx = currentClipIdx + 1;
+              }
+            }
+
+            if (foundIdx === -1) {
+              for (let i = currentClipIdx + 2; i < currentClips.length; i++) {
+                const c = currentClips[i];
+                const sStart = Number.isFinite(c.sourceStart) ? c.sourceStart : (c.start || 0);
+                const sEnd = Number.isFinite(c.sourceEnd) ? c.sourceEnd : (c.end || (v.duration || 0));
+                if (smoothSrcTime >= (sStart - 0.03) && smoothSrcTime < sEnd) {
+                  foundIdx = i;
+                  break;
+                }
+              }
+            }
+
+            if (foundIdx === -1) {
+              for (let i = currentClipIdx - 1; i >= 0; i--) {
+                const c = currentClips[i];
+                const sStart = Number.isFinite(c.sourceStart) ? c.sourceStart : (c.start || 0);
+                const sEnd = Number.isFinite(c.sourceEnd) ? c.sourceEnd : (c.end || (v.duration || 0));
+                if (smoothSrcTime >= (sStart - 0.03) && smoothSrcTime < sEnd) {
+                  foundIdx = i;
+                  break;
+                }
+              }
+            }
+
+            if (foundIdx !== -1) {
+              rafActiveClipIdxRef.current = foundIdx;
+              const c = currentClips[foundIdx];
               const sStart = Number.isFinite(c.sourceStart) ? c.sourceStart : (c.start || 0);
               const cStart = Number.isFinite(c.start) ? c.start : 0;
-              tlTime = cStart + Math.max(0, smoothSrcTime - sStart);
+              const computedTlTime = cStart + Math.max(0, smoothSrcTime - sStart);
+              tlTime = Math.max(rafLastMappedTimeRef.current || 0, computedTlTime);
+              rafLastMappedTimeRef.current = tlTime;
             }
           }
 
@@ -1633,6 +1683,8 @@ function TimelineEditor({
   // Synchronize playhead position via GPU transform when paused or seeking (zero React style conflict)
   useEffect(() => {
     if (isPlaying) return;
+    rafLastMappedTimeRef.current = currentTime;
+    rafActiveClipIdxRef.current = 0;
     if (playheadRef.current) {
       const currentX = currentTime * pps;
       playheadRef.current.style.transform = `translate3d(${currentX}px, 0, 0)`;

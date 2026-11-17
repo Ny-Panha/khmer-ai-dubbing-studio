@@ -2,7 +2,6 @@ import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { Film, Sparkles, Subtitles, Layers, AlertCircle, Plus, CheckCircle2, ArrowRight } from 'lucide-react';
 import { uploadVideoFile } from '../../services/api';
 import { parseTimeToSeconds, parseTimestampToSeconds, formatMinSec } from '../../utils/timestampUtils';
-import { deleteSegmentByIdOrIndex } from '../../utils/timelineUtils';
 import { deleteSegment as deleteSegmentOp } from '../../utils/timelineOps';
 import { filterScriptSegments } from '../../utils/scriptSearchUtils';
 
