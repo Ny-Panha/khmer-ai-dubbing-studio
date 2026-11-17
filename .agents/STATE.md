@@ -3,24 +3,26 @@
 ## Last Session
 - **Environment**: Copilot SDK in VS Code
 - **Branch**: `fix/delete-no-ripple` based on `fix/timeline-clip-selection` (`1d5e464`)
-- **Timestamp**: 2026-11-17T09:05:00+07:00
+- **Timestamp**: 2026-11-17T09:20:00+07:00
 
-## Summary: Strictly Independent Remove-Only Deletes
+## Summary: Track-Independent Deletes and First-Class Gaps
 - Video delete now changes only `videoClips`, leaving dialogue segments/subtitles/audio timings intact; segment delete changes only segments (including that segment's subtitle row), leaving video clips intact. The audio master re-sync after segment delete remains in place.
 - Timeline toolbar fallback and Delete/Backspace shortcuts stop dispatching when the selected track has no valid item, rather than falling through to the other track.
-- Video delete still creates/fills/merges Gap clips and retains the `deleteClipById`/`deleteSegmentByIdOrIndex` legacy defaults for callers that omit remove-only options.
+- Dialogue video delete remains remove-only and creates/fills/merges Gap clips. Gap delete is the explicit exception: it shifts only later video clips left by the Gap duration, preserving source ranges and all dialogue segment data.
+- Splitting while targeting the video track now prioritizes the video clip under the playhead, including Gaps; a split Gap remains two Gap clips. Segment split retains priority when video is not explicitly selected and a segment contains the playhead.
+- `deleteClipById`/`deleteSegmentByIdOrIndex` legacy defaults remain unchanged for callers that omit remove-only options.
 - Production `deleteSegmentByIdOrIndex` callers: `useClipOperations.handleDeleteSegment`, the direct `TimelineEditor.handleDeleteSelected` fallback, and `MediaLibrary` standalone fallback; all pass `{ ripple: false, preserveIds: true }`. `MediaLibrary` delegates to the central handler when provided. Production `deleteClipById` caller: only `useClipOperations.handleDeleteClip`, passing remove-only, Gap, and duration options. Legacy/test callers omitting options retain ripple/re-index behavior.
-- Verification: focused timeline/selection/split tests **19/19**; frontend build passed (**2035 modules**, existing large-chunk warning); frontend lint exited successfully with existing warnings. Related timeline/Auto-Align/search suite **42/43**; its unrelated pre-existing failure is `timeline_ui_workflow_fix.test.js` tooltip expectation.
+- Verification: focused timeline/selection/split and Gap behavior tests **22/22**; frontend build passed (**2035 modules**, existing large-chunk warning). Frontend lint exited successfully with existing warnings. Related timeline/Auto-Align/search suite had an unrelated pre-existing tooltip expectation failure in `timeline_ui_workflow_fix.test.js`.
 - Full backend test run was stopped after long-running integration tests showed network `EACCES` and service-dependent failures; it did not produce a complete suite result.
-- Real-app destructive save/read-back and Ctrl+Z are not verified; no timeline delete was performed on the user's episode data.
+- Real-app save/read-back and Ctrl+Z remain unverified; no destructive test was run on the user's stored episodes.
 
 ## Active Environment
 - Branch: `fix/delete-no-ripple`, based on `fix/timeline-clip-selection`; main untouched.
-- Frontend build and local shell tests are available. The local browser loads the studio and backend series reads respond, but do not perform live deletes without a disposable episode/copy and explicit save/restore test target.
+- Frontend build and local shell tests are available. The shared browser currently reports a domain-policy block; do not perform live deletes without a disposable episode/copy and explicit save/restore test target.
 - Pre-existing `.agents/` deletions, replacement agent files, and the prior Code Reviewer state note remain unrelated and must not be staged.
 
 ## Next Steps
-- Run save/read-back and Ctrl+Z acceptance checks only against a disposable episode/copy; visually verify a deleted video cut becomes a joined Gap and the voice track is unchanged.
+- Run save/read-back and Ctrl+Z acceptance checks only against a disposable episode/copy; visually verify Gap split/delete behavior and that the voice track is unchanged.
 - Push `fix/delete-no-ripple`; do not merge to main.
 
 ## Last Session

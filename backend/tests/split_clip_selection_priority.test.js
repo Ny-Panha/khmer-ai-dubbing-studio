@@ -53,15 +53,22 @@ test('useClipOperations: handleSplitClip Deterministic Priority & Selection Cont
   assert.ok(code.includes('isSegmentMatch'), 'useClipOperations.js must import isSegmentMatch');
   assert.ok(code.includes('findSegmentIndex'), 'useClipOperations.js must import findSegmentIndex');
 
-  // Verify that handleSplitClip implements the 4-step priority contract
-  assert.ok(code.includes('// (a) if selectedSegmentId matches a segment and the playhead is strictly inside it -> split THAT segment, never the video'),
-    'handleSplitClip must have priority (a) guarding selectedSegmentId');
-  assert.ok(code.includes('// (b) else if a video clip is explicitly active and the playhead is inside it -> split the video'),
-    'handleSplitClip must have priority (b) guarding active video clip');
-  assert.ok(code.includes('// (c) else if any segment intersects the playhead -> split it'),
-    'handleSplitClip must have priority (c) guarding any intersecting segment');
-  assert.ok(code.includes('// (d) else split the video at the playhead'),
-    'handleSplitClip must have priority (d) guarding fallback video split');
+  assert.ok(code.includes('// (a) split the selected segment only when the video track is not explicitly targeted'),
+    'Selected-segment priority must defer to an explicit video-track target');
+  assert.ok(code.includes('// (b) split the video clip under the playhead, including Gaps'),
+    'An explicit video target must split the clip under the playhead, including a Gap');
+  assert.ok(code.includes("selectedClipKind === 'video' || Boolean("),
+    'The selected video track kind must override segment targeting');
+  assert.ok(code.includes('selectedClipKind = null'),
+    'useClipOperations must receive the selected track kind');
+  const editorCode = fs.readFileSync(path.resolve(__dirname, '../../frontend/src/components/timeline/TimelineEditor.jsx'), 'utf8');
+  assert.ok(editorCode.includes("selectedClipKind === 'video' || lastSelectedType === 'video'"),
+    'Timeline toolbar must select its target from the selected video kind');
+  assert.ok(editorCode.includes('onSplitClip(time, activeSplitTarget)'),
+    'Timeline toolbar must pass its resolved target ID to the split handler');
+  const appCode = fs.readFileSync(path.resolve(__dirname, '../../frontend/src/App.jsx'), 'utf8');
+  assert.ok(appCode.includes('selectedClipKind: media.selectedClipKind'),
+    'App must pass the selected track kind to useClipOperations');
 
   // Verify veto elimination: videoSplitResult does NOT veto segment split
   assert.ok(!code.includes('const shouldSplitSegment = targetSegIdx !== -1 || (anyIntersectingSegIdx !== -1 && !videoSplitResult)'),

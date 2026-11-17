@@ -185,6 +185,7 @@ export function splitClipAtTime(clips = [], splitTime = 0, totalDuration = 0, ac
   if (targetIndex === -1) return null;
 
   const target = targetClips[targetIndex];
+  const isGap = /^Gap(?: \(Part \d+\))?$/.test(target.name || '') || target.id?.startsWith('clip-gap');
   const roundedSplit = parseFloat(splitTime.toFixed(3));
   const timelineOffset = roundedSplit - target.start;
   const newSourceSplit = parseFloat((target.sourceStart + timelineOffset).toFixed(3));
@@ -210,7 +211,7 @@ export function splitClipAtTime(clips = [], splitTime = 0, totalDuration = 0, ac
     end: target.end,
     sourceStart: newSourceSplit,
     sourceEnd: target.sourceEnd,
-    name: `${baseName} (Part 2)`,
+    name: isGap ? 'Gap' : `${baseName} (Part 2)`,
   };
 
   const updated = [...targetClips];
@@ -463,8 +464,20 @@ export function deleteClipById(clips, clipId, options = {}) {
   const targetStart = Number.isFinite(targetClip.start) ? targetClip.start : 0;
   const targetEnd = Number.isFinite(targetClip.end) ? targetClip.end : targetStart;
   const dur = Math.max(0, parseFloat((targetEnd - targetStart).toFixed(3)));
+  const isTargetGap = /^Gap(?: \(Part \d+\))?$/.test(targetClip.name || '') || targetClip.id?.startsWith('clip-gap');
 
   let remaining = clips.filter((c) => c.id !== clipId);
+  if (isTargetGap) {
+    return remaining.map((clip) => {
+      if (clip.start < targetEnd) return clip;
+      return {
+        ...clip,
+        start: parseFloat((clip.start - dur).toFixed(3)),
+        end: parseFloat((clip.end - dur).toFixed(3)),
+      };
+    });
+  }
+
   const isTargetDialogue = Boolean(targetClip.isDialogue || targetClip.segmentId || targetClip.segmentIndex || /^#\d+/.test(targetClip.name || ''));
   if (remaining.length === 0 && !gapOnDelete) return [];
 

@@ -1695,7 +1695,7 @@ function TimelineEditor({
         canRedo={canRedo}
         onRedo={onRedo}
         onSplitClip={(time) => {
-          const activeSplitTarget = lastSelectedType === 'video'
+          const activeSplitTarget = selectedClipKind === 'video' || lastSelectedType === 'video'
             ? (activeClipId || selectedSegKey)
             : (selectedSegKey || activeClipId);
           if (onSplitClip) onSplitClip(time, activeSplitTarget);

@@ -422,6 +422,7 @@ export default function App() {
     setSpeakerRegistry,
     audioGenerated: audio.audioGenerated,
     selectedSegmentId: media.selectedSegmentId,
+    selectedClipKind: media.selectedClipKind,
     setSelectedSegmentId: media.setSelectedSegmentId,
     handleSeek: playback.handleSeek,
     pushHistory: undoRedo.pushUndoSnapshot,

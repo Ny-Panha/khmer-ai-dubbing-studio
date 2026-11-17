@@ -80,6 +80,7 @@ export function useClipOperations({
   setSpeakerRegistry,
   audioGenerated,
   setSelectedSegmentId,
+  selectedClipKind = null,
   handleSeek,
   pushUndoSnapshot: pushUndoSnapshotParam,
   pushHistory,
@@ -333,11 +334,11 @@ export function useClipOperations({
       return true;
     };
 
-    const isTargetingVideoClip = Boolean(
+    const isTargetingVideoClip = selectedClipKind === 'video' || Boolean(
       targetId && currentClips.some((c) => c.id === targetId)
     );
 
-    // (a) if selectedSegmentId matches a segment and the playhead is strictly inside it -> split THAT segment, never the video
+    // (a) split the selected segment only when the video track is not explicitly targeted
     let selectedSegIdx = -1;
     if (!isTargetingVideoClip) {
       const activeSegKey = targetId !== null && targetId !== undefined ? targetId : selectedSegmentId;
@@ -356,41 +357,20 @@ export function useClipOperations({
       return executeSplitSegment(selectedSegIdx);
     }
 
-    // (b) else if a video clip is explicitly active and the playhead is inside it -> split the video (current behaviour preserved)
+    // (b) split the video clip under the playhead, including Gaps
     const activeVideoId = isTargetingVideoClip ? targetId : activeClipId;
-    let explicitVideoClip = null;
-    if (activeVideoId) {
-      explicitVideoClip = currentClips.find(
-        (c) => c.id === activeVideoId && roundedSplit > (c.start + 0.05) && roundedSplit < (c.end - 0.05)
-      );
-    }
-
-    if (explicitVideoClip) {
-      const videoSplitResult = splitClipAtTime(currentClips, roundedSplit, totalDur, activeVideoId);
-      if (videoSplitResult) {
-        pushUndoSnapshot(currentClips, segments);
-        setVideoClips(videoSplitResult.newClips);
-        setActiveClipId(videoSplitResult.activeClipId);
-        return true;
+    if (!isTargetingVideoClip) {
+      const anyIntersectingSegIdx = segments.findIndex((s) => isInsideSeg(s, false));
+      if (anyIntersectingSegIdx !== -1) {
+        return executeSplitSegment(anyIntersectingSegIdx);
       }
     }
 
-    // (c) else if any segment intersects the playhead -> split it
-    let anyIntersectingSegIdx = -1;
-    if (segments.length > 0) {
-      anyIntersectingSegIdx = segments.findIndex((s) => isInsideSeg(s, false));
-    }
-
-    if (anyIntersectingSegIdx !== -1) {
-      return executeSplitSegment(anyIntersectingSegIdx);
-    }
-
-    // (d) else split the video at the playhead
-    const fallbackVideoSplit = splitClipAtTime(currentClips, roundedSplit, totalDur, null);
-    if (fallbackVideoSplit) {
+    const videoSplitResult = splitClipAtTime(currentClips, roundedSplit, totalDur, activeVideoId);
+    if (videoSplitResult) {
       pushUndoSnapshot(currentClips, segments);
-      setVideoClips(fallbackVideoSplit.newClips);
-      setActiveClipId(fallbackVideoSplit.activeClipId);
+      setVideoClips(videoSplitResult.newClips);
+      setActiveClipId(videoSplitResult.activeClipId);
       return true;
     }
 

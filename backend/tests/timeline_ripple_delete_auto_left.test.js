@@ -216,6 +216,102 @@ describe('Remove-only timeline delete', () => {
     }
   });
 
+  test('splitting a Gap at midpoint or near either edge produces two exact Gap clips', async () => {
+    const { splitClipAtTime } = await import(pathToFileURL(timelineUtilsPath));
+    const cases = [
+      { splitTime: 5, expected: [[2, 5], [5, 8]] },
+      { splitTime: 2.06, expected: [[2, 2.06], [2.06, 8]] },
+      { splitTime: 7.94, expected: [[2, 7.94], [7.94, 8]] },
+    ];
+
+    for (const { splitTime, expected } of cases) {
+      const gap = {
+        id: 'clip-gap-test',
+        name: 'Gap',
+        start: 2,
+        end: 8,
+        sourceStart: 2,
+        sourceEnd: 8,
+        isDialogue: false,
+      };
+      const result = splitClipAtTime([gap], splitTime, 8);
+
+      assert.ok(result);
+      assert.deepEqual(result.newClips.map((clip) => [clip.start, clip.end]), expected);
+      assert.deepEqual(result.newClips.map((clip) => clip.name), ['Gap', 'Gap']);
+      assert.ok(result.newClips.every((clip) => !clip.isDialogue));
+      assert.equal(result.newClips[0].sourceEnd, splitTime);
+      assert.equal(result.newClips[1].sourceStart, splitTime);
+    }
+  });
+
+  test('deleting a middle Gap ripples only later video clips and shortens continuous coverage', async () => {
+    const { deleteClipById } = await import(pathToFileURL(timelineUtilsPath));
+    const clips = [
+      { id: 'clip-before', name: '#1 Speaker', isDialogue: true, segmentId: 1, segmentIndex: 1, start: 0, end: 2, sourceStart: 10, sourceEnd: 12 },
+      { id: 'gap-delete', name: 'Gap', start: 2, end: 5, sourceStart: 2, sourceEnd: 5 },
+      { id: 'clip-after', name: '#2 Speaker', isDialogue: true, segmentId: 2, segmentIndex: 2, start: 5, end: 7, sourceStart: 20, sourceEnd: 22 },
+      { id: 'gap-after', name: 'Gap', start: 7, end: 9, sourceStart: 7, sourceEnd: 9 },
+      { id: 'clip-last', name: '#3 Speaker', isDialogue: true, segmentId: 3, segmentIndex: 3, start: 9, end: 12, sourceStart: 30, sourceEnd: 33 },
+    ];
+    const segments = [
+      { id: 1, startSec: 1, endSec: 2, audioStartSec: 1, audioEndSec: 2 },
+      { id: 2, startSec: 5, endSec: 7, audioStartSec: 5, audioEndSec: 7 },
+    ];
+    const beforeSegments = structuredClone(segments);
+
+    const updated = deleteClipById(clips, 'gap-delete', {
+      ripple: false,
+      preserveIds: true,
+      gapOnDelete: true,
+      totalDuration: 12,
+    });
+
+    assert.deepEqual(updated, [
+      clips[0],
+      { ...clips[2], start: 2, end: 4 },
+      { ...clips[3], start: 4, end: 6 },
+      { ...clips[4], start: 6, end: 9 },
+    ]);
+    assertContinuousCoverage(updated, 9);
+    assert.deepEqual(segments, beforeSegments);
+  });
+
+  test('splitting then deleting the first opening Gap starts the film at zero without changing segments', async () => {
+    const { deleteClipById, splitClipAtTime } = await import(pathToFileURL(timelineUtilsPath));
+    const clips = [
+      { id: 'opening-gap', name: 'Gap', start: 0, end: 4, sourceStart: 0, sourceEnd: 4 },
+      { id: 'clip-first', name: '#1 Speaker', isDialogue: true, segmentId: 1, segmentIndex: 1, start: 4, end: 6, sourceStart: 20, sourceEnd: 22 },
+      { id: 'clip-second', name: '#2 Speaker', isDialogue: true, segmentId: 2, segmentIndex: 2, start: 6, end: 9, sourceStart: 30, sourceEnd: 33 },
+    ];
+    const segments = [
+      { id: 1, startSec: 4, endSec: 6, audioStartSec: 4.1, audioEndSec: 5.9 },
+      { id: 2, startSec: 6, endSec: 9, audioStartSec: 6, audioEndSec: 9 },
+    ];
+    const beforeSegments = structuredClone(segments);
+    const split = splitClipAtTime(clips, 2, 9);
+    assert.ok(split);
+    const updated = deleteClipById(split.newClips, 'opening-gap', {
+      ripple: false,
+      preserveIds: true,
+      gapOnDelete: true,
+      totalDuration: 9,
+    });
+
+    assert.deepEqual(updated.map(({ id, name, start, end }) => [id, name, start, end]), [
+      [split.newClips[1].id, 'Gap', 0, 2],
+      ['clip-first', '#1 Speaker', 2, 4],
+      ['clip-second', '#2 Speaker', 4, 7],
+    ]);
+    assert.deepEqual(updated.slice(1).map(({ sourceStart, sourceEnd }) => [sourceStart, sourceEnd]), [
+      [20, 22],
+      [30, 33],
+    ]);
+    assert.equal(updated[0].start, 0);
+    assertContinuousCoverage(updated, 7);
+    assert.deepEqual(segments, beforeSegments);
+  });
+
   test('deleting a non-dialogue video clip also leaves a covered Gap', async () => {
     const { deleteClipById } = await import(pathToFileURL(timelineUtilsPath));
     const clips = [
