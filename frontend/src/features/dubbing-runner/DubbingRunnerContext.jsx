@@ -601,8 +601,6 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
     }));
 
     return { success: true, noVocalsUrl: sepRes?.noVocalsUrl };
-
-    return { success: false, aborted: true };
   }, [activeSeries?.id, updateRunnerState]);
 
   /**

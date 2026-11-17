@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
-  Sparkles, Languages, BookOpen, Loader2, AlertCircle, ArrowRight, CheckCircle2, Mic, Volume2, Film, RefreshCw, ChevronDown, ChevronUp, Settings2, FileText, Check, Terminal, FileUp, Zap, Layers, MessageSquare, Crown, Briefcase, UserCheck, Building2, Smile, X
+  Sparkles, BookOpen, Loader2, AlertCircle, ArrowRight, CheckCircle2, Mic, Volume2, Film, RefreshCw, ChevronDown, Settings2, FileText, Check, Terminal, Zap, Layers, MessageSquare, Crown, Briefcase, UserCheck, Building2, Smile, X
 } from 'lucide-react';
 import { importSubtitlesApi, retranslateAllSegmentsApi } from '../../services/api';
-import { DubbingStepButton, useDubbingFeature } from '../../features/dubbing-runner';
+import { DubbingStepButton } from '../../features/dubbing-runner';
 
 const GENRE_OPTIONS = [
   { id: 'auto', label: '✨ Auto (ស្គាល់ស្វ័យប្រវត្តិ)', shortLabel: 'Auto', icon: Sparkles, hint: 'AI វិភាគ Audio + OCR កំណត់ប្រភេទរឿងស្វ័យប្រវត្តិ' },
@@ -387,8 +387,6 @@ export default function DubbingModeTab({
       setIsSeparatingAudio(false);
     }
   };
-  const [internalProgress, setInternalProgress] = useState(0);
-  const [internalStage, setInternalStage] = useState('');
 
   const [internalAudioProgress, setInternalAudioProgress] = useState(0);
   const [internalAudioStage, setInternalAudioStage] = useState('');
@@ -396,9 +394,6 @@ export default function DubbingModeTab({
   // Determine if THIS current episode is the one being generated
   const isThisEpisodeGeneratingScript = Boolean(
     isGeneratingScript && (!generatingEpisodeId || !episodeId || generatingEpisodeId === episodeId)
-  );
-  const isOtherEpisodeGeneratingScript = Boolean(
-    isGeneratingScript && generatingEpisodeId && episodeId && generatingEpisodeId !== episodeId
   );
   const isThisEpisodeGeneratingAudio = Boolean(
     isGeneratingAudio && (!generatingAudioEpisodeId || !episodeId || generatingAudioEpisodeId === episodeId)
@@ -452,26 +447,6 @@ export default function DubbingModeTab({
       consoleEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
   }, [scriptLogs, currentStageText]);
-
-  const getDirectionPlaceholder = () => {
-    if (dubbingMode === 'recap') {
-      return 'ឧ. សម្រាយបែបរន្ធត់ ជក់ចិត្ត ផ្តោតលើប្រយុទ្ធ... (អាចទុកទំនេរបាន)';
-    }
-    switch (selectedGenre) {
-      case 'ancient':
-        return 'ឧ. រឿងភាគបុរាណចិន/គុណនិយម, តួប្រុស: លីន ហ្វេង, ឋានៈ: ព្រឹទ្ធាចារ្យ, មេភូមិ... (អាចទុកទំនេរបាន)';
-      case 'modern':
-        return 'ឧ. រឿងភាគសម័យទំនើប/CEO, លោកប្រធានក្រុមហ៊ុន: ឆិន ហាវ, ជំនួយការ: អាលីន... (អាចទុកទំនេរបាន)';
-      case 'action':
-        return 'ឧ. រឿង Action សងសឹក, មេបញ្ជាការ: ចាង ហ្វៃ, ប៉ូលិសស៊ើបអង្កេត... (អាចទុកទំនេរបាន)';
-      case 'comedy':
-        return 'ឧ. រឿងកំប្លែងសើចចុកពោះ, ភាសាសន្ទនាកំប្លុកកំប្លែង ធម្មជាតិ... (អាចទុកទំនេរបាន)';
-      case 'auto':
-      default:
-        return 'ឧ. ទុកឱ្យ AI ស្គាល់ប្រភេទរឿងដោយស្វ័យប្រវត្តិ ឬបញ្ជាក់ឈ្មោះតួអង្គ និងទិសដៅ... (អាចទុកទំនេរបាន)';
-    }
-  };
-
 
   // Fallback animation timer for Step 3 Audio Dubbing (0 -> 100%)
   useEffect(() => {

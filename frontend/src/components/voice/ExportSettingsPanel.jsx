@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import {
   Clapperboard, Subtitles, Loader2, ChevronUp, ChevronDown,
-  CheckCircle2, ShieldCheck, Image, Upload, Video, Tv, Trash2, VolumeX, Sparkles
+  CheckCircle2, ShieldCheck, Image, Upload, Tv, Trash2, VolumeX
 } from 'lucide-react';
 import { resolveDefaultAspectRatio, sanitizeAspectRatio } from '../../utils/projectStorage';
 

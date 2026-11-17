@@ -1,14 +1,13 @@
 import React, { useState } from 'react';
-import { 
-  Film, FileText, Sparkles, Mic, Download, Plus, Trash2, Edit2, CheckCircle2, 
-  Clock, BookOpen, Layers, ArrowRight, Check, AlertCircle, Play, Scissors, Loader2,
-  ChevronDown, ChevronRight, Zap
+import {
+  Plus, Trash2, Edit2, CheckCircle2,
+  Clock, BookOpen, Layers, Check, Scissors, Loader2,
+  ChevronDown, ChevronRight
 } from 'lucide-react';
 import { splitVideoEpisodesApi } from '../../services/api';
 import { formatTimecode } from '../../utils/formatTime';
 import { isCorruptedOrMojibakeTitle } from '../../utils/projectStorage';
-import { checkEpisodeHasScript, getEpisodeSegmentCount } from '../dashboard/geminiRouteHelpers';
-import { DubbingStepButton, useDubbingFeature } from '../../features/dubbing-runner';
+import { DubbingStepButton } from '../../features/dubbing-runner';
 
 function formatEpisodeDisplayTitle(title, episodeNumber) {
   if (!title) return `ភាគទី ${episodeNumber} (EP${episodeNumber})`;
@@ -41,7 +40,6 @@ export default function EpisodesTab({
   const [tempTitle, setTempTitle] = useState('');
   const [isEditingSeriesTitle, setIsEditingSeriesTitle] = useState(false);
   const [tempSeriesTitle, setTempSeriesTitle] = useState('');
-  const [uploadTargetEpisodeId, setUploadTargetEpisodeId] = useState(null);
   const [showSplitModal, setShowSplitModal] = useState(false);
   const [splitMode, setSplitMode] = useState('minutes'); // 'minutes' | 'episodes'
   const [splitValue, setSplitValue] = useState(''); // starts empty: no preset/default
@@ -206,14 +204,6 @@ export default function EpisodesTab({
       onRenameSeries(tempSeriesTitle.trim());
     }
     setIsEditingSeriesTitle(false);
-  };
-
-  const handleEpisodeFileInput = (e, epId) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    if (onFileUpload) {
-      onFileUpload(file, epId);
-    }
   };
 
   return (

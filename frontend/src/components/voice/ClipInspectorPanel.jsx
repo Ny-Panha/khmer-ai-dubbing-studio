@@ -5,7 +5,6 @@ import {
   Volume2, VolumeX, RefreshCw, Trash2, AlertCircle, Pause,
   Copy, Check, User, UserCheck, Play, Film, MessageSquare
 } from 'lucide-react';
-import { isLongKhmerSubtitle } from '../../utils/khmerTextSplitter';
 import { retranslateSegmentApi } from '../../services/api';
 
 export default function ClipInspectorPanel({

@@ -1,9 +1,8 @@
 import React, { useState, useContext, useEffect } from 'react';
 import { 
-  Key, HelpCircle, Download, Loader2, RotateCcw, X, Trash2, Film, Plus, Cpu, Layers, Activity,
+  Key, HelpCircle, Download, Loader2, RotateCcw, Film, Cpu, Layers, Activity,
   PanelLeft, PanelRight, PanelBottom, Home
 } from 'lucide-react';
-import { isCorruptedOrMojibakeTitle } from '../../utils/projectStorage';
 import { useGeminiQuotaMonitor, runQuotaCheck } from '../../hooks/useGeminiQuotaMonitor';
 import { JobQueueContext } from '../../context/jobQueueStore';
 import { useDubbingRunnerContext } from '../../features/dubbing-runner/DubbingRunnerContext';

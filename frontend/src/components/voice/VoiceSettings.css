@@ -55,38 +55,6 @@
   z-index: 15;
 }
 
-.inspector-sticky-export-btn {
-  width: 100%;
-  height: 38px;
-  border-radius: 8px;
-  border: 1px solid rgba(0, 229, 255, 0.45);
-  background: linear-gradient(135deg, #0284c7 0%, #00E5FF 100%);
-  color: #090A0F;
-  font-family: var(--font-khmer);
-  font-size: 0.84rem;
-  font-weight: 800;
-  line-height: var(--khmer-line-height, 1.68);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  cursor: pointer;
-  box-shadow: 0 4px 16px rgba(0, 229, 255, 0.25);
-  transition: all 0.16s ease;
-}
-
-.inspector-sticky-export-btn:hover:not(:disabled) {
-  filter: brightness(1.08);
-  transform: translateY(-1px);
-  box-shadow: 0 6px 20px rgba(0, 229, 255, 0.38);
-}
-
-.inspector-sticky-export-btn:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-  box-shadow: none;
-}
-
 .inspector-card-group {
   background: var(--muted);
   border: 1px solid var(--line);
@@ -138,47 +106,6 @@
   font-size: 0.80rem !important;
   line-height: 1.6 !important;
   padding: 8px 10px !important;
-}
-
-.sound-mode-grid {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 6px;
-}
-
-.mode-btn {
-  background: #141c2e;
-  border: 1px solid rgba(255, 255, 255, 0.07);
-  border-radius: 8px;
-  padding: 10px 12px;
-  text-align: left;
-  cursor: pointer;
-  transition: all 0.15s ease;
-  font-family: inherit;
-}
-
-.mode-btn:hover {
-  background: #1a243a;
-  border-color: rgba(255, 255, 255, 0.15);
-}
-
-.mode-btn.selected {
-  border-color: rgba(56, 189, 248, 0.5);
-  background: rgba(56, 189, 248, 0.08);
-  box-shadow: 0 0 12px rgba(56, 189, 248, 0.2);
-}
-
-.mode-title {
-  font-size: 0.80rem;
-  font-weight: 700;
-  color: #f8fafc;
-}
-
-.mode-desc {
-  font-size: 0.68rem;
-  color: #94a3b8;
-  line-height: 1.35;
-  margin-top: 2px;
 }
 
 .slider-label {
@@ -256,39 +183,5 @@
   cursor: pointer;
   width: 14px;
   height: 14px;
-}
-
-/* Master Video Export CTA */
-.capcut-export-btn {
-  width: 100%;
-  background: linear-gradient(135deg, #0284c7 0%, #0369a1 100%);
-  color: #ffffff;
-  border: 1px solid rgba(56, 189, 248, 0.4);
-  border-radius: 8px;
-  font-weight: 700;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  cursor: pointer;
-  box-shadow: 0 4px 14px rgba(2, 132, 199, 0.35);
-  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1);
-  font-family: inherit;
-}
-
-.capcut-export-btn:hover:not(:disabled) {
-  transform: translateY(-1px);
-  background: linear-gradient(135deg, #0369a1 0%, #0284c7 100%);
-  box-shadow: 0 6px 20px rgba(56, 189, 248, 0.45);
-}
-
-.capcut-export-btn:active:not(:disabled) {
-  transform: scale(0.98);
-}
-
-.capcut-export-btn:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-  box-shadow: none;
 }
 

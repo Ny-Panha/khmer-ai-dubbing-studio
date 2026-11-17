@@ -1,12 +1,11 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { Sliders, ChevronDown, ChevronRight, Users } from 'lucide-react';
 import { parseTimeToSeconds } from '../../utils/timestampUtils';
-import { previewVoiceApi } from '../../services/api';
 
 import ClipInspectorPanel from './ClipInspectorPanel';
 import AudioDuckingPanel from './AudioDuckingPanel';
 import ExportSettingsPanel from './ExportSettingsPanel';
-import { DubbingStepButton, useDubbingFeature } from '../../features/dubbing-runner';
+import { DubbingStepButton } from '../../features/dubbing-runner';
 import './VoiceSettings.css';
 
 const DEFAULT_SUPPORTED_VOICES = [
@@ -293,21 +292,6 @@ export default function VoiceSettings({
     }
   }, [onUpdateSegmentSpeed, selectedSegmentIndex]);
 
-  // Voice Preview State
-  const [previewText, setPreviewText] = useState(
-    settings.previewText || 'សួស្តី! នេះជាសំឡេងខ្មែរ AI សម្រាប់បញ្ចូលសំឡេងរឿងភាគ'
-  );
-  const [isPreviewLoading, setIsPreviewLoading] = useState(false);
-  const [previewAudioObj, setPreviewAudioObj] = useState(null);
-  const [isPlayingPreview, setIsPlayingPreview] = useState(false);
-  const [previewError, setPreviewError] = useState(null);
-  const previewAudioRef = useRef(null);
-  const previewRequestIdRef = useRef(0);
-
-  // Character preview state
-  const [previewingSpeakerVoiceId, setPreviewingSpeakerVoiceId] = useState(null);
-  const charPreviewAudioRef = useRef(null);
-
   // Verified voices list with safe fallback
   const allVoices = (voiceCatalog?.voices && voiceCatalog.voices.length > 0)
     ? voiceCatalog.voices
@@ -384,146 +368,14 @@ export default function VoiceSettings({
     setIsPlayingTest(false);
   };
 
-  const stopPreviewAudio = () => {
-    if (previewAudioRef.current) {
-      previewAudioRef.current.pause();
-      previewAudioRef.current.removeAttribute('src');
-      try { previewAudioRef.current.load(); } catch {}
-      previewAudioRef.current = null;
-    }
-    if (charPreviewAudioRef.current) {
-      charPreviewAudioRef.current.pause();
-      charPreviewAudioRef.current.removeAttribute('src');
-      try { charPreviewAudioRef.current.load(); } catch {}
-      charPreviewAudioRef.current = null;
-    }
-    setIsPlayingPreview(false);
-    setPreviewingSpeakerVoiceId(null);
-  };
-
-  const handlePreviewCharacterVoice = async (voiceId, speakerName, customText = '') => {
-    if (previewingSpeakerVoiceId === voiceId && charPreviewAudioRef.current && !charPreviewAudioRef.current.paused) {
-      charPreviewAudioRef.current.pause();
-      setPreviewingSpeakerVoiceId(null);
-      return;
-    }
-
-    stopPreviewAudio();
-    stopTestAudio();
-    if (segmentAudioRef.current) {
-      segmentAudioRef.current.pause();
-      setPlayingSegmentId(null);
-    }
-
-    setPreviewingSpeakerVoiceId(voiceId);
-    try {
-      const isMale = (voiceId || '').includes('Piseth');
-      const textToUse = customText || (isMale 
-        ? `ខ្ញុំបាទឈ្មោះ ${speakerName || 'តួអង្គប្រុស'} រីករាយណាស់ដែលបានជួបអ្នក`
-        : `នាងខ្ញុំឈ្មោះ ${speakerName || 'តួអង្គស្រី'} រីករាយណាស់ដែលបានជួបអ្នក`);
-
-      const result = await previewVoiceApi({
-        text: textToUse,
-        voiceId: voiceId,
-        speed: settings.speed || 'normal'
-      });
-
-      const audio = new Audio(result.audioUrl);
-      charPreviewAudioRef.current = audio;
-      audio.onended = () => setPreviewingSpeakerVoiceId(null);
-      audio.onerror = () => setPreviewingSpeakerVoiceId(null);
-      await audio.play();
-    } catch (err) {
-      console.warn('Character voice preview failed:', err);
-      setPreviewingSpeakerVoiceId(null);
-    }
-  };
-
   useEffect(() => {
-    previewRequestIdRef.current += 1;
-    stopPreviewAudio();
     stopTestAudio();
-    setPreviewAudioObj(null);
     if (segmentAudioRef.current) {
       segmentAudioRef.current.pause();
       segmentAudioRef.current.removeAttribute('src');
       setPlayingSegmentId(null);
     }
-    setPreviewError(null);
   }, [settings.voiceId, settings.speed]);
-
-  const handleTogglePreview = async () => {
-    if (isPlayingPreview) {
-      stopPreviewAudio();
-      return;
-    }
-
-    stopTestAudio();
-    if (segmentAudioRef.current) {
-      segmentAudioRef.current.pause();
-      setPlayingSegmentId(null);
-    }
-
-    setPreviewError(null);
-    setIsPreviewLoading(true);
-
-    previewRequestIdRef.current += 1;
-    const currentReqId = previewRequestIdRef.current;
-    const targetVoiceId = settings.voiceId || currentVoice?.id || 'km-KH-PisethNeural';
-    const targetSpeed = settings.speed || 'normal';
-
-    try {
-      const textToUse = (previewText || '').trim() || 'សួស្តី! នេះជាសំឡេងខ្មែរ AI សម្រាប់បញ្ចូលសំឡេងរឿងភាគ';
-      const result = await previewVoiceApi({
-        text: textToUse,
-        voiceId: targetVoiceId,
-        speed: targetSpeed,
-      });
-
-      if (previewRequestIdRef.current !== currentReqId) return;
-
-      setPreviewAudioObj(result);
-
-      if (previewAudioRef.current) {
-        previewAudioRef.current.pause();
-        previewAudioRef.current.removeAttribute('src');
-      }
-
-      const audio = new Audio(result.audioUrl);
-      previewAudioRef.current = audio;
-
-      audio.onended = () => setIsPlayingPreview(false);
-      audio.onerror = (e) => {
-        console.error('Audio playback error:', e);
-        setPreviewError('មិនអាចចាក់សំឡេង Preview បានទេ (Decoding Error)');
-        setIsPlayingPreview(false);
-      };
-
-      try {
-        await audio.play();
-        if (previewRequestIdRef.current === currentReqId) {
-          setIsPlayingPreview(true);
-        } else {
-          audio.pause();
-        }
-      } catch (playErr) {
-        if (playErr.name !== 'AbortError') {
-          console.error('Playback promise error:', playErr);
-          setPreviewError('Playback prevented: ' + playErr.message);
-        }
-        setIsPlayingPreview(false);
-      }
-    } catch (err) {
-      if (previewRequestIdRef.current === currentReqId) {
-        console.error('Preview error:', err);
-        setPreviewError(err.message || 'Failed to preview voice');
-      }
-    } finally {
-      if (previewRequestIdRef.current === currentReqId) {
-        setIsPreviewLoading(false);
-      }
-    }
-  };
 
   const handleToggleTest = async () => {
     if (isPlayingTest) {
@@ -536,7 +388,6 @@ export default function VoiceSettings({
       return;
     }
 
-    stopPreviewAudio();
     if (segmentAudioRef.current) {
       segmentAudioRef.current.pause();
       setPlayingSegmentId(null);
@@ -604,7 +455,6 @@ export default function VoiceSettings({
       setPlayingSegmentId(null);
       return;
     }
-    stopPreviewAudio();
     stopTestAudio();
     if (segmentAudioRef.current) {
       segmentAudioRef.current.pause();
@@ -713,15 +563,12 @@ export default function VoiceSettings({
   useEffect(() => {
     return () => {
       stopTestAudio();
-      stopPreviewAudio();
       if (segmentAudioRef.current) {
         segmentAudioRef.current.pause();
         segmentAudioRef.current.removeAttribute('src');
       }
     };
   }, []);
-
-  const segmentsCount = scriptData?.segments?.length || 0;
 
   const renderVoiceOptions = () => (
     <>

@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo } from 'react';
+import React, { useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react';
 import { Video, Upload, Loader2, AlertCircle } from 'lucide-react';
 import { parseTimeToSeconds } from '../../utils/timestampUtils';
 import { mapSourceToTimelineTime, mapTimelineToSourceTime } from '../../utils/timelineUtils';

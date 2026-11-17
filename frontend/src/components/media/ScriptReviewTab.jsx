@@ -2,8 +2,8 @@ import React from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import {
   Search, X, Play, Pause, RefreshCw, Trash2, Subtitles, AlertCircle, AlertTriangle,
-  User, UserCheck, Volume2, Sparkles, Languages, Edit3, Check, CheckCircle2,
-  Loader2, MessageSquare, HelpCircle, Wrench
+  User, UserCheck, Volume2, Sparkles, Languages, Check, CheckCircle2,
+  Loader2, MessageSquare, Wrench
 } from 'lucide-react';
 import { parseTimeToSeconds } from '../../utils/formatTime';
 import { formatMinSec } from '../../utils/timestampUtils';

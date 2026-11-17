@@ -30,14 +30,6 @@
   z-index: 999999 !important;
 }
 
-.capcut-player-panel:fullscreen .player-top-bar,
-.capcut-player-panel:-webkit-full-screen .player-top-bar,
-.capcut-player-panel.is-fullscreen-active .player-top-bar {
-  background: rgba(16, 25, 44, 0.95);
-  border-radius: 0 !important;
-  backdrop-filter: blur(8px);
-}
-
 .capcut-player-panel:fullscreen .player-canvas-container,
 .capcut-player-panel:-webkit-full-screen .player-canvas-container,
 .capcut-player-panel.is-fullscreen-active .player-canvas-container {
@@ -67,17 +59,6 @@
   background: rgba(16, 25, 44, 0.95);
   border-radius: 0 !important;
   backdrop-filter: blur(8px);
-}
-
-.player-top-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 4px 10px;
-  height: 28px;
-  border-bottom: none;
-  background: transparent;
-  flex-shrink: 0;
 }
 
 .player-control-btn {
@@ -111,13 +92,6 @@
   cursor: not-allowed;
 }
 
-.player-control-btn.active-guide {
-  background: rgba(56, 189, 248, 0.12) !important;
-  border-color: #38bdf8 !important;
-  color: #38bdf8 !important;
-  box-shadow: 0 0 10px rgba(56, 189, 248, 0.25);
-}
-
 .player-control-btn.active-full {
   background: rgba(16, 185, 129, 0.14) !important;
   border-color: rgba(16, 185, 129, 0.4) !important;
@@ -141,7 +115,6 @@
   min-height: 0;
 }
 
-.player-canvas-container.is-full-view,
 .player-canvas-container.is-stage-host {
   padding: 0 !important;
 }
@@ -162,74 +135,12 @@
   transition: all 0.15s ease-out;
 }
 
-.player-canvas-area.is-full-view {
-  width: 100% !important;
-  height: 100% !important;
-  max-width: 100% !important;
-  max-height: 100% !important;
-  aspect-ratio: unset !important;
-  border-radius: 0 !important;
-  border: none !important;
-  box-shadow: none !important;
-}
-
 .player-canvas-area.is-aspect-frame,
 .player-canvas-area.is-portrait-frame {
   border-radius: 10px !important;
   border: 1px solid rgba(255, 255, 255, 0.16) !important;
   box-shadow: 0 14px 36px rgba(0, 0, 0, 0.72) !important;
   aspect-ratio: auto;
-}
-
-.phone-mockup-frame {
-  border-radius: 20px !important;
-  border: 2px solid rgba(255, 255, 255, 0.25) !important;
-  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.95), 0 0 0 1px rgba(0, 0, 0, 0.8) !important;
-}
-
-.safe-zones-overlay {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  border: 1px dashed rgba(255, 255, 255, 0.25);
-  z-index: 5;
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-}
-
-.safe-zone-top {
-  background: rgba(248, 113, 113, 0.15);
-  border-bottom: 1px dashed rgba(248, 113, 113, 0.4);
-  color: rgba(255, 255, 255, 0.6);
-  font-size: 0.62rem;
-  padding: 3px 6px;
-  text-align: center;
-}
-
-.safe-zone-right {
-  position: absolute;
-  right: 0;
-  top: 25%;
-  bottom: 25%;
-  width: 40px;
-  background: rgba(248, 113, 113, 0.15);
-  border-left: 1px dashed rgba(248, 113, 113, 0.4);
-  color: rgba(255, 255, 255, 0.5);
-  font-size: 0.52rem;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  writing-mode: vertical-rl;
-}
-
-.safe-zone-bottom {
-  background: rgba(248, 113, 113, 0.15);
-  border-top: 1px dashed rgba(248, 113, 113, 0.4);
-  color: rgba(255, 255, 255, 0.6);
-  font-size: 0.62rem;
-  padding: 4px 6px;
-  text-align: center;
 }
 
 .player-stage-viewport {

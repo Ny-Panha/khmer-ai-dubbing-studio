@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { 
   FolderPlus, Loader2, AlertCircle, Sparkles, ArrowRight, Film, 
-  Check, Trash2, Clock, Monitor, HardDrive, RefreshCw, Scissors, Info
+  Check, Trash2, Clock, Monitor, HardDrive, RefreshCw, Scissors
 } from 'lucide-react';
 import { splitVideoEpisodesApi, uploadVideoFile } from '../../services/api';
 import { formatTimecode } from '../../utils/formatTime';
