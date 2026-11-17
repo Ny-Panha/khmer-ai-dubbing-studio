@@ -14,6 +14,7 @@ export default function TimelineToolbar({
   canRedo,
   onRedo,
   onSplitClip,
+  canSplit = true,
   currentTime = 0,
   duration = 0,
   handleDeleteSelected,
@@ -76,8 +77,8 @@ export default function TimelineToolbar({
           <button
             type="button"
             onClick={() => onSplitClip && onSplitClip(currentTime)}
-            disabled={!selectedVideo && (!scriptSegments || scriptSegments.length === 0)}
-            className="timeline-icon-tool tool-split"
+            disabled={!canSplit}
+            className={`timeline-icon-tool tool-split ${!canSplit ? 'disabled' : ''}`}
             title="Split Clip or Segment at Playhead (Ctrl+B / [|])"
           >
             <Scissors size={13} />

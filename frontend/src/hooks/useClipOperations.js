@@ -78,6 +78,7 @@ export function useClipOperations({
   duration,
   setDuration,
   selectedVideo,
+  videoMetadata = null,
   videoRef,
   scriptData,
   setScriptData,
@@ -86,6 +87,7 @@ export function useClipOperations({
   audioGenerated,
   setSelectedSegmentId,
   selectedClipKind = null,
+  setSelectedClipKind = null,
   handleSeek,
   pushUndoSnapshot: pushUndoSnapshotParam,
   pushHistory,
@@ -114,15 +116,49 @@ export function useClipOperations({
 
   // Split Clip & Segment Tool (Scissors at Playhead)
   const handleSplitClip = (splitTime, targetId = null) => {
-    const totalDur = duration > 0 ? duration : (videoRef?.current?.duration || 0);
+    const totalDur = Number(
+      duration ||
+      videoRef?.current?.duration ||
+      selectedVideo?.durationSec ||
+      selectedVideo?.duration ||
+      videoMetadata?.durationSec ||
+      videoMetadata?.duration ||
+      0
+    );
     const targetTime = typeof splitTime === 'number' && !isNaN(splitTime) ? splitTime : 0;
     const roundedSplit = parseFloat(targetTime.toFixed(3));
 
     const segments = scriptData?.segments || [];
     let currentClips = videoClips;
-    if (!currentClips || currentClips.length === 0 || (currentClips.length === 1 && currentClips[0].end <= currentClips[0].start)) {
+    const isVirtualOrEmpty = !Array.isArray(currentClips) || currentClips.length === 0 || (currentClips.length === 1 && (!currentClips[0].end || currentClips[0].end <= currentClips[0].start));
+
+    if (isVirtualOrEmpty) {
+      const clipDur = totalDur > 0 ? totalDur : Math.max(30, roundedSplit + 10);
+      const initialClipId = `clip-${Date.now()}`;
+      const clipName = selectedVideo?.originalFilename || selectedVideo?.fileName || 'Video 1';
       currentClips = [
-        { id: `clip-${Date.now()}`, start: 0, end: totalDur, name: selectedVideo?.fileName || 'Video 1', trackRow: 0, trackId: 'video-1' }
+        {
+          id: initialClipId,
+          start: 0,
+          end: clipDur,
+          sourceStart: 0,
+          sourceEnd: clipDur,
+          duration: clipDur,
+          name: clipName,
+          trackRow: 0,
+          trackId: 'video-1',
+          videoUrl: selectedVideo?.videoUrl || null,
+          videoId: selectedVideo?.videoId || null,
+        }
+      ];
+    } else if (currentClips.length === 1 && (currentClips[0].start || 0) === 0 && totalDur > currentClips[0].end && roundedSplit > currentClips[0].end - 0.05) {
+      currentClips = [
+        {
+          ...currentClips[0],
+          end: totalDur,
+          sourceEnd: Math.max(Number(currentClips[0].sourceEnd) || 0, totalDur),
+          duration: totalDur,
+        }
       ];
     }
 
@@ -346,13 +382,18 @@ export function useClipOperations({
     // (a) split the selected segment only when the video track is not explicitly targeted
     let selectedSegIdx = -1;
     if (!isTargetingVideoClip) {
-      const activeSegKey = targetId !== null && targetId !== undefined ? targetId : selectedSegmentId;
-      if (activeSegKey !== null && activeSegKey !== undefined && segments.length > 0) {
-        selectedSegIdx = segments.findIndex((s, idx) => isSegmentMatch(s, activeSegKey, idx) && isInsideSeg(s, true));
-        if (selectedSegIdx === -1) {
-          const fallbackIdx = findSegmentIndex(segments, activeSegKey);
-          if (fallbackIdx !== -1 && isInsideSeg(segments[fallbackIdx], true)) {
-            selectedSegIdx = fallbackIdx;
+      const isSegmentExplicitlySelected = (selectedClipKind === 'voice' || selectedClipKind === 'subtitle') || (
+        selectedClipKind !== 'video' && Boolean(targetId && segments.some((s, idx) => isSegmentMatch(s, targetId, idx)))
+      );
+      if (isSegmentExplicitlySelected) {
+        const activeSegKey = targetId !== null && targetId !== undefined ? targetId : selectedSegmentId;
+        if (activeSegKey !== null && activeSegKey !== undefined && segments.length > 0) {
+          selectedSegIdx = segments.findIndex((s, idx) => isSegmentMatch(s, activeSegKey, idx) && isInsideSeg(s, true));
+          if (selectedSegIdx === -1) {
+            const fallbackIdx = findSegmentIndex(segments, activeSegKey);
+            if (fallbackIdx !== -1 && isInsideSeg(segments[fallbackIdx], true)) {
+              selectedSegIdx = fallbackIdx;
+            }
           }
         }
       }
@@ -363,19 +404,20 @@ export function useClipOperations({
     }
 
     // (b) split the video clip under the playhead, including Gaps
+    // Branch (c) note: unselected segments are not auto-split by toolbar scissors; isInsideSeg(s, false) preserved for strict seam check.
     const activeVideoId = isTargetingVideoClip ? targetId : activeClipId;
-    if (!isTargetingVideoClip) {
-      const anyIntersectingSegIdx = segments.findIndex((s) => isInsideSeg(s, false));
-      if (anyIntersectingSegIdx !== -1) {
-        return executeSplitSegment(anyIntersectingSegIdx);
-      }
-    }
 
     const videoSplitResult = splitClipAtTime(currentClips, roundedSplit, totalDur, activeVideoId);
     if (videoSplitResult) {
       pushUndoSnapshot(currentClips, segments);
       setVideoClips(videoSplitResult.newClips);
+      if (typeof setVideoClipsUpdatedAt === 'function') {
+        setVideoClipsUpdatedAt(Date.now());
+      }
       setActiveClipId(videoSplitResult.activeClipId);
+      if (typeof setSelectedClipKind === 'function') {
+        setSelectedClipKind('video');
+      }
       return true;
     }
 

@@ -429,6 +429,8 @@ export default function App() {
     selectedSegmentId: media.selectedSegmentId,
     selectedClipKind: media.selectedClipKind,
     setSelectedSegmentId: media.setSelectedSegmentId,
+    setSelectedClipKind: media.setSelectedClipKind,
+    videoMetadata: media.videoMetadata,
     handleSeek: playback.handleSeek,
     pushHistory: undoRedo.pushUndoSnapshot,
     pushUndoSnapshot: undoRedo.pushUndoSnapshot,

@@ -219,7 +219,7 @@ export function splitClipAtTime(clips = [], splitTime = 0, totalDuration = 0, ac
 
   return {
     newClips: updated,
-    activeClipId: newId,
+    activeClipId: firstPart.id,
   };
 }
 

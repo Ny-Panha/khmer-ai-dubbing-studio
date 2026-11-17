@@ -1484,6 +1484,41 @@ function TimelineEditor({
   const canDeleteVideo = Boolean(activeClipId && videoClips && videoClips.length > 0);
   const canDelete = Boolean(canDeleteSubtitle || canDeleteVideo);
 
+  const canSplit = React.useMemo(() => {
+    const playhead = typeof currentTime === 'number' && !isNaN(currentTime) ? currentTime : 0;
+
+    // (a) If an explicitly selected segment contains the playhead
+    const isSegmentSelected = (selectedClipKind === 'voice' || selectedClipKind === 'subtitle' || selectedClipKind === null) && selectedSegmentId !== null;
+    if (isSegmentSelected && Array.isArray(scriptSegments) && scriptSegments.length > 0) {
+      const activeSeg = scriptSegments.find((s, idx) => isSegmentMatch(s, selectedSegmentId, idx));
+      if (activeSeg) {
+        const sStart = typeof activeSeg.audioStartSec === 'number' && !isNaN(activeSeg.audioStartSec)
+          ? activeSeg.audioStartSec
+          : (typeof activeSeg.startSec === 'number' && !isNaN(activeSeg.startSec) ? activeSeg.startSec : parseTimeToSeconds(activeSeg.start, 0));
+        const sEnd = typeof activeSeg.audioEndSec === 'number' && !isNaN(activeSeg.audioEndSec)
+          ? activeSeg.audioEndSec
+          : (typeof activeSeg.endSec === 'number' && !isNaN(activeSeg.endSec) ? activeSeg.endSec : sStart + 3.0);
+        if (playhead > sStart + 0.05 && playhead < sEnd - 0.05) {
+          return true;
+        }
+      }
+    }
+
+    // (b) Check if any video clip strictly contains the playhead
+    if (Array.isArray(videoClips) && videoClips.length > 0) {
+      const hasStrictVideoClip = videoClips.some((c) => playhead > (c.start || 0) + 0.05 && playhead < (c.end || 0) - 0.05);
+      if (hasStrictVideoClip) return true;
+    }
+
+    // (c) Virtual / full-length single video clip
+    const resolvedDur = Math.max(totalDuration, Number(selectedVideo?.durationSec || selectedVideo?.duration || 0));
+    if (selectedVideo && resolvedDur > 0) {
+      return playhead > 0.05 && playhead < resolvedDur - 0.05;
+    }
+
+    return false;
+  }, [currentTime, selectedClipKind, selectedSegmentId, scriptSegments, videoClips, totalDuration, selectedVideo]);
+
   const handleDeleteSelected = useCallback(() => {
     if (selectedClipKind === 'video') {
       if (canDeleteVideo && onDeleteClip) {
@@ -1686,6 +1721,7 @@ function TimelineEditor({
         onUndo={onUndo}
         canRedo={canRedo}
         onRedo={onRedo}
+        canSplit={canSplit}
         onSplitClip={(time) => {
           const activeSplitTarget = selectedClipKind === 'video'
             ? activeClipId

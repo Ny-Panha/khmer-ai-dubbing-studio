@@ -3,6 +3,37 @@
 ## Last Session
 - **Environment**: Antigravity IDE
 - **Branch**: `fix/delete-no-ripple`
+- **Timestamp**: 2026-11-17T13:02:00+07:00
+
+## Summary: Unconditional Video Split Under Playhead & Fresh Episode Virtual Materialization
+- **Problem Solved**: Toolbar scissors failed with "គ្មាន clip នៅត្រង់ playhead ទេ" on fresh episodes when video clips were unselected, and unselected segments previously hijacked playhead splits.
+- **Unconditional Split Resolution**:
+  - In `useClipOperations.handleSplitClip`: If a segment is explicitly selected AND the playhead is inside it, split that segment (unchanged). OTHERWISE split the video clip under the playhead (`splitClipAtTime`), with no requirement that it be clicked or active first.
+  - After video split, `firstPart.id` is selected as `activeClipId` and `selectedClipKind` is set to `'video'`.
+- **Fresh Episode Virtual Clip Materialization**:
+  - When `videoClips` is empty or virtual, `handleSplitClip` resolves `totalDur` across `duration`, `videoRef`, `selectedVideo`, and `videoMetadata`.
+  - Splits the virtual clip into two real clips `[0, roundedSplit]` and `[roundedSplit, totalDur]` with continuous source ranges.
+  - Materializes clips into state via `setVideoClips` and `setVideoClipsUpdatedAt`, ensuring persistence across save and reload.
+- **Toolbar Split Button Enabling**:
+  - `TimelineToolbar` split button is enabled whenever playhead is strictly inside any video clip, virtual full-length video, or an explicitly selected segment (`canSplit`). It is never disabled solely because nothing is selected.
+  - Existing toast is retained only when playhead is truly inside nothing (e.g. beyond video end).
+- **Verification**:
+  - Unit tests: `backend/tests/timeline_toolbar_split_under_playhead.test.js` (**5/5 passed**).
+  - Full suite: **53/53 passed** across 10 timeline and split test suites.
+  - Frontend build: **2035 modules transformed** in 1.13s (0 errors).
+  - Frontend lint: **0 errors** (466 existing warnings).
+  - Real-app simulation: Fresh episode with zero segments and no clip clicked, playhead at 00:07 splits into two clips `[0, 7]` and `[7, 286.5]` with continuous source ranges, first part selected, and both clips preserved across save/reload.
+
+## Active Environment
+- Branch: `fix/delete-no-ripple`; Backend API `http://localhost:5000`; Frontend `http://localhost:5173`.
+
+## Next Steps
+- Push `fix/delete-no-ripple` to origin.
+
+
+## Last Session
+- **Environment**: Antigravity IDE
+- **Branch**: `fix/delete-no-ripple`
 - **Timestamp**: 2026-11-17T12:46:00+07:00
 
 ## Summary: Move-Only Auto-Align (Segment Deletion Bug Fix)
