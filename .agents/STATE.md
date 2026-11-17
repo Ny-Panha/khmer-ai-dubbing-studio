@@ -3,9 +3,56 @@
 ## Last Session
 - **Environment**: Antigravity IDE
 - **Branch**: `refactor/timeline-core-clean`
-- **Timestamp**: 2026-11-17T15:10:00+07:00
+- **Timestamp**: 2026-11-17T15:25:00+07:00
 
-## Summary: Phase 1 — Dead-Code Audit (Gated Protocol: Audit Only)
+## Summary: Phase 2 — Dead-Code Removal & Real Pipeline Smoke Test (COMPLETED)
+- **Scope**: Full execution of approved dead-code removal across 4 isolated batches + end-to-end pipeline smoke test on branch `refactor/timeline-core-clean`.
+- **Batch Execution & Commits**:
+  1. **Batch 1 (`181dd1b`) — Frontend Dead File**:
+     - Deleted `frontend/src/App.css` (0 imports repo-wide).
+     - Build verification: `npm --prefix frontend run build` (built in 725ms, 0 errors).
+  2. **Batch 2 (`9115923`) — Frontend Dead Exports**:
+     - Pruned `useStudioContext` from `StudioContext.jsx`.
+     - Pruned `selectPartitionedSelectedEpisodes`, `selectStageCompletionFlags`, `selectedTotalBrokenCount` from `geminiRouteSelectors.js`.
+     - Pruned `saveActiveProject`, `loadActiveProject` from `projectStorage.js`.
+     - Pruned `resetSegmentsToSourceTiming` from `timelineUtils.js`.
+     - Verification: `npm --prefix frontend run build` + 54 timeline unit tests passing (100% green).
+  3. **Batch 3 (`103a212`) — Backend Services Dead Exports**:
+     - Pruned `classifySegmentsFromMedia` from `audioClassifierService.js`.
+     - Pruned `cancelSeparationJob` from `audioSeparationService.js`.
+     - Pruned `inFlightProxyJobs`, `createGeminiProxyVideo`, `cleanupProxyFile`, `getActiveJobRenderProcess`, `renderDubbedVideo`, `measureAudioLoudnessDiagnostics` from `ffmpegService.js`.
+     - Pruned `buildOrderedCascadeModels` from `geminiModelCatalog.js`.
+     - Pruned `DEFAULT_QUOTA_SETTINGS` from `geminiQuotaTracker.js`.
+     - Pruned `sanitizeSubtitleDuration`, `getPromptForMode`, `validateAndSanitizeSegment`, `auditTimelineCoverage`, `generateDubbingScript`, `generateScriptFromMedia` from `geminiService.js`.
+     - Verification: Node syntax parsing + regression suites passing (100% green).
+  4. **Batch 4 (`f592745`) — Pipeline Stages & TTS Dead Exports**:
+     - Pruned `generateBaseSamplingGrid` from `stage3_extractChineseSubtitles.js`.
+     - Pruned `groupTranscriptionWordsIntoSegments` from `stage4_analyzeDialogueAudio.js`.
+     - Pruned `DRAMA_GENRES`, `CULTIVATION_DRAMA_GLOSSARY` from `stage6_generateModeSpecificScript.js`.
+     - Pruned `generateKhmerSpeech`, `generateBatchSpeech` from `ttsService.js`.
+     - Verification: Node syntax parsing + 37 timeline regression tests passing (100% green).
+- **Net Reclaimed Metrics**:
+  - `git diff --stat f3a6abd..f592745`: **15 files changed, 1 insertion(+), 1154 deletions(-)**.
+  - 1 dead file deleted (`frontend/src/App.css`).
+  - 0% regression on living code.
+- **End-to-End Real Pipeline Smoke Test (`63a71bc`)**:
+  - Executed `backend/tests/run_real_pipeline_smoke_test.js`:
+    - Step 0: Real 4.0s video generated (1080x1920 with audio tone).
+    - Step 1 (Stage 3 OCR): Extracted 1 Chinese segment (`"掌门师尊，弟子在此候命。"`).
+    - Step 2 (Stage 4 ASR & Pitch): Extracted 1 speech segment with gender detection.
+    - Step 3 (Stage 6 Translation): Generated Mode A translation (`"លោកគ្រូធំ កូនសិស្សនៅទីនេះរង់ចាំបញ្ជា。"`).
+    - Step 4 (TTS Synthesis): Generated Edge Neural audio file (`23,348 bytes`, `2.53s duration`).
+    - Step 5 (Small Export): FFmpeg exported dubbed video with dynamic ducking and burned ASS subtitles (`103,515 bytes`).
+    - Result: **ALL STAGES PASSED (100% GREEN)**.
+
+## Active Environment
+- **Branch**: `refactor/timeline-core-clean` (pushed to origin)
+- **Frontend Dev URL**: `http://localhost:5173`
+- **Backend API**: `http://localhost:8080`
+
+## Next Steps
+- Clean timeline core refactoring and dead-code removal are 100% complete, verified, and pushed to `origin/refactor/timeline-core-clean`.
+- Ready for final review / PR creation by the project owner.
 - **Scope**: Rigorous audit of `frontend/src/` (115 files) and `backend/` (`routes/`, `services/`, `utils/`, 53 files) on branch `refactor/timeline-core-clean`.
 - **Protocol Adherence**: Strictly **AUDIT ONLY**. Zero files or functions deleted. Manifest generated at `.agents/DEAD-CODE-MANIFEST.md`. Stopped at gate awaiting owner approval.
 - **Immediate Hotfix**:
