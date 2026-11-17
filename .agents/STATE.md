@@ -3,6 +3,39 @@
 ## Last Session
 - **Environment**: Antigravity IDE (`engineering-minimal-change-engineer` discipline)
 - **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-17T19:48:00+07:00
+
+## Summary: Fix Voice Clip Box Extent & Waveform Alignment on Legacy & Recent Episodes (COMPLETED — UI-Only)
+- **Step 0 — Stored Data Findings (`Pseudo_Spiritual_Root` `series.json`)**:
+  - **Affected legacy episode (`ep_1`, seg `#10`)**: Has `startSec: 21.6`, `endSec: 24.4` (slot `2.8s`), `speed: 1`, `audioUrl`/`audioPath`/`audioFile`, `audioGenerated: true`. Missing ALL duration & waveform metadata (`finalAudioDuration`, `audioDurationSec`, `audioDuration`, `originalAudioDuration`, `rawAudioDur`, `appliedSpeed`, `audioStartSec`, `audioEndSec`, `peaks`, `waveform` are all absent). Actual MP3 duration via `ffprobe`: `2.580s` (and other `ep_1` clips like `#1`: `0.907s`/`1.4s`, `#3`: `1.363s`/`2.2s`, `#19`: `1.427s`/`1.8s`, `#24`: `3.059s`/`3.5s`, `#30`: `0.623s`/`1.2s`).
+  - **Recent working episode (`ep_2`, seg `#10`)**: Has `startSec: 31.33`, `endSec: 32.28` (`0.95s` slot), `finalAudioDuration: 0.951`, `audioDurationSec: 0.95`, `audioDuration: 0.951`, `originalAudioDuration: 0.951`, `rawAudioDur: 0.951`, `appliedSpeed: 1`, `audioStartSec: 31.33`, `audioEndSec: 32.28`. Neither episode stores `peaks`/`waveform` arrays in `series.json`.
+  - **Second visual root cause confirmed in DOM**: `TimelineTracksCanvas.jsx` computed waveform bar count as `Math.min(40, Math.max(4, Math.floor(((renderedDuration * pps) - 10) / 6)))`, while `.waveform-bar` + `gap` is `4px` pitch (`2px + 2px`). Dividing by `6` and capping at `40` bars (`158px`) caused bars to end at `40–64%` of every clip box even when box width matched audio duration.
+- **Step 1 — Minimal UI-Only Fix (`frontend/src/components/timeline/TimelineTracksCanvas.jsx`)**:
+  - Added `resolvePeaksDuration` and `resolveVoiceAudioExtent` with exact fallback order: **peaks/waveform-derived extent -> `finalAudioDuration` -> `audioDurationSec` / `audioDuration` / `originalAudioDuration` / `rawAudioDur` (scaled by `appliedSpeed`) -> browser-probed actual audio duration from `audioUrl` (`PROBED_AUDIO_DURATION_CACHE`, UI-only in-memory `<audio preload="metadata">` for visible legacy segments lacking metadata, never persisted) -> `slotSpan` (only when segment has no audio/peaks)**.
+  - Fixed waveform bar count to match the true `4px` bar pitch inside the `10px` box inset (`Math.min(400, Math.max(4, Math.floor((waveformWidthPx - 8) / 4)))`) and support real `peaks` arrays when present, so box end == waveform end across all clips and zoom levels.
+  - Preserved unchanged: overrun segments (`extent >= slot`) keep slot box + red indication; VIDEO and SUBTITLE rendering untouched; drag/trim/select hitbox = visible box; zero stored data or timing mutations.
+- **Regression Test Added**:
+  - `backend/tests/timeline_voice_true_extent_rendering.test.js`: Added tests #7 & #8 covering fallback order, 4px bar pitch without 40-bar cutoff, and legacy metadata-less segment rendering.
+- **Verification Evidence**:
+  - Timeline regression suites (`node --test backend/tests/timeline_*.test.js`): **90/90 PASS** across 15 suites (0 fail).
+  - Frontend build (`npm --prefix frontend run build`): **PASS** (628ms, 0 errors); `oxlint`: **0 errors**.
+  - Real-app verification (`http://localhost:5173/studio`, Edge headless, read-only route guard, 0 console/page errors):
+    - `Pseudo_Spiritual_Root` `ep_1` `#8`–`#12`, `#15`–`#16`: boxes hug true probed MP3 durations (`#10`: `21.6s–24.2s`, `114px`) and waveform fills `96–100%` of inner width (`leftGapPx: 5`, `rightGapPx: 5–7`); overrun `#13`/`#14`/`#16` keep slot boxes (`#16 +0.4s` red).
+    - `Pseudo_Spiritual_Root` `ep_2` `#7`–`#16`: zero regression, waveform fills `94–100%` of inner width edge-to-edge.
+
+## Active Environment
+- **Backend API**: `http://localhost:5000` (Status 200 OK)
+- **Frontend Studio**: `http://localhost:5173` (Vite dev server)
+- **Branch**: `chore/full-project-cleanup` (pushed to `origin/chore/full-project-cleanup`)
+
+## Next Steps
+- Refresh browser (`Ctrl + F5`) at `http://localhost:5173/studio` on `Pseudo_Spiritual_Root` EP1 & EP2 to verify visually.
+
+---
+
+## Previous Session
+- **Environment**: Antigravity IDE (`engineering-minimal-change-engineer` discipline)
+- **Branch**: `chore/full-project-cleanup`
 - **Timestamp**: 2026-11-17T19:36:00+07:00
 
 ## Summary: Remove "Auto-Fit Speed" Button from Timeline Toolbar (COMPLETED)

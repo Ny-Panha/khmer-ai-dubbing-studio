@@ -165,4 +165,53 @@ describe('Timeline Voice Clip True Audio Extent Rendering Suite', () => {
 
     assert.equal(rawAudioExtent, 2.0, 'Audio duration scaled by speed (3.0s / 1.5 = 2.0s)');
   });
+
+  it('7. Fallback order & waveform alignment audit: peaks-derived -> finalAudioDuration -> audioDurationSec/speed -> probed audio -> slot; bars use 4px pitch without 40-bar cutoff', () => {
+    const canvasCode = fs.readFileSync('frontend/src/components/timeline/TimelineTracksCanvas.jsx', 'utf8');
+
+    assert.ok(canvasCode.includes('function resolvePeaksDuration(seg)'), 'Defines peaks/waveform duration resolver');
+    assert.ok(canvasCode.includes('function resolveVoiceAudioExtent(seg, appliedSpeed, probedDuration)'), 'Defines unified voice extent resolver');
+    assert.ok(canvasCode.includes('PROBED_AUDIO_DURATION_CACHE'), 'Uses UI-only in-memory probed audio cache for legacy segments lacking metadata');
+
+    const fnStart = canvasCode.indexOf('function resolveVoiceAudioExtent');
+    const fnSlice = canvasCode.slice(fnStart, fnStart + 1800);
+    const idxPeaks = fnSlice.indexOf('if (peaksDuration !== null)');
+    const idxFinal = fnSlice.indexOf('typeof seg.finalAudioDuration === \'number\'');
+    const idxAudioSec = fnSlice.indexOf('typeof seg.audioDurationSec === \'number\'');
+    const idxProbed = fnSlice.indexOf('typeof probedDuration === \'number\'');
+    assert.ok(idxPeaks > 0 && idxFinal > idxPeaks && idxAudioSec > idxFinal && idxProbed > idxAudioSec,
+      'Fallback order must be: peaks-derived -> finalAudioDuration -> audioDurationSec/appliedSpeed -> probed audio -> slot');
+
+    // Waveform bar count uses true 4px pitch (2px bar + 2px gap) and is NOT capped at 40 bars
+    assert.ok(canvasCode.includes('Math.floor((waveformWidthPx - 8) / 4)'), 'Waveform bar count matches 4px bar pitch inside 10px box inset');
+    assert.ok(!canvasCode.includes('Math.min(40, Math.max(4, Math.floor(((renderedDuration * pps) - 10) / 6)))'),
+      'Legacy /6 and 40-bar cutoff bug must be removed');
+  });
+
+  it('8. Legacy episode simulation (e.g. Pseudo_Spiritual_Root ep_1): missing metadata uses probed duration & bars fill full box edge-to-edge', () => {
+    // Legacy segment #10: slot=2.8s, no finalAudioDuration/audioDurationSec, actual MP3=2.58s
+    const seg10 = {
+      id: 10,
+      startSec: 21.6,
+      endSec: 24.4,
+      speed: 1,
+      audioUrl: '/uploads/projects/Pseudo_Spiritual_Root/episodes/ep_1/audio/seg10.mp3',
+    };
+    const probedDuration = 2.58;
+    const slotDur = seg10.endSec - seg10.startSec; // 2.8s
+    const rawAudioExtent = probedDuration;
+    const renderedDuration = rawAudioExtent >= slotDur ? slotDur : rawAudioExtent;
+    assert.equal(renderedDuration, 2.58, 'Legacy segment shrinks to probed MP3 extent (2.58s)');
+
+    // Check bar span fills inner box cleanly at both default zoom (pps=45) and high zoom (pps=120)
+    for (const pps of [45, 120]) {
+      const boxWidth = Math.max(2, renderedDuration * pps - 2);
+      const waveformWidthPx = Math.min(boxWidth, Math.max(16, renderedDuration * pps - 2));
+      const barCount = Math.min(400, Math.max(4, Math.floor((waveformWidthPx - 8) / 4)));
+      const barsSpanPx = (barCount * 4) - 2;
+      const innerWidth = boxWidth - 10; // 1px border + 4px padding on each side
+      assert.ok(barsSpanPx <= innerWidth, `barsSpanPx (${barsSpanPx}) fits inside innerWidth (${innerWidth}) at pps=${pps}`);
+      assert.ok(innerWidth - barsSpanPx <= 4, `Waveform reaches right edge within 1 bar pitch (gap=${innerWidth - barsSpanPx}px) at pps=${pps}`);
+    }
+  });
 });

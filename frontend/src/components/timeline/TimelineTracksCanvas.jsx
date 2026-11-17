@@ -5,6 +5,80 @@ import { findAssociatedSegmentIndices } from '../../utils/timelineUtils';
 import { isGapClip } from '../../utils/timelineOps';
 import { uploadVideoFile } from '../../services/api';
 
+// In-memory UI-only cache for audio file durations probed from segment audioUrl
+// (used for legacy episodes whose segments lack stored duration metadata; never persisted).
+const PROBED_AUDIO_DURATION_CACHE = new Map();
+const PROBED_AUDIO_PENDING = new Set();
+
+function resolvePeaksDuration(seg) {
+  if (!seg) return null;
+  if (typeof seg.waveformDuration === 'number' && seg.waveformDuration > 0 && !isNaN(seg.waveformDuration)) {
+    return seg.waveformDuration;
+  }
+  if (typeof seg.peaksDuration === 'number' && seg.peaksDuration > 0 && !isNaN(seg.peaksDuration)) {
+    return seg.peaksDuration;
+  }
+  if (seg.waveform && typeof seg.waveform.duration === 'number' && seg.waveform.duration > 0 && !isNaN(seg.waveform.duration)) {
+    return seg.waveform.duration;
+  }
+  if (seg.peaks && typeof seg.peaks.duration === 'number' && seg.peaks.duration > 0 && !isNaN(seg.peaks.duration)) {
+    return seg.peaks.duration;
+  }
+  if (Array.isArray(seg.peaks) && seg.peaks.length > 0 && typeof seg.peaksSampleRate === 'number' && seg.peaksSampleRate > 0) {
+    return seg.peaks.length / seg.peaksSampleRate;
+  }
+  return null;
+}
+
+function hasStoredAudioDurationMeta(seg) {
+  if (!seg) return false;
+  if (resolvePeaksDuration(seg) !== null) return true;
+  return Boolean(
+    (typeof seg.finalAudioDuration === 'number' && seg.finalAudioDuration > 0) ||
+    (typeof seg.audioDurationSec === 'number' && seg.audioDurationSec > 0 && !isNaN(seg.audioDurationSec)) ||
+    (typeof seg.audioDuration === 'number' && seg.audioDuration > 0) ||
+    (typeof seg.originalAudioDuration === 'number' && seg.originalAudioDuration > 0) ||
+    (typeof seg.rawAudioDur === 'number' && seg.rawAudioDur > 0)
+  );
+}
+
+// Fallback order:
+// 1. Peaks / waveform-derived extent
+// 2. finalAudioDuration
+// 3. audioDurationSec / audioDuration / originalAudioDuration / rawAudioDur (scaled by appliedSpeed)
+// 4. Browser-probed actual audio file duration (scaled by appliedSpeed) for legacy segments lacking metadata
+// 5. null -> caller falls back to slotSpan (only when segment has no audio/peaks at all)
+function resolveVoiceAudioExtent(seg, appliedSpeed, probedDuration) {
+  const peaksDuration = resolvePeaksDuration(seg);
+  let rawAudioExtent = null;
+  if (peaksDuration !== null) {
+    rawAudioExtent = peaksDuration;
+  } else if (typeof seg.finalAudioDuration === 'number' && seg.finalAudioDuration > 0) {
+    rawAudioExtent = seg.finalAudioDuration;
+  } else if (typeof seg.audioDurationSec === 'number' && seg.audioDurationSec > 0 && !isNaN(seg.audioDurationSec)) {
+    rawAudioExtent = (appliedSpeed > 0 && Math.abs(appliedSpeed - 1.0) > 0.001)
+      ? seg.audioDurationSec / appliedSpeed
+      : seg.audioDurationSec;
+  } else if (typeof seg.audioDuration === 'number' && seg.audioDuration > 0) {
+    rawAudioExtent = (appliedSpeed > 0 && Math.abs(appliedSpeed - 1.0) > 0.001)
+      ? seg.audioDuration / appliedSpeed
+      : seg.audioDuration;
+  } else if (typeof seg.originalAudioDuration === 'number' && seg.originalAudioDuration > 0) {
+    rawAudioExtent = (appliedSpeed > 0 && Math.abs(appliedSpeed - 1.0) > 0.001)
+      ? seg.originalAudioDuration / appliedSpeed
+      : seg.originalAudioDuration;
+  } else if (typeof seg.rawAudioDur === 'number' && seg.rawAudioDur > 0) {
+    rawAudioExtent = (appliedSpeed > 0 && Math.abs(appliedSpeed - 1.0) > 0.001)
+      ? seg.rawAudioDur / appliedSpeed
+      : seg.rawAudioDur;
+  } else if (typeof probedDuration === 'number' && probedDuration > 0 && !isNaN(probedDuration)) {
+    rawAudioExtent = (appliedSpeed > 0 && Math.abs(appliedSpeed - 1.0) > 0.001)
+      ? probedDuration / appliedSpeed
+      : probedDuration;
+  }
+  return rawAudioExtent;
+}
+
 function TimelineTracksCanvas({
   scrollContainerRef = null,
   totalWidth,
@@ -98,6 +172,95 @@ function TimelineTracksCanvas({
     end: 180,
   }));
 
+  // UI-only trigger when browser metadata probes resolve true audio durations for legacy segments
+  const [probedDurationTick, setProbedDurationTick] = React.useState(0);
+  const isMountedRef = React.useRef(true);
+  const probeFlushTimerRef = React.useRef(null);
+
+  React.useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      if (probeFlushTimerRef.current !== null) {
+        window.clearTimeout(probeFlushTimerRef.current);
+        probeFlushTimerRef.current = null;
+      }
+    };
+  }, []);
+
+  React.useEffect(() => {
+    if (!scriptSegments || scriptSegments.length === 0 || typeof Audio === 'undefined') return;
+    let cancelled = false;
+
+    const scheduleFlush = () => {
+      if (!isMountedRef.current || probeFlushTimerRef.current !== null) return;
+      probeFlushTimerRef.current = window.setTimeout(() => {
+        probeFlushTimerRef.current = null;
+        if (isMountedRef.current) setProbedDurationTick((t) => t + 1);
+      }, 40);
+    };
+
+    const urlsToProbe = [];
+    for (let idx = 0; idx < scriptSegments.length; idx++) {
+      const seg = scriptSegments[idx];
+      if (!seg || typeof seg.audioUrl !== 'string' || !seg.audioUrl) continue;
+      if (hasStoredAudioDurationMeta(seg)) continue;
+      if (PROBED_AUDIO_DURATION_CACHE.has(seg.audioUrl) || PROBED_AUDIO_PENDING.has(seg.audioUrl)) continue;
+
+      const vStart = (typeof seg.audioStartSec === 'number' && !isNaN(seg.audioStartSec))
+        ? seg.audioStartSec
+        : ((typeof seg.startSec === 'number' && !isNaN(seg.startSec))
+          ? seg.startSec
+          : parseTimeToSeconds(seg.start, idx * 4));
+      const vEnd = (typeof seg.endSec === 'number' && !isNaN(seg.endSec)) ? seg.endSec : (vStart + 3.0);
+      if (vEnd < visibleRange.start || vStart > visibleRange.end) continue;
+
+      urlsToProbe.push(seg.audioUrl);
+    }
+
+    if (urlsToProbe.length === 0) return;
+
+    const MAX_CONCURRENT = 8;
+    let cursor = 0;
+    let activeCount = 0;
+
+    const pump = () => {
+      while (!cancelled && activeCount < MAX_CONCURRENT && cursor < urlsToProbe.length) {
+        const url = urlsToProbe[cursor++];
+        if (PROBED_AUDIO_DURATION_CACHE.has(url) || PROBED_AUDIO_PENDING.has(url)) continue;
+        PROBED_AUDIO_PENDING.add(url);
+        activeCount++;
+
+        const audio = new Audio();
+        audio.preload = 'metadata';
+
+        const finalize = (dur) => {
+          audio.onloadedmetadata = null;
+          audio.onerror = null;
+          try {
+            audio.src = '';
+            audio.removeAttribute('src');
+          } catch {}
+          PROBED_AUDIO_PENDING.delete(url);
+          PROBED_AUDIO_DURATION_CACHE.set(url, (typeof dur === 'number' && Number.isFinite(dur) && dur > 0) ? dur : null);
+          activeCount--;
+          if (dur > 0) scheduleFlush();
+          pump();
+        };
+
+        audio.onloadedmetadata = () => finalize(audio.duration);
+        audio.onerror = () => finalize(null);
+        audio.src = url;
+      }
+    };
+
+    pump();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [scriptSegments, visibleRange.start, visibleRange.end]);
+
   React.useEffect(() => {
     const container = scrollContainerRef?.current || rootRef.current?.parentElement;
     if (!container) return;
@@ -175,26 +338,10 @@ function TimelineTracksCanvas({
         ? seg.appliedSpeed
         : ((typeof seg.speed === 'number' && seg.speed > 0) ? seg.speed : 1.0);
 
-      let rawAudioExtent = null;
-      if (typeof seg.finalAudioDuration === 'number' && seg.finalAudioDuration > 0) {
-        rawAudioExtent = seg.finalAudioDuration;
-      } else if (typeof seg.audioDurationSec === 'number' && seg.audioDurationSec > 0 && !isNaN(seg.audioDurationSec)) {
-        rawAudioExtent = (appliedSpeed > 0 && Math.abs(appliedSpeed - 1.0) > 0.001)
-          ? seg.audioDurationSec / appliedSpeed
-          : seg.audioDurationSec;
-      } else if (typeof seg.audioDuration === 'number' && seg.audioDuration > 0) {
-        rawAudioExtent = (appliedSpeed > 0 && Math.abs(appliedSpeed - 1.0) > 0.001)
-          ? seg.audioDuration / appliedSpeed
-          : seg.audioDuration;
-      } else if (typeof seg.originalAudioDuration === 'number' && seg.originalAudioDuration > 0) {
-        rawAudioExtent = (appliedSpeed > 0 && Math.abs(appliedSpeed - 1.0) > 0.001)
-          ? seg.originalAudioDuration / appliedSpeed
-          : seg.originalAudioDuration;
-      } else if (typeof seg.rawAudioDur === 'number' && seg.rawAudioDur > 0) {
-        rawAudioExtent = (appliedSpeed > 0 && Math.abs(appliedSpeed - 1.0) > 0.001)
-          ? seg.rawAudioDur / appliedSpeed
-          : seg.rawAudioDur;
-      }
+      const probedDuration = (typeof seg.audioUrl === 'string' && seg.audioUrl)
+        ? PROBED_AUDIO_DURATION_CACHE.get(seg.audioUrl)
+        : null;
+      const rawAudioExtent = resolveVoiceAudioExtent(seg, appliedSpeed, probedDuration);
 
       let renderedDuration = slotSpan;
       if (hasAudio && rawAudioExtent !== null) {
@@ -224,7 +371,7 @@ function TimelineTracksCanvas({
       endTimes[0] = Math.max(endTimes[0] || 0, rawEnd);
       return 0;
     });
-  }, [scriptSegments]);
+  }, [scriptSegments, probedDurationTick]);
 
   const activeSegmentRows = externalSegmentRows || internalSegmentRows;
 
@@ -275,26 +422,10 @@ function TimelineTracksCanvas({
       ? seg.appliedSpeed
       : ((typeof seg.speed === 'number' && seg.speed > 0) ? seg.speed : 1.0);
 
-    let rawAudioExtent = null;
-    if (typeof seg.finalAudioDuration === 'number' && seg.finalAudioDuration > 0) {
-      rawAudioExtent = seg.finalAudioDuration;
-    } else if (typeof seg.audioDurationSec === 'number' && seg.audioDurationSec > 0 && !isNaN(seg.audioDurationSec)) {
-      rawAudioExtent = (appliedSpeed > 0 && Math.abs(appliedSpeed - 1.0) > 0.001)
-        ? seg.audioDurationSec / appliedSpeed
-        : seg.audioDurationSec;
-    } else if (typeof seg.audioDuration === 'number' && seg.audioDuration > 0) {
-      rawAudioExtent = (appliedSpeed > 0 && Math.abs(appliedSpeed - 1.0) > 0.001)
-        ? seg.audioDuration / appliedSpeed
-        : seg.audioDuration;
-    } else if (typeof seg.originalAudioDuration === 'number' && seg.originalAudioDuration > 0) {
-      rawAudioExtent = (appliedSpeed > 0 && Math.abs(appliedSpeed - 1.0) > 0.001)
-        ? seg.originalAudioDuration / appliedSpeed
-        : seg.originalAudioDuration;
-    } else if (typeof seg.rawAudioDur === 'number' && seg.rawAudioDur > 0) {
-      rawAudioExtent = (appliedSpeed > 0 && Math.abs(appliedSpeed - 1.0) > 0.001)
-        ? seg.rawAudioDur / appliedSpeed
-        : seg.rawAudioDur;
-    }
+    const probedDuration = (typeof seg.audioUrl === 'string' && seg.audioUrl)
+      ? PROBED_AUDIO_DURATION_CACHE.get(seg.audioUrl)
+      : null;
+    const rawAudioExtent = resolveVoiceAudioExtent(seg, appliedSpeed, probedDuration);
 
     const realAudioDuration = (rawAudioExtent !== null && rawAudioExtent > 0) ? rawAudioExtent : slotSpan;
 
@@ -467,29 +598,47 @@ function TimelineTracksCanvas({
                     <span className="voice-khmer-dialogue-preview">{khmerPreview}</span>
                   )}
                   {hasAudio ? (
-                    audioWidth >= 20 && (
-                      <div
-                        className="voice-waveform-bars"
-                        style={{
-                          width: `${Math.min(audioWidth, Math.max(16, (renderedDuration * pps) - 2))}px`,
-                          maxWidth: '100%',
-                        }}
-                      >
-                        {Array.from({ length: Math.min(40, Math.max(4, Math.floor(((renderedDuration * pps) - 10) / 6))) }).map((_, wIdx) => {
-                          const pattern = [30, 65, 90, 45, 80, 100, 55, 35, 75, 85, 40, 70, 25, 60, 80, 95, 50, 65, 35, 85];
-                          const hPercent = pattern[wIdx % pattern.length];
-                          return (
-                            <span
-                              key={wIdx}
-                              className="waveform-bar"
-                              style={{
-                                height: `${hPercent}%`,
-                              }}
-                            />
-                          );
-                        })}
-                      </div>
-                    )
+                    audioWidth >= 20 && (() => {
+                      const waveformWidthPx = Math.min(audioWidth, Math.max(16, (renderedDuration * pps) - 2));
+                      // Each .waveform-bar is 2px wide + 2px gap (4px pitch) inside 10px horizontal box inset (1px border + 4px padding per side)
+                      const waveformBarCount = Math.min(400, Math.max(4, Math.floor((waveformWidthPx - 8) / 4)));
+                      const peaksArray = Array.isArray(seg.peaks) && seg.peaks.length > 0
+                        ? seg.peaks
+                        : (Array.isArray(seg.waveform) && seg.waveform.length > 0
+                          ? seg.waveform
+                          : (Array.isArray(seg.waveform?.peaks) && seg.waveform.peaks.length > 0 ? seg.waveform.peaks : null));
+                      const fallbackPattern = [30, 65, 90, 45, 80, 100, 55, 35, 75, 85, 40, 70, 25, 60, 80, 95, 50, 65, 35, 85];
+                      return (
+                        <div
+                          className="voice-waveform-bars"
+                          style={{
+                            width: `${waveformWidthPx}px`,
+                            maxWidth: '100%',
+                          }}
+                        >
+                          {Array.from({ length: waveformBarCount }).map((_, wIdx) => {
+                            let hPercent;
+                            if (peaksArray) {
+                              const sampleIdx = Math.min(peaksArray.length - 1, Math.floor((wIdx / waveformBarCount) * peaksArray.length));
+                              const rawPeak = Number(peaksArray[sampleIdx]);
+                              const normalized = Number.isFinite(rawPeak) ? (rawPeak <= 1 ? rawPeak * 100 : rawPeak) : 40;
+                              hPercent = Math.max(15, Math.min(100, Math.round(normalized)));
+                            } else {
+                              hPercent = fallbackPattern[wIdx % fallbackPattern.length];
+                            }
+                            return (
+                              <span
+                                key={wIdx}
+                                className="waveform-bar"
+                                style={{
+                                  height: `${hPercent}%`,
+                                }}
+                              />
+                            );
+                          })}
+                        </div>
+                      );
+                    })()
                   ) : (
                     !isWideClip && audioWidth >= 24 && (
                       <span className="voice-draft-hint">
