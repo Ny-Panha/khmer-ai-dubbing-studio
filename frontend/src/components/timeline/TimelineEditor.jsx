@@ -200,9 +200,11 @@ function TimelineEditor({
       seg,
       (typeof seg.audioDurationSec === 'number' && seg.audioDurationSec > 0) ? seg.audioDurationSec : slotSpan
     );
-    const rawEnd = (isTrimmed && typeof seg.audioEndSec === 'number' && !isNaN(seg.audioEndSec))
-      ? seg.audioEndSec
-      : (rawStart + audioDur);
+    const rawEnd = (typeof seg.renderedEnd === 'number' && !isNaN(seg.renderedEnd) && seg.renderedEnd > rawStart)
+      ? seg.renderedEnd
+      : ((isTrimmed && typeof seg.audioEndSec === 'number' && !isNaN(seg.audioEndSec))
+        ? seg.audioEndSec
+        : (rawStart + audioDur));
     return { start: rawStart, end: rawEnd };
   }, []);
 
@@ -800,9 +802,11 @@ function TimelineEditor({
       (typeof seg.audioDurationSec === 'number' && seg.audioDurationSec > 0) ? seg.audioDurationSec : slotSpan
     );
     const isTrimmed = Boolean(seg.audioTrimmed || seg.userTrimmed);
-    const rawEnd = (isTrimmed && typeof seg.audioEndSec === 'number' && !isNaN(seg.audioEndSec))
-      ? seg.audioEndSec 
-      : (rawStart + audioDur);
+    const rawEnd = (typeof seg.renderedEnd === 'number' && !isNaN(seg.renderedEnd) && seg.renderedEnd > rawStart)
+      ? seg.renderedEnd
+      : ((isTrimmed && typeof seg.audioEndSec === 'number' && !isNaN(seg.audioEndSec))
+        ? seg.audioEndSec 
+        : (rawStart + audioDur));
 
     if (mode === 'move' && onSeek) {
       manualFocusLockRef.current = {

@@ -3,7 +3,42 @@
 ## Last Session
 - **Environment**: Antigravity IDE
 - **Branch**: `refactor/timeline-core-clean`
-- **Timestamp**: 2026-11-17T15:52:00+07:00
+- **Timestamp**: 2026-11-17T16:06:30+07:00
+
+## Summary: UI-Only Fix — Voice Clip Box Waveform True Extent Alignment (COMPLETED)
+- **Problem Diagnosed**:
+  - In `frontend/src/components/timeline/TimelineTracksCanvas.jsx`, voice clip boxes previously rendered for the entire dialogue segment slot (`startSec` to `endSec`) even when the audio/waveform was shorter (e.g. clip #34 where waveform was ~40% of the box, leaving a long empty box tail).
+- **Owner's Rules & Solutions**:
+  1. **A VOICE clip's box ends where its waveform ends (no empty tail)**:
+     - In `TimelineTracksCanvas.jsx` (`internalSegmentRows` and `renderVoiceSegment`), computed the audio's true extent `rawAudioExtent` from audio metadata (`finalAudioDuration`, or `audioDurationSec / appliedSpeed`, etc.).
+     - Computed `renderedDuration = (hasAudio && rawAudioExtent < slotDur) ? rawAudioExtent : slotSpan` (respecting manual tighter user trim if set).
+     - Defined `rawEnd = rawStart + renderedDuration` and `endSec = isDragging ? (dragState?.mode === 'move' ? (startSec + renderedDuration) : dragState.currentEnd) : ...`.
+     - Computed visible box width `audioWidth = Math.max(2, (endSec - startSec) * pps - 2)`.
+  2. **Overrun segments (`audio extent >= slot duration`)**:
+     - Retained slot-width box, existing red-border, and overrun indicators unchanged.
+  3. **No-audio / draft segments**:
+     - Retained slot-width box so it stays visible and selectable (`• គ្មានសំឡេង` / draft hint).
+  4. **Hitbox, Drag, and Trim**:
+     - The visible shortened box serves as the exact clickable and draggable hitbox.
+     - While dragging to move, the clip box and ghost retain `renderedDuration` without jumping to slot width.
+     - Trim handles sit at the exact visual edges (left at `rawStart`, right at `rawEnd`).
+     - Passed `{ ...seg, renderedEnd: rawEnd, renderedDuration }` to `handleAudioMouseDown` and updated `TimelineEditor.jsx` to honor `seg.renderedEnd`.
+  5. **VIDEO and SUBTITLE clips**:
+     - Unchanged. Subtitles legitimately span the dialogue slot.
+  6. **Zero Stored Data / Backend Impact**:
+     - Strictly UI canvas rendering; no stored data, no segment timing mutations, no backend code changed.
+- **Verification Evidence**:
+  - Production build: `npm run build --prefix frontend` (Vite build passed in 598ms, 0 errors).
+  - Test suites: **80 passed, 0 failed** across 13 timeline suites (`node --test backend/tests/timeline_*.test.js`), including new regression suite `backend/tests/timeline_voice_true_extent_rendering.test.js`.
+  - Owner's scenario (#34): Slot 5.0s, audio duration 2.0s (~40%) -> box ends cleanly at 2.0s with waveform filling the box, no empty tail; normal clips filling slot remain unchanged; overrun clips keep warning; no-audio clips remain selectable.
+
+## Active Environment
+- **Backend API**: `http://localhost:5000` (`/api/health`)
+- **Frontend Studio**: `http://localhost:5173`
+- **Branch**: `refactor/timeline-core-clean`
+
+## Next Steps
+- Branch is clean, tests passing, pushed to origin. Ready for testing in UI.
 
 ## Summary: Fix Gap Clip Selection & Segment Decoupling on Video Track (COMPLETED)
 - **Problem Diagnosed**:

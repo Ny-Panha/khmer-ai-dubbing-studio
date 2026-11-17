@@ -169,22 +169,49 @@ function TimelineTracksCanvas({
       const slotSpan = (typeof seg.audioEndSec === 'number' && !isNaN(seg.audioEndSec) && seg.audioEndSec > rawStart)
         ? (seg.audioEndSec - rawStart)
         : (slotEnd > slotStart ? (slotEnd - slotStart) : 2.5);
-      const realAudioDuration = (typeof seg.finalAudioDuration === 'number' && seg.finalAudioDuration > 0)
-        ? seg.finalAudioDuration
-        : ((typeof seg.audioDurationSec === 'number' && seg.audioDurationSec > 0 && !isNaN(seg.audioDurationSec))
-          ? seg.audioDurationSec
-          : ((typeof seg.audioDuration === 'number' && seg.audioDuration > 0)
-            ? seg.audioDuration
-            : ((typeof seg.originalAudioDuration === 'number' && seg.originalAudioDuration > 0)
-              ? seg.originalAudioDuration
-              : ((typeof seg.rawAudioDur === 'number' && seg.rawAudioDur > 0)
-                ? seg.rawAudioDur
-                : slotSpan))));
-      const isTrimmed = Boolean(seg.audioTrimmed || seg.userTrimmed);
-      // Voice clip box strictly matches true audio duration [audioStartSec, audioStartSec + realAudioDuration]
-      const rawEnd = (isTrimmed && typeof seg.audioEndSec === 'number')
-        ? seg.audioEndSec
-        : (rawStart + realAudioDuration);
+      const slotDur = Math.max(0.1, slotEnd - slotStart);
+      const hasAudio = Boolean(seg.audioUrl || seg.audioPath || seg.audioFile);
+      const appliedSpeed = (typeof seg.appliedSpeed === 'number' && seg.appliedSpeed > 0)
+        ? seg.appliedSpeed
+        : ((typeof seg.speed === 'number' && seg.speed > 0) ? seg.speed : 1.0);
+
+      let rawAudioExtent = null;
+      if (typeof seg.finalAudioDuration === 'number' && seg.finalAudioDuration > 0) {
+        rawAudioExtent = seg.finalAudioDuration;
+      } else if (typeof seg.audioDurationSec === 'number' && seg.audioDurationSec > 0 && !isNaN(seg.audioDurationSec)) {
+        rawAudioExtent = (appliedSpeed > 0 && Math.abs(appliedSpeed - 1.0) > 0.001)
+          ? seg.audioDurationSec / appliedSpeed
+          : seg.audioDurationSec;
+      } else if (typeof seg.audioDuration === 'number' && seg.audioDuration > 0) {
+        rawAudioExtent = (appliedSpeed > 0 && Math.abs(appliedSpeed - 1.0) > 0.001)
+          ? seg.audioDuration / appliedSpeed
+          : seg.audioDuration;
+      } else if (typeof seg.originalAudioDuration === 'number' && seg.originalAudioDuration > 0) {
+        rawAudioExtent = (appliedSpeed > 0 && Math.abs(appliedSpeed - 1.0) > 0.001)
+          ? seg.originalAudioDuration / appliedSpeed
+          : seg.originalAudioDuration;
+      } else if (typeof seg.rawAudioDur === 'number' && seg.rawAudioDur > 0) {
+        rawAudioExtent = (appliedSpeed > 0 && Math.abs(appliedSpeed - 1.0) > 0.001)
+          ? seg.rawAudioDur / appliedSpeed
+          : seg.rawAudioDur;
+      }
+
+      let renderedDuration = slotSpan;
+      if (hasAudio && rawAudioExtent !== null) {
+        if (rawAudioExtent >= slotDur) {
+          renderedDuration = slotSpan;
+        } else {
+          renderedDuration = rawAudioExtent;
+          if (seg.userTrimmed && typeof seg.audioEndSec === 'number' && seg.audioEndSec > rawStart) {
+            const userTrimSpan = seg.audioEndSec - rawStart;
+            if (userTrimSpan < renderedDuration) {
+              renderedDuration = userTrimSpan;
+            }
+          }
+        }
+      }
+
+      const rawEnd = rawStart + renderedDuration;
 
       // CapCut single-lane style: all auto-placed voice clips live sequentially on VOICE 1 (Lane 0).
       // Only userShifted clips keep their explicitly chosen trackRow.
@@ -243,22 +270,55 @@ function TimelineTracksCanvas({
     const slotSpan = (typeof seg.audioEndSec === 'number' && !isNaN(seg.audioEndSec) && seg.audioEndSec > rawStart)
       ? (seg.audioEndSec - rawStart)
       : (slotEnd > slotStart ? (slotEnd - slotStart) : 2.5);
-    const realAudioDuration = (typeof seg.finalAudioDuration === 'number' && seg.finalAudioDuration > 0)
-      ? seg.finalAudioDuration
-      : ((typeof seg.audioDurationSec === 'number' && seg.audioDurationSec > 0 && !isNaN(seg.audioDurationSec))
-        ? seg.audioDurationSec
-        : ((typeof seg.audioDuration === 'number' && seg.audioDuration > 0)
-          ? seg.audioDuration
-          : ((typeof seg.originalAudioDuration === 'number' && seg.originalAudioDuration > 0)
-            ? seg.originalAudioDuration
-            : ((typeof seg.rawAudioDur === 'number' && seg.rawAudioDur > 0)
-              ? seg.rawAudioDur
-              : slotSpan))));
-    const isTrimmed = Boolean(seg.audioTrimmed || seg.userTrimmed);
-    // Voice clip box strictly matches true audio duration [audioStartSec, audioStartSec + realAudioDuration]
-    const rawEnd = (isTrimmed && typeof seg.audioEndSec === 'number')
-      ? seg.audioEndSec
-      : (rawStart + realAudioDuration);
+    const slotDur = Math.max(0.1, slotEnd - slotStart);
+    const appliedSpeed = (typeof seg.appliedSpeed === 'number' && seg.appliedSpeed > 0)
+      ? seg.appliedSpeed
+      : ((typeof seg.speed === 'number' && seg.speed > 0) ? seg.speed : 1.0);
+
+    let rawAudioExtent = null;
+    if (typeof seg.finalAudioDuration === 'number' && seg.finalAudioDuration > 0) {
+      rawAudioExtent = seg.finalAudioDuration;
+    } else if (typeof seg.audioDurationSec === 'number' && seg.audioDurationSec > 0 && !isNaN(seg.audioDurationSec)) {
+      rawAudioExtent = (appliedSpeed > 0 && Math.abs(appliedSpeed - 1.0) > 0.001)
+        ? seg.audioDurationSec / appliedSpeed
+        : seg.audioDurationSec;
+    } else if (typeof seg.audioDuration === 'number' && seg.audioDuration > 0) {
+      rawAudioExtent = (appliedSpeed > 0 && Math.abs(appliedSpeed - 1.0) > 0.001)
+        ? seg.audioDuration / appliedSpeed
+        : seg.audioDuration;
+    } else if (typeof seg.originalAudioDuration === 'number' && seg.originalAudioDuration > 0) {
+      rawAudioExtent = (appliedSpeed > 0 && Math.abs(appliedSpeed - 1.0) > 0.001)
+        ? seg.originalAudioDuration / appliedSpeed
+        : seg.originalAudioDuration;
+    } else if (typeof seg.rawAudioDur === 'number' && seg.rawAudioDur > 0) {
+      rawAudioExtent = (appliedSpeed > 0 && Math.abs(appliedSpeed - 1.0) > 0.001)
+        ? seg.rawAudioDur / appliedSpeed
+        : seg.rawAudioDur;
+    }
+
+    const realAudioDuration = (rawAudioExtent !== null && rawAudioExtent > 0) ? rawAudioExtent : slotSpan;
+
+    // Owner's rules:
+    // 1. If the segment has NO audio yet (no waveform): keep today's slot-width box so it stays visible and selectable.
+    // 2. If audio extent >= slot duration (overrun segments): keep today's rendering exactly (slot-width box, existing red-border / scissors overrun indication unchanged).
+    // 3. Otherwise: compute clip rendered width from audio's TRUE extent -> Box = from segment's start to start + effective audio extent.
+    // 4. If user manually trimmed with userTrimmed, respect manual trim bound if tighter.
+    let renderedDuration = slotSpan;
+    if (hasAudio && rawAudioExtent !== null) {
+      if (rawAudioExtent >= slotDur) {
+        renderedDuration = slotSpan;
+      } else {
+        renderedDuration = rawAudioExtent;
+        if (seg.userTrimmed && typeof seg.audioEndSec === 'number' && seg.audioEndSec > rawStart) {
+          const userTrimSpan = seg.audioEndSec - rawStart;
+          if (userTrimSpan < renderedDuration) {
+            renderedDuration = userTrimSpan;
+          }
+        }
+      }
+    }
+
+    const rawEnd = rawStart + renderedDuration;
 
     const isClipMovingAssociated = dragState?.itemType === 'video' && dragState?.mode === 'move' && associatedClipSegIndices.has(idx);
     const clipMoveDelta = isClipMovingAssociated ? (dragState.currentStart - dragState.origStart) : 0;
@@ -267,7 +327,7 @@ function TimelineTracksCanvas({
       ? dragState.currentStart 
       : (isClipMovingAssociated ? Math.max(0, rawStart + clipMoveDelta) : rawStart);
     const endSec = isDragging 
-      ? dragState.currentEnd 
+      ? (dragState?.mode === 'move' ? (startSec + renderedDuration) : dragState.currentEnd)
       : (isClipMovingAssociated ? Math.max(0.3, rawEnd + clipMoveDelta) : rawEnd);
 
     // 2px gap between adjacent clips
@@ -309,7 +369,6 @@ function TimelineTracksCanvas({
     const isFemale = isExplicitFemale || (isSreymom && !isExplicitMale);
 
     // STEP 3: OVER truthfulness. overSec = realAudioDuration - (slotEnd - slotStart)
-    const slotDur = Math.max(0.1, slotEnd - slotStart);
     const overSec = hasAudio ? parseFloat((realAudioDuration - slotDur).toFixed(2)) : 0;
     const isOverrun = Boolean(seg.audioOverrun);
     const isOver = isOverrun || (hasAudio && (overSec >= 0.15 || Boolean(seg.audioTrimmed && overSec > 0.05)));
@@ -343,14 +402,14 @@ function TimelineTracksCanvas({
             className="video-clip-ghost"
             style={{
               left: dragState.origStart * pps,
-              width: Math.max(2, (dragState.origEnd - dragState.origStart) * pps - 2),
+              width: Math.max(2, (renderedDuration * pps) - 2),
             }}
           />
         )}
 
         <div
           draggable={false}
-          onMouseDown={(e) => handleAudioMouseDown(e, seg, idx, 'move')}
+          onMouseDown={(e) => handleAudioMouseDown(e, { ...seg, renderedEnd: rawEnd, renderedDuration }, idx, 'move')}
           onClick={(e) => {
             e.stopPropagation();
             if (onSelectClipKind) onSelectClipKind('voice');
@@ -382,7 +441,7 @@ function TimelineTracksCanvas({
               draggable={false}
               onMouseDown={(e) => {
                 e.stopPropagation();
-                handleAudioMouseDown(e, seg, idx, 'trim-left');
+                handleAudioMouseDown(e, { ...seg, renderedEnd: rawEnd, renderedDuration }, idx, 'trim-left');
               }}
               title="Drag to trim start"
             >
@@ -412,11 +471,11 @@ function TimelineTracksCanvas({
                       <div
                         className="voice-waveform-bars"
                         style={{
-                          width: `${Math.min(audioWidth, Math.max(16, (realAudioDuration * pps) - 2))}px`,
+                          width: `${Math.min(audioWidth, Math.max(16, (renderedDuration * pps) - 2))}px`,
                           maxWidth: '100%',
                         }}
                       >
-                        {Array.from({ length: Math.min(40, Math.max(4, Math.floor(((realAudioDuration * pps) - 10) / 6))) }).map((_, wIdx) => {
+                        {Array.from({ length: Math.min(40, Math.max(4, Math.floor(((renderedDuration * pps) - 10) / 6))) }).map((_, wIdx) => {
                           const pattern = [30, 65, 90, 45, 80, 100, 55, 35, 75, 85, 40, 70, 25, 60, 80, 95, 50, 65, 35, 85];
                           const hPercent = pattern[wIdx % pattern.length];
                           return (
@@ -450,7 +509,7 @@ function TimelineTracksCanvas({
               draggable={false}
               onMouseDown={(e) => {
                 e.stopPropagation();
-                handleAudioMouseDown(e, seg, idx, 'trim-right');
+                handleAudioMouseDown(e, { ...seg, renderedEnd: rawEnd, renderedDuration }, idx, 'trim-right');
               }}
               title="Drag to trim end"
             >
