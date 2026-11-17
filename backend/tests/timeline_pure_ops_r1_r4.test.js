@@ -192,22 +192,19 @@ describe('Timeline Core Pure Ops Suite — Rules R1 to R4', () => {
   // Rule R3: Delete Gap (Film Ripple Left)
   // ═══════════════════════════════════════════════════════════════════
   describe('Rule R3: deleteGap', () => {
-    it('R3.1: Deleting opening Gap cuts film span, shifts later video clips left by exact Gap duration, film starts at 00:00', () => {
+    it('R3.1: Deleting opening Gap cuts film span, shifts later video clips AND segments starting at/after gap end left by exact Gap duration, film starts at 00:00', () => {
       const initialVideoClips = [
         { id: 'clip-gap-1', start: 0, end: 8.5, name: 'Gap', isDialogue: false },
         { id: 'clip-a', start: 8.5, end: 18.5, name: 'Scene A', isDialogue: true },
         { id: 'clip-b', start: 18.5, end: 30.0, name: 'Scene B', isDialogue: true },
       ];
       const initialSegments = [
-        { id: 1, _uid: 'seg-1', startSec: 10.0, endSec: 12.0 },
+        { id: 1, _uid: 'seg-1', startSec: 10.0, endSec: 12.0, sourceStartSec: 10.0, sourceEndSec: 12.0, khmerText: 'សំឡេង ១' },
       ];
       const state = { videoClips: initialVideoClips, segments: initialSegments };
 
       const result = deleteGap(state, { clipId: 'clip-gap-1' });
       assert.equal(result.applied, true);
-
-      // Segments must be deep-equal untouched
-      assert.deepEqual(result.state.segments, initialSegments, 'segments must be deep-equal untouched');
 
       // Video track: Clip A and Clip B shifted left by 8.5s
       assert.equal(result.state.videoClips.length, 2);
@@ -218,15 +215,29 @@ describe('Timeline Core Pure Ops Suite — Rules R1 to R4', () => {
       assert.equal(result.state.videoClips[1].id, 'clip-b');
       assert.equal(result.state.videoClips[1].start, 10.0);
       assert.equal(result.state.videoClips[1].end, 21.5);
+
+      // Segment after opening gap shifted left by exact Gap duration (8.5s)
+      assert.equal(result.state.segments.length, 1);
+      assert.equal(result.state.segments[0].id, 1, 'id unchanged');
+      assert.equal(result.state.segments[0]._uid, 'seg-1', '_uid unchanged');
+      assert.equal(result.state.segments[0].sourceStartSec, 10.0, 'sourceStartSec unchanged');
+      assert.equal(result.state.segments[0].sourceEndSec, 12.0, 'sourceEndSec unchanged');
+      assert.equal(result.state.segments[0].khmerText, 'សំឡេង ១', 'subtitle unchanged');
+      assert.equal(result.state.segments[0].startSec, 1.5, 'startSec shifted left by 8.5s (10.0 -> 1.5)');
+      assert.equal(result.state.segments[0].endSec, 3.5, 'endSec shifted left by 8.5s (12.0 -> 3.5)');
     });
 
-    it('R3.2: Deleting middle Gap shifts subsequent clips left; prior clips remain untouched', () => {
+    it('R3.2: Deleting middle Gap shifts subsequent clips AND segments starting at/after gap end left; prior clips and segments remain untouched', () => {
       const initialVideoClips = [
         { id: 'clip-a', start: 0, end: 10, name: 'Scene A', isDialogue: true },
         { id: 'clip-gap-mid', start: 10, end: 16, name: 'Gap', isDialogue: false },
         { id: 'clip-b', start: 16, end: 26, name: 'Scene B', isDialogue: true },
       ];
-      const state = { videoClips: initialVideoClips, segments: [] };
+      const initialSegments = [
+        { id: 1, _uid: 'seg-before', startSec: 2.0, endSec: 5.0, sourceStartSec: 2.0, sourceEndSec: 5.0, khmerText: 'មុន Gap' },
+        { id: 2, _uid: 'seg-after', startSec: 18.0, endSec: 22.0, sourceStartSec: 18.0, sourceEndSec: 22.0, khmerText: 'ក្រោយ Gap' },
+      ];
+      const state = { videoClips: initialVideoClips, segments: initialSegments };
 
       // Gap duration is 6.0s
       const result = deleteGap(state, { clipId: 'clip-gap-mid' });
@@ -242,6 +253,18 @@ describe('Timeline Core Pure Ops Suite — Rules R1 to R4', () => {
       assert.equal(result.state.videoClips[1].id, 'clip-b');
       assert.equal(result.state.videoClips[1].start, 10);
       assert.equal(result.state.videoClips[1].end, 20);
+
+      // Segment before gap is deep-equal untouched
+      assert.deepEqual(result.state.segments[0], initialSegments[0], 'segments before gap are deep-equal untouched');
+
+      // Segment after gap shifted left by exact Gap duration (6.0s), ids and source times unchanged
+      assert.equal(result.state.segments[1].id, 2);
+      assert.equal(result.state.segments[1]._uid, 'seg-after');
+      assert.equal(result.state.segments[1].sourceStartSec, 18.0, 'sourceStartSec unchanged');
+      assert.equal(result.state.segments[1].sourceEndSec, 22.0, 'sourceEndSec unchanged');
+      assert.equal(result.state.segments[1].khmerText, 'ក្រោយ Gap', 'subtitle text unchanged');
+      assert.equal(result.state.segments[1].startSec, 12.0, 'startSec shifted left by 6.0s (18.0 -> 12.0)');
+      assert.equal(result.state.segments[1].endSec, 16.0, 'endSec shifted left by 6.0s (22.0 -> 16.0)');
     });
 
     it('R3.3: Calling deleteGap on a non-gap dialogue clip rejects with reason', () => {
@@ -253,6 +276,52 @@ describe('Timeline Core Pure Ops Suite — Rules R1 to R4', () => {
       const result = deleteGap(state, { clipId: 'clip-dialogue' });
       assert.equal(result.applied, false);
       assert.ok(result.reason.includes('deleteVideoClip'));
+    });
+
+    it('R3.4: Sync case — clips [#5, Gap 0.5s, #6] with voices at their clips -> after deleteGap, video #6 and voice #6 both start 0.5s earlier and remain aligned', () => {
+      const initialVideoClips = [
+        { id: 'clip-5', start: 0, end: 5.0, name: 'Clip #5', isDialogue: true },
+        { id: 'clip-gap-mid', start: 5.0, end: 5.5, name: 'Gap', isDialogue: false },
+        { id: 'clip-6', start: 5.5, end: 10.0, name: 'Clip #6', isDialogue: true },
+      ];
+      const initialSegments = [
+        { id: 5, _uid: 'voice-5', startSec: 1.0, endSec: 3.0, audioStartSec: 1.0, audioEndSec: 3.0, sourceStartSec: 1.0, sourceEndSec: 3.0, khmerText: 'សំឡេង ៥' },
+        { id: 6, _uid: 'voice-6', startSec: 5.5, endSec: 7.5, audioStartSec: 5.5, audioEndSec: 7.5, sourceStartSec: 5.5, sourceEndSec: 7.5, khmerText: 'សំឡេង ៦' },
+      ];
+      const state = { videoClips: initialVideoClips, segments: initialSegments };
+
+      const result = deleteGap(state, { clipId: 'clip-gap-mid' });
+      assert.equal(result.applied, true);
+
+      // Video clips: Clip #5 untouched, Clip #6 shifted left by 0.5s
+      assert.equal(result.state.videoClips.length, 2);
+      assert.equal(result.state.videoClips[0].id, 'clip-5');
+      assert.equal(result.state.videoClips[0].start, 0);
+      assert.equal(result.state.videoClips[0].end, 5.0);
+
+      const video6 = result.state.videoClips[1];
+      assert.equal(video6.id, 'clip-6');
+      assert.equal(video6.start, 5.0, 'video #6 starts 0.5s earlier (5.5 -> 5.0)');
+      assert.equal(video6.end, 9.5);
+
+      // Voice #5 untouched
+      assert.deepEqual(result.state.segments[0], initialSegments[0], 'voice #5 before gap is deep-equal untouched');
+
+      // Voice #6 shifted left by 0.5s
+      const voice6 = result.state.segments[1];
+      assert.equal(voice6.id, 6, 'id unchanged');
+      assert.equal(voice6._uid, 'voice-6', '_uid unchanged');
+      assert.equal(voice6.sourceStartSec, 5.5, 'sourceStartSec unchanged');
+      assert.equal(voice6.sourceEndSec, 7.5, 'sourceEndSec unchanged');
+      assert.equal(voice6.khmerText, 'សំឡេង ៦', 'subtitle unchanged');
+      assert.equal(voice6.startSec, 5.0, 'voice #6 starts 0.5s earlier (5.5 -> 5.0)');
+      assert.equal(voice6.endSec, 7.0);
+      assert.equal(voice6.audioStartSec, 5.0);
+      assert.equal(voice6.audioEndSec, 7.0);
+
+      // Crucial: video #6 and voice #6 both start at 5.0s and remain aligned
+      assert.equal(video6.start, voice6.startSec, 'video #6 and voice #6 start times remain aligned');
+      assert.equal(video6.start, voice6.audioStartSec, 'video #6 and voice #6 audioStartSec remain aligned');
     });
   });
 

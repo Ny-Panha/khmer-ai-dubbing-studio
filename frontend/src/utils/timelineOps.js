@@ -229,8 +229,11 @@ export function deleteVideoClip(state, { clipId, totalDuration }) {
 
 // ═══════════════════════════════════════════════════════════════════
 //  R3 — deleteGap (film ripple left)
-//  Remove Gap; shift later VIDEO clips left by exact Gap duration.
-//  Segments deep-equal untouched.
+//  Remove Gap; shift later VIDEO clips AND segments that start at or
+//  after the Gap's end left by exact Gap duration (D).
+//  Segments starting before the Gap's end are untouched (deep-equal).
+//  Ids, source times (sourceStartSec/sourceEndSec), and each segment's
+//  subtitle stay attached; only timeline times shift.
 // ═══════════════════════════════════════════════════════════════════
 
 export function deleteGap(state, { clipId }) {
@@ -284,9 +287,58 @@ export function deleteGap(state, { clipId }) {
     return acc;
   }, []);
 
+  // Ripple segments starting at or after Gap end
+  const segs = Array.isArray(segments) ? segments : [];
+  const shiftedSegments = segs.map((seg) => {
+    const segStart = typeof seg.startSec === 'number' && !isNaN(seg.startSec)
+      ? seg.startSec
+      : (typeof seg.audioStartSec === 'number' && !isNaN(seg.audioStartSec)
+        ? seg.audioStartSec
+        : (typeof seg.start === 'string' ? parseTimeToSeconds(seg.start, 0) : 0));
+
+    // Segments starting before the Gap's end are untouched
+    if (segStart < gapEnd - 0.001) {
+      return deepClone(seg);
+    }
+
+    // Segments starting at or after the Gap's end shift left by dur
+    const updated = { ...seg };
+    if (typeof seg.startSec === 'number' && !isNaN(seg.startSec)) {
+      updated.startSec = Math.max(0, r3(seg.startSec - dur));
+    }
+    if (typeof seg.endSec === 'number' && !isNaN(seg.endSec)) {
+      updated.endSec = Math.max(0, r3(seg.endSec - dur));
+    }
+    if (typeof seg.audioStartSec === 'number' && !isNaN(seg.audioStartSec)) {
+      updated.audioStartSec = Math.max(0, r3(seg.audioStartSec - dur));
+    }
+    if (typeof seg.audioEndSec === 'number' && !isNaN(seg.audioEndSec)) {
+      updated.audioEndSec = Math.max(0, r3(seg.audioEndSec - dur));
+    }
+    if (typeof seg.start === 'string' && typeof updated.startSec === 'number') {
+      updated.start = formatMinSec(updated.startSec);
+    }
+    if (typeof seg.end === 'string' && typeof updated.endSec === 'number') {
+      updated.end = formatMinSec(updated.endSec);
+    }
+    if (typeof seg.startTime === 'string' && typeof updated.startSec === 'number') {
+      updated.startTime = formatMinSec(updated.startSec);
+    }
+    if (typeof seg.endTime === 'string' && typeof updated.endSec === 'number') {
+      updated.endTime = formatMinSec(updated.endSec);
+    }
+    if (typeof seg.audioStart === 'string' && typeof updated.audioStartSec === 'number') {
+      updated.audioStart = formatMinSec(updated.audioStartSec);
+    }
+    if (typeof seg.audioEnd === 'string' && typeof updated.audioEndSec === 'number') {
+      updated.audioEnd = formatMinSec(updated.audioEndSec);
+    }
+    return updated;
+  });
+
   return ok({
     videoClips: merged,
-    segments: deepClone(segments), // R3: segments deep-equal untouched
+    segments: shiftedSegments,
   });
 }
 

@@ -153,7 +153,11 @@ describe('Phase 3 Final Acceptance Suite — Monotonic Playback, R7 Duration & F
     const diskAfter = readDiskEpisode();
     const clipsAfterMax = diskAfter.videoClips.reduce((max, c) => Math.max(max, Number(c.end) || 0), 0);
     assert.equal(clipsAfterMax, 25.0, 'R7: Timeline duration must equal 25.0s (shrunk by exactly 5.0s Gap duration)');
-    assert.deepEqual(diskAfter.scriptData.segments, initialSegments, 'Segments untouched by Gap delete');
+    assert.equal(diskAfter.scriptData.segments[0].id, 1, 'Segment id unchanged');
+    assert.equal(diskAfter.scriptData.segments[0]._uid, 'uid-1', 'Segment _uid unchanged');
+    assert.equal(diskAfter.scriptData.segments[0].khmerText, 'សួស្តី', 'Segment khmerText unchanged');
+    assert.equal(diskAfter.scriptData.segments[0].startSec, 1.0, 'Segment startSec shifted left by 5.0s (6.0 -> 1.0)');
+    assert.equal(diskAfter.scriptData.segments[0].endSec, 5.0, 'Segment endSec shifted left by 5.0s (10.0 -> 5.0)');
   });
 
   // ═════════════════════════════════════════════════════════════════

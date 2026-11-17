@@ -1085,6 +1085,17 @@ async function persistEpisodeTimelineOperation({
           if (deletedId) {
             episode.deletedVideoClipIds = mergeKeys(episode.deletedVideoClipIds, [deletedId]);
           }
+          if (Array.isArray(segments)) {
+            const segUpdatedAt = nextTrackTimestamp(episode.scriptData?.updatedAt);
+            episode.scriptData = {
+              ...(episode.scriptData || {}),
+              segments,
+              hasScript: segments.length > 0,
+              totalSegments: segments.length,
+              updatedAt: segUpdatedAt,
+              explicitClear: segments.length === 0,
+            };
+          }
           episode.timelineTombstonesUpdatedAt = tombstonesUpdatedAt;
           operationTimestamps = { updatedAt };
         }

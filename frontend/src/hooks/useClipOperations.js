@@ -619,6 +619,7 @@ export function useClipOperations({
 
     pushUndoSnapshot(videoClips, scriptData?.segments || []);
     const updated = opResult.state.videoClips;
+    const updatedSegments = opResult.state.segments;
 
     const localSave = saveTimelineOperationToLocalStorage({
       seriesId,
@@ -627,8 +628,12 @@ export function useClipOperations({
       track: 'videoClips',
       items: updated,
       deletedItem: targetClip,
+      segments: updatedSegments,
     });
     setVideoClips(updated);
+    if (isTargetGap && updatedSegments && setScriptData) {
+      setScriptData(prev => prev ? ({ ...prev, segments: updatedSegments, updatedAt: Date.now() }) : null);
+    }
     if (localSave?.videoClipsUpdatedAt && setVideoClipsUpdatedAt) {
       setVideoClipsUpdatedAt(localSave.videoClipsUpdatedAt);
     }
@@ -641,6 +646,7 @@ export function useClipOperations({
         track: 'videoClips',
         items: updated,
         deletedItem: targetClip,
+        segments: updatedSegments,
       });
     } catch (err) {
       console.warn('[useClipOperations] Could not immediately persist deleted video clip:', err.message);

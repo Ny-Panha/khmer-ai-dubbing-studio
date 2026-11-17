@@ -895,6 +895,18 @@ export function saveTimelineOperationToLocalStorage({
     if (deletedItem?.id !== undefined && deletedItem?.id !== null) {
       episode.deletedVideoClipIds = mergeTombstones(episode.deletedVideoClipIds, [String(deletedItem.id)]);
     }
+    if (Array.isArray(segments)) {
+      const segUpdatedAt = Math.max(now, Number(episode.scriptData?.updatedAt || 0) + 1);
+      episode.scriptData = {
+        ...(episode.scriptData || {}),
+        segments,
+        hasScript: segments.length > 0,
+        totalSegments: segments.length,
+        explicitClear: segments.length === 0,
+        updatedAt: segUpdatedAt,
+      };
+      timestamps.updatedAt = segUpdatedAt;
+    }
     episode.timelineTombstonesUpdatedAt = tombstonesUpdatedAt;
     timestamps.videoClipsUpdatedAt = updatedAt;
   } else if (operation === 'restore' && Array.isArray(segments) && Array.isArray(videoClips)) {

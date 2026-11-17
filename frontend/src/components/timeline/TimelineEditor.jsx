@@ -1502,7 +1502,7 @@ function TimelineEditor({
               ? deleteGapOp(currentState, { clipId: activeClipId })
               : deleteVideoClipOp(currentState, { clipId: activeClipId, totalDuration: duration });
             if (opResult.applied) {
-              onUpdateClips(opResult.state.videoClips);
+              onUpdateClips(opResult.state.videoClips, opResult.state.segments);
             }
           }
         }
@@ -1548,7 +1548,7 @@ function TimelineEditor({
             ? deleteGapOp(currentState, { clipId: activeClipId })
             : deleteVideoClipOp(currentState, { clipId: activeClipId, totalDuration: duration });
           if (opResult.applied) {
-            onUpdateClips(opResult.state.videoClips);
+            onUpdateClips(opResult.state.videoClips, opResult.state.segments);
           }
         }
       }

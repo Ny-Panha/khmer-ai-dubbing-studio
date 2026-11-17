@@ -3,7 +3,39 @@
 ## Last Session
 - **Environment**: Antigravity IDE
 - **Branch**: `refactor/timeline-core-clean`
-- **Timestamp**: 2026-11-17T15:25:00+07:00
+- **Timestamp**: 2026-11-17T15:30:00+07:00
+
+## Summary: Spec Amendment — Rule R3 in timelineOps.deleteGap (CapCut Ripple) (COMPLETED)
+- **Scope**: Fixed Rule R3 in `frontend/src/utils/timelineOps.js` (`deleteGap`) and aligned test expectations, persistence, and documentation without touching R1 or R2 (single-item deletes stay track-independent).
+- **Owner's Case & Correct Behavior**:
+  - Deleting a middle Gap joins the film (`||`) and ripples later VIDEO clips AND all segments that start at or after the Gap's end left by the same Gap duration $D$ (CapCut ripple).
+  - A voice belongs to its clip and moves with the film.
+  - Segments starting before the Gap's end are untouched (deep-equal).
+  - IDs, `_uid`, source times (`sourceStartSec`/`sourceEndSec`), and each segment's subtitle stay attached; only timeline times (`startSec`/`endSec`/`audioStartSec`/`audioEndSec` and clip `start`/`end`) shift.
+- **Key Changes Implemented**:
+  1. `frontend/src/utils/timelineOps.js`:
+     - Updated `deleteGap` to ripple segments whose start is >= gapEnd - 0.001 left by D, preserving segments before gapEnd via `deepClone`.
+  2. Persistence & Hook Wiring:
+     - `backend/services/episodeService.js`: Supported optional `segments` payload on `operation: 'delete'` with `track: 'videoClips'` to persist shifted segments in a single locked `series.json` update.
+     - `frontend/src/utils/projectStorage.js`: Synchronized `segments` on `delete` when `track === 'videoClips'`.
+     - `frontend/src/hooks/useClipOperations.js`: Updated `handleDeleteClip` to set and persist `opResult.state.segments` when deleting a Gap clip.
+     - `frontend/src/components/timeline/TimelineEditor.jsx`: Threaded `opResult.state.segments` to `onUpdateClips(newClips, newSegments)`.
+  3. Tests & Specifications:
+     - `backend/tests/timeline_pure_ops_r1_r4.test.js`:
+       - R3.1: opening Gap delete shifts later video clips and segments starting at/after Gap end left by D.
+       - R3.2: middle Gap delete shifts subsequent clips and segments; prior clips and segments are deep-equal untouched.
+       - R3.3: reject non-gap clip delete.
+       - R3.4: sync case: clips `[#5, Gap 0.5s, #6]` with voices at their clips -> after `deleteGap`, video #6 and voice #6 both start 0.5s earlier and remain aligned.
+     - `backend/tests/timeline_step_a_real_app_acceptance.test.js`:
+       - Updated Check 3 opening Gap acceptance to verify shifted segments and undo restoration.
+       - Added Check 4 middle Gap acceptance to verify prior segments untouched, subsequent segments shifted, and undo restoration.
+     - `backend/tests/timeline_phase3_final_acceptance.test.js`:
+       - Updated Check 2 to reflect the amended R3 segment shift.
+     - `.agents/TIMELINE-DESIGN.md`:
+       - Updated Rule R3 text, invariants, and acceptance matrix to reflect CapCut ripple behavior.
+- **Verification Evidence**:
+  - Full timeline test suites (14 suites): **65 passed, 0 failed** (`node --test`).
+  - Production build: `npm run build --prefix frontend` (Vite build passed with 0 errors).
 
 ## Summary: Phase 2 — Dead-Code Removal & Real Pipeline Smoke Test (COMPLETED)
 - **Scope**: Full execution of approved dead-code removal across 4 isolated batches + end-to-end pipeline smoke test on branch `refactor/timeline-core-clean`.
@@ -51,7 +83,7 @@
 - **Backend API**: `http://localhost:8080`
 
 ## Next Steps
-- Clean timeline core refactoring and dead-code removal are 100% complete, verified, and pushed to `origin/refactor/timeline-core-clean`.
+- Spec amendment on `timelineOps.deleteGap` (R3) completed and verified. Stopped per prompt.
 - Ready for final review / PR creation by the project owner.
 - **Scope**: Rigorous audit of `frontend/src/` (115 files) and `backend/` (`routes/`, `services/`, `utils/`, 53 files) on branch `refactor/timeline-core-clean`.
 - **Protocol Adherence**: Strictly **AUDIT ONLY**. Zero files or functions deleted. Manifest generated at `.agents/DEAD-CODE-MANIFEST.md`. Stopped at gate awaiting owner approval.

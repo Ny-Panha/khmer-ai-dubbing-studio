@@ -73,10 +73,11 @@ deleteVideoClip(state, { clipId, totalDuration }) =>
   { state: { videoClips: withGapMerge, segments: same }, applied: true }
   // Invariants: segments deep-equal; range becomes ONE merged Gap; [0, duration] continuous
 
-// R3 — Delete Gap (film ripple)
+// R3 — Delete Gap (film ripple left)
 deleteGap(state, { clipId }) =>
-  { state: { videoClips: shifted, segments: same }, applied: true }
-  // Invariants: segments deep-equal; later clips shift left by gap duration
+  { state: { videoClips: shifted, segments: shiftedAfterGap }, applied: true }
+  // Invariants: later video clips AND segments starting at or after Gap's end shift left by exact Gap duration (D);
+  // segments starting before Gap's end are deep-equal untouched; ids, source times, and subtitles stay attached.
 
 // R4 — Split clip at playhead
 splitClip(state, { splitTime, activeClipId, totalDuration }) =>
@@ -156,7 +157,7 @@ timecode.
 **New file:** `frontend/src/utils/__tests__/timelineOps.test.js`
 - R1: delete segment → videoClips unchanged, survivors keep ids/times
 - R2: delete dialogue clip → gap merge, segments unchanged
-- R3: delete gap → shift left, segments unchanged  
+- R3: delete gap → shift later video clips and segments starting at/after gap end left by D; segments before gap untouched  
 - R4: split → both video and segment variants
 - R5: autoAlign → count guard, move-only
 
@@ -181,7 +182,7 @@ timecode.
 |------|------|----------------|
 | R1 | deleteSegment: survivors deep-equal, videoClips identical | Delete 2 voices → file count -2, video clips identical |
 | R2 | deleteVideoClip: gap merge, segments identical | Delete middle video clip → one joined Gap |
-| R3 | deleteGap: shift left by exact duration | Delete opening Gap → film starts 00:00, duration shrinks |
+| R3 | deleteGap: ripple left by exact duration D | Delete Gap → film joins, later clips and subsequent voices shift left by D, prior voices untouched |
 | R4 | splitClip: two clips, fresh episode virtual | Split mid-video → two clips, save+reload persist |
 | R5 | autoAlign: count guard, move-only | Auto-Align → file unchanged; added voice stays |
 | R6 | Selection routing via selectedClipKind | (existing, verify not regressed) |

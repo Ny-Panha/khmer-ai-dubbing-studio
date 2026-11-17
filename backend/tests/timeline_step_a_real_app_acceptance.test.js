@@ -181,9 +181,9 @@ describe('Phase 2 Step A: Real-App Checks on Disposable Episode Copy (Stored ser
     assert.deepEqual(diskAfterUndo.scriptData.segments, initialSegments, 'Undo must keep segments intact');
   });
 
-  it('Check 3: Delete an opening Gap -> film starts 00:00, segments identical; Ctrl+Z restores exactly', async () => {
+  it('Check 3: Delete an opening Gap -> film starts 00:00, subsequent segments shift left with video; Ctrl+Z restores exactly', async () => {
     const initialSegments = [
-      { id: 1, _uid: 'uid-1', startSec: 10.0, endSec: 13.0, khmerText: 'សួស្តី' },
+      { id: 1, _uid: 'uid-1', startSec: 10.0, endSec: 13.0, sourceStartSec: 10.0, sourceEndSec: 13.0, khmerText: 'សួស្តី' },
     ];
     const initialVideoClips = [
       { id: 'clip-gap-lead', start: 0, end: 6.5, name: 'Gap', isDialogue: false },
@@ -214,12 +214,11 @@ describe('Phase 2 Step A: Real-App Checks on Disposable Episode Copy (Stored ser
       track: 'videoClips',
       items: opResult.state.videoClips,
       deletedItem: initialVideoClips[0],
+      segments: opResult.state.segments,
     });
 
     // Verify stored series.json
     const diskAfterDelete = readDiskEpisode();
-    assert.deepEqual(diskAfterDelete.scriptData.segments, initialSegments, 'Segments in stored file must be 100% identical');
-
     assert.equal(diskAfterDelete.videoClips.length, 2, 'Gap removed, 2 clips remain');
     assert.equal(diskAfterDelete.videoClips[0].id, 'clip-content-1');
     assert.equal(diskAfterDelete.videoClips[0].start, 0.0, 'Film must start at 00:00');
@@ -227,6 +226,16 @@ describe('Phase 2 Step A: Real-App Checks on Disposable Episode Copy (Stored ser
     assert.equal(diskAfterDelete.videoClips[1].id, 'clip-content-2');
     assert.equal(diskAfterDelete.videoClips[1].start, 10.0);
     assert.equal(diskAfterDelete.videoClips[1].end, 20.0);
+
+    // Segment after opening gap shifted left by exact Gap duration (6.5s)
+    assert.equal(diskAfterDelete.scriptData.segments.length, 1);
+    assert.equal(diskAfterDelete.scriptData.segments[0].id, 1, 'Segment id unchanged');
+    assert.equal(diskAfterDelete.scriptData.segments[0]._uid, 'uid-1', 'Segment _uid unchanged');
+    assert.equal(diskAfterDelete.scriptData.segments[0].sourceStartSec, 10.0, 'sourceStartSec unchanged');
+    assert.equal(diskAfterDelete.scriptData.segments[0].sourceEndSec, 13.0, 'sourceEndSec unchanged');
+    assert.equal(diskAfterDelete.scriptData.segments[0].khmerText, 'សួស្តី', 'khmerText unchanged');
+    assert.equal(diskAfterDelete.scriptData.segments[0].startSec, 3.5, 'startSec shifted left by 6.5s (10.0 -> 3.5)');
+    assert.equal(diskAfterDelete.scriptData.segments[0].endSec, 6.5, 'endSec shifted left by 6.5s (13.0 -> 6.5)');
 
     // Ctrl+Z Undo
     await persistEpisodeTimelineOperation({
@@ -241,5 +250,75 @@ describe('Phase 2 Step A: Real-App Checks on Disposable Episode Copy (Stored ser
     const diskAfterUndo = readDiskEpisode();
     assert.deepEqual(diskAfterUndo.videoClips, initialVideoClips, 'Undo must restore opening Gap and exact prior clips');
     assert.deepEqual(diskAfterUndo.scriptData.segments, initialSegments, 'Undo must preserve segments');
+  });
+
+  it('Check 4: Delete a middle Gap -> shifts later video clips AND subsequent segments left, prior segments untouched; Ctrl+Z restores exactly', async () => {
+    const initialSegments = [
+      { id: 1, _uid: 'uid-v1', startSec: 2.0, endSec: 5.0, sourceStartSec: 2.0, sourceEndSec: 5.0, khmerText: 'មុន Gap' },
+      { id: 2, _uid: 'uid-v2', startSec: 16.0, endSec: 19.0, sourceStartSec: 16.0, sourceEndSec: 19.0, khmerText: 'ក្រោយ Gap' },
+    ];
+    const initialVideoClips = [
+      { id: 'clip-a', start: 0, end: 10, name: 'Scene A', isDialogue: true },
+      { id: 'clip-gap-mid', start: 10, end: 15, name: 'Gap', isDialogue: false },
+      { id: 'clip-b', start: 15, end: 25, name: 'Scene B', isDialogue: true },
+    ];
+
+    seedDiskEpisode(initialSegments, initialVideoClips, 25);
+
+    const undoSnapshot = {
+      segments: JSON.parse(JSON.stringify(initialSegments)),
+      videoClips: JSON.parse(JSON.stringify(initialVideoClips)),
+    };
+
+    const currentState = { videoClips: initialVideoClips, segments: initialSegments };
+    const opResult = deleteGap(currentState, { clipId: 'clip-gap-mid' });
+    assert.equal(opResult.applied, true, 'deleteGap op must apply to middle gap');
+
+    // Persist to stored series.json
+    await persistEpisodeTimelineOperation({
+      projectsDir: tempProjectsDir,
+      seriesId,
+      episodeId,
+      operation: 'delete',
+      track: 'videoClips',
+      items: opResult.state.videoClips,
+      deletedItem: initialVideoClips[1],
+      segments: opResult.state.segments,
+    });
+
+    const diskAfterDelete = readDiskEpisode();
+    assert.equal(diskAfterDelete.videoClips.length, 2, 'Middle gap removed, 2 clips remain');
+    assert.equal(diskAfterDelete.videoClips[0].id, 'clip-a');
+    assert.equal(diskAfterDelete.videoClips[0].start, 0);
+    assert.equal(diskAfterDelete.videoClips[0].end, 10);
+    assert.equal(diskAfterDelete.videoClips[1].id, 'clip-b');
+    assert.equal(diskAfterDelete.videoClips[1].start, 10, 'Clip B shifted left by 5s');
+    assert.equal(diskAfterDelete.videoClips[1].end, 20);
+
+    // Segment before Gap untouched
+    assert.deepEqual(diskAfterDelete.scriptData.segments[0], initialSegments[0], 'Segment before Gap must be untouched');
+
+    // Segment after Gap shifted left by 5s (16.0 -> 11.0, 19.0 -> 14.0)
+    assert.equal(diskAfterDelete.scriptData.segments[1].id, 2);
+    assert.equal(diskAfterDelete.scriptData.segments[1]._uid, 'uid-v2');
+    assert.equal(diskAfterDelete.scriptData.segments[1].sourceStartSec, 16.0);
+    assert.equal(diskAfterDelete.scriptData.segments[1].sourceEndSec, 19.0);
+    assert.equal(diskAfterDelete.scriptData.segments[1].khmerText, 'ក្រោយ Gap');
+    assert.equal(diskAfterDelete.scriptData.segments[1].startSec, 11.0, 'Segment 2 startSec shifted by 5s (16.0 -> 11.0)');
+    assert.equal(diskAfterDelete.scriptData.segments[1].endSec, 14.0, 'Segment 2 endSec shifted by 5s (19.0 -> 14.0)');
+
+    // Ctrl+Z Undo
+    await persistEpisodeTimelineOperation({
+      projectsDir: tempProjectsDir,
+      seriesId,
+      episodeId,
+      operation: 'restore',
+      segments: undoSnapshot.segments,
+      videoClips: undoSnapshot.videoClips,
+    });
+
+    const diskAfterUndo = readDiskEpisode();
+    assert.deepEqual(diskAfterUndo.videoClips, initialVideoClips, 'Undo restores clips');
+    assert.deepEqual(diskAfterUndo.scriptData.segments, initialSegments, 'Undo restores segments');
   });
 });
