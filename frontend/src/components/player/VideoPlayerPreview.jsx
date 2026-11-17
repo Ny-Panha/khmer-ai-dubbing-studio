@@ -2163,6 +2163,7 @@ function VideoPlayerPreview({
                 videoMeta={videoMeta}
                 currentTime={currentTime}
                 isPlaying={isPlaying}
+                onUpdateVoiceSettings={onUpdateVoiceSettings}
               />
             </div>
           ) : (

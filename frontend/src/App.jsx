@@ -59,6 +59,8 @@ const VISUAL_SETTING_DEFAULTS = {
   sponsorChromaKey: true,
   sponsorChromaSimilarity: 0.28,
   sponsorPosition: 'bottom-left',
+  sponsorXPercent: null,
+  sponsorYPercent: null,
   sponsorTimingMode: 'loop',
   sponsorIntervalSec: 60,
   sponsorDurationSec: 10,

@@ -1,6 +1,64 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
+- **Environment**: Antigravity IDE
+- **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-17T21:43:00+07:00
+
+## Summary: Draggable Sponsor Ads Overlay in Preview + Percent-Based FFmpeg Export Sync (COMPLETED)
+- **Step 0 — Fresh Restart & Real-App Reproduction**:
+  - Restarted backend (`:5000`) and Vite (`:5173`) cleanly.
+  - Reproduced in live Studio UI (`http://localhost:5173/studio`): uploaded sponsor video, enabled Sponsor Ads, attempted pointer drag on `.sponsor-overlay-container` — **not selectable / drag completely ignored** (`pointerEvents: "none"`, `cursor: "auto"`, `elementFromPoint` hit `<video>` underneath; `SponsorOverlay` lacked `onUpdateVoiceSettings` and drag handlers; Position dropdown lacked `"custom"`; `ffmpegService.js` had no custom percent x/y support).
+- **Changes Applied**:
+  1. `frontend/src/components/player/SponsorOverlay.jsx` & `SponsorOverlay.css`: Wrapped in full-frame `.sponsor-overlay-root`, enabled `pointer-events: auto` (`cursor: grab`/`grabbing`, emerald hover/drag outline + live `X% | Y%` badge), implemented pointer drag (`onPointerDown` + window `pointermove`/`pointerup`/`pointercancel`, clamped within frame bounds), saving percent-based `{ sponsorPosition: 'custom', sponsorXPercent, sponsorYPercent }` via `onUpdateVoiceSettings` (drag = move only; scale, chroma key, sensitivity, loop timing, mute unchanged).
+  2. `frontend/src/components/player/VideoPlayerPreview.jsx`: Passed `onUpdateVoiceSettings` to `<SponsorOverlay />`.
+  3. `frontend/src/components/voice/ExportSettingsPanel.jsx`: Added `<option value="custom">✨ ទីតាំងសេរី (Custom Drag)</option>` to Sponsor Position dropdown; selecting any preset clears `sponsorXPercent: null, sponsorYPercent: null` atomically; displays active `Custom: X% · Y%` hint.
+  4. `frontend/src/App.jsx`: Added `sponsorXPercent: null` and `sponsorYPercent: null` to `VISUAL_SETTING_DEFAULTS` so every drag invalidates stale renders and persists to `localStorage` + `series.json`.
+  5. `frontend/src/hooks/useVideoRender.js`: Forwarded `sponsorXPercent`/`sponsorYPercent` (`xPercent`/`yPercent`) in `buildSponsorOptions()` (used by both single and batch export).
+  6. `backend/services/ffmpegService.js`: Added custom percent positioning (`overlay=x=(main_w-overlay_w)*xFrac:y=(main_h-overlay_h)*yFrac`), handling `0%` cleanly without falsy fallback, mapping identically to 16:9, 9:16, and 1:1 output resolutions.
+  7. `backend/tests/sponsor_ads_end_to_end.test.js`: Extended static audit and added real FFmpeg export test verifying dragged custom percent `(80%, 15%)` on both 16:9 (`1280x720`) and 9:16 (`1080x1920`) plus `(0%, 0%)` top-left corner edge case.
+- **Verification Evidence**:
+  - Frontend build (`npm --prefix frontend run build`): **PASS** (987ms, 0 errors); `oxlint`: **0 errors**.
+  - Test suites (`node --test backend/tests/sponsor_ads_end_to_end.test.js backend/tests/timeline_*.test.js`): **93/93 PASS** (16 suites, 0 fail).
+  - Real-app verification (`http://localhost:5173/studio`, Edge headless, 0 console/page errors):
+    - Dragged from `bottom-left` -> moved smoothly, dropdown switched to `custom`; switched preset `top-left` -> moved cleanly to `top-left`; dragged again to `(X: 59.9%, Y: 18.8%)` (`relCenterX: 0.5742, relCenterY: 0.2663`).
+    - Reloaded page -> persisted identically (`persistDeltaX: 0, persistDeltaY: 0`, `series.json` saved `sponsorPosition: "custom", sponsorXPercent: 59.9, sponsorYPercent: 18.8`).
+    - Short real FFmpeg export frame grab (`1280x720`) rendered `DragonDub AI` chroma-keyed banner at exact matching relative position (`exportRelCenterX: 0.5754` vs preview `0.5742`, delta `0.0012`).
+
+## Active Environment
+- **Backend API**: `http://localhost:5000` (running with latest `ffmpegService.js`)
+- **Frontend Studio**: `http://localhost:5173` (Vite dev server)
+- **Branch**: `chore/full-project-cleanup` (pushed to `origin/chore/full-project-cleanup`)
+
+## Next Steps
+- Refresh browser (`Ctrl + F5`) at `http://localhost:5173/studio`, enable Sponsor Ads, and drag the banner directly in the preview player.
+
+---
+
+## Previous Session
+- **Environment**: Antigravity IDE
+- **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-17T21:38:00+07:00
+
+## Summary: Remove "EP... AI Audio" Quick Action Footer Bar from VoiceSettings (COMPLETED)
+- **Changes Applied**:
+  1. `frontend/src/components/voice/VoiceSettings.jsx`: Removed the bottom `EP{activeEpisode.episodeNumber || activeEpisode.id} AI Audio:` footer bar (`▶ បង្កើតសំឡេង AI` and `▶ ផលិតទាំង 3 ជំហាន` buttons) and its unused `DubbingStepButton` import.
+  2. `backend/tests/reusable_1by1_dubbing_feature.test.js`: Updated `Step 3c` test to remove the `VoiceSettings` `DubbingStepButton` assertion (kept `EpisodesTab` and `DubbingModeTab`).
+- **Verification**:
+  - Frontend build (`npm --prefix frontend run build`): **PASS** (1.34s, 0 errors).
+  - Test (`node --test backend/tests/reusable_1by1_dubbing_feature.test.js`): **10/10 PASS**.
+
+## Active Environment
+- **Backend API**: `http://localhost:5000`
+- **Frontend Studio**: `http://localhost:5173`
+- **Branch**: `chore/full-project-cleanup`
+
+## Next Steps
+- Refresh browser at `http://localhost:5173/studio` to confirm the `EP... AI Audio` bar is gone from the right panel.
+
+---
+
+## Previous Session
 - **Environment**: Antigravity IDE (`engineering-minimal-change-engineer` discipline)
 - **Branch**: `chore/full-project-cleanup`
 - **Timestamp**: 2026-11-17T20:57:00+07:00

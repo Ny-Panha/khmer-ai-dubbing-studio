@@ -770,8 +770,30 @@ export default function ExportSettingsPanel({
                       📍 ទីតាំង Sponsor
                     </span>
                     <select
+                      data-testid="sponsor-position-select"
                       value={settings?.sponsorPosition || 'bottom-left'}
-                      onChange={(e) => onSettingChange('sponsorPosition', e.target.value)}
+                      onChange={(e) => {
+                        const nextPos = e.target.value;
+                        if (nextPos === 'custom') {
+                          const curX = Number.isFinite(Number(settings?.sponsorXPercent)) && settings?.sponsorXPercent !== null && settings?.sponsorXPercent !== ''
+                            ? Number(settings.sponsorXPercent)
+                            : 50;
+                          const curY = Number.isFinite(Number(settings?.sponsorYPercent)) && settings?.sponsorYPercent !== null && settings?.sponsorYPercent !== ''
+                            ? Number(settings.sponsorYPercent)
+                            : 50;
+                          onSettingChange({
+                            sponsorPosition: 'custom',
+                            sponsorXPercent: curX,
+                            sponsorYPercent: curY,
+                          });
+                        } else {
+                          onSettingChange({
+                            sponsorPosition: nextPos,
+                            sponsorXPercent: null,
+                            sponsorYPercent: null,
+                          });
+                        }
+                      }}
                       className="inspector-select"
                       style={{ width: '100%', padding: '4px 6px', fontSize: '0.72rem' }}
                     >
@@ -780,7 +802,15 @@ export default function ExportSettingsPanel({
                       <option value="top-right">ជ្រុងលើស្តាំ (Top Right)</option>
                       <option value="top-left">ជ្រុងលើឆ្វេង (Top Left)</option>
                       <option value="bottom-center">កណ្តាលក្រោម (Bottom Center)</option>
+                      <option value="custom">✨ ទីតាំងសេរី (Custom Drag)</option>
                     </select>
+                    <span style={{ fontSize: '0.62rem', color: '#64748b', display: 'block', marginTop: 2 }}>
+                      {settings?.sponsorPosition === 'custom' &&
+                      typeof settings?.sponsorXPercent === 'number' &&
+                      typeof settings?.sponsorYPercent === 'number'
+                        ? `Custom: X ${settings.sponsorXPercent}% · Y ${settings.sponsorYPercent}%`
+                        : 'អូស Banner លើ Preview ដើម្បីផ្លាស់ទី'}
+                    </span>
                   </div>
 
                   <div>

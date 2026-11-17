@@ -1916,9 +1916,22 @@ function renderDubbedVideoWithDucking(options = {}) {
         vCurrent = "[0:v:0]";
       }
 
+      const rawSponsorX = sponsorSettings.sponsorXPercent ?? sponsorSettings.xPercent;
+      const rawSponsorY = sponsorSettings.sponsorYPercent ?? sponsorSettings.yPercent;
+      const parsedSponsorX =
+        rawSponsorX === null || rawSponsorX === undefined || rawSponsorX === "" ? NaN : Number(rawSponsorX);
+      const parsedSponsorY =
+        rawSponsorY === null || rawSponsorY === undefined || rawSponsorY === "" ? NaN : Number(rawSponsorY);
+      const hasCustomSponsorCoords = Number.isFinite(parsedSponsorX) && Number.isFinite(parsedSponsorY);
+
       let overlayX = `${margin}`;
       let overlayY = `main_h-overlay_h-${bottomMargin}`;
-      if (pos === "bottom-right") {
+      if (pos === "custom" || hasCustomSponsorCoords) {
+        const xFrac = Math.max(0, Math.min(100, Number.isFinite(parsedSponsorX) ? parsedSponsorX : 50)) / 100;
+        const yFrac = Math.max(0, Math.min(100, Number.isFinite(parsedSponsorY) ? parsedSponsorY : 50)) / 100;
+        overlayX = `(main_w-overlay_w)*${xFrac.toFixed(4)}`;
+        overlayY = `(main_h-overlay_h)*${yFrac.toFixed(4)}`;
+      } else if (pos === "bottom-right") {
         overlayX = `main_w-overlay_w-${margin}`;
         overlayY = `main_h-overlay_h-${bottomMargin}`;
       } else if (pos === "top-left") {

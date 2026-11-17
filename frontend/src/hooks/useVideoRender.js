@@ -255,6 +255,12 @@ export function useVideoRender({
 
   const buildSponsorOptions = useCallback(() => {
     const activeSettings = getLatestVoiceSettings();
+    const rawX = activeSettings?.sponsorXPercent;
+    const rawY = activeSettings?.sponsorYPercent;
+    const parsedX = rawX === null || rawX === undefined || rawX === '' ? NaN : Number(rawX);
+    const parsedY = rawY === null || rawY === undefined || rawY === '' ? NaN : Number(rawY);
+    const sponsorXPercent = Number.isFinite(parsedX) ? parsedX : null;
+    const sponsorYPercent = Number.isFinite(parsedY) ? parsedY : null;
     return {
       enabled: Boolean(activeSettings?.enableSponsor),
       enableSponsor: Boolean(activeSettings?.enableSponsor),
@@ -263,6 +269,10 @@ export function useVideoRender({
       videoUrl: activeSettings?.sponsorVideoUrl,
       videoPath: activeSettings?.sponsorVideoPath,
       position: activeSettings?.sponsorPosition || 'bottom-left',
+      sponsorXPercent,
+      sponsorYPercent,
+      xPercent: sponsorXPercent,
+      yPercent: sponsorYPercent,
       scale: Number(activeSettings?.sponsorScale) || 25,
       opacity: Number(activeSettings?.sponsorOpacity) || 1.0,
       chromaKey: activeSettings?.sponsorChromaKey !== false,
