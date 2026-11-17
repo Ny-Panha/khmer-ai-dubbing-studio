@@ -3,6 +3,37 @@
 ## Last Session
 - **Environment**: Antigravity IDE (`engineering-minimal-change-engineer` discipline)
 - **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-17T19:20:00+07:00
+
+## Summary: Play Through Gap Clips During Timeline Playback & Gap Preview Mapping (COMPLETED)
+- **Root Cause**:
+  - Earlier playback-loop fix skipped Gap clips during active-clip tracking, transition lookahead (`nextDialogueClip`), and `timelineUtils` timeline↔source mapping (`if (isGapClip(c)) continue`), causing Play to jump over real source footage carried by Gap clips.
+- **Minimal Changes Applied**:
+  1. `frontend/src/hooks/useVideoPlayback.js`:
+     - Removed `isGapClip` skip loops in `handleTimeUpdate` so active-clip tracking includes Gaps as playable spans.
+     - On clip end (`srcNow >= sEnd - 0.03`), transitions to the immediate `nextClip = videoClips[currentClipIdx + 1]` (including Gaps): seeks forward only if `nextSrcStart > srcNow + 0.15`, advances smoothly on contiguous spans (`nextSrcStart >= srcNow - 0.15`), never seeks backward, and pauses cleanly at the end when no next span exists.
+  2. `frontend/src/utils/timelineUtils.js`:
+     - Updated `mapTimelineToSourceTime` and `mapSourceToTimelineTime` to include Gap clips' source ranges (`[sourceStart, sourceEnd]`, falling back to `[start, end]`) so playhead inside a Gap maps to real source time (for continuous playback AND paused click-seek preview), while tagging `isGap: isGapClip(c)`.
+  3. `backend/tests/timeline_continuous_playback_no_loop.test.js` & `backend/tests/timeline_paused_selection_seek_stability.test.js`:
+     - Updated regression tests to assert continuous play-through across `#3 -> Gap -> #4`, forward seek into non-contiguous Gaps, clean pause at end, zero backward seeks, Gap source-footage mapping, and preserved paused click/seek stability.
+- **Verification Evidence**:
+  - Frontend build (`npm --prefix frontend run build`): **PASS** (611ms, 0 errors); `oxlint`: **0 errors** (416 warnings).
+  - Full timeline regression suites (`node --test backend/tests/timeline_*.test.js`): **88/88 PASS** across 15 suites (0 fail).
+  - Real-app verification (`http://localhost:5173/studio`, Edge headless on `Pseudo_Spiritual_Root` EP1): played from `00:00` continuously through opening Gap `[0..4s]` into `#1`/`#2` (`0.182s -> 0.613s -> 1.435s -> 2.312s -> 3.157s -> 3.988s -> 4.521s -> 5.476s -> 6.343s`), clock advanced monotonically `00:00 -> 00:06`, `backwardJumps = 0`, paused Gap click remained locked at `00:00`.
+
+## Active Environment
+- **Backend API**: `http://localhost:5000` (`/api/health` = 200 OK)
+- **Frontend Studio**: `http://localhost:5173`
+- **Branch**: `chore/full-project-cleanup` (pushed to `origin/chore/full-project-cleanup`)
+
+## Next Steps
+- Ready for owner testing in browser (`http://localhost:5173`).
+
+---
+
+## Previous Session
+- **Environment**: Antigravity IDE (`engineering-minimal-change-engineer` discipline)
+- **Branch**: `chore/full-project-cleanup`
 - **Timestamp**: 2026-11-17T19:16:00+07:00
 
 ## Summary: Remove "Mute Voice Cuts" Feature & Decouple "Auto-Cut by Subs" (Cut-Only) (COMPLETED)

@@ -106,7 +106,7 @@ export function mapTimelineToSourceTime(timelineTime, clips = []) {
 
   for (let i = 0; i < clips.length; i++) {
     const c = clips[i];
-    if (isGapClip(c)) continue;
+    if (!c) continue;
     const cStart = Number.isFinite(c.start) ? c.start : 0;
     const cEnd = Number.isFinite(c.end) ? c.end : (cStart + 0.1);
     const cSourceStart = Number.isFinite(c.sourceStart) ? c.sourceStart : cStart;
@@ -120,14 +120,14 @@ export function mapTimelineToSourceTime(timelineTime, clips = []) {
         sourceTime,
         clip: c,
         clipIndex: i,
-        isGap: false,
+        isGap: isGapClip(c),
         nextClip: null,
       };
     }
   }
 
-  // Not in any dialogue clip -> check if in a gap between clips or before/after
-  const nextClip = clips.find((c) => !isGapClip(c) && (Number.isFinite(c?.start) ? c.start : 0) > safeTime) || null;
+  // Not inside any clip -> check if in unclipped space before/between/after clips
+  const nextClip = clips.find((c) => c && (Number.isFinite(c.start) ? c.start : 0) > safeTime) || null;
   return {
     inClip: false,
     sourceTime: null,
@@ -148,38 +148,37 @@ export function mapSourceToTimelineTime(sourceTime, clips = [], fromIndex = 0) {
   if (!Array.isArray(clips) || clips.length === 0) return sourceTime;
   const startIdx = typeof fromIndex === 'number' && fromIndex >= 0 && fromIndex < clips.length ? fromIndex : 0;
 
+  const matchClip = (c) => {
+    if (!c) return null;
+    const cSrcStart = Number.isFinite(c.sourceStart) ? c.sourceStart : (Number.isFinite(c.start) ? c.start : 0);
+    const cSrcEnd = Number.isFinite(c.sourceEnd) ? c.sourceEnd : (Number.isFinite(c.end) ? c.end : cSrcStart);
+    if (sourceTime >= cSrcStart && sourceTime <= cSrcEnd) {
+      const offset = sourceTime - cSrcStart;
+      return parseFloat(((Number.isFinite(c.start) ? c.start : 0) + offset).toFixed(3));
+    }
+    return null;
+  };
+
   // 1. Check fromIndex
-  const cur = clips[startIdx];
-  if (cur && !isGapClip(cur) && sourceTime >= cur.sourceStart && sourceTime <= cur.sourceEnd) {
-    const offset = sourceTime - cur.sourceStart;
-    return parseFloat((cur.start + offset).toFixed(3));
-  }
+  const curMapped = matchClip(clips[startIdx]);
+  if (curMapped !== null) return curMapped;
 
   // 2. Check next clip in timeline order
   if (startIdx + 1 < clips.length) {
-    const next = clips[startIdx + 1];
-    if (next && !isGapClip(next) && sourceTime >= next.sourceStart && sourceTime <= next.sourceEnd) {
-      const offset = sourceTime - next.sourceStart;
-      return parseFloat((next.start + offset).toFixed(3));
-    }
+    const nextMapped = matchClip(clips[startIdx + 1]);
+    if (nextMapped !== null) return nextMapped;
   }
 
   // 3. Scan forward in timeline order
   for (let i = startIdx + 2; i < clips.length; i++) {
-    const c = clips[i];
-    if (c && !isGapClip(c) && sourceTime >= c.sourceStart && sourceTime <= c.sourceEnd) {
-      const offset = sourceTime - c.sourceStart;
-      return parseFloat((c.start + offset).toFixed(3));
-    }
+    const mapped = matchClip(clips[i]);
+    if (mapped !== null) return mapped;
   }
 
   // 4. Fallback: scan backward if seeked before
   for (let i = startIdx - 1; i >= 0; i--) {
-    const c = clips[i];
-    if (c && !isGapClip(c) && sourceTime >= c.sourceStart && sourceTime <= c.sourceEnd) {
-      const offset = sourceTime - c.sourceStart;
-      return parseFloat((c.start + offset).toFixed(3));
-    }
+    const mapped = matchClip(clips[i]);
+    if (mapped !== null) return mapped;
   }
 
   return null;

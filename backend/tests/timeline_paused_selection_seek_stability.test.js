@@ -7,11 +7,11 @@ import {
 } from '../../frontend/src/utils/timelineUtils.js';
 
 describe('Paused Selection & Playhead Stability Suite (No Snap-back)', () => {
-  it('1. Static audit: timelineUtils, useVideoPlayback, and TimelineEditor guard paused state', () => {
+  it('1. Static audit: timelineUtils maps Gap source ranges, and useVideoPlayback / TimelineEditor guard paused state', () => {
     const utilsCode = fs.readFileSync('frontend/src/utils/timelineUtils.js', 'utf8');
     assert.ok(utilsCode.includes("import { isGapClip } from './timelineOps.js'"), 'timelineUtils imports isGapClip');
-    assert.ok(utilsCode.includes('if (isGapClip(c)) continue'), 'mapTimelineToSourceTime skips Gap clips');
-    assert.ok(utilsCode.includes('!isGapClip(cur)'), 'mapSourceToTimelineTime skips Gap clips');
+    assert.ok(!utilsCode.includes('if (isGapClip(c)) continue'), 'mapTimelineToSourceTime includes Gap clips for real footage preview');
+    assert.ok(utilsCode.includes('isGap: isGapClip(c)'), 'mapTimelineToSourceTime tags matched Gap clips with isGap');
 
     const playbackCode = fs.readFileSync('frontend/src/hooks/useVideoPlayback.js', 'utf8').replace(/\r\n/g, '\n');
     assert.ok(playbackCode.includes('if (!isPlaying) {\n      return;\n    }'), 'handleTimeUpdate early-returns when !isPlaying');
@@ -21,7 +21,7 @@ describe('Paused Selection & Playhead Stability Suite (No Snap-back)', () => {
     assert.ok(editorCode.includes('if (isPlaying && selectedClipKind === \'video\''), 'Video cut tracking checks isPlaying');
   });
 
-  it('2. Gap click simulation: clicking Gap at 8.3s between #2 (5-8s) and #3 (12-16s) does NOT map to #2 and preserves Gap', () => {
+  it('2. Gap click simulation: clicking Gap at 8.3s between #2 (5-8s) and #3 (12-16s) maps to Gap footage and stays locked while paused', () => {
     const clips = [
       { id: 'clip-1', start: 0, end: 5.0, sourceStart: 0, sourceEnd: 5.0, isDialogue: true, name: '#1' },
       { id: 'clip-2', start: 5.0, end: 8.0, sourceStart: 5.0, sourceEnd: 8.0, isDialogue: true, segmentIndex: 2, segmentId: 2, name: '#2' },
@@ -29,18 +29,14 @@ describe('Paused Selection & Playhead Stability Suite (No Snap-back)', () => {
       { id: 'clip-3', start: 12.0, end: 16.0, sourceStart: 8.0, sourceEnd: 12.0, isDialogue: true, segmentIndex: 3, segmentId: 3, name: '#3' },
     ];
 
-    const segments = [
-      { id: 2, startSec: 5.0, endSec: 8.0, khmerText: 'ឃ្លា ២' },
-      { id: 3, startSec: 12.0, endSec: 16.0, khmerText: 'ឃ្លា ៣' },
-    ];
-
-    // Map 8.3s on the timeline (inside the Gap)
+    // Map 8.3s on the timeline (inside the Gap) -> resolves Gap's real source footage (5.0 + 0.3 = 5.3s)
     const mapping = mapTimelineToSourceTime(8.3, clips);
     assert.equal(mapping.isGap, true, '8.3s must be identified as isGap: true');
-    assert.equal(mapping.inClip, false, '8.3s must NOT be considered in a source clip');
-    assert.equal(mapping.nextClip?.id, 'clip-3', 'nextClip must be the upcoming dialogue clip (#3)');
+    assert.equal(mapping.inClip, true, '8.3s must map into the Gap playable span');
+    assert.equal(mapping.clip?.id, 'clip-gap-1', 'matched clip must be the Gap clip');
+    assert.equal(mapping.sourceTime, 5.3, '8.3s inside Gap [8..12] (source [5..9]) maps to source 5.3s');
 
-    // Reverse mapping check: source time 5.3s (which matches clip-2 source range) must map to clip-2, not the Gap
+    // Reverse mapping check: source time 5.3s from index 0 matches clip-2 first (timeline 5.3s)
     const mappedTl = mapSourceToTimelineTime(5.3, clips);
     assert.equal(mappedTl, 5.3, 'Source time 5.3 maps to timeline 5.3');
 

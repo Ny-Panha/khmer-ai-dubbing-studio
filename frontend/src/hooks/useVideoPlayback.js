@@ -1,6 +1,5 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { mapTimelineToSourceTime } from '../utils/timelineUtils';
-import { isGapClip } from '../utils/timelineOps';
 
 /**
  * Custom hook to manage video playback state, playhead position, time update, and seeking
@@ -131,16 +130,9 @@ export function useVideoPlayback({
 
     const srcNow = currentMediaTime;
 
-    // Fast O(1) active clip tracking: continue from the LAST mapped dialogue clip
+    // Fast O(1) active clip tracking: continue from the LAST mapped playable clip (including Gaps)
     let currentClipIdx = activeClipIdxRef.current;
     if (currentClipIdx < 0 || currentClipIdx >= videoClips.length) {
-      currentClipIdx = 0;
-    }
-    // Skip leading gap clips if any
-    while (currentClipIdx < videoClips.length && isGapClip(videoClips[currentClipIdx])) {
-      currentClipIdx++;
-    }
-    if (currentClipIdx >= videoClips.length) {
       currentClipIdx = 0;
     }
 
@@ -150,10 +142,10 @@ export function useVideoPlayback({
 
     if (srcNow < (checkStart - 0.04) || srcNow >= checkEnd) {
       let foundIdx = -1;
-      // 1. Check forward in timeline order for next dialogue clip (skip intervening Gaps)
+      // 1. Check forward in timeline order for next playable clip (including Gaps)
       for (let i = currentClipIdx + 1; i < videoClips.length; i++) {
         const c = videoClips[i];
-        if (isGapClip(c)) continue;
+        if (!c) continue;
         const sStart = Number.isFinite(c.sourceStart) ? c.sourceStart : (Number.isFinite(c.start) ? c.start : 0);
         const sEnd = Number.isFinite(c.sourceEnd) ? c.sourceEnd : (Number.isFinite(c.end) ? c.end : realDur);
         if (srcNow >= (sStart - 0.03) && srcNow < sEnd) {
@@ -166,7 +158,7 @@ export function useVideoPlayback({
       if (foundIdx === -1 && hasSeekedRef.current) {
         for (let i = currentClipIdx - 1; i >= 0; i--) {
           const c = videoClips[i];
-          if (isGapClip(c)) continue;
+          if (!c) continue;
           const sStart = Number.isFinite(c.sourceStart) ? c.sourceStart : (Number.isFinite(c.start) ? c.start : 0);
           const sEnd = Number.isFinite(c.sourceEnd) ? c.sourceEnd : (Number.isFinite(c.end) ? c.end : realDur);
           if (srcNow >= (sStart - 0.03) && srcNow < sEnd) {
@@ -182,7 +174,7 @@ export function useVideoPlayback({
       }
     }
 
-    if (currentClipIdx !== -1 && !isGapClip(videoClips[currentClipIdx])) {
+    if (currentClipIdx !== -1 && videoClips[currentClipIdx]) {
       const c = videoClips[currentClipIdx];
       const sStart = Number.isFinite(c.sourceStart) ? c.sourceStart : (Number.isFinite(c.start) ? c.start : 0);
       const sEnd = Number.isFinite(c.sourceEnd) ? c.sourceEnd : (Number.isFinite(c.end) ? c.end : realDur);
@@ -208,35 +200,28 @@ export function useVideoPlayback({
         setCurrentTime(tlTime);
       }
 
-      // Handle transition to next dialogue clip or end of timeline
+      // Handle transition to next clip (including Gap spans) or end of timeline
       if (srcNow >= sEnd - 0.03) {
-        // Find the next REAL dialogue clip forward (skip any intervening Gaps)
-        let nextDialogueClip = null;
-        let nextDialogueIdx = -1;
-        for (let i = currentClipIdx + 1; i < videoClips.length; i++) {
-          const cand = videoClips[i];
-          if (cand && !isGapClip(cand)) {
-            nextDialogueClip = cand;
-            nextDialogueIdx = i;
-            break;
-          }
-        }
+        const nextClipIdx = currentClipIdx + 1;
+        const nextClip = nextClipIdx < videoClips.length ? videoClips[nextClipIdx] : null;
 
-        if (nextDialogueClip) {
-          const nextSrcStart = Number.isFinite(nextDialogueClip?.sourceStart) 
-            ? nextDialogueClip.sourceStart 
-            : (Number.isFinite(nextDialogueClip?.start) ? nextDialogueClip.start : 0);
+        if (nextClip) {
+          const nextSrcStart = Number.isFinite(nextClip.sourceStart)
+            ? nextClip.sourceStart
+            : (Number.isFinite(nextClip.start) ? nextClip.start : 0);
 
           // CRITICAL INVARIANT:
           // 1. NEVER seek backward during forward playback (nextSrcStart <= srcNow)! That causes infinite loops.
-          // 2. Only seek forward if next clip has a genuine forward gap (>0.15s in source media).
+          // 2. Only seek forward if next clip (including Gap) has a genuine forward jump (>0.15s in source media).
           // 3. Contiguous clips (difference <= 0.15s) flow naturally through HTML5 video decoder with zero seek/stutter.
           if (nextSrcStart > srcNow + 0.15 && !v.seeking) {
-            activeClipIdxRef.current = nextDialogueIdx;
+            activeClipIdxRef.current = nextClipIdx;
             v.currentTime = nextSrcStart;
+          } else if (nextSrcStart >= srcNow - 0.15) {
+            activeClipIdxRef.current = nextClipIdx;
           }
         } else {
-          // Last dialogue clip reached -> STOP at the end, never loop back
+          // Last clip reached -> STOP at the end, never loop back
           const trueMaxDur = Math.max(v.duration || 0, duration || 0, realDur || 0);
           if (videoClips.length === 1 && trueMaxDur > sEnd + 0.5) {
             setCurrentTime(srcNow);
