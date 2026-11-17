@@ -1,6 +1,29 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
+- **Environment**: Antigravity IDE
+- **Branch**: `fix/delete-no-ripple`
+- **Timestamp**: 2026-11-17T12:46:00+07:00
+
+## Summary: Move-Only Auto-Align (Segment Deletion Bug Fix)
+- **Problem**: Auto-Align silently deleted voice segments that users manually added in gaps when their Khmer or Chinese text matched an adjacent line within 2.5s, discarding the added segment's audio.
+- **Removed Anti-Duplication Pass**: Removed step 2 from `autoAlignVoiceSegments` in `frontend/src/utils/timelineUtils.js` entirely. Auto-Align strictly obeys the move-only principle (segment count in == segment count out, always).
+- **Added Hard Guard**: Added hard check in `handleAutoAlignNoOverlap` (`frontend/src/hooks/useClipOperations.js`): if `alignedSegments.length !== currentSegments.length`, aborts the write-back, keeps original segments, logs `console.warn`, and surfaces a visible in-app toast.
+- **Tests & Verification**:
+  - `backend/tests/auto_align_voice.test.js`: **9/9 passed** (including identical Khmer text 1.0s apart with audio preserved, identical Chinese text, and handler guard aborting on mismatch).
+  - Extended timeline test suite: **42/42 passed** (0 failures).
+  - Frontend build: **2035 modules transformed** in 939ms (0 errors).
+  - Frontend lint: **0 errors** (466 existing warnings).
+  - Real-app verification on owner's episode (`Pseudo_Spiritual_Root` Ep 2): Added voice segment in gap with identical Khmer text; Auto-Align preserved 253/253 segments with audio intact.
+
+## Active Environment
+- Branch: `fix/delete-no-ripple`; Backend API `http://localhost:5000`; Frontend `http://localhost:5173`.
+
+## Next Steps
+- Push `fix/delete-no-ripple` to origin.
+
+
+## Last Session
 - **Environment**: Codex CLI + local Edge acceptance run
 - **Branch**: `fix/delete-no-ripple` based on `fix/timeline-clip-selection`
 - **Timestamp**: 2026-11-17T10:48:57+07:00

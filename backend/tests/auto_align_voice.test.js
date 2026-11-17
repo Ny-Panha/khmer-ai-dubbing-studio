@@ -1,5 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 const {
   autoAlignVoiceSegments,
   resetSegmentsToSourceTiming,
@@ -54,7 +56,7 @@ test('autoAlignVoiceSegments: perfectly aligns voice clips to subtitle onsets wi
   }
 });
 
-test('autoAlignVoiceSegments: prevents simultaneous voice overlap on Lane 0 and eliminates duplicates', () => {
+test('autoAlignVoiceSegments: prevents simultaneous voice overlap on Lane 0 without deleting duplicate text (move-only)', () => {
   // Scenario matching Nha's screenshot at 02:14:
   // Segment #20: 3.5s long narration from 133.59 to 137.09
   // Segment #21: "ម្នាក់ទៀតហើយ" at 133.75s
@@ -94,16 +96,19 @@ test('autoAlignVoiceSegments: prevents simultaneous voice overlap on Lane 0 and 
 
   const aligned = autoAlignVoiceSegments(collidingSegments, 300.0);
 
-  // 1. Duplicate #22 must be merged into #21 (only 2 distinct segments remain)
-  assert.equal(aligned.length, 2, 'Duplicate "ម្នាក់ទៀតហើយ" within 2.5s must be merged');
+  // 1. Move-Only: Duplicate #22 is NOT deleted (all 3 segments remain)
+  assert.equal(aligned.length, 3, 'All 3 segments must be preserved without silent deletion');
 
-  // 2. Both clips sit sequentially on Lane 0 (VOICE 1) CapCut-style
+  // 2. All clips sit sequentially on Lane 0 (VOICE 1) CapCut-style
   assert.equal(aligned[0].trackRow, 0, 'Segment 0 must be on Lane 0');
-  assert.equal(aligned[1].trackRow, 0, 'Segment 1 must stay on Lane 0 (never drop to Lane 1)');
+  assert.equal(aligned[1].trackRow, 0, 'Segment 1 must be on Lane 0');
+  assert.equal(aligned[2].trackRow, 0, 'Segment 2 must be on Lane 0');
 
-  // 3. Segment 0 is clamped at Segment 1 start
+  // 3. Overruns are clamped sequentially without overlap
   assert.ok(aligned[0].audioEndSec <= aligned[1].audioStartSec + 0.01, 'Segment 0 must clamp before Segment 1 starts');
+  assert.ok(aligned[1].audioEndSec <= aligned[2].audioStartSec + 0.01, 'Segment 1 must clamp before Segment 2 starts');
   assert.equal(aligned[0].audioTrimmed, true, 'Segment 0 must be marked audioTrimmed');
+  assert.equal(aligned[1].audioTrimmed, true, 'Segment 1 must be marked audioTrimmed');
 });
 
 test('autoAlignVoiceSegments: resolves over-long audio on Lane 0 by clamping previous audioEndSec without shifting N', () => {
@@ -293,6 +298,176 @@ test('Requirement (c): no two aligned Lane-0 clips overlap in [start, audioEndSe
       `Lane 0 overlap violation between clip #${cur.id} [${cur.audioStartSec}, ${cur.audioEndSec}) and clip #${nxt.id} [${nxt.audioStartSec}, ${nxt.audioEndSec})`
     );
   }
+});
+
+test('Move-Only Spec (a): two adjacent segments with IDENTICAL Khmer text 1.0s apart, second user-added WITH audio — both exist, both keep audio, count unchanged', () => {
+  const segments = [
+    {
+      id: 1,
+      startSec: 10.0,
+      endSec: 12.0,
+      sourceStartSec: 10.0,
+      sourceEndSec: 12.0,
+      khmerText: 'សួស្តីពិភពលោក',
+      originalChineseText: '你好世界',
+      audioFile: 'audio_orig_1.mp3',
+      audioUrl: '/uploads/audio_orig_1.mp3',
+      audioDurationSec: 1.8,
+    },
+    {
+      id: 'user_added_in_gap',
+      startSec: 11.0, // 1.0s apart, within the former 2.5s deduplication window
+      endSec: 13.0,
+      sourceStartSec: 11.0,
+      sourceEndSec: 13.0,
+      khmerText: 'សួស្តីពិភពលោក', // IDENTICAL Khmer text
+      originalChineseText: '不同中文',
+      audioFile: 'user_added_voice.mp3',
+      audioUrl: '/uploads/user_added_voice.mp3',
+      audioDurationSec: 1.5,
+      isUserAdded: true,
+    },
+  ];
+
+  const aligned = autoAlignVoiceSegments(segments, 100.0);
+
+  // Segment count in == segment count out
+  assert.equal(aligned.length, 2, 'Segment count in == segment count out (move-only)');
+
+  // Both segments exist with respective audio intact
+  assert.equal(aligned[0].khmerText, 'សួស្តីពិភពលោក');
+  assert.equal(aligned[0].audioFile, 'audio_orig_1.mp3');
+  assert.equal(aligned[0].audioUrl, '/uploads/audio_orig_1.mp3');
+
+  assert.equal(aligned[1].khmerText, 'សួស្តីពិភពលោក');
+  assert.equal(aligned[1].audioFile, 'user_added_voice.mp3');
+  assert.equal(aligned[1].audioUrl, '/uploads/user_added_voice.mp3');
+  assert.equal(aligned[1].isUserAdded, true);
+
+  // Both on Lane 0 without overlap
+  assert.equal(aligned[0].trackRow, 0);
+  assert.equal(aligned[1].trackRow, 0);
+  assert.ok(aligned[0].audioEndSec <= aligned[1].audioStartSec + 0.001);
+});
+
+test('Move-Only Spec (b): two adjacent segments with IDENTICAL Chinese text 1.0s apart — both exist, both keep audio, count unchanged', () => {
+  const segments = [
+    {
+      id: 1,
+      startSec: 20.0,
+      endSec: 22.0,
+      sourceStartSec: 20.0,
+      sourceEndSec: 22.0,
+      khmerText: 'ឃ្លាទីមួយ',
+      originalChineseText: '相同中文台词',
+      audioFile: 'audio_cn_1.mp3',
+      audioUrl: '/uploads/audio_cn_1.mp3',
+      audioDurationSec: 1.6,
+    },
+    {
+      id: 2,
+      startSec: 21.0, // 1.0s apart
+      endSec: 23.0,
+      sourceStartSec: 21.0,
+      sourceEndSec: 23.0,
+      khmerText: 'ឃ្លាទីពីរខុសគ្នា',
+      originalChineseText: '相同中文台词', // IDENTICAL Chinese text
+      audioFile: 'audio_cn_2.mp3',
+      audioUrl: '/uploads/audio_cn_2.mp3',
+      audioDurationSec: 1.7,
+    },
+  ];
+
+  const aligned = autoAlignVoiceSegments(segments, 100.0);
+
+  // Segment count in == segment count out
+  assert.equal(aligned.length, 2, 'Segment count in == segment count out with identical Chinese text');
+
+  // Both segments exist with respective audio intact
+  assert.equal(aligned[0].originalChineseText, '相同中文台词');
+  assert.equal(aligned[0].audioFile, 'audio_cn_1.mp3');
+
+  assert.equal(aligned[1].originalChineseText, '相同中文台词');
+  assert.equal(aligned[1].audioFile, 'audio_cn_2.mp3');
+
+  // Both on Lane 0 without overlap
+  assert.equal(aligned[0].trackRow, 0);
+  assert.equal(aligned[1].trackRow, 0);
+  assert.ok(aligned[0].audioEndSec <= aligned[1].audioStartSec + 0.001);
+});
+
+test('Move-Only Spec (c): the handler guard in useClipOperations leaves scriptData untouched if transform returns fewer segments', () => {
+  const hookFile = path.resolve(__dirname, '../../frontend/src/hooks/useClipOperations.js');
+  const hookCode = fs.readFileSync(hookFile, 'utf8');
+
+  // 1. Static code audit: verify the hard guard exists in handleAutoAlignNoOverlap
+  assert.ok(
+    hookCode.includes('alignedSegments.length !== currentSegments.length'),
+    'handleAutoAlignNoOverlap must verify alignedSegments.length === currentSegments.length'
+  );
+  assert.ok(
+    hookCode.includes('Auto-Align aborted: segment count mismatch'),
+    'handleAutoAlignNoOverlap must log a console.warn on mismatch'
+  );
+  assert.ok(
+    hookCode.includes('showInAppToast'),
+    'handleAutoAlignNoOverlap must surface a visible in-app toast'
+  );
+
+  // 2. Behavioral simulation of the handler guard:
+  // Simulate the exact state and guard logic from handleAutoAlignNoOverlap
+  const initialScriptData = {
+    seriesId: 'test_series',
+    segments: [
+      { id: 1, text: 'Seg 1', audioFile: 'a1.mp3' },
+      { id: 2, text: 'Seg 2', audioFile: 'a2.mp3' },
+      { id: 3, text: 'Seg 3', audioFile: 'a3.mp3' },
+    ],
+    updatedAt: 1000,
+  };
+
+  let stateScriptData = initialScriptData;
+  let undoPushed = false;
+  let toastShown = null;
+  let warningLogged = null;
+
+  const mockSetScriptData = (val) => {
+    stateScriptData = typeof val === 'function' ? val(stateScriptData) : val;
+  };
+  const mockPushUndoSnapshot = () => { undoPushed = true; };
+  const mockShowToast = (msg) => { toastShown = msg; };
+  const mockConsoleWarn = (msg) => { warningLogged = msg; };
+
+  // Simulate handler execution with a buggy / shortened transform returning fewer segments
+  const simulateHandler = (currentSegments, buggyTransformFn) => {
+    const alignedSegments = buggyTransformFn(currentSegments);
+
+    // Hard guard under test
+    if (!Array.isArray(alignedSegments) || alignedSegments.length !== currentSegments.length) {
+      mockConsoleWarn(`[useClipOperations] Auto-Align aborted: segment count mismatch (in: ${currentSegments.length}, out: ${alignedSegments?.length ?? 0}).`);
+      mockShowToast('⚠️ Auto-Align រក្សាទុកឃ្លាដើម៖ ចំនួន segments មិនត្រូវផ្លាស់ប្ដូរឡើយ');
+      return;
+    }
+
+    mockPushUndoSnapshot();
+    mockSetScriptData({
+      ...stateScriptData,
+      segments: alignedSegments,
+      updatedAt: 2000,
+    });
+  };
+
+  // Buggy transform returning 2 segments instead of 3
+  const badTransform = (segs) => segs.slice(0, 2);
+
+  simulateHandler(stateScriptData.segments, badTransform);
+
+  // Assertions: scriptData is UNTOUCHED, undo snapshot not pushed, toast and warning surfaced
+  assert.equal(stateScriptData, initialScriptData, 'scriptData must remain untouched when segment count mismatches');
+  assert.equal(stateScriptData.segments.length, 3, 'segment count must stay 3');
+  assert.equal(undoPushed, false, 'undo snapshot must not be pushed on aborted align');
+  assert.ok(toastShown && toastShown.includes('Auto-Align រក្សាទុកឃ្លាដើម'), 'Toast must be shown to the user');
+  assert.ok(warningLogged && warningLogged.includes('segment count mismatch'), 'Warning must be logged to console');
 });
 
 

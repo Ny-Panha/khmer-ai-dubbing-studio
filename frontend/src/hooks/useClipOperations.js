@@ -52,7 +52,10 @@ function showInAppToast(message, durationMs = 2800) {
     toast.style.transition = 'opacity 0.22s cubic-bezier(0.16, 1, 0.3, 1), transform 0.22s cubic-bezier(0.16, 1, 0.3, 1)';
     document.body.appendChild(toast);
   }
-  toast.innerHTML = `<span style="font-size:15px;line-height:1;">✂️</span><span>${message}</span>`;
+  const leadingEmoji = message.match(/^([\uD800-\uDBFF][\uDC00-\uDFFF]|[\u2600-\u27BF]|\uFE0F|⚠️|⚡|✅|❌|✂️)/);
+  const iconSpan = leadingEmoji ? leadingEmoji[0] : '✂️';
+  const displayMsg = leadingEmoji ? message.slice(leadingEmoji[0].length).trim() : message;
+  toast.innerHTML = `<span style="font-size:15px;line-height:1;">${iconSpan}</span><span>${displayMsg}</span>`;
   toast.style.opacity = '1';
   toast.style.transform = 'translateX(-50%) translateY(0)';
 
@@ -607,6 +610,15 @@ export function useClipOperations({
       maxShiftSec: 0.35,
       maxPlaybackSpeed: 1.45,
     });
+
+    // Hard guard: Auto-Align is a MOVE-ONLY transform. Segment count in == segment count out, always.
+    if (!Array.isArray(alignedSegments) || alignedSegments.length !== currentSegments.length) {
+      console.warn(
+        `[useClipOperations] Auto-Align aborted: segment count mismatch (in: ${currentSegments.length}, out: ${alignedSegments?.length ?? 0}). Auto-Align is move-only and must never add or remove segments.`
+      );
+      showInAppToast('⚠️ Auto-Align រក្សាទុកឃ្លាដើម៖ ចំនួន segments មិនត្រូវផ្លាស់ប្ដូរឡើយ', 3500);
+      return;
+    }
 
     const segmentTimelineSignature = (segments = []) => segments.map((seg) => ([
       seg?._uid ?? null,

@@ -1176,48 +1176,19 @@ export function autoAlignVoiceSegments(segments = [], totalDuration = 0, options
     })
     .sort((a, b) => a._canonicalStart - b._canonicalStart);
 
-  // 2. Anti-Duplication Pass:
-  // Detects duplicate ghost segments (e.g. from OCR card + ASR speech overlap) where the same dialogue was duplicated.
-  const deduplicated = [];
-  for (let i = 0; i < sorted.length; i++) {
-    const curr = sorted[i];
-    if (deduplicated.length > 0) {
-      const prev = deduplicated[deduplicated.length - 1];
-      const prevKhmer = String(prev.khmerText || prev.khmerTranslatedText || '').trim();
-      const currKhmer = String(curr.khmerText || curr.khmerTranslatedText || '').trim();
-      const prevCn = String(prev.originalChineseText || prev.chineseText || '').trim();
-      const currCn = String(curr.originalChineseText || curr.chineseText || '').trim();
-
-      const isSameKhmer = Boolean(prevKhmer && currKhmer && prevKhmer === currKhmer);
-      const isSameCn = Boolean(prevCn && currCn && prevCn === currCn);
-      const timeDiff = Math.abs(curr._canonicalStart - prev._canonicalStart);
-
-      if ((isSameKhmer || isSameCn) && timeDiff <= 2.5) {
-        // Merge into single canonical segment without duplicate audio/text
-        prev._canonicalEnd = Math.max(prev._canonicalEnd, curr._canonicalEnd);
-        if ((curr.audioFile || curr.audioUrl) && !(prev.audioFile || prev.audioUrl)) {
-          prev.audioFile = curr.audioFile;
-          prev.audioUrl = curr.audioUrl;
-          prev.audioDurationSec = curr.audioDurationSec;
-        }
-        continue;
-      }
-    }
-    deduplicated.push(curr);
-  }
-
-  // 3. Single-Lane Sequential Voice Layout (CapCut-Style on Lane 0):
+  // 2. Single-Lane Sequential Voice Layout (CapCut-Style on Lane 0):
   // All auto-placed voice clips live sequentially on VOICE 1 (Lane 0). A clip NEVER drops to VOICE 2/3 automatically.
   // Overruns are resolved strictly on Lane 0 by clamping previous clip's audioEndSec to next segment's baseStart.
   // When a clamp cuts > 40% of audio, mark that segment with audioOverrun: true and overrunRatio.
   // userShifted segments keep their lane forever and are never moved or re-packed.
+  // Auto-Align is a MOVE-ONLY transform: segment count in == segment count out, always.
   const trackLastEnds = {};
   const subTrackLastEnds = { 0: 0, 1: 0, 2: 0 };
   const aligned = [];
   let lastLane0Idx = -1;
 
-  for (let i = 0; i < deduplicated.length; i++) {
-    const seg = deduplicated[i];
+  for (let i = 0; i < sorted.length; i++) {
+    const seg = sorted[i];
     const isUserShifted = Boolean(seg.userShifted);
 
     // Speech onset: rigidly anchored to canonical subtitle onset in video (0% drift)
