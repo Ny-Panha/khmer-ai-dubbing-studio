@@ -82,26 +82,34 @@ Write-Host "======================================================" -ForegroundC
 # Function to forcefully free a busy port and its entire process tree (/T /F)
 function Free-Port {
     param([int]$Port)
+    $killedPids = [System.Collections.Generic.HashSet[int]]::new()
     try {
         $conns = Get-NetTCPConnection -LocalPort $Port -ErrorAction SilentlyContinue
         if ($conns) {
             foreach ($conn in $conns) {
                 if ($conn.OwningProcess -and $conn.OwningProcess -gt 4) {
-                    Write-Host "  [*] Freeing busy port :$Port (PID $($conn.OwningProcess))..." -ForegroundColor Yellow
-                    Start-Process -FilePath "taskkill.exe" -ArgumentList "/PID $($conn.OwningProcess) /T /F" -NoNewWindow -Wait -ErrorAction SilentlyContinue 2>$null
+                    $null = $killedPids.Add([int]$conn.OwningProcess)
                 }
             }
-            Start-Sleep -Milliseconds 400
         }
-    } catch {
+    } catch {}
+
+    try {
         $lines = netstat -ano | Select-String ":$Port\s+.*LISTENING\s+(\d+)"
         foreach ($line in $lines) {
             $pidMatch = $line.Matches[0].Groups[1].Value
             if ($pidMatch -and [int]$pidMatch -gt 4) {
-                Write-Host "  [*] Freeing busy port :$Port (PID $pidMatch)..." -ForegroundColor Yellow
-                Start-Process -FilePath "taskkill.exe" -ArgumentList "/PID $pidMatch /T /F" -NoNewWindow -Wait -ErrorAction SilentlyContinue 2>$null
+                $null = $killedPids.Add([int]$pidMatch)
             }
         }
+    } catch {}
+
+    foreach ($pidToKill in $killedPids) {
+        Write-Host "  [*] Freeing busy port :$Port (PID $pidToKill)..." -ForegroundColor Yellow
+        Start-Process -FilePath "taskkill.exe" -ArgumentList "/PID $pidToKill /T /F" -NoNewWindow -Wait -ErrorAction SilentlyContinue 2>$null
+    }
+    if ($killedPids.Count -gt 0) {
+        Start-Sleep -Milliseconds 400
     }
 }
 
@@ -162,12 +170,21 @@ function Ensure-Dependencies {
 }
 
 function Wait-ForBackend {
-    param([int]$Port = 5000)
+    param(
+        [int]$Port = 5000,
+        [System.Diagnostics.Process]$Process = $null
+    )
     $baseUrl = "http://127.0.0.1:$Port/api/health"
     $startupTimeoutSeconds = 30
     $timer = [System.Diagnostics.Stopwatch]::StartNew()
     Write-Host "  Waiting for Backend API to initialize..." -ForegroundColor Cyan
     while ($timer.Elapsed.TotalSeconds -lt $startupTimeoutSeconds) {
+        if ($Process -and $Process.HasExited) {
+            $code = $Process.ExitCode
+            Write-Host "  [X] Backend failed to start (Process exited with code $code)." -ForegroundColor Red
+            Write-Host "  [TIP] Run 'node backend/server.js' manually in terminal to inspect the error trace." -ForegroundColor Yellow
+            throw "Backend startup failed with exit code $code"
+        }
         try {
             $resp = Invoke-WebRequest -Uri $baseUrl -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop
             if ($resp.StatusCode -eq 200) {
@@ -177,16 +194,26 @@ function Wait-ForBackend {
         } catch {}
         Start-Sleep -Milliseconds 600
     }
-    Write-Host "  [!] Backend taking longer to respond, continuing..." -ForegroundColor Yellow
+    Write-Host "  [X] Backend timed out after $startupTimeoutSeconds seconds on port $Port." -ForegroundColor Red
+    throw "Backend startup timed out on port $Port"
 }
 
 function Wait-ForFrontend {
-    param([int]$Port = 5173)
+    param(
+        [int]$Port = 5173,
+        [System.Diagnostics.Process]$Process = $null
+    )
     $baseUrl = "http://127.0.0.1:$Port"
     $startupTimeoutSeconds = 30
     $timer = [System.Diagnostics.Stopwatch]::StartNew()
     Write-Host "  Waiting for Frontend Studio to initialize..." -ForegroundColor Cyan
     while ($timer.Elapsed.TotalSeconds -lt $startupTimeoutSeconds) {
+        if ($Process -and $Process.HasExited) {
+            $code = $Process.ExitCode
+            Write-Host "  [X] Frontend failed to start (Process exited with code $code)." -ForegroundColor Red
+            Write-Host "  [TIP] Run 'npm run dev --prefix frontend' manually to inspect the error trace." -ForegroundColor Yellow
+            throw "Frontend startup failed with exit code $code"
+        }
         try {
             $resp = Invoke-WebRequest -Uri $baseUrl -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop
             if ($resp.StatusCode -eq 200) {
@@ -196,7 +223,8 @@ function Wait-ForFrontend {
         } catch {}
         Start-Sleep -Milliseconds 600
     }
-    Write-Host "  [!] Frontend taking longer to respond, continuing..." -ForegroundColor Yellow
+    Write-Host "  [X] Frontend timed out after $startupTimeoutSeconds seconds on port $Port." -ForegroundColor Red
+    throw "Frontend startup timed out on port $Port"
 }
 
 try {
@@ -216,16 +244,16 @@ try {
     } else {
         $backendCmd = "node server.js"
     }
-    $null = Start-DevProcess -Title "[Khmer AI Dubbing] Backend API" -WorkingDir $backendDir -Command $backendCmd
-    Wait-ForBackend -Port 5000
+    $backendProc = Start-DevProcess -Title "[Khmer AI Dubbing] Backend API" -WorkingDir $backendDir -Command $backendCmd
+    Wait-ForBackend -Port 5000 -Process $backendProc
 
     # 3. Launch Frontend
     Write-Host "`n[3/3] Starting Frontend Studio (Port 5173)..." -ForegroundColor White
     $frontendDir = Join-Path $RootDir "frontend"
     Ensure-Dependencies -WorkingDir $frontendDir -Name "Frontend"
     $frontendCmd = "npm.cmd run dev"
-    $null = Start-DevProcess -Title "[Khmer AI Dubbing] Frontend Studio" -WorkingDir $frontendDir -Command $frontendCmd
-    Wait-ForFrontend -Port 5173
+    $frontendProc = Start-DevProcess -Title "[Khmer AI Dubbing] Frontend Studio" -WorkingDir $frontendDir -Command $frontendCmd
+    Wait-ForFrontend -Port 5173 -Process $frontendProc
 
     # 4. Open Browser
     if (-not $NoBrowser) {
@@ -249,8 +277,18 @@ try {
     Write-Host "  [*] Press [Ctrl + C] anytime to stop all services." -ForegroundColor Yellow
     Write-Host "======================================================`n"
 
-    # Keep alive until user interrupts with Ctrl+C
+    # Keep alive until user interrupts with Ctrl+C or a child process exits
     while ($true) {
+        if (-not $NewWindow) {
+            if ($backendProc -and $backendProc.HasExited) {
+                Write-Host "`n[!] Backend process has stopped unexpectedly (ExitCode: $($backendProc.ExitCode))." -ForegroundColor Red
+                break
+            }
+            if ($frontendProc -and $frontendProc.HasExited) {
+                Write-Host "`n[!] Frontend process has stopped unexpectedly (ExitCode: $($frontendProc.ExitCode))." -ForegroundColor Red
+                break
+            }
+        }
         Start-Sleep -Seconds 1
     }
 }

@@ -3,7 +3,39 @@
 ## Last Session
 - **Environment**: Antigravity IDE
 - **Branch**: `refactor/timeline-core-clean`
-- **Timestamp**: 2026-11-17T15:30:00+07:00
+- **Timestamp**: 2026-11-17T15:45:00+07:00
+
+## Summary: Fix 502 Bad Gateway & Orchestrator Dev Scripts (`dev.ps1`, `start.bat`) (COMPLETED)
+- **Problem Diagnosed**:
+  - Browser showed `502 (Bad Gateway)` / `ECONNREFUSED` on all API endpoints (`/api/health`, `/api/series`, `/api/tts/voices`, etc.) because Vite dev server on `:5173` could not connect to backend on `:5000`.
+  - Direct execution of `node backend/server.js` revealed a startup crash: `ReferenceError: generateStorytellingScript is not defined at geminiService.js:1245:3` (an earlier dead-code pruning commit had removed the function body while leaving the export referenced by `scriptRoutes.js`).
+  - `dev.ps1` previously waited 30s blindly without inspecting if the child process died, then launched frontend anyway.
+- **Key Fixes Implemented**:
+  1. `backend/services/geminiService.js`:
+     - Restored full `generateStorytellingScript(promptText, customApiKey, options)` implementation.
+  2. `backend/server.js`:
+     - Implemented fail-fast startup crash guard: If an uncaught exception or rejection happens before `app.listen()` (`!isServerReady`), log `[CRITICAL] Startup Exception` and call `process.exit(1)`. Once listening (`isServerReady = true`), keep top-level resilience guards to prevent socket disconnects from terminating Node.
+  3. `dev.ps1`:
+     - In `Wait-ForBackend` and `Wait-ForFrontend`, added `$Process` parameter and `$Process.HasExited` check. If child exits prematurely, fail fast immediately, output exit code, and provide manual debug hints.
+     - Passed `$backendProc` and `$frontendProc` from `Start-DevProcess`.
+     - In `Free-Port`, unified `Get-NetTCPConnection` and `netstat -ano` using `HashSet[int]` to avoid duplicate `taskkill` calls.
+     - In the keep-alive loop, added real-time monitoring of `$backendProc.HasExited` and `$frontendProc.HasExited` to alert user if either service stops during a session.
+  4. `start.bat`:
+     - Added `cd /d "%~dp0"` to guarantee correct directory resolution when double-clicked.
+     - Added `%ERRORLEVEL%` check with `pause` so terminal windows stay open with error details instead of flashing and closing.
+  5. `backend/tests/timeline_ui_workflow_fix.test.js`:
+     - Aligned Step 3 tooltip regex assertion to match `#${segmentNumber}` or `#${idx + 1}`.
+- **Verification Evidence**:
+  - Full timeline test suites (15 suites): **69 passed, 0 failed** (`node --test backend/tests/timeline_*.test.js`).
+  - Queue dispatch suite: **5 passed, 0 failed** (`node --test backend/tests/queue_dispatch_and_payload.test.js`).
+  - Production build: `npm run build --prefix frontend` (Vite build passed in 935ms, 0 errors).
+
+## Active Environment
+- **Backend API**: `http://localhost:5000` (`/api/health`)
+- **Frontend Studio**: `http://localhost:5173` (Vite dev proxy -> `http://127.0.0.1:5000`)
+
+## Next Steps
+- Run `.\dev.ps1` or double-click `start.bat` to launch full stack.
 
 ## Summary: Spec Amendment — Rule R3 in timelineOps.deleteGap (CapCut Ripple) (COMPLETED)
 - **Scope**: Fixed Rule R3 in `frontend/src/utils/timelineOps.js` (`deleteGap`) and aligned test expectations, persistence, and documentation without touching R1 or R2 (single-item deletes stay track-independent).

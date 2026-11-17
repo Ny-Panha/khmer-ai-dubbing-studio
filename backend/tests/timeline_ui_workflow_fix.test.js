@@ -82,7 +82,7 @@ test('Step 3: Smart VOICE 1 / VOICE 2 routing, semantic Male/Female colors, and 
   assert.match(canvasSource, /const isCompactClip = clipWidthPx < 48;/);
   assert.match(canvasSource, /const isWideClip = clipWidthPx >= 95;/);
   assert.match(canvasSource, /voice-khmer-dialogue-preview/);
-  assert.match(canvasSource, /title=\{`#\$\{idx \+ 1\} \[\$\{speakerTooltipLabel\}\] \(\$\{startSec\.toFixed\(1\)\}s - \$\{endSec\.toFixed\(1\)\}s\)/);
+  assert.match(canvasSource, /title=\{`#\$\{(?:segmentNumber|idx \+ 1)\} \[\$\{speakerTooltipLabel\}\] \(\$\{startSec\.toFixed\(1\)\}s - \$\{endSec\.toFixed\(1\)\}s\)/);
   assert.match(canvasSource, /"\$\{khmerPreview/);
   assert.match(cssSource, /\.voice-khmer-dialogue-preview\s*\{[\s\S]*?font-family:\s*'Kantumruy Pro'/);
 });

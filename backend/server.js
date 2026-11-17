@@ -6,13 +6,25 @@ try {
   dns.setDefaultResultOrder("ipv4first");
 } catch (_) {}
 
-// Global process crash prevention handlers
+let isServerReady = false;
+
+// Global process crash prevention handlers: fail-fast during startup, resilient once running
 process.on("uncaughtException", (err) => {
-  console.error("[CRITICAL] Uncaught Exception:", err);
+  if (!isServerReady) {
+    console.error("[CRITICAL] Startup Exception:", err);
+    process.exit(1);
+  } else {
+    console.error("[Backend Guard] ⚠️ Caught uncaughtException (prevented server crash):", err?.stack || err?.message || err);
+  }
 });
 
 process.on("unhandledRejection", (reason, promise) => {
-  console.error("[CRITICAL] Unhandled Rejection at:", promise, "reason:", reason);
+  if (!isServerReady) {
+    console.error("[CRITICAL] Startup Unhandled Rejection at:", promise, "reason:", reason);
+    process.exit(1);
+  } else {
+    console.error("[Backend Guard] ⚠️ Caught unhandledRejection (prevented server crash):", reason?.stack || reason?.message || reason);
+  }
 });
 
 const express = require("express");
@@ -105,6 +117,7 @@ if (require.main === module) {
 
   const startListen = (retries = 5) => {
     server = app.listen(PORT, "0.0.0.0", () => {
+      isServerReady = true;
       console.log(`🚀 Khmer AI Dubbing Backend running on http://localhost:${PORT}`);
     });
     server.requestTimeout = 0;
@@ -123,15 +136,6 @@ if (require.main === module) {
       }
     });
   };
-
-  // Top-Level Resilience Guards: Prevent socket disconnects or unhandled async errors from crashing the Node process
-  process.on("uncaughtException", (err) => {
-    console.error("[Backend Guard] ⚠️ Caught uncaughtException (prevented server crash):", err?.stack || err?.message || err);
-  });
-
-  process.on("unhandledRejection", (reason) => {
-    console.error("[Backend Guard] ⚠️ Caught unhandledRejection (prevented server crash):", reason?.stack || reason?.message || reason);
-  });
 
   startListen();
 

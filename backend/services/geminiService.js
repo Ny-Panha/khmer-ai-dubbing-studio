@@ -858,6 +858,109 @@ function normalizeScriptData(rawData = {}, requestedMode = "dialogue", seriesSpe
 }
 
 /**
+ * បង្កើត Script ពីអត្ថបទ (Text Prompt Only)
+ */
+async function generateStorytellingScript(promptText, customApiKey, options = {}) {
+  const ai = getGeminiClient(customApiKey);
+  const modeObj = resolveGenerationMode(options);
+  const resolvedMode = modeObj.mode;
+  const cinemaPrompt = buildCinemaPrompt(
+    resolvedMode,
+    options.customPrompt || promptText,
+    options.narratorGender || "male",
+    0,
+    options
+  );
+  const targetModel = resolveValidModelName(
+    options.modelName || process.env.GEMINI_MODEL
+  );
+
+  let response = null;
+  let successfulModel = targetModel;
+  let lastGeminiError = null;
+
+  const modelsToTry = [
+    targetModel,
+    ...DEFAULT_MODELS.filter((m) => m !== targetModel),
+  ];
+
+  for (const modelToTest of modelsToTry) {
+    try {
+      console.log(
+        `[GeminiService] 🤖 កំពុងវិភាគអត្ថបទជាមួយ ${modelToTest} (Mode: ${resolvedMode})...`
+      );
+      const modelCall = ai.models.generateContent({
+        model: modelToTest,
+        contents: [`អត្ថបទដើម៖\n${promptText}\n\n${cinemaPrompt}`],
+        config: {
+          systemInstruction: KHMER_DUBBING_BASE_SYSTEM_PROMPT,
+          temperature: 0.3,
+          maxOutputTokens: 65536,
+          responseMimeType: "application/json",
+          responseSchema: SCRIPT_RESPONSE_SCHEMA,
+        },
+      });
+
+      const timeoutCall = new Promise((_, reject) =>
+        setTimeout(
+          () => reject(new Error(`Timeout 45s on ${modelToTest}`)),
+          45000
+        )
+      );
+
+      response = await Promise.race([modelCall, timeoutCall]);
+      successfulModel = modelToTest;
+      break;
+    } catch (geminiApiErr) {
+      lastGeminiError = geminiApiErr;
+      console.error(
+        `[GeminiService] ❌ Gemini API Error Details (${modelToTest}):`,
+        geminiApiErr.message || geminiApiErr
+      );
+      console.warn(
+        `[GeminiService] ⚠️ ម៉ូដែល ${modelToTest} បរាជ័យ, សាកល្បងម៉ូដែលបន្ទាប់...`
+      );
+    }
+  }
+
+  if (!response) {
+    const detailMsg = lastGeminiError
+      ? lastGeminiError.message || String(lastGeminiError)
+      : "ម៉ូដែលទាំងអស់បានបរាជ័យ";
+    throw new Error(`Gemini API Error: ${detailMsg}`);
+  }
+
+  const rawResponseText =
+    typeof response?.text === "function" ? response.text() : response?.text;
+
+  if (!rawResponseText) {
+    throw new Error("Gemini បានឆ្លើយតបមកវិញនូវទិន្នន័យទទេ (Empty response text)");
+  }
+
+  let rawData;
+  try {
+    rawData = safeParseOrRepairJson(rawResponseText);
+  } catch (parseErr) {
+    console.error("[GeminiService] ❌ JSON Parse Error. Raw Text was:", rawResponseText);
+    throw new Error(`មិនអាច Parse JSON ពី Gemini បានទេ: ${parseErr.message}`);
+  }
+
+  const normalized = normalizeScriptData(rawData, resolvedMode);
+
+  return {
+    success: true,
+    mode: normalized.mode,
+    summary: normalized.summary,
+    modelUsed: successfulModel,
+    totalSegments: normalized.segments.length,
+    segments: normalized.segments,
+    script: normalized.segments,
+    speakers: normalized.speakers,
+    speakerRegistry: normalized.speakerRegistry,
+  };
+}
+
+/**
  * Strict Khmer Script Sanitizer: Strips any Thai, Lao, or foreign script leaks,
  * and fixes known Thai loanwords/slang (e.g. ไอ้ -> អា, ออกมา -> ចេញមក).
  */
