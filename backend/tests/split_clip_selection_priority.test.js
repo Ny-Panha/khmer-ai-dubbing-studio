@@ -62,10 +62,15 @@ test('useClipOperations: handleSplitClip Deterministic Priority & Selection Cont
   assert.ok(code.includes('selectedClipKind = null'),
     'useClipOperations must receive the selected track kind');
   const editorCode = fs.readFileSync(path.resolve(__dirname, '../../frontend/src/components/timeline/TimelineEditor.jsx'), 'utf8');
-  assert.ok(editorCode.includes("selectedClipKind === 'video' || lastSelectedType === 'video'"),
-    'Timeline toolbar must select its target from the selected video kind');
+  assert.ok(!editorCode.includes('lastSelectedType'),
+    'Timeline toolbar must not let a stale selection kind override the most recent click');
+  assert.ok(editorCode.includes("const activeSplitTarget = selectedClipKind === 'video'"),
+    'Timeline toolbar must select its target from the current selected video kind');
   assert.ok(editorCode.includes('onSplitClip(time, activeSplitTarget)'),
     'Timeline toolbar must pass its resolved target ID to the split handler');
+  const shortcutCode = fs.readFileSync(path.resolve(__dirname, '../../frontend/src/hooks/useShortcuts.js'), 'utf8');
+  assert.ok(shortcutCode.includes("selectedClipKind === 'video'"),
+    'Ctrl+B must target the selected track kind rather than a stale segment ID');
   const appCode = fs.readFileSync(path.resolve(__dirname, '../../frontend/src/App.jsx'), 'utf8');
   assert.ok(appCode.includes('selectedClipKind: media.selectedClipKind'),
     'App must pass the selected track kind to useClipOperations');

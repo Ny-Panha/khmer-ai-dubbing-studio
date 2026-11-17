@@ -140,6 +140,38 @@ function createEpisode({
   };
 }
 
+function getSegmentIdentityKeys(segment) {
+  if (!segment || typeof segment !== 'object') return [];
+  const keys = [];
+  if (segment._uid !== undefined && segment._uid !== null && String(segment._uid)) {
+    keys.push(`uid:${String(segment._uid)}`);
+  }
+  if (segment.id !== undefined && segment.id !== null && String(segment.id)) {
+    keys.push(`id:${String(segment.id)}`);
+  }
+  if (segment.segmentId !== undefined && segment.segmentId !== null && String(segment.segmentId)) {
+    keys.push(`segmentId:${String(segment.segmentId)}`);
+  }
+  if (keys.length === 0) {
+    const start = segment.startSec ?? segment.start ?? '';
+    const end = segment.endSec ?? segment.end ?? '';
+    const text = segment.chineseText ?? segment.originalText ?? segment.khmerText ?? segment.text ?? '';
+    keys.push(`fallback:${String(start)}|${String(end)}|${String(text)}`);
+  }
+  return keys;
+}
+
+function isSegmentDeletedByTombstone(segment, tombstones) {
+  if (segment?._uid !== undefined && segment?._uid !== null && String(segment._uid)) {
+    return tombstones.has(`uid:${String(segment._uid)}`);
+  }
+  return getSegmentIdentityKeys(segment).some((key) => tombstones.has(key));
+}
+
+function getVideoClipIdentity(clip) {
+  return clip?.id === undefined || clip?.id === null ? null : String(clip.id);
+}
+
 /**
  * Validates, heals, and enforces strict uniqueness on episode numbers and IDs in a series
  *
@@ -207,9 +239,23 @@ function sanitizeSeriesEpisodes(series) {
 
     // 4. Ensure scriptData.segments contains zero null / non-object entries
     if (cloned.scriptData && Array.isArray(cloned.scriptData.segments)) {
-      cloned.scriptData.segments = cloned.scriptData.segments.filter(
-        (seg) => seg && typeof seg === 'object'
+      const deletedSegmentKeys = new Set(
+        (Array.isArray(cloned.deletedSegmentKeys) ? cloned.deletedSegmentKeys : []).map(String)
       );
+      cloned.scriptData.segments = cloned.scriptData.segments.filter((seg) =>
+        seg && typeof seg === 'object' &&
+        !isSegmentDeletedByTombstone(seg, deletedSegmentKeys)
+      );
+    }
+
+    if (Array.isArray(cloned.videoClips)) {
+      const deletedVideoClipIds = new Set(
+        (Array.isArray(cloned.deletedVideoClipIds) ? cloned.deletedVideoClipIds : []).map(String)
+      );
+      cloned.videoClips = cloned.videoClips.filter((clip) => {
+        const clipId = getVideoClipIdentity(clip);
+        return clip && typeof clip === 'object' && (!clipId || !deletedVideoClipIds.has(clipId));
+      });
     }
 
     sanitizedEpisodes.push(cloned);
@@ -223,5 +269,8 @@ module.exports = {
   getNextAvailableEpisodeNumber,
   generateUniqueEpisodeId,
   createEpisode,
+  getSegmentIdentityKeys,
+  isSegmentDeletedByTombstone,
+  getVideoClipIdentity,
   sanitizeSeriesEpisodes,
 };

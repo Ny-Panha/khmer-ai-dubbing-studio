@@ -75,7 +75,6 @@ function TimelineEditor({
   const [zoom, setZoom] = useState(1);
   const [selectedSubId, setSelectedSubId] = useState(null);
   const [selectedAudioId, setSelectedAudioId] = useState(null);
-  const [lastSelectedType, setLastSelectedType] = useState('none'); // 'video' | 'audio' | 'subtitle' | 'none'
   const [isScrubbing, setIsScrubbing] = useState(false);
   const [dragState, setDragState] = useState(null);
   const [snappingEnabled, setSnappingEnabled] = useState(true);
@@ -750,7 +749,6 @@ function TimelineEditor({
       lastSyncedInspectorIdRef.current = null;
       setSelectedAudioId(null);
       setSelectedSubId(null);
-      setLastSelectedType('none');
     }
     isScrubbingRef.current = true;
     setIsScrubbing(true);
@@ -770,7 +768,6 @@ function TimelineEditor({
     selectedSegmentIdRef.current = segKey;
     lastSyncedInspectorIdRef.current = segKey;
     lastUserSelectTimeRef.current = Date.now();
-    setLastSelectedType('audio');
     if (onSelectClipKind) onSelectClipKind('voice');
     setSelectedAudioId(segKey);
     setSelectedSubId(segKey);
@@ -833,7 +830,6 @@ function TimelineEditor({
     selectedSegmentIdRef.current = subKey;
     lastSyncedInspectorIdRef.current = subKey;
     lastUserSelectTimeRef.current = Date.now();
-    setLastSelectedType('subtitle');
     if (onSelectClipKind) onSelectClipKind('subtitle');
     const startSec = (typeof seg.startSec === 'number' && !isNaN(seg.startSec))
       ? seg.startSec
@@ -887,7 +883,6 @@ function TimelineEditor({
 
     followSyncSkippedDueToEditingRef.current = false;
     lastUserSelectTimeRef.current = Date.now();
-    setLastSelectedType('video');
     if (onSelectClipKind) onSelectClipKind('video');
     if (onSelectClip) onSelectClip(clip.id);
 
@@ -1496,7 +1491,6 @@ function TimelineEditor({
         if (onSelectClip) onSelectClip(null);
         if (onSelectSegment) onSelectSegment(null);
         if (onSelectClipKind) onSelectClipKind(null);
-        setLastSelectedType('none');
       }
       return;
     }
@@ -1524,7 +1518,6 @@ function TimelineEditor({
       if (onSelectSegment) {
         onSelectSegment(null);
       }
-      setLastSelectedType('none');
       return;
     }
 
@@ -1533,7 +1526,6 @@ function TimelineEditor({
     if (canDeleteVideo && onDeleteClip) {
       onDeleteClip(activeClipId);
       if (onSelectClip) onSelectClip(null);
-      setLastSelectedType('none');
     }
   }, [selectedClipKind, canDeleteSubtitle, canDeleteVideo, selectedSegKey, scriptSegments, onDeleteSegment, onUpdateSegments, onSelectSegment, onDeleteClip, onSelectClip, onSelectClipKind, activeClipId]);
 
@@ -1695,9 +1687,9 @@ function TimelineEditor({
         canRedo={canRedo}
         onRedo={onRedo}
         onSplitClip={(time) => {
-          const activeSplitTarget = selectedClipKind === 'video' || lastSelectedType === 'video'
-            ? (activeClipId || selectedSegKey)
-            : (selectedSegKey || activeClipId);
+          const activeSplitTarget = selectedClipKind === 'video'
+            ? activeClipId
+            : (selectedClipKind === 'voice' || selectedClipKind === 'subtitle' ? selectedSegKey : null);
           if (onSplitClip) onSplitClip(time, activeSplitTarget);
         }}
         currentTime={currentTime}

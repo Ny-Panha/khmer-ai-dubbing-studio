@@ -197,6 +197,26 @@ export async function deleteEpisodeApi(seriesId, episodeId) {
   }
 }
 
+/** Persist a track delete or an undo/redo timeline snapshot to series.json. */
+export async function persistTimelineOperationApi({ seriesId, episodeId, ...operation }) {
+  if (!seriesId || !episodeId) return { success: false };
+  try {
+    const res = await fetch(`/api/series/${seriesId}/episodes/${episodeId}/timeline`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(operation),
+    });
+    if (res.status === 502 || !res.ok) notifyBackendOffline();
+    else notifyBackendOnline();
+    return await parseResponseJson(res, `Failed to persist timeline for episode ${episodeId}`);
+  } catch (err) {
+    if (/ECONNREFUSED|unreachable|Failed to fetch|NetworkError/i.test(err?.message || '')) {
+      notifyBackendOffline();
+    }
+    throw err;
+  }
+}
+
 /**
  * Render complete video with FFmpeg, burning subtitles and blending audio
  */

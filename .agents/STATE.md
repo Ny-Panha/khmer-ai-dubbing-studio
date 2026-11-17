@@ -1,6 +1,24 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
+- **Environment**: Codex CLI + local Edge acceptance run
+- **Branch**: `fix/delete-no-ripple` based on `fix/timeline-clip-selection`
+- **Timestamp**: 2026-11-17T10:46:27+07:00
+
+## Summary: Durable CapCut-Style Timeline Editing
+- Implemented track-independent remove-only deletion, stable selection-kind dispatch, first-class Gap merge/split/delete behavior, exact undo/redo persistence, and backend/local tombstones so stale autosaves, hydration, or Auto-Align cannot resurrect deleted dialogue.
+- Audited production delete callers: `useClipOperations.handleDeleteSegment`, the direct `TimelineEditor` fallback, and `MediaLibrary` fallback pass `{ ripple: false, preserveIds: true }`; `useClipOperations.handleDeleteClip` passes remove-only, Gap, and duration options. Gap deletion is the deliberate video-only ripple case.
+- Focused tests: **27/27 passed**. Frontend build passed (2035 modules; existing large-chunk warning). Frontend lint exited successfully with existing warnings. Real disposable-series UI checks passed for two voice deletes, Auto-Align, episode switching/reload, middle clip Gap, split/delete opening Gap, and Ctrl+Z/redo; stored tracks matched expected values.
+- Disposable series and acceptance scripts were removed. Main was not changed.
+
+## Active Environment
+- Branch: `fix/delete-no-ripple`; Backend API `http://localhost:5000`; Frontend `http://localhost:5173`.
+- Shared local acceptance servers remain listening on ports 5000 and 5173.
+
+## Next Steps
+- Push `fix/delete-no-ripple`; do not merge to main.
+
+## Last Session
 - **Environment**: Copilot SDK in VS Code
 - **Branch**: `fix/delete-no-ripple` based on `fix/timeline-clip-selection` (`1d5e464`)
 - **Timestamp**: 2026-11-17T09:20:00+07:00

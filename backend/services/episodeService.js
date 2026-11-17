@@ -4,6 +4,8 @@ const {
   getNextAvailableEpisodeNumber,
   generateUniqueEpisodeId,
   createEpisode,
+  getSegmentIdentityKeys,
+  getVideoClipIdentity,
   sanitizeSeriesEpisodes,
 } = require('../models/episodeModel');
 
@@ -243,7 +245,10 @@ function applySafeDiskHydration(ep, cleanSeries, seriesDir, resolvedProjectsDir 
   }
 
   // 1. Hydration Check: Auto-recover scriptData from completed jobs on disk if missing
-  if (!ep.scriptData || !Array.isArray(ep.scriptData.segments) || ep.scriptData.segments.length === 0) {
+  if (
+    !ep.scriptData?.explicitClear &&
+    (!ep.scriptData || !Array.isArray(ep.scriptData.segments) || ep.scriptData.segments.length === 0)
+  ) {
     const epJobsDir = path.join(seriesDir, 'episodes', ep.id, 'jobs');
     const recoveredJob = resolveLatestCompletedJobForEpisode(epJobsDir);
     if (recoveredJob) {
@@ -861,7 +866,12 @@ async function syncSeriesMetadataSafely(seriesId, incomingSeries, options = {}) 
       let resolvedScriptData = incEp.scriptData;
       let resolvedStatus = incEp.status;
 
-      if (incSegs.length === 0 && diskSegs.length > 0 && !incEp?.scriptData?.explicitClear) {
+      if (incUpdatedAt < diskUpdatedAt) {
+        resolvedScriptData = diskEp.scriptData;
+        if (!resolvedStatus || resolvedStatus === 'uploaded') {
+          resolvedStatus = diskEp.status || 'translated';
+        }
+      } else if (incSegs.length === 0 && diskSegs.length > 0 && !incEp?.scriptData?.explicitClear) {
         resolvedScriptData = diskEp.scriptData;
         if (!resolvedStatus || resolvedStatus === 'uploaded') {
           resolvedStatus = diskEp.status || 'translated';
@@ -924,6 +934,13 @@ async function syncSeriesMetadataSafely(seriesId, incomingSeries, options = {}) 
         ? (diskEp.duration || 0)
         : ((incEp.duration && Number(incEp.duration) > 0) ? Number(incEp.duration) : (diskEp.duration || 0));
       const resolvedMetadata = incEp.metadata || diskEp.metadata || (resolvedDuration > 0 ? { duration: resolvedDuration, durationSec: resolvedDuration } : null);
+      const incomingVideoClips = Array.isArray(incEp.videoClips) ? incEp.videoClips : null;
+      const incomingVideoClipsUpdatedAt = Number(incEp.videoClipsUpdatedAt || 0);
+      const diskVideoClipsUpdatedAt = Number(diskEp.videoClipsUpdatedAt || 0);
+      const acceptIncomingVideoClips = incomingVideoClips && incomingVideoClipsUpdatedAt >= diskVideoClipsUpdatedAt;
+      const incomingTombstonesUpdatedAt = Number(incEp.timelineTombstonesUpdatedAt || 0);
+      const diskTombstonesUpdatedAt = Number(diskEp.timelineTombstonesUpdatedAt || 0);
+      const acceptIncomingTombstones = incomingTombstonesUpdatedAt >= diskTombstonesUpdatedAt;
 
       return {
         ...diskEp,
@@ -934,6 +951,19 @@ async function syncSeriesMetadataSafely(seriesId, incomingSeries, options = {}) 
         duration: resolvedDuration,
         metadata: resolvedMetadata,
         scriptData: resolvedScriptData,
+        videoClips: acceptIncomingVideoClips ? incomingVideoClips : (diskEp.videoClips || incomingVideoClips || []),
+        videoClipsUpdatedAt: acceptIncomingVideoClips
+          ? incomingVideoClipsUpdatedAt
+          : diskVideoClipsUpdatedAt,
+        deletedSegmentKeys: acceptIncomingTombstones
+          ? (incEp.deletedSegmentKeys || [])
+          : (diskEp.deletedSegmentKeys || []),
+        deletedVideoClipIds: acceptIncomingTombstones
+          ? (incEp.deletedVideoClipIds || [])
+          : (diskEp.deletedVideoClipIds || []),
+        timelineTombstonesUpdatedAt: acceptIncomingTombstones
+          ? incomingTombstonesUpdatedAt
+          : diskTombstonesUpdatedAt,
         status: finalStatus,
         generationMode: incEp.generationMode || diskEp.generationMode,
         fullAudioUrl: preserveDiskAudioInvalidation ? diskEp.fullAudioUrl : (incEp.fullAudioUrl || diskEp.fullAudioUrl),
@@ -971,6 +1001,138 @@ async function syncSeriesMetadataSafely(seriesId, incomingSeries, options = {}) 
     delete mergedSeries._allowRemoveEpisodes;
 
     return saveSeriesMetadata(mergedSeries, { projectsDir });
+  }, { projectsDir });
+}
+
+function getSegmentKeysForTombstone(segment) {
+  return getSegmentIdentityKeys(segment);
+}
+
+function mergeKeys(existingKeys, keysToAdd = [], keysToRemove = []) {
+  const removed = new Set(keysToRemove.map(String));
+  const merged = new Set((Array.isArray(existingKeys) ? existingKeys : []).map(String).filter((key) => !removed.has(key)));
+  for (const key of keysToAdd) {
+    if (key !== undefined && key !== null && String(key)) merged.add(String(key));
+  }
+  return [...merged];
+}
+
+/**
+ * Persist a timeline delete or an undo/redo snapshot as one locked series.json write.
+ * Tombstones keep older autosaves and in-flight transforms from restoring deleted IDs;
+ * an explicit restore snapshot clears tombstones for the items it puts back.
+ */
+async function persistEpisodeTimelineOperation({
+  seriesId,
+  episodeId,
+  operation = 'delete',
+  track = null,
+  items = null,
+  deletedItem = null,
+  deletedIndex = null,
+  segments = null,
+  videoClips = null,
+  projectsDir = PROJECTS_DIR,
+}) {
+  if (!seriesId || !episodeId) throw new Error('seriesId and episodeId are required');
+  const cleanSeries = sanitizeProjectName(seriesId);
+  const cleanEpisode = sanitizeEpisodeId(episodeId);
+  if (operation === 'delete' && (!['segments', 'videoClips'].includes(track) || !Array.isArray(items))) {
+    throw new Error('delete requires track and items arrays');
+  }
+  if (operation === 'restore' && (!Array.isArray(segments) || !Array.isArray(videoClips))) {
+    throw new Error('restore requires segments and videoClips arrays');
+  }
+  if (!['delete', 'restore'].includes(operation)) throw new Error(`Unsupported timeline operation: ${operation}`);
+
+  return await withSeriesMetadataLock(cleanSeries, () => {
+    let operationTimestamps = {};
+    const saved = updateSeriesMetadata(cleanSeries, (series) => {
+      const episode = (series.episodes || []).find(
+        (ep) => sanitizeEpisodeId(ep.id) === cleanEpisode || String(ep.id) === String(episodeId)
+      );
+      if (!episode) return false;
+
+      const now = Date.now();
+      const nextTrackTimestamp = (previous) => Math.max(now, Number(previous || 0) + 1);
+      const tombstonesUpdatedAt = nextTrackTimestamp(episode.timelineTombstonesUpdatedAt);
+      if (operation === 'delete') {
+        if (track === 'segments') {
+          const previous = Array.isArray(episode.scriptData?.segments) ? episode.scriptData.segments : [];
+          const oldUpdatedAt = Number(episode.scriptData?.updatedAt || 0);
+          const updatedAt = nextTrackTimestamp(oldUpdatedAt);
+          const tombstones = deletedItem
+            ? getSegmentKeysForTombstone(deletedItem)
+            : (deletedIndex !== null && previous[deletedIndex]
+              ? getSegmentKeysForTombstone(previous[deletedIndex])
+              : []);
+          episode.deletedSegmentKeys = mergeKeys(episode.deletedSegmentKeys, tombstones);
+          episode.timelineTombstonesUpdatedAt = tombstonesUpdatedAt;
+          episode.scriptData = {
+            ...(episode.scriptData || {}),
+            segments: items,
+            hasScript: items.length > 0,
+            totalSegments: items.length,
+            updatedAt,
+            explicitClear: items.length === 0,
+          };
+          operationTimestamps = { updatedAt };
+        } else {
+          const deletedId = getVideoClipIdentity(deletedItem);
+          const updatedAt = nextTrackTimestamp(episode.videoClipsUpdatedAt);
+          episode.videoClips = items;
+          episode.videoClipsUpdatedAt = updatedAt;
+          if (deletedId) {
+            episode.deletedVideoClipIds = mergeKeys(episode.deletedVideoClipIds, [deletedId]);
+          }
+          episode.timelineTombstonesUpdatedAt = tombstonesUpdatedAt;
+          operationTimestamps = { updatedAt };
+        }
+      } else {
+        const previousSegments = Array.isArray(episode.scriptData?.segments) ? episode.scriptData.segments : [];
+        const restoredSegmentKeys = new Set(segments.flatMap((segment) => getSegmentIdentityKeys(segment)));
+        const removedSegmentKeys = previousSegments
+          .filter((segment) => !getSegmentIdentityKeys(segment).some((key) => restoredSegmentKeys.has(key)))
+          .flatMap((segment) => getSegmentIdentityKeys(segment));
+        const currentDeletedSegments = new Set((episode.deletedSegmentKeys || []).map(String));
+        const restoreSegmentKeys = [...restoredSegmentKeys].filter((key) => currentDeletedSegments.has(key));
+
+        const previousClips = Array.isArray(episode.videoClips) ? episode.videoClips : [];
+        const restoredClipIds = new Set(videoClips.map(getVideoClipIdentity).filter(Boolean));
+        const removedClipIds = previousClips
+          .map(getVideoClipIdentity)
+          .filter((id) => id && !restoredClipIds.has(id));
+        const currentDeletedClipIds = new Set((episode.deletedVideoClipIds || []).map(String));
+        const restoreClipIds = [...restoredClipIds].filter((id) => currentDeletedClipIds.has(id));
+
+        const updatedAt = nextTrackTimestamp(episode.scriptData?.updatedAt);
+        const videoClipsUpdatedAt = nextTrackTimestamp(episode.videoClipsUpdatedAt);
+        episode.deletedSegmentKeys = mergeKeys(episode.deletedSegmentKeys, removedSegmentKeys, restoreSegmentKeys);
+        episode.deletedVideoClipIds = mergeKeys(episode.deletedVideoClipIds, removedClipIds, restoreClipIds);
+        episode.timelineTombstonesUpdatedAt = tombstonesUpdatedAt;
+        episode.scriptData = {
+          ...(episode.scriptData || {}),
+          segments,
+          hasScript: segments.length > 0,
+          totalSegments: segments.length,
+          updatedAt,
+          explicitClear: segments.length === 0,
+        };
+        episode.videoClips = videoClips;
+        episode.videoClipsUpdatedAt = videoClipsUpdatedAt;
+        operationTimestamps = { updatedAt, videoClipsUpdatedAt };
+      }
+
+      episode.lastModified = Math.max(now, Number(episode.lastModified || 0) + 1);
+      return true;
+    }, { projectsDir });
+
+    if (!saved || !Array.isArray(saved.episodes)) {
+      throw new Error(`Episode ${cleanEpisode} was not found in series ${cleanSeries}`);
+    }
+    const persistedEpisode = saved.episodes.find((ep) => sanitizeEpisodeId(ep.id) === cleanEpisode);
+    if (!persistedEpisode) throw new Error(`Episode ${cleanEpisode} was not persisted`);
+    return { success: true, episode: persistedEpisode, ...operationTimestamps };
   }, { projectsDir });
 }
 
@@ -1100,6 +1262,7 @@ module.exports = {
   updateSeriesMetadata,
   withSeriesMetadataLock,
   persistEpisodeScriptData,
+  persistEpisodeTimelineOperation,
   syncSeriesMetadataSafely,
   resetHydrationLogForTesting,
   createNewEpisode,

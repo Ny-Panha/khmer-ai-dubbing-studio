@@ -48,6 +48,8 @@ export function useSeriesManager({
   setDuration,
   videoClips,
   setVideoClips,
+  videoClipsUpdatedAt,
+  setVideoClipsUpdatedAt,
   activeClipId,
   setActiveClipId,
   selectedSegmentId,
@@ -99,6 +101,7 @@ export function useSeriesManager({
     setDuration,
     setCurrentTime,
     setVideoClips,
+    setVideoClipsUpdatedAt,
     setActiveClipId,
     setSelectedSegmentId,
     setRenderedVideo,
@@ -241,6 +244,9 @@ export function useSeriesManager({
         }
         cb.setVideoClips(normalized);
       }
+    }
+    if (cb.setVideoClipsUpdatedAt) {
+      cb.setVideoClipsUpdatedAt(Number(ep.videoClipsUpdatedAt || Date.now()));
     }
     if (cb.setActiveClipId) {
       cb.setActiveClipId(ep.activeClipId || null);
@@ -418,6 +424,7 @@ export function useSeriesManager({
       fullAudioUrl,
       duration,
       videoClips,
+      videoClipsUpdatedAt,
       activeClipId,
       selectedSegmentId,
       renderedVideo,
@@ -434,6 +441,7 @@ export function useSeriesManager({
     fullAudioUrl,
     duration,
     videoClips,
+    videoClipsUpdatedAt,
     activeClipId,
     selectedSegmentId,
     renderedVideo,
@@ -465,6 +473,7 @@ export function useSeriesManager({
     fullAudioUrl,
     duration,
     videoClips,
+    videoClipsUpdatedAt,
     activeClipId,
     selectedSegmentId,
     renderedVideo,

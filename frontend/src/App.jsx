@@ -264,6 +264,8 @@ export default function App() {
     setDuration: handleSetDuration,
     videoClips: media.videoClips,
     setVideoClips: media.setVideoClips,
+    videoClipsUpdatedAt: media.videoClipsUpdatedAt,
+    setVideoClipsUpdatedAt: media.setVideoClipsUpdatedAt,
     activeClipId: media.activeClipId,
     setActiveClipId: media.setActiveClipId,
     selectedSegmentId: media.selectedSegmentId,
@@ -302,6 +304,8 @@ export default function App() {
     setScriptData,
     activeClipId: media.activeClipId,
     setActiveClipId: media.setActiveClipId,
+    seriesId: series.seriesId,
+    episodeId: series.episodeId,
   });
   undoRedoRef.current = undoRedo;
 
@@ -409,6 +413,7 @@ export default function App() {
   const clips = useClipOperations({
     videoClips: media.videoClips,
     setVideoClips: media.setVideoClips,
+    setVideoClipsUpdatedAt: media.setVideoClipsUpdatedAt,
     activeClipId: media.activeClipId,
     setActiveClipId: media.setActiveClipId,
     duration: playback.duration,

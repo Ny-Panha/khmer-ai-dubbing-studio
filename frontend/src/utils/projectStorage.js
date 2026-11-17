@@ -597,7 +597,9 @@ export function cleanStaleStorageKeys() {
 function trimSegmentForStorage(s) {
   if (!s) return s;
   return {
+    _uid: s._uid,
     id: s.id,
+    segmentId: s.segmentId,
     startSec: s.startSec ?? s.start ?? 0,
     endSec: s.endSec ?? s.end ?? 0,
     khmerText: s.khmerText || s.khmerTranslatedText || s.khmer || '',
@@ -827,6 +829,115 @@ export function syncSeriesToBackend(series) {
   syncSeriesApi(series).catch(() => {});
 }
 
+function getLocalSegmentIdentityKeys(segment) {
+  if (!segment || typeof segment !== 'object') return [];
+  const keys = [];
+  if (segment._uid !== undefined && segment._uid !== null && String(segment._uid)) keys.push(`uid:${String(segment._uid)}`);
+  if (segment.id !== undefined && segment.id !== null && String(segment.id)) keys.push(`id:${String(segment.id)}`);
+  if (segment.segmentId !== undefined && segment.segmentId !== null && String(segment.segmentId)) keys.push(`segmentId:${String(segment.segmentId)}`);
+  if (keys.length === 0) {
+    keys.push(`fallback:${String(segment.startSec ?? segment.start ?? '')}|${String(segment.endSec ?? segment.end ?? '')}|${String(segment.chineseText ?? segment.originalText ?? segment.khmerText ?? segment.text ?? '')}`);
+  }
+  return keys;
+}
+
+function uniqueKeys(values = []) {
+  return [...new Set((Array.isArray(values) ? values : []).map(String))];
+}
+
+/** Update local episode state immediately for a delete or undo/redo without a stale full-series sync. */
+export function saveTimelineOperationToLocalStorage({
+  seriesId,
+  episodeId,
+  operation = 'delete',
+  track = null,
+  items = null,
+  deletedItem = null,
+  segments = null,
+  videoClips = null,
+}) {
+  if (!seriesId || !episodeId) return null;
+  const list = loadSeriesList();
+  const series = list.find((entry) => entry.id === seriesId);
+  const episode = series?.episodes?.find((entry) => entry.id === episodeId);
+  if (!series || !episode) return null;
+
+  const now = Date.now();
+  const timestamps = {};
+  const tombstonesUpdatedAt = Math.max(now, Number(episode.timelineTombstonesUpdatedAt || 0) + 1);
+  const mergeTombstones = (existing, add = [], remove = []) => {
+    const removed = new Set(remove.map(String));
+    const next = new Set(uniqueKeys(existing).filter((key) => !removed.has(key)));
+    add.forEach((key) => key && next.add(String(key)));
+    return [...next];
+  };
+
+  if (operation === 'delete' && track === 'segments' && Array.isArray(items)) {
+    const updatedAt = Math.max(now, Number(episode.scriptData?.updatedAt || 0) + 1);
+    episode.deletedSegmentKeys = mergeTombstones(
+      episode.deletedSegmentKeys,
+      deletedItem ? getLocalSegmentIdentityKeys(deletedItem) : []
+    );
+    episode.timelineTombstonesUpdatedAt = tombstonesUpdatedAt;
+    episode.scriptData = {
+      ...(episode.scriptData || {}),
+      segments: items,
+      hasScript: items.length > 0,
+      totalSegments: items.length,
+      explicitClear: items.length === 0,
+      updatedAt,
+    };
+    timestamps.updatedAt = updatedAt;
+  } else if (operation === 'delete' && track === 'videoClips' && Array.isArray(items)) {
+    const updatedAt = Math.max(now, Number(episode.videoClipsUpdatedAt || 0) + 1);
+    episode.videoClips = items;
+    episode.videoClipsUpdatedAt = updatedAt;
+    if (deletedItem?.id !== undefined && deletedItem?.id !== null) {
+      episode.deletedVideoClipIds = mergeTombstones(episode.deletedVideoClipIds, [String(deletedItem.id)]);
+    }
+    episode.timelineTombstonesUpdatedAt = tombstonesUpdatedAt;
+    timestamps.videoClipsUpdatedAt = updatedAt;
+  } else if (operation === 'restore' && Array.isArray(segments) && Array.isArray(videoClips)) {
+    const oldSegments = episode.scriptData?.segments || [];
+    const restoredSegmentKeys = new Set(segments.flatMap((segment) => getLocalSegmentIdentityKeys(segment)));
+    const oldDeletedSegmentKeys = new Set(uniqueKeys(episode.deletedSegmentKeys));
+    const addedSegmentTombstones = oldSegments
+      .filter((segment) => !getLocalSegmentIdentityKeys(segment).some((key) => restoredSegmentKeys.has(key)))
+      .flatMap((segment) => getLocalSegmentIdentityKeys(segment));
+    const clearedSegmentTombstones = [...restoredSegmentKeys].filter((key) => oldDeletedSegmentKeys.has(key));
+    episode.deletedSegmentKeys = mergeTombstones(episode.deletedSegmentKeys, addedSegmentTombstones, clearedSegmentTombstones);
+
+    const oldClips = Array.isArray(episode.videoClips) ? episode.videoClips : [];
+    const restoredClipIds = new Set(videoClips.map((clip) => String(clip?.id ?? '')).filter(Boolean));
+    const oldDeletedClipIds = new Set(uniqueKeys(episode.deletedVideoClipIds));
+    const addedClipTombstones = oldClips.map((clip) => String(clip?.id ?? '')).filter((id) => id && !restoredClipIds.has(id));
+    const clearedClipTombstones = [...restoredClipIds].filter((id) => oldDeletedClipIds.has(id));
+    episode.deletedVideoClipIds = mergeTombstones(episode.deletedVideoClipIds, addedClipTombstones, clearedClipTombstones);
+    episode.timelineTombstonesUpdatedAt = tombstonesUpdatedAt;
+
+    const updatedAt = Math.max(now, Number(episode.scriptData?.updatedAt || 0) + 1);
+    const videoClipsUpdatedAt = Math.max(now, Number(episode.videoClipsUpdatedAt || 0) + 1);
+    episode.scriptData = {
+      ...(episode.scriptData || {}),
+      segments,
+      hasScript: segments.length > 0,
+      totalSegments: segments.length,
+      explicitClear: segments.length === 0,
+      updatedAt,
+    };
+    episode.videoClips = videoClips;
+    episode.videoClipsUpdatedAt = videoClipsUpdatedAt;
+    timestamps.updatedAt = updatedAt;
+    timestamps.videoClipsUpdatedAt = videoClipsUpdatedAt;
+  } else {
+    return null;
+  }
+
+  episode.lastModified = Math.max(now, Number(episode.lastModified || 0) + 1);
+  saveSeriesList(list);
+  return timestamps;
+}
+
 /**
  * Save specific episode state into series list in localStorage
  */
@@ -871,9 +982,40 @@ export function saveEpisodeState(seriesId, episodeId, stateData) {
     }
 
     // Defensive Preservation Guard: Never wipe valid scriptData, audio, or clips with nulls on stale/uninitialized updates
-    const mergedScriptData = (stateData.scriptData && (stateData.scriptData.segments?.length > 0 || stateData.scriptData.title))
-      ? stateData.scriptData
+    const incomingScriptUpdatedAt = Number(stateData.scriptData?.updatedAt || 0);
+    const previousScriptUpdatedAt = Number(prevEp.scriptData?.updatedAt || 0);
+    const staleScriptSnapshot = Boolean(
+      stateData.scriptData &&
+      prevEp.scriptData &&
+      incomingScriptUpdatedAt < previousScriptUpdatedAt
+    );
+    const mergedScriptCandidate = staleScriptSnapshot ? prevEp.scriptData : stateData.scriptData;
+    const mergedScriptData = (mergedScriptCandidate && (
+      mergedScriptCandidate.segments?.length > 0 ||
+      mergedScriptCandidate.title ||
+      mergedScriptCandidate.explicitClear
+    ))
+      ? mergedScriptCandidate
       : (stateData.clearScript ? null : (prevEp.scriptData || stateData.scriptData));
+    const deletedSegmentKeys = new Set(uniqueKeys(prevEp.deletedSegmentKeys));
+    const mergedScriptDataWithDeletes = mergedScriptData && Array.isArray(mergedScriptData.segments)
+      ? (() => {
+          const keptSegments = mergedScriptData.segments.filter((segment) =>
+            segment?._uid !== undefined && segment?._uid !== null && String(segment._uid)
+              ? !deletedSegmentKeys.has(`uid:${String(segment._uid)}`)
+              : !getLocalSegmentIdentityKeys(segment).some((key) => deletedSegmentKeys.has(key))
+          );
+          return keptSegments.length === mergedScriptData.segments.length
+            ? mergedScriptData
+            : {
+                ...mergedScriptData,
+                segments: keptSegments,
+                hasScript: keptSegments.length > 0,
+                totalSegments: keptSegments.length,
+                explicitClear: keptSegments.length === 0,
+              };
+        })()
+      : mergedScriptData;
 
     const mergedSpeakerRegistry = (stateData.speakerRegistry && Object.keys(stateData.speakerRegistry).length > 0)
       ? stateData.speakerRegistry
@@ -900,9 +1042,16 @@ export function saveEpisodeState(seriesId, episodeId, stateData) {
       ? false
       : (stateData.hasAudio !== undefined ? Boolean(stateData.hasAudio) : mergedAudioGenerated);
 
-    const mergedVideoClips = (Array.isArray(stateData.videoClips) && stateData.videoClips.length > 0)
+    const incomingVideoClipsUpdatedAt = Number(stateData.videoClipsUpdatedAt || 0);
+    const previousVideoClipsUpdatedAt = Number(prevEp.videoClipsUpdatedAt || 0);
+    const staleVideoClipsSnapshot = incomingVideoClipsUpdatedAt < previousVideoClipsUpdatedAt;
+    const rawVideoClips = !staleVideoClipsSnapshot && Array.isArray(stateData.videoClips) && (
+      stateData.videoClips.length > 0 || incomingVideoClipsUpdatedAt > 0
+    )
       ? stateData.videoClips
       : (prevEp.videoClips || []);
+    const deletedVideoClipIds = new Set(uniqueKeys(prevEp.deletedVideoClipIds));
+    const mergedVideoClips = rawVideoClips.filter((clip) => !deletedVideoClipIds.has(String(clip?.id ?? '')));
 
     const mergedRenderedVideo = (stateData.clearAudio || stateData.clearScript)
       ? null
@@ -920,7 +1069,7 @@ export function saveEpisodeState(seriesId, episodeId, stateData) {
     const updatedEp = {
       ...prevEp,
       ...stateData,
-      scriptData: mergedScriptData,
+      scriptData: mergedScriptDataWithDeletes,
       speakerRegistry: mergedSpeakerRegistry,
       audioGenerated: mergedAudioGenerated,
       hasAudio: mergedHasAudio,
@@ -929,6 +1078,9 @@ export function saveEpisodeState(seriesId, episodeId, stateData) {
       fullAudioUrl: mergedFullAudioUrl,
       renderedVideo: mergedRenderedVideo,
       videoClips: mergedVideoClips,
+      videoClipsUpdatedAt: staleVideoClipsSnapshot
+        ? previousVideoClipsUpdatedAt
+        : Number(stateData.videoClipsUpdatedAt || prevEp.videoClipsUpdatedAt || 0),
       voiceSettings: sanitizedVoiceSettings,
       title: episodeTitle,
       displayTitle: cleanDisplayTitle

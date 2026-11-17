@@ -1,4 +1,6 @@
 import { useState, useCallback } from 'react';
+import { persistTimelineOperationApi } from '../services/api';
+import { saveTimelineOperationToLocalStorage } from '../utils/projectStorage';
 
 /**
  * Cycle-safe deep clone helper.
@@ -34,6 +36,8 @@ export function useUndoRedo({
   setScriptData,
   activeClipId,
   setActiveClipId,
+  seriesId = null,
+  episodeId = null,
 }) {
   const [undoStack, setUndoStack] = useState([]);
   const [redoStack, setRedoStack] = useState([]);
@@ -53,63 +57,69 @@ export function useUndoRedo({
     setRedoStack([]); // Clear redo stack on new action
   }, [videoClips, scriptData, activeClipId]);
 
+  const persistSnapshot = useCallback((snapshot) => {
+    persistTimelineOperationApi({
+      seriesId,
+      episodeId,
+      operation: 'restore',
+      segments: snapshot.segments || [],
+      videoClips: snapshot.videoClips || [],
+    }).catch((err) => console.warn('[useUndoRedo] Could not persist restored timeline snapshot:', err.message));
+  }, [seriesId, episodeId]);
+
   const handleUndo = useCallback(() => {
-    setUndoStack((prevUndo) => {
-      if (!prevUndo || prevUndo.length === 0) return prevUndo;
-      const targetSnapshot = prevUndo[prevUndo.length - 1];
-      const remainingUndo = prevUndo.slice(0, prevUndo.length - 1);
-
-      // Save current state into redo stack
-      const currentSnapshot = {
-        videoClips: safeClone(videoClips || []),
-        segments: safeClone(scriptData?.segments || []),
-        activeClipId,
-      };
-      setRedoStack((prevRedo) => [...prevRedo.slice(-30), currentSnapshot]);
-
-      // Apply target snapshot
-      if (targetSnapshot.videoClips) {
-        setVideoClips(targetSnapshot.videoClips);
-      }
-      if (targetSnapshot.segments && setScriptData) {
-        setScriptData((sPrev) => (sPrev ? { ...sPrev, segments: targetSnapshot.segments, updatedAt: Date.now() } : sPrev));
-      }
-      if (targetSnapshot.activeClipId !== undefined) {
-        setActiveClipId(targetSnapshot.activeClipId);
-      }
-
-      return remainingUndo;
+    if (!undoStack.length) return;
+    const targetSnapshot = undoStack[undoStack.length - 1];
+    const currentSnapshot = {
+      videoClips: safeClone(videoClips || []),
+      segments: safeClone(scriptData?.segments || []),
+      activeClipId,
+    };
+    const localSave = saveTimelineOperationToLocalStorage({
+      seriesId,
+      episodeId,
+      operation: 'restore',
+      segments: targetSnapshot.segments || [],
+      videoClips: targetSnapshot.videoClips || [],
     });
-  }, [videoClips, scriptData, activeClipId, setVideoClips, setScriptData, setActiveClipId]);
+    setUndoStack((prev) => prev.slice(0, -1));
+    setRedoStack((prev) => [...prev.slice(-30), currentSnapshot]);
+    setVideoClips(targetSnapshot.videoClips || []);
+    if (targetSnapshot.segments && setScriptData) {
+      setScriptData((sPrev) => (sPrev
+        ? { ...sPrev, segments: targetSnapshot.segments, updatedAt: localSave?.updatedAt || Date.now(), explicitClear: targetSnapshot.segments.length === 0 }
+        : (targetSnapshot.segments.length ? { mode: 'dialogue', segments: targetSnapshot.segments, updatedAt: localSave?.updatedAt || Date.now() } : sPrev)));
+    }
+    if (targetSnapshot.activeClipId !== undefined) setActiveClipId(targetSnapshot.activeClipId);
+    persistSnapshot(targetSnapshot);
+  }, [undoStack, videoClips, scriptData, activeClipId, setVideoClips, setScriptData, setActiveClipId, seriesId, episodeId, persistSnapshot]);
 
   const handleRedo = useCallback(() => {
-    setRedoStack((prevRedo) => {
-      if (!prevRedo || prevRedo.length === 0) return prevRedo;
-      const targetSnapshot = prevRedo[prevRedo.length - 1];
-      const remainingRedo = prevRedo.slice(0, prevRedo.length - 1);
-
-      // Save current state into undo stack
-      const currentSnapshot = {
-        videoClips: safeClone(videoClips || []),
-        segments: safeClone(scriptData?.segments || []),
-        activeClipId,
-      };
-      setUndoStack((prevUndo) => [...prevUndo.slice(-30), currentSnapshot]);
-
-      // Apply target snapshot
-      if (targetSnapshot.videoClips) {
-        setVideoClips(targetSnapshot.videoClips);
-      }
-      if (targetSnapshot.segments && setScriptData) {
-        setScriptData((sPrev) => (sPrev ? { ...sPrev, segments: targetSnapshot.segments, updatedAt: Date.now() } : sPrev));
-      }
-      if (targetSnapshot.activeClipId !== undefined) {
-        setActiveClipId(targetSnapshot.activeClipId);
-      }
-
-      return remainingRedo;
+    if (!redoStack.length) return;
+    const targetSnapshot = redoStack[redoStack.length - 1];
+    const currentSnapshot = {
+      videoClips: safeClone(videoClips || []),
+      segments: safeClone(scriptData?.segments || []),
+      activeClipId,
+    };
+    const localSave = saveTimelineOperationToLocalStorage({
+      seriesId,
+      episodeId,
+      operation: 'restore',
+      segments: targetSnapshot.segments || [],
+      videoClips: targetSnapshot.videoClips || [],
     });
-  }, [videoClips, scriptData, activeClipId, setVideoClips, setScriptData, setActiveClipId]);
+    setRedoStack((prev) => prev.slice(0, -1));
+    setUndoStack((prev) => [...prev.slice(-30), currentSnapshot]);
+    setVideoClips(targetSnapshot.videoClips || []);
+    if (targetSnapshot.segments && setScriptData) {
+      setScriptData((sPrev) => (sPrev
+        ? { ...sPrev, segments: targetSnapshot.segments, updatedAt: localSave?.updatedAt || Date.now(), explicitClear: targetSnapshot.segments.length === 0 }
+        : (targetSnapshot.segments.length ? { mode: 'dialogue', segments: targetSnapshot.segments, updatedAt: localSave?.updatedAt || Date.now() } : sPrev)));
+    }
+    if (targetSnapshot.activeClipId !== undefined) setActiveClipId(targetSnapshot.activeClipId);
+    persistSnapshot(targetSnapshot);
+  }, [redoStack, videoClips, scriptData, activeClipId, setVideoClips, setScriptData, setActiveClipId, seriesId, episodeId, persistSnapshot]);
 
   const clearHistory = useCallback(() => {
     setUndoStack([]);

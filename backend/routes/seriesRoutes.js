@@ -6,6 +6,7 @@ const {
   getSeriesMetadata,
   withSeriesMetadataLock,
   syncSeriesMetadataSafely,
+  persistEpisodeTimelineOperation,
   createNewEpisode,
   deleteEpisode,
 } = require("../services/episodeService");
@@ -76,6 +77,21 @@ router.delete("/:seriesId/episodes/:episodeId", async (req, res) => {
     res.json(result);
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.patch("/:seriesId/episodes/:episodeId/timeline", async (req, res) => {
+  try {
+    const { seriesId, episodeId } = req.params;
+    const result = await persistEpisodeTimelineOperation({
+      seriesId,
+      episodeId,
+      ...(req.body || {}),
+    });
+    res.json(result);
+  } catch (err) {
+    const status = /required|requires|Unsupported/.test(err.message) ? 400 : 500;
+    res.status(status).json({ success: false, error: err.message });
   }
 });
 

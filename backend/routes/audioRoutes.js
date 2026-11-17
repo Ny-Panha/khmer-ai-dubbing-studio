@@ -1331,15 +1331,33 @@ router.post(["/audio/autofit-speed", "/autofit-speed"], async (req, res) => {
       }
     }
 
-    ep.autoFitted = true;
-    if (ep.scriptData) {
-      ep.scriptData.autoFitted = true;
-      ep.scriptData.segments = updatedSegments;
-      ep.scriptData.updatedAt = Date.now();
-    }
-    episodes[epIndex] = ep;
-    seriesData.episodes = episodes;
-    fs.writeFileSync(seriesMetaPath, JSON.stringify(seriesData, null, 2), "utf8");
+    await withSeriesMetadataLock(seriesId, () => updateSeriesMetadata(seriesId, (latestSeries) => {
+      const latestEp = (latestSeries.episodes || []).find((candidate) => String(candidate.id) === String(episodeId));
+      if (!latestEp?.scriptData || !Array.isArray(latestEp.scriptData.segments)) return false;
+
+      const fittedByIdentity = new Map(updatedSegments.map((segment) => [
+        String(segment._uid || segment.id || segment.segmentId),
+        segment,
+      ]));
+      const fitFields = [
+        'audioStartSec', 'audioEndSec', 'audioDurationSec', 'audioDuration',
+        'finalAudioDuration', 'rawAudioDur', 'audioTrimmed', 'userTrimmed',
+        'speed', 'appliedSpeed', 'userCustomSpeed', 'audioOutdated', 'ttsStatus',
+      ];
+      latestEp.scriptData.segments = latestEp.scriptData.segments.map((segment) => {
+        const fitted = fittedByIdentity.get(String(segment._uid || segment.id || segment.segmentId));
+        if (!fitted) return segment;
+        const next = { ...segment };
+        for (const field of fitFields) {
+          if (fitted[field] !== undefined) next[field] = fitted[field];
+        }
+        return next;
+      });
+      latestEp.autoFitted = true;
+      latestEp.scriptData.autoFitted = true;
+      latestEp.scriptData.updatedAt = Math.max(Date.now(), Number(latestEp.scriptData.updatedAt || 0) + 1);
+      return true;
+    }));
 
     if (fittedCount > 0) {
       const pEntry = autoFitProgressMap.get(progressKey);
@@ -1389,10 +1407,6 @@ router.post(["/audio/autofit-speed", "/autofit-speed"], async (req, res) => {
       } catch (syncErr) {
         console.warn(`[Auto-Fit Speed] Notice re-syncing master narration: ${syncErr.message}`);
       }
-    } else {
-      episodes[epIndex] = ep;
-      seriesData.episodes = episodes;
-      fs.writeFileSync(seriesMetaPath, JSON.stringify(seriesData, null, 2), "utf8");
     }
 
     const finalLogs = autoFitProgressMap.get(progressKey)?.logs || [];

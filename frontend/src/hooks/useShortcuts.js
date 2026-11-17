@@ -51,7 +51,10 @@ export function useShortcuts({
       // Ctrl/Cmd + B: Split Clip at Playhead
       if (isMod && key === 'b') {
         e.preventDefault();
-        onSplitClip?.(currentTime, selectedSegmentId ?? activeClipId);
+        const splitTarget = selectedClipKind === 'video'
+          ? activeClipId
+          : (selectedClipKind === 'voice' || selectedClipKind === 'subtitle' ? selectedSegmentId : null);
+        onSplitClip?.(currentTime, splitTarget);
         return;
       }
 

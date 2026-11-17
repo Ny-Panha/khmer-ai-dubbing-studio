@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { fetchVideoMetadata, fetchVideoThumbnails } from '../services/api';
 import { generateVideoThumbnails } from '../utils/thumbnailUtils';
 import { clearActiveProject } from '../utils/projectStorage';
@@ -26,11 +26,16 @@ export function useWorkspaceMedia({
   const [selectedVideo, setSelectedVideo] = useState(null);
   const [videoMetadata, setVideoMetadata] = useState(null);
   const [videoClips, setVideoClips] = useState([]);
+  const [videoClipsUpdatedAt, setVideoClipsUpdatedAt] = useState(0);
   const [mediaAssets, setMediaAssets] = useState([]);
   const [videoThumbnails, setVideoThumbnails] = useState([]);
   const [activeClipId, setActiveClipId] = useState(null);
   const [selectedSegmentId, setSelectedSegmentId] = useState(null);
   const [selectedClipKind, setSelectedClipKind] = useState(null); // 'video' | 'voice' | 'subtitle' | null
+
+  useEffect(() => {
+    setVideoClipsUpdatedAt((previous) => Math.max(Date.now(), Number(previous || 0) + 1));
+  }, [videoClips]);
 
   // Video Loaded Handler - CapCut style import into Media Bin and VIDEO 1 track
   const handleVideoLoaded = async (vid) => {
@@ -355,6 +360,8 @@ export function useWorkspaceMedia({
     setVideoMetadata,
     videoClips,
     setVideoClips,
+    videoClipsUpdatedAt,
+    setVideoClipsUpdatedAt,
     mediaAssets,
     setMediaAssets,
     videoThumbnails,

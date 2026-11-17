@@ -220,6 +220,7 @@ describe('Remove-only timeline delete', () => {
     const { splitClipAtTime } = await import(pathToFileURL(timelineUtilsPath));
     const cases = [
       { splitTime: 5, expected: [[2, 5], [5, 8]] },
+      { splitTime: 2.001, expected: [[2, 2.001], [2.001, 8]] },
       { splitTime: 2.06, expected: [[2, 2.06], [2.06, 8]] },
       { splitTime: 7.94, expected: [[2, 7.94], [7.94, 8]] },
     ];
@@ -390,10 +391,16 @@ describe('Remove-only timeline delete', () => {
     assert.ok(hookCode.includes('deleteSegmentByIdOrIndex(scriptData.segments, segmentKey, { ripple: false, preserveIds: true })'));
     assert.ok(hookCode.includes('gapOnDelete: true'));
     assert.ok(clipDeleteHandler.includes('totalDuration: duration'));
+    assert.ok(clipDeleteHandler.includes("track: 'videoClips'"));
+    assert.ok(clipDeleteHandler.includes('persistTimelineOperationApi'));
+    assert.ok(clipDeleteHandler.includes('saveTimelineOperationToLocalStorage'));
     assert.ok(!clipDeleteHandler.includes('deleteSegmentByIdOrIndex'));
     assert.ok(!clipDeleteHandler.includes('handleUpdateTimelineSegments'));
     assert.ok(!segmentDeleteHandler.includes('deleteClipById'));
     assert.ok(!segmentDeleteHandler.includes('setVideoClips'));
+    assert.ok(segmentDeleteHandler.includes("track: 'segments'"));
+    assert.ok(segmentDeleteHandler.includes('persistTimelineOperationApi'));
+    assert.ok(segmentDeleteHandler.includes('saveTimelineOperationToLocalStorage'));
     assert.ok(editorCode.includes("if (selectedClipKind === 'video')"));
     assert.ok(!deleteSelectedHandler.includes('matchingClip'));
     assert.ok(!deleteSelectedHandler.includes('onDeleteClip(matchingClip'));
@@ -410,6 +417,6 @@ describe('Remove-only timeline delete', () => {
     assert.ok(timelineUtilsCode.includes('export function bridgeClipGaps'));
     const hookCode = fs.readFileSync(path.resolve(__dirname, '../../frontend/src/hooks/useClipOperations.js'), 'utf8');
     assert.ok(hookCode.includes('// 1. If leading gap exists'));
-    assert.ok(hookCode.includes('setVideoClips(snappedClips)'));
+    assert.ok(hookCode.includes('setVideoClips(snappedVideoClips)'));
   });
 });

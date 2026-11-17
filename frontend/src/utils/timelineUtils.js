@@ -172,13 +172,13 @@ export function splitClipAtTime(clips = [], splitTime = 0, totalDuration = 0, ac
   let targetIndex = -1;
   if (activeClipId) {
     targetIndex = targetClips.findIndex(
-      (c) => c.id === activeClipId && splitTime > c.start + 0.05 && splitTime < c.end - 0.05
+      (c) => c.id === activeClipId && splitTime > c.start && splitTime < c.end
     );
   }
 
   if (targetIndex === -1) {
     targetIndex = targetClips.findIndex(
-      (c) => splitTime > c.start + 0.05 && splitTime < c.end - 0.05
+      (c) => splitTime > c.start && splitTime < c.end
     );
   }
 
@@ -468,7 +468,7 @@ export function deleteClipById(clips, clipId, options = {}) {
 
   let remaining = clips.filter((c) => c.id !== clipId);
   if (isTargetGap) {
-    return remaining.map((clip) => {
+    const shifted = remaining.map((clip) => {
       if (clip.start < targetEnd) return clip;
       return {
         ...clip,
@@ -476,6 +476,22 @@ export function deleteClipById(clips, clipId, options = {}) {
         end: parseFloat((clip.end - dur).toFixed(3)),
       };
     });
+    return shifted.sort((a, b) => a.start - b.start).reduce((joined, clip) => {
+      const previous = joined[joined.length - 1];
+      const previousIsGap = previous && (/^Gap(?: \(Part \d+\))?$/.test(previous.name || '') || previous.id?.startsWith('clip-gap'));
+      const currentIsGap = /^Gap(?: \(Part \d+\))?$/.test(clip.name || '') || clip.id?.startsWith('clip-gap');
+      if (previousIsGap && currentIsGap && Math.abs(clip.start - previous.end) <= 0.001) {
+        joined[joined.length - 1] = {
+          ...previous,
+          end: Math.max(previous.end, clip.end),
+          sourceStart: previous.start,
+          sourceEnd: Math.max(previous.end, clip.end),
+        };
+      } else {
+        joined.push(clip);
+      }
+      return joined;
+    }, []);
   }
 
   const isTargetDialogue = Boolean(targetClip.isDialogue || targetClip.segmentId || targetClip.segmentIndex || /^#\d+/.test(targetClip.name || ''));

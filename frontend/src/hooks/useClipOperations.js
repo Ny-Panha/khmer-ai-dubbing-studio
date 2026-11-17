@@ -13,7 +13,8 @@ import {
 import { parseTimeToSeconds, formatTimecode, formatMinSec, getSegmentAudioDuration } from '../utils/timestampUtils';
 import { splitKhmerTextIntoHalves, splitSegmentIntoNaturalSentences } from '../utils/khmerTextSplitter';
 import { buildSpeakerRegistry } from '../utils/speakerUtils';
-import { syncTimelineAudioApi, autoFitSpeechSpeedApi, notifyBackendOffline, notifyBackendOnline } from '../services/api';
+import { syncTimelineAudioApi, autoFitSpeechSpeedApi, persistTimelineOperationApi, notifyBackendOffline, notifyBackendOnline } from '../services/api';
+import { saveTimelineOperationToLocalStorage } from '../utils/projectStorage';
 
 /**
  * Lightweight, non-intrusive floating in-app toast for timeline feedback (e.g. split guard)
@@ -68,6 +69,7 @@ function showInAppToast(message, durationMs = 2800) {
 export function useClipOperations({
   videoClips,
   setVideoClips,
+  setVideoClipsUpdatedAt = null,
   activeClipId,
   setActiveClipId,
   duration,
@@ -510,12 +512,6 @@ export function useClipOperations({
       return;
     }
 
-    try {
-      pushUndoSnapshot(videoClips, currentSegments);
-    } catch (err) {
-      console.warn('[useClipOperations] pushUndoSnapshot failed in handleAutoAlignNoOverlap:', err);
-    }
-
     // 1. If leading gap exists (e.g. from deleting clips/segments at 00:00), snap everything to 00:00!
     let leadOffset = 0;
     const firstSegStart = typeof currentSegments[0].startSec === 'number'
@@ -532,15 +528,16 @@ export function useClipOperations({
       if (leadOffset === Infinity) leadOffset = 0;
     }
 
-    // Snap video clips to 00:00 if leading gap exists
+    // Snap video clips to 00:00 if leading gap exists, but defer the write until
+    // we know whether Auto-Align changes any timeline data.
+    let snappedVideoClips = videoClips;
     if (leadOffset > 0.04 && Array.isArray(videoClips) && videoClips.length > 0) {
-      const snappedClips = videoClips.map((c) => {
+      snappedVideoClips = videoClips.map((c) => {
         const clipLen = c.end - c.start;
         const newStart = Math.max(0, parseFloat((c.start - leadOffset).toFixed(3)));
         const newEnd = parseFloat((newStart + clipLen).toFixed(3));
         return { ...c, start: newStart, end: newEnd };
       });
-      setVideoClips(snappedClips);
     }
 
     // Snap voice segments to 00:00 if leadOffset > 0
@@ -611,20 +608,68 @@ export function useClipOperations({
       maxPlaybackSpeed: 1.45,
     });
 
-    const nextScriptData = {
-      ...scriptData,
-      segments: alignedSegments,
-      updatedAt: Date.now(),
-    };
+    const segmentTimelineSignature = (segments = []) => segments.map((seg) => ([
+      seg?._uid ?? null,
+      seg?.id ?? null,
+      seg?.segmentId ?? null,
+      seg?.startSec ?? null,
+      seg?.endSec ?? null,
+      seg?.audioStartSec ?? null,
+      seg?.audioEndSec ?? null,
+      seg?.sourceStartSec ?? null,
+      seg?.sourceEndSec ?? null,
+      seg?.duration ?? null,
+      seg?.audioDurationSec ?? null,
+      seg?.finalAudioDuration ?? null,
+      seg?.trackRow ?? null,
+      seg?.trackId ?? null,
+      seg?.subTrackRow ?? null,
+      seg?.subTrackId ?? null,
+      Boolean(seg?.audioTrimmed || seg?.userTrimmed),
+      Boolean(seg?.audioOverrun),
+      seg?.overrunRatio ?? null,
+      seg?.playbackRate ?? null,
+      Boolean(seg?.needsTimeStretch),
+    ]));
+    const clipTimelineSignature = (clips = []) => clips.map((clip) => ([
+      clip?.id ?? null,
+      clip?.start ?? null,
+      clip?.end ?? null,
+      clip?.sourceStart ?? null,
+      clip?.sourceEnd ?? null,
+      clip?.name ?? null,
+      Boolean(clip?.isMuted),
+    ]));
+    const segmentsChanged = JSON.stringify(segmentTimelineSignature(currentSegments)) !== JSON.stringify(segmentTimelineSignature(alignedSegments));
+    const clipsChanged = JSON.stringify(clipTimelineSignature(videoClips || [])) !== JSON.stringify(clipTimelineSignature(snappedVideoClips || []));
 
-    setScriptData(nextScriptData);
+    // Auto-Align can normalize optional metadata even when the timeline already
+    // matches. Avoid autosaving that normalization as if the user had edited it.
+    if (!segmentsChanged && !clipsChanged) return;
+
+    try {
+      pushUndoSnapshot(videoClips, currentSegments);
+    } catch (err) {
+      console.warn('[useClipOperations] pushUndoSnapshot failed in handleAutoAlignNoOverlap:', err);
+    }
+
+    if (clipsChanged) setVideoClips(snappedVideoClips);
+
+    if (segmentsChanged) {
+      const nextScriptData = {
+        ...scriptData,
+        segments: alignedSegments,
+        updatedAt: Date.now(),
+      };
+      setScriptData(nextScriptData);
+    }
 
     // 3. Keep user's existing video cuts intact (do not wipe out or reset cut clips)
 
     // 4. Update master narration track on Backend
     try {
       const hasGeneratedAudio = alignedSegments.some((s) => s.audioFile || s.audioPath || s.audioUrl);
-      if (hasGeneratedAudio || audioGenerated) {
+      if (segmentsChanged && (hasGeneratedAudio || audioGenerated)) {
         const syncRes = await syncTimelineAudioApi(
           alignedSegments,
           getProjectName() || 'drama_project',
@@ -799,7 +844,7 @@ export function useClipOperations({
   };
 
   // Delete only the selected video clip.
-  const handleDeleteClip = (clipId = null) => {
+  const handleDeleteClip = async (clipId = null) => {
     const targetClipId = clipId !== null && clipId !== undefined ? clipId : activeClipId;
     if (!targetClipId) return;
 
@@ -814,8 +859,31 @@ export function useClipOperations({
       gapOnDelete: true,
       totalDuration: duration,
     });
+    const localSave = saveTimelineOperationToLocalStorage({
+      seriesId,
+      episodeId,
+      operation: 'delete',
+      track: 'videoClips',
+      items: updated,
+      deletedItem: targetClip,
+    });
     setVideoClips(updated);
+    if (localSave?.videoClipsUpdatedAt && setVideoClipsUpdatedAt) {
+      setVideoClipsUpdatedAt(localSave.videoClipsUpdatedAt);
+    }
     setActiveClipId(updated[0]?.id || null);
+    try {
+      await persistTimelineOperationApi({
+        seriesId,
+        episodeId,
+        operation: 'delete',
+        track: 'videoClips',
+        items: updated,
+        deletedItem: targetClip,
+      });
+    } catch (err) {
+      console.warn('[useClipOperations] Could not immediately persist deleted video clip:', err.message);
+    }
   };
 
   // Update Clips (Drag/Trim) with optional synchronized segments
@@ -842,6 +910,15 @@ export function useClipOperations({
       : targetKey;
     const updated = deleteSegmentByIdOrIndex(scriptData.segments, segmentKey, { ripple: false, preserveIds: true });
     if (updated === scriptData.segments) return;
+    const localSave = saveTimelineOperationToLocalStorage({
+      seriesId,
+      episodeId,
+      operation: 'delete',
+      track: 'segments',
+      items: updated,
+      deletedItem: targetSeg,
+    });
+    const deleteUpdatedAt = localSave?.updatedAt || Date.now();
 
     if (syncAudioTimeoutRef?.current) clearTimeout(syncAudioTimeoutRef.current);
 
@@ -849,8 +926,32 @@ export function useClipOperations({
       const updatedReg = buildSpeakerRegistry(updated, speakerRegistry);
       if (setSpeakerRegistry) setSpeakerRegistry(updatedReg);
     }
-    setScriptData(prev => prev ? ({ ...prev, segments: updated, updatedAt: Date.now() }) : null);
+    setScriptData(prev => prev ? ({
+      ...prev,
+      segments: updated,
+      hasScript: updated.length > 0,
+      totalSegments: updated.length,
+      explicitClear: updated.length === 0,
+      updatedAt: deleteUpdatedAt,
+    }) : null);
     if (setSelectedSegmentId) setSelectedSegmentId(null);
+
+    try {
+      const persisted = await persistTimelineOperationApi({
+        seriesId,
+        episodeId,
+        operation: 'delete',
+        track: 'segments',
+        items: updated,
+        deletedItem: targetSeg,
+        deletedIndex: targetSegIdx,
+      });
+      if (persisted?.updatedAt) {
+        setScriptData((prev) => prev ? { ...prev, updatedAt: Math.max(Number(prev.updatedAt || 0), persisted.updatedAt) } : prev);
+      }
+    } catch (err) {
+      console.warn('[useClipOperations] Could not immediately persist deleted voice segment:', err.message);
+    }
 
     const hasAudios = Boolean(updated.some(s => s.audioFile || s.audioPath || s.audioUrl));
     if (!hasAudios) {
