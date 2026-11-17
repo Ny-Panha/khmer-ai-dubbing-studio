@@ -3,36 +3,45 @@
 ## Last Session
 - **Environment**: Antigravity IDE
 - **Branch**: `refactor/timeline-core-clean`
-- **Timestamp**: 2026-11-17T13:45:00+07:00
+- **Timestamp**: 2026-11-17T14:07:00+07:00
 
-## Summary: Timeline Core Clean Rebuild — Step 1 & Step 2 (Pure Ops & Invariants R1-R4 Unit Tests)
-- **Branch Created**: `refactor/timeline-core-clean` based on `fix/delete-no-ripple`.
-- **Design Spec**: `.agents/TIMELINE-DESIGN.md` committed (`5f5f3ce`).
-- **Step 1: Pure Operations Module Implemented**:
-  - File: `frontend/src/utils/timelineOps.js` created and committed (`ebde0cc`).
-  - Architecture: Pure functions `(state, args) => { state, applied, reason? }` with zero React dependencies, zero refs, and zero direct API calls.
-  - Implemented ops: `deleteSegment` (R1), `deleteVideoClip` (R2), `deleteGap` (R3), `splitClip` (R4 video), `splitSegment` (R4 segment), `trimClip`, `moveClip`, `autoAlign` (R5 move-only with count guard), and `resetTiming`.
-  - Frontend build verification: `npm --prefix frontend run build` parsed and built cleanly (**2035 modules transformed**, 0 errors).
-- **Step 2: Invariants R1-R4 Unit Tests**:
-  - File: `backend/tests/timeline_pure_ops_r1_r4.test.js` created and committed (`ed0f423`).
-  - **17/17 tests passing**:
-    - **R1: deleteSegment**: Survivor IDs/times intact, no renumbering, no ripple, leading segment delete doesn't snap to 00:00, `videoClips` deep-equal.
-    - **R2: deleteVideoClip**: Deleted dialogue clip becomes ONE continuous Gap, merges with adjacent Gaps, `segments` deep-equal, video track covers [0, duration] continuously.
-    - **R3: deleteGap**: Opening Gap cut shifts film to 00:00, later clips shift left by exact Gap duration, `segments` deep-equal untouched.
-    - **R4: splitClip & splitSegment**: Cuts dialogue, Gap, or fresh episode virtual clip at playhead without selection dependency. Segment split strictly requires selection + playhead containment, and splits Khmer/English/Chinese text.
-  - Regression check: 31/31 passing across related timeline suites.
-- **Strict Scope**: Zero changes outside timeline editing core. Stopped before Phase 2 per instructions.
+## Summary: Phase 2 Step A — Rewire DELETE to Pure TimelineOps
+- **Scope**: Re-wired DELETE operations only in `useClipOperations`, `TimelineEditor`, and `MediaLibrary`. Split, align, trim, move left untouched. Old utils preserved.
+- **Changes Applied**:
+  1. `frontend/src/utils/timelineOps.js`: Exported `isGapClip` helper.
+  2. `frontend/src/hooks/useClipOperations.js`:
+     - Rewired `handleDeleteClip`: Determines if target clip is a Gap via `isGapClip(targetClip)` and calls `deleteGapOp` or `deleteVideoClipOp`.
+     - Rewired `handleDeleteSegment`: Calls `deleteSegmentOp`.
+     - If `!opResult.applied`, displays `opResult.reason` via `showInAppToast` and halts without modifying state or pushing undo.
+     - Preserved exact persistence (`saveTimelineOperationToLocalStorage`, `persistTimelineOperationApi`), single snapshot `pushUndoSnapshot`, audio sync (`syncTimelineAudioApi`), and selection cleanup.
+  3. `frontend/src/components/timeline/TimelineEditor.jsx`:
+     - Rewired `handleDeleteSelected`: If deleting video, calls `onDeleteClip(activeClipId)` or falls back to `deleteGapOp` / `deleteVideoClipOp`. If deleting subtitle, calls `onDeleteSegment(selectedSegKey)` or falls back to `deleteSegmentOp`.
+  4. `frontend/src/components/media/MediaLibrary.jsx`:
+     - Rewired `handleDeleteSegment` fallback to call `deleteSegmentOp`.
+  5. `backend/tests/timeline_ripple_delete_auto_left.test.js`:
+     - Updated static audit assertions in Test 13 to check for `deleteSegmentOp` / `deleteVideoClipOp` / `deleteGapOp`.
+- **Verification**:
+  - `npm --prefix frontend run build`: **2036 modules transformed**, 0 errors.
+  - Unit tests:
+    - Pure Ops R1-R4: `backend/tests/timeline_pure_ops_r1_r4.test.js` (**17/17 passed**).
+    - Step A Real-App Acceptance: `backend/tests/timeline_step_a_real_app_acceptance.test.js` (**3/3 passed**).
+      - Check 1: Delete a voice -> count -1, video clips identical in disk `series.json`; Ctrl+Z restores exact prior state.
+      - Check 2: Delete a middle video clip -> segments identical in disk `series.json`, range becomes one joined Gap; Ctrl+Z restores exact prior state.
+      - Check 3: Delete an opening Gap -> film starts 00:00, segments identical in disk `series.json`; Ctrl+Z restores exact prior state.
+    - Full timeline suite: **75/75 passed** across 14 suites (1 pre-existing failure in `timeline_ui_workflow_fix.test.js` for tooltip regex expectation).
+- **Git State**: Committed (`5855a97`) and pushed to `origin/refactor/timeline-core-clean`.
 
 ## Active Environment
-- Branch: `refactor/timeline-core-clean`
+- Branch: `refactor/timeline-core-clean` (pushed to origin)
 - Backend API: `http://localhost:5000`
 - Frontend: `http://localhost:5173`
 
 ## Next Steps
-- **Phase 2**: Rewire `useClipOperations.js` and `TimelineEditor.jsx` to call pure ops from `frontend/src/utils/timelineOps.js`.
+- **Phase 2 Step B**: Rewire SPLIT (`handleSplitClip`, `executeSplitSegment`) to `timelineOps.splitClip` and `timelineOps.splitSegment`.
+- Phase 2 Step C: Rewire AUTO-ALIGN and RESET TIMING to `timelineOps.autoAlign` and `timelineOps.resetTiming`.
+- Phase 2 Step D: Rewire TRIM and MOVE to `timelineOps.trimClip` and `timelineOps.moveClip`.
 - Phase 3: Playback mapping monotonic fix in `useVideoPlayback.js`.
 - Phase 4: Duration display verification (R7).
-- Full acceptance tests verification.
 
 ## Summary: Unconditional Video Split Under Playhead & Fresh Episode Virtual Materialization
 - **Problem Solved**: Toolbar scissors failed with "គ្មាន clip នៅត្រង់ playhead ទេ" on fresh episodes when video clips were unselected, and unselected segments previously hijacked playhead splits.
