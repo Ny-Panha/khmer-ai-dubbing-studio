@@ -3,6 +3,7 @@ import { Film, Sparkles, Subtitles, Layers, AlertCircle, Plus, CheckCircle2, Arr
 import { uploadVideoFile } from '../../services/api';
 import { parseTimeToSeconds, parseTimestampToSeconds, formatMinSec } from '../../utils/timestampUtils';
 import { deleteSegmentByIdOrIndex } from '../../utils/timelineUtils';
+import { deleteSegment as deleteSegmentOp } from '../../utils/timelineOps';
 import { filterScriptSegments } from '../../utils/scriptSearchUtils';
 
 import MediaUploadTab from './MediaUploadTab';
@@ -272,7 +273,12 @@ function MediaLibrary({
       onDeleteSegment(segIdOrIdx);
       return;
     }
-    const updated = deleteSegmentByIdOrIndex(scriptData?.segments || [], segIdOrIdx, { ripple: false, preserveIds: true });
+    const opResult = deleteSegmentOp(
+      { videoClips: videoClips || [], segments: scriptData?.segments || [] },
+      { segKey: segIdOrIdx }
+    );
+    if (!opResult.applied) return;
+    const updated = opResult.state.segments;
     if (onUpdateSegments) {
       onUpdateSegments(updated);
     } else if (onUpdateScript) {
@@ -281,7 +287,7 @@ function MediaLibrary({
         segments: updated,
       });
     }
-  }, [onDeleteSegment, scriptData, onUpdateSegments, onUpdateScript]);
+  }, [onDeleteSegment, videoClips, scriptData, onUpdateSegments, onUpdateScript]);
 
   const handlePlayLine = useCallback((url, segId) => {
     if (!url) return;

@@ -26,7 +26,7 @@ import {
 // ─── Helpers ────────────────────────────────────────────────────────
 
 /** Check if a clip is a Gap */
-function isGapClip(clip) {
+export function isGapClip(clip) {
   if (!clip) return false;
   if (clip.isDialogue === false && (!clip.name || clip.name === 'Gap')) return true;
   return /^Gap(?: \(Part \d+\))?$/i.test(clip.name || '') || (clip.id && String(clip.id).startsWith('clip-gap'));

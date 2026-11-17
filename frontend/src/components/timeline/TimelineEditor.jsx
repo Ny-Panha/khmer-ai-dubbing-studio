@@ -11,6 +11,12 @@ import {
   computeTimelineScrollForTime,
   isSegmentMatch,
 } from '../../utils/timelineUtils';
+import {
+  deleteSegment as deleteSegmentOp,
+  deleteVideoClip as deleteVideoClipOp,
+  deleteGap as deleteGapOp,
+  isGapClip,
+} from '../../utils/timelineOps';
 
 import TimelineToolbar from './TimelineToolbar';
 import TimelineTrackHeaders from './TimelineTrackHeaders';
@@ -1522,8 +1528,21 @@ function TimelineEditor({
 
   const handleDeleteSelected = useCallback(() => {
     if (selectedClipKind === 'video') {
-      if (canDeleteVideo && onDeleteClip) {
-        onDeleteClip(activeClipId);
+      if (canDeleteVideo) {
+        if (onDeleteClip) {
+          onDeleteClip(activeClipId);
+        } else if (onUpdateClips) {
+          const targetClip = (videoClips || []).find((c) => c.id === activeClipId);
+          if (targetClip) {
+            const currentState = { videoClips: videoClips || [], segments: scriptSegments || [] };
+            const opResult = isGapClip(targetClip)
+              ? deleteGapOp(currentState, { clipId: activeClipId })
+              : deleteVideoClipOp(currentState, { clipId: activeClipId, totalDuration: duration });
+            if (opResult.applied) {
+              onUpdateClips(opResult.state.videoClips);
+            }
+          }
+        }
         if (onSelectClip) onSelectClip(null);
         if (onSelectSegment) onSelectSegment(null);
         if (onSelectClipKind) onSelectClipKind(null);
@@ -1537,14 +1556,10 @@ function TimelineEditor({
       if (onDeleteSegment) {
         onDeleteSegment(selectedSegKey);
       } else {
-        const segmentIndex = findSegmentIndex(scriptSegments, selectedSegKey);
-        const segment = segmentIndex !== -1 ? scriptSegments[segmentIndex] : null;
-        const segmentKey = segment
-          ? (segment._uid || segment.id || segment.segmentId || segmentIndex)
-          : selectedSegKey;
-        const updated = deleteSegmentByIdOrIndex(scriptSegments, segmentKey, { ripple: false, preserveIds: true });
-        if (onUpdateSegments) {
-          onUpdateSegments(updated, false, true);
+        const currentState = { videoClips: videoClips || [], segments: scriptSegments || [] };
+        const opResult = deleteSegmentOp(currentState, { segKey: selectedSegKey });
+        if (opResult.applied && onUpdateSegments) {
+          onUpdateSegments(opResult.state.segments, false, true);
         }
       }
       setSelectedSubId(null);
@@ -1559,11 +1574,24 @@ function TimelineEditor({
 
     if (selectedClipKind) return;
 
-    if (canDeleteVideo && onDeleteClip) {
-      onDeleteClip(activeClipId);
+    if (canDeleteVideo) {
+      if (onDeleteClip) {
+        onDeleteClip(activeClipId);
+      } else if (onUpdateClips) {
+        const targetClip = (videoClips || []).find((c) => c.id === activeClipId);
+        if (targetClip) {
+          const currentState = { videoClips: videoClips || [], segments: scriptSegments || [] };
+          const opResult = isGapClip(targetClip)
+            ? deleteGapOp(currentState, { clipId: activeClipId })
+            : deleteVideoClipOp(currentState, { clipId: activeClipId, totalDuration: duration });
+          if (opResult.applied) {
+            onUpdateClips(opResult.state.videoClips);
+          }
+        }
+      }
       if (onSelectClip) onSelectClip(null);
     }
-  }, [selectedClipKind, canDeleteSubtitle, canDeleteVideo, selectedSegKey, scriptSegments, onDeleteSegment, onUpdateSegments, onSelectSegment, onDeleteClip, onSelectClip, onSelectClipKind, activeClipId]);
+  }, [selectedClipKind, canDeleteSubtitle, canDeleteVideo, selectedSegKey, scriptSegments, videoClips, duration, onDeleteSegment, onUpdateSegments, onSelectSegment, onDeleteClip, onUpdateClips, onSelectClip, onSelectClipKind, activeClipId]);
 
 
   // 1. Pure 60FPS Hardware GPU Playhead Animation & 1:1 In-Sync Smooth Center Scroll

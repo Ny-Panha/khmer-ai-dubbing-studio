@@ -10,6 +10,12 @@ import {
   autoAlignVoiceSegments,
   resetSegmentsToSourceTiming,
 } from '../utils/timelineUtils';
+import {
+  deleteSegment as deleteSegmentOp,
+  deleteVideoClip as deleteVideoClipOp,
+  deleteGap as deleteGapOp,
+  isGapClip,
+} from '../utils/timelineOps';
 import { parseTimeToSeconds, formatTimecode, formatMinSec, getSegmentAudioDuration } from '../utils/timestampUtils';
 import { splitKhmerTextIntoHalves, splitSegmentIntoNaturalSentences } from '../utils/khmerTextSplitter';
 import { buildSpeakerRegistry } from '../utils/speakerUtils';
@@ -902,17 +908,27 @@ export function useClipOperations({
     const targetClipId = clipId !== null && clipId !== undefined ? clipId : activeClipId;
     if (!targetClipId) return;
 
-    const targetClip = videoClips.find((c) => c.id === targetClipId);
+    const targetClip = (videoClips || []).find((c) => c.id === targetClipId);
     if (!targetClip) return;
-    pushUndoSnapshot(videoClips, scriptData?.segments || []);
 
-    const updated = deleteClipById(videoClips, targetClipId, {
-      allowEmpty: true,
-      ripple: false,
-      preserveIds: true,
-      gapOnDelete: true,
-      totalDuration: duration,
-    });
+    const currentState = {
+      videoClips: videoClips || [],
+      segments: scriptData?.segments || [],
+    };
+
+    const isTargetGap = isGapClip(targetClip);
+    const opResult = isTargetGap
+      ? deleteGapOp(currentState, { clipId: targetClipId })
+      : deleteVideoClipOp(currentState, { clipId: targetClipId, totalDuration: duration });
+
+    if (!opResult.applied) {
+      if (opResult.reason) showInAppToast(opResult.reason);
+      return;
+    }
+
+    pushUndoSnapshot(videoClips, scriptData?.segments || []);
+    const updated = opResult.state.videoClips;
+
     const localSave = saveTimelineOperationToLocalStorage({
       seriesId,
       episodeId,
@@ -955,15 +971,27 @@ export function useClipOperations({
     const targetKey = segIdOrIdx !== null && segIdOrIdx !== undefined ? segIdOrIdx : selectedSegmentId;
     if (targetKey === null || targetKey === undefined) return;
 
-    pushUndoSnapshot(videoClips, scriptData.segments);
     const targetSegIdx = findSegmentIndex(scriptData.segments, targetKey);
     const targetSeg = targetSegIdx !== -1 ? scriptData.segments[targetSegIdx] : null;
 
     const segmentKey = targetSeg
       ? (targetSeg._uid || targetSeg.id || targetSeg.segmentId || targetSegIdx)
       : targetKey;
-    const updated = deleteSegmentByIdOrIndex(scriptData.segments, segmentKey, { ripple: false, preserveIds: true });
-    if (updated === scriptData.segments) return;
+
+    const currentState = {
+      videoClips: videoClips || [],
+      segments: scriptData.segments,
+    };
+
+    const opResult = deleteSegmentOp(currentState, { segKey: segmentKey });
+    if (!opResult.applied) {
+      if (opResult.reason) showInAppToast(opResult.reason);
+      return;
+    }
+
+    pushUndoSnapshot(videoClips, scriptData.segments);
+    const updated = opResult.state.segments;
+
     const localSave = saveTimelineOperationToLocalStorage({
       seriesId,
       episodeId,

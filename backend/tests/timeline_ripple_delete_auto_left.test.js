@@ -388,8 +388,8 @@ describe('Remove-only timeline delete', () => {
     const segmentDeleteHandler = hookCode.slice(hookCode.indexOf('const handleDeleteSegment'), hookCode.indexOf('// Update Timeline Subtitles'));
     const deleteSelectedHandler = editorCode.slice(editorCode.indexOf('const handleDeleteSelected'), editorCode.indexOf('}, [selectedClipKind'));
 
-    assert.ok(hookCode.includes('deleteSegmentByIdOrIndex(scriptData.segments, segmentKey, { ripple: false, preserveIds: true })'));
-    assert.ok(hookCode.includes('gapOnDelete: true'));
+    assert.ok(hookCode.includes('deleteSegmentOp(') || hookCode.includes('deleteSegment('));
+    assert.ok(hookCode.includes('deleteVideoClipOp(') || hookCode.includes('deleteVideoClip('));
     assert.ok(clipDeleteHandler.includes('totalDuration: duration'));
     assert.ok(clipDeleteHandler.includes("track: 'videoClips'"));
     assert.ok(clipDeleteHandler.includes('persistTimelineOperationApi'));
@@ -405,8 +405,8 @@ describe('Remove-only timeline delete', () => {
     assert.ok(!deleteSelectedHandler.includes('matchingClip'));
     assert.ok(!deleteSelectedHandler.includes('onDeleteClip(matchingClip'));
     assert.ok(!editorCode.includes("lastSelectedType === 'video' || selectedClipKind === 'video'"));
-    assert.ok(editorCode.includes('{ ripple: false, preserveIds: true }'));
-    assert.ok(mediaLibraryCode.includes('{ ripple: false, preserveIds: true }'));
+    assert.ok(editorCode.includes('deleteSegmentOp(') || editorCode.includes('deleteSegment('));
+    assert.ok(mediaLibraryCode.includes('deleteSegmentOp(') || mediaLibraryCode.includes('deleteSegment('));
     assert.ok(tracksCode.includes('const segmentNumber = seg.segmentId ?? seg.id ?? idx + 1;'));
     assert.ok(tracksCode.includes('const compactIdLabel = `#${segmentNumber}'));
     assert.equal((clipDeleteHandler.match(/pushUndoSnapshot\(/g) || []).length, 1);
