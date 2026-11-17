@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { formatMinSec, getSegmentAudioDuration } from '../../utils/timestampUtils';
+import { formatMinSec, getSegmentAudioDuration, parseTimeToSeconds } from '../../utils/timestampUtils';
 import {
   getPixelsPerSecond,
   trimClip,
@@ -9,6 +9,7 @@ import {
   findSegmentIndex,
   resolveSegmentAtTime,
   computeTimelineScrollForTime,
+  isSegmentMatch,
 } from '../../utils/timelineUtils';
 
 import TimelineToolbar from './TimelineToolbar';

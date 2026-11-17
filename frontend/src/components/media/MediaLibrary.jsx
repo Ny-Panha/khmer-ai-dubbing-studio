@@ -437,8 +437,10 @@ function MediaLibrary({
           audioStage={audioStage}
           episodeId={episodeId}
           seriesId={seriesId}
+          activeSeries={activeSeries}
           activeEpisode={activeEpisode}
           onUpdateScript={onUpdateScript}
+          apiKey={apiKey}
         />
       )}
 

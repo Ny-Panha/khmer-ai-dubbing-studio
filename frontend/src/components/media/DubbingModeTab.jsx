@@ -71,8 +71,10 @@ export default function DubbingModeTab({
   audioStage = '',
   episodeId = null,
   seriesId = null,
+  activeSeries = null,
   activeEpisode = null,
   onUpdateScript = null,
+  apiKey = null,
 }) {
   const [generationMode, setGenerationMode] = useState(
     activeEpisode?.generationMode ||
@@ -124,12 +126,13 @@ export default function DubbingModeTab({
       for (let i = 0; i < count; i += BATCH_CHUNK) {
         const slice = currentSegments.slice(i, i + BATCH_CHUNK);
         try {
+          const resolvedSeriesId = seriesId || activeSeries?.id || activeEpisode?.seriesId || episodeId;
           const res = await retranslateAllSegmentsApi({
             segments: slice,
-            seriesId: activeSeries?.id || episodeId,
+            seriesId: resolvedSeriesId,
             episodeId,
             options: { style: 'compact' },
-            apiKey: undefined,
+            apiKey: apiKey || undefined,
           });
           if (res?.success && Array.isArray(res.segments)) {
             const resultMap = new Map();

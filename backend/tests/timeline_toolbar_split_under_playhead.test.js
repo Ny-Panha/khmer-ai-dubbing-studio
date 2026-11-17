@@ -220,3 +220,13 @@ test('Test (d): fresh episode with no selection and no segments splits the video
   assert.equal(videoSplitResult.newClips[1].end, 286);
   assert.equal(videoSplitResult.activeClipId, videoSplitResult.newClips[0].id, 'First resulting part is selected');
 });
+
+test('Test (e): TimelineEditor and DubbingModeTab imports and references contract', () => {
+  const timelineEditorSrc = fs.readFileSync(path.join(__dirname, '../../frontend/src/components/timeline/TimelineEditor.jsx'), 'utf8');
+  assert.ok(timelineEditorSrc.includes('isSegmentMatch'), 'TimelineEditor must import isSegmentMatch');
+  assert.ok(timelineEditorSrc.includes('parseTimeToSeconds'), 'TimelineEditor must import parseTimeToSeconds');
+
+  const dubbingModeTabSrc = fs.readFileSync(path.join(__dirname, '../../frontend/src/components/media/DubbingModeTab.jsx'), 'utf8');
+  assert.ok(dubbingModeTabSrc.includes('activeSeries = null'), 'DubbingModeTab must accept activeSeries prop');
+  assert.ok(dubbingModeTabSrc.includes('resolvedSeriesId = seriesId || activeSeries?.id || activeEpisode?.seriesId || episodeId'), 'DubbingModeTab must resolve seriesId safely without reference error');
+});

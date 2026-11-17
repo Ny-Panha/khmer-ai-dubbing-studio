@@ -3,7 +3,26 @@
 ## Last Session
 - **Environment**: Antigravity IDE
 - **Branch**: `fix/delete-no-ripple`
-- **Timestamp**: 2026-11-17T13:02:00+07:00
+- **Timestamp**: 2026-11-17T13:08:00+07:00
+
+## Summary: Fix ReferenceErrors in DubbingModeTab & TimelineEditor
+- **Problems Fixed**:
+  1. `DubbingModeTab.jsx`: `ReferenceError: activeSeries is not defined` during 1-Click Auto Compact "📝 ខ្លីចំអត្ថន័យ" batch execution. `activeSeries` was referenced without being in scope or props.
+  2. `TimelineEditor.jsx`: `ReferenceError: isSegmentMatch is not defined` in `canSplit` memo. Neither `isSegmentMatch` nor `parseTimeToSeconds` were imported.
+- **Changes Applied**:
+  - `TimelineEditor.jsx`: Imported `isSegmentMatch` from `../../utils/timelineUtils` and `parseTimeToSeconds` from `../../utils/timestampUtils`.
+  - `DubbingModeTab.jsx`: Added `activeSeries = null` and `apiKey = null` to props; resolved series ID safely via `const resolvedSeriesId = seriesId || activeSeries?.id || activeEpisode?.seriesId || episodeId;` and forwarded `apiKey`.
+  - `MediaLibrary.jsx`: Passed `activeSeries={activeSeries}` and `apiKey={apiKey}` to `<DubbingModeTab />`.
+  - `backend/tests/timeline_toolbar_split_under_playhead.test.js`: Added Test (e) verifying reference/import contracts.
+- **Verification**:
+  - `npm --prefix frontend run build`: **2035 modules transformed**, 0 errors.
+  - `node --test backend/tests/timeline_toolbar_split_under_playhead.test.js`: **6/6 passed**.
+
+## Active Environment
+- Branch: `fix/delete-no-ripple`; Backend API `http://localhost:5000`; Frontend `http://localhost:5173`.
+
+## Next Steps
+- Commit and push fix to `fix/delete-no-ripple`.
 
 ## Summary: Unconditional Video Split Under Playhead & Fresh Episode Virtual Materialization
 - **Problem Solved**: Toolbar scissors failed with "គ្មាន clip នៅត្រង់ playhead ទេ" on fresh episodes when video clips were unselected, and unselected segments previously hijacked playhead splits.
