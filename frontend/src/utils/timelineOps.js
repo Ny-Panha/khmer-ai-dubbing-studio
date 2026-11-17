@@ -14,7 +14,6 @@
 import {
   parseTimeToSeconds,
   formatMinSec,
-  formatTimecode,
   getSegmentAudioDuration,
   hasSegmentAudio,
 } from './timestampUtils.js';
@@ -297,11 +296,13 @@ export function deleteGap(state, { clipId }) {
 //  length clip of a fresh episode — whether or not anything is selected.
 // ═══════════════════════════════════════════════════════════════════
 
-export function splitClip(state, { splitTime, activeClipId, totalDuration }) {
+export function splitClip(state, { splitTime, activeClipId, totalDuration, clipDefaults = {} }) {
   const { videoClips, segments } = state;
   let targetClips = Array.isArray(videoClips) && videoClips.length > 0
     ? [...videoClips]
     : [];
+
+  const roundedSplit = r3(splitTime);
 
   // Materialize virtual/empty clips for a fresh episode
   const isVirtualOrEmpty = targetClips.length === 0 || (targetClips.length === 1 && (!targetClips[0].end || targetClips[0].end <= targetClips[0].start));
@@ -314,23 +315,24 @@ export function splitClip(state, { splitTime, activeClipId, totalDuration }) {
       end: clipDur,
       sourceStart: 0,
       sourceEnd: clipDur,
-      name: 'Video Clip',
+      duration: clipDur,
+      name: clipDefaults.name || 'Video Clip',
       trackRow: 0,
       trackId: 'video-1',
+      ...clipDefaults,
     }];
   } else if (targetClips.length === 1 && (targetClips[0].start || 0) === 0 && totalDuration > targetClips[0].end && roundedSplit > targetClips[0].end - 0.05) {
     targetClips = [{
       ...targetClips[0],
       end: totalDuration,
       sourceEnd: Math.max(Number(targetClips[0].sourceEnd) || 0, totalDuration),
+      duration: totalDuration,
     }];
   }
 
   if (targetClips.length === 0) {
     return noop(state, 'No video clips to split');
   }
-
-  const roundedSplit = r3(splitTime);
 
   // Find target clip: prefer activeClipId, then any clip containing splitTime
   let targetIndex = -1;
@@ -422,9 +424,6 @@ export function splitSegment(state, { segKey, splitTime }) {
     if (isTrimmed && typeof targetSeg.audioEndSec === 'number' && !isNaN(targetSeg.audioEndSec)) {
       return targetSeg.audioEndSec;
     }
-    const slotEnd = typeof targetSeg.endSec === 'number' && !isNaN(targetSeg.endSec)
-      ? targetSeg.endSec
-      : parseTimeToSeconds(targetSeg.end, effectiveStart + 3.0);
     const audioDur = getSegmentAudioDuration(targetSeg, 0);
     const candidates = [effectiveStart + audioDur];
     if (typeof targetSeg.audioEndSec === 'number' && !isNaN(targetSeg.audioEndSec)) {
@@ -592,10 +591,14 @@ export function splitSegment(state, { segKey, splitTime }) {
     segmentId: idx + 1,
   }));
 
-  return ok({
-    videoClips: deepClone(videoClips), // segments-only split: videoClips unchanged
-    segments: reindexed,
-  });
+  return {
+    state: {
+      videoClips: deepClone(videoClips), // segments-only split: videoClips unchanged
+      segments: reindexed,
+    },
+    applied: true,
+    newSegmentId: uid2,
+  };
 }
 
 // ═══════════════════════════════════════════════════════════════════

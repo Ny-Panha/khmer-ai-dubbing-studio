@@ -14,6 +14,8 @@ import {
   deleteSegment as deleteSegmentOp,
   deleteVideoClip as deleteVideoClipOp,
   deleteGap as deleteGapOp,
+  splitClip as splitClipOp,
+  splitSegment as splitSegmentOp,
   isGapClip,
 } from '../utils/timelineOps';
 import { parseTimeToSeconds, formatTimecode, formatMinSec, getSegmentAudioDuration } from '../utils/timestampUtils';
@@ -135,258 +137,14 @@ export function useClipOperations({
     const roundedSplit = parseFloat(targetTime.toFixed(3));
 
     const segments = scriptData?.segments || [];
-    let currentClips = videoClips;
-    const isVirtualOrEmpty = !Array.isArray(currentClips) || currentClips.length === 0 || (currentClips.length === 1 && (!currentClips[0].end || currentClips[0].end <= currentClips[0].start));
-
-    if (isVirtualOrEmpty) {
-      const clipDur = totalDur > 0 ? totalDur : Math.max(30, roundedSplit + 10);
-      const initialClipId = `clip-${Date.now()}`;
-      const clipName = selectedVideo?.originalFilename || selectedVideo?.fileName || 'Video 1';
-      currentClips = [
-        {
-          id: initialClipId,
-          start: 0,
-          end: clipDur,
-          sourceStart: 0,
-          sourceEnd: clipDur,
-          duration: clipDur,
-          name: clipName,
-          trackRow: 0,
-          trackId: 'video-1',
-          videoUrl: selectedVideo?.videoUrl || null,
-          videoId: selectedVideo?.videoId || null,
-        }
-      ];
-    } else if (currentClips.length === 1 && (currentClips[0].start || 0) === 0 && totalDur > currentClips[0].end && roundedSplit > currentClips[0].end - 0.05) {
-      currentClips = [
-        {
-          ...currentClips[0],
-          end: totalDur,
-          sourceEnd: Math.max(Number(currentClips[0].sourceEnd) || 0, totalDur),
-          duration: totalDur,
-        }
-      ];
-    }
-
-    const getSegTiming = (s) => {
-      if (!s) return { sStart: 0, sEnd: 0, effectiveStart: 0, effectiveEnd: 0 };
-      const isTrimmed = Boolean(s.audioTrimmed || s.userTrimmed);
-      const effectiveStart = typeof s.audioStartSec === 'number' && !isNaN(s.audioStartSec)
-        ? s.audioStartSec
-        : (typeof s.startSec === 'number' && !isNaN(s.startSec) ? s.startSec : parseTimeToSeconds(s.start, 0));
-      const slotEnd = typeof s.endSec === 'number' && !isNaN(s.endSec)
-        ? s.endSec
-        : parseTimeToSeconds(s.end, effectiveStart + 3.0);
-      const audioDur = getSegmentAudioDuration(s, 0);
-
-      let effectiveEnd;
-      if (isTrimmed && typeof s.audioEndSec === 'number' && !isNaN(s.audioEndSec)) {
-        effectiveEnd = s.audioEndSec;
-      } else {
-        const candidates = [effectiveStart + audioDur];
-        if (typeof s.audioEndSec === 'number' && !isNaN(s.audioEndSec)) {
-          candidates.push(s.audioEndSec);
-        }
-        effectiveEnd = Math.max(...candidates);
-      }
-
-      return {
-        sStart: effectiveStart,
-        sEnd: effectiveEnd,
-        effectiveStart,
-        effectiveEnd,
-      };
-    };
-
-    const isInsideSeg = (s, allowSeamEnd = false) => {
-      if (!s) return false;
-      const { effectiveStart, effectiveEnd } = getSegTiming(s);
-      const endLimit = allowSeamEnd ? effectiveEnd : effectiveEnd - 0.05;
-      return roundedSplit > effectiveStart + 0.05 && roundedSplit < endLimit;
-    };
-
-    // Helper: Execute segment split logic (reused for (a) and (c))
-    const executeSplitSegment = (splitSegIdx) => {
-      const targetSeg = segments[splitSegIdx];
-      const { effectiveStart, effectiveEnd } = getSegTiming(targetSeg);
-      const sStart = effectiveStart;
-      const sEnd = effectiveEnd;
-      const dur = Math.max(0.2, sEnd - sStart);
-
-      // Intelligent text splitting for Khmer & English
-      const fullKhmer = (targetSeg.khmerTranslatedText || targetSeg.khmerText || targetSeg.khmer || '').trim();
-      let [part1, part2] = splitKhmerTextIntoHalves(fullKhmer);
-      if (!part2) {
-        const words = fullKhmer.split(/\s+/).filter(Boolean);
-        if (words.length >= 2) {
-          const ratio = (roundedSplit - sStart) / Math.max(0.1, dur);
-          const midWord = Math.max(1, Math.min(words.length - 1, Math.round(words.length * ratio)));
-          part1 = words.slice(0, midWord).join(' ');
-          part2 = words.slice(midWord).join(' ');
-        } else {
-          part1 = fullKhmer;
-          part2 = fullKhmer;
-        }
-      }
-
-      // Proportional text splitting for Chinese
-      const fullChinese = (targetSeg.chineseText || targetSeg.originalChineseText || targetSeg.originalText || targetSeg.original || targetSeg.chinese || '').trim();
-      let cnPart1 = fullChinese;
-      let cnPart2 = '';
-      if (fullChinese.length > 4) {
-        const ratio = (roundedSplit - sStart) / Math.max(0.1, dur);
-        const splitIdx = Math.max(1, Math.min(fullChinese.length - 1, Math.round(fullChinese.length * ratio)));
-        const puncts = ['。', '？', '！', '…', '，', '；', '\n'];
-        let bestPunctIdx = -1;
-        let minPunctDiff = Infinity;
-        for (const p of puncts) {
-          let pIdx = fullChinese.indexOf(p);
-          while (pIdx !== -1) {
-            const diff = Math.abs(pIdx + 1 - splitIdx);
-            if (diff < minPunctDiff && diff < fullChinese.length * 0.35) {
-              minPunctDiff = diff;
-              bestPunctIdx = pIdx + 1;
-            }
-            pIdx = fullChinese.indexOf(p, pIdx + 1);
-          }
-        }
-        const finalCnSplit = bestPunctIdx !== -1 ? bestPunctIdx : splitIdx;
-        cnPart1 = fullChinese.slice(0, finalCnSplit).trim();
-        cnPart2 = fullChinese.slice(finalCnSplit).trim();
-      }
-
-      let engPart1 = targetSeg.english || '';
-      let engPart2 = targetSeg.english || '';
-      if (targetSeg.english) {
-        const engWords = targetSeg.english.trim().split(/\s+/).filter(Boolean);
-        if (engWords.length >= 2) {
-          const ratio = (roundedSplit - sStart) / Math.max(0.1, dur);
-          const mid = Math.max(1, Math.min(engWords.length - 1, Math.round(engWords.length * ratio)));
-          engPart1 = engWords.slice(0, mid).join(' ');
-          engPart2 = engWords.slice(mid).join(' ');
-        }
-      }
-
-      const dur1 = parseFloat((roundedSplit - sStart).toFixed(2));
-      const dur2 = parseFloat((sEnd - roundedSplit).toFixed(2));
-
-      const uid1 = targetSeg._uid ? `${targetSeg._uid}_a` : `seg_${Date.now()}_a_${Math.random().toString(36).substr(2, 4)}`;
-      const uid2 = `seg_${Date.now()}_b_${Math.random().toString(36).substr(2, 4)}`;
-      const hasAudio = Boolean(targetSeg.audioGenerated || targetSeg.audioFile || targetSeg.audioUrl);
-      const origOffset = typeof targetSeg.audioOffset === 'number' && !isNaN(targetSeg.audioOffset) ? targetSeg.audioOffset : 0;
-
-      const seg1 = {
-        ...targetSeg,
-        _uid: uid1,
-        start: formatMinSec(sStart),
-        end: formatMinSec(roundedSplit),
-        startSec: sStart,
-        endSec: roundedSplit,
-        audioStart: formatMinSec(sStart),
-        audioEnd: formatMinSec(roundedSplit),
-        audioStartSec: sStart,
-        audioEndSec: roundedSplit,
-        audioOffset: origOffset,
-        audioDurationSec: dur1,
-        finalAudioDuration: dur1,
-        audioDuration: dur1,
-        originalAudioDuration: dur1,
-        rawAudioDur: dur1,
-        audioTrimmed: true,
-        userTrimmed: true,
-        khmer: part1,
-        khmerText: part1,
-        khmerTranslatedText: part1,
-        chineseText: cnPart1,
-        original: cnPart1,
-        originalText: cnPart1,
-        originalChineseText: cnPart1,
-        english: engPart1,
-        audioGenerated: hasAudio,
-        audioFile: targetSeg.audioFile || null,
-        audioPath: targetSeg.audioPath || null,
-        audioUrl: targetSeg.audioUrl || null,
-        audioFileName: targetSeg.audioFileName || null,
-        rawAudioPath: targetSeg.rawAudioPath || null,
-        rawAudioFile: targetSeg.rawAudioFile || null,
-        audioOutdated: false,
-        ttsStatus: targetSeg.ttsStatus || (hasAudio ? 'ready' : 'pending'),
-        userShifted: true,
-      };
-
-      const seg2 = {
-        ...targetSeg,
-        _uid: uid2,
-        id: `seg-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
-        start: formatMinSec(roundedSplit),
-        end: formatMinSec(sEnd),
-        startSec: roundedSplit,
-        endSec: sEnd,
-        audioStart: formatMinSec(roundedSplit),
-        audioEnd: formatMinSec(sEnd),
-        audioStartSec: roundedSplit,
-        audioEndSec: sEnd,
-        audioOffset: parseFloat((origOffset + dur1).toFixed(2)),
-        audioDurationSec: dur2,
-        finalAudioDuration: dur2,
-        audioDuration: dur2,
-        originalAudioDuration: dur2,
-        rawAudioDur: dur2,
-        audioTrimmed: true,
-        userTrimmed: true,
-        khmer: part2,
-        khmerText: part2,
-        khmerTranslatedText: part2,
-        chineseText: cnPart2 || cnPart1,
-        original: cnPart2 || cnPart1,
-        originalText: cnPart2 || cnPart1,
-        originalChineseText: cnPart2 || cnPart1,
-        english: engPart2,
-        audioGenerated: hasAudio,
-        audioFile: targetSeg.audioFile || null,
-        audioPath: targetSeg.audioPath || null,
-        audioUrl: targetSeg.audioUrl || null,
-        audioFileName: targetSeg.audioFileName || null,
-        rawAudioPath: targetSeg.rawAudioPath || null,
-        rawAudioFile: targetSeg.rawAudioFile || null,
-        audioOutdated: false,
-        ttsStatus: targetSeg.ttsStatus || (hasAudio ? 'ready' : 'pending'),
-        userShifted: true,
-      };
-
-      const nextSegments = [...segments];
-      nextSegments.splice(splitSegIdx, 1, seg1, seg2);
-      const reindexed = nextSegments.map((item, idx) => ({
-        ...item,
-        id: idx + 1,
-        segmentId: idx + 1,
-      }));
-
-      // Snapshot with current uncut videoClips to preserve unbroken video state
-      pushUndoSnapshot(currentClips, segments);
-      setScriptData((prev) => (prev ? { ...prev, segments: reindexed, updatedAt: Date.now() } : null));
-      if (setSelectedSegmentId) setSelectedSegmentId(uid2);
-
-      // Re-sync timeline narration audio
-      if (audioGenerated && syncTimelineAudioApi) {
-        if (syncAudioTimeoutRef?.current) clearTimeout(syncAudioTimeoutRef.current);
-        syncTimelineAudioApi(reindexed, getProjectName(), getVideoId(), episodeId, seriesId).then((res) => {
-          if (res?.fullAudioUrl && setFullAudioUrl) {
-            setFullAudioUrl(`${res.fullAudioUrl.split('?')[0]}?t=${Date.now()}`);
-            if (setFullAudioPath) setFullAudioPath(res.fullAudioPath);
-          }
-        }).catch((err) => console.warn('Audio sync after segment split error:', err.message));
-      }
-
-      return true;
-    };
+    const currentClips = videoClips || [];
 
     const isTargetingVideoClip = selectedClipKind === 'video' || Boolean(
       targetId && currentClips.some((c) => c.id === targetId)
     );
 
     // (a) split the selected segment only when the video track is not explicitly targeted
-    let selectedSegIdx = -1;
+    let selectedSegKey = null;
     if (!isTargetingVideoClip) {
       const isSegmentExplicitlySelected = (selectedClipKind === 'voice' || selectedClipKind === 'subtitle') || (
         selectedClipKind !== 'video' && Boolean(targetId && segments.some((s, idx) => isSegmentMatch(s, targetId, idx)))
@@ -394,77 +152,77 @@ export function useClipOperations({
       if (isSegmentExplicitlySelected) {
         const activeSegKey = targetId !== null && targetId !== undefined ? targetId : selectedSegmentId;
         if (activeSegKey !== null && activeSegKey !== undefined && segments.length > 0) {
-          selectedSegIdx = segments.findIndex((s, idx) => isSegmentMatch(s, activeSegKey, idx) && isInsideSeg(s, true));
-          if (selectedSegIdx === -1) {
-            const fallbackIdx = findSegmentIndex(segments, activeSegKey);
-            if (fallbackIdx !== -1 && isInsideSeg(segments[fallbackIdx], true)) {
-              selectedSegIdx = fallbackIdx;
-            }
-          }
+          selectedSegKey = activeSegKey;
         }
       }
     }
 
-    if (selectedSegIdx !== -1) {
-      return executeSplitSegment(selectedSegIdx);
+    const currentState = {
+      videoClips: currentClips,
+      segments,
+    };
+
+    if (selectedSegKey !== null) {
+      const segOpResult = splitSegmentOp(currentState, {
+        segKey: selectedSegKey,
+        splitTime: roundedSplit,
+      });
+
+      if (segOpResult.applied) {
+        pushUndoSnapshot(currentClips, segments);
+        setScriptData((prev) => (prev ? { ...prev, segments: segOpResult.state.segments, updatedAt: Date.now() } : null));
+        if (setSelectedSegmentId && segOpResult.newSegmentId) {
+          setSelectedSegmentId(segOpResult.newSegmentId);
+        }
+
+        // Re-sync timeline narration audio
+        if (audioGenerated && syncTimelineAudioApi) {
+          if (syncAudioTimeoutRef?.current) clearTimeout(syncAudioTimeoutRef.current);
+          syncTimelineAudioApi(segOpResult.state.segments, getProjectName(), getVideoId(), episodeId, seriesId).then((res) => {
+            if (res?.fullAudioUrl && setFullAudioUrl) {
+              setFullAudioUrl(`${res.fullAudioUrl.split('?')[0]}?t=${Date.now()}`);
+              if (setFullAudioPath) setFullAudioPath(res.fullAudioPath);
+            }
+          }).catch((err) => console.warn('Audio sync after segment split error:', err.message));
+        }
+
+        return true;
+      }
+      // If playhead was outside the selected segment, fall through to split the video clip under playhead per spec R4!
     }
 
     // (b) split the video clip under the playhead, including Gaps
-    // Branch (c) note: unselected segments are not auto-split by toolbar scissors; isInsideSeg(s, false) preserved for strict seam check.
     const activeVideoId = isTargetingVideoClip ? targetId : activeClipId;
+    const clipDefaults = {
+      name: selectedVideo?.originalFilename || selectedVideo?.fileName || 'Video 1',
+      videoUrl: selectedVideo?.videoUrl || null,
+      videoId: selectedVideo?.videoId || null,
+    };
 
-    const videoSplitResult = splitClipAtTime(currentClips, roundedSplit, totalDur, activeVideoId);
-    if (videoSplitResult) {
+    const clipOpResult = splitClipOp(currentState, {
+      splitTime: roundedSplit,
+      activeClipId: activeVideoId,
+      totalDuration: totalDur,
+      clipDefaults,
+    });
+
+    if (clipOpResult.applied) {
       pushUndoSnapshot(currentClips, segments);
-      setVideoClips(videoSplitResult.newClips);
+      setVideoClips(clipOpResult.state.videoClips);
       if (typeof setVideoClipsUpdatedAt === 'function') {
         setVideoClipsUpdatedAt(Date.now());
       }
-      setActiveClipId(videoSplitResult.activeClipId);
+      if (clipOpResult.activeClipId) {
+        setActiveClipId(clipOpResult.activeClipId);
+      }
       if (typeof setSelectedClipKind === 'function') {
         setSelectedClipKind('video');
       }
       return true;
     }
 
-    // STEP 2: When no branch matches (no segment, no video clip at the playhead), show brief in-app toast in Khmer
-    // and log the playhead time + nearest segment boundaries to the console.
-    let nearestPrev = null;
-    let nearestNext = null;
-    let minPrevDist = Infinity;
-    let minNextDist = Infinity;
-
-    for (let i = 0; i < segments.length; i++) {
-      const s = segments[i];
-      const timing = getSegTiming(s);
-      if (timing.effectiveEnd <= roundedSplit) {
-        const dist = roundedSplit - timing.effectiveEnd;
-        if (dist < minPrevDist) {
-          minPrevDist = dist;
-          nearestPrev = { index: i, id: s.id, start: timing.effectiveStart, end: timing.effectiveEnd, distSec: parseFloat(dist.toFixed(3)) };
-        }
-      }
-      if (timing.effectiveStart >= roundedSplit) {
-        const dist = timing.effectiveStart - roundedSplit;
-        if (dist < minNextDist) {
-          minNextDist = dist;
-          nearestNext = { index: i, id: s.id, start: timing.effectiveStart, end: timing.effectiveEnd, distSec: parseFloat(dist.toFixed(3)) };
-        }
-      }
-    }
-
-    console.warn(`[Split] ⚠️ គ្មាន clip នៅត្រង់ playhead ទេ (playhead=${roundedSplit.toFixed(3)}s). Nearest segment boundaries:`, {
-      playhead: roundedSplit,
-      nearestPrevSegment: nearestPrev,
-      nearestNextSegment: nearestNext,
-      totalSegments: segments.length,
-      activeTargetId: targetId,
-      selectedSegmentId,
-      activeClipId,
-    });
-
-    showInAppToast('គ្មាន clip នៅត្រង់ playhead ទេ — ដាក់ playhead ឲ្យនៅកណ្ដាល clip');
-
+    // (c) Neither branch applied -> show toast with reason
+    showInAppToast(clipOpResult.reason || 'គ្មាន clip នៅត្រង់ playhead ទេ — ដាក់ playhead ឲ្យនៅកណ្ដាល clip');
     return false;
   };
 
