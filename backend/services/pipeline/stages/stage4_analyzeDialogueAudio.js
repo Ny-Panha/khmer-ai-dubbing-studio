@@ -213,87 +213,6 @@ function safelyParseSpeechSegments(rawText) {
 }
 
 /**
- * Parses gemini-3.5-transcribe output parts and segments words into natural dialogue phrases
- * using punctuation, pauses between words, and duration limits.
- */
-function groupTranscriptionWordsIntoSegments(transcriptionPart, startOffsetSec = 0) {
-  const trans = transcriptionPart?.audioTranscription;
-  if (!trans) return [];
-
-  const rawSpeaker = trans.speakerLabel ? String(trans.speakerLabel).replace('spk:', 'spk_') : 'spk_1';
-  const words = Array.isArray(trans.words) ? trans.words : [];
-
-  // If no word-level timestamps were provided, use the top-level transcript text
-  if (words.length === 0) {
-    const rawText = String(trans.text || '').trim();
-    if (!containsChineseCharacters(rawText)) return [];
-    const localStart = parseOffsetToSeconds(trans.startOffset);
-    const localEnd = parseOffsetToSeconds(trans.endOffset) || localStart + 2.0;
-    const dur = Math.max(0.6, parseFloat((localEnd - localStart).toFixed(2)));
-    const globalStart = parseFloat((startOffsetSec + localStart).toFixed(2));
-    const globalEnd = parseFloat((globalStart + dur).toFixed(2));
-
-    return [{
-      startSec: globalStart,
-      endSec: globalEnd,
-      duration: dur,
-      sourceStartSec: globalStart,
-      sourceEndSec: globalEnd,
-      spokenChineseText: rawText,
-      audioGender: 'unknown',
-      speakerId: rawSpeaker,
-      audioConfidence: 0.95,
-      source: 'audio_asr',
-      evidenceSource: 'audio_asr',
-    }];
-  }
-
-  const segments = [];
-  let currentGroup = [];
-
-  for (let i = 0; i < words.length; i++) {
-    const w = words[i];
-    currentGroup.push(w);
-
-    const isSentencePunctuation = /[。！？?!；;]$/.test(w.word || '');
-    const nextW = words[i + 1];
-    const nextStart = nextW ? parseOffsetToSeconds(nextW.startOffset) : null;
-    const currentEnd = parseOffsetToSeconds(w.endOffset);
-    const isSignificantPause = nextStart !== null && (nextStart - currentEnd >= 0.75);
-    const isDurationLimit = (currentEnd - parseOffsetToSeconds(currentGroup[0].startOffset)) >= 5.5;
-    const isLastWord = i === words.length - 1;
-
-    if ((isSentencePunctuation || isSignificantPause || isDurationLimit || isLastWord) && currentGroup.length > 0) {
-      const segText = currentGroup.map((x) => x.word || '').join('').trim();
-      if (containsChineseCharacters(segText)) {
-        const localStart = parseOffsetToSeconds(currentGroup[0].startOffset);
-        const localEnd = parseOffsetToSeconds(currentGroup[currentGroup.length - 1].endOffset);
-        const dur = Math.max(0.6, parseFloat((localEnd - localStart).toFixed(2)));
-        const globalStart = parseFloat((startOffsetSec + localStart).toFixed(2));
-        const globalEnd = parseFloat((globalStart + dur).toFixed(2));
-
-        segments.push({
-          startSec: globalStart,
-          endSec: globalEnd,
-          duration: dur,
-          sourceStartSec: globalStart,
-          sourceEndSec: globalEnd,
-          spokenChineseText: segText,
-          audioGender: 'unknown',
-          speakerId: rawSpeaker,
-          audioConfidence: 0.95,
-          source: 'audio_asr',
-          evidenceSource: 'audio_asr',
-        });
-      }
-      currentGroup = [];
-    }
-  }
-
-  return segments;
-}
-
-/**
  * Stage 4: Analyze Dialogue Audio
  * First-Class Chinese Speech-to-Text (ASR) & Diarization engine.
  * Works even when NO on-screen subtitles exist.
@@ -847,7 +766,6 @@ Return JSON ONLY matching this schema:
 
 module.exports = {
   analyzeDialogueAudio,
-  groupTranscriptionWordsIntoSegments,
   safelyParseSpeechSegments,
   containsChineseCharacters,
   filterValidChineseAsrSegments,

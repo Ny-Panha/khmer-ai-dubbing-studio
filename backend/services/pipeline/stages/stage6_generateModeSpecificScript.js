@@ -8,15 +8,6 @@ const {
   isExplicitFillerKhmer,
 } = require('../../../utils/translationQuality');
 
-const DRAMA_GENRES = {
-  AUTO: 'auto',
-  ANCIENT: 'ancient',
-  MODERN: 'modern',
-  ACTION: 'action',
-  COMEDY: 'comedy',
-  GENERAL: 'general',
-};
-
 // Full Gemini cascade matching Shared Catalog (all 10 usable dubbing models)
 const STAGE6_CASCADE_MODELS = DUBBING_CASCADE_MODELS;
 
@@ -57,9 +48,6 @@ function isPlaceholderTranslationText(text = '') {
   if (!stripPunctuationForSpeech(cleaned)) return true;
   return false;
 }
-
-// Universal Genre Reference (Series-specific glossaries are provided dynamically via seriesGlossary)
-const CULTIVATION_DRAMA_GLOSSARY = '';
 
 /**
  * Clean any accidental Thai characters or Thai loanwords from Khmer text
@@ -2163,6 +2151,4 @@ module.exports = {
   detectDuplicateTranslations,
   isPlaceholderTranslationText,
   STAGE6_CASCADE_MODELS,
-  DRAMA_GENRES,
-  CULTIVATION_DRAMA_GLOSSARY,
 };

@@ -1261,35 +1261,8 @@ async function generateVoicePreview(voiceId = "km-KH-PisethNeural", customText =
 /**
  * Backward compatibility aliases
  */
-async function generateKhmerSpeech(text, outputPath, voiceId = "km-KH-PisethNeural") {
-  const resolvedVoice = resolveKhmerVoice(voiceId);
-  const dir = path.dirname(outputPath);
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-
-  try {
-    if (resolvedVoice === "google-km-standard") {
-      await synthesizeWithGoogleFallback(text, outputPath);
-    } else {
-      await synthesizeWithEdgeNeural(text, resolvedVoice, outputPath);
-    }
-  } catch (err) {
-    await synthesizeWithGoogleFallback(text, outputPath);
-  }
-
-  const stat = fs.statSync(outputPath);
-  return {
-    outputPath,
-    size: stat.size,
-    voiceId: resolvedVoice,
-  };
-}
-
 async function generateSingleSegmentSpeech(segment, outputDir, options = {}) {
   return await generateSingleSegmentAudio(segment, outputDir, options);
-}
-
-async function generateBatchSpeech(segments, outputDir, options = {}) {
-  return await generateBatchSegmentsAudio(segments, outputDir, options);
 }
 
 module.exports = {
@@ -1315,7 +1288,5 @@ module.exports = {
   resolvePriorSegmentAudioPath,
   cancelTtsJob,
   generateVoicePreview,
-  generateKhmerSpeech,
   generateSingleSegmentSpeech,
-  generateBatchSpeech,
 };

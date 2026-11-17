@@ -84,36 +84,6 @@ function areChineseTextsEquivalent(a = '', b = '') {
   return false;
 }
 
-/**
- * Generate comprehensive sampling timestamps across the entire video or chunk
- * Removes arbitrary sample ceiling so dialogue lines are never skipped.
- * 
- * @param {number} durationSec
- * @param {number} [stepSec=0.75] - ~1.33 fps (ensures every >= 1.0s subtitle is sampled)
- * @param {number} [startOffsetSec=0]
- * @returns {number[]}
- */
-function generateBaseSamplingGrid(durationSec, stepSec = 0.75, startOffsetSec = 0) {
-  const times = [];
-  if (!durationSec || durationSec <= 0) {
-    return [parseFloat((startOffsetSec + 0.5).toFixed(2))];
-  }
-
-  const effectiveStep = Math.max(0.4, Number(stepSec) || 0.75);
-  let cur = startOffsetSec === 0 ? 0.5 : startOffsetSec + 0.3; // standard 0.5s start for initial video
-  const endSec = startOffsetSec + durationSec;
-
-  while (cur < endSec) {
-    times.push(parseFloat(cur.toFixed(2)));
-    cur += effectiveStep;
-  }
-
-  if (times.length === 0 && durationSec > 0) {
-    times.push(parseFloat((startOffsetSec + durationSec / 2).toFixed(2)));
-  }
-  return times;
-}
-
 const CASCADE_VISION_MODELS = VISION_CASCADE_MODELS;
 
 /**
@@ -1228,7 +1198,6 @@ module.exports = {
   normalizeChineseChars,
   stripDecorativeSubtitleNoise,
   areChineseTextsEquivalent,
-  generateBaseSamplingGrid,
   deduplicateFastOcrCues,
   isRetryableVisionError,
   callGeminiVisionWithRetry,
