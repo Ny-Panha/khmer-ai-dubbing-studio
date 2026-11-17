@@ -36,7 +36,6 @@ export default function ClipInspectorPanel({
   playbackError = null,
   onToggleMuteSegment = null,
   onToggleMuteVideoClip = null,
-  onToggleMuteAllCuts = null,
   videoClips = [],
   onUpdateSpeakerVoice = null,
   onAutoSplitSegment = null,
@@ -1210,38 +1209,6 @@ export default function ClipInspectorPanel({
                           )}
                         </button>
                       )}
-
-                      {/* 1-Click: Mute All Cuts Shortcut */}
-                      {onToggleMuteAllCuts && videoClips && videoClips.length > 1 && (() => {
-                        const dialogueClips = videoClips.filter((c) => c.isDialogue);
-                        const targetClips = dialogueClips.length > 0 ? dialogueClips : videoClips;
-                        const areAllCutsMuted = targetClips.length > 0 && targetClips.every((c) => Boolean(c.isMuted));
-                        return (
-                          <button
-                            type="button"
-                            onClick={() => onToggleMuteAllCuts(true)}
-                            title={areAllCutsMuted ? "ចុចដើម្បីបើកសំឡេងដើម Clip កាត់ទាំងអស់ឡើងវិញ" : "ចុចដើម្បីបិទសំឡេងដើម Clip កាត់ទាំងអស់ដោយ 1-Click"}
-                            style={{
-                              padding: '4px 6px',
-                              fontSize: '0.68rem',
-                              fontWeight: 600,
-                              borderRadius: 4,
-                              cursor: 'pointer',
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              justifyContent: 'center',
-                              gap: 4,
-                              border: '1px solid rgba(239, 68, 68, 0.45)',
-                              background: areAllCutsMuted ? 'rgba(239, 68, 68, 0.25)' : 'rgba(239, 68, 68, 0.1)',
-                              color: areAllCutsMuted ? '#fca5a5' : '#f87171',
-                              transition: 'all 0.15s ease',
-                            }}
-                          >
-                            {areAllCutsMuted ? <VolumeX size={11} color="#fca5a5" /> : <Volume2 size={11} color="#f87171" />}
-                            <span style={{ whiteSpace: 'nowrap' }}>{areAllCutsMuted ? 'Unmute All' : 'Mute All'}</span>
-                          </button>
-                        );
-                      })()}
 
                       {/* 2. Single Clip Mute / Unmute Toggle (Khmer AI Voice) */}
                       {onToggleMuteSegment && (

@@ -18,17 +18,11 @@ export default function TimelineTrackHeaders({
   selectedVideo = null,
   scriptSegments = [],
   videoClips = [],
-  onToggleMuteAllCuts = null,
   voiceSettings = null,
   onUpdateVoiceSettings = null,
 }) {
   // Dynamic Unlimited Voice Lanes: Always render headers for all available/empty voice lanes
   const effectiveVoiceRowCount = Math.max(2, voiceRowCount || 2);
-
-  // Compute VIDEO 1 clip mute state
-  const dialogueClips = Array.isArray(videoClips) ? videoClips.filter((c) => c.isDialogue) : [];
-  const targetVideoClips = dialogueClips.length > 0 ? dialogueClips : (Array.isArray(videoClips) ? videoClips : []);
-  const areAllCutsMuted = targetVideoClips.length > 0 && targetVideoClips.every((c) => Boolean(c.isMuted));
 
   // Compute CLEAN BGM mute state (two-way synced with voiceSettings.duckingVolume === 0)
   const isBgmMuted = Boolean(
@@ -42,9 +36,6 @@ export default function TimelineTrackHeaders({
       [trackKey]: nextMuted,
       ...(rIdx === 0 ? { video: nextMuted } : {}),
     }));
-    if (rIdx === 0 && typeof onToggleMuteAllCuts === 'function') {
-      onToggleMuteAllCuts(true);
-    }
   };
 
   const handleToggleCleanBgmMute = () => {

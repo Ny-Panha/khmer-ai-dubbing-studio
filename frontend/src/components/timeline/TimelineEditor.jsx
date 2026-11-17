@@ -62,7 +62,6 @@ function TimelineEditor({
   onAddSegment = null,
   onToggleMuteSegment = null,
   onToggleMuteVideoClip = null,
-  onToggleMuteAllCuts = null,
   canUndo = false,
   canRedo = false,
   onUndo = null,
@@ -1791,7 +1790,6 @@ function TimelineEditor({
         canDeleteVideo={canDeleteVideo}
         onAutoSplitVideo={onAutoSplitVideo}
         videoClips={videoClips}
-        onToggleMuteAllCuts={onToggleMuteAllCuts}
         scriptSegments={scriptSegments}
         onBridgeGaps={onBridgeGaps}
         onAutoAlignNoOverlap={onAutoAlignNoOverlap}
@@ -1836,7 +1834,6 @@ function TimelineEditor({
           selectedVideo={selectedVideo}
           scriptSegments={scriptSegments}
           videoClips={videoClips}
-          onToggleMuteAllCuts={onToggleMuteAllCuts}
           voiceSettings={voiceSettings}
           onUpdateVoiceSettings={onUpdateVoiceSettings}
         />

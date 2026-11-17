@@ -997,9 +997,6 @@ function TimelineTracksCanvas({
       {Array.from({ length: Math.max(1, videoRowCount) }).map((_, rIdx) => {
         const trackKey = `video_${rIdx}`;
         const isHidden = Boolean(hiddenTracks[trackKey] || (rIdx === 0 && hiddenTracks.video));
-        const dialogueClips = Array.isArray(videoClips) ? videoClips.filter((c) => c.isDialogue) : [];
-        const targetVideoClips = dialogueClips.length > 0 ? dialogueClips : (Array.isArray(videoClips) ? videoClips : []);
-        const areAllCutsMuted = targetVideoClips.length > 0 && targetVideoClips.every((c) => Boolean(c.isMuted));
         const isMuted = Boolean(
           mutedTracks?.[trackKey] ||
           (rIdx === 0 && mutedTracks?.video)

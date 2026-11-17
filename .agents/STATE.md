@@ -2,6 +2,48 @@
 
 ## Last Session
 - **Environment**: Antigravity IDE (`engineering-minimal-change-engineer` discipline)
+- **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-17T19:16:00+07:00
+
+## Summary: Remove "Mute Voice Cuts" Feature & Decouple "Auto-Cut by Subs" (Cut-Only) (COMPLETED)
+- **Problem Solved**:
+  - Clicking "Auto-Cut by Subs" previously auto-muted dialogue cuts (`isMuted: Boolean(it.hasVoice)`) and surfaced the "Mute Voice Cuts" / "Mute All" bulk-mute controls in the timeline toolbar, track header (`VIDEO 1` mute), and clip inspector.
+- **Changes Applied**:
+  1. `frontend/src/utils/timelineUtils.js` (`autoSplitVideoBySegments`):
+     - Removed `hasVoiceAudio` / `hasVoice` mute-at-cut coupling and set `isMuted: false` on all dialogue cuts, Gaps, and Outro. Running Auto-Cut by Subs now ONLY cuts — never mutes any clip.
+  2. `frontend/src/hooks/useClipOperations.js`:
+     - Removed `handleToggleMuteAllCuts` and its export. Preserved per-clip mute (`handleToggleMuteVideoClip`) and segment mute (`handleToggleMuteSegment`).
+  3. `frontend/src/App.jsx`, `frontend/src/components/timeline/TimelineEditor.jsx`, `frontend/src/components/voice/VoiceSettings.jsx`:
+     - Removed `handleToggleMuteAllCuts` / `onToggleMuteAllCuts` callback & prop threading.
+  4. `frontend/src/components/timeline/TimelineToolbar.jsx`:
+     - Removed the "Mute Voice Cuts" / "Voice Muted" button, `onToggleMuteAllCuts` prop, and unused `Volume2`/`VolumeX` imports. Updated Auto-Cut tooltip to describe cutting only.
+  5. `frontend/src/components/timeline/TimelineTrackHeaders.jsx`:
+     - Removed `onToggleMuteAllCuts` prop, unused `areAllCutsMuted`, and `onToggleMuteAllCuts(true)` call inside `handleToggleVideoMute`. Track-level mute/unmute (`setMutedTracks`) remains intact.
+  6. `frontend/src/components/timeline/TimelineTracksCanvas.jsx`:
+     - Removed unused `areAllCutsMuted` block. Preserved per-clip mute rendering (`is-clip-muted`, `clip-mini-muted-badge`) and track mute dimming (`is-track-muted`).
+  7. `frontend/src/components/voice/ClipInspectorPanel.jsx`:
+     - Removed `onToggleMuteAllCuts` prop and the "Mute All / Unmute All" shortcut button. Preserved per-clip mute (`onToggleMuteVideoClip`) and segment mute (`onToggleMuteSegment`).
+  8. `backend/tests/timeline_voice_cut_mute_gap_simple.test.js` & `backend/tests/timeline_ui_workflow_fix.test.js`:
+     - Updated assertions to enforce cut-only Auto-Cut (`isMuted === false` on all cuts, runtime + static check) and complete removal of Mute Voice Cuts, while verifying per-clip mute and track mute stay intact.
+- **Shared Parts Kept Untouched**:
+  - Per-clip `clip.isMuted` (`handleToggleMuteVideoClip`, `VideoPlayerPreview.jsx` `isCurrentVideoClipMuted`, `ffmpegService.js` `buildDynamicDuckingFilter` `.filter((c) => c.isMuted)`, `TimelineTracksCanvas.jsx` `is-clip-muted` / `clip-mini-muted-badge`) and track-level mute (`mutedTracks`).
+- **Verification Evidence**:
+  - Frontend build (`npm --prefix frontend run build`): **PASS** (650ms, 0 errors).
+  - Full timeline suites (`node --test backend/tests/timeline_*.test.js`): **87/87 PASS** (0 fail).
+  - Real-app Edge verification (`http://localhost:5173/studio`, read-only sync guard on `Pseudo_Spiritual_Root` EP1, 257 segments): `Full Video` (1 clip) → click `Auto-Cut by Subs` → 23 visible cut clips rendered in viewport, `mutedClips = 0`, `mutedBadges = 0`, `slicingButtons = ["Full Video", "Auto-Cut by Subs"]`, `hasMuteVoiceCutsAnywhere = false`, `hasMuteAllBtn = false`.
+
+## Active Environment
+- **Backend API**: `http://localhost:5000` (`/api/health` = 200 OK)
+- **Frontend Studio**: `http://localhost:5173`
+- **Branch**: `chore/full-project-cleanup` (pushed to `origin/chore/full-project-cleanup`)
+
+## Next Steps
+- Ready for owner testing in browser (`http://localhost:5173`).
+
+---
+
+## Previous Session
+- **Environment**: Antigravity IDE (`engineering-minimal-change-engineer` discipline)
 - **Branch**: `chore/full-project-cleanup` (branched from `refactor/timeline-core-clean` at `31323e1`)
 - **Timestamp**: 2026-11-17T19:05:00+07:00
 

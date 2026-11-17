@@ -57,8 +57,9 @@ test('Step 2: Track Headers widen to 148px, prevent CLEAN BGM truncation, add co
   assert.match(headersSource, /👩\/បន្ទាប់/);
   assert.match(headersSource, /CLEAN BGM/);
 
-  // 4. Two-way Mute synchronization with VIDEO 1 and CLEAN BGM + Muted lane dimming & badge
-  assert.match(headersSource, /onToggleMuteAllCuts\(true\)/);
+  // 4. Track-level Mute on VIDEO 1 and CLEAN BGM + Muted lane dimming & badge (no Mute-Voice-Cuts coupling)
+  assert.match(headersSource, /handleToggleVideoMute/);
+  assert.doesNotMatch(headersSource, /onToggleMuteAllCuts/);
   assert.match(headersSource, /duckingVolume:\s*isBgmMuted \? 0\.15 : 0/);
   assert.match(canvasSource, /is-track-muted/);
   assert.match(canvasSource, /<span className="track-muted-badge">MUTED<\/span>/);

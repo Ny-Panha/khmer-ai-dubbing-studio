@@ -506,7 +506,6 @@ export default function App() {
   const handleUpdateTimelineSegments = useCallback((...args) => clipsRef.current.handleUpdateTimelineSegments?.(...args), []);
   const handleToggleMuteSegment = useCallback((...args) => clipsRef.current.handleToggleMuteSegment?.(...args), []);
   const handleToggleMuteVideoClip = useCallback((...args) => clipsRef.current.handleToggleMuteVideoClip?.(...args), []);
-  const handleToggleMuteAllCuts = useCallback((...args) => clipsRef.current.handleToggleMuteAllCuts?.(...args), []);
   const handleAutoSplitVideo = useCallback((...args) => clipsRef.current.handleAutoSplitVideo?.(...args), []);
   const handleResetFullVideo = useCallback((...args) => clipsRef.current.handleResetFullVideo?.(...args), []);
   const handleBridgeGaps = useCallback((...args) => clipsRef.current.handleBridgeGaps?.(...args), []);
@@ -1051,7 +1050,6 @@ export default function App() {
                   onUpdateSegments={handleUpdateTimelineSegments}
                   onToggleMuteSegment={handleToggleMuteSegment}
                   onToggleMuteVideoClip={handleToggleMuteVideoClip}
-                  onToggleMuteAllCuts={handleToggleMuteAllCuts}
                   videoClips={media.videoClips || EMPTY_CLIPS}
                   onUpdateScript={handleUpdateScript}
                 />
@@ -1099,7 +1097,6 @@ export default function App() {
                 onUpdateSegments={handleUpdateTimelineSegments}
                 onToggleMuteSegment={handleToggleMuteSegment}
                 onToggleMuteVideoClip={handleToggleMuteVideoClip}
-                onToggleMuteAllCuts={handleToggleMuteAllCuts}
                 onToggleDeliveryType={handleToggleDeliveryType}
                 speakerRegistry={speakerRegistry || EMPTY_OBJECT}
                 voiceSettings={voiceSettings || EMPTY_OBJECT}

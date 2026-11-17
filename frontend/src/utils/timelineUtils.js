@@ -565,13 +565,6 @@ export function autoSplitVideoBySegments(segments = [], totalDuration = 0, video
     const start = Math.max(0, Math.min(totalDuration, rawStart));
     const end = Math.max(start + 0.3, Math.min(totalDuration, rawEnd));
 
-    const hasVoiceAudio = Boolean(
-      seg.audioUrl ||
-      seg.audioFile ||
-      seg.audioPath ||
-      (typeof seg.audioDurationSec === 'number' && seg.audioDurationSec > 0)
-    ) && !seg.muted && !seg.isMuted;
-
     return {
       start: parseFloat(start.toFixed(2)),
       end: parseFloat(end.toFixed(2)),
@@ -579,7 +572,6 @@ export function autoSplitVideoBySegments(segments = [], totalDuration = 0, video
       khmer: seg.khmer || '',
       index: idx + 1,
       id: seg.id || idx + 1,
-      hasVoice: hasVoiceAudio,
     };
   }).filter((s) => s.end > s.start);
 
@@ -634,7 +626,7 @@ export function autoSplitVideoBySegments(segments = [], totalDuration = 0, video
     }
     const clipEnd = parseFloat(Math.min(totalDuration, Math.max(clipStart + 0.2, rawClipEnd)).toFixed(2));
 
-    // Video clip matching this dialogue line
+    // Video clip matching this dialogue line (Auto-Cut only cuts — never mutes)
     clips.push({
       id: `clip-seg-${Date.now()}-${idx}`,
       trackRow: 0,
@@ -645,11 +637,9 @@ export function autoSplitVideoBySegments(segments = [], totalDuration = 0, video
       sourceEnd: clipEnd,
       name: `#${it.index} ${it.speaker}`,
       isDialogue: true,
-      hasVoice: Boolean(it.hasVoice),
       segmentIndex: it.index,
       segmentId: it.id || it.index,
-      // ONLY mute if this dialogue segment ACTUALLY has a voice (bit tea kleang voice, kelang ot voice baj bit te)
-      isMuted: Boolean(it.hasVoice),
+      isMuted: false,
     });
 
     curTime = clipEnd;
@@ -669,6 +659,7 @@ export function autoSplitVideoBySegments(segments = [], totalDuration = 0, video
       sourceEnd: outroEnd,
       name: 'Outro',
       isDialogue: false,
+      isMuted: false,
     };
     delete outroClip.segmentId;
     delete outroClip.segmentIndex;
