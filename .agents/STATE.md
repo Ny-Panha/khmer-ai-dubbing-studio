@@ -3,6 +3,57 @@
 ## Last Session
 - **Environment**: Antigravity IDE
 - **Branch**: `refactor/timeline-core-clean`
+- **Timestamp**: 2026-11-17T14:24:00+07:00
+
+## Summary: Phase 2 Step C — Rewire AUTO-ALIGN and RESET TIMING to Pure TimelineOps
+- **Scope**: Re-wired AUTO-ALIGN (`handleAutoAlignNoOverlap`) and RESET TIMING (`handleResetToSourceTiming`) to pure ops `timelineOps.autoAlign` and `timelineOps.resetTiming`. Completely removed the old step-2 segment-to-cut sync block and snap-to-00:00 lead shift (pure ops define behavior now, move-only, zero hidden cross-track coupling). Subtitles belong strictly to their segments. Delete (Step A) and Split (Step B) preserved. Trim/move left untouched. Old utils preserved.
+- **Changes Applied**:
+  1. `frontend/src/utils/timelineOps.js`:
+     - Preserved `seg.id` and `seg.segmentId` on `autoAlign` and `resetTiming` so non-contiguous survivor IDs (e.g. after deletion) and user-added segment IDs are never renumbered.
+     - Preserved `sourceStartSec` and `sourceEndSec` across `autoAlign` passes so `resetTiming` can always return segments to their source-anchored times.
+     - In `resetTiming`, prioritized `sourceStartSec` over `startSec` so edited or aligned segments accurately return to original source times.
+     - Cleaned up `overrunRatio` handling to avoid `overrunRatio: undefined` property leaks across JSON serialization passes (ensuring strict idempotency).
+  2. `frontend/src/hooks/useClipOperations.js`:
+     - Imported `autoAlign as autoAlignOp, resetTiming as resetTimingOp` from `../utils/timelineOps`.
+     - Rewired `handleAutoAlignNoOverlap`:
+       - Dispatches to `autoAlignOp(currentState, { totalDuration, options })`.
+       - Enforces hard count guard: aborts write-back with toast and console warning if `alignedSegments.length !== currentSegments.length`.
+       - Compares timeline signatures; if unchanged, returns early without modifying state or pushing undo.
+       - Pushes single undo snapshot, writes back to `scriptData`, and triggers master narration re-sync via `syncTimelineAudioApi`.
+     - Rewired `handleResetToSourceTiming`:
+       - Dispatches to `resetTimingOp(currentState, { totalDuration })`.
+       - Pushes single undo snapshot, writes back to `scriptData`, and triggers master narration re-sync via `syncTimelineAudioApi`.
+  3. `backend/tests/timeline_step_c_real_app_acceptance.test.js`:
+     - Created real-app acceptance test verifying operations against stored `series.json` on disk:
+       - Check 1: Add a voice next to a same-text line -> Auto-Align -> added voice stays, count unchanged (move-only).
+       - Check 2: Episode with subtitles -> Auto-Align -> segment count AND subtitle count unchanged, no subtitle sits at 00:00 unless its segment starts there (no snap-to-00:00).
+       - Check 3: Auto-Align twice in a row -> second run changes nothing (strictly idempotent).
+       - Check 4: Reset Timing -> segments return to source-anchored times, count unchanged.
+       - Check 5: Ctrl+Z after align restores exact prior state from stored file.
+- **Verification**:
+  - `npm --prefix frontend run build`: **2036 modules transformed**, built in 647ms (0 errors).
+  - Pure Ops R1-R4: `backend/tests/timeline_pure_ops_r1_r4.test.js` (**17/17 passed**).
+  - Toolbar Split Under Playhead: `backend/tests/timeline_toolbar_split_under_playhead.test.js` (**6/6 passed**).
+  - Auto-Align Voice Suite: `backend/tests/auto_align_voice.test.js` (**9/9 passed**).
+  - Step A Real-App Acceptance: `backend/tests/timeline_step_a_real_app_acceptance.test.js` (**3/3 passed**).
+  - Step B Real-App Acceptance: `backend/tests/timeline_step_b_real_app_acceptance.test.js` (**4/4 passed**).
+  - Step C Real-App Acceptance: `backend/tests/timeline_step_c_real_app_acceptance.test.js` (**5/5 passed**).
+  - Total timeline clean core tests: **44/44 passed**. Pre-existing failure: 1 in `backend/tests/timeline_ui_workflow_fix.test.js` (tooltip regex expectation).
+- **Git State**: Committed (`d1ba32f`) and pushed to `origin/refactor/timeline-core-clean`.
+
+## Active Environment
+- Branch: `refactor/timeline-core-clean` (pushed to origin)
+- Backend API: `http://localhost:5000`
+- Frontend: `http://localhost:5173`
+
+## Next Steps
+- Phase 2 Step D: Rewire TRIM and MOVE to `timelineOps.trimClip` and `timelineOps.moveClip`.
+- Phase 3: Playback mapping monotonic fix in `useVideoPlayback.js`.
+- Phase 4: Duration display verification (R7).
+
+## Last Session
+- **Environment**: Antigravity IDE
+- **Branch**: `refactor/timeline-core-clean`
 - **Timestamp**: 2026-11-17T14:18:00+07:00
 
 ## Summary: Phase 2 Step B — Rewire SPLIT to Pure TimelineOps
