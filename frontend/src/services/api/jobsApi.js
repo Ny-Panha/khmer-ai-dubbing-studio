@@ -40,18 +40,6 @@ export async function cancelJobApi(jobId) {
 }
 
 /**
- * Kill/Cancel Translate Job(s) by jobId, episodeId, or All
- */
-export async function killTranslateJobApi({ jobId, seriesId, episodeId, all = false } = {}) {
-  const res = await fetch('/api/jobs/kill', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ jobId, seriesId, episodeId, all }),
-  });
-  return await parseResponseJson(res, 'Failed to kill translate job');
-}
-
-/**
  * Fetch all background dubbing jobs with optional status filter (Phase 4.4 Dashboard)
  */
 export async function fetchJobsListApi({ filter, signal } = {}) {

@@ -1,7 +1,6 @@
 import {
   parseTimeToSeconds,
   formatMinSec,
-  formatTimecode,
 } from './timestampUtils.js';
 import { isGapClip } from './timelineOps.js';
 
@@ -809,31 +808,5 @@ export function computeTimelineScrollForTime(timeSec, pixelsPerSecond, clientWid
   return playheadAbsoluteX > centerThreshold
     ? Math.max(0, Math.round(playheadAbsoluteX - centerThreshold))
     : 0;
-}
-
-/**
- * Helper to determine source subtitle end timing for collision analysis
- */
-function getSourceSubtitleEnd(s) {
-  if (!s) return 0;
-  const start = (typeof s._canonicalStart === 'number' && !isNaN(s._canonicalStart))
-    ? s._canonicalStart
-    : ((typeof s.sourceStartSec === 'number' && !isNaN(s.sourceStartSec))
-      ? s.sourceStartSec
-      : (typeof s.startSec === 'number' && !isNaN(s.startSec) ? s.startSec : 0));
-
-  if (typeof s.speechEndSec === 'number' && !isNaN(s.speechEndSec) && s.speechEndSec > start) {
-    return s.speechEndSec;
-  }
-  const slot = (typeof s.slotDuration === 'number' && s.slotDuration > 0)
-    ? s.slotDuration
-    : (typeof s.availableSlotDuration === 'number' && s.availableSlotDuration > 0 ? s.availableSlotDuration : null);
-  if (slot !== null) {
-    return parseFloat((start + slot).toFixed(2));
-  }
-  if (typeof s.sourceEndSec === 'number' && !isNaN(s.sourceEndSec) && s.sourceEndSec > start) {
-    return s.sourceEndSec;
-  }
-  return start + 2.0;
 }
 

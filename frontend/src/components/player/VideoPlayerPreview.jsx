@@ -7,7 +7,7 @@ import { uploadVideoFile } from '../../services/api';
 import { createAudioRecoveryManager } from '../../utils/audioAutoRecovery';
 import { resolveDefaultAspectRatio, inferRenderedAspectRatio, sanitizeAspectRatio } from '../../utils/projectStorage';
 
-import { PlayerTopBar, PlayerBottomBar } from './PlayerControls';
+import { PlayerBottomBar } from './PlayerControls';
 import LiveSubtitleOverlay from './LiveSubtitleOverlay';
 import AntiTheftOverlay from './AntiTheftOverlay';
 import LogoOverlay from './LogoOverlay';

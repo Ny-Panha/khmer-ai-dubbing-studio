@@ -158,18 +158,6 @@ export async function generateSingleSegmentAudio(segment, options = {}) {
 }
 
 /**
- * Kill/Cancel Khmer AI Voice TTS Process
- */
-export async function killTtsApi({ seriesId, episodeId, all = false } = {}) {
-  const res = await fetch('/api/tts/kill', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ seriesId, episodeId, all }),
-  });
-  return await parseResponseJson(res, 'Failed to kill TTS process');
-}
-
-/**
  * Trigger AI Vocal Separation (Demucs Clean BGM) for a single episode or video
  */
 export async function separateAudioApi({ videoPath, seriesId = null, episodeId = null, twoStems = 'vocals', model = 'htdemucs', signal } = {}) {

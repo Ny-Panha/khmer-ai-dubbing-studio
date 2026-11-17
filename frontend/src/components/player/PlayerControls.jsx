@@ -21,10 +21,6 @@ function formatPrecisionTimecode(seconds) {
   return `00:${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}.${String(ms).padStart(2, '0')}`;
 }
 
-export function PlayerTopBar() {
-  return null;
-}
-
 /**
  * Direct Editable Number Input for Framing Percentage (5% - 95%)
  */

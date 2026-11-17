@@ -46,12 +46,6 @@ export function getEpisodesBrokenSummary(episodes = []) {
   return scanSeriesBrokenSegments(episodes);
 }
 
-export function checkEpisodeScriptHealthy(ep) {
-  const segments = getStoredEpisodeSegments(ep);
-  if (segments.length === 0) return false;
-  return scanEpisodeBrokenSegments(ep).textBrokenCount === 0;
-}
-
 export function checkEpisodeHasAudioReady(ep, completedTtsEpIds = null, ttsLiveStats = null) {
   if (!ep) return false;
   const hasExplicitSegmentsArray = Boolean(ep.scriptData && Array.isArray(ep.scriptData.segments));

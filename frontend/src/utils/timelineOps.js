@@ -31,14 +31,6 @@ export function isGapClip(clip) {
   return /^Gap(?: \(Part \d+\))?$/i.test(clip.name || '') || (clip.id && String(clip.id).startsWith('clip-gap'));
 }
 
-/** Strip segmentId and segmentIndex from a Gap clip */
-export function stripGapSegmentFields(clip) {
-  if (!clip || !isGapClip(clip)) return clip;
-  delete clip.segmentId;
-  delete clip.segmentIndex;
-  return clip;
-}
-
 /** Deterministic unique ID (timestamp + random suffix) */
 function uid(prefix = 'clip') {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`;
@@ -917,24 +909,6 @@ export function moveClip(state, { clipId, newStart, trackRow, subTrackRow }) {
 //  Single-lane rule: non-userShifted voices on VOICE 1; overruns
 //  clamped and flagged audioOverrun.
 // ═══════════════════════════════════════════════════════════════════
-
-/** Helper: source subtitle end for collision analysis */
-function getSourceSubtitleEnd(s) {
-  if (!s) return 0;
-  const start = (typeof s._canonicalStart === 'number' && !isNaN(s._canonicalStart))
-    ? s._canonicalStart
-    : ((typeof s.sourceStartSec === 'number' && !isNaN(s.sourceStartSec))
-      ? s.sourceStartSec
-      : (typeof s.startSec === 'number' && !isNaN(s.startSec) ? s.startSec : 0));
-
-  if (typeof s.speechEndSec === 'number' && !isNaN(s.speechEndSec) && s.speechEndSec > start) return s.speechEndSec;
-  const slot = (typeof s.slotDuration === 'number' && s.slotDuration > 0)
-    ? s.slotDuration
-    : (typeof s.availableSlotDuration === 'number' && s.availableSlotDuration > 0 ? s.availableSlotDuration : null);
-  if (slot !== null) return r2(start + slot);
-  if (typeof s.sourceEndSec === 'number' && !isNaN(s.sourceEndSec) && s.sourceEndSec > start) return s.sourceEndSec;
-  return start + 2.0;
-}
 
 export function autoAlign(state, { totalDuration, options = {} }) {
   const { videoClips, segments } = state;
