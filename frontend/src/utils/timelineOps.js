@@ -602,88 +602,232 @@ export function splitSegment(state, { segKey, splitTime }) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-//  trimClip — Trim a video clip's start or end
+//  trimClip — Trim a video clip or segment start or end
 // ═══════════════════════════════════════════════════════════════════
 
 export function trimClip(state, { clipId, edge, newTime, maxSourceDuration = Infinity }) {
   const { videoClips, segments } = state;
-  if (!Array.isArray(videoClips) || videoClips.length === 0 || !clipId) {
-    return noop(state, 'No clips or missing clipId');
+  if (clipId === null || clipId === undefined || clipId === '') {
+    return noop(state, 'Missing clipId');
   }
 
-  const index = videoClips.findIndex((c) => c.id === clipId);
-  if (index === -1) {
-    return noop(state, `Clip not found: ${clipId}`);
-  }
-
-  const clip = ensureClipNums(videoClips[index]);
-  const isStart = edge === 'start' || edge === 'left';
+  const isStart = edge === 'start' || edge === 'left' || edge === 'trim-left';
   const MIN_CLIP_DURATION = 0.2;
 
-  if (isStart) {
-    const delta = newTime - clip.start;
-    const proposedStart = Math.max(0, newTime);
-    const proposedSourceStart = clip.sourceStart + delta;
+  // 1. Check videoClips
+  const videoIndex = Array.isArray(videoClips) ? videoClips.findIndex((c) => c.id === clipId) : -1;
+  if (videoIndex !== -1) {
+    const clip = ensureClipNums(videoClips[videoIndex]);
+    const targetRow = typeof clip.trackRow === 'number' ? clip.trackRow : 0;
 
-    if (proposedStart > clip.end - MIN_CLIP_DURATION) return noop(state, 'Trim would make clip too short');
-    if (proposedSourceStart < 0) return noop(state, 'Source start would be negative');
-    if (proposedSourceStart > clip.sourceEnd - MIN_CLIP_DURATION) return noop(state, 'Source range too narrow');
+    if (isStart) {
+      const delta = newTime - clip.start;
+      const proposedStart = Math.max(0, newTime);
+      const proposedSourceStart = clip.sourceStart + delta;
 
-    const nextClips = [...videoClips];
-    nextClips[index] = {
-      ...clip,
-      start: r3(proposedStart),
-      sourceStart: r3(proposedSourceStart),
-    };
-    return ok({ videoClips: nextClips, segments: deepClone(segments) });
-  } else {
-    const delta = newTime - clip.end;
-    const proposedEnd = Math.max(clip.start + MIN_CLIP_DURATION, newTime);
-    const proposedSourceEnd = clip.sourceEnd + delta;
+      if (proposedStart > clip.end - MIN_CLIP_DURATION) return noop(state, 'Trim would make clip too short');
+      if (proposedSourceStart < 0) return noop(state, 'Source start would be negative');
+      if (proposedSourceStart > clip.sourceEnd - MIN_CLIP_DURATION) return noop(state, 'Source range too narrow');
 
-    if (proposedEnd < clip.start + MIN_CLIP_DURATION) return noop(state, 'Trim would make clip too short');
-    if (isFinite(maxSourceDuration) && proposedSourceEnd > maxSourceDuration + 0.05) return noop(state, 'Exceeds source duration');
-    if (proposedSourceEnd < clip.sourceStart + MIN_CLIP_DURATION) return noop(state, 'Source range too narrow');
+      // Check overlap with prior clips on same track
+      for (let i = 0; i < videoClips.length; i++) {
+        if (i === videoIndex) continue;
+        const other = ensureClipNums(videoClips[i]);
+        const otherRow = typeof other.trackRow === 'number' ? other.trackRow : 0;
+        if (otherRow === targetRow && other.end <= clip.start + 0.001) {
+          if (proposedStart < other.end - 0.001) {
+            return noop(state, `Trim would overlap with clip "${other.name || other.id}"`);
+          }
+        }
+      }
 
-    const nextClips = [...videoClips];
-    nextClips[index] = {
-      ...clip,
-      end: r3(proposedEnd),
-      sourceEnd: r3(proposedSourceEnd),
-    };
-    return ok({ videoClips: nextClips, segments: deepClone(segments) });
+      const nextClips = [...videoClips];
+      nextClips[videoIndex] = {
+        ...clip,
+        start: r3(proposedStart),
+        sourceStart: r3(proposedSourceStart),
+      };
+      return ok({ videoClips: nextClips, segments: deepClone(segments) });
+    } else {
+      const delta = newTime - clip.end;
+      const proposedEnd = Math.max(clip.start + MIN_CLIP_DURATION, newTime);
+      const proposedSourceEnd = clip.sourceEnd + delta;
+
+      if (proposedEnd < clip.start + MIN_CLIP_DURATION) return noop(state, 'Trim would make clip too short');
+      if (isFinite(maxSourceDuration) && proposedSourceEnd > maxSourceDuration + 0.05) return noop(state, 'Exceeds source duration');
+      if (proposedSourceEnd < clip.sourceStart + MIN_CLIP_DURATION) return noop(state, 'Source range too narrow');
+
+      // Check overlap with next clips on same track
+      for (let i = 0; i < videoClips.length; i++) {
+        if (i === videoIndex) continue;
+        const other = ensureClipNums(videoClips[i]);
+        const otherRow = typeof other.trackRow === 'number' ? other.trackRow : 0;
+        if (otherRow === targetRow && other.start >= clip.end - 0.001) {
+          if (proposedEnd > other.start + 0.001) {
+            return noop(state, `Trim would overlap with clip "${other.name || other.id}"`);
+          }
+        }
+      }
+
+      const nextClips = [...videoClips];
+      nextClips[videoIndex] = {
+        ...clip,
+        end: r3(proposedEnd),
+        sourceEnd: r3(proposedSourceEnd),
+      };
+      return ok({ videoClips: nextClips, segments: deepClone(segments) });
+    }
   }
+
+  // 2. Check segments
+  const segIndex = findSegIdx(segments, clipId);
+
+  if (segIndex !== -1) {
+    const seg = segments[segIndex];
+    if (isStart) {
+      const proposedStart = Math.max(0, r2(newTime));
+      const currentEnd = typeof seg.audioEndSec === 'number' && !isNaN(seg.audioEndSec)
+        ? seg.audioEndSec
+        : (typeof seg.endSec === 'number' ? seg.endSec : proposedStart + 0.5);
+      if (proposedStart > currentEnd - MIN_CLIP_DURATION) {
+        return noop(state, 'Trim would make segment too short');
+      }
+
+      const nextSegments = [...segments];
+      const newDur = r2(currentEnd - proposedStart);
+      nextSegments[segIndex] = {
+        ...seg,
+        startSec: proposedStart,
+        audioStartSec: proposedStart,
+        duration: newDur,
+        audioDurationSec: newDur,
+        start: formatMinSec(proposedStart),
+        startTime: formatMinSec(proposedStart),
+        audioStart: formatMinSec(proposedStart),
+        audioTrimmed: true,
+        userTrimmed: true,
+      };
+      return ok({ videoClips: deepClone(videoClips), segments: nextSegments });
+    } else {
+      const currentStart = typeof seg.audioStartSec === 'number' && !isNaN(seg.audioStartSec)
+        ? seg.audioStartSec
+        : (typeof seg.startSec === 'number' ? seg.startSec : 0);
+      const proposedEnd = r2(newTime);
+      if (proposedEnd < currentStart + MIN_CLIP_DURATION) {
+        return noop(state, 'Trim would make segment too short');
+      }
+
+      const nextSegments = [...segments];
+      const newDur = r2(proposedEnd - currentStart);
+      nextSegments[segIndex] = {
+        ...seg,
+        endSec: proposedEnd,
+        audioEndSec: proposedEnd,
+        duration: newDur,
+        audioDurationSec: newDur,
+        end: formatMinSec(proposedEnd),
+        endTime: formatMinSec(proposedEnd),
+        audioEnd: formatMinSec(proposedEnd),
+        audioTrimmed: true,
+        userTrimmed: true,
+      };
+      return ok({ videoClips: deepClone(videoClips), segments: nextSegments });
+    }
+  }
+
+  return noop(state, `Clip or segment not found: ${clipId}`);
 }
 
 // ═══════════════════════════════════════════════════════════════════
-//  moveClip — Move a video clip along the timeline
+//  moveClip — Move a video clip or segment along the timeline
 // ═══════════════════════════════════════════════════════════════════
 
-export function moveClip(state, { clipId, newStart }) {
+export function moveClip(state, { clipId, newStart, trackRow, subTrackRow }) {
   const { videoClips, segments } = state;
-  if (!Array.isArray(videoClips) || videoClips.length === 0 || !clipId) {
-    return noop(state, 'No clips or missing clipId');
+  if (clipId === null || clipId === undefined || clipId === '') {
+    return noop(state, 'Missing clipId');
   }
 
-  const index = videoClips.findIndex((c) => c.id === clipId);
-  if (index === -1) {
-    return noop(state, `Clip not found: ${clipId}`);
+  // 1. Check if clipId is in videoClips
+  const videoIndex = Array.isArray(videoClips) ? videoClips.findIndex((c) => c.id === clipId) : -1;
+  if (videoIndex !== -1) {
+    const clip = ensureClipNums(videoClips[videoIndex]);
+    const duration = clip.end - clip.start;
+    const safeStart = Math.max(0, r3(newStart));
+    const safeEnd = r3(safeStart + duration);
+    const targetRow = typeof trackRow === 'number' ? Math.max(0, trackRow) : (clip.trackRow || 0);
+
+    // Invariant: a move may not create overlapping clips on the video track (op returns applied:false with reason instead of overlapping)
+    for (let i = 0; i < videoClips.length; i++) {
+      if (i === videoIndex) continue;
+      const other = ensureClipNums(videoClips[i]);
+      const otherRow = typeof other.trackRow === 'number' ? other.trackRow : 0;
+      if (otherRow === targetRow) {
+        if (Math.max(safeStart, other.start) < Math.min(safeEnd, other.end) - 0.001) {
+          return noop(state, `Move would overlap with video clip "${other.name || other.id}" at [${other.start}s, ${other.end}s]`);
+        }
+      }
+    }
+
+    const nextClips = [...videoClips];
+    nextClips[videoIndex] = {
+      ...clip,
+      start: safeStart,
+      end: safeEnd,
+      ...(typeof trackRow === 'number' ? { trackRow: targetRow, trackId: `video-${targetRow + 1}` } : {}),
+      // sourceStart and sourceEnd remain unchanged during move
+    };
+
+    return ok({
+      videoClips: nextClips,
+      segments: deepClone(segments),
+    });
   }
 
-  const clip = ensureClipNums(videoClips[index]);
-  const duration = clip.end - clip.start;
-  const safeStart = Math.max(0, r3(newStart));
-  const safeEnd = r3(safeStart + duration);
+  // 2. Check if clipId is in segments
+  const segIndex = findSegIdx(segments, clipId);
 
-  const nextClips = [...videoClips];
-  nextClips[index] = {
-    ...clip,
-    start: safeStart,
-    end: safeEnd,
-    // sourceStart and sourceEnd remain unchanged during move
-  };
+  if (segIndex !== -1) {
+    const seg = segments[segIndex];
+    const rawDur = typeof seg.audioDurationSec === 'number' && seg.audioDurationSec > 0
+      ? seg.audioDurationSec
+      : (typeof seg.duration === 'number' && seg.duration > 0
+        ? seg.duration
+        : Math.max(0.3, (seg.endSec || 0) - (seg.startSec || 0)));
+    const dur = r2(rawDur);
+    const safeStart = Math.max(0, r2(newStart));
+    const safeEnd = r2(safeStart + dur);
+    const targetRow = typeof trackRow === 'number' ? Math.max(0, trackRow) : (seg.trackRow || 0);
 
-  return ok({ videoClips: nextClips, segments: deepClone(segments) });
+    const nextSegments = [...segments];
+    nextSegments[segIndex] = {
+      ...seg,
+      startSec: safeStart,
+      endSec: safeEnd,
+      duration: dur,
+      audioStartSec: safeStart,
+      audioEndSec: safeEnd,
+      audioDurationSec: dur,
+      start: formatMinSec(safeStart),
+      end: formatMinSec(safeEnd),
+      startTime: formatMinSec(safeStart),
+      endTime: formatMinSec(safeEnd),
+      audioStart: formatMinSec(safeStart),
+      audioEnd: formatMinSec(safeEnd),
+      userShifted: true,
+      trackRow: targetRow,
+      trackId: `voice-${targetRow + 1}`,
+      ...(typeof subTrackRow === 'number' ? { subTrackRow: Math.max(0, subTrackRow), userSubShifted: true } : {}),
+      // Subtitle belongs to segment and follows the move
+    };
+
+    return ok({
+      videoClips: deepClone(videoClips),
+      segments: nextSegments,
+    });
+  }
+
+  return noop(state, `Clip or segment not found: ${clipId}`);
 }
 
 // ═══════════════════════════════════════════════════════════════════
