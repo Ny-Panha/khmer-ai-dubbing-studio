@@ -3,6 +3,37 @@
 ## Last Session
 - **Environment**: Antigravity IDE (`engineering-minimal-change-engineer` discipline)
 - **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-17T19:32:00+07:00
+
+## Summary: Auto-Cut by Subs Bug Diagnosis & Server Restart Verification (COMPLETED — No Code Defect Found)
+- **Step 0 — Fresh Restart & Real-App Reproduction**:
+  - Cleanly stopped stale backend (`:5000`) and Vite (`:5173`) processes and started fresh backend (`node backend/server.js`) and frontend (`npm --prefix frontend run dev`) servers.
+  - Reproduced `Full Video -> Auto-Cut by Subs -> Switch Episode -> Switch Back` across 4 real episodes of `Pseudo_Spiritual_Root` (`ep_1`, `ep_3`, `ep_4`, `ep_5`) in Edge headless with real disk persistence enabled:
+    - `ep_5`: `Full Video` (1 clip) -> `Auto-Cut by Subs` -> **376 clips** on disk (`mutedCount: 0`), 36 visible in DOM (`muted: 0`), persisted across EP1 switch & return.
+    - `ep_3`: `Full Video` (1 clip) -> `Auto-Cut by Subs` -> **432 clips** on disk (`mutedCount: 0`), 33 visible in DOM (`muted: 0`), persisted across EP1 switch & return.
+    - `ep_4` (347 tombstones, immediate 50ms switch): `Full Video` -> `Auto-Cut by Subs` -> **343 clips** on disk (`mutedCount: 0`), 32 visible in DOM, persisted across EP1 switch & return.
+    - `ep_1`: `Full Video` (1 clip) -> `Auto-Cut by Subs` -> **324 clips** on disk (`mutedCount: 0`), 36 visible in DOM (`muted: 0`).
+  - Browser console errors: **0**, page errors: **0**, error toasts: **0**.
+- **Step 1 — Root Cause Diagnosis (`b8501fb` & `039ffa1` audit)**:
+  - Audited every line of commits `b8501fb` and `039ffa1`: `autoSplitVideoBySegments`, `handleAutoSplitVideo`, `TimelineToolbar`, `useWorkspaceMedia` (`videoClipsUpdatedAt` auto-bump), and `episodeService` persistence have zero defects and zero remaining references to `onToggleMuteAllCuts`.
+  - Root cause of both the earlier `"onToggleMuteAllCuts is not defined"` toast and the broken toolbar behavior was the stale Vite HMR / un-refreshed browser tab from before the server restart. No speculative code edits were made (minimal-change discipline).
+- **Verification**:
+  - Frontend build (`npm --prefix frontend run build`): **PASS** (0 errors).
+  - Full timeline suites (`node --test backend/tests/timeline_*.test.js`): **88/88 PASS** (15 suites, 0 fail).
+
+## Active Environment
+- **Backend API**: `http://localhost:5000` (freshly restarted, Status 200 OK)
+- **Frontend Studio**: `http://localhost:5173` (freshly restarted Vite dev server)
+- **Branch**: `chore/full-project-cleanup` (pushed to `origin/chore/full-project-cleanup`)
+
+## Next Steps
+- Hard refresh browser tab (`Ctrl + F5` / `Ctrl + Shift + R`) at `http://localhost:5173` to clear stale HMR state from before the server restart.
+
+---
+
+## Previous Session
+- **Environment**: Antigravity IDE (`engineering-minimal-change-engineer` discipline)
+- **Branch**: `chore/full-project-cleanup`
 - **Timestamp**: 2026-11-17T19:20:00+07:00
 
 ## Summary: Play Through Gap Clips During Timeline Playback & Gap Preview Mapping (COMPLETED)
