@@ -3,9 +3,55 @@
 ## Last Session
 - **Environment**: Antigravity IDE
 - **Branch**: `refactor/timeline-core-clean`
-- **Timestamp**: 2026-11-17T14:52:00+07:00
+- **Timestamp**: 2026-11-17T15:10:00+07:00
 
-## Summary: Final Cleanup — Retiring Legacy Editing Functions & Tests, Porting Living Suites to TimelineOps
+## Summary: Phase 1 — Dead-Code Audit (Gated Protocol: Audit Only)
+- **Scope**: Rigorous audit of `frontend/src/` (115 files) and `backend/` (`routes/`, `services/`, `utils/`, 53 files) on branch `refactor/timeline-core-clean`.
+- **Protocol Adherence**: Strictly **AUDIT ONLY**. Zero files or functions deleted. Manifest generated at `.agents/DEAD-CODE-MANIFEST.md`. Stopped at gate awaiting owner approval.
+- **Immediate Hotfix**:
+  - Resolved `ReferenceError: useMemo is not defined` in `frontend/src/hooks/useVideoPlayback.js` by adding `useMemo` to React imports. Committed (`44d1fbe`) and pushed.
+- **Audit Findings**:
+  - **Dead Files (1 file)**:
+    - `frontend/src/App.css` (63 bytes, 2 lines): Completely unreferenced repo-wide.
+  - **Dead Exported Functions & Constants (27 symbols across 13 modules, ~796 lines)**:
+    - Frontend:
+      - `StudioContext.jsx`: `useStudioContext` (3 lines)
+      - `geminiRouteSelectors.js`: `selectPartitionedSelectedEpisodes` (27 lines), `selectStageCompletionFlags` (11 lines)
+      - `projectStorage.js`: `saveActiveProject` (7 lines), `loadActiveProject` (12 lines)
+      - `timelineUtils.js`: `resetSegmentsToSourceTiming` (85 lines)
+    - Backend:
+      - `audioClassifierService.js`: `classifySegmentsFromMedia` (23 lines)
+      - `audioSeparationService.js`: `cancelSeparationJob` (3 lines)
+      - `ffmpegService.js`: `createGeminiProxyVideo` (111 lines), `cleanupProxyFile` (8 lines), `getActiveJobRenderProcess` (3 lines), `renderDubbedVideo` (9 lines), `measureAudioLoudnessDiagnostics` (24 lines)
+      - `geminiModelCatalog.js`: `buildOrderedCascadeModels` (23 lines)
+      - `geminiQuotaTracker.js`: `DEFAULT_QUOTA_SETTINGS` (1 line)
+      - `geminiService.js`: `sanitizeSubtitleDuration` (17 lines), `getPromptForMode` (21 lines), `validateAndSanitizeSegment` (120 lines), `auditTimelineCoverage` (67 lines), `generateDubbingScript` (117 lines), `generateScriptFromMedia` (16 lines)
+      - `stage3_extractChineseSubtitles.js`: `generateBaseSamplingGrid` (20 lines)
+      - `stage4_analyzeDialogueAudio.js`: `groupTranscriptionWordsIntoSegments` (27 lines)
+      - `stage6_generateModeSpecificScript.js`: `DRAMA_GENRES` (8 lines), `CULTIVATION_DRAMA_GLOSSARY` (1 line)
+      - `ttsService.js`: `generateKhmerSpeech` (22 lines), `generateBatchSpeech` (3 lines)
+  - **Suspects Debunked & Kept Active**:
+    - `usePlaybackEngine.js`, `useStudioActions.js`, `formatTime.js`, `cleanKhmer.js`, `features/dubbing-runner/`, `features/gemini-route/`, `context/` are all alive, mounted, and verified.
+- **Verification**:
+  - Frontend build (`npm --prefix frontend run build`): **2036 modules transformed**, built in 601ms (0 errors).
+  - Living timeline test suites: **56/56 passing (100% green)**.
+
+## Active Environment
+- **Branch**: `refactor/timeline-core-clean`
+- **Frontend Dev URL**: `http://localhost:5173`
+- **Backend API**: `http://localhost:8080`
+
+## Next Steps (Phase 2 - After Owner Approval)
+1. Delete Batch 1: Remove `frontend/src/App.css`.
+2. Delete Batch 2: Remove dead exports in `StudioContext.jsx`, `geminiRouteSelectors.js`, `projectStorage.js`, `timelineUtils.js`.
+3. Delete Batch 3: Remove dead exports in `audioClassifierService.js`, `audioSeparationService.js`, `ffmpegService.js`, `geminiModelCatalog.js`, `geminiQuotaTracker.js`, `geminiService.js`.
+4. Delete Batch 4: Remove dead exports in `stage3_extractChineseSubtitles.js`, `stage4_analyzeDialogueAudio.js`, `stage6_generateModeSpecificScript.js`, `ttsService.js`.
+5. Run build and tests after each batch and commit separately.
+
+---
+
+## Prior Sessions History
+### Final Cleanup — Retiring Legacy Editing Functions & Tests
 - **Scope**: Final cleanup step on branch `refactor/timeline-core-clean`:
   0. **Hotfix Runtime ReferenceError**:
      - Added missing `useMemo` to the React import in `frontend/src/hooks/useVideoPlayback.js` (`import { useState, useCallback, useRef, useEffect, useMemo } from 'react';`).
