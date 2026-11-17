@@ -818,7 +818,7 @@ export function useClipOperations({
     }
   };
 
-  // Delete a video clip and only its matching dialogue segment.
+  // Delete only the selected video clip.
   const handleDeleteClip = (clipId = null) => {
     const targetClipId = clipId !== null && clipId !== undefined ? clipId : activeClipId;
     if (!targetClipId) return;
@@ -836,40 +836,6 @@ export function useClipOperations({
     });
     setVideoClips(updated);
     setActiveClipId(updated[0]?.id || null);
-
-    const segments = scriptData?.segments || [];
-    const isDialogueClip = Boolean(targetClip.isDialogue || targetClip.segmentId || targetClip.segmentIndex || /^#\d+/.test(targetClip.name || ''));
-    if (segments.length > 0 && isDialogueClip) {
-      const clipKeys = [targetClip.segmentId, targetClip.segmentIndex].filter((key) => key !== null && key !== undefined);
-      let segmentIndex = -1;
-      for (const key of clipKeys) {
-        segmentIndex = segments.findIndex((segment) =>
-          [segment.id, segment.segmentId].some((id) => id !== null && id !== undefined && String(id) === String(key))
-        );
-        if (segmentIndex !== -1) break;
-      }
-      if (segmentIndex === -1) {
-        const clipStart = Number.isFinite(targetClip.sourceStart) ? targetClip.sourceStart : targetClip.start;
-        const clipEnd = Number.isFinite(targetClip.sourceEnd) ? targetClip.sourceEnd : targetClip.end;
-        segmentIndex = segments.findIndex((segment) => {
-          if (!segment) return false;
-          const segmentStart = Number.isFinite(segment.sourceStartSec)
-            ? segment.sourceStartSec
-            : (Number.isFinite(segment.startSec) ? segment.startSec : parseTimeToSeconds(segment.start, 0));
-          const segmentEnd = Number.isFinite(segment.sourceEndSec)
-            ? segment.sourceEndSec
-            : (Number.isFinite(segment.endSec) ? segment.endSec : parseTimeToSeconds(segment.end, segmentStart + 2.5));
-          return Math.max(clipStart, segmentStart) < Math.min(clipEnd, segmentEnd);
-        });
-      }
-      if (segmentIndex !== -1) {
-        const segment = segments[segmentIndex];
-        const segmentKey = segment._uid || segment.id || segment.segmentId || segmentIndex;
-        const nextSegments = deleteSegmentByIdOrIndex(segments, segmentKey, { ripple: false, preserveIds: true });
-        handleUpdateTimelineSegments(nextSegments, true, true);
-        if (setSelectedSegmentId) setSelectedSegmentId(null);
-      }
-    }
   };
 
   // Update Clips (Drag/Trim) with optional synchronized segments
@@ -881,7 +847,7 @@ export function useClipOperations({
     }
   };
 
-  // Delete a subtitle/voice segment and only its matching dialogue clip.
+  // Delete only the selected subtitle/voice segment.
   const handleDeleteSegment = async (segIdOrIdx = null) => {
     if (!scriptData?.segments) return;
     const targetKey = segIdOrIdx !== null && segIdOrIdx !== undefined ? segIdOrIdx : selectedSegmentId;
@@ -905,40 +871,6 @@ export function useClipOperations({
     }
     setScriptData(prev => prev ? ({ ...prev, segments: updated, updatedAt: Date.now() }) : null);
     if (setSelectedSegmentId) setSelectedSegmentId(null);
-
-    if (targetSeg && Array.isArray(videoClips) && videoClips.length > 0) {
-      const sStart = typeof targetSeg.startSec === 'number' ? targetSeg.startSec : parseTimeToSeconds(targetSeg.start, 0);
-      const sEnd = typeof targetSeg.endSec === 'number' ? targetSeg.endSec : parseTimeToSeconds(targetSeg.end, sStart + 2.5);
-      const segmentKeys = [targetSeg.id, targetSeg.segmentId].filter((key) => key !== null && key !== undefined);
-      let matchingClip = videoClips.find((clip) =>
-        clip.isDialogue && segmentKeys.some((key) =>
-          clip.segmentId !== null && clip.segmentId !== undefined && String(clip.segmentId) === String(key)
-        )
-      );
-      if (!matchingClip) {
-        matchingClip = videoClips.find((clip) =>
-          clip.isDialogue && segmentKeys.some((key) =>
-            clip.segmentIndex !== null && clip.segmentIndex !== undefined && String(clip.segmentIndex) === String(key)
-          )
-        );
-      }
-      if (!matchingClip) {
-        matchingClip = videoClips.find((clip) =>
-          clip.isDialogue && Math.max(clip.start, sStart) < Math.min(clip.end, sEnd) - 0.05
-        );
-      }
-      if (matchingClip) {
-        const remainingClips = deleteClipById(videoClips, matchingClip.id, {
-          allowEmpty: true,
-          ripple: false,
-          preserveIds: true,
-          gapOnDelete: true,
-          totalDuration: duration,
-        });
-        setVideoClips(remainingClips);
-        setActiveClipId(remainingClips[0]?.id || null);
-      }
-    }
 
     const hasAudios = Boolean(updated.some(s => s.audioFile || s.audioPath || s.audioUrl));
     if (!hasAudios) {

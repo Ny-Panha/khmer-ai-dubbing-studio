@@ -1490,16 +1490,18 @@ function TimelineEditor({
   const canDelete = Boolean(canDeleteSubtitle || canDeleteVideo);
 
   const handleDeleteSelected = useCallback(() => {
-    if (selectedClipKind === 'video' && canDeleteVideo && onDeleteClip) {
-      onDeleteClip(activeClipId);
-      if (onSelectClip) onSelectClip(null);
-      if (onSelectSegment) onSelectSegment(null);
-      if (onSelectClipKind) onSelectClipKind(null);
-      setLastSelectedType('none');
+    if (selectedClipKind === 'video') {
+      if (canDeleteVideo && onDeleteClip) {
+        onDeleteClip(activeClipId);
+        if (onSelectClip) onSelectClip(null);
+        if (onSelectSegment) onSelectSegment(null);
+        if (onSelectClipKind) onSelectClipKind(null);
+        setLastSelectedType('none');
+      }
       return;
     }
+    if ((selectedClipKind === 'voice' || selectedClipKind === 'subtitle') && !canDeleteSubtitle) return;
 
-    // 2. If user clicked an audio/subtitle segment (or video cannot be deleted), delete the segment!
     if (canDeleteSubtitle) {
       if (onSelectClipKind) onSelectClipKind(null);
       if (onDeleteSegment) {
@@ -1507,22 +1509,12 @@ function TimelineEditor({
       } else {
         const segmentIndex = findSegmentIndex(scriptSegments, selectedSegKey);
         const segment = segmentIndex !== -1 ? scriptSegments[segmentIndex] : null;
-        const segmentKeys = [segment?.id, segment?.segmentId].filter((key) => key !== null && key !== undefined);
-        const matchingClip = videoClips.find((clip) =>
-          clip.isDialogue && segmentKeys.some((key) =>
-            [clip.segmentId, clip.segmentIndex].some((id) => id !== null && id !== undefined && String(id) === String(key))
-          )
-        );
-        if (matchingClip && onDeleteClip) {
-          onDeleteClip(matchingClip.id);
-        } else {
-          const segmentKey = segment
-            ? (segment._uid || segment.id || segment.segmentId || segmentIndex)
-            : selectedSegKey;
-          const updated = deleteSegmentByIdOrIndex(scriptSegments, segmentKey, { ripple: false, preserveIds: true });
-          if (onUpdateSegments) {
-            onUpdateSegments(updated, false, true);
-          }
+        const segmentKey = segment
+          ? (segment._uid || segment.id || segment.segmentId || segmentIndex)
+          : selectedSegKey;
+        const updated = deleteSegmentByIdOrIndex(scriptSegments, segmentKey, { ripple: false, preserveIds: true });
+        if (onUpdateSegments) {
+          onUpdateSegments(updated, false, true);
         }
       }
       setSelectedSubId(null);
@@ -1535,6 +1527,8 @@ function TimelineEditor({
       setLastSelectedType('none');
       return;
     }
+
+    if (selectedClipKind) return;
 
     if (canDeleteVideo && onDeleteClip) {
       onDeleteClip(activeClipId);

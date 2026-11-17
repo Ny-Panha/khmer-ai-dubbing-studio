@@ -82,13 +82,21 @@ export function useShortcuts({
 
       // Delete / Backspace: Delete Selected Segment or Clip (respecting selectedClipKind)
       if ((e.key === 'Delete' || e.key === 'Backspace') && !isMod) {
-        if (selectedClipKind === 'video' && activeClipId) {
-          e.preventDefault();
-          onDeleteClip?.(activeClipId);
-        } else if ((selectedClipKind === 'voice' || selectedClipKind === 'subtitle') && selectedSegmentId !== null && selectedSegmentId !== undefined) {
-          e.preventDefault();
-          onDeleteSegment?.(selectedSegmentId);
-        } else if (selectedSegmentId !== null && selectedSegmentId !== undefined) {
+        if (selectedClipKind === 'video') {
+          if (activeClipId) {
+            e.preventDefault();
+            onDeleteClip?.(activeClipId);
+          }
+          return;
+        }
+        if (selectedClipKind === 'voice' || selectedClipKind === 'subtitle') {
+          if (selectedSegmentId !== null && selectedSegmentId !== undefined) {
+            e.preventDefault();
+            onDeleteSegment?.(selectedSegmentId);
+          }
+          return;
+        }
+        if (selectedSegmentId !== null && selectedSegmentId !== undefined) {
           e.preventDefault();
           onDeleteSegment?.(selectedSegmentId);
         } else if (activeClipId) {
@@ -133,4 +141,3 @@ export function useShortcuts({
     onRenderVideo,
   ]);
 }
-

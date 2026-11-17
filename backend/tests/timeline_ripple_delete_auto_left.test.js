@@ -22,8 +22,8 @@ describe('Remove-only timeline delete', () => {
   const timelineUtilsPath = path.resolve(__dirname, '../../frontend/src/utils/timelineUtils.js');
   const timelineUtilsCode = fs.readFileSync(timelineUtilsPath, 'utf8');
 
-  test('middle segment delete preserves survivor IDs and exact timing values', async () => {
-    const { deleteSegmentByIdOrIndex, deleteClipById } = await import(pathToFileURL(timelineUtilsPath));
+  test('middle voice delete preserves segment timing and leaves video clips deeply unchanged', async () => {
+    const { deleteSegmentByIdOrIndex } = await import(pathToFileURL(timelineUtilsPath));
     const segments = Array.from({ length: 5 }, (_, index) => ({
       id: index + 1,
       segmentId: index + 1,
@@ -35,10 +35,11 @@ describe('Remove-only timeline delete', () => {
       audioStartSec: index * 2 + 0.1,
       audioEndSec: index * 2 + 1.9,
       chineseText: `line ${index + 1}`,
+      subtitleText: `subtitle ${index + 1}`,
     }));
 
     const updated = deleteSegmentByIdOrIndex(segments, segments[2]._uid, { ripple: false, preserveIds: true });
-    const clips = segments.map((segment) => ({
+    const videoClipsBefore = segments.map((segment) => ({
       id: `clip-${segment.id}`,
       name: `#${segment.id} Speaker`,
       isDialogue: true,
@@ -47,25 +48,23 @@ describe('Remove-only timeline delete', () => {
       start: segment.startSec,
       end: segment.endSec,
     }));
-    const updatedClips = deleteClipById(clips, 'clip-3', {
-      allowEmpty: true,
-      ripple: false,
-      preserveIds: true,
-      gapOnDelete: true,
-      totalDuration: 10,
-    });
+    const videoClipsAfter = structuredClone(videoClipsBefore);
 
     assert.deepEqual(updated.map((segment) => segment.id), [1, 2, 4, 5]);
     assert.deepEqual(updated.map((segment) => segment.segmentId), [1, 2, 4, 5]);
     assert.deepEqual(updated, segments.filter((segment) => segment.id !== 3));
-    assert.deepEqual(
-      updatedClips.filter((clip) => clip.isDialogue),
-      clips.filter((clip) => clip.id !== 'clip-3')
-    );
-    const gaps = updatedClips.filter((clip) => clip.name === 'Gap');
-    assert.equal(gaps.length, 1);
-    assert.deepEqual([gaps[0].start, gaps[0].end], [4, 6]);
-    assertContinuousCoverage(updatedClips, 10);
+    assert.deepEqual(videoClipsAfter, videoClipsBefore);
+    assert.deepEqual(updated.map(({ startSec, endSec, audioStartSec, audioEndSec }) => [
+      startSec, endSec, audioStartSec, audioEndSec,
+    ]), [
+      [0, 2, 0.1, 1.9],
+      [2, 4, 2.1, 3.9],
+      [6, 8, 6.1, 7.9],
+      [8, 10, 8.1, 9.9],
+    ]);
+    assert.deepEqual(updated.map((segment) => segment.subtitleText), [
+      'subtitle 1', 'subtitle 2', 'subtitle 4', 'subtitle 5',
+    ]);
   });
 
   test('script hydration preserves non-sequential segment numbers', async () => {
@@ -79,7 +78,7 @@ describe('Remove-only timeline delete', () => {
   });
 
   test('middle video delete leaves survivor clips unchanged and inserts one exact Gap', async () => {
-    const { deleteClipById, deleteSegmentByIdOrIndex } = await import(pathToFileURL(timelineUtilsPath));
+    const { deleteClipById } = await import(pathToFileURL(timelineUtilsPath));
     const segments = Array.from({ length: 5 }, (_, index) => ({
       id: index + 1,
       segmentId: index + 1,
@@ -105,7 +104,7 @@ describe('Remove-only timeline delete', () => {
       gapOnDelete: true,
       totalDuration: 10,
     });
-    const updatedSegments = deleteSegmentByIdOrIndex(segments, clips[2].segmentId, { ripple: false, preserveIds: true });
+    const segmentsAfter = structuredClone(segments);
 
     assert.deepEqual(
       updated.filter((clip) => clip.isDialogue),
@@ -114,7 +113,7 @@ describe('Remove-only timeline delete', () => {
     const gaps = updated.filter((clip) => clip.name === 'Gap');
     assert.equal(gaps.length, 1);
     assert.deepEqual([gaps[0].start, gaps[0].end], [4, 6]);
-    assert.deepEqual(updatedSegments.map((segment) => segment.id), [1, 2, 4, 5]);
+    assert.deepEqual(segmentsAfter, segments);
     assertContinuousCoverage(updated, 10);
   });
 
@@ -290,15 +289,18 @@ describe('Remove-only timeline delete', () => {
     const mediaLibraryCode = fs.readFileSync(path.resolve(__dirname, '../../frontend/src/components/media/MediaLibrary.jsx'), 'utf8');
     const clipDeleteHandler = hookCode.slice(hookCode.indexOf('const handleDeleteClip'), hookCode.indexOf('// Update Clips'));
     const segmentDeleteHandler = hookCode.slice(hookCode.indexOf('const handleDeleteSegment'), hookCode.indexOf('// Update Timeline Subtitles'));
+    const deleteSelectedHandler = editorCode.slice(editorCode.indexOf('const handleDeleteSelected'), editorCode.indexOf('}, [selectedClipKind'));
 
-    assert.ok(hookCode.includes('deleteSegmentByIdOrIndex(segments, segmentKey, { ripple: false, preserveIds: true })'));
     assert.ok(hookCode.includes('deleteSegmentByIdOrIndex(scriptData.segments, segmentKey, { ripple: false, preserveIds: true })'));
     assert.ok(hookCode.includes('gapOnDelete: true'));
     assert.ok(clipDeleteHandler.includes('totalDuration: duration'));
-    assert.ok(clipDeleteHandler.includes('Math.max(clipStart, segmentStart) < Math.min(clipEnd, segmentEnd)'));
-    assert.ok(clipDeleteHandler.indexOf('for (const key of clipKeys)') < clipDeleteHandler.indexOf('const clipStart ='));
-    assert.ok(segmentDeleteHandler.includes('totalDuration: duration'));
-    assert.ok(editorCode.includes("selectedClipKind === 'video' && canDeleteVideo"));
+    assert.ok(!clipDeleteHandler.includes('deleteSegmentByIdOrIndex'));
+    assert.ok(!clipDeleteHandler.includes('handleUpdateTimelineSegments'));
+    assert.ok(!segmentDeleteHandler.includes('deleteClipById'));
+    assert.ok(!segmentDeleteHandler.includes('setVideoClips'));
+    assert.ok(editorCode.includes("if (selectedClipKind === 'video')"));
+    assert.ok(!deleteSelectedHandler.includes('matchingClip'));
+    assert.ok(!deleteSelectedHandler.includes('onDeleteClip(matchingClip'));
     assert.ok(!editorCode.includes("lastSelectedType === 'video' || selectedClipKind === 'video'"));
     assert.ok(editorCode.includes('{ ripple: false, preserveIds: true }'));
     assert.ok(mediaLibraryCode.includes('{ ripple: false, preserveIds: true }'));

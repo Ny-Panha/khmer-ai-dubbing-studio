@@ -102,7 +102,7 @@ describe('CapCut-Style Per-Clip Selection Kind Suite', () => {
     assert.ok(inspectorCode.includes('onDeleteClip'), 'renders delete button in video mode');
   });
 
-  it('5. Operation safety: Delete and Split respect selection kind and paired remove-only deletion', () => {
+  it('5. Delete dispatch respects selection kind without cross-track deletion', () => {
     let deletedVideoId = null;
     let deletedSegmentId = null;
 
@@ -128,5 +128,33 @@ describe('CapCut-Style Per-Clip Selection Kind Suite', () => {
     executeDelete('voice', 'clip-7', 7);
     assert.equal(deletedSegmentId, 7, 'Deleting with kind voice calls onDeleteSegment');
     assert.equal(deletedVideoId, null, 'onDeleteClip was not directly called');
+
+    const clipOperationsCode = fs.readFileSync('frontend/src/hooks/useClipOperations.js', 'utf8');
+    const clipDeleteHandler = clipOperationsCode.slice(
+      clipOperationsCode.indexOf('const handleDeleteClip'),
+      clipOperationsCode.indexOf('// Update Clips')
+    );
+    const segmentDeleteHandler = clipOperationsCode.slice(
+      clipOperationsCode.indexOf('const handleDeleteSegment'),
+      clipOperationsCode.indexOf('// Update Timeline Subtitles')
+    );
+    assert.ok(!clipDeleteHandler.includes('deleteSegmentByIdOrIndex'), 'video deletion does not delete a segment');
+    assert.ok(!clipDeleteHandler.includes('handleUpdateTimelineSegments'), 'video deletion does not update segments');
+    assert.ok(!segmentDeleteHandler.includes('deleteClipById'), 'voice deletion does not delete a video clip');
+    assert.ok(!segmentDeleteHandler.includes('setVideoClips'), 'voice deletion does not update video clips');
+
+    const shortcutsCode = fs.readFileSync('frontend/src/hooks/useShortcuts.js', 'utf8');
+    const deleteShortcut = shortcutsCode.slice(
+      shortcutsCode.indexOf('// Delete / Backspace:'),
+      shortcutsCode.indexOf('// Left / Right Arrows:')
+    );
+    const videoShortcut = deleteShortcut.slice(
+      deleteShortcut.indexOf("if (selectedClipKind === 'video')"),
+      deleteShortcut.indexOf("if (selectedClipKind === 'voice'")
+    );
+    const voiceBranchStart = deleteShortcut.indexOf("if (selectedClipKind === 'voice'");
+    const voiceShortcut = deleteShortcut.slice(voiceBranchStart, deleteShortcut.lastIndexOf('if (selectedSegmentId !== null'));
+    assert.ok(videoShortcut.includes('return;') && !videoShortcut.includes('onDeleteSegment'), 'video keyboard delete cannot fall through to a segment');
+    assert.ok(voiceShortcut.includes('return;') && !voiceShortcut.includes('onDeleteClip'), 'voice keyboard delete cannot fall through to a video clip');
   });
 });
