@@ -3,7 +3,47 @@
 ## Last Session
 - **Environment**: Antigravity IDE
 - **Branch**: `refactor/timeline-core-clean`
-- **Timestamp**: 2026-11-17T16:06:30+07:00
+- **Timestamp**: 2026-11-17T16:25:00+07:00
+
+## Summary: Bug Fix — Lock Playhead & Manual Selection While Paused (COMPLETED)
+- **Problem Diagnosed**:
+  - Owner reproduction: clicking a Gap clip on the VIDEO track selects the Gap and seeks the playhead to the click point (~00:08.3). About 2 seconds later with NO further input, selection and playhead snap back automatically to dialogue segment #2 (playhead to ~00:05) and the Gap is deselected.
+  - **Investigation Breakdown (Both Suspects Identified & Linked in a Fatal Sync Loop)**:
+    1. **Suspect 1 (Root cause of playhead jump)**:
+       - `mapTimelineToSourceTime` in `frontend/src/utils/timelineUtils.js` treated Gap clips as real media clips, mapping through synthetic/stale `sourceStart` ranges.
+       - In `useVideoPlayback.js`, `handleTimeUpdate` ran on `<video>` `timeupdate` events while PAUSED, re-derived timeline time `tlTime` from `<video>.currentTime` (which remained at or mapped to ~5s via first-match over overlapping ranges), and called `setCurrentTime(tlTime)`, actively moving the playhead away from the click point back to ~00:05.
+    2. **Suspect 2 (Root cause of Gap deselection)**:
+       - In `TimelineEditor.jsx`, the auto-follow `useEffect` ran even when paused, and its video cut tracking (`if (selectedClipKind === 'video')`) lacked an `isPlaying` check.
+       - When `currentTime` snapped back to ~00:05, auto-follow resolved dialogue segment #2 and called `onSelectClip` for dialogue clip #2, overriding the user's manual Gap selection.
+- **Key Changes Implemented**:
+  1. `frontend/src/utils/timelineUtils.js`:
+     - Imported `isGapClip` from `./timelineOps.js`.
+     - In `mapTimelineToSourceTime`: Skipped Gap clips (`if (isGapClip(c)) continue;`). When clicking/scrubbing in a Gap, returns `{ inClip: false, sourceTime: null, isGap: true, nextClip }`, where `nextClip` finds the next non-gap clip.
+     - In `mapSourceToTimelineTime`: Skipped Gap clips (`if (isGapClip(c)) continue;`), ensuring source media positions map only to actual video clips.
+  2. `frontend/src/hooks/useVideoPlayback.js`:
+     - In `handleTimeUpdate`: Guarded with `if (!isPlaying) return;` so that background media element events (`timeupdate`/`seeked`) while paused NEVER overwrite authoritative timeline `currentTime`.
+  3. `frontend/src/components/timeline/TimelineEditor.jsx`:
+     - In auto-follow `useEffect`: Added `if (!isPlaying) return;` so paused playback sync never overrides manual selection.
+     - In video cut tracking: Added `isPlaying &&` check (`if (isPlaying && selectedClipKind === 'video' && onSelectClip && ...)`).
+     - In `handleVideoMouseDown`: Cleared `lastPlayheadSegKeyRef.current = null` on Gap click, and anchored `lastPlayheadSegKeyRef.current = segKey` on dialogue clip click.
+  4. `backend/tests/timeline_paused_selection_seek_stability.test.js`:
+     - Comprehensive regression suite verifying:
+       - Static audit of `useVideoPlayback.js`, `TimelineEditor.jsx`, and `timelineUtils.js`.
+       - Gap click simulation: Seek to 8.3s while paused, 5 idle seconds with multiple background `timeupdate` events -> playhead remains at 8.3s, Gap remains selected.
+       - Dialogue clip click stability: Seek to dialogue clip while paused -> playhead and dialogue selection remain stable.
+       - Normal playback tracking: When `isPlaying = true`, playhead and active clip follow playback smoothly.
+- **Verification Evidence**:
+  - Production build: `npm run build --prefix frontend` (Vite build passed in 621ms, 0 errors).
+  - Test suites: **84 passed, 0 failed** across 14 timeline suites (`node --test backend/tests/timeline_*.test.js`), 100% green.
+- **Result**: Manual click selection is authoritative. While paused, playback sync never changes selection or moves playhead. Normal playback tracking while playing is fully preserved.
+
+## Active Environment
+- **Backend API**: `http://localhost:5000` (`/api/health`)
+- **Frontend Studio**: `http://localhost:5173`
+- **Branch**: `refactor/timeline-core-clean`
+
+## Next Steps
+- Changes committed and pushed to `origin/refactor/timeline-core-clean`.
 
 ## Summary: UI-Only Fix — Voice Clip Box Waveform True Extent Alignment (COMPLETED)
 - **Problem Diagnosed**:

@@ -538,8 +538,11 @@ function TimelineEditor({
   }, []);
 
   // Auto-follow playhead line |: Update selected segment and Inspector when playhead moves across speaking segments
-  // Runs both during playback and when seeking/paused; preserves manual click selection until playhead crosses into next segment
+  // Normal playback following while playing tracks segments; while PAUSED, manual click selection is authoritative
   useEffect(() => {
+    // While PAUSED, playback sync must never change selection or override user click
+    if (!isPlaying) return;
+
     if (!scriptSegments || scriptSegments.length === 0 || !Number.isFinite(currentTime) || dragState || isScrubbing || isScrubbingRef.current) return;
 
     // Preserve explicit segment selection (from "3. Subs" click or timeline clip click) across
@@ -589,7 +592,7 @@ function TimelineEditor({
         }
 
         // When following video cuts during playback, track active video clip
-        if (selectedClipKind === 'video' && onSelectClip && videoClips && videoClips.length > 0) {
+        if (isPlaying && selectedClipKind === 'video' && onSelectClip && videoClips && videoClips.length > 0) {
           const matchClip = videoClips.find(c => c.segmentId === activeSeg.id || c.segmentIndex === activeSeg.id);
           if (matchClip) {
             onSelectClip(matchClip.id);
@@ -906,6 +909,7 @@ function TimelineEditor({
     if (isGapClip(clip)) {
       selectedSegmentIdRef.current = null;
       lastSyncedInspectorIdRef.current = null;
+      lastPlayheadSegKeyRef.current = null;
       setSelectedSubId(null);
       setSelectedAudioId(null);
       if (onSelectSegment) onSelectSegment(null);
@@ -915,12 +919,14 @@ function TimelineEditor({
         const segKey = targetSeg._uid || targetSeg.id;
         selectedSegmentIdRef.current = segKey;
         lastSyncedInspectorIdRef.current = segKey;
+        lastPlayheadSegKeyRef.current = segKey;
         setSelectedAudioId(segKey);
         setSelectedSubId(segKey);
         if (onSelectSegment) onSelectSegment(segKey);
       } else {
         selectedSegmentIdRef.current = null;
         lastSyncedInspectorIdRef.current = null;
+        lastPlayheadSegKeyRef.current = null;
         setSelectedSubId(null);
         setSelectedAudioId(null);
         if (onSelectSegment) onSelectSegment(null);

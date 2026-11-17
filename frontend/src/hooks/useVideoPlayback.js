@@ -88,6 +88,13 @@ export function useVideoPlayback({
   const handleTimeUpdate = (explicitMediaTime) => {
     if (!videoRef?.current) return;
     const v = videoRef.current;
+
+    // While PAUSED, playback sync must NEVER move the playhead away from where the user clicked/seeked.
+    // Media element timeupdate/seeked events while paused must not overwrite authoritative timeline currentTime.
+    if (!isPlaying) {
+      return;
+    }
+
     const realDur = v.duration || duration || 0;
     const currentMediaTime = (typeof explicitMediaTime === 'number' && Number.isFinite(explicitMediaTime))
       ? explicitMediaTime

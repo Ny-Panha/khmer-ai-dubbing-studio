@@ -3,6 +3,7 @@ import {
   formatMinSec,
   formatTimecode,
 } from './timestampUtils.js';
+import { isGapClip } from './timelineOps.js';
 
 /**
  * Timeline mathematical and non-linear editing (NLE) data manipulation utilities
@@ -106,6 +107,7 @@ export function mapTimelineToSourceTime(timelineTime, clips = []) {
 
   for (let i = 0; i < clips.length; i++) {
     const c = clips[i];
+    if (isGapClip(c)) continue;
     const cStart = Number.isFinite(c.start) ? c.start : 0;
     const cEnd = Number.isFinite(c.end) ? c.end : (cStart + 0.1);
     const cSourceStart = Number.isFinite(c.sourceStart) ? c.sourceStart : cStart;
@@ -125,8 +127,8 @@ export function mapTimelineToSourceTime(timelineTime, clips = []) {
     }
   }
 
-  // Not in any clip -> check if in a gap between clips or before/after
-  const nextClip = clips.find((c) => (Number.isFinite(c?.start) ? c.start : 0) > safeTime) || null;
+  // Not in any dialogue clip -> check if in a gap between clips or before/after
+  const nextClip = clips.find((c) => !isGapClip(c) && (Number.isFinite(c?.start) ? c.start : 0) > safeTime) || null;
   return {
     inClip: false,
     sourceTime: null,
@@ -149,7 +151,7 @@ export function mapSourceToTimelineTime(sourceTime, clips = [], fromIndex = 0) {
 
   // 1. Check fromIndex
   const cur = clips[startIdx];
-  if (cur && sourceTime >= cur.sourceStart && sourceTime <= cur.sourceEnd) {
+  if (cur && !isGapClip(cur) && sourceTime >= cur.sourceStart && sourceTime <= cur.sourceEnd) {
     const offset = sourceTime - cur.sourceStart;
     return parseFloat((cur.start + offset).toFixed(3));
   }
@@ -157,7 +159,7 @@ export function mapSourceToTimelineTime(sourceTime, clips = [], fromIndex = 0) {
   // 2. Check next clip in timeline order
   if (startIdx + 1 < clips.length) {
     const next = clips[startIdx + 1];
-    if (sourceTime >= next.sourceStart && sourceTime <= next.sourceEnd) {
+    if (next && !isGapClip(next) && sourceTime >= next.sourceStart && sourceTime <= next.sourceEnd) {
       const offset = sourceTime - next.sourceStart;
       return parseFloat((next.start + offset).toFixed(3));
     }
@@ -166,7 +168,7 @@ export function mapSourceToTimelineTime(sourceTime, clips = [], fromIndex = 0) {
   // 3. Scan forward in timeline order
   for (let i = startIdx + 2; i < clips.length; i++) {
     const c = clips[i];
-    if (sourceTime >= c.sourceStart && sourceTime <= c.sourceEnd) {
+    if (c && !isGapClip(c) && sourceTime >= c.sourceStart && sourceTime <= c.sourceEnd) {
       const offset = sourceTime - c.sourceStart;
       return parseFloat((c.start + offset).toFixed(3));
     }
@@ -175,7 +177,7 @@ export function mapSourceToTimelineTime(sourceTime, clips = [], fromIndex = 0) {
   // 4. Fallback: scan backward if seeked before
   for (let i = startIdx - 1; i >= 0; i--) {
     const c = clips[i];
-    if (sourceTime >= c.sourceStart && sourceTime <= c.sourceEnd) {
+    if (c && !isGapClip(c) && sourceTime >= c.sourceStart && sourceTime <= c.sourceEnd) {
       const offset = sourceTime - c.sourceStart;
       return parseFloat((c.start + offset).toFixed(3));
     }
