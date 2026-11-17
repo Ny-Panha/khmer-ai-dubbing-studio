@@ -22,7 +22,8 @@
 - Branch: `fix/delete-no-ripple`; Backend API `http://localhost:5000`; Frontend `http://localhost:5173`.
 
 ## Next Steps
-- Commit and push fix to `fix/delete-no-ripple`.
+- Pushed commit `acaaa37` to `origin/fix/delete-no-ripple`.
+- Ready for testing.
 
 ## Summary: Unconditional Video Split Under Playhead & Fresh Episode Virtual Materialization
 - **Problem Solved**: Toolbar scissors failed with "គ្មាន clip នៅត្រង់ playhead ទេ" on fresh episodes when video clips were unselected, and unselected segments previously hijacked playhead splits.
