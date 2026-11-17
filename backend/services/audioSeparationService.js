@@ -516,10 +516,6 @@ function killSeparationJob(identifier = 'all') {
   return { success: true, killed };
 }
 
-function cancelSeparationJob(jobId) {
-  return killSeparationJob(jobId);
-}
-
 function os_mkdir_p(dir) {
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
@@ -540,7 +536,6 @@ module.exports = {
   separateAudio,
   killSeparationJob,
   killAllDemucsSystemProcesses,
-  cancelSeparationJob,
   getSeparationCacheDir,
   getSeparationProgress,
   isSeparationBusy,

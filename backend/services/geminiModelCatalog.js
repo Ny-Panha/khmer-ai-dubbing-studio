@@ -298,36 +298,11 @@ function isUsableDubbingModel(modelId) {
   return DUBBING_CASCADE_MODELS.includes(clean);
 }
 
-function buildOrderedCascadeModels(preferredOrRequested = 'auto', fallbackList = null) {
-  const clean = String(preferredOrRequested || '').trim();
-  const envList = process.env.GEMINI_CASCADE_MODELS
-    ? process.env.GEMINI_CASCADE_MODELS.split(',').map((s) => s.trim()).filter(Boolean)
-    : null;
-  const base = (Array.isArray(fallbackList) && fallbackList.length > 0)
-    ? fallbackList
-    : (envList && envList.length > 0 ? envList : DUBBING_CASCADE_MODELS);
-  const seen = new Set();
-  const ordered = [];
-
-  if (clean && clean !== 'auto') {
-    seen.add(clean);
-    ordered.push(clean);
-  }
-  for (const id of base) {
-    if (!seen.has(id)) {
-      seen.add(id);
-      ordered.push(id);
-    }
-  }
-  return ordered;
-}
-
 module.exports = {
   GEMINI_MODEL_CATALOG,
   DUBBING_CASCADE_MODELS,
   VISION_CASCADE_MODELS,
   getModelCatalogEntry,
   isUsableDubbingModel,
-  buildOrderedCascadeModels,
 };
 

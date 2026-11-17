@@ -159,136 +159,6 @@ function getSafeCliPath(targetPath) {
 // ============================================================================
 
 // In-flight proxy video creation jobs to prevent race conditions and duplicate FFmpeg processes
-const inFlightProxyJobs = new Map();
-
-/**
- * បង្កើតវីដេអូ Proxy 540p @ 12fps (CRF 22) ច្បាស់សម្រាប់ Gemini OCR & Vision
- * @param {string} inputVideoPath
- * @param {object} options
- * @returns {Promise<string>}
- */
-function createGeminiProxyVideo(inputVideoPath, options = {}) {
-  if (!fs.existsSync(inputVideoPath)) {
-    return Promise.reject(new Error(`រកមិនឃើញវីដេអូដើម៖ ${inputVideoPath}`));
-  }
-
-  const scaleHeight = Number(options.scaleHeight || 540);
-  const fps = Number(options.fps || 12);
-  const crf = Number(options.crf || 22);
-
-  const dir = path.dirname(inputVideoPath);
-  const ext = path.extname(inputVideoPath);
-  const baseName = path.basename(inputVideoPath, ext);
-  const proxyOutputPath = path.join(dir, `${baseName}_gemini_proxy.mp4`);
-
-  // 1. If an existing complete proxy file already exists and is valid (> 100KB), reuse it
-  if (fs.existsSync(proxyOutputPath)) {
-    try {
-      const stat = fs.statSync(proxyOutputPath);
-      if (stat.size > 100 * 1024) {
-        console.log(`[FFmpegService] ⚡ ប្រើប្រាស់ Proxy Video ដែលមានស្រាប់៖ ${path.basename(proxyOutputPath)} (${(stat.size / (1024 * 1024)).toFixed(2)}MB)`);
-        return Promise.resolve(proxyOutputPath);
-      } else {
-        // Stale/truncated proxy from previous aborted run -> remove
-        fs.unlinkSync(proxyOutputPath);
-      }
-    } catch (_) {}
-  }
-
-  // 2. If a proxy creation job is already running for this video, await that exact job (deduplication)
-  if (inFlightProxyJobs.has(inputVideoPath)) {
-    console.log(`[FFmpegService] ⏳ កំពុងរង់ចាំ Proxy Video ដែលកំពុងដំណើរការស្រាប់៖ ${path.basename(inputVideoPath)}`);
-    return inFlightProxyJobs.get(inputVideoPath);
-  }
-
-  const jobPromise = new Promise((resolve) => {
-    console.log(`[FFmpegService] 🗜️ កំពុងបង្រួមវីដេអូ Proxy ${scaleHeight}p @ ${fps}fps (CRF ${crf}) សម្រាប់ Gemini OCR & Vision...`);
-    const startTime = Date.now();
-
-    // Use a unique temporary file so that proxyOutputPath never exists until 100% finished
-    const tempOutputPath = path.join(dir, `${baseName}_gemini_proxy.tmp_${Date.now()}_${process.pid}.mp4`);
-
-    const safeInputPath = getSafeCliPath(inputVideoPath);
-    const safeTempPath = getSafeCliPath(tempOutputPath);
-
-    const args = [
-      "-y",
-      "-i", safeInputPath,
-      "-vf", `scale='if(gt(iw,ih),-2,${scaleHeight})':'if(gt(iw,ih),${scaleHeight},-2)',fps=${fps}`,
-      "-c:v", "libx264",
-      "-preset", "veryfast",
-      "-crf", String(crf),
-      "-c:a", "aac",
-      "-ac", "1",
-      "-ar", "16000",
-      "-b:a", "64k",
-      "-movflags", "+faststart",
-      safeTempPath,
-    ];
-
-    const ffmpegProcess = spawn(FFMPEG_PATH, args);
-    let errorLog = "";
-
-    ffmpegProcess.stderr.on("data", (data) => {
-      errorLog += data.toString();
-    });
-
-    ffmpegProcess.on("close", (code) => {
-      inFlightProxyJobs.delete(inputVideoPath);
-      if (code === 0 && fs.existsSync(tempOutputPath)) {
-        try {
-          // Atomically rename temp file to final proxy output path
-          if (fs.existsSync(proxyOutputPath)) {
-            try { fs.unlinkSync(proxyOutputPath); } catch (_) {}
-          }
-          fs.renameSync(tempOutputPath, proxyOutputPath);
-
-          const origSize = (fs.statSync(inputVideoPath).size / (1024 * 1024)).toFixed(2);
-          const proxySize = (fs.statSync(proxyOutputPath).size / (1024 * 1024)).toFixed(2);
-          const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
-
-          console.log(
-            `[FFmpegService] ✅ បង្កើត Proxy រួចរាល់ក្នុង ${elapsed}s! (ទំហំថយពី ${origSize}MB ➜ ${proxySize}MB)`
-          );
-          resolve(proxyOutputPath);
-        } catch (renameErr) {
-          console.warn(`[FFmpegService] ⚠️ Rename failed, using temp proxy:`, renameErr.message);
-          resolve(tempOutputPath);
-        }
-      } else {
-        if (fs.existsSync(tempOutputPath)) {
-          try { fs.unlinkSync(tempOutputPath); } catch (_) {}
-        }
-        console.error(`[FFmpegService] ❌ បរាជ័យក្នុងការបង្កើត Proxy (Code ${code}):`, errorLog.slice(-500));
-        resolve(inputVideoPath);
-      }
-    });
-
-    ffmpegProcess.on("error", (err) => {
-      inFlightProxyJobs.delete(inputVideoPath);
-      if (fs.existsSync(tempOutputPath)) {
-        try { fs.unlinkSync(tempOutputPath); } catch (_) {}
-      }
-      console.warn(`[FFmpegService] ⚠️ FFmpeg Spawn Error, ប្រើវីដេអូដើមជំនួស៖`, err.message);
-      resolve(inputVideoPath);
-    });
-  });
-
-  inFlightProxyJobs.set(inputVideoPath, jobPromise);
-  return jobPromise;
-}
-
-function cleanupProxyFile(proxyPath, originalPath) {
-  if (proxyPath && proxyPath !== originalPath && fs.existsSync(proxyPath)) {
-    try {
-      fs.unlinkSync(proxyPath);
-      console.log(`[FFmpegService] 🧹 បានលុប File Proxy បណ្ដោះអាសន្ន៖ ${path.basename(proxyPath)}`);
-    } catch (err) {
-      console.warn(`[FFmpegService] ⚠️ មិនអាចលុប Proxy File បានទេ៖`, err.message);
-    }
-  }
-}
-
 // ============================================================================
 // ផ្នែកទី 2: MEDIA DURATION & AUTO TIME-STRETCH (silenceremove + atempo)
 // ============================================================================
@@ -1386,10 +1256,6 @@ function pauseJobRenderProcess(jobId) {
     return true;
   }
   return false;
-}
-
-function getActiveJobRenderProcess(jobId) {
-  return jobRenderProcesses.get(jobId) || null;
 }
 
 /**
@@ -2823,216 +2689,6 @@ function createSynchronizedNarrationAudio(segments, outputAudioPath, options = {
   });
 }
 
-function renderDubbedVideo(params) {
-  // If master audio exists or segments array contains valid audio, delegate to renderDubbedVideoWithDucking
-  const hasMaster = Boolean(params.khmerAudioPath && fs.existsSync(params.khmerAudioPath));
-  const validSegs = (params.segments || []).filter((s) => (s.audioPath && fs.existsSync(s.audioPath)) || (s.audioFile && fs.existsSync(s.audioFile)));
-  if (hasMaster || validSegs.length > 0) {
-    return renderDubbedVideoWithDucking({
-      inputVideoPath: params.videoPath,
-      masterAudioPath: params.khmerAudioPath || null,
-      fullAudioPath: params.khmerAudioPath || null,
-      segments: validSegs,
-      outputVideoPath: params.outputPath,
-      soundMode: params.duckingVolume === 0 ? "replace" : "ducking",
-      bgVolume: params.duckingVolume ?? 0.15,
-      khmerVolume: params.khmerVolume ?? 1.3,
-      burnSubtitles: Boolean(params.burnSubtitles),
-      aspectRatio: params.aspectRatio,
-      verticalStyle: params.verticalStyle || "pad",
-      subtitleOptions: {
-        textColor: params.subtitleColor === "yellow" ? "#FFE600" : "#FFFFFF",
-        fontSize: params.subtitleSize === "large" ? 64 : params.subtitleSize === "small" ? 42 : 52,
-        aspectRatio: params.aspectRatio,
-        verticalStyle: params.verticalStyle || "pad",
-      },
-      videoClips: params.videoClips || [],
-    }).then((res) => res.outputVideoPath);
-  }
-
-  // Fallback if full audio was pre-baked
-  return new Promise((resolve, reject) => {
-    if (!fs.existsSync(params.videoPath)) {
-      return reject(new Error(`Input video not found: ${params.videoPath}`));
-    }
-    if (!fs.existsSync(params.khmerAudioPath)) {
-      return reject(new Error(`Khmer audio not found: ${params.khmerAudioPath}`));
-    }
-
-    const command = ffmpeg().input(params.videoPath).input(params.khmerAudioPath);
-    const filterComplex = [];
-    const duckVal = parseFloat(params.duckingVolume) || 0;
-    const khmerVal = parseFloat(params.khmerVolume) || 1.3;
-
-    if (duckVal === 0) {
-      filterComplex.push(
-        "[0:a]volume=0[original_bg]",
-        `[1:a]volume=${khmerVal}[khmer_voice]`,
-        "[original_bg][khmer_voice]amix=inputs=2:duration=first:dropout_transition=2147483647,volume=2,alimiter=limit=0.95[a_out]"
-      );
-    } else {
-      filterComplex.push(
-        `[0:a]volume=${duckVal}[original_bg]`,
-        `[1:a]volume=${khmerVal}[khmer_voice]`,
-        "[original_bg][khmer_voice]amix=inputs=2:duration=first:dropout_transition=2147483647,volume=2,alimiter=limit=0.95[a_out]"
-      );
-    }
-
-    if (params.burnSubtitles && params.subtitlePath && fs.existsSync(params.subtitlePath)) {
-      const escapedSubPath = params.subtitlePath.replace(/\\/g, "/").replace(/:/g, "\\:");
-      filterComplex.push(`[0:v]subtitles='${escapedSubPath}'[v_out]`);
-      command.complexFilter(filterComplex).outputOptions(["-map [v_out]", "-map [a_out]"]);
-    } else {
-      command.complexFilter(filterComplex).outputOptions(["-map 0:v", "-map [a_out]"]);
-    }
-
-    command
-      .videoCodec("libx264")
-      .audioCodec("aac")
-      .outputOptions(["-preset fast", "-pix_fmt yuv420p", "-shortest"])
-      .output(params.outputPath)
-      .on("end", () => resolve(params.outputPath))
-      .on("error", reject)
-      .run();
-  });
-}
-
-/**
- * 🔊 Audio Loudness & Peak Diagnostics Tool (volumedetect)
- * Analyzes audio levels at the beginning, middle, and end of the timeline
- * to ensure uniform loudness and prevent audio clipping/distortion.
- * @param {string} audioPath
- * @returns {Promise<{ durationSec: number, beginning: object, middle: object, end: object, maxDifferenceDb: number, isBalanced: boolean }>}
- */
-function measureAudioLoudnessDiagnostics(audioPath) {
-  return new Promise((resolve, reject) => {
-    if (!audioPath || !fs.existsSync(audioPath)) {
-      return reject(new Error(`Audio file not found: ${audioPath}`));
-    }
-    const safePath = getSafeCliPath(audioPath);
-    getMediaDuration(audioPath)
-      .then((durSec) => {
-        if (!durSec || durSec <= 0) {
-          return resolve({
-            durationSec: 0,
-            beginning: { meanVolumeDb: 0, maxVolumeDb: 0, isClipping: false },
-            middle: { meanVolumeDb: 0, maxVolumeDb: 0, isClipping: false },
-            end: { meanVolumeDb: 0, maxVolumeDb: 0, isClipping: false },
-            maxDifferenceDb: 0,
-            isBalanced: true,
-          });
-        }
-
-        const analyzeSegment = (startSec, durationSec) => {
-          return new Promise((resSeg) => {
-            let stderrRaw = "";
-            let stderrSpeech = "";
-
-            ffmpeg()
-              .input(safePath)
-              .seekInput(Math.max(0, startSec))
-              .duration(durationSec)
-              .audioFilters("volumedetect")
-              .format("null")
-              .output("-")
-              .on("stderr", (line) => { stderrRaw += line + "\n"; })
-              .on("end", () => {
-                const rawMean = (stderrRaw.match(/mean_volume:\s+([-0-9.]+)\s+dB/) || [])[1] || "-99.0";
-                const rawMax = (stderrRaw.match(/max_volume:\s+([-0-9.]+)\s+dB/) || [])[1] || "-99.0";
-
-                // Secondary gated speech measurement excluding natural dialogue pauses
-                ffmpeg()
-                  .input(safePath)
-                  .seekInput(Math.max(0, startSec))
-                  .duration(durationSec)
-                  .audioFilters("silenceremove=stop_periods=-1:stop_duration=0.08:stop_threshold=-45dB,volumedetect")
-                  .format("null")
-                  .output("-")
-                  .on("stderr", (line) => { stderrSpeech += line + "\n"; })
-                  .on("end", () => {
-                    const speechMean = (stderrSpeech.match(/mean_volume:\s+([-0-9.]+)\s+dB/) || [])[1] || "-99.0";
-                    const speechMax = (stderrSpeech.match(/max_volume:\s+([-0-9.]+)\s+dB/) || [])[1] || "-99.0";
-                    const pSpeechMean = parseFloat(speechMean);
-                    const pSpeechMax = parseFloat(speechMax);
-                    const pRawMean = parseFloat(rawMean);
-                    const pRawMax = parseFloat(rawMax);
-
-                    resSeg({
-                      meanVolumeDb: pRawMean,
-                      maxVolumeDb: pRawMax,
-                      speechMeanVolumeDb: pSpeechMean > -90 ? pSpeechMean : pRawMean,
-                      speechMaxVolumeDb: pSpeechMax > -90 ? pSpeechMax : pRawMax,
-                      isClipping: pRawMax >= -0.05,
-                    });
-                  })
-                  .on("error", () => {
-                    resSeg({
-                      meanVolumeDb: parseFloat(rawMean),
-                      maxVolumeDb: parseFloat(rawMax),
-                      speechMeanVolumeDb: parseFloat(rawMean),
-                      speechMaxVolumeDb: parseFloat(rawMax),
-                      isClipping: parseFloat(rawMax) >= -0.05,
-                    });
-                  })
-                  .run();
-              })
-              .on("error", () => {
-                resSeg({ meanVolumeDb: -99.0, maxVolumeDb: -99.0, speechMeanVolumeDb: -99.0, speechMaxVolumeDb: -99.0, isClipping: false });
-              })
-              .run();
-          });
-        };
-
-        const sampleDur = Math.min(15, Math.max(1, durSec / 4));
-        const midStart = Math.max(0, (durSec - sampleDur) / 2);
-        const endStart = Math.max(0, durSec - sampleDur);
-
-        Promise.all([
-          analyzeSegment(0, sampleDur),
-          analyzeSegment(midStart, sampleDur),
-          analyzeSegment(endStart, sampleDur),
-        ]).then(([beginning, middle, end]) => {
-          const rawMeans = [beginning.meanVolumeDb, middle.meanVolumeDb, end.meanVolumeDb].filter(v => v > -90);
-          const speechMeans = [beginning.speechMeanVolumeDb, middle.speechMeanVolumeDb, end.speechMeanVolumeDb].filter(v => v > -90);
-          const peaks = [beginning.maxVolumeDb, middle.maxVolumeDb, end.maxVolumeDb].filter(v => v > -90);
-
-          const wholeWindowMeanVariationDb = rawMeans.length > 0 ? parseFloat((Math.max(...rawMeans) - Math.min(...rawMeans)).toFixed(2)) : 0;
-          const speechActiveMeanVariationDb = speechMeans.length > 0 ? parseFloat((Math.max(...speechMeans) - Math.min(...speechMeans)).toFixed(2)) : 0;
-          const peakVariationDb = peaks.length > 0 ? parseFloat((Math.max(...peaks) - Math.min(...peaks)).toFixed(2)) : 0;
-          const isClipping = [beginning, middle, end].some(s => s.isClipping);
-
-          // Defined using speech-active loudness metric (<4.0 dB) and peak variation (<5.0 dB) with zero clipping
-          const isBalanced = speechActiveMeanVariationDb < 4.0 && peakVariationDb < 5.0 && !isClipping;
-          const naturalPauseDetected = (wholeWindowMeanVariationDb - speechActiveMeanVariationDb) > 2.5;
-
-          resolve({
-            durationSec: durSec,
-            beginning,
-            middle,
-            end,
-            wholeWindowMeanVariationDb,
-            speechActiveMeanVariationDb,
-            peakVariationDb,
-            meanDifferenceDb: wholeWindowMeanVariationDb,
-            peakDifferenceDb: peakVariationDb,
-            maxDifferenceDb: speechActiveMeanVariationDb,
-            isClipping,
-            isBalanced,
-            naturalPauseDetected,
-          });
-        }).catch(reject);
-      })
-      .catch(reject);
-  });
-}
-/**
- * Extract high-resolution video frames at specified timestamps using FFmpeg fast seek
- * @param {string} inputVideoPath
- * @param {number[]} timestampsSec Array of timestamps in seconds
- * @param {string} outputDir Directory where frames will be saved
- * @param {object} options
- * @returns {Promise<Array<{ timestampSec: number, filePath: string }>>}
- */
 async function extractFramesAtTimestamps(inputVideoPath, timestampsSec = [], outputDir, options = {}) {
   if (options?.signal?.aborted) {
     throw createAbortError("Frame extraction aborted");
@@ -4262,8 +3918,6 @@ module.exports = {
   checkQsvSupport,
   splitVideoIntoEpisodes,
   applyInnerThoughtAudioEffect,
-  createGeminiProxyVideo,
-  cleanupProxyFile,
   extractFramesAtTimestamps,
   extractFramesStreaming,
   extractSubtitleDifferenceGrid,
@@ -4290,15 +3944,12 @@ module.exports = {
   extractValidTimestamp,
   resolveSegmentStartSec,
   generateSrtFile,
-  renderDubbedVideo,
   createSynchronizedNarrationAudio,
-  measureAudioLoudnessDiagnostics,
   getMediaInfo,
   getVideoMetadata,
   getSafeCliPath,
   detectSpeechBounds,
   cancelJobRenderProcess,
   pauseJobRenderProcess,
-  getActiveJobRenderProcess,
 };
 

@@ -1062,5 +1062,4 @@ module.exports = {
   getPacificDateKey,
   getNextPacificMidnightMs,
   parseGeminiRateLimitDetails,
-  DEFAULT_QUOTA_SETTINGS: DEFAULT_SETTINGS,
 };

@@ -222,37 +222,7 @@ function classifySegmentAcousticGender(mediaFilePathOrPcm, startSecOrSampleRate 
   });
 }
 
-/**
- * Classify dialogue segments using original media acoustic evidence
- * @param {Array} segments - Array of segments with startSec and endSec
- * @param {string} mediaFilePath - Source video or extracted audio path
- * @returns {Promise<Array>} enriched segments with acousticGender, acousticF0, acousticConfidence
- */
-async function classifySegmentsFromMedia(segments = [], mediaFilePath) {
-  if (!mediaFilePath || !fs.existsSync(mediaFilePath) || !Array.isArray(segments) || segments.length === 0) {
-    return segments;
-  }
-
-  const enriched = [];
-  for (const seg of segments) {
-    const startSec = Number(seg.startSeconds ?? seg.startSec ?? 0);
-    const endSec = Number(seg.endSeconds ?? seg.endSec ?? startSec + 2.5);
-    const durSec = Math.max(0.5, endSec - startSec);
-
-    const acoustic = await classifySegmentAcousticGender(mediaFilePath, startSec, durSec);
-    enriched.push({
-      ...seg,
-      acousticGender: acoustic.gender,
-      acousticF0: acoustic.f0,
-      acousticConfidence: acoustic.confidence,
-    });
-  }
-
-  return enriched;
-}
-
 module.exports = {
   computeYinPitch,
   classifySegmentAcousticGender,
-  classifySegmentsFromMedia,
 };
