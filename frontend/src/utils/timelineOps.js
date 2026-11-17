@@ -865,13 +865,16 @@ export function autoAlign(state, { totalDuration, options = {} }) {
     const cleanSeg = { ...seg };
     delete cleanSeg._canonicalStart;
     delete cleanSeg._canonicalEnd;
+    if (cleanSeg.overrunRatio === undefined) {
+      delete cleanSeg.overrunRatio;
+    }
 
-    aligned.push({
+    const alignedSeg = {
       ...cleanSeg,
-      id: isUserShifted && seg.id !== undefined ? seg.id : (i + 1),
-      segmentId: isUserShifted && (seg.segmentId !== undefined || seg.id !== undefined) ? (seg.segmentId ?? seg.id) : (i + 1),
-      sourceStartSec: seg._canonicalStart,
-      sourceEndSec: seg._canonicalEnd,
+      id: seg.id !== undefined ? seg.id : (i + 1),
+      segmentId: seg.segmentId !== undefined ? seg.segmentId : (seg.id !== undefined ? seg.id : (i + 1)),
+      sourceStartSec: seg.sourceStartSec !== undefined ? seg.sourceStartSec : seg._canonicalStart,
+      sourceEndSec: seg.sourceEndSec !== undefined ? seg.sourceEndSec : seg._canonicalEnd,
       startSec: targetStart,
       endSec: finalEndSec,
       duration: finalDur,
@@ -881,7 +884,6 @@ export function autoAlign(state, { totalDuration, options = {} }) {
       rawAudioDur: effectiveDur,
       audioTrimmed: Boolean(cleanSeg.userTrimmed || cleanSeg.audioTrimmed),
       audioOverrun: Boolean(cleanSeg.audioOverrun),
-      overrunRatio: cleanSeg.overrunRatio,
       trackRow: targetRow,
       trackId: `voice-${targetRow + 1}`,
       subTrackRow: targetSubRow,
@@ -895,7 +897,14 @@ export function autoAlign(state, { totalDuration, options = {} }) {
       playbackRate: 1.0,
       needsTimeStretch: false,
       userShifted: isUserShifted,
-    });
+    };
+    if (cleanSeg.overrunRatio !== undefined) {
+      alignedSeg.overrunRatio = cleanSeg.overrunRatio;
+    } else {
+      delete alignedSeg.overrunRatio;
+    }
+
+    aligned.push(alignedSeg);
   }
 
   // R5 Hard guard: segment count in == segment count out
@@ -926,15 +935,15 @@ export function resetTiming(state, { totalDuration }) {
   const reset = segments
     .filter((seg) => seg && typeof seg === 'object')
     .map((seg, idx) => {
-      const srcStart = (typeof seg.startSec === 'number' && !isNaN(seg.startSec))
-        ? seg.startSec
-        : ((typeof seg.sourceStartSec === 'number' && !isNaN(seg.sourceStartSec))
-          ? seg.sourceStartSec
+      const srcStart = (typeof seg.sourceStartSec === 'number' && !isNaN(seg.sourceStartSec) && seg.sourceStartSec >= 0)
+        ? seg.sourceStartSec
+        : ((typeof seg.startSec === 'number' && !isNaN(seg.startSec) && seg.startSec >= 0)
+          ? seg.startSec
           : idx * 3.5);
-      const rawSrcEnd = (typeof seg.endSec === 'number' && !isNaN(seg.endSec) && seg.endSec > srcStart)
-        ? seg.endSec
-        : ((typeof seg.sourceEndSec === 'number' && !isNaN(seg.sourceEndSec) && seg.sourceEndSec > srcStart)
-          ? seg.sourceEndSec
+      const rawSrcEnd = (typeof seg.sourceEndSec === 'number' && !isNaN(seg.sourceEndSec) && seg.sourceEndSec > srcStart)
+        ? seg.sourceEndSec
+        : ((typeof seg.endSec === 'number' && !isNaN(seg.endSec) && seg.endSec > srcStart)
+          ? seg.endSec
           : srcStart + 2.2);
 
       const safeStart = hasValidVideoEnd ? Math.min(srcStart, Math.max(0, totalDuration - 1.0)) : srcStart;
@@ -965,10 +974,10 @@ export function resetTiming(state, { totalDuration }) {
       }
       subTrackLastEnds[targetSubRow] = safeEnd;
 
-      return {
+      const resetSeg = {
         ...seg,
-        id: idx + 1,
-        segmentId: idx + 1,
+        id: seg.id !== undefined ? seg.id : (idx + 1),
+        segmentId: seg.segmentId !== undefined ? seg.segmentId : (seg.id !== undefined ? seg.id : (idx + 1)),
         sourceStartSec: r2(safeStart),
         sourceEndSec: r2(safeEnd),
         startSec: r2(safeStart),
@@ -980,7 +989,6 @@ export function resetTiming(state, { totalDuration }) {
         rawAudioDur: hasAudioFlag ? audioDur : undefined,
         audioTrimmed: false,
         audioOverrun: false,
-        overrunRatio: undefined,
         finalAudioDuration: hasAudioFlag ? audioDur : seg.finalAudioDuration,
         audioDuration: hasAudioFlag ? audioDur : seg.audioDuration,
         trackRow: targetRow,
@@ -995,6 +1003,8 @@ export function resetTiming(state, { totalDuration }) {
         audioEnd: formatMinSec(safeEnd),
         userShifted: isUserShifted,
       };
+      delete resetSeg.overrunRatio;
+      return resetSeg;
     });
 
   return ok({

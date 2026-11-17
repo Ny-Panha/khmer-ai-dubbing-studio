@@ -16,6 +16,8 @@ import {
   deleteGap as deleteGapOp,
   splitClip as splitClipOp,
   splitSegment as splitSegmentOp,
+  autoAlign as autoAlignOp,
+  resetTiming as resetTimingOp,
   isGapClip,
 } from '../utils/timelineOps';
 import { parseTimeToSeconds, formatTimecode, formatMinSec, getSegmentAudioDuration } from '../utils/timestampUtils';
@@ -321,88 +323,6 @@ export function useClipOperations({
       return;
     }
 
-    // 1. If leading gap exists (e.g. from deleting clips/segments at 00:00), snap everything to 00:00!
-    let leadOffset = 0;
-    const firstSegStart = typeof currentSegments[0].startSec === 'number'
-      ? currentSegments[0].startSec
-      : parseTimeToSeconds(currentSegments[0].start, 0);
-
-    const firstClipStart = Array.isArray(videoClips) && videoClips.length > 0 ? (videoClips[0].start || 0) : 0;
-
-    if (firstSegStart > 0.05 || firstClipStart > 0.05) {
-      leadOffset = Math.min(
-        firstSegStart > 0.05 ? firstSegStart : Infinity,
-        firstClipStart > 0.05 ? firstClipStart : Infinity
-      );
-      if (leadOffset === Infinity) leadOffset = 0;
-    }
-
-    // Snap video clips to 00:00 if leading gap exists, but defer the write until
-    // we know whether Auto-Align changes any timeline data.
-    let snappedVideoClips = videoClips;
-    if (leadOffset > 0.04 && Array.isArray(videoClips) && videoClips.length > 0) {
-      snappedVideoClips = videoClips.map((c) => {
-        const clipLen = c.end - c.start;
-        const newStart = Math.max(0, parseFloat((c.start - leadOffset).toFixed(3)));
-        const newEnd = parseFloat((newStart + clipLen).toFixed(3));
-        return { ...c, start: newStart, end: newEnd };
-      });
-    }
-
-    // Snap voice segments to 00:00 if leadOffset > 0
-    let adjustedSegments = currentSegments;
-    if (leadOffset > 0.04) {
-      adjustedSegments = currentSegments.map((seg) => {
-        const s = typeof seg.startSec === 'number' ? seg.startSec : parseTimeToSeconds(seg.start, 0);
-        const segDur = typeof seg.duration === 'number' && seg.duration > 0
-          ? seg.duration
-          : ((typeof seg.endSec === 'number' ? seg.endSec : parseTimeToSeconds(seg.end, s + 2.5)) - s);
-        const newStart = Math.max(0, parseFloat((s - leadOffset).toFixed(3)));
-        const newEnd = parseFloat((newStart + segDur).toFixed(3));
-        return {
-          ...seg,
-          start: formatTimecode(newStart),
-          end: formatTimecode(newEnd),
-          startSec: newStart,
-          endSec: newEnd,
-          audioStartSec: newStart,
-          audioEndSec: newEnd,
-        };
-      });
-    }
-
-    // 2. Synchronize dialogue voice segments to their matching video cuts if video was cut into segments
-    if (Array.isArray(videoClips) && videoClips.length > 0) {
-      const dialogueClips = videoClips.filter((c) => c.isDialogue);
-      if (dialogueClips.length > 0) {
-        adjustedSegments = adjustedSegments.map((seg, idx) => {
-          // Find matching dialogue video clip
-          const matchingCut = dialogueClips.find((c) =>
-            (c.segmentId && (seg.id === c.segmentId || String(seg.id) === String(c.segmentId))) ||
-            (c.segmentIndex && (seg.id === c.segmentIndex || idx + 1 === c.segmentIndex))
-          );
-          if (matchingCut && typeof matchingCut.start === 'number') {
-            const segDur = typeof seg.duration === 'number' && seg.duration > 0
-              ? seg.duration
-              : ((typeof seg.endSec === 'number' ? seg.endSec : parseTimeToSeconds(seg.end, matchingCut.start + 2.5)) - (typeof seg.startSec === 'number' ? seg.startSec : matchingCut.start));
-            const newStart = matchingCut.start;
-            const newEnd = parseFloat((newStart + Math.max(0.3, segDur)).toFixed(3));
-            return {
-              ...seg,
-              start: formatTimecode(newStart),
-              end: formatTimecode(newEnd),
-              startSec: newStart,
-              endSec: newEnd,
-              audioStartSec: newStart,
-              audioEndSec: newEnd,
-            };
-          }
-          return seg;
-        });
-      }
-    }
-
-    // 3. Calculate canonical video duration
     const totalDur = Number(
       duration ||
       videoRef?.current?.duration ||
@@ -410,12 +330,26 @@ export function useClipOperations({
       0
     );
 
-    // 4. Align voice segments strictly anchored to sourceStartSec (Max Shift <= 0.35s, 0% video overflow)
-    const alignedSegments = autoAlignVoiceSegments(adjustedSegments, totalDur, {
-      minGapSec: 0.04,
-      maxShiftSec: 0.35,
-      maxPlaybackSpeed: 1.45,
+    const currentState = {
+      videoClips: videoClips || [],
+      segments: currentSegments,
+    };
+
+    const opResult = autoAlignOp(currentState, {
+      totalDuration: totalDur,
+      options: {
+        minGapSec: 0.04,
+        maxShiftSec: 0.35,
+        maxPlaybackSpeed: 1.45,
+      },
     });
+
+    if (!opResult.applied) {
+      showInAppToast(opResult.reason || '⚠️ Auto-Align មិនអាចអនុវត្តបានទេ');
+      return;
+    }
+
+    const alignedSegments = opResult.state.segments;
 
     // Hard guard: Auto-Align is a MOVE-ONLY transform. Segment count in == segment count out, always.
     if (!Array.isArray(alignedSegments) || alignedSegments.length !== currentSegments.length) {
@@ -449,21 +383,12 @@ export function useClipOperations({
       seg?.playbackRate ?? null,
       Boolean(seg?.needsTimeStretch),
     ]));
-    const clipTimelineSignature = (clips = []) => clips.map((clip) => ([
-      clip?.id ?? null,
-      clip?.start ?? null,
-      clip?.end ?? null,
-      clip?.sourceStart ?? null,
-      clip?.sourceEnd ?? null,
-      clip?.name ?? null,
-      Boolean(clip?.isMuted),
-    ]));
+
     const segmentsChanged = JSON.stringify(segmentTimelineSignature(currentSegments)) !== JSON.stringify(segmentTimelineSignature(alignedSegments));
-    const clipsChanged = JSON.stringify(clipTimelineSignature(videoClips || [])) !== JSON.stringify(clipTimelineSignature(snappedVideoClips || []));
 
     // Auto-Align can normalize optional metadata even when the timeline already
     // matches. Avoid autosaving that normalization as if the user had edited it.
-    if (!segmentsChanged && !clipsChanged) return;
+    if (!segmentsChanged) return;
 
     try {
       pushUndoSnapshot(videoClips, currentSegments);
@@ -471,20 +396,14 @@ export function useClipOperations({
       console.warn('[useClipOperations] pushUndoSnapshot failed in handleAutoAlignNoOverlap:', err);
     }
 
-    if (clipsChanged) setVideoClips(snappedVideoClips);
+    const nextScriptData = {
+      ...scriptData,
+      segments: alignedSegments,
+      updatedAt: Date.now(),
+    };
+    setScriptData(nextScriptData);
 
-    if (segmentsChanged) {
-      const nextScriptData = {
-        ...scriptData,
-        segments: alignedSegments,
-        updatedAt: Date.now(),
-      };
-      setScriptData(nextScriptData);
-    }
-
-    // 3. Keep user's existing video cuts intact (do not wipe out or reset cut clips)
-
-    // 4. Update master narration track on Backend
+    // Update master narration track on Backend
     try {
       const hasGeneratedAudio = alignedSegments.some((s) => s.audioFile || s.audioPath || s.audioUrl);
       if (segmentsChanged && (hasGeneratedAudio || audioGenerated)) {
@@ -520,7 +439,9 @@ export function useClipOperations({
     episodeId,
     pushUndoSnapshot,
     setScriptData,
-    setVideoClips,
+    syncTimelineAudioApi,
+    getProjectName,
+    getVideoId,
     setFullAudioUrl,
     setFullAudioPath,
   ]);
@@ -594,18 +515,30 @@ export function useClipOperations({
     setFullAudioPath,
   ]);
 
-  // Reset all segments to exact original Chinese video timestamps (0% drift)
+  // Reset all segments to exact original source timestamps (0% drift)
   const handleResetToSourceTiming = useCallback(async () => {
     const currentSegments = scriptData?.segments;
     if (!Array.isArray(currentSegments) || currentSegments.length === 0) return;
+
+    const totalDur = Number(duration || videoRef?.current?.duration || selectedVideo?.duration || 0);
+    const currentState = {
+      videoClips: videoClips || [],
+      segments: currentSegments,
+    };
+
+    const opResult = resetTimingOp(currentState, { totalDuration: totalDur });
+    if (!opResult.applied) {
+      showInAppToast(opResult.reason || '⚠️ Reset Timing មិនអាចអនុវត្តបានទេ');
+      return;
+    }
+
+    const resetSegs = opResult.state.segments;
 
     try {
       pushUndoSnapshot(videoClips, currentSegments);
     } catch (err) {
       console.warn('[useClipOperations] pushUndoSnapshot failed in handleResetToSourceTiming:', err);
     }
-    const totalDur = Number(duration || videoRef?.current?.duration || selectedVideo?.duration || 0);
-    const resetSegs = resetSegmentsToSourceTiming(currentSegments, totalDur);
 
     setScriptData({
       ...scriptData,
@@ -639,17 +572,22 @@ export function useClipOperations({
     }
   }, [
     scriptData,
+    videoClips,
+    pushUndoSnapshot,
     duration,
     videoRef,
     selectedVideo,
-    videoClips,
-    audioGenerated,
-    seriesId,
-    episodeId,
-    pushUndoSnapshot,
     setScriptData,
+    audioGenerated,
+    syncTimelineAudioApi,
+    getProjectName,
+    getVideoId,
+    episodeId,
+    seriesId,
     setFullAudioUrl,
     setFullAudioPath,
+    notifyBackendOnline,
+    notifyBackendOffline,
   ]);
 
   // Select clip and seek playhead to its start
