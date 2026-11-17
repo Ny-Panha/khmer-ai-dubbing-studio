@@ -28,7 +28,8 @@
 - Branch: `fix/delete-no-ripple`; Backend API `http://localhost:5000`; Frontend `http://localhost:5173`.
 
 ## Next Steps
-- Push `fix/delete-no-ripple` to origin.
+- Pushed `fix/delete-no-ripple` (commit `af40dee`) to origin.
+- Ready for owner testing.
 
 
 ## Last Session
@@ -51,7 +52,8 @@
 - Branch: `fix/delete-no-ripple`; Backend API `http://localhost:5000`; Frontend `http://localhost:5173`.
 
 ## Next Steps
-- Push `fix/delete-no-ripple` to origin.
+- Pushed `fix/delete-no-ripple` (commit `af40dee`) to origin.
+- Ready for owner testing.
 
 
 ## Last Session
