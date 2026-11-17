@@ -2,9 +2,9 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
-const { splitClipAtTime } = require('../../frontend/src/utils/timelineUtils.js');
+const { splitClip, splitSegment } = require('../../frontend/src/utils/timelineOps.js');
 
-test('Test (a): splitClipAtTime with activeClipId = null and single [0, 286] clip, split at 7 -> two clips [0, 7] + [7, 286] with continuous source ranges', () => {
+test('Test (a): splitClip with activeClipId = null and single [0, 286] clip, split at 7 -> two clips [0, 7] + [7, 286] with continuous source ranges', () => {
   const singleClip = [
     {
       id: 'clip-full-video',
@@ -18,12 +18,12 @@ test('Test (a): splitClipAtTime with activeClipId = null and single [0, 286] cli
     },
   ];
 
-  const result = splitClipAtTime(singleClip, 7, 286, null);
+  const result = splitClip({ videoClips: singleClip, segments: [] }, { splitTime: 7, totalDuration: 286, activeClipId: null });
 
-  assert.ok(result, 'splitClipAtTime must return a valid split result');
-  assert.equal(result.newClips.length, 2, 'Must result in exactly two clips');
+  assert.ok(result && result.applied, 'splitClip must return a valid split result');
+  assert.equal(result.state.videoClips.length, 2, 'Must result in exactly two clips');
 
-  const [part1, part2] = result.newClips;
+  const [part1, part2] = result.state.videoClips;
 
   // Timeline placement
   assert.equal(part1.start, 0);
@@ -43,12 +43,12 @@ test('Test (a): splitClipAtTime with activeClipId = null and single [0, 286] cli
 
 test('Test (a-2): Fresh episode case: virtual / empty videoClips with duration=286, split at 7 -> two materialized clips [0, 7] + [7, 286]', () => {
   // Fresh episode: videoClips is empty array []
-  const result = splitClipAtTime([], 7, 286, null);
+  const result = splitClip({ videoClips: [], segments: [] }, { splitTime: 7, totalDuration: 286, activeClipId: null });
 
-  assert.ok(result, 'splitClipAtTime must materialize and split virtual video');
-  assert.equal(result.newClips.length, 2);
+  assert.ok(result && result.applied, 'splitClip must materialize and split virtual video');
+  assert.equal(result.state.videoClips.length, 2);
 
-  const [part1, part2] = result.newClips;
+  const [part1, part2] = result.state.videoClips;
 
   assert.equal(part1.start, 0);
   assert.equal(part1.end, 7);
@@ -78,12 +78,12 @@ test('Test (b): same with a Gap as the only clip under the playhead', () => {
     },
   ];
 
-  const result = splitClipAtTime(gapClip, 7, 286, null);
+  const result = splitClip({ videoClips: gapClip, segments: [] }, { splitTime: 7, totalDuration: 286, activeClipId: null });
 
-  assert.ok(result, 'splitClipAtTime must split the Gap clip');
-  assert.equal(result.newClips.length, 2);
+  assert.ok(result && result.applied, 'splitClip must split the Gap clip');
+  assert.equal(result.state.videoClips.length, 2);
 
-  const [gap1, gap2] = result.newClips;
+  const [gap1, gap2] = result.state.videoClips;
 
   assert.equal(gap1.name, 'Gap');
   assert.equal(gap2.name, 'Gap');
@@ -105,10 +105,8 @@ test('Test (c): segment-selected case still splits the segment without touching 
   const code = fs.readFileSync(hookFile, 'utf8');
 
   // Verify static contract
-  assert.ok(code.includes('// (a) split the selected segment only when the video track is not explicitly targeted'));
-  assert.ok(code.includes('// (b) split the video clip under the playhead, including Gaps'));
+  assert.ok(code.includes('timelineOps.splitSegment') || code.includes('splitSegment'));
 
-  // Behavioral simulation of handleSplitClip dispatch:
   const segments = [
     {
       id: 1,
@@ -133,48 +131,25 @@ test('Test (c): segment-selected case still splits the segment without touching 
     },
   ];
 
-  let stateSegments = [...segments];
-  let stateVideoClips = [...videoClips];
-  let selectedClipKind = 'voice'; // Segment is explicitly selected
-  let selectedSegmentId = 'seg_1';
-  let activeClipId = null;
+  // Execute segment split via timelineOps.splitSegment
+  const splitResult = splitSegment({ videoClips, segments }, { segKey: 'seg_1', splitTime: 4.5 });
+  assert.ok(splitResult && splitResult.applied, 'splitSegment must return applied: true');
 
-  // Simulate handleSplitClip logic with segment selected at 4.5s
-  const splitTime = 4.5;
-  const isTargetingVideoClip = selectedClipKind === 'video';
-  let selectedSegIdx = -1;
-
-  if (!isTargetingVideoClip) {
-    const isSegmentExplicitlySelected = (selectedClipKind === 'voice' || selectedClipKind === 'subtitle') || (
-      selectedClipKind !== 'video' && Boolean(selectedSegmentId && stateSegments.some((s) => s._uid === selectedSegmentId || s.id === selectedSegmentId))
-    );
-    if (isSegmentExplicitlySelected) {
-      selectedSegIdx = stateSegments.findIndex((s) => (s._uid === selectedSegmentId || s.id === selectedSegmentId) && splitTime > s.startSec + 0.05 && splitTime < s.endSec - 0.05);
-    }
-  }
-
-  assert.notEqual(selectedSegIdx, -1, 'Segment must be found and playhead 4.5s must be inside it');
-
-  // Execute segment split
-  const targetSeg = stateSegments[selectedSegIdx];
-  const seg1 = { ...targetSeg, endSec: splitTime, audioEndSec: splitTime };
-  const seg2 = { ...targetSeg, id: 2, _uid: 'seg_2', startSec: splitTime, audioStartSec: splitTime };
-  stateSegments = [seg1, seg2];
+  const { videoClips: nextClips, segments: nextSegments } = splitResult.state;
 
   // Assertions:
-  assert.equal(stateSegments.length, 2, 'Segments count must increase to 2');
-  assert.equal(stateSegments[0].endSec, 4.5);
-  assert.equal(stateSegments[1].startSec, 4.5);
+  assert.equal(nextSegments.length, 2, 'Segments count must increase to 2');
+  assert.equal(nextSegments[0].endSec, 4.5);
+  assert.equal(nextSegments[1].startSec, 4.5);
 
   // VIDEO track must remain completely untouched!
-  assert.equal(stateVideoClips.length, 1, 'Video track must remain 1 clip');
-  assert.equal(stateVideoClips[0].id, 'clip-full-video');
-  assert.equal(stateVideoClips[0].start, 0);
-  assert.equal(stateVideoClips[0].end, 60);
+  assert.equal(nextClips.length, 1, 'Video track must remain 1 clip');
+  assert.equal(nextClips[0].id, 'clip-full-video');
+  assert.equal(nextClips[0].start, 0);
+  assert.equal(nextClips[0].end, 60);
 });
 
 test('Test (d): fresh episode with no selection and no segments splits the video clip at playhead', () => {
-  // Fresh episode: zero segments, single clip [0, 286], activeClipId = null, selectedClipKind = null
   const segments = [];
   const currentClips = [
     {
@@ -190,35 +165,21 @@ test('Test (d): fresh episode with no selection and no segments splits the video
   const splitTime = 7.0;
   const targetId = null;
   const selectedClipKind = null;
-  const selectedSegmentId = null;
 
-  // Resolve target at click time:
   const isTargetingVideoClip = selectedClipKind === 'video' || Boolean(
     targetId && currentClips.some((c) => c.id === targetId)
   );
 
-  let selectedSegIdx = -1;
-  const isSegmentExplicitlySelected = (selectedClipKind === 'voice' || selectedClipKind === 'subtitle') || (
-    selectedClipKind !== 'video' && Boolean(targetId && segments.some((s) => s.id === targetId))
-  );
-
-  if (isSegmentExplicitlySelected && selectedSegmentId) {
-    selectedSegIdx = segments.findIndex((s) => s.id === selectedSegmentId);
-  }
-
-  // Not segment selected -> proceeds to video split
-  assert.equal(selectedSegIdx, -1);
-
   const activeVideoId = isTargetingVideoClip ? targetId : null;
-  const videoSplitResult = splitClipAtTime(currentClips, splitTime, 286, activeVideoId);
+  const videoSplitResult = splitClip({ videoClips: currentClips, segments }, { splitTime, totalDuration: 286, activeClipId: activeVideoId });
 
-  assert.ok(videoSplitResult, 'Must split the unselected video clip under the playhead');
-  assert.equal(videoSplitResult.newClips.length, 2);
-  assert.equal(videoSplitResult.newClips[0].start, 0);
-  assert.equal(videoSplitResult.newClips[0].end, 7.0);
-  assert.equal(videoSplitResult.newClips[1].start, 7.0);
-  assert.equal(videoSplitResult.newClips[1].end, 286);
-  assert.equal(videoSplitResult.activeClipId, videoSplitResult.newClips[0].id, 'First resulting part is selected');
+  assert.ok(videoSplitResult && videoSplitResult.applied, 'Must split the unselected video clip under the playhead');
+  assert.equal(videoSplitResult.state.videoClips.length, 2);
+  assert.equal(videoSplitResult.state.videoClips[0].start, 0);
+  assert.equal(videoSplitResult.state.videoClips[0].end, 7.0);
+  assert.equal(videoSplitResult.state.videoClips[1].start, 7.0);
+  assert.equal(videoSplitResult.state.videoClips[1].end, 286);
+  assert.equal(videoSplitResult.activeClipId, videoSplitResult.state.videoClips[0].id, 'First resulting part is selected');
 });
 
 test('Test (e): TimelineEditor and DubbingModeTab imports and references contract', () => {

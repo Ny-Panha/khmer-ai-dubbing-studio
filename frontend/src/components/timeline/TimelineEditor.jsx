@@ -1260,6 +1260,7 @@ function TimelineEditor({
 
             if (dragState.mode === 'move') {
               const newStart = Math.max(0, parseFloat(dragState.currentStart.toFixed(2)));
+              // Enforce strict no-overlap clamp on final target row via moveClipOp
               // Dynamic trackId generation for voice lanes: `voice-${finalTargetRow + 1}`
               const opResult = moveClipOp(currentState, {
                 clipId: segKey,

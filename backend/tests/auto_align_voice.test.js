@@ -3,11 +3,23 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const {
-  autoAlignVoiceSegments,
-  resetSegmentsToSourceTiming,
-} = require('../../frontend/src/utils/timelineUtils.js');
+  autoAlign,
+  resetTiming,
+} = require('../../frontend/src/utils/timelineOps.js');
 
-test('autoAlignVoiceSegments: perfectly aligns voice clips to subtitle onsets with multi-track alternation', () => {
+function runAutoAlign(segments, totalDuration, options = {}) {
+  const res = autoAlign({ videoClips: [], segments }, { totalDuration, options });
+  assert.equal(res.applied, true, 'autoAlign must return applied: true');
+  return res.state.segments;
+}
+
+function runResetTiming(segments, totalDuration) {
+  const res = resetTiming({ videoClips: [], segments }, { totalDuration });
+  assert.equal(res.applied, true, 'resetTiming must return applied: true');
+  return res.state.segments;
+}
+
+test('autoAlign: perfectly aligns voice clips to subtitle onsets with multi-track alternation', () => {
   // Scenario matching Nha's screenshot (Clips #3 to #12)
   const segments = [
     { id: 3, startSec: 93.0, endSec: 94.92, audioStartSec: 93.0, audioEndSec: 94.92, audioDurationSec: 1.92, speaker: 'Speaker A' },
@@ -22,10 +34,10 @@ test('autoAlignVoiceSegments: perfectly aligns voice clips to subtitle onsets wi
     { id: 12, startSec: 115.0, endSec: 117.34, audioStartSec: 113.5, audioEndSec: 115.84, audioDurationSec: 2.34, speaker: 'Speaker B' }
   ];
 
-  const aligned = autoAlignVoiceSegments(segments, 375.37);
+  const aligned = runAutoAlign(segments, 375.37);
 
   // 1. Verify every segment's audioStartSec is in 100% lockstep with its visual subtitle startSec
-  assert.equal(aligned[2].id, 3); // Clip #5 (index 2 in slice)
+  assert.equal(aligned[2].id, 5, 'survivors keep their real id under pure ops R5 (no arbitrary renumbering)');
   assert.equal(aligned[2].audioStartSec, 98.8); // Resets back from 98.0 to true 98.8s
   assert.equal(aligned[2].startSec, 98.8);
 
@@ -56,7 +68,7 @@ test('autoAlignVoiceSegments: perfectly aligns voice clips to subtitle onsets wi
   }
 });
 
-test('autoAlignVoiceSegments: prevents simultaneous voice overlap on Lane 0 without deleting duplicate text (move-only)', () => {
+test('autoAlign: prevents simultaneous voice overlap on Lane 0 without deleting duplicate text (move-only)', () => {
   // Scenario matching Nha's screenshot at 02:14:
   // Segment #20: 3.5s long narration from 133.59 to 137.09
   // Segment #21: "ម្នាក់ទៀតហើយ" at 133.75s
@@ -94,7 +106,7 @@ test('autoAlignVoiceSegments: prevents simultaneous voice overlap on Lane 0 with
     },
   ];
 
-  const aligned = autoAlignVoiceSegments(collidingSegments, 300.0);
+  const aligned = runAutoAlign(collidingSegments, 300.0);
 
   // 1. Move-Only: Duplicate #22 is NOT deleted (all 3 segments remain)
   assert.equal(aligned.length, 3, 'All 3 segments must be preserved without silent deletion');
@@ -111,7 +123,7 @@ test('autoAlignVoiceSegments: prevents simultaneous voice overlap on Lane 0 with
   assert.equal(aligned[1].audioTrimmed, true, 'Segment 1 must be marked audioTrimmed');
 });
 
-test('autoAlignVoiceSegments: resolves over-long audio on Lane 0 by clamping previous audioEndSec without shifting N', () => {
+test('autoAlign: resolves over-long audio on Lane 0 by clamping previous audioEndSec without shifting N', () => {
   // Scenario matching real episode segments #17, #18, #19:
   // #17: 39.91 to 42.02 (speech), audio is 3.69s (overrunning to 43.60)
   // #18: 42.50 to 43.60, audio is 1.25s
@@ -153,7 +165,7 @@ test('autoAlignVoiceSegments: resolves over-long audio on Lane 0 by clamping pre
     },
   ];
 
-  const aligned = autoAlignVoiceSegments(segments, 180.0);
+  const aligned = runAutoAlign(segments, 180.0);
 
   // Both #17 and #18 sit on Lane 0 (VOICE 1), not dropped to VOICE 2!
   assert.equal(aligned[0].trackRow, 0, '#17 must stay on VOICE 1');
@@ -177,7 +189,7 @@ test('autoAlignVoiceSegments: resolves over-long audio on Lane 0 by clamping pre
   assert.equal(aligned[2].audioTrimmed, false, '#19 is not trimmed');
 
   // Verify Reset Timing restores source timing on Lane 0
-  const resetSegs = resetSegmentsToSourceTiming(aligned, 180.0);
+  const resetSegs = runResetTiming(aligned, 180.0);
   assert.equal(resetSegs[0].audioTrimmed, false, '#17 audioTrimmed must be reset');
   assert.equal(resetSegs[1].trackRow, 0, 'Reset timing keeps #18 on VOICE 1 (Lane 0)');
 });
@@ -196,7 +208,7 @@ test('Requirement (a): chain of segments with >40% overruns all land on trackRow
     { id: 4, startSec: 3.0, endSec: 4.5, audioDurationSec: 1.5, audioFile: 'seg_4.mp3' },
   ];
 
-  const aligned = autoAlignVoiceSegments(chain, 60.0);
+  const aligned = runAutoAlign(chain, 60.0);
 
   assert.equal(aligned.length, 4);
 
@@ -247,7 +259,7 @@ test('Requirement (b): a userShifted segment on row 2 is untouched by Auto-Align
     { id: 3, startSec: 3.0, endSec: 6.0, audioDurationSec: 3.0, trackRow: 0, userShifted: false },
   ];
 
-  const aligned = autoAlignVoiceSegments(segments, 60.0);
+  const aligned = runAutoAlign(segments, 60.0);
 
   // Find userShifted segment
   const userSeg = aligned.find(s => s.userShifted);
@@ -285,7 +297,7 @@ test('Requirement (c): no two aligned Lane-0 clips overlap in [start, audioEndSe
     { id: 15, startSec: 22.0, endSec: 23.5, audioDurationSec: 2.2 },
   ];
 
-  const aligned = autoAlignVoiceSegments(rawSegments, 120.0);
+  const aligned = runAutoAlign(rawSegments, 120.0);
 
   const lane0Clips = aligned.filter(s => s.trackRow === 0);
   assert.equal(lane0Clips.length, 15, 'All 15 non-userShifted clips must land on Lane 0');
@@ -329,7 +341,7 @@ test('Move-Only Spec (a): two adjacent segments with IDENTICAL Khmer text 1.0s a
     },
   ];
 
-  const aligned = autoAlignVoiceSegments(segments, 100.0);
+  const aligned = runAutoAlign(segments, 100.0);
 
   // Segment count in == segment count out
   assert.equal(aligned.length, 2, 'Segment count in == segment count out (move-only)');
@@ -378,7 +390,7 @@ test('Move-Only Spec (b): two adjacent segments with IDENTICAL Chinese text 1.0s
     },
   ];
 
-  const aligned = autoAlignVoiceSegments(segments, 100.0);
+  const aligned = runAutoAlign(segments, 100.0);
 
   // Segment count in == segment count out
   assert.equal(aligned.length, 2, 'Segment count in == segment count out with identical Chinese text');
@@ -469,5 +481,3 @@ test('Move-Only Spec (c): the handler guard in useClipOperations leaves scriptDa
   assert.ok(toastShown && toastShown.includes('Auto-Align រក្សាទុកឃ្លាដើម'), 'Toast must be shown to the user');
   assert.ok(warningLogged && warningLogged.includes('segment count mismatch'), 'Warning must be logged to console');
 });
-
-
