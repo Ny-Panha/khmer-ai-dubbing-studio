@@ -3,6 +3,32 @@
 ## Last Session
 - **Environment**: Antigravity IDE (`engineering-minimal-change-engineer` discipline)
 - **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-17T19:36:00+07:00
+
+## Summary: Remove "Auto-Fit Speed" Button from Timeline Toolbar (COMPLETED)
+- **Changes Applied**:
+  1. `frontend/src/components/timeline/TimelineToolbar.jsx`: Removed `⚡ Auto-Fit Speed` button, `onAutoFitSpeechSpeed` prop, and unused `Zap` icon import.
+  2. `frontend/src/components/timeline/TimelineEditor.jsx`: Removed `onAutoFitSpeechSpeed` prop & forwarding.
+  3. `frontend/src/App.jsx`: Removed `handleAutoFitSpeechSpeed` wrapper & prop pass.
+  4. `frontend/src/hooks/useClipOperations.js`: Removed `handleAutoFitSpeechSpeed`, its export, and unused `autoFitSpeechSpeedApi` import.
+  - Batch Studio Stage 3 Auto-Fit Speed (`GeminiRouteModal`, `DubbingRunnerContext`, backend `/api/audio/autofit-speed`) left untouched.
+- **Verification**:
+  - Frontend build (`npm --prefix frontend run build`): **PASS** (687ms, 0 errors); `oxlint`: 0 errors (413 warnings).
+  - Timeline + Auto-Fit suites: **91/91 PASS** (16 suites, 0 fail).
+
+## Active Environment
+- **Backend API**: `http://localhost:5000` (Status 200 OK)
+- **Frontend Studio**: `http://localhost:5173` (Vite dev server)
+- **Branch**: `chore/full-project-cleanup` (pushed to `origin/chore/full-project-cleanup`)
+
+## Next Steps
+- Refresh browser (`Ctrl + F5`) at `http://localhost:5173` to confirm the toolbar without `Auto-Fit Speed`.
+
+---
+
+## Previous Session
+- **Environment**: Antigravity IDE (`engineering-minimal-change-engineer` discipline)
+- **Branch**: `chore/full-project-cleanup`
 - **Timestamp**: 2026-11-17T19:32:00+07:00
 
 ## Summary: Auto-Cut by Subs Bug Diagnosis & Server Restart Verification (COMPLETED — No Code Defect Found)

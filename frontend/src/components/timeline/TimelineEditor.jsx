@@ -57,7 +57,6 @@ function TimelineEditor({
   onResetFullVideo = null,
   onBridgeGaps = null,
   onAutoAlignNoOverlap = null,
-  onAutoFitSpeechSpeed = null,
   onResetToSourceTiming = null,
   onAddSegment = null,
   onToggleMuteSegment = null,
@@ -1793,7 +1792,6 @@ function TimelineEditor({
         scriptSegments={scriptSegments}
         onBridgeGaps={onBridgeGaps}
         onAutoAlignNoOverlap={onAutoAlignNoOverlap}
-        onAutoFitSpeechSpeed={onAutoFitSpeechSpeed}
         onResetToSourceTiming={onResetToSourceTiming}
         onAddSegment={onAddSegment}
         snappingEnabled={snappingEnabled}
