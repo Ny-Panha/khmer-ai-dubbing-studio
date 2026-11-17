@@ -566,52 +566,6 @@ function syncSegmentsWithSpeakerRegistry(segments = [], customSpeakerVoiceMap = 
 }
 
 /**
- * 5. មុខងារប្តូរសំឡេង 1-Click សម្រាប់ឃ្លាណាមួយ ឬប្តូរសំឡេងតួអង្គទាំងមូល
- */
-function switchSpeakerOrSegmentVoice(
-  segments = [],
-  { segmentId = null, speakerName = null, speakerId = null, targetVoiceOrGender = "female" }
-) {
-  const isFemale =
-    targetVoiceOrGender === "female" ||
-    targetVoiceOrGender === "FEMALE" ||
-    String(targetVoiceOrGender).includes("Sreymom");
-
-  const profile = isFemale ? VOICE_PROFILES.female : VOICE_PROFILES.male;
-
-  const updatedSegments = segments.map((seg) => {
-    const matchById = segmentId !== null && String(seg.id) === String(segmentId);
-    const matchBySpkId = speakerId !== null && (seg.speakerId === speakerId || String(seg.speakerId) === String(speakerId));
-    const matchBySpeaker = speakerName !== null && (seg.speaker === speakerName || seg.speakerName === speakerName);
-
-    if (matchById || matchBySpkId || matchBySpeaker) {
-      return {
-        ...seg,
-        gender: isFemale ? "female" : "male",
-        voiceGender: isFemale ? "female" : "male",
-        speakerGender: isFemale ? "FEMALE" : "MALE",
-        genderConfidence: 1.0,
-        khmerVoiceId: profile.voiceId,
-        voice: profile.voiceId,
-        voiceId: profile.voiceId,
-        voiceLabel: profile.voiceLabel,
-        avatar: profile.avatar,
-        badgeColor: profile.badgeColor,
-        voiceOverride: profile.voiceId,
-        voiceAssignmentSource: "manual",
-      };
-    }
-    return seg;
-  });
-
-  const customMap = {};
-  if (speakerId) customMap[speakerId] = profile.voiceId;
-  if (speakerName) customMap[speakerName] = profile.voiceId;
-
-  return syncSegmentsWithSpeakerRegistry(updatedSegments, customMap);
-}
-
-/**
  * Backward compatibility helpers
  */
 function getSpeakerId(speakerName = "") {
@@ -673,35 +627,6 @@ function applySpeakerVoiceToSegments(segments = [], speakerRegistry = {}) {
   return syncSegmentsWithSpeakerRegistry(segments, customVoiceMap, speakerRegistry).segments;
 }
 
-const DEFAULT_VOICES = {
-  male: {
-    id: "km-KH-PisethNeural",
-    name: "Piseth Neural",
-    gender: "MALE",
-  },
-  female: {
-    id: "km-KH-SreymomNeural",
-    name: "Sreymom Neural",
-    gender: "FEMALE",
-  },
-};
-
-function detectGenderFromAcousticPitch(f0, confidence = 0.9) {
-  if (typeof f0 !== "number" || f0 <= 0 || isNaN(f0)) {
-    return { gender: "unknown", confidence: null };
-  }
-  if (confidence < 0.50) {
-    return { gender: "unknown", confidence: null };
-  }
-  if (f0 >= 170) {
-    return { gender: "female", confidence: parseFloat(confidence.toFixed(2)) };
-  } else if (f0 <= 155) {
-    return { gender: "male", confidence: parseFloat(confidence.toFixed(2)) };
-  } else {
-    return { gender: "unknown", confidence: null };
-  }
-}
-
 module.exports = {
   FEMALE_KEYWORDS,
   MALE_KEYWORDS,
@@ -710,13 +635,10 @@ module.exports = {
   FEMALE_MARKERS: FEMALE_KEYWORDS,
   MALE_MARKERS: MALE_KEYWORDS,
   VOICE_PROFILES,
-  DEFAULT_VOICES,
   detectSpeakerGender,
-  detectGenderFromAcousticPitch,
   normalizeSpeakerName,
   getVoiceProfile,
   syncSegmentsWithSpeakerRegistry,
-  switchSpeakerOrSegmentVoice,
   getSpeakerId,
   getDefaultVoiceForGender,
   buildSpeakerRegistry,
