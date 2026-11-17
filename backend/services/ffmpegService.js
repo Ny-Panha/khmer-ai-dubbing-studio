@@ -1609,6 +1609,7 @@ function renderDubbedVideoWithDucking(options = {}) {
 
     // Sponsor Ads (Green Screen Video) Input
     let sponsorInputIndex = -1;
+    let sponsorHasAudio = false;
     const sponsorSettings = options.sponsorSettings || null;
     const hasSponsor = Boolean(
       sponsorSettings &&
@@ -1616,12 +1617,23 @@ function renderDubbedVideoWithDucking(options = {}) {
       sponsorSettings.sponsorPath &&
       fs.existsSync(sponsorSettings.sponsorPath)
     );
+    const sponsorMuteAudio = sponsorSettings
+      ? (sponsorSettings.muteAudio !== false && sponsorSettings.sponsorMuteAudio !== false)
+      : true;
 
     if (hasSponsor) {
       const currentInputCount = args.reduce((acc, curr) => (curr === "-i" ? acc + 1 : acc), 0);
       sponsorInputIndex = currentInputCount;
       args.push("-stream_loop", "-1", "-i", getSafeCliPath(sponsorSettings.sponsorPath));
-      console.log(`[FFmpegService] 🎬 Sponsor video input detected at index [${sponsorInputIndex}:v]: ${path.basename(sponsorSettings.sponsorPath)}`);
+      if (!sponsorMuteAudio) {
+        try {
+          const spMeta = await getVideoMetadata(sponsorSettings.sponsorPath);
+          sponsorHasAudio = Boolean(spMeta && spMeta.hasAudio);
+        } catch (_) {
+          sponsorHasAudio = false;
+        }
+      }
+      console.log(`[FFmpegService] 🎬 Sponsor video input detected at index [${sponsorInputIndex}:v]: ${path.basename(sponsorSettings.sponsorPath)} (muteAudio=${sponsorMuteAudio}, hasAudio=${sponsorHasAudio})`);
     }
 
     // NLE multi-clip cuts and trims on VIDEO 1
@@ -1872,11 +1884,14 @@ function renderDubbedVideoWithDucking(options = {}) {
     }
 
     // Overlay Sponsor Ads Video (Green Screen Chroma Key)
+    let audioMapArg = "[final_audio]";
     if (hasSponsor && sponsorInputIndex >= 0) {
       const scalePercent = Math.max(10, Math.min(60, Number(sponsorSettings.scale || sponsorSettings.sponsorScale) || 25));
-      const targetW = targetAspectRatio === "9:16"
-        ? Math.round(1080 * (scalePercent / 100))
-        : Math.round(1920 * (scalePercent / 100));
+      const outputCanvasW =
+        targetAspectRatio === "9:16" || targetAspectRatio === "1:1"
+          ? 1080
+          : (needsLandscape16x9Pad ? 1920 : (Number(sourceDimensions?.width) || 1920));
+      const targetW = Math.round(outputCanvasW * (scalePercent / 100));
       // Ensure even dimensions for H.264
       const safeScaledW = Math.max(80, targetW - (targetW % 2));
       const pos = sponsorSettings.position || sponsorSettings.sponsorPosition || "bottom-left";
@@ -1920,20 +1935,36 @@ function renderDubbedVideoWithDucking(options = {}) {
       // Timing mode: loop vs interval vs custom
       const timingMode = sponsorSettings.timingMode || sponsorSettings.sponsorTimingMode || "loop";
       let enableExpr = "";
+      let sponsorAudioGateExpr = null;
       if (timingMode === "interval") {
         const intervalSec = Math.max(10, Number(sponsorSettings.intervalSec || sponsorSettings.sponsorIntervalSec || 60));
         const durSec = Math.max(2, Number(sponsorSettings.durationSec || sponsorSettings.sponsorDurationSec || 10));
         enableExpr = `:enable='lt(mod(t,${intervalSec}),${durSec})'`;
+        sponsorAudioGateExpr = `lt(mod(t,${intervalSec}),${durSec})`;
       } else if (timingMode === "custom") {
         const startSec = Math.max(0, Number(sponsorSettings.startSec || sponsorSettings.sponsorStartSec || 0));
         const endSec = Math.max(startSec + 1, Number(sponsorSettings.endSec || sponsorSettings.sponsorEndSec || 15));
         enableExpr = `:enable='between(t,${startSec},${endSec})'`;
+        sponsorAudioGateExpr = `between(t,${startSec},${endSec})`;
       }
 
       filterComplexParts.push(
         `${vCurrent}[sponsor_prepared]overlay=x=${overlayX}:y=${overlayY}:shortest=1${enableExpr}[v_with_sponsor]`
       );
       videoMapArg = "[v_with_sponsor]";
+
+      // Mix sponsor audio only when explicitly unmuted AND sponsor file has an audio stream
+      if (!sponsorMuteAudio && sponsorHasAudio) {
+        const spVol = Math.max(0.05, Math.min(1.5, Number(sponsorSettings.volume ?? sponsorSettings.sponsorVolume ?? 0.5)));
+        const spVolFilter = sponsorAudioGateExpr
+          ? `volume=eval=frame:volume='if(${sponsorAudioGateExpr},${spVol.toFixed(2)},0)'`
+          : `volume=${spVol.toFixed(2)}`;
+        filterComplexParts.push(
+          `[${sponsorInputIndex}:a]aformat=sample_rates=44100:channel_layouts=stereo,${spVolFilter}[sponsor_audio]`,
+          `[final_audio][sponsor_audio]amix=inputs=2:duration=first:dropout_transition=0,volume=2,alimiter=limit=0.95[final_audio_with_sponsor]`
+        );
+        audioMapArg = "[final_audio_with_sponsor]";
+      }
     }
 
     filterComplexParts.forEach((p, idx) => console.log(`[FFmpegService] Part [${idx}] len=${p.length}: ${p.slice(0, 100)}`));
@@ -1942,7 +1973,7 @@ function renderDubbedVideoWithDucking(options = {}) {
     // In modern FFmpeg, pass filter complex graph directly to -filter_complex (prevents unrecognized option filter_complex_script error)
     args.push("-filter_complex", fullFilterString);
 
-    args.push("-map", videoMapArg, "-map", "[final_audio]");
+    args.push("-map", videoMapArg, "-map", audioMapArg);
 
     const isVideoFiltered = (videoMapArg !== "0:v:0" && videoMapArg !== "[0:v:0]");
     if (!hasBurnableSubs && !hasLogo && !hasSponsor && !isVideoFiltered && !hasCustomCuts) {

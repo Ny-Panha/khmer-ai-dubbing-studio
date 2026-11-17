@@ -367,6 +367,7 @@ export function useVideoRender({
     buildAntiTheftOptions,
     buildLogoOptions,
     buildCornerMaskOptions,
+    buildSponsorOptions,
     startBatchPolling,
   ]);
 

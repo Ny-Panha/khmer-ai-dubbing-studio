@@ -3,6 +3,47 @@
 ## Last Session
 - **Environment**: Antigravity IDE (`engineering-minimal-change-engineer` discipline)
 - **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-17T20:57:00+07:00
+
+## Summary: Fix Sponsor Ads (Green Screen Video) End-to-End Flow (COMPLETED)
+- **Step 0 — Fresh Restart & Real-App Reproduction**:
+  - Restarted backend (`:5000`) and Vite (`:5173`) cleanly.
+  - Reproduced upload in the live Studio UI: `POST /api/upload-sponsor-video` returned `200 OK` and saved the MP4 to `backend/uploads/sponsor/sponsor_*.mp4` (4 prior owner uploads were also already saved there), yet:
+    - `(a)` Panel preview stayed on placeholder `<Tv>` icon (`sponsorVideoUrl` was `undefined` in state & `localStorage`, while `sponsorVideoPath` was set; `playerOverlayRendered: false`).
+    - `(b)` After page reload, `enableSponsor` reverted to `false` (overwritten by stale `ep.voiceSettings` from `series.json`).
+    - `(c)` Single export `ffmpegService` already had `colorkey` + `scale` + `overlay` + `-stream_loop -1`, but hardcoded `1920` width scaling (making 25% = 37.5% on 720p), ignored `muteAudio: false`, and `batchExportService.js` dropped `sponsorSettings` completely.
+- **Step 1 — Break Points Traced**:
+  1. **Upload handler stale-closure overwrite**: `ExportSettingsPanel.jsx` called `onSettingChange('sponsorVideoUrl', ...)` then `onSettingChange('sponsorVideoPath', ...)` back-to-back; `VoiceSettings.jsx` `handleChange` spread stale render-closure `settings`, so the second call wiped `sponsorVideoUrl` back to `undefined`.
+  2. **Persistence across reload**: `App.jsx` `VISUAL_SETTING_DEFAULTS` / `RENDER_INVALIDATING_SETTING_KEYS` omitted all `sponsor*` keys, and `handleUpdateVoiceSettings` only background-saved on `ratioChanged`, so `ep.voiceSettings` in `series.json` never saved sponsor changes and overwrote `localStorage` on reload.
+  3. **Live preview invisible while paused**: `SponsorOverlay.jsx` used `display: none` on the hidden source `<video>` and skipped canvas drawing when `vid.paused`, leaving a blank canvas until Play.
+  4. **Backend export gaps**: `batchExportService.js` never resolved/forwarded `sponsorSettings`; `ffmpegService.js` hardcoded `1920` for non-9:16 width scaling and ignored `muteAudio: false`.
+- **Step 2 — Minimal Changes Applied**:
+  1. `frontend/src/components/voice/VoiceSettings.jsx`: Added `latestSettingsRef` and atomic object-patch support in `handleChange`.
+  2. `frontend/src/components/voice/ExportSettingsPanel.jsx`: Updated upload, sample, and delete actions to pass `{ sponsorVideoUrl, sponsorVideoPath }` atomically and clear `e.target.value = ''`.
+  3. `frontend/src/App.jsx`: Added `sponsor*` defaults to `VISUAL_SETTING_DEFAULTS` (invalidating stale renders) and persisted `hasRenderAffectingChange` patches via `handleSaveEpisodeBackground`.
+  4. `frontend/src/components/player/SponsorOverlay.jsx` & `SponsorOverlay.css`: Fixed offscreen `<video>` decode (`opacity: 0; preload="auto"`), drew initial chroma-keyed frame even while paused, reset `videoLoaded` on URL change, and fixed CSS `justify-content: center`.
+  5. `frontend/src/hooks/useVideoRender.js`: Added `buildSponsorOptions` to `handleStartBatchRender` deps.
+  6. `backend/services/batchExportService.js`: Added `resolveSponsorInputForBatch` and forwarded `sponsorSettings` to `renderDubbedVideoWithDucking`.
+  7. `backend/services/ffmpegService.js`: Computed sponsor scale width from actual `outputCanvasW` (`1080` for 9:16/1:1, `1920` when padded, else `sourceDimensions.width`) and mixed sponsor audio only when explicitly unmuted (`muteAudio === false`) and audio stream exists.
+  8. `backend/tests/sponsor_ads_end_to_end.test.js`: Added static audit + real FFmpeg 10s export test verifying green chroma-key removal, 25% scale at bottom-center, full-duration looping, muted sponsor audio (`<= -50 dB`), and Sponsor OFF unchanged.
+- **Verification Evidence**:
+  - Frontend build (`npm --prefix frontend run build`): **PASS** (743ms, 0 errors); `oxlint`: **0 errors**.
+  - Test suites (`node --test backend/tests/sponsor_ads_end_to_end.test.js backend/tests/timeline_*.test.js`): **92/92 PASS** (16 suites, 0 fail).
+  - Real-app verification (`http://localhost:5173/studio`, Edge headless, 0 console/page errors): upload immediately displays panel `<video>` preview + chroma-keyed live player canvas (`centerRGBA: [249,204,21,255]`, `cornerRGBA: [0,0,0,0]`), persists to `series.json` & survives page reload; 30s real export with owner's `DragonDub AI` green-screen MP4 rendered crisp bottom-center banner at `t=25s` with all green removed.
+
+## Active Environment
+- **Backend API**: `http://localhost:5000` (restarted with latest backend fix, Status 200 OK)
+- **Frontend Studio**: `http://localhost:5173` (Vite dev server)
+- **Branch**: `chore/full-project-cleanup` (pushed to `origin/chore/full-project-cleanup`)
+
+## Next Steps
+- Refresh browser (`Ctrl + F5`) at `http://localhost:5173/studio` and test uploading green-screen MP4 in Sponsor Ads.
+
+---
+
+## Previous Session
+- **Environment**: Antigravity IDE (`engineering-minimal-change-engineer` discipline)
+- **Branch**: `chore/full-project-cleanup`
 - **Timestamp**: 2026-11-17T19:48:00+07:00
 
 ## Summary: Fix Voice Clip Box Extent & Waveform Alignment on Legacy & Recent Episodes (COMPLETED — UI-Only)

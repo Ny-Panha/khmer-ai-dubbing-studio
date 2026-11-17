@@ -326,21 +326,29 @@ export default function VoiceSettings({
 
   const voiceUrl = previewAudioUrl;
   const bgUrl = selectedVideo ? selectedVideo.videoUrl : null;
+  const latestSettingsRef = useRef(settings);
+  latestSettingsRef.current = settings;
 
   const handleChange = (field, value) => {
-    onUpdateSettings({
-      ...settings,
-      [field]: value,
-    });
+    const patch = (field && typeof field === 'object' && !Array.isArray(field))
+      ? field
+      : { [field]: value };
+    const nextSettings = {
+      ...(latestSettingsRef.current || {}),
+      ...patch,
+    };
+    latestSettingsRef.current = nextSettings;
+    onUpdateSettings(nextSettings);
 
-    if (field === 'khmerVolume' && voiceGainNodeRef.current) {
-      voiceGainNodeRef.current.gain.value = value;
+    if (Object.prototype.hasOwnProperty.call(patch, 'khmerVolume') && voiceGainNodeRef.current) {
+      voiceGainNodeRef.current.gain.value = patch.khmerVolume;
     }
-    if (field === 'duckingVolume') {
-      if (bgGainNodeRef.current) bgGainNodeRef.current.gain.value = value;
+    if (Object.prototype.hasOwnProperty.call(patch, 'duckingVolume')) {
+      const duckVal = patch.duckingVolume;
+      if (bgGainNodeRef.current) bgGainNodeRef.current.gain.value = duckVal;
       if (bgAudioRef.current) {
-        bgAudioRef.current.volume = Math.min(1.0, Math.max(0, value));
-        bgAudioRef.current.muted = value <= 0;
+        bgAudioRef.current.volume = Math.min(1.0, Math.max(0, duckVal));
+        bgAudioRef.current.muted = duckVal <= 0;
       }
     }
   };

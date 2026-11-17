@@ -35,8 +35,10 @@ export default function ExportSettingsPanel({
       });
       const data = await res.json();
       if (data.success && data.videoUrl) {
-        onSettingChange('sponsorVideoUrl', data.videoUrl);
-        onSettingChange('sponsorVideoPath', data.videoPath);
+        onSettingChange({
+          sponsorVideoUrl: data.videoUrl,
+          sponsorVideoPath: data.videoPath,
+        });
       } else {
         setSponsorUploadError(data.error || 'Upload failed');
       }
@@ -660,6 +662,7 @@ export default function ExportSettingsPanel({
                           disabled={isUploadingSponsor}
                           onChange={(e) => {
                             const file = e.target.files?.[0];
+                            e.target.value = '';
                             if (file) handleSponsorUpload(file);
                           }}
                         />
@@ -669,8 +672,10 @@ export default function ExportSettingsPanel({
                         <button
                           type="button"
                           onClick={() => {
-                            onSettingChange('sponsorVideoUrl', null);
-                            onSettingChange('sponsorVideoPath', null);
+                            onSettingChange({
+                              sponsorVideoUrl: null,
+                              sponsorVideoPath: null,
+                            });
                           }}
                           style={{
                             padding: '4px 6px',
@@ -692,8 +697,10 @@ export default function ExportSettingsPanel({
                     <button
                       type="button"
                       onClick={() => {
-                        onSettingChange('sponsorVideoUrl', '/assets/sample_sponsor_green.mp4');
-                        onSettingChange('sponsorVideoPath', 'frontend/public/assets/sample_sponsor_green.mp4');
+                        onSettingChange({
+                          sponsorVideoUrl: '/assets/sample_sponsor_green.mp4',
+                          sponsorVideoPath: 'frontend/public/assets/sample_sponsor_green.mp4',
+                        });
                       }}
                       style={{
                         display: 'inline-flex',

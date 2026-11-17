@@ -33,6 +33,10 @@ export default function SponsorOverlay({
   const animFrameRef = useRef(null);
   const [videoLoaded, setVideoLoaded] = useState(false);
 
+  useEffect(() => {
+    setVideoLoaded(false);
+  }, [sponsorVideoUrl]);
+
   const shouldRender = Boolean(enableSponsor && sponsorVideoUrl && !renderedVideo);
 
   // Check timing visibility
@@ -65,7 +69,7 @@ export default function SponsorOverlay({
     }
   }, [shouldRender, isPlaying, isTimeVisible, sponsorMuteAudio, sponsorVolume]);
 
-  // Real-time canvas chroma key green-screen processing
+  // Real-time canvas chroma key green-screen processing (also draws a static frame when paused)
   useEffect(() => {
     if (!shouldRender) return;
     const vid = videoRef.current;
@@ -74,48 +78,64 @@ export default function SponsorOverlay({
 
     let active = true;
 
+    const drawCurrentFrame = () => {
+      if (vid.readyState < 2) return;
+      const w = vid.videoWidth || 320;
+      const h = vid.videoHeight || 180;
+
+      if (canvas.width !== w || canvas.height !== h) {
+        canvas.width = w;
+        canvas.height = h;
+      }
+
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      if (!ctx) return;
+      ctx.drawImage(vid, 0, 0, w, h);
+
+      if (sponsorChromaKey) {
+        const frame = ctx.getImageData(0, 0, w, h);
+        const data = frame.data;
+        const len = data.length;
+        const sim = Math.max(0.1, Math.min(0.5, Number(sponsorChromaSimilarity) || 0.28));
+        const greenThreshold = 70 + (sim * 100);
+
+        for (let i = 0; i < len; i += 4) {
+          const r = data[i];
+          const g = data[i + 1];
+          const b = data[i + 2];
+
+          // Fast Chroma Key green detection
+          if (g > greenThreshold && g > r * 1.3 && g > b * 1.3) {
+            const edgeDiff = g - Math.max(r, b) * 1.3;
+            if (edgeDiff > 25) {
+              data[i + 3] = 0; // Fully transparent
+            } else {
+              data[i + 3] = Math.round(data[i + 3] * (1 - (edgeDiff / 25)));
+            }
+          }
+        }
+
+        ctx.putImageData(frame, 0, 0);
+      }
+    };
+
+    // Paint initial frame immediately so preview is visible even while paused
+    let drewPausedFrame = false;
+    if (vid.readyState >= 2) {
+      drawCurrentFrame();
+      drewPausedFrame = true;
+    }
+
     const renderFrame = () => {
       if (!active) return;
 
-      if (vid.readyState >= 2 && !vid.paused && !vid.ended) {
-        const w = vid.videoWidth || 320;
-        const h = vid.videoHeight || 180;
-
-        if (canvas.width !== w || canvas.height !== h) {
-          canvas.width = w;
-          canvas.height = h;
-        }
-
-        const ctx = canvas.getContext('2d', { willReadFrequently: true });
-        if (ctx) {
-          ctx.drawImage(vid, 0, 0, w, h);
-
-          if (sponsorChromaKey) {
-            const frame = ctx.getImageData(0, 0, w, h);
-            const data = frame.data;
-            const len = data.length;
-            const sim = Math.max(0.1, Math.min(0.5, Number(sponsorChromaSimilarity) || 0.28));
-            const greenThreshold = 70 + (sim * 100);
-
-            for (let i = 0; i < len; i += 4) {
-              const r = data[i];
-              const g = data[i + 1];
-              const b = data[i + 2];
-
-              // Fast Chroma Key green detection
-              if (g > greenThreshold && g > r * 1.3 && g > b * 1.3) {
-                // Soft edge alpha
-                const edgeDiff = g - Math.max(r, b) * 1.3;
-                if (edgeDiff > 25) {
-                  data[i + 3] = 0; // Fully transparent
-                } else {
-                  data[i + 3] = Math.round(data[i + 3] * (1 - (edgeDiff / 25)));
-                }
-              }
-            }
-
-            ctx.putImageData(frame, 0, 0);
-          }
+      if (vid.readyState >= 2) {
+        if (!vid.paused && !vid.ended) {
+          drawCurrentFrame();
+          drewPausedFrame = true;
+        } else if (!drewPausedFrame) {
+          drawCurrentFrame();
+          drewPausedFrame = true;
         }
       }
 
@@ -130,7 +150,7 @@ export default function SponsorOverlay({
         cancelAnimationFrame(animFrameRef.current);
       }
     };
-  }, [videoLoaded, sponsorChromaKey, sponsorChromaSimilarity]);
+  }, [shouldRender, videoLoaded, sponsorVideoUrl, sponsorChromaKey, sponsorChromaSimilarity]);
 
   // Layout & positioning geometry
   const scaleFactor = aspectRatio === '9:16' ? 0.75 : 1.0;
@@ -172,15 +192,23 @@ export default function SponsorOverlay({
         transition: 'opacity 0.25s ease',
       }}
     >
-      {/* Hidden source video element providing playback & frames */}
+      {/* Hidden source video element providing playback & frames (offscreen opacity:0 so Chromium decodes frames while paused) */}
       <video
         ref={videoRef}
         src={sponsorVideoUrl}
+        preload="auto"
         loop
         playsInline
         muted={Boolean(sponsorMuteAudio)}
         onLoadedData={() => setVideoLoaded(true)}
-        style={{ display: 'none' }}
+        onCanPlay={() => setVideoLoaded(true)}
+        style={{
+          position: 'absolute',
+          width: 1,
+          height: 1,
+          opacity: 0,
+          pointerEvents: 'none',
+        }}
       />
 
       {/* Rendered Canvas with Real-time Chroma Key */}

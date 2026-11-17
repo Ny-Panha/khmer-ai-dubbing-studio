@@ -53,6 +53,20 @@ const VISUAL_SETTING_DEFAULTS = {
   cornerMaskWidth: 220,
   cornerMaskHeight: 54,
   cornerMaskOpacity: 0.95,
+  enableSponsor: false,
+  sponsorVideoUrl: null,
+  sponsorVideoPath: null,
+  sponsorChromaKey: true,
+  sponsorChromaSimilarity: 0.28,
+  sponsorPosition: 'bottom-left',
+  sponsorTimingMode: 'loop',
+  sponsorIntervalSec: 60,
+  sponsorDurationSec: 10,
+  sponsorStartSec: 0,
+  sponsorEndSec: 15,
+  sponsorScale: 25,
+  sponsorMuteAudio: true,
+  sponsorVolume: 0.5,
   enableAntiTheft: false,
   marqueeText: '«ហាមផុសបន្ត • សូមឱ្យតម្លៃលើការខិតខំរបស់ម្ចាស់ដើម»',
   marqueeSpeed: 'normal',
@@ -575,9 +589,7 @@ export default function App() {
       const patch = { voiceSettings: normalizedSettings };
       if (sId && eId) {
         saveEpisodeState(sId, eId, patch);
-        if (ratioChanged) {
-          seriesRef.current.handleSaveEpisodeBackground?.(eId, patch);
-        }
+        seriesRef.current.handleSaveEpisodeBackground?.(eId, patch);
       }
     }
 

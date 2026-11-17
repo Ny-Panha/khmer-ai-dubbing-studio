@@ -114,6 +114,30 @@ function resolveLogoInputForBatch(logoSettings, workDir) {
   return { logoPath: null, tempLogoFile: null };
 }
 
+function resolveSponsorInputForBatch(sponsorSettings) {
+  if (!sponsorSettings || !(sponsorSettings.enabled || sponsorSettings.enableSponsor)) {
+    return null;
+  }
+  const vidVal =
+    sponsorSettings.sponsorVideoPath ||
+    sponsorSettings.videoPath ||
+    sponsorSettings.sponsorVideoUrl ||
+    sponsorSettings.videoUrl;
+  if (!vidVal || typeof vidVal !== "string") {
+    return null;
+  }
+  const candidate1 = path.join(__dirname, "../../frontend/public", vidVal.replace(/^\//, ""));
+  const candidate2 = path.join(uploadsDir, path.basename(vidVal));
+  const candidate3 = path.join(uploadsDir, "sponsor", path.basename(vidVal));
+  const candidate4 = resolveMediaFile(vidVal);
+  if (fs.existsSync(candidate1)) return candidate1;
+  if (fs.existsSync(candidate2) && isSafeUploadPath(candidate2, uploadsDir)) return candidate2;
+  if (fs.existsSync(candidate3) && isSafeUploadPath(candidate3, uploadsDir)) return candidate3;
+  if (candidate4 && fs.existsSync(candidate4) && isSafeUploadPath(candidate4, uploadsDir)) return candidate4;
+  if (fs.existsSync(vidVal) && isSafeUploadPath(vidVal, uploadsDir)) return vidVal;
+  return null;
+}
+
 function isWithinDirectory(candidatePath, dirPath) {
   try {
     const canonCandidate = path.resolve(candidatePath);
@@ -528,6 +552,8 @@ async function runBatchExportWorker({
 
   const rawLogo = exportSettings.logoSettings || null;
   const { logoPath: resolvedLogoPath, tempLogoFile } = resolveLogoInputForBatch(rawLogo, exportsDir);
+  const rawSponsor = exportSettings.sponsorSettings || null;
+  const resolvedSponsorPath = resolveSponsorInputForBatch(rawSponsor);
 
   const totalCount = plan.eligible.length;
   const isMergeMode = job.mode === "merge";
@@ -688,6 +714,7 @@ async function runBatchExportWorker({
           videoClips: epPlan.videoClips,
           antiTheft,
           logoSettings: resolvedLogoPath ? { ...rawLogo, logoPath: resolvedLogoPath } : null,
+          sponsorSettings: resolvedSponsorPath ? { ...rawSponsor, sponsorPath: resolvedSponsorPath } : null,
           allowOriginalAudio: epPlan.useOriginalAudio,
           expectedDurationSec: expectedDur,
           onProgress: ({ percent }) => {
