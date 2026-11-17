@@ -2,28 +2,37 @@
 
 ## Last Session
 - **Environment**: Antigravity IDE
-- **Branch**: `fix/delete-no-ripple`
-- **Timestamp**: 2026-11-17T13:08:00+07:00
+- **Branch**: `refactor/timeline-core-clean`
+- **Timestamp**: 2026-11-17T13:45:00+07:00
 
-## Summary: Fix ReferenceErrors in DubbingModeTab & TimelineEditor
-- **Problems Fixed**:
-  1. `DubbingModeTab.jsx`: `ReferenceError: activeSeries is not defined` during 1-Click Auto Compact "📝 ខ្លីចំអត្ថន័យ" batch execution. `activeSeries` was referenced without being in scope or props.
-  2. `TimelineEditor.jsx`: `ReferenceError: isSegmentMatch is not defined` in `canSplit` memo. Neither `isSegmentMatch` nor `parseTimeToSeconds` were imported.
-- **Changes Applied**:
-  - `TimelineEditor.jsx`: Imported `isSegmentMatch` from `../../utils/timelineUtils` and `parseTimeToSeconds` from `../../utils/timestampUtils`.
-  - `DubbingModeTab.jsx`: Added `activeSeries = null` and `apiKey = null` to props; resolved series ID safely via `const resolvedSeriesId = seriesId || activeSeries?.id || activeEpisode?.seriesId || episodeId;` and forwarded `apiKey`.
-  - `MediaLibrary.jsx`: Passed `activeSeries={activeSeries}` and `apiKey={apiKey}` to `<DubbingModeTab />`.
-  - `backend/tests/timeline_toolbar_split_under_playhead.test.js`: Added Test (e) verifying reference/import contracts.
-- **Verification**:
-  - `npm --prefix frontend run build`: **2035 modules transformed**, 0 errors.
-  - `node --test backend/tests/timeline_toolbar_split_under_playhead.test.js`: **6/6 passed**.
+## Summary: Timeline Core Clean Rebuild — Step 1 & Step 2 (Pure Ops & Invariants R1-R4 Unit Tests)
+- **Branch Created**: `refactor/timeline-core-clean` based on `fix/delete-no-ripple`.
+- **Design Spec**: `.agents/TIMELINE-DESIGN.md` committed (`5f5f3ce`).
+- **Step 1: Pure Operations Module Implemented**:
+  - File: `frontend/src/utils/timelineOps.js` created and committed (`ebde0cc`).
+  - Architecture: Pure functions `(state, args) => { state, applied, reason? }` with zero React dependencies, zero refs, and zero direct API calls.
+  - Implemented ops: `deleteSegment` (R1), `deleteVideoClip` (R2), `deleteGap` (R3), `splitClip` (R4 video), `splitSegment` (R4 segment), `trimClip`, `moveClip`, `autoAlign` (R5 move-only with count guard), and `resetTiming`.
+  - Frontend build verification: `npm --prefix frontend run build` parsed and built cleanly (**2035 modules transformed**, 0 errors).
+- **Step 2: Invariants R1-R4 Unit Tests**:
+  - File: `backend/tests/timeline_pure_ops_r1_r4.test.js` created and committed (`ed0f423`).
+  - **17/17 tests passing**:
+    - **R1: deleteSegment**: Survivor IDs/times intact, no renumbering, no ripple, leading segment delete doesn't snap to 00:00, `videoClips` deep-equal.
+    - **R2: deleteVideoClip**: Deleted dialogue clip becomes ONE continuous Gap, merges with adjacent Gaps, `segments` deep-equal, video track covers [0, duration] continuously.
+    - **R3: deleteGap**: Opening Gap cut shifts film to 00:00, later clips shift left by exact Gap duration, `segments` deep-equal untouched.
+    - **R4: splitClip & splitSegment**: Cuts dialogue, Gap, or fresh episode virtual clip at playhead without selection dependency. Segment split strictly requires selection + playhead containment, and splits Khmer/English/Chinese text.
+  - Regression check: 31/31 passing across related timeline suites.
+- **Strict Scope**: Zero changes outside timeline editing core. Stopped before Phase 2 per instructions.
 
 ## Active Environment
-- Branch: `fix/delete-no-ripple`; Backend API `http://localhost:5000`; Frontend `http://localhost:5173`.
+- Branch: `refactor/timeline-core-clean`
+- Backend API: `http://localhost:5000`
+- Frontend: `http://localhost:5173`
 
 ## Next Steps
-- Pushed commit `acaaa37` to `origin/fix/delete-no-ripple`.
-- Ready for testing.
+- **Phase 2**: Rewire `useClipOperations.js` and `TimelineEditor.jsx` to call pure ops from `frontend/src/utils/timelineOps.js`.
+- Phase 3: Playback mapping monotonic fix in `useVideoPlayback.js`.
+- Phase 4: Duration display verification (R7).
+- Full acceptance tests verification.
 
 ## Summary: Unconditional Video Split Under Playhead & Fresh Episode Virtual Materialization
 - **Problem Solved**: Toolbar scissors failed with "គ្មាន clip នៅត្រង់ playhead ទេ" on fresh episodes when video clips were unselected, and unselected segments previously hijacked playhead splits.
