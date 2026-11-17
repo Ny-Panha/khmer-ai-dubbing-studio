@@ -899,20 +899,28 @@ function TimelineEditor({
     if (onSelectClipKind) onSelectClipKind('video');
     if (onSelectClip) onSelectClip(clip.id);
 
-    const targetSeg = scriptSegments?.find(s => s.id === clip.segmentId || s.id === clip.segmentIndex || (clip.segmentIndex && s.id === clip.segmentIndex));
-    if (targetSeg) {
-      const segKey = targetSeg._uid || targetSeg.id;
-      selectedSegmentIdRef.current = segKey;
-      lastSyncedInspectorIdRef.current = segKey;
-      setSelectedAudioId(segKey);
-      setSelectedSubId(segKey);
-      if (onSelectSegment) onSelectSegment(segKey);
-    } else {
+    if (isGapClip(clip)) {
       selectedSegmentIdRef.current = null;
       lastSyncedInspectorIdRef.current = null;
       setSelectedSubId(null);
       setSelectedAudioId(null);
       if (onSelectSegment) onSelectSegment(null);
+    } else {
+      const targetSeg = scriptSegments?.find(s => s.id === clip.segmentId || s.id === clip.segmentIndex || (clip.segmentIndex && s.id === clip.segmentIndex));
+      if (targetSeg) {
+        const segKey = targetSeg._uid || targetSeg.id;
+        selectedSegmentIdRef.current = segKey;
+        lastSyncedInspectorIdRef.current = segKey;
+        setSelectedAudioId(segKey);
+        setSelectedSubId(segKey);
+        if (onSelectSegment) onSelectSegment(segKey);
+      } else {
+        selectedSegmentIdRef.current = null;
+        lastSyncedInspectorIdRef.current = null;
+        setSelectedSubId(null);
+        setSelectedAudioId(null);
+        if (onSelectSegment) onSelectSegment(null);
+      }
     }
 
     if (mode === 'move' && onSeek && typeof clip.start === 'number') {

@@ -3,9 +3,45 @@
 ## Last Session
 - **Environment**: Antigravity IDE
 - **Branch**: `refactor/timeline-core-clean`
-- **Timestamp**: 2026-11-17T15:45:00+07:00
+- **Timestamp**: 2026-11-17T15:52:00+07:00
 
-## Summary: Fix 502 Bad Gateway & Orchestrator Dev Scripts (`dev.ps1`, `start.bat`) (COMPLETED)
+## Summary: Fix Gap Clip Selection & Segment Decoupling on Video Track (COMPLETED)
+- **Problem Diagnosed**:
+  - Clicking a Gap clip on the VIDEO track selected the neighbouring dialogue clip (#3) instead of the Gap, preventing Gap selection and deletion.
+  - Root cause: Video-clip `onClick` in `TimelineTracksCanvas.jsx` and `handleVideoMouseDown` in `TimelineEditor.jsx` resolved an associated segment via `clip.segmentId` / `clip.segmentIndex`. When a Gap clip carried a stale `segmentIndex` (or when bridged), clicking the Gap selected segment #3; `App.jsx` synced clip selection back to dialogue clip #3.
+- **Key Changes Implemented**:
+  1. `frontend/src/components/timeline/TimelineTracksCanvas.jsx`:
+     - Imported `isGapClip` from `../../utils/timelineOps`.
+     - In `renderVideoClip` `onClick`: If `isGapClip(clip)` is true, selects ONLY the clip (`onSelectClipKind('video')`, `onSelectClip(clip.id)`), clears segment selection (`setSelectedAudioId(null)`, `setSelectedSubId(null)`, `onSelectSegment(null)`), and skips the associated-segment lookup entirely. Dialogue clips retain previous association behavior.
+     - In `renderVideoClip`: Added `!isGapClip(clip)` guard to `isAssociatedWithSeg` so Gaps never evaluate as linked to segments.
+     - In `renderVoiceBlock` and `renderSubtitleBlock`: Added `!isGapClip(c)` guard so voice/subtitle segments never link to Gap clips.
+     - In virtualization filter: Guarded `!isGapClip(clip)` on segment ID match.
+  2. `frontend/src/components/timeline/TimelineEditor.jsx`:
+     - In `handleVideoMouseDown`: If `isGapClip(clip)` is true, selects ONLY the clip (`onSelectClipKind('video')`, `onSelectClip(clip.id)`), clears `selectedSegmentIdRef`, `lastSyncedInspectorIdRef`, and calls `setSelectedSubId(null)`, `setSelectedAudioId(null)`, `onSelectSegment(null)`, skipping the `targetSeg` lookup.
+  3. `frontend/src/utils/timelineOps.js`:
+     - Added `stripGapSegmentFields(clip)` helper.
+     - In `ok(state)`: Automatically strips `segmentId` and `segmentIndex` from all Gap clips in returned `videoClips`.
+     - In `deleteVideoClip`: Explicitly stripped `segmentId` and `segmentIndex` from created `gap`, `fillGap`, `endGap`, and merged adjacent Gaps.
+     - In `deleteGap`: Explicitly stripped `segmentId` and `segmentIndex` from merged adjacent Gaps.
+     - In `splitClip`: Stripped `segmentId` and `segmentIndex` from both parts when splitting a Gap.
+  4. `frontend/src/utils/timelineUtils.js`:
+     - In `bridgeClipGaps`: Stripped `segmentId` and `segmentIndex` from any Gap clips in the returned array.
+     - In `autoSplitVideoBySegments`: Explicitly stripped `segmentId` and `segmentIndex` from newly generated Gap clips and Outro clips.
+  5. `backend/tests/timeline_gap_selection_fix.test.js`:
+     - Created comprehensive regression suite covering static audit, selection isolation simulation, R3 ripple on delete, dialogue clip #4 pair retention, and Gap object purity across all utils.
+- **Verification Evidence**:
+  - Full timeline test suites (16 suites): **74 passed, 0 failed** (`node --test backend/tests/timeline_*.test.js`).
+  - Production build: `npm run build --prefix frontend` (Vite build passed in 622ms, 0 errors).
+  - Real-app simulation: Clicking Gap between #3 and #4 selects ONLY Gap with selection border (`isSelected = true`); #3 has `isSelected = false, isLinked = false`; pressing Delete removes the Gap and fires the R3 ripple left; clicking dialogue clip #4 selects #4 and links voice segment #4 as before.
+
+## Active Environment
+- **Backend API**: `http://localhost:5000` (`/api/health`)
+- **Frontend Studio**: `http://localhost:5173`
+- **Branch**: `refactor/timeline-core-clean`
+
+## Next Steps
+- Push changes to origin.
+- Report completion and STOP per prompt.
 - **Problem Diagnosed**:
   - Browser showed `502 (Bad Gateway)` / `ECONNREFUSED` on all API endpoints (`/api/health`, `/api/series`, `/api/tts/voices`, etc.) because Vite dev server on `:5173` could not connect to backend on `:5000`.
   - Direct execution of `node backend/server.js` revealed a startup crash: `ReferenceError: generateStorytellingScript is not defined at geminiService.js:1245:3` (an earlier dead-code pruning commit had removed the function body while leaving the export referenced by `scriptRoutes.js`).

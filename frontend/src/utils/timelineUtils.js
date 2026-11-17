@@ -524,7 +524,17 @@ export function bridgeClipGaps(clips = [], maxGapThreshold = Infinity) {
     }
   }
 
-  return bridged;
+  // Strip segmentId and segmentIndex from any Gap clip in bridged
+  return bridged.map((c) => {
+    const isGap = c.name === 'Gap' || c.isDialogue === false || (c.id && String(c.id).startsWith('clip-gap'));
+    if (isGap) {
+      const copy = { ...c };
+      delete copy.segmentId;
+      delete copy.segmentIndex;
+      return copy;
+    }
+    return c;
+  });
 }
 
 /**
@@ -596,7 +606,7 @@ export function autoSplitVideoBySegments(segments = [], totalDuration = 0, video
     if (it.start > curTime + 0.15) {
       const gapStart = parseFloat(curTime.toFixed(2));
       const gapEnd = parseFloat(it.start.toFixed(2));
-      clips.push({
+      const gapClip = {
         id: `clip-gap-${Date.now()}-${idx}`,
         trackRow: 0,
         trackId: 'video-1',
@@ -607,7 +617,10 @@ export function autoSplitVideoBySegments(segments = [], totalDuration = 0, video
         name: 'Gap',
         isDialogue: false,
         isMuted: false,
-      });
+      };
+      delete gapClip.segmentId;
+      delete gapClip.segmentIndex;
+      clips.push(gapClip);
       curTime = gapEnd;
     }
 
@@ -645,7 +658,7 @@ export function autoSplitVideoBySegments(segments = [], totalDuration = 0, video
   if (totalDuration > curTime + 0.15) {
     const outroStart = parseFloat(curTime.toFixed(2));
     const outroEnd = parseFloat(totalDuration.toFixed(2));
-    clips.push({
+    const outroClip = {
       id: `clip-outro-${Date.now()}`,
       trackRow: 0,
       trackId: 'video-1',
@@ -655,7 +668,10 @@ export function autoSplitVideoBySegments(segments = [], totalDuration = 0, video
       sourceEnd: outroEnd,
       name: 'Outro',
       isDialogue: false,
-    });
+    };
+    delete outroClip.segmentId;
+    delete outroClip.segmentIndex;
+    clips.push(outroClip);
   }
 
   return clips;

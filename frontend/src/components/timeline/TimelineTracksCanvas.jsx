@@ -2,6 +2,7 @@ import React from 'react';
 import { Upload, Volume2, VolumeX, Film } from 'lucide-react';
 import { formatTimecode, parseTimeToSeconds, formatMinSec } from '../../utils/formatTime';
 import { findAssociatedSegmentIndices } from '../../utils/timelineUtils';
+import { isGapClip } from '../../utils/timelineOps';
 import { uploadVideoFile } from '../../services/api';
 
 function TimelineTracksCanvas({
@@ -283,7 +284,7 @@ function TimelineTracksCanvas({
       ))
     );
     const isAssociatedWithClip = Boolean(
-      activeClipId && videoClips?.some((c) => c.id === activeClipId && (c.segmentId === seg.id || c.segmentIndex === segmentNumber))
+      activeClipId && videoClips?.some((c) => c.id === activeClipId && !isGapClip(c) && (c.segmentId === seg.id || c.segmentIndex === segmentNumber))
     );
     const isSelected = Boolean(
       (selectedClipKind === 'voice' || !selectedClipKind) && isDirectSegMatch
@@ -357,7 +358,7 @@ function TimelineTracksCanvas({
             setSelectedSubId(segKey);
             if (onSelectSegment) onSelectSegment(segKey);
             if (onSelectClip) {
-              const matchClip = videoClips?.find(c => c.segmentId === seg.id || c.segmentIndex === segmentNumber);
+              const matchClip = videoClips?.find(c => !isGapClip(c) && (c.segmentId === seg.id || c.segmentIndex === segmentNumber));
               onSelectClip(matchClip ? matchClip.id : null);
             }
             onSeek(startSec);
@@ -531,7 +532,7 @@ function TimelineTracksCanvas({
       ))
     );
     const isAssociatedWithClip = Boolean(
-      activeClipId && videoClips?.some((c) => c.id === activeClipId && (c.segmentId === seg.id || c.segmentIndex === segmentNumber))
+      activeClipId && videoClips?.some((c) => c.id === activeClipId && !isGapClip(c) && (c.segmentId === seg.id || c.segmentIndex === segmentNumber))
     );
     const isSelected = Boolean(
       (selectedClipKind === 'subtitle' || !selectedClipKind) && isDirectSubMatch
@@ -568,7 +569,7 @@ function TimelineTracksCanvas({
             setSelectedAudioId(subKey);
             if (onSelectSegment) onSelectSegment(subKey);
             if (onSelectClip) {
-              const matchClip = videoClips?.find(c => c.segmentId === seg.id || c.segmentIndex === segmentNumber);
+              const matchClip = videoClips?.find(c => !isGapClip(c) && (c.segmentId === seg.id || c.segmentIndex === segmentNumber));
               onSelectClip(matchClip ? matchClip.id : null);
             }
             onSeek(startSec);
@@ -645,6 +646,7 @@ function TimelineTracksCanvas({
     const clipLeft = startSec * pps;
     const isDirectClipMatch = Boolean(activeClipId && activeClipId === clip.id);
     const isAssociatedWithSeg = Boolean(
+      !isGapClip(clip) &&
       selectedSegmentId !== null && selectedSegmentId !== undefined && (
         clip.segmentId === selectedSegmentId ||
         clip.segmentIndex === selectedSegmentId ||
@@ -704,6 +706,12 @@ function TimelineTracksCanvas({
             e.stopPropagation();
             if (onSelectClipKind) onSelectClipKind('video');
             if (onSelectClip) onSelectClip(clip.id);
+            if (isGapClip(clip)) {
+              if (setSelectedAudioId) setSelectedAudioId(null);
+              if (setSelectedSubId) setSelectedSubId(null);
+              if (onSelectSegment) onSelectSegment(null);
+              return;
+            }
             const targetSeg = scriptSegments?.find(s => s.id === clip.segmentId || s.id === clip.segmentIndex || (clip.segmentIndex && s.id === clip.segmentIndex));
             if (targetSeg) {
               const segKey = targetSeg._uid || targetSeg.id;
@@ -1044,7 +1052,7 @@ function TimelineTracksCanvas({
                 .filter((clip) => (clip.trackRow || 0) === rIdx)
                 .filter((clip, idx) => {
                   const isDragging = dragState?.itemType === 'video' && (dragState?.id === clip.id || dragState?.index === idx);
-                  const isSelected = activeClipId === clip.id || (selectedSegmentId !== null && (clip.segmentId === selectedSegmentId || clip.segmentIndex === selectedSegmentId));
+                  const isSelected = activeClipId === clip.id || (!isGapClip(clip) && selectedSegmentId !== null && (clip.segmentId === selectedSegmentId || clip.segmentIndex === selectedSegmentId));
                   if (isDragging || isSelected) return true;
                   const cStart = clip.start || 0;
                   const cEnd = clip.end || (cStart + 1);

@@ -31,6 +31,14 @@ export function isGapClip(clip) {
   return /^Gap(?: \(Part \d+\))?$/i.test(clip.name || '') || (clip.id && String(clip.id).startsWith('clip-gap'));
 }
 
+/** Strip segmentId and segmentIndex from a Gap clip */
+export function stripGapSegmentFields(clip) {
+  if (!clip || !isGapClip(clip)) return clip;
+  delete clip.segmentId;
+  delete clip.segmentIndex;
+  return clip;
+}
+
 /** Deterministic unique ID (timestamp + random suffix) */
 function uid(prefix = 'clip') {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`;
@@ -94,6 +102,14 @@ function ensureClipNums(clip) {
 // ─── OpResult factory ───────────────────────────────────────────────
 
 function ok(state) {
+  if (state && Array.isArray(state.videoClips)) {
+    state.videoClips.forEach((c) => {
+      if (isGapClip(c)) {
+        delete c.segmentId;
+        delete c.segmentIndex;
+      }
+    });
+  }
   return { state, applied: true };
 }
 
@@ -169,6 +185,8 @@ export function deleteVideoClip(state, { clipId, totalDuration }) {
     isDialogue: false,
     isMuted: false,
   };
+  delete gap.segmentId;
+  delete gap.segmentIndex;
 
   remaining = [...remaining, gap].sort((a, b) => a.start - b.start);
 
@@ -215,6 +233,8 @@ export function deleteVideoClip(state, { clipId, totalDuration }) {
         sourceStart: prev.start,
         sourceEnd: Math.max(prev.end, clip.end),
       };
+      delete acc[acc.length - 1].segmentId;
+      delete acc[acc.length - 1].segmentIndex;
     } else {
       acc.push(clip);
     }
@@ -281,6 +301,8 @@ export function deleteGap(state, { clipId }) {
         sourceStart: prev.start,
         sourceEnd: Math.max(prev.end, clip.end),
       };
+      delete acc[acc.length - 1].segmentId;
+      delete acc[acc.length - 1].segmentIndex;
     } else {
       acc.push(clip);
     }
@@ -430,6 +452,13 @@ export function splitClip(state, { splitTime, activeClipId, totalDuration, clipD
     sourceEnd: target.sourceEnd,
     name: isGap ? 'Gap' : `${baseName} (Part 2)`,
   };
+
+  if (isGap) {
+    delete firstPart.segmentId;
+    delete firstPart.segmentIndex;
+    delete secondPart.segmentId;
+    delete secondPart.segmentIndex;
+  }
 
   const updated = [...targetClips];
   updated.splice(targetIndex, 1, firstPart, secondPart);
