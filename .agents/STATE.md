@@ -1,6 +1,41 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
+- **Environment**: Antigravity IDE (`engineering-minimal-change-engineer` discipline)
+- **Branch**: `chore/full-project-cleanup` (branched from `refactor/timeline-core-clean` at `31323e1`)
+- **Timestamp**: 2026-11-17T19:05:00+07:00
+
+## Summary: Full Project Cleanup & Repair (Phases 0–4 COMPLETED)
+- **Phase 0 (`b5e2eec`)**: Completed repo-wide dead-code, logging, broken-wiring, and CSS inventory; wrote `.agents/FULL-FIX-PLAN.md` with grep evidence per item.
+- **Phase 1 — Dead Code Removal**:
+  - **Batch 1A Frontend (`6926613`)**: Removed 3 dead files (`WorkflowStepper.jsx`, `WorkflowStepper.css`, `features/gemini-route/hooks/index.js`) and dead exports/helpers (`PlayerTopBar`, `checkEpisodeScriptHealthy`, `killTtsApi`, `killTranslateJobApi`, `stripGapSegmentFields`, `getSourceSubtitleEnd`, unused `formatTimecode`) — 12 files, +2/-319 lines.
+  - **Batch 1B Backend (`d8b5c50`)**: Removed 3 dead exports in `backend/models/speakerRegistry.js` (`switchSpeakerOrSegmentVoice`, `DEFAULT_VOICES`, `detectGenderFromAcousticPitch`) — 1 file, -78 lines.
+- **Phase 2 — Broken Wiring Fixes (1 fix per commit)**:
+  - `e41f0ec`: Replaced non-existent `./AiToolsTab` barrel export in `frontend/src/components/media/index.js` with `./DubbingModeTab`.
+  - `ec3c98a`: Fixed 404 abort endpoint in `DubbingRunnerContext.jsx:128` (`/api/jobs/:jobId/kill` -> `/api/jobs/:jobId/cancel`).
+  - `6b50792`: Removed duplicate `selectedClip`/`onSplitClip`/`onDeleteClip` JSX props on `<VoiceSettings>` in `App.jsx`.
+  - `677c766`: Replaced `window.location.reload()` fallback in `EpisodesTab.jsx:107` with SPA `onRefreshSeries()` (turned `full_project_master_upgrade.test.js` Phase 3a GREEN).
+  - `1001346`: Exported `getVideoDimensionsFast` from `backend/services/ffmpegService.js` (consumed by `aspect_ratio_and_crop.test.js`).
+- **Phase 3 — UI Code Cleanup (`43e3d3d`, zero visual change)**:
+  - Removed unreachable `return` in `DubbingRunnerContext.jsx:605`, dead voice-preview state/handlers in `VoiceSettings.jsx`, dead state/handlers/imports in `EpisodesTab.jsx` & `DubbingModeTab.jsx`, unused imports across 7 UI components, and strictly unused CSS blocks in `Navbar.css`, `VoiceSettings.css`, `MediaLibrary.css`, `VideoPlayerPreview.css`, `styles/modals.css` — 16 files, +17/-700 lines (CSS bundle `87.31 kB` -> `79.00 kB`).
+- **Phase 4 — Final Verification (ALL PASSED)**:
+  - Frozen timeline regression suites: **87/87 PASS** (0 fail).
+  - Full backend test suite (`node --test backend/tests/*.test.js`): **316/323 PASS** (improved from 315 -> 316; 5 pre-existing unrelated failures + 2 skipped; 0 regressions).
+  - Frontend production build: **PASS** (2036 modules, 615ms, 0 errors); `oxlint`: **0 errors**, warnings `473 -> 417`.
+  - Live backend health check: `GET http://localhost:5000/api/health` -> **HTTP 200 OK** (`6/6` Gemini keys active) + fresh `backend/server.js` module boot verified clean.
+  - Real pipeline smoke test (`backend/tests/run_real_pipeline_smoke_test.js`): **ALL STAGES PASSED** (Stage 3 OCR -> Stage 4 ASR -> Stage 6 Translation -> Edge Neural TTS 23,684 bytes -> FFmpeg `h264_qsv` Export 102,827 bytes).
+
+## Active Environment
+- **Backend API**: `http://localhost:5000` (`/api/health` = 200 OK)
+- **Frontend Studio**: `http://localhost:5173`
+- **Branch**: `chore/full-project-cleanup` (pushed to `origin/chore/full-project-cleanup`)
+
+## Next Steps
+- Review "Needs Owner" items in `.agents/FULL-FIX-PLAN.md` (Section 3) before deciding on follow-up cleanup or merging `chore/full-project-cleanup`.
+
+---
+
+## Previous Session
 - **Environment**: Antigravity IDE
 - **Branch**: `refactor/timeline-core-clean`
 - **Timestamp**: 2026-11-17T16:42:00+07:00
