@@ -2712,15 +2712,56 @@ function createSynchronizedNarrationAudio(segments, outputAudioPath, options = {
         .run();
     }
 
-    // Helper: Mix a single batch of up to 40 segments safely
-    const mixBatch = (segs, outPath, isWav = false) => {
+    // Helper: Re-verify segment audio file right before spawning FFmpeg.
+    // If a concurrent single-segment voice switch deleted & replaced the old MP3 while earlier
+    // batches were running, transparently pick up the replacement MP3 for that segment (or skip
+    // cleanly if still mid-TTS) so /api/sync-audio never crashes with HTTP 500 ENOENT.
+    const resolveLiveSegmentAudioPath = (seg) => {
+      if (!seg || !seg.audioPath) return null;
+      if (fs.existsSync(seg.audioPath)) return seg.audioPath;
+      try {
+        const dir = path.dirname(seg.audioPath);
+        const base = path.basename(seg.audioPath);
+        const prefixMatch = base.match(/^(.+?_seg_[^_]+_)/i);
+        if (prefixMatch && fs.existsSync(dir)) {
+          const prefix = prefixMatch[1];
+          const candidates = fs.readdirSync(dir)
+            .filter((f) => f.startsWith(prefix) && f.endsWith(".mp3") && !f.startsWith(".tmp_"))
+            .map((f) => {
+              const full = path.join(dir, f);
+              let mtimeMs = 0;
+              try { mtimeMs = fs.statSync(full).mtimeMs; } catch (_) {}
+              return { full, mtimeMs };
+            })
+            .sort((a, b) => b.mtimeMs - a.mtimeMs);
+          if (candidates.length > 0 && fs.existsSync(candidates[0].full)) {
+            return candidates[0].full;
+          }
+        }
+      } catch (_) {}
+      return null;
+    };
+
+    // Helper: Mix a single batch of up to 40 segments safely (resilient to concurrent voice-switch file swaps)
+    const mixBatch = (segs, outPath, isWav = false, allowRetry = true) => {
       return new Promise((resBatch, rejBatch) => {
         try {
+          const liveSegs = [];
+          for (const seg of segs) {
+            const livePath = resolveLiveSegmentAudioPath(seg);
+            if (livePath) {
+              liveSegs.push(livePath === seg.audioPath ? seg : { ...seg, audioPath: livePath });
+            }
+          }
+          if (liveSegs.length === 0) {
+            return resBatch(null);
+          }
+
           const command = ffmpeg();
           const filterParts = [];
           const mixInputs = [];
 
-          const preparedSegs = segs.map((seg, idx) => {
+          const preparedSegs = liveSegs.map((seg, idx) => {
             const secVal = resolveSegmentStartSec(seg, idx * 4);
             let dur = typeof seg.audioDurationSec === "number" && !isNaN(seg.audioDurationSec) && seg.audioDurationSec > 0
               ? seg.audioDurationSec
@@ -2760,7 +2801,7 @@ function createSynchronizedNarrationAudio(segments, outputAudioPath, options = {
             mixInputs.push(`[a${idx}]`);
           });
 
-          const N = segs.length;
+          const N = liveSegs.length;
           const filterStr = filterParts.join(";") + ";" + mixInputs.join("") + "amix=inputs=" + N + ":duration=longest:dropout_transition=2147483647,volume=" + N + ",alimiter=limit=0.95[outa]";
           command.complexFilter(filterStr);
 
@@ -2773,7 +2814,14 @@ function createSynchronizedNarrationAudio(segments, outputAudioPath, options = {
 
           command.output(getSafeCliPath(outPath))
             .on("end", () => resBatch(outPath))
-            .on("error", rejBatch)
+            .on("error", (err) => {
+              const msg = String(err?.message || "");
+              if (allowRetry && /No such file or directory|Error opening input/i.test(msg)) {
+                console.warn(`[FFmpegService] ⚠️ Concurrent audio file swap detected during sync batch — retrying batch with live files...`);
+                return mixBatch(segs, outPath, isWav, false).then(resBatch).catch(rejBatch);
+              }
+              return rejBatch(err);
+            })
             .run();
         } catch (spawnErr) {
           rejBatch(spawnErr);
@@ -2785,7 +2833,10 @@ function createSynchronizedNarrationAudio(segments, outputAudioPath, options = {
     try {
       if (validSegs.length <= BATCH_SIZE) {
         // Direct Single Pass
-        await mixBatch(validSegs, tempOutputPath, false);
+        const singleOut = await mixBatch(validSegs, tempOutputPath, false);
+        if (!singleOut) {
+          return reject(new Error("No valid audio files remained during synchronization"));
+        }
         finalizeAtomicSwap();
         console.log(`[FFmpegService] 🎙️ Master Narration បាន Sync រួចរាល់ (${validSegs.length} segments | Steady Loudness Guard active)`);
         return resolve(outputAudioPath);
@@ -2799,8 +2850,14 @@ function createSynchronizedNarrationAudio(segments, outputAudioPath, options = {
         const batchNum = Math.floor(b / BATCH_SIZE) + 1;
         const batchSegs = validSegs.slice(b, b + BATCH_SIZE);
         const batchWavPath = path.join(outDir, `.tmp_sync_batch_${Date.now()}_${batchNum}.wav`);
-        await mixBatch(batchSegs, batchWavPath, true);
-        intermediateChunkPaths.push(batchWavPath);
+        const builtChunk = await mixBatch(batchSegs, batchWavPath, true);
+        if (builtChunk) {
+          intermediateChunkPaths.push(builtChunk);
+        }
+      }
+
+      if (intermediateChunkPaths.length === 0) {
+        return reject(new Error("No valid audio batches remained during synchronization"));
       }
 
       // Final mix of intermediate batch WAVs into single MP3

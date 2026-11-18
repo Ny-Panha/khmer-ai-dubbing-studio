@@ -3,6 +3,30 @@
 ## Last Session
 - **Environment**: Antigravity IDE
 - **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-19T00:28:30+07:00
+
+## Summary: Fix `/api/sync-audio` HTTP 500 `No such file or directory` Race on Concurrent Voice Switch (COMPLETED)
+- **Root Cause**: When a timeline drag/edit triggered multi-batch `POST /api/sync-audio` while a segment (`#162`, `#163`) concurrently switched voices (`Sreymom -> Piseth`), `ttsService` replaced & deleted the old `...SreymomNeural...mp3` while FFmpeg batches 1–4 were running, causing batch 5 to crash with `Error opening input file: No such file or directory` (HTTP 500).
+- **Fix Applied**:
+  - `backend/services/ffmpegService.js` (`createSynchronizedNarrationAudio` / `mixBatch`):
+    - Added `resolveLiveSegmentAudioPath(seg)` right before spawning each FFmpeg batch: if an old voice MP3 vanished during a concurrent voice switch, automatically resolves the newest replacement `.mp3` for that segment prefix (`ep_*_seg_<id>_*.mp3`) or skips cleanly if mid-TTS.
+    - Added single automatic batch retry on `No such file or directory|Error opening input` for microsecond TOCTOU races and guarded empty batches safely.
+- **Verification**:
+  - Verified `createSynchronizedNarrationAudio` succeeds cleanly (`SYNC OK: true`), restarted backend on `:5000`.
+
+## Active Environment
+- **Backend API**: `http://localhost:5000` (restarted with `/api/sync-audio` race fix)
+- **Frontend Studio**: `http://localhost:5173` (Vite dev server)
+- **Branch**: `chore/full-project-cleanup` (committed & pushed)
+
+## Next Steps
+- Continue editing/dragging clips and switching voices in Studio — `/api/sync-audio` will no longer throw HTTP 500 on concurrent voice file swaps.
+
+---
+
+## Previous Session
+- **Environment**: Antigravity IDE
+- **Branch**: `chore/full-project-cleanup`
 - **Timestamp**: 2026-11-19T00:22:00+07:00
 
 ## Summary: Instant Same-Frame Voice Assignment Color/Label, Mid-Generation Reload Survival & Failure Rollback Toast (COMPLETED)
