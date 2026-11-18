@@ -3,6 +3,46 @@
 ## Last Session
 - **Environment**: Antigravity IDE
 - **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-18T21:37:30+07:00
+
+## Summary: Smooth-Drag Inspector & Settings Sliders (Commit-on-Release + Zero-Rerender Live Preview) (COMPLETED)
+- **Root Cause**: All 16 Inspector/settings `<input type="range">` controls fired `onSettingChange` (or `onClipSpeedChange`) on every pointer-move `onChange` tick, triggering top-level `<App />` re-renders (219 segments + timeline), synchronous `localStorage.setItem`, render invalidation, and backend `POST /api/series/.../sync` per drag pixel.
+- **Changes Applied**:
+  1. `frontend/src/utils/sliderDraftPreview.js` *(new)* & `frontend/src/components/common/SmoothRangeSlider.jsx` *(new)*:
+     - Created reusable `SmoothRangeSlider` + pure `createSliderDragController` + lightweight `'inspector:draft-preview'` event bus.
+     - During pointer drag (`pointerdown` -> moves): updates local draft state + emits preview event ONLY — zero full-studio state commits, zero `localStorage` writes, zero `/sync`, zero render invalidation.
+     - On pointer release (`pointerup`/`pointercancel` on window): commits ONCE (with duplicate trailing-change guard).
+     - Keyboard arrows & preset buttons (`0.75x/1.0x/1.25x/1.5x`) continue committing immediately as single commits.
+  2. **Converted ALL 16 Inspector & Settings sliders** to `SmoothRangeSlider` with local draft readouts:
+     - `frontend/src/components/voice/AudioDuckingPanel.jsx` (2): Background Music Volume (`duckingVolume`), Khmer Voice Boost (`khmerVolume`).
+     - `frontend/src/components/voice/ClipInspectorPanel.jsx` (1): Clip Speed (`0.5x–2.0x`).
+     - `frontend/src/components/voice/ExportSettingsPanel.jsx` (9): Logo Size, Logo Opacity, Corner Mask Width, Corner Mask Height, Corner Mask Offset X, Corner Mask Offset Y, Corner Mask Blur Strength, Sponsor Chroma Sensitivity, Sponsor Scale.
+     - `frontend/src/components/player/VideoTransformControls.jsx` (4): Quick Logo Size, Quick Mask Width, Quick Mask Height, Anti-Theft Bottom Height.
+  3. **Lightweight Live Preview Subscribers** (bypassing `<App />` re-render during drag):
+     - `CornerMaskOverlay.jsx` (width/height/offsetX/offsetY/blur, with `transition: none` during active draft), `LogoOverlay.jsx` (size/opacity), `SponsorOverlay.jsx` (scale/sensitivity), `AntiTheftOverlay.jsx` (bottom %), and `VideoPlayerPreview.jsx` (direct `.volume`/`.muted` update on video/BGM/narration/segment audio refs).
+  4. `backend/tests/inspector_smooth_sliders.test.js` *(new)*: State-machine + static audit confirming 0 raw `<input type="range">` across all 4 Inspector/settings files and all 16 smooth sliders + 5 preview subscribers wired.
+- **Verification**:
+  - Real-app Playwright E2E (`:5173` + `:5000`, isolated clone of `Pseudo_Spiritual_Root/ep_5`):
+    - Dragged BGM Volume `0% -> 100% -> 45%`: readout tracked smoothly (`Muted (0%) -> 34% -> 71% -> 100% -> 71% -> 45%`), `0` localStorage writes & `0` `/sync` calls during drag, committed ONLY `[0.45]` on release.
+    - Dragged Corner Mask Width: preview `.corner-mask-root` resized 1:1 (`130px -> 255px -> 350px`) during drag with `0` saves & `0` `/sync` during drag, committed ONLY `[350]` on release.
+    - Keyboard `ArrowRight` on BGM (`0.45 -> 0.46`): single immediate commit.
+    - `page.reload()`: final `duckingVolume: 0.46` & `cornerMaskWidth: 350` persisted.
+  - `npm --prefix frontend run build`: **PASS** (`648ms`, 0 errors).
+  - Tests (`inspector_smooth_sliders`, `corner_mask_real_blur`, `global_logo_settings`, `timeline_voice_drag_persistence`): **12 / 12 PASS**.
+
+## Active Environment
+- **Backend API**: `http://localhost:5000` (HTTP 200)
+- **Frontend Studio**: `http://localhost:5173` (Vite dev server)
+- **Branch**: `chore/full-project-cleanup` (committed & pushed)
+
+## Next Steps
+- Refresh Studio (`Ctrl + F5`) at `http://localhost:5173/studio` and drag any Inspector slider (BGM Volume, Voice Boost, Mask Width/Height/Offset/Blur, Clip Speed, Logo, Sponsor) — handle tracks smoothly at 60fps and saves once on release.
+
+---
+
+## Previous Session
+- **Environment**: Antigravity IDE
+- **Branch**: `chore/full-project-cleanup`
 - **Timestamp**: 2026-11-18T21:12:00+07:00
 
 ## Summary: Real Video Blur Watermark Mask (Preview + FFmpeg `gblur`), Solid Black 100%, & Offset X/Y Controls (COMPLETED)

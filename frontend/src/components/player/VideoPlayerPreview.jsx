@@ -6,6 +6,7 @@ import { findLeadingSilenceFromChannels, computeSegmentAudioSyncTarget } from '.
 import { uploadVideoFile } from '../../services/api';
 import { createAudioRecoveryManager } from '../../utils/audioAutoRecovery';
 import { resolveDefaultAspectRatio, inferRenderedAspectRatio, sanitizeAspectRatio } from '../../utils/projectStorage';
+import { subscribeDraftPreview } from '../../utils/sliderDraftPreview';
 
 import { PlayerBottomBar } from './PlayerControls';
 import LiveSubtitleOverlay from './LiveSubtitleOverlay';
@@ -1287,6 +1288,40 @@ function VideoPlayerPreview({
       }
     }
   }, [currentTime, audioGenerated, audioOutdated, fullAudioUrl, renderedVideo, scriptData, voiceSettings, videoClips, videoRef]);
+
+  // Zero-rerender live audio volume preview while dragging Audio Mixing sliders
+  useEffect(() => {
+    return subscribeDraftPreview(['duckingVolume', 'khmerVolume'], ({ key, value, cleared }) => {
+      if (cleared || !Number.isFinite(value)) return;
+      const cfg = segAudioConfigRef.current || {};
+      if (cfg.renderedVideo) return;
+
+      if (key === 'duckingVolume') {
+        const clamped = Math.min(1.0, Math.max(0, value));
+        const isDemucs = Boolean(cfg.voiceSettings?.enableDemucs && cleanBgAudioRef.current);
+        if (isDemucs && cleanBgAudioRef.current) {
+          cleanBgAudioRef.current.muted = clamped <= 0.001;
+          cleanBgAudioRef.current.volume = clamped;
+        } else if (videoRef?.current) {
+          videoRef.current.muted = clamped <= 0.001;
+          videoRef.current.volume = clamped;
+        }
+      } else if (key === 'khmerVolume') {
+        const clamped = Math.min(1.0, Math.max(0, value));
+        const isMuted = value <= 0.01;
+        if (narrationAudioRef.current) {
+          narrationAudioRef.current.muted = isMuted;
+          narrationAudioRef.current.volume = isMuted ? 0 : clamped;
+        }
+        const activeAudios = activeSegmentAudiosRef.current || {};
+        Object.values(activeAudios).forEach((item) => {
+          if (item?.audio) {
+            item.audio.volume = isMuted ? 0 : clamped;
+          }
+        });
+      }
+    });
+  }, [videoRef]);
 
   const episodeSourceKey = `${seriesId || ''}::${episodeId || ''}::${selectedVideo?.videoId || selectedVideo?.videoUrl || ''}`;
   const prevEpisodeSourceKeyRef = useRef(episodeSourceKey);

@@ -1,6 +1,7 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { ChevronUp, ChevronDown, RotateCcw, X, MoveVertical } from 'lucide-react';
 import './AntiTheftOverlay.css';
+import { subscribeDraftPreview } from '../../utils/sliderDraftPreview';
 
 export default function AntiTheftOverlay({
   voiceSettings = {},
@@ -17,6 +18,13 @@ export default function AntiTheftOverlay({
   const [isHovered, setIsHovered] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [dragDeltaY, setDragDeltaY] = useState(0);
+  const [draftBottomPercent, setDraftBottomPercent] = useState(null);
+
+  useEffect(() => {
+    return subscribeDraftPreview('antiTheftBottomPercent', ({ value, cleared }) => {
+      setDraftBottomPercent(cleared ? null : value);
+    });
+  }, []);
 
   if (!voiceSettings?.enableAntiTheft || renderedVideo) {
     return null;
@@ -51,11 +59,13 @@ export default function AntiTheftOverlay({
     ? 'size-large'
     : (antiTheftSize === 'medium' ? 'size-medium' : 'size-small');
 
-  // Compute effective bottom percent
+  // Compute effective bottom percent (prefer live draft while dragging slider)
   const defaultBottom = isLandscapeInVertical ? 34.2 : (aspectRatio === '9:16' ? 16.5 : 2);
-  const effectiveBottom = typeof voiceSettings?.antiTheftBottomPercent === 'number'
-    ? voiceSettings.antiTheftBottomPercent
-    : defaultBottom;
+  const effectiveBottom = typeof draftBottomPercent === 'number'
+    ? draftBottomPercent
+    : (typeof voiceSettings?.antiTheftBottomPercent === 'number'
+      ? voiceSettings.antiTheftBottomPercent
+      : defaultBottom);
 
   // Mouse drag handler to freely move the bottom banner up/down
   const handleRibbonMouseDown = (e) => {

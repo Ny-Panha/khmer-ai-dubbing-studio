@@ -1,5 +1,14 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import './CornerMaskOverlay.css';
+import { subscribeDraftPreview } from '../../utils/sliderDraftPreview';
+
+const MASK_DRAFT_KEYS = [
+  'cornerMaskWidth',
+  'cornerMaskHeight',
+  'cornerMaskOffsetX',
+  'cornerMaskOffsetY',
+  'cornerMaskBlur',
+];
 
 /**
  * Corner Mask / Disclaimer Blocker Overlay
@@ -13,6 +22,26 @@ export default function CornerMaskOverlay({
   verticalStyle = 'pad',
   videoMeta = null,
 }) {
+  const [draftOverrides, setDraftOverrides] = useState({});
+
+  useEffect(() => {
+    return subscribeDraftPreview(MASK_DRAFT_KEYS, ({ key, value, cleared }) => {
+      setDraftOverrides((prev) => {
+        if (cleared) {
+          if (!(key in prev)) return prev;
+          const next = { ...prev };
+          delete next[key];
+          return next;
+        }
+        if (prev[key] === value) return prev;
+        return { ...prev, [key]: value };
+      });
+    });
+  }, []);
+
+  const hasActiveDraft = Object.keys(draftOverrides).length > 0;
+  const merged = hasActiveDraft ? { ...(voiceSettings || {}), ...draftOverrides } : (voiceSettings || {});
+
   const {
     enableCornerMask = false,
     cornerMaskText = '«រឿងប្រឌិតសុទ្ធសាធ • ហាមចម្លង»',
@@ -24,7 +53,7 @@ export default function CornerMaskOverlay({
     cornerMaskBlur = 18,
     cornerMaskOffsetX = 14,
     cornerMaskOffsetY = 14,
-  } = voiceSettings || {};
+  } = merged;
 
   if (!enableCornerMask || renderedVideo) {
     return null;
@@ -83,6 +112,7 @@ export default function CornerMaskOverlay({
         width: `${width}px`,
         height: `${height}px`,
         opacity,
+        ...(hasActiveDraft ? { transition: 'none' } : null),
         ...positionStyle,
       }}
     >

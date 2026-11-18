@@ -1,5 +1,8 @@
 import React, { useRef, useEffect, useState } from 'react';
 import './SponsorOverlay.css';
+import { subscribeDraftPreview } from '../../utils/sliderDraftPreview';
+
+const SPONSOR_DRAFT_KEYS = ['sponsorScale', 'sponsorChromaSimilarity'];
 
 export default function SponsorOverlay({
   voiceSettings = {},
@@ -11,6 +14,27 @@ export default function SponsorOverlay({
   isPlaying = false,
   onUpdateVoiceSettings = null,
 }) {
+  const [draftOverrides, setDraftOverrides] = useState({});
+
+  useEffect(() => {
+    return subscribeDraftPreview(SPONSOR_DRAFT_KEYS, ({ key, value, cleared }) => {
+      setDraftOverrides((prev) => {
+        if (cleared) {
+          if (!(key in prev)) return prev;
+          const next = { ...prev };
+          delete next[key];
+          return next;
+        }
+        if (prev[key] === value) return prev;
+        return { ...prev, [key]: value };
+      });
+    });
+  }, []);
+
+  const merged = Object.keys(draftOverrides).length > 0
+    ? { ...(voiceSettings || {}), ...draftOverrides }
+    : (voiceSettings || {});
+
   const {
     enableSponsor = false,
     sponsorVideoUrl = null,
@@ -29,7 +53,7 @@ export default function SponsorOverlay({
     sponsorEndSec = 15,
     sponsorMuteAudio = true,
     sponsorVolume = 0.5,
-  } = voiceSettings || {};
+  } = merged;
 
   const rootRef = useRef(null);
   const videoRef = useRef(null);

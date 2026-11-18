@@ -1,7 +1,8 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   Volume2, RotateCcw, Play, Square, ChevronUp, ChevronDown
 } from 'lucide-react';
+import SmoothRangeSlider from '../common/SmoothRangeSlider';
 
 export default function AudioDuckingPanel({
   isOpen,
@@ -12,8 +13,13 @@ export default function AudioDuckingPanel({
   onToggleTest,
   previewAudioUrl,
 }) {
-  const duckingVal = settings?.duckingVolume !== undefined ? settings.duckingVolume : 0.15;
-  const khmerVal = settings?.khmerVolume !== undefined ? settings.khmerVolume : 1.0;
+  const [draftDucking, setDraftDucking] = useState(null);
+  const [draftKhmer, setDraftKhmer] = useState(null);
+
+  const committedDucking = settings?.duckingVolume !== undefined ? settings.duckingVolume : 0.15;
+  const committedKhmer = settings?.khmerVolume !== undefined ? settings.khmerVolume : 1.0;
+  const duckingVal = draftDucking !== null ? draftDucking : committedDucking;
+  const khmerVal = draftKhmer !== null ? draftKhmer : committedKhmer;
   // Linear gain -> dB readout (0 = -∞ dB)
   const toDb = (gain) => {
     if (!(gain > 0)) return '-∞ dB';
@@ -127,14 +133,16 @@ export default function AudioDuckingPanel({
                 <span style={{ marginLeft: 6, fontWeight: 500, opacity: 0.7 }}>{toDb(duckingVal)}</span>
               </span>
             </div>
-            <input
-              type="range"
-              min="0"
-              max="1"
-              step="0.01"
-              value={duckingVal}
-              onChange={(e) => onSettingChange('duckingVolume', parseFloat(e.target.value))}
+            <SmoothRangeSlider
+              min={0}
+              max={1}
+              step={0.01}
+              value={committedDucking}
+              previewKey="duckingVolume"
+              onDraftChange={setDraftDucking}
+              onCommit={(val) => onSettingChange('duckingVolume', val)}
               className="capcut-slider"
+              data-testid="slider-ducking-volume"
               title="Adjust Original Drama Audio from 0% to 100%"
             />
             {duckingVal === 0 && (
@@ -158,14 +166,16 @@ export default function AudioDuckingPanel({
                 <span style={{ marginLeft: 6, fontWeight: 500, opacity: 0.7 }}>{toDb(khmerVal)}</span>
               </span>
             </div>
-            <input
-              type="range"
-              min="0.2"
-              max="2.0"
-              step="0.05"
-              value={khmerVal}
-              onChange={(e) => onSettingChange('khmerVolume', parseFloat(e.target.value))}
+            <SmoothRangeSlider
+              min={0.2}
+              max={2.0}
+              step={0.05}
+              value={committedKhmer}
+              previewKey="khmerVolume"
+              onDraftChange={setDraftKhmer}
+              onCommit={(val) => onSettingChange('khmerVolume', val)}
               className="capcut-slider"
+              data-testid="slider-khmer-volume"
               title="Boost Khmer Voice from 20% up to 200% (Standard is 100%)"
             />
           </div>

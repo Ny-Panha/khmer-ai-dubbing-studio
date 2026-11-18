@@ -1,5 +1,8 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import './LogoOverlay.css';
+import { subscribeDraftPreview } from '../../utils/sliderDraftPreview';
+
+const LOGO_DRAFT_KEYS = ['logoSize', 'logoOpacity'];
 
 export default function LogoOverlay({
   voiceSettings = {},
@@ -9,6 +12,27 @@ export default function LogoOverlay({
   videoMeta = null,
   onUpdateVoiceSettings = null,
 }) {
+  const [draftOverrides, setDraftOverrides] = useState({});
+
+  useEffect(() => {
+    return subscribeDraftPreview(LOGO_DRAFT_KEYS, ({ key, value, cleared }) => {
+      setDraftOverrides((prev) => {
+        if (cleared) {
+          if (!(key in prev)) return prev;
+          const next = { ...prev };
+          delete next[key];
+          return next;
+        }
+        if (prev[key] === value) return prev;
+        return { ...prev, [key]: value };
+      });
+    });
+  }, []);
+
+  const merged = Object.keys(draftOverrides).length > 0
+    ? { ...(voiceSettings || {}), ...draftOverrides }
+    : (voiceSettings || {});
+
   const {
     enableLogo = false,
     logoImage = null,
@@ -19,7 +43,7 @@ export default function LogoOverlay({
     logoMargin = 20,
     logoXPercent,
     logoYPercent,
-  } = voiceSettings || {};
+  } = merged;
 
   const rootRef = useRef(null);
   const [isHovered, setIsHovered] = useState(false);

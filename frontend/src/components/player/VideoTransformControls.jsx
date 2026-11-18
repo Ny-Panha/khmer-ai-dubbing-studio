@@ -4,6 +4,7 @@ import {
   Shield, Eye, EyeOff, Sliders, ChevronDown, ShieldCheck
 } from 'lucide-react';
 import './VideoTransformControls.css';
+import SmoothRangeSlider from '../common/SmoothRangeSlider';
 
 /**
  * Modern floating glassmorphism toolbar for customizing
@@ -18,6 +19,22 @@ export default function VideoTransformControls({
 }) {
   const [activeMenu, setActiveMenu] = useState(null); // 'logo' | 'mask' | 'ribbon' | null
   const [isCollapsed, setIsCollapsed] = useState(false);
+  const [draftSliders, setDraftSliders] = useState({});
+
+  const setSliderDraft = (key, val) => {
+    setDraftSliders((prev) => {
+      if (val === null || val === undefined) {
+        if (!(key in prev)) return prev;
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      }
+      if (prev[key] === val) return prev;
+      return { ...prev, [key]: val };
+    });
+  };
+  const getDisplay = (key, committed) =>
+    Object.prototype.hasOwnProperty.call(draftSliders, key) ? draftSliders[key] : committed;
 
   const currentLogoPos = voiceSettings?.logoPosition || 'top-right';
   const currentLogoSize = voiceSettings?.logoSize || 72;
@@ -118,15 +135,16 @@ export default function VideoTransformControls({
                 <div className="popup-section">
                   <div className="slider-row-header">
                     <span>ទំហំ Logo (Size):</span>
-                    <span className="value-label">{currentLogoSize}px</span>
+                    <span className="value-label">{getDisplay('logoSize', currentLogoSize)}px</span>
                   </div>
-                  <input
-                    type="range"
-                    min="36"
-                    max="160"
-                    step="4"
+                  <SmoothRangeSlider
+                    min={36}
+                    max={160}
+                    step={4}
                     value={currentLogoSize}
-                    onChange={(e) => onUpdateVoiceSettings?.({ ...voiceSettings, logoSize: Number(e.target.value) })}
+                    previewKey="logoSize"
+                    onDraftChange={(v) => setSliderDraft('logoSize', v)}
+                    onCommit={(v) => onUpdateVoiceSettings?.({ ...voiceSettings, logoSize: v })}
                     className="compact-range"
                   />
                 </div>
@@ -205,15 +223,16 @@ export default function VideoTransformControls({
                 <div className="popup-section">
                   <div className="slider-row-header">
                     <span>បណ្តោយ (Width):</span>
-                    <span className="value-label" style={{ color: '#38bdf8' }}>{currentMaskWidth}px</span>
+                    <span className="value-label" style={{ color: '#38bdf8' }}>{getDisplay('cornerMaskWidth', currentMaskWidth)}px</span>
                   </div>
-                  <input
-                    type="range"
-                    min="100"
-                    max="360"
-                    step="5"
+                  <SmoothRangeSlider
+                    min={100}
+                    max={360}
+                    step={5}
                     value={currentMaskWidth}
-                    onChange={(e) => onUpdateVoiceSettings?.({ ...voiceSettings, cornerMaskWidth: Number(e.target.value), enableCornerMask: true })}
+                    previewKey="cornerMaskWidth"
+                    onDraftChange={(v) => setSliderDraft('cornerMaskWidth', v)}
+                    onCommit={(v) => onUpdateVoiceSettings?.({ ...voiceSettings, cornerMaskWidth: v, enableCornerMask: true })}
                     className="compact-range"
                     style={{ accentColor: '#38bdf8' }}
                   />
@@ -222,15 +241,16 @@ export default function VideoTransformControls({
                 <div className="popup-section">
                   <div className="slider-row-header">
                     <span>កម្ពស់ (Height):</span>
-                    <span className="value-label" style={{ color: '#38bdf8' }}>{currentMaskHeight}px</span>
+                    <span className="value-label" style={{ color: '#38bdf8' }}>{getDisplay('cornerMaskHeight', currentMaskHeight)}px</span>
                   </div>
-                  <input
-                    type="range"
-                    min="24"
-                    max="100"
-                    step="2"
+                  <SmoothRangeSlider
+                    min={24}
+                    max={100}
+                    step={2}
                     value={currentMaskHeight}
-                    onChange={(e) => onUpdateVoiceSettings?.({ ...voiceSettings, cornerMaskHeight: Number(e.target.value), enableCornerMask: true })}
+                    previewKey="cornerMaskHeight"
+                    onDraftChange={(v) => setSliderDraft('cornerMaskHeight', v)}
+                    onCommit={(v) => onUpdateVoiceSettings?.({ ...voiceSettings, cornerMaskHeight: v, enableCornerMask: true })}
                     className="compact-range"
                     style={{ accentColor: '#38bdf8' }}
                   />
@@ -289,15 +309,18 @@ export default function VideoTransformControls({
                 <div className="popup-section">
                   <div className="slider-row-header">
                     <span>កម្ពស់របារ (Bottom Height):</span>
-                    <span className="value-label" style={{ color: '#38bdf8' }}>{Math.round(voiceSettings?.antiTheftBottomPercent || 2)}%</span>
+                    <span className="value-label" style={{ color: '#38bdf8' }}>
+                      {Math.round(getDisplay('antiTheftBottomPercent', voiceSettings?.antiTheftBottomPercent || 2))}%
+                    </span>
                   </div>
-                  <input
-                    type="range"
-                    min="1"
-                    max="60"
-                    step="1"
+                  <SmoothRangeSlider
+                    min={1}
+                    max={60}
+                    step={1}
                     value={Math.round(voiceSettings?.antiTheftBottomPercent || 2)}
-                    onChange={(e) => onUpdateVoiceSettings?.({ ...voiceSettings, antiTheftBottomPercent: Number(e.target.value), marqueePosition: 'bottom' })}
+                    previewKey="antiTheftBottomPercent"
+                    onDraftChange={(v) => setSliderDraft('antiTheftBottomPercent', v)}
+                    onCommit={(v) => onUpdateVoiceSettings?.({ ...voiceSettings, antiTheftBottomPercent: v, marqueePosition: 'bottom' })}
                     className="compact-range"
                     style={{ accentColor: '#38bdf8' }}
                   />

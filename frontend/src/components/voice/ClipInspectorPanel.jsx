@@ -1,5 +1,6 @@
 import { cleanKhmerText } from '../../utils/cleanKhmer';
 import React, { useState } from 'react';
+import SmoothRangeSlider from '../common/SmoothRangeSlider';
 import {
   Mic, Edit3, Sparkles, Loader2, Scissors, CheckCircle2,
   Volume2, VolumeX, RefreshCw, Trash2, AlertCircle, Pause,
@@ -44,6 +45,7 @@ export default function ClipInspectorPanel({
   onSegmentChineseChange = null,
 }) {
   const [copiedChinese, setCopiedChinese] = useState(false);
+  const [draftClipSpeed, setDraftClipSpeed] = useState(null);
   const [switchingVoiceTarget, setSwitchingVoiceTarget] = useState(null);
   const [isRetranslating, setIsRetranslating] = useState(false);
   const [retranslateData, setRetranslateData] = useState(null);
@@ -1324,6 +1326,7 @@ export default function ClipInspectorPanel({
                         { label: '1.5x', val: 1.5 },
                       ];
 
+                      const displaySpeedNum = draftClipSpeed !== null ? draftClipSpeed : segSpeedNum;
                       return (
                         <div style={{ marginBottom: 10, padding: '7px 9px', background: 'rgba(255,255,255,0.02)', borderRadius: 6, border: '1px solid rgba(255,255,255,0.06)' }}>
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 5 }}>
@@ -1339,37 +1342,37 @@ export default function ClipInspectorPanel({
                               fontWeight: 700,
                               whiteSpace: 'nowrap'
                             }}>
-                              {segSpeedNum.toFixed(2)}x • {getClipSpeedLabel(segSpeedNum)}
+                              {displaySpeedNum.toFixed(2)}x • {getClipSpeedLabel(displaySpeedNum)}
                             </span>
                           </div>
 
                           <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
                             <span style={{ fontSize: '0.64rem', color: 'var(--text-dim)' }}>0.5x</span>
-                            <input
-                              type="range"
-                              min="0.5"
-                              max="2.0"
-                              step="0.05"
+                            <SmoothRangeSlider
+                              min={0.5}
+                              max={2.0}
+                              step={0.05}
                               value={segSpeedNum}
                               disabled={regeneratingId === (selectedSegment.id || selectedSegmentIndex)}
-                              onChange={(e) => {
-                                const val = parseFloat(e.target.value);
+                              onDraftChange={setDraftClipSpeed}
+                              onCommit={(val) => {
                                 onClipSpeedChange(selectedSegment.id || selectedSegmentIndex, val, selectedSegmentIndex);
                               }}
+                              data-testid="slider-clip-speed"
                               style={{
                                 flex: 1,
                                 cursor: 'pointer',
                                 accentColor: 'var(--accent-cyan, #38bdf8)',
                                 height: 4,
                               }}
-                              title={`កែសម្រួលល្បឿនឃ្លានេះ: ${segSpeedNum.toFixed(2)}x`}
+                              title={`កែសម្រួលល្បឿនឃ្លានេះ: ${displaySpeedNum.toFixed(2)}x`}
                             />
                             <span style={{ fontSize: '0.64rem', color: 'var(--text-dim)' }}>2.0x</span>
                           </div>
 
                           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 4 }}>
                             {clipPresets.map((p) => {
-                              const isMatch = Math.abs(segSpeedNum - p.val) < 0.03;
+                              const isMatch = Math.abs(displaySpeedNum - p.val) < 0.03;
                               return (
                                 <button
                                   key={p.val}

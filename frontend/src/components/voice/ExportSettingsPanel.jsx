@@ -4,6 +4,7 @@ import {
   CheckCircle2, ShieldCheck, Image, Upload, Tv, Trash2, VolumeX
 } from 'lucide-react';
 import { resolveDefaultAspectRatio, sanitizeAspectRatio } from '../../utils/projectStorage';
+import SmoothRangeSlider from '../common/SmoothRangeSlider';
 
 export default function ExportSettingsPanel({
   isOpen,
@@ -21,6 +22,23 @@ export default function ExportSettingsPanel({
   const [internalStage, setInternalStage] = useState('');
   const [isUploadingSponsor, setIsUploadingSponsor] = useState(false);
   const [sponsorUploadError, setSponsorUploadError] = useState(null);
+  const [draftSliders, setDraftSliders] = useState({});
+
+  const setSliderDraft = (key, val) => {
+    setDraftSliders((prev) => {
+      if (val === null || val === undefined) {
+        if (!(key in prev)) return prev;
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      }
+      if (prev[key] === val) return prev;
+      return { ...prev, [key]: val };
+    });
+  };
+
+  const getSliderDisplay = (key, committedVal) =>
+    Object.prototype.hasOwnProperty.call(draftSliders, key) ? draftSliders[key] : committedVal;
 
   const handleSponsorUpload = async (file) => {
     if (!file) return;
@@ -404,16 +422,18 @@ export default function ExportSettingsPanel({
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 2 }}>
                       <span style={{ fontSize: '0.68rem', color: '#94a3b8' }}>ទំហំ Size</span>
                       <span style={{ fontSize: '0.68rem', color: '#fde047', fontFamily: 'monospace' }}>
-                        {settings?.logoSize || 72}px
+                        {getSliderDisplay('logoSize', settings?.logoSize || 72)}px
                       </span>
                     </div>
-                    <input
-                      type="range"
-                      min="40"
-                      max="140"
-                      step="4"
+                    <SmoothRangeSlider
+                      min={40}
+                      max={140}
+                      step={4}
                       value={settings?.logoSize || 72}
-                      onChange={(e) => onSettingChange('logoSize', Number(e.target.value))}
+                      previewKey="logoSize"
+                      onDraftChange={(v) => setSliderDraft('logoSize', v)}
+                      onCommit={(v) => onSettingChange('logoSize', v)}
+                      data-testid="slider-logo-size"
                       style={{ width: '100%', accentColor: '#eab308' }}
                     />
                   </div>
@@ -422,16 +442,18 @@ export default function ExportSettingsPanel({
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 2 }}>
                       <span style={{ fontSize: '0.68rem', color: '#94a3b8' }}>ភាពច្បាស់ (Opacity)</span>
                       <span style={{ fontSize: '0.68rem', color: '#fde047', fontFamily: 'monospace' }}>
-                        {Math.round((settings?.logoOpacity ?? 0.9) * 100)}%
+                        {Math.round(getSliderDisplay('logoOpacity', settings?.logoOpacity ?? 0.9) * 100)}%
                       </span>
                     </div>
-                    <input
-                      type="range"
-                      min="0.2"
-                      max="1.0"
-                      step="0.05"
+                    <SmoothRangeSlider
+                      min={0.2}
+                      max={1.0}
+                      step={0.05}
                       value={settings?.logoOpacity ?? 0.9}
-                      onChange={(e) => onSettingChange('logoOpacity', Number(e.target.value))}
+                      previewKey="logoOpacity"
+                      onDraftChange={(v) => setSliderDraft('logoOpacity', v)}
+                      onCommit={(v) => onSettingChange('logoOpacity', v)}
+                      data-testid="slider-logo-opacity"
                       style={{ width: '100%', accentColor: '#eab308' }}
                     />
                   </div>
@@ -538,16 +560,18 @@ export default function ExportSettingsPanel({
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 2 }}>
                       <span style={{ fontSize: '0.68rem', color: '#94a3b8' }}>បណ្តោយ (Width)</span>
                       <span style={{ fontSize: '0.68rem', color: '#38bdf8', fontFamily: 'monospace' }}>
-                        {settings?.cornerMaskWidth || 220}px
+                        {getSliderDisplay('cornerMaskWidth', settings?.cornerMaskWidth || 220)}px
                       </span>
                     </div>
-                    <input
-                      type="range"
-                      min="100"
-                      max="380"
-                      step="5"
+                    <SmoothRangeSlider
+                      min={100}
+                      max={380}
+                      step={5}
                       value={settings?.cornerMaskWidth || 220}
-                      onChange={(e) => onSettingChange('cornerMaskWidth', Number(e.target.value))}
+                      previewKey="cornerMaskWidth"
+                      onDraftChange={(v) => setSliderDraft('cornerMaskWidth', v)}
+                      onCommit={(v) => onSettingChange('cornerMaskWidth', v)}
+                      data-testid="slider-mask-width"
                       style={{ width: '100%', accentColor: '#38bdf8' }}
                     />
                   </div>
@@ -556,16 +580,18 @@ export default function ExportSettingsPanel({
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 2 }}>
                       <span style={{ fontSize: '0.68rem', color: '#94a3b8' }}>កម្ពស់ (Height)</span>
                       <span style={{ fontSize: '0.68rem', color: '#38bdf8', fontFamily: 'monospace' }}>
-                        {settings?.cornerMaskHeight || 54}px
+                        {getSliderDisplay('cornerMaskHeight', settings?.cornerMaskHeight || 54)}px
                       </span>
                     </div>
-                    <input
-                      type="range"
-                      min="24"
-                      max="120"
-                      step="2"
+                    <SmoothRangeSlider
+                      min={24}
+                      max={120}
+                      step={2}
                       value={settings?.cornerMaskHeight || 54}
-                      onChange={(e) => onSettingChange('cornerMaskHeight', Number(e.target.value))}
+                      previewKey="cornerMaskHeight"
+                      onDraftChange={(v) => setSliderDraft('cornerMaskHeight', v)}
+                      onCommit={(v) => onSettingChange('cornerMaskHeight', v)}
+                      data-testid="slider-mask-height"
                       style={{ width: '100%', accentColor: '#38bdf8' }}
                     />
                   </div>
@@ -577,16 +603,18 @@ export default function ExportSettingsPanel({
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 2 }}>
                       <span style={{ fontSize: '0.68rem', color: '#94a3b8' }}>គែមឆ្វេង/ស្តាំ (Offset X)</span>
                       <span style={{ fontSize: '0.68rem', color: '#38bdf8', fontFamily: 'monospace' }}>
-                        {Number.isFinite(Number(settings?.cornerMaskOffsetX)) ? Number(settings.cornerMaskOffsetX) : 14}px
+                        {getSliderDisplay('cornerMaskOffsetX', Number.isFinite(Number(settings?.cornerMaskOffsetX)) ? Number(settings.cornerMaskOffsetX) : 14)}px
                       </span>
                     </div>
-                    <input
-                      type="range"
-                      min="0"
-                      max="120"
-                      step="2"
+                    <SmoothRangeSlider
+                      min={0}
+                      max={120}
+                      step={2}
                       value={Number.isFinite(Number(settings?.cornerMaskOffsetX)) ? Number(settings.cornerMaskOffsetX) : 14}
-                      onChange={(e) => onSettingChange('cornerMaskOffsetX', Number(e.target.value))}
+                      previewKey="cornerMaskOffsetX"
+                      onDraftChange={(v) => setSliderDraft('cornerMaskOffsetX', v)}
+                      onCommit={(v) => onSettingChange('cornerMaskOffsetX', v)}
+                      data-testid="slider-mask-offset-x"
                       style={{ width: '100%', accentColor: '#38bdf8' }}
                     />
                   </div>
@@ -595,16 +623,18 @@ export default function ExportSettingsPanel({
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 2 }}>
                       <span style={{ fontSize: '0.68rem', color: '#94a3b8' }}>គែមលើ/ក្រោម (Offset Y)</span>
                       <span style={{ fontSize: '0.68rem', color: '#38bdf8', fontFamily: 'monospace' }}>
-                        {Number.isFinite(Number(settings?.cornerMaskOffsetY)) ? Number(settings.cornerMaskOffsetY) : 14}px
+                        {getSliderDisplay('cornerMaskOffsetY', Number.isFinite(Number(settings?.cornerMaskOffsetY)) ? Number(settings.cornerMaskOffsetY) : 14)}px
                       </span>
                     </div>
-                    <input
-                      type="range"
-                      min="0"
-                      max="120"
-                      step="2"
+                    <SmoothRangeSlider
+                      min={0}
+                      max={120}
+                      step={2}
                       value={Number.isFinite(Number(settings?.cornerMaskOffsetY)) ? Number(settings.cornerMaskOffsetY) : 14}
-                      onChange={(e) => onSettingChange('cornerMaskOffsetY', Number(e.target.value))}
+                      previewKey="cornerMaskOffsetY"
+                      onDraftChange={(v) => setSliderDraft('cornerMaskOffsetY', v)}
+                      onCommit={(v) => onSettingChange('cornerMaskOffsetY', v)}
+                      data-testid="slider-mask-offset-y"
                       style={{ width: '100%', accentColor: '#38bdf8' }}
                     />
                   </div>
@@ -616,16 +646,18 @@ export default function ExportSettingsPanel({
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 2 }}>
                       <span style={{ fontSize: '0.68rem', color: '#94a3b8' }}>🌫️ កម្រិតព្រិល (Blur Strength)</span>
                       <span style={{ fontSize: '0.68rem', color: '#38bdf8', fontFamily: 'monospace' }}>
-                        {Number.isFinite(Number(settings?.cornerMaskBlur)) ? Number(settings.cornerMaskBlur) : 18}px
+                        {getSliderDisplay('cornerMaskBlur', Number.isFinite(Number(settings?.cornerMaskBlur)) ? Number(settings.cornerMaskBlur) : 18)}px
                       </span>
                     </div>
-                    <input
-                      type="range"
-                      min="6"
-                      max="36"
-                      step="2"
+                    <SmoothRangeSlider
+                      min={6}
+                      max={36}
+                      step={2}
                       value={Number.isFinite(Number(settings?.cornerMaskBlur)) ? Number(settings.cornerMaskBlur) : 18}
-                      onChange={(e) => onSettingChange('cornerMaskBlur', Number(e.target.value))}
+                      previewKey="cornerMaskBlur"
+                      onDraftChange={(v) => setSliderDraft('cornerMaskBlur', v)}
+                      onCommit={(v) => onSettingChange('cornerMaskBlur', v)}
+                      data-testid="slider-mask-blur"
                       style={{ width: '100%', accentColor: '#38bdf8' }}
                     />
                   </div>
@@ -807,17 +839,19 @@ export default function ExportSettingsPanel({
                   {settings?.sponsorChromaKey !== false && (
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
                       <span style={{ fontSize: '0.65rem', color: '#94A3B8' }}>ភាពម៉ត់ចត់ (Sensitivity)</span>
-                      <input
-                        type="range"
-                        min="0.10"
-                        max="0.45"
-                        step="0.02"
+                      <SmoothRangeSlider
+                        min={0.10}
+                        max={0.45}
+                        step={0.02}
                         value={settings?.sponsorChromaSimilarity ?? 0.28}
-                        onChange={(e) => onSettingChange('sponsorChromaSimilarity', Number(e.target.value))}
+                        previewKey="sponsorChromaSimilarity"
+                        onDraftChange={(v) => setSliderDraft('sponsorChromaSimilarity', v)}
+                        onCommit={(v) => onSettingChange('sponsorChromaSimilarity', v)}
+                        data-testid="slider-sponsor-sensitivity"
                         style={{ flex: 1, accentColor: '#10B981' }}
                       />
                       <span style={{ fontSize: '0.65rem', color: '#34D399', fontFamily: 'monospace', width: 32, textAlign: 'right' }}>
-                        {Math.round((settings?.sponsorChromaSimilarity ?? 0.28) * 100)}%
+                        {Math.round(getSliderDisplay('sponsorChromaSimilarity', settings?.sponsorChromaSimilarity ?? 0.28) * 100)}%
                       </span>
                     </div>
                   )}
@@ -960,16 +994,18 @@ export default function ExportSettingsPanel({
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 2 }}>
                       <span style={{ fontSize: '0.68rem', color: '#94a3b8' }}>ទំហំ Scale</span>
                       <span style={{ fontSize: '0.68rem', color: '#34D399', fontFamily: 'monospace' }}>
-                        {settings?.sponsorScale || 25}%
+                        {getSliderDisplay('sponsorScale', settings?.sponsorScale || 25)}%
                       </span>
                     </div>
-                    <input
-                      type="range"
-                      min="15"
-                      max="50"
-                      step="2"
+                    <SmoothRangeSlider
+                      min={15}
+                      max={50}
+                      step={2}
                       value={settings?.sponsorScale || 25}
-                      onChange={(e) => onSettingChange('sponsorScale', Number(e.target.value))}
+                      previewKey="sponsorScale"
+                      onDraftChange={(v) => setSliderDraft('sponsorScale', v)}
+                      onCommit={(v) => onSettingChange('sponsorScale', v)}
+                      data-testid="slider-sponsor-scale"
                       style={{ width: '100%', accentColor: '#10B981' }}
                     />
                   </div>
