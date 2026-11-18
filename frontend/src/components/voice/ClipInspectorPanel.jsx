@@ -1299,8 +1299,21 @@ export default function ClipInspectorPanel({
 
                     {/* Speaking Rate for this selected segment */}
                     {(() => {
+                      const hasAutoFitSpeed = Boolean(
+                        !selectedSegment.userCustomSpeed &&
+                        typeof selectedSegment.appliedSpeed === 'number' &&
+                        Number.isFinite(selectedSegment.appliedSpeed) &&
+                        Math.abs(selectedSegment.appliedSpeed - 1.0) > 0.01
+                      );
                       const segSpeedNum = (() => {
-                        if (typeof selectedSegment.speed === 'number') return selectedSegment.speed;
+                        // Precedence: manual userCustomSpeed wins; otherwise reflect real Auto-Fit appliedSpeed if active
+                        if (selectedSegment.userCustomSpeed) {
+                          if (typeof selectedSegment.speed === 'number' && Number.isFinite(selectedSegment.speed)) return selectedSegment.speed;
+                          const parsedManual = parseFloat(selectedSegment.speed);
+                          if (!isNaN(parsedManual) && parsedManual > 0) return parsedManual;
+                        }
+                        if (hasAutoFitSpeed) return Number(selectedSegment.appliedSpeed);
+                        if (typeof selectedSegment.speed === 'number' && Number.isFinite(selectedSegment.speed)) return selectedSegment.speed;
                         if (selectedSegment.speed === 'slow') return 0.75;
                         if (selectedSegment.speed === 'fast') return 1.25;
                         const parsed = parseFloat(selectedSegment.speed);
@@ -1333,16 +1346,19 @@ export default function ClipInspectorPanel({
                             <span style={{ fontSize: '0.70rem', color: 'var(--text-dim)', fontWeight: 600 }}>
                               ល្បឿន (Clip Speed):
                             </span>
-                            <span style={{
-                              fontSize: '0.68rem',
-                              color: 'var(--accent-cyan, #38bdf8)',
-                              background: 'rgba(56, 189, 248, 0.12)',
-                              padding: '1px 7px',
-                              borderRadius: 4,
-                              fontWeight: 700,
-                              whiteSpace: 'nowrap'
-                            }}>
-                              {displaySpeedNum.toFixed(2)}x • {getClipSpeedLabel(displaySpeedNum)}
+                            <span
+                              data-testid="clip-speed-badge"
+                              style={{
+                                fontSize: '0.68rem',
+                                color: 'var(--accent-cyan, #38bdf8)',
+                                background: 'rgba(56, 189, 248, 0.12)',
+                                padding: '1px 7px',
+                                borderRadius: 4,
+                                fontWeight: 700,
+                                whiteSpace: 'nowrap'
+                              }}
+                            >
+                              {displaySpeedNum.toFixed(2)}x • {hasAutoFitSpeed && draftClipSpeed === null ? 'Auto-Fit' : getClipSpeedLabel(displaySpeedNum)}
                             </span>
                           </div>
 

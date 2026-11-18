@@ -632,6 +632,77 @@ async function autoStretchTtsAudio({
   };
 }
 
+/**
+ * Applies an EXACT mathematical audio speed multiplier via FFmpeg `atempo` (single pass on natural 1.0x TTS).
+ * Guarantees measured output duration = inputDuration / speedFactor within <1% without Edge TTS prosody drift
+ * and without stacking TTS rate + atempo.
+ */
+async function applyExactAudioSpeed(inputAudioPath, speedFactor = 1.0) {
+  if (!inputAudioPath || !fs.existsSync(inputAudioPath)) {
+    throw new Error(`Audio file not found for exact speed scaling: ${inputAudioPath}`);
+  }
+  const parsed = Number(speedFactor);
+  const targetSpeed = Number.isFinite(parsed) ? Math.max(0.5, Math.min(4.0, parsed)) : 1.0;
+  const originalDuration = await getMediaDuration(inputAudioPath);
+
+  if (Math.abs(targetSpeed - 1.0) <= 0.001) {
+    return {
+      outputPath: inputAudioPath,
+      originalDuration,
+      finalDuration: originalDuration,
+      appliedSpeed: 1.0,
+    };
+  }
+
+  const ext = path.extname(inputAudioPath) || ".mp3";
+  const baseName = path.basename(inputAudioPath, ext);
+  const dirName = path.dirname(inputAudioPath);
+  const rand = Math.random().toString(36).slice(2, 7);
+  const scaledPath = path.join(dirName, `.tmp_speed_${baseName}_${Date.now()}_${rand}${ext}`);
+  const atempoFilter = buildAtempoFilter(targetSpeed);
+
+  await new Promise((resolve, reject) => {
+    const args = [
+      "-y",
+      "-i", getSafeCliPath(inputAudioPath),
+      "-filter:a", atempoFilter,
+      "-c:a", "libmp3lame",
+      "-q:a", "2",
+      getSafeCliPath(scaledPath),
+    ];
+    const proc = spawn(FFMPEG_PATH, args);
+    proc.on("close", (code) => {
+      if (activeRenderProcess === proc) activeRenderProcess = null;
+      if (code === 0 && fs.existsSync(scaledPath)) {
+        resolve();
+      } else {
+        try { if (fs.existsSync(scaledPath)) fs.unlinkSync(scaledPath); } catch (_) {}
+        reject(new Error(`FFmpeg exact atempo (${targetSpeed}x) failed with code ${code}`));
+      }
+    });
+    proc.on("error", reject);
+  });
+
+  try {
+    fs.renameSync(scaledPath, inputAudioPath);
+  } catch (_) {
+    fs.copyFileSync(scaledPath, inputAudioPath);
+    try { fs.unlinkSync(scaledPath); } catch (_) {}
+  }
+
+  const finalDuration = await getMediaDuration(inputAudioPath);
+  console.log(
+    `[FFmpegService] 🎚️ Exact Clip Speed: ${originalDuration.toFixed(3)}s ➜ ${finalDuration.toFixed(3)}s (atempo=${targetSpeed.toFixed(4)}x | expected=${(originalDuration / targetSpeed).toFixed(3)}s)`
+  );
+
+  return {
+    outputPath: inputAudioPath,
+    originalDuration,
+    finalDuration,
+    appliedSpeed: Number(targetSpeed.toFixed(4)),
+  };
+}
+
 // ============================================================================
 // ផ្នែកទី 3: KHMER .ASS SUBTITLE GENERATOR (UTF-8 BOM + NFC Shaping)
 // ============================================================================
@@ -4024,6 +4095,7 @@ module.exports = {
   buildAtempoFilter,
   trimTtsSilence,
   autoStretchTtsAudio,
+  applyExactAudioSpeed,
   hexToAssColor,
   formatSecondsToAssTime,
   sanitizeKhmerSubtitleText,

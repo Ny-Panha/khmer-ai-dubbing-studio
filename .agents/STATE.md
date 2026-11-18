@@ -3,6 +3,44 @@
 ## Last Session
 - **Environment**: Antigravity IDE
 - **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-18T21:55:35+07:00
+
+## Summary: Exact Clip Speed Accuracy (<1% via Single-Pass FFmpeg `atempo`) & Auto-Fit Precedence Fix (COMPLETED)
+- **Step 0 Measured Root Causes**:
+  1. **UI lied about Auto-Fit speed (`ClipInspectorPanel.jsx`)**: Segment `#6` on `ep_5` had `speed: 'normal'`, `appliedSpeed: 1.5` (from Auto-Fit, `3.017s`, natural 1.0x = `4.489s`), yet the slider displayed `1.00x`. Setting `1.05x` disabled Auto-Fit (`1.50x -> 1.05x`), making audio **42% slower** (`3.017s -> 4.284s`, `0.704x` relative to what the user heard).
+  2. **Explicit `1.0x` re-enabled Auto-Fit (`useAudioDubbing.js:280`)**: `isCustomClipSpeed(1.0)` returned `false` -> setting `1.0x` sent `userCustomSpeed: false`, letting Auto-Fit re-crush `#207` to `2.698s` (`appliedSpeed: 1.04`) instead of natural `2.773s`, and `#6` to `3.013s` (`appliedSpeed: 1.50`) instead of `4.489s`.
+  3. **Edge Neural TTS `--rate` prosody drift (`ttsService.js`)**: Edge SSML `--rate=+50%` on `#207` (`2.773s`) produced `1.881s` (`1.474x`, 1.7% error > 1% tolerance) because neural prosody rate is non-linear.
+  4. **Preview vs Export parity**: Verified both `VideoPlayerPreview.jsx` and `createSynchronizedNarrationAudio` play/mix the generated segment MP3 at `1.0x` without re-applying `seg.speed` (no double speed).
+- **Step 1 Fixes Applied (Precedence Rule: Manual Clip Speed ALWAYS wins over Auto-Fit)**:
+  1. `backend/services/ffmpegService.js`: Added exported `applyExactAudioSpeed(inputAudioPath, speedFactor)` applying single-pass `buildAtempoFilter(speed)` on natural 1.0x audio.
+  2. `backend/services/ttsService.js`: Always synthesizes Edge TTS at natural `+0%` (`1.0x`) -> trims dead silence -> when `hasExplicitUserSpeed` is true, skips Auto-Fit completely and applies exact `applyExactAudioSpeed` ONCE (so TTS rate & `atempo` never stack, and duration = `natural / speed` within `<1%`). Untouched segments (`userCustomSpeed: false`) keep existing behavior (`1.0x` when fitting slot).
+  3. `frontend/src/hooks/useAudioDubbing.js`: `handleUpdateSegmentSpeed` now ALWAYS sets `userCustomSpeed: true` (including explicit `1.0x`), preserving exact `1.0x` natural speech, and immediately persists via `saveTimelineOperationToLocalStorage` + `persistTimelineOperationApi('update_segments')`.
+  4. `frontend/src/components/voice/ClipInspectorPanel.jsx`: Reflects active Auto-Fit `appliedSpeed` (e.g. `1.50x • Auto-Fit`) when `userCustomSpeed` is false so the UI always displays the true playing speed.
+  5. `backend/tests/clip_speed_exact_accuracy.test.js` *(new)*: Verifies `<1%` accuracy at `1.05x`, `1.50x`, and explicit `1.00x`, zero Auto-Fit stacking, and export mix duration parity.
+- **Verification Measurements**:
+  - Real-app Playwright E2E (`:5173` + `:5000`, isolated clone of `Pseudo_Spiritual_Root/ep_5`, `#6`):
+    - Initial badge: `1.50x • Auto-Fit` (honest).
+    - Set `1.00x`: `4.489s` (`disk: speed=1, appliedSpeed=1, userCustomSpeed=true`).
+    - Set `1.05x`: `4.297s` vs expected `4.275s` (**`0.50%` error** `<1%`, `disk: speed=1.05, appliedSpeed=1.05`).
+    - Set `1.50x`: `3.013s` vs expected `2.993s` (**`0.68%` error** `<1%`, `disk: speed=1.5, appliedSpeed=1.5`).
+    - Set back to `1.00x`: `4.489s` (**`0.00%` error**).
+  - `backend/tests/clip_speed_exact_accuracy.test.js`: **2 / 2 PASS** (`5.999s -> 5.739s` @ `1.05x` [`0.45%`], `4.017s` @ `1.50x` [`0.45%`], `5.999s` @ `1.00x` [`0.00%`], export mix matches preview MP3).
+  - `backend/tests/clip_speed_tts.test.js`: **5 / 5 PASS**.
+  - `npm --prefix frontend run build`: **PASS** (`624ms`, 0 errors).
+
+## Active Environment
+- **Backend API**: `http://localhost:5000` (restarted with exact `atempo` Clip Speed)
+- **Frontend Studio**: `http://localhost:5173` (Vite dev server)
+- **Branch**: `chore/full-project-cleanup` (committed & pushed)
+
+## Next Steps
+- Refresh Studio (`Ctrl + F5`) at `http://localhost:5173/studio`, select any clip, and test Clip Speed (`1.05x`, `1.50x`, `1.00x`).
+
+---
+
+## Previous Session
+- **Environment**: Antigravity IDE
+- **Branch**: `chore/full-project-cleanup`
 - **Timestamp**: 2026-11-18T21:37:30+07:00
 
 ## Summary: Smooth-Drag Inspector & Settings Sliders (Commit-on-Release + Zero-Rerender Live Preview) (COMPLETED)

@@ -4,7 +4,7 @@ const https = require("https");
 const { spawn } = require("child_process");
 const { MsEdgeTTS, OUTPUT_FORMAT } = require("msedge-tts");
 const crypto = require("crypto");
-const { autoStretchTtsAudio, trimTtsSilence, getMediaDuration, applyInnerThoughtAudioEffect } = require("./ffmpegService");
+const { autoStretchTtsAudio, applyExactAudioSpeed, trimTtsSilence, getMediaDuration, applyInnerThoughtAudioEffect } = require("./ffmpegService");
 const { parseTimeToSec } = require("../models/timestampUtils");
 const { detectSpeakerGender } = require("../models/speakerRegistry");
 
@@ -706,19 +706,14 @@ async function generateSingleSegmentAudio(segment, uploadsDir, options = {}) {
       rawFilePath = path.join(uploadsDir, rawFileName);
 
       if (options.forceRegen || !fs.existsSync(rawFilePath) || fs.statSync(rawFilePath).size < 200) {
+        // Always synthesize natural 1.0x speech (+0%) so exact speed is applied once via FFmpeg atempo (zero stacking/prosody drift)
         try {
           if (voiceId === "google-km-standard") {
-            if (rate && rate !== "+0%") {
-              console.warn(`[TTS] ⚠️ Segment #${segment.id || 'N/A'} requested rate ${rate} (speed=${speedInfo.requested ?? rate}) cannot be applied on Google TTS voice`);
-            }
             await synthesizeWithGoogleFallback(textToSpeak, rawFilePath);
           } else {
-            await synthesizeWithEdgeNeural(textToSpeak, voiceId, rawFilePath, rate, pitch, { requestedSpeed: speedInfo.requested });
+            await synthesizeWithEdgeNeural(textToSpeak, voiceId, rawFilePath, "+0%", pitch, { requestedSpeed: speedInfo.requested });
           }
         } catch (edgeErr) {
-          if (rate && rate !== "+0%") {
-            console.warn(`[TTS] ⚠️ Segment #${segment.id || 'N/A'} requested rate ${rate} (speed=${speedInfo.requested ?? rate}) cannot be applied after Edge TTS error (${edgeErr.message})`);
-          }
           console.warn(`[TTSService] ⚠️ Edge TTS failed for raw thought base #${segment.id}, using Google TTS: ${edgeErr.message}`);
           await synthesizeWithGoogleFallback(textToSpeak, rawFilePath);
         }
@@ -732,7 +727,16 @@ async function generateSingleSegmentAudio(segment, uploadsDir, options = {}) {
           }
         }
 
-        if (effectiveAutoStretch && fs.existsSync(rawFilePath)) {
+        if (hasExplicitUserSpeed && fs.existsSync(rawFilePath)) {
+          const exactTargetSpeed = Number(speedInfo.numericSpeed || 1.0);
+          if (Math.abs(exactTargetSpeed - 1.0) > 0.001) {
+            const exactRes = await applyExactAudioSpeed(rawFilePath, exactTargetSpeed);
+            appliedSpeed = exactRes.appliedSpeed;
+          } else {
+            appliedSpeed = 1.0;
+          }
+          console.log(`[TTS] Segment #${segment.id || 'N/A'} (inner_thought) explicit user speed (ttsRate=+0%, requestedRate=${rate}, atempo=${appliedSpeed}x) — skipped slot autoStretch`);
+        } else if (effectiveAutoStretch && fs.existsSync(rawFilePath)) {
           try {
             const stretchRes = await autoStretchTtsAudio({
               inputAudioPath: rawFilePath,
@@ -745,8 +749,6 @@ async function generateSingleSegmentAudio(segment, uploadsDir, options = {}) {
             });
             if (stretchRes?.appliedSpeed) appliedSpeed = stretchRes.appliedSpeed;
           } catch (_) { }
-        } else if (hasExplicitUserSpeed) {
-          console.log(`[TTS] Segment #${segment.id || 'N/A'} (inner_thought) using explicit user speed (${rate}, speed=${speedInfo.numericSpeed ?? 1.0}) — skipping slot autoStretch`);
         }
       }
 
@@ -760,20 +762,14 @@ async function generateSingleSegmentAudio(segment, uploadsDir, options = {}) {
       finalDuration = effectRes.duration;
       originalDuration = await getMediaDuration(rawFilePath) || finalDuration;
     } else {
-      // Normal spoken dialogue
+      // Normal spoken dialogue — always synthesize at natural 1.0x (+0%) so exact speed is applied once via FFmpeg atempo
       try {
         if (voiceId === "google-km-standard") {
-          if (rate && rate !== "+0%") {
-            console.warn(`[TTS] ⚠️ Segment #${segment.id || 'N/A'} requested rate ${rate} (speed=${speedInfo.requested ?? rate}) cannot be applied on Google TTS voice`);
-          }
           await synthesizeWithGoogleFallback(textToSpeak, outputPath);
         } else {
-          await synthesizeWithEdgeNeural(textToSpeak, voiceId, outputPath, rate, pitch, { requestedSpeed: speedInfo.requested });
+          await synthesizeWithEdgeNeural(textToSpeak, voiceId, outputPath, "+0%", pitch, { requestedSpeed: speedInfo.requested });
         }
       } catch (edgeErr) {
-        if (rate && rate !== "+0%") {
-          console.warn(`[TTS] ⚠️ Segment #${segment.id || 'N/A'} requested rate ${rate} (speed=${speedInfo.requested ?? rate}) cannot be applied after Edge TTS error (${edgeErr.message})`);
-        }
         console.warn(`[TTSService] ⚠️ Edge TTS failed for segment #${segment.id}, using Google TTS: ${edgeErr.message}`);
         await synthesizeWithGoogleFallback(textToSpeak, outputPath);
       }
@@ -859,13 +855,24 @@ async function generateSingleSegmentAudio(segment, uploadsDir, options = {}) {
           originalDuration = actualDuration;
           appliedSpeed = 1.0;
         }
+      } else if (hasExplicitUserSpeed && fs.existsSync(outputPath)) {
+        // Manual Clip Speed ALWAYS wins over Auto-Fit: apply exact FFmpeg atempo ONCE on natural 1.0x TTS
+        const exactTargetSpeed = Number(speedInfo.numericSpeed || 1.0);
+        if (Math.abs(exactTargetSpeed - 1.0) > 0.001) {
+          const exactRes = await applyExactAudioSpeed(outputPath, exactTargetSpeed);
+          finalDuration = exactRes.finalDuration;
+          originalDuration = exactRes.finalDuration;
+          appliedSpeed = exactRes.appliedSpeed;
+        } else {
+          finalDuration = actualDuration;
+          originalDuration = actualDuration;
+          appliedSpeed = 1.0;
+        }
+        console.log(`[TTS] Segment #${segment.id || 'N/A'} explicit user speed (ttsRate=+0%, requestedRate=${rate}, atempo=${appliedSpeed}x) — skipped slot autoStretch (natural=${actualDuration.toFixed(3)}s -> final=${finalDuration.toFixed(3)}s, slot=${availableSlotDuration.toFixed(3)}s)`);
       } else {
         finalDuration = actualDuration;
         originalDuration = actualDuration;
-        appliedSpeed = hasExplicitUserSpeed ? (speedInfo.numericSpeed || 1.0) : 1.0;
-        if (hasExplicitUserSpeed) {
-          console.log(`[TTS] Segment #${segment.id || 'N/A'} explicit user speed (rate=${rate}, speed=${appliedSpeed}) — skipping slot autoStretch (probed=${actualDuration.toFixed(3)}s, slot=${availableSlotDuration.toFixed(3)}s)`);
-        }
+        appliedSpeed = 1.0;
       }
 
       rawFilePath = outputPath;

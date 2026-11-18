@@ -3,9 +3,11 @@ import {
   generateAudioApi, 
   generateSingleSegmentAudio, 
   syncTimelineAudioApi, 
+  persistTimelineOperationApi,
   fetchTtsVoices,
   retranslateSegmentApi,
 } from '../services/api';
+import { saveTimelineOperationToLocalStorage } from '../utils/projectStorage';
 import { getSpeakerId, detectSpeakerGender } from '../utils/speakerUtils';
 import { formatTimecode, parseTimeToSeconds } from '../utils/timestampUtils';
 import { splitKhmerTextIntoHalves } from '../utils/khmerTextSplitter';
@@ -277,10 +279,14 @@ const FALLBACK_VOICE_CATALOG = {
     const targetSeg = scriptData.segments[segIdx];
     const targetVoiceId = targetSeg.voiceId || (targetSeg.speakerGender === 'FEMALE' ? 'km-KH-SreymomNeural' : 'km-KH-PisethNeural');
 
-    const customFlag = isCustomClipSpeed(newSpeed);
+    // Manual Clip Speed ALWAYS wins over Auto-Fit (including explicit 1.0x so Auto-Fit cannot silently re-stretch it)
+    const customFlag = true;
+    const numericSpeed = Number(newSpeed);
+    const normalizedSpeed = Number.isFinite(numericSpeed) ? Number(numericSpeed.toFixed(4)) : newSpeed;
     const updatedSeg = {
       ...targetSeg,
-      speed: newSpeed,
+      speed: normalizedSpeed,
+      appliedSpeed: Number.isFinite(numericSpeed) ? normalizedSpeed : (targetSeg.appliedSpeed || 1.0),
       userCustomSpeed: customFlag,
       audioOutdated: true,
     };
@@ -299,7 +305,7 @@ const FALLBACK_VOICE_CATALOG = {
     if (autoRegen && currentKhmerText) {
       try {
         const regenerated = await generateSingleSegmentAudio(updatedSeg, {
-          speed: newSpeed,
+          speed: normalizedSpeed,
           userCustomSpeed: customFlag,
           voiceId: targetVoiceId,
           forceRegen: true,
@@ -314,16 +320,34 @@ const FALLBACK_VOICE_CATALOG = {
           audioOffset: 0,
           audioTrimmed: false,
           userTrimmed: false,
-          speed: newSpeed,
+          speed: normalizedSpeed,
+          appliedSpeed: regenerated?.appliedSpeed ?? normalizedSpeed,
           userCustomSpeed: customFlag,
           audioOutdated: false,
         };
+        const nextUpdatedAt = Date.now();
         setScriptData((prev) => (prev ? {
           ...prev,
           segments: finalSegments,
-          updatedAt: Date.now(),
+          updatedAt: nextUpdatedAt,
         } : prev));
         setAudioGenerated(true);
+        if (seriesId && episodeId) {
+          saveTimelineOperationToLocalStorage({
+            seriesId,
+            episodeId,
+            operation: 'update_segments',
+            segments: finalSegments,
+          });
+          persistTimelineOperationApi({
+            seriesId,
+            episodeId,
+            operation: 'update_segments',
+            segments: finalSegments,
+          }).catch((persistErr) => {
+            console.warn('[useAudioDubbing] Failed to persist clip speed update:', persistErr?.message || persistErr);
+          });
+        }
         invalidateRendered();
 
         const stillOutdated = finalSegments.some((s) => s.audioOutdated);
