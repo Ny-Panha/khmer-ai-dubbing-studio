@@ -247,77 +247,74 @@ export default function GeminiQuotaModal({
           height: 'min(91vh, 880px)',
           display: 'flex',
           flexDirection: 'column',
-          background: 'rgba(20, 30, 51, 0.97)',
-          border: '1px solid rgba(56, 189, 248, 0.16)',
-          borderRadius: 20,
-          boxShadow: '0 30px 100px -15px rgba(0, 0, 0, 0.88), 0 0 60px -10px rgba(56, 189, 248, 0.2)',
+          background: 'var(--bg-primary-panel)',
+          border: '1px solid var(--border-subtle-hover)',
+          borderRadius: 'var(--radius-lg)',
+          boxShadow: 'var(--shadow-lg)',
           overflow: 'hidden',
-          fontFamily: "'Kantumruy Pro', system-ui, sans-serif",
+          fontFamily: 'var(--font-sans)',
         }}
         onClick={(e) => e.stopPropagation()}
       >
         {/* ── MODAL HEADER ── */}
         <div
           style={{
-            padding: '15px 24px',
-            borderBottom: '1px solid rgba(255, 255, 255, 0.06)',
-            background: 'rgba(16, 25, 44, 0.96)',
+            padding: '14px 20px',
+            borderBottom: '1px solid var(--border-subtle)',
+            background: 'var(--bg-secondary-panel)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
-            gap: 16,
+            flexWrap: 'wrap',
+            gap: 12,
             flexShrink: 0,
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 14, minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0, flex: '1 1 240px' }}>
             <div
               style={{
-                width: 42,
-                height: 42,
-                borderRadius: 12,
-                background: 'linear-gradient(135deg, rgba(56, 189, 248, 0.22) 0%, rgba(52, 211, 153, 0.16) 100%)',
-                border: '1px solid rgba(56, 189, 248, 0.4)',
+                width: 38,
+                height: 38,
+                borderRadius: 'var(--radius-sm)',
+                background: 'rgba(56, 189, 248, 0.12)',
+                border: '1px solid rgba(56, 189, 248, 0.35)',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                color: '#38BDF8',
-                boxShadow: '0 0 20px rgba(56, 189, 248, 0.24)',
+                color: 'var(--primary-accent)',
                 flexShrink: 0,
               }}
             >
-              <Activity size={21} />
+              <Activity size={19} />
             </div>
 
-            <div style={{ minWidth: 0 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                <h2
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <h1
                   style={{
                     margin: 0,
-                    fontSize: '1.05rem',
-                    fontWeight: 900,
-                    letterSpacing: '0.04em',
+                    fontSize: 'var(--text-lg)',
+                    fontWeight: 700,
+                    letterSpacing: '0.02em',
                     textTransform: 'uppercase',
-                    background: 'linear-gradient(135deg, #FFFFFF 0%, #BAE6FD 100%)',
-                    WebkitBackgroundClip: 'text',
-                    WebkitTextFillColor: 'transparent',
+                    color: 'var(--text-primary)',
                   }}
                 >
                   GEMINI KEYS &amp; MODEL QUOTA
-                </h2>
+                </h1>
 
                 <span
                   style={{
-                    fontSize: '0.68rem',
-                    fontWeight: 800,
-                    padding: '3px 10px',
-                    borderRadius: 9999,
+                    fontSize: 'var(--text-2xs)',
+                    fontWeight: 700,
+                    padding: '2px 9px',
+                    borderRadius: 'var(--radius-xs)',
                     background: hdrPillBg,
                     color: hdrPillColor,
                     border: `1px solid ${hdrPillBorder}`,
                     display: 'inline-flex',
                     alignItems: 'center',
                     gap: 6,
-                    boxShadow: hdrPillShadow,
                   }}
                 >
                   <span
@@ -327,7 +324,6 @@ export default function GeminiQuotaModal({
                       borderRadius: '50%',
                       background: hdrPillColor,
                       display: 'inline-block',
-                      boxShadow: `0 0 6px ${hdrPillColor}`,
                     }}
                   />
                   {hdrPillLabel}
@@ -336,13 +332,13 @@ export default function GeminiQuotaModal({
                 <span
                   data-testid="header-model-cascade-pill"
                   style={{
-                    fontSize: '0.66rem',
-                    fontWeight: 800,
-                    padding: '3px 10px',
-                    borderRadius: 9999,
-                    background: isPinned ? 'rgba(255, 133, 119, 0.14)' : 'rgba(56, 189, 248, 0.12)',
-                    color: isPinned ? '#FF8577' : '#38BDF8',
-                    border: `1px solid ${isPinned ? 'rgba(255, 133, 119, 0.35)' : 'rgba(56, 189, 248, 0.32)'}`,
+                    fontSize: 'var(--text-2xs)',
+                    fontWeight: 700,
+                    padding: '2px 9px',
+                    borderRadius: 'var(--radius-xs)',
+                    background: isPinned ? 'rgba(245, 158, 11, 0.14)' : 'rgba(56, 189, 248, 0.12)',
+                    color: isPinned ? '#FBBF24' : '#7DD3FC',
+                    border: `1px solid ${isPinned ? 'rgba(245, 158, 11, 0.35)' : 'rgba(56, 189, 248, 0.35)'}`,
                     display: 'inline-flex',
                     alignItems: 'center',
                     gap: 5,
@@ -356,13 +352,13 @@ export default function GeminiQuotaModal({
                   </span>
                 </span>
               </div>
-              <p style={{ margin: '3px 0 0 0', fontSize: '0.73rem', color: '#94A3B8' }}>
+              <p style={{ margin: '3px 0 0 0', fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
                 តាមដាន Quota ពិត (RPM / TPM / RPD) របស់ {totalKeys > 1 ? `Key #1–#${totalKeys}` : totalKeys === 1 ? 'Key #1' : 'API Keys'} និងស្ថានភាព Model Cascade — ចុច Test ឬ Pin Model មុនពេល Generate!
               </p>
             </div>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0, flexWrap: 'wrap' }}>
             {onOpenBatchModal && (
               <button
                 type="button"
@@ -950,11 +946,11 @@ export default function GeminiQuotaModal({
               </div>
             </div>
 
-            {/* Per-Key Breakdown Strip (Clean Symmetrical 3x2 Grid) */}
+            {/* Per-Key Breakdown Strip (Clean Symmetrical Grid) */}
             <div
               style={{
                 display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 260px), 1fr))',
                 gap: 10,
               }}
             >
@@ -1608,17 +1604,17 @@ export default function GeminiQuotaModal({
         {/* ── MODAL FOOTER ── */}
         <div
           style={{
-            padding: '12px 24px',
-            borderTop: '1px solid rgba(255, 255, 255, 0.06)',
-            background: 'rgba(16, 25, 44, 0.96)',
+            padding: '12px 20px',
+            borderTop: '1px solid var(--border-subtle)',
+            background: 'var(--bg-secondary-panel)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
             flexWrap: 'wrap',
-            gap: 12,
+            gap: 10,
             flexShrink: 0,
-            fontSize: '0.73rem',
-            color: '#94A3B8',
+            fontSize: 'var(--text-sm)',
+            color: 'var(--text-secondary)',
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 10 }}>
