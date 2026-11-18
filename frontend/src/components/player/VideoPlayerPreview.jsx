@@ -144,6 +144,7 @@ function VideoPlayerPreview({
   const segmentAudioMetaRef = useRef(new Map());
   const leadingSilenceCacheRef = useRef(new Map());
   const leadingSilenceInflightRef = useRef(new Map());
+  const leadingSilenceFailureRef = useRef(new Map());
   const audioProbeCtxRef = useRef(null);
   const lastPreloadCenterRef = useRef(-Infinity);
   const currentTimeRef = useRef(currentTime);
@@ -214,13 +215,30 @@ function VideoPlayerPreview({
 
   const probeUrlLeadingSilence = useCallback((url) => {
     if (!url || typeof window === 'undefined') return;
-    // CRITICAL PERF: Never decode audio buffers in background during active video playback!
+    // CRITICAL PERF: Never decode audio buffers in background during active video playback or while video is seeking/buffering!
     if (isPlayingRef.current) return;
+    const activeVideo = videoRef?.current;
+    if (activeVideo && (activeVideo.seeking || activeVideo.readyState < 2)) return;
     if (leadingSilenceCacheRef.current.has(url) || leadingSilenceInflightRef.current.has(url)) return;
+    // Cap concurrent probes to 2 so paused preloading never starves the 6-socket HTTP/1.1 origin pool
+    if (leadingSilenceInflightRef.current.size >= 2) return;
+    // Respect failure backoff & terminal 404/403 stop so errors never storm every 1.5s
+    const failState = leadingSilenceFailureRef.current.get(url);
+    if (failState && (failState.count >= 3 || Date.now() < failState.retryAfterMs)) return;
 
     const AudioCtx = window.AudioContext || window.webkitAudioContext;
     const OfflineCtx = window.OfflineAudioContext || window.webkitOfflineAudioContext;
     if (!AudioCtx && !OfflineCtx) return;
+
+    const recordFailure = (isTerminal = false) => {
+      const prev = leadingSilenceFailureRef.current.get(url) || { count: 0, retryAfterMs: 0 };
+      const nextCount = isTerminal ? 99 : prev.count + 1;
+      const delayMs = isTerminal ? Infinity : Math.min(60000, 5000 * (3 ** Math.min(prev.count, 3)));
+      leadingSilenceFailureRef.current.set(url, {
+        count: nextCount,
+        retryAfterMs: isTerminal ? Infinity : Date.now() + delayMs,
+      });
+    };
 
     const task = (async () => {
       try {
@@ -229,7 +247,10 @@ function VideoPlayerPreview({
         }
         const ctx = audioProbeCtxRef.current;
         const res = await fetch(url, { cache: 'force-cache' });
-        if (!res.ok) return;
+        if (!res.ok) {
+          recordFailure(res.status === 404 || res.status === 403 || res.status === 410);
+          return;
+        }
         const arrayBuf = await res.arrayBuffer();
         const audioBuf = await ctx.decodeAudioData(arrayBuf);
         const channels = [];
@@ -242,15 +263,16 @@ function VideoPlayerPreview({
           if (oldestKey !== undefined) leadingSilenceCacheRef.current.delete(oldestKey);
         }
         leadingSilenceCacheRef.current.set(url, skipSec);
+        leadingSilenceFailureRef.current.delete(url);
       } catch (_) {
-        // Leave uncached on decode/abort so a future retry can still probe safely
+        recordFailure(false);
       } finally {
         leadingSilenceInflightRef.current.delete(url);
       }
     })();
 
     leadingSilenceInflightRef.current.set(url, task);
-  }, []);
+  }, [videoRef]);
 
   const evictDistantSegmentAudios = useCallback((centerTime) => {
     const urls = Object.keys(segmentAudioPoolRef.current);
@@ -298,9 +320,13 @@ function VideoPlayerPreview({
     const now = Number.isFinite(centerTime) ? centerTime : (currentTimeRef.current || 0);
     lastPreloadCenterRef.current = now;
 
-    // During active playback, keep preload horizon compact to avoid thrashing audio decoders
-    const lookAheadSec = isPlayingRef.current ? 20 : 45;
-    const maxClips = isPlayingRef.current ? 6 : 14;
+    // Keep preload window compact & bounded so segment audio fetches never saturate the 6-connection HTTP/1.1 pool
+    const activeVideo = videoRef?.current;
+    if (activeVideo && activeVideo.seeking && activeVideo.readyState < 2) return;
+
+    const lookAheadSec = isPlayingRef.current ? 15 : 22;
+    const maxClips = isPlayingRef.current ? 4 : 6;
+    const maxNewPerTick = 3;
 
     const upcoming = sd.segments
       .map((seg) => {
@@ -312,7 +338,13 @@ function VideoPlayerPreview({
       .sort((a, b) => Math.abs(a.s - now) - Math.abs(b.s - now))
       .slice(0, maxClips);
 
+    let createdThisTick = 0;
     upcoming.forEach(({ seg, s, rawUrl }) => {
+      const alreadyPooled = Boolean(segmentAudioPoolRef.current[rawUrl]);
+      if (!alreadyPooled) {
+        if (createdThisTick >= maxNewPerTick) return;
+        createdThisTick += 1;
+      }
       getSegmentAudio(rawUrl, s);
       const rawOffset = (typeof seg.audioOffset === 'number' && !isNaN(seg.audioOffset)) ? seg.audioOffset : 0;
       if (!isPlayingRef.current && rawOffset === 0 && !seg.userTrimmed) {
@@ -321,7 +353,7 @@ function VideoPlayerPreview({
     });
 
     evictDistantSegmentAudios(now);
-  }, [getSegmentAudio, probeUrlLeadingSilence, evictDistantSegmentAudios]);
+  }, [getSegmentAudio, probeUrlLeadingSilence, evictDistantSegmentAudios, videoRef]);
 
   // Preload on-demand: proactively warm upcoming clips & probe Edge TTS leading silence around playhead
   useEffect(() => {
@@ -528,7 +560,6 @@ function VideoPlayerPreview({
       if (seg.muted || seg.isMuted) continue;
       const s = (typeof seg.audioStartSec === 'number' && !isNaN(seg.audioStartSec)) ? seg.audioStartSec : (seg.startSec || 0);
       if (s > (now + 0.35)) {
-        if (s > (now + 5)) break; // Segments are chronological; stop scanning once past window
         continue;
       }
       const rawAudioDur = (typeof seg.finalAudioDuration === 'number' && seg.finalAudioDuration > 0)
@@ -794,12 +825,12 @@ function VideoPlayerPreview({
           syncSegmentAudiosAtTime(tlNow);
         }
 
-        // Tight 60Hz Clean Demucs BGM sync
+        // Tight 60Hz Clean Demucs BGM sync (0.12s drift threshold avoids re-seeking 100MB WAV streams on minor jitter)
         const bg = cleanBgAudioRef.current;
-        if (bg && vs?.enableDemucs && bgUrl && v && !v.paused && Number.isFinite(v.currentTime)) {
+        if (bg && vs?.enableDemucs && bgUrl && v && !v.paused && !v.seeking && Number.isFinite(v.currentTime)) {
           const baseRate = v.playbackRate || 1.0;
           if (bg.playbackRate !== baseRate) bg.playbackRate = baseRate;
-          if (bg.readyState >= 1 && !bg.seeking && Math.abs(bg.currentTime - v.currentTime) > 0.04) {
+          if (bg.readyState >= 2 && !bg.seeking && Math.abs(bg.currentTime - v.currentTime) > 0.12) {
             bg.currentTime = v.currentTime;
           }
           if (bg.paused) bg.play().catch(() => {});
@@ -911,9 +942,9 @@ function VideoPlayerPreview({
       // Sync Clean Demucs BGM (no_vocals.wav) with video regardless of segment vs master narration mode
       const { voiceSettings: vs, cleanBgAudioUrl: bgUrl } = segAudioConfigRef.current;
       const bg = cleanBgAudioRef.current;
-      if (bg && !renderedVideo && vs?.enableDemucs && bgUrl && !v.paused) {
+      if (bg && !renderedVideo && vs?.enableDemucs && bgUrl && !v.paused && !v.seeking) {
         if (bg.paused) bg.play().catch(() => {});
-        if (Number.isFinite(v.currentTime) && Math.abs(bg.currentTime - v.currentTime) > 0.04) {
+        if (bg.readyState >= 2 && !bg.seeking && Number.isFinite(v.currentTime) && Math.abs(bg.currentTime - v.currentTime) > 0.12) {
           bg.currentTime = v.currentTime;
         }
       }
@@ -1117,10 +1148,10 @@ function VideoPlayerPreview({
     };
   }, [videoRef, renderedVideo, audioGenerated, fullAudioUrl, hasSegmentAudios, videoClips, preloadSegmentsAroundTime, syncSegmentAudiosAtTime, stopAllSegmentAudios]);
 
-  // Pre-calculate speaking intervals once per script change (ultra-fast O(1) checks during 60fps playback)
+  // Pre-calculate sorted & merged speaking intervals once per script change (O(log N) safe even with overlapping VOICE 2/3 tracks)
   const speakingIntervals = React.useMemo(() => {
     if (!scriptData?.segments) return [];
-    return scriptData.segments
+    const raw = scriptData.segments
       .filter((seg) => {
         const hasAudio = Boolean(seg.audioFile || seg.audioPath || seg.audioUrl || (typeof seg.audioDurationSec === 'number' && seg.audioDurationSec > 0));
         // Only count as speaking if voice audio actually exists (bit tea kleang voice, kelang ot voice baj bit te)
@@ -1141,7 +1172,18 @@ function VideoPlayerPreview({
           ? seg.audioEndSec
           : (s + dur);
         return { start: s, end: e };
-      });
+      })
+      .sort((a, b) => (a.start - b.start) || (a.end - b.end));
+
+    const merged = [];
+    for (const cur of raw) {
+      if (merged.length === 0 || cur.start > merged[merged.length - 1].end) {
+        merged.push({ ...cur });
+      } else if (cur.end > merged[merged.length - 1].end) {
+        merged[merged.length - 1].end = cur.end;
+      }
+    }
+    return merged;
   }, [audioGenerated, fullAudioUrl, scriptData?.segments]);
 
   // Fast binary search helper for sorted time intervals
@@ -2047,7 +2089,7 @@ function VideoPlayerPreview({
                 <audio
                   ref={cleanBgAudioRef}
                   src={cleanBgAudioUrl}
-                  preload="auto"
+                  preload="metadata"
                   onLoadedMetadata={() => {
                     const v = videoRef?.current;
                     const bg = cleanBgAudioRef?.current;

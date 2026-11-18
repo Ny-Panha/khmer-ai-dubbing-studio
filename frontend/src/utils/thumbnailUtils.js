@@ -13,13 +13,12 @@ export function generateVideoThumbnails(videoUrl, duration = 30, count = null) {
     const dur = duration > 0 ? duration : 30;
     const targetCount = typeof count === 'number' && count > 0
       ? count
-      : Math.min(12, Math.max(6, Math.floor(dur / 25)));
+      : Math.min(8, Math.max(5, Math.floor(dur / 45)));
 
     const v = document.createElement('video');
     v.crossOrigin = 'anonymous';
-    v.src = videoUrl;
     v.muted = true;
-    v.preload = 'auto';
+    v.preload = 'metadata';
 
     const thumbs = [];
     const times = [];
@@ -30,39 +29,59 @@ export function generateVideoThumbnails(videoUrl, duration = 30, count = null) {
 
     let currentIdx = 0;
     let seekTimer = null;
+    let startDelayTimer = null;
+    let deferTimer = null;
+    let finished = false;
     const canvas = document.createElement('canvas');
     canvas.width = 120;
     canvas.height = 68;
     const ctx = canvas.getContext('2d');
 
     const finish = () => {
+      if (finished) return;
+      finished = true;
       if (seekTimer) clearTimeout(seekTimer);
+      if (startDelayTimer) clearTimeout(startDelayTimer);
+      if (deferTimer) clearTimeout(deferTimer);
       v.onseeked = null;
       v.onerror = null;
       v.onloadeddata = null;
+      v.onloadedmetadata = null;
       v.removeAttribute('src');
       v.load();
       resolve(thumbs);
     };
 
-    const overallTimeout = setTimeout(finish, 8000);
+    const overallTimeout = setTimeout(finish, 12000);
+
+    const isMainPlayerBusy = () => {
+      if (typeof document === 'undefined') return false;
+      const mainVideo = document.querySelector('.player-stage-viewport video');
+      return Boolean(mainVideo && (mainVideo.seeking || !mainVideo.paused || mainVideo.readyState < 3));
+    };
 
     const seekNext = () => {
+      if (finished) return;
       if (currentIdx >= times.length) {
         clearTimeout(overallTimeout);
         finish();
         return;
       }
+      if (isMainPlayerBusy()) {
+        if (deferTimer) clearTimeout(deferTimer);
+        deferTimer = setTimeout(seekNext, 350);
+        return;
+      }
       if (seekTimer) clearTimeout(seekTimer);
-      // If a single seek hangs for more than 700ms, skip to next timestamp
+      // If a single seek hangs for more than 900ms, skip to next timestamp
       seekTimer = setTimeout(() => {
         currentIdx++;
         seekNext();
-      }, 700);
+      }, 900);
       v.currentTime = times[currentIdx];
     };
 
-    v.onloadeddata = () => {
+    v.onloadedmetadata = () => {
       seekNext();
     };
 
@@ -82,5 +101,12 @@ export function generateVideoThumbnails(videoUrl, duration = 30, count = null) {
       clearTimeout(overallTimeout);
       finish();
     };
+
+    // Defer hidden filmstrip loading briefly so the main <video> player gets full HTTP/1.1 & decoder priority on load
+    startDelayTimer = setTimeout(() => {
+      if (!finished) {
+        v.src = videoUrl;
+      }
+    }, 1200);
   });
 }

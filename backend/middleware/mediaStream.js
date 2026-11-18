@@ -57,15 +57,35 @@ router.get(/^\/(.+\.(?:mp3|wav|ogg|m4a|aac|mp4|webm|mov))$/i, (req, res, next) =
     ".mov": "video/quicktime",
   };
   const contentType = mimeTypes[ext] || "application/octet-stream";
+  const isVideo = ext === ".mp4" || ext === ".webm" || ext === ".mov";
+  const isLargeWav = ext === ".wav" && fileSize > 4 * 1024 * 1024;
+  const isStreamedMedia = isVideo || isLargeWav;
+  const etag = `"${fileSize.toString(16)}-${Math.floor(stat.mtimeMs).toString(16)}"`;
+  const lastModified = stat.mtime.toUTCString();
+  // CRITICAL: Large byte-range media (.mp4/.webm/.mov and >4MB .wav) MUST use Cache-Control: no-store
+  // to bypass Chromium's single-writer HttpCache entry lock across concurrent/throttled 206 seeks
+  // (prevents 3.5s-infinite respMs stalls when seeking while a previous range stream is open).
+  const baseHeaders = isStreamedMedia
+    ? {
+        "Content-Type": contentType,
+        "Accept-Ranges": "bytes",
+        "Cache-Control": "no-store",
+      }
+    : {
+        "Content-Type": contentType,
+        "Accept-Ranges": "bytes",
+        "ETag": etag,
+        "Last-Modified": lastModified,
+        "Cache-Control": "public, max-age=3600",
+      };
 
   res.setHeader("Accept-Ranges", "bytes");
 
   // If file is 0 bytes (e.g. freshly created)
   if (fileSize === 0) {
     res.writeHead(200, {
+      ...baseHeaders,
       "Content-Length": 0,
-      "Content-Type": contentType,
-      "Accept-Ranges": "bytes",
     });
     return res.end();
   }
@@ -73,13 +93,13 @@ router.get(/^\/(.+\.(?:mp3|wav|ogg|m4a|aac|mp4|webm|mov))$/i, (req, res, next) =
   const range = req.headers.range;
   if (!range) {
     res.writeHead(200, {
+      ...baseHeaders,
       "Content-Length": fileSize,
-      "Content-Type": contentType,
-      "Accept-Ranges": "bytes",
     });
+    if (req.method === "HEAD") return res.end();
     const s = fs.createReadStream(filePath);
-    req.on('close', () => s.destroy());
-    s.on('error', () => { if (!res.headersSent) res.status(500).end(); });
+    res.on('close', () => { if (!res.writableEnded) s.destroy(); });
+    s.on('error', () => { if (!res.headersSent) res.status(500).end(); else res.end(); });
     return s.pipe(res);
   }
 
@@ -89,43 +109,52 @@ router.get(/^\/(.+\.(?:mp3|wav|ogg|m4a|aac|mp4|webm|mov))$/i, (req, res, next) =
 
   if (isNaN(start) || start >= fileSize || start < 0) {
     res.writeHead(200, {
+      ...baseHeaders,
       "Content-Length": fileSize,
-      "Content-Type": contentType,
-      "Accept-Ranges": "bytes",
     });
+    if (req.method === "HEAD") return res.end();
     const s = fs.createReadStream(filePath);
-    req.on('close', () => s.destroy());
-    s.on('error', () => { if (!res.headersSent) res.status(500).end(); });
+    res.on('close', () => { if (!res.writableEnded) s.destroy(); });
+    s.on('error', () => { if (!res.headersSent) res.status(500).end(); else res.end(); });
     return s.pipe(res);
   }
 
-  // 🎥 Video Stream Optimization: Cap open-ended range requests (bytes=start-) to 3MB chunks
-  // This lets HTML5 <video> start playing immediately and seek with zero lag, instead of downloading 500MB+ in one go!
-  const isVideo = ext === ".mp4" || ext === ".webm" || ext === ".mov";
-  const CHUNK_SIZE = 3 * 1024 * 1024; // 3MB chunk for smooth streaming
+  // 🎥 Media Stream Optimization:
+  // - Video open-ended ranges (bytes=start-) capped at 8MB so long 1080p GOPs (e.g. 8.5s / ~4MB)
+  //   complete in a single 206 round-trip with zero multi-chunk seek stalls.
+  // - Large WAV open-ended ranges (e.g. 100MB+ Demucs no_vocals.wav) capped at 4MB so an audio
+  //   element never hogs an HTTP/1.1 connection streaming 100MB on every seek.
+  const VIDEO_CHUNK_SIZE = 8 * 1024 * 1024; // 8MB covers 2+ full 1080p GOPs in 1 request
+  const WAV_CHUNK_SIZE = 4 * 1024 * 1024;   // 4MB (~22s stereo PCM) prevents 100MB socket hogging
   let effectiveEnd = isNaN(end) ? fileSize - 1 : end;
   if (!parts[1] && isVideo) {
-    effectiveEnd = Math.min(start + CHUNK_SIZE - 1, fileSize - 1);
+    effectiveEnd = Math.min(start + VIDEO_CHUNK_SIZE - 1, fileSize - 1);
+  } else if (!parts[1] && isLargeWav) {
+    effectiveEnd = Math.min(start + WAV_CHUNK_SIZE - 1, fileSize - 1);
   }
   const clampedEnd = Math.min(effectiveEnd, fileSize - 1);
   const chunksize = (clampedEnd - start) + 1;
+
+  res.writeHead(206, {
+    ...baseHeaders,
+    "Content-Range": `bytes ${start}-${clampedEnd}/${fileSize}`,
+    "Content-Length": chunksize,
+  });
+
+  if (req.method === "HEAD") return res.end();
+
   const fileStream = fs.createReadStream(filePath, { start, end: clampedEnd });
 
-  req.on('close', () => {
-    fileStream.destroy();
+  res.on('close', () => {
+    if (!res.writableEnded) fileStream.destroy();
   });
 
   fileStream.on('error', () => {
     if (!res.headersSent) {
       res.status(500).end();
+    } else {
+      res.end();
     }
-  });
-
-  res.writeHead(206, {
-    "Content-Range": `bytes ${start}-${clampedEnd}/${fileSize}`,
-    "Accept-Ranges": "bytes",
-    "Content-Length": chunksize,
-    "Content-Type": contentType,
   });
 
   fileStream.pipe(res);

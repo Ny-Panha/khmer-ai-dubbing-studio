@@ -220,7 +220,7 @@ function TimelineTracksCanvas({
 
     if (urlsToProbe.length === 0) return;
 
-    const MAX_CONCURRENT = 8;
+    const MAX_CONCURRENT = 3;
     let cursor = 0;
     let activeCount = 0;
 

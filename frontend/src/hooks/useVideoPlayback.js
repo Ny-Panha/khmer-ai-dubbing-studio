@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
-import { mapTimelineToSourceTime } from '../utils/timelineUtils';
+import { mapTimelineToSourceTime, mapSourceToTimelineTime } from '../utils/timelineUtils';
 
 /**
  * Custom hook to manage video playback state, playhead position, time update, and seeking
@@ -16,6 +16,10 @@ export function useVideoPlayback({
   const [isPlaying, setIsPlaying] = useState(false);
   const lastMappedTimelineTimeRef = useRef(0);
   const hasSeekedRef = useRef(false);
+  const intendedPlayingRef = useRef(false);
+  const pendingSeekTargetRef = useRef(null);
+  const stallRecoveryCountRef = useRef(0);
+  const [playRequestTick, setPlayRequestTick] = useState(0);
 
   // Duration follows the timeline (R7): when videoClips has been edited, duration equals the end of the last video clip
   const timelineDuration = useMemo(() => {
@@ -106,12 +110,16 @@ export function useVideoPlayback({
       if (!v.paused && now - lastStateUpdateTimeRef.current < 200) return;
       lastStateUpdateTimeRef.current = now;
       setCurrentTime(currentMediaTime);
-      if (v.paused && isPlaying) setIsPlaying(false);
+      if (v.paused && isPlaying) {
+        intendedPlayingRef.current = false;
+        setIsPlaying(false);
+      }
       return;
     }
 
     // Check if HTML5 video has reached the physical end of file
     if (v.ended || (realDur > 0 && currentMediaTime >= realDur - 0.15)) {
+      intendedPlayingRef.current = false;
       v.pause();
       setIsPlaying(false);
       setCurrentTime(duration > 0 ? duration : realDur);
@@ -124,7 +132,10 @@ export function useVideoPlayback({
       if (!v.paused && now - lastStateUpdateTimeRef.current < 200) return;
       lastStateUpdateTimeRef.current = now;
       setCurrentTime(currentMediaTime);
-      if (v.paused && isPlaying) setIsPlaying(false);
+      if (v.paused && isPlaying) {
+        intendedPlayingRef.current = false;
+        setIsPlaying(false);
+      }
       return;
     }
 
@@ -226,6 +237,7 @@ export function useVideoPlayback({
           if (videoClips.length === 1 && trueMaxDur > sEnd + 0.5) {
             setCurrentTime(srcNow);
           } else {
+            intendedPlayingRef.current = false;
             v.pause();
             setIsPlaying(false);
             if (Number.isFinite(cEnd)) {
@@ -243,6 +255,7 @@ export function useVideoPlayback({
     }
 
     if (v.paused && isPlaying) {
+      intendedPlayingRef.current = false;
       setIsPlaying(false);
     }
   };
@@ -289,8 +302,95 @@ export function useVideoPlayback({
     };
   }, [isPlaying, videoRef]);
 
+  // Keep activeClipIdxRef valid whenever videoClips changes (prevents stale clip index traps after edits)
+  useEffect(() => {
+    if (!Array.isArray(videoClips) || videoClips.length === 0) {
+      activeClipIdxRef.current = 0;
+      return;
+    }
+    if (activeClipIdxRef.current < 0 || activeClipIdxRef.current >= videoClips.length || !isPlaying) {
+      const safeT = Number.isFinite(lastMappedTimelineTimeRef.current) ? lastMappedTimelineTimeRef.current : 0;
+      const mapping = mapTimelineToSourceTime(safeT, videoClips);
+      if (mapping.inClip && mapping.clipIndex >= 0) {
+        activeClipIdxRef.current = mapping.clipIndex;
+      } else if (mapping.isGap && mapping.nextClip) {
+        const nextIdx = videoClips.findIndex((c) => c.id === mapping.nextClip.id);
+        activeClipIdxRef.current = nextIdx >= 0 ? nextIdx : 0;
+      } else {
+        activeClipIdxRef.current = 0;
+      }
+    }
+  }, [videoClips, isPlaying]);
+
+  // Bounded forward-only stall/hung-seek watchdog during active playback:
+  // If <video> is attempting to play (!paused, !ended) but stuck in seeking or readyState < 3
+  // with unchanged currentTime for >= 1.6s (e.g. hung HTTP range request), nudge strictly forward (+5ms)
+  // to abort the stalled seek and resume cleanly without ever seeking backward.
+  useEffect(() => {
+    if (!isPlaying && !intendedPlayingRef.current) return undefined;
+    const v = videoRef?.current;
+    if (!v) return undefined;
+
+    let lastObservedTime = Number.isFinite(v.currentTime) ? v.currentTime : 0;
+    let stuckSinceMs = performance.now();
+
+    const onClearSeek = () => {
+      pendingSeekTargetRef.current = null;
+      if (intendedPlayingRef.current && v.paused && !v.ended) {
+        v.play().then(() => setIsPlaying(true)).catch(() => {});
+      }
+    };
+
+    v.addEventListener('seeked', onClearSeek);
+    v.addEventListener('canplay', onClearSeek);
+
+    const timer = window.setInterval(() => {
+      if (!intendedPlayingRef.current || v.ended) return;
+      const curT = Number.isFinite(v.currentTime) ? v.currentTime : 0;
+      const nowMs = performance.now();
+
+      if (Math.abs(curT - lastObservedTime) >= 0.01) {
+        lastObservedTime = curT;
+        stuckSinceMs = nowMs;
+        stallRecoveryCountRef.current = 0;
+        pendingSeekTargetRef.current = null;
+        return;
+      }
+
+      const isStalled = !v.paused && (v.seeking || v.readyState < 3);
+      if (isStalled && (nowMs - stuckSinceMs) >= 1600 && stallRecoveryCountRef.current < 2) {
+        stallRecoveryCountRef.current += 1;
+        stuckSinceMs = nowMs;
+        const maxDur = Number.isFinite(v.duration) && v.duration > 0 ? v.duration : (duration || curT + 1);
+        const forwardTarget = Math.min(Math.max(0, maxDur - 0.05), curT + 0.005);
+        if (forwardTarget > curT) {
+          hasSeekedRef.current = true;
+          pendingSeekTargetRef.current = forwardTarget;
+          try {
+            v.currentTime = forwardTarget;
+          } catch (_) {}
+        }
+        try {
+          const p = v.play();
+          if (p && typeof p.then === 'function') {
+            p.then(() => {
+              if (intendedPlayingRef.current) setIsPlaying(true);
+            }).catch(() => {});
+          }
+        } catch (_) {}
+      }
+    }, 450);
+
+    return () => {
+      window.clearInterval(timer);
+      v.removeEventListener('seeked', onClearSeek);
+      v.removeEventListener('canplay', onClearSeek);
+    };
+  }, [isPlaying, playRequestTick, duration, videoRef]);
+
   const handleSeek = useCallback((time) => {
     hasSeekedRef.current = true;
+    stallRecoveryCountRef.current = 0;
     activeClipIdxRef.current = 0;
     const rawTime = typeof time === 'number' && Number.isFinite(time) ? time : 0;
     const realDur = videoRef?.current?.duration || 0;
@@ -321,6 +421,7 @@ export function useVideoPlayback({
       }
 
       if (Number.isFinite(targetTime) && Math.abs((videoRef.current.currentTime || 0) - targetTime) > 0.03) {
+        pendingSeekTargetRef.current = targetTime;
         videoRef.current.currentTime = targetTime;
       }
     }
@@ -340,13 +441,21 @@ export function useVideoPlayback({
     const totalDur = timelineDuration > 0 ? timelineDuration : Math.max(duration > 0 ? duration : 0, realDur > 0 ? realDur : 0);
 
     if (v.paused) {
+      intendedPlayingRef.current = true;
+      stallRecoveryCountRef.current = 0;
+
       if (v.ended || (totalDur > 0 && currentTime >= totalDur - 0.2)) {
         handleSeek(0);
       } else if (!renderedVideo && videoClips && videoClips.length > 0) {
         const safeNow = Number.isFinite(currentTime) ? currentTime : 0;
         const mapping = mapTimelineToSourceTime(safeNow, videoClips);
         if (mapping.inClip && Number.isFinite(mapping.sourceTime)) {
-          if (Math.abs(v.currentTime - mapping.sourceTime) > 0.04) {
+          const alreadySeekingToTarget = v.seeking
+            && pendingSeekTargetRef.current !== null
+            && Math.abs(pendingSeekTargetRef.current - mapping.sourceTime) <= 0.04;
+          if (!alreadySeekingToTarget && Math.abs(v.currentTime - mapping.sourceTime) > 0.04) {
+            hasSeekedRef.current = true;
+            pendingSeekTargetRef.current = mapping.sourceTime;
             v.currentTime = mapping.sourceTime;
           }
           const targetIdx = videoClips.findIndex(c => c.id === mapping.clip?.id);
@@ -355,7 +464,15 @@ export function useVideoPlayback({
           }
         } else if (mapping.isGap && mapping.nextClip && Number.isFinite(mapping.nextClip.sourceStart)) {
           // In gap: cue video to next clip start without forcing premature timeline jump
-          v.currentTime = mapping.nextClip.sourceStart;
+          const nextSrcStart = mapping.nextClip.sourceStart;
+          const alreadySeekingToTarget = v.seeking
+            && pendingSeekTargetRef.current !== null
+            && Math.abs(pendingSeekTargetRef.current - nextSrcStart) <= 0.04;
+          if (!alreadySeekingToTarget && Math.abs(v.currentTime - nextSrcStart) > 0.04) {
+            hasSeekedRef.current = true;
+            pendingSeekTargetRef.current = nextSrcStart;
+            v.currentTime = nextSrcStart;
+          }
           const targetIdx = videoClips.findIndex(c => c.id === mapping.nextClip?.id);
           if (targetIdx !== -1) {
             activeClipIdxRef.current = targetIdx;
@@ -363,17 +480,41 @@ export function useVideoPlayback({
         }
       }
       lastMappedTimelineTimeRef.current = currentTime;
-      if (!v.src && !v.currentSrc) return;
+      if (!v.src && !v.currentSrc) {
+        intendedPlayingRef.current = false;
+        return;
+      }
       if (v.error) {
         try { v.load(); } catch (_) {}
       }
+      setPlayRequestTick((t) => t + 1);
       const playPromise = v.play();
       if (playPromise !== undefined) {
         playPromise
           .then(() => {
-            setIsPlaying(true);
+            if (intendedPlayingRef.current) {
+              setIsPlaying(true);
+            }
           })
           .catch((e) => {
+            if (e.name === 'AbortError' && intendedPlayingRef.current) {
+              // Concurrent seek interrupted initial play(): retry once when seek/buffer completes
+              const retryPlay = () => {
+                if (!intendedPlayingRef.current || !v.paused || v.ended) return;
+                v.play()
+                  .then(() => {
+                    if (intendedPlayingRef.current) setIsPlaying(true);
+                  })
+                  .catch(() => {
+                    intendedPlayingRef.current = false;
+                    setIsPlaying(false);
+                  });
+              };
+              v.addEventListener('seeked', retryPlay, { once: true });
+              v.addEventListener('canplay', retryPlay, { once: true });
+              return;
+            }
+            intendedPlayingRef.current = false;
             setIsPlaying(false);
             if (e.name !== 'AbortError' && e.name !== 'NotSupportedError') {
               console.error('Playback error:', e);
@@ -383,12 +524,30 @@ export function useVideoPlayback({
         setIsPlaying(true);
       }
     } else {
+      intendedPlayingRef.current = false;
+      pendingSeekTargetRef.current = null;
       v.pause();
       setIsPlaying(false);
+      // Sync exact timeline position immediately on pause so resuming Play never forces a stale backward seek
+      const rawNow = Number.isFinite(v.currentTime) ? v.currentTime : currentTime;
+      let exactTl = rawNow;
+      if (!renderedVideo && Array.isArray(videoClips) && videoClips.length > 0) {
+        const mapped = mapSourceToTimelineTime(rawNow, videoClips, activeClipIdxRef.current);
+        if (typeof mapped === 'number' && Number.isFinite(mapped)) {
+          exactTl = Math.max(lastMappedTimelineTimeRef.current || 0, mapped);
+        }
+      }
+      if (Number.isFinite(exactTl)) {
+        const rounded = parseFloat(exactTl.toFixed(2));
+        lastMappedTimelineTimeRef.current = rounded;
+        setCurrentTime(rounded);
+      }
     }
   }, [currentTime, duration, timelineDuration, renderedVideo, videoClips, handleSeek, videoRef]);
 
   const handleVideoEnded = useCallback(() => {
+    intendedPlayingRef.current = false;
+    pendingSeekTargetRef.current = null;
     setIsPlaying(false);
   }, []);
 

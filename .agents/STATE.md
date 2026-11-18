@@ -3,6 +3,42 @@
 ## Last Session
 - **Environment**: Antigravity IDE
 - **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-18T19:31:30+07:00
+
+## Summary: Fix Playback Freeze/Stall at `~00:07` (`#5 -> Gap`) in Both Live Edit & Rendered Preview (COMPLETED)
+- **Step 0 Diagnosis Findings on `Pseudo_Spiritual_Root` / `ep_5` (219 segments, 378 videoClips, 0 clip anomalies)**:
+  1. **Stored Data Layout (`00:04–00:11`)**:
+     - `videoClips` (all contiguous 1:1 `start === sourceStart`, `end === sourceEnd`): `#4 (4.84–6.50)`, `Gap (6.50–7.71)`, `#5 (7.71–8.91)`, `#6 (8.91–9.40)`, `#7 (9.40–10.70)` (prior snapshot before owner's edit: `#5 6.11–8.43`, `Gap 8.43–8.91`, `#6 8.91–9.40`).
+     - Segment `#5`: `startSec: 7.71, endSec: 10.03, audioStartSec: 7.71, audioEndSec: 10.03, audioDurationSec: 2.32, trackRow: 2 (voice-3 / VOICE 3), userShifted: true` (overlaps `#6: 8.91–9.40` on `VOICE 1`).
+     - Media GOP / buffer alignment right at `~00:07`: `Pseudo_Spiritual_Root_ep_5_source.mp4` (93.5 MB AV1, keyframes at `0.015s, 5.015s, 10.015s`, initial buffer `[0, 6.75s]`) and `EP5_Khmer_Dubbed.mp4` (275 MB H.264 3.65 Mbps, keyframes at `0.000s, 8.533s`, 1 GOP = ~3.9 MB, first 3MB chunk ended at `6.88s`). Seeking back to `00:05` landed inside the initial buffer / on the `5.015s` keyframe.
+  2. **Console / Network Failures Reproduced**:
+     - Zero JS console/page errors; severe HTTP Range stalls observed: `LIVE_EDIT_MODE` stalled 4+s (`seeking: true, readyState: 1, networkState: 2, ev: stalled`, `seeked` never fired, 19 `net::ERR_ABORTED` on source MP4, 1 hung `GET ..._ep_5_source.mp4` open 10.6+s); `RENDERED_MODE` stalled 2.56s at `00:07.00` and 3.89s at `00:08.42` (4 `suspend` events) and 3.56s `respMs` header wait on `bytes=589824-` on `EP5_Khmer_Dubbed.mp4` due to Chromium's single-writer `HttpCache` entry lock across concurrent/throttled `206` range requests.
+     - HTTP/1.1 6-connection origin pool saturation on `localhost:5173`: SSE `/api/jobs/stream` (1 permanent slot) + unchunked 101.26 MB Demucs `no_vocals.wav` (`bytes 0-106180651/106180652`, held open 11+s) + `thumbnailUtils.js` firing 15–18 aborted MP4 range seeks while playing + `preloadSegmentsAroundTime` (`14` `new Audio` + `4` `fetch` = 19 concurrent requests) + `TimelineTracksCanvas` (`MAX_CONCURRENT = 8`).
+  3. **Affected Preview Modes**: **BOTH** Live (Edit) preview AND Rendered preview suffered seek/buffer stalls at `~00:07`.
+  4. **What the Engine Was Waiting On**: Primarily `<video>` waiting indefinitely for `seeked` / `canplay` (`readyState: 1`) due to Chromium `HttpCache` single-writer lock on concurrent `206` range streams + `3MB` chunking smaller than 1 GOP (`3.9MB`) + 101MB unchunked `no_vocals.wav` + 19+ concurrent requests starving the 6-socket HTTP/1.1 pool; compounded in `useVideoPlayback.js` by stale `currentTime` on Pause (up to 200ms behind `v.currentTime`, triggering an unnecessary backward re-seek right before `v.play()`), redundant re-seeking while `v.seeking` already targets the same timestamp, no `activeClipIdxRef` re-sync when `videoClips` changes, and no bounded forward-only stall watchdog.
+- **Step 1 Fix Applied**:
+  1. `backend/middleware/mediaStream.js`: Send `Cache-Control: no-store` on streamed byte-range media (`.mp4/.webm/.mov` and `>4MB .wav`) to bypass Chromium's single-writer `HttpCache` lock; raise video open-ended chunk size `3MB -> 8MB` (covers 2+ full 1080p GOPs in 1 request); chunk large `.wav` (`>4MB`) to `4MB`; keep `ETag`/`Last-Modified`/`Cache-Control: public, max-age=3600` for small audio clips; handle `HEAD` cleanly and destroy aborted streams on `res.on('close')`.
+  2. `frontend/src/hooks/useVideoPlayback.js`: Sync exact mapped `currentTime` immediately on Pause (eliminating stale backward re-seek on Resume); skip redundant `v.currentTime` writes when `v.seeking` is already targeting that timestamp; re-align `activeClipIdxRef` when `videoClips` changes; add bounded forward-only (`+5ms`, max 2 nudges) stall/hung-seek recovery watchdog & `AbortError` retry while `intendedPlayingRef` is active (preserving all frozen timeline invariants: forward-only mapping, play-through-Gaps, paused snap-back guard).
+  3. `frontend/src/components/player/VideoPlayerPreview.jsx`, `frontend/src/components/timeline/TimelineTracksCanvas.jsx`, `frontend/src/utils/thumbnailUtils.js`: Throttle concurrent audio preloads (`maxNewPerTick = 3`, `<= 2` leading-silence probes, `MAX_CONCURRENT = 3` in canvas), switch 101MB `cleanBgAudioRef` to `preload="metadata"` with `0.12s` drift threshold, yield filmstrip `thumbnailUtils` (`preload="metadata"`) whenever main `<video>` is playing/seeking, remove premature `break` on out-of-order `userShifted` segments, and sort+merge overlapping `speakingIntervals` (VOICE 3 overlapping VOICE 1).
+  4. `backend/tests/timeline_playback_stall_guard.test.js` *(new)*: Regression suite for `mediaStream.js`, `useVideoPlayback.js`, connection-pool caps, VOICE 3 overlap handling, and `#5 -> Gap` monotonic mapping.
+- **Verification Evidence**:
+  - Real-app Playwright E2E on `Pseudo_Spiritual_Root` / `ep_5` (read-only, `series.json` byte-identical, with real 101.26 MB Demucs `no_vocals.wav` mounted): **24 / 24 PASS** across **Chrome + Edge**, **BOTH Live Edit & Rendered preview**, at `00:05`, `00:07`, `00:07.50`, `00:07.71` (Voice `#5` on VOICE 3), `00:08.42`, and Pause->Resume at `~7.5s` — clock & video advanced continuously past `00:09+` with **`maxFlatRun = 0`** on every case, `0` page errors, `0` console errors.
+  - Frontend production build (`npm --prefix frontend run build`): **PASS** (`650ms`, 0 errors).
+  - New suite (`backend/tests/timeline_playback_stall_guard.test.js`): **4 / 4 PASS**. Full timeline + auto-align suites: **117 / 118 PASS** (sole failure is pre-existing `timeline_continuous_playback_no_loop.test.js` test #2 whose hardcoded live `episodes[0]` Gap expectation drifted after earlier owner edits to `ep_5`; static audit & gap-playback tests #1, #3, #4 all PASS).
+
+## Active Environment
+- **Backend API**: `http://localhost:5000` (auto-reloaded with updated `mediaStream.js`, verified `8MB` MP4 / `4MB` WAV `206` with `Cache-Control: no-store`)
+- **Frontend Studio**: `http://localhost:5173` (Vite dev server on `chore/full-project-cleanup`)
+- **Branch**: `chore/full-project-cleanup` (committed & pushed)
+
+## Next Steps
+- Hard-refresh browser (`Ctrl + F5`) at `http://localhost:5173/studio` and test Play from `00:05` and `00:07` in both Live and Rendered modes.
+
+---
+
+## Previous Session
+- **Environment**: Antigravity IDE
+- **Branch**: `chore/full-project-cleanup`
 - **Timestamp**: 2026-11-18T18:47:30+07:00
 
 ## Summary: Invalidate Cached `renderedVideo` Preview on Any Segment / Audio-Mix Mutation (COMPLETED)
