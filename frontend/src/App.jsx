@@ -1114,6 +1114,31 @@ export default function App() {
           </div>
         )}
 
+        {/* Voice Switch Error / Rollback Toast */}
+        {audio.voiceSwitchError && (
+          <div
+            data-testid="voice-switch-error-toast"
+            className="backend-offline-banner"
+            role="alert"
+            style={{
+              background: 'rgba(127, 29, 29, 0.94)',
+              borderColor: 'rgba(248, 113, 113, 0.65)',
+              color: '#fecaca',
+            }}
+          >
+            <AlertTriangle size={16} style={{ color: '#f87171', flexShrink: 0 }} />
+            <span>{audio.voiceSwitchError}</span>
+            <button
+              type="button"
+              onClick={() => audio.clearVoiceSwitchError?.()}
+              aria-label="Dismiss voice error"
+              title="Dismiss"
+            >
+              <X size={14} />
+            </button>
+          </div>
+        )}
+
         {/* Home & Route Launchpad (/ or /home) vs Main Video Editing Workspace (/studio, /batch, /quota, /export, /jobs) */}
         {isHomeRoute ? (
           <ErrorBoundary inline name="Home Dashboard">

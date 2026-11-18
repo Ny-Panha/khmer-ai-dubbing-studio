@@ -1,7 +1,7 @@
 import React from 'react';
 import { Upload, Volume2, VolumeX, Film } from 'lucide-react';
 import { formatTimecode, parseTimeToSeconds, formatMinSec } from '../../utils/formatTime';
-import { findAssociatedSegmentIndices } from '../../utils/timelineUtils';
+import { findAssociatedSegmentIndices, resolveSegmentIsFemale } from '../../utils/timelineUtils';
 import { isGapClip } from '../../utils/timelineOps';
 import { uploadVideoFile } from '../../services/api';
 
@@ -347,19 +347,7 @@ function TimelineTracksCanvas({
     if (!scriptSegments || scriptSegments.length === 0) return [];
     const endTimes = [0, 0];
 
-    const resolveIsFemale = (seg) => {
-      const speakerName = String(seg?.speaker || seg?.speakerName || '').trim();
-      const explicitGender = String(seg?.speakerGender || seg?.gender || seg?.voiceGender || '').toUpperCase().trim();
-      const isExplicitFemale = explicitGender === 'FEMALE' || explicitGender === 'GIRL' || explicitGender === 'WOMAN' || speakerName.includes('ស្រី') || speakerName.toLowerCase().includes('female');
-      const isExplicitMale = (explicitGender === 'MALE' || explicitGender === 'BOY' || explicitGender === 'MAN' || speakerName.includes('ប្រុស') || speakerName.toLowerCase().includes('male')) && !isExplicitFemale;
-      const activeVoiceId = String(
-        seg?.voiceId ||
-        (speakerRegistry && (speakerRegistry[seg?.speakerId]?.voiceId || speakerRegistry[speakerName]?.voiceId)) ||
-        (isExplicitFemale ? 'km-KH-SreymomNeural' : (isExplicitMale ? 'km-KH-PisethNeural' : (voiceSettings?.voiceId || 'km-KH-PisethNeural')))
-      );
-      const isSreymom = activeVoiceId.includes('Sreymom') || activeVoiceId === 'km';
-      return isExplicitFemale || (isSreymom && !isExplicitMale);
-    };
+    const resolveIsFemale = (seg) => resolveSegmentIsFemale(seg, speakerRegistry, voiceSettings?.voiceId);
 
     return scriptSegments.map((seg, idx) => {
       const rawStart = (typeof seg.audioStartSec === 'number' && !isNaN(seg.audioStartSec))
@@ -538,16 +526,8 @@ function TimelineTracksCanvas({
     );
 
     const speakerName = (seg.speaker || seg.speakerName || '').trim();
-    const explicitGender = String(seg.speakerGender || seg.gender || seg.voiceGender || '').toUpperCase().trim();
-    const isExplicitFemale = explicitGender === 'FEMALE' || explicitGender === 'GIRL' || explicitGender === 'WOMAN' || speakerName.includes('ស្រី') || speakerName.toLowerCase().includes('female');
-    const isExplicitMale = (explicitGender === 'MALE' || explicitGender === 'BOY' || explicitGender === 'MAN' || speakerName.includes('ប្រុស') || speakerName.toLowerCase().includes('male')) && !isExplicitFemale;
-
-    const activeVoiceId = seg.voiceId || 
-      (speakerRegistry && (speakerRegistry[seg.speakerId]?.voiceId || speakerRegistry[speakerName]?.voiceId)) || 
-      (isExplicitFemale ? 'km-KH-SreymomNeural' : (isExplicitMale ? 'km-KH-PisethNeural' : (voiceSettings?.voiceId || 'km-KH-PisethNeural')));
-
-    const isSreymom = activeVoiceId.includes('Sreymom') || activeVoiceId === 'km';
-    const isFemale = isExplicitFemale || (isSreymom && !isExplicitMale);
+    const isFemale = resolveSegmentIsFemale(seg, speakerRegistry, voiceSettings?.voiceId);
+    const isGeneratingVoice = seg.textStatus === 'generating';
 
     // STEP 3: OVER truthfulness. overSec = realAudioDuration - (slotEnd - slotStart)
     const overSec = hasAudio ? parseFloat((realAudioDuration - slotDur).toFixed(2)) : 0;
@@ -556,7 +536,7 @@ function TimelineTracksCanvas({
     const overrunMarker = isOverrun ? ' ⚠️' : '';
     const overMarker = isOver ? (isOverrun ? overrunMarker : ` +${overSec.toFixed(1)}s`) : '';
     const trimMarker = (seg.audioTrimmed || seg.userTrimmed) ? ' ✂' : '';
-    const pendingMarker = !hasAudio ? ' • គ្មានសំឡេង' : '';
+    const pendingMarker = isGeneratingVoice ? ' • ⏳ កំពុងបង្កើត...' : (!hasAudio ? ' • គ្មានសំឡេង' : '');
     const khmerPreview = (seg.khmer || seg.khmerText || seg.khmerTranslatedText || seg.text || '').trim();
     const speakerGenderLabel = isFemale ? 'ស្រី' : 'ប្រុស';
     const speakerTooltipLabel = speakerName || speakerGenderLabel;
@@ -604,7 +584,10 @@ function TimelineTracksCanvas({
             }
             onSeek(startSec);
           }}
-          className={`voice-segment-block ${isFemale ? 'voice-female' : 'voice-male'} ${!hasAudio ? 'is-pending-audio' : ''} ${isSelected ? 'selected' : ''} ${isLinked ? 'is-linked-clip' : ''} ${isSliver ? 'clip-sliver' : ''} ${isCompactClip ? 'is-compact-clip' : ''} ${isOverrun ? 'has-audio-overrun' : ''}`}
+          data-segment-id={seg.id ?? idx}
+          data-voice-gender={isFemale ? 'female' : 'male'}
+          data-voice-generating={isGeneratingVoice ? 'true' : 'false'}
+          className={`voice-segment-block ${isFemale ? 'voice-female' : 'voice-male'} ${!hasAudio ? 'is-pending-audio' : ''} ${isGeneratingVoice ? 'is-generating-voice' : ''} ${isSelected ? 'selected' : ''} ${isLinked ? 'is-linked-clip' : ''} ${isSliver ? 'clip-sliver' : ''} ${isCompactClip ? 'is-compact-clip' : ''} ${isOverrun ? 'has-audio-overrun' : ''}`}
           style={{
             cursor: isDragging ? 'grabbing' : 'grab',
             left: audioLeft,

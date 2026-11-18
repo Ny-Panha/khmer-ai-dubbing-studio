@@ -1067,3 +1067,56 @@ export function resolveVoiceDragScrubTime({
   return parseFloat(clamped.toFixed(3));
 }
 
+/**
+ * Canonical gender/voice resolver for timeline voice clips.
+ * Precedence:
+ *   1. Segment's explicit voiceId / khmerVoiceId / voice (Piseth -> male, Sreymom -> female)
+ *      ALWAYS wins over stale speakerName (e.g. speaker="តួអង្គស្រី" manually switched to Piseth!).
+ *   2. Segment's explicit gender fields (voiceGender / speakerGender / gender).
+ *   3. speakerRegistry voiceId / gender for the segment's speaker.
+ *   4. Fallback speakerName keywords (ស្រី/female vs ប្រុស/male) or defaultVoiceId.
+ *
+ * @param {Object} seg
+ * @param {Object|null} [speakerRegistry=null]
+ * @param {string} [defaultVoiceId='km-KH-PisethNeural']
+ * @returns {boolean} true if female (Sreymom), false if male (Piseth)
+ */
+export function resolveSegmentIsFemale(seg, speakerRegistry = null, defaultVoiceId = 'km-KH-PisethNeural') {
+  if (!seg || typeof seg !== 'object') {
+    return String(defaultVoiceId || '').includes('Sreymom');
+  }
+
+  // 1. Explicit voiceId on segment takes highest priority (instant manual voice switch wins over stale speakerName!)
+  const directVoice = String(seg.voiceId || seg.khmerVoiceId || seg.voice || '').trim();
+  if (directVoice) {
+    if (directVoice.includes('Sreymom') || directVoice === 'km') return true;
+    if (directVoice.includes('Piseth')) return false;
+  }
+
+  // 2. Explicit segment gender fields
+  const explicitGender = String(seg.voiceGender || seg.speakerGender || seg.gender || '').toUpperCase().trim();
+  if (explicitGender === 'FEMALE' || explicitGender === 'GIRL' || explicitGender === 'WOMAN') return true;
+  if (explicitGender === 'MALE' || explicitGender === 'BOY' || explicitGender === 'MAN') return false;
+
+  // 3. Speaker registry voice/gender
+  const speakerName = String(seg.speaker || seg.speakerName || '').trim();
+  const regEntry = speakerRegistry
+    ? (speakerRegistry[seg.speakerId] || speakerRegistry[speakerName] || null)
+    : null;
+  if (regEntry) {
+    const regVoice = String(regEntry.voiceId || regEntry.khmerVoiceId || '').trim();
+    if (regVoice.includes('Sreymom') || regVoice === 'km') return true;
+    if (regVoice.includes('Piseth')) return false;
+    const regGender = String(regEntry.voiceGender || regEntry.gender || '').toUpperCase().trim();
+    if (regGender === 'FEMALE') return true;
+    if (regGender === 'MALE') return false;
+  }
+
+  // 4. Fallback to speakerName keywords
+  const lowerName = speakerName.toLowerCase();
+  if (speakerName.includes('ស្រី') || lowerName.includes('female')) return true;
+  if (speakerName.includes('ប្រុស') || lowerName.includes('male')) return false;
+
+  return String(defaultVoiceId || '').includes('Sreymom') || defaultVoiceId === 'km';
+}
+

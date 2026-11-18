@@ -407,16 +407,65 @@ router.post("/generate-audio", async (req, res) => {
         }
       } catch (_) {}
 
+      const resolvedVoiceGender = targetVoice.includes("Sreymom")
+        ? "female"
+        : (targetVoice.includes("Piseth") ? "male" : (segGender === "female" || segGender === "FEMALE" ? "female" : "male"));
+      const resolvedSpeakerGender = resolvedVoiceGender === "female" ? "FEMALE" : "MALE";
+      const resolvedVoiceMeta = {
+        voice: targetVoice,
+        voiceId: targetVoice,
+        khmerVoiceId: targetVoice,
+        gender: resolvedVoiceGender,
+        voiceGender: resolvedVoiceGender,
+        speakerGender: resolvedSpeakerGender,
+        voiceLabel: resolvedVoiceGender === "female" ? "ស្រីមុំ (Sreymom)" : "ពិសិដ្ឋ (Piseth)",
+        avatar: resolvedVoiceGender === "female" ? "👩" : "👨",
+        badgeColor: resolvedVoiceGender === "female" ? "#ec4899" : "#38bdf8",
+        voiceAssignmentSource: isManual ? "manual" : (segment.voiceAssignmentSource || "automatic"),
+        userOverridden: isManual ? true : Boolean(segment.userOverridden),
+      };
+
+      // Persist manual voice assignment immediately in parallel with Edge TTS so a mid-generation
+      // reload preserves the chosen voice without adding any latency to TTS synthesis!
+      let prePersistPromise = Promise.resolve();
+      if (isEpisode && cleanSeries && cleanEpisode && isManual) {
+        const metaPathPre = path.join(uploadsDir, "projects", cleanSeries, "series.json");
+        prePersistPromise = withSeriesMetadataLock(cleanSeries, () => {
+          if (!fs.existsSync(metaPathPre)) return;
+          updateSeriesMetadata(cleanSeries, (seriesMeta) => {
+            const targetEp = (seriesMeta?.episodes || []).find((e) => String(e.id) === String(cleanEpisode));
+            if (!targetEp || !targetEp.scriptData || !Array.isArray(targetEp.scriptData.segments)) {
+              return false;
+            }
+            const segIdx = targetEp.scriptData.segments.findIndex((s) => String(s.id) === String(segment.id));
+            if (segIdx !== -1) {
+              targetEp.scriptData.segments[segIdx] = {
+                ...targetEp.scriptData.segments[segIdx],
+                ...resolvedVoiceMeta,
+                audioOutdated: true,
+              };
+            }
+            if (req.body.speakerUpdate && req.body.speakerUpdate.key && req.body.speakerUpdate.entry) {
+              const spkKey = String(req.body.speakerUpdate.key);
+              targetEp.speakerRegistry = {
+                ...(targetEp.speakerRegistry || {}),
+                [spkKey]: {
+                  ...((targetEp.speakerRegistry && targetEp.speakerRegistry[spkKey]) || {}),
+                  ...req.body.speakerUpdate.entry,
+                },
+              };
+            }
+            targetEp.scriptData.updatedAt = Date.now();
+            return true;
+          });
+        }).catch(() => {});
+      }
+
       console.log(`[TTS] Regenerating single segment #${segment.id} [${deliveryType}] with voice ${targetVoice}, rate=${resolvedRate} (requestedSpeed=${requestedSpeedRaw ?? "default"}, userCustomSpeed=${hasExplicitUserSpeed})${cleanEpisode ? ` [Episode: ${cleanEpisode}]` : ""}...`);
       const updatedSegment = await generateSingleSegmentAudio(
         {
           ...segment,
-          voice: targetVoice,
-          voiceId: targetVoice,
-          khmerVoiceId: targetVoice,
-          gender: targetVoice.includes("Sreymom") ? "female" : (targetVoice.includes("Piseth") ? "male" : (segGender === "female" || segGender === "FEMALE" ? "female" : "male")),
-          voiceGender: targetVoice.includes("Sreymom") ? "female" : (targetVoice.includes("Piseth") ? "male" : (segGender === "female" || segGender === "FEMALE" ? "female" : "male")),
-          voiceAssignmentSource: isManual ? "manual" : (segment.voiceAssignmentSource || "automatic"),
+          ...resolvedVoiceMeta,
           deliveryType,
           deliveryOverride,
           audioEffect,
@@ -444,6 +493,8 @@ router.post("/generate-audio", async (req, res) => {
           ...(speedInfo.provided && !speedInfo.valid ? { _suppressInvalidSpeedLog: true } : {}),
         }
       );
+
+      await prePersistPromise;
 
       // Optionally re-sync master narration audio for Track A1 if allSegments is passed
       let fullAudioUrl = null;
@@ -481,6 +532,7 @@ router.post("/generate-audio", async (req, res) => {
                 targetEp.scriptData.segments[segIdx] = {
                   ...targetEp.scriptData.segments[segIdx],
                   ...updatedSegment,
+                  ...resolvedVoiceMeta,
                   audioOutdated: false,
                   textStatus: "ready",
                   audioOffset: 0,

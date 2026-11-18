@@ -3,6 +3,40 @@
 ## Last Session
 - **Environment**: Antigravity IDE
 - **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-19T00:22:00+07:00
+
+## Summary: Instant Same-Frame Voice Assignment Color/Label, Mid-Generation Reload Survival & Failure Rollback Toast (COMPLETED)
+- **Root Cause**:
+  1. `TimelineTracksCanvas.jsx:353 & 542` checked `speakerName.includes('ស្រី')` BEFORE `seg.voiceId` / `seg.voiceGender` / `seg.speakerGender` — so any clip whose speaker name contained `"ស្រី"` (like `#129` `speaker: "តួអង្គស្រី"`) stayed pink `"ស្រី"` even after clicking `ប្រុស (Piseth)`!
+  2. `handleUpdateSegmentVoice` did not update `gender`, `voiceLabel`, `avatar`, `badgeColor`, or `userOverridden` immediately, did not persist the assignment pre-TTS for mid-generation reloads, and did not rollback the voice assignment or show an error toast when TTS failed.
+- **Changes Applied**:
+  1. `frontend/src/utils/timelineUtils.js`: Exported canonical `resolveSegmentIsFemale(seg, speakerRegistry, defaultVoiceId)` where segment's explicit `voiceId`/`khmerVoiceId`/`voice` (`Piseth` vs `Sreymom`) ALWAYS takes #1 precedence over stale `speakerName`.
+  2. `frontend/src/components/timeline/TimelineTracksCanvas.jsx` & `TimelineEditor.css`: Wired `resolveSegmentIsFemale` for both lane routing and clip rendering; added subtle `.is-generating-voice` shimmer + `• ⏳ កំពុងបង្កើត...` indicator + `data-segment-id` / `data-voice-gender` / `data-voice-generating` attributes while preserving the new male-blue / female-pink color and `ប្រុស` / `ស្រី` label.
+  3. `frontend/src/hooks/useAudioDubbing.js` & `frontend/src/App.jsx`:
+     - `handleUpdateSegmentVoice` updates ALL voice/gender/badge fields in the same frame, persists immediately to `localStorage` (`saveTimelineOperationToLocalStorage`, reload-safe `textStatus`), runs TTS async, and on failure cleanly rolls back `scriptData`, `speakerRegistry`, `localStorage` (+ best-effort backend revert) and displays a visible dismissible error toast (`[data-testid="voice-switch-error-toast"]`).
+  4. `backend/routes/audioRoutes.js`: Runs parallel pre-TTS manual voice assignment persistence (`prePersistPromise`) concurrently with `generateSingleSegmentAudio` (0ms added TTS latency) so reloading mid-generation keeps the chosen `Piseth`/`Sreymom` assignment on disk.
+  5. `backend/tests/voice_instant_visual_assignment.test.js` *(new)*: Unit + static audit verifying `#129` (`speaker: "តួអង្គស្រី"` + `Piseth` -> male) and rollback/toast/pre-persist wiring.
+- **Verification Results (Real App on isolated `ep_5` clone with `#129` set to female `តួអង្គស្រី`, no audio)**:
+  - **Before click**: `.voice-female`, `#129 ស្រី • គ្មានសំឡេង`, pink border (`rgba(244,114,182,0.6)`), `0` waveform bars.
+  - **Same-frame mid-generation (screenshot verified BEFORE TTS returned)**: `.voice-male.is-generating-voice`, `#129 ប្រុស • ⏳ កំពុងបង្កើត...`, blue border (`rgb(56,189,248)`), Inspector spinning `Generating Khmer Voice...` + `✓ Manual Assigned`.
+  - **After generation completed**: `.voice-male`, `#129 ប្រុស`, `23` waveform bars, Inspector `Audio Ready`.
+  - **Reload mid-generation**: Stayed assigned to the newly clicked voice + `Manual Assigned`.
+  - **Forced 503 failure**: Reverted clip back to previous voice color/label + displayed visible red error toast.
+  - **Build & Suites**: `npm --prefix frontend run build` **PASS** (`661ms`); `voice_instant_visual_assignment`, `voice_switch_fast_path`, and all `timeline_*.test.js` **127 / 127 PASS**.
+
+## Active Environment
+- **Backend API**: `http://localhost:5000` (restarted with parallel pre-TTS manual voice persistence)
+- **Frontend Studio**: `http://localhost:5173` (Vite dev server)
+- **Branch**: `chore/full-project-cleanup` (committed & pushed)
+
+## Next Steps
+- Hard refresh (`Ctrl + Shift + R`) at `http://localhost:5173/studio` and click `ប្រុស (Piseth)` / `ស្រី (Sreymom)` on any clip — timeline color & `ប្រុស`/`ស្រី` label flip instantaneously in the same frame.
+
+---
+
+## Previous Session
+- **Environment**: Antigravity IDE
+- **Branch**: `chore/full-project-cleanup`
 - **Timestamp**: 2026-11-19T00:05:00+07:00
 
 ## Summary: Per-Episode Timeline View State Persistence, Instant Seek Reveal & Playhead-Anchored Zoom (COMPLETED)
