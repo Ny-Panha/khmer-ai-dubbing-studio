@@ -3,6 +3,38 @@
 ## Last Session
 - **Environment**: Antigravity IDE
 - **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-18T19:56:30+07:00
+
+## Summary: Auto-Cut by Subs Cuts Cleanly at Every Dialogue Start (Zero Leftover Absorption) (COMPLETED)
+- **Root Cause**: `autoSplitVideoBySegments` in `frontend/src/utils/timelineUtils.js` only created a Gap when `it.start > curTime + 0.15`, absorbing up to `0.15s` of the previous scene's tail into the head of the next dialogue clip (`45` absorbed gaps on `Pseudo_Spiritual_Root/ep_5` alone). Additionally, `normalizeClip` enforced a `0.1s` minimum length even on Gap clips, which could stretch sub-`0.10s` Gaps into overlapping the next dialogue clip on reload.
+- **Changes Applied**:
+  1. `frontend/src/utils/timelineUtils.js`:
+     - Removed the `0.15s` absorption threshold in `autoSplitVideoBySegments`: whenever `targetStart > gapStart` (any positive space >= 0.01s before the next dialogue start), emits a pure `Gap` clip `[gapStart, targetStart]` (`isDialogue: false`, `isMuted: false`, no `segmentId`/`segmentIndex`) and starts the dialogue clip **exactly** at `it.start`.
+     - Same exact-tail check for `Outro` (`outroEnd > outroStart`).
+     - Preserved the existing overlap clamp (`if (it.start < curTime)` clamps previous clip end to `Math.max(prevClip.start + 0.2, it.start)`), `isMuted: false` on all clips, and pure Gap objects.
+     - Updated `normalizeClip` to use `minClipLen = isGapClip(clip) ? 0.01 : 0.1` so sub-`0.10s` pure Gaps remain exact and non-overlapping after episode reload.
+  2. `backend/tests/timeline_auto_cut_exact_starts.test.js` *(new)*: Unit + static regression suite verifying exact dialogue starts for `<= 0.15s` and larger gaps (`0.08s, 0.11s, 0.07s, 0.45s`), zero-gap touching clips, overlap clamping, `normalizeClips` reload contiguity, `isMuted: false`, and pure Gap objects.
+- **Verification Evidence**:
+  - Real-app Playwright E2E on `Pseudo_Spiritual_Root` / `ep_5` (read-only, `series.json` byte-identical `true`, `0` console/page errors):
+    - Clicking `Auto-Cut by Subs` on `ep_5` produced `420` clips (`219` dialogues, `200` pure Gaps, `1` Outro, `0` muted, `0` impure Gaps — recovering all `45` formerly absorbed leftover gaps).
+    - Verified former leftover spots: `#6->#7` (`Gap 10.76–10.87`, `#7` @ `10.87`), `#14->#15` (`Gap 27.29–27.37`, `#15` @ `27.37`), `#16->#17` (`Gap 33.10–33.17`, `#17` @ `33.17`), `#18->#19` (`Gap 36.16–36.25`, `#19` @ `36.25`).
+    - Verified `#8/#9` gap test: dragging voice `#9` right to `15.98s` (after `#8` end `15.67s`) and clicking `Auto-Cut by Subs` created pure `Gap [15.67, 15.98]` and started video clip `#9` at exact `15.98s`.
+  - Frontend production build (`npm --prefix frontend run build`): **PASS** (`614ms`, 0 errors).
+  - New suite (`backend/tests/timeline_auto_cut_exact_starts.test.js`): **3 / 3 PASS**. Full timeline + auto-align suites: **122 / 123 PASS** (sole failure is pre-existing `timeline_continuous_playback_no_loop.test.js` test #2 live-disk fixture expectation).
+
+## Active Environment
+- **Backend API**: `http://localhost:5000` (HTTP 200)
+- **Frontend Studio**: `http://localhost:5173` (Vite dev server on `chore/full-project-cleanup`)
+- **Branch**: `chore/full-project-cleanup` (committed & pushed)
+
+## Next Steps
+- Refresh browser (`Ctrl + F5`) at `http://localhost:5173/studio` and click `Auto-Cut by Subs` to get exact dialogue-aligned cuts with zero leftover heads.
+
+---
+
+## Previous Session
+- **Environment**: Antigravity IDE
+- **Branch**: `chore/full-project-cleanup`
 - **Timestamp**: 2026-11-18T19:38:30+07:00
 
 ## Summary: Real-Time Playhead & Video Preview Scrubbing During Paused Voice-Clip Move Drag (COMPLETED)

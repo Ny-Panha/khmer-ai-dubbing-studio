@@ -46,8 +46,9 @@ export function normalizeClip(clip, fallbackDuration = 0) {
     ? clip.end
     : parseTimeToSeconds(clip.end, rawStart + (fallbackDuration || 3.0));
 
+  const minClipLen = isGapClip(clip) ? 0.01 : 0.1;
   const start = Math.max(0, parseFloat(rawStart.toFixed(3)));
-  const end = Math.max(start + 0.1, parseFloat(rawEnd.toFixed(3)));
+  const end = Math.max(start + minClipLen, parseFloat(rawEnd.toFixed(3)));
 
   // Backward compatibility: If sourceStart / sourceEnd are missing, inherit from start / end
   const rawSourceStart = typeof clip.sourceStart === 'number' && !isNaN(clip.sourceStart)
@@ -59,7 +60,7 @@ export function normalizeClip(clip, fallbackDuration = 0) {
     : (typeof clip.source_out === 'number' ? clip.source_out : (rawSourceStart + (end - start)));
 
   const sourceStart = Math.max(0, parseFloat(rawSourceStart.toFixed(3)));
-  const sourceEnd = Math.max(sourceStart + 0.1, parseFloat(rawSourceEnd.toFixed(3)));
+  const sourceEnd = Math.max(sourceStart + minClipLen, parseFloat(rawSourceEnd.toFixed(3)));
 
   return {
     ...clip,
@@ -594,18 +595,19 @@ export function autoSplitVideoBySegments(segments = [], totalDuration = 0, video
       }
     }
 
-    // If there is an introductory or dialogue gap
-    if (it.start > curTime + 0.15) {
-      const gapStart = parseFloat(curTime.toFixed(2));
-      const gapEnd = parseFloat(it.start.toFixed(2));
+    // Create a Gap clip for ANY positive space before this dialogue start (no 0.15s absorption)
+    // so every dialogue clip begins cleanly at its own exact start with zero leftover head.
+    const gapStart = parseFloat(curTime.toFixed(2));
+    const targetStart = parseFloat(it.start.toFixed(2));
+    if (targetStart > gapStart) {
       const gapClip = {
         id: `clip-gap-${Date.now()}-${idx}`,
         trackRow: 0,
         trackId: 'video-1',
         start: gapStart,
-        end: gapEnd,
+        end: targetStart,
         sourceStart: gapStart,
-        sourceEnd: gapEnd,
+        sourceEnd: targetStart,
         name: 'Gap',
         isDialogue: false,
         isMuted: false,
@@ -613,7 +615,7 @@ export function autoSplitVideoBySegments(segments = [], totalDuration = 0, video
       delete gapClip.segmentId;
       delete gapClip.segmentIndex;
       clips.push(gapClip);
-      curTime = gapEnd;
+      curTime = targetStart;
     }
 
     const clipStart = parseFloat(curTime.toFixed(2));
@@ -645,9 +647,9 @@ export function autoSplitVideoBySegments(segments = [], totalDuration = 0, video
   });
 
   // Outro clip if video continues past last segment
-  if (totalDuration > curTime + 0.15) {
-    const outroStart = parseFloat(curTime.toFixed(2));
-    const outroEnd = parseFloat(totalDuration.toFixed(2));
+  const outroStart = parseFloat(curTime.toFixed(2));
+  const outroEnd = parseFloat(totalDuration.toFixed(2));
+  if (outroEnd > outroStart) {
     const outroClip = {
       id: `clip-outro-${Date.now()}`,
       trackRow: 0,
