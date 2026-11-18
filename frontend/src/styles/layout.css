@@ -7,6 +7,10 @@
   box-sizing: border-box;
 }
 
+html {
+  font-size: 16px;
+}
+
 html,
 body,
 #root {
@@ -19,10 +23,13 @@ body,
   background-color: var(--bg-desktop);
   color: var(--text-primary);
   font-family: var(--font-sans);
-  font-size: var(--text-body);
   line-height: var(--khmer-line-height);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  font-size: var(--text-body);
 }
 
 /* Main App Container: 48px Top Navbar | 1fr Workspace (minmax(0,1fr) prevents horizontal grid expansion) */
