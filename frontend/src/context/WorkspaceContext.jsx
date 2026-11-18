@@ -7,6 +7,10 @@ import {
   isRenderedRatioMismatch,
   sanitizeAspectRatio,
 } from '../utils/projectStorage';
+import {
+  DEFAULT_GLOBAL_LOGO_SETTINGS,
+  loadGlobalLogoSettings,
+} from '../utils/logoSettingsStorage';
 
 const NOOP = () => {};
 
@@ -19,6 +23,8 @@ const DEFAULT_WORKSPACE_CONTEXT = Object.freeze({
   setSpeakerRegistry: NOOP,
   voiceSettings: {},
   setVoiceSettings: NOOP,
+  globalLogoSettings: DEFAULT_GLOBAL_LOGO_SETTINGS,
+  setGlobalLogoSettings: NOOP,
   audioGenerated: false,
   setAudioGenerated: NOOP,
   audioOutdated: false,
@@ -76,6 +82,7 @@ export function useStudioWorkspaceState() {
   const [scriptData, setScriptData] = useState(null);
   const [speakerRegistry, setSpeakerRegistry] = useState({});
   const [voiceSettings, setVoiceSettings] = useState(loadSavedVoiceSettings);
+  const [globalLogoSettings, setGlobalLogoSettings] = useState(loadGlobalLogoSettings);
   const [audioGenerated, setAudioGenerated] = useState(false);
   const [audioOutdated, setAudioOutdated] = useState(false);
   const [fullAudioPath, setFullAudioPath] = useState(null);
@@ -92,6 +99,8 @@ export function useStudioWorkspaceState() {
       setSpeakerRegistry,
       voiceSettings,
       setVoiceSettings,
+      globalLogoSettings,
+      setGlobalLogoSettings,
       audioGenerated,
       setAudioGenerated,
       audioOutdated,
@@ -114,6 +123,7 @@ export function useStudioWorkspaceState() {
       scriptData,
       speakerRegistry,
       voiceSettings,
+      globalLogoSettings,
       audioGenerated,
       audioOutdated,
       fullAudioPath,

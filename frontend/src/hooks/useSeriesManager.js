@@ -19,6 +19,7 @@ import {
   sanitizeRenderedVideo,
   sanitizeAndHealSeriesList,
 } from '../utils/projectStorage';
+import { stripLogoSettings } from '../utils/logoSettingsStorage';
 import { generateVideoThumbnails } from '../utils/thumbnailUtils';
 import { fetchVideoThumbnails } from '../services/api';
 import { normalizeClips, sanitizeScriptData } from '../utils/timelineUtils';
@@ -428,7 +429,7 @@ export function useSeriesManager({
       activeClipId,
       selectedSegmentId,
       renderedVideo,
-      voiceSettings,
+      voiceSettings: stripLogoSettings(voiceSettings),
     };
   }, [
     selectedVideo,
@@ -794,6 +795,9 @@ export function useSeriesManager({
   // 6. Save background results (e.g. if user switched to EP2 while EP1 was generating)
   const handleSaveEpisodeBackground = useCallback((targetEpisodeId, partialData) => {
     if (!targetEpisodeId || !partialData) return;
+    const safePartialData = partialData.voiceSettings && typeof partialData.voiceSettings === 'object'
+      ? { ...partialData, voiceSettings: stripLogoSettings(partialData.voiceSettings) }
+      : partialData;
     const list = loadSeriesList();
     const sIdx = list.findIndex((s) => s.id === activeSeriesIdState);
     if (sIdx !== -1) {
@@ -801,7 +805,7 @@ export function useSeriesManager({
       if (eIdx !== -1) {
         list[sIdx].episodes[eIdx] = {
           ...list[sIdx].episodes[eIdx],
-          ...partialData,
+          ...safePartialData,
           lastModified: Date.now(),
         };
         saveSeriesList(list);
@@ -814,7 +818,7 @@ export function useSeriesManager({
               ...s,
               episodes: (s.episodes || []).map((e) =>
                 e.id === targetEpisodeId
-                  ? { ...e, ...partialData, lastModified: Date.now() }
+                  ? { ...e, ...safePartialData, lastModified: Date.now() }
                   : e
               ),
             }

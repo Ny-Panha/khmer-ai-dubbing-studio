@@ -1867,13 +1867,17 @@ function renderDubbedVideoWithDucking(options = {}) {
           overlayExpr = `(main_w-overlay_w)/2:(main_h-overlay_h)/2`;
         } else if (
           pos === "custom" ||
-          (logoSettings.logoXPercent !== undefined && logoSettings.logoYPercent !== undefined) ||
-          (logoSettings.xPercent !== undefined && logoSettings.yPercent !== undefined)
+          (logoSettings.logoXPercent !== undefined && logoSettings.logoXPercent !== null &&
+            logoSettings.logoYPercent !== undefined && logoSettings.logoYPercent !== null) ||
+          (logoSettings.xPercent !== undefined && logoSettings.xPercent !== null &&
+            logoSettings.yPercent !== undefined && logoSettings.yPercent !== null)
         ) {
           const rawX = logoSettings.logoXPercent ?? logoSettings.xPercent ?? 50;
           const rawY = logoSettings.logoYPercent ?? logoSettings.yPercent ?? 50;
-          const xPct = Math.max(0, Math.min(100, Number(rawX) || 50)) / 100;
-          const yPct = Math.max(0, Math.min(100, Number(rawY) || 50)) / 100;
+          const numX = Number(rawX);
+          const numY = Number(rawY);
+          const xPct = Math.max(0, Math.min(100, Number.isFinite(numX) ? numX : 50)) / 100;
+          const yPct = Math.max(0, Math.min(100, Number.isFinite(numY) ? numY : 50)) / 100;
           overlayExpr = `(main_w-overlay_w)*${xPct.toFixed(4)}:(main_h-overlay_h)*${yPct.toFixed(4)}`;
         }
         filterComplexParts.push(

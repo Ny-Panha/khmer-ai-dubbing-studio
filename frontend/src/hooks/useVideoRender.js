@@ -7,6 +7,7 @@ import {
   killBatchRenderApi,
 } from '../services/api';
 import { resolveDefaultAspectRatio, inferRenderedAspectRatio, sanitizeAspectRatio } from '../utils/projectStorage';
+import { buildLogoExportPayload, loadGlobalLogoSettings } from '../utils/logoSettingsStorage';
 
 /**
  * Custom hook to manage single-episode and multi-episode batch/merged video export
@@ -19,6 +20,8 @@ export function useVideoRender({
   speakerRegistry,
   voiceSettings,
   voiceSettingsRef = null,
+  globalLogoSettings = null,
+  globalLogoSettingsRef = null,
   scriptData,
   videoClips,
   fullAudioPath,
@@ -52,10 +55,17 @@ export function useVideoRender({
   refreshSeriesRef.current = refreshSeriesFromServer;
   const internalVoiceSettingsRef = useRef(voiceSettings);
   internalVoiceSettingsRef.current = voiceSettings;
+  const internalGlobalLogoSettingsRef = useRef(globalLogoSettings);
+  internalGlobalLogoSettingsRef.current = globalLogoSettings;
 
   const getLatestVoiceSettings = useCallback(
     () => voiceSettingsRef?.current || internalVoiceSettingsRef.current || voiceSettings || {},
     [voiceSettingsRef, voiceSettings]
+  );
+
+  const getLatestGlobalLogoSettings = useCallback(
+    () => globalLogoSettingsRef?.current || internalGlobalLogoSettingsRef.current || globalLogoSettings || loadGlobalLogoSettings(),
+    [globalLogoSettingsRef, globalLogoSettings]
   );
 
   const triggerBrowserDownload = useCallback((url, filename) => {
@@ -226,19 +236,9 @@ export function useVideoRender({
   }, [getLatestVoiceSettings]);
 
   const buildLogoOptions = useCallback(() => {
-    const activeSettings = getLatestVoiceSettings();
-    return {
-      enabled: Boolean(activeSettings?.enableLogo),
-      image: activeSettings?.logoImage,
-      position: activeSettings?.logoPosition || 'both',
-      size: Number(activeSettings?.logoSize) || 72,
-      opacity: Number(activeSettings?.logoOpacity) || 0.9,
-      shape: activeSettings?.logoShape || 'circle',
-      margin: Number(activeSettings?.logoMargin) || 20,
-      logoXPercent: activeSettings?.logoXPercent,
-      logoYPercent: activeSettings?.logoYPercent,
-    };
-  }, [getLatestVoiceSettings]);
+    const activeLogo = getLatestGlobalLogoSettings();
+    return buildLogoExportPayload(activeLogo);
+  }, [getLatestGlobalLogoSettings]);
 
   const buildCornerMaskOptions = useCallback(() => {
     const activeSettings = getLatestVoiceSettings();

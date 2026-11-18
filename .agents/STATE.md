@@ -3,6 +3,114 @@
 ## Last Session
 - **Environment**: Antigravity IDE (`engineering-minimal-change-engineer` discipline)
 - **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-18T14:14:00+07:00
+
+## Summary: Make Logo Settings Global (Single Source of Truth Across All Episodes & Series) (COMPLETED)
+- **Scope**: Logo settings family ONLY (`enableLogo`, `logoImage`, `logoPosition`, `logoSize`, `logoOpacity`, `logoShape`, `logoMargin`, `logoXPercent`, `logoYPercent`). All other visual settings (subtitles, sponsor, watermark, corner mask, ducking, aspect ratio, etc.) preserve their existing per-episode behaviour untouched.
+- **Minimal Changes Applied**:
+  1. `backend/services/globalLogoSettingsService.js` *(new)*: Dedicated atomic server-side store (`backend/uploads/cache/global_logo_settings.json`) with normalization, stale-write timestamp guard, `stripLogoSettingsFromObject`, and `getEffectiveGlobalLogoSettingsForExport`.
+  2. `backend/routes/systemRoutes.js`: Added `GET /api/logo-settings` and `PUT`/`POST /api/logo-settings`.
+  3. `backend/routes/videoRoutes.js` & `backend/services/batchExportService.js`: Switched export fallback to `getEffectiveGlobalLogoSettingsForExport()` (removed per-episode `req.body?.voiceSettings?.logoSettings` fallback).
+  4. `backend/services/ffmpegService.js`: Guarded `logoXPercent !== null && logoYPercent !== null` so `null` coords never hijack preset corners (e.g. `top-left`) and preserved `0%` coordinates cleanly.
+  5. `backend/services/episodeService.js`: Stripped `logo*` keys from `ep.voiceSettings` on write in `syncSeriesMetadataSafely` (while leaving reads untouched so first-time migration can seed from the active episode).
+  6. `frontend/src/utils/logoSettingsStorage.js` *(new)*: Dedicated global client store (`KHMER_AI_GLOBAL_LOGO_SETTINGS_V1`) with serialized/coalesced server sync, one-time migration (`resolveInitialLogoSeed` / `migrateGlobalLogoSettingsIfNeeded`), `stripLogoSettings`, and `buildLogoExportPayload`.
+  7. `frontend/src/utils/projectStorage.js`: Removed `logo*` keys from `DEFAULT_VOICE_SETTINGS`; stripped `logo*` keys in `resolveStickyVoiceSettings`, `loadSavedVoiceSettings`, `saveVoiceSettings`, and `saveEpisodeState` so episode `voiceSettings` never override or store logo keys.
+  8. `frontend/src/context/WorkspaceContext.jsx`: Added dedicated `globalLogoSettings` / `setGlobalLogoSettings` state.
+  9. `frontend/src/hooks/useSeriesManager.js`: Stripped `logo*` keys from `getCurrentWorkspaceSnapshot` and `handleSaveEpisodeBackground`.
+  10. `frontend/src/hooks/useVideoRender.js`: Updated `buildLogoOptions` (used by both single and batch export) to read strictly from the global logo store (`globalLogoSettingsRef` / `globalLogoSettings` / `loadGlobalLogoSettings()`).
+  11. `frontend/src/App.jsx`: Added mount hydration & one-time migration (seeding from active episode customized logo / legacy voiceSettings / defaults, then ignoring per-episode logo values forever), routed `logo*` edits in `handleUpdateVoiceSettings` strictly to the global store while still invalidating stale `renderedVideo`, and passed combined `studioSettings` to `VideoPlayerPreview` and `VoiceSettings`.
+  12. `backend/tests/global_logo_settings.test.js` *(new)*: Unit, persistence, migration, episode-stripping, and static export-wiring tests.
+- **Verification Evidence**:
+  - Frontend production build (`npm --prefix frontend run build`): **PASS** (`605ms`, 0 errors).
+  - Relevant test suites (`global_logo_settings.test.js`, `aspect_ratio_and_crop.test.js`, `workspace_player_containment.test.js`, `sponsor_ads_end_to_end.test.js`): **21/21 PASS** (0 fail).
+  - Real-app E2E verification (`http://localhost:5173/studio` + restarted backend `:5000`, Edge headless):
+    - First-time migration from `Solo Leveling` EP1 seeded `top-left / 68px / 0.75` to `KHMER_AI_GLOBAL_LOGO_SETTINGS_V1` + `GET /api/logo-settings`.
+    - Edited logo on `Pseudo_Spiritual_Root` EP1 -> `bottom-right / square / 96px / 0.85` -> live preview `.logo-overlay-item.shape-square` + server store synced (`localVoiceHasLogoKeys: []`, disk `ep_1.voiceSettings` logo keys: `[]`).
+    - Switched to `Pseudo_Spiritual_Root` EP2 (legacy `top-left / 68px / circle`) -> stayed `bottom-right / square / 96px / 0.85`.
+    - Switched to different series (`Solo Leveling`) -> stayed `bottom-right / square / 96px / 0.85` with live preview overlay.
+    - Reloaded page -> stayed identical (`bottom-right / square / 96px / 0.85`, 0 page errors).
+    - Real `/api/render-video` export from `Pseudo_Spiritual_Root` EP2 logged `scale=144:144 ... colorchannelmixer=aa=0.85` + `overlay=main_w-overlay_w-30:main_h-overlay_h-30` and frame pixel diff proved burned logo at bottom-right (`bottomRightMeanDiff: 30.75` vs `topLeftMeanDiff: 1.37`).
+
+## Active Environment
+- **Backend API**: `http://localhost:5000` (restarted cleanly with latest global logo store endpoints & export fallback)
+- **Frontend Studio**: `http://localhost:5173` (Vite dev server)
+- **Branch**: `chore/full-project-cleanup` (committed & pushed)
+
+## Next Steps
+- Refresh browser (`Ctrl + F5`) at `http://localhost:5173/studio` — logo settings now persist globally across all episodes, series, reloads, and single/batch exports.
+
+---
+
+## Previous Session
+- **Environment**: Antigravity IDE (`design-ui-designer` + Impeccable v4.9.1)
+- **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-18T13:53:00+07:00
+
+## Summary: Full-Site UI Overhaul — PHASE 2 Visual-Only Fixes Across All 6 Routes (COMPLETED)
+- **Scope**: Visual/CSS/A11y-semantics ONLY — zero feature, pipeline, routing, content, or timeline behavior changes. All 8 approved steps executed in exact order, rebuilt, re-screenshotted (`1440px` + `390px`), and committed individually.
+- **Audit Health Score (Before → After)**: **`6 / 20 (Poor)` → `15 / 20 (Good)` (+9 points)**
+  - Accessibility: `1/4 → 3/4` | Performance: `3/4 → 3/4` | Theming: `1/4 → 3/4` | Responsive: `0/4 → 3/4` | Implementation Integrity: `1/4 → 3/4`
+  - Impeccable 1440px Live Detector: **`2,272 → 1,450` (-36.2%)**; `/home` dropped **`77 → 0`** (100% clean!); `overused-font` → `0`, `gradient-text` → `0`, `skipped-heading` → `0`, `gray-on-color` `44 → 1`, `ai-color-palette` `113 → 10`, CSS `!important` `157 → 76` (-52%).
+  - Horizontal Overflow (`overflowX` & `navOverflow`): **`+152px` (1440px) & `+1,202px` (390px) → `0px`** across ALL 6 routes!
+- **Atomic Commits Per Step**:
+  1. `d166fe9` **Global Tokens** (`PRODUCT.md`, `DESIGN.md`, `.impeccable/design.json`, `frontend/index.html`, `frontend/src/index.css`, `frontend/src/styles/tokens.css`): Unified Obsidian Darkroom Console tokens, AA `#0369A1` primary CTA (`5.9:1`), AA `#047857` success CTA (`5.4:1`), AA `#8E9EB5` dimmed ink, `Kantumruy Pro` + `IBM Plex Sans` + `JetBrains Mono` (removed duplicate Google Fonts `@import` & `Inter`), universal `:focus-visible`, `prefers-reduced-motion`, exponential motion.
+  2. `1689b66` **Shared Shell & Components** (`layout.css`, `Navbar.css/jsx`, `components.css`, `modals.css`): Fixed root CSS grid `minmax(0, 1fr)` & responsive Navbar (0px overflow at 1440px & 390px), retired purple-cyan AI gradient `.btn-primary` & neon glows, added unified modal shell primitives.
+  3. `040329b` **Page 1 — `/home`** (`HomeDashboard.css`, `layout.css` 16px root `rem` fix): Flat tonal cards, clear `h1`/`h2` scale (`22px`/`16px`), AA CTA contrast, clean 390px mobile stacking — **`77 → 0` Impeccable findings**.
+  4. `61daaad` **Page 2 — `/studio`** (`timeline.css`, `TimelineEditor.css`, `MediaLibrary.css`, `MediaUploadTab.jsx`, `EpisodesTab.jsx`, `VoiceSettings.css`, `VideoPlayerPreview.css`): **Timeline behavior 100% frozen** (zero timeline JS/JSX edits; preserved frozen CSS test assertions). Fixed 1440px Right Inspector clipping (`13 → 0` clipped controls), unified 3 conflicting CTA styles (retired coral `#FF8577` glow pills & purple-cyan gradient), fixed empty-lane `1.9:1` contrast, added clean 390px vertical reflow.
+  5. `d951bd2` **Page 3 — `/batch`** (`DubbingStepCardsBar.jsx`, `GeminiRouteModal.jsx`, `MediaLibrary.css`): Fixed Step 1 (`1. Script ខ្មែរ:`) text overlap collision at 1440px & 390px via 2-row flex-column cards, fixed 390px episode grid overflow (`minmax(min(100%, 330px), 1fr)`), fixed `H2→H4` skipped heading, fixed 390px Script Setup toggle overlap, aligned Obsidian modal shell.
+  6. `8ac8b8f` **Page 4 — `/quota`** (`GeminiQuotaModal.jsx`): Fixed P0 390px vertical header collapse & footer clipping, replaced `gradient-text` `<h2>` with crisp `<h1>`, removed cyan halo glows, aligned Obsidian tokens.
+  7. `a87370a` **Page 5 — `/jobs`** (`JobDashboardModal.jsx`, `JobQueueList.jsx`): Fixed 390px 4-col stat card overflow via responsive 2×2 `.studio-stat-grid-4`, promoted `<h1>`, added search `aria-label`, aligned Obsidian tokens.
+  8. `6323a06` **Page 6 — `/export` + `ShortcutsModal`** (`BatchExportStudioModal.jsx`, `ShortcutsModal.jsx`): Removed duplicate `× ✕` close icon, flattened nested outer episode box, promoted `<h1>`, fixed `ShortcutsModal` tokens & dialog a11y.
+- **Verification Evidence**:
+  - Vite Production Build (`npm --prefix frontend run build`): **PASS** (`648ms`, 0 errors).
+  - Full Frozen Timeline + Batch Regression Tests: **117 / 117 PASS** (`90` timeline + `27` batch, 0 fail).
+  - After Screenshots Captured: `.agents/ui-audit/after/{home,studio,batch,export,quota,jobs}-{1440,390}.png` (`0` console/page errors across all 12 captures).
+- **Remaining P2/P3 Items (Tracked for Optional Follow-Up)**:
+  - `[P2]` Inner episode cards in `GeminiRouteModal.jsx` (4,574 lines), `BatchExportStudioModal.jsx`, `GeminiQuotaModal.jsx`, and `ScriptReviewTab.jsx` still contain legacy inline `0.62rem–0.70rem` micro-font badges & inline hexes (responsible for the remaining `undersized-ui-text` / `tiny-text` counts).
+  - `[P2]` Add an `.sr-only` `<h1>` landmark inside `/studio` workspace and `aria-label` attributes on remaining 8 inspector range sliders.
+  - `[P3]` Frozen timeline CSS assertions in `backend/tests/timeline_*.test.js` intentionally lock `border-left: 3px` on track headers (`5` `side-tab`) and `border-top: 2px` on voice clips (`12` `border-accent-on-rounded`) — left untouched per timeline freeze rule.
+
+## Active Environment
+- **Backend API**: `http://localhost:5000` (HTTP 200 OK)
+- **Frontend Studio**: `http://localhost:5173` (HTTP 200 OK)
+- **Branch**: `chore/full-project-cleanup` (8 new UI commits ahead of previous baseline)
+
+## Next Steps
+- Review the refreshed UI in browser (`http://localhost:5173/home`, `/studio`, `/batch`, `/export`, `/quota`, `/jobs`) or compare `.agents/ui-audit/before/` vs `.agents/ui-audit/after/` screenshots, and push branch when ready.
+
+---
+
+## Previous Session
+- **Environment**: Antigravity IDE (`design-ui-designer` + Impeccable v4.9.1)
+- **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-18T12:35:00+07:00
+
+## Summary: Full-Site UI Audit — SETUP + PHASE 1 AUDIT ONLY (COMPLETED, Awaiting Fix Order Approval)
+- **Scope**: Strictly SETUP + PHASE 1 AUDIT ONLY — zero application code edits.
+- **SETUP Completed**:
+  1. Verified Impeccable design skill (`v4.9.1`) installed in `.agents/skills/impeccable`.
+  2. Completed `/impeccable init` → wrote `PRODUCT.md` (schema v1).
+  3. Completed `/impeccable document` → wrote `DESIGN.md` & `.impeccable/design.json` (schema v2 — *"The Darkroom Console"*).
+- **PHASE 1 Audit Completed**:
+  - Verified live servers: Backend `http://localhost:5000` (200 OK) & Frontend `http://localhost:5173` (200 OK).
+  - Captured fresh screenshots at `1440×900` & `390×844` across all 6 canonical routes (`/home`, `/studio` + sub-tabs, `/batch`, `/export`, `/quota`, `/jobs`) into `.agents/ui-audit/before/`.
+  - Ran `impeccable detect` static scan (`7` findings) + live browser scans (`2,272` findings at 1440px, `475` at 390px) + Playwright DOM/A11y/CSS scan (`279` non-token CSS hexes, `1,542` inline JSX hexes, `157` `!important`, `1` `:focus-visible`, `0` `prefers-reduced-motion`).
+  - Baseline **Audit Health Score: 6 / 20 (Poor)** — A11y `1/4`, Performance `3/4`, Theming `1/4`, Responsive `0/4`, Implementation Integrity `1/4`.
+  - Wrote full report + 8-step ranked fix order to `.agents/UI-AUDIT.md`.
+
+## Active Environment
+- **Backend API**: `http://localhost:5000` (HTTP 200 OK)
+- **Frontend Studio**: `http://localhost:5173` (HTTP 200 OK)
+- **Branch**: `chore/full-project-cleanup`
+
+## Next Steps
+- **STOPPED after Phase 1**: Waiting for owner approval of the 8-step ranked fix order in `.agents/UI-AUDIT.md` before starting **PHASE 2 (Visual-Only Fixes, page by page with before/after screenshots & commits)**.
+
+---
+
+## Previous Session
+- **Environment**: Antigravity IDE (`engineering-minimal-change-engineer` discipline)
+- **Branch**: `chore/full-project-cleanup`
 - **Timestamp**: 2026-11-17T21:54:00+07:00
 
 ## Summary: Batch Generate Studio (/batch) UI & Label Fixes — Step 4 Numbering, Compact Queued Demucs Row, True Auto-Fit % (COMPLETED)

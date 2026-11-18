@@ -25,6 +25,10 @@ const {
 } = require("../services/geminiModelCatalog");
 const { CASCADE_MODELS } = require("../services/pipeline");
 const { DEFAULT_MODELS } = require("../services/geminiService");
+const {
+  readGlobalLogoSettings,
+  writeGlobalLogoSettings,
+} = require("../services/globalLogoSettingsService");
 
 const router = express.Router();
 
@@ -406,6 +410,51 @@ router.post("/gemini/quota-settings", (req, res) => {
       success: true,
       settings,
       ...snapshot,
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * Global Logo Settings (Single Source of Truth across all episodes & series)
+ */
+router.get("/logo-settings", (req, res) => {
+  try {
+    const state = readGlobalLogoSettings();
+    res.json({
+      success: true,
+      ...state,
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.put("/logo-settings", (req, res) => {
+  try {
+    const body = req.body && typeof req.body === "object" ? req.body : {};
+    const incoming = body.logoSettings && typeof body.logoSettings === "object" ? body.logoSettings : body;
+    const updatedAt = Number(body.updatedAt) || Date.now();
+    const state = writeGlobalLogoSettings(incoming, { updatedAt });
+    res.json({
+      success: true,
+      ...state,
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.post("/logo-settings", (req, res) => {
+  try {
+    const body = req.body && typeof req.body === "object" ? req.body : {};
+    const incoming = body.logoSettings && typeof body.logoSettings === "object" ? body.logoSettings : body;
+    const updatedAt = Number(body.updatedAt) || Date.now();
+    const state = writeGlobalLogoSettings(incoming, { updatedAt });
+    res.json({
+      success: true,
+      ...state,
     });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });

@@ -10,6 +10,7 @@ const {
 } = require('../models/episodeModel');
 
 const { uploadsDir: UPLOADS_DIR } = require('../utils/pathUtils');
+const { stripLogoSettingsFromObject } = require('./globalLogoSettingsService');
 const PROJECTS_DIR = path.join(UPLOADS_DIR, 'projects');
 
 // In-memory concurrency locks per series to serialize all read-modify-write operations on series.json
@@ -842,7 +843,15 @@ async function syncSeriesMetadataSafely(seriesId, incomingSeries, options = {}) 
 
     const incomingWithId = { ...incomingSeries, id: cleanSeries };
     if (!fs.existsSync(metaPath)) {
-      return saveSeriesMetadata(incomingWithId, { projectsDir });
+      const cleanedNewSeries = {
+        ...incomingWithId,
+        episodes: (Array.isArray(incomingWithId.episodes) ? incomingWithId.episodes : []).map((ep) =>
+          ep && ep.voiceSettings
+            ? { ...ep, voiceSettings: stripLogoSettingsFromObject(ep.voiceSettings) }
+            : ep
+        ),
+      };
+      return saveSeriesMetadata(cleanedNewSeries, { projectsDir });
     }
 
     const diskSeries = getSeriesMetadata(cleanSeries, { forceDisk: true, projectsDir });
@@ -855,7 +864,11 @@ async function syncSeriesMetadataSafely(seriesId, incomingSeries, options = {}) 
     const mergedEpisodes = incomingEpisodes.map((incEp) => {
       const key = sanitizeEpisodeId(incEp?.id);
       const diskEp = diskEpMap.get(key);
-      if (!diskEp) return incEp;
+      if (!diskEp) {
+        return incEp && incEp.voiceSettings
+          ? { ...incEp, voiceSettings: stripLogoSettingsFromObject(incEp.voiceSettings) }
+          : incEp;
+      }
       seenDiskKeys.add(key);
 
       const diskSegs = Array.isArray(diskEp?.scriptData?.segments) ? diskEp.scriptData.segments : [];
@@ -978,6 +991,9 @@ async function syncSeriesMetadataSafely(seriesId, incomingSeries, options = {}) 
         isDemucsDone: Boolean(incEp.isDemucsDone || diskEp.isDemucsDone),
         hasDemucs: Boolean(incEp.hasDemucs || diskEp.hasDemucs),
         renderedVideo: resolvedRenderedVideo,
+        voiceSettings: stripLogoSettingsFromObject(
+          incEp.voiceSettings !== undefined ? incEp.voiceSettings : diskEp.voiceSettings
+        ),
       };
     });
 

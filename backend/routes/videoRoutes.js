@@ -29,6 +29,7 @@ const {
   cancelBatchExportJob,
 } = require("../services/batchExportService");
 const { analyzeEpisodeFraming } = require("../services/smartReframeService");
+const { getEffectiveGlobalLogoSettingsForExport } = require("../services/globalLogoSettingsService");
 
 const router = express.Router();
 
@@ -279,10 +280,10 @@ router.post("/render-video", async (req, res) => {
       marginV: subtitleOptions.marginV || null,
     };
 
-    // Resolve Logo Watermark (Base64 DataURL or Image file path)
+    // Resolve Logo Watermark (Global settings store; never read per-episode voiceSettings)
     let resolvedLogoPath = null;
     let tempLogoFile = null;
-    const rawLogo = logoSettings || req.body?.voiceSettings?.logoSettings || null;
+    const rawLogo = logoSettings || getEffectiveGlobalLogoSettingsForExport() || null;
     if (rawLogo && (rawLogo.enabled || rawLogo.enableLogo) && (rawLogo.image || rawLogo.logoImage)) {
       const imgVal = rawLogo.image || rawLogo.logoImage;
       if (typeof imgVal === "string" && imgVal.startsWith("data:image")) {

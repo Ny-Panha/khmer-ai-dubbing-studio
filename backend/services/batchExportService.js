@@ -22,6 +22,7 @@ const {
   getMediaDuration,
   cancelJobRenderProcess,
 } = require("./ffmpegService");
+const { getEffectiveGlobalLogoSettingsForExport } = require("./globalLogoSettingsService");
 
 const batchExportJobs = new Map();
 const batchJobControllers = new Map();
@@ -550,7 +551,7 @@ async function runBatchExportWorker({
 
   const targetDownloadsDir = resolveDownloadsDirectory(downloadsDir);
 
-  const rawLogo = exportSettings.logoSettings || null;
+  const rawLogo = exportSettings.logoSettings || getEffectiveGlobalLogoSettingsForExport() || null;
   const { logoPath: resolvedLogoPath, tempLogoFile } = resolveLogoInputForBatch(rawLogo, exportsDir);
   const rawSponsor = exportSettings.sponsorSettings || null;
   const resolvedSponsorPath = resolveSponsorInputForBatch(rawSponsor);

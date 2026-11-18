@@ -1,5 +1,6 @@
 import { SCHEMA_VERSION } from './timestampUtils.js';
 import { syncSeriesApi, deleteEpisodeApi } from '../services/api.js';
+import { stripLogoSettings } from './logoSettingsStorage.js';
 
 export const STORAGE_SERIES_LIST_KEY = 'KHMER_AI_SERIES_LIST_V2';
 export const STORAGE_ACTIVE_SERIES_ID_KEY = 'KHMER_AI_ACTIVE_SERIES_ID';
@@ -28,13 +29,6 @@ export const DEFAULT_VOICE_SETTINGS = {
   watermarkText: 'រក្សាសិទ្ធិដោយ ៖ Holiday Kh Drama',
   watermarkPosition: 'above-ticker',
   watermarkColor: '#38BDF8',
-  enableLogo: true,
-  logoImage: '/assets/dragon_town_logo.jpg',
-  logoPosition: 'both',
-  logoSize: 72,
-  logoOpacity: 0.9,
-  logoShape: 'circle',
-  logoMargin: 20,
   enableCornerMask: false,
   cornerMaskText: '«រឿងប្រឌិតសុទ្ធសាធ • ហាមចម្លង»',
   cornerMaskStyle: 'badge',
@@ -142,16 +136,16 @@ export function resolveStickyVoiceSettings({
   const safeGlobal = savedGlobalSettings && typeof savedGlobalSettings === 'object' && !Array.isArray(savedGlobalSettings)
     ? savedGlobalSettings
     : null;
-  const base = {
+  const base = stripLogoSettings({
     ...DEFAULT_VOICE_SETTINGS,
     ...safePrev,
-  };
+  });
   const stickyRatio =
     sanitizeAspectRatio(base.aspectRatio) ||
     sanitizeAspectRatio(safeGlobal?.aspectRatio) ||
     null;
   const epClean = episodeVoiceSettings && typeof episodeVoiceSettings === 'object' && !Array.isArray(episodeVoiceSettings)
-    ? { ...episodeVoiceSettings }
+    ? stripLogoSettings({ ...episodeVoiceSettings })
     : {};
   delete epClean.aspectRatio;
   return {
@@ -159,6 +153,20 @@ export function resolveStickyVoiceSettings({
     ...epClean,
     aspectRatio: stickyRatio,
   };
+}
+
+/**
+ * Read raw legacy voiceSettings from localStorage before logo-key stripping (used once for migration)
+ */
+export function readLegacyVoiceSettingsRaw() {
+  try {
+    const raw = localStorage.getItem(STORAGE_VOICE_SETTINGS_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -170,7 +178,7 @@ export function loadSavedVoiceSettings() {
     if (raw) {
       const parsed = JSON.parse(raw);
       if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        const merged = { ...DEFAULT_VOICE_SETTINGS, ...parsed };
+        const merged = stripLogoSettings({ ...DEFAULT_VOICE_SETTINGS, ...parsed });
         merged.aspectRatio = sanitizeAspectRatio(merged.aspectRatio);
         return merged;
       }
@@ -185,10 +193,10 @@ export function loadSavedVoiceSettings() {
 export function saveVoiceSettings(settings) {
   try {
     if (!settings || typeof settings !== 'object' || Array.isArray(settings)) return;
-    const normalized = {
+    const normalized = stripLogoSettings({
       ...settings,
       aspectRatio: sanitizeAspectRatio(settings.aspectRatio),
-    };
+    });
     localStorage.setItem(STORAGE_VOICE_SETTINGS_KEY, JSON.stringify(normalized));
   } catch {}
 }
@@ -1075,8 +1083,8 @@ export function saveEpisodeState(seriesId, episodeId, stateData) {
       ? stateData.voiceSettings
       : prevEp.voiceSettings;
     const sanitizedVoiceSettings = rawVoiceSettings && typeof rawVoiceSettings === 'object' && !Array.isArray(rawVoiceSettings)
-      ? { ...rawVoiceSettings, aspectRatio: sanitizeAspectRatio(rawVoiceSettings.aspectRatio) }
-      : (rawVoiceSettings === null ? null : prevEp.voiceSettings || null);
+      ? stripLogoSettings({ ...rawVoiceSettings, aspectRatio: sanitizeAspectRatio(rawVoiceSettings.aspectRatio) })
+      : (rawVoiceSettings === null ? null : stripLogoSettings(prevEp.voiceSettings) || null);
 
     const updatedEp = {
       ...prevEp,
