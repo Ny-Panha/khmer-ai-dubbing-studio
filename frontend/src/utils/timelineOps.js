@@ -31,6 +31,30 @@ export function isGapClip(clip) {
   return /^Gap(?: \(Part \d+\))?$/i.test(clip.name || '') || (clip.id && String(clip.id).startsWith('clip-gap'));
 }
 
+/**
+ * Match a video clip to a dialogue segment using canonical segmentId first.
+ * Only falls back to segmentIndex when segmentId is absent (legacy clips),
+ * preventing drifted idx+1 segmentIndex values from cross-linking wrong clips
+ * after +ឃ្លា insertions or segment deletions.
+ */
+export function doesClipMatchSegment(clip, segOrId, fallbackSegmentNumber = null) {
+  if (!clip || typeof clip !== 'object') return false;
+  const targetId = (segOrId && typeof segOrId === 'object')
+    ? (segOrId.segmentId ?? segOrId.id ?? fallbackSegmentNumber)
+    : segOrId;
+  if (targetId === null || targetId === undefined) return false;
+
+  const hasCanonicalSegId = clip.segmentId !== undefined && clip.segmentId !== null && clip.segmentId !== '';
+  if (hasCanonicalSegId) {
+    return String(clip.segmentId) === String(targetId);
+  }
+  const hasSegIdx = clip.segmentIndex !== undefined && clip.segmentIndex !== null && clip.segmentIndex !== '';
+  if (hasSegIdx) {
+    return String(clip.segmentIndex) === String(targetId);
+  }
+  return false;
+}
+
 /** Deterministic unique ID (timestamp + random suffix) */
 function uid(prefix = 'clip') {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`;
@@ -417,6 +441,12 @@ export function splitClip(state, { splitTime, activeClipId, totalDuration, clipD
   }
 
   const target = targetClips[targetIndex];
+  // Prevent accidental micro-clip creation (< 0.3s) on split
+  const MIN_CLIP_SPLIT_SEC = 0.3;
+  if ((roundedSplit - target.start) < MIN_CLIP_SPLIT_SEC || (target.end - roundedSplit) < MIN_CLIP_SPLIT_SEC) {
+    return noop(state, 'មិនអាចកាត់ clip ឲ្យខ្លីជាង 0.3 វិនាទីបានទេ');
+  }
+
   const isGap = isGapClip(target);
   const timelineOffset = roundedSplit - target.start;
   const newSourceSplit = r3(target.sourceStart + timelineOffset);
@@ -505,9 +535,14 @@ export function splitSegment(state, { segKey, splitTime }) {
     return Math.max(...candidates);
   })();
 
-  // Guard: playhead must be inside the segment
-  if (roundedSplit <= effectiveStart + 0.05 || roundedSplit >= effectiveEnd - 0.05) {
+  // Guard 1: playhead must be inside the segment
+  if (roundedSplit <= effectiveStart || roundedSplit >= effectiveEnd) {
     return noop(state, 'Playhead is not inside the selected segment');
+  }
+  // Guard 2: prevent accidental micro-segments (< 0.3s) on split
+  const MIN_SEG_SPLIT_SEC = 0.3;
+  if ((roundedSplit - effectiveStart) < MIN_SEG_SPLIT_SEC || (effectiveEnd - roundedSplit) < MIN_SEG_SPLIT_SEC) {
+    return noop(state, 'មិនអាចកាត់ segment ឲ្យខ្លីជាង 0.3 វិនាទីបានទេ');
   }
 
   const dur = Math.max(0.2, effectiveEnd - effectiveStart);
@@ -1280,9 +1315,8 @@ export function releaseSegmentFromManual(state, { segKey }) {
   if (Array.isArray(videoClips) && videoClips.length > 0 && seg.id !== undefined && seg.id !== null) {
     pairedVideoClip = videoClips.find((c) => {
       if (!c || isGapClip(c)) return false;
-      const matchId = c.segmentId !== undefined && c.segmentId !== null && String(c.segmentId) === String(seg.id);
-      const matchIdx = c.segmentIndex !== undefined && c.segmentIndex !== null && String(c.segmentIndex) === String(seg.id);
-      return (matchId || matchIdx) && typeof c.start === 'number' && !isNaN(c.start) && c.start >= 0;
+      const match = doesClipMatchSegment(c, seg);
+      return match && typeof c.start === 'number' && !isNaN(c.start) && c.start >= 0;
     }) || null;
   }
 

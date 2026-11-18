@@ -3,6 +3,7 @@ import {
   formatMinSec,
 } from './timestampUtils.js';
 import { isGapClip } from './timelineOps.js';
+export { doesClipMatchSegment } from './timelineOps.js';
 
 /**
  * Timeline mathematical and non-linear editing (NLE) data manipulation utilities
@@ -287,6 +288,67 @@ export function moveClip(clips = [], clipId, newStart) {
 }
 
 /**
+ * Resolve the next clip target when playback reaches the end of currentClipIdx.
+ * - Contiguous next clips (nextSrcStart <= srcNow + 0.15) flow naturally with zero seek.
+ * - Non-contiguous forward jumps (nextSrcStart > srcNow + 0.15) coalesce past chained
+ *   degenerate non-contiguous micro-slivers (< 0.25s) so rapid back-to-back seeks
+ *   cannot stall the HTML5 video decoder.
+ * - Never seeks backward during forward playback.
+ */
+export function resolveForwardPlaybackTransition(videoClips, currentClipIdx, srcNow, realDur = 0, minMicroClipSec = 0.25) {
+  if (!Array.isArray(videoClips) || currentClipIdx < 0 || currentClipIdx >= videoClips.length - 1) {
+    return { action: 'end', nextClipIdx: -1, targetSrc: null, skippedMicroCount: 0 };
+  }
+
+  let nextClipIdx = currentClipIdx + 1;
+  let nextClip = videoClips[nextClipIdx];
+  if (!nextClip) {
+    return { action: 'end', nextClipIdx: -1, targetSrc: null, skippedMicroCount: 0 };
+  }
+
+  let nextSrcStart = Number.isFinite(nextClip.sourceStart)
+    ? nextClip.sourceStart
+    : (Number.isFinite(nextClip.start) ? nextClip.start : 0);
+
+  if (nextSrcStart > srcNow + 0.15) {
+    let skippedMicroCount = 0;
+    while (nextClipIdx < videoClips.length - 1) {
+      const cand = videoClips[nextClipIdx];
+      const candStart = Number.isFinite(cand?.sourceStart)
+        ? cand.sourceStart
+        : (Number.isFinite(cand?.start) ? cand.start : 0);
+      const candEnd = Number.isFinite(cand?.sourceEnd)
+        ? cand.sourceEnd
+        : (Number.isFinite(cand?.end) ? cand.end : realDur);
+      const candDur = candEnd - candStart;
+
+      const after = videoClips[nextClipIdx + 1];
+      const afterStart = Number.isFinite(after?.sourceStart)
+        ? after.sourceStart
+        : (Number.isFinite(after?.start) ? after.start : 0);
+
+      // Coalesce ONLY if this clip is a degenerate micro-sliver (< minMicroClipSec)
+      // AND the clip right after it would ALSO trigger another non-contiguous seek.
+      if (candDur < minMicroClipSec && afterStart > candEnd + 0.15) {
+        nextClipIdx += 1;
+        nextClip = after;
+        nextSrcStart = afterStart;
+        skippedMicroCount += 1;
+      } else {
+        break;
+      }
+    }
+    return { action: 'seek', nextClipIdx, targetSrc: nextSrcStart, skippedMicroCount };
+  }
+
+  if (nextSrcStart >= srcNow - 0.15) {
+    return { action: 'flow', nextClipIdx, targetSrc: nextSrcStart, skippedMicroCount: 0 };
+  }
+
+  return { action: 'hold', nextClipIdx: currentClipIdx, targetSrc: null, skippedMicroCount: 0 };
+}
+
+/**
  * Find dialogue segments that belong to a video clip
  * @param {Object} clip - The video clip
  * @param {Array} segments - Array of dialogue segments
@@ -298,18 +360,19 @@ export function findAssociatedSegmentIndices(clip, segments = []) {
   const clipSourceStart = Number.isFinite(clip.sourceStart) ? clip.sourceStart : (Number.isFinite(clip.start) ? clip.start : 0);
   const clipSourceEnd = Number.isFinite(clip.sourceEnd) ? clip.sourceEnd : (Number.isFinite(clip.end) ? clip.end : clipSourceStart + 0.1);
   const clipSegIdx = Number.isFinite(clip.segmentIndex) ? clip.segmentIndex : null;
-  const clipSegId = clip.segmentId ? String(clip.segmentId) : null;
+  const clipSegId = clip.segmentId !== undefined && clip.segmentId !== null && clip.segmentId !== '' ? String(clip.segmentId) : null;
 
   return segments.map((seg, idx) => {
     if (!seg || typeof seg !== 'object') return -1;
-    // 1. Explicit segmentId, segmentIndex or clipId match
+    // 1. Explicit clipId or canonical segmentId match (do not cross-match drifted segmentIndex when segmentId exists)
     if (seg.clipId && clip.id && String(seg.clipId) === String(clip.id)) {
       return idx;
     }
-    if (clipSegId && (String(seg.id) === clipSegId || String(idx + 1) === clipSegId)) {
-      return idx;
-    }
-    if (clipSegIdx !== null && (seg.id === clipSegIdx || seg.id === String(clipSegIdx) || (idx + 1) === clipSegIdx)) {
+    if (clipSegId) {
+      if (seg.id !== undefined && seg.id !== null && String(seg.id) === clipSegId) {
+        return idx;
+      }
+    } else if (clipSegIdx !== null && (seg.id === clipSegIdx || seg.id === String(clipSegIdx) || (idx + 1) === clipSegIdx)) {
       return idx;
     }
 
@@ -565,13 +628,15 @@ export function autoSplitVideoBySegments(segments = [], totalDuration = 0, video
     const start = Math.max(0, Math.min(totalDuration, rawStart));
     const end = Math.max(start + 0.3, Math.min(totalDuration, rawEnd));
 
+    const canonicalNum = seg.segmentId ?? seg.id ?? (idx + 1);
+
     return {
       start: parseFloat(start.toFixed(2)),
       end: parseFloat(end.toFixed(2)),
-      speaker: seg.speaker || `Line #${idx + 1}`,
+      speaker: seg.speaker || `Line #${canonicalNum}`,
       khmer: seg.khmer || '',
-      index: idx + 1,
-      id: seg.id || idx + 1,
+      index: canonicalNum,
+      id: seg.id ?? canonicalNum,
     };
   }).filter((s) => s.end > s.start);
 

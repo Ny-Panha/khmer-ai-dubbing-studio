@@ -3,6 +3,58 @@
 ## Last Session
 - **Environment**: Antigravity IDE
 - **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-19T00:50:00+07:00
+
+## Summary: Extended Step 0 Diagnosis & Complete Fix for Playback Freeze #2 at ~08:42 & Duplicate #187 (COMPLETED)
+- **Extended Step 0 Exact Measured Findings (Pseudo_Spiritual_Root ep_5, 405 video clips, 221 segments around 518s–532s)**:
+  1. **Stored Layout & Micro-Clips**:
+     - All 405 video clips are 100% contiguous (`srcGapToNext === 0`, 0 non-contiguous jumps on unmodified footage).
+     - Found 59 micro Gap video clips (`0.07s–0.29s`) created by Auto-Cut to align dialogue onsets cleanly, and 2 micro voice segments (`#47` `0.05s`, `#95` `0.29s` slot / `2.47s` audio).
+  2. **Root Cause of `#187` Appearing in Two Places (`08:42` AND `08:46.8`)**:
+     - `ep_5` has **0 duplicate segment IDs**.
+     - Because 2 segments were inserted earlier via `+ ឃ្លា`, array `idx + 1` drifted by `+2` from `seg.id`!
+     - `autoSplitVideoBySegments` wrote `index: idx + 1` (`187`) into `name: '#187 តួអង្គទី២'` and `segmentIndex: 187` while setting `segmentId: 185`!
+     - `TimelineTracksCanvas.jsx` renders voice segments by `seg.segmentId ?? seg.id ?? idx + 1` (`#185` on VOICE 1 at `522.09s`, `#187` on VOICE 2 at `526.84s`).
+     - Result: VIDEO 1 at `08:42` (`522.09s`) displayed `#187` while VOICE 2 at `08:46.8` (`526.84s`) ALSO displayed `#187`, and selection/linking cross-linked `#187` to `#185`!
+  3. **Root Cause of Seek Storms / Freezes on Micro-Clips**:
+     - `useVideoPlayback.js` had NO seek-in-flight guard or cooldown for forward clip transitions (`v.currentTime = nextSrcStart` was issued without setting `pendingSeekTargetRef` or recording seek time).
+     - Queued `requestVideoFrameCallback` callbacks delivering stale pre-seek `mediaTime` could trigger back-to-back seeks before the previous seek landed.
+     - `timelineOps.js` had NO minimum clip duration guard in `splitClip` (allowed micro-splits `< 0.3s`).
+- **Fixes Applied**:
+  1. `frontend/src/utils/timelineOps.js` & `frontend/src/utils/timelineUtils.js`:
+     - Added `doesClipMatchSegment(clip, segOrId, fallbackSegmentNumber)` which matches by canonical `segmentId` first and only falls back to `segmentIndex` when `segmentId` is absent (legacy clips).
+     - Fixed `autoSplitVideoBySegments` to use canonical `seg.segmentId ?? seg.id ?? (idx + 1)` for `index`, `segmentIndex`, and `name`.
+     - In `splitClip` and `splitSegment`: enforced `MIN_SPLIT_SEC = 0.3s` guard, rejecting splits that would create `< 0.3s` micro-clips or micro-segments with clear feedback (`applied: false`).
+  2. `frontend/src/components/timeline/TimelineTracksCanvas.jsx` & `TimelineEditor.jsx`:
+     - Updated all clip-to-segment matching, selection highlighting, and Inspector linking to use `doesClipMatchSegment` instead of raw `segmentIndex`.
+     - Normalized video clip label rendering (`clip.segmentId ?? clip.segmentIndex`) so existing clips on disk immediately display their true canonical segment number (`#185 តួអង្គទី២` instead of `#187`).
+  3. `frontend/src/hooks/useVideoPlayback.js`:
+     - Added `resolveForwardPlaybackTransition`: flows contiguous micro-Gaps (`<= 0.15s`) naturally with 0 seeks; coalesces chained non-contiguous micro-slivers (`< 0.25s`) directly to the target clip.
+     - Added stale `rVFC` frame guard: while a forward seek is in flight, queued pre-seek frames are ignored until `mediaTime` lands near `pendingSeekTargetRef`.
+     - Added `lastTransitionSeekMsRef` cooldown (120ms) and synchronized `pendingSeekTargetRef` + `pendingSeekStartedMsRef`.
+  4. `backend/tests/timeline_microclip_and_id_sync.test.js` *(new)*: 5 unit + static audit tests covering canonical ID sync, legacy match precedence, `< 0.3s` micro-clip rejection, micro-gap flow & chaining coalescing, and player guards.
+- **Verification Results**:
+  - **Real App on `Pseudo_Spiritual_Root` `ep_5` (`08:38 → 08:50`, read-only)**:
+    - VIDEO 1 at `08:42`: now correctly displays **`#185 តួអង្គទី២`** (no longer duplicate `#187`).
+    - VIDEO 1 at `08:45.6`: correctly displays **`#187 តួអង្គទី២`**.
+    - `#187` count on VIDEO track: **1**, `#187` count on VOICE track: **1**.
+    - Clicking VOICE 2 `#187`: selects ONLY `#187` without cross-highlighting `#185`!
+    - Continuous Playback through `08:38 → 08:50`: `totalVideoSeeks: 0`, `frameGapsOver180ms: []` (0 freezes!), `consoleErrorsCount: 0`, `audioPlaysCount: 10`.
+  - **Suites & Build**: `node --test backend/tests/timeline_*.test.js` **126 / 126 PASS**; `npm --prefix frontend run build` **PASS** (`634ms`).
+
+## Active Environment
+- **Backend API**: `http://localhost:5000`
+- **Frontend Studio**: `http://localhost:5173` (Vite dev server)
+- **Branch**: `chore/full-project-cleanup` (committed & pushed)
+
+## Next Steps
+- Continue editing/playback in Studio — `#187` will no longer duplicate on VIDEO 1, and playback through micro-Gaps runs seamlessly without freezing.
+
+---
+
+## Previous Session
+- **Environment**: Antigravity IDE
+- **Branch**: `chore/full-project-cleanup`
 - **Timestamp**: 2026-11-19T00:28:30+07:00
 
 ## Summary: Fix `/api/sync-audio` HTTP 500 `No such file or directory` Race on Concurrent Voice Switch (COMPLETED)

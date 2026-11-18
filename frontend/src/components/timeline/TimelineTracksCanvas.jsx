@@ -1,7 +1,7 @@
 import React from 'react';
 import { Upload, Volume2, VolumeX, Film } from 'lucide-react';
 import { formatTimecode, parseTimeToSeconds, formatMinSec } from '../../utils/formatTime';
-import { findAssociatedSegmentIndices, resolveSegmentIsFemale } from '../../utils/timelineUtils';
+import { findAssociatedSegmentIndices, resolveSegmentIsFemale, doesClipMatchSegment } from '../../utils/timelineUtils';
 import { isGapClip } from '../../utils/timelineOps';
 import { uploadVideoFile } from '../../services/api';
 
@@ -513,7 +513,7 @@ function TimelineTracksCanvas({
       ))
     );
     const isAssociatedWithClip = Boolean(
-      activeClipId && videoClips?.some((c) => c.id === activeClipId && !isGapClip(c) && (c.segmentId === seg.id || c.segmentIndex === segmentNumber))
+      activeClipId && videoClips?.some((c) => c.id === activeClipId && !isGapClip(c) && doesClipMatchSegment(c, seg, segmentNumber))
     );
     const isSelected = Boolean(
       (selectedClipKind === 'voice' || !selectedClipKind) && isDirectSegMatch
@@ -579,7 +579,7 @@ function TimelineTracksCanvas({
             setSelectedSubId(segKey);
             if (onSelectSegment) onSelectSegment(segKey);
             if (onSelectClip) {
-              const matchClip = videoClips?.find(c => !isGapClip(c) && (c.segmentId === seg.id || c.segmentIndex === segmentNumber));
+              const matchClip = videoClips?.find(c => !isGapClip(c) && doesClipMatchSegment(c, seg, segmentNumber));
               onSelectClip(matchClip ? matchClip.id : null);
             }
             onSeek(startSec);
@@ -747,7 +747,7 @@ function TimelineTracksCanvas({
       ))
     );
     const isAssociatedWithClip = Boolean(
-      activeClipId && videoClips?.some((c) => c.id === activeClipId && !isGapClip(c) && (c.segmentId === seg.id || c.segmentIndex === segmentNumber))
+      activeClipId && videoClips?.some((c) => c.id === activeClipId && !isGapClip(c) && doesClipMatchSegment(c, seg, segmentNumber))
     );
     const isSelected = Boolean(
       (selectedClipKind === 'subtitle' || !selectedClipKind) && isDirectSubMatch
@@ -784,7 +784,7 @@ function TimelineTracksCanvas({
             setSelectedAudioId(subKey);
             if (onSelectSegment) onSelectSegment(subKey);
             if (onSelectClip) {
-              const matchClip = videoClips?.find(c => !isGapClip(c) && (c.segmentId === seg.id || c.segmentIndex === segmentNumber));
+              const matchClip = videoClips?.find(c => !isGapClip(c) && doesClipMatchSegment(c, seg, segmentNumber));
               onSelectClip(matchClip ? matchClip.id : null);
             }
             onSeek(startSec);
@@ -862,12 +862,8 @@ function TimelineTracksCanvas({
     const isDirectClipMatch = Boolean(activeClipId && activeClipId === clip.id);
     const isAssociatedWithSeg = Boolean(
       !isGapClip(clip) &&
-      selectedSegmentId !== null && selectedSegmentId !== undefined && (
-        clip.segmentId === selectedSegmentId ||
-        clip.segmentIndex === selectedSegmentId ||
-        String(clip.segmentId) === String(selectedSegmentId) ||
-        String(clip.segmentIndex) === String(selectedSegmentId)
-      )
+      selectedSegmentId !== null && selectedSegmentId !== undefined &&
+      doesClipMatchSegment(clip, selectedSegmentId)
     );
     const isSelected = Boolean(
       (selectedClipKind === 'video' || !selectedClipKind) && isDirectClipMatch
@@ -886,19 +882,25 @@ function TimelineTracksCanvas({
     // Responsive, clean label for video clips:
     // Narrow clips (< 52px): `#10` (clean centered badge, no truncated overflow text)
     // Medium clips (52px - 90px): Clean gender `#10 ស្រី` or `#10 ប្រុស`
-    // Wide clips (>= 90px): Full clean name
+    // Wide clips (>= 90px): Full clean name (normalized to canonical segmentId when present)
     let videoClipLabel = rawCleanName;
-    if (clip.isDialogue && clip.segmentIndex) {
+    const clipDisplayNumber = clip.segmentId ?? clip.segmentIndex;
+    if (clip.isDialogue && clipDisplayNumber) {
+      const normalizedCleanName = rawCleanName.replace(/^#\d+\b/, `#${clipDisplayNumber}`);
       if (isCompactClip) {
-        videoClipLabel = `#${clip.segmentIndex}`;
+        videoClipLabel = `#${clipDisplayNumber}`;
       } else if (clipWidth < 90) {
-        const hasFemale = rawCleanName.includes('ស្រី');
-        const hasMale = rawCleanName.includes('ប្រុស');
+        const hasFemale = normalizedCleanName.includes('ស្រី');
+        const hasMale = normalizedCleanName.includes('ប្រុស');
         if (hasFemale) {
-          videoClipLabel = `#${clip.segmentIndex} ស្រី`;
+          videoClipLabel = `#${clipDisplayNumber} ស្រី`;
         } else if (hasMale) {
-          videoClipLabel = `#${clip.segmentIndex} ប្រុស`;
+          videoClipLabel = `#${clipDisplayNumber} ប្រុស`;
+        } else {
+          videoClipLabel = normalizedCleanName;
         }
+      } else {
+        videoClipLabel = normalizedCleanName;
       }
     }
 
@@ -927,7 +929,7 @@ function TimelineTracksCanvas({
               if (onSelectSegment) onSelectSegment(null);
               return;
             }
-            const targetSeg = scriptSegments?.find(s => s.id === clip.segmentId || s.id === clip.segmentIndex || (clip.segmentIndex && s.id === clip.segmentIndex));
+            const targetSeg = scriptSegments?.find(s => doesClipMatchSegment(clip, s));
             if (targetSeg) {
               const segKey = targetSeg._uid || targetSeg.id;
               if (setSelectedAudioId) setSelectedAudioId(segKey);
@@ -1310,7 +1312,7 @@ function TimelineTracksCanvas({
                 .filter((clip) => (clip.trackRow || 0) === rIdx)
                 .filter((clip, idx) => {
                   const isDragging = dragState?.itemType === 'video' && (dragState?.id === clip.id || dragState?.index === idx);
-                  const isSelected = activeClipId === clip.id || (!isGapClip(clip) && selectedSegmentId !== null && (clip.segmentId === selectedSegmentId || clip.segmentIndex === selectedSegmentId));
+                  const isSelected = activeClipId === clip.id || (!isGapClip(clip) && selectedSegmentId !== null && doesClipMatchSegment(clip, selectedSegmentId));
                   if (isDragging || isSelected) return true;
                   const cStart = clip.start || 0;
                   const cEnd = clip.end || (cStart + 1);
@@ -1406,7 +1408,7 @@ function TimelineTracksCanvas({
 
                 const isDragging = (dragState?.itemType === 'audio' || dragState?.itemType === 'subtitle') && dragState?.index === idx;
                 const isSelected = Boolean(
-                  (activeClipId && videoClips?.some((c) => c.id === activeClipId && (c.segmentId === seg.id || c.segmentIndex === (seg.segmentId ?? seg.id ?? idx + 1)))) ||
+                  (activeClipId && videoClips?.some((c) => c.id === activeClipId && doesClipMatchSegment(c, seg, seg.segmentId ?? seg.id ?? idx + 1))) ||
                   (selectedSegmentId !== null && selectedSegmentId !== undefined && (
                     (seg._uid && String(selectedSegmentId) === String(seg._uid)) || (seg.id !== undefined && seg.id !== null ? String(selectedSegmentId) === String(seg.id) : Number(selectedSegmentId) === idx)
                   )) ||
@@ -1503,7 +1505,7 @@ function TimelineTracksCanvas({
 
                 const isDragging = (dragState?.itemType === 'audio' || dragState?.itemType === 'subtitle') && dragState?.index === idx;
                 const isSelected = Boolean(
-                  (activeClipId && videoClips?.some((c) => c.id === activeClipId && (c.segmentId === seg.id || c.segmentIndex === (seg.segmentId ?? seg.id ?? idx + 1)))) ||
+                  (activeClipId && videoClips?.some((c) => c.id === activeClipId && doesClipMatchSegment(c, seg, seg.segmentId ?? seg.id ?? idx + 1))) ||
                   (selectedSegmentId !== null && selectedSegmentId !== undefined && (
                     (seg._uid && String(selectedSegmentId) === String(seg._uid)) || (seg.id !== undefined && seg.id !== null ? String(selectedSegmentId) === String(seg.id) : Number(selectedSegmentId) === idx)
                   )) ||

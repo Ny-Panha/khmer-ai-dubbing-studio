@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
-import { mapTimelineToSourceTime, mapSourceToTimelineTime } from '../utils/timelineUtils';
+import { mapTimelineToSourceTime, mapSourceToTimelineTime, resolveForwardPlaybackTransition } from '../utils/timelineUtils';
 
 /**
  * Custom hook to manage video playback state, playhead position, time update, and seeking
@@ -23,6 +23,8 @@ export function useVideoPlayback({
   const hasSeekedRef = useRef(false);
   const intendedPlayingRef = useRef(false);
   const pendingSeekTargetRef = useRef(null);
+  const pendingSeekStartedMsRef = useRef(0);
+  const lastTransitionSeekMsRef = useRef(0);
   const stallRecoveryCountRef = useRef(0);
   const [playRequestTick, setPlayRequestTick] = useState(0);
 
@@ -169,6 +171,18 @@ export function useVideoPlayback({
 
     const srcNow = currentMediaTime;
 
+    // Stale rVFC frame guard: while a forward or user seek is in flight, ignore queued pre-seek frames
+    // until mediaTime lands near pendingSeekTargetRef (or seek clears after bounded timeout).
+    const pendingTarget = pendingSeekTargetRef.current;
+    if (pendingTarget !== null && Number.isFinite(pendingTarget)) {
+      const elapsedMs = performance.now() - pendingSeekStartedMsRef.current;
+      if (Math.abs(srcNow - pendingTarget) <= 0.25 || (!v.seeking && elapsedMs >= 400) || elapsedMs >= 1500) {
+        pendingSeekTargetRef.current = null;
+      } else {
+        return;
+      }
+    }
+
     // Fast O(1) active clip tracking: continue from the LAST mapped playable clip (including Gaps)
     let currentClipIdx = activeClipIdxRef.current;
     if (currentClipIdx < 0 || currentClipIdx >= videoClips.length) {
@@ -245,17 +259,28 @@ export function useVideoPlayback({
         const nextClip = nextClipIdx < videoClips.length ? videoClips[nextClipIdx] : null;
 
         if (nextClip) {
-          const nextSrcStart = Number.isFinite(nextClip.sourceStart)
-            ? nextClip.sourceStart
-            : (Number.isFinite(nextClip.start) ? nextClip.start : 0);
+          const trans = resolveForwardPlaybackTransition(videoClips, currentClipIdx, srcNow, realDur);
+          const nextSrcStart = Number.isFinite(trans.targetSrc)
+            ? trans.targetSrc
+            : (Number.isFinite(nextClip.sourceStart)
+                ? nextClip.sourceStart
+                : (Number.isFinite(nextClip.start) ? nextClip.start : 0));
 
           // CRITICAL INVARIANT:
           // 1. NEVER seek backward during forward playback (nextSrcStart <= srcNow)! That causes infinite loops.
           // 2. Only seek forward if next clip (including Gap) has a genuine forward jump (>0.15s in source media).
           // 3. Contiguous clips (difference <= 0.15s) flow naturally through HTML5 video decoder with zero seek/stutter.
+          // 4. Coalesce chained non-contiguous micro-slivers and enforce a seek cooldown to prevent seek storms.
           if (nextSrcStart > srcNow + 0.15 && !v.seeking) {
-            activeClipIdxRef.current = nextClipIdx;
-            v.currentTime = nextSrcStart;
+            const seekNowMs = performance.now();
+            if (seekNowMs - lastTransitionSeekMsRef.current >= 120) {
+              lastTransitionSeekMsRef.current = seekNowMs;
+              activeClipIdxRef.current = trans.nextClipIdx >= 0 ? trans.nextClipIdx : nextClipIdx;
+              hasSeekedRef.current = true;
+              pendingSeekTargetRef.current = nextSrcStart;
+              pendingSeekStartedMsRef.current = seekNowMs;
+              v.currentTime = nextSrcStart;
+            }
           } else if (nextSrcStart >= srcNow - 0.15) {
             activeClipIdxRef.current = nextClipIdx;
           }
@@ -452,6 +477,7 @@ export function useVideoPlayback({
 
       if (Number.isFinite(targetTime) && Math.abs((videoRef.current.currentTime || 0) - targetTime) > 0.03) {
         pendingSeekTargetRef.current = targetTime;
+        pendingSeekStartedMsRef.current = performance.now();
         videoRef.current.currentTime = targetTime;
       }
     }
@@ -486,6 +512,7 @@ export function useVideoPlayback({
           if (!alreadySeekingToTarget && Math.abs(v.currentTime - mapping.sourceTime) > 0.04) {
             hasSeekedRef.current = true;
             pendingSeekTargetRef.current = mapping.sourceTime;
+            pendingSeekStartedMsRef.current = performance.now();
             v.currentTime = mapping.sourceTime;
           }
           const targetIdx = videoClips.findIndex(c => c.id === mapping.clip?.id);
@@ -501,6 +528,7 @@ export function useVideoPlayback({
           if (!alreadySeekingToTarget && Math.abs(v.currentTime - nextSrcStart) > 0.04) {
             hasSeekedRef.current = true;
             pendingSeekTargetRef.current = nextSrcStart;
+            pendingSeekStartedMsRef.current = performance.now();
             v.currentTime = nextSrcStart;
           }
           const targetIdx = videoClips.findIndex(c => c.id === mapping.nextClip?.id);

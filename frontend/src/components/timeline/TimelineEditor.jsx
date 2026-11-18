@@ -12,6 +12,7 @@ import {
   resolveVoiceDropRow,
   computeVoiceDragPosition,
   resolveVoiceDragScrubTime,
+  doesClipMatchSegment,
 } from '../../utils/timelineUtils';
 import {
   buildEpisodeViewKey,
@@ -686,7 +687,7 @@ function TimelineEditor({
 
         // When following video cuts during playback, track active video clip (without triggering playback seek)
         if (isPlaying && selectedClipKind === 'video' && onSelectClip && videoClips && videoClips.length > 0) {
-          const matchClip = videoClips.find(c => c.segmentId === activeSeg.id || c.segmentIndex === activeSeg.id);
+          const matchClip = videoClips.find(c => doesClipMatchSegment(c, activeSeg));
           if (matchClip) {
             onSelectClip(matchClip.id, false);
           }
@@ -1008,7 +1009,7 @@ function TimelineEditor({
       setSelectedAudioId(null);
       if (onSelectSegment) onSelectSegment(null);
     } else {
-      const targetSeg = scriptSegments?.find(s => s.id === clip.segmentId || s.id === clip.segmentIndex || (clip.segmentIndex && s.id === clip.segmentIndex));
+      const targetSeg = scriptSegments?.find(s => doesClipMatchSegment(clip, s));
       if (targetSeg) {
         const segKey = targetSeg._uid || targetSeg.id;
         selectedSegmentIdRef.current = segKey;
