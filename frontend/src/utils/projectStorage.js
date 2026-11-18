@@ -610,6 +610,27 @@ function trimSegmentForStorage(s) {
     segmentId: s.segmentId,
     startSec: s.startSec ?? s.start ?? 0,
     endSec: s.endSec ?? s.end ?? 0,
+    ...(typeof s.duration === 'number' ? { duration: s.duration } : {}),
+    ...(typeof s.sourceStartSec === 'number' ? { sourceStartSec: s.sourceStartSec } : {}),
+    ...(typeof s.sourceEndSec === 'number' ? { sourceEndSec: s.sourceEndSec } : {}),
+    ...(typeof s.audioStartSec === 'number' ? { audioStartSec: s.audioStartSec } : {}),
+    ...(typeof s.audioEndSec === 'number' ? { audioEndSec: s.audioEndSec } : {}),
+    ...(typeof s.audioDurationSec === 'number' ? { audioDurationSec: s.audioDurationSec } : {}),
+    ...(typeof s.finalAudioDuration === 'number' ? { finalAudioDuration: s.finalAudioDuration } : {}),
+    ...(typeof s.appliedSpeed === 'number' ? { appliedSpeed: s.appliedSpeed } : {}),
+    ...(typeof s.trackRow === 'number' ? { trackRow: s.trackRow } : {}),
+    ...(s.trackId ? { trackId: s.trackId } : {}),
+    ...(typeof s.subTrackRow === 'number' ? { subTrackRow: s.subTrackRow } : {}),
+    ...(s.subTrackId ? { subTrackId: s.subTrackId } : {}),
+    ...(s.userShifted !== undefined ? { userShifted: Boolean(s.userShifted) } : {}),
+    ...(s.userSubShifted !== undefined ? { userSubShifted: Boolean(s.userSubShifted) } : {}),
+    ...(s.userTrimmed !== undefined ? { userTrimmed: Boolean(s.userTrimmed) } : {}),
+    ...(s.audioTrimmed !== undefined ? { audioTrimmed: Boolean(s.audioTrimmed) } : {}),
+    ...(typeof s.audioOffset === 'number' ? { audioOffset: s.audioOffset } : {}),
+    ...(s.audioOverrun !== undefined ? { audioOverrun: Boolean(s.audioOverrun) } : {}),
+    ...(typeof s.overrunRatio === 'number' ? { overrunRatio: s.overrunRatio } : {}),
+    ...(s.muted !== undefined ? { muted: Boolean(s.muted) } : {}),
+    ...(s.isMuted !== undefined ? { isMuted: Boolean(s.isMuted) } : {}),
     khmerText: s.khmerText || s.khmerTranslatedText || s.khmer || '',
     chineseText: s.chineseText || s.originalChineseText || s.originalText || s.original || '',
     speaker: s.speaker || s.speakerName || 'Narrator',
@@ -617,6 +638,8 @@ function trimSegmentForStorage(s) {
     voiceGender: s.voiceGender || s.speakerGender || s.gender || 'male',
     voiceId: s.voiceId || s.khmerVoiceId || null,
     audioUrl: s.audioUrl || s.audioFile || s.rawAudioPath || null,
+    ...(s.audioPath ? { audioPath: s.audioPath } : {}),
+    ...(s.audioFile ? { audioFile: s.audioFile } : {}),
     audioOutdated: Boolean(s.audioOutdated),
     speed: s.speed || 1.0,
     ttsStatus: s.ttsStatus || null,
@@ -834,7 +857,43 @@ export function extractSeriesName(title) {
  */
 export function syncSeriesToBackend(series) {
   if (!series?.id) return;
-  syncSeriesApi(series).catch(() => {});
+  syncSeriesApi(series).catch((err) => {
+    console.warn('[Storage] Failed to sync series to backend:', err?.message || err);
+    const message = '⚠️ បរាជ័យក្នុងការរក្សាទុកទៅ Server — សូមពិនិត្យ Backend ហើយព្យាយាមម្ដងទៀត!';
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('timeline:toast', { detail: { message } }));
+    }
+    if (typeof document !== 'undefined') {
+      let toast = document.getElementById('timeline-split-toast');
+      if (!toast) {
+        toast = document.createElement('div');
+        toast.id = 'timeline-split-toast';
+        toast.setAttribute('role', 'status');
+        toast.setAttribute('aria-live', 'polite');
+        toast.style.position = 'fixed';
+        toast.style.bottom = '32px';
+        toast.style.left = '50%';
+        toast.style.transform = 'translateX(-50%) translateY(0)';
+        toast.style.maxWidth = 'min(92vw, 760px)';
+        toast.style.backgroundColor = 'rgba(127, 29, 29, 0.96)';
+        toast.style.color = '#fef2f2';
+        toast.style.padding = '10px 20px';
+        toast.style.borderRadius = '14px';
+        toast.style.fontSize = '13.5px';
+        toast.style.fontWeight = '500';
+        toast.style.zIndex = '99999';
+        toast.style.pointerEvents = 'none';
+        toast.style.boxShadow = '0 12px 30px -4px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(248, 113, 113, 0.35)';
+        document.body.appendChild(toast);
+      }
+      toast.textContent = message;
+      toast.style.opacity = '1';
+      if (toast._hideTimer) clearTimeout(toast._hideTimer);
+      toast._hideTimer = setTimeout(() => {
+        if (toast) toast.style.opacity = '0';
+      }, 4500);
+    }
+  });
 }
 
 function getLocalSegmentIdentityKeys(segment) {
@@ -949,6 +1008,17 @@ export function saveTimelineOperationToLocalStorage({
     episode.videoClipsUpdatedAt = videoClipsUpdatedAt;
     timestamps.updatedAt = updatedAt;
     timestamps.videoClipsUpdatedAt = videoClipsUpdatedAt;
+  } else if (operation === 'update_segments' && Array.isArray(segments)) {
+    const updatedAt = Math.max(now, Number(episode.scriptData?.updatedAt || 0) + 1);
+    episode.scriptData = {
+      ...(episode.scriptData || {}),
+      segments,
+      hasScript: segments.length > 0,
+      totalSegments: segments.length,
+      explicitClear: segments.length === 0,
+      updatedAt,
+    };
+    timestamps.updatedAt = updatedAt;
   } else {
     return null;
   }

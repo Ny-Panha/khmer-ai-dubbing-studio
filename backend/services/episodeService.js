@@ -884,6 +884,19 @@ async function syncSeriesMetadataSafely(seriesId, incomingSeries, options = {}) 
         if (!resolvedStatus || resolvedStatus === 'uploaded') {
           resolvedStatus = diskEp.status || 'translated';
         }
+      } else if (
+        incUpdatedAt > 0 &&
+        diskUpdatedAt > 0 &&
+        incUpdatedAt === diskUpdatedAt &&
+        diskSegs.length > 0 &&
+        !incEp?.scriptData?.explicitClear
+      ) {
+        // Non-script partial sync (e.g. renderedVideo/settings patch) carrying unchanged updatedAt:
+        // preserve authoritative disk segments so trimmed/stale client copies can never strip trackRow/userShifted/audioStartSec.
+        resolvedScriptData = diskEp.scriptData;
+        if (!resolvedStatus || resolvedStatus === 'uploaded') {
+          resolvedStatus = diskEp.status || 'translated';
+        }
       } else if (incSegs.length === 0 && diskSegs.length > 0 && !incEp?.scriptData?.explicitClear) {
         resolvedScriptData = diskEp.scriptData;
         if (!resolvedStatus || resolvedStatus === 'uploaded') {
@@ -1074,7 +1087,10 @@ async function persistEpisodeTimelineOperation({
   if (operation === 'restore' && (!Array.isArray(segments) || !Array.isArray(videoClips))) {
     throw new Error('restore requires segments and videoClips arrays');
   }
-  if (!['delete', 'restore'].includes(operation)) throw new Error(`Unsupported timeline operation: ${operation}`);
+  if (operation === 'update_segments' && !Array.isArray(segments)) {
+    throw new Error('update_segments requires segments array');
+  }
+  if (!['delete', 'restore', 'update_segments'].includes(operation)) throw new Error(`Unsupported timeline operation: ${operation}`);
 
   return await withSeriesMetadataLock(cleanSeries, () => {
     let operationTimestamps = {};
@@ -1130,6 +1146,17 @@ async function persistEpisodeTimelineOperation({
           episode.timelineTombstonesUpdatedAt = tombstonesUpdatedAt;
           operationTimestamps = { updatedAt };
         }
+      } else if (operation === 'update_segments') {
+        const updatedAt = nextTrackTimestamp(episode.scriptData?.updatedAt);
+        episode.scriptData = {
+          ...(episode.scriptData || {}),
+          segments,
+          hasScript: segments.length > 0,
+          totalSegments: segments.length,
+          updatedAt,
+          explicitClear: segments.length === 0,
+        };
+        operationTimestamps = { updatedAt };
       } else {
         const previousSegments = Array.isArray(episode.scriptData?.segments) ? episode.scriptData.segments : [];
         const restoredSegmentKeys = new Set(segments.flatMap((segment) => getSegmentIdentityKeys(segment)));

@@ -580,9 +580,8 @@ export function useClipOperations({
         await persistTimelineOperationApi({
           seriesId,
           episodeId,
-          operation: 'release_manual',
-          track: 'segments',
-          items: releasedSegments,
+          operation: 'update_segments',
+          segments: releasedSegments,
         });
       }
     } catch (err) {
@@ -782,12 +781,46 @@ export function useClipOperations({
     if (!skipUndo) {
       pushUndoSnapshot(videoClips, scriptData?.segments || []);
     }
-    invalidateRendered();
+    const nextUpdatedAt = Math.max(Date.now(), Number(scriptData?.updatedAt || 0) + 1);
+    const nextScriptData = scriptData
+      ? { ...scriptData, segments: newSegments, updatedAt: nextUpdatedAt }
+      : (newSegments?.length ? { mode: 'dialogue', genre: 'auto', segments: newSegments, updatedAt: nextUpdatedAt } : null);
+
     if (newSegments?.length) {
       const updatedReg = buildSpeakerRegistry(newSegments, speakerRegistry);
       if (setSpeakerRegistry) setSpeakerRegistry(updatedReg);
     }
-    setScriptData(prev => (prev ? ({ ...prev, segments: newSegments, updatedAt: Date.now() }) : (newSegments?.length ? { mode: 'dialogue', genre: 'auto', segments: newSegments, updatedAt: Date.now() } : null)));
+    setScriptData(nextScriptData);
+
+    // Update localStorage synchronously BEFORE invalidateRendered() so no stale/trimmed segment snapshot can race to /sync
+    if (seriesId && episodeId && Array.isArray(newSegments)) {
+      saveTimelineOperationToLocalStorage({
+        seriesId,
+        episodeId,
+        operation: 'update_segments',
+        segments: newSegments,
+      });
+      // Immediately persist full segment state (audioStartSec, trackRow, userShifted, etc.) directly to series.json FIRST
+      persistTimelineOperationApi({
+        seriesId,
+        episodeId,
+        operation: 'update_segments',
+        segments: newSegments,
+      })
+        .then((persisted) => {
+          if (persisted?.updatedAt) {
+            setScriptData((prev) => (prev ? { ...prev, updatedAt: Math.max(Number(prev.updatedAt || 0), persisted.updatedAt) } : prev));
+          }
+        })
+        .catch((err) => {
+          console.error('[useClipOperations] Failed to persist dragged/edited segments:', err);
+          showInAppToast(`⚠️ បរាជ័យក្នុងការរក្សាទុកទីតាំងសំឡេង (${err?.message || 'Backend error'}) — សូមពិនិត្យ Server!`, 4800);
+          if (err?.status === 502 || /ECONNREFUSED|unreachable|Failed to fetch|NetworkError/i.test(err?.message || '')) {
+            notifyBackendOffline();
+          }
+        });
+    }
+    invalidateRendered();
 
     const hasAudios = Boolean(newSegments?.some(s => s.audioFile || s.audioPath || s.audioUrl));
     if (!hasAudios && audioGenerated) {
@@ -810,6 +843,7 @@ export function useClipOperations({
           }
         } catch (e) {
           console.warn('Auto re-sync timeline audio error:', e.message);
+          showInAppToast(`⚠️ បរាជ័យក្នុងការ sync សំឡេង timeline (${e?.message || 'error'})`, 4000);
         }
       };
 
@@ -870,7 +904,7 @@ export function useClipOperations({
         : (sRawStart + sAudioDur);
 
       let assignedRow = 0;
-      if (typeof seg.trackRow === 'number' && (seg.userShifted || seg.trackRow >= 2)) {
+      if (typeof seg.trackRow === 'number' && (seg.userShifted || seg.trackRow > 0)) {
         assignedRow = Math.max(0, seg.trackRow);
         rowEndTimes[assignedRow] = Math.max(rowEndTimes[assignedRow] || 0, sEnd);
       } else if (sRawStart >= (rowEndTimes[0] || 0) - 0.05) {

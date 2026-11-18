@@ -3,6 +3,51 @@
 ## Last Session
 - **Environment**: Antigravity IDE
 - **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-18T20:23:30+07:00
+
+## Summary: Voice Clip Drag Persistence & Reload Durability Across All Lanes (COMPLETED)
+- **Step 0 Root-Cause Evidence**:
+  1. **Save race on drop**: `handleUpdateTimelineSegments` in `frontend/src/hooks/useClipOperations.js` called `invalidateRendered()` -> `saveEpisodeState(..., { renderedVideo: null })` which read `prevEp` from `localStorage` where `trimSegmentForStorage()` (`frontend/src/utils/projectStorage.js`) had **stripped** `audioStartSec`, `audioEndSec`, `audioDurationSec`, `trackRow`, `trackId`, `userShifted` from all 219 segments. That sent `POST /api/series/.../sync => 200` at `+0ms` with the OLD, stripped segments and the same `updatedAt` as disk.
+  2. **Backend disk overwrite & slow persist**: `syncSeriesMetadataSafely` (`backend/services/episodeService.js`) only rejected `incUpdatedAt < diskUpdatedAt` (not `===`), so the equal-timestamp partial `/sync` wiped `audioStartSec`/`trackRow`/`userShifted` on disk at `+300ms`. Meanwhile `POST /api/sync-audio` (`backend/routes/audioRoutes.js`) ran 6+ seconds of FFmpeg mixing BEFORE persisting synced segments to `series.json`.
+  3. **Lane & error-visibility gaps**: `handleAddSegmentAtTime` (`useClipOperations.js`) checked `seg.trackRow >= 2` instead of `seg.trackRow > 0` (ignoring `VOICE 2` / `trackRow: 1` without `userShifted`), `handleReleaseSegmentToAutoAlign` sent unsupported `operation: 'release_manual'`, and `syncSeriesToBackend` silently swallowed save errors with `.catch(() => {})`.
+- **Step 1 Fixes Applied**:
+  1. `frontend/src/utils/projectStorage.js`:
+     - `trimSegmentForStorage(s)` now preserves all timeline position, lane, trim, overrun, and anchor fields (`audioStartSec`, `audioEndSec`, `audioDurationSec`, `finalAudioDuration`, `appliedSpeed`, `sourceStartSec`, `sourceEndSec`, `trackRow`, `trackId`, `subTrackRow`, `subTrackId`, `userShifted`, `userSubShifted`, `userTrimmed`, `audioTrimmed`, `audioOffset`, `audioOverrun`, `overrunRatio`, `muted`, `isMuted`, `audioPath`, `audioFile`).
+     - Added `operation === 'update_segments'` support in `saveTimelineOperationToLocalStorage`.
+     - Updated `syncSeriesToBackend` to show a visible error toast (`#timeline-split-toast` + `timeline:toast` event) instead of swallowing save failures silently.
+  2. `backend/services/episodeService.js`:
+     - Guarded `syncSeriesMetadataSafely` so equal-timestamp (`incUpdatedAt === diskUpdatedAt`) partial `/sync` payloads without newer script data preserve authoritative `diskEp.scriptData`.
+     - Added atomic `operation === 'update_segments'` support to `persistEpisodeTimelineOperation` (`PATCH /api/series/:seriesId/episodes/:episodeId/timeline`) under `withSeriesMetadataLock` with monotonic `updatedAt` and `renderInvalidatedAt`.
+  3. `backend/routes/audioRoutes.js`:
+     - In `POST /api/sync-audio`, persists synced segments to `series.json` **before** running the long FFmpeg audio mix job.
+  4. `frontend/src/hooks/useClipOperations.js`:
+     - `handleUpdateTimelineSegments` now updates `localStorage` synchronously (`update_segments`) and fires `PATCH /timeline` (`persistTimelineOperationApi`) **immediately before** `invalidateRendered()`, showing a visible Khmer error toast on any save or sync failure.
+     - Fixed `handleReleaseSegmentToAutoAlign` to use `operation: 'update_segments'` with `releasedSegments`.
+     - Fixed lane occupancy check in `handleAddSegmentAtTime` to honour `trackRow > 0` (all voice lanes including `VOICE 2` / `trackRow: 1`).
+  5. `backend/tests/timeline_voice_drag_persistence.test.js` *(new)*: Regression suite verifying atomic `update_segments` persistence on `VOICE 2`, equal-timestamp `/sync` preservation, `trimSegmentForStorage` field retention, immediate drag persistence, visible error toasts, and `trackRow > 0` handling.
+- **Verification Evidence**:
+  - Real-app Playwright E2E against live `:5173` + `:5000` (isolated clone of `Pseudo_Spiritual_Root` `ep_4`/`ep_5` to avoid interfering with live editing):
+    - Dragged `#7` (`9.46s -> 9.3s`) on `VOICE 2` (`trackRow: 1`) -> `PATCH /timeline => 200` fired immediately -> `series.json` on disk immediately saved `{ startSec: 9.3, audioStartSec: 9.3, audioEndSec: 10.6, trackRow: 1, trackId: 'voice-2', userShifted: true }`.
+    - Fast `page.reload()` -> `#7` stayed on `VOICE 2` (`laneRow: "1"`) at `9.3s`, Inspector showed `Release` button, `localStorage` & `series.json` preserved all fields.
+    - Episode switch `EP5 -> EP4 -> EP5` -> `#7` remained on `VOICE 2` at `9.3s` in UI and on disk.
+    - Simulated `PATCH /timeline` HTTP 500 -> visible Khmer error toast rendered (`⚠️បរាជ័យក្នុងការរក្សាទុកទីតាំងសំឡេង...`).
+  - Frontend production build (`npm --prefix frontend run build`): **PASS** (`1.03s`, 0 errors).
+  - New regression test (`backend/tests/timeline_voice_drag_persistence.test.js`): **2 / 2 PASS**.
+  - Full timeline + auto-align + series persistence suites: **138 / 139 PASS** (sole failure is pre-existing `timeline_continuous_playback_no_loop.test.js` test #2 live-disk fixture expectation).
+
+## Active Environment
+- **Backend API**: `http://localhost:5000` (HTTP 200)
+- **Frontend Studio**: `http://localhost:5173` (Vite dev server on `chore/full-project-cleanup`)
+- **Branch**: `chore/full-project-cleanup` (committed & pushed)
+
+## Next Steps
+- Refresh browser (`Ctrl + F5`) at `http://localhost:5173/studio` and test dragging any voice clip across lanes (`VOICE 1`/`VOICE 2`/`VOICE 3`) + reloading or switching episodes.
+
+---
+
+## Previous Session
+- **Environment**: Antigravity IDE
+- **Branch**: `chore/full-project-cleanup`
 - **Timestamp**: 2026-11-18T19:56:30+07:00
 
 ## Summary: Auto-Cut by Subs Cuts Cleanly at Every Dialogue Start (Zero Leftover Absorption) (COMPLETED)

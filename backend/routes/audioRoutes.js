@@ -1167,6 +1167,10 @@ router.post("/sync-audio", async (req, res) => {
       });
     }
 
+    // Persist segment timing, lane placement, and userShifted anchor flags IMMEDIATELY before FFmpeg runs
+    // so an immediate page reload after dragging never loses the move while FFmpeg is still mixing audio.
+    await persistSyncedSegmentsToSeriesJson();
+
     const syncPromise = (async () => {
       console.log(`[Sync Audio] Re-syncing ${syncSegs.length} audio clips in ${cleanSeries}${cleanEpisode ? ` [Episode: ${cleanEpisode}]` : ""}/audio (Fingerprint: ${fingerprint})...`);
       await createSynchronizedNarrationAudio(syncSegs, fullAudioPath);
