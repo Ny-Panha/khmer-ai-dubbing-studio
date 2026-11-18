@@ -800,3 +800,241 @@ export function computeTimelineScrollForTime(timeSec, pixelsPerSecond, clientWid
     : 0;
 }
 
+/**
+ * Voice clips can ONLY ever be dropped onto voice lanes — NEVER onto video, subtitle, or BGM tracks.
+ *
+ * @param {string|null|undefined} targetTrackType
+ * @returns {boolean}
+ */
+export function isVoiceDropTargetAllowed(targetTrackType) {
+  return String(targetTrackType || '').toLowerCase() === 'voice';
+}
+
+/**
+ * Clamp a dragged voice clip's vertical translateY offset strictly within the voice lanes area
+ * (from the top voice lane `voice_0` down to the bottom voice lane).
+ * Prevents the dragged clip preview/ghost from ever overlapping the VIDEO track above
+ * or non-voice tracks below.
+ *
+ * @param {Object} params
+ * @returns {{ clampedY: number, minDeltaY: number, maxDeltaY: number }}
+ */
+export function clampVoiceDragY({
+  deltaY = 0,
+  curRow = 0,
+  voiceRowCount = 2,
+  laneHeight = 48,
+  firstLaneTop = null,
+  lastLaneTop = null,
+  originLaneTop = null,
+} = {}) {
+  const safeRow = Math.max(0, Number.isFinite(curRow) ? Math.floor(curRow) : 0);
+  const safeRowCount = Math.max(2, Number.isFinite(voiceRowCount) ? Math.floor(voiceRowCount) : 2);
+  const safeLaneHeight = Number.isFinite(laneHeight) && laneHeight > 0 ? laneHeight : 48;
+  const safeDeltaY = Number.isFinite(deltaY) ? deltaY : 0;
+
+  const hasDomTops = Number.isFinite(firstLaneTop) && Number.isFinite(originLaneTop);
+  const minDeltaY = hasDomTops
+    ? Math.min(0, Math.round(firstLaneTop - originLaneTop))
+    : -(safeRow * safeLaneHeight);
+
+  const hasDomBottom = Number.isFinite(lastLaneTop) && Number.isFinite(originLaneTop);
+  const maxDeltaY = hasDomBottom
+    ? Math.max(0, Math.round(lastLaneTop - originLaneTop))
+    : Math.max(0, (safeRowCount - 1 - safeRow) * safeLaneHeight);
+
+  const clampedY = Math.max(minDeltaY, Math.min(maxDeltaY, safeDeltaY));
+  return { clampedY, minDeltaY, maxDeltaY };
+}
+
+/**
+ * Resolve the target VOICE lane index for a voice clip drag/drop.
+ * - The VIDEO track is NEVER a valid drop target for a voice clip.
+ * - Any upward drag past the top voice lane (`voice_0`) is clamped to `0`.
+ * - Normal voice-to-voice lane moves resolve cleanly across all available voice lanes.
+ *
+ * @param {Object} params
+ * @returns {number}
+ */
+export function resolveVoiceDropRow({
+  pointerLaneType = null,
+  pointerLaneRow = null,
+  pointerClientY = null,
+  firstLaneTop = null,
+  lastLaneBottom = null,
+  deltaY = 0,
+  curRow = 0,
+  voiceRowCount = 2,
+  laneHeight = 48,
+} = {}) {
+  const safeRow = Math.max(0, Number.isFinite(curRow) ? Math.floor(curRow) : 0);
+  const maxRow = Math.max(1, (Number.isFinite(voiceRowCount) ? Math.floor(voiceRowCount) : 2) - 1);
+  const safeLaneHeight = Number.isFinite(laneHeight) && laneHeight > 0 ? laneHeight : 48;
+  const safeDeltaY = Number.isFinite(deltaY) ? deltaY : 0;
+
+  if (isVoiceDropTargetAllowed(pointerLaneType) && Number.isFinite(pointerLaneRow) && pointerLaneRow >= 0) {
+    return Math.min(maxRow, Math.max(0, Math.floor(pointerLaneRow)));
+  }
+
+  // Pointer dragged above the top voice lane (e.g. over VIDEO track or ruler) -> clamp to top voice lane (0)
+  if (Number.isFinite(pointerClientY) && Number.isFinite(firstLaneTop) && pointerClientY < firstLaneTop) {
+    return 0;
+  }
+
+  // Pointer dragged below the bottom voice lane -> clamp to bottom available voice lane
+  if (Number.isFinite(pointerClientY) && Number.isFinite(lastLaneBottom) && pointerClientY > lastLaneBottom) {
+    return maxRow;
+  }
+
+  if (safeDeltaY < -20) {
+    const rowShift = Math.min(-1, Math.round(safeDeltaY / safeLaneHeight));
+    return Math.max(0, safeRow + rowShift);
+  }
+  if (safeDeltaY > 20) {
+    const rowShift = Math.max(1, Math.round(safeDeltaY / safeLaneHeight));
+    return Math.min(maxRow, safeRow + rowShift);
+  }
+  return Math.min(maxRow, safeRow);
+}
+
+/**
+ * Compute dragged VOICE clip horizontal position and magnetic snap time.
+ * Snap targets are STRICTLY other VOICE clips (`scriptSegments`) — NEVER video clips or video boundaries.
+ *
+ * @param {Object} params
+ * @returns {{ newStart: number, newEnd: number, snapTime: number|null }}
+ */
+export function computeVoiceDragPosition({
+  origStart = 0,
+  origEnd = 0,
+  proposedStart = 0,
+  draggedIndex = -1,
+  curRow = 0,
+  targetRow = 0,
+  scriptSegments = [],
+  segmentRows = [],
+  getSegEffectiveRange = null,
+  snappingEnabled = true,
+  shiftKey = false,
+  pps = 45,
+} = {}) {
+  const clipDur = Math.max(0.05, (Number.isFinite(origEnd) ? origEnd : 0) - (Number.isFinite(origStart) ? origStart : 0));
+  let newStart = Math.max(0, Number.isFinite(proposedStart) ? proposedStart : 0);
+  let newEnd = newStart + clipDur;
+  let snapTime = null;
+
+  let prevBound = 0;
+  let nextBound = Infinity;
+
+  if (!Array.isArray(scriptSegments) || scriptSegments.length === 0) {
+    return { newStart, newEnd, snapTime, prevBound, nextBound };
+  }
+
+  const safePps = Number.isFinite(pps) && pps > 0 ? pps : 45;
+  const snapThreshold = Math.min(0.2, Math.max(0.06, 8 / safePps));
+  const resolveRange = typeof getSegEffectiveRange === 'function'
+    ? getSegEffectiveRange
+    : (seg, idx) => {
+        const s = (typeof seg?.audioStartSec === 'number' && !isNaN(seg.audioStartSec))
+          ? seg.audioStartSec
+          : (typeof seg?.startSec === 'number' && !isNaN(seg.startSec) ? seg.startSec : idx * 4);
+        const e = (typeof seg?.audioEndSec === 'number' && !isNaN(seg.audioEndSec) && seg.audioEndSec > s)
+          ? seg.audioEndSec
+          : (typeof seg?.endSec === 'number' && !isNaN(seg.endSec) && seg.endSec > s ? seg.endSec : s + 2.5);
+        return { start: s, end: e };
+      };
+
+  const isSameLane = targetRow === curRow;
+
+  if (isSameLane) {
+    let hasPrevVoice = false;
+
+    for (let i = 0; i < scriptSegments.length; i++) {
+      if (i === draggedIndex) continue;
+      const other = scriptSegments[i];
+      if (!other) continue;
+      const otherRow = segmentRows[i] ?? (other.trackRow || 0);
+      if (otherRow !== curRow) continue;
+
+      const range = resolveRange(other, i);
+      if (range.end <= origStart + 0.05) {
+        if (!hasPrevVoice || range.end > prevBound) {
+          prevBound = range.end;
+          hasPrevVoice = true;
+        }
+      } else if (range.start >= origEnd - 0.05) {
+        if (range.start < nextBound) nextBound = range.start;
+      } else {
+        if (range.start < origStart && (!hasPrevVoice || range.end > prevBound)) {
+          prevBound = range.end;
+          hasPrevVoice = true;
+        }
+        if (range.end > origEnd && range.start < nextBound) {
+          nextBound = range.start;
+        }
+      }
+    }
+
+    // 1. Magnetic edge snapping strictly to adjacent VOICE clips on the same voice lane
+    if (snappingEnabled && !shiftKey) {
+      if (hasPrevVoice && Math.abs(newStart - prevBound) < snapThreshold) {
+        newStart = prevBound;
+        newEnd = newStart + clipDur;
+        snapTime = prevBound;
+      } else if (nextBound !== Infinity && Math.abs(newEnd - nextBound) < snapThreshold) {
+        newEnd = nextBound;
+        newStart = Math.max(prevBound, newEnd - clipDur);
+        snapTime = nextBound;
+      }
+    }
+
+    // 2. Strict No-Overlap Clamp on the same voice lane
+    if (newStart < prevBound) {
+      newStart = prevBound;
+      newEnd = newStart + clipDur;
+    }
+    if (nextBound !== Infinity && newEnd > nextBound) {
+      newEnd = nextBound;
+      newStart = Math.max(prevBound, newEnd - clipDur);
+    }
+  } else if (snappingEnabled && !shiftKey) {
+    // Moving to another voice lane: snap strictly to VOICE clip edges on the target voice lane (NEVER video clips)
+    let bestDist = snapThreshold;
+    let bestStart = newStart;
+    let bestEnd = newEnd;
+    let bestSnap = null;
+
+    for (let i = 0; i < scriptSegments.length; i++) {
+      if (i === draggedIndex) continue;
+      const other = scriptSegments[i];
+      if (!other) continue;
+      const otherRow = segmentRows[i] ?? (other.trackRow || 0);
+      if (otherRow !== targetRow) continue;
+
+      const range = resolveRange(other, i);
+      const distStartToEnd = Math.abs(newStart - range.end);
+      if (distStartToEnd < bestDist) {
+        bestDist = distStartToEnd;
+        bestStart = range.end;
+        bestEnd = range.end + clipDur;
+        bestSnap = range.end;
+      }
+      const distEndToStart = Math.abs(newEnd - range.start);
+      if (distEndToStart < bestDist) {
+        bestDist = distEndToStart;
+        bestEnd = range.start;
+        bestStart = Math.max(0, range.start - clipDur);
+        bestSnap = range.start;
+      }
+    }
+
+    if (bestSnap !== null) {
+      newStart = bestStart;
+      newEnd = bestEnd;
+      snapTime = bestSnap;
+    }
+  }
+
+  return { newStart, newEnd, snapTime, prevBound, nextBound };
+}
+

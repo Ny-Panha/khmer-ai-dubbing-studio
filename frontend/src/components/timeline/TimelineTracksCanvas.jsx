@@ -406,7 +406,17 @@ function TimelineTracksCanvas({
     const hasAudio = Boolean(seg.audioUrl || seg.audioPath || seg.audioFile);
     if (!hasAudio && !shouldRenderOnVoiceTrack(seg)) return null;
 
-    const isDragging = (dragState?.itemType === 'audio' || dragState?.itemType === 'subtitle') && dragState?.index === idx;
+    const isAudioDragging = dragState?.itemType === 'audio' && dragState?.index === idx;
+    const isSubDragging = dragState?.itemType === 'subtitle' && dragState?.index === idx;
+    const isDragging = isAudioDragging || isSubDragging;
+    const segRow = activeSegmentRows[idx] ?? (typeof seg.trackRow === 'number' ? Math.max(0, seg.trackRow) : 0);
+    const voiceMinY = typeof dragState?.minVoiceY === 'number' ? dragState.minVoiceY : -(segRow * 48);
+    const voiceMaxY = typeof dragState?.maxVoiceY === 'number'
+      ? dragState.maxVoiceY
+      : Math.max(0, (Math.max(2, voiceRowCount || 2) - 1 - segRow) * 48);
+    const safeVoiceTranslateY = (isAudioDragging && dragState?.mode === 'move' && typeof dragState?.currentY === 'number')
+      ? Math.max(voiceMinY, Math.min(voiceMaxY, dragState.currentY))
+      : null;
     const rawStart = (typeof seg.audioStartSec === 'number' && !isNaN(seg.audioStartSec))
       ? seg.audioStartSec 
       : ((typeof seg.startSec === 'number' && !isNaN(seg.startSec))
@@ -534,6 +544,7 @@ function TimelineTracksCanvas({
             style={{
               left: dragState.origStart * pps,
               width: Math.max(2, (renderedDuration * pps) - 2),
+              height: 'calc(100% - 6px)',
             }}
           />
         )}
@@ -559,7 +570,7 @@ function TimelineTracksCanvas({
             left: audioLeft,
             width: audioWidth,
             zIndex: isDragging ? 100 : (isSelected ? 20 : (isLinked ? 8 : 5)),
-            transform: isDragging && dragState?.mode === 'move' && typeof dragState?.currentY === 'number' ? `translateY(${dragState.currentY}px)` : undefined,
+            transform: safeVoiceTranslateY !== null ? `translateY(${safeVoiceTranslateY}px)` : undefined,
             transition: isDragging ? 'none' : undefined,
             pointerEvents: isDragging && dragState?.mode === 'move' ? 'none' : 'auto',
           }}
@@ -1150,7 +1161,34 @@ function TimelineTracksCanvas({
           mutedTracks?.[trackKey] ||
           (rIdx === 0 && mutedTracks?.video)
         );
-        const isDragOver = dragOverTrack === trackKey || (rIdx === 0 && dragOverTrack === 'video');
+        const isVoiceDragActive = dragState?.itemType === 'audio';
+        const isDragOver = !isVoiceDragActive && (dragOverTrack === trackKey || (rIdx === 0 && dragOverTrack === 'video'));
+
+        const isDraggedVoicePayload = (e, parsedData = null, parsedId = null) => {
+          if (dragState?.itemType === 'audio') return true;
+          const active = window.__activeDraggedTimelineItem;
+          const checkObj = (obj) => Boolean(
+            obj && (
+              obj.itemType === 'audio' ||
+              obj.type === 'voice-segment' ||
+              obj.type === 'audio-segment' ||
+              obj.segId !== undefined
+            )
+          );
+          if (checkObj(active) || checkObj(parsedData)) return true;
+          if (!parsedData && e?.dataTransfer) {
+            try {
+              const raw = e.dataTransfer.getData('application/json');
+              if (raw && checkObj(JSON.parse(raw))) return true;
+            } catch {}
+          }
+          if (parsedId !== null && parsedId !== undefined && parsedId !== '') {
+            const matchesVideo = Boolean(videoClips?.some((c) => String(c.id) === String(parsedId)));
+            const matchesSegment = Boolean(scriptSegments?.some((s) => String(s._uid ?? s.id) === String(parsedId) || String(s.id) === String(parsedId)));
+            if (matchesSegment && !matchesVideo) return true;
+          }
+          return false;
+        };
 
         return (
           <div 
@@ -1160,6 +1198,16 @@ function TimelineTracksCanvas({
             data-track-row={rIdx}
             data-track-key={trackKey}
             onDragOver={(e) => {
+              // Video track is NEVER a valid drop target for a voice clip
+              if (isDraggedVoicePayload(e)) {
+                try {
+                  if (e.dataTransfer) e.dataTransfer.dropEffect = 'none';
+                } catch {}
+                if (dragOverTrack === trackKey || dragOverTrack === 'video') {
+                  setDragOverTrack(null);
+                }
+                return;
+              }
               e.preventDefault();
               e.dataTransfer.dropEffect = 'copy';
               if (dragOverTrack !== trackKey) {
@@ -1174,6 +1222,11 @@ function TimelineTracksCanvas({
               e.preventDefault();
               setDragOverTrack(null);
 
+              // Reject any voice clip dropped onto the video track before video-edge snapping or commit
+              if (isDraggedVoicePayload(e)) {
+                return;
+              }
+
               // Allow direct file drop if dropped from OS
               const files = e.dataTransfer?.files;
               if (files && files.length > 0 && files[0].type.startsWith('video/')) {
@@ -1185,6 +1238,21 @@ function TimelineTracksCanvas({
                 } catch (err) {
                   console.error('Timeline video drop failed:', err);
                 }
+                return;
+              }
+
+              const textData = e.dataTransfer ? e.dataTransfer.getData("text/plain") : null;
+              let dragData = null;
+              try {
+                const raw = e.dataTransfer ? e.dataTransfer.getData("application/json") : null;
+                if (raw) dragData = JSON.parse(raw);
+              } catch (err) {}
+
+              const fallback = window.__activeDraggedTimelineItem;
+              const finalData = dragData || fallback;
+              const finalId = textData || finalData?.clipId || finalData?.segId || finalData?.id;
+
+              if (isDraggedVoicePayload(e, finalData, finalId)) {
                 return;
               }
 
@@ -1202,17 +1270,6 @@ function TimelineTracksCanvas({
                   }
                 }
               }
-
-              const textData = e.dataTransfer ? e.dataTransfer.getData("text/plain") : null;
-              let dragData = null;
-              try {
-                const raw = e.dataTransfer ? e.dataTransfer.getData("application/json") : null;
-                if (raw) dragData = JSON.parse(raw);
-              } catch (err) {}
-
-              const fallback = window.__activeDraggedTimelineItem;
-              const finalData = dragData || fallback;
-              const finalId = textData || finalData?.clipId || finalData?.segId || finalData?.id;
 
               if (handleMoveVideoToTrack) {
                 handleMoveVideoToTrack(finalId, trackKey, dropTime, finalData);

@@ -7,6 +7,10 @@ import {
   resolveSegmentAtTime,
   computeTimelineScrollForTime,
   isSegmentMatch,
+  isVoiceDropTargetAllowed,
+  clampVoiceDragY,
+  resolveVoiceDropRow,
+  computeVoiceDragPosition,
 } from '../../utils/timelineUtils';
 import {
   deleteSegment as deleteSegmentOp,
@@ -286,8 +290,25 @@ function TimelineEditor({
       setUserSubTrackCount(trackRow + 1);
     }
 
+    const isExplicitVoiceDrag = Boolean(
+      effectiveData?.itemType === 'audio' ||
+      effectiveData?.type === 'voice-segment' ||
+      effectiveData?.type === 'audio-segment' ||
+      effectiveData?.segId !== undefined
+    );
+    const isExplicitSubtitleDrag = Boolean(
+      effectiveData?.itemType === 'subtitle' ||
+      effectiveData?.type === 'subtitle-segment'
+    );
+    const isExplicitSegmentDrag = isExplicitVoiceDrag || isExplicitSubtitleDrag;
+
+    // Voice clips can NEVER be dropped onto the video track (or any non-voice track)
+    if (isExplicitVoiceDrag && !isVoiceDropTargetAllowed(trackType)) {
+      return;
+    }
+
     // 1. Dragged Media Asset from Media Bin (MediaUploadTab)
-    if (effectiveData?.type === 'media-asset' || (!videoClips?.some(c => String(c.id) === String(effectiveId)) && !scriptSegments?.some(s => String(s.id) === String(effectiveId)))) {
+    if (!isExplicitSegmentDrag && (effectiveData?.type === 'media-asset' || (!videoClips?.some(c => String(c.id) === String(effectiveId)) && !scriptSegments?.some(s => String(s.id) === String(effectiveId))))) {
       const asset = effectiveData?.asset || (mediaAssets || []).find(a => String(a.videoId) === String(effectiveId) || String(a.id) === String(effectiveId)) || selectedVideo;
       if (asset) {
         if (onAddClipToTimeline) {
@@ -307,11 +328,13 @@ function TimelineEditor({
     }
 
     // 2. Existing Video Clip on Timeline (Moves horizontally on single main VIDEO 1 track)
-    const existingVideoClip = videoClips?.find(c => 
-      String(c.id) === String(effectiveId) || 
-      String(c.id) === String(effectiveData?.clipId) ||
-      (effectiveData?.type === 'video-clip' && videoClips.length === 1)
-    );
+    const existingVideoClip = !isExplicitSegmentDrag
+      ? videoClips?.find(c => 
+          String(c.id) === String(effectiveId) || 
+          String(c.id) === String(effectiveData?.clipId) ||
+          (effectiveData?.type === 'video-clip' && videoClips.length === 1)
+        )
+      : null;
 
     if (existingVideoClip) {
       const clipDur = Math.max(0.4, existingVideoClip.end - existingVideoClip.start);
@@ -369,6 +392,10 @@ function TimelineEditor({
     }
 
     // 3. Dialogue / Audio / Subtitle Segment moved across tracks or rows (T1 -> T2, A1 -> A2, etc.)
+    // Video track is NEVER a valid drop target for a voice/subtitle segment
+    if (trackType === 'video' || (!isVoiceDropTargetAllowed(trackType) && trackType !== 'subs')) {
+      return;
+    }
     if (scriptSegments && onUpdateSegments) {
       const segIdx = scriptSegments.findIndex(s => 
         String(s.id) === String(clipIdOrAssetId) || 
@@ -960,6 +987,33 @@ function TimelineEditor({
     let mouseRafId = null;
     let pendingMouseE = null;
 
+    const measureVoiceLaneBounds = (curRow) => {
+      const container = timelineBodyRef.current;
+      const lanes = container ? Array.from(container.querySelectorAll('.track-lane.voice-lane')) : [];
+      if (lanes.length > 0) {
+        const firstRect = lanes[0].getBoundingClientRect();
+        const lastRect = lanes[lanes.length - 1].getBoundingClientRect();
+        const originLane = lanes.find((el) => Number(el.dataset?.trackRow) === curRow) || lanes[Math.min(curRow, lanes.length - 1)];
+        const originRect = originLane.getBoundingClientRect();
+        return {
+          firstLaneTop: firstRect.top,
+          lastLaneTop: lastRect.top,
+          lastLaneBottom: lastRect.bottom,
+          originLaneTop: originRect.top,
+          laneHeight: originRect.height > 0 ? originRect.height : 48,
+          laneCount: Math.max(lanes.length, voiceRowCount || 2),
+        };
+      }
+      return {
+        firstLaneTop: null,
+        lastLaneTop: null,
+        lastLaneBottom: null,
+        originLaneTop: null,
+        laneHeight: 48,
+        laneCount: Math.max(2, voiceRowCount || 2),
+      };
+    };
+
     const processMouseMove = (e) => {
       if (!dragState) return;
         const moveDistX = Math.abs(e.clientX - dragState.startX);
@@ -974,51 +1028,90 @@ function TimelineEditor({
           const clipDur = dragState.origEnd - dragState.origStart;
           let newEnd = newStart + clipDur;
           let currentSnapTime = null;
+          let effectiveCurrentY = deltaY;
+          let voiceMinY = undefined;
+          let voiceMaxY = undefined;
+          let resolvedVoiceTargetRow = null;
 
-          if (dragState.itemType === 'audio' && scriptSegments && scriptSegments.length > 0) {
-            const curRow = segmentRows[dragState.index] ?? (scriptSegments[dragState.index]?.trackRow || 0);
-            const isHoveringOtherLane = Math.abs(deltaY) > 20;
+          // Highlight / hit-test target lane while dragging vertically (Strict lane type isolation)
+          const elements = typeof document.elementsFromPoint === 'function'
+            ? document.elementsFromPoint(e.clientX, e.clientY)
+            : [document.elementFromPoint(e.clientX, e.clientY)].filter(Boolean);
 
-            if (!isHoveringOtherLane) {
-              let prevBound = 0;
-              let nextBound = Infinity;
-
-              for (let i = 0; i < scriptSegments.length; i++) {
-                if (i === dragState.index) continue;
-                const other = scriptSegments[i];
-                const otherRow = segmentRows[i] ?? (other.trackRow || 0);
-                if (otherRow !== curRow) continue;
-
-                const range = getSegEffectiveRange(other, i);
-                if (range.end <= dragState.origStart + 0.05) {
-                  if (range.end > prevBound) prevBound = range.end;
-                } else if (range.start >= dragState.origEnd - 0.05) {
-                  if (range.start < nextBound) nextBound = range.start;
-                } else {
-                  if (range.start < dragState.origStart && range.end > prevBound) {
-                    prevBound = range.end;
-                  }
-                  if (range.end > dragState.origEnd && range.start < nextBound) {
-                    nextBound = range.start;
-                  }
-                }
+          let targetLane = null;
+          for (const el of elements) {
+            const lane = el?.closest?.('.track-lane');
+            if (lane) {
+              const laneType = lane.dataset?.trackType; // 'video' | 'voice' | 'subs'
+              if (dragState.itemType === 'subtitle' && laneType === 'subs') {
+                targetLane = lane;
+                break;
+              } else if (dragState.itemType === 'audio' && isVoiceDropTargetAllowed(laneType)) {
+                targetLane = lane;
+                break;
+              } else if (dragState.itemType === 'video' && laneType === 'video') {
+                targetLane = lane;
+                break;
               }
+            }
+          }
 
-              // 1. Magnetic edge snapping to adjacent clips on same track
-              if (snappingEnabled && !e.shiftKey) {
-                const snapThreshold = Math.min(0.2, Math.max(0.06, 8 / pps));
-                if (Math.abs(newStart - prevBound) < snapThreshold) {
-                  newStart = prevBound;
-                  newEnd = newStart + clipDur;
-                  currentSnapTime = prevBound;
-                } else if (nextBound !== Infinity && Math.abs(newEnd - nextBound) < snapThreshold) {
-                  newEnd = nextBound;
-                  newStart = Math.max(prevBound, newEnd - clipDur);
-                  currentSnapTime = nextBound;
-                }
-              }
+          if (dragState.itemType === 'audio') {
+            const curRow = segmentRows[dragState.index] ?? (scriptSegments?.[dragState.index]?.trackRow || 0);
+            const bounds = measureVoiceLaneBounds(curRow);
 
-              // 2. Strict No-Overlap Clamp on the same track (Edge-to-edge ||)
+            // Clamp drag ghost / preview strictly inside the voice lanes area (NEVER enters VIDEO track)
+            const clamped = clampVoiceDragY({
+              deltaY,
+              curRow,
+              voiceRowCount: bounds.laneCount,
+              laneHeight: bounds.laneHeight,
+              firstLaneTop: bounds.firstLaneTop,
+              lastLaneTop: bounds.lastLaneTop,
+              originLaneTop: bounds.originLaneTop,
+            });
+            effectiveCurrentY = clamped.clampedY;
+            voiceMinY = clamped.minDeltaY;
+            voiceMaxY = clamped.maxDeltaY;
+
+            const pointerVoiceRow = targetLane?.dataset?.trackType === 'voice'
+              ? parseInt(targetLane.dataset.trackRow, 10)
+              : null;
+
+            resolvedVoiceTargetRow = resolveVoiceDropRow({
+              pointerLaneType: targetLane?.dataset?.trackType || null,
+              pointerLaneRow: Number.isFinite(pointerVoiceRow) ? pointerVoiceRow : null,
+              pointerClientY: e.clientY,
+              firstLaneTop: bounds.firstLaneTop,
+              lastLaneBottom: bounds.lastLaneBottom,
+              deltaY: effectiveCurrentY,
+              curRow,
+              voiceRowCount: bounds.laneCount,
+              laneHeight: bounds.laneHeight,
+            });
+
+            // Snap targets for VOICE clips are VOICE clips ONLY — NEVER video clip boundaries
+            const voicePos = computeVoiceDragPosition({
+              origStart: dragState.origStart,
+              origEnd: dragState.origEnd,
+              proposedStart: newStart,
+              draggedIndex: dragState.index,
+              curRow,
+              targetRow: resolvedVoiceTargetRow,
+              scriptSegments: scriptSegments || [],
+              segmentRows,
+              getSegEffectiveRange,
+              snappingEnabled,
+              shiftKey: Boolean(e.shiftKey),
+              pps,
+            });
+            newStart = voicePos.newStart;
+            newEnd = voicePos.newEnd;
+            currentSnapTime = voicePos.snapTime;
+
+            if (resolvedVoiceTargetRow === curRow) {
+              const { prevBound, nextBound } = voicePos;
+              // Strict No-Overlap Clamp on the same track (Edge-to-edge ||)
               if (newStart < prevBound) {
                 newStart = prevBound;
                 newEnd = newStart + clipDur;
@@ -1070,49 +1163,23 @@ function TimelineEditor({
             hasMoved: true, 
             currentStart: newStart, 
             currentEnd: newEnd,
-            currentY: deltaY,
+            currentY: effectiveCurrentY,
+            ...(dragState.itemType === 'audio' ? {
+              minVoiceY: voiceMinY,
+              maxVoiceY: voiceMaxY,
+              targetVoiceRow: resolvedVoiceTargetRow,
+            } : {}),
           }) : null);
 
-          // Highlight target lane while dragging vertically (Strict lane type isolation)
-          const elements = typeof document.elementsFromPoint === 'function'
-            ? document.elementsFromPoint(e.clientX, e.clientY)
-            : [document.elementFromPoint(e.clientX, e.clientY)].filter(Boolean);
-
-          let targetLane = null;
-          for (const el of elements) {
-            const lane = el?.closest?.('.track-lane');
-            if (lane) {
-              const laneType = lane.dataset?.trackType; // 'video' | 'voice' | 'subs'
-              if (dragState.itemType === 'subtitle' && laneType === 'subs') {
-                targetLane = lane;
-                break;
-              } else if (dragState.itemType === 'audio' && laneType === 'voice') {
-                targetLane = lane;
-                break;
-              } else if (dragState.itemType === 'video' && laneType === 'video') {
-                targetLane = lane;
-                break;
-              }
-            }
-          }
-
-          if (targetLane && targetLane.dataset?.trackKey) {
+          if (dragState.itemType === 'audio') {
+            setDragOverTrack(`voice_${Math.max(0, resolvedVoiceTargetRow ?? 0)}`);
+          } else if (targetLane && targetLane.dataset?.trackKey) {
             setDragOverTrack(targetLane.dataset.trackKey);
           } else if (deltaY > 20 && dragState.itemType === 'video') {
             const cur = videoClips?.find(c => c.id === dragState.id);
             const curRow = cur?.trackRow || 0;
             const rowShift = Math.max(1, Math.round(deltaY / 52));
             setDragOverTrack(`video_${curRow + rowShift}`);
-          } else if (deltaY > 20 && dragState.itemType === 'audio') {
-            const curSeg = scriptSegments?.[dragState.index];
-            const curRow = segmentRows[dragState.index] ?? (curSeg?.trackRow || 0);
-            const rowShift = Math.max(1, Math.round(deltaY / 48));
-            setDragOverTrack(`voice_${curRow + rowShift}`);
-          } else if (deltaY < -20 && dragState.itemType === 'audio') {
-            const curSeg = scriptSegments?.[dragState.index];
-            const curRow = segmentRows[dragState.index] ?? (curSeg?.trackRow || 0);
-            const rowShift = Math.min(-1, Math.round(deltaY / 48));
-            setDragOverTrack(`voice_${Math.max(0, curRow + rowShift)}`);
           } else if (deltaY > 20 && dragState.itemType === 'subtitle') {
             const curSeg = scriptSegments?.[dragState.index];
             const curRow = (typeof curSeg?.subTrackRow === 'number' && curSeg.subTrackRow >= 0) ? curSeg.subTrackRow : 0;
@@ -1251,15 +1318,18 @@ function TimelineEditor({
             let finalTargetRow = curSegRow;
 
             if (dragState.itemType === 'audio') {
-              if (targetType === 'voice' && targetRow !== null) {
-                finalTargetRow = targetRow;
-              } else if (liveDeltaY < -20 && curSegRow > 0) {
-                const rowShift = Math.min(-1, Math.round(liveDeltaY / 48));
-                finalTargetRow = Math.max(0, curSegRow + rowShift);
-              } else if (liveDeltaY > 20) {
-                const rowShift = Math.max(1, Math.round(liveDeltaY / 48));
-                finalTargetRow = curSegRow + rowShift;
-              }
+              const bounds = measureVoiceLaneBounds(curSegRow);
+              finalTargetRow = resolveVoiceDropRow({
+                pointerLaneType: isVoiceDropTargetAllowed(targetType) ? targetType : null,
+                pointerLaneRow: isVoiceDropTargetAllowed(targetType) ? targetRow : null,
+                pointerClientY: typeof e?.clientY === 'number' ? e.clientY : null,
+                firstLaneTop: bounds.firstLaneTop,
+                lastLaneBottom: bounds.lastLaneBottom,
+                deltaY: liveDeltaY,
+                curRow: curSegRow,
+                voiceRowCount: bounds.laneCount,
+                laneHeight: bounds.laneHeight,
+              });
             }
 
             const curSubRow = (typeof seg.subTrackRow === 'number' && seg.subTrackRow >= 0) ? seg.subTrackRow : 0;

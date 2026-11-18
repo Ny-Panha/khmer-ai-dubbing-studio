@@ -3,6 +3,46 @@
 ## Last Session
 - **Environment**: Antigravity IDE
 - **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-18T17:28:30+07:00
+
+## Summary: Voice Clip Lane Isolation — Never Joins Video Track on Drag, Drop, Snap, or Ghost Preview (COMPLETED)
+- **Step 0 Diagnosis (live on `Pseudo_Spiritual_Root` `ep_5`, `#9` after fresh restart of `:5000` & `:5173`)**:
+  - **(a) Drop onto VIDEO track row**: Custom pointer drag (`TimelineEditor.jsx` `handleMouseUp`) ignored `.video-lane` hits and kept `trackRow: 0`, **but** dragging upward from Row 0 set `isHoveringOtherLane = Math.abs(deltaY) > 20` (`TimelineEditor.jsx` L980), bypassing same-lane no-overlap bounds so `#9` dropped overlapping `#10` (`14.81s–16.11s`). Separately, the HTML5 native drop path (`TimelineTracksCanvas.jsx` `.video-lane` `onDragOver`/`onDrop` L1162–1220 -> `TimelineEditor.jsx` `handleMoveVideoToTrack` L239–406) unconditionally accepted voice drags, highlighted `Drop to place on VIDEO 1`, snapped `dropTime` against `videoClips`, and did not reject `trackType === 'video'` for segments.
+  - **(b) Snap to video clip edges**: Custom pointer drag (`TimelineEditor.jsx` `processMouseMove`) already iterated `scriptSegments` for same-lane voice drags (0 video-edge snaps on empty `VOICE 2`), while `.video-lane` `onDrop` (`TimelineTracksCanvas.jsx` L1195–1204) snapped dropped times to `videoClips` (`c.end`), and the `else if` snap block wasn't structurally isolated from `audio`. `useClipOperations.js` has no drag/drop/snap logic.
+  - **(c) Drag ghost / preview overlapping VIDEO track (PRIMARY VISUAL BUG)**: `TimelineEditor.jsx` `processMouseMove` wrote unclamped `currentY: deltaY` (L970, L1073) and `TimelineTracksCanvas.jsx` `renderVoiceSegment` applied `transform: translateY(${dragState.currentY}px)` with `zIndex: 100` (L561–562). Live measurement on `ep_5` `#9`: dragging upward `-46px` placed `#9` at `top: 673..713` inside `.video-lane` (`669..715`, **40px / 100% overlap**); dragging `-120px` lifted it to `top: 599..639` past the video track and ruler.
+- **Step 1 Changes Applied**:
+  1. `frontend/src/utils/timelineUtils.js`: Added pure helpers `isVoiceDropTargetAllowed`, `clampVoiceDragY`, `resolveVoiceDropRow`, and `computeVoiceDragPosition` (voice-only snap targets, strict voice-lane drop validation, top/bottom voice-lane Y clamping).
+  2. `frontend/src/components/timeline/TimelineEditor.jsx`:
+     - Wired `measureVoiceLaneBounds`, `clampVoiceDragY`, `resolveVoiceDropRow`, and `computeVoiceDragPosition` into `processMouseMove` and `handleMouseUp` for `itemType === 'audio'` (clamped strictly to voice lanes, upward drag past `voice_0` clamps to `0` & keeps same-lane bounds, snap targets strictly voice clips only).
+     - Guarded `handleMoveVideoToTrack` so voice segments can never match video clips or drop onto `trackType === 'video'`.
+     - Left video clip dragging behaviour (`itemType === 'video'`) 100% unchanged.
+  3. `frontend/src/components/timeline/TimelineTracksCanvas.jsx`:
+     - Defensively clamped `safeVoiceTranslateY` in `renderVoiceSegment` (only for `itemType === 'audio'`) and kept `.video-clip-ghost` inside `.voice-lane` (`height: calc(100% - 6px)`).
+     - Suppressed `.video-lane` `isDragOver` during voice drags and rejected voice payloads in `.video-lane` `onDragOver` & `onDrop` before any video-edge snapping or commit.
+  4. `backend/tests/timeline_voice_lane_isolation.test.js` *(new)*: Added 5 unit + static-audit tests covering all 3 requirements and video-drag preservation.
+- **Verification Evidence**:
+  - Timeline & Auto-Align suites (`node --test backend/tests/timeline_*.test.js backend/tests/auto_align_voice.test.js`): **111 / 111 PASS** (16 suites, 0 fail).
+  - Frontend production build (`npm --prefix frontend run build`): **PASS** (`646ms`, 0 errors).
+  - Real-app Playwright E2E on `Pseudo_Spiritual_Root` `ep_5` (`http://localhost:5173/studio`, original `series.json` byte-identical):
+    - Dragging `#9` upward to VIDEO center and extreme `y=20`: `transform: translateY(0px)`, `b9Top: 719 >= videoBottom: 715` (`overlapsVideo: false`, `overlapPx: 0`), `dragOverLanes: ['voice_0']`, ghost inside `voice_0`, drops on `voice_0` without overlapping `#10`.
+    - Normal voice-to-voice move `#9` `VOICE 1` -> `VOICE 2` works (`laneKey: 'voice_1'`).
+    - Dragging `#9` on `VOICE 2` across all nearby video clip edges: `snapSamples: []` (0 snaps to video edges).
+    - Dragging `#9` from `VOICE 2` far upward (`y=50`): clamps cleanly at `VOICE 1` (`translateY(-37px)`, `b9Top: 719 >= videoBottom: 715`, `overlapsVideo: false`) and drops on `voice_0`.
+    - Real video playback advanced smoothly (`1.0s -> 1.662s`, `0` page errors).
+
+## Active Environment
+- **Backend API**: `http://localhost:5000` (freshly restarted on `chore/full-project-cleanup`)
+- **Frontend Studio**: `http://localhost:5173` (freshly restarted Vite dev server on `chore/full-project-cleanup`)
+- **Branch**: `chore/full-project-cleanup` (committed & pushed)
+
+## Next Steps
+- Refresh browser (`Ctrl + F5`) at `http://localhost:5173/studio` and drag voice `#9` upward or across lanes to verify visually.
+
+---
+
+## Previous Session
+- **Environment**: Antigravity IDE
+- **Branch**: `chore/full-project-cleanup`
 - **Timestamp**: 2026-11-18T16:53:00+07:00
 
 ## Summary: Inspector "ឲ្យ Auto-Align គ្រប់គ្រងវិញ" (Release to Auto-Align) Button for Manual `userShifted` Clips (COMPLETED)
