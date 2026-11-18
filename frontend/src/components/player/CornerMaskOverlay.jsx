@@ -21,6 +21,9 @@ export default function CornerMaskOverlay({
     cornerMaskWidth = 220,
     cornerMaskHeight = 54,
     cornerMaskOpacity = 0.95,
+    cornerMaskBlur = 18,
+    cornerMaskOffsetX = 14,
+    cornerMaskOffsetY = 14,
   } = voiceSettings || {};
 
   if (!enableCornerMask || renderedVideo) {
@@ -31,7 +34,15 @@ export default function CornerMaskOverlay({
   const scale = aspectRatio === '9:16' ? 0.65 : 1.0;
   const width = Math.round((Number(cornerMaskWidth) || 220) * scale);
   const height = Math.round((Number(cornerMaskHeight) || 54) * scale);
-  const opacity = Math.max(0.1, Math.min(1.0, Number(cornerMaskOpacity) || 0.95));
+  const blurPx = Math.max(4, Math.min(40, Math.round((Number.isFinite(Number(cornerMaskBlur)) ? Number(cornerMaskBlur) : 18) * scale)));
+  const rawOffsetX = Number.isFinite(Number(cornerMaskOffsetX)) ? Number(cornerMaskOffsetX) : 14;
+  const rawOffsetY = Number.isFinite(Number(cornerMaskOffsetY)) ? Number(cornerMaskOffsetY) : 14;
+  const offsetX = Math.max(0, Math.min(200, Math.round(rawOffsetX * scale)));
+  const offsetY = Math.max(0, Math.min(200, Math.round(rawOffsetY * scale)));
+  // Solid Black & Real Blur must render at full opacity (1.0) so watermarks never bleed through
+  const opacity = (cornerMaskStyle === 'solid' || cornerMaskStyle === 'blur')
+    ? 1
+    : Math.max(0.1, Math.min(1.0, Number(cornerMaskOpacity) || 0.95));
 
   const is916Letterbox = aspectRatio === '9:16' && verticalStyle !== 'crop' && (!videoMeta?.ratio || videoMeta.ratio > 1.2);
   const aspectClass = is916Letterbox ? 'aspect-9-16-letterbox' : '';
@@ -41,6 +52,29 @@ export default function CornerMaskOverlay({
   // Font size scales with height
   const fontSize = Math.max(9, Math.min(18, Math.round(height * 0.28)));
 
+  const positionStyle = {};
+  if (cornerMaskPosition === 'top-left' || cornerMaskPosition === 'bottom-left') {
+    positionStyle.left = `${offsetX}px`;
+    positionStyle.right = 'auto';
+  } else {
+    positionStyle.right = `${offsetX}px`;
+    positionStyle.left = 'auto';
+  }
+  if (cornerMaskPosition === 'bottom-left' || cornerMaskPosition === 'bottom-right') {
+    positionStyle.bottom = is916Letterbox ? `calc(34.2% + ${offsetY}px)` : `${offsetY}px`;
+    positionStyle.top = 'auto';
+  } else {
+    positionStyle.top = is916Letterbox ? `calc(34.2% + ${offsetY}px)` : `${offsetY}px`;
+    positionStyle.bottom = 'auto';
+  }
+
+  const innerBlurStyle = cornerMaskStyle === 'blur'
+    ? {
+        backdropFilter: `blur(${blurPx}px)`,
+        WebkitBackdropFilter: `blur(${blurPx}px)`,
+      }
+    : undefined;
+
   return (
     <div
       className={`corner-mask-root ${posClass} ${aspectClass}`}
@@ -49,9 +83,10 @@ export default function CornerMaskOverlay({
         width: `${width}px`,
         height: `${height}px`,
         opacity,
+        ...positionStyle,
       }}
     >
-      <div className={`corner-mask-inner ${styleClass}`}>
+      <div className={`corner-mask-inner ${styleClass}`} style={innerBlurStyle}>
         {cornerMaskStyle !== 'blur' && cornerMaskText && (
           <span
             className="corner-mask-text"

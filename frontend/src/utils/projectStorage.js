@@ -36,6 +36,9 @@ export const DEFAULT_VOICE_SETTINGS = {
   cornerMaskWidth: 220,
   cornerMaskHeight: 54,
   cornerMaskOpacity: 0.95,
+  cornerMaskBlur: 18,
+  cornerMaskOffsetX: 14,
+  cornerMaskOffsetY: 14,
 };
 
 export const VALID_ASPECT_RATIOS = Object.freeze(['16:9', '9:16', '1:1']);

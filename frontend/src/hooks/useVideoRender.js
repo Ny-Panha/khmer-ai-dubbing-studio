@@ -244,6 +244,9 @@ export function useVideoRender({
 
   const buildCornerMaskOptions = useCallback(() => {
     const activeSettings = getLatestVoiceSettings();
+    const rawOffsetX = activeSettings?.cornerMaskOffsetX;
+    const rawOffsetY = activeSettings?.cornerMaskOffsetY;
+    const rawBlur = activeSettings?.cornerMaskBlur;
     return {
       enabled: Boolean(activeSettings?.enableCornerMask),
       text: activeSettings?.cornerMaskText ?? '«រឿងប្រឌិតសុទ្ធសាធ • ហាមចម្លង»',
@@ -252,6 +255,9 @@ export function useVideoRender({
       width: Number(activeSettings?.cornerMaskWidth) || 220,
       height: Number(activeSettings?.cornerMaskHeight) || 54,
       opacity: Number(activeSettings?.cornerMaskOpacity) || 0.95,
+      blurStrength: Number.isFinite(Number(rawBlur)) ? Number(rawBlur) : 18,
+      offsetX: Number.isFinite(Number(rawOffsetX)) ? Number(rawOffsetX) : 14,
+      offsetY: Number.isFinite(Number(rawOffsetY)) ? Number(rawOffsetY) : 14,
     };
   }, [getLatestVoiceSettings]);
 

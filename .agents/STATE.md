@@ -3,6 +3,42 @@
 ## Last Session
 - **Environment**: Antigravity IDE
 - **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-18T21:12:00+07:00
+
+## Summary: Real Video Blur Watermark Mask (Preview + FFmpeg `gblur`), Solid Black 100%, & Offset X/Y Controls (COMPLETED)
+- **Root Cause**:
+  1. `CornerMaskOverlay.css` rendered `.style-blur` with dark `rgba(0, 0, 0, 0.65)` instead of pure clear video blur, and `CornerMaskOverlay.jsx` applied `opacity: 0.95` even on `solid` and `blur` styles (letting `bilibili` watermark bleed through).
+  2. `backend/services/ffmpegService.js` did NOT actually blur the video when `cornerMask.style === 'blur'` — it drew a dark ASS subtitle box (`&H121216&`).
+  3. Corner position was fixed at `14px` (`30px` in FFmpeg) with no Offset X / Offset Y sliders to cover edge-flush logos like `bilibili`.
+- **Changes Applied**:
+  1. `frontend/src/components/player/CornerMaskOverlay.jsx` & `CornerMaskOverlay.css`:
+     - Removed dark `0.65` tint from `.style-blur`; renders pure natural video blur (`backdrop-filter: blur(${blurPx}px)`).
+     - Enforced `opacity: 1` for both `solid` (100% opaque `#000000`) and `blur` styles.
+     - Added dynamic `cornerMaskOffsetX`, `cornerMaskOffsetY`, and `cornerMaskBlur` positioning & blur-strength support (16:9 & 9:16 letterbox).
+  2. `frontend/src/components/voice/ExportSettingsPanel.jsx`, `frontend/src/hooks/useVideoRender.js`, `frontend/src/utils/projectStorage.js`, `frontend/src/App.jsx`:
+     - Added Inspector sliders for **Offset X (`0–120px`)**, **Offset Y (`0–120px`)**, and **Blur Strength (`6–36px`, visible when `blur` style selected)**; forwarded `blurStrength`, `offsetX`, `offsetY` in `buildCornerMaskOptions()`.
+  3. `backend/services/ffmpegService.js`:
+     - Added exported `buildCornerBlurVideoFilterChain(...)` (`split -> crop -> gblur=sigma=... -> overlay`) wired into `renderDubbedVideoWithDucking` right BEFORE burning ASS subtitles, Anti-Theft marquee, and Logo.
+     - Updated `generateKhmerAssSubtitleFile` to skip `CornerMaskBox` for `style === 'blur'`, use pure opaque `#000000` (`\c&H000000&\1a&H00&\bord0`) for `style === 'solid'`, and respect `offsetX`/`offsetY`.
+  4. `backend/tests/corner_mask_real_blur.test.js` *(new)*: Real FFmpeg execution test across 16:9 + 9:16 + all 4 corners + ASS + static UI wiring verification.
+- **Verification**:
+  - `node --test backend/tests/corner_mask_real_blur.test.js backend/tests/global_logo_settings.test.js`: **8 / 8 PASS** (including 4 real FFmpeg `gblur` runs).
+  - `npm --prefix frontend run build`: **PASS** (`677ms`, 0 errors).
+  - Backend server restarted on `http://localhost:5000` with the new FFmpeg filtergraph active.
+
+## Active Environment
+- **Backend API**: `http://localhost:5000` (HTTP 200, restarted with real FFmpeg blur)
+- **Frontend Studio**: `http://localhost:5173` (Vite dev server)
+- **Branch**: `chore/full-project-cleanup` (committed & pushed)
+
+## Next Steps
+- Refresh Studio (`Ctrl + F5`), pick `🌫️ ប្រអប់ Blur (Real Blur ព្រិលពិត)`, set `Offset X = 0–4px` and `Offset Y = 0–6px`, adjust `Blur Strength` (`18–24px`) to blur out the `bilibili` corner watermark cleanly in both Preview and Export.
+
+---
+
+## Previous Session
+- **Environment**: Antigravity IDE
+- **Branch**: `chore/full-project-cleanup`
 - **Timestamp**: 2026-11-18T20:23:30+07:00
 
 ## Summary: Voice Clip Drag Persistence & Reload Durability Across All Lanes (COMPLETED)

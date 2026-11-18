@@ -64,20 +64,20 @@
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.65), inset 0 0 10px rgba(56, 189, 248, 0.1);
 }
 
-/* Style B: Pure Blur Patch (Translucent frosted blur glass to cleanly obscure watermarks) */
+/* Style B: Pure Real Video Blur Patch (Clear video blur — no dark tint, matches FFmpeg gblur export) */
 .corner-mask-inner.style-blur {
-  background: rgba(0, 0, 0, 0.65);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
+  background: rgba(255, 255, 255, 0.02);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  border: 1px dashed rgba(255, 255, 255, 0.22);
+  box-shadow: none;
 }
 
-/* Style C: Solid Black Box (100% blacked out for complete concealment) */
+/* Style C: Solid Black Box (100% opaque black for complete concealment) */
 .corner-mask-inner.style-solid {
   background: #000000;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.8);
+  border: none;
+  box-shadow: none;
 }
 
 .corner-mask-text {

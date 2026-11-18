@@ -988,10 +988,15 @@ Style: AntiTheftWatermark,${fontName},${watermarkFontSize},${watermarkAssColor},
     }
   }
 
-  // 🛡️ Corner Blocker / Disclaimer Mask Events & Styles
+  // 🛡️ Corner Blocker / Disclaimer Mask Events & Styles (Badge / Solid Black via ASS; Real Blur uses FFmpeg video filtergraph)
   let cornerMaskStyles = "";
   const cornerMaskEvents = [];
-  const isCornerMaskActive = Boolean(cornerMask && (cornerMask.enabled || cornerMask.enableCornerMask));
+  const rawCornerMaskStyle = String(cornerMask?.style || "badge").toLowerCase();
+  const isCornerMaskActive = Boolean(
+    cornerMask &&
+    (cornerMask.enabled || cornerMask.enableCornerMask) &&
+    rawCornerMaskStyle !== "blur"
+  );
   if (isCornerMaskActive) {
     let maxTimeSec = Number(totalDuration) || 0;
     if (maxTimeSec <= 0 && segments.length > 0) {
@@ -1005,27 +1010,35 @@ Style: AntiTheftWatermark,${fontName},${watermarkFontSize},${watermarkAssColor},
     maxTimeSec += 2;
     const totalEndAss = formatSecondsToAssTime(maxTimeSec);
 
-    const baseW = Number(cornerMask.width) || 220;
-    const baseH = Number(cornerMask.height) || 54;
+    const baseW = Math.max(60, Math.min(500, Number(cornerMask.width) || 220));
+    const baseH = Math.max(20, Math.min(200, Number(cornerMask.height) || 54));
+    const rawOffsetX = cornerMask.offsetX ?? cornerMask.cornerMaskOffsetX;
+    const rawOffsetY = cornerMask.offsetY ?? cornerMask.cornerMaskOffsetY;
+    const baseOffX = Math.max(0, Math.min(200, Number.isFinite(Number(rawOffsetX)) ? Number(rawOffsetX) : 14));
+    const baseOffY = Math.max(0, Math.min(200, Number.isFinite(Number(rawOffsetY)) ? Number(rawOffsetY) : 14));
     const scale = playResX / 1000;
     const maskW = Math.round(baseW * scale);
     const maskH = Math.round(baseH * scale);
+    const offX = Math.round(baseOffX * scale);
+    const offY = Math.round(baseOffY * scale);
     const maskPos = cornerMask.position || "top-right";
-    const maskStyle = cornerMask.style || "badge";
-    const maskText = cornerMask.text || "«រឿងប្រឌិតសុទ្ធសាធ • ហាមចម្លង»";
+    const maskStyle = rawCornerMaskStyle;
+    const maskText = cornerMask.text ?? "«រឿងប្រឌិតសុទ្ធសាធ • ហាមចម្លង»";
+    const is916Letterbox = aspectRatio === "9:16" && verticalStyle !== "crop";
+    const letterboxTopY = Math.round(playResY * 0.342);
 
-    let maskX = playResX - maskW - 30;
-    let maskY = (aspectRatio === "9:16" && verticalStyle !== "crop") ? 676 : 30;
+    let maskX = Math.max(0, playResX - maskW - offX);
+    let maskY = is916Letterbox ? (letterboxTopY + offY) : offY;
 
     if (maskPos === "top-left") {
-      maskX = 30;
-      maskY = (aspectRatio === "9:16" && verticalStyle !== "crop") ? 676 : 30;
+      maskX = offX;
+      maskY = is916Letterbox ? (letterboxTopY + offY) : offY;
     } else if (maskPos === "bottom-right") {
-      maskX = playResX - maskW - 30;
-      maskY = (aspectRatio === "9:16" && verticalStyle !== "crop") ? (1920 - 676 - maskH) : (playResY - maskH - 30);
+      maskX = Math.max(0, playResX - maskW - offX);
+      maskY = is916Letterbox ? Math.max(0, playResY - letterboxTopY - maskH - offY) : Math.max(0, playResY - maskH - offY);
     } else if (maskPos === "bottom-left") {
-      maskX = 30;
-      maskY = (aspectRatio === "9:16" && verticalStyle !== "crop") ? (1920 - 676 - maskH) : (playResY - maskH - 30);
+      maskX = offX;
+      maskY = is916Letterbox ? Math.max(0, playResY - letterboxTopY - maskH - offY) : Math.max(0, playResY - maskH - offY);
     }
 
     const textFontSize = Math.max(16, Math.round(maskH * 0.28));
@@ -1033,12 +1046,15 @@ Style: AntiTheftWatermark,${fontName},${watermarkFontSize},${watermarkAssColor},
 Style: CornerMaskBox,${fontName},10,&H00000000,&H00000000,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,0,0,7,0,0,0,1
 Style: CornerMaskText,${fontName},${textFontSize},&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,2,1,5,0,0,0,1`;
 
-    const boxAlpha = maskStyle === "solid" ? "00" : "18";
+    const isSolid = maskStyle === "solid";
+    const boxColor = isSolid ? "000000" : "121216";
+    const boxAlpha = isSolid ? "00" : "18";
+    const boxBorder = isSolid ? "\\bord0" : "\\bord1.5\\3c&H404050&";
     cornerMaskEvents.push(
-      `Dialogue: 1,0:00:00.00,${totalEndAss},CornerMaskBox,,0,0,0,,{\\p1\\c&H121216&\\1a&H${boxAlpha}&\\bord1.5\\3c&H404050&\\shad0\\pos(${maskX},${maskY})}m 0 0 l ${maskW} 0 l ${maskW} ${maskH} l 0 ${maskH}{\\p0}`
+      `Dialogue: 1,0:00:00.00,${totalEndAss},CornerMaskBox,,0,0,0,,{\\p1\\c&H${boxColor}&\\1a&H${boxAlpha}&${boxBorder}\\shad0\\pos(${maskX},${maskY})}m 0 0 l ${maskW} 0 l ${maskW} ${maskH} l 0 ${maskH}{\\p0}`
     );
 
-    if (maskStyle !== "blur" && maskText && maskText.trim()) {
+    if (maskText && maskText.trim()) {
       const cleanMaskText = sanitizeKhmerSubtitleText(maskText);
       const textCenterX = maskX + Math.round(maskW / 2);
       const textCenterY = maskY + Math.round(maskH / 2);
@@ -1328,6 +1344,64 @@ function buildVerticalVideoFilterChain({
     `${inputLabel}${baseScaleFilter},split[v_vert_main][v_vert_band_src]`,
     `[v_vert_band_src]crop=1080:${h}:0:${y},boxblur=luma_radius=${requestedR}:luma_power=${power}:chroma_radius=${chromaR}:chroma_power=${power},eq=brightness=${brightness.toFixed(2)}[v_vert_sub_blur]`,
     `[v_vert_main][v_vert_sub_blur]overlay=0:${y}${outputLabel}`,
+  ];
+}
+
+/**
+ * Builds a true Gaussian-blur watermark mask filter chain (`split -> crop -> gblur -> overlay`)
+ * matching the frontend CornerMaskOverlay preview position, size, offset, and blur strength.
+ * Safe across all resolutions and YUV420P chroma dimensions (uses gblur instead of boxblur).
+ */
+function buildCornerBlurVideoFilterChain({
+  inputLabel = "[0:v:0]",
+  outputLabel = "[v_corner_blur]",
+  cornerMask = null,
+  aspectRatio = "16:9",
+  verticalStyle = "pad",
+} = {}) {
+  const baseW = Math.max(60, Math.min(500, Number(cornerMask?.width) || 220));
+  const baseH = Math.max(20, Math.min(200, Number(cornerMask?.height) || 54));
+  const rawOffX = cornerMask?.offsetX ?? cornerMask?.cornerMaskOffsetX;
+  const rawOffY = cornerMask?.offsetY ?? cornerMask?.cornerMaskOffsetY;
+  const rawBlur = cornerMask?.blurStrength ?? cornerMask?.cornerMaskBlur;
+  const baseOffX = Math.max(0, Math.min(200, Number.isFinite(Number(rawOffX)) ? Number(rawOffX) : 14));
+  const baseOffY = Math.max(0, Math.min(200, Number.isFinite(Number(rawOffY)) ? Number(rawOffY) : 14));
+  const blurSigma = Math.max(4, Math.min(40, Number.isFinite(Number(rawBlur)) ? Number(rawBlur) : 18));
+  const pos = String(cornerMask?.position || "top-right");
+  const is916Letterbox = aspectRatio === "9:16" && verticalStyle !== "crop";
+
+  const wFrac = (baseW / 1000).toFixed(4);
+  const hFrac = (baseH / 1000).toFixed(4);
+  const offXFrac = (baseOffX / 1000).toFixed(4);
+  const offYFrac = (baseOffY / 1000).toFixed(4);
+
+  const buildX = (W, w) =>
+    pos === "top-left" || pos === "bottom-left"
+      ? `max(0,min(${W}-${w},trunc(${W}*${offXFrac}/2)*2))`
+      : `max(0,min(${W}-${w},${W}-${w}-trunc(${W}*${offXFrac}/2)*2))`;
+
+  const buildY = (W, H, h) => {
+    if (pos === "bottom-left" || pos === "bottom-right") {
+      return is916Letterbox
+        ? `max(0,min(${H}-${h},trunc(${H}*0.658-${h}-${W}*${offYFrac})))`
+        : `max(0,min(${H}-${h},${H}-${h}-trunc(${W}*${offYFrac}/2)*2))`;
+    }
+    return is916Letterbox
+      ? `max(0,min(${H}-${h},trunc(${H}*0.342+${W}*${offYFrac})))`
+      : `max(0,min(${H}-${h},trunc(${W}*${offYFrac}/2)*2))`;
+  };
+
+  const cropW = `min(iw,max(16,trunc(iw*${wFrac}/2)*2))`;
+  const cropH = `min(ih,max(16,trunc(iw*${hFrac}/2)*2))`;
+  const cropX = buildX("iw", "ow");
+  const cropY = buildY("iw", "ih", "oh");
+  const ovX = buildX("W", "w");
+  const ovY = buildY("W", "H", "h");
+
+  return [
+    `${inputLabel}split[v_cm_bg][v_cm_fg]`,
+    `[v_cm_fg]crop=w='${cropW}':h='${cropH}':x='${cropX}':y='${cropY}',gblur=sigma=${blurSigma}[v_cm_blurred]`,
+    `[v_cm_bg][v_cm_blurred]overlay=x='${ovX}':y='${ovY}'${outputLabel}`,
   ];
 }
 
@@ -1687,8 +1761,10 @@ function renderDubbedVideoWithDucking(options = {}) {
     const targetAspectRatio = resolveRenderAspectRatio(subtitleOptions.aspectRatio || aspectRatio, sourceDimensions);
     const hasAntiTheft = Boolean(antiTheft && (antiTheft.enabled || antiTheft.enableAntiTheft));
     const hasCornerMask = Boolean(cornerMask && (cornerMask.enabled || cornerMask.enableCornerMask));
+    const isBlurCornerMask = Boolean(hasCornerMask && String(cornerMask.style || "badge").toLowerCase() === "blur");
+    const hasAssCornerMask = Boolean(hasCornerMask && !isBlurCornerMask);
     const hasBurnableSubs = Boolean(burnSubtitles && validSegments.length > 0);
-    const shouldBurnAss = Boolean(hasBurnableSubs || hasAntiTheft || hasCornerMask);
+    const shouldBurnAss = Boolean(hasBurnableSubs || hasAntiTheft || hasAssCornerMask);
     const isSourcePortrait = Boolean(
       sourceDimensions &&
       Number(sourceDimensions.height) > Number(sourceDimensions.width)
@@ -1710,6 +1786,49 @@ function renderDubbedVideoWithDucking(options = {}) {
       Number(sourceDimensions.height) > 0 &&
       Math.abs(srcRatio - 16 / 9) > 0.05;
 
+    // 1. Scale/pad canvas first (9:16, 16:9 pad, 1:1, or source passthrough)
+    let canvasLabel = baseVideoSource;
+    if (targetAspectRatio === "9:16") {
+      filterComplexParts.push(
+        ...buildVerticalVideoFilterChain({
+          inputLabel: baseVideoSource,
+          outputLabel: "[base_vert]",
+          verticalStyle,
+          blurSubtitleBand: shouldBlurVerticalSubBand,
+          segments,
+          framingOverrides,
+          framingKeyframes,
+        })
+      );
+      canvasLabel = "[base_vert]";
+    } else if (needsLandscape16x9Pad) {
+      filterComplexParts.push(
+        `${baseVideoSource}scale='if(gt(a,16/9),1920,-2)':'if(gt(a,16/9),-2,1080)',pad=1920:1080:(1920-iw)/2:(1080-ih)/2:color=black,setsar=1[base_land]`
+      );
+      canvasLabel = "[base_land]";
+    } else if (targetAspectRatio === "1:1") {
+      filterComplexParts.push(
+        `${baseVideoSource}scale=1080:1080:force_original_aspect_ratio=decrease,pad=1080:1080:(1080-iw)/2:(1080-ih)/2:color=black,setsar=1[base_sq]`
+      );
+      canvasLabel = "[base_sq]";
+    }
+
+    // 2. Apply Real Video Blur Corner Mask (crop + gblur + overlay) BEFORE burning ASS subtitles/logo
+    if (isBlurCornerMask) {
+      const blurInput = canvasLabel.startsWith("[") ? canvasLabel : `[${canvasLabel}]`;
+      filterComplexParts.push(
+        ...buildCornerBlurVideoFilterChain({
+          inputLabel: blurInput,
+          outputLabel: "[v_corner_blur]",
+          cornerMask,
+          aspectRatio: targetAspectRatio,
+          verticalStyle,
+        })
+      );
+      canvasLabel = "[v_corner_blur]";
+    }
+
+    // 3. Burn ASS Subtitles / Anti-Theft / Badge or Solid Corner Mask on top of blurred/scaled canvas
     if (shouldBurnAss) {
       tempAssPath = path.join(
         path.dirname(outputVideoPath),
@@ -1738,66 +1857,16 @@ function renderDubbedVideoWithDucking(options = {}) {
         aspectRatio: targetAspectRatio,
         verticalStyle,
         antiTheft: hasAntiTheft ? antiTheft : null,
-        cornerMask: hasCornerMask ? cornerMask : null,
+        cornerMask: hasAssCornerMask ? cornerMask : null,
         totalDuration: calculatedDuration > 0 ? calculatedDuration : null,
         sourceDimensions,
       });
 
       const assFilter = buildAssSubtitleVideoFilter(tempAssPath);
-
-      if (targetAspectRatio === "9:16") {
-        filterComplexParts.push(
-          ...buildVerticalVideoFilterChain({
-            inputLabel: baseVideoSource,
-            outputLabel: "[base_vert]",
-            verticalStyle,
-            blurSubtitleBand: shouldBlurVerticalSubBand,
-            segments,
-            framingOverrides,
-            framingKeyframes,
-          }),
-          `[base_vert]${assFilter}[final_video]`
-        );
-      } else if (needsLandscape16x9Pad) {
-        // Non-16:9 source (portrait, 1:1, 4:3, or ultrawide) exported to 16:9 landscape canvas
-        filterComplexParts.push(
-          `${baseVideoSource}scale='if(gt(a,16/9),1920,-2)':'if(gt(a,16/9),-2,1080)',pad=1920:1080:(1920-iw)/2:(1080-ih)/2:color=black,setsar=1[base_land]`,
-          `[base_land]${assFilter}[final_video]`
-        );
-      } else if (targetAspectRatio === "1:1") {
-        // 1:1 Square Canvas
-        filterComplexParts.push(
-          `${baseVideoSource}scale=1080:1080:force_original_aspect_ratio=decrease,pad=1080:1080:(1080-iw)/2:(1080-ih)/2:color=black,setsar=1[base_sq]`,
-          `[base_sq]${assFilter}[final_video]`
-        );
-      } else {
-        filterComplexParts.push(`${baseVideoSource}${assFilter}[final_video]`);
-      }
+      filterComplexParts.push(`${canvasLabel}${assFilter}[final_video]`);
       videoMapArg = "[final_video]";
-    } else if (targetAspectRatio === "9:16") {
-      // 9:16 Canvas without subtitles or anti-theft (uses shared vertical filter builder)
-      filterComplexParts.push(
-        ...buildVerticalVideoFilterChain({
-          inputLabel: baseVideoSource,
-          outputLabel: "[final_video]",
-          verticalStyle,
-          blurSubtitleBand: shouldBlurVerticalSubBand,
-          segments,
-          framingOverrides,
-          framingKeyframes,
-        })
-      );
-      videoMapArg = "[final_video]";
-    } else if (needsLandscape16x9Pad) {
-      filterComplexParts.push(
-        `${baseVideoSource}scale='if(gt(a,16/9),1920,-2)':'if(gt(a,16/9),-2,1080)',pad=1920:1080:(1920-iw)/2:(1080-ih)/2:color=black,setsar=1[final_video]`
-      );
-      videoMapArg = "[final_video]";
-    } else if (targetAspectRatio === "1:1") {
-      filterComplexParts.push(
-        `${baseVideoSource}scale=1080:1080:force_original_aspect_ratio=decrease,pad=1080:1080:(1080-iw)/2:(1080-ih)/2:color=black,setsar=1[final_video]`
-      );
-      videoMapArg = "[final_video]";
+    } else if (canvasLabel !== baseVideoSource) {
+      videoMapArg = canvasLabel;
     }
 
     // Overlay Logo Watermark (សងខាង / Both Sides, Top-Left, or Top-Right)
@@ -3964,6 +4033,7 @@ module.exports = {
   generateKhmerAssSubtitleFile,
   buildAssSubtitleVideoFilter,
   buildVerticalVideoFilterChain,
+  buildCornerBlurVideoFilterChain,
   buildDynamicDuckingFilter,
   renderDubbedVideoWithDucking,
   mergeVideosConcat,

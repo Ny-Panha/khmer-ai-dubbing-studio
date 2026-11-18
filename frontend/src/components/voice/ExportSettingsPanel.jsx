@@ -526,8 +526,8 @@ export default function ExportSettingsPanel({
                       style={{ width: '100%', padding: '4px 6px', fontSize: '0.72rem' }}
                     >
                       <option value="badge">🏷️ ប្រអប់អក្សរ (Badge + Text)</option>
-                      <option value="blur">🌫️ ប្រអប់ Blur (Blur Patch)</option>
-                      <option value="solid">⬛ ប្រអប់ខ្មៅសុទ្ធ (Solid Black)</option>
+                      <option value="blur">🌫️ ប្រអប់ Blur (Real Blur ព្រិលពិត)</option>
+                      <option value="solid">⬛ ប្រអប់ខ្មៅសុទ្ធ (Solid Black 100%)</option>
                     </select>
                   </div>
                 </div>
@@ -570,6 +570,66 @@ export default function ExportSettingsPanel({
                     />
                   </div>
                 </div>
+
+                {/* 4. Sliders: Offset X & Offset Y (move flush to corner edge to cover bilibili cleanly) */}
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                  <div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 2 }}>
+                      <span style={{ fontSize: '0.68rem', color: '#94a3b8' }}>គែមឆ្វេង/ស្តាំ (Offset X)</span>
+                      <span style={{ fontSize: '0.68rem', color: '#38bdf8', fontFamily: 'monospace' }}>
+                        {Number.isFinite(Number(settings?.cornerMaskOffsetX)) ? Number(settings.cornerMaskOffsetX) : 14}px
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min="0"
+                      max="120"
+                      step="2"
+                      value={Number.isFinite(Number(settings?.cornerMaskOffsetX)) ? Number(settings.cornerMaskOffsetX) : 14}
+                      onChange={(e) => onSettingChange('cornerMaskOffsetX', Number(e.target.value))}
+                      style={{ width: '100%', accentColor: '#38bdf8' }}
+                    />
+                  </div>
+
+                  <div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 2 }}>
+                      <span style={{ fontSize: '0.68rem', color: '#94a3b8' }}>គែមលើ/ក្រោម (Offset Y)</span>
+                      <span style={{ fontSize: '0.68rem', color: '#38bdf8', fontFamily: 'monospace' }}>
+                        {Number.isFinite(Number(settings?.cornerMaskOffsetY)) ? Number(settings.cornerMaskOffsetY) : 14}px
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min="0"
+                      max="120"
+                      step="2"
+                      value={Number.isFinite(Number(settings?.cornerMaskOffsetY)) ? Number(settings.cornerMaskOffsetY) : 14}
+                      onChange={(e) => onSettingChange('cornerMaskOffsetY', Number(e.target.value))}
+                      style={{ width: '100%', accentColor: '#38bdf8' }}
+                    />
+                  </div>
+                </div>
+
+                {/* 5. Blur Strength slider (shown when Real Blur style is active) */}
+                {(settings?.cornerMaskStyle || 'badge') === 'blur' && (
+                  <div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 2 }}>
+                      <span style={{ fontSize: '0.68rem', color: '#94a3b8' }}>🌫️ កម្រិតព្រិល (Blur Strength)</span>
+                      <span style={{ fontSize: '0.68rem', color: '#38bdf8', fontFamily: 'monospace' }}>
+                        {Number.isFinite(Number(settings?.cornerMaskBlur)) ? Number(settings.cornerMaskBlur) : 18}px
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min="6"
+                      max="36"
+                      step="2"
+                      value={Number.isFinite(Number(settings?.cornerMaskBlur)) ? Number(settings.cornerMaskBlur) : 18}
+                      onChange={(e) => onSettingChange('cornerMaskBlur', Number(e.target.value))}
+                      style={{ width: '100%', accentColor: '#38bdf8' }}
+                    />
+                  </div>
+                )}
               </div>
             )}
           </div>
