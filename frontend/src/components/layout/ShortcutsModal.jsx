@@ -14,48 +14,60 @@ export default function ShortcutsModal({ isOpen, onClose }) {
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal-dialog" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 440 }}>
+      <div
+        className="modal-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Keyboard Shortcuts and Controls"
+        onClick={(e) => e.stopPropagation()}
+        style={{ maxWidth: 440 }}
+      >
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-            <Keyboard size={16} color="var(--accent-cyan)" />
-            <h3 style={{ margin: 0, fontSize: '0.92rem', fontWeight: 700, color: '#fff' }}>
-              Keyboard Shortcuts & Controls
-            </h3>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Keyboard size={16} color="var(--primary-accent)" />
+            <h2 style={{ margin: 0, fontSize: 'var(--text-md)', fontWeight: 700, color: 'var(--text-primary)' }}>
+              Keyboard Shortcuts &amp; Controls
+            </h2>
           </div>
-          <button 
-            onClick={onClose} 
-            className="icon-action-btn"
-            style={{ padding: 4 }}
+          <button
+            type="button"
+            onClick={onClose}
+            className="btn-ghost"
+            aria-label="Close Keyboard Shortcuts"
           >
-            <X size={15} />
+            <X size={16} />
           </button>
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: 6, margin: '14px 0' }}>
           {shortcuts.map((sc, i) => (
-            <div 
+            <div
               key={i}
               style={{
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'space-between',
-                padding: '7px 10px',
-                background: 'rgba(0, 0, 0, 0.25)',
+                gap: 10,
+                padding: '8px 10px',
+                background: 'var(--bg-secondary-panel)',
                 border: '1px solid var(--border-subtle)',
-                borderRadius: 'var(--radius-xs)',
+                borderRadius: 'var(--radius-sm)',
               }}
             >
-              <span style={{ fontSize: '0.78rem', color: 'var(--text-muted)' }}>{sc.desc}</span>
-              <kbd style={{
-                background: 'var(--bg-card)',
-                border: '1px solid var(--border-subtle)',
-                color: 'var(--accent-cyan)',
-                fontSize: '0.72rem',
-                fontWeight: 700,
-                padding: '2px 8px',
-                borderRadius: 4,
-                fontFamily: 'monospace',
-              }}>
+              <span style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>{sc.desc}</span>
+              <kbd
+                style={{
+                  background: 'var(--bg-elevated-panel)',
+                  border: '1px solid var(--border-subtle)',
+                  color: 'var(--primary-accent)',
+                  fontSize: 'var(--text-2xs)',
+                  fontWeight: 600,
+                  padding: '2px 8px',
+                  borderRadius: 'var(--radius-xs)',
+                  fontFamily: 'var(--font-mono)',
+                  whiteSpace: 'nowrap',
+                }}
+              >
                 {sc.key}
               </kbd>
             </div>
@@ -63,7 +75,7 @@ export default function ShortcutsModal({ isOpen, onClose }) {
         </div>
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
-          <button onClick={onClose} className="btn-secondary" style={{ fontSize: '0.78rem' }}>
+          <button type="button" onClick={onClose} className="btn-secondary">
             Close
           </button>
         </div>

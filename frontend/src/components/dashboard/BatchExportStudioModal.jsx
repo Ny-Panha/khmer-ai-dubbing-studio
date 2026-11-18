@@ -278,10 +278,10 @@ export default function BatchExportStudioModal({
           maxHeight: '92vh',
           display: 'flex',
           flexDirection: 'column',
-          borderRadius: 16,
-          background: 'linear-gradient(180deg, #0b1222 0%, #0f172a 100%)',
-          border: '1px solid rgba(56, 189, 248, 0.3)',
-          boxShadow: '0 24px 64px rgba(0, 0, 0, 0.65)',
+          borderRadius: 'var(--radius-lg)',
+          background: 'var(--bg-primary-panel)',
+          border: '1px solid var(--border-subtle-hover)',
+          boxShadow: 'var(--shadow-lg)',
           overflow: 'hidden',
         }}
       >
@@ -289,8 +289,8 @@ export default function BatchExportStudioModal({
         <div
           style={{
             padding: '14px 20px',
-            borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
-            background: 'rgba(15, 23, 42, 0.9)',
+            borderBottom: '1px solid var(--border-subtle)',
+            background: 'var(--bg-secondary-panel)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
@@ -303,31 +303,31 @@ export default function BatchExportStudioModal({
               style={{
                 width: 36,
                 height: 36,
-                borderRadius: 10,
-                background: 'linear-gradient(135deg, rgba(2, 132, 199, 0.25), rgba(37, 99, 235, 0.35))',
-                border: '1px solid rgba(56, 189, 248, 0.45)',
+                borderRadius: 'var(--radius-sm)',
+                background: 'rgba(56, 189, 248, 0.12)',
+                border: '1px solid rgba(56, 189, 248, 0.35)',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
                 flexShrink: 0,
               }}
             >
-              <Film size={18} color="#38BDF8" />
+              <Film size={18} color="var(--primary-accent)" />
             </div>
             <div style={{ minWidth: 0 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                <h2 style={{ margin: 0, fontSize: '0.98rem', fontWeight: 900, color: '#F8FAFC', letterSpacing: '0.01em' }}>
+                <h1 style={{ margin: 0, fontSize: 'var(--text-lg)', fontWeight: 700, color: 'var(--text-primary)', letterSpacing: '0.01em' }}>
                   Export Studio — Batch Export &amp; Merge
-                </h2>
+                </h1>
                 {activeSeries?.title && (
                   <span
                     style={{
-                      fontSize: '0.68rem',
-                      fontWeight: 700,
+                      fontSize: 'var(--text-2xs)',
+                      fontWeight: 600,
                       padding: '2px 8px',
-                      borderRadius: 9999,
-                      background: 'rgba(56, 189, 248, 0.14)',
-                      border: '1px solid rgba(56, 189, 248, 0.32)',
+                      borderRadius: 'var(--radius-xs)',
+                      background: 'rgba(56, 189, 248, 0.12)',
+                      border: '1px solid rgba(56, 189, 248, 0.35)',
                       color: '#7DD3FC',
                       maxWidth: 320,
                       overflow: 'hidden',
@@ -346,22 +346,14 @@ export default function BatchExportStudioModal({
             type="button"
             data-testid="close-export-studio-btn"
             onClick={onClose}
+            className="btn-secondary"
             style={{
+              minHeight: 34,
               padding: '6px 12px',
-              borderRadius: 8,
-              background: 'rgba(255, 255, 255, 0.06)',
-              border: '1px solid rgba(255, 255, 255, 0.14)',
-              color: '#E2E8F0',
-              fontSize: '0.76rem',
-              fontWeight: 700,
-              cursor: 'pointer',
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 5,
             }}
           >
             <X size={14} />
-            <span>✕ បិទ (Close)</span>
+            <span>បិទ (Close)</span>
           </button>
         </div>
 
@@ -374,15 +366,12 @@ export default function BatchExportStudioModal({
             display: 'flex',
             flexDirection: 'column',
             gap: 16,
+            background: 'var(--bg-desktop)',
           }}
         >
           {/* ── (a) Episode Multi-Select Grid with Readiness States ── */}
           <section
             style={{
-              background: 'rgba(15, 23, 42, 0.72)',
-              border: '1px solid rgba(255, 255, 255, 0.09)',
-              borderRadius: 12,
-              padding: '12px 14px',
               display: 'flex',
               flexDirection: 'column',
               gap: 10,
@@ -390,18 +379,18 @@ export default function BatchExportStudioModal({
           >
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                <span style={{ fontSize: '0.8rem', fontWeight: 800, color: '#F8FAFC' }}>
+                <span style={{ fontSize: 'var(--text-md)', fontWeight: 700, color: 'var(--text-primary)' }}>
                   ១. ជ្រើសរើសភាគសម្រាប់ Export ({selectedItems.length}/{episodesWithVideo.length} ភាគ)
                 </span>
                 <span
                   style={{
-                    fontSize: '0.68rem',
+                    fontSize: 'var(--text-2xs)',
                     fontWeight: 700,
                     padding: '2px 8px',
-                    borderRadius: 9999,
+                    borderRadius: 'var(--radius-xs)',
                     background: 'rgba(16, 185, 129, 0.14)',
                     border: '1px solid rgba(52, 211, 153, 0.35)',
-                    color: '#34D399',
+                    color: '#6EE7B7',
                   }}
                 >
                   មានសំឡេងខ្មែររួច: {selectedVoicedItems.length} ភាគ
