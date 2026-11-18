@@ -82,6 +82,7 @@ export default function VoiceSettings({
   onAutoSplitSegment = null,
   onToggleMuteSegment = null,
   onToggleMuteVideoClip = null,
+  onReleaseSegmentToAutoAlign = null,
   videoClips = [],
   onToggleDeliveryType = null,
   duration = 0,
@@ -631,6 +632,7 @@ export default function VoiceSettings({
           onSelectSegment={onSelectSegment}
           onToggleMuteSegment={onToggleMuteSegment}
           onToggleMuteVideoClip={onToggleMuteVideoClip}
+          onReleaseSegmentToAutoAlign={onReleaseSegmentToAutoAlign}
           videoClips={videoClips}
           autoplayBlocked={autoplayBlockedId === String(selectedSegment?.id ?? selectedSegmentIndex)}
           playbackError={playbackErrorMap[String(selectedSegment?.id ?? selectedSegmentIndex)]}

@@ -1247,3 +1247,105 @@ export function autoAlign(state, { totalDuration, options = {} }) {
     },
   };
 }
+
+// ═══════════════════════════════════════════════════════════════════
+//  releaseSegmentFromManual — Hand a single userShifted segment back
+//  to Auto-Align control (clears userShifted + manual trackRow override
+//  and restores canonical slot anchor without auto-running Auto-Align).
+// ═══════════════════════════════════════════════════════════════════
+
+export function releaseSegmentFromManual(state, { segKey }) {
+  const { videoClips = [], segments = [] } = state || {};
+  if (!Array.isArray(segments) || segments.length === 0) {
+    return noop(state, 'No segments available');
+  }
+
+  const segIndex = findSegIdx(segments, segKey);
+  if (segIndex === -1) {
+    return noop(state, `Segment not found: ${segKey}`);
+  }
+
+  const seg = segments[segIndex];
+  if (!seg.userShifted) {
+    return noop(state, 'Segment is already managed by Auto-Align');
+  }
+
+  const clipNumber = resolveSegClipNumber(seg, segIndex);
+
+  // Resolve canonical slot start/end for the NEXT Auto-Align click:
+  // 1) Paired dialogue video clip (if timeline was split by subs)
+  // 2) Original sourceStartSec / speechStartSec preserved before manual drag
+  // 3) Current startSec / endSec fallback
+  let pairedVideoClip = null;
+  if (Array.isArray(videoClips) && videoClips.length > 0 && seg.id !== undefined && seg.id !== null) {
+    pairedVideoClip = videoClips.find((c) => {
+      if (!c || isGapClip(c)) return false;
+      const matchId = c.segmentId !== undefined && c.segmentId !== null && String(c.segmentId) === String(seg.id);
+      const matchIdx = c.segmentIndex !== undefined && c.segmentIndex !== null && String(c.segmentIndex) === String(seg.id);
+      return (matchId || matchIdx) && typeof c.start === 'number' && !isNaN(c.start) && c.start >= 0;
+    }) || null;
+  }
+
+  const fallbackStart = (typeof seg.startSec === 'number' && !isNaN(seg.startSec) && seg.startSec >= 0)
+    ? seg.startSec
+    : parseTimeToSeconds(seg.start ?? seg.startTime, 0);
+  const fallbackEnd = (typeof seg.endSec === 'number' && !isNaN(seg.endSec) && seg.endSec > fallbackStart)
+    ? seg.endSec
+    : r2(fallbackStart + Math.max(0.35, getSegmentAudioDuration(seg, 2.0)));
+
+  let canonicalStart = fallbackStart;
+  let canonicalEnd = fallbackEnd;
+  if (pairedVideoClip) {
+    canonicalStart = r2(pairedVideoClip.start);
+    canonicalEnd = (typeof pairedVideoClip.end === 'number' && !isNaN(pairedVideoClip.end) && pairedVideoClip.end > canonicalStart)
+      ? r2(pairedVideoClip.end)
+      : r2(canonicalStart + Math.max(0.35, fallbackEnd - fallbackStart));
+  } else if (typeof seg.sourceStartSec === 'number' && !isNaN(seg.sourceStartSec) && seg.sourceStartSec >= 0) {
+    canonicalStart = r2(seg.sourceStartSec);
+    canonicalEnd = (typeof seg.sourceEndSec === 'number' && !isNaN(seg.sourceEndSec) && seg.sourceEndSec > canonicalStart)
+      ? r2(seg.sourceEndSec)
+      : r2(canonicalStart + Math.max(0.35, fallbackEnd - fallbackStart));
+  } else if (typeof seg.speechStartSec === 'number' && !isNaN(seg.speechStartSec) && seg.speechStartSec >= 0) {
+    canonicalStart = r2(seg.speechStartSec);
+    canonicalEnd = (typeof seg.speechEndSec === 'number' && !isNaN(seg.speechEndSec) && seg.speechEndSec > canonicalStart)
+      ? r2(seg.speechEndSec)
+      : r2(canonicalStart + Math.max(0.35, fallbackEnd - fallbackStart));
+  }
+
+  // Keep current voice clip audioStartSec/audioEndSec untouched until owner explicitly clicks Auto-Align
+  const keptAudioStart = (typeof seg.audioStartSec === 'number' && !isNaN(seg.audioStartSec))
+    ? r2(seg.audioStartSec)
+    : r2(fallbackStart);
+  const keptAudioEnd = (typeof seg.audioEndSec === 'number' && !isNaN(seg.audioEndSec) && seg.audioEndSec > keptAudioStart)
+    ? r2(seg.audioEndSec)
+    : r2(keptAudioStart + Math.max(0.35, getSegmentAudioDuration(seg, fallbackEnd - fallbackStart)));
+
+  const nextSegments = [...segments];
+  nextSegments[segIndex] = {
+    ...seg,
+    userShifted: false,
+    trackRow: 0,
+    trackId: 'voice-1',
+    sourceStartSec: canonicalStart,
+    sourceEndSec: canonicalEnd,
+    startSec: canonicalStart,
+    endSec: canonicalEnd,
+    start: formatMinSec(canonicalStart),
+    end: formatMinSec(canonicalEnd),
+    startTime: formatMinSec(canonicalStart),
+    endTime: formatMinSec(canonicalEnd),
+    audioStartSec: keptAudioStart,
+    audioEndSec: keptAudioEnd,
+    audioStart: formatMinSec(keptAudioStart),
+    audioEnd: formatMinSec(keptAudioEnd),
+  };
+
+  return {
+    ...ok({
+      videoClips: deepClone(videoClips),
+      segments: nextSegments,
+    }),
+    clipNumber,
+    canonicalStart,
+  };
+}

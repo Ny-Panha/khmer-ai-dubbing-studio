@@ -36,6 +36,7 @@ export default function ClipInspectorPanel({
   playbackError = null,
   onToggleMuteSegment = null,
   onToggleMuteVideoClip = null,
+  onReleaseSegmentToAutoAlign = null,
   videoClips = [],
   onUpdateSpeakerVoice = null,
   onAutoSplitSegment = null,
@@ -531,6 +532,53 @@ export default function ClipInspectorPanel({
 
   return (
     <div className="inspector-card-group" style={{ padding: '8px' }}>
+      {/* Manual Position Anchor Notice & Release to Auto-Align (only when userShifted === true) */}
+      {Boolean(selectedSegment?.userShifted) && onReleaseSegmentToAutoAlign && (
+        <div
+          data-testid="manual-position-release-banner"
+          style={{
+            marginBottom: 8,
+            padding: '8px 10px',
+            background: 'rgba(245, 158, 11, 0.10)',
+            border: '1px solid rgba(245, 158, 11, 0.38)',
+            borderRadius: 6,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 8,
+            flexWrap: 'wrap',
+          }}
+        >
+          <span style={{ fontSize: '0.74rem', color: '#fcd34d', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+            <AlertCircle size={13} color="#f59e0b" style={{ flexShrink: 0 }} />
+            <span>ទីតាំងដៃ (Auto-Align មិនប៉ះ)</span>
+          </span>
+          <button
+            type="button"
+            data-testid="btn-release-auto-align"
+            onClick={() => onReleaseSegmentToAutoAlign(selectedSegment._uid || (selectedSegment.id !== undefined && selectedSegment.id !== null ? selectedSegment.id : selectedSegmentIndex))}
+            style={{
+              padding: '5px 10px',
+              fontSize: '0.74rem',
+              fontWeight: 700,
+              borderRadius: 5,
+              cursor: 'pointer',
+              border: '1px solid rgba(56, 189, 248, 0.55)',
+              background: 'rgba(3, 105, 161, 0.35)',
+              color: '#e0f2fe',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 5,
+              whiteSpace: 'nowrap',
+            }}
+            title="Release to Auto-Align — លុបទីតាំងដៃ ដើម្បីឲ្យ Auto-Align រៀបឃ្លានេះឡើងវិញ"
+          >
+            <RefreshCw size={12} color="#38bdf8" />
+            <span>ឲ្យ Auto-Align គ្រប់គ្រងវិញ</span>
+          </button>
+        </div>
+      )}
+
       {/* Dialogue & Translation Card (Chinese Source + Khmer Target) */}
       <div style={{
         marginBottom: 10,

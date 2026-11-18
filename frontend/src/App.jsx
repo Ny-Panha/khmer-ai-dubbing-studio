@@ -640,6 +640,7 @@ export default function App() {
   const handleResetFullVideo = useCallback((...args) => clipsRef.current.handleResetFullVideo?.(...args), []);
   const handleBridgeGaps = useCallback((...args) => clipsRef.current.handleBridgeGaps?.(...args), []);
   const handleAutoAlignNoOverlap = useCallback((...args) => clipsRef.current.handleAutoAlignNoOverlap?.(...args), []);
+  const handleReleaseSegmentToAutoAlign = useCallback((...args) => clipsRef.current.handleReleaseSegmentToAutoAlign?.(...args), []);
   const handleAddSegmentAtTime = useCallback((...args) => clipsRef.current.handleAddSegmentAtTime?.(...args), []);
   const handleAddClipToTimeline = useCallback((t, asset) => {
     const curTime = typeof t === 'number' ? t : (playbackRef.current.currentTime || 0);
@@ -1210,6 +1211,7 @@ export default function App() {
                   onUpdateSegments={handleUpdateTimelineSegments}
                   onToggleMuteSegment={handleToggleMuteSegment}
                   onToggleMuteVideoClip={handleToggleMuteVideoClip}
+                  onReleaseSegmentToAutoAlign={handleReleaseSegmentToAutoAlign}
                   videoClips={media.videoClips || EMPTY_CLIPS}
                   onUpdateScript={handleUpdateScript}
                 />

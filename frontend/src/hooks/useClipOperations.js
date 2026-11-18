@@ -12,6 +12,7 @@ import {
   splitClip as splitClipOp,
   splitSegment as splitSegmentOp,
   autoAlign as autoAlignOp,
+  releaseSegmentFromManual as releaseSegmentFromManualOp,
   isGapClip,
 } from '../utils/timelineOps';
 import { parseTimeToSeconds, formatTimecode, formatMinSec, getSegmentAudioDuration } from '../utils/timestampUtils';
@@ -516,6 +517,78 @@ export function useClipOperations({
     setFullAudioPath,
   ]);
 
+  // Release a single manually-shifted segment back to Auto-Align control (does NOT auto-run Auto-Align)
+  const handleReleaseSegmentToAutoAlign = useCallback(async (segKey) => {
+    const currentSegments = scriptData?.segments;
+    if (!Array.isArray(currentSegments) || currentSegments.length === 0) return;
+
+    const currentState = {
+      videoClips: videoClips || [],
+      segments: currentSegments,
+    };
+
+    const opResult = releaseSegmentFromManualOp(currentState, { segKey });
+    if (!opResult.applied) return;
+
+    const releasedSegments = opResult.state.segments;
+    const clipLabel = opResult.clipNumber !== undefined ? `#${opResult.clipNumber}` : '';
+
+    try {
+      pushUndoSnapshot(videoClips, currentSegments);
+    } catch (err) {
+      console.warn('[useClipOperations] pushUndoSnapshot failed in handleReleaseSegmentToAutoAlign:', err);
+    }
+
+    setScriptData({
+      ...scriptData,
+      segments: releasedSegments,
+      updatedAt: Date.now(),
+    });
+
+    showInAppToast(
+      `✅ បានប្រគល់ ${clipLabel} ឲ្យ Auto-Align គ្រប់គ្រងវិញ — ចុច Auto-Align ដើម្បីរៀបទីតាំង`,
+      4200
+    );
+
+    // Persist flag & trackRow clear immediately to series.json
+    try {
+      const hasGeneratedAudio = releasedSegments.some((s) => s.audioFile || s.audioPath || s.audioUrl);
+      if (hasGeneratedAudio || audioGenerated) {
+        await syncTimelineAudioApi(
+          releasedSegments,
+          getProjectName() || 'drama_project',
+          getVideoId(),
+          episodeId,
+          seriesId
+        );
+        notifyBackendOnline();
+      } else if (seriesId && episodeId) {
+        await persistTimelineOperationApi({
+          seriesId,
+          episodeId,
+          operation: 'release_manual',
+          track: 'segments',
+          items: releasedSegments,
+        });
+      }
+    } catch (err) {
+      console.warn('[useClipOperations] Release to Auto-Align persist notice:', err.message);
+      if (err.status === 502 || /ECONNREFUSED|unreachable|Failed to fetch|NetworkError/i.test(err?.message || '')) {
+        notifyBackendOffline();
+      }
+    }
+  }, [
+    scriptData,
+    videoClips,
+    audioGenerated,
+    seriesId,
+    episodeId,
+    pushUndoSnapshot,
+    setScriptData,
+    getProjectName,
+    getVideoId,
+  ]);
+
   // Select clip and seek playhead to its start (only seek when paused / explicit user gesture, never during continuous playback)
   const handleSelectClip = (clipId, shouldSeek = true) => {
     setActiveClipId(clipId);
@@ -945,6 +1018,7 @@ export function useClipOperations({
     handleResetFullVideo,
     handleBridgeGaps,
     handleAutoAlignNoOverlap,
+    handleReleaseSegmentToAutoAlign,
     handleSelectClip,
     handleDeleteClip,
     handleUpdateClips,

@@ -6,6 +6,7 @@ const path = require('node:path');
 const {
   moveClip,
   autoAlign,
+  releaseSegmentFromManual,
 } = require('../../frontend/src/utils/timelineOps.js');
 
 const ROOT_DIR = path.join(__dirname, '..', '..');
@@ -139,3 +140,66 @@ test('5. Backend sync-timeline-audio persists userShifted + trackRow + startSec 
   assert.match(src, /userShifted:\s*Boolean\(updated\.userShifted\)/);
   assert.match(src, /startSec:\s*typeof updated\.startSec === "number"/);
 });
+
+test('6. releaseSegmentFromManual clears userShifted & trackRow for ONLY that segment, does NOT auto-align yet, and subsequent autoAlign snaps it back to slot without overlapping #2/#3', () => {
+  const videoClips = [
+    { id: 'vc-1', segmentId: 1, start: 0.27, end: 0.96, name: '#1' },
+    { id: 'vc-2', segmentId: 2, start: 1.40, end: 2.52, name: '#2' },
+    { id: 'vc-3', segmentId: 3, start: 2.55, end: 3.70, name: '#3' },
+    { id: 'vc-4', segmentId: 4, start: 3.85, end: 5.85, name: '#4' },
+    { id: 'vc-5', segmentId: 5, start: 6.11, end: 8.43, name: '#5' },
+  ];
+  const segments = [
+    { id: 1, _uid: 's1', startSec: 0.27, endSec: 0.96, audioStartSec: 0.27, audioEndSec: 0.96, audioDurationSec: 0.69, trackRow: 0, userShifted: false },
+    { id: 2, _uid: 's2', startSec: 1.40, endSec: 2.52, audioStartSec: 1.40, audioEndSec: 2.52, audioDurationSec: 1.12, trackRow: 1, userShifted: true },
+    { id: 3, _uid: 's3', startSec: 2.55, endSec: 3.70, audioStartSec: 2.55, audioEndSec: 3.70, audioDurationSec: 1.15, trackRow: 2, userShifted: true },
+    // #4 was dragged ~1.3s early to 2.55s on Lane 1, overlapping #2/#3
+    { id: 4, _uid: 's4', startSec: 2.55, endSec: 4.55, sourceStartSec: 3.85, sourceEndSec: 5.85, audioStartSec: 2.55, audioEndSec: 4.55, audioDurationSec: 2.0, trackRow: 1, userShifted: true },
+    { id: 5, _uid: 's5', startSec: 6.11, endSec: 8.43, audioStartSec: 6.11, audioEndSec: 8.43, audioDurationSec: 2.32, trackRow: 0, userShifted: false },
+  ];
+
+  // Release ONLY #4
+  const rel = releaseSegmentFromManual({ videoClips, segments }, { segKey: 's4' });
+  assert.equal(rel.applied, true);
+  assert.equal(rel.clipNumber, 4);
+
+  const rel2 = rel.state.segments.find((s) => s.id === 2);
+  const rel3 = rel.state.segments.find((s) => s.id === 3);
+  const rel4 = rel.state.segments.find((s) => s.id === 4);
+
+  // Other manual segments untouched
+  assert.equal(rel2.userShifted, true);
+  assert.equal(rel2.trackRow, 1);
+  assert.equal(rel3.userShifted, true);
+  assert.equal(rel3.trackRow, 2);
+
+  // #4 cleared userShifted & manual trackRow override, WITHOUT moving audioStartSec yet
+  assert.equal(rel4.userShifted, false);
+  assert.equal(rel4.trackRow, 0);
+  assert.equal(rel4.trackId, 'voice-1');
+  assert.equal(rel4.audioStartSec, 2.55, 'Release must NOT auto-run Auto-Align (audioStartSec stays until owner clicks Auto-Align)');
+  assert.equal(rel4.startSec, 3.85, 'Canonical slot startSec restored to 3.85s for next Auto-Align');
+
+  // Releasing a non-shifted segment is a no-op
+  const noopRes = releaseSegmentFromManual(rel.state, { segKey: 's5' });
+  assert.equal(noopRes.applied, false);
+
+  // Owner clicks Auto-Align afterwards -> #4 snaps to 3.85s and no longer overlaps #2 or #3
+  const aligned = autoAlign(rel.state, { totalDuration: 60 });
+  assert.equal(aligned.applied, true);
+  const aligned4 = aligned.state.segments.find((s) => s.id === 4);
+  assert.equal(aligned4.audioStartSec, 3.85, '#4 moved cleanly to slot start 3.85s');
+  assert.equal(aligned4.trackRow, 0);
+  assert.equal(aligned4.userShifted, false);
+  assert.ok(aligned4.audioStartSec >= rel2.audioEndSec && aligned4.audioStartSec >= rel3.audioEndSec, '#4 no longer overlaps #2 or #3');
+  assert.deepEqual(aligned.report.untouchedClipNumbers, [2, 3], 'Only #2 and #3 remain manual untouched');
+});
+
+test('7. ClipInspectorPanel shows Release to Auto-Align button ONLY for userShifted segments', () => {
+  const inspectorPath = path.join(ROOT_DIR, 'frontend', 'src', 'components', 'voice', 'ClipInspectorPanel.jsx');
+  const src = fs.readFileSync(inspectorPath, 'utf8');
+  assert.match(src, /Boolean\(selectedSegment\?\.userShifted\)\s*&&\s*onReleaseSegmentToAutoAlign/);
+  assert.match(src, /ឲ្យ Auto-Align គ្រប់គ្រងវិញ/);
+  assert.match(src, /data-testid="btn-release-auto-align"/);
+});
+

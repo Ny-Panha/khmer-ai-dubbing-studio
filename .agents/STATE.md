@@ -3,6 +3,38 @@
 ## Last Session
 - **Environment**: Antigravity IDE
 - **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-18T16:53:00+07:00
+
+## Summary: Inspector "ឲ្យ Auto-Align គ្រប់គ្រងវិញ" (Release to Auto-Align) Button for Manual `userShifted` Clips (COMPLETED)
+- **Context**: Manually dragged clips (`userShifted: true`) are respected as fixed anchors by Auto-Align, so owners needed a way in the Inspector to hand a single clip back to Auto-Align control (e.g. `#4` on `ep_5` overlapping `#2`/`#3`).
+- **Changes Applied**:
+  1. `frontend/src/utils/timelineOps.js`: Added pure op `releaseSegmentFromManual(state, { segKey })` — clears `userShifted: false` and manual `trackRow` override (`trackRow: 0`, `trackId: 'voice-1'`) for that segment ONLY, restores canonical slot anchor (`startSec`/`endSec` from paired dialogue video clip or `sourceStartSec`), and preserves current `audioStartSec`/`audioEndSec` so Auto-Align is NOT auto-run.
+  2. `frontend/src/hooks/useClipOperations.js`: Added `handleReleaseSegmentToAutoAlign` with single-undo snapshot, confirmation toast (`✅ បានប្រគល់ #N ឲ្យ Auto-Align គ្រប់គ្រងវិញ — ចុច Auto-Align ដើម្បីរៀបទីតាំង`), and immediate persistence to `series.json`.
+  3. `frontend/src/components/voice/ClipInspectorPanel.jsx`: Rendered the manual-anchor notice + `"ឲ្យ Auto-Align គ្រប់គ្រងវិញ"` (`data-testid="btn-release-auto-align"`) button strictly when `Boolean(selectedSegment?.userShifted)` is `true` (hidden on non-shifted segments).
+  4. `frontend/src/App.jsx` & `frontend/src/components/voice/VoiceSettings.jsx`: Wired `onReleaseSegmentToAutoAlign`.
+  5. `backend/tests/timeline_user_shifted_anchors.test.js`: Added unit + static tests (Tests 6–7) covering single-segment release, no auto-align on click, subsequent Auto-Align snapping back to slot without overlapping `#2`/`#3`, and conditional Inspector rendering.
+- **Verification Evidence**:
+  - Frontend build (`npm --prefix frontend run build`): **PASS** (`748ms`, 0 errors).
+  - Full timeline suites (`node --test backend/tests/timeline_*.test.js backend/tests/auto_align_voice.test.js`): **106 / 106 PASS** (0 fail).
+  - Real-app Playwright E2E on `Pseudo_Spiritual_Root` (`ep_5`, original `series.json` restored cleanly):
+    - Non-shifted `#1`: `0` release buttons rendered.
+    - Manual `#4`: `"ឲ្យ Auto-Align គ្រប់គ្រងវិញ"` visible → clicked → toast confirmed release, button hid, `#4` persisted (`userShifted: false`, `trackRow: 0`, `startSec: 4.45`, `audioStartSec: 2.88` unchanged), `#2`/`#3` stayed `userShifted: true`.
+    - Reloaded page → `#4` still released (`userShifted: false`, button hidden).
+    - Clicked `Auto-Align` → `#4` moved cleanly to `4.45s` (`trackRow: 0`), no longer overlapping `#2` (`end 2.52s`) or `#3` (`end 4.18s`), and toast showed `Aligned 1 clip • 2 manual untouched (#2, #3)`. Zero page errors.
+
+## Active Environment
+- **Backend API**: `http://localhost:5000` (running on `chore/full-project-cleanup`)
+- **Frontend Studio**: `http://localhost:5173` (Vite dev server on `chore/full-project-cleanup`)
+- **Branch**: `chore/full-project-cleanup` (committed & pushed)
+
+## Next Steps
+- Select `#4` in the Inspector → click `"ឲ្យ Auto-Align គ្រប់គ្រងវិញ"` → click `Auto-Align` to snap `#4` back onto its slot without overlapping `#2`/`#3`.
+
+---
+
+## Previous Session
+- **Environment**: Antigravity IDE
+- **Branch**: `chore/full-project-cleanup`
 - **Timestamp**: 2026-11-18T16:42:00+07:00
 
 ## Summary: Manual Move Sets `userShifted` Anchor, Auto-Align Honours Anchors, Delete `Reset Timing`, Extended Summary Toast (COMPLETED)
