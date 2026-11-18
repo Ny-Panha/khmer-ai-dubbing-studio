@@ -3,6 +3,32 @@
 ## Last Session
 - **Environment**: Antigravity IDE
 - **Branch**: `fix/preview-subtitle-single-source` (pushed to `origin/fix/preview-subtitle-single-source`)
+- **Timestamp**: 2026-11-18T16:26:00+07:00
+
+## Summary: Remove "Reset Timing" Feature from Timeline Toolbar (COMPLETED)
+- **Changes Applied**:
+  1. `frontend/src/components/timeline/TimelineToolbar.jsx`: Removed `Reset Timing` button, `onResetToSourceTiming` prop, and unused `RotateCcw` icon import.
+  2. `frontend/src/components/timeline/TimelineEditor.jsx`: Removed `onResetToSourceTiming` prop & forwarding.
+  3. `frontend/src/App.jsx`: Removed `handleResetToSourceTiming` wrapper & `onResetToSourceTiming` prop pass.
+  4. `frontend/src/hooks/useClipOperations.js`: Removed `handleResetToSourceTiming`, `buildResetTimingToastMessage`, and unused `resetTimingOp` import.
+  5. `backend/tests/timeline_ui_workflow_fix.test.js` & `backend/tests/timeline_autoalign_reset_fix.test.js`: Updated static toolbar/hook assertions to verify `Reset Timing` is removed (keeping `Auto-Align` intact).
+- **Verification**:
+  - Timeline test suites (`node --test backend/tests/timeline_*.test.js`): **95 / 95 PASS** (`16` suites, `0` fail).
+  - Frontend build (`npm --prefix frontend run build`): **PASS** (`635ms`, `0` errors).
+
+## Active Environment
+- **Backend API**: `http://localhost:5000`
+- **Frontend Studio**: `http://localhost:5173`
+- **Branch**: `fix/preview-subtitle-single-source` (committed & pushed)
+
+## Next Steps
+- Refresh browser (`Ctrl + F5`) at `http://localhost:5173/studio` — ប៊ូតុង `Reset Timing` ត្រូវបានលុបចេញពី Timeline Toolbar រួចរាល់ (នៅសល់តែ `Auto-Align`)។
+
+---
+
+## Previous Session
+- **Environment**: Antigravity IDE
+- **Branch**: `fix/preview-subtitle-single-source` (pushed to `origin/fix/preview-subtitle-single-source`)
 - **Timestamp**: 2026-11-18T16:22:00+07:00
 
 ## Summary: Fix Auto-Align & Reset Timing Silent No-Ops on Misaligned/Shifted Voice Clips (EP5 219-Segment Bug) (COMPLETED)

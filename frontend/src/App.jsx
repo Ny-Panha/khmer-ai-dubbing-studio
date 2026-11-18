@@ -610,7 +610,6 @@ export default function App() {
   const handleResetFullVideo = useCallback((...args) => clipsRef.current.handleResetFullVideo?.(...args), []);
   const handleBridgeGaps = useCallback((...args) => clipsRef.current.handleBridgeGaps?.(...args), []);
   const handleAutoAlignNoOverlap = useCallback((...args) => clipsRef.current.handleAutoAlignNoOverlap?.(...args), []);
-  const handleResetToSourceTiming = useCallback((...args) => clipsRef.current.handleResetToSourceTiming?.(...args), []);
   const handleAddSegmentAtTime = useCallback((...args) => clipsRef.current.handleAddSegmentAtTime?.(...args), []);
   const handleAddClipToTimeline = useCallback((t, asset) => {
     const curTime = typeof t === 'number' ? t : (playbackRef.current.currentTime || 0);
@@ -1254,7 +1253,6 @@ export default function App() {
                 onResetFullVideo={handleResetFullVideo}
                 onBridgeGaps={handleBridgeGaps}
                 onAutoAlignNoOverlap={handleAutoAlignNoOverlap}
-                onResetToSourceTiming={handleResetToSourceTiming}
                 onAddSegment={handleAddSegmentAtTime}
                 canUndo={undoRedo.canUndo}
                 canRedo={undoRedo.canRedo}

@@ -1,6 +1,6 @@
 import React from 'react';
 import {
-  Plus, Undo2, Redo2, Scissors, Trash2, Film, Sparkles, RotateCcw,
+  Plus, Undo2, Redo2, Scissors, Trash2, Film, Sparkles,
   ZoomOut, ZoomIn, Maximize2, LocateFixed, Magnet, MessageSquare
 } from 'lucide-react';
 import { formatMinSec } from '../../utils/timestampUtils';
@@ -25,7 +25,6 @@ export default function TimelineToolbar({
   scriptSegments,
   onBridgeGaps = null,
   onAutoAlignNoOverlap = null,
-  onResetToSourceTiming = null,
   snappingEnabled = true,
   setSnappingEnabled = null,
   showSubtitlesTrack = false,
@@ -150,19 +149,6 @@ export default function TimelineToolbar({
             >
               <Sparkles size={12} />
               <span>Auto-Align</span>
-            </button>
-          )}
-
-          {onResetToSourceTiming && (
-            <button
-              type="button"
-              onClick={() => onResetToSourceTiming && onResetToSourceTiming()}
-              className="timeline-pill-tool tool-neutral"
-              title="កំណត់ម៉ោងសំឡេងតាមវីដេអូដើមវិញ (Reset to original timestamps)"
-              disabled={!scriptSegments || scriptSegments.length === 0}
-            >
-              <RotateCcw size={12} />
-              <span>Reset Timing</span>
             </button>
           )}
         </div>

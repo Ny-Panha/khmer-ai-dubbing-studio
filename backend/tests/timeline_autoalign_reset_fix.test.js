@@ -175,7 +175,7 @@ describe('Auto-Align & Reset Timing Fix (EP5 219-seg #4 misalignment, re-laning,
     const canvasCode = fs.readFileSync(path.join(__dirname, '../../frontend/src/components/timeline/TimelineTracksCanvas.jsx'), 'utf8');
 
     assert.ok(opsHookCode.includes('buildAutoAlignToastMessage'), 'Auto-Align builds visible summary/overrun toast');
-    assert.ok(opsHookCode.includes('buildResetTimingToastMessage'), 'Reset Timing builds visible summary/overrun/baseline toast');
+    assert.ok(!opsHookCode.includes('handleResetToSourceTiming'), 'Reset Timing feature removed from useClipOperations');
     assert.ok(opsHookCode.includes('originalTimingSnapshot'), 'useClipOperations wires originalTimingSnapshot');
     assert.ok(editorCode.includes('(seg.userShifted || seg.trackRow > 0)'), 'TimelineEditor renders auto-aligned multi-lane clips on assigned VOICE row');
     assert.ok(canvasCode.includes('(seg.userShifted || seg.trackRow > 0)'), 'TimelineTracksCanvas renders auto-aligned multi-lane clips on assigned VOICE row');

@@ -12,7 +12,6 @@ import {
   splitClip as splitClipOp,
   splitSegment as splitSegmentOp,
   autoAlign as autoAlignOp,
-  resetTiming as resetTimingOp,
   isGapClip,
 } from '../utils/timelineOps';
 import { parseTimeToSeconds, formatTimecode, formatMinSec, getSegmentAudioDuration } from '../utils/timestampUtils';
@@ -116,42 +115,6 @@ function buildAutoAlignToastMessage(report = {}, segmentsChanged = false) {
   }
 
   const prefix = overrunNums.length > 0 || clampedNums.length > 0 ? '⚠️ Auto-Align:' : '✅ Auto-Align:';
-  return `${prefix} ${parts.join(' · ')}`;
-}
-
-function buildResetTimingToastMessage(report = {}, segmentsChanged = false) {
-  const movedCount = Number(report?.movedCount) || 0;
-  const relanedNums = (report?.relanedClips || []).map((c) => c.clipNumber);
-  const overrunNums = (report?.overrunClips || []).map((c) => c.clipNumber);
-  const missingNums = (report?.missingBaselineClips || []).map((c) => c.clipNumber);
-
-  if (report?.createdBaseline) {
-    const overrunSuffix = overrunNums.length > 0
-      ? ` · ⚠️ សំឡេងវែងជាង slot (មិនអាចបង្រួមដោយ Reset): ${formatClipNumberSummary(overrunNums, 8)}`
-      : '';
-    return `📌 Reset Timing: មិនទាន់មាន baseline ដើម — បានរក្សាទុក timing បច្ចុប្បន្នជា baseline ដើមរួចរាល់${overrunSuffix}`;
-  }
-
-  const parts = [];
-  if (segmentsChanged && movedCount > 0) {
-    parts.push(`ស្តារ ${movedCount} ឃ្លាមក timing ដើម`);
-  } else if (segmentsChanged) {
-    parts.push('បានស្តារ timing ដើម');
-  } else {
-    parts.push('គ្រប់ឃ្លានៅ timing ដើមស្រាប់ហើយ');
-  }
-
-  if (relanedNums.length > 0) {
-    parts.push(`ប្តូរជួរ VOICE ដើម្បីកុំជាន់គ្នា (${formatClipNumberSummary(relanedNums, 6)})`);
-  }
-  if (overrunNums.length > 0) {
-    parts.push(`⚠️ សំឡេងវែងជាង slot (Reset មិនអាចបង្រួមសំឡេង): ${formatClipNumberSummary(overrunNums, 8)}`);
-  }
-  if (missingNums.length > 0) {
-    parts.push(`⚠️ គ្មាន timing ដើម (រក្សាតម្លៃបច្ចុប្បន្ន): ${formatClipNumberSummary(missingNums, 6)}`);
-  }
-
-  const prefix = overrunNums.length > 0 || missingNums.length > 0 ? '⚠️ Reset Timing:' : '✅ Reset Timing:';
   return `${prefix} ${parts.join(' · ')}`;
 }
 
@@ -528,115 +491,6 @@ export function useClipOperations({
     getVideoId,
     setFullAudioUrl,
     setFullAudioPath,
-  ]);
-
-  // Reset all segments to exact original source timestamps (0% drift)
-  const handleResetToSourceTiming = useCallback(async () => {
-    const currentSegments = scriptData?.segments;
-    if (!Array.isArray(currentSegments) || currentSegments.length === 0) {
-      showInAppToast('⚠️ Reset Timing: គ្មាន segments សម្រាប់ស្តារ timing ទេ', 3500);
-      return;
-    }
-
-    const totalDur = Number(duration || videoRef?.current?.duration || selectedVideo?.duration || 0);
-    const currentState = {
-      videoClips: videoClips || [],
-      segments: currentSegments,
-    };
-
-    const opResult = resetTimingOp(currentState, {
-      totalDuration: totalDur,
-      originalTimingSnapshot: scriptData?.originalTimingSnapshot || null,
-    });
-    if (!opResult.applied) {
-      showInAppToast(opResult.reason || '⚠️ Reset Timing មិនអាចអនុវត្តបានទេ', 4500);
-      return;
-    }
-
-    const resetSegs = opResult.state.segments;
-    const resetSig = (segments = []) => segments.map((seg) => ([
-      seg?._uid ?? null,
-      seg?.id ?? null,
-      seg?.startSec ?? null,
-      seg?.endSec ?? null,
-      seg?.audioStartSec ?? null,
-      seg?.audioEndSec ?? null,
-      seg?.sourceStartSec ?? null,
-      seg?.sourceEndSec ?? null,
-      seg?.trackRow ?? null,
-      Boolean(seg?.userShifted),
-      Boolean(seg?.audioTrimmed || seg?.userTrimmed),
-      Boolean(seg?.audioOverrun),
-    ]));
-    const segmentsChanged = JSON.stringify(resetSig(currentSegments)) !== JSON.stringify(resetSig(resetSegs));
-    const createdBaseline = Boolean(opResult.report?.createdBaseline);
-    const toastMessage = buildResetTimingToastMessage(opResult.report, segmentsChanged);
-    showInAppToast(
-      toastMessage,
-      (opResult.report?.overrunClips?.length || 0) > 0 || createdBaseline ? 6000 : 4000
-    );
-
-    if (!segmentsChanged && !createdBaseline) return;
-
-    try {
-      pushUndoSnapshot(videoClips, currentSegments);
-    } catch (err) {
-      console.warn('[useClipOperations] pushUndoSnapshot failed in handleResetToSourceTiming:', err);
-    }
-
-    setScriptData({
-      ...scriptData,
-      ...(opResult.report?.baselineSnapshot && !scriptData?.originalTimingSnapshot
-        ? { originalTimingSnapshot: opResult.report.baselineSnapshot }
-        : {}),
-      segments: resetSegs,
-      updatedAt: Date.now(),
-    });
-
-    if (!segmentsChanged) return;
-
-    try {
-      const hasGeneratedAudio = resetSegs.some((s) => s.audioFile || s.audioPath || s.audioUrl);
-      if (hasGeneratedAudio || audioGenerated) {
-        const syncRes = await syncTimelineAudioApi(
-          resetSegs,
-          getProjectName() || 'drama_project',
-          getVideoId(),
-          episodeId,
-          seriesId
-        );
-        if (syncRes?.fullAudioUrl && typeof setFullAudioUrl === 'function') {
-          setFullAudioUrl(`${syncRes.fullAudioUrl.split('?')[0]}?t=${Date.now()}`);
-        }
-        if (syncRes?.fullAudioPath && typeof setFullAudioPath === 'function') {
-          setFullAudioPath(syncRes.fullAudioPath);
-        }
-        notifyBackendOnline();
-      }
-    } catch (err) {
-      console.warn('[useClipOperations] Reset timing audio sync notice:', err.message);
-      if (err.status === 502 || /ECONNREFUSED|unreachable|Failed to fetch|NetworkError/i.test(err?.message || '')) {
-        notifyBackendOffline();
-      }
-    }
-  }, [
-    scriptData,
-    videoClips,
-    pushUndoSnapshot,
-    duration,
-    videoRef,
-    selectedVideo,
-    setScriptData,
-    audioGenerated,
-    syncTimelineAudioApi,
-    getProjectName,
-    getVideoId,
-    episodeId,
-    seriesId,
-    setFullAudioUrl,
-    setFullAudioPath,
-    notifyBackendOnline,
-    notifyBackendOffline,
   ]);
 
   // Select clip and seek playhead to its start (only seek when paused / explicit user gesture, never during continuous playback)
@@ -1068,7 +922,6 @@ export function useClipOperations({
     handleResetFullVideo,
     handleBridgeGaps,
     handleAutoAlignNoOverlap,
-    handleResetToSourceTiming,
     handleSelectClip,
     handleDeleteClip,
     handleUpdateClips,

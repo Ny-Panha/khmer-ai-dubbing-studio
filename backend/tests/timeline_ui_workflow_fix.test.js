@@ -18,8 +18,8 @@ test('Step 1: TimelineToolbar fixes duplicate plus sign, adds 3-stage left group
   assert.match(toolbarSource, /data-workflow-group="voice-timing"/);
   assert.match(toolbarSource, /Full Video/);
   assert.match(toolbarSource, /Auto-Cut by Subs/);
-  assert.match(toolbarSource, /Reset Timing/);
-  assert.match(toolbarSource, /timeline-pill-tool tool-neutral/);
+  assert.match(toolbarSource, /Auto-Align/);
+  assert.doesNotMatch(toolbarSource, /Reset Timing/);
 
   // 3. Center Section: Live Monospace Timecode Readout
   assert.match(toolbarSource, /className="toolbar-center-timecode"/);
