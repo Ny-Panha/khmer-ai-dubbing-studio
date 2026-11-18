@@ -731,6 +731,7 @@ async function runBatchExportWorker({
 
       job.currentEpisodePercent = 100;
 
+      const epSubtitlesBurned = Boolean(epPlan.hasVoice && burnSubtitles);
       const relVideoPath = `projects/${cleanSeries}/episodes/${epPlan.cleanEpisode}/video/${epOutputFilename}`;
       const videoUrl = `/uploads/${relVideoPath}`;
       const downloadUrl = `/api/download-export?file=${encodeURIComponent(relVideoPath)}&name=${encodeURIComponent(epOutputFilename)}`;
@@ -752,6 +753,7 @@ async function runBatchExportWorker({
               usedOriginalAudio: epPlan.useOriginalAudio,
               aspectRatio: epAspectRatio,
               verticalStyle,
+              subtitlesBurned: epSubtitlesBurned,
             };
             if (epPlan.hasVoice) {
               targetEp.status = "completed";
@@ -788,6 +790,7 @@ async function runBatchExportWorker({
         savedToDownloads: Boolean(epDownloadsPath),
         downloadsPath: epDownloadsPath,
         usedOriginalAudio: epPlan.useOriginalAudio,
+        subtitlesBurned: epSubtitlesBurned,
         renderTimeSeconds: renderRes?.renderTimeSeconds || 0,
         aspectRatio: epAspectRatio,
         verticalStyle,

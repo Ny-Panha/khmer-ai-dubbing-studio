@@ -387,6 +387,7 @@ router.post("/render-video", async (req, res) => {
       downloadsPath: downloadsExportPath,
       aspectRatio: targetAspectRatio,
       verticalStyle,
+      subtitlesBurned: Boolean(burnSubtitles),
     });
   } catch (err) {
     console.error("Render Error:", err);

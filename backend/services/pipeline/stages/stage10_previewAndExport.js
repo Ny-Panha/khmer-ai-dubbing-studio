@@ -99,6 +99,10 @@ async function previewAndExport({
     const outFilename = `dubbed_export_${Date.now()}.mp4`;
     const targetOutPath = path.join(videoOutDir, outFilename);
 
+    const effectiveBurnSubtitles = exportOptions.isPreviewRender
+      ? false
+      : exportOptions.burnSubtitles !== false;
+
     const renderRes = await renderDubbedVideoWithDucking({
       inputVideoPath: videoPath,
       videoPath,
@@ -116,7 +120,7 @@ async function previewAndExport({
       },
       aspectRatio: exportOptions.aspectRatio,
       verticalStyle: exportOptions.verticalStyle || 'pad',
-      burnSubtitles: exportOptions.burnSubtitles !== false,
+      burnSubtitles: effectiveBurnSubtitles,
       bgVolume: exportOptions.bgVolume ?? exportOptions.duckingVolume ?? 0.15,
       duckingVolume: exportOptions.duckingVolume ?? exportOptions.bgVolume ?? 0.15,
       khmerVolume: exportOptions.khmerVolume ?? 1.3,
