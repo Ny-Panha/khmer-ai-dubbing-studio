@@ -3,6 +3,41 @@
 ## Last Session
 - **Environment**: Antigravity IDE
 - **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-18T23:09:30+07:00
+
+## Summary: Stage 6 Khmer Translation Quality Rules (Anti-Translationese: Degree Words, Explicit Subject, Natural Single-Marker Questions) (COMPLETED)
+- **Changes Applied (without removing any existing rule)**:
+  1. `backend/services/pipeline/stages/stage6_generateModeSpecificScript.js`:
+     - Added explicit **Section 9 (RULE 1, RULE 2, RULE 3)** to Mode A `modeAPrompt` (plus priority note inside Rule 5 so `maxKhmerWords` never drops degree words or essential subjects), and added concise equivalents to Mode A `retryPrompt`, `singlePrompt`, and Mode B `modeBPrompt`:
+       - **RULE 1 (Keep degree words)**: Never drop degree/quantity modifiers (`一点/有点 -> បន្តិច/ល្មមៗ/គ្រាន់បើបន្តិច`, `很/非常 -> ខ្លាំង/ណាស់`, `更 -> កាន់តែ`, `太`, `只/才`) to fit `maxKhmerWords`; compress filler elsewhere instead.
+       - **RULE 2 (Explicit subject)**: Always name the subject (`គេ/បក្ស/ពួកគេ/គាត់/ខ្ញុំ/ឯង`) whenever omission blurs or flips WHO acts (explicitly clarifying `舍不得 = មិនដាច់ចិត្តចំណាយ/លះបង់`, forbidding flipped `"មិនស្ដាយ"`).
+       - **RULE 3 (Natural Khmer questions)**: Chinese rhetorical questions (`难道...吗`, `难道...不是...`, `不是...吗`) keep negation (`មិនមែន`) and use ONE Khmer question marker only (`ទេឬ?` / `មែនទេ?`), forbidding stacked `ឬមួយ...` + `...ឬក៏អ្វី?`/`...ទេហ្ដេស?`/`...ទេឬ?` and word-for-word Chinese skeleton translation.
+  2. `backend/tests/stage6_khmer_translation_quality_rules.test.js` *(new)*: Static + runtime verification of all 3 rules across Mode A & Mode B while confirming all existing rules and 1:1 segment counts remain intact.
+- **Live Gemini Verification (Read-Only on real `Pseudo_Spiritual_Root` `ep_5` lines & 12-segment chunk)**:
+  - **Line 1 (`ep_5` `#59`: `竟连资质好一点的人都舍不得`)**:
+    - Before: `សូម្បីតែមនុស្សមានទេពកោសល្យក៏មិនស្ដាយ`
+    - After: `សូម្បីឫសវិញ្ញាណល្អបន្តិច ក៏គេមិនដាច់ចិត្តដែរ។` (keeps `បន្តិច` + explicit subject `គេ` + accurate `មិនដាច់ចិត្ត`)
+  - **Line 2 (`ep_5` `#87`: `难道他们不是冲着我来的`)**:
+    - Before: `ឬមួយពួកគេមិនមែនមករកខ្ញុំទេឬ?` / `ឬមួយពួកគេមិនមែនមករកខ្ញុំទេហ្ដេស?`
+    - After: `ពួកគេមិនមែនមករកខ្ញុំទេឬ?` (preserves `មិនមែន`, single marker `ទេឬ?`, zero `ឬមួយ...`/`ឬក៏អ្វី?`)
+  - **Full 12-segment chunk (`ep_5` `#55–#66`)**: `12 / 12` 1:1 segment count, `0` Hanzi, `0` Thai, `0` empty/placeholder, `0` duplicate regressions.
+- **Build & Tests**:
+  - `stage6_khmer_translation_quality_rules`, `ai_detection_and_dubbing_prompt_fix`, `fast_ocr_mode`, `phase1_translation_boundary`, `thai_script_sanitization`: **32 / 32 PASS**.
+  - `npm --prefix frontend run build`: **PASS** (`966ms`, `0` errors).
+
+## Active Environment
+- **Backend API**: `http://localhost:5000` (restarted with updated Stage 6 prompt)
+- **Frontend Studio**: `http://localhost:5173` (Vite dev server)
+- **Branch**: `chore/full-project-cleanup` (committed & pushed)
+
+## Next Steps
+- Any new Translate / Re-Translate run in Studio or Batch Studio will automatically use the updated Stage 6 prompt with RULE 1–3 active.
+
+---
+
+## Previous Session
+- **Environment**: Antigravity IDE
+- **Branch**: `chore/full-project-cleanup`
 - **Timestamp**: 2026-11-18T22:34:00+07:00
 
 ## Summary: Playback Freeze / Main-Thread Stall & Premature Stop Fix on `ep_5` (COMPLETED)
