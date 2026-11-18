@@ -1057,12 +1057,86 @@ router.post("/sync-audio", async (req, res) => {
       ? `/uploads/projects/${cleanSeries}/episodes/${cleanEpisode}/audio/${fullAudioFilename}`
       : `/uploads/projects/${cleanName}/audio/${fullAudioFilename}`;
 
+    // Persist segment timing, lane placement, and userShifted anchor flags to series.json.
+    // Must run on BOTH cache-hit (e.g. lane-only drag) AND after FFmpeg sync so reload never loses edits.
+    const persistSyncedSegmentsToSeriesJson = async () => {
+      if (!cleanSeries || !cleanEpisode) return;
+      try {
+        const seriesJsonPath = path.join(uploadsDir, "projects", cleanSeries, "series.json");
+        await withSeriesMetadataLock(cleanSeries, () => {
+          if (!fs.existsSync(seriesJsonPath)) return;
+          updateSeriesMetadata(cleanSeries, (seriesMeta) => {
+            const targetEp = (seriesMeta?.episodes || []).find(
+              (e) => String(e.id) === String(cleanEpisode) || String(e.episodeNumber) === String(cleanEpisode)
+            );
+            if (!targetEp || !targetEp.scriptData || !Array.isArray(targetEp.scriptData.segments)) return false;
+
+            const byUid = new Map();
+            const byId = new Map();
+            for (const seg of segments) {
+              if (!seg) continue;
+              if (seg._uid) byUid.set(String(seg._uid), seg);
+              if (seg.id !== undefined && seg.id !== null) byId.set(String(seg.id), seg);
+              else if (seg.segmentId !== undefined && seg.segmentId !== null) byId.set(String(seg.segmentId), seg);
+            }
+
+            targetEp.scriptData.segments = targetEp.scriptData.segments.map((s, idx) => {
+              const updated =
+                (s._uid && byUid.get(String(s._uid))) ||
+                byId.get(String(s.id ?? s.segmentId ?? (idx + 1)));
+              if (!updated) return s;
+
+              const nextTrackRow = typeof updated.trackRow === "number" ? updated.trackRow : (typeof s.trackRow === "number" ? s.trackRow : 0);
+              const merged = {
+                ...s,
+                startSec: typeof updated.startSec === "number" ? updated.startSec : s.startSec,
+                endSec: typeof updated.endSec === "number" ? updated.endSec : s.endSec,
+                duration: typeof updated.duration === "number" ? updated.duration : s.duration,
+                audioStartSec: typeof updated.audioStartSec === "number" ? updated.audioStartSec : s.audioStartSec,
+                audioEndSec: typeof updated.audioEndSec === "number" ? updated.audioEndSec : s.audioEndSec,
+                audioDurationSec: typeof updated.audioDurationSec === "number" ? updated.audioDurationSec : s.audioDurationSec,
+                sourceStartSec: typeof updated.sourceStartSec === "number" ? updated.sourceStartSec : s.sourceStartSec,
+                sourceEndSec: typeof updated.sourceEndSec === "number" ? updated.sourceEndSec : s.sourceEndSec,
+                start: updated.start !== undefined ? updated.start : s.start,
+                end: updated.end !== undefined ? updated.end : s.end,
+                startTime: updated.startTime !== undefined ? updated.startTime : s.startTime,
+                endTime: updated.endTime !== undefined ? updated.endTime : s.endTime,
+                audioStart: updated.audioStart !== undefined ? updated.audioStart : s.audioStart,
+                audioEnd: updated.audioEnd !== undefined ? updated.audioEnd : s.audioEnd,
+                trackRow: nextTrackRow,
+                trackId: updated.trackId || `voice-${nextTrackRow + 1}`,
+                subTrackRow: typeof updated.subTrackRow === "number" ? updated.subTrackRow : s.subTrackRow,
+                subTrackId: updated.subTrackId !== undefined ? updated.subTrackId : s.subTrackId,
+                audioTrimmed: Boolean(updated.audioTrimmed),
+                userTrimmed: updated.userTrimmed !== undefined ? Boolean(updated.userTrimmed) : s.userTrimmed,
+                audioOverrun: Boolean(updated.audioOverrun),
+                userShifted: Boolean(updated.userShifted),
+              };
+              if (updated.overrunRatio !== undefined) {
+                merged.overrunRatio = updated.overrunRatio;
+              } else {
+                delete merged.overrunRatio;
+              }
+              return merged;
+            });
+
+            targetEp.scriptData.updatedAt = Date.now();
+            console.log(`[Sync Audio] ✅ Auto-persisted ${segments.length} synced segments to series.json for ${cleanSeries} [${cleanEpisode}]`);
+            return true;
+          });
+        });
+      } catch (saveErr) {
+        console.warn("[Sync Audio] Could not auto-persist synced segments to series.json:", saveErr.message);
+      }
+    };
+
     // Fast-path: Check if matching synchronized audio already exists on disk with identical fingerprint
     if (fs.existsSync(fullAudioPath) && fs.existsSync(metaPath)) {
       try {
         const existingMeta = JSON.parse(fs.readFileSync(metaPath, "utf8"));
         if (existingMeta && existingMeta.fingerprint === fingerprint) {
           console.log(`[Sync Audio] ✨ Cache hit for ${cleanSeries}${cleanEpisode ? ` [Episode: ${cleanEpisode}]` : ""}/audio (Fingerprint: ${fingerprint}). Skipping re-render.`);
+          await persistSyncedSegmentsToSeriesJson();
           return res.json({
             success: true,
             projectName: cleanSeries,
@@ -1081,6 +1155,7 @@ router.post("/sync-audio", async (req, res) => {
     if (activeSyncJobs.has(fullAudioPath)) {
       console.log(`[Sync Audio] ⏳ Joining in-flight sync for ${fullAudioPath}...`);
       await activeSyncJobs.get(fullAudioPath);
+      await persistSyncedSegmentsToSeriesJson();
       return res.json({
         success: true,
         projectName: cleanSeries,
@@ -1116,54 +1191,7 @@ router.post("/sync-audio", async (req, res) => {
       activeSyncJobs.delete(fullAudioPath);
     }
 
-    // Auto-persist aligned segments (trackRow, audioEndSec, audioTrimmed, audioOverrun) to series.json
-    if (cleanSeries && cleanEpisode) {
-      try {
-        const metaPath = path.join(uploadsDir, "projects", cleanSeries, "series.json");
-        await withSeriesMetadataLock(cleanSeries, () => {
-          if (!fs.existsSync(metaPath)) return;
-          updateSeriesMetadata(cleanSeries, (seriesMeta) => {
-            const targetEp = (seriesMeta?.episodes || []).find(
-              (e) => String(e.id) === String(cleanEpisode) || String(e.episodeNumber) === String(cleanEpisode)
-            );
-            if (!targetEp || !targetEp.scriptData || !Array.isArray(targetEp.scriptData.segments)) return false;
-
-            const updatedMap = new Map();
-            for (const seg of segments) {
-              if (seg) {
-                const key = String(seg.id ?? seg.segmentId);
-                updatedMap.set(key, seg);
-              }
-            }
-
-            targetEp.scriptData.segments = targetEp.scriptData.segments.map((s, idx) => {
-              const updated = updatedMap.get(String(s.id ?? s.segmentId ?? (idx + 1)));
-              if (updated) {
-                return {
-                  ...s,
-                  trackRow: typeof updated.trackRow === "number" ? updated.trackRow : 0,
-                  trackId: updated.trackId || `voice-${(updated.trackRow || 0) + 1}`,
-                  audioStartSec: typeof updated.audioStartSec === "number" ? updated.audioStartSec : s.audioStartSec,
-                  audioEndSec: typeof updated.audioEndSec === "number" ? updated.audioEndSec : s.audioEndSec,
-                  audioDurationSec: typeof updated.audioDurationSec === "number" ? updated.audioDurationSec : s.audioDurationSec,
-                  audioTrimmed: Boolean(updated.audioTrimmed),
-                  audioOverrun: Boolean(updated.audioOverrun),
-                  overrunRatio: updated.overrunRatio,
-                  userShifted: Boolean(updated.userShifted),
-                };
-              }
-              return s;
-            });
-
-            targetEp.scriptData.updatedAt = Date.now();
-            console.log(`[Sync Audio] ✅ Auto-persisted ${segments.length} aligned segments to series.json for ${cleanSeries} [${cleanEpisode}]`);
-            return true;
-          });
-        });
-      } catch (saveErr) {
-        console.warn("[Sync Audio] Could not auto-persist aligned segments to series.json:", saveErr.message);
-      }
-    }
+    await persistSyncedSegmentsToSeriesJson();
 
     res.json({
       success: true,

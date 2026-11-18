@@ -12,7 +12,6 @@ import {
   splitClip as splitClipOp,
   splitSegment as splitSegmentOp,
   autoAlign as autoAlignOp,
-  resetTiming as resetTimingOp,
   isGapClip,
 } from '../utils/timelineOps';
 import { parseTimeToSeconds, formatTimecode, formatMinSec, getSegmentAudioDuration } from '../utils/timestampUtils';
@@ -22,7 +21,63 @@ import { syncTimelineAudioApi, persistTimelineOperationApi, notifyBackendOffline
 import { saveTimelineOperationToLocalStorage } from '../utils/projectStorage';
 
 /**
- * Lightweight, non-intrusive floating in-app toast for timeline feedback (e.g. split guard)
+ * Format an array of clip numbers concisely for toast notices (e.g. "#4, #7, #12 (+3 more)")
+ */
+function formatClipNumberSummary(clipNumbers = [], maxShown = 8) {
+  const unique = [];
+  const seen = new Set();
+  for (const n of clipNumbers) {
+    if (n === null || n === undefined) continue;
+    const key = String(n);
+    if (!seen.has(key)) {
+      seen.add(key);
+      unique.push(n);
+    }
+  }
+  if (unique.length === 0) return '';
+  const shown = unique.slice(0, maxShown).map((n) => `#${n}`).join(', ');
+  const remaining = unique.length - maxShown;
+  return remaining > 0 ? `${shown} (+${remaining} more)` : shown;
+}
+
+/**
+ * Build a visible, informative Auto-Align summary toast reporting:
+ * - how many clips were aligned,
+ * - how many userShifted clips were left untouched (and their clip numbers),
+ * - any overrun clips whose audio exceeds their slot.
+ */
+function buildAutoAlignToastMessage(report = {}, segmentsChanged = false) {
+  const alignedCount = Number(report?.alignedCount || 0);
+  const untouchedNumbers = Array.isArray(report?.untouchedClipNumbers) ? report.untouchedClipNumbers : [];
+  const untouchedCount = Number(report?.untouchedCount ?? untouchedNumbers.length);
+  const overrunClips = Array.isArray(report?.overrunClips) ? report.overrunClips : [];
+  const overrunNumbers = overrunClips.map((c) => c?.clipNumber ?? c).filter((n) => n !== null && n !== undefined);
+
+  const parts = [];
+  if (alignedCount > 0) {
+    parts.push(`Aligned ${alignedCount} clip${alignedCount === 1 ? '' : 's'}`);
+  } else if (segmentsChanged) {
+    parts.push('Aligned timeline');
+  } else {
+    parts.push('Already aligned (0 moved)');
+  }
+
+  if (untouchedCount > 0) {
+    const untouchedList = formatClipNumberSummary(untouchedNumbers);
+    parts.push(`${untouchedCount} manual untouched (${untouchedList})`);
+  }
+
+  if (overrunNumbers.length > 0) {
+    const overrunList = formatClipNumberSummary(overrunNumbers);
+    parts.push(`Overrun: ${overrunList} (audio longer than slot)`);
+  }
+
+  const prefix = overrunNumbers.length > 0 ? '⚠️' : '✅';
+  return `${prefix} Auto-Align: ${parts.join(' • ')}`;
+}
+
+/**
+ * Lightweight, non-intrusive floating in-app toast for timeline feedback (e.g. split guard, auto-align summary)
  */
 function showInAppToast(message, durationMs = 2800) {
   if (typeof window !== 'undefined') {
@@ -39,12 +94,14 @@ function showInAppToast(message, durationMs = 2800) {
     toast.style.bottom = '32px';
     toast.style.left = '50%';
     toast.style.transform = 'translateX(-50%) translateY(0)';
+    toast.style.maxWidth = 'min(92vw, 760px)';
     toast.style.backgroundColor = 'rgba(24, 24, 27, 0.96)';
     toast.style.color = '#f4f4f5';
     toast.style.padding = '10px 20px';
-    toast.style.borderRadius = '9999px';
+    toast.style.borderRadius = '14px';
     toast.style.fontSize = '13.5px';
     toast.style.fontWeight = '500';
+    toast.style.lineHeight = '1.4';
     toast.style.fontFamily = "'Kantumruy Pro', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
     toast.style.boxShadow = '0 12px 30px -4px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(255, 255, 255, 0.15)';
     toast.style.backdropFilter = 'blur(12px)';
@@ -57,10 +114,20 @@ function showInAppToast(message, durationMs = 2800) {
     toast.style.transition = 'opacity 0.22s cubic-bezier(0.16, 1, 0.3, 1), transform 0.22s cubic-bezier(0.16, 1, 0.3, 1)';
     document.body.appendChild(toast);
   }
-  const leadingEmoji = message.match(/^([\uD800-\uDBFF][\uDC00-\uDFFF]|[\u2600-\u27BF]|\uFE0F|⚠️|⚡|✅|❌|✂️)/);
-  const iconSpan = leadingEmoji ? leadingEmoji[0] : '✂️';
-  const displayMsg = leadingEmoji ? message.slice(leadingEmoji[0].length).trim() : message;
-  toast.innerHTML = `<span style="font-size:15px;line-height:1;">${iconSpan}</span><span>${displayMsg}</span>`;
+  const safeMessage = String(message || '');
+  const leadingEmoji = safeMessage.match(/^([\uD800-\uDBFF][\uDC00-\uDFFF]|[\u2600-\u27BF]\uFE0F?|⚠️|⚡|✅|❌|✂️|ℹ️|✨)/);
+  const iconText = leadingEmoji ? leadingEmoji[0] : '✂️';
+  const displayMsg = leadingEmoji ? safeMessage.slice(leadingEmoji[0].length).trim() : safeMessage;
+  toast.textContent = '';
+  const iconEl = document.createElement('span');
+  iconEl.style.fontSize = '15px';
+  iconEl.style.lineHeight = '1';
+  iconEl.style.flexShrink = '0';
+  iconEl.textContent = iconText;
+  const textEl = document.createElement('span');
+  textEl.textContent = displayMsg;
+  toast.appendChild(iconEl);
+  toast.appendChild(textEl);
   toast.style.opacity = '1';
   toast.style.transform = 'translateX(-50%) translateY(0)';
 
@@ -377,13 +444,20 @@ export function useClipOperations({
       seg?.overrunRatio ?? null,
       seg?.playbackRate ?? null,
       Boolean(seg?.needsTimeStretch),
+      Boolean(seg?.userShifted),
     ]));
 
     const segmentsChanged = JSON.stringify(segmentTimelineSignature(currentSegments)) !== JSON.stringify(segmentTimelineSignature(alignedSegments));
+    const report = opResult.report || {};
+    const summaryMsg = buildAutoAlignToastMessage(report, segmentsChanged);
+    const toastDuration = (report?.overrunClips?.length > 0 || report?.untouchedCount > 0) ? 5500 : 3500;
 
     // Auto-Align can normalize optional metadata even when the timeline already
-    // matches. Avoid autosaving that normalization as if the user had edited it.
-    if (!segmentsChanged) return;
+    // matches. Avoid autosaving that normalization, but ALWAYS show a visible summary toast.
+    if (!segmentsChanged) {
+      showInAppToast(summaryMsg, toastDuration);
+      return;
+    }
 
     try {
       pushUndoSnapshot(videoClips, currentSegments);
@@ -397,6 +471,7 @@ export function useClipOperations({
       updatedAt: Date.now(),
     };
     setScriptData(nextScriptData);
+    showInAppToast(summaryMsg, toastDuration);
 
     // Update master narration track on Backend
     try {
@@ -439,81 +514,6 @@ export function useClipOperations({
     getVideoId,
     setFullAudioUrl,
     setFullAudioPath,
-  ]);
-
-  // Reset all segments to exact original source timestamps (0% drift)
-  const handleResetToSourceTiming = useCallback(async () => {
-    const currentSegments = scriptData?.segments;
-    if (!Array.isArray(currentSegments) || currentSegments.length === 0) return;
-
-    const totalDur = Number(duration || videoRef?.current?.duration || selectedVideo?.duration || 0);
-    const currentState = {
-      videoClips: videoClips || [],
-      segments: currentSegments,
-    };
-
-    const opResult = resetTimingOp(currentState, { totalDuration: totalDur });
-    if (!opResult.applied) {
-      showInAppToast(opResult.reason || '⚠️ Reset Timing មិនអាចអនុវត្តបានទេ');
-      return;
-    }
-
-    const resetSegs = opResult.state.segments;
-
-    try {
-      pushUndoSnapshot(videoClips, currentSegments);
-    } catch (err) {
-      console.warn('[useClipOperations] pushUndoSnapshot failed in handleResetToSourceTiming:', err);
-    }
-
-    setScriptData({
-      ...scriptData,
-      segments: resetSegs,
-      updatedAt: Date.now(),
-    });
-
-    try {
-      const hasGeneratedAudio = resetSegs.some((s) => s.audioFile || s.audioPath || s.audioUrl);
-      if (hasGeneratedAudio || audioGenerated) {
-        const syncRes = await syncTimelineAudioApi(
-          resetSegs,
-          getProjectName() || 'drama_project',
-          getVideoId(),
-          episodeId,
-          seriesId
-        );
-        if (syncRes?.fullAudioUrl && typeof setFullAudioUrl === 'function') {
-          setFullAudioUrl(`${syncRes.fullAudioUrl.split('?')[0]}?t=${Date.now()}`);
-        }
-        if (syncRes?.fullAudioPath && typeof setFullAudioPath === 'function') {
-          setFullAudioPath(syncRes.fullAudioPath);
-        }
-        notifyBackendOnline();
-      }
-    } catch (err) {
-      console.warn('[useClipOperations] Reset timing audio sync notice:', err.message);
-      if (err.status === 502 || /ECONNREFUSED|unreachable|Failed to fetch|NetworkError/i.test(err?.message || '')) {
-        notifyBackendOffline();
-      }
-    }
-  }, [
-    scriptData,
-    videoClips,
-    pushUndoSnapshot,
-    duration,
-    videoRef,
-    selectedVideo,
-    setScriptData,
-    audioGenerated,
-    syncTimelineAudioApi,
-    getProjectName,
-    getVideoId,
-    episodeId,
-    seriesId,
-    setFullAudioUrl,
-    setFullAudioPath,
-    notifyBackendOnline,
-    notifyBackendOffline,
   ]);
 
   // Select clip and seek playhead to its start (only seek when paused / explicit user gesture, never during continuous playback)
@@ -945,7 +945,6 @@ export function useClipOperations({
     handleResetFullVideo,
     handleBridgeGaps,
     handleAutoAlignNoOverlap,
-    handleResetToSourceTiming,
     handleSelectClip,
     handleDeleteClip,
     handleUpdateClips,

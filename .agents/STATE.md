@@ -1,6 +1,50 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
+- **Environment**: Antigravity IDE
+- **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-18T16:42:00+07:00
+
+## Summary: Manual Move Sets `userShifted` Anchor, Auto-Align Honours Anchors, Delete `Reset Timing`, Extended Summary Toast (COMPLETED)
+- **Root Cause**: `autoAlign` in `frontend/src/utils/timelineOps.js` respected manual positions only when `seg.userShifted` was `true`, but `moveClip` (voice drag/drop commit path) never set `userShifted: true`, and `POST /api/sync-timeline-audio` skipped persisting `trackRow`/`userShifted`/`startSec` on fingerprint cache hits (e.g. vertical lane-only drags) and omitted `startSec`/`endSec` on post-sync writes.
+- **Changes Applied**:
+  1. `frontend/src/utils/timelineOps.js`:
+     - `moveClip`: sets `userShifted: true`, persists dropped `audioStartSec`, `audioEndSec`, `trackRow`, `trackId`, and preserves `sourceStartSec`/`sourceEndSec`.
+     - `autoAlign`: treats all `userShifted` clips as immutable fixed anchors (never modifies start, end, duration, or lane on any row), aligns only non-shifted clips around them (re-laning non-shifted clips that collide with a Lane-0 anchor), and returns `report` (`alignedCount`, `movedClipNumbers`, `untouchedCount`, `untouchedClipNumbers`, `relanedClips`, `overrunClips`).
+     - Deleted `resetTiming` completely.
+  2. `frontend/src/components/timeline/TimelineEditor.jsx` & `TimelineTracksCanvas.jsx`:
+     - Kept `userShifted` (and secondary-lane) clips rendered on their stored `trackRow` at their stored `audioStartSec`.
+     - Updated cross-track drop (`handleMoveVideoToTrack`) to preserve `sourceStartSec`/`sourceEndSec`, set `userShifted: true`, and sync immediately.
+     - Removed `onResetToSourceTiming` prop & wiring.
+  3. `frontend/src/components/timeline/TimelineToolbar.jsx` & `frontend/src/App.jsx`:
+     - Completely removed the `Reset Timing` button, icon import, handler callback, and prop wiring (grep-proof **0 hits** for `resetTiming` across `frontend/src`).
+  4. `frontend/src/hooks/useClipOperations.js`:
+     - Deleted `handleResetToSourceTiming` and `resetTiming` import.
+     - Extended `handleAutoAlignNoOverlap` to always show a visible summary toast reporting aligned count, untouched `userShifted` clips by clip number (e.g. `#4`), and overrun clips.
+  5. `backend/routes/audioRoutes.js`:
+     - Extracted `persistSyncedSegmentsToSeriesJson` and invoked it on BOTH fingerprint cache-hit AND post-FFmpeg sync paths, persisting `userShifted`, `trackRow`, `trackId`, `startSec`, `endSec`, `audioStartSec`, `audioEndSec`, `sourceStartSec`, `sourceEndSec`, and trimming/overrun flags to `series.json`.
+  6. Tests updated/added: `backend/tests/auto_align_voice.test.js`, `backend/tests/timeline_step_c_real_app_acceptance.test.js`, `backend/tests/timeline_ui_workflow_fix.test.js`, and new `backend/tests/timeline_user_shifted_anchors.test.js`.
+- **Verification Evidence**:
+  - Grep check across `frontend/src` for `resetTiming|Reset Timing|ResetToSourceTiming`: **0 hits**.
+  - Production build (`npm --prefix frontend run build`): **PASS** (`618ms`, 0 errors).
+  - Full timeline test suite (`node --test backend/tests/timeline_*.test.js backend/tests/auto_align_voice.test.js`): **104 / 104 PASS** (0 fail).
+  - Real-app Playwright E2E on `Pseudo_Spiritual_Root` (`ep_1`, restarted backend `:5000` + frontend `:5173`, original `series.json` restored cleanly):
+    - `Reset Timing` button count in DOM: `0`.
+    - Dragged `#4` from Lane 1 (`12s`, `left: 540px`) → Lane 2 (`14s`, `left: 630px`) → persisted to `series.json` (`userShifted: true`, `trackRow: 1`, `audioStartSec: 14`).
+    - Reloaded page → `#4` stayed on Lane 2 (`left: 630px`, `audioStartSec: 14`, `userShifted: true`).
+    - Clicked `Auto-Align` → `#4` stayed untouched on Lane 2 (`left: 630px`, `audioStartSec: 14`, `userShifted: true`), drifted non-shifted `#6` aligned cleanly back to `14.8s` on Lane 1, and visible toast reported: `⚠️Auto-Align: Aligned 1 clip • 5 manual untouched (#4, #16, #21, #50, #74) • Overrun: ...`. Zero page errors.
+
+## Active Environment
+- **Backend API**: `http://localhost:5000` (restarted fresh on `chore/full-project-cleanup`)
+- **Frontend Studio**: `http://localhost:5173` (restarted fresh Vite dev server on `chore/full-project-cleanup`)
+- **Branch**: `chore/full-project-cleanup` (committed & pushed)
+
+## Next Steps
+- Refresh browser (`Ctrl + F5`) at `http://localhost:5173/studio` — manually dragged voice clips stay locked across reload & Auto-Align, and `Reset Timing` is removed.
+
+---
+
+## Previous Session
 - **Environment**: Antigravity IDE (`engineering-minimal-change-engineer` discipline)
 - **Branch**: `chore/full-project-cleanup`
 - **Timestamp**: 2026-11-18T14:14:00+07:00

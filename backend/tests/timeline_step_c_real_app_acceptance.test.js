@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   autoAlign,
-  resetTiming,
+  moveClip,
 } from '../../frontend/src/utils/timelineOps.js';
 import {
   persistEpisodeTimelineOperation,
@@ -242,67 +242,91 @@ describe('Phase 2 Step C: Real-App Checks on Disposable Episode Copy (Stored ser
     );
   });
 
-  it('Check 4: Reset Timing -> segments return to source-anchored times, count unchanged', async () => {
-    // Aligned segments where audio was clamped/trimmed away from source timing
-    const alignedSegments = [
+  it('Check 4: Manual Move sets userShifted anchor -> persists to disk and survives Auto-Align untouched', async () => {
+    const initialSegments = [
       {
         id: 1,
         _uid: 'uid-r1',
-        startSec: 2.0,
-        endSec: 4.5,
-        sourceStartSec: 2.0,
-        sourceEndSec: 5.0,
-        audioStartSec: 2.0,
-        audioEndSec: 4.5,
-        audioDurationSec: 2.5,
-        audioTrimmed: true,
-        audioOverrun: true,
-        overrunRatio: 0.45,
+        startSec: 1.0,
+        endSec: 3.0,
+        sourceStartSec: 1.0,
+        sourceEndSec: 3.0,
+        audioStartSec: 1.0,
+        audioEndSec: 3.0,
+        audioDurationSec: 2.0,
+        trackRow: 0,
         khmerText: 'ឃ្លាទីមួយ',
         audioFile: 'a1.mp3',
       },
       {
         id: 2,
         _uid: 'uid-r2',
-        startSec: 4.5,
-        endSec: 8.0,
-        sourceStartSec: 5.0, // Source was at 5.0, but clamped alignment moved it to 4.5
-        sourceEndSec: 8.0,
-        audioStartSec: 4.5,
-        audioEndSec: 7.5,
-        audioDurationSec: 3.0,
-        audioTrimmed: false,
+        startSec: 4.0,
+        endSec: 6.5,
+        sourceStartSec: 4.0,
+        sourceEndSec: 6.5,
+        audioStartSec: 4.0,
+        audioEndSec: 6.5,
+        audioDurationSec: 2.5,
+        trackRow: 0,
         khmerText: 'ឃ្លាទីពីរ',
         audioFile: 'a2.mp3',
+      },
+      {
+        id: 3,
+        _uid: 'uid-r3',
+        startSec: 7.0,
+        endSec: 9.0,
+        sourceStartSec: 7.0,
+        sourceEndSec: 9.0,
+        audioStartSec: 8.2, // misaligned non-shifted clip
+        audioEndSec: 10.2,
+        audioDurationSec: 2.0,
+        trackRow: 0,
+        khmerText: 'ឃ្លាទីបី',
+        audioFile: 'a3.mp3',
       },
     ];
     const initialVideoClips = [
       { id: 'clip-1', start: 0, end: 20, name: 'Video 1', isDialogue: true },
     ];
 
-    seedDiskEpisode(alignedSegments, initialVideoClips, 20);
+    seedDiskEpisode(initialSegments, initialVideoClips, 20);
 
-    const currentState = { videoClips: initialVideoClips, segments: alignedSegments };
-    const opResult = resetTiming(currentState, { totalDuration: 20 });
+    // 1. User manually moves clip #2 to 5.2s on VOICE 2 (trackRow: 1)
+    const moveRes = moveClip(
+      { videoClips: initialVideoClips, segments: initialSegments },
+      { clipId: 'uid-r2', newStart: 5.2, trackRow: 1 }
+    );
+    assert.equal(moveRes.applied, true, 'moveClip must apply');
+    persistDiskState(undefined, moveRes.state.segments);
 
-    assert.equal(opResult.applied, true, 'resetTiming must apply');
-    assert.equal(opResult.state.segments.length, 2, 'Count must remain 2');
+    // 2. Reload from disk and verify userShifted + trackRow + audioStartSec persisted
+    const diskAfterMove = readDiskEpisode();
+    const movedSeg2 = diskAfterMove.scriptData.segments.find((s) => s._uid === 'uid-r2');
+    assert.equal(movedSeg2.userShifted, true, 'Moved segment must have userShifted: true on disk');
+    assert.equal(movedSeg2.audioStartSec, 5.2, 'Moved segment must keep dropped audioStartSec');
+    assert.equal(movedSeg2.trackRow, 1, 'Moved segment must keep dropped trackRow (VOICE 2)');
 
-    // Persist to stored series.json
-    persistDiskState(undefined, opResult.state.segments);
+    // 3. Run Auto-Align after reload -> #2 MUST remain untouched, #3 aligns back to 7.0s
+    const alignRes = autoAlign(
+      { videoClips: diskAfterMove.videoClips, segments: diskAfterMove.scriptData.segments },
+      { totalDuration: 20 }
+    );
+    assert.equal(alignRes.applied, true, 'autoAlign must apply');
+    assert.equal(alignRes.state.segments.length, 3, 'Count must remain 3');
+    persistDiskState(undefined, alignRes.state.segments);
 
-    const diskAfterReset = readDiskEpisode();
-    const [seg1, seg2] = diskAfterReset.scriptData.segments;
+    const diskAfterAlign = readDiskEpisode();
+    const alignedSeg2 = diskAfterAlign.scriptData.segments.find((s) => s._uid === 'uid-r2');
+    const alignedSeg3 = diskAfterAlign.scriptData.segments.find((s) => s._uid === 'uid-r3');
 
-    // Segment 2 must return to its source-anchored startSec (5.0s, not 4.5s)
-    assert.equal(seg2.startSec, 5.0, 'Segment 2 startSec must return to sourceStartSec (5.0s)');
-    assert.equal(seg2.audioStartSec, 5.0, 'Segment 2 audioStartSec must return to 5.0s');
-
-    // Flags reset
-    assert.equal(seg1.audioTrimmed, false, 'audioTrimmed must be reset to false');
-    assert.equal(seg1.audioOverrun, false, 'audioOverrun must be reset to false');
-
-    assert.deepEqual(diskAfterReset.videoClips, initialVideoClips, 'Video clips must remain untouched');
+    assert.equal(alignedSeg2.userShifted, true, '#2 userShifted anchor flag preserved');
+    assert.equal(alignedSeg2.audioStartSec, 5.2, '#2 manual start preserved after Auto-Align');
+    assert.equal(alignedSeg2.trackRow, 1, '#2 manual lane preserved after Auto-Align');
+    assert.equal(alignedSeg3.audioStartSec, 7.0, '#3 non-shifted clip aligned to canonical startSec');
+    assert.deepEqual(alignRes.report.untouchedClipNumbers, [2], 'Report names #2 as untouched manual anchor');
+    assert.deepEqual(diskAfterAlign.videoClips, initialVideoClips, 'Video clips must remain untouched');
   });
 
   it('Check 5: Ctrl+Z after align restores exactly', async () => {

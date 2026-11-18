@@ -4,18 +4,12 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {
   autoAlign,
-  resetTiming,
+  moveClip,
 } = require('../../frontend/src/utils/timelineOps.js');
 
 function runAutoAlign(segments, totalDuration, options = {}) {
   const res = autoAlign({ videoClips: [], segments }, { totalDuration, options });
   assert.equal(res.applied, true, 'autoAlign must return applied: true');
-  return res.state.segments;
-}
-
-function runResetTiming(segments, totalDuration) {
-  const res = resetTiming({ videoClips: [], segments }, { totalDuration });
-  assert.equal(res.applied, true, 'resetTiming must return applied: true');
   return res.state.segments;
 }
 
@@ -187,11 +181,6 @@ test('autoAlign: resolves over-long audio on Lane 0 by clamping previous audioEn
   // #19 starts at exact 43.60
   assert.equal(aligned[2].audioStartSec, 43.60);
   assert.equal(aligned[2].audioTrimmed, false, '#19 is not trimmed');
-
-  // Verify Reset Timing restores source timing on Lane 0
-  const resetSegs = runResetTiming(aligned, 180.0);
-  assert.equal(resetSegs[0].audioTrimmed, false, '#17 audioTrimmed must be reset');
-  assert.equal(resetSegs[1].trackRow, 0, 'Reset timing keeps #18 on VOICE 1 (Lane 0)');
 });
 
 // User Requirements (a), (b), (c)

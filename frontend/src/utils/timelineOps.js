@@ -862,6 +862,16 @@ export function moveClip(state, { clipId, newStart, trackRow, subTrackRow }) {
 
   if (segIndex !== -1) {
     const seg = segments[segIndex];
+    const origStart = (typeof seg.sourceStartSec === 'number' && !isNaN(seg.sourceStartSec) && seg.sourceStartSec >= 0)
+      ? seg.sourceStartSec
+      : ((typeof seg.startSec === 'number' && !isNaN(seg.startSec) && seg.startSec >= 0)
+        ? seg.startSec
+        : parseTimeToSeconds(seg.start ?? seg.startTime, 0));
+    const origEnd = (typeof seg.sourceEndSec === 'number' && !isNaN(seg.sourceEndSec) && seg.sourceEndSec > origStart)
+      ? seg.sourceEndSec
+      : ((typeof seg.endSec === 'number' && !isNaN(seg.endSec) && seg.endSec > origStart)
+        ? seg.endSec
+        : r2(origStart + Math.max(0.3, getSegmentAudioDuration(seg, 2.2))));
     const rawDur = typeof seg.audioDurationSec === 'number' && seg.audioDurationSec > 0
       ? seg.audioDurationSec
       : (typeof seg.duration === 'number' && seg.duration > 0
@@ -875,6 +885,8 @@ export function moveClip(state, { clipId, newStart, trackRow, subTrackRow }) {
     const nextSegments = [...segments];
     nextSegments[segIndex] = {
       ...seg,
+      sourceStartSec: r2(origStart),
+      sourceEndSec: r2(origEnd),
       startSec: safeStart,
       endSec: safeEnd,
       duration: dur,
@@ -903,11 +915,19 @@ export function moveClip(state, { clipId, newStart, trackRow, subTrackRow }) {
   return noop(state, `Clip or segment not found: ${clipId}`);
 }
 
+/** Resolve a segment's display clip number (e.g. 4 for #4) */
+function resolveSegClipNumber(seg, fallbackIdx) {
+  if (typeof seg?.id === 'number' && Number.isFinite(seg.id)) return seg.id;
+  if (typeof seg?.segmentId === 'number' && Number.isFinite(seg.segmentId)) return seg.segmentId;
+  if (typeof seg?.id === 'string' && /^\d+$/.test(seg.id.trim())) return parseInt(seg.id.trim(), 10);
+  return fallbackIdx + 1;
+}
+
 // ═══════════════════════════════════════════════════════════════════
 //  R5 — autoAlign (move-only transform)
 //  Hard count guard: segments.length in == out; aborts on mismatch.
-//  Single-lane rule: non-userShifted voices on VOICE 1; overruns
-//  clamped and flagged audioOverrun.
+//  userShifted clips are fixed anchors — Auto-Align NEVER changes
+//  their start, end, or lane. Aligns only non-shifted clips around them.
 // ═══════════════════════════════════════════════════════════════════
 
 export function autoAlign(state, { totalDuration, options = {} }) {
@@ -917,17 +937,12 @@ export function autoAlign(state, { totalDuration, options = {} }) {
   }
 
   const inputCount = segments.length;
-  const {
-    minGapSec = 0.05,
-    maxShiftSec = 0.35,
-    maxPlaybackSpeed = 1.45,
-  } = options;
-
   const hasValidVideoEnd = Number.isFinite(totalDuration) && totalDuration > 0;
 
-  // 1. Sort chronologically by canonical subtitle onset
-  const sorted = [...segments]
+  // 1. Resolve sort key & canonical slot timing for every segment
+  const sorted = segments
     .map((seg, idx) => {
+      const isUserShifted = Boolean(seg.userShifted);
       const canonicalStart = (typeof seg.startSec === 'number' && !isNaN(seg.startSec) && seg.startSec >= 0)
         ? seg.startSec
         : ((typeof seg.sourceStartSec === 'number' && !isNaN(seg.sourceStartSec) && seg.sourceStartSec >= 0)
@@ -940,130 +955,225 @@ export function autoAlign(state, { totalDuration, options = {} }) {
           ? seg.sourceEndSec
           : canonicalStart + 2.2);
 
+      const anchorStart = isUserShifted
+        ? (typeof seg.audioStartSec === 'number' && !isNaN(seg.audioStartSec)
+            ? seg.audioStartSec
+            : canonicalStart)
+        : canonicalStart;
+
       return {
         ...seg,
+        _origIdx: idx,
         _canonicalStart: r2(canonicalStart),
         _canonicalEnd: r2(canonicalEnd),
+        _sortStart: r2(anchorStart),
       };
     })
-    .sort((a, b) => a._canonicalStart - b._canonicalStart);
+    .sort((a, b) => {
+      if (a._sortStart !== b._sortStart) return a._sortStart - b._sortStart;
+      return a._origIdx - b._origIdx;
+    });
 
-  // 2. Single-Lane Sequential Voice Layout
+  // 2. Collect fixed intervals occupied by userShifted anchors per lane (so non-shifted clips never collide with or mutate them)
+  const anchorIntervalsByRow = new Map();
+  for (let i = 0; i < sorted.length; i++) {
+    const seg = sorted[i];
+    if (!seg.userShifted) continue;
+    const anchorRow = typeof seg.trackRow === 'number' ? Math.max(0, seg.trackRow) : 0;
+    const anchorStart = seg._sortStart;
+    const fallbackSpan = Math.max(0.35, seg._canonicalEnd - seg._canonicalStart);
+    const rawAudioDur = getSegmentAudioDuration(seg, fallbackSpan);
+    const anchorEnd = (typeof seg.audioEndSec === 'number' && !isNaN(seg.audioEndSec) && seg.audioEndSec > anchorStart)
+      ? r2(seg.audioEndSec)
+      : ((typeof seg.endSec === 'number' && !isNaN(seg.endSec) && seg.endSec > anchorStart)
+        ? r2(seg.endSec)
+        : r2(anchorStart + Math.max(0.35, rawAudioDur)));
+    if (!anchorIntervalsByRow.has(anchorRow)) anchorIntervalsByRow.set(anchorRow, []);
+    anchorIntervalsByRow.get(anchorRow).push([anchorStart, anchorEnd]);
+  }
+
+  const overlapsAnchorOnRow = (row, start, end) => {
+    const intervals = anchorIntervalsByRow.get(row);
+    if (!intervals || intervals.length === 0) return false;
+    return intervals.some(([aStart, aEnd]) => Math.max(start, aStart) < Math.min(end, aEnd) - 0.04);
+  };
+
+  // 3. Layout pass: keep userShifted anchors 100% untouched; align non-shifted clips cleanly around them
   const trackLastEnds = {};
   const subTrackLastEnds = { 0: 0, 1: 0, 2: 0 };
   const aligned = [];
-  let lastLane0Idx = -1;
+  let lastAlignedLane0Idx = -1;
+
+  const movedClipNumbers = [];
+  const untouchedClipNumbers = [];
+  const relanedClips = [];
+  const overrunMap = new Map();
 
   for (let i = 0; i < sorted.length; i++) {
     const seg = sorted[i];
+    const clipNumber = resolveSegClipNumber(seg, i);
     const isUserShifted = Boolean(seg.userShifted);
 
+    const fallbackSubtitleSpan = Math.max(0.35, (seg._canonicalEnd || 0) - (seg._canonicalStart || 0));
+    const rawAudioDur = getSegmentAudioDuration(seg, fallbackSubtitleSpan);
+    const effectiveDur = Math.max(0.35, rawAudioDur);
+
+    if (isUserShifted) {
+      // Fixed anchor: NEVER modify start, end, duration, or lane of a userShifted clip
+      const targetRow = typeof seg.trackRow === 'number' ? Math.max(0, seg.trackRow) : 0;
+      const targetStart = seg._sortStart;
+      const finalEndSec = (typeof seg.audioEndSec === 'number' && !isNaN(seg.audioEndSec))
+        ? r2(seg.audioEndSec)
+        : ((typeof seg.endSec === 'number' && !isNaN(seg.endSec))
+          ? r2(seg.endSec)
+          : r2(targetStart + effectiveDur));
+      const finalDur = (typeof seg.audioDurationSec === 'number' && !isNaN(seg.audioDurationSec))
+        ? r2(seg.audioDurationSec)
+        : r2(Math.max(0.05, finalEndSec - targetStart));
+
+      const targetSubRow = typeof seg.subTrackRow === 'number'
+        ? Math.max(0, seg.subTrackRow)
+        : 0;
+      subTrackLastEnds[targetSubRow] = Math.max(subTrackLastEnds[targetSubRow] || 0, finalEndSec);
+      trackLastEnds[targetRow] = Math.max(trackLastEnds[targetRow] || 0, finalEndSec);
+      untouchedClipNumbers.push(clipNumber);
+
+      const cleanSeg = { ...seg };
+      delete cleanSeg._origIdx;
+      delete cleanSeg._canonicalStart;
+      delete cleanSeg._canonicalEnd;
+      delete cleanSeg._sortStart;
+
+      const anchorSeg = {
+        ...cleanSeg,
+        id: seg.id !== undefined ? seg.id : (i + 1),
+        segmentId: seg.segmentId !== undefined ? seg.segmentId : (seg.id !== undefined ? seg.id : (i + 1)),
+        sourceStartSec: seg.sourceStartSec !== undefined ? seg.sourceStartSec : seg._canonicalStart,
+        sourceEndSec: seg.sourceEndSec !== undefined ? seg.sourceEndSec : seg._canonicalEnd,
+        startSec: typeof seg.startSec === 'number' && !isNaN(seg.startSec) ? r2(seg.startSec) : targetStart,
+        endSec: typeof seg.endSec === 'number' && !isNaN(seg.endSec) ? r2(seg.endSec) : finalEndSec,
+        duration: typeof seg.duration === 'number' && !isNaN(seg.duration) ? r2(seg.duration) : finalDur,
+        audioStartSec: targetStart,
+        audioEndSec: finalEndSec,
+        audioDurationSec: finalDur,
+        trackRow: targetRow,
+        trackId: `voice-${targetRow + 1}`,
+        subTrackRow: targetSubRow,
+        subTrackId: `subs-${targetSubRow + 1}`,
+        userShifted: true,
+      };
+      aligned.push(anchorSeg);
+      continue;
+    }
+
+    // Non-shifted clip: align to canonical slot start on Lane 0 (or lowest free non-anchor lane if blocked by a userShifted anchor on Lane 0)
     let baseStart = seg._canonicalStart;
     if (hasValidVideoEnd && baseStart >= totalDuration - 0.4) {
       baseStart = Math.max(0, r2(totalDuration - 1.2));
     }
 
-    let targetRow = 0;
     let targetStart = baseStart;
+    let targetRow = 0;
 
-    if (isUserShifted && typeof seg.trackRow === 'number') {
-      targetRow = Math.max(0, seg.trackRow);
-      if (typeof seg.audioStartSec === 'number' && !isNaN(seg.audioStartSec)) {
-        targetStart = seg.audioStartSec;
-      } else if (typeof seg.startSec === 'number' && !isNaN(seg.startSec)) {
-        targetStart = seg.startSec;
+    // Check if Lane 0 at targetStart is occupied by a fixed userShifted anchor
+    const projectedEnd = r2(Math.min(hasValidVideoEnd ? totalDuration : Infinity, targetStart + effectiveDur));
+    if (overlapsAnchorOnRow(0, targetStart, projectedEnd)) {
+      let freeRow = 1;
+      while (overlapsAnchorOnRow(freeRow, targetStart, projectedEnd) || (trackLastEnds[freeRow] || 0) > targetStart + 0.04) {
+        freeRow += 1;
       }
-    } else {
-      targetRow = 0;
+      targetRow = freeRow;
+      relanedClips.push({ clipNumber, lane: targetRow + 1 });
+    } else if (lastAlignedLane0Idx >= 0) {
+      // Resolve overrun on Lane 0 against the previous NON-SHIFTED Lane 0 clip (never mutates userShifted anchors!)
+      const prevLane0 = aligned[lastAlignedLane0Idx];
+      if (prevLane0 && !prevLane0.userShifted && prevLane0.audioEndSec > baseStart) {
+        const origAudioDur = getSegmentAudioDuration(
+          prevLane0,
+          Math.max(0, (prevLane0.audioEndSec || 0) - (prevLane0.audioStartSec || 0))
+        );
+        const cutDur = prevLane0.audioEndSec - baseStart;
+        const cutRatio = (origAudioDur > 0 && cutDur > 0) ? (cutDur / origAudioDur) : 0;
 
-      // Resolve overrun on Lane 0
-      if (lastLane0Idx >= 0) {
-        const prevLane0 = aligned[lastLane0Idx];
-        if (prevLane0 && prevLane0.audioEndSec > baseStart) {
-          const origAudioDur = getSegmentAudioDuration(
-            prevLane0,
-            Math.max(0, (prevLane0.audioEndSec || 0) - (prevLane0.audioStartSec || 0))
-          );
-          const cutDur = prevLane0.audioEndSec - baseStart;
-          const cutRatio = (origAudioDur > 0 && cutDur > 0) ? (cutDur / origAudioDur) : 0;
+        const clampedEnd = Math.max(
+          r2(prevLane0.audioStartSec + 0.05),
+          r2(baseStart)
+        );
+        prevLane0.audioEndSec = clampedEnd;
+        prevLane0.endSec = clampedEnd;
+        const newDur = r2(Math.max(0.05, prevLane0.audioEndSec - prevLane0.audioStartSec));
+        prevLane0.audioDurationSec = newDur;
+        prevLane0.duration = newDur;
+        prevLane0.audioTrimmed = true;
+        if (cutRatio > 0.40) {
+          prevLane0.audioOverrun = true;
+          prevLane0.overrunRatio = r2(cutRatio);
+        } else {
+          prevLane0.audioOverrun = false;
+          delete prevLane0.overrunRatio;
+        }
+        prevLane0.end = formatMinSec(prevLane0.audioEndSec);
+        prevLane0.audioEnd = formatMinSec(prevLane0.audioEndSec);
+        trackLastEnds[0] = prevLane0.audioEndSec;
 
-          const clampedEnd = Math.max(
-            r2(prevLane0.audioStartSec + 0.05),
-            r2(baseStart)
-          );
-          prevLane0.audioEndSec = clampedEnd;
-          prevLane0.endSec = clampedEnd;
-          const newDur = r2(Math.max(0.05, prevLane0.audioEndSec - prevLane0.audioStartSec));
-          prevLane0.audioDurationSec = newDur;
-          prevLane0.duration = newDur;
-          prevLane0.audioTrimmed = true;
-          if (cutRatio > 0.40) {
-            prevLane0.audioOverrun = true;
-            prevLane0.overrunRatio = r2(cutRatio);
-          } else {
-            prevLane0.audioOverrun = false;
-            delete prevLane0.overrunRatio;
-          }
-          prevLane0.end = formatMinSec(prevLane0.audioEndSec);
-          prevLane0.audioEnd = formatMinSec(prevLane0.audioEndSec);
-          trackLastEnds[0] = prevLane0.audioEndSec;
+        if (cutDur > 0.05) {
+          const prevClipNum = resolveSegClipNumber(prevLane0, lastAlignedLane0Idx);
+          overrunMap.set(prevClipNum, {
+            clipNumber: prevClipNum,
+            overrunSec: r2(cutDur),
+            overrunRatio: r2(cutRatio),
+          });
+        }
 
-          if (clampedEnd > targetStart) {
-            targetStart = clampedEnd;
-          }
+        if (clampedEnd > targetStart) {
+          targetStart = clampedEnd;
         }
       }
     }
 
-    // Determine audio duration
-    const fallbackSubtitleSpan = Math.max(0.35, (seg._canonicalEnd || 0) - (seg._canonicalStart || 0));
-    const rawAudioDur = getSegmentAudioDuration(seg, fallbackSubtitleSpan);
-    let effectiveDur = Math.max(0.35, rawAudioDur);
-
-    let finalEndSec;
-    let finalDur;
-
-    if (isUserShifted) {
-      finalEndSec = (typeof seg.audioEndSec === 'number' && !isNaN(seg.audioEndSec))
-        ? seg.audioEndSec
-        : ((typeof seg.endSec === 'number' && !isNaN(seg.endSec))
-          ? seg.endSec
-          : r2(targetStart + effectiveDur));
-      finalDur = (typeof seg.audioDurationSec === 'number' && !isNaN(seg.audioDurationSec))
-        ? seg.audioDurationSec
-        : r2(Math.max(0.05, finalEndSec - targetStart));
-    } else {
-      finalEndSec = r2(Math.min(
-        hasValidVideoEnd ? totalDuration : Infinity,
-        targetStart + effectiveDur
-      ));
-      finalDur = r2(Math.max(0.30, finalEndSec - targetStart));
-    }
+    const finalEndSec = r2(Math.min(
+      hasValidVideoEnd ? totalDuration : Infinity,
+      targetStart + effectiveDur
+    ));
+    const finalDur = r2(Math.max(0.30, finalEndSec - targetStart));
 
     trackLastEnds[targetRow] = Math.max(trackLastEnds[targetRow] || 0, finalEndSec);
-    if (targetRow === 0) lastLane0Idx = aligned.length;
+    if (targetRow === 0) lastAlignedLane0Idx = aligned.length;
 
     // Subtitle track row (multi-lane collision avoidance)
     let targetSubRow = 0;
-    if (typeof seg.subTrackRow === 'number' && (seg.userSubShifted || (seg.userShifted && seg.subTrackRow > 0))) {
+    if (typeof seg.subTrackRow === 'number' && seg.userSubShifted) {
       targetSubRow = Math.max(0, seg.subTrackRow);
+    } else if (targetStart >= (subTrackLastEnds[0] || 0) - 0.04) {
+      targetSubRow = 0;
+    } else if (targetStart >= (subTrackLastEnds[1] || 0) - 0.04) {
+      targetSubRow = 1;
+    } else if (targetStart >= (subTrackLastEnds[2] || 0) - 0.04) {
+      targetSubRow = 2;
     } else {
-      if (targetStart >= (subTrackLastEnds[0] || 0) - 0.04) {
-        targetSubRow = 0;
-      } else if (targetStart >= (subTrackLastEnds[1] || 0) - 0.04) {
-        targetSubRow = 1;
-      } else if (targetStart >= (subTrackLastEnds[2] || 0) - 0.04) {
-        targetSubRow = 2;
-      } else {
-        const sortedLanes = [0, 1, 2].sort((a, b) => (subTrackLastEnds[a] || 0) - (subTrackLastEnds[b] || 0));
-        targetSubRow = sortedLanes[0];
-      }
+      const sortedLanes = [0, 1, 2].sort((a, b) => (subTrackLastEnds[a] || 0) - (subTrackLastEnds[b] || 0));
+      targetSubRow = sortedLanes[0];
     }
     subTrackLastEnds[targetSubRow] = finalEndSec;
 
+    const prevStart = typeof seg.startSec === 'number' ? r2(seg.startSec) : null;
+    const prevAudioStart = typeof seg.audioStartSec === 'number' ? r2(seg.audioStartSec) : prevStart;
+    const prevRow = typeof seg.trackRow === 'number' ? seg.trackRow : 0;
+    if (
+      prevStart === null ||
+      Math.abs(prevStart - targetStart) > 0.01 ||
+      prevAudioStart === null ||
+      Math.abs(prevAudioStart - targetStart) > 0.01 ||
+      prevRow !== targetRow
+    ) {
+      movedClipNumbers.push(clipNumber);
+    }
+
     const cleanSeg = { ...seg };
+    delete cleanSeg._origIdx;
     delete cleanSeg._canonicalStart;
     delete cleanSeg._canonicalEnd;
+    delete cleanSeg._sortStart;
     if (cleanSeg.overrunRatio === undefined) {
       delete cleanSeg.overrunRatio;
     }
@@ -1095,7 +1205,7 @@ export function autoAlign(state, { totalDuration, options = {} }) {
       audioEnd: formatMinSec(finalEndSec),
       playbackRate: 1.0,
       needsTimeStretch: false,
-      userShifted: isUserShifted,
+      userShifted: false,
     };
     if (cleanSeg.overrunRatio !== undefined) {
       alignedSeg.overrunRatio = cleanSeg.overrunRatio;
@@ -1111,103 +1221,29 @@ export function autoAlign(state, { totalDuration, options = {} }) {
     return noop(state, `Auto-Align count mismatch (in: ${inputCount}, out: ${aligned.length}). Aborted.`);
   }
 
-  return ok({
-    videoClips: deepClone(videoClips), // R5: autoAlign is move-only on segments; videoClips unchanged
-    segments: aligned,
-  });
-}
-
-// ═══════════════════════════════════════════════════════════════════
-//  resetTiming — Reset segments to original source timestamps
-// ═══════════════════════════════════════════════════════════════════
-
-export function resetTiming(state, { totalDuration }) {
-  const { videoClips, segments } = state;
-  if (!Array.isArray(segments) || segments.length === 0) {
-    return noop(state, 'No segments to reset');
+  // Also include any pre-flagged audioOverrun non-shifted clips in overrun report so re-running Auto-Align still names them
+  for (let i = 0; i < aligned.length; i++) {
+    const s = aligned[i];
+    if (!s.userShifted && s.audioOverrun) {
+      const cNum = resolveSegClipNumber(s, i);
+      if (!overrunMap.has(cNum)) {
+        overrunMap.set(cNum, { clipNumber: cNum, overrunRatio: s.overrunRatio ?? null });
+      }
+    }
   }
 
-  const hasValidVideoEnd = Number.isFinite(totalDuration) && totalDuration > 0;
-  const trackLastEnds = [0, 0];
-  const subTrackLastEnds = [0, 0, 0];
-
-  const reset = segments
-    .filter((seg) => seg && typeof seg === 'object')
-    .map((seg, idx) => {
-      const srcStart = (typeof seg.sourceStartSec === 'number' && !isNaN(seg.sourceStartSec) && seg.sourceStartSec >= 0)
-        ? seg.sourceStartSec
-        : ((typeof seg.startSec === 'number' && !isNaN(seg.startSec) && seg.startSec >= 0)
-          ? seg.startSec
-          : idx * 3.5);
-      const rawSrcEnd = (typeof seg.sourceEndSec === 'number' && !isNaN(seg.sourceEndSec) && seg.sourceEndSec > srcStart)
-        ? seg.sourceEndSec
-        : ((typeof seg.endSec === 'number' && !isNaN(seg.endSec) && seg.endSec > srcStart)
-          ? seg.endSec
-          : srcStart + 2.2);
-
-      const safeStart = hasValidVideoEnd ? Math.min(srcStart, Math.max(0, totalDuration - 1.0)) : srcStart;
-      const safeEnd = hasValidVideoEnd ? Math.min(totalDuration, Math.max(safeStart + 0.4, rawSrcEnd)) : rawSrcEnd;
-      const dur = r2(safeEnd - safeStart);
-
-      const hasAudioFlag = hasSegmentAudio(seg);
-      const audioDur = hasAudioFlag ? getSegmentAudioDuration(seg, dur) : dur;
-      const audioEndSec = r2(safeStart + audioDur);
-
-      const isUserShifted = Boolean(seg.userShifted);
-      const targetRow = (isUserShifted && typeof seg.trackRow === 'number')
-        ? Math.max(0, seg.trackRow)
-        : 0;
-      const effectiveEnd = hasAudioFlag ? audioEndSec : safeEnd;
-      trackLastEnds[targetRow] = Math.max(trackLastEnds[targetRow] || 0, effectiveEnd);
-
-      let targetSubRow = 0;
-      if (safeStart >= (subTrackLastEnds[0] || 0) - 0.04) {
-        targetSubRow = 0;
-      } else if (safeStart >= (subTrackLastEnds[1] || 0) - 0.04) {
-        targetSubRow = 1;
-      } else if (safeStart >= (subTrackLastEnds[2] || 0) - 0.04) {
-        targetSubRow = 2;
-      } else {
-        const sortedLanes = [0, 1, 2].sort((a, b) => (subTrackLastEnds[a] || 0) - (subTrackLastEnds[b] || 0));
-        targetSubRow = sortedLanes[0];
-      }
-      subTrackLastEnds[targetSubRow] = safeEnd;
-
-      const resetSeg = {
-        ...seg,
-        id: seg.id !== undefined ? seg.id : (idx + 1),
-        segmentId: seg.segmentId !== undefined ? seg.segmentId : (seg.id !== undefined ? seg.id : (idx + 1)),
-        sourceStartSec: r2(safeStart),
-        sourceEndSec: r2(safeEnd),
-        startSec: r2(safeStart),
-        endSec: r2(safeEnd),
-        duration: dur,
-        audioStartSec: r2(safeStart),
-        audioEndSec: audioEndSec,
-        audioDurationSec: audioDur,
-        rawAudioDur: hasAudioFlag ? audioDur : undefined,
-        audioTrimmed: false,
-        audioOverrun: false,
-        finalAudioDuration: hasAudioFlag ? audioDur : seg.finalAudioDuration,
-        audioDuration: hasAudioFlag ? audioDur : seg.audioDuration,
-        trackRow: targetRow,
-        trackId: `voice-${targetRow + 1}`,
-        subTrackRow: targetSubRow,
-        subTrackId: `subs-${targetSubRow + 1}`,
-        start: formatMinSec(safeStart),
-        end: formatMinSec(safeEnd),
-        startTime: formatMinSec(safeStart),
-        endTime: formatMinSec(safeEnd),
-        audioStart: formatMinSec(safeStart),
-        audioEnd: formatMinSec(safeEnd),
-        userShifted: isUserShifted,
-      };
-      delete resetSeg.overrunRatio;
-      return resetSeg;
-    });
-
-  return ok({
-    videoClips: deepClone(videoClips),
-    segments: reset,
-  });
+  return {
+    ...ok({
+      videoClips: deepClone(videoClips), // R5: autoAlign is move-only on segments; videoClips unchanged
+      segments: aligned,
+    }),
+    report: {
+      alignedCount: movedClipNumbers.length,
+      movedClipNumbers,
+      untouchedCount: untouchedClipNumbers.length,
+      untouchedClipNumbers,
+      relanedClips,
+      overrunClips: Array.from(overrunMap.values()),
+    },
+  };
 }

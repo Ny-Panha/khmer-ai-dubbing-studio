@@ -57,7 +57,6 @@ function TimelineEditor({
   onResetFullVideo = null,
   onBridgeGaps = null,
   onAutoAlignNoOverlap = null,
-  onResetToSourceTiming = null,
   onAddSegment = null,
   onToggleMuteSegment = null,
   onToggleMuteVideoClip = null,
@@ -156,8 +155,8 @@ function TimelineEditor({
         : (rawStart + audioDur);
 
       // CapCut single-lane style: all auto-placed voice clips live sequentially on VOICE 1 (Lane 0).
-      // Only userShifted clips are placed on their explicitly chosen trackRow.
-      if (typeof seg.trackRow === 'number' && seg.userShifted) {
+      // Only userShifted clips (or clips explicitly placed on a secondary lane) stay on their stored trackRow.
+      if (typeof seg.trackRow === 'number' && (seg.userShifted || seg.trackRow > 0)) {
         const userR = Math.max(0, seg.trackRow);
         rowEndTimes[userR] = Math.max(rowEndTimes[userR] || 0, rawEnd);
         return userR;
@@ -378,25 +377,31 @@ function TimelineEditor({
       );
       if (segIdx >= 0) {
         const seg = scriptSegments[segIdx];
-        const origStart = typeof seg.startSec === 'number' ? seg.startSec : 0;
-        const origEnd = typeof seg.endSec === 'number' ? seg.endSec : origStart + 3.0;
-        const dur = Math.max(0.4, origEnd - origStart);
+        const origStart = typeof seg.sourceStartSec === 'number' ? seg.sourceStartSec : (typeof seg.startSec === 'number' ? seg.startSec : 0);
+        const origEnd = typeof seg.sourceEndSec === 'number' ? seg.sourceEndSec : (typeof seg.endSec === 'number' ? seg.endSec : origStart + 3.0);
+        const curStart = typeof seg.startSec === 'number' ? seg.startSec : 0;
+        const curEnd = typeof seg.endSec === 'number' ? seg.endSec : curStart + 3.0;
+        const dur = Math.max(0.4, (typeof seg.audioDurationSec === 'number' && seg.audioDurationSec > 0) ? seg.audioDurationSec : (curEnd - curStart));
 
         const updated = [...scriptSegments];
         updated[segIdx] = {
           ...seg,
-          ...(trackType === 'subs' ? { subTrackRow: trackRow, subTrackId: `subs-${trackRow + 1}` } : { trackRow: trackRow, trackId: `voice-${trackRow + 1}` }),
+          sourceStartSec: parseFloat(origStart.toFixed(2)),
+          sourceEndSec: parseFloat(origEnd.toFixed(2)),
+          ...(trackType === 'subs' ? { subTrackRow: trackRow, subTrackId: `subs-${trackRow + 1}`, userSubShifted: true } : { trackRow: trackRow, trackId: `voice-${trackRow + 1}` }),
           startSec: safeTime,
           endSec: parseFloat((safeTime + dur).toFixed(2)),
+          duration: parseFloat(dur.toFixed(2)),
           start: formatMinSec(safeTime),
           end: formatMinSec(safeTime + dur),
           audioStartSec: safeTime,
           audioEndSec: parseFloat((safeTime + dur).toFixed(2)),
+          audioDurationSec: parseFloat(dur.toFixed(2)),
           audioStart: formatMinSec(safeTime),
           audioEnd: formatMinSec(safeTime + dur),
           userShifted: true,
         };
-        onUpdateSegments(updated);
+        onUpdateSegments(updated, false, true);
       }
     }
   }, [
@@ -1792,7 +1797,6 @@ function TimelineEditor({
         scriptSegments={scriptSegments}
         onBridgeGaps={onBridgeGaps}
         onAutoAlignNoOverlap={onAutoAlignNoOverlap}
-        onResetToSourceTiming={onResetToSourceTiming}
         onAddSegment={onAddSegment}
         snappingEnabled={snappingEnabled}
         setSnappingEnabled={setSnappingEnabled}
