@@ -145,10 +145,59 @@ export function getLivePagedSubtitle(seg, currentTime, parseTimeToSeconds) {
 
   const dur = Math.max(1.5, e - s);
   const midTime = s + dur / 2;
-  const [part1, part2] = splitKhmerTextIntoHalves(text);
+  const [rawPart1, rawPart2] = splitKhmerTextIntoHalves(text);
+  const part1 = String(rawPart1 || '').trim();
+  const part2 = String(rawPart2 || '').trim();
 
-  if (!part2) return text;
-  return currentTime < midTime ? part1 : part2;
+  if (!part1 && !part2) return text;
+  if (!part2) return part1 || text;
+  if (!part1) return part2 || text;
+
+  // Paging safety: a segment with text must never resolve to a blank subtitle while active.
+  // Fall back to the nearest page (or full text) if currentTime is non-finite or outside [s, e].
+  if (!Number.isFinite(currentTime) || currentTime < s) {
+    return part1 || text;
+  }
+  if (currentTime >= e) {
+    return part2 || part1 || text;
+  }
+  const chosen = currentTime < midTime ? part1 : part2;
+  return chosen || part1 || part2 || text;
+}
+
+/**
+ * Overlap-safe O(log N) lookup for the active subtitle segment at timeline time `t`.
+ * Expects `indexedSegments` sorted ascending by `start` with optional precomputed `maxEnd` prefix.
+ */
+export function findActiveSubtitleSegment(indexedSegments, t) {
+  if (!Array.isArray(indexedSegments) || indexedSegments.length === 0 || !Number.isFinite(t)) {
+    return null;
+  }
+
+  // Binary search for the rightmost segment whose start <= t
+  let low = 0;
+  let high = indexedSegments.length - 1;
+  let rightmost = -1;
+  while (low <= high) {
+    const mid = (low + high) >> 1;
+    if (indexedSegments[mid].start <= t) {
+      rightmost = mid;
+      low = mid + 1;
+    } else {
+      high = mid - 1;
+    }
+  }
+
+  for (let i = rightmost; i >= 0; i--) {
+    const item = indexedSegments[i];
+    if (typeof item.maxEnd === 'number' && item.maxEnd <= t + 0.001) {
+      break;
+    }
+    if (t >= item.start && t < (item.end - 0.001)) {
+      return item.seg;
+    }
+  }
+  return null;
 }
 
 /**

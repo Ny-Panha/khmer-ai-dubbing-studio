@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react';
 import { Video, Upload, Loader2, AlertCircle } from 'lucide-react';
 import { parseTimeToSeconds } from '../../utils/timestampUtils';
+import { findActiveSubtitleSegment } from '../../utils/khmerTextSplitter';
 import { mapSourceToTimelineTime, mapTimelineToSourceTime } from '../../utils/timelineUtils';
 import { findLeadingSilenceFromChannels, computeSegmentAudioSyncTarget } from '../../utils/audioSyncUtils';
 import { uploadVideoFile } from '../../services/api';
@@ -1407,29 +1408,20 @@ function VideoPlayerPreview({
       }
       return { start: s, end: e, seg };
     });
-    return list.sort((a, b) => a.start - b.start);
+    list.sort((a, b) => a.start - b.start);
+    let runningMaxEnd = -Infinity;
+    for (let i = 0; i < list.length; i++) {
+      runningMaxEnd = Math.max(runningMaxEnd, list[i].end);
+      list[i].maxEnd = runningMaxEnd;
+    }
+    return list;
   }, [scriptData?.segments]);
 
-  // Fast O(log N) active segment lookup for smooth 60fps subtitle overlay
-  const activeSegment = React.useMemo(() => {
-    if (!indexedSegments || indexedSegments.length === 0) return null;
-    const t = effectiveTimelineTime;
-    let low = 0;
-    let high = indexedSegments.length - 1;
-    while (low <= high) {
-      const mid = (low + high) >> 1;
-      const item = indexedSegments[mid];
-      if (t >= item.start && t < (item.end - 0.001)) {
-        return item.seg;
-      }
-      if (t < item.start) {
-        high = mid - 1;
-      } else {
-        low = mid + 1;
-      }
-    }
-    return null;
-  }, [indexedSegments, effectiveTimelineTime]);
+  // Fast overlap-safe O(log N) active segment lookup for smooth 60fps subtitle overlay
+  const activeSegment = React.useMemo(
+    () => findActiveSubtitleSegment(indexedSegments, effectiveTimelineTime),
+    [indexedSegments, effectiveTimelineTime]
+  );
 
   const toggleFullscreen = () => {
     if (!containerRef.current) return;
