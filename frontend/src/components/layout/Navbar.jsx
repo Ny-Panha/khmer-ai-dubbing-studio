@@ -89,12 +89,12 @@ export default function Navbar({
     <>
       <header className="capcut-navbar">
         {/* Left: Brand Mark, Home, Studio, Batch Generate, Keys & Quota, and Jobs */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <nav className="navbar-left-nav" aria-label="Primary Studio Navigation">
           <button
             type="button"
             onClick={() => onNavigateRoute && onNavigateRoute('/home')}
             className="concat-app-mark"
-            style={{ cursor: 'pointer', border: 'none' }}
+            aria-label="DragonDub AI Studio Home"
             title="DragonDub AI Studio — Go to Home (/home)"
           >
             <span>D</span>
@@ -149,11 +149,11 @@ export default function Navbar({
             <Layers size={14} className={activeRunnerStep ? 'animate-pulse' : ''} />
             <span>Batch Generate</span>
             {activeRunnerStep ? (
-              <span className="gemini-badge-chip" style={{ background: '#0284C7', color: '#FFFFFF', fontWeight: 800 }}>
-                {activeRunnerStep === 'clean_bgm' ? '🔇 Demucs' : (activeRunnerStep === 'voice' ? '🎙️ Voice' : (activeRunnerStep === 'repair' ? '🔧 Repair' : '📝 Script'))}: {activeRunnerState?.progress || 0}%
+              <span className="gemini-badge-chip" style={{ background: 'var(--btn-primary-bg)', color: '#FFFFFF', fontWeight: 700 }}>
+                {activeRunnerStep === 'clean_bgm' ? 'Demucs' : (activeRunnerStep === 'voice' ? 'Voice' : (activeRunnerStep === 'repair' ? 'Repair' : 'Script'))}: {activeRunnerState?.progress || 0}%
               </span>
             ) : (
-              <span className="gemini-badge-chip">{episodesCount > 0 ? `${episodesCount} EPs` : 'Batch'}</span>
+              <span className="gemini-badge-chip navbar-route-chip">{episodesCount > 0 ? `${episodesCount} EPs` : 'Batch'}</span>
             )}
           </button>
 
@@ -171,7 +171,7 @@ export default function Navbar({
             >
               <Activity size={14} />
               <span>Keys &amp; Quota</span>
-              <span className="gemini-badge-chip">{keysChipText}</span>
+              <span className="gemini-badge-chip navbar-route-chip">{keysChipText}</span>
             </button>
           )}
 
@@ -196,14 +196,14 @@ export default function Navbar({
               )}
             </button>
           )}
-        </div>
+        </nav>
 
         {/* Right: Actions, Shortcuts, Key & Export CTA */}
         <div className="navbar-right-actions">
           {/* Workspace Panel Collapse / Expand Toggles (Laptop 1366x768 & 1440x900) */}
           {(onToggleLeftPanel || onToggleTimelinePanel || onToggleRightPanel) && (
             <div
-              className="navbar-aspect-toggle"
+              className="navbar-aspect-toggle navbar-panel-toggles"
               role="group"
               aria-label="Workspace Panel Toggles"
               title="បិទ/បើកផ្ទាំងការងារ (Left Media | Bottom Timeline | Right Inspector)"
@@ -214,6 +214,7 @@ export default function Navbar({
                   data-testid="toggle-left-panel-btn"
                   onClick={onToggleLeftPanel}
                   aria-pressed={!isLeftCollapsed}
+                  aria-label={isLeftCollapsed ? 'Show Left Media Library' : 'Collapse Left Panel'}
                   className={`navbar-aspect-btn ${!isLeftCollapsed ? 'active' : ''}`}
                   title={isLeftCollapsed ? 'បើកផ្ទាំងឆ្វេង (Show Left Media Library)' : 'បង្រួមផ្ទាំងឆ្វេង (Collapse Left Panel)'}
                 >
@@ -226,6 +227,7 @@ export default function Navbar({
                   data-testid="toggle-timeline-panel-btn"
                   onClick={onToggleTimelinePanel}
                   aria-pressed={!isTimelineCollapsed}
+                  aria-label={isTimelineCollapsed ? 'Show Timeline' : 'Collapse Timeline'}
                   className={`navbar-aspect-btn ${!isTimelineCollapsed ? 'active' : ''}`}
                   title={isTimelineCollapsed ? 'បើកផ្ទាំង Timeline ខាងក្រោម (Show Timeline)' : 'បង្រួមផ្ទាំង Timeline (Collapse Timeline)'}
                 >
@@ -238,6 +240,7 @@ export default function Navbar({
                   data-testid="toggle-right-panel-btn"
                   onClick={onToggleRightPanel}
                   aria-pressed={!isRightCollapsed}
+                  aria-label={isRightCollapsed ? 'Show Right Inspector' : 'Collapse Right Inspector'}
                   className={`navbar-aspect-btn ${!isRightCollapsed ? 'active' : ''}`}
                   title={isRightCollapsed ? 'បើកផ្ទាំងស្តាំ (Show Right Inspector)' : 'បង្រួមផ្ទាំងស្តាំ (Collapse Right Inspector)'}
                 >
@@ -281,7 +284,7 @@ export default function Navbar({
           {/* Backend Online status chip */}
           <div className={`status-chip ${isBackendOnline ? 'online' : 'offline'}`} title={isBackendOnline ? 'FFmpeg backend is running' : 'Backend server offline'}>
             <span className="status-dot" />
-            <span>{isBackendOnline ? 'FFmpeg Online' : 'Backend Offline'}</span>
+            <span className="navbar-status-text">{isBackendOnline ? 'FFmpeg Online' : 'Backend Offline'}</span>
           </div>
 
           {/* Gemini API Key Configuration */}
@@ -289,17 +292,19 @@ export default function Navbar({
             type="button"
             onClick={() => setShowKeyModal(true)}
             className={`api-key-btn ${apiKey ? 'configured' : 'missing'}`}
+            aria-label={apiKey ? 'API Key Configured' : 'Set Gemini Key'}
             title="Configure Gemini AI API Key"
           >
             <Key size={13} />
-            <span>{apiKey ? 'API Key Configured' : 'Set Gemini Key'}</span>
+            <span className="navbar-key-text">{apiKey ? 'API Key' : 'Set Key'}</span>
           </button>
 
           {/* Keyboard Shortcuts */}
           <button
             type="button"
             onClick={() => setShowShortcutsModal(true)}
-            className="navbar-icon-btn"
+            className="navbar-icon-btn navbar-shortcuts-btn"
+            aria-label="Keyboard Shortcuts"
             title="Keyboard Shortcuts (Ctrl+/)"
           >
             <HelpCircle size={14} />
@@ -386,24 +391,12 @@ export default function Navbar({
                 onOpenBatchExportStudio();
               }}
               disabled={episodesCount === 0}
-              className={`navbar-gemini-route-btn ${isBatchExportStudioActive ? 'active' : ''}`}
-              style={{
-                borderColor: isBatchRunning ? 'rgba(56, 189, 248, 0.6)' : 'rgba(56, 189, 248, 0.35)',
-                color: '#E0F2FE',
-                background: isBatchExportStudioActive ? 'rgba(2, 132, 199, 0.24)' : 'rgba(14, 165, 233, 0.12)',
-              }}
+              className={`navbar-gemini-route-btn navbar-batch-export-btn ${isBatchExportStudioActive ? 'active' : ''}`}
               title="Export Studio — Batch Export & Merge គ្រប់ភាគ"
             >
-              <Layers size={14} style={{ color: '#38BDF8' }} />
+              <Layers size={14} />
               <span>Batch Export</span>
-              <span
-                className="gemini-badge-chip"
-                style={{
-                  borderColor: 'rgba(56, 189, 248, 0.35)',
-                  color: '#38BDF8',
-                  background: 'rgba(15, 23, 42, 0.7)',
-                }}
-              >
+              <span className="gemini-badge-chip navbar-route-chip">
                 {isBatchRunning ? `${batchJob?.progress || 0}%` : `${episodesCount} ភាគ`}
               </span>
             </button>

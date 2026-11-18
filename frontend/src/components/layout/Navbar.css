@@ -1,136 +1,181 @@
 /* ==========================================================================
-   DragonDub AI Studio — Pro Studio Navbar (52px, Clean Anatomy, FreeCut Ramp)
+   DragonDub AI Studio — Top Studio Navbar (48px Desktop, Overflow-Free 1440/390)
    ========================================================================== */
 .capcut-navbar {
-  height: 52px;
-  background: var(--panel);
-  border-bottom: 1px solid var(--line);
+  height: 48px;
+  min-height: 48px;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  background: var(--bg-primary-panel);
+  border-bottom: 1px solid var(--border-subtle);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 16px;
+  padding: 0 12px;
   user-select: none;
   z-index: 50;
   flex-shrink: 0;
-  box-shadow: none;
-  gap: 12px;
+  gap: 8px;
+  overflow: hidden;
+}
+
+.navbar-left-nav {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+.navbar-left-nav::-webkit-scrollbar {
+  display: none;
 }
 
 /* Brand App Icon Mark */
 .concat-app-mark {
-  width: 32px;
-  height: 32px;
-  border-radius: 6px;
-  background: linear-gradient(135deg, #0284c7 0%, #1e40af 100%);
-  color: #ffffff;
-  font-weight: 800;
-  font-size: 0.9rem;
-  display: flex;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-sm);
+  background: var(--btn-primary-bg);
+  color: var(--text-primary);
+  font-weight: 700;
+  font-size: 0.875rem;
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid rgba(56, 189, 248, 0.35);
+  border: 1px solid var(--btn-primary-border);
   flex-shrink: 0;
-  transition: transform 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+  cursor: pointer;
+  transition: var(--transition-fast);
 }
 
 .concat-app-mark:hover {
-  transform: scale(1.04);
+  background: var(--btn-primary-hover);
 }
 
-/* Gemini Route Multi-Key Launcher Pill (Ghost Button 36px, Radius 6px) */
+/* Primary Route Pills (32px desktop height, compact & crisp) */
 .navbar-gemini-route-btn {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  height: 36px;
-  padding: 0 12px;
-  border-radius: 6px;
+  gap: 6px;
+  height: 32px;
+  padding: 0 9px;
+  border-radius: var(--radius-sm);
   background: transparent;
-  border: 1px solid var(--line);
-  color: var(--ink-dim);
-  font-size: 13px;
-  font-weight: 500;
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  line-height: 1.4;
   cursor: pointer;
-  transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: var(--transition-fast);
   white-space: nowrap;
+  flex-shrink: 0;
 }
 
-.navbar-gemini-route-btn:hover {
-  border-color: var(--line);
-  background: var(--muted);
-  color: var(--ink);
+.navbar-gemini-route-btn:hover:not(:disabled) {
+  border-color: var(--border-subtle-hover);
+  background: var(--bg-elevated-panel);
+  color: var(--text-primary);
 }
 
-.navbar-gemini-route-btn:active {
-  transform: scale(0.98);
+.navbar-gemini-route-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .navbar-gemini-route-btn.active {
-  background: var(--muted);
+  background: var(--bg-elevated-panel);
   border-color: var(--primary-accent);
   color: var(--primary-accent);
 }
 
-.gemini-badge-chip {
-  font-family: var(--font-mono), monospace;
-  font-size: 11px;
-  font-weight: 600;
-  padding: 1px 6px;
-  border-radius: 4px;
-  background: var(--muted);
-  color: var(--ink-dim);
-  border: 1px solid var(--line);
+.navbar-batch-export-btn {
+  border-color: rgba(56, 189, 248, 0.35);
+  color: var(--text-primary);
+  background: rgba(56, 189, 248, 0.1);
 }
 
-/* Right Actions Section (Ghost Controls + One Filled Export Button) */
+.navbar-batch-export-btn:hover:not(:disabled),
+.navbar-batch-export-btn.active {
+  background: rgba(56, 189, 248, 0.18);
+  border-color: var(--primary-accent);
+  color: var(--text-primary);
+}
+
+.gemini-badge-chip {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: var(--radius-xs);
+  background: var(--bg-secondary-panel);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-subtle);
+  line-height: 1.3;
+}
+
+.navbar-gemini-route-btn.active .gemini-badge-chip {
+  color: var(--primary-accent);
+  border-color: rgba(56, 189, 248, 0.35);
+}
+
+/* Right Actions Section */
 .navbar-right-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   flex-shrink: 0;
+  min-width: 0;
 }
 
-/* Aspect Ratio Quick Switcher (16:9 | 9:16) */
+/* Aspect Ratio & Panel Toggle Groups */
 .navbar-aspect-toggle {
   display: inline-flex;
   align-items: center;
   gap: 2px;
-  height: 36px;
-  padding: 3px;
-  border-radius: 6px;
-  background: rgba(15, 23, 42, 0.75);
-  border: 1px solid var(--line);
+  height: 32px;
+  padding: 2px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary-panel);
+  border: 1px solid var(--border-subtle);
   flex-shrink: 0;
 }
 
 .navbar-aspect-btn {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  height: 28px;
-  padding: 0 9px;
-  border-radius: 4px;
+  justify-content: center;
+  gap: 4px;
+  height: 26px;
+  min-width: 26px;
+  padding: 0 7px;
+  border-radius: var(--radius-xs);
   border: 1px solid transparent;
   background: transparent;
-  color: var(--ink-dim);
-  font-family: var(--font-mono), monospace;
-  font-size: 12px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
   font-weight: 600;
   cursor: pointer;
-  transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: var(--transition-fast);
   white-space: nowrap;
 }
 
 .navbar-aspect-btn:hover:not(:disabled):not(.active) {
-  background: rgba(255, 255, 255, 0.06);
-  color: var(--ink);
+  background: var(--bg-elevated-panel);
+  color: var(--text-primary);
 }
 
 .navbar-aspect-btn.active {
-  background: rgba(2, 132, 199, 0.24);
-  border-color: rgba(56, 189, 248, 0.6);
-  color: #38bdf8;
-  box-shadow: inset 0 0 0 1px rgba(56, 189, 248, 0.12);
+  background: rgba(56, 189, 248, 0.16);
+  border-color: rgba(56, 189, 248, 0.45);
+  color: var(--primary-accent);
 }
 
 .navbar-aspect-btn:disabled {
@@ -146,153 +191,185 @@
 }
 
 .aspect-icon-16-9 {
-  width: 14px;
-  height: 9px;
+  width: 13px;
+  height: 8px;
 }
 
 .aspect-icon-9-16 {
   width: 8px;
-  height: 13px;
+  height: 12px;
 }
 
+/* Backend Online Status Chip */
 .status-chip {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 6px;
-  height: 36px;
-  font-size: 12px;
-  font-weight: 500;
-  background: transparent;
-  border: 1px solid var(--line);
-  padding: 0 12px;
-  border-radius: 6px;
-  color: var(--ink-dim);
-}
-
-.status-chip.online {
-  color: var(--ink-dim);
+  height: 32px;
+  font-size: var(--text-2xs);
+  font-weight: 600;
+  background: var(--bg-secondary-panel);
+  border: 1px solid var(--border-subtle);
+  padding: 0 9px;
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .status-chip.offline {
-  color: #f87171;
+  color: var(--color-error-text);
+  border-color: rgba(239, 68, 68, 0.35);
 }
 
 .status-dot {
-  width: 6px;
-  height: 6px;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
-  background: #10b981;
+  background: var(--color-success);
+  flex-shrink: 0;
 }
 
 .status-chip.offline .status-dot {
-  background: #ef4444;
+  background: var(--color-error);
 }
 
+/* API Key Button */
 .api-key-btn {
-  height: 36px;
-  border-radius: 6px;
-  padding: 0 12px;
-  font-size: 12px;
-  font-weight: 500;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  padding: 0 9px;
+  font-size: var(--text-2xs);
+  font-weight: 600;
   cursor: pointer;
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 6px;
-  transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+  gap: 5px;
+  transition: var(--transition-fast);
   font-family: inherit;
   background: transparent;
-  border: 1px solid var(--line);
-  color: var(--ink-dim);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .api-key-btn:hover {
-  background: var(--muted);
-  color: var(--ink);
-  border-color: var(--line);
-}
-
-.api-key-btn.configured {
-  background: transparent;
-  border: 1px solid var(--line);
-  color: var(--ink-dim);
-}
-
-.api-key-btn.configured:hover {
-  background: var(--muted);
-  color: var(--ink);
+  background: var(--bg-elevated-panel);
+  color: var(--text-primary);
+  border-color: var(--border-subtle-hover);
 }
 
 .api-key-btn.missing {
-  background: transparent;
-  border: 1px solid #ef4444;
-  color: #f87171;
+  border-color: rgba(239, 68, 68, 0.55);
+  color: var(--color-error-text);
 }
 
 .navbar-icon-btn {
-  width: 36px;
-  height: 36px;
-  border-radius: 6px;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm);
   background: transparent;
-  border: 1px solid var(--line);
-  color: var(--ink-dim);
-  display: flex;
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  display: inline-flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  transition: all 0.15s ease;
+  flex-shrink: 0;
+  transition: var(--transition-fast);
 }
 
-.navbar-icon-btn:hover {
-  background: var(--muted);
-  color: var(--ink);
-  border-color: var(--line);
+.navbar-icon-btn:hover:not(:disabled) {
+  background: var(--bg-elevated-panel);
+  color: var(--text-primary);
+  border-color: var(--border-subtle-hover);
 }
 
-/* Export CTA Button — The ONLY filled/accent button in the chrome */
+/* Export CTA Button — Solid Accessible Primary (#0369A1 = 5.9:1 with #F8FAFC) */
 .navbar-export-btn {
-  background: #0284c7;
-  color: #ffffff;
-  border: none;
-  border-radius: 6px;
-  height: 36px;
-  padding: 0 16px;
-  font-size: 13px;
+  background: var(--btn-primary-bg);
+  color: var(--text-primary);
+  border: 1px solid var(--btn-primary-border);
+  border-radius: var(--radius-sm);
+  height: 32px;
+  padding: 0 12px;
+  font-size: var(--text-sm);
   font-weight: 600;
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 6px;
   cursor: pointer;
-  transition: all 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+  transition: var(--transition-fast);
   font-family: inherit;
-  box-shadow: none;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 .navbar-export-btn:hover:not(:disabled) {
-  background: #0369a1;
-  box-shadow: none;
-  transform: translateY(-1px);
-}
-
-.navbar-export-btn:active:not(:disabled) {
-  transform: scale(0.98);
+  background: var(--btn-primary-hover);
+  border-color: var(--primary-accent);
 }
 
 .navbar-export-btn:disabled {
-  opacity: 0.4;
+  opacity: 0.45;
   cursor: not-allowed;
-  box-shadow: none;
-  transform: none;
 }
 
 .navbar-export-btn.download-ready {
-  background: #059669;
+  background: var(--btn-success-bg);
   color: #ffffff;
-  border: none;
+  border-color: rgba(52, 211, 153, 0.4);
   text-decoration: none;
-  box-shadow: none;
 }
 
 .navbar-export-btn.download-ready:hover {
-  background: #10b981;
-  box-shadow: none;
+  background: var(--btn-success-hover);
+}
+
+/* Compact Laptop / 1440px Optimization — guarantees 0px overflow at 1366px–1440px */
+@media (max-width: 1520px) {
+  .navbar-status-text,
+  .navbar-key-text {
+    display: none;
+  }
+
+  .status-chip,
+  .api-key-btn {
+    padding: 0 8px;
+  }
+}
+
+@media (max-width: 1280px) {
+  .navbar-panel-toggles,
+  .navbar-shortcuts-btn {
+    display: none;
+  }
+
+  .navbar-route-chip {
+    display: none;
+  }
+}
+
+/* Mobile (<= 768px / 390px target) — Clean single-row scrollable route bar, zero overflow */
+@media (max-width: 768px) {
+  .capcut-navbar {
+    height: auto;
+    min-height: 48px;
+    padding: 6px 10px;
+    gap: 6px;
+  }
+
+  .navbar-right-actions {
+    display: none;
+  }
+
+  .navbar-left-nav {
+    gap: 6px;
+  }
+
+  .navbar-gemini-route-btn {
+    height: 36px;
+    padding: 0 10px;
+  }
 }

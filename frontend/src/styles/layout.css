@@ -1,5 +1,5 @@
 /* ==========================================================================
-   Khmer AI Dubbing Studio (CapCut Pro 2026) — 100vh Locked Desktop Workspace
+   DragonDub AI Studio (The Darkroom Console) — Responsive Workstation Shell
    ========================================================================== */
 * {
   margin: 0;
@@ -10,60 +10,48 @@
 html,
 body,
 #root {
-  width: 100vw;
+  width: 100%;
   height: 100vh;
-  min-width: 100vw;
-  min-height: 100vh;
-  max-width: 100vw;
-  max-height: 100vh;
+  max-width: 100%;
   margin: 0;
   padding: 0;
   overflow: hidden;
-  background-color: #090A0F;
+  background-color: var(--bg-desktop);
   color: var(--text-primary);
   font-family: var(--font-sans);
   font-size: var(--text-body);
-  line-height: var(--khmer-line-height, 1.68);
+  line-height: var(--khmer-line-height);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Main App Container: 48px Top Navbar | 1fr 3-Column Workspace | Resizable Bottom Timeline */
+/* Main App Container: 48px Top Navbar | 1fr Workspace (minmax(0,1fr) prevents horizontal grid expansion) */
 .capcut-app-root,
 .capcut-app-container {
   display: grid;
-  grid-template-rows: 48px 1fr;
-  width: 100vw;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: 48px minmax(0, 1fr);
+  width: 100%;
+  max-width: 100vw;
   height: 100vh;
-  min-width: 100vw;
-  min-height: 100vh;
   max-height: 100vh;
   overflow: hidden;
-  background: #090A0F;
-  color: var(--ink);
+  background: var(--bg-desktop);
+  color: var(--text-primary);
 }
 
-/* Top Navbar Override (48px Locked Height) */
-.capcut-navbar {
-  height: 48px !important;
-  min-height: 48px !important;
-  max-height: 48px !important;
-  background: #12141D !important;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.07) !important;
-  padding: 0 14px !important;
-}
-
-/* Main Workspace Wrapper (Center 3-Col + Horizontal Resizer + Bottom Timeline with 6px Gap & Padding) */
+/* Main Workspace Wrapper (Center 3-Col + Horizontal Resizer + Bottom Timeline) */
 .capcut-main-workspace {
   display: flex;
   flex-direction: column;
   gap: 6px;
   padding: 6px;
   width: 100%;
+  min-width: 0;
   height: calc(100vh - 48px);
   min-height: 0;
   overflow: hidden;
-  background: #090A0F;
+  background: var(--bg-desktop);
 }
 
 /* Center 3-Column Workspace (Left Media | Center Player | Right Inspector) */
@@ -74,11 +62,12 @@ body,
   gap: 6px;
   padding: 0;
   flex: 1 1 0%;
+  width: 100%;
+  min-width: 0;
   min-height: 180px;
   overflow: hidden;
   background: transparent;
   position: relative;
-  border-bottom: none;
 }
 
 .top-suite-col-left,
@@ -86,11 +75,12 @@ body,
 .top-suite-col-right {
   height: 100%;
   min-height: 0;
+  min-width: 0;
   overflow: hidden;
-  background: #12141D;
-  border: 1px solid rgba(255, 255, 255, 0.07);
-  border-radius: 10px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
+  background: var(--bg-primary-panel);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  box-shadow: none;
 }
 
 .top-suite-col-left {
@@ -99,8 +89,8 @@ body,
 }
 
 .top-suite-col-center {
-  flex: 1;
-  min-width: 300px;
+  flex: 1 1 0%;
+  min-width: 280px;
   display: flex;
   flex-direction: column;
 }
@@ -120,23 +110,24 @@ body,
 .capcut-bottom-timeline {
   flex-shrink: 0;
   min-height: 0;
+  min-width: 0;
+  width: 100%;
   transition: height 0.14s var(--spring-ease);
 }
 
 /* Panel Headers */
 .media-tabs-header,
 .inspector-header {
-  background: rgba(9, 10, 15, 0.65) !important;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.07) !important;
+  background: var(--bg-desktop);
+  border-bottom: 1px solid var(--border-subtle);
 }
 
 .panel-title-tag {
-  font-size: 0.8125rem;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  letter-spacing: 0.01em;
   color: var(--text-secondary);
-  line-height: var(--khmer-line-height, 1.68);
+  line-height: var(--khmer-line-height);
 }
 
 /* Draggable Vertical Splitters (Left / Right Columns — 4px hit target) */
@@ -152,7 +143,7 @@ body,
   flex-shrink: 0;
   user-select: none;
   background: transparent;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   transition: background-color 0.15s ease;
 }
 
@@ -162,9 +153,9 @@ body,
   top: 12%;
   bottom: 12%;
   width: 2px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.08);
-  transition: all 0.15s ease;
+  border-radius: var(--radius-full);
+  background: var(--border-subtle);
+  transition: background-color 0.15s ease, top 0.15s ease, bottom 0.15s ease;
 }
 
 .capcut-panel-splitter:hover::before,
@@ -173,7 +164,6 @@ body,
   bottom: 4%;
   width: 3px;
   background: var(--primary-accent);
-  box-shadow: 0 0 10px rgba(0, 229, 255, 0.6);
 }
 
 /* Draggable Horizontal Splitter (Bottom Timeline Height — 4px hit target) */
@@ -190,7 +180,7 @@ body,
   flex-shrink: 0;
   user-select: none;
   background: transparent;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   transition: background-color 0.15s ease;
 }
 
@@ -200,9 +190,9 @@ body,
   left: 18%;
   right: 18%;
   height: 2px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.08);
-  transition: all 0.15s ease;
+  border-radius: var(--radius-full);
+  background: var(--border-subtle);
+  transition: background-color 0.15s ease, left 0.15s ease, right 0.15s ease;
 }
 
 .capcut-panel-splitter-horizontal:hover::before,
@@ -211,5 +201,76 @@ body,
   right: 6%;
   height: 3px;
   background: var(--primary-accent);
-  box-shadow: 0 0 10px rgba(0, 229, 255, 0.6);
+}
+
+/* Visually Hidden Utility for Accessible Headings & Labels */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ==========================================================================
+   Responsive Mobile & Tablet Reflow (<= 960px — zero horizontal clipping)
+   ========================================================================== */
+@media (max-width: 960px) {
+  html,
+  body,
+  #root {
+    height: auto;
+    min-height: 100vh;
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
+  .capcut-app-root,
+  .capcut-app-container {
+    height: auto;
+    min-height: 100vh;
+    max-height: none;
+    overflow-x: hidden;
+    overflow-y: visible;
+    grid-template-rows: auto 1fr;
+  }
+
+  .capcut-main-workspace {
+    height: auto;
+    min-height: calc(100vh - 48px);
+    overflow: visible;
+    gap: 8px;
+    padding: 8px;
+  }
+
+  .capcut-top-suite {
+    flex-direction: column;
+    overflow: visible;
+    flex: none;
+    gap: 8px;
+  }
+
+  .top-suite-col-left,
+  .top-suite-col-center,
+  .top-suite-col-right {
+    width: 100% !important;
+    min-width: 0 !important;
+    max-width: 100% !important;
+    height: auto;
+    overflow: visible;
+  }
+
+  .top-suite-col-center {
+    order: -1;
+    min-height: 260px;
+  }
+
+  .capcut-panel-splitter,
+  .capcut-panel-splitter-horizontal {
+    display: none;
+  }
 }
