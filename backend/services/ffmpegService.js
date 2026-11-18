@@ -675,6 +675,16 @@ const SUBTITLE_SIZE_SCALE_MAP = {
   large: 1.25,
 };
 
+function resolveRenderAspectRatio(requestedRatio, sourceDimensions) {
+  if (requestedRatio) return requestedRatio;
+  if (!sourceDimensions?.width || !sourceDimensions?.height) {
+    console.warn("[FFmpegService] Source dimensions missing, falling back to 16:9 aspectRatio");
+    return "16:9";
+  }
+  if (sourceDimensions.height > sourceDimensions.width) return "9:16";
+  return sourceDimensions.height === sourceDimensions.width ? "1:1" : "16:9";
+}
+
 function resolveAssSubtitleLayoutDefaults({
   aspectRatio = "16:9",
   verticalStyle = "pad",
@@ -710,6 +720,7 @@ function generateKhmerAssSubtitleFile({
   outputPath,
   fontName = "Khmer OS Battambang",
   fontSize = null,
+  subtitleSize = null,
   textColor = "#FFFFFF",
   outlineColor = "#000000",
   subtitleStyle = "banner",
@@ -728,7 +739,17 @@ function generateKhmerAssSubtitleFile({
   });
   const playResX = layoutDefaults.playResX;
   const playResY = layoutDefaults.playResY;
-  let effFontSize = fontSize || layoutDefaults.defaultFontSize;
+  const explicitFontSize = Number(fontSize);
+  const preset = String(subtitleSize ?? "").trim().toLowerCase();
+  let effFontSize = layoutDefaults.defaultFontSize;
+  let sizeLabel = "null";
+  if (Number.isFinite(explicitFontSize) && explicitFontSize > 0) {
+    effFontSize = explicitFontSize;
+    sizeLabel = "explicit";
+  } else if (Object.hasOwn(SUBTITLE_SIZE_SCALE_MAP, preset)) {
+    effFontSize = Math.round(effFontSize * SUBTITLE_SIZE_SCALE_MAP[preset]);
+    sizeLabel = preset;
+  }
   let effMarginV = marginV;
 
   const isAntiTheftActive = Boolean(antiTheft && (antiTheft.enabled || antiTheft.enableAntiTheft));
@@ -1093,6 +1114,9 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
   const fullAssContent = assHeader + allEvents.join("\n") + "\n";
 
   fs.writeFileSync(outputPath, "\uFEFF" + fullAssContent, "utf8");
+  console.log(
+    `🎬 ASS burn: style=${subtitleStyle} color=${textColor} fontSize=${effFontSize} (size=${sizeLabel}) playRes=${playResX}x${playResY}`
+  );
   console.log(`[FFmpegService] 📝 បានបង្កើត File Subtitle ខ្មែរ (.ass)៖ ${path.basename(outputPath)} (Anti-theft: ${isAntiTheftActive ? 'Active' : 'Off'}, Corner-mask: ${isCornerMaskActive ? 'Active' : 'Off'})`);
 
   return outputPath;
@@ -1660,19 +1684,7 @@ function renderDubbedVideoWithDucking(options = {}) {
     let videoMapArg = baseVideoSource.startsWith("[v_") ? baseVideoSource : "0:v:0";
     const sourceDimensions = getVideoDimensionsFast(inputVideoPath);
 
-    let targetAspectRatio = subtitleOptions.aspectRatio || aspectRatio;
-    if (!targetAspectRatio) {
-      if (sourceDimensions && sourceDimensions.height > sourceDimensions.width) {
-        targetAspectRatio = "9:16";
-      } else if (sourceDimensions && sourceDimensions.width === sourceDimensions.height && sourceDimensions.width > 0) {
-        targetAspectRatio = "1:1";
-      } else if (sourceDimensions && sourceDimensions.width > sourceDimensions.height) {
-        targetAspectRatio = "16:9";
-      } else {
-        console.warn("[FFmpegService] ⚠️ Source dimensions missing, falling back to 16:9 aspectRatio");
-        targetAspectRatio = "16:9";
-      }
-    }
+    const targetAspectRatio = resolveRenderAspectRatio(subtitleOptions.aspectRatio || aspectRatio, sourceDimensions);
     const hasAntiTheft = Boolean(antiTheft && (antiTheft.enabled || antiTheft.enableAntiTheft));
     const hasCornerMask = Boolean(cornerMask && (cornerMask.enabled || cornerMask.enableCornerMask));
     const hasBurnableSubs = Boolean(burnSubtitles && validSegments.length > 0);
@@ -1713,42 +1725,15 @@ function renderDubbedVideoWithDucking(options = {}) {
         calculatedDuration = Math.max(...validSegments.map((s) => Number(s.endSeconds || (s.startSeconds + s.duration) || 0)));
       }
 
-      const layoutDefaults = resolveAssSubtitleLayoutDefaults({
-        aspectRatio: targetAspectRatio,
-        verticalStyle,
-        sourceDimensions,
-      });
-      const explicitFontSize = subtitleOptions.fontSize ? Number(subtitleOptions.fontSize) : null;
-      const rawSubtitleSize = subtitleOptions.subtitleSize
-        ? String(subtitleOptions.subtitleSize).trim().toLowerCase()
-        : null;
-      const sizeScale =
-        rawSubtitleSize && Object.prototype.hasOwnProperty.call(SUBTITLE_SIZE_SCALE_MAP, rawSubtitleSize)
-          ? SUBTITLE_SIZE_SCALE_MAP[rawSubtitleSize]
-          : null;
-
-      let resolvedFontSize = null;
-      let resolvedSizeLabel = "null";
-      if (explicitFontSize && Number.isFinite(explicitFontSize) && explicitFontSize > 0) {
-        resolvedFontSize = explicitFontSize;
-        resolvedSizeLabel = "explicit";
-      } else if (sizeScale !== null) {
-        resolvedFontSize = Math.round(layoutDefaults.defaultFontSize * sizeScale);
-        resolvedSizeLabel = rawSubtitleSize;
-      }
-
-      const effectiveBurnFontSize = resolvedFontSize || layoutDefaults.defaultFontSize;
-      const effectiveBurnColor = subtitleOptions.textColor || "#FFFFFF";
-      const effectiveBurnStyle = subtitleStyle || "banner";
-
       generateKhmerAssSubtitleFile({
         segments: burnSubtitles ? validSegments : [],
         outputPath: tempAssPath,
         fontName: subtitleOptions.fontName || "Khmer OS Battambang",
-        fontSize: resolvedFontSize,
-        textColor: effectiveBurnColor,
+        fontSize: subtitleOptions.fontSize,
+        subtitleSize: subtitleOptions.subtitleSize,
+        textColor: subtitleOptions.textColor || "#FFFFFF",
         outlineColor: subtitleOptions.outlineColor || "#000000",
-        subtitleStyle: effectiveBurnStyle,
+        subtitleStyle,
         marginV: subtitleOptions.marginV ? Number(subtitleOptions.marginV) : null,
         aspectRatio: targetAspectRatio,
         verticalStyle,
@@ -1757,10 +1742,6 @@ function renderDubbedVideoWithDucking(options = {}) {
         totalDuration: calculatedDuration > 0 ? calculatedDuration : null,
         sourceDimensions,
       });
-
-      console.log(
-        `🎬 ASS burn: style=${effectiveBurnStyle} color=${effectiveBurnColor} fontSize=${effectiveBurnFontSize} (size=${resolvedSizeLabel}) playRes=${layoutDefaults.playResX}x${layoutDefaults.playResY}`
-      );
 
       const assFilter = buildAssSubtitleVideoFilter(tempAssPath);
 
@@ -3978,6 +3959,7 @@ module.exports = {
   formatSecondsToAssTime,
   sanitizeKhmerSubtitleText,
   resolveAssSubtitleLayoutDefaults,
+  resolveRenderAspectRatio,
   SUBTITLE_SIZE_SCALE_MAP,
   generateKhmerAssSubtitleFile,
   buildAssSubtitleVideoFilter,

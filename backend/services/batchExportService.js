@@ -595,13 +595,13 @@ async function runBatchExportWorker({
   const soundMode = exportSettings.soundMode || "ducking";
   const burnSubtitles = exportSettings.burnSubtitles !== false;
   const subtitleColor = exportSettings.subtitleColor || "white";
-  const subtitleSize = exportSettings.subtitleSize || "medium";
   const subtitleStyle = exportSettings.subtitleStyle || "banner";
   const enableDemucs = Boolean(exportSettings.enableDemucs);
   const antiTheft = exportSettings.antiTheft || null;
 
   const renderedFilePaths = [];
   let mergedTempOrTargetPath = null;
+  let pendingEpisodePath = null;
 
   try {
     for (let i = 0; i < totalCount; i++) {
@@ -646,12 +646,32 @@ async function runBatchExportWorker({
       const epStartPct = Math.round((i / totalCount) * renderWeight);
       const epEndPct = Math.round(((i + 1) / totalCount) * renderWeight);
 
-      // Check if episode video is already fully rendered on disk
+      const subtitleOptions = {
+        ...(exportSettings.subtitleOptions || {}),
+        fontName: exportSettings.subtitleOptions?.fontName || "Khmer OS Battambang",
+        fontSize: exportSettings.subtitleOptions?.fontSize || null,
+        subtitleSize: exportSettings.subtitleOptions?.subtitleSize || exportSettings.subtitleSize || null,
+        textColor:
+          exportSettings.subtitleOptions?.textColor ||
+          (subtitleColor === "yellow" ? "#FFE600" : "#FFFFFF"),
+        outlineColor: exportSettings.subtitleOptions?.outlineColor || "#000000",
+        subtitleStyle: exportSettings.subtitleOptions?.subtitleStyle || subtitleStyle,
+        aspectRatio: epAspectRatio,
+        verticalStyle,
+        marginV: exportSettings.subtitleOptions?.marginV || null,
+      };
+
+      const burnedSubtitleOptions = epPlan.hasVoice && burnSubtitles ? subtitleOptions : null;
+      const previous = epPlan.rawEpisode.renderedVideo;
+      // Named episode outputs can be overwritten. Only reuse a known matching burn.
       let alreadyRenderedOnDisk = false;
       if (fs.existsSync(epOutputPath) && !exportSettings.forceReRender) {
         try {
           const stat = fs.statSync(epOutputPath);
-          if (stat.size > 2 * 1024 * 1024) {
+          const sameBurn = previous?.outputFilename === epOutputFilename &&
+            previous.renderedAt === stat.mtime.getTime() &&
+            JSON.stringify(previous.burnedSubtitleOptions) === JSON.stringify(burnedSubtitleOptions);
+          if (stat.size > 2 * 1024 * 1024 && (epPlan.useOriginalAudio || sameBurn)) {
             alreadyRenderedOnDisk = true;
           }
         } catch (_) {}
@@ -665,9 +685,7 @@ async function runBatchExportWorker({
         job.stage = `ភាគ ${i + 1}/${totalCount} (EP${epPlan.episodeNumber}): ប្រើប្រាស់វីដេអូដែល Render រួចស្រាប់ (Skip)...`;
         job.updatedAt = Date.now();
       } else {
-        if (fs.existsSync(epOutputPath)) {
-          try { fs.unlinkSync(epOutputPath); } catch (_) {}
-        }
+        pendingEpisodePath = path.join(epPlan.videoDir, `batch_${job.jobId}_${i}.tmp.mp4`);
 
         job.progress = Math.max(job.progress, epStartPct);
         job.stage = `ភាគ ${i + 1}/${totalCount} (EP${epPlan.episodeNumber}): កំពុង Render 0%${epPlan.useOriginalAudio ? " (សំឡេងដើម)" : " សំឡេងខ្មែរ & Subtitles"}...`;
@@ -680,21 +698,6 @@ async function runBatchExportWorker({
           } catch (_) {}
         }
 
-        const subtitleOptions = {
-          ...(exportSettings.subtitleOptions || {}),
-          fontName: exportSettings.subtitleOptions?.fontName || "Khmer OS Battambang",
-          fontSize: exportSettings.subtitleOptions?.fontSize || null,
-          subtitleSize: exportSettings.subtitleOptions?.subtitleSize || exportSettings.subtitleSize || null,
-          textColor:
-            exportSettings.subtitleOptions?.textColor ||
-            (subtitleColor === "yellow" ? "#FFE600" : "#FFFFFF"),
-          outlineColor: exportSettings.subtitleOptions?.outlineColor || "#000000",
-          subtitleStyle: exportSettings.subtitleOptions?.subtitleStyle || subtitleStyle,
-          aspectRatio: epAspectRatio,
-          verticalStyle,
-          marginV: exportSettings.subtitleOptions?.marginV || null,
-        };
-
         renderRes = await renderDubbedVideoWithDucking({
           jobId: job.jobId,
           signal,
@@ -702,7 +705,7 @@ async function runBatchExportWorker({
           masterAudioPath: epPlan.hasVoice ? epPlan.masterAudioPath : null,
           fullAudioPath: epPlan.hasVoice ? epPlan.masterAudioPath : null,
           segments: epPlan.hasVoice ? epPlan.preparedSegments : [],
-          outputVideoPath: epOutputPath,
+          outputVideoPath: pendingEpisodePath,
           soundMode,
           enableDemucs: epPlan.hasVoice ? enableDemucs : false,
           separatedBgAudioPath: epPlan.hasVoice && enableDemucs ? epPlan.separatedBgAudioPath : null,
@@ -727,9 +730,12 @@ async function runBatchExportWorker({
             job.updatedAt = Date.now();
           },
         });
+        fs.renameSync(pendingEpisodePath, epOutputPath);
+        pendingEpisodePath = null;
       }
 
       job.currentEpisodePercent = 100;
+      const renderedAt = fs.statSync(epOutputPath).mtime.getTime();
 
       const relVideoPath = `projects/${cleanSeries}/episodes/${epPlan.cleanEpisode}/video/${epOutputFilename}`;
       const videoUrl = `/uploads/${relVideoPath}`;
@@ -748,7 +754,8 @@ async function runBatchExportWorker({
               outputVideoUrl: videoUrl,
               outputFilename: epOutputFilename,
               downloadUrl,
-              renderedAt: Date.now(),
+              renderedAt,
+              burnedSubtitleOptions,
               usedOriginalAudio: epPlan.useOriginalAudio,
               aspectRatio: epAspectRatio,
               verticalStyle,
@@ -782,6 +789,8 @@ async function runBatchExportWorker({
         episodeNumber: epPlan.episodeNumber,
         title: epPlan.title,
         outputFilename: epOutputFilename,
+        renderedAt,
+        burnedSubtitleOptions,
         videoUrl,
         outputVideoUrl: videoUrl,
         downloadUrl,
@@ -908,6 +917,9 @@ async function runBatchExportWorker({
     job.updatedAt = job.completedAt;
     return job;
   } finally {
+    if (pendingEpisodePath && fs.existsSync(pendingEpisodePath)) {
+      try { fs.unlinkSync(pendingEpisodePath); } catch (_) {}
+    }
     batchJobControllers.delete(job.jobId);
     if (tempLogoFile && fs.existsSync(tempLogoFile)) {
       try { fs.unlinkSync(tempLogoFile); } catch (_) {}

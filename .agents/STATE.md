@@ -3,6 +3,27 @@
 ## Last Session
 - **Environment**: Codex CLI
 - **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-18T18:08:52+07:00
+
+## Summary: Burned Khmer subtitle size in the Rendered player
+- The Studio player reads `renderedVideo.outputVideoUrl`. For single renders, `useVideoRender.handleRenderVideo -> renderVideoApi -> POST /api/render-video` sends the selected subtitleSize and no numeric fontSize. Download and playback reference the same MP4. ep_5's saved output is a batch MP4, 275,109,158 bytes, 1920x1080.
+- In the pre-fix batch worker (batchExportService.js lines 651-656), an existing MP4 over 2 MiB counted as a completed render regardless of the requested subtitle size. Batch now checks the subtitle settings, filename and file revision. Fresh renders replace the old file after encoding and the Studio player uses the returned revision. Matching reruns still reuse the file.
+- The separate pipeline Stage 10 sent `fontSize: exportOptions.subtitleSize || 52` twice (old lines 74 and 113). Before the fix its saved ASS contained literal preset names and FFmpeg burned 44 for both small and large in 16:9. Presets, numeric overrides and aspect-specific defaults now resolve in the common ASS writer. The export scale factors and default font sizes are preserved.
+- Verified on an isolated excerpt of Pseudo_Spiritual_Root ep_5 with the episode's real Khmer speech and text. At 00:01.88, ASS PlayRes and encoded video both 1920x1080, small/medium/large resolved to 35/44/55. Actual yellow glyph bounds measured 170x22 / 214x27 / 266x35 px in Stage 10 and Studio batch files. Medium matched an independent single export at the same coordinates; the downloaded medium MP4 was byte-identical to the Studio copy. Checked browser playback of the versioned output. Consecutive batch renders above 2 MiB changed with the preset and an identical large rerun was reused. Original episode files were used read-only.
+- Frontend production build passed. 23 relevant tests executed and passed including aspect-ratio framing, batch export, ASS sizing, Stage 10, the player and subtitle toggles. The aspect-ratio E2E was rerun with the local ep_2 fixture. One additional Demucs integration test returned early because its unrelated media fixture was absent.
+
+## Active Environment
+- Studio: `http://localhost:5173/studio`
+- Backend API: `http://localhost:5000`
+
+## Next Steps
+- None for this fix. Existing burned MP4s pick up the requested size when rendered again.
+
+---
+
+## Previous Session
+- **Environment**: Codex CLI
+- **Branch**: `chore/full-project-cleanup`
 - **Timestamp**: 2026-11-18T17:42:24+07:00
 
 ## Summary: Timeline clip containment and row alignment

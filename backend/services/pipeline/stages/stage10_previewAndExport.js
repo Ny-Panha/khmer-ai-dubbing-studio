@@ -4,7 +4,8 @@ const {
   generateKhmerAssSubtitleFile,
   generateSrtFile,
   renderDubbedVideoWithDucking,
-  getVideoMetadata,
+  getVideoDimensionsFast,
+  resolveRenderAspectRatio,
   getMediaDuration,
 } = require('../../ffmpegService');
 const { saveCheckpoint } = require('../checkpointManager');
@@ -67,13 +68,22 @@ async function previewAndExport({
   const assPath = path.join(subtitlesDir, 'dialogue_khmer.ass');
   const srtPath = path.join(subtitlesDir, 'dialogue_khmer.srt');
 
+  const sourceDimensions = getVideoDimensionsFast(videoPath);
+  const options = exportOptions.subtitleOptions || {};
+  const subtitleSize = options.subtitleSize ?? exportOptions.subtitleSize;
+  const subtitleOptions = {
+    textColor: options.textColor || exportOptions.subtitleColor || '#FFFFFF',
+    subtitleSize,
+    // Older stage callers used subtitleSize for an explicit number.
+    fontSize: options.fontSize ?? exportOptions.fontSize ?? (Number(subtitleSize) || null),
+    aspectRatio: resolveRenderAspectRatio(options.aspectRatio || exportOptions.aspectRatio, sourceDimensions),
+    verticalStyle: options.verticalStyle || exportOptions.verticalStyle || 'pad',
+  };
   generateKhmerAssSubtitleFile({
     segments,
     outputPath: assPath,
-    textColor: exportOptions.subtitleColor || '#FFFFFF',
-    fontSize: exportOptions.subtitleSize || 52,
-    aspectRatio: exportOptions.aspectRatio || '16:9',
-    verticalStyle: exportOptions.verticalStyle || 'pad',
+    ...subtitleOptions,
+    sourceDimensions,
   });
 
   generateSrtFile(segments, srtPath);
@@ -105,17 +115,7 @@ async function previewAndExport({
       segments,
       outputVideoPath: targetOutPath,
       outputPath: targetOutPath,
-      subtitlePath: assPath,
-      subtitleOptions: {
-        assSubtitlePath: assPath,
-        srtSubtitlePath: srtPath,
-        textColor: exportOptions.subtitleColor || '#FFFFFF',
-        fontSize: exportOptions.subtitleSize || 52,
-        aspectRatio: exportOptions.aspectRatio || '16:9',
-        verticalStyle: exportOptions.verticalStyle || 'pad',
-      },
-      aspectRatio: exportOptions.aspectRatio,
-      verticalStyle: exportOptions.verticalStyle || 'pad',
+      subtitleOptions,
       burnSubtitles: exportOptions.burnSubtitles !== false,
       bgVolume: exportOptions.bgVolume ?? exportOptions.duckingVolume ?? 0.15,
       duckingVolume: exportOptions.duckingVolume ?? exportOptions.bgVolume ?? 0.15,

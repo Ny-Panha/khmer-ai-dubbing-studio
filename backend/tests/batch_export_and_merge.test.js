@@ -321,6 +321,13 @@ test("HTTP Batch Export & Merge workflow + secure /api/download-export endpoints
     const ep2Saved = updatedSeriesAfterSep.episodes.find((e) => e.id === "ep_2");
     assert.ok(ep1Saved?.renderedVideo?.downloadUrl, "ep_1 renderedVideo must persist in series.json");
     assert.ok(ep2Saved?.renderedVideo?.usedOriginalAudio === true, "ep_2 renderedVideo metadata must record usedOriginalAudio");
+    assert.equal(ep1Saved.renderedVideo.renderedAt, sepDone.outputs[0].renderedAt);
+
+    // A valid MP4 free-space box exercises the production reuse threshold on a short fixture.
+    const freeBox = Buffer.alloc(2 * 1024 * 1024);
+    freeBox.writeUInt32BE(freeBox.length);
+    freeBox.write("free", 4);
+    fs.appendFileSync(path.join(seriesDir, "episodes/ep_1/video", ep1Saved.renderedVideo.outputFilename), freeBox);
 
     // Verify GET /api/render-batch/latest
     const latestRes = await fetch(`${baseUrl}/api/render-batch/latest?seriesId=${encodeURIComponent(seriesId)}`);

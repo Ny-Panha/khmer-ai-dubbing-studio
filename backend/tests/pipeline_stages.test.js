@@ -2,6 +2,8 @@ const test = require('node:test');
 const assert = require('node:assert');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
+const { previewAndExport } = require('../services/pipeline/stages/stage10_previewAndExport');
 
 test('Stage 3: getOcrCachePath resolves correctly to ../../../uploads/cache', () => {
   const stage3Path = path.resolve(__dirname, '../services/pipeline/stages/stage3_extractChineseSubtitles.js');
@@ -62,6 +64,20 @@ test('Stage 10: uploadsDir resolves to ../../../uploads matching Stage 1', () =>
     !stage10Content.includes("path.resolve(__dirname, '../../../../uploads')"),
     'Stage 10 path.resolve must not use 4 levels up'
   );
+});
+
+test('Stage 10 writes numeric ASS sizes for presets, layout defaults and legacy numeric overrides', async (t) => {
+  const episodeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'stage10-subtitle-size-'));
+  t.after(() => fs.rmSync(episodeDir, { recursive: true, force: true }));
+  for (const [aspectRatio, subtitleSize, expected] of [
+    ['16:9', 'small', 35], ['16:9', 'medium', 44], ['16:9', 'large', 55],
+    ['16:9', undefined, 44], ['1:1', 'large', 65], ['9:16', 'small', 38],
+    ['16:9', '62', 62],
+  ]) {
+    const { assSubtitlePath } = await previewAndExport({ episodeDir, exportOptions: { aspectRatio, subtitleSize } });
+    const ass = fs.readFileSync(assSubtitlePath, 'utf8');
+    assert.strictEqual(ass.match(/^Style: Default,[^,]*,([^,]*),/m)[1], String(expected));
+  }
 });
 
 test('Master Orchestrator: episodePipelineOrchestrator runs and exports correctly', () => {
