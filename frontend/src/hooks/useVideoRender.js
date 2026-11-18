@@ -112,6 +112,9 @@ export function useVideoRender({
           savedToDownloads: Boolean(matched.savedToDownloads),
           downloadsPath: matched.downloadsPath || null,
           aspectRatio: resolvedMatchedRatio,
+          subtitlesBurned: matched.subtitlesBurned !== undefined
+            ? Boolean(matched.subtitlesBurned)
+            : (job.exportSettings?.burnSubtitles !== false),
         });
       }
     }
@@ -542,6 +545,9 @@ export function useVideoRender({
       setRenderedVideo({
         ...result,
         aspectRatio: effectiveAspectRatio,
+        subtitlesBurned: result.subtitlesBurned !== undefined
+          ? Boolean(result.subtitlesBurned)
+          : (activeSettings.burnSubtitles !== false),
         renderedAt: Date.now(),
       });
       if (videoRef?.current) {

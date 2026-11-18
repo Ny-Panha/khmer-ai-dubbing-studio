@@ -122,6 +122,17 @@ export function isRenderedRatioMismatch(renderedVideo, targetAspectRatio, fallba
 }
 
 /**
+ * Returns true if a renderedVideo artifact has (or may have, for legacy/pre-tag exports)
+ * burned-in Khmer subtitles. Used so Studio preview never plays burned-subtitle files under
+ * the live LiveSubtitleOverlay (preventing double subtitles and tiny export-resolution text).
+ */
+export function isRenderedVideoBurnedWithSubtitles(renderedVideo) {
+  if (!renderedVideo) return false;
+  if (typeof renderedVideo === 'string') return true;
+  return renderedVideo.subtitlesBurned !== false;
+}
+
+/**
  * Merge episode voice settings into current workspace settings while NEVER letting
  * stale episode metadata or legacy rendered outputs overwrite the user's sticky aspectRatio.
  */

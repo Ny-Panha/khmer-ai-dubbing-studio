@@ -20,6 +20,7 @@ import {
   saveEpisodeState,
   resolveDefaultAspectRatio,
   isRenderedRatioMismatch,
+  isRenderedVideoBurnedWithSubtitles,
   sanitizeAspectRatio,
 } from './utils/projectStorage';
 import {
@@ -416,10 +417,9 @@ export default function App() {
   const currentAspectRatio = sanitizeAspectRatio(voiceSettings?.aspectRatio) || resolveDefaultAspectRatio(srcW, srcH) || '16:9';
 
   const prevRawRendered = renderRef.current.renderedVideo || null;
-  const playbackEffectiveRenderedVideo = isRenderedRatioMismatch(
-    prevRawRendered,
-    currentAspectRatio,
-    { width: srcW, height: srcH }
+  const playbackEffectiveRenderedVideo = (
+    isRenderedRatioMismatch(prevRawRendered, currentAspectRatio, { width: srcW, height: srcH }) ||
+    isRenderedVideoBurnedWithSubtitles(prevRawRendered)
   )
     ? null
     : prevRawRendered;
@@ -918,6 +918,12 @@ export default function App() {
     ? null
     : render.renderedVideo;
 
+  // Single subtitle source in Studio preview: never load burned-subtitle exports (or stale
+  // pre-fix exports) into the preview player where LiveSubtitleOverlay renders on top.
+  const previewRenderedVideo = isRenderedVideoBurnedWithSubtitles(effectiveRenderedVideo)
+    ? null
+    : effectiveRenderedVideo;
+
   useShortcuts({
     isModalOpen: isAnyModalOpen,
     onPlayPause: handlePlayPause,
@@ -1114,7 +1120,7 @@ export default function App() {
                   seriesId={series.seriesId}
                   episodeId={series.episodeId}
                   scriptData={scriptData}
-                  renderedVideo={effectiveRenderedVideo}
+                  renderedVideo={previewRenderedVideo}
                   setRenderedVideo={render.setRenderedVideo}
                   onResetToPreview={handleResetToPreview}
                   isRendering={render.isRendering}
