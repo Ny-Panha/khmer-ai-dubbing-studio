@@ -377,23 +377,32 @@ router.post("/generate-audio", async (req, res) => {
           : (speedInfo.numericSpeed ?? 1.0))
         : (segment.speed ?? "normal");
 
-      // Protect split sibling audio files from prior-file cleanup if any other segment still points to the same file
+      // Protect split sibling audio files from prior-file cleanup if any other segment still points to the same file.
+      // Fast path: when caller passes skipPeerDiskScan + sharedAudioFiles (computed in-memory), skip pre-TTS 17MB series.json disk scan.
       const singleSharedAudioPaths = new Set();
       try {
-        let peerSegments = Array.isArray(req.body.allSegments) ? req.body.allSegments : null;
-        if (!peerSegments && isEpisode && cleanSeries && cleanEpisode) {
-          const metaPath = path.join(uploadsDir, "projects", cleanSeries, "series.json");
-          if (fs.existsSync(metaPath)) {
-            const meta = JSON.parse(await fs.promises.readFile(metaPath, "utf8"));
-            const ep = (meta.episodes || []).find((e) => String(e.id) === String(cleanEpisode));
-            if (Array.isArray(ep?.scriptData?.segments)) peerSegments = ep.scriptData.segments;
-          }
-        }
-        if (peerSegments) {
-          for (const peer of peerSegments) {
-            if (!peer || String(peer.id) === String(segment.id)) continue;
-            const peerPath = resolvePriorSegmentAudioPath(peer, audioDir);
+        if (req.body.skipPeerDiskScan) {
+          const sharedList = Array.isArray(req.body.sharedAudioFiles) ? req.body.sharedAudioFiles : [];
+          for (const ref of sharedList) {
+            const peerPath = resolvePriorSegmentAudioPath({ audioPath: ref, audioFile: ref, audioUrl: ref }, audioDir);
             if (peerPath) singleSharedAudioPaths.add(path.resolve(peerPath));
+          }
+        } else {
+          let peerSegments = Array.isArray(req.body.allSegments) ? req.body.allSegments : null;
+          if (!peerSegments && isEpisode && cleanSeries && cleanEpisode) {
+            const metaPath = path.join(uploadsDir, "projects", cleanSeries, "series.json");
+            if (fs.existsSync(metaPath)) {
+              const meta = JSON.parse(await fs.promises.readFile(metaPath, "utf8"));
+              const ep = (meta.episodes || []).find((e) => String(e.id) === String(cleanEpisode));
+              if (Array.isArray(ep?.scriptData?.segments)) peerSegments = ep.scriptData.segments;
+            }
+          }
+          if (peerSegments) {
+            for (const peer of peerSegments) {
+              if (!peer || String(peer.id) === String(segment.id)) continue;
+              const peerPath = resolvePriorSegmentAudioPath(peer, audioDir);
+              if (peerPath) singleSharedAudioPaths.add(path.resolve(peerPath));
+            }
           }
         }
       } catch (_) {}
@@ -472,9 +481,21 @@ router.post("/generate-audio", async (req, res) => {
                 targetEp.scriptData.segments[segIdx] = {
                   ...targetEp.scriptData.segments[segIdx],
                   ...updatedSegment,
+                  audioOutdated: false,
+                  textStatus: "ready",
                   audioOffset: 0,
                   audioTrimmed: false,
                   userTrimmed: false,
+                };
+              }
+              if (req.body.speakerUpdate && req.body.speakerUpdate.key && req.body.speakerUpdate.entry) {
+                const spkKey = String(req.body.speakerUpdate.key);
+                targetEp.speakerRegistry = {
+                  ...(targetEp.speakerRegistry || {}),
+                  [spkKey]: {
+                    ...((targetEp.speakerRegistry && targetEp.speakerRegistry[spkKey]) || {}),
+                    ...req.body.speakerUpdate.entry,
+                  },
                 };
               }
               targetEp.scriptData.updatedAt = Date.now();
@@ -487,6 +508,14 @@ router.post("/generate-audio", async (req, res) => {
                 if (!hasRemainingOutdatedSpoken) {
                   targetEp.audioOutdated = false;
                 }
+              } else {
+                // Invalidate stale pre-mixed master narration so Export rebuilds fresh audio with this updated voice
+                targetEp.fullAudioUrl = null;
+                targetEp.fullAudioPath = null;
+                const staleMasterName = isEpisode ? `${cleanEpisode}_narration_khmer.mp3` : `${cleanName}_narration_khmer.mp3`;
+                const staleMasterPath = path.join(audioDir, staleMasterName);
+                fs.promises.unlink(staleMasterPath).catch(() => {});
+                fs.promises.unlink(`${staleMasterPath}.meta.json`).catch(() => {});
               }
               targetEp.audioGenerated = true;
               targetEp.hasAudio = true;

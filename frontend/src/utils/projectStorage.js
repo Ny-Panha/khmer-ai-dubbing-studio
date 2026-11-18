@@ -1037,10 +1037,24 @@ export function saveTimelineOperationToLocalStorage({
   return timestamps;
 }
 
+let _suppressBackendSyncUntil = 0;
+
+/**
+ * Temporarily skip redundant full-series POST /api/series/:id/sync when a targeted backend
+ * endpoint (e.g. single-segment /api/generate-audio) already persisted the mutation on disk.
+ * localStorage is still updated immediately.
+ */
+export function suppressNextBackendSync(durationMs = 2500) {
+  const until = Date.now() + Math.max(0, Number(durationMs) || 0);
+  if (until > _suppressBackendSyncUntil) {
+    _suppressBackendSyncUntil = until;
+  }
+}
+
 /**
  * Save specific episode state into series list in localStorage
  */
-export function saveEpisodeState(seriesId, episodeId, stateData) {
+export function saveEpisodeState(seriesId, episodeId, stateData, options = {}) {
   if (!seriesId || !episodeId || !stateData) return;
   try {
     const list = loadSeriesList();
@@ -1269,10 +1283,12 @@ export function saveEpisodeState(seriesId, episodeId, stateData) {
       } catch (_) {}
     }
 
-    // Background sync to backend for server-side persistence
-    try {
-      syncSeriesToBackend(series);
-    } catch (_) {}
+    // Background sync to backend for server-side persistence (skip when caller already persisted directly)
+    if (!options?.skipBackendSync && Date.now() >= _suppressBackendSyncUntil) {
+      try {
+        syncSeriesToBackend(series);
+      } catch (_) {}
+    }
 
     return list;
   } catch (err) {

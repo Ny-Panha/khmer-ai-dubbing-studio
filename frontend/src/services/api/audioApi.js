@@ -99,6 +99,9 @@ export async function generateSingleSegmentAudio(segment, options = {}) {
   const deliveryOverride = isObj && options.deliveryOverride !== undefined ? options.deliveryOverride : Boolean(segment.deliveryOverride);
   const effectConfig = isObj ? (options.effectConfig || segment.effectConfig) : segment.effectConfig;
   const forceRegen = isObj && options.forceRegen !== undefined ? options.forceRegen : true;
+  const skipPeerDiskScan = isObj ? Boolean(options.skipPeerDiskScan) : false;
+  const sharedAudioFiles = isObj && Array.isArray(options.sharedAudioFiles) ? options.sharedAudioFiles : undefined;
+  const speakerUpdate = isObj && options.speakerUpdate && typeof options.speakerUpdate === 'object' ? options.speakerUpdate : undefined;
 
   const payload = JSON.stringify({
     segment: {
@@ -116,6 +119,9 @@ export async function generateSingleSegmentAudio(segment, options = {}) {
     },
     ...(speed !== undefined ? { speed } : {}),
     ...(userCustomSpeed !== undefined ? { userCustomSpeed } : {}),
+    ...(skipPeerDiskScan ? { skipPeerDiskScan: true } : {}),
+    ...(sharedAudioFiles ? { sharedAudioFiles } : {}),
+    ...(speakerUpdate ? { speakerUpdate } : {}),
     voiceId,
     forceVoice: true,
     deliveryType,

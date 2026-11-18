@@ -1212,12 +1212,27 @@ export default function ClipInspectorPanel({
                   <>
                     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6, fontSize: '0.74rem' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                        {selectedSegment.audioUrl ? (
-                          <span style={{ fontSize: '0.66rem', color: selectedSegment.audioOutdated ? 'var(--color-warning)' : 'var(--color-success)', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                        {(isGenerating || switchingVoiceTarget !== null) ? (
+                          <span
+                            data-testid="segment-audio-status-badge"
+                            style={{ fontSize: '0.66rem', color: '#38bdf8', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4 }}
+                          >
+                            <Loader2 size={11} className="animate-spin" /> កំពុងបង្កើតសំឡេង... (Generating)
+                          </span>
+                        ) : selectedSegment.audioUrl ? (
+                          <span
+                            data-testid="segment-audio-status-badge"
+                            style={{ fontSize: '0.66rem', color: selectedSegment.audioOutdated ? 'var(--color-warning)' : 'var(--color-success)', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4 }}
+                          >
                             <CheckCircle2 size={11} /> {selectedSegment.audioOutdated ? 'អត្ថបទកែ (Outdated)' : 'Audio Ready'}
                           </span>
                         ) : (
-                          <span style={{ fontSize: '0.66rem', color: 'var(--text-dim)' }}>Audio Pending</span>
+                          <span
+                            data-testid="segment-audio-status-badge"
+                            style={{ fontSize: '0.66rem', color: 'var(--text-dim)' }}
+                          >
+                            Audio Pending
+                          </span>
                         )}
                       </div>
                     </div>

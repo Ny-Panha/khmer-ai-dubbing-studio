@@ -7,7 +7,7 @@ import {
   fetchTtsVoices,
   retranslateSegmentApi,
 } from '../services/api';
-import { saveTimelineOperationToLocalStorage } from '../utils/projectStorage';
+import { saveTimelineOperationToLocalStorage, suppressNextBackendSync } from '../utils/projectStorage';
 import { getSpeakerId, detectSpeakerGender } from '../utils/speakerUtils';
 import { formatTimecode, parseTimeToSeconds } from '../utils/timestampUtils';
 import { splitKhmerTextIntoHalves } from '../utils/khmerTextSplitter';
@@ -391,10 +391,39 @@ const FALLBACK_VOICE_CATALOG = {
     const isFemale = (newVoiceId || '').includes('Sreymom');
     const isMale = (newVoiceId || '').includes('Piseth');
     const updatedGender = isMale ? 'MALE' : (isFemale ? 'FEMALE' : targetSeg.speakerGender);
-
     const activeSpeed = targetSeg.userCustomSpeed ? targetSeg.speed : (voiceSettings.speed || 'normal');
-
     const updatedVoiceGender = isFemale ? 'female' : 'male';
+    const currentKhmerText = (targetSeg.khmer || targetSeg.khmerText || targetSeg.khmerTranslatedText || '').trim();
+    const willRegen = Boolean(autoRegen && currentKhmerText);
+
+    const spkKey = targetSeg.speakerId || targetSeg.speaker || null;
+    const speakerEntryPatch = spkKey ? {
+      id: spkKey,
+      speakerId: spkKey,
+      voiceId: newVoiceId,
+      khmerVoiceId: newVoiceId,
+      gender: updatedGender,
+      voiceGender: updatedVoiceGender,
+      voiceAssignmentSource: 'manual',
+      userOverridden: true,
+    } : null;
+
+    const prevAudioBackup = {
+      audioUrl: targetSeg.audioUrl,
+      audioFile: targetSeg.audioFile,
+      audioPath: targetSeg.audioPath,
+      audioDurationSec: targetSeg.audioDurationSec,
+      audioOutdated: targetSeg.audioOutdated,
+      textStatus: targetSeg.textStatus,
+    };
+
+    // Fast path: when auto-regenerating a single text-ready segment, /api/generate-audio
+    // persists both the segment & speakerRegistry directly to series.json on disk.
+    // Suppress redundant 1MB+ full-series /sync uploads so they never contend on series.json!
+    if (willRegen) {
+      suppressNextBackendSync(5000);
+    }
+
     const updatedSeg = {
       ...targetSeg,
       voiceId: newVoiceId,
@@ -406,25 +435,23 @@ const FALLBACK_VOICE_CATALOG = {
       speed: activeSpeed,
       voiceProvider: 'edge-tts',
       audioOutdated: true,
+      ...(willRegen ? {
+        textStatus: 'generating',
+        audioUrl: null,
+        audioFile: null,
+        audioPath: null,
+      } : {}),
     };
 
     const newSegments = [...scriptData.segments];
     newSegments[segIdx] = updatedSeg;
 
-    if (targetSeg.speakerId || targetSeg.speaker) {
-      const spkKey = targetSeg.speakerId || targetSeg.speaker;
+    if (spkKey && speakerEntryPatch) {
       setSpeakerRegistry((prev) => ({
         ...prev,
         [spkKey]: {
           ...(prev[spkKey] || {}),
-          id: spkKey,
-          speakerId: spkKey,
-          voiceId: newVoiceId,
-          khmerVoiceId: newVoiceId,
-          gender: updatedGender,
-          voiceGender: updatedVoiceGender,
-          voiceAssignmentSource: 'manual',
-          userOverridden: true,
+          ...speakerEntryPatch,
         }
       }));
     }
@@ -436,54 +463,97 @@ const FALLBACK_VOICE_CATALOG = {
     } : prev));
     invalidateRendered();
 
-    const currentKhmerText = (updatedSeg.khmer || updatedSeg.khmerText || updatedSeg.khmerTranslatedText || '').trim();
-    if (autoRegen && currentKhmerText) {
+    if (willRegen) {
+      // Compute shared audio references in-memory (0ms) so backend skips pre-TTS 17MB series.json disk scan
+      const sharedAudioFiles = [];
+      const targetRef = targetSeg.audioPath || targetSeg.audioFile || (targetSeg.audioUrl ? targetSeg.audioUrl.split('?')[0] : null);
+      if (targetRef) {
+        const targetBase = String(targetRef).split('/').pop().split('\\').pop();
+        for (let i = 0; i < scriptData.segments.length; i++) {
+          if (i === segIdx) continue;
+          const peer = scriptData.segments[i];
+          const peerRef = peer?.audioPath || peer?.audioFile || (peer?.audioUrl ? peer.audioUrl.split('?')[0] : null);
+          if (peerRef && String(peerRef).split('/').pop().split('\\').pop() === targetBase) {
+            sharedAudioFiles.push(peerRef);
+            break;
+          }
+        }
+      }
+
       try {
-        const regenerated = await generateSingleSegmentAudio(updatedSeg, {
-          speed: activeSpeed,
-          voiceId: newVoiceId,
-          forceRegen: true,
-          projectName: getProjectName(),
-          videoId: getVideoId(),
-          episodeId,
-          seriesId,
-        });
-        const finalSegments = [...newSegments];
-        finalSegments[segIdx] = {
+        const regenerated = await generateSingleSegmentAudio(
+          {
+            ...updatedSeg,
+            // Pass prior file refs to backend for safe unshared cleanup while UI keeps audioUrl cleared
+            textStatus: 'ready',
+            audioFile: prevAudioBackup.audioFile,
+            audioPath: prevAudioBackup.audioPath,
+          },
+          {
+            speed: activeSpeed,
+            userCustomSpeed: Boolean(targetSeg.userCustomSpeed),
+            voiceId: newVoiceId,
+            forceRegen: true,
+            projectName: getProjectName(),
+            videoId: getVideoId(),
+            episodeId,
+            seriesId,
+            skipPeerDiskScan: true,
+            sharedAudioFiles,
+            ...(spkKey && speakerEntryPatch ? { speakerUpdate: { key: spkKey, entry: speakerEntryPatch } } : {}),
+          }
+        );
+
+        suppressNextBackendSync(2500);
+        const committedSeg = {
           ...regenerated,
           speakerGender: updatedGender,
+          voiceGender: updatedVoiceGender,
           voiceId: newVoiceId,
+          khmerVoiceId: newVoiceId,
+          voiceAssignmentSource: 'manual',
           speed: activeSpeed,
           audioOutdated: false,
+          textStatus: 'ready',
         };
-        setScriptData((prev) => (prev ? {
-          ...prev,
-          segments: finalSegments,
-          updatedAt: Date.now(),
-        } : prev));
+
+        let stillOutdated = false;
+        setScriptData((prev) => {
+          if (!prev || !Array.isArray(prev.segments)) return prev;
+          const nextSegs = [...prev.segments];
+          const matchIdx = nextSegs.findIndex((s, i) => i === segIdx || String(s.id) === String(targetSeg.id));
+          if (matchIdx !== -1) {
+            nextSegs[matchIdx] = { ...nextSegs[matchIdx], ...committedSeg };
+          }
+          stillOutdated = nextSegs.some((s) => s.audioOutdated);
+          return {
+            ...prev,
+            segments: nextSegs,
+            updatedAt: Date.now(),
+          };
+        });
+        // Clear stale master narration reference without running a 7-10s 6-batch FFmpeg full-episode re-mix:
+        // live preview plays per-segment audioUrl directly, and Export assembles fresh narration on demand.
+        setFullAudioUrl(null);
+        setFullAudioPath(null);
         setAudioGenerated(true);
-        invalidateRendered();
-
-        const stillOutdated = finalSegments.some((s) => s.audioOutdated);
         setAudioOutdated(stillOutdated);
-
-        if (finalSegments.some((s) => s.audioFile || s.audioPath || s.audioUrl)) {
-          syncTimelineAudioApi(finalSegments, getProjectName(), getVideoId(), episodeId, seriesId)
-            .then((res) => {
-              if (res.fullAudioUrl) {
-                const cacheBusted = `${res.fullAudioUrl.split('?')[0]}?t=${Date.now()}`;
-                setFullAudioUrl(cacheBusted);
-                setFullAudioPath(res.fullAudioPath);
-                setAudioGenerated(true);
-              }
-            })
-            .catch((syncErr) => {
-              console.warn('Auto re-sync timeline audio error:', syncErr.message);
-            });
-        }
-        return finalSegments[segIdx];
+        return committedSeg;
       } catch (err) {
         console.warn('Auto-regen segment audio failed:', err);
+        setScriptData((prev) => {
+          if (!prev || !Array.isArray(prev.segments)) return prev;
+          const rolledBack = [...prev.segments];
+          const matchIdx = rolledBack.findIndex((s, i) => i === segIdx || String(s.id) === String(targetSeg.id));
+          if (matchIdx !== -1) {
+            rolledBack[matchIdx] = {
+              ...rolledBack[matchIdx],
+              ...prevAudioBackup,
+              textStatus: 'error',
+            };
+          }
+          return { ...prev, segments: rolledBack, updatedAt: Date.now() };
+        });
         return null;
       }
     }

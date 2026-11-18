@@ -500,10 +500,18 @@ export default function App() {
     const sId = seriesRef.current.seriesId;
     const activeEpId = seriesRef.current.episodeId;
     const eId = targetEpId || activeEpId;
+    const isActiveEp = !targetEpId || String(targetEpId) === String(activeEpId);
+    const hasActiveRendered = Boolean(renderRef.current?.renderedVideo);
     const prevRenderedAt = Number(renderRef.current?.renderedVideo?.renderedAt || 0);
     const invalidatedAt = Math.max(Date.now(), prevRenderedAt > 0 ? prevRenderedAt + 1 : 0);
 
-    if (!targetEpId || String(targetEpId) === String(activeEpId)) {
+    // Fast path: if invalidating the active episode and no rendered video exists, avoid a synchronous
+    // localStorage + 1MB POST /api/series/:id/sync round-trip on every single clip/voice edit.
+    if (isActiveEp && !hasActiveRendered) {
+      return invalidatedAt;
+    }
+
+    if (isActiveEp) {
       if (renderRef.current?.setRenderedVideo) {
         renderRef.current.setRenderedVideo(null);
       }

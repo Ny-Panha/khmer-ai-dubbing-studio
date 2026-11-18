@@ -3,6 +3,42 @@
 ## Last Session
 - **Environment**: Antigravity IDE
 - **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-18T23:54:30+07:00
+
+## Summary: Fast Single-Segment Voice Switch (<2s vs 10-15s) & Honest Generating Status (COMPLETED)
+- **Step 0 Measured Timings (Real App, 14.79 MB cloned `Pseudo_Spiritual_Root/series.json`, `ep_5` `#6`)**:
+  - Pure `generateSingleSegmentAudio` (Edge TTS + silence trim + peaks): **`1.00s – 1.21s`**.
+  - Actual click -> end of waterfall BEFORE fix: **`13.54s` total** (`5.66s` UI clickable, `6.78s–7.46s` until new MP3 loaded):
+    1. **7.93s (`5,618ms -> 13,544ms`)**: `POST /api/sync-audio` (6-batch FFmpeg re-mix of ALL 219 segments into `ep_5_narration_khmer.mp3` + 15MB `series.json` write), even though live preview plays per-segment MP3s directly!
+    2. **6.0s of serialized lock contention (4× `POST /api/series/.../sync` per click)**: `0.87s` + `1.86s` + `0.90s` + `2.31s` (each uploading `902–1,134 KB` and reading/writing 15–17MB `series.json` under `withSeriesMetadataLock`), blocking `/api/generate-audio` (`4.93s`) AND starving the 25KB `GET new.mp3` response for **`1.06s–2.99s`**!
+    3. **Pre-TTS 17MB `series.json` disk read** (`audioRoutes.js:387`) + **409ms synchronous `invalidateRendered()` click freeze** even when `renderedVideo` was already `null`.
+    4. **UI Status Dishonesty**: `handleUpdateSegmentVoice` never set `textStatus: 'generating'` or cleared old `audioUrl`, so Inspector showed `"Outdated"`/`"Audio Ready"` with a checkmark during generation.
+- **Step 1 Fixes Applied**:
+  1. `frontend/src/utils/projectStorage.js`: Added `suppressNextBackendSync(durationMs)` + optional `skipBackendSync` on `saveEpisodeState` so localStorage still saves while suppressing redundant 1MB+ `/sync` uploads when `/api/generate-audio` already persists directly on disk.
+  2. `frontend/src/App.jsx`: Short-circuited `invalidateRenderedPreview` when the active episode has no `renderedVideo` (0ms no-op instead of synchronous save + `/sync`).
+  3. `frontend/src/services/api/audioApi.js` & `frontend/src/hooks/useAudioDubbing.js`: Refactored `handleUpdateSegmentVoice` to set honest generating state (`textStatus: 'generating'`, clear old `audioUrl` with rollback backup on error), suppress competing `/sync` calls, compute `sharedAudioFiles` in-memory (`skipPeerDiskScan: true`), send `speakerUpdate` for atomic persistence, swap in new audio with `textStatus: 'ready'`, and skip the 7.93s `syncTimelineAudioApi` full-episode FFmpeg re-mix.
+  4. `backend/routes/audioRoutes.js`: Honored `skipPeerDiskScan` (0ms), persisted `updatedSegment` (`textStatus: 'ready'`, `audioOutdated: false`) + `speakerUpdate` atomically in ONE `series.json` update, and asynchronously unlinked any stale `ep_X_narration_khmer.mp3` (+ `.meta.json`) so Export rebuilds fresh narration on demand.
+  5. `frontend/src/components/voice/ClipInspectorPanel.jsx`: Honest spinning `កំពុងបង្កើតសំឡេង... (Generating)` badge during wait; `Audio Ready` appears ONLY when the new voice file is in place.
+  6. `backend/tests/voice_switch_fast_path.test.js` *(new)*: Regression suite for all fast-path and honest-status invariants.
+- **Verification Results (Real App, 14.79 MB cloned `series.json`, `ep_5` `#6`)**:
+  - **Sreymom → Piseth**: `POST /api/generate-audio` **`1.03s`**, UI Ready **`1.65s`**, New male MP3 playable **`1.88s`** (`0` `/sync`, `0` `/sync-audio`, `sawGenerating: true`, `sawFalseReadyDuringWait: false`).
+  - **Piseth → Sreymom**: `POST /api/generate-audio` **`1.20s`**, UI Ready **`1.78s`**, New female MP3 playable **`2.03s`** (`0` `/sync`, `0` `/sync-audio`, `sawGenerating: true`, `sawFalseReadyDuringWait: false`).
+  - **Post-Reload (`page.reload()`)**: `Manual Assigned` + `Audio Ready` + `km-KH-SreymomNeural` + new MP3 URL persisted on disk & UI, `0` console errors.
+  - **Build & Tests**: `npm --prefix frontend run build` **PASS** (`1.15s`); `voice_switch_fast_path`, `clip_speed_tts`, `inspector_smooth_sliders` **11 / 11 PASS**.
+
+## Active Environment
+- **Backend API**: `http://localhost:5000` (restarted with fast voice switch route)
+- **Frontend Studio**: `http://localhost:5173` (Vite dev server)
+- **Branch**: `chore/full-project-cleanup` (committed & pushed)
+
+## Next Steps
+- Hard refresh (`Ctrl + Shift + R`) at `http://localhost:5173/studio` and switch any text-ready segment between `ស្រី (Sreymom)` and `ប្រុស (Piseth)` — should complete in ~1.6–2.5s.
+
+---
+
+## Previous Session
+- **Environment**: Antigravity IDE
+- **Branch**: `chore/full-project-cleanup`
 - **Timestamp**: 2026-11-18T23:09:30+07:00
 
 ## Summary: Stage 6 Khmer Translation Quality Rules (Anti-Translationese: Degree Words, Explicit Subject, Natural Single-Marker Questions) (COMPLETED)
