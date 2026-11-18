@@ -1,6 +1,27 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
+- **Environment**: Codex CLI
+- **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-18T17:42:24+07:00
+
+## Summary: Timeline clip containment and row alignment
+- Step 0: `61daaad` removed the 290px `!important` height/min/max lock from `.capcut-bottom-timeline` in `frontend/src/styles/timeline.css`, allowing the inline panel height and existing component min/max to take effect. The component diff changed empty-lane typography, with no clip-height, vertical-offset or root rem-scale change. The underlying flex mismatch also reproduced with the old 290px shell and the current episode's four voice rows.
+- The canvas ruler kept its 26px height while its header shrank. Both columns compressed their rows separately. Absolutely positioned video and voice clips kept their fixed 52px/40px heights and 4px top insets. At 1440x900, 3x timeline zoom and a 290px panel, VIDEO 1 was 45.97px tall and its clips crossed the bottom by 10.03px. VOICE 1 began 4px inside its own lane, but adjacent clips overlapped and header dividers were out of alignment.
+- Changed `frontend/src/components/timeline/TimelineEditor.css` only for rendering: the ruler header holds its height, lanes shrink like headers, video fills its lane's inner box, and inset clips and drag placeholders are capped by the lane's actual height.
+- Real Studio check in Chrome on `Pseudo_Spiritual_Root/ep_5` at 1440x900, 3x timeline zoom, with 275px, 290px and 378px rendered panels. All rendered clip rectangles were contained and every header matched its lane. VIDEO 1 reached the inner edge of the 1px divider, VOICE 1-4 retained 4px top/bottom insets, and the original VOICE 2-4 and CLEAN BGM lane boundaries matched the pre-fix measurements at the 275px and 290px panels. Exercised a populated VOICE 4 and subtitles in a disposable browser session with API writes intercepted.
+- Frontend production build passed. Timeline and auto-align suites passed 111/111.
+
+## Active Environment
+- Studio: `http://localhost:5173/studio`
+- Backend API: `http://localhost:5000`
+
+## Next Steps
+- None for this rendering fix.
+
+---
+
+## Previous Session
 - **Environment**: Antigravity IDE
 - **Branch**: `chore/full-project-cleanup`
 - **Timestamp**: 2026-11-18T17:28:30+07:00

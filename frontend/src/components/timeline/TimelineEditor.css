@@ -373,6 +373,7 @@
 
 .track-header.ruler-header {
   height: 26px;
+  flex-shrink: 0; /* Match the ruler above the clips when the panel is resized. */
   background: oklch(0.14 0.01 250);
   border-bottom: 1px solid oklch(0.25 0.01 250);
   justify-content: flex-start;
@@ -712,6 +713,7 @@
   position: relative;
   width: 100%;
   min-width: 100%;
+  min-height: 0; /* Shrink in step with the corresponding track header. */
   box-sizing: border-box;
   background: oklch(0.12 0 0);
   border-bottom: 1px solid oklch(0.25 0.01 250);
@@ -878,10 +880,10 @@
   display: none !important;
 }
 
-/* 1. Video Clip: 4px vertical inset in 60px row (height 52px), bg oklch(0.40 0.04 250) */
-.video-clip-block {
-  top: 4px;
-  height: 52px;
+/* The lane owns the divider. Fill its inner box up to that border. */
+.video-lane > .video-clip-block {
+  top: 0;
+  bottom: 0;
   background: linear-gradient(180deg, oklch(0.42 0.04 250) 0%, oklch(0.38 0.04 250) 100%);
   cursor: grab;
 }
@@ -890,7 +892,13 @@
   border-color: oklch(0.35 0.02 250);
 }
 
-/* 2. Voice Clips: 4px vertical inset in 48px row (height 40px) */
+/* Keep the normal clip insets when flex rows compress inside a short panel.
+   The 1px lane divider supplies the last pixel of the bottom inset. */
+.track-lane > :is(.voice-segment-block, .subtitle-segment-block, .clean-bgm-block, .video-clip-ghost) {
+  max-height: calc(100% - 7px);
+}
+
+/* 2. Voice Clips: 4px vertical inset in a full-height 48px row */
 /* Voice Male: Deep Studio Blue oklch(0.28 0.08 250) with electric blue #38bdf8 top accent bar */
 .voice-segment-block.voice-male,
 .voice-segment-block.male-voice {
