@@ -539,11 +539,12 @@ function TimelineEditor({
 
   useEffect(() => () => cancelVoiceDragScrub(), [cancelVoiceDragScrub]);
 
-  // Subscribe playhead DOM element directly to 60fps RAF playback engine
+  // Subscribe playhead DOM element directly to 60fps RAF playback engine (paused/scrub sync only;
+  // during active playback updatePlayheadAndScroll owns the GPU transform to avoid 2x/frame writes).
   useEffect(() => {
     if (typeof subscribePlayhead !== 'function') return undefined;
     return subscribePlayhead((liveTime) => {
-      if (isScrubbingRef.current) return;
+      if (isScrubbingRef.current || isPlayingRef.current) return;
       if (playheadRef.current && Number.isFinite(liveTime)) {
         const nextX = Math.max(0, liveTime * (ppsRef.current || 45));
         playheadRef.current.style.transform = `translate3d(${nextX}px, 0, 0)`;
@@ -1827,7 +1828,10 @@ function TimelineEditor({
           playheadRef.current.style.transform = `translate3d(${currentX}px, 0, 0)`;
 
           if (playheadTimeTextRef.current) {
-            playheadTimeTextRef.current.textContent = formatMinSec(tlTime);
+            const nextPlayheadText = formatMinSec(tlTime);
+            if (playheadTimeTextRef.current.textContent !== nextPlayheadText) {
+              playheadTimeTextRef.current.textContent = nextPlayheadText;
+            }
           }
 
           // Smart Professional Auto-Follow Viewport Bounds (Center-Lock Style)
@@ -1946,6 +1950,9 @@ function TimelineEditor({
           if (onSplitClip) onSplitClip(time, activeSplitTarget);
         }}
         currentTime={currentTime}
+        isPlaying={isPlaying}
+        playheadTimeRef={playheadTimeRef}
+        subscribePlayhead={subscribePlayhead}
         duration={totalDuration}
         handleDeleteSelected={handleDeleteSelected}
         canDelete={canDelete}

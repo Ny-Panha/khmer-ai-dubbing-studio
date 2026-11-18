@@ -3,6 +3,50 @@
 ## Last Session
 - **Environment**: Antigravity IDE
 - **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-18T22:34:00+07:00
+
+## Summary: Playback Freeze / Main-Thread Stall & Premature Stop Fix on `ep_5` (COMPLETED)
+- **Step 0 Measured Root Causes (`Pseudo_Spiritual_Root` `ep_5`, 219 segments, 415 clips, `renderedVideo: null` live preview)**:
+  - Before fix (`01:49.57 -> 02:05.92`, read-only): **0 `<video>` seeks** (`readyState: 4` throughout, 0 `waiting`/`stalled` events, 0 console errors), yet **81 main-thread long tasks (50–298ms each)** stacked into **1.38s freeze** at `#46 -> Gap -> #47` (`114.6s–116.0s`) and **0.78s freeze** at `#49 -> Gap` (`118.9s–119.5s`), with **1,829 DOM mutations** in 16s.
+  - CDP CPU Flamegraph + DOM Mutation Profiler proved the exact stalling mechanisms:
+    1. **Closed 4,578-line `GeminiRouteModal` (29.8% total CPU!) + `BatchExportStudioModal`**: Re-rendered on EVERY 200ms `setCurrentTime` tick even while `isOpen === false`, running `computeSeriesTranslateSummary` -> `scanEpisodeBrokenSegments` -> `isSegmentVoiceBroken` across all episodes & 219 segments.
+    2. **`useSeriesManager.js` auto-persist during playback (`activeClipId` / `selectedSegmentId` in deps)**: Every clip/Gap boundary (`#46 -> Gap -> #47 -> #48 -> Gap -> #49 -> Gap -> #50`) triggered debounced `saveEpisodeState` -> synchronous `localStorage.getItem`/`setItem` + `sanitizeAndHealSeriesList` + `POST /api/series/.../sync`.
+    3. **Broken `React.memo(TimelineTracksCanvas)` + unmemoized 3,800-line `VoiceSettings` & `Navbar` & `TimelineToolbar`**: `App.jsx` passed inline `framingKeyframes={scriptData?.framingKeyframes || []}` (breaking canvas memo on every 200ms tick), re-diffed 350+ `.waveform-bar` spans, and re-rendered `VoiceSettings` (`512` input mutations in 6s).
+    4. **Double playhead DOM writes + redundant 60fps `.textContent` mutations**: `usePlaybackEngine.js` reset `lastMappedIdxRef = 0` every 200ms during playback; both `subscribePlayhead` and `updatePlayheadAndScroll` mutated `playheadRef.style.transform` 2x/frame; timecode spans recreated DOM Text nodes at 60fps even when text was unchanged.
+    5. **Premature stop / seek-abort watchdog bug (`useVideoPlayback.js`)**: Old watchdog nudged `+0.005s` while `v.seeking` (`readyState: 1`) and reset `stallRecoveryCountRef = 0` after 2 nudges (`+0.01s`), aborting in-flight HTTP range requests; `handleTimeUpdate` also killed `intendedPlayingRef` if `v.paused` momentarily while `v.seeking`.
+- **Step 1 Fixes Applied (Zero Playback Semantics Changed — Forward-Only, Gaps Play Through, Paused Snap-Back Guard, Drag-Scrub Intact)**:
+  1. `frontend/src/App.jsx`: Added `MemoGeminiRouteModal`, `MemoBatchExportStudioModal`, `MemoJobDashboardModal`, `MemoGeminiQuotaModal` (skip render while closed), `MemoVoiceSettings`, `MemoNavbar`, and replaced inline `|| []` with stable `EMPTY_ARRAY`.
+  2. `frontend/src/hooks/useSeriesManager.js`: Read `activeClipId`/`selectedSegmentId` via refs inside `getCurrentWorkspaceSnapshot` and removed them from auto-persist `useEffect` deps so playback auto-follow never triggers full-series serialization or `/sync`.
+  3. `frontend/src/hooks/usePlaybackEngine.js`: Guarded `currentTime` sync effect with `if (isPlaying) return;`.
+  4. `frontend/src/hooks/useVideoPlayback.js`: Guarded `v.paused && isPlaying && !v.seeking`, fixed stall watchdog (`>= 3500ms`, max 2 nudges, reset counter only when `!v.seeking && v.readyState >= 3 && Math.abs(curT - lastHealthyTime) >= 0.08`), and hardened `AbortError` `v.play()` retry cleanup.
+  5. `frontend/src/components/timeline/TimelineTracksCanvas.jsx`, `TimelineEditor.jsx`, `TimelineToolbar.jsx`, `TimelineTrackHeaders.jsx`, `PlayerControls.jsx`, `ExportSettingsPanel.jsx`, `AudioDuckingPanel.jsx`: Extracted `MemoizedVoiceWaveformBars`, omitted React playhead `transform` while playing, removed 2x/frame playhead transform overwrite, guarded `.textContent` writes, and memoized toolbar/headers/panels.
+  6. `backend/tests/timeline_continuous_playback_no_loop.test.js`: Fixed test #2 (previously hardcoded `episodes[0]` / `ep_1` which is now 1 unsplit clip on disk; now selects the first split multi-clip episode with Gaps in `[7.0, 14.0]`) + added test #5 anti-freeze regression audit.
+- **Verification Results (Read-Only on `Pseudo_Spiritual_Root` `ep_5`)**:
+  - **3× Consecutive 1.0x Plays (`01:40 -> 02:10`, 90s total / 2,677 frames)**:
+    - Run 1: `100.00s -> 130.00s` (`29.96s` wall, `880` frames), **`0` freezes > 0.5s**, **`0` gaps > 0.2s**, `maxFrameGapMs: 100ms`, `syncCallsDuringPlay: 0`.
+    - Run 2: `100.00s -> 130.45s` (`30.48s` wall, `896` frames), **`0` freezes > 0.5s**, **`0` gaps > 0.2s**, `maxFrameGapMs: 117ms`, `syncCallsDuringPlay: 0`.
+    - Run 3: `100.00s -> 130.46s` (`30.50s` wall, `901` frames), **`0` freezes > 0.5s**, **`0` gaps > 0.2s**, `maxFrameGapMs: 84ms`, `maxRafGapMs: 33ms`, `longTasksCount: 0`, `syncCallsDuringPlay: 0`.
+    - `consoleErrors: []`, `pageErrors: []`.
+  - **1× Full-Episode Continuous Play (`ep_5`, `00:00 -> 10:02.04` / `602.29s` at `8x`, all 415 clips + 196 Gaps + 219 segments)**:
+    - Completed cleanly to `602.04s` in `77.12s` wall time, `stoppedEarly: false`, `reachedEnd: true`, `seeksCount: 0`, `backwardSeeksCount: 0`, `syncCallsDuringPlay: 0`, `consoleErrors: []`.
+  - **Build & Suites**:
+    - `npm --prefix frontend run build`: **PASS** (`944ms`, 0 errors).
+    - `timeline_continuous_playback_no_loop.test.js`: **5 / 5 PASS**.
+    - All `timeline_*.test.js` + `auto_align_voice.test.js`: **126 / 126 PASS**. (Note: `playback_60fps_optimization.test.js` has 2 pre-existing unrelated static checks failing on `mediaStream.js` 3MB chunk & `VideoPlayerPreview.jsx` `if (s > (now + 5)) break;`; its 2 timeline tests pass.)
+
+## Active Environment
+- **Backend API**: `http://localhost:5000`
+- **Frontend Studio**: `http://localhost:5173` (Vite dev server)
+- **Branch**: `chore/full-project-cleanup` (committed & pushed)
+
+## Next Steps
+- Refresh Studio (`Ctrl + F5`) at `http://localhost:5173/studio`, play `ep_5` across `01:40–02:10` (and full episode) to confirm smooth playback with zero stalls.
+
+---
+
+## Previous Session
+- **Environment**: Antigravity IDE
+- **Branch**: `chore/full-project-cleanup`
 - **Timestamp**: 2026-11-18T21:55:35+07:00
 
 ## Summary: Exact Clip Speed Accuracy (<1% via Single-Pass FFmpeg `atempo`) & Auto-Fit Precedence Fix (COMPLETED)

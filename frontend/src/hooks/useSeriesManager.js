@@ -393,6 +393,11 @@ export function useSeriesManager({
     };
   }, [applyEpisodeToWorkspace]);
 
+  const activeClipIdRef = useRef(activeClipId);
+  activeClipIdRef.current = activeClipId;
+  const selectedSegmentIdRef = useRef(selectedSegmentId);
+  selectedSegmentIdRef.current = selectedSegmentId;
+
   // Extract current workspace snapshot for saving
   const getCurrentWorkspaceSnapshot = useCallback(() => {
     return {
@@ -426,8 +431,8 @@ export function useSeriesManager({
       duration,
       videoClips,
       videoClipsUpdatedAt,
-      activeClipId,
-      selectedSegmentId,
+      activeClipId: activeClipIdRef.current,
+      selectedSegmentId: selectedSegmentIdRef.current,
       renderedVideo,
       voiceSettings: stripLogoSettings(voiceSettings),
     };
@@ -443,13 +448,13 @@ export function useSeriesManager({
     duration,
     videoClips,
     videoClipsUpdatedAt,
-    activeClipId,
-    selectedSegmentId,
     renderedVideo,
     voiceSettings,
   ]);
 
-  // Auto-persist active episode state to localStorage whenever changes occur (debounced)
+  // Auto-persist active episode state to localStorage whenever data changes occur (debounced).
+  // Excludes ephemeral UI selection pointers (activeClipId, selectedSegmentId) so playback auto-follow
+  // across clip/Gap boundaries never triggers full-series JSON serialization or /sync during playback.
   useEffect(() => {
     // Guard against running auto-persist before initial workspace restore is complete
     if (!isInitializedRef.current) return;
@@ -475,8 +480,6 @@ export function useSeriesManager({
     duration,
     videoClips,
     videoClipsUpdatedAt,
-    activeClipId,
-    selectedSegmentId,
     renderedVideo,
     voiceSettings,
     getCurrentWorkspaceSnapshot,

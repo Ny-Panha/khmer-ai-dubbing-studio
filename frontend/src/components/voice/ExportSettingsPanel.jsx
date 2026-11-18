@@ -6,7 +6,7 @@ import {
 import { resolveDefaultAspectRatio, sanitizeAspectRatio } from '../../utils/projectStorage';
 import SmoothRangeSlider from '../common/SmoothRangeSlider';
 
-export default function ExportSettingsPanel({
+function ExportSettingsPanel({
   isOpen,
   onToggle,
   settings,
@@ -1495,3 +1495,5 @@ export default function ExportSettingsPanel({
     </div>
   );
 }
+
+export default React.memo(ExportSettingsPanel);

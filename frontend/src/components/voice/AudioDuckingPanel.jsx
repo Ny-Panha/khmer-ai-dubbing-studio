@@ -4,7 +4,7 @@ import {
 } from 'lucide-react';
 import SmoothRangeSlider from '../common/SmoothRangeSlider';
 
-export default function AudioDuckingPanel({
+function AudioDuckingPanel({
   isOpen,
   onToggle,
   settings,
@@ -208,3 +208,5 @@ export default function AudioDuckingPanel({
     </div>
   );
 }
+
+export default React.memo(AudioDuckingPanel);

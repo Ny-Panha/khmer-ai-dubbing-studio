@@ -1,7 +1,7 @@
 import React from 'react';
 import { Lock, Eye, EyeOff, Volume2, VolumeX } from 'lucide-react';
 
-export default function TimelineTrackHeaders({
+function TimelineTrackHeaders({
   lockedTracks,
   setLockedTracks,
   hiddenTracks,
@@ -261,3 +261,5 @@ export default function TimelineTrackHeaders({
     </div>
   );
 }
+
+export default React.memo(TimelineTrackHeaders);

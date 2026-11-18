@@ -1,11 +1,11 @@
-import React from 'react';
+import React, { useRef, useEffect } from 'react';
 import {
   Plus, Undo2, Redo2, Scissors, Trash2, Film, Sparkles,
   ZoomOut, ZoomIn, Maximize2, LocateFixed, Magnet, MessageSquare
 } from 'lucide-react';
 import { formatMinSec } from '../../utils/timestampUtils';
 
-export default function TimelineToolbar({
+function TimelineToolbar({
   selectedVideo,
   onResetFullVideo,
   canUndo,
@@ -15,6 +15,9 @@ export default function TimelineToolbar({
   onSplitClip,
   canSplit = true,
   currentTime = 0,
+  isPlaying = false,
+  playheadTimeRef = null,
+  subscribePlayhead = null,
   duration = 0,
   handleDeleteSelected,
   canDelete,
@@ -42,6 +45,28 @@ export default function TimelineToolbar({
   onAddTrack = null,
 }) {
   const isAutoCutMode = Array.isArray(videoClips) && videoClips.length > 1;
+
+  const timecodeSpanRef = useRef(null);
+
+  useEffect(() => {
+    if (typeof subscribePlayhead !== 'function') return undefined;
+    let lastText = '';
+    return subscribePlayhead((liveTime) => {
+      if (timecodeSpanRef.current) {
+        const nextText = formatMinSec(liveTime);
+        if (nextText !== lastText) {
+          lastText = nextText;
+          timecodeSpanRef.current.textContent = nextText;
+        }
+      }
+    });
+  }, [subscribePlayhead]);
+
+  const getActiveTime = () => (
+    playheadTimeRef && Number.isFinite(playheadTimeRef.current)
+      ? playheadTimeRef.current
+      : currentTime
+  );
 
   return (
     <div className="capcut-timeline-toolbar">
@@ -72,7 +97,7 @@ export default function TimelineToolbar({
 
           <button
             type="button"
-            onClick={() => onSplitClip && onSplitClip(currentTime)}
+            onClick={() => onSplitClip && onSplitClip(getActiveTime())}
             disabled={!canSplit}
             className={`timeline-icon-tool tool-split ${!canSplit ? 'disabled' : ''}`}
             title="Split Clip or Segment at Playhead (Ctrl+B / [|])"
@@ -97,7 +122,7 @@ export default function TimelineToolbar({
           {onAddSegment && (
             <button
               type="button"
-              onClick={() => onAddSegment(currentTime)}
+              onClick={() => onAddSegment(getActiveTime())}
               className="timeline-pill-tool tool-add-segment"
               title="បន្ថែមឃ្លា Subtitle ថ្មីនៅត្រង់ Playhead (+ Add Subtitle at Playhead)"
             >
@@ -156,7 +181,7 @@ export default function TimelineToolbar({
 
       {/* 2. Center Section — Live Studio Timecode Display */}
       <div className="toolbar-center-timecode" data-testid="timeline-center-timecode">
-        <span className="timeline-timecode-current">{formatMinSec(currentTime)}</span>
+        <span ref={timecodeSpanRef} className="timeline-timecode-current">{formatMinSec(currentTime)}</span>
         <span className="timeline-timecode-sep">/</span>
         <span className="timeline-timecode-total">{formatMinSec(duration)}</span>
       </div>
@@ -255,3 +280,17 @@ export default function TimelineToolbar({
     </div>
   );
 }
+
+export default React.memo(TimelineToolbar, (prev, next) => {
+  if (prev.isPlaying !== next.isPlaying) return false;
+  if (!next.isPlaying && prev.currentTime !== next.currentTime) return false;
+  if (prev.duration !== next.duration) return false;
+  if (prev.canUndo !== next.canUndo || prev.canRedo !== next.canRedo) return false;
+  if (prev.canSplit !== next.canSplit) return false;
+  if (prev.canDelete !== next.canDelete || prev.canDeleteSubtitle !== next.canDeleteSubtitle || prev.canDeleteVideo !== next.canDeleteVideo) return false;
+  if (prev.snappingEnabled !== next.snappingEnabled || prev.showSubtitlesTrack !== next.showSubtitlesTrack) return false;
+  if (prev.zoom !== next.zoom || prev.autoCenter !== next.autoCenter) return false;
+  if (prev.videoClips !== next.videoClips || prev.scriptSegments !== next.scriptSegments) return false;
+  if (prev.selectedVideo !== next.selectedVideo || prev.voiceSettings !== next.voiceSettings) return false;
+  return true;
+});

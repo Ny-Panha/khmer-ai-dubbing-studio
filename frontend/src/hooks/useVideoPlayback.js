@@ -254,7 +254,7 @@ export function useVideoPlayback({
       }
     }
 
-    if (v.paused && isPlaying) {
+    if (v.paused && isPlaying && !v.seeking) {
       intendedPlayingRef.current = false;
       setIsPlaying(false);
     }
@@ -323,19 +323,20 @@ export function useVideoPlayback({
   }, [videoClips, isPlaying]);
 
   // Bounded forward-only stall/hung-seek watchdog during active playback:
-  // If <video> is attempting to play (!paused, !ended) but stuck in seeking or readyState < 3
-  // with unchanged currentTime for >= 1.6s (e.g. hung HTTP range request), nudge strictly forward (+5ms)
-  // to abort the stalled seek and resume cleanly without ever seeking backward.
+  // If <video> is attempting to play (!paused, !ended) but genuinely stuck in seeking or readyState < 3
+  // with unchanged currentTime for >= 3.5s (e.g. hung HTTP range request), nudge strictly forward (+5ms)
+  // to abort the stalled seek and resume cleanly without ever aborting normal 0.5-2s range buffering.
   useEffect(() => {
     if (!isPlaying && !intendedPlayingRef.current) return undefined;
     const v = videoRef?.current;
     if (!v) return undefined;
 
-    let lastObservedTime = Number.isFinite(v.currentTime) ? v.currentTime : 0;
+    let lastHealthyTime = Number.isFinite(v.currentTime) ? v.currentTime : 0;
     let stuckSinceMs = performance.now();
 
     const onClearSeek = () => {
       pendingSeekTargetRef.current = null;
+      stuckSinceMs = performance.now();
       if (intendedPlayingRef.current && v.paused && !v.ended) {
         v.play().then(() => setIsPlaying(true)).catch(() => {});
       }
@@ -349,16 +350,17 @@ export function useVideoPlayback({
       const curT = Number.isFinite(v.currentTime) ? v.currentTime : 0;
       const nowMs = performance.now();
 
-      if (Math.abs(curT - lastObservedTime) >= 0.01) {
-        lastObservedTime = curT;
+      // Only reset stall counters when playback actually advances while readyState >= 3 and not seeking
+      if (!v.seeking && v.readyState >= 3 && Math.abs(curT - lastHealthyTime) >= 0.08) {
+        lastHealthyTime = curT;
         stuckSinceMs = nowMs;
         stallRecoveryCountRef.current = 0;
         pendingSeekTargetRef.current = null;
         return;
       }
 
-      const isStalled = !v.paused && (v.seeking || v.readyState < 3);
-      if (isStalled && (nowMs - stuckSinceMs) >= 1600 && stallRecoveryCountRef.current < 2) {
+      const isStalled = (!v.paused && (v.seeking || v.readyState < 3)) || (v.paused && intendedPlayingRef.current && !v.ended && v.seeking);
+      if (isStalled && (nowMs - stuckSinceMs) >= 3500 && stallRecoveryCountRef.current < 2) {
         stallRecoveryCountRef.current += 1;
         stuckSinceMs = nowMs;
         const maxDur = Number.isFinite(v.duration) && v.duration > 0 ? v.duration : (duration || curT + 1);
@@ -379,7 +381,7 @@ export function useVideoPlayback({
           }
         } catch (_) {}
       }
-    }, 450);
+    }, 500);
 
     return () => {
       window.clearInterval(timer);
@@ -499,7 +501,12 @@ export function useVideoPlayback({
           .catch((e) => {
             if (e.name === 'AbortError' && intendedPlayingRef.current) {
               // Concurrent seek interrupted initial play(): retry once when seek/buffer completes
+              let retried = false;
               const retryPlay = () => {
+                if (retried) return;
+                retried = true;
+                v.removeEventListener('seeked', retryPlay);
+                v.removeEventListener('canplay', retryPlay);
                 if (!intendedPlayingRef.current || !v.paused || v.ended) return;
                 v.play()
                   .then(() => {
@@ -512,6 +519,9 @@ export function useVideoPlayback({
               };
               v.addEventListener('seeked', retryPlay, { once: true });
               v.addEventListener('canplay', retryPlay, { once: true });
+              if (v.readyState >= 3 && !v.seeking) {
+                window.setTimeout(retryPlay, 80);
+              }
               return;
             }
             intendedPlayingRef.current = false;

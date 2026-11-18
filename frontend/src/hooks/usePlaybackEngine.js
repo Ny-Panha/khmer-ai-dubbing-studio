@@ -34,14 +34,15 @@ export function usePlaybackEngine(params) {
     });
   }, []);
 
-  // Keep ref synchronized when paused or seeking
+  // Keep ref synchronized when paused or seeking (never reset/fight 60fps RAF loop during active playback)
   useEffect(() => {
+    if (isPlaying) return;
     if (Number.isFinite(currentTime)) {
       lastMappedTlTimeRef.current = currentTime;
       lastMappedIdxRef.current = 0;
       notifySubscribers(currentTime);
     }
-  }, [currentTime, notifySubscribers]);
+  }, [currentTime, isPlaying, notifySubscribers]);
 
   // 60fps requestAnimationFrame loop while video is actively playing
   useEffect(() => {

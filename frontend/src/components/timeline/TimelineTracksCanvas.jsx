@@ -79,6 +79,46 @@ function resolveVoiceAudioExtent(seg, appliedSpeed, probedDuration) {
   return rawAudioExtent;
 }
 
+const FALLBACK_WAVEFORM_PATTERN = [30, 65, 90, 45, 80, 100, 55, 35, 75, 85, 40, 70, 25, 60, 80, 95, 50, 65, 35, 85];
+
+const MemoizedVoiceWaveformBars = React.memo(function MemoizedVoiceWaveformBars({
+  waveformWidthPx,
+  peaksArray,
+}) {
+  // Each .waveform-bar is 2px wide + 2px gap (4px pitch) inside 10px horizontal box inset (1px border + 4px padding per side)
+  const waveformBarCount = Math.min(400, Math.max(4, Math.floor((waveformWidthPx - 8) / 4)));
+  return (
+    <div
+      className="voice-waveform-bars"
+      style={{
+        width: `${waveformWidthPx}px`,
+        maxWidth: '100%',
+      }}
+    >
+      {Array.from({ length: waveformBarCount }).map((_, wIdx) => {
+        let hPercent;
+        if (peaksArray) {
+          const sampleIdx = Math.min(peaksArray.length - 1, Math.floor((wIdx / waveformBarCount) * peaksArray.length));
+          const rawPeak = Number(peaksArray[sampleIdx]);
+          const normalized = Number.isFinite(rawPeak) ? (rawPeak <= 1 ? rawPeak * 100 : rawPeak) : 40;
+          hPercent = Math.max(15, Math.min(100, Math.round(normalized)));
+        } else {
+          hPercent = FALLBACK_WAVEFORM_PATTERN[wIdx % FALLBACK_WAVEFORM_PATTERN.length];
+        }
+        return (
+          <span
+            key={wIdx}
+            className="waveform-bar"
+            style={{
+              height: `${hPercent}%`,
+            }}
+          />
+        );
+      })}
+    </div>
+  );
+});
+
 function TimelineTracksCanvas({
   scrollContainerRef = null,
   totalWidth,
@@ -611,43 +651,16 @@ function TimelineTracksCanvas({
                   {hasAudio ? (
                     audioWidth >= 20 && (() => {
                       const waveformWidthPx = Math.min(audioWidth, Math.max(16, (renderedDuration * pps) - 2));
-                      // Each .waveform-bar is 2px wide + 2px gap (4px pitch) inside 10px horizontal box inset (1px border + 4px padding per side)
-                      const waveformBarCount = Math.min(400, Math.max(4, Math.floor((waveformWidthPx - 8) / 4)));
                       const peaksArray = Array.isArray(seg.peaks) && seg.peaks.length > 0
                         ? seg.peaks
                         : (Array.isArray(seg.waveform) && seg.waveform.length > 0
                           ? seg.waveform
                           : (Array.isArray(seg.waveform?.peaks) && seg.waveform.peaks.length > 0 ? seg.waveform.peaks : null));
-                      const fallbackPattern = [30, 65, 90, 45, 80, 100, 55, 35, 75, 85, 40, 70, 25, 60, 80, 95, 50, 65, 35, 85];
                       return (
-                        <div
-                          className="voice-waveform-bars"
-                          style={{
-                            width: `${waveformWidthPx}px`,
-                            maxWidth: '100%',
-                          }}
-                        >
-                          {Array.from({ length: waveformBarCount }).map((_, wIdx) => {
-                            let hPercent;
-                            if (peaksArray) {
-                              const sampleIdx = Math.min(peaksArray.length - 1, Math.floor((wIdx / waveformBarCount) * peaksArray.length));
-                              const rawPeak = Number(peaksArray[sampleIdx]);
-                              const normalized = Number.isFinite(rawPeak) ? (rawPeak <= 1 ? rawPeak * 100 : rawPeak) : 40;
-                              hPercent = Math.max(15, Math.min(100, Math.round(normalized)));
-                            } else {
-                              hPercent = fallbackPattern[wIdx % fallbackPattern.length];
-                            }
-                            return (
-                              <span
-                                key={wIdx}
-                                className="waveform-bar"
-                                style={{
-                                  height: `${hPercent}%`,
-                                }}
-                              />
-                            );
-                          })}
-                        </div>
+                        <MemoizedVoiceWaveformBars
+                          waveformWidthPx={waveformWidthPx}
+                          peaksArray={peaksArray}
+                        />
                       );
                     })()
                   ) : (
@@ -1131,7 +1144,7 @@ function TimelineTracksCanvas({
         <div 
           ref={playheadRef}
           className="timeline-playhead capcut-playhead-line"
-          style={{ 
+          style={isPlaying ? { left: 0, willChange: 'transform' } : {
             left: 0,
             transform: `translate3d(${playheadX}px, 0, 0)`,
             willChange: 'transform'

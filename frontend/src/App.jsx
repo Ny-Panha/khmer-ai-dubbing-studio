@@ -10,6 +10,72 @@ import BatchExportStudioModal from './components/dashboard/BatchExportStudioModa
 import MediaLibrary from './components/media/MediaLibrary';
 import VideoPlayerPreview from './components/player/VideoPlayerPreview';
 import VoiceSettings from './components/voice/VoiceSettings';
+
+// Skip re-rendering closed modals completely on 5Hz playback currentTime ticks (prevents heavy series scans while closed)
+const MemoJobDashboardModal = React.memo(JobDashboardModal, (prev, next) => !prev.isOpen && !next.isOpen);
+const MemoGeminiRouteModal = React.memo(GeminiRouteModal, (prev, next) => !prev.isOpen && !next.isOpen);
+const MemoBatchExportStudioModal = React.memo(BatchExportStudioModal, (prev, next) => !prev.isOpen && !next.isOpen);
+const MemoGeminiQuotaModal = React.memo(GeminiQuotaModal, (prev, next) => !prev.isOpen && !next.isOpen);
+
+// Skip Navbar re-renders on playback currentTime ticks (Navbar does not display currentTime)
+const MemoNavbar = React.memo(Navbar, (prev, next) => (
+  prev.apiKey === next.apiKey &&
+  prev.isBackendOnline === next.isBackendOnline &&
+  prev.isRendering === next.isRendering &&
+  prev.renderProgress === next.renderProgress &&
+  prev.selectedVideo === next.selectedVideo &&
+  prev.videoMetadata === next.videoMetadata &&
+  prev.renderedVideo === next.renderedVideo &&
+  prev.activeSeries === next.activeSeries &&
+  prev.activeEpisode === next.activeEpisode &&
+  prev.seriesId === next.seriesId &&
+  prev.episodeId === next.episodeId &&
+  prev.generatingEpisodeId === next.generatingEpisodeId &&
+  prev.generatingAudioEpisodeId === next.generatingAudioEpisodeId &&
+  prev.activeTab === next.activeTab &&
+  prev.isGeminiRouteActive === next.isGeminiRouteActive &&
+  prev.isGeminiQuotaActive === next.isGeminiQuotaActive &&
+  prev.isBatchExportStudioActive === next.isBatchExportStudioActive &&
+  prev.isJobDashboardActive === next.isJobDashboardActive &&
+  prev.batchRender === next.batchRender &&
+  prev.currentAspectRatio === next.currentAspectRatio &&
+  prev.isLeftCollapsed === next.isLeftCollapsed &&
+  prev.isRightCollapsed === next.isRightCollapsed &&
+  prev.isTimelineCollapsed === next.isTimelineCollapsed &&
+  prev.currentRoute === next.currentRoute
+));
+
+// Prevent 5Hz playback currentTime ticks from re-rendering the 3,800-line Inspector panel
+const MemoVoiceSettings = React.memo(VoiceSettings, (prev, next) => {
+  if (prev.isPlaying !== next.isPlaying) return false;
+  if (!next.isPlaying && prev.currentTime !== next.currentTime) return false;
+  if (prev.selectedSegmentId !== next.selectedSegmentId) return false;
+  if (prev.selectedClipKind !== next.selectedClipKind) return false;
+  if (prev.selectedClip !== next.selectedClip) return false;
+  if (prev.settings !== next.settings) return false;
+  if (prev.scriptData !== next.scriptData) return false;
+  if (prev.videoClips !== next.videoClips) return false;
+  if (prev.speakerRegistry !== next.speakerRegistry) return false;
+  if (prev.voiceCatalog !== next.voiceCatalog) return false;
+  if (prev.audioOutdated !== next.audioOutdated) return false;
+  if (prev.audioGenerated !== next.audioGenerated) return false;
+  if (prev.isGeneratingAudio !== next.isGeneratingAudio) return false;
+  if (prev.audioProgress !== next.audioProgress) return false;
+  if (prev.audioStage !== next.audioStage) return false;
+  if (prev.isRendering !== next.isRendering) return false;
+  if (prev.renderProgress !== next.renderProgress) return false;
+  if (prev.renderStage !== next.renderStage) return false;
+  if (prev.renderedVideo !== next.renderedVideo) return false;
+  if (prev.previewAudioUrl !== next.previewAudioUrl) return false;
+  if (prev.selectedVideo !== next.selectedVideo) return false;
+  if (prev.videoMetadata !== next.videoMetadata) return false;
+  if (prev.activeEpisode !== next.activeEpisode) return false;
+  if (prev.activeSeries !== next.activeSeries) return false;
+  if (prev.seriesId !== next.seriesId || prev.episodeId !== next.episodeId) return false;
+  if (prev.batchRender !== next.batchRender) return false;
+  if (prev.duration !== next.duration) return false;
+  return true;
+});
 import TimelineEditor from './components/timeline/TimelineEditor';
 import {
   STORAGE_SERIES_LIST_KEY,
@@ -981,7 +1047,7 @@ export default function App() {
             >
               <div className="capcut-app-container">
         {/* Top Application Navbar */}
-        <Navbar
+        <MemoNavbar
           apiKey={persistence.apiKey}
           onSaveApiKey={persistence.handleSaveApiKey}
           isBackendOnline={persistence.isBackendOnline}
@@ -1186,7 +1252,7 @@ export default function App() {
               }}
             >
               <ErrorBoundary inline name="Inspector">
-                <VoiceSettings
+                <MemoVoiceSettings
                   settings={studioSettings}
                   onUpdateSettings={handleUpdateVoiceSettings}
                   voiceCatalog={audio.ttsVoiceCatalog}
@@ -1279,7 +1345,7 @@ export default function App() {
                 onDeleteClip={handleDeleteClip}
                 onDeleteSegment={handleDeleteSegment}
                 scriptSegments={scriptData?.segments || EMPTY_SEGMENTS}
-                framingKeyframes={scriptData?.framingKeyframes || []}
+                framingKeyframes={scriptData?.framingKeyframes || EMPTY_ARRAY}
                 onUpdateSegments={handleUpdateTimelineSegments}
                 onToggleMuteSegment={handleToggleMuteSegment}
                 onToggleMuteVideoClip={handleToggleMuteVideoClip}
@@ -1320,12 +1386,12 @@ export default function App() {
 
         {/* DragonDub Production Job Queue Dashboard Modal (Phase 4.4) */}
         <ErrorBoundary inline name="Job Dashboard" onReset={handleCloseJobDashboard}>
-          <JobDashboardModal isOpen={showJobDashboard} onClose={handleCloseJobDashboard} />
+          <MemoJobDashboardModal isOpen={showJobDashboard} onClose={handleCloseJobDashboard} />
         </ErrorBoundary>
 
         {/* DragonDub Batch Generate Studio Modal (Separated Clean Workflow) */}
         <ErrorBoundary inline name="Gemini Route" onReset={handleCloseGeminiRoute}>
-          <GeminiRouteModal
+          <MemoGeminiRouteModal
             isOpen={showGeminiRouteModal}
             onClose={handleCloseGeminiRoute}
             onOpenQuotaModal={handleOpenGeminiQuota}
@@ -1347,7 +1413,7 @@ export default function App() {
 
         {/* DragonDub Dedicated Export Studio Modal (Batch Export & Full Video Merge) */}
         <ErrorBoundary inline name="Export Studio" onReset={handleCloseBatchExportStudio}>
-          <BatchExportStudioModal
+          <MemoBatchExportStudioModal
             isOpen={showBatchExportStudioModal}
             onClose={handleCloseBatchExportStudio}
             activeSeries={series.activeSeries}
@@ -1371,7 +1437,7 @@ export default function App() {
 
         {/* DragonDub Dedicated Gemini Keys & Model Quota Modal */}
         <ErrorBoundary inline name="Gemini Quota" onReset={handleCloseGeminiQuota}>
-          <GeminiQuotaModal
+          <MemoGeminiQuotaModal
             isOpen={showGeminiQuotaModal}
             onClose={handleCloseGeminiQuota}
             onOpenBatchModal={handleOpenGeminiRoute}

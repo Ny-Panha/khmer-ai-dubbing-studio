@@ -63,13 +63,17 @@ describe('Continuous Playback Stability & Play-Through Gaps Suite', () => {
     const seriesJsonPath = path.join(rootDir, 'backend/uploads/projects/Pseudo_Spiritual_Root/series.json');
     assert.ok(fs.existsSync(seriesJsonPath), 'series.json must exist');
     const projectData = JSON.parse(fs.readFileSync(seriesJsonPath, 'utf8'));
-    const ep = projectData.episodes[0];
+    // Pick the first episode that has been split into multi-clip Gaps (ep_1 may be reset to 1 unsplit full clip)
+    const ep = (projectData.episodes || []).find((e) =>
+      Array.isArray(e?.videoClips) &&
+      e.videoClips.some((c) => isGapClip(c) && c.start >= 7.0 && c.end <= 14.0)
+    ) || projectData.episodes[0];
     const videoClips = ep.videoClips;
     const segments = ep.scriptData.segments;
 
     // Identify the middle Gap between #3 and #4
     const middleGap = videoClips.find((c) => isGapClip(c) && c.start >= 7.0 && c.end <= 14.0);
-    assert.ok(middleGap, 'Episode must contain a Gap clip between dialogue #3 and #4');
+    assert.ok(middleGap, `Episode (${ep?.id}) must contain a Gap clip between 7.0s and 14.0s`);
     const middleGapDur = middleGap.end - middleGap.start;
 
     let realCurrentTime = 0.0;
@@ -336,5 +340,39 @@ describe('Continuous Playback Stability & Play-Through Gaps Suite', () => {
     assert.equal(clipMapping.inClip, true);
     assert.equal(clipMapping.isGap, false);
     assert.equal(clipMapping.sourceTime, 2.5);
+  });
+
+  it('5. Anti-freeze playback architecture audit: closed modals, auto-persist, playhead engine, and stall watchdog', () => {
+    const appCode = fs.readFileSync(path.join(rootDir, 'frontend/src/App.jsx'), 'utf8').replace(/\r\n/g, '\n');
+    const seriesMgrCode = fs.readFileSync(path.join(rootDir, 'frontend/src/hooks/useSeriesManager.js'), 'utf8').replace(/\r\n/g, '\n');
+    const engineCode = fs.readFileSync(path.join(rootDir, 'frontend/src/hooks/usePlaybackEngine.js'), 'utf8').replace(/\r\n/g, '\n');
+    const playbackCode = fs.readFileSync(path.join(rootDir, 'frontend/src/hooks/useVideoPlayback.js'), 'utf8').replace(/\r\n/g, '\n');
+    const canvasCode = fs.readFileSync(path.join(rootDir, 'frontend/src/components/timeline/TimelineTracksCanvas.jsx'), 'utf8').replace(/\r\n/g, '\n');
+
+    // 1. App.jsx memoizes closed modals & Inspector & Navbar and never passes unstable inline [] for framingKeyframes
+    assert.ok(appCode.includes('const MemoGeminiRouteModal = React.memo(GeminiRouteModal'), 'GeminiRouteModal must skip re-renders while closed');
+    assert.ok(appCode.includes('const MemoBatchExportStudioModal = React.memo(BatchExportStudioModal'), 'BatchExportStudioModal must skip re-renders while closed');
+    assert.ok(appCode.includes('const MemoVoiceSettings = React.memo(VoiceSettings'), 'VoiceSettings must be memoized against playback ticks');
+    assert.ok(appCode.includes('const MemoNavbar = React.memo(Navbar'), 'Navbar must be memoized against playback ticks');
+    assert.ok(!appCode.includes('framingKeyframes={scriptData?.framingKeyframes || []}'), 'TimelineEditor must receive stable EMPTY_ARRAY instead of inline []');
+
+    // 2. useSeriesManager auto-persist must NOT fire on activeClipId / selectedSegmentId playback selection changes
+    const persistBlockStart = seriesMgrCode.indexOf('saveEpisodeState(activeSeriesIdState, activeEpisodeIdState, snapshot);');
+    assert.ok(persistBlockStart > 0, 'useSeriesManager auto-persist effect must exist');
+    const persistDepEnd = seriesMgrCode.indexOf(']);', persistBlockStart);
+    const persistDeps = seriesMgrCode.slice(persistBlockStart, persistDepEnd);
+    assert.ok(!persistDeps.includes('activeClipId'), 'Auto-persist deps must exclude activeClipId to avoid full-series saves during playback');
+    assert.ok(!persistDeps.includes('selectedSegmentId'), 'Auto-persist deps must exclude selectedSegmentId to avoid full-series saves during playback');
+
+    // 3. usePlaybackEngine must not overwrite RAF playhead / reset lastMappedIdxRef while playing
+    assert.ok(engineCode.includes('if (isPlaying) return;'), 'usePlaybackEngine must guard currentTime effect while isPlaying');
+
+    // 4. useVideoPlayback stall watchdog must wait >= 3500ms and only reset counter when healthy (!v.seeking && v.readyState >= 3)
+    assert.ok(playbackCode.includes('!v.seeking && v.readyState >= 3'), 'Stall watchdog must only reset counters on healthy advancing playback');
+    assert.ok(playbackCode.includes('>= 3500'), 'Stall watchdog threshold must not abort normal range buffering');
+
+    // 5. TimelineTracksCanvas must memoize voice waveform bars and avoid conflicting playhead transform during playback
+    assert.ok(canvasCode.includes('const MemoizedVoiceWaveformBars = React.memo('), 'Voice waveform bars must be memoized');
+    assert.ok(canvasCode.includes("style={isPlaying ? { left: 0, willChange: 'transform' }"), 'Playhead inline transform must yield to GPU RAF loop while playing');
   });
 });

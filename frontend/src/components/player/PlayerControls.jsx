@@ -133,9 +133,14 @@ export function PlayerBottomBar({
 
   useEffect(() => {
     if (typeof subscribePlayhead !== 'function') return undefined;
+    let lastText = '';
     return subscribePlayhead((liveTime) => {
       if (currentTimeSpanRef.current) {
-        currentTimeSpanRef.current.textContent = formatPrecisionTimecode(liveTime);
+        const nextText = formatPrecisionTimecode(liveTime);
+        if (nextText !== lastText) {
+          lastText = nextText;
+          currentTimeSpanRef.current.textContent = nextText;
+        }
       }
     });
   }, [subscribePlayhead]);
