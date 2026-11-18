@@ -1962,26 +1962,29 @@ export default function GeminiRouteModal({
         alignItems: 'center',
         justifyContent: 'center',
         padding: '16px',
-        background: 'rgba(5, 10, 24, 0.82)',
-        backdropFilter: 'blur(24px)',
-        WebkitBackdropFilter: 'blur(24px)',
+        background: 'rgba(9, 10, 15, 0.82)',
+        backdropFilter: 'blur(8px)',
+        WebkitBackdropFilter: 'blur(8px)',
       }}
       onClick={onClose}
     >
-      <div 
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Batch Generate Studio"
         style={{
-          width: '95vw',
+          width: 'min(1280px, 96vw)',
           maxWidth: '1280px',
           height: '92vh',
           maxHeight: '92vh',
           display: 'flex',
           flexDirection: 'column',
-          background: 'rgba(20, 30, 51, 0.96)',
-          border: '1px solid rgba(255, 255, 255, 0.08)',
-          borderRadius: 20,
-          boxShadow: '0 30px 100px -15px rgba(0, 0, 0, 0.85), 0 0 60px -10px rgba(56, 189, 248, 0.18)',
+          background: 'var(--bg-primary-panel)',
+          border: '1px solid var(--border-subtle-hover)',
+          borderRadius: 'var(--radius-lg)',
+          boxShadow: 'var(--shadow-lg)',
           overflow: 'hidden',
-          fontFamily: "'Kantumruy Pro', system-ui, sans-serif",
+          fontFamily: 'var(--font-sans)',
         }}
         onClick={(e) => e.stopPropagation()}
       >
@@ -1989,41 +1992,42 @@ export default function GeminiRouteModal({
         <div
           data-testid="batch-modal-header"
           style={{
-            padding: '12px 20px',
-            borderBottom: '1px solid rgba(255, 255, 255, 0.07)',
-            background: 'rgba(15, 23, 42, 0.96)',
+            padding: '12px 18px',
+            borderBottom: '1px solid var(--border-subtle)',
+            background: 'var(--bg-secondary-panel)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
             gap: 12,
+            flexWrap: 'wrap',
             flexShrink: 0,
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', minWidth: 0 }}>
             <div style={{
-              width: 32,
-              height: 32,
-              borderRadius: 8,
+              width: 34,
+              height: 34,
+              borderRadius: 'var(--radius-sm)',
               background: 'rgba(56, 189, 248, 0.12)',
-              border: '1px solid rgba(56, 189, 248, 0.28)',
+              border: '1px solid rgba(56, 189, 248, 0.35)',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              color: '#38BDF8',
+              color: 'var(--primary-accent)',
               flexShrink: 0,
             }}>
               <Cpu size={17} />
             </div>
-            <h2 style={{
+            <h1 style={{
               margin: 0,
-              fontSize: '0.96rem',
-              fontWeight: 800,
-              color: '#F8FAFC',
-              letterSpacing: '0.03em',
+              fontSize: 'var(--text-lg)',
+              fontWeight: 700,
+              color: 'var(--text-primary)',
+              letterSpacing: '0.02em',
               textTransform: 'uppercase',
             }}>
               BATCH GENERATE STUDIO
-            </h2>
+            </h1>
             {(() => {
               const hdrView = applyElapsedCountdownToKeysHealth(keysHealth, quotaNowMs);
               const hdrKeys = Array.isArray(hdrView?.keys) ? hdrView.keys : [];
@@ -2427,9 +2431,9 @@ export default function GeminiRouteModal({
                     textAlign: 'left',
                   }}
                 >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flex: 1 }}>
-                    <Settings2 size={13} color="#38BDF8" style={{ flexShrink: 0 }} />
-                    <span style={{ fontSize: '0.73rem', fontWeight: 800, color: '#F8FAFC', flexShrink: 0 }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flex: 1, overflow: 'hidden' }}>
+                    <Settings2 size={13} color="var(--primary-accent)" style={{ flexShrink: 0 }} />
+                    <span style={{ fontSize: 'var(--text-sm)', fontWeight: 700, color: 'var(--text-primary)', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       កំណត់ទម្រង់បង្កើត Script (Batch Script Setup):
                     </span>
                     <span
@@ -3262,7 +3266,7 @@ export default function GeminiRouteModal({
           ) : (
             <div style={{
               display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fill, minmax(370px, 1fr))',
+              gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 330px), 1fr))',
               gap: 14,
             }}>
               {episodes.map((ep, idx) => {
@@ -3446,17 +3450,17 @@ export default function GeminiRouteModal({
                               MP4 EXPORTED
                             </span>
                           )}
-                          <h4 style={{
+                          <h2 style={{
                             margin: 0,
-                            fontSize: '0.82rem',
+                            fontSize: 'var(--text-body)',
                             fontWeight: 700,
-                            color: '#F8FAFC',
+                            color: 'var(--text-primary)',
                             overflow: 'hidden',
                             textOverflow: 'ellipsis',
                             whiteSpace: 'nowrap',
                           }} title={ep.title}>
                             {ep.title}
-                          </h4>
+                          </h2>
                         </div>
 
                         <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
