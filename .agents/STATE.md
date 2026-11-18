@@ -1,6 +1,68 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
+- **Environment**: Antigravity IDE
+- **Branch**: `fix/preview-subtitle-single-source` (branched from `chore/full-project-cleanup` at `dec4a3a`; pushed branch only — NOT merged into `main`)
+- **Timestamp**: 2026-11-18T15:18:00+07:00
+
+## Summary: Single-Source Preview Subtitles (`LiveSubtitleOverlay`) + Stale Burned-Preview Guard + Paging Safety (COMPLETED)
+- **Root Cause Verified in Code**:
+  1. There are no per-segment preview renders in the backend — `renderedVideo` is always the whole-episode exported MP4 from `POST /api/render-video` or `POST /api/render-batch` (which burns Khmer ASS subtitles at export resolution). When an episode had an existing `ep.renderedVideo` on disk (`Pseudo_Spiritual_Root` `ep_1..ep_5`), `VideoPlayerPreview` loaded that burned MP4 and `LiveSubtitleOverlay.jsx` early-returned `null` whenever `renderedVideo` was set, while unrendered episodes (or after edit/reset) played raw source video + CSS `cqw` overlay.
+  2. `getLivePagedSubtitle()` in `khmerTextSplitter.js` had no fallback for empty split pages or non-finite / boundary `currentTime`, and `VideoPlayerPreview.jsx`'s naive binary search for `activeSegment` missed overlapping segments (`5` misses in `ep_4`, `14` misses in `ep_5`).
+- **Logical Commits Applied on `fix/preview-subtitle-single-source`**:
+  1. `557f2f4` — **Backend metadata & preview guard** (`backend/routes/videoRoutes.js`, `backend/services/batchExportService.js`, `backend/services/pipeline/stages/stage10_previewAndExport.js`): Tagged exported renders with `subtitlesBurned: Boolean(...)` without touching export burn logic; disabled subtitle burning in `stage10_previewAndExport` when `exportOptions.isPreviewRender === true`.
+  2. `b29663d` — **Single-source preview overlay & stale preview guard** (`frontend/src/utils/projectStorage.js`, `frontend/src/hooks/useVideoRender.js`, `frontend/src/components/player/LiveSubtitleOverlay.jsx`, `frontend/src/App.jsx`): Removed the `|| renderedVideo` early-return from `LiveSubtitleOverlay.jsx` (keeping `burnSubtitles === false` and all size/style/aspect classes intact). Added `isRenderedVideoBurnedWithSubtitles()` so any burned export or stale pre-fix `ep.renderedVideo` (missing `subtitlesBurned === false`) is excluded from `previewRenderedVideo` (preventing double subtitles while preserving `effectiveRenderedVideo` for Navbar/Export download links).
+  3. `f12bc56` — **Paging safety & overlap-safe active segment lookup** (`frontend/src/utils/khmerTextSplitter.js`, `frontend/src/components/player/VideoPlayerPreview.jsx`): Hardened `getLivePagedSubtitle()` to fall back to nearest non-empty page / full text so an active segment with Khmer text never renders blank; added `findActiveSubtitleSegment()` with prefix `maxEnd` so overlapping segments never drop subtitles.
+  4. `3493639` — **Regression tests** (`backend/tests/preview_subtitle_single_source.test.js`): Unit + static wiring tests for `getLivePagedSubtitle`, `findActiveSubtitleSegment`, `isRenderedVideoBurnedWithSubtitles`, `LiveSubtitleOverlay`, `App.jsx`, and export/preview burn paths.
+- **Verification Evidence**:
+  - Frontend production build (`npm --prefix frontend run build`): **PASS** (`0` errors).
+  - Targeted suites (`preview_subtitle_single_source.test.js`, `workspace_player_containment.test.js`, `global_logo_settings.test.js`): **16 / 16 PASS**.
+  - Full backend test suite (`node --test backend/tests/*.test.js`): **329 / 338 PASS** (`2` skipped, `7` pre-existing unrelated failures in `stage5_reconciliation_and_recovery`, `stage6_translation_fallback_and_tts_guard`, `full_project_master_upgrade:90`, `fullstack_refactor_verification:49`; **0 regressions**).
+  - Real-app verification after fresh restart of backend (`:5000`) & Vite (`:5173`) on `Pseudo_Spiritual_Root` EP2 (which has a stale burned `ep.renderedVideo` on disk):
+    - Preview loaded clean source MP4 (`Pseudo_Spiritual_Root_ep_2_source.mp4`), zero double subtitles, Navbar Download Export link intact.
+    - Seeking across segments `#1 (0.00s)`, `#8 (26.81s)`, `#9 (28.84s)`, `#10 (31.33s)`, `#11 (33.77s)`, `#12 (35.11s)` rendered `<LiveSubtitleOverlay>` at identical constant `fontSize: 16.652px` (`uniqueSizes: ["16.652px"]`, `allMatch: true`, `0` page errors).
+    - Toggling `burnSubtitles = false` hid `<LiveSubtitleOverlay>` completely (`overlayPresent: false`).
+  - Short 12-second FFmpeg export test on EP2 (`burnSubtitles: true`, `style=banner`, `color=#FFE600`, `fontSize=44`, `1920x1080`): visually & numerically verified burned Khmer subtitle in exported MP4 (`subtitleBandMeanDiff: 11.2`, frame confirmed) — export burn behaviour unchanged.
+
+## Active Environment
+- **Backend API**: `http://localhost:5000` (freshly restarted, HTTP 200 OK)
+- **Frontend Studio**: `http://localhost:5173` (freshly restarted Vite dev server, HTTP 200 OK)
+- **Branch**: `fix/preview-subtitle-single-source` (pushed to `origin/fix/preview-subtitle-single-source`; NOT merged into `main`)
+
+## Next Steps
+- Review branch `fix/preview-subtitle-single-source` and hard-refresh (`Ctrl + F5`) at `http://localhost:5173/studio` to confirm consistent live preview subtitles across all episodes.
+
+---
+
+## Previous Session
+- **Environment**: Antigravity IDE (`/agents` QA Triage & Defensive Fix)
+- **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-18T14:48:00+07:00
+
+## Summary: Fix HTTP 502 Bad Gateway Storm on `/uploads/.../*.mp3` Audio Streaming (COMPLETED)
+- **Root Causes Diagnosed (Evidence-Verified)**:
+  1. **Node 24 premature stream destroy (`backend/middleware/mediaStream.js:81,97,114`)**: Handlers listened on `req.on('close', () => stream.destroy())`. In Node 16+–24 (`v24.22.1`), `req` emits `'close'` as soon as request reading finishes (`closedBeforeEnd: true` verified via reproduction), destroying `fs.createReadStream` mid-response before `Content-Length` finishes -> socket hang-up -> Vite `/uploads` proxy returns `502 Bad Gateway`.
+  2. **Unbounded 1.5s retry storm (`frontend/src/components/player/VideoPlayerPreview.jsx:215-253`)**: `probeUrlLeadingSilence` ran every `1500ms` via `preloadSegmentsAroundTime`, silently returned on `!res.ok` without backoff/retry cap, and allowed up to 14 concurrent probes at once — amplifying any transient 502/restart into dozens of repeated console errors.
+- **Minimal Changes Applied**:
+  1. `backend/middleware/mediaStream.js`: Replaced all 3 `req.on('close', ...)` listeners with `res.on('close', () => { if (!res.writableEnded) stream.destroy(); })` and ensured `error` handlers end already-started responses cleanly.
+  2. `frontend/src/components/player/VideoPlayerPreview.jsx`: Added `leadingSilenceFailureRef` exponential backoff (`5s -> 15s -> 60s`, max 3 retries; immediate terminal stop on `404`/`403`/`410`) and capped concurrent probes to `4`.
+- **Verification Evidence**:
+  - Restarted backend (`http://localhost:5000`) cleanly.
+  - 50 concurrent mixed Range/Full MP3 requests (`seg_25..seg_34`) via Vite `:5173/uploads/...`: **`200: 20, 206: 30, zeroBytes: 0, 502: 0`**.
+  - Frontend build (`npm --prefix frontend run build`): **PASS** (`695ms`, 0 errors).
+  - Test suites (`workspace_player_containment.test.js`, `global_logo_settings.test.js`): **12/12 PASS**.
+
+## Active Environment
+- **Backend API**: `http://localhost:5000` (restarted with fixed `mediaStream.js`)
+- **Frontend Studio**: `http://localhost:5173` (Vite dev server)
+- **Branch**: `chore/full-project-cleanup` (uncommitted local fix ready to commit if requested)
+
+## Next Steps
+- Refresh browser (`Ctrl + F5`) at `http://localhost:5173/studio` and verify zero `502 Bad Gateway` errors on audio segments.
+
+---
+
+## Previous Session
 - **Environment**: Antigravity IDE (`engineering-minimal-change-engineer` discipline)
 - **Branch**: `chore/full-project-cleanup`
 - **Timestamp**: 2026-11-18T14:14:00+07:00
