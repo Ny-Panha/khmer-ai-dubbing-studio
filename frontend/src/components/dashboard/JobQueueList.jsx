@@ -79,26 +79,26 @@ export default function JobQueueList({
                   alignItems: 'center',
                   gap: 6,
                   padding: '6px 12px',
-                  borderRadius: 8,
-                  fontSize: '0.75rem',
+                  borderRadius: 'var(--radius-sm)',
+                  fontSize: 'var(--text-sm)',
                   fontWeight: isActive ? 700 : 500,
                   whiteSpace: 'nowrap',
                   cursor: 'pointer',
-                  transition: 'all 0.15s ease',
-                  background: isActive ? '#0284C7' : '#10192C',
-                  color: isActive ? '#FFFFFF' : '#94A3B8',
-                  border: isActive ? '1px solid #38BDF8' : '1px solid rgba(255, 255, 255, 0.1)',
+                  transition: 'var(--transition-fast)',
+                  background: isActive ? 'var(--btn-primary-bg)' : 'var(--bg-secondary-panel)',
+                  color: isActive ? '#FFFFFF' : 'var(--text-secondary)',
+                  border: isActive ? '1px solid var(--btn-primary-border)' : '1px solid var(--border-subtle)',
                 }}
               >
                 <span>{tab.labelKhmer}</span>
                 <span
                   style={{
-                    fontSize: '0.68rem',
-                    fontFamily: 'var(--font-mono), monospace',
+                    fontSize: 'var(--text-2xs)',
+                    fontFamily: 'var(--font-mono)',
                     padding: '1px 6px',
-                    borderRadius: 9999,
-                    background: isActive ? 'rgba(255, 255, 255, 0.22)' : '#192744',
-                    color: isActive ? '#FFFFFF' : '#CBD5E1',
+                    borderRadius: 'var(--radius-xs)',
+                    background: isActive ? 'rgba(255, 255, 255, 0.2)' : 'var(--bg-elevated-panel)',
+                    color: isActive ? '#FFFFFF' : 'var(--text-primary)',
                   }}
                 >
                   {count}
@@ -109,9 +109,10 @@ export default function JobQueueList({
         </div>
 
         {/* Search Input */}
-        <div style={{ position: 'relative', minWidth: 230 }}>
+        <div style={{ position: 'relative', minWidth: 220, flex: '1 1 220px', maxWidth: 320 }}>
           <input
             type="text"
+            aria-label="ស្វែងរកតាម Series, Ep, ឬ Job ID"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             placeholder="ស្វែងរកតាម Series, Ep, Job ID..."

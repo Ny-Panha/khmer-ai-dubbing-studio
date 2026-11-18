@@ -50,31 +50,34 @@ export default function JobDashboardModal({ isOpen, onClose }) {
         alignItems: 'center',
         justifyContent: 'center',
         padding: 18,
-        background: 'rgba(5, 10, 24, 0.84)',
+        background: 'rgba(9, 10, 15, 0.82)',
         backdropFilter: 'blur(8px)',
       }}
     >
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="DragonDub Production Job Queue"
         onClick={(e) => e.stopPropagation()}
         style={{
-          background: '#141E33',
-          border: '1px solid rgba(255, 255, 255, 0.12)',
-          borderRadius: 16,
+          background: 'var(--bg-primary-panel)',
+          border: '1px solid var(--border-subtle-hover)',
+          borderRadius: 'var(--radius-lg)',
           width: '100%',
           maxWidth: 1040,
-          height: '86vh',
+          height: '88vh',
           display: 'flex',
           flexDirection: 'column',
-          boxShadow: '0 24px 64px rgba(0, 0, 0, 0.85)',
+          boxShadow: 'var(--shadow-lg)',
           overflow: 'hidden',
         }}
       >
         {/* Modal Header */}
         <div
           style={{
-            padding: '14px 22px',
-            borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
-            background: '#10192C',
+            padding: '14px 20px',
+            borderBottom: '1px solid var(--border-subtle)',
+            background: 'var(--bg-secondary-panel)',
             display: 'flex',
             flexWrap: 'wrap',
             alignItems: 'center',
@@ -83,69 +86,71 @@ export default function JobDashboardModal({ isOpen, onClose }) {
             flexShrink: 0,
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
             <div
               style={{
-                width: 40,
-                height: 40,
-                borderRadius: 10,
-                background: 'linear-gradient(135deg, rgba(255, 133, 119, 0.18), rgba(56, 189, 248, 0.18))',
+                width: 38,
+                height: 38,
+                borderRadius: 'var(--radius-sm)',
+                background: 'rgba(56, 189, 248, 0.12)',
                 border: '1px solid rgba(56, 189, 248, 0.35)',
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                color: '#38BDF8',
+                color: 'var(--primary-accent)',
+                flexShrink: 0,
               }}
             >
               <Monitor size={19} />
             </div>
-            <div>
-              <h2
+            <div style={{ minWidth: 0 }}>
+              <h1
                 style={{
                   margin: 0,
-                  fontSize: '1rem',
-                  fontWeight: 800,
-                  color: '#FFFFFF',
+                  fontSize: 'var(--text-lg)',
+                  fontWeight: 700,
+                  color: 'var(--text-primary)',
                   display: 'flex',
                   alignItems: 'center',
+                  flexWrap: 'wrap',
                   gap: 8,
                 }}
               >
                 <span>DragonDub Production Job Queue</span>
                 <span
                   style={{
-                    fontSize: '0.66rem',
-                    fontFamily: 'var(--font-mono), monospace',
+                    fontSize: 'var(--text-2xs)',
+                    fontFamily: 'var(--font-mono)',
                     padding: '2px 8px',
-                    borderRadius: 9999,
+                    borderRadius: 'var(--radius-xs)',
                     background: 'rgba(56, 189, 248, 0.12)',
                     color: '#7DD3FC',
-                    border: '1px solid rgba(56, 189, 248, 0.3)',
+                    border: '1px solid rgba(56, 189, 248, 0.35)',
                   }}
                 >
                   Background Queue
                 </span>
-              </h2>
-              <p style={{ margin: '2px 0 0', fontSize: '0.75rem', color: '#94A3B8' }}>
+              </h1>
+              <p style={{ margin: '2px 0 0', fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
                 ផ្ទាំងគ្រប់គ្រង និងតាមដានដំណើរការ Dubbing Jobs ទាំងអស់ (Real-Time Background Engine)
               </p>
             </div>
           </div>
 
           {/* Right Header: Connection Status & Controls */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <div
               style={{
                 display: 'inline-flex',
                 alignItems: 'center',
                 gap: 6,
-                padding: '5px 12px',
-                borderRadius: 9999,
-                fontSize: '0.73rem',
+                padding: '5px 10px',
+                borderRadius: 'var(--radius-sm)',
+                fontSize: 'var(--text-2xs)',
                 fontWeight: 600,
-                background: '#192744',
-                border: '1px solid rgba(255, 255, 255, 0.1)',
-                color: '#CBD5E1',
+                background: 'var(--bg-elevated-panel)',
+                border: '1px solid var(--border-subtle)',
+                color: 'var(--text-secondary)',
               }}
             >
               <span
@@ -157,7 +162,7 @@ export default function JobDashboardModal({ isOpen, onClose }) {
                     ? '#10B981'
                     : connectionMode === 'polling'
                     ? '#F59E0B'
-                    : '#64748B',
+                    : '#8E9EB5',
                   display: 'inline-block',
                 }}
               />
@@ -167,17 +172,18 @@ export default function JobDashboardModal({ isOpen, onClose }) {
             <button
               type="button"
               onClick={() => refreshJobs()}
+              aria-label="Refresh Jobs"
               title="Refresh Jobs"
               style={{
                 width: 34,
                 height: 34,
-                borderRadius: 8,
+                borderRadius: 'var(--radius-sm)',
                 display: 'inline-flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                color: '#CBD5E1',
-                background: '#192744',
-                border: '1px solid rgba(255, 255, 255, 0.1)',
+                color: 'var(--text-primary)',
+                background: 'var(--bg-elevated-panel)',
+                border: '1px solid var(--border-subtle)',
                 cursor: 'pointer',
               }}
             >
@@ -188,17 +194,18 @@ export default function JobDashboardModal({ isOpen, onClose }) {
               type="button"
               data-testid="job-dashboard-close-btn"
               onClick={onClose}
+              aria-label="Close Job Dashboard"
               title="Close Dashboard (ESC)"
               style={{
                 width: 34,
                 height: 34,
-                borderRadius: 8,
+                borderRadius: 'var(--radius-sm)',
                 display: 'inline-flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                color: '#CBD5E1',
-                background: '#192744',
-                border: '1px solid rgba(255, 255, 255, 0.1)',
+                color: 'var(--text-primary)',
+                background: 'var(--bg-elevated-panel)',
+                border: '1px solid var(--border-subtle)',
                 cursor: 'pointer',
               }}
             >
@@ -207,55 +214,53 @@ export default function JobDashboardModal({ isOpen, onClose }) {
           </div>
         </div>
 
-        {/* Quick Stats Ribbon */}
+        {/* Quick Stats Ribbon (4-col desktop, 2x2 mobile via .studio-stat-grid-4) */}
         <div
+          className="studio-stat-grid-4"
           style={{
-            padding: '12px 22px',
-            background: 'rgba(16, 25, 44, 0.85)',
-            borderBottom: '1px solid rgba(255, 255, 255, 0.08)',
-            display: 'grid',
-            gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
-            gap: 10,
+            padding: '12px 20px',
+            background: 'var(--bg-desktop)',
+            borderBottom: '1px solid var(--border-subtle)',
             flexShrink: 0,
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', borderRadius: 10, background: '#192744', border: '1px solid rgba(255, 255, 255, 0.06)' }}>
-            <div style={{ width: 30, height: 30, borderRadius: 8, background: 'rgba(56, 189, 248, 0.16)', color: '#38BDF8', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: '0.86rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', borderRadius: 'var(--radius-sm)', background: 'var(--bg-secondary-panel)', border: '1px solid var(--border-subtle)', minWidth: 0 }}>
+            <div style={{ width: 30, height: 30, borderRadius: 'var(--radius-xs)', background: 'rgba(56, 189, 248, 0.14)', color: '#7DD3FC', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontFamily: 'var(--font-mono)', fontSize: 'var(--text-body)', flexShrink: 0 }}>
               {stats.runningCount || 0}
             </div>
-            <div>
-              <div style={{ fontSize: '0.67rem', color: '#94A3B8' }}>កំពុងដំណើរការ</div>
-              <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#FFFFFF' }}>Running Jobs</div>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-secondary)' }}>កំពុងដំណើរការ</div>
+              <div style={{ fontSize: 'var(--text-sm)', fontWeight: 700, color: 'var(--text-primary)' }}>Running Jobs</div>
             </div>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', borderRadius: 10, background: '#192744', border: '1px solid rgba(255, 255, 255, 0.06)' }}>
-            <div style={{ width: 30, height: 30, borderRadius: 8, background: 'rgba(245, 158, 11, 0.16)', color: '#FBBF24', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: '0.86rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', borderRadius: 'var(--radius-sm)', background: 'var(--bg-secondary-panel)', border: '1px solid var(--border-subtle)', minWidth: 0 }}>
+            <div style={{ width: 30, height: 30, borderRadius: 'var(--radius-xs)', background: 'rgba(245, 158, 11, 0.14)', color: '#FDE68A', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontFamily: 'var(--font-mono)', fontSize: 'var(--text-body)', flexShrink: 0 }}>
               {stats.queuedCount || 0}
             </div>
-            <div>
-              <div style={{ fontSize: '0.67rem', color: '#94A3B8' }}>រង់ចាំក្នុងជួរ</div>
-              <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#FFFFFF' }}>Queued Jobs</div>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-secondary)' }}>រង់ចាំក្នុងជួរ</div>
+              <div style={{ fontSize: 'var(--text-sm)', fontWeight: 700, color: 'var(--text-primary)' }}>Queued Jobs</div>
             </div>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', borderRadius: 10, background: '#192744', border: '1px solid rgba(255, 255, 255, 0.06)' }}>
-            <div style={{ width: 30, height: 30, borderRadius: 8, background: 'rgba(234, 179, 8, 0.16)', color: '#FACC15', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: '0.86rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', borderRadius: 'var(--radius-sm)', background: 'var(--bg-secondary-panel)', border: '1px solid var(--border-subtle)', minWidth: 0 }}>
+            <div style={{ width: 30, height: 30, borderRadius: 'var(--radius-xs)', background: 'rgba(234, 179, 8, 0.14)', color: '#FEF08A', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontFamily: 'var(--font-mono)', fontSize: 'var(--text-body)', flexShrink: 0 }}>
               {stats.pausedCount || 0}
             </div>
-            <div>
-              <div style={{ fontSize: '0.67rem', color: '#94A3B8' }}>បានផ្អាក</div>
-              <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#FFFFFF' }}>Paused Jobs</div>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-secondary)' }}>បានផ្អាក</div>
+              <div style={{ fontSize: 'var(--text-sm)', fontWeight: 700, color: 'var(--text-primary)' }}>Paused Jobs</div>
             </div>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', borderRadius: 10, background: '#192744', border: '1px solid rgba(255, 255, 255, 0.06)' }}>
-            <div style={{ width: 30, height: 30, borderRadius: 8, background: 'rgba(16, 185, 129, 0.16)', color: '#34D399', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: '0.86rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', borderRadius: 'var(--radius-sm)', background: 'var(--bg-secondary-panel)', border: '1px solid var(--border-subtle)', minWidth: 0 }}>
+            <div style={{ width: 30, height: 30, borderRadius: 'var(--radius-xs)', background: 'rgba(16, 185, 129, 0.14)', color: '#6EE7B7', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontFamily: 'var(--font-mono)', fontSize: 'var(--text-body)', flexShrink: 0 }}>
               {stats.completedCount || 0}
             </div>
-            <div>
-              <div style={{ fontSize: '0.67rem', color: '#94A3B8' }}>បានបញ្ចប់</div>
-              <div style={{ fontSize: '0.78rem', fontWeight: 700, color: '#FFFFFF' }}>Completed</div>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-secondary)' }}>បានបញ្ចប់</div>
+              <div style={{ fontSize: 'var(--text-sm)', fontWeight: 700, color: 'var(--text-primary)' }}>Completed</div>
             </div>
           </div>
         </div>
