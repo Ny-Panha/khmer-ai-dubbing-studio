@@ -273,33 +273,33 @@ export default function MediaUploadTab({
       {/* Target Series Choice: (a) Current Series vs (b) + Series ថ្មី */}
       <div
         style={{
-          background: 'rgba(15, 23, 42, 0.65)',
-          border: '1px solid rgba(255, 255, 255, 0.08)',
-          borderRadius: 12,
-          padding: '10px 14px',
+          background: 'var(--bg-secondary-panel)',
+          border: '1px solid var(--border-subtle)',
+          borderRadius: 'var(--radius-md)',
+          padding: '10px 12px',
           display: 'flex',
           flexDirection: 'column',
           gap: 8,
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
-          <span style={{ fontSize: '0.74rem', fontWeight: 700, color: '#94A3B8' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+          <span style={{ fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--text-secondary)' }}>
             គោលដៅ Upload:
           </span>
-          <div style={{ display: 'flex', gap: 6 }}>
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
             <button
               type="button"
               onClick={() => { setUploadTarget('current'); setTargetError(null); }}
               style={{
                 padding: '4px 10px',
-                borderRadius: 9999,
-                fontSize: '0.72rem',
+                borderRadius: 'var(--radius-sm)',
+                fontSize: 'var(--text-sm)',
                 fontWeight: 600,
-                border: uploadTarget === 'current' ? '1px solid #38BDF8' : '1px solid rgba(255, 255, 255, 0.1)',
-                background: uploadTarget === 'current' ? 'rgba(56, 189, 248, 0.15)' : 'rgba(255, 255, 255, 0.04)',
-                color: uploadTarget === 'current' ? '#38BDF8' : '#94A3B8',
+                border: uploadTarget === 'current' ? '1px solid var(--primary-accent)' : '1px solid var(--border-subtle)',
+                background: uploadTarget === 'current' ? 'rgba(56, 189, 248, 0.14)' : 'var(--bg-elevated-panel)',
+                color: uploadTarget === 'current' ? 'var(--primary-accent)' : 'var(--text-secondary)',
                 cursor: 'pointer',
-                transition: 'all 0.15s ease',
+                transition: 'var(--transition-fast)',
               }}
             >
               Series បច្ចុប្បន្ន — {activeSeries?.title || 'Series 1'}
@@ -309,14 +309,15 @@ export default function MediaUploadTab({
               onClick={() => { setUploadTarget('new'); setTargetError(null); }}
               style={{
                 padding: '4px 10px',
-                borderRadius: 9999,
-                fontSize: '0.72rem',
+                borderRadius: 'var(--radius-sm)',
+                fontSize: 'var(--text-sm)',
                 fontWeight: 600,
-                border: uploadTarget === 'new' ? '1px solid #FF8577' : '1px solid rgba(255, 255, 255, 0.1)',
-                background: uploadTarget === 'new' ? 'rgba(255, 133, 119, 0.15)' : 'rgba(255, 255, 255, 0.04)',
-                color: uploadTarget === 'new' ? '#FF8577' : '#94A3B8',
+                border: uploadTarget === 'new' ? '1px solid var(--primary-accent)' : '1px solid var(--border-subtle)',
+                background: uploadTarget === 'new' ? 'rgba(56, 189, 248, 0.14)' : 'var(--bg-elevated-panel)',
+                color: uploadTarget === 'new' ? 'var(--primary-accent)' : 'var(--text-secondary)',
                 cursor: 'pointer',
-                transition: 'all 0.15s ease',
+                transition: 'var(--transition-fast)',
+                whiteSpace: 'nowrap',
               }}
             >
               ＋ Series ថ្មី
@@ -692,63 +693,50 @@ export default function MediaUploadTab({
           </button>
         </div>
       ) : (
-        /* 2. Upload Zone when NO video is loaded (GetLayers Layer 2 Glass) */
-        <div 
-          className="motion-lift"
-          style={{ 
-            display: 'flex', 
-            flexDirection: 'column', 
-            alignItems: 'center', 
-            textAlign: 'center', 
-            padding: '40px 20px', 
-            border: '2px dashed rgba(255, 133, 119, 0.35)', 
-            borderRadius: 16, 
-            background: 'rgba(25, 39, 68, 0.45)',
+        /* 2. Upload Zone when NO video is loaded (Darkroom Console Flat Dropzone) */
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            textAlign: 'center',
+            padding: '32px 18px',
+            border: '1px dashed var(--border-subtle-hover)',
+            borderRadius: 'var(--radius-md)',
+            background: 'var(--bg-secondary-panel)',
             gap: 14,
-            transition: 'all 0.2s cubic-bezier(0.16, 1, 0.3, 1)',
           }}
         >
-          <div 
-            style={{ 
-              width: 58, 
-              height: 58, 
-              borderRadius: 14, 
-              background: 'rgba(255, 133, 119, 0.12)', 
-              border: '1px solid rgba(255, 133, 119, 0.25)',
-              display: 'flex', 
-              alignItems: 'center', 
+          <div
+            style={{
+              width: 52,
+              height: 52,
+              borderRadius: 'var(--radius-md)',
+              background: 'rgba(56, 189, 248, 0.12)',
+              border: '1px solid rgba(56, 189, 248, 0.35)',
+              display: 'flex',
+              alignItems: 'center',
               justifyContent: 'center',
             }}
           >
-            <FolderPlus size={28} color="#FF8577" />
+            <FolderPlus size={24} color="var(--primary-accent)" />
           </div>
 
           <div>
-            <div style={{ fontSize: '0.94rem', fontWeight: 800, color: '#F8FAFC', marginBottom: 4 }}>
+            <div style={{ fontSize: 'var(--text-md)', fontWeight: 700, color: 'var(--text-primary)', marginBottom: 4 }}>
               បញ្ចូលវីដេអូសម្រាប់ភាគនេះ
             </div>
-            <div style={{ fontSize: '0.76rem', color: '#94A3B8', lineHeight: 1.5 }}>
+            <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', lineHeight: 1.55 }}>
               គាំទ្រ MP4, MKV, MOV, WebM (Full HD, 4K)
             </div>
           </div>
 
-          <label 
-            className="btn-tactile"
-            style={{ 
-              marginTop: 6,
-              cursor: isUploading ? 'not-allowed' : 'pointer', 
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 8,
-              padding: '10px 22px',
-              borderRadius: 9999,
-              background: 'linear-gradient(135deg, #FF8577 0%, #f43f5e 100%)',
-              border: '1px solid #FF8577',
-              color: '#0B132B',
-              fontSize: '0.80rem',
-              fontWeight: 800,
-              boxShadow: '0 4px 16px rgba(255, 133, 119, 0.35)',
-              transition: 'all 0.18s cubic-bezier(0.16, 1, 0.3, 1)',
+          <label
+            className="btn-primary"
+            style={{
+              marginTop: 4,
+              cursor: isUploading ? 'not-allowed' : 'pointer',
+              padding: '8px 18px',
             }}
           >
             <input
@@ -760,12 +748,12 @@ export default function MediaUploadTab({
             />
             {(isUploading || isCustomUploading) ? (
               <>
-                <Loader2 size={15} className="animate-spin" color="#0B132B" />
+                <Loader2 size={15} className="animate-spin" />
                 <span>កំពុង{uploadTarget === 'new' ? 'បង្កើត Series & Upload' : 'Upload & រៀបចំវីដេអូ'}...</span>
               </>
             ) : (
               <>
-                <FolderPlus size={15} color="#0B132B" />
+                <FolderPlus size={15} />
                 <span>{uploadTarget === 'new' ? '+ បង្កើត & Upload ចូល Series ថ្មី' : '+ ជ្រើសរើសវីដេអូ (Import Video)'}</span>
               </>
             )}

@@ -237,39 +237,36 @@ export default function EpisodesTab({
             </span>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
             <button
               type="button"
               onClick={() => { setShowNewSeriesModal(true); setCreateSeriesError(null); }}
+              className="btn-secondary"
               style={{
-                padding: '2px 8px',
-                fontSize: '0.70rem',
-                fontWeight: 700,
-                borderRadius: 9999,
-                background: 'linear-gradient(135deg, #FF8577 0%, #f43f5e 100%)',
-                color: '#0B132B',
-                border: 'none',
-                cursor: 'pointer',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 4,
+                minHeight: 28,
+                padding: '3px 10px',
+                fontSize: 'var(--text-sm)',
+                whiteSpace: 'nowrap',
               }}
               title="បង្កើត Series / រឿងភាគថ្មី"
             >
-              <Plus size={11} strokeWidth={3} />
-              <span>+ Series ថ្មី</span>
+              <Plus size={13} />
+              <span>Series ថ្មី</span>
             </button>
 
-            <span 
-              style={{ 
-                fontSize: '0.70rem', 
-                color: 'var(--text-dim)', 
-                background: 'rgba(255,255,255,0.06)', 
-                padding: '2px 8px', 
-                borderRadius: 10 
+            <span
+              style={{
+                fontSize: 'var(--text-2xs)',
+                fontFamily: 'var(--font-mono)',
+                color: 'var(--text-secondary)',
+                background: 'var(--bg-elevated-panel)',
+                border: '1px solid var(--border-subtle)',
+                padding: '2px 7px',
+                borderRadius: 'var(--radius-xs)',
+                whiteSpace: 'nowrap',
               }}
             >
-              {episodes.length} Episodes
+              {episodes.length} EP
             </span>
           </div>
         </div>
@@ -1069,16 +1066,8 @@ export default function EpisodesTab({
                 className="btn-primary"
                 style={{
                   padding: '8px 18px',
-                  fontSize: '0.82rem',
-                  fontWeight: 700,
-                  background: 'linear-gradient(135deg, #FF8577 0%, #f43f5e 100%)',
-                  color: '#0B132B',
-                  border: 'none',
-                  borderRadius: 8,
+                  fontSize: 'var(--text-sm)',
                   cursor: isCreatingSeries ? 'not-allowed' : 'pointer',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 6,
                 }}
                 disabled={isCreatingSeries}
               >

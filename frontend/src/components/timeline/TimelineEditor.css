@@ -430,7 +430,7 @@
   color: #f9a8d4;
 }
 
-/* Row Heights & 3px Left Colored Status Bars */
+/* Row Heights & 3px Left Colored Status Bars (Locked by frozen timeline regression suite) */
 .track-header.video-track-hdr {
   height: 60px;
   border-left: 3px solid #00e5ff;
@@ -699,12 +699,12 @@
   align-items: center;
   height: 100%;
   padding-left: 14px;
-  font-size: 0.72rem;
-  color: rgba(255, 255, 255, 0.22);
+  font-size: var(--text-2xs);
+  color: var(--text-dim);
   user-select: none;
   pointer-events: none;
-  font-style: italic;
-  letter-spacing: 0.02em;
+  font-style: normal;
+  letter-spacing: 0.01em;
 }
 
 /* Multi-Track Lanes: Tonal step (Floor oklch(0.12 0 0)) + Heights: VIDEO 60px, VOICE 48px, SUBTITLES 48px, CLEAN BGM 40px */

@@ -1,20 +1,20 @@
 /* ==========================================================================
-   Khmer AI Dubbing Studio (CapCut Pro 2026) — Multi-Track Timeline Engine
+   DragonDub AI Studio (The Darkroom Console) — Multi-Track Timeline Shell
+   Visual/CSS ONLY — Timeline interaction, drag & playback behavior FROZEN
    ========================================================================== */
 
-/* Bottom 290px Locked Timeline Container */
+/* Bottom 290px Timeline Container (Desktop) */
 .capcut-bottom-timeline {
-  height: 290px !important;
-  min-height: 290px !important;
-  max-height: 290px !important;
-  background: #12141D !important;
-  border: 1px solid rgba(255, 255, 255, 0.07) !important;
-  border-radius: 10px !important;
+  height: 290px;
+  min-height: 220px;
+  background: var(--bg-primary-panel);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
   display: flex;
   flex-direction: column;
   overflow: hidden;
   flex-shrink: 0;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
+  box-shadow: none;
 }
 
 .capcut-timeline-container {
@@ -22,17 +22,15 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  background: #12141D !important;
-  border-radius: 10px;
+  background: var(--bg-primary-panel);
+  border-radius: var(--radius-md);
 }
 
 .capcut-timeline-toolbar {
   height: 38px;
   min-height: 38px;
-  background: rgba(9, 10, 15, 0.85) !important;
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.07) !important;
+  background: var(--bg-secondary-panel);
+  border-bottom: 1px solid var(--border-subtle);
 }
 
 /* Timecode & Tabular Monospace Enforcement */
@@ -41,40 +39,46 @@
 .time-readout,
 .ruler-tick-label,
 [class*="timecode"] {
-  font-family: var(--font-mono) !important;
-  font-variant-numeric: tabular-nums !important;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
 }
 
 /* Character & Track Color System:
-   - Female Sreymom: #EC4899 (Pink)
-   - Male Piseth: #3B82F6 (Blue)
-   - Subtitles: #8B5CF6 (Violet)
+   - Female Sreymom: Rose
+   - Male Piseth: Blue
+   - Subtitles: Violet
 */
 .voice-segment-block.female,
 .voice-segment-block[data-gender="FEMALE"],
 .voice-clip-female {
-  border-color: rgba(236, 72, 153, 0.65) !important;
-  background: linear-gradient(180deg, rgba(236, 72, 153, 0.24) 0%, rgba(236, 72, 153, 0.12) 100%) !important;
+  border: 1px solid rgba(236, 72, 153, 0.55);
+  background: rgba(236, 72, 153, 0.2);
 }
 
 .voice-segment-block.male,
 .voice-segment-block[data-gender="MALE"],
 .voice-clip-male {
-  border-color: rgba(59, 130, 246, 0.65) !important;
-  background: linear-gradient(180deg, rgba(59, 130, 246, 0.24) 0%, rgba(59, 130, 246, 0.12) 100%) !important;
+  border: 1px solid rgba(59, 130, 246, 0.55);
+  background: rgba(59, 130, 246, 0.2);
 }
 
 .subtitle-segment-block,
 .timeline-subtitle-clip {
-  border-color: rgba(139, 92, 246, 0.65) !important;
-  background: linear-gradient(180deg, rgba(139, 92, 246, 0.24) 0%, rgba(139, 92, 246, 0.12) 100%) !important;
+  border: 1px solid rgba(139, 92, 246, 0.55);
+  background: rgba(139, 92, 246, 0.2);
 }
 
-/* Active Clip Highlighting (CapCut Cyan) */
+/* Active Clip Highlighting (Crisp Studio Accent Outline, Zero Neon Glow) */
 .voice-segment-block.selected,
 .subtitle-segment-block.selected,
 .timeline-video-clip.selected {
-  outline: 2px solid #00E5FF !important;
-  box-shadow: 0 0 14px rgba(0, 229, 255, 0.35) !important;
+  outline: 2px solid var(--primary-accent) !important;
+  box-shadow: none !important;
 }
 
+@media (max-width: 960px) {
+  .capcut-bottom-timeline {
+    height: 260px;
+    min-height: 240px;
+  }
+}
