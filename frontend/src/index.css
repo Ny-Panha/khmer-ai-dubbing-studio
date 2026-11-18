@@ -1,6 +1,4 @@
-/* Khmer AI Dubbing Studio (CapCut Pro 2026) — Modular Stylesheet Entrypoint */
-@import url('https://fonts.googleapis.com/css2?family=Battambang:wght@400;700&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&family=Kantumruy+Pro:wght@400;500;600;700&display=swap');
-
+/* DragonDub AI Studio (The Darkroom Console) — Modular Stylesheet Entrypoint */
 @import './styles/tokens.css';
 @import './styles/layout.css';
 @import './styles/timeline.css';

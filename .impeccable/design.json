@@ -1,0 +1,159 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-18T12:26:30+07:00",
+  "title": "Design System: DragonDub AI Studio",
+  "extensions": {
+    "colorMeta": {
+      "studio-cyan": {
+        "role": "primary",
+        "displayName": "Studio Cyan",
+        "canonical": "#00E5FF",
+        "tonalRamp": ["#002B33", "#004D59", "#007385", "#009BB3", "#00C4E0", "#00E5FF", "#66F0FF", "#CCF9FF"]
+      },
+      "deep-sky-action": {
+        "role": "primary",
+        "displayName": "Deep Sky Action",
+        "canonical": "#0284C7",
+        "tonalRamp": ["#082F49", "#0C4A6E", "#075985", "#0369A1", "#0284C7", "#0EA5E9", "#38BDF8", "#BAE6FD"]
+      },
+      "obsidian-floor": {
+        "role": "neutral",
+        "displayName": "Obsidian Floor",
+        "canonical": "#090A0F",
+        "tonalRamp": ["#07080C", "#090A0F", "#12141D", "#171A26", "#1E2231", "#252A3D", "#64748B", "#F8FAFC"]
+      },
+      "status-emerald": {
+        "role": "semantic",
+        "displayName": "Status Emerald",
+        "canonical": "#10B981",
+        "tonalRamp": ["#022C22", "#064E3B", "#065F46", "#047857", "#059669", "#10B981", "#34D399", "#A7F3D0"]
+      },
+      "voice-female-rose": {
+        "role": "semantic",
+        "displayName": "Voice Female Rose",
+        "canonical": "oklch(0.70 0.17 350)",
+        "tonalRamp": ["#3B0721", "#500724", "#831843", "#9D174D", "#BE185D", "#EC4899", "#F472B6", "#FBCFE8"]
+      },
+      "voice-male-blue": {
+        "role": "semantic",
+        "displayName": "Voice Male Blue",
+        "canonical": "oklch(0.68 0.16 250)",
+        "tonalRamp": ["#172554", "#1E3A8A", "#1E40AF", "#1D4ED8", "#2563EB", "#3B82F6", "#60A5FA", "#BFDBFE"]
+      },
+      "track-subtitle-violet": {
+        "role": "semantic",
+        "displayName": "Track Subtitle Violet",
+        "canonical": "oklch(0.68 0.17 295)",
+        "tonalRamp": ["#2E1065", "#4C1D95", "#5B21B6", "#6D28D9", "#7C3AED", "#8B5CF6", "#A78BFA", "#DDD6FE"]
+      }
+    },
+    "typographyMeta": {
+      "display": { "displayName": "Display", "purpose": "Page-level titles on Home Dashboard and studio modal headers." },
+      "headline": { "displayName": "Headline", "purpose": "Active series titles and primary section headers." },
+      "title": { "displayName": "Title", "purpose": "Card headers, episode titles, and inspector groups." },
+      "body": { "displayName": "Body", "purpose": "Dialogue scripts, form labels, and descriptions with Khmer 1.68 line-height." },
+      "label": { "displayName": "Label", "purpose": "Buttons, tabs, and interactive pills (>= 13px Khmer legibility floor)." },
+      "mono": { "displayName": "Mono", "purpose": "Tabular timecodes, percentages, RPM counters, and live console logs." }
+    },
+    "shadows": [
+      { "name": "overlay", "value": "0 16px 36px rgba(0, 0, 0, 0.65)", "purpose": "Floating modal dialogs and confirmation overlays." },
+      { "name": "toast", "value": "0 10px 30px rgba(0, 0, 0, 0.65)", "purpose": "Fixed top status banners and toast alerts." },
+      { "name": "focus-ring", "value": "0 0 0 2px rgba(0, 229, 255, 0.25)", "purpose": "Keyboard focus indicator on inputs and controls." }
+    ],
+    "motion": [
+      { "name": "spring-ease", "value": "cubic-bezier(0.16, 1, 0.3, 1)", "purpose": "Standard smooth deceleration for panel transitions and hovers." },
+      { "name": "duration-fast", "value": "150ms", "purpose": "Interactive control state changes (buttons, tabs, borders)." },
+      { "name": "duration-normal", "value": "220ms", "purpose": "Panel layout transitions and banner entrance." }
+    ],
+    "breakpoints": [
+      { "name": "mobile", "value": "390px" },
+      { "name": "sm", "value": "640px" },
+      { "name": "md", "value": "768px" },
+      { "name": "lg", "value": "1080px" },
+      { "name": "desktop", "value": "1440px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Action Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "High-contrast primary CTA for Export, Open Studio, and Run Batch.",
+      "html": "<button class=\"ds-btn-primary\">Export MP4</button>",
+      "css": ".ds-btn-primary { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 36px; padding: 8px 16px; background: #0284C7; color: #F8FAFC; border: 1px solid rgba(56, 189, 248, 0.4); border-radius: 6px; font-family: var(--font-sans, Inter, sans-serif); font-size: 13px; font-weight: 700; line-height: 1.5; cursor: pointer; transition: background 0.15s ease, border-color 0.15s ease; } .ds-btn-primary:hover { background: #0369A1; border-color: #38BDF8; } .ds-btn-primary:focus-visible { outline: 2px solid #00E5FF; outline-offset: 2px; }"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "Standard dark workstation control button for secondary actions.",
+      "html": "<button class=\"ds-btn-secondary\">Auto-Cut by Subs</button>",
+      "css": ".ds-btn-secondary { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 34px; padding: 6px 12px; background: var(--bg-secondary-panel, #171A26); color: var(--text-primary, #F8FAFC); border: 1px solid var(--border-subtle, rgba(255,255,255,0.07)); border-radius: 6px; font-family: var(--font-sans, Inter, sans-serif); font-size: 13px; font-weight: 600; cursor: pointer; transition: background 0.15s ease, border-color 0.15s ease; } .ds-btn-secondary:hover { background: var(--bg-elevated-panel, #1E2231); border-color: var(--border-subtle-hover, rgba(255,255,255,0.16)); } .ds-btn-secondary:focus-visible { outline: 2px solid #00E5FF; outline-offset: 2px; }"
+    },
+    {
+      "name": "Navbar Route Pill",
+      "kind": "nav",
+      "refersTo": "button-ghost",
+      "description": "Top navigation route button with active cyan border state.",
+      "html": "<button class=\"ds-nav-pill is-active\">Batch Studio <span class=\"ds-nav-chip\">23 EP</span></button>",
+      "css": ".ds-nav-pill { display: inline-flex; align-items: center; gap: 8px; height: 36px; padding: 0 12px; border-radius: 6px; background: transparent; border: 1px solid rgba(255,255,255,0.07); color: #94A3B8; font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.15s ease; } .ds-nav-pill:hover { background: #1E2231; color: #F8FAFC; } .ds-nav-pill.is-active { background: #1E2231; border-color: #00E5FF; color: #00E5FF; } .ds-nav-chip { font-family: var(--font-mono, monospace); font-size: 11px; padding: 1px 6px; border-radius: 4px; background: #171A26; border: 1px solid rgba(255,255,255,0.07); color: inherit; }"
+    },
+    {
+      "name": "Studio Select Field",
+      "kind": "input",
+      "refersTo": "input-select",
+      "description": "High-contrast dark select dropdown with Khmer-safe line-height.",
+      "html": "<select class=\"ds-select\"><option>km-KH-SreymomNeural (ស្រីមុំ)</option></select>",
+      "css": ".ds-select { height: 34px; padding: 6px 10px; background: var(--bg-secondary-panel, #171A26); color: var(--text-primary, #F8FAFC); border: 1px solid var(--border-subtle, rgba(255,255,255,0.07)); border-radius: 6px; font-size: 13px; line-height: 1.65; outline: none; } .ds-select:hover { border-color: rgba(255,255,255,0.16); } .ds-select:focus { border-color: #00E5FF; box-shadow: 0 0 0 2px rgba(0,229,255,0.2); }"
+    },
+    {
+      "name": "Console Surface Card",
+      "kind": "card",
+      "refersTo": "card-panel",
+      "description": "Flat tonal panel card separated by a 1px hairline border.",
+      "html": "<div class=\"ds-panel-card\"><div class=\"ds-panel-title\">EP 01 · Pseudo Spiritual Root</div><div class=\"ds-panel-meta\">257 segments · 96.4% Auto-Fit</div></div>",
+      "css": ".ds-panel-card { background: var(--bg-primary-panel, #12141D); border: 1px solid rgba(255,255,255,0.07); border-radius: 10px; padding: 14px 16px; color: #F8FAFC; } .ds-panel-title { font-size: 14px; font-weight: 700; margin-bottom: 4px; } .ds-panel-meta { font-family: var(--font-mono, monospace); font-size: 12px; color: #94A3B8; font-variant-numeric: tabular-nums; }"
+    },
+    {
+      "name": "Semantic Status Chip",
+      "kind": "chip",
+      "refersTo": "chip-status",
+      "description": "Compact tabular status indicator for pipeline and server health.",
+      "html": "<span class=\"ds-chip-ready\">● READY · 6/6 KEYS</span>",
+      "css": ".ds-chip-ready { display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px; border-radius: 4px; background: rgba(16, 185, 129, 0.12); border: 1px solid rgba(16, 185, 129, 0.3); color: #10B981; font-family: var(--font-mono, monospace); font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Darkroom Console",
+    "overview": "DragonDub AI Studio is a high-density, low-glare desktop video dubbing workstation modeled on precision darkroom consoles such as CapCut Pro, DaVinci Resolve, and Linear. Every surface exists to keep the editor's eye on the video frame, the multi-track timeline, and live Khmer dialogue scripts during multi-hour production sessions without eye fatigue or decorative clutter.\n\nDepth is built through quiet tonal stepping from the deep obsidian floor outward to raised interactive surfaces, separated by crisp 1px hairlines rather than drop shadows or glowing neon halos. Color is rationed with discipline: one coherent Cyan/Deep Sky primary accent marks active selection, playheads, and primary calls to action, while semantic track colors (Rose, Blue, Violet, Emerald, Amber) are reserved strictly for voice gender, subtitle tracks, and live pipeline states.",
+    "keyCharacteristics": [
+      "Low-glare obsidian tonal ramp (#090A0F -> #12141D -> #171A26 -> #1E2231 -> #252A3D) with crisp 1px hairline borders.",
+      "Single Studio Cyan / Deep Sky primary accent family; zero decorative purple-cyan AI gradients on routine controls.",
+      "Khmer-safe typography floor (13px minimum interactive size, 1.68 line height) paired with tabular JetBrains Mono for timecodes and metrics.",
+      "Flat-by-default panels; shadows reserved for floating modals, popovers, and toast banners.",
+      "Desktop-dense workstation layout that degrades cleanly to single-column scrollable stacks at 390px mobile without horizontal overflow."
+    ],
+    "rules": [
+      { "name": "The One Accent Rule", "body": "Studio Cyan / Deep Sky is the sole brand accent across chrome and primary CTAs; Rose, Blue, and Violet are locked exclusively to character voice gender and subtitle track identity.", "section": "colors" },
+      { "name": "The No-Slop Gradient Rule", "body": "Never apply purple-to-cyan decorative gradients to standard buttons, cards, or headers; use solid deep-sky-action with crisp borders for primary CTAs.", "section": "colors" },
+      { "name": "The Single Token Source Rule", "body": "Every color in component CSS must resolve from :root custom properties in frontend/src/styles/tokens.css—no duplicate legacy palettes (#0B132B navy or ad-hoc slate hexes).", "section": "colors" },
+      { "name": "The Khmer 13px Floor Rule", "body": "No interactive Khmer label, tab, button, or script row may drop below 13px (0.8125rem) or 1.55 line-height, preventing clipped Khmer vowels and subscripts.", "section": "typography" },
+      { "name": "The Tabular Numerals Rule", "body": "Every live timecode, progress percentage, queue counter, and RPM metric must use var(--font-mono) with font-variant-numeric: tabular-nums so counters never jitter during playback or streaming updates.", "section": "typography" },
+      { "name": "The Flat-By-Default Rule", "body": "Resting workstation panels, dashboard cards, and buttons carry zero drop shadow and zero neon outer glow; hierarchy comes from tonal contrast and 1px hairlines.", "section": "elevation" }
+    ],
+    "dos": [
+      "Do enforce >= 13px font size and >= 1.55–1.68 line-height on all Khmer interactive text, tabs, buttons, and subtitles.",
+      "Do source every surface, text, border, radius, and spacing value from frontend/src/styles/tokens.css variables.",
+      "Do use solid deep-sky-action (#0284C7) with #F8FAFC text for primary filled buttons to guarantee WCAG AA contrast (>= 4.5:1).",
+      "Do use font-family: var(--font-mono) with font-variant-numeric: tabular-nums on every timecode, percentage, queue position, and RPM metric.",
+      "Do provide visible :focus-visible outlines (2px solid var(--primary-accent)) on all interactive controls and preserve >= 44px touch targets on mobile."
+    ],
+    "donts": [
+      "Don't apply purple-cyan gradients (linear-gradient(135deg, #7C5CFC, #00E5FF)) or glowing neon box-shadows to standard buttons or cards.",
+      "Don't stack 3+ levels of bordered nested cards inside modals or inspector panels—use spacing and hairline dividers instead.",
+      "Don't hard-code legacy #0B132B / #141c2e / #111827 hex values or use !important overrides across component CSS files.",
+      "Don't lock narrow mobile viewports (<= 768px) to 100vw/100vh overflow: hidden in a way that clips content or forces horizontal scrolling at 390px.",
+      "Don't skip heading levels (h1 -> h3) or render clickable actions as unlabelled <div> elements without accessible semantics."
+    ]
+  }
+}
