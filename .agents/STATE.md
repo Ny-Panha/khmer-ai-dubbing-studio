@@ -3,6 +3,26 @@
 ## Last Session
 - **Environment**: Codex CLI
 - **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-18T18:23:22+07:00
+
+## Summary: Released manual anchors #2 and #3 in the live ep_5
+- Stopped the backend and verified port 5000 was clear before editing `E:\khmer_ai_dubbing_studio\backend\uploads\projects\Pseudo_Spiritual_Root\series.json`. The episode was `ep_5` with 219 segments.
+- Disk before: #2 and #3 each had `userShifted=true, trackRow=1, trackId="voice-2"`. Disk after atomic save: both had `userShifted=false, trackRow=0, trackId="voice-1"`. The offline edit was verified against a backup to change only these six values.
+- Restarted both services, reopened the episode in the real Studio and clicked Auto-Align. The toast said `Auto-Align: Aligned timeline ? Overrun: #4, #6, #47, #55, #58, #77, #95, #105 (+8 more) (audio longer than slot)`. Both clips rendered in the VOICE 1 lane (`voice_0`). Audio resync returned HTTP 200 / success. Studio updated the episode's audio and timeline metadata through its ordinary save.
+- Reopened again after a fresh backend restart. The DOM, live API and disk all confirmed the released assignments. The live series is local ignored data. Only this shared-state entry is tracked.
+
+## Active Environment
+- Studio: `http://localhost:5173/studio`
+- Backend API: `http://localhost:5000`
+
+## Next Steps
+- None for this release.
+
+---
+
+## Previous Session
+- **Environment**: Codex CLI
+- **Branch**: `chore/full-project-cleanup`
 - **Timestamp**: 2026-11-18T18:08:52+07:00
 
 ## Summary: Burned Khmer subtitle size in the Rendered player
