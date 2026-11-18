@@ -8,9 +8,9 @@ import {
   sanitizeAspectRatio,
 } from '../utils/projectStorage';
 import {
-  DEFAULT_GLOBAL_LOGO_SETTINGS,
-  loadGlobalLogoSettings,
-} from '../utils/logoSettingsStorage';
+  DEFAULT_GLOBAL_OVERLAY_SETTINGS,
+  loadGlobalOverlaySettings,
+} from '../utils/overlaySettingsStorage';
 
 const NOOP = () => {};
 
@@ -23,8 +23,8 @@ const DEFAULT_WORKSPACE_CONTEXT = Object.freeze({
   setSpeakerRegistry: NOOP,
   voiceSettings: {},
   setVoiceSettings: NOOP,
-  globalLogoSettings: DEFAULT_GLOBAL_LOGO_SETTINGS,
-  setGlobalLogoSettings: NOOP,
+  globalOverlaySettings: DEFAULT_GLOBAL_OVERLAY_SETTINGS,
+  setGlobalOverlaySettings: NOOP,
   audioGenerated: false,
   setAudioGenerated: NOOP,
   audioOutdated: false,
@@ -82,7 +82,7 @@ export function useStudioWorkspaceState() {
   const [scriptData, setScriptData] = useState(null);
   const [speakerRegistry, setSpeakerRegistry] = useState({});
   const [voiceSettings, setVoiceSettings] = useState(loadSavedVoiceSettings);
-  const [globalLogoSettings, setGlobalLogoSettings] = useState(loadGlobalLogoSettings);
+  const [globalOverlaySettings, setGlobalOverlaySettings] = useState(loadGlobalOverlaySettings);
   const [audioGenerated, setAudioGenerated] = useState(false);
   const [audioOutdated, setAudioOutdated] = useState(false);
   const [fullAudioPath, setFullAudioPath] = useState(null);
@@ -99,8 +99,8 @@ export function useStudioWorkspaceState() {
       setSpeakerRegistry,
       voiceSettings,
       setVoiceSettings,
-      globalLogoSettings,
-      setGlobalLogoSettings,
+      globalOverlaySettings,
+      setGlobalOverlaySettings,
       audioGenerated,
       setAudioGenerated,
       audioOutdated,
@@ -123,7 +123,7 @@ export function useStudioWorkspaceState() {
       scriptData,
       speakerRegistry,
       voiceSettings,
-      globalLogoSettings,
+      globalOverlaySettings,
       audioGenerated,
       audioOutdated,
       fullAudioPath,

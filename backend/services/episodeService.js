@@ -10,7 +10,7 @@ const {
 } = require('../models/episodeModel');
 
 const { uploadsDir: UPLOADS_DIR } = require('../utils/pathUtils');
-const { stripLogoSettingsFromObject } = require('./globalLogoSettingsService');
+const { stripGlobalOverlaySettingsFromObject } = require('./globalOverlaySettingsService');
 const PROJECTS_DIR = path.join(UPLOADS_DIR, 'projects');
 
 // In-memory concurrency locks per series to serialize all read-modify-write operations on series.json
@@ -847,7 +847,7 @@ async function syncSeriesMetadataSafely(seriesId, incomingSeries, options = {}) 
         ...incomingWithId,
         episodes: (Array.isArray(incomingWithId.episodes) ? incomingWithId.episodes : []).map((ep) =>
           ep && ep.voiceSettings
-            ? { ...ep, voiceSettings: stripLogoSettingsFromObject(ep.voiceSettings) }
+            ? { ...ep, voiceSettings: stripGlobalOverlaySettingsFromObject(ep.voiceSettings) }
             : ep
         ),
       };
@@ -866,7 +866,7 @@ async function syncSeriesMetadataSafely(seriesId, incomingSeries, options = {}) 
       const diskEp = diskEpMap.get(key);
       if (!diskEp) {
         return incEp && incEp.voiceSettings
-          ? { ...incEp, voiceSettings: stripLogoSettingsFromObject(incEp.voiceSettings) }
+          ? { ...incEp, voiceSettings: stripGlobalOverlaySettingsFromObject(incEp.voiceSettings) }
           : incEp;
       }
       seenDiskKeys.add(key);
@@ -991,7 +991,7 @@ async function syncSeriesMetadataSafely(seriesId, incomingSeries, options = {}) 
         isDemucsDone: Boolean(incEp.isDemucsDone || diskEp.isDemucsDone),
         hasDemucs: Boolean(incEp.hasDemucs || diskEp.hasDemucs),
         renderedVideo: resolvedRenderedVideo,
-        voiceSettings: stripLogoSettingsFromObject(
+        voiceSettings: stripGlobalOverlaySettingsFromObject(
           incEp.voiceSettings !== undefined ? incEp.voiceSettings : diskEp.voiceSettings
         ),
       };

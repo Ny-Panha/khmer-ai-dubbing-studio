@@ -1,6 +1,48 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
+- **Environment**: Antigravity IDE (`/agents`)
+- **Branch**: `fix/preview-subtitle-single-source` (pushed to `origin/fix/preview-subtitle-single-source`)
+- **Timestamp**: 2026-11-18T16:02:00+07:00
+
+## Summary: Make All 4 Branding/Overlay Settings Families Global (Single Source of Truth Across All Episodes & Series) (COMPLETED)
+- **Scope**: Unified all 4 branding/overlay families (45 keys total) into ONE global settings store, extending the earlier logo-only global store while keeping all per-episode settings (subtitles, ducking, volumes, aspect ratio, voice/speed, Demucs) untouched:
+  - `logo*` (9 keys): `enableLogo`, `logoImage`, `logoPosition`, `logoSize`, `logoOpacity`, `logoShape`, `logoMargin`, `logoXPercent`, `logoYPercent`
+  - `cornerMask*` (7 keys): `enableCornerMask`, `cornerMaskText`, `cornerMaskStyle`, `cornerMaskPosition`, `cornerMaskWidth`, `cornerMaskHeight`, `cornerMaskOpacity`
+  - `sponsor*` (18 keys): `enableSponsor`, `sponsorVideoUrl`, `sponsorVideoPath`, `sponsorChromaKey`, `sponsorChromaSimilarity`, `sponsorPosition`, `sponsorXPercent`, `sponsorYPercent`, `sponsorTimingMode`, `sponsorIntervalSec`, `sponsorDurationSec`, `sponsorStartSec`, `sponsorEndSec`, `sponsorScale`, `sponsorOpacity`, `sponsorMargin`, `sponsorMuteAudio`, `sponsorVolume`
+  - `anti-theft / marquee / watermark` (11 keys): `enableAntiTheft`, `marqueeText`, `marqueeSpeed`, `marqueePosition`, `marqueeTextColor`, `enableWatermark`, `watermarkText`, `watermarkPosition`, `watermarkColor`, `antiTheftSize`, `antiTheftBottomPercent`
+- **Changes Applied**:
+  1. `backend/services/globalOverlaySettingsService.js` *(new)*: Single unified atomic server store (`backend/uploads/cache/global_overlay_settings.json`) with normalization across all 45 keys, stale-timestamp guard, legacy `global_logo_settings.json` seed hint, `stripGlobalOverlaySettingsFromObject`, and export formatters (`getEffectiveGlobalLogoSettingsForExport`, `getEffectiveGlobalCornerMaskForExport`, `getEffectiveGlobalSponsorForExport`, `getEffectiveGlobalAntiTheftForExport`).
+  2. `backend/services/globalLogoSettingsService.js`: Delegated cleanly to `globalOverlaySettingsService.js` for backwards compatibility with `/api/logo-settings`.
+  3. `backend/routes/systemRoutes.js`: Added `GET /api/overlay-settings`, `PUT /api/overlay-settings`, and `POST /api/overlay-settings`.
+  4. `backend/routes/videoRoutes.js`: Replaced per-episode `req.body?.voiceSettings` fallbacks for logo, cornerMask, sponsor, and antiTheft with global overlay store getters.
+  5. `backend/services/batchExportService.js`: Wired `rawLogo`, `rawSponsor`, `antiTheft`, and `cornerMask` to fall back to the global overlay store and fixed missing `cornerMask` forwarding into `renderDubbedVideoWithDucking`.
+  6. `backend/services/episodeService.js`: Stripped all 45 global overlay keys from `ep.voiceSettings` on write in `syncSeriesMetadataSafely` (preserving reads so first-time migration can seed from the active episode).
+  7. `frontend/src/utils/overlaySettingsStorage.js` *(new)* & `frontend/src/utils/logoSettingsStorage.js`: Dedicated global client store (`KHMER_AI_GLOBAL_OVERLAY_SETTINGS_V1`) with serialized/coalesced `PUT /api/overlay-settings` sync, one-time per-family migration (preserving legacy `KHMER_AI_GLOBAL_LOGO_SETTINGS_V1` + seeding cornerMask/sponsor/anti-theft from the currently open episode once, then ignoring `series.json` forever), `stripGlobalOverlaySettings`, and 4 export payload builders.
+  8. `frontend/src/utils/projectStorage.js`, `frontend/src/context/WorkspaceContext.jsx`, `frontend/src/hooks/useSeriesManager.js`, `frontend/src/hooks/useVideoRender.js`, `frontend/src/App.jsx`: Removed all 4 families from `DEFAULT_VOICE_SETTINGS` and `VISUAL_SETTING_DEFAULTS`, replaced `globalLogoSettings` with `globalOverlaySettings`, stripped all 45 keys from per-episode load/switch/save, routed overlay edits strictly to the global store (while still invalidating stale `renderedVideo`), and wired all 4 `useVideoRender.js` builders (`buildLogoOptions`, `buildCornerMaskOptions`, `buildSponsorOptions`, `buildAntiTheftOptions`) for both single and batch exports to read strictly from the global store.
+  9. `backend/tests/global_overlay_settings.test.js` *(new)*, `backend/tests/global_logo_settings.test.js`, `backend/tests/sponsor_ads_end_to_end.test.js`: Full unit, migration, episode-stripping, and export-wiring coverage.
+- **Verification Evidence**:
+  - Frontend production build (`npm --prefix frontend run build`): **PASS** (`710ms`, `0` errors).
+  - Relevant test suites (`global_overlay_settings.test.js`, `global_logo_settings.test.js`, `sponsor_ads_end_to_end.test.js`, `aspect_ratio_and_crop.test.js`, `workspace_player_containment.test.js`, `preview_subtitle_single_source.test.js`): **31 / 31 PASS** (`0` fail).
+  - Real-app E2E verification (`http://localhost:5173/studio` + restarted backend `:5000`, Edge headless, `0` page errors):
+    - One-time migration on `Pseudo_Spiritual_Root` EP1 preserved legacy global logo (`custom circle 72px`) and seeded EP1 Corner Mask (`175x34 solid top-right`).
+    - Updated Corner Mask (`190x42 solid top-right`) + Logo (`bottom-right square 92px 0.85`) on EP1 -> verified `/api/overlay-settings` synced and `ep_1.voiceSettings` on disk contains `0` global overlay keys (per-episode subtitles/ducking/aspectRatio intact).
+    - Switched to EP23 (`ep_23`) -> identical (`190x42 solid`, `bottom-right square 92px 0.85`) without re-editing.
+    - Switched to different series (`Solo Leveling` `series_1794958298712`) -> identical without re-editing.
+    - Reloaded page -> identical (`0` page errors).
+    - Real short 4s export from EP23 (`Pseudo_Spiritual_Root_ep_23_source.mp4`, `1920x1080`) via `POST /api/render-video` reading the global overlay store proved BOTH overlays burned at the global values (`topRightMask`: `diff=57.99`, `baseLuma 72 -> expLuma 27.8`; `bottomRightLogo`: `diff=29.01`; `centerControl`: `diff=2.04`).
+
+## Active Environment
+- **Backend API**: `http://localhost:5000` (freshly restarted with `/api/overlay-settings` & global overlay export fallbacks)
+- **Frontend Studio**: `http://localhost:5173` (Vite dev server)
+- **Branch**: `fix/preview-subtitle-single-source` (committed & pushed to `origin/fix/preview-subtitle-single-source`)
+
+## Next Steps
+- Hard-refresh (`Ctrl + F5`) at `http://localhost:5173/studio` — all 4 branding/overlay families (Logo, Corner Mask, Sponsor Ads, Anti-Theft/Watermark) now persist globally across every episode, series, reload, and single/batch export.
+
+---
+
+## Previous Session
 - **Environment**: Antigravity IDE
 - **Branch**: `fix/preview-subtitle-single-source` (branched from `chore/full-project-cleanup` at `dec4a3a`; pushed branch only — NOT merged into `main`)
 - **Timestamp**: 2026-11-18T15:18:00+07:00

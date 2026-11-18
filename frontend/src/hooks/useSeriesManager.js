@@ -19,7 +19,7 @@ import {
   sanitizeRenderedVideo,
   sanitizeAndHealSeriesList,
 } from '../utils/projectStorage';
-import { stripLogoSettings } from '../utils/logoSettingsStorage';
+import { stripGlobalOverlaySettings } from '../utils/overlaySettingsStorage';
 import { generateVideoThumbnails } from '../utils/thumbnailUtils';
 import { fetchVideoThumbnails } from '../services/api';
 import { normalizeClips, sanitizeScriptData } from '../utils/timelineUtils';
@@ -429,7 +429,7 @@ export function useSeriesManager({
       activeClipId,
       selectedSegmentId,
       renderedVideo,
-      voiceSettings: stripLogoSettings(voiceSettings),
+      voiceSettings: stripGlobalOverlaySettings(voiceSettings),
     };
   }, [
     selectedVideo,
@@ -796,7 +796,7 @@ export function useSeriesManager({
   const handleSaveEpisodeBackground = useCallback((targetEpisodeId, partialData) => {
     if (!targetEpisodeId || !partialData) return;
     const safePartialData = partialData.voiceSettings && typeof partialData.voiceSettings === 'object'
-      ? { ...partialData, voiceSettings: stripLogoSettings(partialData.voiceSettings) }
+      ? { ...partialData, voiceSettings: stripGlobalOverlaySettings(partialData.voiceSettings) }
       : partialData;
     const list = loadSeriesList();
     const sIdx = list.findIndex((s) => s.id === activeSeriesIdState);

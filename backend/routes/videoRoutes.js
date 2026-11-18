@@ -29,7 +29,12 @@ const {
   cancelBatchExportJob,
 } = require("../services/batchExportService");
 const { analyzeEpisodeFraming } = require("../services/smartReframeService");
-const { getEffectiveGlobalLogoSettingsForExport } = require("../services/globalLogoSettingsService");
+const {
+  getEffectiveGlobalLogoSettingsForExport,
+  getEffectiveGlobalCornerMaskForExport,
+  getEffectiveGlobalSponsorForExport,
+  getEffectiveGlobalAntiTheftForExport,
+} = require("../services/globalOverlaySettingsService");
 
 const router = express.Router();
 
@@ -304,9 +309,9 @@ router.post("/render-video", async (req, res) => {
       }
     }
 
-    // Resolve Sponsor Ads Video (Green Screen MP4 / MOV / WebM)
+    // Resolve Sponsor Ads Video (Global settings store; never read per-episode voiceSettings)
     let resolvedSponsorPath = null;
-    const rawSponsor = sponsorSettings || req.body?.voiceSettings?.sponsorSettings || req.body?.voiceSettings || null;
+    const rawSponsor = sponsorSettings || getEffectiveGlobalSponsorForExport() || null;
     if (rawSponsor && (rawSponsor.enableSponsor || rawSponsor.enabled) && (rawSponsor.sponsorVideoUrl || rawSponsor.sponsorVideoPath || rawSponsor.videoUrl || rawSponsor.videoPath)) {
       const vidVal = rawSponsor.sponsorVideoPath || rawSponsor.videoPath || rawSponsor.sponsorVideoUrl || rawSponsor.videoUrl;
       if (typeof vidVal === "string") {
@@ -321,6 +326,9 @@ router.post("/render-video", async (req, res) => {
         else if (fs.existsSync(vidVal)) resolvedSponsorPath = vidVal;
       }
     }
+
+    const effectiveAntiTheft = antiTheft || getEffectiveGlobalAntiTheftForExport() || null;
+    const effectiveCornerMask = cornerMask || getEffectiveGlobalCornerMaskForExport() || null;
 
     let renderResult;
     try {
@@ -341,12 +349,12 @@ router.post("/render-video", async (req, res) => {
         videoClips,
         framingKeyframes: req.body?.framingKeyframes || [],
         framingOverrides: req.body?.framingOverrides || [],
-        antiTheft: antiTheft || req.body?.voiceSettings?.antiTheft || null,
+        antiTheft: effectiveAntiTheft,
         logoSettings: resolvedLogoPath ? {
           ...rawLogo,
           logoPath: resolvedLogoPath,
         } : null,
-        cornerMask: cornerMask || req.body?.voiceSettings?.cornerMask || null,
+        cornerMask: effectiveCornerMask,
         sponsorSettings: resolvedSponsorPath ? {
           ...rawSponsor,
           sponsorPath: resolvedSponsorPath,

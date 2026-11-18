@@ -29,6 +29,10 @@ const {
   readGlobalLogoSettings,
   writeGlobalLogoSettings,
 } = require("../services/globalLogoSettingsService");
+const {
+  readGlobalOverlaySettings,
+  writeGlobalOverlaySettings,
+} = require("../services/globalOverlaySettingsService");
 
 const router = express.Router();
 
@@ -417,7 +421,59 @@ router.post("/gemini/quota-settings", (req, res) => {
 });
 
 /**
- * Global Logo Settings (Single Source of Truth across all episodes & series)
+ * Global Branding & Overlay Settings (Single Source of Truth across all episodes & series)
+ * Covers: logo*, cornerMask*, sponsor*, anti-theft/marquee/watermark
+ */
+router.get("/overlay-settings", (req, res) => {
+  try {
+    const state = readGlobalOverlaySettings();
+    res.json({
+      success: true,
+      ...state,
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.put("/overlay-settings", (req, res) => {
+  try {
+    const body = req.body && typeof req.body === "object" ? req.body : {};
+    const incoming =
+      body.overlaySettings && typeof body.overlaySettings === "object"
+        ? body.overlaySettings
+        : body;
+    const updatedAt = Number(body.updatedAt) || Date.now();
+    const state = writeGlobalOverlaySettings(incoming, { updatedAt });
+    res.json({
+      success: true,
+      ...state,
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.post("/overlay-settings", (req, res) => {
+  try {
+    const body = req.body && typeof req.body === "object" ? req.body : {};
+    const incoming =
+      body.overlaySettings && typeof body.overlaySettings === "object"
+        ? body.overlaySettings
+        : body;
+    const updatedAt = Number(body.updatedAt) || Date.now();
+    const state = writeGlobalOverlaySettings(incoming, { updatedAt });
+    res.json({
+      success: true,
+      ...state,
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * Global Logo Settings (Legacy alias — reads/writes the unified global overlay store)
  */
 router.get("/logo-settings", (req, res) => {
   try {

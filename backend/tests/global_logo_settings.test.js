@@ -153,7 +153,7 @@ test('Per-episode voiceSettings ignores logo* keys on load/switch and strips log
       );
     }
 
-    // Switching episodes with stale per-episode logo keys must ignore logo* but keep subtitle/sponsor/watermark/mask/ducking
+    // Switching episodes with stale per-episode overlay keys must ignore global overlay families while keeping subtitle/ducking/volume/aspect settings
     const merged = projectStorageMod.resolveStickyVoiceSettings({
       prevSettings: { aspectRatio: '16:9', subtitleColor: 'white', duckingVolume: 0.15 },
       savedGlobalSettings: { aspectRatio: '16:9' },
@@ -172,6 +172,7 @@ test('Per-episode voiceSettings ignores logo* keys on load/switch and strips log
         enableCornerMask: true,
         enableSponsor: true,
         duckingVolume: 0.25,
+        khmerVolume: 1.5,
       },
     });
 
@@ -179,10 +180,11 @@ test('Per-episode voiceSettings ignores logo* keys on load/switch and strips log
       assert.equal(merged[key], undefined, `resolveStickyVoiceSettings must not include ${key}`);
     }
     assert.equal(merged.subtitleColor, 'yellow');
-    assert.equal(merged.enableWatermark, false);
-    assert.equal(merged.enableCornerMask, true);
-    assert.equal(merged.enableSponsor, true);
     assert.equal(merged.duckingVolume, 0.25);
+    assert.equal(merged.khmerVolume, 1.5);
+    assert.equal(merged.enableWatermark, undefined);
+    assert.equal(merged.enableCornerMask, undefined);
+    assert.equal(merged.enableSponsor, undefined);
 
     // saveVoiceSettings strips logo* keys
     projectStorageMod.saveVoiceSettings({
@@ -200,13 +202,14 @@ test('Per-episode voiceSettings ignores logo* keys on load/switch and strips log
       assert.equal(savedVoiceRaw[key], undefined, `STORAGE_VOICE_SETTINGS_KEY must strip ${key}`);
     }
 
-    // saveEpisodeState strips logo* keys from ep.voiceSettings while keeping other per-episode settings
+    // saveEpisodeState strips logo* and other global overlay keys from ep.voiceSettings while keeping per-episode settings
     const series = projectStorageMod.createDefaultSeries('Test Series', 'series_logo_test');
     projectStorageMod.saveSeriesList([series]);
     const epId = series.episodes[0].id;
     projectStorageMod.saveEpisodeState('series_logo_test', epId, {
       voiceSettings: {
         subtitleColor: 'yellow',
+        duckingVolume: 0.22,
         enableSponsor: true,
         enableLogo: true,
         logoPosition: 'top-right',
@@ -218,7 +221,8 @@ test('Per-episode voiceSettings ignores logo* keys on load/switch and strips log
     const reloaded = projectStorageMod.loadSeriesList();
     const epVs = reloaded[0].episodes[0].voiceSettings;
     assert.equal(epVs.subtitleColor, 'yellow');
-    assert.equal(epVs.enableSponsor, true);
+    assert.equal(epVs.duckingVolume, 0.22);
+    assert.equal(epVs.enableSponsor, undefined);
     for (const key of LOGO_SETTING_KEYS) {
       assert.equal(epVs[key], undefined, `Saved ep.voiceSettings must strip ${key}`);
     }
@@ -297,7 +301,7 @@ test('Backend globalLogoSettingsService persists globally and episodeService str
     const diskSeries = getSeriesMetadata('series_strip_check', { forceDisk: true, projectsDir });
     const ep1Vs = diskSeries.episodes[0].voiceSettings;
     assert.equal(ep1Vs.subtitleColor, 'yellow');
-    assert.equal(ep1Vs.enableCornerMask, true);
+    assert.equal(ep1Vs.enableCornerMask, undefined);
     for (const key of LOGO_SETTING_KEYS) {
       assert.equal(ep1Vs[key], undefined, `series.json ep.voiceSettings must not contain ${key}`);
     }
@@ -329,7 +333,7 @@ test('Static wiring audit: single export, batch export, systemRoutes, and ffmpeg
   );
 
   assert.ok(useVideoRenderCode.includes('buildLogoExportPayload'), 'useVideoRender uses global buildLogoExportPayload');
-  assert.ok(useVideoRenderCode.includes('getLatestGlobalLogoSettings'), 'buildLogoOptions reads from global logo store');
+  assert.ok(useVideoRenderCode.includes('getLatestGlobalOverlaySettings'), 'buildLogoOptions reads from global overlay store');
   assert.ok(useVideoRenderCode.includes('logoSettings: buildLogoOptions()'), 'batch export uses buildLogoOptions()');
   assert.ok(useVideoRenderCode.includes('const logoOptions = buildLogoOptions()'), 'single export uses buildLogoOptions()');
 

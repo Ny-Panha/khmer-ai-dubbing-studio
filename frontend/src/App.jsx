@@ -24,18 +24,18 @@ import {
   sanitizeAspectRatio,
 } from './utils/projectStorage';
 import {
-  DEFAULT_GLOBAL_LOGO_SETTINGS,
-  normalizeGlobalLogoSettings,
-  extractLogoSettings,
-  hasAnyLogoSettings,
-  areLogoSettingsEqual,
-  stripLogoSettings,
-  loadGlobalLogoSettingsRecord,
-  saveGlobalLogoSettings,
-  fetchGlobalLogoSettingsFromServer,
-  syncGlobalLogoSettingsToServer,
-  resolveInitialLogoSeed,
-} from './utils/logoSettingsStorage';
+  DEFAULT_GLOBAL_OVERLAY_SETTINGS,
+  normalizeGlobalOverlaySettings,
+  extractGlobalOverlaySettings,
+  hasAnyGlobalOverlaySettings,
+  areGlobalOverlaySettingsEqual,
+  stripGlobalOverlaySettings,
+  loadGlobalOverlaySettingsRecord,
+  saveGlobalOverlaySettings,
+  fetchGlobalOverlaySettingsFromServer,
+  syncGlobalOverlaySettingsToServer,
+  resolveInitialOverlaySeed,
+} from './utils/overlaySettingsStorage';
 import { isSegmentMatch, resolveVoiceClipStartSec } from './utils/timelineUtils';
 import { parseTimeToSeconds } from './utils/timestampUtils';
 import { JobQueueProvider } from './context/JobQueueContext';
@@ -50,6 +50,7 @@ const EMPTY_CLIPS = Object.freeze([]);
 const EMPTY_OBJECT = Object.freeze({});
 const EMPTY_ARRAY = Object.freeze([]);
 
+// Per-episode visual/audio settings ONLY (logo*, cornerMask*, sponsor*, anti-theft/watermark are global)
 const VISUAL_SETTING_DEFAULTS = {
   aspectRatio: null,
   verticalStyle: 'pad',
@@ -57,39 +58,6 @@ const VISUAL_SETTING_DEFAULTS = {
   subtitleStyle: 'banner',
   subtitleColor: 'white',
   subtitleSize: 'medium',
-  enableCornerMask: false,
-  cornerMaskText: '«រឿងប្រឌិតសុទ្ធសាធ • ហាមចម្លង»',
-  cornerMaskStyle: 'badge',
-  cornerMaskPosition: 'top-right',
-  cornerMaskWidth: 220,
-  cornerMaskHeight: 54,
-  cornerMaskOpacity: 0.95,
-  enableSponsor: false,
-  sponsorVideoUrl: null,
-  sponsorVideoPath: null,
-  sponsorChromaKey: true,
-  sponsorChromaSimilarity: 0.28,
-  sponsorPosition: 'bottom-left',
-  sponsorXPercent: null,
-  sponsorYPercent: null,
-  sponsorTimingMode: 'loop',
-  sponsorIntervalSec: 60,
-  sponsorDurationSec: 10,
-  sponsorStartSec: 0,
-  sponsorEndSec: 15,
-  sponsorScale: 25,
-  sponsorMuteAudio: true,
-  sponsorVolume: 0.5,
-  enableAntiTheft: false,
-  marqueeText: '«ហាមផុសបន្ត • សូមឱ្យតម្លៃលើការខិតខំរបស់ម្ចាស់ដើម»',
-  marqueeSpeed: 'normal',
-  marqueePosition: 'bottom',
-  marqueeTextColor: '#FFE600',
-  enableWatermark: true,
-  watermarkText: 'រក្សាសិទ្ធិដោយ ៖ Holiday Kh Drama',
-  watermarkPosition: 'above-ticker',
-  watermarkColor: '#38BDF8',
-  antiTheftSize: 'small',
   duckingVolume: 0.15,
   khmerVolume: 1.3,
   enableDemucs: false,
@@ -213,8 +181,8 @@ export default function App() {
     setSpeakerRegistry,
     voiceSettings,
     setVoiceSettings,
-    globalLogoSettings,
-    setGlobalLogoSettings,
+    globalOverlaySettings,
+    setGlobalOverlaySettings,
     audioGenerated,
     setAudioGenerated,
     audioOutdated,
@@ -252,49 +220,49 @@ export default function App() {
   scriptDataRef.current = scriptData;
   const voiceSettingsRef = useRef(voiceSettings);
   voiceSettingsRef.current = voiceSettings;
-  const globalLogoSettingsRef = useRef(globalLogoSettings);
-  globalLogoSettingsRef.current = globalLogoSettings;
-  const userEditedLogoRef = useRef(false);
-  const initialLogoBootRef = useRef(null);
-  if (initialLogoBootRef.current === null) {
-    initialLogoBootRef.current = {
-      localRecord: loadGlobalLogoSettingsRecord(),
+  const globalOverlaySettingsRef = useRef(globalOverlaySettings);
+  globalOverlaySettingsRef.current = globalOverlaySettings;
+  const userEditedOverlayRef = useRef(false);
+  const initialOverlayBootRef = useRef(null);
+  if (initialOverlayBootRef.current === null) {
+    initialOverlayBootRef.current = {
+      localRecord: loadGlobalOverlaySettingsRecord(),
       legacyVoiceRaw: readLegacyVoiceSettingsRaw(),
       localEpisodeVoice: readLocalActiveEpisodeVoiceSettings(),
     };
   }
 
-  // Hydrate or perform one-time migration for global logo settings (server <-> localStorage)
+  // Hydrate or perform one-time migration for global branding/overlay settings (server <-> localStorage)
   useEffect(() => {
     let cancelled = false;
-    const { localRecord, legacyVoiceRaw, localEpisodeVoice } = initialLogoBootRef.current;
+    const { localRecord, legacyVoiceRaw, localEpisodeVoice } = initialOverlayBootRef.current;
 
-    async function syncOrMigrateGlobalLogo() {
-      const serverState = await fetchGlobalLogoSettingsFromServer();
-      if (cancelled || userEditedLogoRef.current) return;
+    async function syncOrMigrateGlobalOverlay() {
+      const serverState = await fetchGlobalOverlaySettingsFromServer();
+      if (cancelled || userEditedOverlayRef.current) return;
 
       if (serverState && serverState.initialized && serverState.settings) {
         if (!localRecord.initialized || serverState.updatedAt > localRecord.updatedAt) {
-          globalLogoSettingsRef.current = serverState.settings;
-          setGlobalLogoSettings(serverState.settings);
-          saveGlobalLogoSettings(serverState.settings, {
+          globalOverlaySettingsRef.current = serverState.settings;
+          setGlobalOverlaySettings(serverState.settings);
+          saveGlobalOverlaySettings(serverState.settings, {
             syncServer: false,
             updatedAt: serverState.updatedAt || Date.now(),
           });
         } else if (localRecord.initialized && localRecord.updatedAt > serverState.updatedAt) {
-          syncGlobalLogoSettingsToServer(localRecord.settings, localRecord.updatedAt);
+          syncGlobalOverlaySettingsToServer(localRecord.settings, localRecord.updatedAt);
         }
         return;
       }
 
       if (localRecord.initialized) {
         if (serverState && !serverState.initialized) {
-          syncGlobalLogoSettingsToServer(localRecord.settings, localRecord.updatedAt || Date.now());
+          syncGlobalOverlaySettingsToServer(localRecord.settings, localRecord.updatedAt || Date.now());
         }
         return;
       }
 
-      // First-time migration: seed from currently open episode (if owner customized it) or legacy voiceSettings or defaults
+      // First-time migration: preserve legacy global logo settings, seed cornerMask/sponsor/anti-theft from active episode or defaults
       let serverActiveEpVoice = null;
       if (serverState) {
         try {
@@ -312,21 +280,23 @@ export default function App() {
         } catch {}
       }
 
-      if (cancelled || userEditedLogoRef.current) return;
-      const seeded = resolveInitialLogoSeed({
+      if (cancelled || userEditedOverlayRef.current) return;
+      const seeded = resolveInitialOverlaySeed({
         activeEpisodeVoiceSettings: serverActiveEpVoice || localEpisodeVoice,
         legacyVoiceSettings: legacyVoiceRaw,
+        legacyGlobalLogoSettings:
+          serverState?.legacyLogoSettings || localRecord?.legacyLogoSettings || null,
       });
-      globalLogoSettingsRef.current = seeded;
-      setGlobalLogoSettings(seeded);
-      saveGlobalLogoSettings(seeded, { syncServer: Boolean(serverState) });
+      globalOverlaySettingsRef.current = seeded;
+      setGlobalOverlaySettings(seeded);
+      saveGlobalOverlaySettings(seeded, { syncServer: Boolean(serverState) });
     }
 
-    syncOrMigrateGlobalLogo();
+    syncOrMigrateGlobalOverlay();
     return () => {
       cancelled = true;
     };
-  }, [setGlobalLogoSettings]);
+  }, [setGlobalOverlaySettings]);
 
   // Stable ref-delegated callbacks (prevents infinite render loops & unnecessary effect runs)
   const handleSetDuration = useCallback((dur) => playbackRef.current.setDuration?.(dur), []);
@@ -491,8 +461,8 @@ export default function App() {
     speakerRegistry,
     voiceSettings,
     voiceSettingsRef,
-    globalLogoSettings,
-    globalLogoSettingsRef,
+    globalOverlaySettings,
+    globalOverlaySettingsRef,
     scriptData,
     videoClips: media.videoClips,
     fullAudioPath: audio.fullAudioPath,
@@ -657,7 +627,7 @@ export default function App() {
   const handleUpdateVoiceSettings = useCallback((newSettings) => {
     const prevSettings = voiceSettingsRef.current || EMPTY_OBJECT;
     const prevRatio = sanitizeAspectRatio(prevSettings?.aspectRatio);
-    const prevLogo = globalLogoSettingsRef.current || DEFAULT_GLOBAL_LOGO_SETTINGS;
+    const prevOverlay = globalOverlaySettingsRef.current || DEFAULT_GLOBAL_OVERLAY_SETTINGS;
     const normalizedSettings = newSettings && typeof newSettings === 'object' && !Array.isArray(newSettings)
       ? {
           ...newSettings,
@@ -665,61 +635,65 @@ export default function App() {
         }
       : newSettings;
 
-    // Route logo* keys strictly to the single global logo store (never per-episode voiceSettings)
-    let logoChanged = false;
-    if (normalizedSettings && typeof normalizedSettings === 'object' && hasAnyLogoSettings(normalizedSettings)) {
-      const nextLogo = normalizeGlobalLogoSettings(extractLogoSettings(normalizedSettings), prevLogo);
-      if (!areLogoSettingsEqual(prevLogo, nextLogo)) {
-        logoChanged = true;
-        userEditedLogoRef.current = true;
-        globalLogoSettingsRef.current = nextLogo;
-        setGlobalLogoSettings(nextLogo);
-        saveGlobalLogoSettings(nextLogo);
+    // Route all branding/overlay keys (logo*, cornerMask*, sponsor*, anti-theft/watermark)
+    // strictly to the single global overlay store (never per-episode voiceSettings)
+    let overlayChanged = false;
+    if (normalizedSettings && typeof normalizedSettings === 'object' && hasAnyGlobalOverlaySettings(normalizedSettings)) {
+      const nextOverlay = normalizeGlobalOverlaySettings(
+        extractGlobalOverlaySettings(normalizedSettings),
+        prevOverlay
+      );
+      if (!areGlobalOverlaySettingsEqual(prevOverlay, nextOverlay)) {
+        overlayChanged = true;
+        userEditedOverlayRef.current = true;
+        globalOverlaySettingsRef.current = nextOverlay;
+        setGlobalOverlaySettings(nextOverlay);
+        saveGlobalOverlaySettings(nextOverlay);
       }
     }
 
-    const nonLogoSettings = normalizedSettings && typeof normalizedSettings === 'object'
-      ? stripLogoSettings(normalizedSettings)
+    const perEpisodeSettings = normalizedSettings && typeof normalizedSettings === 'object'
+      ? stripGlobalOverlaySettings(normalizedSettings)
       : normalizedSettings;
 
-    const hasNonLogoChange = Boolean(
-      nonLogoSettings &&
-      typeof nonLogoSettings === 'object' &&
-      !shallowEqualObjects(prevSettings, nonLogoSettings)
+    const hasPerEpisodeChange = Boolean(
+      perEpisodeSettings &&
+      typeof perEpisodeSettings === 'object' &&
+      !shallowEqualObjects(prevSettings, perEpisodeSettings)
     );
-    const hasNonLogoRenderChange = Boolean(
-      nonLogoSettings &&
-      typeof nonLogoSettings === 'object' &&
+    const hasPerEpisodeRenderChange = Boolean(
+      perEpisodeSettings &&
+      typeof perEpisodeSettings === 'object' &&
       RENDER_INVALIDATING_SETTING_KEYS.some(
-        (key) => readNormalizedSettingVal(prevSettings, key) !== readNormalizedSettingVal(nonLogoSettings, key)
+        (key) => readNormalizedSettingVal(prevSettings, key) !== readNormalizedSettingVal(perEpisodeSettings, key)
       )
     );
-    const hasRenderAffectingChange = hasNonLogoRenderChange || logoChanged;
+    const hasRenderAffectingChange = hasPerEpisodeRenderChange || overlayChanged;
     const hasSubtitleVisualChange = Boolean(
-      nonLogoSettings &&
-      typeof nonLogoSettings === 'object' &&
+      perEpisodeSettings &&
+      typeof perEpisodeSettings === 'object' &&
       SUBTITLE_PREVIEW_SETTING_KEYS.some(
-        (key) => readNormalizedSettingVal(prevSettings, key) !== readNormalizedSettingVal(nonLogoSettings, key)
+        (key) => readNormalizedSettingVal(prevSettings, key) !== readNormalizedSettingVal(perEpisodeSettings, key)
       )
     );
 
-    if (nonLogoSettings && typeof nonLogoSettings === 'object' && (!logoChanged || hasNonLogoChange)) {
-      voiceSettingsRef.current = nonLogoSettings;
-      saveVoiceSettings(nonLogoSettings);
-      audioRef.current.handleUpdateVoiceSettings?.(nonLogoSettings);
+    if (perEpisodeSettings && typeof perEpisodeSettings === 'object' && (!overlayChanged || hasPerEpisodeChange)) {
+      voiceSettingsRef.current = perEpisodeSettings;
+      saveVoiceSettings(perEpisodeSettings);
+      audioRef.current.handleUpdateVoiceSettings?.(perEpisodeSettings);
     }
 
     const sId = seriesRef.current.seriesId;
     const eId = seriesRef.current.episodeId;
-    const ratioChanged = Boolean(nonLogoSettings?.aspectRatio && nonLogoSettings.aspectRatio !== prevRatio);
+    const ratioChanged = Boolean(perEpisodeSettings?.aspectRatio && perEpisodeSettings.aspectRatio !== prevRatio);
     const clearedRenderedForEdit = Boolean(hasRenderAffectingChange && renderRef.current?.renderedVideo);
 
     if (clearedRenderedForEdit) {
       if (renderRef.current.setRenderedVideo) {
         renderRef.current.setRenderedVideo(null);
       }
-      const patch = hasNonLogoChange || ratioChanged
-        ? { renderedVideo: null, voiceSettings: nonLogoSettings }
+      const patch = hasPerEpisodeChange || ratioChanged
+        ? { renderedVideo: null, voiceSettings: perEpisodeSettings }
         : { renderedVideo: null };
       if (sId && eId) {
         saveEpisodeState(sId, eId, patch);
@@ -727,8 +701,8 @@ export default function App() {
       if (eId && seriesRef.current.handleSaveEpisodeBackground) {
         seriesRef.current.handleSaveEpisodeBackground(eId, patch);
       }
-    } else if (hasNonLogoRenderChange || ratioChanged) {
-      const patch = { voiceSettings: nonLogoSettings };
+    } else if (hasPerEpisodeRenderChange || ratioChanged) {
+      const patch = { voiceSettings: perEpisodeSettings };
       if (sId && eId) {
         saveEpisodeState(sId, eId, patch);
         seriesRef.current.handleSaveEpisodeBackground?.(eId, patch);
@@ -737,7 +711,7 @@ export default function App() {
 
     if (
       hasSubtitleVisualChange &&
-      nonLogoSettings?.burnSubtitles !== false &&
+      perEpisodeSettings?.burnSubtitles !== false &&
       !playbackRef.current?.isPlaying
     ) {
       const sampleTime = resolveSubtitleSampleSeekTime(
@@ -748,7 +722,7 @@ export default function App() {
         playbackRef.current?.handleSeek?.(sampleTime);
       }
     }
-  }, [setGlobalLogoSettings]);
+  }, [setGlobalOverlaySettings]);
 
   const handleAspectRatioChange = useCallback((nextRatio) => {
     const sanitizedRatio = sanitizeAspectRatio(nextRatio);
@@ -905,9 +879,9 @@ export default function App() {
   const studioSettings = useMemo(
     () => ({
       ...(voiceSettings || EMPTY_OBJECT),
-      ...(globalLogoSettings || DEFAULT_GLOBAL_LOGO_SETTINGS),
+      ...(globalOverlaySettings || DEFAULT_GLOBAL_OVERLAY_SETTINGS),
     }),
-    [voiceSettings, globalLogoSettings]
+    [voiceSettings, globalOverlaySettings]
   );
 
   const effectiveRenderedVideo = isRenderedRatioMismatch(

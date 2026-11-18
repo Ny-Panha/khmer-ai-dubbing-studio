@@ -7,7 +7,13 @@ import {
   killBatchRenderApi,
 } from '../services/api';
 import { resolveDefaultAspectRatio, inferRenderedAspectRatio, sanitizeAspectRatio } from '../utils/projectStorage';
-import { buildLogoExportPayload, loadGlobalLogoSettings } from '../utils/logoSettingsStorage';
+import {
+  buildLogoExportPayload,
+  buildCornerMaskExportPayload,
+  buildSponsorExportPayload,
+  buildAntiTheftExportPayload,
+  loadGlobalOverlaySettings,
+} from '../utils/overlaySettingsStorage';
 
 /**
  * Custom hook to manage single-episode and multi-episode batch/merged video export
@@ -20,6 +26,8 @@ export function useVideoRender({
   speakerRegistry,
   voiceSettings,
   voiceSettingsRef = null,
+  globalOverlaySettings = null,
+  globalOverlaySettingsRef = null,
   globalLogoSettings = null,
   globalLogoSettingsRef = null,
   scriptData,
@@ -55,17 +63,23 @@ export function useVideoRender({
   refreshSeriesRef.current = refreshSeriesFromServer;
   const internalVoiceSettingsRef = useRef(voiceSettings);
   internalVoiceSettingsRef.current = voiceSettings;
-  const internalGlobalLogoSettingsRef = useRef(globalLogoSettings);
-  internalGlobalLogoSettingsRef.current = globalLogoSettings;
+  const effectiveOverlayProp = globalOverlaySettings || globalLogoSettings;
+  const internalGlobalOverlaySettingsRef = useRef(effectiveOverlayProp);
+  internalGlobalOverlaySettingsRef.current = effectiveOverlayProp;
 
   const getLatestVoiceSettings = useCallback(
     () => voiceSettingsRef?.current || internalVoiceSettingsRef.current || voiceSettings || {},
     [voiceSettingsRef, voiceSettings]
   );
 
-  const getLatestGlobalLogoSettings = useCallback(
-    () => globalLogoSettingsRef?.current || internalGlobalLogoSettingsRef.current || globalLogoSettings || loadGlobalLogoSettings(),
-    [globalLogoSettingsRef, globalLogoSettings]
+  const getLatestGlobalOverlaySettings = useCallback(
+    () =>
+      globalOverlaySettingsRef?.current ||
+      globalLogoSettingsRef?.current ||
+      internalGlobalOverlaySettingsRef.current ||
+      effectiveOverlayProp ||
+      loadGlobalOverlaySettings(),
+    [globalOverlaySettingsRef, globalLogoSettingsRef, effectiveOverlayProp]
   );
 
   const triggerBrowserDownload = useCallback((url, filename) => {
@@ -223,72 +237,24 @@ export function useVideoRender({
   }, [seriesId, stopBatchPolling, startBatchPolling]);
 
   const buildAntiTheftOptions = useCallback(() => {
-    const activeSettings = getLatestVoiceSettings();
-    return {
-      enabled: Boolean(activeSettings?.enableAntiTheft),
-      marqueeText: activeSettings?.marqueeText || '«ហាមផុសបន្ត • សូមឱ្យតម្លៃលើការខិតខំរបស់ម្ចាស់ដើម»',
-      marqueeSpeed: activeSettings?.marqueeSpeed || 'normal',
-      marqueePosition: activeSettings?.marqueePosition || 'bottom',
-      marqueeTextColor: activeSettings?.marqueeTextColor || '#FFE600',
-      enableWatermark: activeSettings?.enableWatermark !== false,
-      watermarkText: activeSettings?.watermarkText || 'រក្សាសិទ្ធិដោយ ៖ Holiday Kh Drama',
-      watermarkPosition: activeSettings?.watermarkPosition || 'above-ticker',
-      watermarkColor: activeSettings?.watermarkColor || '#38BDF8',
-      antiTheftSize: activeSettings?.antiTheftSize || 'small',
-    };
-  }, [getLatestVoiceSettings]);
+    const activeOverlay = getLatestGlobalOverlaySettings();
+    return buildAntiTheftExportPayload(activeOverlay);
+  }, [getLatestGlobalOverlaySettings]);
 
   const buildLogoOptions = useCallback(() => {
-    const activeLogo = getLatestGlobalLogoSettings();
-    return buildLogoExportPayload(activeLogo);
-  }, [getLatestGlobalLogoSettings]);
+    const activeOverlay = getLatestGlobalOverlaySettings();
+    return buildLogoExportPayload(activeOverlay);
+  }, [getLatestGlobalOverlaySettings]);
 
   const buildCornerMaskOptions = useCallback(() => {
-    const activeSettings = getLatestVoiceSettings();
-    return {
-      enabled: Boolean(activeSettings?.enableCornerMask),
-      text: activeSettings?.cornerMaskText ?? '«រឿងប្រឌិតសុទ្ធសាធ • ហាមចម្លង»',
-      style: activeSettings?.cornerMaskStyle || 'badge',
-      position: activeSettings?.cornerMaskPosition || 'top-right',
-      width: Number(activeSettings?.cornerMaskWidth) || 220,
-      height: Number(activeSettings?.cornerMaskHeight) || 54,
-      opacity: Number(activeSettings?.cornerMaskOpacity) || 0.95,
-    };
-  }, [getLatestVoiceSettings]);
+    const activeOverlay = getLatestGlobalOverlaySettings();
+    return buildCornerMaskExportPayload(activeOverlay);
+  }, [getLatestGlobalOverlaySettings]);
 
   const buildSponsorOptions = useCallback(() => {
-    const activeSettings = getLatestVoiceSettings();
-    const rawX = activeSettings?.sponsorXPercent;
-    const rawY = activeSettings?.sponsorYPercent;
-    const parsedX = rawX === null || rawX === undefined || rawX === '' ? NaN : Number(rawX);
-    const parsedY = rawY === null || rawY === undefined || rawY === '' ? NaN : Number(rawY);
-    const sponsorXPercent = Number.isFinite(parsedX) ? parsedX : null;
-    const sponsorYPercent = Number.isFinite(parsedY) ? parsedY : null;
-    return {
-      enabled: Boolean(activeSettings?.enableSponsor),
-      enableSponsor: Boolean(activeSettings?.enableSponsor),
-      sponsorVideoUrl: activeSettings?.sponsorVideoUrl,
-      sponsorVideoPath: activeSettings?.sponsorVideoPath,
-      videoUrl: activeSettings?.sponsorVideoUrl,
-      videoPath: activeSettings?.sponsorVideoPath,
-      position: activeSettings?.sponsorPosition || 'bottom-left',
-      sponsorXPercent,
-      sponsorYPercent,
-      xPercent: sponsorXPercent,
-      yPercent: sponsorYPercent,
-      scale: Number(activeSettings?.sponsorScale) || 25,
-      opacity: Number(activeSettings?.sponsorOpacity) || 1.0,
-      chromaKey: activeSettings?.sponsorChromaKey !== false,
-      chromaSimilarity: Number(activeSettings?.sponsorChromaSimilarity) || 0.28,
-      timingMode: activeSettings?.sponsorTimingMode || 'loop',
-      intervalSec: Number(activeSettings?.sponsorIntervalSec) || 60,
-      durationSec: Number(activeSettings?.sponsorDurationSec) || 10,
-      startSec: Number(activeSettings?.sponsorStartSec) || 0,
-      endSec: Number(activeSettings?.sponsorEndSec) || 15,
-      muteAudio: activeSettings?.sponsorMuteAudio !== false,
-      volume: Number(activeSettings?.sponsorVolume) || 0.5,
-    };
-  }, [getLatestVoiceSettings]);
+    const activeOverlay = getLatestGlobalOverlaySettings();
+    return buildSponsorExportPayload(activeOverlay);
+  }, [getLatestGlobalOverlaySettings]);
 
   const handleStartBatchRender = useCallback(async ({
     episodeIds = [],

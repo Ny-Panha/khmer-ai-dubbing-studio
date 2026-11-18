@@ -22,7 +22,12 @@ const {
   getMediaDuration,
   cancelJobRenderProcess,
 } = require("./ffmpegService");
-const { getEffectiveGlobalLogoSettingsForExport } = require("./globalLogoSettingsService");
+const {
+  getEffectiveGlobalLogoSettingsForExport,
+  getEffectiveGlobalCornerMaskForExport,
+  getEffectiveGlobalSponsorForExport,
+  getEffectiveGlobalAntiTheftForExport,
+} = require("./globalOverlaySettingsService");
 
 const batchExportJobs = new Map();
 const batchJobControllers = new Map();
@@ -553,8 +558,9 @@ async function runBatchExportWorker({
 
   const rawLogo = exportSettings.logoSettings || getEffectiveGlobalLogoSettingsForExport() || null;
   const { logoPath: resolvedLogoPath, tempLogoFile } = resolveLogoInputForBatch(rawLogo, exportsDir);
-  const rawSponsor = exportSettings.sponsorSettings || null;
+  const rawSponsor = exportSettings.sponsorSettings || getEffectiveGlobalSponsorForExport() || null;
   const resolvedSponsorPath = resolveSponsorInputForBatch(rawSponsor);
+  const cornerMask = exportSettings.cornerMask || getEffectiveGlobalCornerMaskForExport() || null;
 
   const totalCount = plan.eligible.length;
   const isMergeMode = job.mode === "merge";
@@ -598,7 +604,7 @@ async function runBatchExportWorker({
   const subtitleSize = exportSettings.subtitleSize || "medium";
   const subtitleStyle = exportSettings.subtitleStyle || "banner";
   const enableDemucs = Boolean(exportSettings.enableDemucs);
-  const antiTheft = exportSettings.antiTheft || null;
+  const antiTheft = exportSettings.antiTheft || getEffectiveGlobalAntiTheftForExport() || null;
 
   const renderedFilePaths = [];
   let mergedTempOrTargetPath = null;
@@ -715,6 +721,7 @@ async function runBatchExportWorker({
           videoClips: epPlan.videoClips,
           antiTheft,
           logoSettings: resolvedLogoPath ? { ...rawLogo, logoPath: resolvedLogoPath } : null,
+          cornerMask,
           sponsorSettings: resolvedSponsorPath ? { ...rawSponsor, sponsorPath: resolvedSponsorPath } : null,
           allowOriginalAudio: epPlan.useOriginalAudio,
           expectedDurationSec: expectedDur,

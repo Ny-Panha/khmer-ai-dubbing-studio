@@ -36,6 +36,10 @@ describe('Sponsor Ads (Green Screen Video) End-to-End Suite', () => {
       path.resolve(__dirname, '../services/batchExportService.js'),
       'utf8'
     );
+    const overlayStorageCode = fs.readFileSync(
+      path.resolve(__dirname, '../../frontend/src/utils/overlaySettingsStorage.js'),
+      'utf8'
+    );
     const ffmpegCode = fs.readFileSync(
       path.resolve(__dirname, '../services/ffmpegService.js'),
       'utf8'
@@ -46,14 +50,24 @@ describe('Sponsor Ads (Green Screen Video) End-to-End Suite', () => {
       'ExportSettingsPanel updates sponsorVideoUrl and sponsorVideoPath atomically in one object patch');
     assert.ok(exportPanelCode.includes('value="custom"') && exportPanelCode.includes('sponsorXPercent: null'),
       'ExportSettingsPanel supports custom sponsor position and clears custom percent on preset pick');
-    assert.ok(appCode.includes('enableSponsor: false') && appCode.includes('sponsorVideoUrl: null') && appCode.includes('sponsorXPercent: null') && appCode.includes('sponsorYPercent: null'),
-      'App VISUAL_SETTING_DEFAULTS includes sponsor keys including sponsorXPercent/sponsorYPercent so changes persist and invalidate stale renders');
+    assert.ok(
+      overlayStorageCode.includes('enableSponsor: false') &&
+        overlayStorageCode.includes('sponsorVideoUrl: null') &&
+        overlayStorageCode.includes('sponsorXPercent: null') &&
+        overlayStorageCode.includes('sponsorYPercent: null') &&
+        appCode.includes('hasRenderAffectingChange = hasPerEpisodeRenderChange || overlayChanged'),
+      'Global overlay store includes sponsor keys including sponsorXPercent/sponsorYPercent and App invalidates stale renders on overlay changes'
+    );
     assert.ok(overlayCode.includes('drawCurrentFrame()') && overlayCode.includes('onPointerDown={handlePointerDown}') && overlayCode.includes("sponsorPosition: 'custom'"),
       'SponsorOverlay draws initial chroma-keyed frame even while paused and supports pointer dragging into percent-based custom coordinates');
     assert.ok(previewCode.includes('<SponsorOverlay') && previewCode.includes('onUpdateVoiceSettings={onUpdateVoiceSettings}'),
       'VideoPlayerPreview passes onUpdateVoiceSettings to SponsorOverlay');
-    assert.ok(renderHookCode.includes('sponsorXPercent') && renderHookCode.includes('sponsorYPercent'),
-      'useVideoRender buildSponsorOptions forwards sponsorXPercent and sponsorYPercent');
+    assert.ok(
+      renderHookCode.includes('buildSponsorExportPayload') &&
+        overlayStorageCode.includes('sponsorXPercent') &&
+        overlayStorageCode.includes('sponsorYPercent'),
+      'useVideoRender buildSponsorOptions forwards sponsorXPercent and sponsorYPercent from global overlay store'
+    );
     assert.ok(batchCode.includes('resolveSponsorInputForBatch') && batchCode.includes('sponsorSettings: resolvedSponsorPath'),
       'batchExportService resolves and forwards sponsorSettings to renderDubbedVideoWithDucking');
     assert.ok(ffmpegCode.includes('const outputCanvasW =') && ffmpegCode.includes('const sponsorMuteAudio =') && ffmpegCode.includes('hasCustomSponsorCoords'),
