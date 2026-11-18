@@ -924,7 +924,23 @@ async function syncSeriesMetadataSafely(seriesId, incomingSeries, options = {}) 
       const checkDiskRv = projectsDir === PROJECTS_DIR;
       const safeIncRv = sanitizeRenderedVideoRef(incEp.renderedVideo, { checkDisk: checkDiskRv, uploadsDir: UPLOADS_DIR });
       const safeDiskRv = sanitizeRenderedVideoRef(diskEp.renderedVideo, { checkDisk: checkDiskRv, uploadsDir: UPLOADS_DIR });
-      const resolvedRenderedVideo = safeIncRv || safeDiskRv || null;
+      // A compact autosave can omit the render. An explicit settings edit carries
+      // a cutoff so that a later sync from an old tab cannot restore that MP4.
+      const diskCutoff = Number(diskEp.renderInvalidatedAt) || 0;
+      const incomingCutoff = Number(incEp.renderInvalidatedAt) || 0;
+      const renderInvalidatedAt = Math.max(diskCutoff, incomingCutoff);
+      const resolvedRenderedVideo = [safeIncRv, safeDiskRv]
+        .filter(render => render && (!renderInvalidatedAt || Number(render.renderedAt) > renderInvalidatedAt))
+        .sort((a, b) => (Number(b.renderedAt) || 0) - (Number(a.renderedAt) || 0))[0] || null;
+      const voiceSettings = stripLogoSettingsFromObject(
+        incEp.voiceSettings !== undefined ? incEp.voiceSettings : diskEp.voiceSettings
+      );
+      if (incomingCutoff < diskCutoff && voiceSettings && diskEp.voiceSettings) {
+        for (const key of ['subtitleSize', 'subtitleStyle', 'subtitleColor']) {
+          if (Object.hasOwn(diskEp.voiceSettings, key)) voiceSettings[key] = diskEp.voiceSettings[key];
+          else delete voiceSettings[key];
+        }
+      }
       let finalStatus = resolvedStatus || diskEp.status;
       if (finalStatus === 'completed' && !resolvedRenderedVideo) {
         finalStatus = (preserveDiskAudioInvalidation ? false : Boolean(incEp.audioGenerated || diskEp.audioGenerated))
@@ -991,9 +1007,8 @@ async function syncSeriesMetadataSafely(seriesId, incomingSeries, options = {}) 
         isDemucsDone: Boolean(incEp.isDemucsDone || diskEp.isDemucsDone),
         hasDemucs: Boolean(incEp.hasDemucs || diskEp.hasDemucs),
         renderedVideo: resolvedRenderedVideo,
-        voiceSettings: stripLogoSettingsFromObject(
-          incEp.voiceSettings !== undefined ? incEp.voiceSettings : diskEp.voiceSettings
-        ),
+        ...(renderInvalidatedAt > 0 && { renderInvalidatedAt }),
+        voiceSettings,
       };
     });
 
@@ -1148,6 +1163,15 @@ async function persistEpisodeTimelineOperation({
         episode.videoClips = videoClips;
         episode.videoClipsUpdatedAt = videoClipsUpdatedAt;
         operationTimestamps = { updatedAt, videoClipsUpdatedAt };
+      }
+
+      // Timeline mutations (delete / undo-redo restore) invalidate any cached rendered preview
+      // WITHOUT deleting the rendered MP4 file from disk.
+      const prevRenderedAt = Number(episode.renderedVideo?.renderedAt || 0);
+      episode.renderedVideo = null;
+      episode.renderInvalidatedAt = Math.max(now, Number(episode.renderInvalidatedAt || 0) + 1, prevRenderedAt > 0 ? prevRenderedAt + 1 : 0);
+      if (episode.status === 'completed') {
+        episode.status = episode.audioGenerated ? 'voicing' : 'translated';
       }
 
       episode.lastModified = Math.max(now, Number(episode.lastModified || 0) + 1);

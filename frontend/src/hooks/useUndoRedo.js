@@ -38,6 +38,7 @@ export function useUndoRedo({
   setActiveClipId,
   seriesId = null,
   episodeId = null,
+  onInvalidateRenderedPreview = null,
 }) {
   const [undoStack, setUndoStack] = useState([]);
   const [redoStack, setRedoStack] = useState([]);
@@ -91,8 +92,11 @@ export function useUndoRedo({
         : (targetSnapshot.segments.length ? { mode: 'dialogue', segments: targetSnapshot.segments, updatedAt: localSave?.updatedAt || Date.now() } : sPrev)));
     }
     if (targetSnapshot.activeClipId !== undefined) setActiveClipId(targetSnapshot.activeClipId);
+    if (typeof onInvalidateRenderedPreview === 'function') {
+      onInvalidateRenderedPreview();
+    }
     persistSnapshot(targetSnapshot);
-  }, [undoStack, videoClips, scriptData, activeClipId, setVideoClips, setScriptData, setActiveClipId, seriesId, episodeId, persistSnapshot]);
+  }, [undoStack, videoClips, scriptData, activeClipId, setVideoClips, setScriptData, setActiveClipId, seriesId, episodeId, persistSnapshot, onInvalidateRenderedPreview]);
 
   const handleRedo = useCallback(() => {
     if (!redoStack.length) return;
@@ -118,8 +122,11 @@ export function useUndoRedo({
         : (targetSnapshot.segments.length ? { mode: 'dialogue', segments: targetSnapshot.segments, updatedAt: localSave?.updatedAt || Date.now() } : sPrev)));
     }
     if (targetSnapshot.activeClipId !== undefined) setActiveClipId(targetSnapshot.activeClipId);
+    if (typeof onInvalidateRenderedPreview === 'function') {
+      onInvalidateRenderedPreview();
+    }
     persistSnapshot(targetSnapshot);
-  }, [redoStack, videoClips, scriptData, activeClipId, setVideoClips, setScriptData, setActiveClipId, seriesId, episodeId, persistSnapshot]);
+  }, [redoStack, videoClips, scriptData, activeClipId, setVideoClips, setScriptData, setActiveClipId, seriesId, episodeId, persistSnapshot, onInvalidateRenderedPreview]);
 
   const clearHistory = useCallback(() => {
     setUndoStack([]);

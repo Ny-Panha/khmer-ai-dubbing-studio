@@ -1,6 +1,40 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
+- **Environment**: Antigravity IDE
+- **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-18T18:47:30+07:00
+
+## Summary: Invalidate Cached `renderedVideo` Preview on Any Segment / Audio-Mix Mutation (COMPLETED)
+- **Root Cause**: Editing or deleting segments on the timeline updated `scriptData.segments` and synced live audio, but never invalidated `renderedVideo` (unlike visual/export settings edits). As a result, Studio stayed in `🎬 Rendered` mode playing the stale pre-edit MP4 with the deleted voice baked into its audio track.
+- **Changes Applied (reusing existing stale-render invalidation pattern — rendered MP4 files on disk are NEVER deleted)**:
+  1. `frontend/src/App.jsx`: Added central `invalidateRenderedPreview(targetEpId)` callback — immediately calls `setRenderedVideo(null)` (hiding the green `🎬 Rendered` badge and falling back to live preview), stamps monotonic `renderInvalidatedAt = Math.max(Date.now(), prevRenderedAt + 1)` via `saveEpisodeState` and `handleSaveEpisodeBackground`, and wired `onInvalidateRenderedPreview` into `useClipOperations`, `useAudioDubbing`, `useUndoRedo`, and `useScriptWorkflow`.
+  2. `frontend/src/hooks/useClipOperations.js`: Wired `invalidateRendered()` into all 13 timeline/segment mutation paths: `handleDeleteSegment`, `handleAddSegmentAtTime` (via `handleUpdateTimelineSegments`), `handleSplitClip` (segment & clip), `handleAutoSplitSegment`, `handleAutoSplitVideo`, `handleResetFullVideo`, `handleBridgeGaps` (merge/bridge), `handleAutoAlignNoOverlap`, `handleReleaseSegmentToAutoAlign`, `handleDeleteClip` (clip & Gap ripple), `handleUpdateClips`, `handleUpdateTimelineSegments` (drag/move `audioStartSec`/`trackRow`, trim, inline edits), `handleToggleMuteSegment`, and `handleToggleMuteVideoClip`.
+  3. `frontend/src/hooks/useAudioDubbing.js`: Wired `invalidateRendered()` into all TTS/segment audio mutation paths: `handleRegenerateSingleSegment`, `handleGenerateAudio` (active & background episode when `!result.alreadyCompleted`), `handleUpdateSegmentSpeed`, `handleUpdateSegmentVoice`, `handleToggleDeliveryType`, `handleUpdateSegmentText`, `handleSplitSegment`, `handleUpdateSpeakerVoice`, and `handleTranslateSingleSegment`.
+  4. `frontend/src/hooks/useUndoRedo.js`: Wired `onInvalidateRenderedPreview()` into BOTH `handleUndo` and `handleRedo`.
+  5. `frontend/src/hooks/useScriptWorkflow.js`: Wired `onInvalidateRenderedPreview()` into `handleGenerateScript` and `handleUpdateScript` (covering `MediaLibrary` Add Segment, Bridge/Merge, and fallback delete/edit).
+  6. `frontend/src/utils/projectStorage.js` & `backend/services/episodeService.js` & `frontend/src/hooks/useVideoRender.js`: Enforced monotonic `renderInvalidatedAt` cutoff across `saveEpisodeState`, `saveTimelineOperationToLocalStorage`, `persistEpisodeTimelineOperation` (`delete` & `restore`), and `syncSeriesMetadataSafely` so stale `renderedVideo` cannot resurrect on autosave/reload while fresh renders (`renderedAt > renderInvalidatedAt`) are accepted cleanly.
+  7. `backend/tests/timeline_render_invalidation.test.js` *(new)*: Added backend persistence, frontend localStorage cutoff, and full static wiring audit tests.
+- **Verification Evidence**:
+  - Frontend production build (`npm --prefix frontend run build`): **PASS** (`1.14s`, 0 errors).
+  - Relevant test suites (`timeline_render_invalidation`, `timeline_delete_persistence`, `timeline_user_shifted_anchors`, `timeline_voice_lane_isolation`, `series_persist_and_sync`, `workspace_player_containment`, `auto_align_voice`): **50 / 50 PASS** (0 fail).
+  - Real-app Playwright E2E on `Pseudo_Spiritual_Root` (`ep_2` with real rendered MP4 on disk, original `series.json` & MP4 100% untouched):
+    - Before delete: `🎬 Rendered` badge visible, `<video>` playing `*_EP2_Khmer_Dubbed.mp4`.
+    - Delete voice `#2` (`10.3s–11.3s`): `🎬 Rendered` badge disappeared immediately, `<video>` switched to `Pseudo_Spiritual_Root_ep_2_source.mp4`, count dropped `252 -> 251`, `renderInvalidatedAt` stamped, MP4 kept on disk, live playback across `10.35s–11.015s` had **0** voice audios played (`playedSeg2Count: 0`).
+    - Undo (`Ctrl+Z`): restored `#2` (`251 -> 252`), kept `🎬 Rendered` hidden, and advanced `renderInvalidatedAt`.
+    - Add Segment (`ថែមឃ្លា`) & Drag/Move voice `#2` from Rendered state: `🎬 Rendered` badge disappeared immediately and player fell back to live source video (`0` page errors).
+
+## Active Environment
+- **Backend API**: `http://localhost:5000` (restarted fresh on `chore/full-project-cleanup`)
+- **Frontend Studio**: `http://localhost:5173` (Vite dev server on `chore/full-project-cleanup`)
+- **Branch**: `chore/full-project-cleanup` (committed & pushed)
+
+## Next Steps
+- Refresh browser (`Ctrl + F5`) at `http://localhost:5173/studio` — deleting, adding, moving, trimming, splitting, muting, regenerating, or undoing segments now exits `🎬 Rendered` mode immediately to live preview.
+
+---
+
+## Previous Session
 - **Environment**: Codex CLI
 - **Branch**: `chore/full-project-cleanup`
 - **Timestamp**: 2026-11-18T18:23:22+07:00

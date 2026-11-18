@@ -107,7 +107,7 @@ export function useVideoRender({
           videoUrl: matched.videoUrl,
           outputVideoUrl: matched.outputVideoUrl || matched.videoUrl,
           outputFilename: matched.outputFilename,
-          renderedAt: matched.renderedAt || job.completedAt,
+          renderedAt: matched.renderedAt || job.completedAt || Date.now(),
           burnedSubtitleOptions: matched.burnedSubtitleOptions,
           downloadUrl: matched.downloadUrl,
           renderTimeSeconds: matched.renderTimeSeconds || 0,

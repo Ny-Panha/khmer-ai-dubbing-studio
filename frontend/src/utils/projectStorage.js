@@ -953,6 +953,12 @@ export function saveTimelineOperationToLocalStorage({
     return null;
   }
 
+  const prevRenderedAt = Number(episode.renderedVideo?.renderedAt || 0);
+  episode.renderedVideo = null;
+  episode.renderInvalidatedAt = Math.max(now, Number(episode.renderInvalidatedAt || 0) + 1, prevRenderedAt > 0 ? prevRenderedAt + 1 : 0);
+  if (episode.status === 'completed') {
+    episode.status = episode.audioGenerated ? 'voicing' : 'translated';
+  }
   episode.lastModified = Math.max(now, Number(episode.lastModified || 0) + 1);
   saveSeriesList(list);
   return timestamps;
@@ -1073,11 +1079,22 @@ export function saveEpisodeState(seriesId, episodeId, stateData) {
     const deletedVideoClipIds = new Set(uniqueKeys(prevEp.deletedVideoClipIds));
     const mergedVideoClips = rawVideoClips.filter((clip) => !deletedVideoClipIds.has(String(clip?.id ?? '')));
 
-    const mergedRenderedVideo = (stateData.clearAudio || stateData.clearScript)
+    const mergedRenderInvalidatedAt = Math.max(
+      Number(prevEp.renderInvalidatedAt || 0),
+      Number(stateData.renderInvalidatedAt || 0)
+    );
+    const rawMergedRenderedVideo = (stateData.clearAudio || stateData.clearScript)
       ? null
       : (stateData.renderedVideo !== undefined
         ? sanitizeRenderedVideo(stateData.renderedVideo)
         : sanitizeRenderedVideo(prevEp.renderedVideo));
+    const mergedRenderedVideo = (
+      rawMergedRenderedVideo &&
+      mergedRenderInvalidatedAt > 0 &&
+      Number(rawMergedRenderedVideo.renderedAt || 0) <= mergedRenderInvalidatedAt
+    )
+      ? null
+      : rawMergedRenderedVideo;
 
     const rawVoiceSettings = stateData.voiceSettings !== undefined
       ? stateData.voiceSettings
@@ -1097,6 +1114,7 @@ export function saveEpisodeState(seriesId, episodeId, stateData) {
       fullAudioPath: mergedFullAudioPath,
       fullAudioUrl: mergedFullAudioUrl,
       renderedVideo: mergedRenderedVideo,
+      ...(mergedRenderInvalidatedAt > 0 ? { renderInvalidatedAt: mergedRenderInvalidatedAt } : {}),
       videoClips: mergedVideoClips,
       videoClipsUpdatedAt: staleVideoClipsSnapshot
         ? previousVideoClipsUpdatedAt

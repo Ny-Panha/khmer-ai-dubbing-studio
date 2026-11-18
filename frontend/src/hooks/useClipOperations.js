@@ -170,7 +170,13 @@ export function useClipOperations({
   seriesId = null,
   episodeId = null,
   setAudioOutdated = null,
+  onInvalidateRenderedPreview = null,
 }) {
+  const invalidateRendered = useCallback(() => {
+    if (typeof onInvalidateRenderedPreview === 'function') {
+      onInvalidateRenderedPreview();
+    }
+  }, [onInvalidateRenderedPreview]);
   const pushUndoSnapshot = useCallback((...args) => {
     try {
       if (typeof pushUndoSnapshotParam === 'function') {
@@ -235,6 +241,7 @@ export function useClipOperations({
 
       if (segOpResult.applied) {
         pushUndoSnapshot(currentClips, segments);
+        invalidateRendered();
         setScriptData((prev) => (prev ? { ...prev, segments: segOpResult.state.segments, updatedAt: Date.now() } : null));
         if (setSelectedSegmentId && segOpResult.newSegmentId) {
           setSelectedSegmentId(segOpResult.newSegmentId);
@@ -273,6 +280,7 @@ export function useClipOperations({
 
     if (clipOpResult.applied) {
       pushUndoSnapshot(currentClips, segments);
+      invalidateRendered();
       setVideoClips(clipOpResult.state.videoClips);
       if (typeof setVideoClipsUpdatedAt === 'function') {
         setVideoClipsUpdatedAt(Date.now());
@@ -316,6 +324,7 @@ export function useClipOperations({
 
     if (splitClips && splitClips.length > 0) {
       pushUndoSnapshot(videoClips);
+      invalidateRendered();
       setVideoClips(splitClips);
       setActiveClipId(splitClips[0]?.id || null);
     }
@@ -343,6 +352,7 @@ export function useClipOperations({
         },
       ];
       pushUndoSnapshot(videoClips);
+      invalidateRendered();
       setVideoClips(fullClip);
       setActiveClipId(fullClip[0]?.id || null);
     }
@@ -351,6 +361,7 @@ export function useClipOperations({
   // Bridge Subtitle/Dialogue Gaps & Video Gaps
   const handleBridgeGaps = () => {
     pushUndoSnapshot(videoClips, scriptData?.segments || []);
+    invalidateRendered();
 
     // 1. Bridge video gaps
     if (videoClips && videoClips.length > 1) {
@@ -471,6 +482,7 @@ export function useClipOperations({
       segments: alignedSegments,
       updatedAt: Date.now(),
     };
+    invalidateRendered();
     setScriptData(nextScriptData);
     showInAppToast(summaryMsg, toastDuration);
 
@@ -515,6 +527,7 @@ export function useClipOperations({
     getVideoId,
     setFullAudioUrl,
     setFullAudioPath,
+    invalidateRendered,
   ]);
 
   // Release a single manually-shifted segment back to Auto-Align control (does NOT auto-run Auto-Align)
@@ -539,6 +552,7 @@ export function useClipOperations({
       console.warn('[useClipOperations] pushUndoSnapshot failed in handleReleaseSegmentToAutoAlign:', err);
     }
 
+    invalidateRendered();
     setScriptData({
       ...scriptData,
       segments: releasedSegments,
@@ -587,6 +601,7 @@ export function useClipOperations({
     setScriptData,
     getProjectName,
     getVideoId,
+    invalidateRendered,
   ]);
 
   // Select clip and seek playhead to its start (only seek when paused / explicit user gesture, never during continuous playback)
@@ -623,6 +638,7 @@ export function useClipOperations({
     }
 
     pushUndoSnapshot(videoClips, scriptData?.segments || []);
+    invalidateRendered();
     const updated = opResult.state.videoClips;
     const updatedSegments = opResult.state.segments;
 
@@ -661,6 +677,7 @@ export function useClipOperations({
   // Update Clips (Drag/Trim) with optional synchronized segments
   const handleUpdateClips = (newClips, updatedSegments = null) => {
     pushUndoSnapshot(videoClips, scriptData?.segments || []);
+    invalidateRendered();
     setVideoClips(newClips);
     if (updatedSegments && updatedSegments.length) {
       handleUpdateTimelineSegments(updatedSegments, true, true);
@@ -692,6 +709,7 @@ export function useClipOperations({
     }
 
     pushUndoSnapshot(videoClips, scriptData.segments);
+    invalidateRendered();
     const updated = opResult.state.segments;
 
     const localSave = saveTimelineOperationToLocalStorage({
@@ -764,6 +782,7 @@ export function useClipOperations({
     if (!skipUndo) {
       pushUndoSnapshot(videoClips, scriptData?.segments || []);
     }
+    invalidateRendered();
     if (newSegments?.length) {
       const updatedReg = buildSpeakerRegistry(newSegments, speakerRegistry);
       if (setSpeakerRegistry) setSpeakerRegistry(updatedReg);
@@ -919,6 +938,7 @@ export function useClipOperations({
     const targetClipId = clipId !== null && clipId !== undefined ? clipId : activeClipId;
     if (!targetClipId) return;
     pushUndoSnapshot(videoClips, scriptData?.segments || []);
+    invalidateRendered();
 
     const updated = videoClips.map((c) => {
       if (c.id === targetClipId) {
@@ -940,6 +960,7 @@ export function useClipOperations({
     if (targetKey === null || targetKey === undefined) return;
 
     pushUndoSnapshot(videoClips, scriptData.segments);
+    invalidateRendered();
 
     const updated = scriptData.segments.map((seg, idx) => {
       const isTarget = isSegmentMatch(seg, targetKey, idx);
@@ -986,6 +1007,7 @@ export function useClipOperations({
     if (!splitPieces || splitPieces.length <= 1) return;
 
     pushUndoSnapshot(videoClips, segments);
+    invalidateRendered();
 
     const nextSegments = [...segments];
     nextSegments.splice(targetIdx, 1, ...splitPieces);

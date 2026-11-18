@@ -28,6 +28,7 @@ export function useScriptWorkflow({
   seriesGlossary,
   onSaveEpisodeBackground,
   onNavigateToTab = null,
+  onInvalidateRenderedPreview = null,
 }) {
   const [isGeneratingScript, setIsGeneratingScript] = useState(false);
   const [generatingEpisodeId, setGeneratingEpisodeId] = useState(null);
@@ -311,6 +312,8 @@ export function useScriptWorkflow({
               updatedAt: Date.now(),
             },
             speakerRegistry: bgRegistry,
+            renderedVideo: null,
+            renderInvalidatedAt: Date.now(),
           });
         }
         return;
@@ -340,6 +343,9 @@ export function useScriptWorkflow({
 
       // 4. Update the active workspace
       if (selectedVideo?.videoId === targetVideoId) {
+        if (typeof onInvalidateRenderedPreview === 'function') {
+          onInvalidateRenderedPreview(targetEpisodeId);
+        }
         setSpeakerRegistry(freshRegistry);
         setScriptData(sanitizeScriptData(validatedScript));
         setAudioGenerated(false);
@@ -405,6 +411,9 @@ export function useScriptWorkflow({
   };
 
   const handleUpdateScript = (newScript) => {
+    if (typeof onInvalidateRenderedPreview === 'function') {
+      onInvalidateRenderedPreview();
+    }
     if (newScript?.segments) {
       const updatedReg = buildSpeakerRegistry(newScript.segments, speakerRegistry);
       setSpeakerRegistry(updatedReg);

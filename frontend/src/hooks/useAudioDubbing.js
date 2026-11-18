@@ -52,7 +52,13 @@ export function useAudioDubbing({
   setFullAudioPath: propSetFullAudioPath,
   fullAudioUrl: propFullAudioUrl,
   setFullAudioUrl: propSetFullAudioUrl,
+  onInvalidateRenderedPreview = null,
 }) {
+  const invalidateRendered = (targetEpId = null) => {
+    if (typeof onInvalidateRenderedPreview === 'function') {
+      onInvalidateRenderedPreview(targetEpId || episodeId || null);
+    }
+  };
   const [isGeneratingAudio, setIsGeneratingAudio] = useState(false);
   const [generatingAudioEpisodeId, setGeneratingAudioEpisodeId] = useState(null);
   const [audioProgress, setAudioProgress] = useState(0);
@@ -241,6 +247,7 @@ const FALLBACK_VOICE_CATALOG = {
     });
 
     setAudioOutdated(true);
+    invalidateRendered();
 
     const saveFn = onSaveEpisodeBackground || handleSaveEpisodeBackground;
     if (saveFn && updatedSegments) {
@@ -286,6 +293,7 @@ const FALLBACK_VOICE_CATALOG = {
       segments: newSegments,
       updatedAt: Date.now(),
     } : prev));
+    invalidateRendered();
 
     const currentKhmerText = (updatedSeg.khmer || updatedSeg.khmerText || updatedSeg.khmerTranslatedText || '').trim();
     if (autoRegen && currentKhmerText) {
@@ -316,6 +324,7 @@ const FALLBACK_VOICE_CATALOG = {
           updatedAt: Date.now(),
         } : prev));
         setAudioGenerated(true);
+        invalidateRendered();
 
         const stillOutdated = finalSegments.some((s) => s.audioOutdated);
         setAudioOutdated(stillOutdated);
@@ -401,6 +410,7 @@ const FALLBACK_VOICE_CATALOG = {
       segments: newSegments,
       updatedAt: Date.now(),
     } : prev));
+    invalidateRendered();
 
     const currentKhmerText = (updatedSeg.khmer || updatedSeg.khmerText || updatedSeg.khmerTranslatedText || '').trim();
     if (autoRegen && currentKhmerText) {
@@ -428,6 +438,7 @@ const FALLBACK_VOICE_CATALOG = {
           updatedAt: Date.now(),
         } : prev));
         setAudioGenerated(true);
+        invalidateRendered();
 
         const stillOutdated = finalSegments.some((s) => s.audioOutdated);
         setAudioOutdated(stillOutdated);
@@ -494,6 +505,7 @@ const FALLBACK_VOICE_CATALOG = {
       segments: newSegments,
       updatedAt: Date.now(),
     } : prev));
+    invalidateRendered();
 
     const currentKhmerText = (updatedSeg.khmer || updatedSeg.khmerText || updatedSeg.khmerTranslatedText || '').trim();
     if (autoRegen && currentKhmerText) {
@@ -527,6 +539,7 @@ const FALLBACK_VOICE_CATALOG = {
           updatedAt: Date.now(),
         } : prev));
         setAudioGenerated(true);
+        invalidateRendered();
 
         const stillOutdated = finalSegments.some((s) => s.audioOutdated);
         setAudioOutdated(stillOutdated);
@@ -610,6 +623,7 @@ const FALLBACK_VOICE_CATALOG = {
       };
       return { ...prev, segments: nextSegs, updatedAt: Date.now() };
     });
+    invalidateRendered();
 
     if (autoRegen && cleanText) {
       const dramaName = getProjectName();
@@ -687,6 +701,7 @@ const FALLBACK_VOICE_CATALOG = {
         });
 
         setAudioGenerated(true);
+        invalidateRendered();
 
         if (allUpdatedSegments && allUpdatedSegments.some((s) => s.audioFile || s.audioPath || s.audioUrl)) {
           // Trigger non-blocking background timeline audio sync to keep UI lightning fast (<1.5s)
@@ -816,6 +831,7 @@ const FALLBACK_VOICE_CATALOG = {
       segments: reindexed,
       updatedAt: Date.now(),
     } : prev));
+    invalidateRendered();
 
     if (setSelectedSegmentId) {
       setSelectedSegmentId(uid2);
@@ -1031,6 +1047,7 @@ const FALLBACK_VOICE_CATALOG = {
             fullAudioUrl: result.fullAudioUrl,
             audioGenerated: true,
             audioOutdated: false,
+            ...(!result.alreadyCompleted ? { renderedVideo: null, renderInvalidatedAt: Date.now() } : {}),
           });
         }
         return;
@@ -1056,6 +1073,9 @@ const FALLBACK_VOICE_CATALOG = {
       setFullAudioUrl(result.fullAudioUrl);
       setAudioGenerated(true);
       setAudioOutdated(false);
+      if (!result.alreadyCompleted) {
+        invalidateRendered(targetEpisodeId);
+      }
 
       setTimeout(() => {
         setAudioProgress(0);
@@ -1202,6 +1222,7 @@ const FALLBACK_VOICE_CATALOG = {
       });
 
       setAudioGenerated(true);
+      invalidateRendered();
 
       if (allUpdatedSegments && allUpdatedSegments.some((s) => s.audioFile || s.audioPath || s.audioUrl)) {
         // Trigger non-blocking background timeline audio sync to keep UI lightning fast (<1.5s)
@@ -1344,6 +1365,7 @@ const FALLBACK_VOICE_CATALOG = {
             };
           });
           setAudioOutdated(true);
+          invalidateRendered(targetEpisodeId);
 
           return updated;
         }

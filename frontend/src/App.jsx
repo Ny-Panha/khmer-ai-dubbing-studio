@@ -424,6 +424,31 @@ export default function App() {
     ? null
     : prevRawRendered;
 
+  // Central stale-render invalidator for any audio-mix / segment / timeline edit.
+  // Mirrors the settings-change invalidation pattern: clears active renderedVideo and stamps
+  // renderInvalidatedAt in localStorage + backend sync WITHOUT deleting the MP4 file on disk.
+  const invalidateRenderedPreview = useCallback((targetEpId = null) => {
+    const sId = seriesRef.current.seriesId;
+    const activeEpId = seriesRef.current.episodeId;
+    const eId = targetEpId || activeEpId;
+    const prevRenderedAt = Number(renderRef.current?.renderedVideo?.renderedAt || 0);
+    const invalidatedAt = Math.max(Date.now(), prevRenderedAt > 0 ? prevRenderedAt + 1 : 0);
+
+    if (!targetEpId || String(targetEpId) === String(activeEpId)) {
+      if (renderRef.current?.setRenderedVideo) {
+        renderRef.current.setRenderedVideo(null);
+      }
+    }
+    const patch = { renderedVideo: null, renderInvalidatedAt: invalidatedAt };
+    if (sId && eId) {
+      saveEpisodeState(sId, eId, patch);
+    }
+    if (eId && seriesRef.current?.handleSaveEpisodeBackground) {
+      seriesRef.current.handleSaveEpisodeBackground(eId, patch);
+    }
+    return invalidatedAt;
+  }, []);
+
   // 4. Undo / Redo Stack Management Hook
   const undoRedo = useUndoRedo({
     videoClips: media.videoClips,
@@ -434,6 +459,7 @@ export default function App() {
     setActiveClipId: media.setActiveClipId,
     seriesId: series.seriesId,
     episodeId: series.episodeId,
+    onInvalidateRenderedPreview: invalidateRenderedPreview,
   });
   undoRedoRef.current = undoRedo;
 
@@ -479,6 +505,7 @@ export default function App() {
     setFullAudioPath,
     fullAudioUrl,
     setFullAudioUrl,
+    onInvalidateRenderedPreview: invalidateRenderedPreview,
   });
   audioRef.current = audio;
 
@@ -536,6 +563,7 @@ export default function App() {
     clearHistory: handleClearHistory,
     setScriptError: handleSetScriptError,
     setIsGeneratingScript: handleSetIsGeneratingScript,
+    onInvalidateRenderedPreview: invalidateRenderedPreview,
   });
   scriptRef.current = script;
 
@@ -572,6 +600,7 @@ export default function App() {
     setAudioOutdated: audio.setAudioOutdated,
     renderedVideo: render.renderedVideo,
     setRenderedVideo: render.setRenderedVideo,
+    onInvalidateRenderedPreview: invalidateRenderedPreview,
     voiceSettings,
     setVoiceSettings,
     setVideoThumbnails: media.setVideoThumbnails,
@@ -694,7 +723,7 @@ export default function App() {
         (key) => readNormalizedSettingVal(prevSettings, key) !== readNormalizedSettingVal(nonLogoSettings, key)
       )
     );
-    const hasRenderAffectingChange = hasNonLogoRenderChange || logoChanged;
+    const clearedRenderedForEdit = hasNonLogoRenderChange || logoChanged;
     const hasSubtitleVisualChange = Boolean(
       nonLogoSettings &&
       typeof nonLogoSettings === 'object' &&
@@ -712,26 +741,18 @@ export default function App() {
     const sId = seriesRef.current.seriesId;
     const eId = seriesRef.current.episodeId;
     const ratioChanged = Boolean(nonLogoSettings?.aspectRatio && nonLogoSettings.aspectRatio !== prevRatio);
-    const clearedRenderedForEdit = Boolean(hasRenderAffectingChange && renderRef.current?.renderedVideo);
 
     if (clearedRenderedForEdit) {
       if (renderRef.current.setRenderedVideo) {
         renderRef.current.setRenderedVideo(null);
       }
-      const patch = hasNonLogoChange || ratioChanged
-        ? { renderedVideo: null, voiceSettings: nonLogoSettings }
-        : { renderedVideo: null };
+      const patch = { renderedVideo: null, renderInvalidatedAt: Date.now() };
+      if (hasNonLogoChange || ratioChanged) patch.voiceSettings = nonLogoSettings;
       if (sId && eId) {
         saveEpisodeState(sId, eId, patch);
       }
       if (eId && seriesRef.current.handleSaveEpisodeBackground) {
         seriesRef.current.handleSaveEpisodeBackground(eId, patch);
-      }
-    } else if (hasNonLogoRenderChange || ratioChanged) {
-      const patch = { voiceSettings: nonLogoSettings };
-      if (sId && eId) {
-        saveEpisodeState(sId, eId, patch);
-        seriesRef.current.handleSaveEpisodeBackground?.(eId, patch);
       }
     }
 
