@@ -1131,29 +1131,85 @@ router.post("/sync-audio", async (req, res) => {
             const updatedMap = new Map();
             for (const seg of segments) {
               if (seg) {
-                const key = String(seg.id ?? seg.segmentId);
-                updatedMap.set(key, seg);
+                const uidKey = seg._uid ? `uid:${seg._uid}` : null;
+                const idKey = `id:${String(seg.id ?? seg.segmentId)}`;
+                if (uidKey) updatedMap.set(uidKey, seg);
+                updatedMap.set(idKey, seg);
               }
             }
 
-            targetEp.scriptData.segments = targetEp.scriptData.segments.map((s, idx) => {
-              const updated = updatedMap.get(String(s.id ?? s.segmentId ?? (idx + 1)));
-              if (updated) {
-                return {
-                  ...s,
-                  trackRow: typeof updated.trackRow === "number" ? updated.trackRow : 0,
-                  trackId: updated.trackId || `voice-${(updated.trackRow || 0) + 1}`,
-                  audioStartSec: typeof updated.audioStartSec === "number" ? updated.audioStartSec : s.audioStartSec,
-                  audioEndSec: typeof updated.audioEndSec === "number" ? updated.audioEndSec : s.audioEndSec,
-                  audioDurationSec: typeof updated.audioDurationSec === "number" ? updated.audioDurationSec : s.audioDurationSec,
-                  audioTrimmed: Boolean(updated.audioTrimmed),
-                  audioOverrun: Boolean(updated.audioOverrun),
-                  overrunRatio: updated.overrunRatio,
-                  userShifted: Boolean(updated.userShifted),
-                };
-              }
-              return s;
+            const diskSegMap = new Map();
+            targetEp.scriptData.segments.forEach((s, idx) => {
+              if (!s) return;
+              if (s._uid) diskSegMap.set(`uid:${s._uid}`, s);
+              diskSegMap.set(`id:${String(s.id ?? s.segmentId ?? (idx + 1))}`, s);
             });
+
+            const mergeSegmentTiming = (s, updated) => {
+              const merged = {
+                ...s,
+                trackRow: typeof updated.trackRow === "number" ? updated.trackRow : 0,
+                trackId: updated.trackId || `voice-${(updated.trackRow || 0) + 1}`,
+                startSec: typeof updated.startSec === "number" ? updated.startSec : s.startSec,
+                endSec: typeof updated.endSec === "number" ? updated.endSec : s.endSec,
+                duration: typeof updated.duration === "number" ? updated.duration : s.duration,
+                audioStartSec: typeof updated.audioStartSec === "number" ? updated.audioStartSec : s.audioStartSec,
+                audioEndSec: typeof updated.audioEndSec === "number" ? updated.audioEndSec : s.audioEndSec,
+                audioDurationSec: typeof updated.audioDurationSec === "number" ? updated.audioDurationSec : s.audioDurationSec,
+                sourceStartSec: typeof updated.sourceStartSec === "number" ? updated.sourceStartSec : s.sourceStartSec,
+                sourceEndSec: typeof updated.sourceEndSec === "number" ? updated.sourceEndSec : s.sourceEndSec,
+                start: typeof updated.start === "string" ? updated.start : s.start,
+                end: typeof updated.end === "string" ? updated.end : s.end,
+                startTime: typeof updated.startTime === "string" ? updated.startTime : s.startTime,
+                endTime: typeof updated.endTime === "string" ? updated.endTime : s.endTime,
+                audioStart: typeof updated.audioStart === "string" ? updated.audioStart : s.audioStart,
+                audioEnd: typeof updated.audioEnd === "string" ? updated.audioEnd : s.audioEnd,
+                subTrackRow: typeof updated.subTrackRow === "number" ? updated.subTrackRow : s.subTrackRow,
+                subTrackId: updated.subTrackId || s.subTrackId,
+                audioTrimmed: Boolean(updated.audioTrimmed),
+                userTrimmed: Boolean(updated.userTrimmed),
+                audioOverrun: Boolean(updated.audioOverrun),
+                userShifted: Boolean(updated.userShifted),
+              };
+              if (updated.overrunRatio !== undefined) {
+                merged.overrunRatio = updated.overrunRatio;
+              } else {
+                delete merged.overrunRatio;
+              }
+              return merged;
+            };
+
+            if (segments.length === targetEp.scriptData.segments.length) {
+              // Preserve updated chronological order when same segment count (e.g. Auto-Align / Reset Timing)
+              const reordered = [];
+              let allMatched = true;
+              for (let i = 0; i < segments.length; i++) {
+                const updated = segments[i];
+                const diskSeg =
+                  (updated?._uid && diskSegMap.get(`uid:${updated._uid}`)) ||
+                  diskSegMap.get(`id:${String(updated?.id ?? updated?.segmentId ?? (i + 1))}`);
+                if (!diskSeg) {
+                  allMatched = false;
+                  break;
+                }
+                reordered.push(mergeSegmentTiming(diskSeg, updated));
+              }
+              targetEp.scriptData.segments = allMatched
+                ? reordered
+                : targetEp.scriptData.segments.map((s, idx) => {
+                    const updated =
+                      (s?._uid && updatedMap.get(`uid:${s._uid}`)) ||
+                      updatedMap.get(`id:${String(s?.id ?? s?.segmentId ?? (idx + 1))}`);
+                    return updated ? mergeSegmentTiming(s, updated) : s;
+                  });
+            } else {
+              targetEp.scriptData.segments = targetEp.scriptData.segments.map((s, idx) => {
+                const updated =
+                  (s?._uid && updatedMap.get(`uid:${s._uid}`)) ||
+                  updatedMap.get(`id:${String(s?.id ?? s?.segmentId ?? (idx + 1))}`);
+                return updated ? mergeSegmentTiming(s, updated) : s;
+              });
+            }
 
             targetEp.scriptData.updatedAt = Date.now();
             console.log(`[Sync Audio] ✅ Auto-persisted ${segments.length} aligned segments to series.json for ${cleanSeries} [${cleanEpisode}]`);

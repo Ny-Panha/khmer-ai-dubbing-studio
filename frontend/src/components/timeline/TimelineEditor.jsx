@@ -156,8 +156,8 @@ function TimelineEditor({
         : (rawStart + audioDur);
 
       // CapCut single-lane style: all auto-placed voice clips live sequentially on VOICE 1 (Lane 0).
-      // Only userShifted clips are placed on their explicitly chosen trackRow.
-      if (typeof seg.trackRow === 'number' && seg.userShifted) {
+      // Honor explicit userShifted or auto-aligned collision-free multi-lane trackRow (> 0).
+      if (typeof seg.trackRow === 'number' && (seg.userShifted || seg.trackRow > 0)) {
         const userR = Math.max(0, seg.trackRow);
         rowEndTimes[userR] = Math.max(rowEndTimes[userR] || 0, rawEnd);
         return userR;

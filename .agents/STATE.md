@@ -1,6 +1,44 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
+- **Environment**: Antigravity IDE
+- **Branch**: `fix/preview-subtitle-single-source` (pushed to `origin/fix/preview-subtitle-single-source`)
+- **Timestamp**: 2026-11-18T16:22:00+07:00
+
+## Summary: Fix Auto-Align & Reset Timing Silent No-Ops on Misaligned/Shifted Voice Clips (EP5 219-Segment Bug) (COMPLETED)
+- **Step 0 — Stored Data Findings (`backend/uploads/projects/Pseudo_Spiritual_Root/series.json`, `ep_5` — 219 segments)**:
+  - Segment `#4` (`id: 4`, `_uid: "seg_4_1794918362513_pit7n"`): `startSec: 4.89` (and later `3.68`), `endSec: 7.66`, `audioStartSec: 4.84`, `audioEndSec: 7.61`, `sourceStartSec: 2.84`, `sourceEndSec: 6.11` (`speechStartSec: 2.84`, `speechEndSec: 6.11`, original slot duration `3.27s`), stored audio duration `audioDurationSec / finalAudioDuration: 2.77s` (`originalAudioDuration: 2.765s`), `trackRow: 1` (`VOICE 2`), `userShifted: true`. Neighbors `#2 (id: 3)`, `#3 (id: 2)`, `#5 (id: 5)` were also `userShifted: true` with `#5` stuck on `VOICE 3` (`trackRow: 2`, `startSec: 8.07`).
+  - Original-timing snapshot check: No episode-level `originalTimingSnapshot` existed in `series.json`, while `ep_5` segments had per-segment `sourceStartSec`/`sourceEndSec` matching `episodes/ep_5/jobs/job_1794761724015_9253d121.json` (`#4: 2.84 -> 6.11`, `#5: 6.11 -> 8.91`); other legacy episodes (`ep_2`, `Solo Leveling/ep_3`) had `sourceStartSec: undefined`.
+- **Step 1 — Root Causes Traced**:
+  1. `autoAlign()` (`frontend/src/utils/timelineOps.js`): Skipped every `userShifted: true` clip (keeping its drifted `audioStartSec` and stuck `trackRow`), anchored to drifted `startSec` before `sourceStartSec`, forced non-shifted clips onto Lane 0 instead of re-laning blocked clips, and `useClipOperations.js` silently returned with no toast when `!segmentsChanged` and never reported overrun clips.
+  2. `resetTiming()` (`frontend/src/utils/timelineOps.js`): Preserved `userShifted` and stuck `trackRow`, never re-sorted chronologically, silently fell back to drifted `startSec` when no baseline existed (no baseline creation/notice), and `moveClip()` didn't capture pre-drag `sourceStartSec`/`sourceEndSec` when missing.
+  3. Visual lane override (`TimelineEditor.jsx:160`, `TimelineTracksCanvas.jsx:365`): Only respected `seg.trackRow` when `seg.userShifted === true`, squashing auto-aligned re-laned clips (`trackRow > 0, userShifted: false`) back onto Lane 0 visually.
+  4. Backend persistence bug discovered during real-app E2E (`backend/routes/audioRoutes.js:1139-1158`, `POST /api/sync-timeline-audio`): Only persisted `audioStartSec`/`audioEndSec`/`trackRow` while dropping `startSec`/`endSec`/chronological order and bumping `scriptData.updatedAt = Date.now()`, causing `syncSeriesMetadataSafely` to reject the frontend's updated `startSec` and permanently split `startSec` from `audioStartSec` on disk!
+- **Step 2 — Fixes Applied (Keeping All Frozen Timeline Rules Intact)**:
+  1. `frontend/src/utils/timelineOps.js`: Updated `moveClip` to capture missing `sourceStartSec`/`sourceEndSec` before moving; rewrote `autoAlign` to align ALL clips (including `userShifted`) to true canonical slot starts (`sourceStartSec` -> `speechStartSec` -> snapshot -> dialogue clip -> `startSec`), re-lane to the lowest free VOICE lane when Lane 0 is blocked, stay strictly idempotent & move-only, and return structured `report` (`movedCount`, `relanedClips`, `overrunClips`, `clampedClips`); updated `resetTiming` to restore chronological order, clear `userShifted`/stuck `trackRow`, create a real `baselineSnapshot` (`createdBaseline: true`) if missing, and return structured `report`.
+  2. `frontend/src/hooks/useClipOperations.js`: Added `buildAutoAlignToastMessage` & `buildResetTimingToastMessage` so BOTH buttons ALWAYS display a visible toast naming re-laned and overrun/unfixed clip numbers + reasons (never silent no-op), and persist `originalTimingSnapshot` when created.
+  3. `frontend/src/components/timeline/TimelineEditor.jsx` & `TimelineTracksCanvas.jsx`: Honored `(seg.userShifted || seg.trackRow > 0)` so auto-aligned multi-lane clips render on their assigned VOICE row.
+  4. `backend/routes/audioRoutes.js`: Fixed `/api/sync-timeline-audio` metadata persistence to save `startSec`, `endSec`, `start`, `end`, `sourceStartSec`, `sourceEndSec`, `subTrackRow`, `userTrimmed`, and updated chronological order cleanly.
+  5. `backend/tests/timeline_autoalign_reset_fix.test.js` *(new)*: 5 unit + static audit tests covering EP5 `#4` alignment, blocked-lane re-laning, drag -> Reset Timing restoration, missing-baseline creation, and visible toasts.
+- **Verification Evidence**:
+  - Full timeline test suites (`node --test backend/tests/timeline_*.test.js`): **95 / 95 PASS** (`16` suites, `0` fail).
+  - Frontend production build (`npm --prefix frontend run build`): **PASS** (`0` errors).
+  - Real-app E2E on `Pseudo_Spiritual_Root` `ep_5` (219 segments, restarted backend `:5000` & Vite `:5173`, `0` page errors):
+    - Click **Auto-Align**: `#4` moved to exact true slot start `2.84s` on `VOICE 1`, `#5` moved to `6.11s` on `VOICE 1`, blocked `#3` re-laned cleanly at exact `1.40s` on `VOICE 2`, visible toast named re-laned clips (`#3, #7, #48...`) and overrun clips (`#2, #6, #47...`).
+    - Second **Auto-Align**: strictly idempotent + visible non-silent toast.
+    - Real mouse drag `#4` -> `6.84s` (`VOICE 2`) -> click **Reset Timing** -> `#4` returned cleanly to `2.84s` (`VOICE 1`, `startSec: 2.84, audioStartSec: 2.84`, DOM `leftPx: 127.8`, persisted on disk) with visible summary toast.
+
+## Active Environment
+- **Backend API**: `http://localhost:5000` (freshly restarted with `/api/sync-timeline-audio` persistence fix)
+- **Frontend Studio**: `http://localhost:5173` (freshly restarted Vite dev server)
+- **Branch**: `fix/preview-subtitle-single-source` (committed & pushed)
+
+## Next Steps
+- Hard-refresh (`Ctrl + F5`) at `http://localhost:5173/studio` on EP5 (219 segments) and click **Auto-Align** or **Reset Timing** to verify `#4` snaps cleanly to its slot with visible summary toast.
+
+---
+
+## Previous Session
 - **Environment**: Antigravity IDE (`/agents`)
 - **Branch**: `fix/preview-subtitle-single-source` (pushed to `origin/fix/preview-subtitle-single-source`)
 - **Timestamp**: 2026-11-18T16:02:00+07:00

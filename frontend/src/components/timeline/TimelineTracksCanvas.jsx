@@ -361,8 +361,8 @@ function TimelineTracksCanvas({
       const rawEnd = rawStart + renderedDuration;
 
       // CapCut single-lane style: all auto-placed voice clips live sequentially on VOICE 1 (Lane 0).
-      // Only userShifted clips keep their explicitly chosen trackRow.
-      if (typeof seg.trackRow === 'number' && seg.userShifted) {
+      // Honor explicit userShifted or auto-aligned collision-free multi-lane trackRow (> 0).
+      if (typeof seg.trackRow === 'number' && (seg.userShifted || seg.trackRow > 0)) {
         const r = Math.max(0, seg.trackRow);
         endTimes[r] = Math.max(endTimes[r] || 0, rawEnd);
         return r;

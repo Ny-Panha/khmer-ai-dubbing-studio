@@ -41,9 +41,11 @@ function showInAppToast(message, durationMs = 2800) {
     toast.style.transform = 'translateX(-50%) translateY(0)';
     toast.style.backgroundColor = 'rgba(24, 24, 27, 0.96)';
     toast.style.color = '#f4f4f5';
-    toast.style.padding = '10px 20px';
-    toast.style.borderRadius = '9999px';
-    toast.style.fontSize = '13.5px';
+    toast.style.padding = '10px 18px';
+    toast.style.borderRadius = '14px';
+    toast.style.maxWidth = 'min(92vw, 760px)';
+    toast.style.lineHeight = '1.45';
+    toast.style.fontSize = '13px';
     toast.style.fontWeight = '500';
     toast.style.fontFamily = "'Kantumruy Pro', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
     toast.style.boxShadow = '0 12px 30px -4px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(255, 255, 255, 0.15)';
@@ -57,10 +59,19 @@ function showInAppToast(message, durationMs = 2800) {
     toast.style.transition = 'opacity 0.22s cubic-bezier(0.16, 1, 0.3, 1), transform 0.22s cubic-bezier(0.16, 1, 0.3, 1)';
     document.body.appendChild(toast);
   }
-  const leadingEmoji = message.match(/^([\uD800-\uDBFF][\uDC00-\uDFFF]|[\u2600-\u27BF]|\uFE0F|⚠️|⚡|✅|❌|✂️)/);
+  const leadingEmoji = message.match(/^([\uD800-\uDBFF][\uDC00-\uDFFF]|[\u2600-\u27BF]|\uFE0F|⚠️|⚡|✅|❌|✂️|ℹ️|✨|📌)/);
   const iconSpan = leadingEmoji ? leadingEmoji[0] : '✂️';
   const displayMsg = leadingEmoji ? message.slice(leadingEmoji[0].length).trim() : message;
-  toast.innerHTML = `<span style="font-size:15px;line-height:1;">${iconSpan}</span><span>${displayMsg}</span>`;
+  toast.innerHTML = '';
+  const iconEl = document.createElement('span');
+  iconEl.style.fontSize = '15px';
+  iconEl.style.lineHeight = '1';
+  iconEl.style.flexShrink = '0';
+  iconEl.textContent = iconSpan;
+  const textEl = document.createElement('span');
+  textEl.textContent = displayMsg;
+  toast.appendChild(iconEl);
+  toast.appendChild(textEl);
   toast.style.opacity = '1';
   toast.style.transform = 'translateX(-50%) translateY(0)';
 
@@ -69,6 +80,79 @@ function showInAppToast(message, durationMs = 2800) {
     toast.style.opacity = '0';
     toast.style.transform = 'translateX(-50%) translateY(8px)';
   }, durationMs);
+}
+
+function formatClipNumberSummary(clipNumbers = [], maxShown = 8) {
+  const unique = [...new Set((clipNumbers || []).filter((n) => n !== null && n !== undefined))];
+  if (unique.length === 0) return '';
+  const shown = unique.slice(0, maxShown).map((n) => `#${n}`).join(', ');
+  const remaining = unique.length - maxShown;
+  return remaining > 0 ? `${shown} (+${remaining} ទៀត)` : shown;
+}
+
+function buildAutoAlignToastMessage(report = {}, segmentsChanged = false) {
+  const movedCount = Number(report?.movedCount) || 0;
+  const relanedNums = (report?.relanedClips || []).map((c) => c.clipNumber);
+  const overrunNums = (report?.overrunClips || []).map((c) => c.clipNumber);
+  const clampedNums = (report?.clampedClips || []).map((c) => c.clipNumber);
+
+  const parts = [];
+  if (segmentsChanged && movedCount > 0) {
+    parts.push(`តម្រៀប ${movedCount} ឃ្លាត្រង់តាម slot`);
+  } else if (segmentsChanged) {
+    parts.push('បានអាប់ដេតការតម្រៀប timeline');
+  } else {
+    parts.push('គ្រប់ឃ្លានៅត្រង់ slot រួចហើយ');
+  }
+
+  if (relanedNums.length > 0) {
+    parts.push(`ប្តូរជួរ VOICE ដើម្បីកុំជាន់គ្នា (${formatClipNumberSummary(relanedNums, 6)})`);
+  }
+  if (overrunNums.length > 0) {
+    parts.push(`⚠️ សំឡេងវែងជាង slot មិនអាចបង្រួមដោយ Auto-Align: ${formatClipNumberSummary(overrunNums, 8)}`);
+  }
+  if (clampedNums.length > 0) {
+    parts.push(`⚠️ ហួសចុងវីដេអូ: ${formatClipNumberSummary(clampedNums, 5)}`);
+  }
+
+  const prefix = overrunNums.length > 0 || clampedNums.length > 0 ? '⚠️ Auto-Align:' : '✅ Auto-Align:';
+  return `${prefix} ${parts.join(' · ')}`;
+}
+
+function buildResetTimingToastMessage(report = {}, segmentsChanged = false) {
+  const movedCount = Number(report?.movedCount) || 0;
+  const relanedNums = (report?.relanedClips || []).map((c) => c.clipNumber);
+  const overrunNums = (report?.overrunClips || []).map((c) => c.clipNumber);
+  const missingNums = (report?.missingBaselineClips || []).map((c) => c.clipNumber);
+
+  if (report?.createdBaseline) {
+    const overrunSuffix = overrunNums.length > 0
+      ? ` · ⚠️ សំឡេងវែងជាង slot (មិនអាចបង្រួមដោយ Reset): ${formatClipNumberSummary(overrunNums, 8)}`
+      : '';
+    return `📌 Reset Timing: មិនទាន់មាន baseline ដើម — បានរក្សាទុក timing បច្ចុប្បន្នជា baseline ដើមរួចរាល់${overrunSuffix}`;
+  }
+
+  const parts = [];
+  if (segmentsChanged && movedCount > 0) {
+    parts.push(`ស្តារ ${movedCount} ឃ្លាមក timing ដើម`);
+  } else if (segmentsChanged) {
+    parts.push('បានស្តារ timing ដើម');
+  } else {
+    parts.push('គ្រប់ឃ្លានៅ timing ដើមស្រាប់ហើយ');
+  }
+
+  if (relanedNums.length > 0) {
+    parts.push(`ប្តូរជួរ VOICE ដើម្បីកុំជាន់គ្នា (${formatClipNumberSummary(relanedNums, 6)})`);
+  }
+  if (overrunNums.length > 0) {
+    parts.push(`⚠️ សំឡេងវែងជាង slot (Reset មិនអាចបង្រួមសំឡេង): ${formatClipNumberSummary(overrunNums, 8)}`);
+  }
+  if (missingNums.length > 0) {
+    parts.push(`⚠️ គ្មាន timing ដើម (រក្សាតម្លៃបច្ចុប្បន្ន): ${formatClipNumberSummary(missingNums, 6)}`);
+  }
+
+  const prefix = overrunNums.length > 0 || missingNums.length > 0 ? '⚠️ Reset Timing:' : '✅ Reset Timing:';
+  return `${prefix} ${parts.join(' · ')}`;
 }
 
 /**
@@ -332,6 +416,7 @@ export function useClipOperations({
 
     const opResult = autoAlignOp(currentState, {
       totalDuration: totalDur,
+      originalTimingSnapshot: scriptData?.originalTimingSnapshot || null,
       options: {
         minGapSec: 0.04,
         maxShiftSec: 0.35,
@@ -340,7 +425,7 @@ export function useClipOperations({
     });
 
     if (!opResult.applied) {
-      showInAppToast(opResult.reason || '⚠️ Auto-Align មិនអាចអនុវត្តបានទេ');
+      showInAppToast(opResult.reason || '⚠️ Auto-Align មិនអាចអនុវត្តបានទេ', 4500);
       return;
     }
 
@@ -351,7 +436,7 @@ export function useClipOperations({
       console.warn(
         `[useClipOperations] Auto-Align aborted: segment count mismatch (in: ${currentSegments.length}, out: ${alignedSegments?.length ?? 0}). Auto-Align is move-only and must never add or remove segments.`
       );
-      showInAppToast('⚠️ Auto-Align រក្សាទុកឃ្លាដើម៖ ចំនួន segments មិនត្រូវផ្លាស់ប្ដូរឡើយ', 3500);
+      showInAppToast('⚠️ Auto-Align រក្សាទុកឃ្លាដើម៖ ចំនួន segments មិនត្រូវផ្លាស់ប្ដូរឡើយ', 4500);
       return;
     }
 
@@ -377,9 +462,13 @@ export function useClipOperations({
       seg?.overrunRatio ?? null,
       seg?.playbackRate ?? null,
       Boolean(seg?.needsTimeStretch),
+      Boolean(seg?.userShifted),
     ]));
 
     const segmentsChanged = JSON.stringify(segmentTimelineSignature(currentSegments)) !== JSON.stringify(segmentTimelineSignature(alignedSegments));
+
+    const toastMessage = buildAutoAlignToastMessage(opResult.report, segmentsChanged);
+    showInAppToast(toastMessage, (opResult.report?.overrunClips?.length || 0) > 0 ? 6000 : 4000);
 
     // Auto-Align can normalize optional metadata even when the timeline already
     // matches. Avoid autosaving that normalization as if the user had edited it.
@@ -444,7 +533,10 @@ export function useClipOperations({
   // Reset all segments to exact original source timestamps (0% drift)
   const handleResetToSourceTiming = useCallback(async () => {
     const currentSegments = scriptData?.segments;
-    if (!Array.isArray(currentSegments) || currentSegments.length === 0) return;
+    if (!Array.isArray(currentSegments) || currentSegments.length === 0) {
+      showInAppToast('⚠️ Reset Timing: គ្មាន segments សម្រាប់ស្តារ timing ទេ', 3500);
+      return;
+    }
 
     const totalDur = Number(duration || videoRef?.current?.duration || selectedVideo?.duration || 0);
     const currentState = {
@@ -452,13 +544,39 @@ export function useClipOperations({
       segments: currentSegments,
     };
 
-    const opResult = resetTimingOp(currentState, { totalDuration: totalDur });
+    const opResult = resetTimingOp(currentState, {
+      totalDuration: totalDur,
+      originalTimingSnapshot: scriptData?.originalTimingSnapshot || null,
+    });
     if (!opResult.applied) {
-      showInAppToast(opResult.reason || '⚠️ Reset Timing មិនអាចអនុវត្តបានទេ');
+      showInAppToast(opResult.reason || '⚠️ Reset Timing មិនអាចអនុវត្តបានទេ', 4500);
       return;
     }
 
     const resetSegs = opResult.state.segments;
+    const resetSig = (segments = []) => segments.map((seg) => ([
+      seg?._uid ?? null,
+      seg?.id ?? null,
+      seg?.startSec ?? null,
+      seg?.endSec ?? null,
+      seg?.audioStartSec ?? null,
+      seg?.audioEndSec ?? null,
+      seg?.sourceStartSec ?? null,
+      seg?.sourceEndSec ?? null,
+      seg?.trackRow ?? null,
+      Boolean(seg?.userShifted),
+      Boolean(seg?.audioTrimmed || seg?.userTrimmed),
+      Boolean(seg?.audioOverrun),
+    ]));
+    const segmentsChanged = JSON.stringify(resetSig(currentSegments)) !== JSON.stringify(resetSig(resetSegs));
+    const createdBaseline = Boolean(opResult.report?.createdBaseline);
+    const toastMessage = buildResetTimingToastMessage(opResult.report, segmentsChanged);
+    showInAppToast(
+      toastMessage,
+      (opResult.report?.overrunClips?.length || 0) > 0 || createdBaseline ? 6000 : 4000
+    );
+
+    if (!segmentsChanged && !createdBaseline) return;
 
     try {
       pushUndoSnapshot(videoClips, currentSegments);
@@ -468,9 +586,14 @@ export function useClipOperations({
 
     setScriptData({
       ...scriptData,
+      ...(opResult.report?.baselineSnapshot && !scriptData?.originalTimingSnapshot
+        ? { originalTimingSnapshot: opResult.report.baselineSnapshot }
+        : {}),
       segments: resetSegs,
       updatedAt: Date.now(),
     });
+
+    if (!segmentsChanged) return;
 
     try {
       const hasGeneratedAudio = resetSegs.some((s) => s.audioFile || s.audioPath || s.audioUrl);
