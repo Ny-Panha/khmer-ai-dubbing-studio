@@ -11,6 +11,7 @@ import {
   clampVoiceDragY,
   resolveVoiceDropRow,
   computeVoiceDragPosition,
+  resolveVoiceDragScrubTime,
 } from '../../utils/timelineUtils';
 import {
   deleteSegment as deleteSegmentOp,
@@ -476,12 +477,67 @@ function TimelineEditor({
   const scrubRafRef = useRef(null);
   const pendingScrubTimeRef = useRef(null);
   const handleScrubRef = useRef(null);
+  const isPlayingRef = useRef(isPlaying);
+  isPlayingRef.current = isPlaying;
+  const onSeekRef = useRef(onSeek);
+  onSeekRef.current = onSeek;
+  const voiceDragSeekRafRef = useRef(null);
+  const pendingVoiceDragSeekRef = useRef(null);
+  const lastVoiceDragSeekRef = useRef(null);
   const playheadRef = useRef(null);
   const playheadTimeTextRef = useRef(null);
   const videoClipsRef = useRef(videoClips);
   videoClipsRef.current = videoClips;
   const ppsRef = useRef(getPixelsPerSecond(zoom));
   ppsRef.current = getPixelsPerSecond(zoom);
+
+  const cancelVoiceDragScrub = useCallback(() => {
+    if (voiceDragSeekRafRef.current !== null && typeof cancelAnimationFrame === 'function') {
+      cancelAnimationFrame(voiceDragSeekRafRef.current);
+      voiceDragSeekRafRef.current = null;
+    }
+    pendingVoiceDragSeekRef.current = null;
+  }, []);
+
+  // RAF-throttled real-time scrub-seek during PAUSED voice-clip MOVE drags only
+  const scheduleVoiceDragScrub = useCallback((targetSec, segKey = null) => {
+    if (isPlayingRef.current || typeof targetSec !== 'number' || !Number.isFinite(targetSec)) return;
+    const safePps = ppsRef.current || 45;
+    if (playheadRef.current) {
+      playheadRef.current.style.transform = `translate3d(${Math.max(0, targetSec * safePps)}px, 0, 0)`;
+    }
+    if (playheadTimeTextRef.current) {
+      playheadTimeTextRef.current.textContent = formatMinSec(targetSec);
+    }
+    pendingVoiceDragSeekRef.current = { time: targetSec, segKey };
+
+    if (voiceDragSeekRafRef.current === null && typeof requestAnimationFrame === 'function') {
+      voiceDragSeekRafRef.current = requestAnimationFrame(() => {
+        voiceDragSeekRafRef.current = null;
+        if (isPlayingRef.current) {
+          pendingVoiceDragSeekRef.current = null;
+          return;
+        }
+        const pending = pendingVoiceDragSeekRef.current;
+        pendingVoiceDragSeekRef.current = null;
+        if (!pending || typeof pending.time !== 'number' || !Number.isFinite(pending.time)) return;
+        if (lastVoiceDragSeekRef.current !== null && Math.abs(pending.time - lastVoiceDragSeekRef.current) < 0.01) {
+          return;
+        }
+        lastVoiceDragSeekRef.current = pending.time;
+        if (pending.segKey !== null && pending.segKey !== undefined) {
+          manualFocusLockRef.current = {
+            segKey: pending.segKey,
+            targetTime: pending.time,
+            expiresAt: Date.now() + 900,
+          };
+        }
+        onSeekRef.current?.(pending.time);
+      });
+    }
+  }, []);
+
+  useEffect(() => () => cancelVoiceDragScrub(), [cancelVoiceDragScrub]);
 
   // Subscribe playhead DOM element directly to 60fps RAF playback engine
   useEffect(() => {
@@ -841,13 +897,14 @@ function TimelineEditor({
         ? seg.audioEndSec 
         : (rawStart + audioDur));
 
-    if (mode === 'move' && onSeek) {
+    if (mode === 'move' && onSeek && !isPlaying) {
       manualFocusLockRef.current = {
         segKey,
         targetTime: rawStart,
         expiresAt: Date.now() + 900,
       };
       lastPlayheadSegKeyRef.current = segKey;
+      lastVoiceDragSeekRef.current = rawStart;
       onSeek(rawStart);
     }
 
@@ -1121,6 +1178,18 @@ function TimelineEditor({
                 newStart = Math.max(prevBound, newEnd - clipDur);
               }
             }
+
+            // Live scrub-seek: move playhead + seek preview video frame in real time while paused & dragging a voice clip
+            const voiceScrubTime = resolveVoiceDragScrubTime({
+              itemType: dragState.itemType,
+              mode: dragState.mode,
+              isPlaying: isPlayingRef.current,
+              dragStartSec: newStart,
+              totalDuration,
+            });
+            if (voiceScrubTime !== null) {
+              scheduleVoiceDragScrub(voiceScrubTime, dragState.id);
+            }
           } else if (snappingEnabled && !e.shiftKey) {
             // CapCut Precision Snapping: subtle 8px window (~0.1s), NOT a violent 0.6s jump!
             const snapThreshold = Math.min(0.2, Math.max(0.06, 8 / pps));
@@ -1249,6 +1318,8 @@ function TimelineEditor({
     };
 
     const handleMouseUp = (e) => {
+      cancelVoiceDragScrub();
+      lastVoiceDragSeekRef.current = null;
       setSnapLineTime(null);
       setDragOverTrack(null);
       if (isNativeDraggingRef.current) {
@@ -1259,8 +1330,8 @@ function TimelineEditor({
 
       if (dragState) {
         if (!dragState.hasMoved) {
-          // If simple click on an audio or subtitle segment, jump the playhead line | to the start of this segment
-          if ((dragState.itemType === 'audio' || dragState.itemType === 'subtitle') && onSeek && typeof dragState.origStart === 'number') {
+          // If simple click on an audio or subtitle segment while paused, jump the playhead line | to the start of this segment
+          if (!isPlayingRef.current && (dragState.itemType === 'audio' || dragState.itemType === 'subtitle') && onSeek && typeof dragState.origStart === 'number') {
             onSeek(dragState.origStart);
           }
           setDragState(null);
@@ -1367,12 +1438,30 @@ function TimelineEditor({
                 if (dragState.itemType === 'subtitle' && finalSubTargetRow >= userSubTrackCount) {
                   setUserSubTrackCount(finalSubTargetRow + 1);
                 }
+                const droppedSeg = opResult.state.segments[segIdx];
+                const droppedStart = (dragState.itemType === 'audio' && droppedSeg && typeof droppedSeg.audioStartSec === 'number' && Number.isFinite(droppedSeg.audioStartSec))
+                  ? droppedSeg.audioStartSec
+                  : newStart;
                 onUpdateSegments(opResult.state.segments, false, true);
-                if (onSeek && typeof newStart === 'number') {
-                  onSeek(newStart);
+                if (!isPlayingRef.current && onSeek && typeof droppedStart === 'number') {
+                  manualFocusLockRef.current = {
+                    segKey,
+                    targetTime: droppedStart,
+                    expiresAt: Date.now() + 900,
+                  };
+                  if (playheadRef.current) {
+                    playheadRef.current.style.transform = `translate3d(${Math.max(0, droppedStart * (ppsRef.current || 45))}px, 0, 0)`;
+                  }
+                  if (playheadTimeTextRef.current) {
+                    playheadTimeTextRef.current.textContent = formatMinSec(droppedStart);
+                  }
+                  onSeek(droppedStart);
                 }
               } else if (opResult.reason) {
                 console.warn('[moveClip]', opResult.reason);
+                if (!isPlayingRef.current && dragState.itemType === 'audio' && onSeek && typeof dragState.origStart === 'number') {
+                  onSeek(dragState.origStart);
+                }
                 if (typeof window !== 'undefined') {
                   window.dispatchEvent(new CustomEvent('timeline:toast', { detail: { message: opResult.reason } }));
                 }

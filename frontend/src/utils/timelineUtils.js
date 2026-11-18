@@ -1038,3 +1038,30 @@ export function computeVoiceDragPosition({
   return { newStart, newEnd, snapTime, prevBound, nextBound };
 }
 
+/**
+ * Determine whether a timeline drag should scrub the playhead & preview video in real time.
+ * Scope: PAUSED voice-clip MOVE drags only (never during playback, never trim, never video/subtitle drags).
+ *
+ * @param {Object} params
+ * @returns {number|null} Clamped timeline timestamp in seconds, or null when drag-scrub is suppressed
+ */
+export function resolveVoiceDragScrubTime({
+  itemType = null,
+  mode = null,
+  isPlaying = false,
+  dragStartSec = null,
+  totalDuration = 0,
+} = {}) {
+  if (isPlaying || itemType !== 'audio' || mode !== 'move') {
+    return null;
+  }
+  if (typeof dragStartSec !== 'number' || !Number.isFinite(dragStartSec)) {
+    return null;
+  }
+  const safeMax = (typeof totalDuration === 'number' && Number.isFinite(totalDuration) && totalDuration > 0)
+    ? totalDuration
+    : Infinity;
+  const clamped = Math.max(0, Math.min(safeMax, dragStartSec));
+  return parseFloat(clamped.toFixed(3));
+}
+

@@ -3,6 +3,40 @@
 ## Last Session
 - **Environment**: Antigravity IDE
 - **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-18T19:38:30+07:00
+
+## Summary: Real-Time Playhead & Video Preview Scrubbing During Paused Voice-Clip Move Drag (COMPLETED)
+- **Feature**: When paused and dragging a VOICE clip horizontally on the timeline, the red playhead line and preview video frame follow the dragged clip's current start time in real time (showing the exact burned-in Chinese subtitle / scene frame under the clip as the owner drags). On release, the playhead stays at the dropped clip's start.
+- **Changes Applied (strictly scoped to PAUSED voice-clip MOVE drags — never trim, never video/subtitle drags, never during playback)**:
+  1. `frontend/src/utils/timelineUtils.js`: Added pure helper `resolveVoiceDragScrubTime({ itemType, mode, isPlaying, dragStartSec, totalDuration })` returning clamped timeline seconds ONLY when `!isPlaying && itemType === 'audio' && mode === 'move'`, and `null` otherwise.
+  2. `frontend/src/components/timeline/TimelineEditor.jsx`:
+     - Added RAF-throttled `scheduleVoiceDragScrub(targetSec, segKey)` + `cancelVoiceDragScrub()` using refs (`voiceDragSeekRafRef`, `pendingVoiceDragSeekRef`, `lastVoiceDragSeekRef`, `isPlayingRef`, `onSeekRef`) so drag seeks are throttled to animation frames without being cancelled by React state re-renders, immediately update the GPU playhead (`playheadRef`) + pill timecode, and invoke the existing manual `onSeek` path.
+     - Wired `resolveVoiceDragScrubTime` + `scheduleVoiceDragScrub` into `processMouseMove` strictly inside the `dragState.itemType === 'audio'` & `dragState.mode === 'move'` branch.
+     - On `handleMouseUp`: cancels any pending drag-scrub RAF and leaves the playhead + `manualFocusLockRef` at the exact dropped clip's start (`droppedStart`, respecting any no-overlap clamp from `moveClipOp`), or restores `origStart` if drop is rejected.
+     - Preserved all frozen playback rules: guarded manual drag-start/drop/scrub seeks with `!isPlaying`, leaving active playback, auto-follow suppression, and paused snap-back guards untouched.
+  3. `backend/tests/timeline_voice_drag_scrub.test.js` *(new)*: Unit & static audit suite covering scope guards (paused voice move only; suppressed during playback, trim, video/subtitle drags), RAF throttling, drop-point retention, and frozen playback guards.
+- **Verification Evidence**:
+  - Real-app Playwright E2E on `Pseudo_Spiritual_Root` / `ep_5` (paused, read-only, `series.json` byte-identical `true`):
+    - Dragged voice `#2` smoothly across `00:02–00:05` (`2.99s -> 2.50s -> 1.99s -> 2.59s -> 3.19s -> 3.79s -> 4.39s -> 4.99s -> 4.19s`): red playhead (`phSec`) matched `clipSec` 1:1 (`0.00s` diff), `video.currentTime` tracked continuously (`0.001s` diff), **9 / 9 distinct decoded video frames** rendered live, and `video.paused` remained `true` throughout.
+    - On release (`+600ms` paused): playhead and video stayed at dropped start (`4.19s`), zero snap-back.
+    - Pressed Play after drop: playback advanced smoothly forward (`5.04s -> 8.46s`) with zero loop and zero snap-back.
+    - Negative scope check: dragging video clip `#5` did NOT scrub-seek playhead; `0` console/page errors.
+  - Frontend production build (`npm --prefix frontend run build`): **PASS** (`656ms`, 0 errors).
+  - New suite (`backend/tests/timeline_voice_drag_scrub.test.js`): **2 / 2 PASS**. Full timeline + auto-align suites: **119 / 120 PASS** (sole failure is pre-existing `timeline_continuous_playback_no_loop.test.js` test #2 live-disk fixture expectation).
+
+## Active Environment
+- **Backend API**: `http://localhost:5000` (HTTP 200)
+- **Frontend Studio**: `http://localhost:5173` (Vite dev server on `chore/full-project-cleanup`)
+- **Branch**: `chore/full-project-cleanup` (committed & pushed)
+
+## Next Steps
+- Refresh browser (`Ctrl + F5`) at `http://localhost:5173/studio` and drag any voice clip while paused to see the red playhead and preview video frame scrub live with the clip start.
+
+---
+
+## Previous Session
+- **Environment**: Antigravity IDE
+- **Branch**: `chore/full-project-cleanup`
 - **Timestamp**: 2026-11-18T19:31:30+07:00
 
 ## Summary: Fix Playback Freeze/Stall at `~00:07` (`#5 -> Gap`) in Both Live Edit & Rendered Preview (COMPLETED)
