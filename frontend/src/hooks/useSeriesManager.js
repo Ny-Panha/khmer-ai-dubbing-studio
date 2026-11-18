@@ -23,6 +23,7 @@ import { stripLogoSettings } from '../utils/logoSettingsStorage';
 import { generateVideoThumbnails } from '../utils/thumbnailUtils';
 import { fetchVideoThumbnails } from '../services/api';
 import { normalizeClips, sanitizeScriptData } from '../utils/timelineUtils';
+import { loadEpisodeTimelineViewState } from '../utils/timelineViewState';
 import { applySpeakerVoiceToSegments } from '../utils/speakerUtils';
 
 /**
@@ -71,7 +72,9 @@ export function useSeriesManager({
   const [activeSeriesIdState, setActiveSeriesIdState] = useState(getActiveSeriesId);
   const [activeEpisodeIdState, setActiveEpisodeIdState] = useState(getActiveEpisodeId);
 
-  // Reference to current active episode ID to prevent stale closures in async effects
+  // Reference to current active series/episode IDs to prevent stale closures in async effects
+  const activeSeriesIdRef = useRef(activeSeriesIdState);
+  activeSeriesIdRef.current = activeSeriesIdState;
   const activeEpisodeIdRef = useRef(activeEpisodeIdState);
   activeEpisodeIdRef.current = activeEpisodeIdState;
 
@@ -115,9 +118,10 @@ export function useSeriesManager({
   };
 
   // Helper to apply an episode state to the React workspace (stable reference)
-  const applyEpisodeToWorkspace = useCallback((ep) => {
+  const applyEpisodeToWorkspace = useCallback((ep, explicitSeriesId = null) => {
     if (!ep) return;
     const cb = callbacksRef.current;
+    const resolvedSeriesId = explicitSeriesId || activeSeriesIdRef.current || getActiveSeriesId();
 
     // If episode has no video yet (e.g. freshly created or reset episode), purge workspace cleanly
     if (!ep.video) {
@@ -213,7 +217,13 @@ export function useSeriesManager({
       cb.setDuration(epDur || ep.duration || 0);
     }
     if (cb.setCurrentTime) {
-      cb.setCurrentTime(0);
+      // Restore persisted per-episode playhead time from localStorage (never from series.json)
+      const savedView = loadEpisodeTimelineViewState(resolvedSeriesId, ep.id);
+      const rawSavedTime = savedView && Number.isFinite(savedView.playheadSec) ? savedView.playheadSec : 0;
+      const restoredTime = rawSavedTime > 0
+        ? (epDur > 0 ? Math.min(rawSavedTime, epDur) : rawSavedTime)
+        : 0;
+      cb.setCurrentTime(parseFloat(restoredTime.toFixed(2)));
     }
     if (cb.setVideoClips) {
       const existingClips = Array.isArray(ep.videoClips) ? ep.videoClips : [];
@@ -330,7 +340,8 @@ export function useSeriesManager({
 
     // Apply initial episode state to workspace
     if (episode) {
-      applyEpisodeToWorkspace(episode);
+      activeSeriesIdRef.current = series?.id || activeSeriesIdRef.current;
+      applyEpisodeToWorkspace(episode, series?.id);
     }
 
     const markInitialized = () => {
@@ -362,6 +373,7 @@ export function useSeriesManager({
           if (targetSeries) {
             setActiveSeriesId(targetSeries.id);
             setActiveSeriesIdState(targetSeries.id);
+            activeSeriesIdRef.current = targetSeries.id;
           }
           if (targetEp) {
             setActiveEpisodeId(targetEp.id);
@@ -375,7 +387,7 @@ export function useSeriesManager({
           } catch (_) {}
 
           if (targetEp) {
-            applyEpisodeToWorkspace(targetEp);
+            applyEpisodeToWorkspace(targetEp, targetSeries?.id);
           }
         }
       })
@@ -647,7 +659,8 @@ export function useSeriesManager({
         setActiveEpisodeId(firstEp.id);
         setActiveEpisodeIdState(firstEp.id);
         activeEpisodeIdRef.current = firstEp.id;
-        applyEpisodeToWorkspace(firstEp);
+        activeSeriesIdRef.current = targetSeries.id;
+        applyEpisodeToWorkspace(firstEp, targetSeries.id);
       } else {
         setActiveEpisodeId(null);
         setActiveEpisodeIdState(null);

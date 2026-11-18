@@ -14,7 +14,12 @@ export function useVideoPlayback({
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
+  const currentTimeRef = useRef(0);
+  currentTimeRef.current = currentTime;
   const lastMappedTimelineTimeRef = useRef(0);
+  if (!isPlaying && Number.isFinite(currentTime)) {
+    lastMappedTimelineTimeRef.current = currentTime;
+  }
   const hasSeekedRef = useRef(false);
   const intendedPlayingRef = useRef(false);
   const pendingSeekTargetRef = useRef(null);
@@ -35,7 +40,8 @@ export function useVideoPlayback({
 
   const handleLoadedMetadata = () => {
     if (videoRef?.current) {
-      const dur = videoRef.current.duration || 0;
+      const v = videoRef.current;
+      const dur = v.duration || 0;
       if (dur > 0) {
         setDuration((prevDur) => {
           if (!prevDur || prevDur === 0 || Math.abs(prevDur - dur) > 0.5) {
@@ -43,6 +49,28 @@ export function useVideoPlayback({
           }
           return prevDur;
         });
+        // If a per-episode playhead time was restored while paused before metadata loaded,
+        // cue the <video> frame directly to that restored timestamp without auto-playing.
+        const desiredTlTime = Number.isFinite(currentTimeRef.current) ? currentTimeRef.current : 0;
+        if (!isPlaying && desiredTlTime > 0.05) {
+          let targetSrc = Math.min(dur, desiredTlTime);
+          if (!renderedVideo && Array.isArray(videoClips) && videoClips.length > 0) {
+            const mapping = mapTimelineToSourceTime(desiredTlTime, videoClips);
+            if (mapping.inClip && Number.isFinite(mapping.sourceTime)) {
+              targetSrc = Math.min(dur, Math.max(0, mapping.sourceTime));
+              const targetIdx = videoClips.findIndex((c) => c.id === mapping.clip?.id);
+              if (targetIdx !== -1) activeClipIdxRef.current = targetIdx;
+            } else if (mapping.isGap && mapping.nextClip && Number.isFinite(mapping.nextClip.sourceStart)) {
+              targetSrc = Math.min(dur, Math.max(0, mapping.nextClip.sourceStart));
+            }
+          }
+          if (Number.isFinite(targetSrc) && Math.abs((v.currentTime || 0) - targetSrc) > 0.1) {
+            hasSeekedRef.current = true;
+            try {
+              v.currentTime = targetSrc;
+            } catch (_) {}
+          }
+        }
         if (setVideoClips) {
           setVideoClips((prevClips) => {
             if (!prevClips || prevClips.length === 0) {

@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react';
 import { formatMinSec, getSegmentAudioDuration, parseTimeToSeconds } from '../../utils/timestampUtils';
 import {
   getPixelsPerSecond,
@@ -13,6 +13,13 @@ import {
   computeVoiceDragPosition,
   resolveVoiceDragScrubTime,
 } from '../../utils/timelineUtils';
+import {
+  buildEpisodeViewKey,
+  loadEpisodeTimelineViewState,
+  saveEpisodeTimelineViewState,
+  computeAnchoredZoomScrollLeft,
+  computeScrollToRevealPlayhead,
+} from '../../utils/timelineViewState';
 import {
   deleteSegment as deleteSegmentOp,
   deleteVideoClip as deleteVideoClipOp,
@@ -80,7 +87,10 @@ function TimelineEditor({
   seriesId = null,
   episodeId = null,
 }) {
-  const [zoom, setZoom] = useState(1);
+  const [zoom, setZoom] = useState(() => {
+    const saved = loadEpisodeTimelineViewState(seriesId, episodeId);
+    return saved ? saved.zoom : 1;
+  });
   const [selectedSubId, setSelectedSubId] = useState(null);
   const [selectedAudioId, setSelectedAudioId] = useState(null);
   const [isScrubbing, setIsScrubbing] = useState(false);
@@ -592,12 +602,8 @@ function TimelineEditor({
         TRACK_HEADER_WIDTH
       );
       lastFocusScrollRef.current = { targetScroll, ts: Date.now() };
-      if (Math.abs(container.scrollLeft - targetScroll) > 4) {
-        if (typeof container.scrollTo === 'function') {
-          container.scrollTo({ left: targetScroll, behavior: 'smooth' });
-        } else {
-          container.scrollLeft = targetScroll;
-        }
+      if (Math.abs(container.scrollLeft - targetScroll) > 1) {
+        container.scrollLeft = targetScroll;
       }
     }
   }, [timelineFocusRequest]);
@@ -1865,6 +1871,177 @@ function TimelineEditor({
     return () => cancelAnimationFrame(animId);
   }, [isPlaying, autoCenter, pps, isScrubbing, dragState]);
 
+  // --- Unified Per-Episode Timeline View State (Playhead, Scroll, Zoom) ---
+  const episodeViewKey = buildEpisodeViewKey(seriesId, episodeId);
+  const restoredEpisodeKeyRef = useRef('');
+  const pendingRestoreViewRef = useRef(null);
+  const prevPpsRef = useRef(pps);
+  const prevRevealedTimeRef = useRef(currentTime);
+  const prevIsScrubbingRef = useRef(isScrubbing);
+  const zoomRef = useRef(zoom);
+  zoomRef.current = zoom;
+  const viewSaveTimerRef = useRef(null);
+
+  // A1. Load per-episode view state (zoom + pending scroll/playhead restore) when episode opens/switches
+  useLayoutEffect(() => {
+    if (!episodeViewKey) return;
+    if (restoredEpisodeKeyRef.current === episodeViewKey) return;
+
+    const saved = loadEpisodeTimelineViewState(seriesId, episodeId);
+    if (saved) {
+      pendingRestoreViewRef.current = {
+        key: episodeViewKey,
+        playheadSec: saved.playheadSec,
+        scrollLeft: saved.scrollLeft,
+        zoom: saved.zoom,
+      };
+      if (Math.abs(zoomRef.current - saved.zoom) > 0.005) {
+        setZoom(saved.zoom);
+      }
+    } else {
+      pendingRestoreViewRef.current = null;
+      restoredEpisodeKeyRef.current = episodeViewKey;
+      prevPpsRef.current = ppsRef.current;
+      prevRevealedTimeRef.current = currentTimeRef.current;
+    }
+  }, [episodeViewKey, seriesId, episodeId]);
+
+  // A2. Apply restored horizontal scroll once timeline width & restored zoom have laid out
+  useLayoutEffect(() => {
+    const pending = pendingRestoreViewRef.current;
+    if (!pending || pending.key !== episodeViewKey) return;
+    const container = timelineBodyRef.current;
+    if (!container || container.clientWidth <= 0) return;
+
+    const expectedPps = getPixelsPerSecond(pending.zoom);
+    if (Math.abs(pps - expectedPps) > 0.05) return;
+    // Wait for episode duration to hydrate before restoring non-zero scroll so scrollLeft isn't clamped to 0
+    if (totalDuration <= 0 && (pending.scrollLeft > 0 || pending.playheadSec > 0)) return;
+
+    const clientWidth = container.clientWidth;
+    const trackViewportW = Math.max(0, clientWidth - TRACK_HEADER_WIDTH);
+    const desiredPlayhead = currentTimeRef.current > 0 ? currentTimeRef.current : pending.playheadSec;
+    const playheadOffsetAtSavedScroll = desiredPlayhead * pps - pending.scrollLeft;
+    const isPlayheadVisibleAtSaved =
+      trackViewportW > 32 &&
+      playheadOffsetAtSavedScroll >= 0 &&
+      playheadOffsetAtSavedScroll <= (trackViewportW - 12);
+
+    const targetScroll = isPlayheadVisibleAtSaved
+      ? Math.max(0, Math.round(pending.scrollLeft))
+      : computeTimelineScrollForTime(desiredPlayhead, pps, clientWidth, TRACK_HEADER_WIDTH);
+
+    container.scrollLeft = targetScroll;
+    if (playheadRef.current) {
+      playheadRef.current.style.transform = `translate3d(${desiredPlayhead * pps}px, 0, 0)`;
+    }
+    if (playheadTimeTextRef.current) {
+      playheadTimeTextRef.current.textContent = formatMinSec(desiredPlayhead);
+    }
+
+    pendingRestoreViewRef.current = null;
+    restoredEpisodeKeyRef.current = episodeViewKey;
+    prevPpsRef.current = pps;
+    prevRevealedTimeRef.current = desiredPlayhead;
+  }, [episodeViewKey, totalDuration, totalWidth, pps]);
+
+  // Helper to persist current timeline view state for active episode (localStorage only, never series.json)
+  const flushEpisodeViewState = useCallback((override = null) => {
+    if (!episodeViewKey || restoredEpisodeKeyRef.current !== episodeViewKey) return;
+    const container = timelineBodyRef.current;
+    const liveTime = (playheadTimeRef && Number.isFinite(playheadTimeRef.current))
+      ? playheadTimeRef.current
+      : currentTimeRef.current;
+    const playheadSec = override && Number.isFinite(override.playheadSec) ? override.playheadSec : liveTime;
+    const scrollLeft = override && Number.isFinite(override.scrollLeft)
+      ? override.scrollLeft
+      : (container ? container.scrollLeft : 0);
+    const activeZoom = override && Number.isFinite(override.zoom) ? override.zoom : zoomRef.current;
+
+    saveEpisodeTimelineViewState(seriesId, episodeId, {
+      playheadSec,
+      scrollLeft,
+      zoom: activeZoom,
+    });
+  }, [episodeViewKey, seriesId, episodeId, playheadTimeRef]);
+
+  const schedulePersistViewState = useCallback(() => {
+    if (!episodeViewKey || restoredEpisodeKeyRef.current !== episodeViewKey) return;
+    if (viewSaveTimerRef.current !== null) {
+      window.clearTimeout(viewSaveTimerRef.current);
+    }
+    viewSaveTimerRef.current = window.setTimeout(() => {
+      viewSaveTimerRef.current = null;
+      flushEpisodeViewState();
+    }, 120);
+  }, [episodeViewKey, flushEpisodeViewState]);
+
+  // A3. Persist on horizontal scroll & flush synchronously before page reload/unload
+  useEffect(() => {
+    const container = timelineBodyRef.current;
+    if (!container || !episodeViewKey) return undefined;
+
+    const onScroll = () => schedulePersistViewState();
+    const onBeforeUnload = () => flushEpisodeViewState();
+
+    container.addEventListener('scroll', onScroll, { passive: true });
+    window.addEventListener('beforeunload', onBeforeUnload);
+    window.addEventListener('pagehide', onBeforeUnload);
+
+    return () => {
+      container.removeEventListener('scroll', onScroll);
+      window.removeEventListener('beforeunload', onBeforeUnload);
+      window.removeEventListener('pagehide', onBeforeUnload);
+      if (viewSaveTimerRef.current !== null) {
+        window.clearTimeout(viewSaveTimerRef.current);
+        viewSaveTimerRef.current = null;
+      }
+      flushEpisodeViewState();
+    };
+  }, [episodeViewKey, schedulePersistViewState, flushEpisodeViewState]);
+
+  // A4. Persist whenever playhead time or zoom changes (once episode restore is complete)
+  useEffect(() => {
+    if (!episodeViewKey || restoredEpisodeKeyRef.current !== episodeViewKey) return;
+    schedulePersistViewState();
+  }, [episodeViewKey, currentTime, zoom, schedulePersistViewState]);
+
+  // C. Zoom anchors synchronously on the playhead BEFORE paint — playhead NEVER leaves the screen on zoom
+  useLayoutEffect(() => {
+    const oldPps = prevPpsRef.current;
+    prevPpsRef.current = pps;
+    if (oldPps === pps) return;
+    if (pendingRestoreViewRef.current && pendingRestoreViewRef.current.key === episodeViewKey) return;
+
+    const container = timelineBodyRef.current;
+    if (!container || container.clientWidth <= 0) return;
+
+    const anchorTime = (playheadTimeRef && Number.isFinite(playheadTimeRef.current))
+      ? playheadTimeRef.current
+      : currentTimeRef.current;
+
+    const anchoredScroll = computeAnchoredZoomScrollLeft({
+      playheadSec: anchorTime,
+      oldPps,
+      newPps: pps,
+      currentScrollLeft: container.scrollLeft,
+      clientWidth: container.clientWidth,
+      trackHeaderWidth: TRACK_HEADER_WIDTH,
+    });
+
+    container.scrollLeft = anchoredScroll;
+    if (playheadRef.current) {
+      playheadRef.current.style.transform = `translate3d(${anchorTime * pps}px, 0, 0)`;
+    }
+    if (playheadTimeTextRef.current) {
+      const txt = formatMinSec(anchorTime);
+      if (playheadTimeTextRef.current.textContent !== txt) {
+        playheadTimeTextRef.current.textContent = txt;
+      }
+    }
+    flushEpisodeViewState({ playheadSec: anchorTime, scrollLeft: anchoredScroll, zoom: zoomRef.current });
+  }, [pps, episodeViewKey, playheadTimeRef, flushEpisodeViewState]);
+
   // Synchronize playhead position via GPU transform when paused or seeking (zero React style conflict)
   useEffect(() => {
     if (isPlaying) return;
@@ -1879,24 +2056,38 @@ function TimelineEditor({
     }
   }, [currentTime, pps, isPlaying]);
 
-  // 2. When seeking while paused: center the playhead smoothly at 50% viewport width
-  useEffect(() => {
-    if (isPlaying || !autoCenter || !timelineBodyRef.current || isScrubbing || dragState) return;
+  // B. Seek = visible immediately: any action that moves the playhead (ruler click, clip select,
+  // scrub drop, search jump, player scrub) reveals the playhead instantly without smooth-scroll lag.
+  useLayoutEffect(() => {
+    const justFinishedScrub = prevIsScrubbingRef.current && !isScrubbing;
+    prevIsScrubbingRef.current = isScrubbing;
+
+    if (isPlaying || !timelineBodyRef.current || isScrubbing || dragState) return;
+    if (pendingRestoreViewRef.current && pendingRestoreViewRef.current.key === episodeViewKey) return;
+
+    const timeMoved = Math.abs(currentTime - prevRevealedTimeRef.current) > 0.005;
+    if (!timeMoved && !justFinishedScrub) return;
+    prevRevealedTimeRef.current = currentTime;
 
     const container = timelineBodyRef.current;
     const clientWidth = container.clientWidth;
     if (clientWidth <= 0) return;
 
-    const targetScroll = computeTimelineScrollForTime(currentTime, pps, clientWidth, TRACK_HEADER_WIDTH);
-    const recentFocus = lastFocusScrollRef.current;
-    if (recentFocus && (Date.now() - recentFocus.ts) < 120 && Math.abs(targetScroll - recentFocus.targetScroll) <= 6) {
-      return;
-    }
+    const targetScroll = computeScrollToRevealPlayhead({
+      playheadSec: currentTime,
+      pps,
+      currentScrollLeft: container.scrollLeft,
+      clientWidth,
+      trackHeaderWidth: TRACK_HEADER_WIDTH,
+      autoCenter,
+      forceCenter: false,
+    });
 
-    if (Math.abs(container.scrollLeft - targetScroll) > 4) {
-      container.scrollTo({ left: targetScroll, behavior: 'smooth' });
+    if (Math.abs(container.scrollLeft - targetScroll) > 1) {
+      container.scrollLeft = targetScroll;
+      flushEpisodeViewState({ playheadSec: currentTime, scrollLeft: targetScroll, zoom: zoomRef.current });
     }
-  }, [currentTime, isPlaying, autoCenter, pps, isScrubbing, dragState]);
+  }, [currentTime, isPlaying, autoCenter, pps, isScrubbing, dragState, episodeViewKey, flushEpisodeViewState]);
 
   // Ruler tick step calculation to guarantee labels spaced at least ~100px apart
   const { majorStepSec, minorStepSec } = React.useMemo(() => {

@@ -3,6 +3,42 @@
 ## Last Session
 - **Environment**: Antigravity IDE
 - **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-19T00:05:00+07:00
+
+## Summary: Per-Episode Timeline View State Persistence, Instant Seek Reveal & Playhead-Anchored Zoom (COMPLETED)
+- **Root Causes**:
+  1. `TimelineEditor.jsx` initialized `zoom` to hardcoded `1`, never persisted `scrollLeft`, and `useSeriesManager.js` `applyEpisodeToWorkspace` always called `cb.setCurrentTime(0)` — so every reload reset playhead, scroll, and zoom.
+  2. Zooming changed `pps` without re-anchoring `scrollLeft` synchronously before paint, causing the playhead to jump completely off-screen (e.g. viewport at `01:45` while playhead sat at `00:41`).
+  3. Seeking relied on `autoCenter === true` + async `behavior: 'smooth'` scrolling, leaving off-screen seeks invisible when `autoCenter` was off or lagging during rapid seeks.
+- **Changes Applied (Zero Playback Semantics Changed; Never Stored in `series.json`)**:
+  1. `frontend/src/utils/timelineViewState.js` *(new)*: Per-episode `localStorage` store (`KHMER_AI_TIMELINE_VIEW_STATE_V1`, keyed by `${seriesId}::${episodeId}`, capped at 60 episodes) + pure `computeAnchoredZoomScrollLeft` + `computeScrollToRevealPlayhead`.
+  2. `frontend/src/hooks/useSeriesManager.js`: `applyEpisodeToWorkspace(ep, explicitSeriesId)` restores persisted per-episode `playheadSec` (clamped to episode duration) instead of resetting to `0`.
+  3. `frontend/src/hooks/useVideoPlayback.js`: `handleLoadedMetadata` cues `<video>.currentTime` to the restored playhead timestamp (via `mapTimelineToSourceTime`) while paused so video frame & playhead open at the exact same spot on reload.
+  4. `frontend/src/components/timeline/TimelineEditor.jsx`:
+     - **A. Per-episode restore & save**: Restores `zoom` + `scrollLeft` (guaranteeing playhead visibility) on episode open/reload via `useLayoutEffect`, persists on scroll/seek/zoom, and flushes synchronously on `beforeunload`/`pagehide`.
+     - **B. Seek = visible instantly**: Any playhead change (ruler click, clip select, scrub drop, search/Subs jump, player step) reveals the playhead immediately (`container.scrollLeft = targetScroll`) whether `autoCenter` is ON or OFF.
+     - **C. Zoom anchors on playhead**: Synchronous `useLayoutEffect` on `pps` change locks the playhead at its exact on-screen X (or centers it if off-screen) before paint.
+  5. `backend/tests/timeline_view_state_persistence.test.js` *(new)*: Unit + static audit tests for per-episode isolation, playhead-anchored zoom across 0.5x–3.0x, off-screen seek reveal, and `series.json` exclusion.
+- **Verification Results (Real App on `Pseudo_Spiritual_Root` `ep_5`, 219 segments, Read-Only)**:
+  - **Reload restore**: Seeked to `00:41`, zoomed in twice (`1.4x`, `scrollLeft: 2018`, `screenX: 565`) → `page.reload()` → restored **`00:41`**, **`videoCt: 41`**, **`zoom: 1.4`**, **`scrollLeft: 2018`**, **`screenX: 565`**, `playheadVisible: true`.
+  - **Far seek & off-screen seek**: Clicked `~03:20` (`scrollLeft: 12035`, `screenX: 565`, visible); scrolled to `0` (`visible: false`) then stepped `+1s` (`03:21`) → jumped instantly to `scrollLeft: 12098`, `screenX: 565`, `visible: true`.
+  - **Zoom In 3× & Out 3× (`1.4x -> 2.0x -> 1.4x`)**: Playhead stayed locked at **`screenX: 565px` (`visible: true`)** across every single step; zooming with playhead manually hidden off-screen immediately rescued it to `screenX: 565px` (`visible: true`).
+  - **Console Errors**: `0`.
+  - **Build & Suites**: `npm --prefix frontend run build` **PASS** (`1.12s`); all `backend/tests/timeline_*.test.js` **121 / 121 PASS**.
+
+## Active Environment
+- **Backend API**: `http://localhost:5000`
+- **Frontend Studio**: `http://localhost:5173` (Vite dev server)
+- **Branch**: `chore/full-project-cleanup` (committed & pushed)
+
+## Next Steps
+- Hard refresh (`Ctrl + Shift + R`) at `http://localhost:5173/studio`, seek to any timestamp, zoom in/out, and reload to confirm exact position restoration and playhead-anchored zoom.
+
+---
+
+## Previous Session
+- **Environment**: Antigravity IDE
+- **Branch**: `chore/full-project-cleanup`
 - **Timestamp**: 2026-11-18T23:54:30+07:00
 
 ## Summary: Fast Single-Segment Voice Switch (<2s vs 10-15s) & Honest Generating Status (COMPLETED)
