@@ -51,10 +51,16 @@ function doesSegmentNeedTts(seg, audioDir, batchSpeedInfo = null, batchExplicitC
   const raw = seg.khmer || seg.khmerText || seg.khmerTranslatedText || seg.text || "";
   if (typeof raw !== "string" || !raw.trim() || !cleanTextForTts(raw) || isPlaceholderOrEmptyTtsText(raw)) return false;
 
-  if (seg.audioOutdated) return true;
+  // Support caller passing boolean isForce / forceRegen as 2nd arg: doesSegmentNeedTts(seg, isForce, voiceId)
+  if (typeof audioDir === 'boolean') {
+    if (audioDir) return true; // forceRegen is true
+    audioDir = (typeof batchSpeedInfo === 'string' && batchSpeedInfo.includes(path.sep)) ? batchSpeedInfo : path.dirname(seg?.audioPath || '');
+  }
+
+  if (seg.audioOutdated || seg.force || seg.forceRegen) return true;
   if (seg.ttsStatus === "pending" || seg.ttsStatus === "error" || seg.status === "tts_error") return true;
 
-  const existingPath = resolvePriorSegmentAudioPath(seg, audioDir);
+  const existingPath = resolvePriorSegmentAudioPath(seg, typeof audioDir === 'string' ? audioDir : '');
   if (!existingPath) return true;
 
   // Verify physical file validity (size >= 500 bytes)
@@ -105,7 +111,7 @@ function doesSegmentNeedTts(seg, audioDir, batchSpeedInfo = null, batchExplicitC
     return true;
   }
 
-  if (seg.voiceId) {
+  if (seg.voiceId && !seg.audioSignature) {
     const validVoice = validateVoiceId(seg.voiceId);
     if (validVoice !== "google-km-standard" && !path.basename(existingPath).includes(validVoice)) {
       return true;

@@ -3,17 +3,15 @@
 ## Last Session
 - **Environment**: Antigravity IDE (Gemini) - Minimal Change Engineer
 - **Branch**: `chore/full-project-cleanup`
-- **Timestamp**: 2026-11-19T22:58:00+07:00
+- **Timestamp**: 2026-11-19T23:10:00+07:00
 
-## Summary: Unify All 3-Step Buttons with Run 1-by-1 — Shared Core, Clean Code (100% PASS)
-- **Goal:** Make all Script, AI Voice, and Clean BGM buttons use the same authoritative backend services and consistent generation rules across all 7 entry points:
-  1. Single Episode Generate (Script)
-  2. Single Episode Regenerate (Script)
-  3. Run 1-by-1 (Translate, Voice, Auto-Fit, Clean BGM)
-  4. Repair (Broken Text)
-  5. Run All 3 (Script -> Voice sequential, Clean BGM parallel)
-  6. Re-TTS (Voice)
-  7. Clean BGM (Demucs)
+## Summary: Smart 3-Step Pipeline Targeted Correctness Fixes & Unified Runner Contract (100% PASS)
+- **Request:** Target 5 authorized areas in Smart 3-Step AI Pipeline:
+  1. All-3 runner normalized result contract: structured error code (`BGM_GENERATION_FAILED`, `VOICE_GENERATION_FAILED`, `SCRIPT_GENERATION_FAILED`), step statuses, and explicit cancellation handling.
+  2. Demucs queue lifecycle & deadlock resilience: prevent deadlock on missing worker script or spawn failure, immediate dequeue cache check (>=100KB), and wait for process exit before queue advancement.
+  3. Polymorphic stem validation: support both synchronous directory validation and media-probed asynchronous stem validation.
+  4. Smart TTS cache & signature matching: verify signature and allow boolean forceRegen without type errors.
+  5. 100% verified regression test suites with zero false-success reports.
 - **Confirmed Differences & Redundant Logic Identified**:
   1. `DubbingModeTab.jsx` contained an independent 107-line Demucs separation loop (`handleStartDemucsSeparation`) that called `/api/audio/separate` directly and polled separately, bypassing `DubbingRunnerContext` safe queues and de-synchronizing Card 4 status.
   2. `DubbingModeTab.jsx` contained a simulated random number ticker (`if (Math.random() > 0.4) next = prev + 1;`) for TTS audio progress.

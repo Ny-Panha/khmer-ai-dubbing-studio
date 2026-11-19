@@ -526,25 +526,28 @@ function synthesizeWithGoogleFallback(text, outputPath, options = {}) {
 }
 
 function resolvePriorSegmentAudioPath(segment = {}, uploadsDir = "") {
-  if (!segment || !uploadsDir) return null;
-  const resolvedBase = path.resolve(uploadsDir);
+  if (!segment) return null;
+  const safeUploadsDir = typeof uploadsDir === "string" && uploadsDir.trim() ? uploadsDir.trim() : null;
+  const resolvedBase = safeUploadsDir ? path.resolve(safeUploadsDir) : null;
   const candidates = [];
   if (segment.audioPath && typeof segment.audioPath === "string") {
     candidates.push(segment.audioPath);
   }
   if (segment.audioFile && typeof segment.audioFile === "string") {
-    candidates.push(path.join(uploadsDir, path.basename(segment.audioFile)));
+    if (safeUploadsDir) candidates.push(path.join(safeUploadsDir, path.basename(segment.audioFile)));
+    else candidates.push(segment.audioFile);
   }
   if (segment.audioUrl && typeof segment.audioUrl === "string") {
     const cleanUrl = segment.audioUrl.split("?")[0];
     if (cleanUrl) {
-      candidates.push(path.join(uploadsDir, path.basename(cleanUrl)));
+      if (safeUploadsDir) candidates.push(path.join(safeUploadsDir, path.basename(cleanUrl)));
+      else candidates.push(cleanUrl);
     }
   }
   for (const cand of candidates) {
     try {
       const resolved = path.resolve(cand);
-      const insideDir = resolved.startsWith(resolvedBase + path.sep) || resolved === resolvedBase;
+      const insideDir = resolvedBase ? (resolved.startsWith(resolvedBase + path.sep) || resolved === resolvedBase) : true;
       if (insideDir && fs.existsSync(resolved) && fs.statSync(resolved).size > 200) {
         return resolved;
       }

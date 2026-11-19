@@ -50,14 +50,20 @@ test('Unified 3-Step Buttons & Run 1-by-1 Invariants Suite', async (t) => {
   await t.test('3. Script Regenerate: force=true resets script and clears old job manifests while keeping video intact', async () => {
     const testSeriesId = 'test_series_unified_regen';
     const testEpId = 'ep_regen_test';
-    const epDir = path.resolve(__dirname, `../uploads/series/${testSeriesId}/episodes/${testEpId}`);
+    const seriesDir = path.resolve(__dirname, `../uploads/projects/${testSeriesId}`);
+    const epDir = path.join(seriesDir, 'episodes', testEpId);
     fs.mkdirSync(epDir, { recursive: true });
 
-    // Seed dummy video and script data
+    // Seed dummy series.json, video and script data
     const dummyVideo = path.join(epDir, 'source.mp4');
     fs.writeFileSync(dummyVideo, 'dummy_video_stream');
     const dummyScript = path.join(epDir, 'script.json');
     fs.writeFileSync(dummyScript, JSON.stringify({ segments: [{ id: 1, text: 'old' }] }));
+    fs.writeFileSync(path.join(seriesDir, 'series.json'), JSON.stringify({
+      id: testSeriesId,
+      title: 'Unified Test Series',
+      episodes: [{ id: testEpId, title: 'EP 1', videoPath: dummyVideo, scriptData: { segments: [{ id: 1, text: 'old' }] } }],
+    }));
 
     try {
       const resetRes = await resetEpisodeState(testSeriesId, testEpId, { resetType: 'script' });
@@ -65,7 +71,7 @@ test('Unified 3-Step Buttons & Run 1-by-1 Invariants Suite', async (t) => {
       assert.ok(fs.existsSync(dummyVideo), 'Original source video must remain 100% intact');
       assert.ok(!fs.existsSync(dummyScript), 'Old script data must be cleared on script reset');
     } finally {
-      fs.rmSync(path.resolve(__dirname, `../uploads/series/${testSeriesId}`), { recursive: true, force: true });
+      fs.rmSync(seriesDir, { recursive: true, force: true });
     }
   });
 
@@ -379,11 +385,21 @@ test('Unified 3-Step Buttons & Run 1-by-1 Invariants Suite', async (t) => {
   // Invariant 20: No cross-episode data corruption
   await t.test('20. No cross-episode data corruption: episode operations remain strictly isolated', async () => {
     const seriesId = 'test_series_isolation';
-    const ep1Dir = path.resolve(__dirname, `../uploads/series/${seriesId}/episodes/ep_1`);
-    const ep2Dir = path.resolve(__dirname, `../uploads/series/${seriesId}/episodes/ep_2`);
+    const seriesDir = path.resolve(__dirname, `../uploads/projects/${seriesId}`);
+    const ep1Dir = path.join(seriesDir, 'episodes', 'ep_1');
+    const ep2Dir = path.join(seriesDir, 'episodes', 'ep_2');
 
     fs.mkdirSync(ep1Dir, { recursive: true });
     fs.mkdirSync(ep2Dir, { recursive: true });
+
+    fs.writeFileSync(path.join(seriesDir, 'series.json'), JSON.stringify({
+      id: seriesId,
+      title: 'Isolation Series',
+      episodes: [
+        { id: 'ep_1', title: 'EP 1', scriptData: { ep: 1 } },
+        { id: 'ep_2', title: 'EP 2', scriptData: { ep: 2 } },
+      ],
+    }));
 
     fs.writeFileSync(path.join(ep1Dir, 'script.json'), JSON.stringify({ ep: 1 }));
     fs.writeFileSync(path.join(ep2Dir, 'script.json'), JSON.stringify({ ep: 2 }));
@@ -395,7 +411,7 @@ test('Unified 3-Step Buttons & Run 1-by-1 Invariants Suite', async (t) => {
       assert.ok(!fs.existsSync(path.join(ep1Dir, 'script.json')), 'EP1 script must be cleared');
       assert.ok(fs.existsSync(path.join(ep2Dir, 'script.json')), 'EP2 script must remain 100% untouched');
     } finally {
-      fs.rmSync(path.resolve(__dirname, `../uploads/series/${seriesId}`), { recursive: true, force: true });
+      fs.rmSync(seriesDir, { recursive: true, force: true });
     }
   });
 

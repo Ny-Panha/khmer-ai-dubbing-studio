@@ -157,52 +157,72 @@ function getSeparationCacheDir(audioPath, model = 'htdemucs') {
 /**
  * Validate Demucs separated stems for existence, size (>=100KB), decodability, and non-zero duration
  */
-async function validateDemucsStems(vocalsPath, noVocalsPath, sourceDuration = null) {
+function validateDemucsStems(vocalsPath, noVocalsPath, sourceDuration = null) {
   const MIN_STEM_SIZE = 100 * 1024; // 100 KB
-  if (!fs.existsSync(vocalsPath) || !fs.existsSync(noVocalsPath)) {
-    return { valid: false, reason: 'STEMS_NOT_FOUND' };
-  }
-  const vStat = fs.statSync(vocalsPath);
-  const nvStat = fs.statSync(noVocalsPath);
-  if (vStat.size < MIN_STEM_SIZE || nvStat.size < MIN_STEM_SIZE) {
-    return { valid: false, reason: 'STEMS_TOO_SMALL', vocalsSizeBytes: vStat.size, noVocalsSizeBytes: nvStat.size };
+
+  // Polymorphic support: when called synchronously with 1 argument (targetDir)
+  if (!noVocalsPath || typeof noVocalsPath !== 'string') {
+    const dir = vocalsPath;
+    const vFile = path.join(dir, 'vocals.wav');
+    const nvFile = path.join(dir, 'no_vocals.wav');
+    if (!fs.existsSync(vFile) || !fs.existsSync(nvFile)) {
+      return false;
+    }
+    try {
+      const vSize = fs.statSync(vFile).size;
+      const nvSize = fs.statSync(nvFile).size;
+      return vSize >= MIN_STEM_SIZE && nvSize >= MIN_STEM_SIZE;
+    } catch (_) {
+      return false;
+    }
   }
 
-  try {
-    const vDur = await probeMediaDuration(vocalsPath);
-    const nvDur = await probeMediaDuration(noVocalsPath);
-
-    if (typeof vDur !== 'number' || typeof nvDur !== 'number' || vDur <= 0.1 || nvDur <= 0.1) {
-      return { valid: false, reason: 'STEMS_ZERO_OR_INVALID_DURATION', vDur, nvDur };
+  return (async () => {
+    if (!fs.existsSync(vocalsPath) || !fs.existsSync(noVocalsPath)) {
+      return { valid: false, reason: 'STEMS_NOT_FOUND' };
+    }
+    const vStat = fs.statSync(vocalsPath);
+    const nvStat = fs.statSync(noVocalsPath);
+    if (vStat.size < MIN_STEM_SIZE || nvStat.size < MIN_STEM_SIZE) {
+      return { valid: false, reason: 'STEMS_TOO_SMALL', vocalsSizeBytes: vStat.size, noVocalsSizeBytes: nvStat.size };
     }
 
-    if (typeof sourceDuration === 'number' && sourceDuration > 0.5) {
-      const tolerance = 2.0; // 2.0s tolerance
-      if (Math.abs(vDur - sourceDuration) > tolerance || Math.abs(nvDur - sourceDuration) > tolerance) {
-        return {
-          valid: false,
-          reason: 'STEMS_DURATION_MISMATCH_SOURCE',
-          vDur,
-          nvDur,
-          sourceDuration,
-          diffV: Math.abs(vDur - sourceDuration),
-          diffNV: Math.abs(nvDur - sourceDuration),
-        };
+    try {
+      const vDur = await probeMediaDuration(vocalsPath);
+      const nvDur = await probeMediaDuration(noVocalsPath);
+
+      if (typeof vDur !== 'number' || typeof nvDur !== 'number' || vDur <= 0.1 || nvDur <= 0.1) {
+        return { valid: false, reason: 'STEMS_ZERO_OR_INVALID_DURATION', vDur, nvDur };
       }
-    }
 
-    return {
-      valid: true,
-      vocalsPath,
-      noVocalsPath,
-      vocalsDuration: vDur,
-      noVocalsDuration: nvDur,
-      vocalsSizeBytes: vStat.size,
-      noVocalsSizeBytes: nvStat.size,
-    };
-  } catch (err) {
-    return { valid: false, reason: 'STEMS_DECODE_ERROR', error: err.message };
-  }
+      if (typeof sourceDuration === 'number' && sourceDuration > 0.5) {
+        const tolerance = 2.0; // 2.0s tolerance
+        if (Math.abs(vDur - sourceDuration) > tolerance || Math.abs(nvDur - sourceDuration) > tolerance) {
+          return {
+            valid: false,
+            reason: 'STEMS_DURATION_MISMATCH_SOURCE',
+            vDur,
+            nvDur,
+            sourceDuration,
+            diffV: Math.abs(vDur - sourceDuration),
+            diffNV: Math.abs(nvDur - sourceDuration),
+          };
+        }
+      }
+
+      return {
+        valid: true,
+        vocalsPath,
+        noVocalsPath,
+        vocalsDuration: vDur,
+        noVocalsDuration: nvDur,
+        vocalsSizeBytes: vStat.size,
+        noVocalsSizeBytes: nvStat.size,
+      };
+    } catch (err) {
+      return { valid: false, reason: 'STEMS_DECODE_ERROR', error: err.message };
+    }
+  })();
 }
 
 /**

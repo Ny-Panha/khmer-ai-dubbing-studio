@@ -1454,6 +1454,10 @@ async function resetEpisodeState(seriesId, episodeId, options = {}) {
       // Reset scriptData
       targetEp.scriptData = null;
       targetEp.status = 'uploaded';
+      try {
+        const epScriptPath = path.join(epDir, 'script.json');
+        if (fs.existsSync(epScriptPath)) fs.unlinkSync(epScriptPath);
+      } catch (_) { }
     } else {
       // Voice reset: Keep scriptData, but reset all segment audio references to pending
       if (targetEp.scriptData && Array.isArray(targetEp.scriptData.segments)) {
