@@ -41,6 +41,18 @@ export const DEFAULT_VOICE_SETTINGS = {
   cornerMaskOffsetY: 14,
 };
 
+// The floating Customize toolbar controls are shared across all episodes.
+// Logo settings live in their dedicated global store; these non-logo visual keys
+// inherit the last explicitly saved workspace settings instead of stale episode data.
+export const STICKY_CUSTOMIZE_SETTING_KEYS = Object.freeze([
+  'enableCornerMask', 'cornerMaskText', 'cornerMaskStyle', 'cornerMaskPosition',
+  'cornerMaskWidth', 'cornerMaskHeight', 'cornerMaskOpacity', 'cornerMaskBlur',
+  'cornerMaskOffsetX', 'cornerMaskOffsetY',
+  'enableAntiTheft', 'marqueeText', 'marqueeSpeed', 'marqueePosition',
+  'marqueeTextColor', 'antiTheftSize', 'antiTheftBottomPercent',
+  'enableWatermark', 'watermarkText', 'watermarkPosition', 'watermarkColor',
+]);
+
 export const VALID_ASPECT_RATIOS = Object.freeze(['16:9', '9:16', '1:1']);
 
 /**
@@ -151,9 +163,18 @@ export function resolveStickyVoiceSettings({
     ? stripLogoSettings({ ...episodeVoiceSettings })
     : {};
   delete epClean.aspectRatio;
+  // Current global Customize values win across episode switches. Only explicitly
+  // stored keys override episode values; non-Customize editing stays per-episode.
+  const stickyCustomize = {};
+  for (const key of STICKY_CUSTOMIZE_SETTING_KEYS) {
+    if (safeGlobal && Object.prototype.hasOwnProperty.call(safeGlobal, key)) {
+      stickyCustomize[key] = safeGlobal[key];
+    }
+  }
   return {
     ...base,
     ...epClean,
+    ...stickyCustomize,
     aspectRatio: stickyRatio,
   };
 }
