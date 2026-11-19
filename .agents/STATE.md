@@ -3,7 +3,43 @@
 ## Last Session
 - **Environment**: Antigravity IDE (Gemini) - Minimal Change Engineer
 - **Branch**: `chore/full-project-cleanup`
-- **Timestamp**: 2026-11-20T01:02:00+07:00
+- **Timestamp**: 2026-11-20T02:16:00+07:00
+
+## Summary: Stage 3 Smart OCR Speed Restoration, Fast Batch Splitting & Performance Telemetry (100% PASS)
+- **Task:** Recover OCR speed lost to retry/cascade backoff while maintaining 100% Chinese subtitle accuracy, verified empty frame protection, and zero false completions across Stage 3.
+- **Confirmed Root Causes Addressed**:
+  1. **Cascade Backoff Delay on Large Batches**: When 15-frame batches timed out under network congestion, the system previously cascaded through 4 models x 2 attempts with backoffs (~200s) before splitting.
+  2. **Model Selection Restart**: System previously reset model selection each batch, repeatedly retrying slow models instead of sticking with the last healthy model.
+  3. **Redundant Subtitle Frame Calls**: In drama dialogue, cues often span 1.5–3.0s where `sampleA` (onset) and `sampleB` (midpoint) have identical subtitle pixels (`subDiff < 2.5`), causing redundant expensive Vision API calls.
+  4. **Missing Granular Telemetry**: Lack of detailed breakdowns (FFmpeg prepass vs Gemini API time vs retry sleep vs batch splits) made it hard to pinpoint bottlenecks.
+- **Surgical Changes Implemented (Minimal Change Discipline)**:
+  1. `backend/services/pipeline/stages/stage3_extractChineseSubtitles.js`:
+     - **Point 1 (Fast Model Affinity & Tight Deadlines)**: Implemented `lastSuccessfulVisionModel` affinity to prioritize the model that recently answered with 200 OK. Tightened batch timeout deadlines to 16s for normal batches (>4 frames) and 12s for sub-batches (<=4 frames) instead of 25s. Limited cascade fallback models to 1 attempt to fail fast.
+     - **Point 2 (Fast Batch Splitting on Timeout)**: Multi-frame batches (>4 frames) that hit `CLIENT_TIMEOUT` or `SERVER_TIMEOUT` immediately throw `ERR_BATCH_TIMEOUT` with `fastSplit: true`, instantly splitting into 8+7 frame sub-batches within 16s rather than waiting ~200s for cascade exhaustion.
+     - **Point 3 (Verified Subtitle Region Deduplication)**: Added `getMaxSubtitleDiffBetween(startT, endT)`. Candidate cue frames with unchanged subtitle box pixels (`subDiff < 2.5`) are linked to `sampleA` and skip initial Vision API calls. Upon completion, linked frames inherit verified observations with exact timestamps only if `sampleA` is sharp (`isSharp: true`) and verified. If `sampleA` is blurry or failed, secondary frames are extracted and verified directly via Gemini fallback.
+     - **Point 4 (Performance Metrics Breakdown)**: Emits detailed `performance` telemetry in `ocrMeta`: `wallTimeMs`, `ffmpegPrepassMs`, `apiTotalMs`, `retrySleepMs`, `apiCallsCount`, `retriesCount`, `batchSplitsCount`, `dedupedFramesCount`, `verifiedFramesCount`, `unresolvedFramesCount`.
+  2. `backend/services/pipeline/chunkOrchestrator.js`:
+     - Logs complete OCR performance breakdown table for each chunk.
+     - Persists `ocrPerformance` telemetry into chunk cache files and `updateChunk` job updates for full observability.
+  3. `backend/tests/stage3_ocr_performance_and_deduplication.test.js` (NEW):
+     - Unit tests verifying:
+       1. `lastSuccessfulVisionModel` affinity reuses winning model.
+       2. Large batch timeout fast-splits immediately without cascade delay.
+       3. Subtitle region pixel-diff deduplication inherits verified observation safely with exact timestamps.
+       4. Performance telemetry structure exposes all required metrics.
+- **Verification Outcomes**:
+  - `backend/tests/stage3_ocr_performance_and_deduplication.test.js`: **5/5 PASS** (100%).
+  - `backend/tests/stage3_chinese_ocr_accuracy_and_completion.test.js`: **9/9 PASS** (100%).
+  - `backend/tests/stage3_gemini_vision_resilience.test.js`: **14/14 PASS** (100%).
+  - `backend/tests/gemini_key_pool_and_504_retry.test.js`: **9/9 PASS** (100%).
+  - `backend/tests/pipeline_stages.test.js` & `fast_ocr_mode.test.js`: **20/20 PASS** (100%).
+  - Full suite run: **57/57 PASS** (0 failures).
+- **Active Environment**:
+  - Backend API: `http://localhost:5000`
+  - Frontend UI: `http://localhost:5173`
+  - Active Branch: `chore/full-project-cleanup`
+- **Next Steps**:
+  - Commit and push to `origin/chore/full-project-cleanup`.
 
 ## Summary: Fix Global UI Click Delay (2–5s) — Instant Response & Smooth Studio Interaction (<100ms)
 - **Task:** Eliminate 2–5 second UI response delays across button clicks, tab switches, episode selection, modal openings, and control interactions. Achieve click-to-visual-feedback latency below 100 ms under normal conditions backed by real Chrome browser profiling.
@@ -239,7 +275,43 @@
 ## Last Session
 - **Environment**: Antigravity IDE (Gemini) - Minimal Change Engineer
 - **Branch**: `chore/full-project-cleanup`
-- **Timestamp**: 2026-11-20T01:02:00+07:00
+- **Timestamp**: 2026-11-20T02:16:00+07:00
+
+## Summary: Stage 3 Smart OCR Speed Restoration, Fast Batch Splitting & Performance Telemetry (100% PASS)
+- **Task:** Recover OCR speed lost to retry/cascade backoff while maintaining 100% Chinese subtitle accuracy, verified empty frame protection, and zero false completions across Stage 3.
+- **Confirmed Root Causes Addressed**:
+  1. **Cascade Backoff Delay on Large Batches**: When 15-frame batches timed out under network congestion, the system previously cascaded through 4 models x 2 attempts with backoffs (~200s) before splitting.
+  2. **Model Selection Restart**: System previously reset model selection each batch, repeatedly retrying slow models instead of sticking with the last healthy model.
+  3. **Redundant Subtitle Frame Calls**: In drama dialogue, cues often span 1.5–3.0s where `sampleA` (onset) and `sampleB` (midpoint) have identical subtitle pixels (`subDiff < 2.5`), causing redundant expensive Vision API calls.
+  4. **Missing Granular Telemetry**: Lack of detailed breakdowns (FFmpeg prepass vs Gemini API time vs retry sleep vs batch splits) made it hard to pinpoint bottlenecks.
+- **Surgical Changes Implemented (Minimal Change Discipline)**:
+  1. `backend/services/pipeline/stages/stage3_extractChineseSubtitles.js`:
+     - **Point 1 (Fast Model Affinity & Tight Deadlines)**: Implemented `lastSuccessfulVisionModel` affinity to prioritize the model that recently answered with 200 OK. Tightened batch timeout deadlines to 16s for normal batches (>4 frames) and 12s for sub-batches (<=4 frames) instead of 25s. Limited cascade fallback models to 1 attempt to fail fast.
+     - **Point 2 (Fast Batch Splitting on Timeout)**: Multi-frame batches (>4 frames) that hit `CLIENT_TIMEOUT` or `SERVER_TIMEOUT` immediately throw `ERR_BATCH_TIMEOUT` with `fastSplit: true`, instantly splitting into 8+7 frame sub-batches within 16s rather than waiting ~200s for cascade exhaustion.
+     - **Point 3 (Verified Subtitle Region Deduplication)**: Added `getMaxSubtitleDiffBetween(startT, endT)`. Candidate cue frames with unchanged subtitle box pixels (`subDiff < 2.5`) are linked to `sampleA` and skip initial Vision API calls. Upon completion, linked frames inherit verified observations with exact timestamps only if `sampleA` is sharp (`isSharp: true`) and verified. If `sampleA` is blurry or failed, secondary frames are extracted and verified directly via Gemini fallback.
+     - **Point 4 (Performance Metrics Breakdown)**: Emits detailed `performance` telemetry in `ocrMeta`: `wallTimeMs`, `ffmpegPrepassMs`, `apiTotalMs`, `retrySleepMs`, `apiCallsCount`, `retriesCount`, `batchSplitsCount`, `dedupedFramesCount`, `verifiedFramesCount`, `unresolvedFramesCount`.
+  2. `backend/services/pipeline/chunkOrchestrator.js`:
+     - Logs complete OCR performance breakdown table for each chunk.
+     - Persists `ocrPerformance` telemetry into chunk cache files and `updateChunk` job updates for full observability.
+  3. `backend/tests/stage3_ocr_performance_and_deduplication.test.js` (NEW):
+     - Unit tests verifying:
+       1. `lastSuccessfulVisionModel` affinity reuses winning model.
+       2. Large batch timeout fast-splits immediately without cascade delay.
+       3. Subtitle region pixel-diff deduplication inherits verified observation safely with exact timestamps.
+       4. Performance telemetry structure exposes all required metrics.
+- **Verification Outcomes**:
+  - `backend/tests/stage3_ocr_performance_and_deduplication.test.js`: **5/5 PASS** (100%).
+  - `backend/tests/stage3_chinese_ocr_accuracy_and_completion.test.js`: **9/9 PASS** (100%).
+  - `backend/tests/stage3_gemini_vision_resilience.test.js`: **14/14 PASS** (100%).
+  - `backend/tests/gemini_key_pool_and_504_retry.test.js`: **9/9 PASS** (100%).
+  - `backend/tests/pipeline_stages.test.js` & `fast_ocr_mode.test.js`: **20/20 PASS** (100%).
+  - Full suite run: **57/57 PASS** (0 failures).
+- **Active Environment**:
+  - Backend API: `http://localhost:5000`
+  - Frontend UI: `http://localhost:5173`
+  - Active Branch: `chore/full-project-cleanup`
+- **Next Steps**:
+  - Commit and push to `origin/chore/full-project-cleanup`.
 
 ## Summary: Fix Global UI Click Delay (2–5s) — Instant Response & Smooth Studio Interaction (<100ms)
 - **Task:** Eliminate 2–5 second UI response delays across button clicks, tab switches, episode selection, modal openings, and control interactions. Achieve click-to-visual-feedback latency below 100 ms under normal conditions backed by real Chrome browser profiling.

@@ -162,7 +162,15 @@ function classifyVisionError(err) {
     return { type: 'SERVICE_UNAVAILABLE', isRetryable: true, status: 503, message: rawMsg };
   }
   // Rate limit / Resource exhausted
-  if (status === 429 || msgUpper.includes('429') || msgUpper.includes('RESOURCE_EXHAUSTED') || msgUpper.includes('RATE LIMIT') || msgUpper.includes('TOO MANY REQUESTS')) {
+  if (
+    status === 429 ||
+    msgUpper.includes('429') ||
+    msgUpper.includes('RESOURCE_EXHAUSTED') ||
+    msgUpper.includes('RESOURCE HAS BEEN EXHAUSTED') ||
+    msgUpper.includes('RATE LIMIT') ||
+    msgUpper.includes('TOO MANY REQUESTS') ||
+    msgUpper.includes('CHECK QUOTA')
+  ) {
     return { type: 'RATE_LIMIT', isRetryable: true, status: 429, message: rawMsg };
   }
   // Network / Socket errors
@@ -233,12 +241,27 @@ function isTimeoutOrOverloadError(err) {
     classified.type === 'NETWORK_ERROR';
 }
 
+let lastSuccessfulVisionModel = null;
+
 /**
  * Helper: Call Gemini Vision with bounded retry/backoff, model cooldown handling,
  * and cancellation support for client timeouts and user aborts.
+ * Point 1 & Point 2: Uses last successful model first, fast-splits large batches on timeout (<=16s),
+ * and limits retries on cascade fallback models.
  */
-async function callGeminiVisionWithRetry(aiClient, modelName, contents, maxRetries = 2, signal = null, onModelSuccess = null) {
-  const preferred = modelName || geminiQuotaTracker.getPreferredPrimaryModel(CASCADE_VISION_MODELS[0]);
+async function callGeminiVisionWithRetry(
+  aiClient,
+  modelName,
+  contents,
+  maxRetries = 2,
+  signal = null,
+  onModelSuccess = null,
+  batchMeta = {}
+) {
+  const isLastHealthy = lastSuccessfulVisionModel && (visionModelCooldownMap.get(lastSuccessfulVisionModel) || 0) <= Date.now();
+  const preferred = isLastHealthy
+    ? lastSuccessfulVisionModel
+    : (modelName || geminiQuotaTracker.getPreferredPrimaryModel(CASCADE_VISION_MODELS[0]));
   const otherModels = CASCADE_VISION_MODELS.filter((m) => m !== preferred);
   const poolKeys = Array.isArray(aiClient?.pool?.keys) ? aiClient.pool.keys : [];
   const allCandidateModels = [preferred, ...otherModels];
@@ -252,11 +275,14 @@ async function callGeminiVisionWithRetry(aiClient, modelName, contents, maxRetri
   // Filter models not currently in cooldown
   let candidateList = topCandidates.filter((m) => (visionModelCooldownMap.get(m) || 0) <= Date.now());
 
+  const telemetry = batchMeta?.telemetry || null;
+
   // If all models are in temporary cooldown, wait for shortest cooldown (Requirement 14)
   if (candidateList.length === 0 && topCandidates.length > 0) {
     const earliestExpiry = Math.min(...topCandidates.map((m) => visionModelCooldownMap.get(m) || 0));
     const waitMs = Math.min(10000, Math.max(1000, earliestExpiry - Date.now()));
     console.warn(`[Stage 3 OCR] ⏳ All cascade models in temporary cooldown. Waiting ${waitMs}ms before retrying...`);
+    if (telemetry) telemetry.retrySleepMs = (telemetry.retrySleepMs || 0) + waitMs;
     await sleepOrAbort(waitMs, signal);
     visionModelCooldownMap.delete(preferred);
     candidateList = topCandidates.filter((m) => (visionModelCooldownMap.get(m) || 0) <= Date.now());
@@ -266,16 +292,29 @@ async function callGeminiVisionWithRetry(aiClient, modelName, contents, maxRetri
   let lastErr = null;
   let classifiedLastErr = null;
 
+  const explicitSize = Number(batchMeta?.batchSize);
+  const batchSize = !isNaN(explicitSize) && explicitSize > 0
+    ? explicitSize
+    : (Array.isArray(contents)
+        ? Math.max(1, contents.filter((c) => c && c.inlineData).length || contents.length)
+        : 1);
+  const fastSplitOnTimeout = Boolean(batchMeta?.fastSplitOnTimeout);
+
+  // Point 1: 16s deadline for normal batches, 12s for sub-batches <= 4 (prevents 25s hangs)
+  const timeoutMs = batchSize <= 4 ? 12000 : 16000;
+
   for (const currentModel of candidateList) {
     let attempt = 0;
-    while (attempt < maxRetries) {
+    // For fallback models in cascade, limit to 1 attempt to fail fast and trigger batch split
+    const modelMaxAttempts = (currentModel === candidateList[0]) ? maxRetries : 1;
+
+    while (attempt < modelMaxAttempts) {
       if (signal?.aborted) {
         throw createAbortError('Stage 3 OCR aborted');
       }
 
       const abortController = new AbortController();
       let timeoutId = null;
-      const timeoutMs = 25000;
 
       const onSignalAbort = () => {
         abortController.abort(signal?.reason || createAbortError('Stage 3 OCR aborted'));
@@ -298,6 +337,7 @@ async function callGeminiVisionWithRetry(aiClient, modelName, contents, maxRetri
       };
       abortController.signal.addEventListener('abort', onAbortEvent, { once: true });
 
+      const callStart = Date.now();
       try {
         const callPromise = aiClient.models.generateContent({
           model: currentModel,
@@ -310,11 +350,13 @@ async function callGeminiVisionWithRetry(aiClient, modelName, contents, maxRetri
         });
 
         const resp = await Promise.race([callPromise, abortPromise]);
+        if (telemetry) telemetry.apiTotalMs = (telemetry.apiTotalMs || 0) + (Date.now() - callStart);
         clearTimeout(timeoutId);
         abortController.signal.removeEventListener('abort', onAbortEvent);
         if (signal) signal.removeEventListener('abort', onSignalAbort);
 
-        // Success: clear cooldown and record healthy probe
+        // Success: record model as lastSuccessfulVisionModel & clear cooldown
+        lastSuccessfulVisionModel = currentModel;
         visionModelCooldownMap.delete(currentModel);
         try {
           geminiQuotaTracker.recordModelProbeStatus(currentModel, { statusCode: 200, latencyMs: 1000 });
@@ -325,6 +367,7 @@ async function callGeminiVisionWithRetry(aiClient, modelName, contents, maxRetri
         }
         return resp;
       } catch (err) {
+        if (telemetry) telemetry.apiTotalMs = (telemetry.apiTotalMs || 0) + (Date.now() - callStart);
         if (timeoutId) clearTimeout(timeoutId);
         abortController.signal.removeEventListener('abort', onAbortEvent);
         if (signal) signal.removeEventListener('abort', onSignalAbort);
@@ -342,23 +385,37 @@ async function callGeminiVisionWithRetry(aiClient, modelName, contents, maxRetri
           throw err;
         }
 
-        const serverRetryDelay = extractRetryDelayMs(err, Math.min(3000, 1000 * Math.pow(1.5, attempt)));
+        // Point 2: Fast Batch Splitting on Timeout:
+        // If a multi-frame batch (> 4 frames) times out, don't waste 200s cascading through all models!
+        // Immediately throw so the scheduler fast-splits the batch into smaller halves (8+7).
+        if (fastSplitOnTimeout && batchSize > 4 && (classified.type === 'CLIENT_TIMEOUT' || classified.type === 'SERVER_TIMEOUT')) {
+          console.warn(`[Stage 3 OCR] ⚡ Batch of ${batchSize} frames timed out on ${currentModel} (${timeoutMs}ms). Fast-splitting batch into smaller halves...`);
+          const splitErr = new Error(`Batch timeout on ${currentModel} (${batchSize} frames). Fast-splitting batch.`);
+          splitErr.name = 'TimeoutError';
+          splitErr.code = 'ERR_BATCH_TIMEOUT';
+          splitErr.fastSplit = true;
+          splitErr.status = 504;
+          throw splitErr;
+        }
 
-        if (attempt < maxRetries) {
-          console.warn(`[Stage 3 OCR] Model ${currentModel} hit ${classified.type} (${err.message}). Retrying in ${serverRetryDelay}ms (attempt ${attempt}/${maxRetries})...`);
+        const serverRetryDelay = extractRetryDelayMs(err, Math.min(2500, 1000 * Math.pow(1.5, attempt)));
+
+        if (attempt < modelMaxAttempts) {
+          console.warn(`[Stage 3 OCR] Model ${currentModel} hit ${classified.type} (${err.message}). Retrying in ${serverRetryDelay}ms (attempt ${attempt}/${modelMaxAttempts})...`);
+          if (telemetry) telemetry.retrySleepMs = (telemetry.retrySleepMs || 0) + serverRetryDelay;
           await sleepOrAbort(serverRetryDelay, signal);
         } else {
-          // Model exhausted its attempts -> set cooldown (20s) and cascade to next model
+          // Model exhausted its attempts -> set cooldown (15s) and cascade to next model
           const modelCdMs = Math.max(15000, serverRetryDelay);
           visionModelCooldownMap.set(currentModel, Date.now() + modelCdMs);
           try {
             geminiQuotaTracker.recordModelProbeStatus(currentModel, {
               statusCode: classified.status || 503,
               message: err.message,
-              latencyMs: 25000,
+              latencyMs: 15000,
             });
           } catch (_) {}
-          console.warn(`[Stage 3 OCR] Model ${currentModel} failed after ${maxRetries} attempts (${err.message}). Cascading to next candidate model...`);
+          console.warn(`[Stage 3 OCR] Model ${currentModel} failed after ${modelMaxAttempts} attempt(s) (${err.message}). Cascading to next candidate model...`);
           break;
         }
       }
@@ -622,7 +679,15 @@ async function extractChineseSubtitles({
   let retriesCount = 0;
   let lastBatchError = null;
   let ocrWallTimeMs = 0;
+  let ffmpegPrepassMs = 0;
+  let batchSplitsCount = 0;
+  let dedupedFramesCount = 0;
+  const telemetry = {
+    apiTotalMs: 0,
+    retrySleepMs: 0,
+  };
 
+  const prepassStartTime = Date.now();
   try {
     checkAbort();
     // 1. STEP 1: Change-driven sampling pre-pass (local FFmpeg pixel-diff, zero API calls)
@@ -645,11 +710,23 @@ async function extractChineseSubtitles({
       diffMap.set(d.timestampSec, d);
     }
 
+    // Helper: Inspect maximum subtitle pixel diff between two timestamps
+    function getMaxSubtitleDiffBetween(startT, endT) {
+      if (!Array.isArray(frameDiffs) || frameDiffs.length === 0) return 999;
+      const minT = Math.min(startT, endT);
+      const maxT = Math.max(startT, endT);
+      const inRange = frameDiffs.filter((d) => d && typeof d.timestampSec === 'number' && d.timestampSec >= minT && d.timestampSec <= maxT);
+      if (inRange.length === 0) return 999;
+      return inRange.reduce((max, d) => Math.max(max, Number(d.subDiff || d.diff || 0)), 0);
+    }
+
     // Schedule candidate frame timestamps:
     // (a) One frame shortly AFTER each change point (sampleASec) + mid-cue frame (sampleBSec)
     // (b) 0.75s baseline safety net deduplicated by timestamp (drops on static scenes)
+    // Point 3: Smart Deduplication avoids redundant Vision API calls on static subtitle regions
     const scheduled = new Set();
     const candidateTimestamps = [];
+    const linkedSecondaryFrames = new Map(); // timestampSec -> { parentTimestampSec, cueIndex, reason }
     const safeStartSec = Math.max(0, Number(startOffsetSec) || 0);
     const endSec = durationSec > 0 ? safeStartSec + durationSec : (cueStates.length > 0 ? cueStates[cueStates.length - 1].endSec : safeStartSec + 10);
 
@@ -668,7 +745,18 @@ async function extractChineseSubtitles({
     if (cueStates.length > 0) {
       for (const cs of cueStates) {
         trySchedule(cs.sampleASec, `cue_${cs.cueIndex}_sampleA`, 0.12);
-        trySchedule(cs.sampleBSec, `cue_${cs.cueIndex}_sampleB`, 0.12);
+
+        // Point 3: Smart Deduplication: Check if sample B has unchanged subtitle pixels (subDiff < 2.5)
+        const diffBetweenAandB = getMaxSubtitleDiffBetween(cs.sampleASec, cs.sampleBSec);
+        if (diffBetweenAandB < 2.5 && !completedMap.has(parseFloat(cs.sampleBSec.toFixed(2)))) {
+          linkedSecondaryFrames.set(parseFloat(cs.sampleBSec.toFixed(2)), {
+            parentTimestampSec: parseFloat(cs.sampleASec.toFixed(2)),
+            cueIndex: cs.cueIndex,
+            reason: `cue_${cs.cueIndex}_sampleB_static`,
+          });
+        } else {
+          trySchedule(cs.sampleBSec, `cue_${cs.cueIndex}_sampleB`, 0.12);
+        }
       }
     } else {
       // Fallback: use raw changePoints if cueStates empty
@@ -689,6 +777,26 @@ async function extractChineseSubtitles({
         if (Math.abs(ex - rounded) <= 0.40) {
           isCovered = true;
           break;
+        }
+      }
+
+      if (!isCovered && linkedSecondaryFrames.has(rounded)) {
+        isCovered = true;
+      }
+
+      if (!isCovered) {
+        // If baseline frame falls inside a cue whose subtitle is already static, link it
+        const insideCue = cueStates.find((cs) => rounded >= cs.startSec && rounded <= cs.endSec);
+        if (insideCue) {
+          const diffFromA = getMaxSubtitleDiffBetween(insideCue.sampleASec, rounded);
+          if (diffFromA < 2.5) {
+            linkedSecondaryFrames.set(rounded, {
+              parentTimestampSec: parseFloat(insideCue.sampleASec.toFixed(2)),
+              cueIndex: insideCue.cueIndex,
+              reason: 'baseline_static_inside_cue',
+            });
+            isCovered = true;
+          }
         }
       }
 
@@ -733,6 +841,7 @@ async function extractChineseSubtitles({
       const fps = Math.min(2.0, Math.max(0.8, parseFloat((1 / effectiveStep).toFixed(2))));
       extractedFrames = await extractFramesStreaming(videoPath, safeStartSec, durationSec, fps, tempDir, { signal });
     }
+    ffmpegPrepassMs = Date.now() - prepassStartTime;
 
     if (!extractedFrames || extractedFrames.length === 0) {
       console.warn('[Stage 3 Extract Subtitles] No frames could be extracted for video');
@@ -825,7 +934,8 @@ Return JSON ONLY matching this schema:
             console.log(`[Stage 3 OCR] ⚡ Auto-Cascade switched active model: ${activeWorkingModel} -> ${winningModel}`);
             activeWorkingModel = winningModel;
           }
-        }
+        },
+        { batchSize: batchFrames.length, fastSplitOnTimeout: true, telemetry }
       );
       return parseVisionResponseFrames(resp, batchFrames);
     }
@@ -994,6 +1104,7 @@ Return JSON ONLY matching this schema:
 
           // Adaptive batch splitting without discarding source frames (Requirement 6)
           if (originalBatch.frames.length > 1) {
+            batchSplitsCount++;
             const mid = Math.ceil(originalBatch.frames.length / 2);
             const subBatch1 = {
               batchId: `${originalBatch.batchId}_s1`,
@@ -1009,7 +1120,7 @@ Return JSON ONLY matching this schema:
             batchQueue.unshift(subBatch2);
             batchQueue.unshift(subBatch1);
             console.warn(
-              `[Stage 3 OCR] 🔀 Batch at ${originalBatch.frames[0]?.timestampSec}s failed (${lastBatchError}). Split into sub-batches (${subBatch1.frames.length} & ${subBatch2.frames.length} frames) without discarding frames.`
+              `[Stage 3 OCR] 🔀 Batch at ${originalBatch.frames[0]?.timestampSec}s failed (${lastBatchError}). Split into sub-batches (${subBatch1.frames.length} & ${subBatch2.frames.length} frames) without discarding frames. (Total splits: ${batchSplitsCount})`
             );
             recoveredBatchesCount++;
           } else {
@@ -1068,6 +1179,84 @@ Return JSON ONLY matching this schema:
     }
     ocrWallTimeMs = Date.now() - ocrStartTime;
 
+    // Point 3: Resolve Linked Secondary Frames with strict sharpness and verification checks
+    if (linkedSecondaryFrames.size > 0) {
+      const framesNeedingDirectOcr = [];
+
+      for (const [secB, linkInfo] of linkedSecondaryFrames.entries()) {
+        const parentObs = completedMap.get(linkInfo.parentTimestampSec);
+        if (parentObs && parentObs.isVerified && parentObs.isSharp) {
+          // Parent frame is sharp and verified (either text or empty) -> inherit observation safely
+          const inheritedObs = {
+            ...parentObs,
+            timestampSec: secB,
+            reportedSec: secB,
+            dedupedFromSec: linkInfo.parentTimestampSec,
+            isDeduped: true,
+          };
+          completedMap.set(secB, inheritedObs);
+          unresolvedMap.delete(secB);
+          dedupedFramesCount++;
+        } else {
+          // Parent frame was blurry, failed, or unverified -> cannot assume! Must verify directly!
+          framesNeedingDirectOcr.push(secB);
+        }
+      }
+
+      if (framesNeedingDirectOcr.length > 0) {
+        console.log(`[Stage 3 OCR] 🔍 Parent frame was blurry/unverified for ${framesNeedingDirectOcr.length} linked frame(s). Extracting and verifying directly via Gemini...`);
+        let fallbackExtracted = [];
+        try {
+          fallbackExtracted = await extractFramesAtTimestamps(videoPath, framesNeedingDirectOcr, tempDir, { signal });
+        } catch (_) {
+          fallbackExtracted = [];
+        }
+
+        if (fallbackExtracted.length > 0) {
+          for (let fi = 0; fi < fallbackExtracted.length; fi += INITIAL_BATCH_SIZE) {
+            const fbSlice = fallbackExtracted.slice(fi, fi + INITIAL_BATCH_SIZE);
+            try {
+              const fbObsList = await executeSingleVisionBatch(fbSlice);
+              for (const fbObs of fbObsList) {
+                const t = parseFloat(fbObs.timestampSec.toFixed(2));
+                if (fbObs.isVerified) {
+                  completedMap.set(t, fbObs);
+                  unresolvedMap.delete(t);
+                } else {
+                  unresolvedMap.set(t, fbObs);
+                }
+              }
+            } catch (fbErr) {
+              console.warn(`[Stage 3 OCR] Direct verification fallback failed for slice: ${fbErr.message}`);
+              for (const fbFrame of fbSlice) {
+                const t = parseFloat(fbFrame.timestampSec.toFixed(2));
+                unresolvedMap.set(t, {
+                  timestampSec: t,
+                  reportedSec: t,
+                  hasText: false,
+                  chineseText: '',
+                  position: 'bottom_subtitle',
+                  isSharp: false,
+                  visualGender: 'unknown',
+                  speakerGender: 'UNKNOWN',
+                  speakerVisualHint: '',
+                  deliveryType: 'dialogue',
+                  genderConfidence: 0.5,
+                  ocrStatus: 'failed',
+                  ocrFailed: true,
+                  isVerified: false,
+                  isVerifiedEmpty: false,
+                  reviewNeeded: true,
+                  uncertainOcr: true,
+                  failureReason: fbErr.message,
+                });
+              }
+            }
+          }
+        }
+      }
+    }
+
     // Account for all frames:
     for (const f of framesToAnalyze) {
       const t = parseFloat(f.timestampSec.toFixed(2));
@@ -1092,6 +1281,32 @@ Return JSON ONLY matching this schema:
           reviewNeeded: true,
           uncertainOcr: true,
           failureReason: 'Frame unreached during batch execution',
+        });
+      }
+    }
+    for (const secB of linkedSecondaryFrames.keys()) {
+      const t = parseFloat(Number(secB).toFixed(2));
+      if (!completedMap.has(t) && !unresolvedMap.has(t)) {
+        unresolvedMap.set(t, {
+          timestampSec: t,
+          reportedSec: t,
+          hasText: false,
+          textZh: '',
+          chineseText: '',
+          position: 'bottom_subtitle',
+          isSharp: false,
+          visualGender: 'unknown',
+          speakerGender: 'UNKNOWN',
+          speakerVisualHint: '',
+          deliveryType: 'dialogue',
+          genderConfidence: 0.5,
+          ocrStatus: 'missing',
+          ocrFailed: true,
+          isVerified: false,
+          isVerifiedEmpty: false,
+          reviewNeeded: true,
+          uncertainOcr: true,
+          failureReason: 'Linked secondary frame unresolved',
         });
       }
     }
@@ -1726,8 +1941,21 @@ Return JSON ONLY matching this schema:
     };
   });
 
+  const performance = {
+    wallTimeMs: ocrWallTimeMs,
+    ffmpegPrepassMs,
+    apiTotalMs: telemetry.apiTotalMs,
+    retrySleepMs: telemetry.retrySleepMs,
+    apiCallsCount,
+    retriesCount,
+    batchSplitsCount,
+    dedupedFramesCount,
+    verifiedFramesCount: completedMap.size,
+    unresolvedFramesCount: unresolvedMap.size,
+  };
+
   const ocrWallTimeSec = (ocrWallTimeMs / 1000).toFixed(1);
-  console.log(`[Stage 3 Extract Subtitles] OCR engine: gemini-vision (${activeWorkingModel}, wall time: ${ocrWallTimeSec}s, api calls: ${apiCallsCount}, ${finalizedVisualSegments.length} cues)`);
+  console.log(`[Stage 3 Extract Subtitles] OCR engine: gemini-vision (${activeWorkingModel}, wall time: ${ocrWallTimeSec}s, api: ${(telemetry.apiTotalMs / 1000).toFixed(1)}s, prepass: ${(ffmpegPrepassMs / 1000).toFixed(1)}s, retry sleep: ${(telemetry.retrySleepMs / 1000).toFixed(1)}s, calls: ${apiCallsCount}, deduped: ${dedupedFramesCount}, splits: ${batchSplitsCount}, ${finalizedVisualSegments.length} cues)`);
   console.log(`[Stage 3 Extract Subtitles] Completed with ${finalizedVisualSegments.length} deduplicated visual segments detected from ${rawObservations.length} observations.`);
 
   const result = {
@@ -1748,6 +1976,9 @@ Return JSON ONLY matching this schema:
       baseStepSec,
       apiCallsCount,
       retriesCount,
+      batchSplitsCount,
+      dedupedFramesCount,
+      performance,
       modelUsed: activeWorkingModel,
       ocrEngine: 'gemini-vision',
       wallTimeMs: ocrWallTimeMs,

@@ -238,6 +238,7 @@ async function runChunkedDubbingPipeline({
     let isChunkReused = false;
     let visualOnlyCount = 0;
     let fusedCount = 0;
+    let ocrPerf = null;
 
     if (force && fs.existsSync(chunkFile)) {
       try { fs.unlinkSync(chunkFile); } catch (_) {}
@@ -257,6 +258,7 @@ async function runChunkedDubbingPipeline({
           const droppedCacheJunk = beforeCacheCount - chunkSegments.length;
           visualOnlyCount = cachedChunk.visualOnlyCount || 0;
           fusedCount = cachedChunk.fusedCount || 0;
+          ocrPerf = cachedChunk.ocrPerformance || null;
           isChunkReused = true;
           console.log(
             `[ChunkOrchestrator] ⚡ Resuming Chunk ${cIdx + 1}/${chunks.length}: Loaded ${chunkSegments.length} validated segments from disk cache${droppedCacheJunk > 0 ? ` (dropped ${droppedCacheJunk} non-Chinese ASR junk)` : ''}`
@@ -297,6 +299,31 @@ async function runChunkedDubbingPipeline({
         });
 
         checkAbort();
+
+        ocrPerf = ocrResult?.ocrMeta?.performance || {
+          wallTimeMs: ocrResult?.ocrMeta?.wallTimeMs || 0,
+          ffmpegPrepassMs: 0,
+          apiTotalMs: 0,
+          retrySleepMs: 0,
+          apiCallsCount: ocrResult?.ocrMeta?.apiCallsCount || 0,
+          retriesCount: ocrResult?.ocrMeta?.retriesCount || 0,
+          batchSplitsCount: ocrResult?.ocrMeta?.batchSplitsCount || 0,
+          dedupedFramesCount: ocrResult?.ocrMeta?.dedupedFramesCount || 0,
+          verifiedFramesCount: ocrResult?.ocrMeta?.verifiedFramesCount || 0,
+          unresolvedFramesCount: ocrResult?.ocrMeta?.unresolvedFramesCount || 0,
+        };
+
+        console.log(`[ChunkOrchestrator] 📊 Chunk ${cIdx + 1}/${chunks.length} OCR Performance Metrics:`, {
+          wallTimeMs: ocrPerf.wallTimeMs,
+          ffmpegPrepassMs: ocrPerf.ffmpegPrepassMs,
+          apiTotalMs: ocrPerf.apiTotalMs,
+          retrySleepMs: ocrPerf.retrySleepMs,
+          apiCallsCount: ocrPerf.apiCallsCount,
+          retriesCount: ocrPerf.retriesCount,
+          batchSplitsCount: ocrPerf.batchSplitsCount,
+          dedupedFramesCount: ocrPerf.dedupedFramesCount,
+          verifiedFramesCount: ocrPerf.verifiedFramesCount,
+        });
 
         // Validate OCR completeness: Do not allow incomplete OCR to silently trigger downstream stages
         const hasUnresolvedOcr = Boolean(
@@ -404,6 +431,7 @@ async function runChunkedDubbingPipeline({
             segments: chunkSegments,
             visualOnlyCount,
             fusedCount,
+            ocrPerformance: ocrPerf,
             videoSignature,
             isComplete: true,
             hasUnresolvedFrames: false,
@@ -447,6 +475,7 @@ async function runChunkedDubbingPipeline({
         segmentsCount: chunkSegments.length,
         visualOnlyCount,
         fusedCount,
+        ocrPerformance: ocrPerf,
       });
     }
 
