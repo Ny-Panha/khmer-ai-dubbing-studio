@@ -128,4 +128,36 @@ test('Playback State & Deferred Source Invariant Verification Suite', async (t) 
     handleTimeUpdate();
     assert.strictEqual(timeUpdateCalled, 1, 'timeUpdate must not be blocked when native playback resumes');
   });
+
+  await t.test('4. Virtual DOM render thrashing prevention during active playback', () => {
+    const appFile = path.resolve(__dirname, '../../frontend/src/App.jsx');
+    const appContent = fs.readFileSync(appFile, 'utf8');
+
+    assert.ok(appContent.includes('const MemoMediaLibrary = React.memo(MediaLibrary'), 'App.jsx must wrap MediaLibrary in React.memo');
+    assert.ok(appContent.includes('<MemoMediaLibrary'), 'App.jsx must render MemoMediaLibrary to avoid 5Hz currentTime re-renders');
+
+    const timelineFile = path.resolve(__dirname, '../../frontend/src/components/timeline/TimelineEditor.jsx');
+    const timelineContent = fs.readFileSync(timelineFile, 'utf8');
+
+    assert.ok(timelineContent.includes('if (!isPlaying) {'), 'TimelineEditor must not trigger top-level onSelectSegment on every segment boundary during active playback');
+    assert.ok(timelineContent.includes('wasPlayingSyncRef'), 'TimelineEditor must synchronize active segment to onSelectSegment on playback pause');
+  });
+
+  await t.test('5. Audio synchronization invariants: cold seek avoidance, startup grace, and rate nudge deadzone', () => {
+    const playerFile = path.resolve(__dirname, '../../frontend/src/components/player/VideoPlayerPreview.jsx');
+    const content = fs.readFileSync(playerFile, 'utf8');
+
+    // Cold seek avoidance on natural start (from beginning of segment)
+    assert.ok(content.includes('isNaturalStart = Math.abs(expectedOffset) <= 0.055'), 'Must check natural start to avoid cold seek latency');
+    assert.ok(content.includes('startedAtPerf: performance.now()'), 'Must record startedAtPerf for startup grace calculation');
+
+    // Startup grace prevents premature seek while audio element spins up physical output
+    assert.ok(content.includes('isStartupGrace = (nowPerf - (activeItem.startedAtPerf || 0)) < 650'), 'Must provide at least 650ms startup grace period');
+
+    // Rate nudge deadzone (>= 60ms) prevents pitch-warping flutter from normal frame quantization (33ms at 30fps)
+    assert.ok(content.includes('absDrift >= 0.065'), 'Rate nudge threshold must be >= 65ms (2 video frames)');
+
+    // Demucs BGM sync cooldown prevents repeated seeks
+    assert.ok(content.includes('lastBgmSeekMsRef'), 'Must maintain lastBgmSeekMsRef for BGM seek throttling');
+  });
 });

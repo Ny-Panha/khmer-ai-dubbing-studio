@@ -3,6 +3,73 @@
 ## Last Session
 - **Environment**: Antigravity IDE (Gemini)
 - **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-19T16:05:00+07:00
+
+## Summary: Fix Live Video + Khmer Voice Normal Playback Lag, Audio Seeks, and React Render Thrashing (100% PASS)
+- **Problem & Root Causes Identified**:
+  1. **Top-Level React Re-render Thrashing on Segment Boundaries**: `TimelineEditor.jsx:739` invoked `onSelectSegment(segKey)` every ~1.5s as dialogue played. This mutated top-level `selectedSegmentId` in `App.jsx`, triggering heavy virtual DOM reconciliation across the entire application—specifically unmemoized `<MediaLibrary>` and its heavy `<ScriptReviewTab>` (`isSegmentTextBroken` scans). Chrome CDP profiler proved this generated **100+ Long Tasks (>40ms) consuming 11,089ms (37% of playback time)** on the main thread, choking audio scheduling loops.
+  2. **Cold Buffer Audio Seeks at Clip Start**: `VideoPlayerPreview.jsx:688` evaluated `Math.abs(audio.currentTime - expectedOffset) > 0.015`. When a clip started naturally from 0 with a tiny silence offset (e.g. 0.024s), `0.024 > 0.015` forced `audio.currentTime = bounded` immediately before `.play()`. In Chromium, setting `currentTime` on a newly loaded media element forces an asynchronous media pipeline seek/flush, downgrading `readyState` from 4 to 1 and delaying audio onset by 50–120ms (cutting off first syllables).
+  3. **Hypersensitive 35ms PlaybackRate Oscillation**: At 30fps, 1 video frame = 33.3ms. Because `<video>.currentTime` steps in frame quanta, normal video-to-audio media clock difference regularly reached 35ms. The previous threshold (`absDrift > 0.035`) triggered `audio.playbackRate = 1.10` / `0.90` on almost every sentence (26 rate changes in 30s), causing audible pitch warping and flutter.
+  4. **Premature Hard Seeks During Startup Grace Window**: Chromium takes ~80–200ms to spin up physical audio output upon `.play()`. Without a startup grace period, line 770 seeked the audio element after just 120ms of playback, aborting initial playback and causing stutter.
+  5. **Competing BGM Seeks**: Competing seeks between `syncLoop` and `handleSync` caused redundant seeks on large Demucs WAV audio streams.
+
+- **Surgical Minimal Changes Implemented**:
+  1. `frontend/src/components/timeline/TimelineEditor.jsx`:
+     - Decoupled `onSelectSegment(segKey)` during active playback (`if (!isPlaying)`). Segment playhead tracking now updates local visual timeline state (`selectedSegmentIdRef`, `setSelectedAudioId`, `setSelectedSubId`) so active tracks highlight smoothly without re-rendering top-level panels.
+     - Added `wasPlayingSyncRef` hook to cleanly synchronize `onSelectSegment(activeSeg)` when transitioning from playing to paused.
+  2. `frontend/src/App.jsx`:
+     - Added `const MemoMediaLibrary = React.memo(MediaLibrary, ...)` and replaced `<MediaLibrary` with `<MemoMediaLibrary`, preventing 5Hz playback `currentTime` state updates from re-rendering the heavy `ScriptReviewTab`.
+  3. `frontend/src/components/player/VideoPlayerPreview.jsx`:
+     - Added `try { audio.load(); } catch (_) {}` in `getSegmentAudio` to ensure audio elements are buffered in advance.
+     - Increased preload lookahead during playback from 15s to 18s and `maxClips` from 4 to 6.
+     - Natural start check: `isNaturalStart = Math.abs(expectedOffset) <= 0.055`. Skips cold `audio.currentTime` seek when starting from 0, allowing instant 0ms speech start without media pipeline flush.
+     - Startup grace period: `isStartupGrace = (nowPerf - (activeItem.startedAtPerf || 0)) < 650`. Suppresses hard seeks during the 650ms initial audio spin-up window.
+     - Rate nudge deadzone: Raised threshold to **65ms** (2 video frames) with gentle rate multipliers `1.08 / 0.92`, eliminating pitch-warping flutter on normal 33ms frame quantization.
+     - Consolidated Demucs BGM sync into `syncLoop` with a 500ms seek cooldown and 0.20s threshold; removed duplicate competing seek from `handleSync`.
+  4. `backend/tests/playback_sync_and_deferred_source_regression.test.js`:
+     - Added Invariant 4 (`MemoMediaLibrary` & `TimelineEditor` active playback decoupling).
+     - Added Invariant 5 (Natural start cold seek avoidance, 650ms startup grace, 65ms rate nudge deadzone, and BGM seek throttling).
+
+- **Empirical Browser Verification (Chromium Playwright on Google Chrome)**:
+  - **Proxy_Verification_219** (219 segments, ep_5, 30s LIVE continuous playback):
+    - Audio `.play()` calls: 15 (Warm readyState >= 2: **14/15, 93.3% preloaded**)
+    - Audio seeks during playback: **3 total (0.1/s)** (All 3 on BGM init/play; **0 seeks on voice clips during playback!**)
+    - Audio playbackRate nudges: 12 (0.4/s, gentle micro-nudges, settled smoothly)
+    - Video frames rendered: 763 | Dropped: 7 (less than 1% drop rate)
+    - Frame delta avg: 39.7ms
+  - **Pseudo_Spiritual_Root** (221 segments, ep_5, 30s LIVE continuous playback):
+    - Audio `.play()` calls: 15 (Warm readyState >= 2: **14/15, 93.3% preloaded**)
+    - Audio seeks during playback: **3 total (0.1/s)** (**0 seeks on voice clips during playback!**)
+    - Audio playbackRate nudges: 18 (0.6/s)
+    - Video frames rendered: 776 | Dropped: 4 (0.5% drop rate)
+    - Frame delta avg: 38.7ms
+  - **Pseudo_Spiritual_Root** (Seek & Play 20s -> 35s):
+    - Main-thread long tasks: dropped from 100+ down to **13**!
+    - 10 out of 11 plays were warm (preloaded).
+    - Audio seeks on voice clips: **0**.
+    - Playback advanced smoothly with 0 stutter.
+
+- **Test Suites & Verification**:
+  - `npm --prefix frontend run build`: **PASS** (0 errors, 1.08s).
+  - All test suites passing:
+    - `playback_sync_and_deferred_source_regression.test.js` (6/6 PASS)
+    - `timeline_voice_drag_freeze_regression.test.js` (1/1 PASS)
+    - `timeline_voice_drag_persistence.test.js` (7/7 PASS)
+    - `source_proxy.test.js` (5/5 PASS)
+    - `proxy_preview.test.js` (4/4 PASS)
+
+- **Active Environment**:
+  - Backend API: `http://localhost:5000`
+  - Frontend UI: `http://localhost:5173`
+
+- **Next Steps**:
+  - Verified and ready for deployment/user review.
+
+---
+
+## Previous Session
+- **Environment**: Antigravity IDE (Gemini)
+- **Branch**: `chore/full-project-cleanup`
 - **Timestamp**: 2026-11-19T15:28:00+07:00
 
 ## Summary: Fix Real-Time Video Preview Stutter During Voice Clip Dragging (100% PASS)

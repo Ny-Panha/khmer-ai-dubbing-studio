@@ -47,6 +47,32 @@ const MemoNavbar = React.memo(Navbar, (prev, next) => (
   prev.currentRoute === next.currentRoute
 ));
 
+// Prevent 5Hz playback currentTime ticks from re-rendering MediaLibrary and its heavy ScriptReviewTab
+const MemoMediaLibrary = React.memo(MediaLibrary, (prev, next) => (
+  prev.apiKey === next.apiKey &&
+  prev.selectedVideo === next.selectedVideo &&
+  prev.videoMetadata === next.videoMetadata &&
+  prev.scriptData === next.scriptData &&
+  prev.activeTab === next.activeTab &&
+  prev.isGeneratingScript === next.isGeneratingScript &&
+  prev.scriptProgress === next.scriptProgress &&
+  prev.scriptStage === next.scriptStage &&
+  prev.scriptError === next.scriptError &&
+  prev.isGeneratingAudio === next.isGeneratingAudio &&
+  prev.audioProgress === next.audioProgress &&
+  prev.audioStage === next.audioStage &&
+  prev.selectedSegmentId === next.selectedSegmentId &&
+  prev.speakerRegistry === next.speakerRegistry &&
+  prev.seriesId === next.seriesId &&
+  prev.episodeId === next.episodeId &&
+  prev.activeSeries === next.activeSeries &&
+  prev.activeEpisode === next.activeEpisode &&
+  prev.duration === next.duration &&
+  prev.videoClips === next.videoClips &&
+  prev.mediaAssets === next.mediaAssets &&
+  prev.seriesList === next.seriesList
+));
+
 // Prevent 5Hz playback currentTime ticks from re-rendering the 3,800-line Inspector panel
 const MemoVoiceSettings = React.memo(VoiceSettings, (prev, next) => {
   if (prev.isPlaying !== next.isPlaying) return false;
@@ -1191,7 +1217,7 @@ export default function App() {
               }}
             >
               <ErrorBoundary inline name="Media Library">
-                <MediaLibrary
+                <MemoMediaLibrary
                   apiKey={persistence.apiKey}
                   selectedVideo={media.selectedVideo}
                   videoMetadata={media.videoMetadata}

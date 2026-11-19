@@ -155,6 +155,7 @@ function VideoPlayerPreview({
   isPlayingRef.current = isPlaying;
   const isPlayPendingRef = useRef(false);
   const playStartTimeRef = useRef(0);
+  const lastBgmSeekMsRef = useRef(0);
 
   // BUG-013: Bounded Audio Auto-Recovery State & Manager
   const [narrationError, setNarrationError] = useState(null);
@@ -209,6 +210,7 @@ function VideoPlayerPreview({
       if ('preservesPitch' in audio) audio.preservesPitch = true;
       if ('mozPreservesPitch' in audio) audio.mozPreservesPitch = true;
       if ('webkitPreservesPitch' in audio) audio.webkitPreservesPitch = true;
+      try { audio.load(); } catch (_) {}
       segmentAudioPoolRef.current[url] = audio;
     }
     segmentAudioMetaRef.current.set(url, { segStart, lastUsedMs: Date.now() });
@@ -330,8 +332,8 @@ function VideoPlayerPreview({
     const activeVideo = videoRef?.current;
     if (activeVideo && activeVideo.seeking) return;
 
-    const lookAheadSec = isPlayingRef.current ? 15 : 22;
-    const maxClips = isPlayingRef.current ? 4 : 6;
+    const lookAheadSec = isPlayingRef.current ? 18 : 22;
+    const maxClips = isPlayingRef.current ? 6 : 6;
     const maxNewPerTick = 3;
 
     const upcoming = sd.segments
@@ -685,7 +687,13 @@ function VideoPlayerPreview({
 
             let cleanupMetadataListener = null;
             if (audio.readyState >= 1) {
-              if (Math.abs(audio.currentTime - expectedOffset) > 0.015) {
+              const isNaturalStart = Math.abs(expectedOffset) <= 0.055;
+              const curPos = audio.currentTime || 0;
+              // Avoid cold seek at natural clip start: starting from 0 immediately eliminates decoder flush & play latency.
+              // Only seek if clip was previously paused mid-way or user initiated playback mid-segment.
+              const needsSeek = (!isNaturalStart && Math.abs(curPos - expectedOffset) > 0.035) ||
+                (isNaturalStart && curPos > 0.04);
+              if (needsSeek) {
                 try {
                   const bounded = Number.isFinite(audio.duration) && audio.duration > 0
                     ? Math.min(expectedOffset, Math.max(0, audio.duration - 0.02))
@@ -735,6 +743,7 @@ function VideoPlayerPreview({
               segEnd: effectiveSegEnd,
               segAudioEndLimit,
               hasEnded: false,
+              startedAtPerf: performance.now(),
               lastSeekPerf: performance.now(),
               cleanupMetadataListener,
             };
@@ -755,14 +764,15 @@ function VideoPlayerPreview({
               audio.play().catch(() => {});
             }
 
-            // Tight 3-Tier Sync (<= 35ms lock, 35-120ms hysteresis rate nudge, > 120ms debounced seek)
+            // Tight 3-Tier Sync (<= 65ms lock, 65-220ms hysteresis rate nudge, > 220ms debounced seek)
             if (audio.readyState >= 2 && !audio.seeking) {
               const drift = expectedOffset - audio.currentTime;
               const absDrift = Math.abs(drift);
               const isNudged = Math.abs(audio.playbackRate - currentRate) > 0.005;
               const nowPerf = performance.now();
+              const isStartupGrace = (nowPerf - (activeItem.startedAtPerf || 0)) < 650;
 
-              if (absDrift > 0.120 && (nowPerf - (activeItem.lastSeekPerf || 0)) >= 250) {
+              if (absDrift > 0.220 && !isStartupGrace && (nowPerf - (activeItem.lastSeekPerf || 0)) >= 450) {
                 try {
                   const maxPos = Number.isFinite(audio.duration) && audio.duration > 0 ? Math.max(0, audio.duration - 0.02) : (expectedOffset + 0.015);
                   audio.currentTime = Math.max(0, Math.min(expectedOffset + 0.015, maxPos));
@@ -770,14 +780,14 @@ function VideoPlayerPreview({
                 activeItem.lastSeekPerf = nowPerf;
                 if (audio.playbackRate !== currentRate) audio.playbackRate = currentRate;
               } else if (isNudged) {
-                if (absDrift < 0.015) {
+                if (absDrift < 0.020) {
                   audio.playbackRate = currentRate;
                 } else {
-                  const rateMultiplier = drift > 0 ? 1.10 : 0.90;
+                  const rateMultiplier = drift > 0 ? 1.08 : 0.92;
                   audio.playbackRate = parseFloat((currentRate * rateMultiplier).toFixed(3));
                 }
-              } else if (absDrift >= 0.035) {
-                const rateMultiplier = drift > 0 ? 1.10 : 0.90;
+              } else if (absDrift >= 0.065) {
+                const rateMultiplier = drift > 0 ? 1.08 : 0.92;
                 audio.playbackRate = parseFloat((currentRate * rateMultiplier).toFixed(3));
               }
             }
@@ -831,12 +841,15 @@ function VideoPlayerPreview({
           syncSegmentAudiosAtTime(tlNow);
         }
 
-        // Tight 60Hz Clean Demucs BGM sync (0.12s drift threshold avoids re-seeking 100MB WAV streams on minor jitter)
+        // Authoritative Demucs BGM sync (0.20s drift threshold + 500ms cooldown avoids re-seeking large WAV streams on minor jitter)
         const bg = cleanBgAudioRef.current;
         if (bg && vs?.enableDemucs && bgUrl && v && !v.paused && !v.seeking && Number.isFinite(v.currentTime)) {
           const baseRate = v.playbackRate || 1.0;
           if (bg.playbackRate !== baseRate) bg.playbackRate = baseRate;
-          if (bg.readyState >= 2 && !bg.seeking && Math.abs(bg.currentTime - v.currentTime) > 0.12) {
+          const bgDrift = Math.abs(bg.currentTime - v.currentTime);
+          const nowMs = performance.now();
+          if (bg.readyState >= 2 && !bg.seeking && bgDrift > 0.20 && (nowMs - (lastBgmSeekMsRef.current || 0) >= 500)) {
+            lastBgmSeekMsRef.current = nowMs;
             bg.currentTime = v.currentTime;
           }
           if (bg.paused) bg.play().catch(() => {});
@@ -945,14 +958,11 @@ function VideoPlayerPreview({
     };
 
     const handleSync = () => {
-      // Sync Clean Demucs BGM (no_vocals.wav) with video regardless of segment vs master narration mode
+      // Clean Demucs BGM (no_vocals.wav) play resumption; authoritative seeking is delegated to syncLoop
       const { voiceSettings: vs, cleanBgAudioUrl: bgUrl } = segAudioConfigRef.current;
       const bg = cleanBgAudioRef.current;
       if (bg && !renderedVideo && vs?.enableDemucs && bgUrl && !v.paused && !v.seeking) {
         if (bg.paused) bg.play().catch(() => {});
-        if (bg.readyState >= 2 && !bg.seeking && Number.isFinite(v.currentTime) && Math.abs(bg.currentTime - v.currentTime) > 0.12) {
-          bg.currentTime = v.currentTime;
-        }
       }
 
       const a = narrationAudioRef.current;

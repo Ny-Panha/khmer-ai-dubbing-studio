@@ -726,17 +726,22 @@ function TimelineEditor({
 
         lastPlayheadSegKeyRef.current = segKey;
 
-        // Auto-follow playhead: Update selected segment and Inspector as dialogue plays (both during playback and when paused)
+        // Auto-follow playhead: Update selected segment and Inspector as dialogue plays.
+        // During active playback, track local selection so timeline tracks highlight without triggering
+        // expensive top-level React re-renders of VoiceSettings and MediaLibrary on every segment boundary.
+        // On pause, the current playhead segment is synced to onSelectSegment.
         if (String(selectedSegmentIdRef.current) !== String(segKey)) {
           selectedSegmentIdRef.current = segKey;
           setSelectedAudioId(segKey);
           setSelectedSubId(segKey);
         }
 
-        if (String(lastSyncedInspectorIdRef.current) !== String(segKey)) {
-          lastSyncedInspectorIdRef.current = segKey;
-          if (onSelectSegment) {
-            onSelectSegment(segKey);
+        if (!isPlaying) {
+          if (String(lastSyncedInspectorIdRef.current) !== String(segKey)) {
+            lastSyncedInspectorIdRef.current = segKey;
+            if (onSelectSegment) {
+              onSelectSegment(segKey);
+            }
           }
         }
 
@@ -754,6 +759,23 @@ function TimelineEditor({
     }
     // In gaps, preserve current selection so Inspector never disappears unexpectedly
   }, [currentTime, scriptSegments, dragState, isScrubbing, isPlaying, onSelectSegment, isEditingInspectorText]);
+
+  // Synchronize paused playhead segment to onSelectSegment when transitioning from playing to paused
+  const wasPlayingSyncRef = useRef(false);
+  useEffect(() => {
+    if (wasPlayingSyncRef.current && !isPlaying && !dragState && !isScrubbing) {
+      const curT = Number.isFinite(currentTimeRef.current) ? currentTimeRef.current : 0;
+      const activeSeg = resolveSegmentAtTime(scriptSegments, curT);
+      if (activeSeg) {
+        const segKey = activeSeg._uid || (activeSeg.id !== undefined && activeSeg.id !== null ? activeSeg.id : scriptSegments.indexOf(activeSeg));
+        if (String(lastSyncedInspectorIdRef.current) !== String(segKey)) {
+          lastSyncedInspectorIdRef.current = segKey;
+          onSelectSegment?.(segKey);
+        }
+      }
+    }
+    wasPlayingSyncRef.current = isPlaying;
+  }, [isPlaying, scriptSegments, onSelectSegment, dragState, isScrubbing]);
 
   // Catch-up after editing: If follow-sync was skipped because user was typing in the Inspector,
   // catch up to the current playhead segment on blur/focusout even while paused
