@@ -71,7 +71,8 @@ export function useProxyPreview({ seriesId, episodeId, videoUrl, clips, segments
         timer = setTimeout(() => check(null), 15000);
       }
     }
-    timer = setTimeout(() => check(null), 0);
+    const debounceMs = isInitialOpen ? 0 : 1200;
+    timer = setTimeout(() => check(null), debounceMs);
     return () => { controller.abort(); clearTimeout(timer); };
   }, [base, body, epoch]);
 

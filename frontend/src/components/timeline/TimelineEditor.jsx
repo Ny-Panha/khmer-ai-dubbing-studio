@@ -1455,7 +1455,7 @@ function TimelineEditor({
                   ? droppedSeg.audioStartSec
                   : newStart;
                 const wasPlayingOnDrop = Boolean(isPlayingRef.current || (videoRef?.current && !videoRef.current.paused));
-                onUpdateSegments(opResult.state.segments, false, true);
+                onUpdateSegments(opResult.state.segments, false, false);
                 if (!wasPlayingOnDrop && onSeek && typeof droppedStart === 'number') {
                   manualFocusLockRef.current = {
                     segKey,

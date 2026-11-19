@@ -322,9 +322,13 @@ function VideoPlayerPreview({
     const now = Number.isFinite(centerTime) ? centerTime : (currentTimeRef.current || 0);
     lastPreloadCenterRef.current = now;
 
+    // Audio preloading is ONLY needed during active playback.
+    // While paused, video frame decoding has 100% exclusive priority on HTTP/1.1 sockets!
+    if (!isPlayingRef.current) return;
+
     // Keep preload window compact & bounded so segment audio fetches never saturate the 6-connection HTTP/1.1 pool
     const activeVideo = videoRef?.current;
-    if (activeVideo && activeVideo.seeking && activeVideo.readyState < 2) return;
+    if (activeVideo && activeVideo.seeking) return;
 
     const lookAheadSec = isPlayingRef.current ? 15 : 22;
     const maxClips = isPlayingRef.current ? 4 : 6;
@@ -349,7 +353,7 @@ function VideoPlayerPreview({
       }
       getSegmentAudio(rawUrl, s);
       const rawOffset = (typeof seg.audioOffset === 'number' && !isNaN(seg.audioOffset)) ? seg.audioOffset : 0;
-      if (!isPlayingRef.current && rawOffset === 0 && !seg.userTrimmed) {
+      if (rawOffset === 0 && !seg.userTrimmed) {
         probeUrlLeadingSilence(rawUrl);
       }
     });
@@ -1000,6 +1004,11 @@ function VideoPlayerPreview({
     };
 
     const handlePlay = () => {
+      // If video is currently seeking, defer audio synchronization to handleSeeked once video frames decode
+      if (v.seeking) {
+        return;
+      }
+
       const { voiceSettings: vs, cleanBgAudioUrl: bgUrl } = segAudioConfigRef.current;
       const bg = cleanBgAudioRef.current;
       if (bg && !renderedVideo && vs?.enableDemucs && bgUrl) {
@@ -1044,28 +1053,22 @@ function VideoPlayerPreview({
       isPlayPendingRef.current = false;
       stopAllSegmentAudios();
       const bg = cleanBgAudioRef.current;
-      if (bg) {
-        if (!bg.paused) bg.pause();
-        if (Number.isFinite(v.currentTime)) bg.currentTime = v.currentTime;
+      if (bg && !bg.paused) {
+        bg.pause();
       }
       const a = narrationAudioRef.current;
-      if (a) {
-        if (!a.paused) a.pause();
+      if (a && !a.paused) {
+        a.pause();
         a.playbackRate = v.playbackRate || 1.0;
-        const targetTime = getTargetTimelineTime();
-        if (a.readyState >= 1 && Number.isFinite(targetTime)) {
-          const maxTime = Number.isFinite(a.duration) && a.duration > 0 ? a.duration : targetTime;
-          a.currentTime = Math.min(targetTime, maxTime);
-        }
       }
     };
 
     const handleSeeked = () => {
       const { voiceSettings: vs, cleanBgAudioUrl: bgUrl } = segAudioConfigRef.current;
       const bg = cleanBgAudioRef.current;
-      if (bg && !renderedVideo && vs?.enableDemucs && bgUrl) {
+      if (bg && !renderedVideo && vs?.enableDemucs && bgUrl && !v.paused) {
         if (Number.isFinite(v.currentTime)) bg.currentTime = v.currentTime;
-        if (!v.paused) bg.play().catch(() => {});
+        bg.play().catch(() => {});
       }
 
       if (hasSegmentAudios && !renderedVideo) {

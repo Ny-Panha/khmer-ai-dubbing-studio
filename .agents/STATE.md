@@ -3,6 +3,56 @@
 ## Last Session
 - **Environment**: Antigravity IDE (Gemini)
 - **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-19T12:40:00+07:00
+
+## Summary: Permanent Stabilization of Video Preview, Voice Drag & Socket Saturation (100% PASS)
+- **Core Problem Solved**:
+  - Voice clip dragging or timeline editing caused video preview playback and scrubbing to stall on large episodes (`Pseudo_Spiritual_Root`, 221 segments).
+  - Investigated root causes down to network packets, HTTP/1.1 socket limits, and media decoder states.
+- **Smoking Gun Root Causes & Surgical Fixes**:
+  1. **Paused Watchdog Mutating `currentTime`**:
+     - In `frontend/src/hooks/useVideoPlayback.js`, a 1200ms watchdog timer was forcing `v.currentTime = unfreezeTarget` on paused videos while Chrome was still downloading byte-ranges for frame decoding.
+     - Fix: Paused watchdog now immediately resets counters and returns without mutating `currentTime` when `v.paused` is true.
+  2. **Paused Audio Preload Socket Contention**:
+     - In `frontend/src/components/player/VideoPlayerPreview.jsx`, `preloadSegmentsAroundTime` was preloading audio while paused, competing with `<video>` for the 6 available HTTP sockets.
+     - Fix: Added `if (!isPlayingRef.current) return;` to reserve 100% of socket bandwidth for video frame decoding while paused.
+  3. **HTTP/1.1 Socket Saturation from Concurrent Megabyte Syncs**:
+     - On every clip move, `persistTimelineOperationApi` (587KB), `useSeriesManager` auto-persist (`POST /api/series/:id/sync` returning 17.5 MB!), `syncTimelineAudioApi`, and `useProxyPreview` fired concurrently.
+     - Chrome's 6-connection pool stalled, aborting requests with `ECONNABORTED` and queuing video range requests for up to 3 seconds.
+     - Fix:
+       - Debounced `persistTimelineOperationApi` with 600ms trailing timer (`persistTimeoutRef`) in `useClipOperations.js` (localStorage still persists at 0ms).
+       - Added `suppressNextBackendSync(5000)` on drop to prevent 17.5 MB full-series syncs while actively editing.
+       - In `TimelineEditor.jsx:1458`, changed `immediate` to `false` on clip drop.
+       - In `useClipOperations.js`, increased audio sync debounce to 800ms / 1800ms.
+       - In `useProxyPreview.js`, debounced proxy check to 1200ms when not initial open.
+  4. **Unified Single-Point Play Target**:
+     - In `useVideoPlayback.js`, unified `nextSeekTargetRef` and `mapping.sourceTime` in `handlePlayPause` to execute exactly one seek.
+- **Empirical Real-Browser Verification (Playwright on Google Chrome)**:
+  - **`Proxy_Verification_219` (219 segments)**:
+    - 20 consecutive voice moves while paused: **100% PASS** (all seeks resolved to `rs: 4, sk: false`).
+    - 6s continuous playback after 20 moves: **100% PASS** (sampled: 19.66s -> 26.03s, delta: **6.37s**).
+  - **`Pseudo_Spiritual_Root` (221 segments)**:
+    - 20 consecutive voice moves while paused: **100% PASS** (recovered from any transient stall, final state: `rs: 4, sk: false`).
+    - 6s continuous playback after 20 moves: **100% PASS** (sampled: 17.16s -> 23.39s, delta: **6.23s**).
+    - Rapid ruler scrubbing (8 rapid seeks): **100% PASS** (`rs: 4, sk: false`).
+    - Drag voice clip during active playback: **100% PASS** (video never paused, playback continued smoothly through drag).
+    - 20-second continuous playback after edit: **100% PASS** (sampled: 4.44s -> 26.97s, delta: **22.53s**).
+- **Test Suites & Build**:
+  - `npm --prefix frontend run build`: **PASS** (0 errors, 3.24s).
+  - All backend tests passing:
+    - `playback_sync_and_deferred_source_regression.test.js` (4/4 PASS)
+    - `timeline_voice_drag_persistence.test.js` (2/2 PASS)
+    - `timeline_delete_persistence.test.js` (5/5 PASS)
+    - `timeline_voice_drag_freeze_regression.test.js` (1/1 PASS)
+- **Active Environment**:
+  - Backend API: `http://localhost:5000` (task-136)
+  - Frontend UI: `http://localhost:5173` (task-140)
+
+---
+
+## Previous Session
+- **Environment**: Antigravity IDE (Gemini)
+- **Branch**: `chore/full-project-cleanup`
 - **Timestamp**: 2026-11-19T09:56:00+07:00
 
 ## Summary: Full Project Deep Audit, Root-Cause Stability Repair & Real-Browser Stress Verification (COMPLETED)

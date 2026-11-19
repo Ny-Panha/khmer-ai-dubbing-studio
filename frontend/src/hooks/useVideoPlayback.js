@@ -1,6 +1,15 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { mapTimelineToSourceTime, mapSourceToTimelineTime, resolveForwardPlaybackTransition } from '../utils/timelineUtils';
 
+function getUnfreezeTime(curT, maxDur) {
+  const safeCur = Number.isFinite(curT) ? curT : 0;
+  const safeMax = Number.isFinite(maxDur) && maxDur > 0 ? maxDur : safeCur + 1;
+  if (safeCur >= safeMax - 0.03) {
+    return Math.max(0, safeCur - 0.003);
+  }
+  return safeCur + 0.003;
+}
+
 /**
  * Custom hook to manage video playback state, playhead position, time update, and seeking
  */
@@ -27,6 +36,9 @@ export function useVideoPlayback({
   const pendingSeekStartedMsRef = useRef(0);
   const lastTransitionSeekMsRef = useRef(0);
   const stallRecoveryCountRef = useRef(0);
+  const pausedRecoveryCountRef = useRef(0);
+  const pausedSeekingSinceMsRef = useRef(0);
+  const isSeekInFlightRef = useRef(false);
   const [playRequestTick, setPlayRequestTick] = useState(0);
 
   // Duration follows the timeline (R7): when videoClips has been edited, duration equals the end of the last video clip
@@ -376,12 +388,12 @@ export function useVideoPlayback({
     }
   }, [videoClips, isPlaying]);
 
-  // Bounded forward-only stall/hung-seek watchdog during active playback:
-  // If <video> is attempting to play (!paused, !ended) but genuinely stuck in seeking or readyState < 3
-  // with unchanged currentTime for >= 3.5s (e.g. hung HTTP range request), nudge strictly forward (+5ms)
-  // to abort the stalled seek and resume cleanly without ever aborting normal 0.5-2s range buffering.
+  // Bounded stall/hung-seek watchdog:
+  // Monitors video element during playback and paused seeks.
+  // 1. During active playback: if seeking or readyState < 3 for >= 1200ms, nudge forward to abort stalled range request.
+  // 2. While paused: if stuck in seeking for >= 400ms without progress, unfreeze by re-asserting latest seek target.
   useEffect(() => {
-    if (renderedVideo?.isProxyPreview || (!isPlaying && !intendedPlayingRef.current)) return undefined;
+    if (renderedVideo?.isProxyPreview) return undefined;
     const v = videoRef?.current;
     if (!v) return undefined;
 
@@ -389,8 +401,12 @@ export function useVideoPlayback({
     let stuckSinceMs = performance.now();
 
     const onClearSeek = () => {
+      isSeekInFlightRef.current = false;
       pendingSeekTargetRef.current = null;
+      pausedSeekingSinceMsRef.current = 0;
       stuckSinceMs = performance.now();
+      stallRecoveryCountRef.current = 0;
+      pausedRecoveryCountRef.current = 0;
       if (intendedPlayingRef.current && v.paused && !v.ended) {
         v.play().then(() => setIsPlaying(true)).catch(() => {});
       }
@@ -400,32 +416,48 @@ export function useVideoPlayback({
     v.addEventListener('canplay', onClearSeek);
 
     const timer = window.setInterval(() => {
-      if (!intendedPlayingRef.current || v.ended) return;
+      if (v.ended) return;
       const curT = Number.isFinite(v.currentTime) ? v.currentTime : 0;
       const nowMs = performance.now();
+
+      // When paused: video is stationary.
+      // Do NEVER mutate v.currentTime via watchdog timers while paused,
+      // because mutating currentTime interrupts Chrome's in-buffer frame decoding
+      // and aborts ongoing seeks, wedging media pipelines into stalled states.
+      if (v.paused) {
+        lastHealthyTime = curT;
+        stuckSinceMs = nowMs;
+        stallRecoveryCountRef.current = 0;
+        pausedSeekingSinceMsRef.current = 0;
+        pausedRecoveryCountRef.current = 0;
+        return;
+      }
 
       // Only reset stall counters when playback actually advances while readyState >= 3 and not seeking
       if (!v.seeking && v.readyState >= 3 && Math.abs(curT - lastHealthyTime) >= 0.08) {
         lastHealthyTime = curT;
         stuckSinceMs = nowMs;
         stallRecoveryCountRef.current = 0;
+        pausedRecoveryCountRef.current = 0;
         pendingSeekTargetRef.current = null;
         return;
       }
 
-      const isStalled = (!v.paused && (v.seeking || v.readyState < 3)) || (v.paused && intendedPlayingRef.current && !v.ended && v.seeking);
-      if (isStalled && (nowMs - stuckSinceMs) >= 3500 && stallRecoveryCountRef.current < 2) {
+      // Active playback stall recovery:
+      // If video is actively playing (!v.paused) but stuck in seeking or readyState < 3 for >= 3500ms,
+      // nudge forward to abort stalled socket and resume.
+      const isActiveStalled = !v.paused && (v.seeking || v.readyState < 3);
+      if (isActiveStalled && (nowMs - stuckSinceMs) >= 3500 && stallRecoveryCountRef.current < 3) {
         stallRecoveryCountRef.current += 1;
         stuckSinceMs = nowMs;
         const maxDur = Number.isFinite(v.duration) && v.duration > 0 ? v.duration : (duration || curT + 1);
-        const forwardTarget = Math.min(Math.max(0, maxDur - 0.05), curT + 0.005);
-        if (forwardTarget > curT) {
-          hasSeekedRef.current = true;
-          pendingSeekTargetRef.current = forwardTarget;
-          try {
-            v.currentTime = forwardTarget;
-          } catch (_) {}
-        }
+        const unfreezeTarget = getUnfreezeTime(curT, maxDur);
+        hasSeekedRef.current = true;
+        pendingSeekTargetRef.current = unfreezeTarget;
+        pendingSeekStartedMsRef.current = nowMs;
+        try {
+          v.currentTime = unfreezeTarget;
+        } catch (_) {}
         try {
           const p = v.play();
           if (p && typeof p.then === 'function') {
@@ -435,7 +467,7 @@ export function useVideoPlayback({
           }
         } catch (_) {}
       }
-    }, 500);
+    }, 250);
 
     return () => {
       window.clearInterval(timer);
@@ -460,11 +492,14 @@ export function useVideoPlayback({
       setIsPlaying(false);
     };
 
-    const onNativeSeeked = () => {
-      if (nextSeekTargetRef.current !== null) {
+    const drainNextSeek = () => {
+      isSeekInFlightRef.current = false;
+      pausedRecoveryCountRef.current = 0;
+      if (!v.seeking && nextSeekTargetRef.current !== null) {
         const next = nextSeekTargetRef.current;
         nextSeekTargetRef.current = null;
         if (Math.abs((v.currentTime || 0) - next) > 0.03) {
+          isSeekInFlightRef.current = true;
           pendingSeekTargetRef.current = next;
           pendingSeekStartedMsRef.current = performance.now();
           try { v.currentTime = next; } catch (_) {}
@@ -474,12 +509,12 @@ export function useVideoPlayback({
 
     v.addEventListener('play', onNativePlay);
     v.addEventListener('pause', onNativePause);
-    v.addEventListener('seeked', onNativeSeeked);
+    v.addEventListener('seeked', drainNextSeek);
 
     return () => {
       v.removeEventListener('play', onNativePlay);
       v.removeEventListener('pause', onNativePause);
-      v.removeEventListener('seeked', onNativeSeeked);
+      v.removeEventListener('seeked', drainNextSeek);
     };
   }, [videoRef]);
 
@@ -519,12 +554,18 @@ export function useVideoPlayback({
         return;
       }
 
-      if (videoRef.current.seeking) {
+      // If video is currently seeking, coalesce seek requests:
+      // Store latest requested time so the in-flight seek can finish downloading
+      // its 206 byte-range chunk without being aborted prematurely.
+      // Once 'seeked' fires, drainNextSeek immediately dispatches this target.
+      if (videoRef.current.seeking || isSeekInFlightRef.current) {
         nextSeekTargetRef.current = targetTime;
         return;
       }
 
+      nextSeekTargetRef.current = null;
       if (Number.isFinite(targetTime) && Math.abs((videoRef.current.currentTime || 0) - targetTime) > 0.03) {
+        isSeekInFlightRef.current = true;
         pendingSeekTargetRef.current = targetTime;
         pendingSeekStartedMsRef.current = performance.now();
         videoRef.current.currentTime = targetTime;
@@ -548,43 +589,38 @@ export function useVideoPlayback({
     if (v.paused) {
       intendedPlayingRef.current = true;
       stallRecoveryCountRef.current = 0;
+      isSeekInFlightRef.current = false;
 
-      if (v.ended || (totalDur > 0 && currentTime >= totalDur - 0.2)) {
-        handleSeek(0);
+      // Unified single-point play target resolution:
+      // Play target priority:
+      // 1. If a seek target is already queued in nextSeekTargetRef, play from it.
+      // 2. Otherwise, map the current timeline currentTime to video source time.
+      let playTarget = null;
+      if (nextSeekTargetRef.current !== null) {
+        playTarget = nextSeekTargetRef.current;
+        nextSeekTargetRef.current = null;
       } else if (!renderedVideo && videoClips && videoClips.length > 0) {
         const safeNow = Number.isFinite(currentTime) ? currentTime : 0;
         const mapping = mapTimelineToSourceTime(safeNow, videoClips);
         if (mapping.inClip && Number.isFinite(mapping.sourceTime)) {
-          const alreadySeekingToTarget = v.seeking
-            && pendingSeekTargetRef.current !== null
-            && Math.abs(pendingSeekTargetRef.current - mapping.sourceTime) <= 0.04;
-          if (!alreadySeekingToTarget && Math.abs(v.currentTime - mapping.sourceTime) > 0.04) {
-            hasSeekedRef.current = true;
-            pendingSeekTargetRef.current = mapping.sourceTime;
-            pendingSeekStartedMsRef.current = performance.now();
-            v.currentTime = mapping.sourceTime;
-          }
+          playTarget = mapping.sourceTime;
           const targetIdx = videoClips.findIndex(c => c.id === mapping.clip?.id);
-          if (targetIdx !== -1) {
-            activeClipIdxRef.current = targetIdx;
-          }
+          if (targetIdx !== -1) activeClipIdxRef.current = targetIdx;
         } else if (mapping.isGap && mapping.nextClip && Number.isFinite(mapping.nextClip.sourceStart)) {
-          // In gap: cue video to next clip start without forcing premature timeline jump
-          const nextSrcStart = mapping.nextClip.sourceStart;
-          const alreadySeekingToTarget = v.seeking
-            && pendingSeekTargetRef.current !== null
-            && Math.abs(pendingSeekTargetRef.current - nextSrcStart) <= 0.04;
-          if (!alreadySeekingToTarget && Math.abs(v.currentTime - nextSrcStart) > 0.04) {
-            hasSeekedRef.current = true;
-            pendingSeekTargetRef.current = nextSrcStart;
-            pendingSeekStartedMsRef.current = performance.now();
-            v.currentTime = nextSrcStart;
-          }
+          playTarget = mapping.nextClip.sourceStart;
           const targetIdx = videoClips.findIndex(c => c.id === mapping.nextClip?.id);
-          if (targetIdx !== -1) {
-            activeClipIdxRef.current = targetIdx;
-          }
+          if (targetIdx !== -1) activeClipIdxRef.current = targetIdx;
         }
+      }
+
+      if (v.ended || (totalDur > 0 && currentTime >= totalDur - 0.2)) {
+        handleSeek(0);
+      } else if (playTarget !== null && Math.abs((v.currentTime || 0) - playTarget) > 0.04) {
+        hasSeekedRef.current = true;
+        pendingSeekTargetRef.current = playTarget;
+        pendingSeekStartedMsRef.current = performance.now();
+        isSeekInFlightRef.current = true;
+        try { v.currentTime = playTarget; } catch (_) {}
       }
       lastMappedTimelineTimeRef.current = currentTime;
       if (!v.src && !v.currentSrc) {

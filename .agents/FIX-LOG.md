@@ -30,3 +30,33 @@
   - `VideoPlayerPreview` deferred proxy hot-swap during active playback.
   - Latest-request-wins seek coalescing preserves final seek target without flooding decoder.
   - HTML5 video play/pause event sync prevents playhead freeze on source transitions.
+
+---
+
+## Stabilization Fixes: Voice Drag Freeze & HTTP Socket Saturation Elimination
+
+### 4. `frontend/src/hooks/useVideoPlayback.js`
+- **Diff Explanation**:
+  - Disabled paused watchdog seek mutation: when `v.paused` is true, watchdog resets counters and returns without setting `v.currentTime = unfreezeTarget`.
+  - Unified single-point play target in `handlePlayPause`: resolves target from `nextSeekTargetRef` or `mapTimelineToSourceTime` and executes exactly one seek.
+  - Ensures decoder finishes range requests cleanly without aborted seeks.
+
+### 5. `frontend/src/components/player/VideoPlayerPreview.jsx`
+- **Diff Explanation**:
+  - In `preloadSegmentsAroundTime`: added `if (!isPlayingRef.current) return;` so paused video has 100% exclusive priority over HTTP/1.1 sockets for video frame fetching.
+  - Guarded `handlePlay` when `v.seeking` is true so audio playback does not race video frame loading.
+
+### 6. `frontend/src/hooks/useClipOperations.js`
+- **Diff Explanation**:
+  - Added `persistTimeoutRef = useRef(null)` with 600ms trailing debounce for `persistTimelineOperationApi`.
+  - Added `suppressNextBackendSync(5000)` on clip move to prevent 17.5 MB `POST /api/series/:id/sync` requests from `useSeriesManager` auto-persist effect.
+  - Increased audio sync debounce to 800ms (`immediate`) / 1800ms (`non-immediate`).
+
+### 7. `frontend/src/components/timeline/TimelineEditor.jsx`
+- **Diff Explanation**:
+  - Line 1458: Changed `onUpdateSegments(opResult.state.segments, false, true)` to `onUpdateSegments(opResult.state.segments, false, false)` so `immediate` is false.
+
+### 8. `frontend/src/hooks/useProxyPreview.js`
+- **Diff Explanation**:
+  - Debounced proxy preview check to 1200ms when not initial open, eliminating fetch aborts and socket churn during editing.
+

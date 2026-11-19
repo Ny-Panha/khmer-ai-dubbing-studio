@@ -1,4 +1,4 @@
-import { useCallback } from 'react';
+import { useCallback, useRef, useEffect } from 'react';
 import {
   isSegmentMatch,
   findSegmentIndex,
@@ -19,7 +19,7 @@ import { parseTimeToSeconds, formatTimecode, formatMinSec, getSegmentAudioDurati
 import { splitSegmentIntoNaturalSentences } from '../utils/khmerTextSplitter';
 import { buildSpeakerRegistry } from '../utils/speakerUtils';
 import { syncTimelineAudioApi, persistTimelineOperationApi, notifyBackendOffline, notifyBackendOnline } from '../services/api';
-import { saveTimelineOperationToLocalStorage } from '../utils/projectStorage';
+import { saveTimelineOperationToLocalStorage, suppressNextBackendSync } from '../utils/projectStorage';
 
 /**
  * Format an array of clip numbers concisely for toast notices (e.g. "#4, #7, #12 (+3 more)")
@@ -172,6 +172,13 @@ export function useClipOperations({
   setAudioOutdated = null,
   onInvalidateRenderedPreview = null,
 }) {
+  const persistTimeoutRef = useRef(null);
+  useEffect(() => {
+    return () => {
+      if (persistTimeoutRef.current) clearTimeout(persistTimeoutRef.current);
+    };
+  }, []);
+
   const invalidateRendered = useCallback(() => {
     if (typeof onInvalidateRenderedPreview === 'function') {
       onInvalidateRenderedPreview();
@@ -800,25 +807,32 @@ export function useClipOperations({
         operation: 'update_segments',
         segments: newSegments,
       });
-      // Immediately persist full segment state (audioStartSec, trackRow, userShifted, etc.) directly to series.json FIRST
-      persistTimelineOperationApi({
-        seriesId,
-        episodeId,
-        operation: 'update_segments',
-        segments: newSegments,
-      })
-        .then((persisted) => {
-          if (persisted?.updatedAt) {
-            setScriptData((prev) => (prev ? { ...prev, updatedAt: Math.max(Number(prev.updatedAt || 0), persisted.updatedAt) } : prev));
-          }
+
+      // Suppress redundant full-series POST /api/series/:id/sync from useSeriesManager while user is actively editing
+      suppressNextBackendSync(5000);
+
+      // Debounce persistTimelineOperationApi so 20 rapid moves don't saturate HTTP connections
+      if (persistTimeoutRef.current) clearTimeout(persistTimeoutRef.current);
+      persistTimeoutRef.current = setTimeout(() => {
+        persistTimelineOperationApi({
+          seriesId,
+          episodeId,
+          operation: 'update_segments',
+          segments: newSegments,
         })
-        .catch((err) => {
-          console.error('[useClipOperations] Failed to persist dragged/edited segments:', err);
-          showInAppToast(`⚠️ បរាជ័យក្នុងការរក្សាទុកទីតាំងសំឡេង (${err?.message || 'Backend error'}) — សូមពិនិត្យ Server!`, 4800);
-          if (err?.status === 502 || /ECONNREFUSED|unreachable|Failed to fetch|NetworkError/i.test(err?.message || '')) {
-            notifyBackendOffline();
-          }
-        });
+          .then((persisted) => {
+            if (persisted?.updatedAt) {
+              setScriptData((prev) => (prev ? { ...prev, updatedAt: Math.max(Number(prev.updatedAt || 0), persisted.updatedAt) } : prev));
+            }
+          })
+          .catch((err) => {
+            console.error('[useClipOperations] Failed to persist dragged/edited segments:', err);
+            showInAppToast(`⚠️ បរាជ័យក្នុងការរក្សាទុកទីតាំងសំឡេង (${err?.message || 'Backend error'}) — សូមពិនិត្យ Server!`, 4800);
+            if (err?.status === 502 || /ECONNREFUSED|unreachable|Failed to fetch|NetworkError/i.test(err?.message || '')) {
+              notifyBackendOffline();
+            }
+          });
+      }, 600);
     }
     invalidateRendered();
 
@@ -847,10 +861,12 @@ export function useClipOperations({
         }
       };
 
-      if (immediate) {
+      if (syncAudioTimeoutRef) {
+        // Debounce audio sync (800ms if immediate, 1800ms otherwise) so rapid successive edits don't spawn multiple FFmpeg processes
+        const delay = immediate ? 800 : 1800;
+        syncAudioTimeoutRef.current = setTimeout(executeSync, delay);
+      } else {
         executeSync();
-      } else if (syncAudioTimeoutRef) {
-        syncAudioTimeoutRef.current = setTimeout(executeSync, 250);
       }
     }
   };

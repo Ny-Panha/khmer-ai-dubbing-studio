@@ -89,3 +89,36 @@
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 | `Proxy_Verification_219 / ep_5` | 219 | 0 | 0 | 84ms | 0 | 60.3ms | **PASS** |
 | `Pseudo_Spiritual_Root / ep_5` | 221 | 0 | 0 | 50ms | 0 | 55.0ms | **PASS** |
+
+---
+
+## 4. Phase 3 & Step 4: 20-Move Drag Stress & Continuous Playback Verification
+
+### 20 Consecutive Voice Moves + 6s Continuous Playback (Test: `test_viewport_moves.js`)
+- **`Proxy_Verification_219 / ep_5` (219 segments)**:
+  - 20 consecutive voice clip moves executed on real Chrome.
+  - State after 20 moves: `t = 18.13s, rs = 4, sk = false, p = true`.
+  - Play button clicked -> playback started immediately.
+  - Continuous playback progression sampled over 6s: `19.66s -> 26.03s`, Delta: **6.37s**.
+  - Result: **100% PASS**
+- **`Pseudo_Spiritual_Root / ep_5` (221 segments)**:
+  - 20 consecutive voice clip moves executed on real Chrome.
+  - State after 20 moves: `t = 15.81s, rs = 4, sk = false, p = true`.
+  - Play button clicked -> playback started immediately.
+  - Continuous playback progression sampled over 6s: `17.16s -> 23.39s`, Delta: **6.23s**.
+  - Result: **100% PASS**
+
+### Rapid Scrubbing, Drag-While-Playing & 20s Continuous Playback (Test: `test_full_suite.js`)
+- **Test 1: Rapid Ruler Scrubbing (8 consecutive clicks across ruler)**:
+  - Post-scrub state: `t = 0s, rs = 4, sk = false`.
+  - Result: **PASS** (Zero stalls, readyState = 4).
+- **Test 2: Dragging Voice Clip While Actively Playing**:
+  - Playback active at `1.94s`.
+  - Clip dragged 15px during active playback.
+  - Post-drag state: `t = 4.44s, p = false, rs = 4`.
+  - Result: **PASS** (Playback never interrupted, zero pauses, zero freezes).
+- **Test 3: 20-Second Continuous Playback After Edit**:
+  - Sampled over 20 seconds after edit: `start = 4.44s, end = 26.97s`.
+  - Progression delta: **22.53s**.
+  - Result: **PASS** (100% smooth, continuous progression).
+
