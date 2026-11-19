@@ -68,8 +68,33 @@ function doesSegmentNeedTts(seg, audioDir, batchSpeedInfo = null, batchExplicitC
   // Smart TTS Cache v2: verify content signature
   const targetVoice = seg.voiceId || seg.khmerVoiceId || "km-KH-PisethNeural";
   const currentSig = computeSegmentAudioSignature(raw, targetVoice, seg.speed ?? seg.rate, seg.pitch);
-  if (seg.audioSignature && seg.audioSignature !== currentSig) {
-    return true;
+  if (seg.audioSignature) {
+    if (seg.audioSignature !== currentSig) {
+      return true;
+    }
+  } else {
+    // Missing signature: a segment without audioSignature MUST NOT be trusted on file existence alone
+    // unless verified against a trusted ledger/metadata file that recorded the exact text and voice.
+    let metaMatches = false;
+    const metaPath = existingPath.replace(/\.[^.]+$/, '.json');
+    if (fs.existsSync(metaPath)) {
+      try {
+        const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+        if (
+          meta &&
+          meta.text &&
+          cleanTextForTts(meta.text) === cleanTextForTts(raw) &&
+          (meta.voiceId === targetVoice || meta.voice === targetVoice) &&
+          (!meta.audioSignature || meta.audioSignature === currentSig)
+        ) {
+          metaMatches = true;
+          seg.audioSignature = currentSig;
+        }
+      } catch (_) {}
+    }
+    if (!metaMatches) {
+      return true; // Missing signature and no verified metadata proves match -> MUST re-synthesize!
+    }
   }
 
   const ownInfo = speedToEdgeRate(seg.speed ?? seg.rate);
@@ -512,6 +537,19 @@ router.post("/generate-audio", async (req, res) => {
       const rawSingleTxt = updatedSegment.khmer || updatedSegment.khmerText || updatedSegment.khmerTranslatedText || updatedSegment.text || "";
       const singleSig = computeSegmentAudioSignature(rawSingleTxt, targetVoice, updatedSegment.speed ?? updatedSegment.rate, updatedSegment.pitch);
       updatedSegment.audioSignature = singleSig;
+
+      if (updatedSegment.audioPath && fs.existsSync(updatedSegment.audioPath)) {
+        try {
+          const sidecarMeta = updatedSegment.audioPath.replace(/\.[^.]+$/, '.json');
+          fs.writeFileSync(sidecarMeta, JSON.stringify({
+            text: rawSingleTxt,
+            voiceId: targetVoice,
+            audioSignature: singleSig,
+            audioDurationSec: updatedSegment.audioDurationSec || updatedSegment.duration,
+            timestamp: Date.now(),
+          }, null, 2), 'utf8');
+        } catch (_) {}
+      }
 
       await prePersistPromise;
 
@@ -1609,6 +1647,8 @@ router.get(["/audio/autofit-progress", "/autofit-progress"], (req, res) => {
     return res.json({ success: true, status: 'idle', progress: 0, logs: [] });
   }
 });
+
+router.doesSegmentNeedTts = doesSegmentNeedTts;
 
 module.exports = router;
 

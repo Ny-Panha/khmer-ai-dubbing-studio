@@ -18,14 +18,30 @@ function getTranslationCacheDir() {
   return dir;
 }
 
-function getTranslationCacheKey(chineseSource, { seriesId = 'default', glossaryHash = '', mode = 'dialogue' } = {}) {
+function getTranslationCacheKey(chineseSource, {
+  seriesId = 'default',
+  glossaryHash = '',
+  mode = 'dialogue',
+  speaker = '',
+  voiceGender = '',
+  prevContext = '',
+  schemaVersion = 'v3_ctx',
+} = {}) {
   const norm = String(chineseSource || '')
     .trim()
     .replace(/\s+/g, '')
     .replace(/[，。！？,.!?、]/g, '');
   const sId = String(seriesId || 'default').trim();
+  const spk = String(speaker || '').trim().toLowerCase();
+  const gen = String(voiceGender || '').trim().toLowerCase();
+  const prevNorm = String(prevContext || '')
+    .trim()
+    .replace(/\s+/g, '')
+    .replace(/[，。！？,.!?、]/g, '')
+    .substring(0, 32);
+
   return crypto.createHash('sha256')
-    .update(`${norm}__${sId}__${glossaryHash}__${mode}`)
+    .update(`${schemaVersion}__${norm}__${sId}__${glossaryHash}__${mode}__${spk}__${gen}__${prevNorm}`)
     .digest('hex')
     .substring(0, 16);
 }
@@ -37,23 +53,43 @@ function getCachedTranslation(chineseSource, options = {}) {
   if (!fs.existsSync(cachePath)) return null;
   try {
     const data = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
-    if (data && data.khmerText && !isPlaceholderTranslationText(data.khmerText)) {
+    const expectedSchema = options.schemaVersion || 'v3_ctx';
+    if (data && data.schemaVersion === expectedSchema && data.khmerText && !isPlaceholderTranslationText(data.khmerText)) {
       return data;
     }
   } catch (_) {}
   return null;
 }
 
-function setCachedTranslation(chineseSource, { khmerText, speaker, voiceGender, seriesId = 'default', glossaryHash = '', mode = 'dialogue' } = {}) {
+function setCachedTranslation(chineseSource, {
+  khmerText,
+  speaker,
+  voiceGender,
+  seriesId = 'default',
+  glossaryHash = '',
+  mode = 'dialogue',
+  prevContext = '',
+  schemaVersion = 'v3_ctx',
+} = {}) {
   if (!chineseSource || !khmerText || isPlaceholderTranslationText(khmerText)) return;
-  const key = getTranslationCacheKey(chineseSource, { seriesId, glossaryHash, mode });
+  const key = getTranslationCacheKey(chineseSource, {
+    seriesId,
+    glossaryHash,
+    mode,
+    speaker,
+    voiceGender,
+    prevContext,
+    schemaVersion,
+  });
   const cachePath = path.join(getTranslationCacheDir(), `tr_${key}.json`);
   try {
     fs.writeFileSync(cachePath, JSON.stringify({
+      schemaVersion,
       chineseSource,
       khmerText,
       speaker: speaker || 'តួអង្គ',
       voiceGender: voiceGender || 'unknown',
+      prevContext: prevContext || '',
       seriesId,
       timestamp: Date.now(),
     }, null, 2), 'utf8');
@@ -1387,7 +1423,16 @@ async function generateModeSpecificScript({
         if (!targetChinese) continue;
 
         if (!s.khmerTranslatedText || isPlaceholderTranslationText(s.khmerTranslatedText)) {
-          const cached = getCachedTranslation(targetChinese, { seriesId: effectiveSeriesId, glossaryHash, mode: isFastOcrMode ? 'fast_ocr' : 'dialogue' });
+          const prevSeg = i > 0 ? dialogueList[i - 1] : null;
+          const prevContext = prevSeg ? (prevSeg.originalChineseText || prevSeg.chineseText || prevSeg.originalText || '') : '';
+          const cached = getCachedTranslation(targetChinese, {
+            seriesId: effectiveSeriesId,
+            glossaryHash,
+            mode: isFastOcrMode ? 'fast_ocr' : 'dialogue',
+            speaker: s.speaker || '',
+            voiceGender: s.voiceGender || s.visualGender || '',
+            prevContext,
+          });
           if (cached && cached.khmerText && !isPlaceholderTranslationText(cached.khmerText)) {
             s.khmerTranslatedText = cached.khmerText;
             if (cached.speaker && (!s.speaker || s.speaker === 'តួអង្គ')) s.speaker = cached.speaker;
@@ -1682,13 +1727,17 @@ Return JSON ONLY matching this schema:
             // Cache successful translations for future runs (Smart Translation Cache)
             if (canUseCache) {
               for (let sIdx = 0; sIdx < batchSlice.length; sIdx++) {
-                const seg = dialogueList[b + sIdx];
+                const segIdx = b + sIdx;
+                const seg = dialogueList[segIdx];
                 if (seg && seg.khmerTranslatedText && !isPlaceholderTranslationText(seg.khmerTranslatedText)) {
                   const targetChinese = String(seg.originalChineseText || seg.chineseText || seg.originalText || '').trim();
+                  const prevSeg = segIdx > 0 ? dialogueList[segIdx - 1] : null;
+                  const prevContext = prevSeg ? (prevSeg.originalChineseText || prevSeg.chineseText || prevSeg.originalText || '') : '';
                   setCachedTranslation(targetChinese, {
                     khmerText: seg.khmerTranslatedText,
                     speaker: seg.speaker,
-                    voiceGender: seg.voiceGender,
+                    voiceGender: seg.voiceGender || seg.visualGender,
+                    prevContext,
                     seriesId: effectiveSeriesId,
                     glossaryHash,
                     mode: isFastOcrMode ? 'fast_ocr' : 'dialogue',
@@ -2049,10 +2098,13 @@ Return ONE JSON object ONLY (no array, no extra commentary):
                 if (ok) {
                   clearRescuedSegmentFailureState(targetSeg);
                   if (canUseCache) {
+                    const prevSeg = globalIdx > 0 ? dialogueList[globalIdx - 1] : null;
+                    const prevContext = prevSeg ? (prevSeg.originalChineseText || prevSeg.chineseText || prevSeg.originalText || '') : '';
                     setCachedTranslation(payloadItem.sourceChineseToTranslate, {
                       khmerText: targetSeg.khmerTranslatedText,
                       speaker: targetSeg.speaker,
-                      voiceGender: targetSeg.voiceGender,
+                      voiceGender: targetSeg.voiceGender || targetSeg.visualGender,
+                      prevContext,
                       seriesId: effectiveSeriesId,
                       glossaryHash,
                       mode: isFastOcrMode ? 'fast_ocr' : 'dialogue',

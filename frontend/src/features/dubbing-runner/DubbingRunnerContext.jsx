@@ -633,6 +633,7 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
    */
   const runSingleEpisodeAll3 = useCallback(async (ep, options = {}, signal = null) => {
     if (!ep) return { success: false, error: 'No episode provided' };
+    if (signal?.aborted) return { success: false, aborted: true };
 
     const hasDemucs = checkEpisodeHasDemucsReady(ep, null, null);
     let bgmPromise = null;
@@ -640,33 +641,58 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
     // 1. Kick off Clean BGM in parallel if not already cached and not skipped
     if (!hasDemucs && !options.skipCleanBgm) {
       bgmPromise = runSingleCleanBgm(ep, options, signal).catch((bgmErr) => {
-        console.warn(`[All 3] Clean BGM background task notice for EP${ep.episodeNumber || ep.id}:`, bgmErr.message);
-        return { success: false, error: bgmErr.message };
+        return { success: false, error: bgmErr?.message || 'Clean BGM separation failed' };
       });
     }
 
     // 2. Step 1: Script ខ្មែរ (Chinese Subtitle OCR -> Khmer Translation)
+    if (signal?.aborted) return { success: false, aborted: true };
     const scriptRes = await runSingleTranslate(ep, options, signal);
-    if (!scriptRes?.success && !scriptRes?.skipped) {
-      throw new Error(scriptRes?.error || 'Script generation failed');
+    if (signal?.aborted) return { success: false, aborted: true };
+    if (!scriptRes?.success) {
+      if (scriptRes?.skipped && checkEpisodeHasScript(ep)) {
+        // Valid script already exists
+      } else {
+        throw new Error(scriptRes?.error || scriptRes?.reason || 'Script generation failed');
+      }
     }
     if (typeof refreshSeries === 'function') await refreshSeries();
 
     // 3. Step 2: សំឡេង AI (Strictly depends on Script!)
+    if (signal?.aborted) return { success: false, aborted: true };
     const voiceRes = await runSingleVoice(ep, options, signal);
-    if (!voiceRes?.success && !voiceRes?.skipped) {
-      throw new Error(voiceRes?.error || 'Voice generation failed');
+    if (signal?.aborted) return { success: false, aborted: true };
+    if (!voiceRes?.success) {
+      if (voiceRes?.skipped && checkEpisodeHasAudioReady(ep, null, null)) {
+        // Valid voice audio already exists
+      } else {
+        throw new Error(voiceRes?.error || voiceRes?.reason || 'Voice generation failed');
+      }
     }
     if (typeof refreshSeries === 'function') await refreshSeries();
 
     // 4. Step 3: Await Clean BGM if running in background
+    if (signal?.aborted) return { success: false, aborted: true };
     if (bgmPromise) {
       const bgmRes = await bgmPromise;
-      if (!bgmRes?.success && !bgmRes?.skipped) {
-        console.warn(`[All 3] Clean BGM finished with notice:`, bgmRes?.error);
+      if (signal?.aborted) return { success: false, aborted: true };
+      if (!bgmRes?.success && !options.skipCleanBgm) {
+        if (bgmRes?.skipped && checkEpisodeHasDemucsReady(ep, null, null)) {
+          // Demucs was already cached/ready
+        } else {
+          throw new Error(bgmRes?.error || 'Clean BGM separation failed');
+        }
       }
     } else if (!hasDemucs && !options.skipCleanBgm) {
-      await runSingleCleanBgm(ep, options, signal);
+      const directBgmRes = await runSingleCleanBgm(ep, options, signal);
+      if (signal?.aborted) return { success: false, aborted: true };
+      if (!directBgmRes?.success && !options.skipCleanBgm) {
+        if (directBgmRes?.skipped && checkEpisodeHasDemucsReady(ep, null, null)) {
+          // Demucs was already cached/ready
+        } else {
+          throw new Error(directBgmRes?.error || 'Clean BGM separation failed');
+        }
+      }
     }
     if (typeof refreshSeries === 'function') await refreshSeries();
 
@@ -882,7 +908,9 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
         } else if (stepType === 'autofit') {
           await runSingleAutoFitSpeed(currentEp, options, controller.signal);
         } else if (stepType === 'all3') {
-          await runSingleEpisodeAll3(currentEp, options, controller.signal);
+          const all3Res = await runSingleEpisodeAll3(currentEp, options, controller.signal);
+          if (controller.signal.aborted || all3Res?.aborted) break;
+          if (!all3Res?.success) throw new Error(all3Res?.error || 'Episode All 3 processing failed');
         }
 
         setActiveEpisodeIds((prev) => {

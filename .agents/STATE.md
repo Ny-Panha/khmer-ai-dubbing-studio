@@ -3,6 +3,71 @@
 ## Last Session
 - **Environment**: Antigravity IDE (Gemini)
 - **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-19T22:45:00+07:00
+
+## Summary: Post-Optimization Critical Fixes — Smart 3-Step AI Pipeline (100% PASS)
+- **Request:** Fix the remaining correctness, caching, concurrency, and test-coverage problems in the Smart 3-Step AI Pipeline across 5 priority areas:
+  1. Fix false-success results in All-3 runner.
+  2. Prevent unsafe legacy TTS cache reuse.
+  3. Make Chinese-to-Khmer translation caching context-safe.
+  4. Fix Demucs queue/cancellation race conditions & stem validation.
+  5. Replace misleading tests with real behavioral regression tests.
+- **Root Causes Confirmed & Surgical Fixes Implemented**:
+  1. **P0 False Success in All-3 Runner (`frontend/src/features/dubbing-runner/DubbingRunnerContext.jsx`)**:
+     - `runSingleEpisodeAll3` previously caught background Demucs failure (`bgmErr`) with a warning and still returned `{ success: true }`.
+     - Fixed: Validates actual outcome of all three steps. If Clean BGM fails and was not explicitly skipped, throws/fails cleanly with visible error.
+     - Fixed: Abort signal stops immediately before/after each step; returns `{ success: false, aborted: true }` without claiming completion.
+     - Fixed: `skipped: true` requires actual artifact presence (`checkEpisodeHasScript`, `checkEpisodeHasAudioReady`, `checkEpisodeHasDemucsReady`); missing dependencies throw errors instead of being treated as completed.
+  2. **P1 Unsafe Legacy TTS Cache Reuse (`backend/services/pipeline/stages/stage9_generateSegmentTTS.js` & `backend/routes/audioRoutes.js`)**:
+     - Previously `const sigMatches = !seg.audioSignature || seg.audioSignature === audioSignature;` allowed any segment lacking `audioSignature` to bypass invalidation and falsely reuse stale audio after text edits.
+     - Fixed: Segments without `audioSignature` MUST NOT be trusted on file existence alone. Requires verified sidecar `.json` metadata matching exact normalized Khmer text and voice ID, otherwise marks `needsTts = true` and forces fresh synthesis.
+     - Fixed: Existing audio files are NOT deleted until replacement generation succeeds. Saves atomic sidecar metadata alongside synthesized audio files.
+  3. **P1 Context-Safe Translation Cache (`backend/services/pipeline/stages/stage6_generateModeSpecificScript.js`)**:
+     - Previously keyed only by normalized Chinese text, leading to collisions for short dialogue (e.g., "是", "好", "快走") across different characters or scenes.
+     - Fixed: Cache key incorporates `schemaVersion: 'v3_ctx'`, `speaker`, `voiceGender`, surrounding dialogue context (`prevContext` / previous Chinese line), and series ID.
+     - Invalidates legacy v1/v2 schema entries automatically. Preserves manual corrections (`userOverridden: true`) strictly.
+  4. **P1 Demucs Queue / Cancellation Races & Stem Validation (`backend/services/audioSeparationService.js`)**:
+     - Fixed Double-Dequeue Race: Wrapped `finishDemucsWorkerAndProcessQueue()` in per-worker `completeWorkerOnce` guard attached to child process (`child.__completeWorker`). Prevents duplicate dequeues when `error` and `close` fire in rapid sequence.
+     - Fixed Substring Collisions: Replaced `includes()` with exact equality matching (`cleanKey === targetClean || options.jobId === identifier`), preventing `ep_1.mp4` from cancelling `ep_10.mp4`.
+     - Fixed Stem Validation: Added `validateDemucsStems(vocalsPath, noVocalsPath, sourceDuration)`. Verifies file existence, size >= 100KB, decodability via FFprobe/FFmpeg, duration > 0.1s, and duration matching source within 2.0s tolerance. Discards corrupt stems immediately. Eliminated circular dependency with lazy probe helper.
+  5. **P1 Real Behavioral Regression Tests (`backend/tests/smart_pipeline_all3.test.js`)**:
+     - Expanded test suite with real runtime assertions:
+       - All-3 runner failure propagation on Clean BGM error (rejects/fails, no false success).
+       - Context-safe translation cache hits, cross-speaker isolation, and context-dependent misses.
+       - Legacy TTS signature enforcement: missing signature triggers synthesis, matching signature reuses, edited text invalidates, sidecar metadata verifies.
+       - Real Demucs stem validation: tests missing, small, corrupt, matched duration, and mismatched duration stems.
+       - Exact matching queue cancellation preventing substring collisions.
+       - Worker error-to-close transition without double dequeue.
+- **Verification Outcomes**:
+  - `backend/tests/smart_pipeline_all3.test.js`: **22/22 PASS** (927ms).
+  - All regression test suites passing (**91 PASS, 1 skipped, 0 FAIL** across all suites in 6.1s):
+    - `smart_pipeline_all3.test.js` (22/22 PASS)
+    - `fast_ocr_timing_and_accuracy.test.js` (8/8 PASS)
+    - `regenerate_script_and_voice.test.js` (11/11 PASS)
+    - `global_logo_settings.test.js` (7/7 PASS)
+    - `speaker_identity_and_series_voice_memory.test.js` (12/12 PASS)
+    - `playback_sync_and_deferred_source_regression.test.js` (5/5 PASS)
+    - `source_proxy.test.js` (4/4 PASS)
+    - `proxy_preview.test.js` (4/4 PASS)
+    - `timeline_voice_drag_persistence.test.js` (7/7 PASS)
+    - `timeline_voice_drag_freeze_regression.test.js` (1/1 PASS)
+    - `auto_align_voice.test.js` (9/9 PASS)
+    - `concat_playback_and_timeline.test.js` (4/4 PASS)
+  - `npm --prefix frontend run build`: **PASS** (0 errors, 674ms).
+- **Active Environment**:
+  - Backend API: `http://localhost:5000`
+  - Frontend UI: `http://localhost:5173`
+- **Next Steps**:
+  - Commit and push to `chore/full-project-cleanup`.
+  - Ready for Nha's review.
+
+---
+
+# Antigravity Shared State (Sync Memory)
+
+## Last Session
+- **Environment**: Antigravity IDE (Gemini)
+- **Branch**: `chore/full-project-cleanup`
 - **Timestamp**: 2026-11-19T22:20:00+07:00
 
 ## Summary: Smart 3-Step AI Pipeline Optimization (100% PASS)

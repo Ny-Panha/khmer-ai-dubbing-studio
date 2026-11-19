@@ -9,6 +9,11 @@ const crypto = require('crypto');
 const { spawn } = require('child_process');
 const { registerProcess, unregisterProcess } = require('../utils/processRegistry');
 
+function probeMediaDuration(filePath) {
+  const { getMediaDuration } = require('./ffmpegService');
+  return getMediaDuration(filePath);
+}
+
 const activeSeparationJobs = new Map();
 const activeSeparationProgress = new Map();
 const separationQueue = [];
@@ -150,6 +155,57 @@ function getSeparationCacheDir(audioPath, model = 'htdemucs') {
 }
 
 /**
+ * Validate Demucs separated stems for existence, size (>=100KB), decodability, and non-zero duration
+ */
+async function validateDemucsStems(vocalsPath, noVocalsPath, sourceDuration = null) {
+  const MIN_STEM_SIZE = 100 * 1024; // 100 KB
+  if (!fs.existsSync(vocalsPath) || !fs.existsSync(noVocalsPath)) {
+    return { valid: false, reason: 'STEMS_NOT_FOUND' };
+  }
+  const vStat = fs.statSync(vocalsPath);
+  const nvStat = fs.statSync(noVocalsPath);
+  if (vStat.size < MIN_STEM_SIZE || nvStat.size < MIN_STEM_SIZE) {
+    return { valid: false, reason: 'STEMS_TOO_SMALL', vocalsSizeBytes: vStat.size, noVocalsSizeBytes: nvStat.size };
+  }
+
+  try {
+    const vDur = await probeMediaDuration(vocalsPath);
+    const nvDur = await probeMediaDuration(noVocalsPath);
+
+    if (typeof vDur !== 'number' || typeof nvDur !== 'number' || vDur <= 0.1 || nvDur <= 0.1) {
+      return { valid: false, reason: 'STEMS_ZERO_OR_INVALID_DURATION', vDur, nvDur };
+    }
+
+    if (typeof sourceDuration === 'number' && sourceDuration > 0.5) {
+      const tolerance = 2.0; // 2.0s tolerance
+      if (Math.abs(vDur - sourceDuration) > tolerance || Math.abs(nvDur - sourceDuration) > tolerance) {
+        return {
+          valid: false,
+          reason: 'STEMS_DURATION_MISMATCH_SOURCE',
+          vDur,
+          nvDur,
+          sourceDuration,
+          diffV: Math.abs(vDur - sourceDuration),
+          diffNV: Math.abs(nvDur - sourceDuration),
+        };
+      }
+    }
+
+    return {
+      valid: true,
+      vocalsPath,
+      noVocalsPath,
+      vocalsDuration: vDur,
+      noVocalsDuration: nvDur,
+      vocalsSizeBytes: vStat.size,
+      noVocalsSizeBytes: nvStat.size,
+    };
+  } catch (err) {
+    return { valid: false, reason: 'STEMS_DECODE_ERROR', error: err.message };
+  }
+}
+
+/**
  * Separate audio into vocals.wav and no_vocals.wav using local Demucs
  * @param {Object} options
  * @param {string} options.audioPath - Source audio/video path
@@ -261,6 +317,17 @@ function executeDemucsWorker(options, targetDir, cleanKey) {
       env: spawnEnv,
     });
 
+    let workerFinished = false;
+    const completeWorkerOnce = () => {
+      if (workerFinished) return;
+      workerFinished = true;
+      unregisterProcess(child);
+      activeSeparationJobs.delete(jobId);
+      activeSeparationJobs.delete(cleanKey);
+      finishDemucsWorkerAndProcessQueue();
+    };
+    child.__completeWorker = completeWorkerOnce;
+
     registerProcess(child, { type: 'demucs', jobId, label: cleanKey });
     activeSeparationJobs.set(jobId, child);
     activeSeparationJobs.set(cleanKey, child);
@@ -306,9 +373,6 @@ function executeDemucsWorker(options, targetDir, cleanKey) {
     });
 
     child.on('error', (err) => {
-      unregisterProcess(child);
-      activeSeparationJobs.delete(jobId);
-      activeSeparationJobs.delete(cleanKey);
       activeSeparationProgress.set(cleanKey, {
         progress: 0,
         status: 'error',
@@ -321,15 +385,12 @@ function executeDemucsWorker(options, targetDir, cleanKey) {
           activeSeparationProgress.delete(cleanKey);
         }
       }, 60000);
-      finishDemucsWorkerAndProcessQueue();
+      completeWorkerOnce();
       reject(err);
     });
 
-    child.on('close', (code) => {
-      unregisterProcess(child);
-      activeSeparationJobs.delete(jobId);
-      activeSeparationJobs.delete(cleanKey);
-      finishDemucsWorkerAndProcessQueue();
+    child.on('close', async (code) => {
+      completeWorkerOnce();
       if (code !== 0) {
         let cleanDetail = '';
         if (stdoutData) {
@@ -367,6 +428,29 @@ function executeDemucsWorker(options, targetDir, cleanKey) {
         const parsed = JSON.parse(lastLine);
 
         if (parsed.status === 'success') {
+          let sourceDuration = null;
+          if (typeof options.sourceDuration === 'number' && options.sourceDuration > 0) {
+            sourceDuration = options.sourceDuration;
+          } else if (audioPath) {
+            try { sourceDuration = await probeMediaDuration(audioPath); } catch (_) {}
+          }
+
+          const validation = await validateDemucsStems(parsed.vocalsPath, parsed.noVocalsPath, sourceDuration);
+          if (!validation.valid) {
+            console.error(`[AudioSeparation] ❌ Generated stems failed validation: ${validation.reason}`);
+            try { if (fs.existsSync(parsed.vocalsPath)) fs.unlinkSync(parsed.vocalsPath); } catch (_) {}
+            try { if (fs.existsSync(parsed.noVocalsPath)) fs.unlinkSync(parsed.noVocalsPath); } catch (_) {}
+            const stemErr = `Demucs separated stems failed validation: ${validation.reason}`;
+            activeSeparationProgress.set(cleanKey, {
+              progress: 0,
+              status: 'error',
+              error: stemErr,
+              message: stemErr,
+              model,
+            });
+            return reject(new Error(stemErr));
+          }
+
           const existing = activeSeparationProgress.get(cleanKey);
           const curLogs = Array.isArray(existing?.logs) ? [...existing.logs] : [];
           curLogs.push({
@@ -387,6 +471,8 @@ function executeDemucsWorker(options, targetDir, cleanKey) {
           console.log(`[AudioSeparation] ✅ Separation successful in ${parsed.processingTimeSec}s (Vocals: ${(parsed.vocalsSizeBytes / 1024 / 1024).toFixed(1)}MB, No-Vocals: ${(parsed.noVocalsSizeBytes / 1024 / 1024).toFixed(1)}MB)`);
           resolve({
             ...parsed,
+            vocalsDuration: validation.vocalsDuration,
+            noVocalsDuration: validation.noVocalsDuration,
             isCached: false,
           });
         } else {
@@ -415,10 +501,10 @@ function executeDemucsWorker(options, targetDir, cleanKey) {
   });
 }
 
-function separateAudio(options = {}) {
+async function separateAudio(options = {}) {
   const { audioPath, model = 'htdemucs' } = options;
   if (!audioPath || !fs.existsSync(audioPath)) {
-    return Promise.reject(new Error(`Input audio file not found: ${audioPath}`));
+    throw new Error(`Input audio file not found: ${audioPath}`);
   }
 
   const targetDir = options.outputDir || getSeparationCacheDir(audioPath, model);
@@ -428,23 +514,34 @@ function separateAudio(options = {}) {
   const cachedNoVocals = path.join(targetDir, 'no_vocals.wav');
   const cleanKey = path.basename(audioPath).toLowerCase();
 
-  // 1. Instant Cache Hit Check (Strict validation: both stems must exist & be >= 100KB)
-  const MIN_STEM_SIZE = 100 * 1024; // 100 KB
+  // 1. Instant Cache Hit Check (Strict validation: both stems must exist, be decodable & duration > 0.1s)
   if (fs.existsSync(cachedVocals) && fs.existsSync(cachedNoVocals)) {
-    const vStat = fs.statSync(cachedVocals);
-    const nvStat = fs.statSync(cachedNoVocals);
-    if (vStat.size >= MIN_STEM_SIZE && nvStat.size >= MIN_STEM_SIZE) {
+    let sourceDuration = null;
+    if (typeof options.sourceDuration === 'number' && options.sourceDuration > 0) {
+      sourceDuration = options.sourceDuration;
+    } else {
+      try { sourceDuration = await probeMediaDuration(audioPath); } catch (_) {}
+    }
+
+    const validation = await validateDemucsStems(cachedVocals, cachedNoVocals, sourceDuration);
+    if (validation.valid) {
       console.log(`[AudioSeparation] ⚡ Using cached Demucs separation: ${targetDir}`);
       activeSeparationProgress.set(cleanKey, { progress: 100, status: 'completed', message: 'Clean BGM រួចរាល់ 100%' });
-      return Promise.resolve({
+      return {
         status: 'success',
         isCached: true,
         model,
         vocalsPath: cachedVocals,
         noVocalsPath: cachedNoVocals,
-        vocalsSizeBytes: vStat.size,
-        noVocalsSizeBytes: nvStat.size,
-      });
+        vocalsSizeBytes: validation.vocalsSizeBytes,
+        noVocalsSizeBytes: validation.noVocalsSizeBytes,
+        vocalsDuration: validation.vocalsDuration,
+        noVocalsDuration: validation.noVocalsDuration,
+      };
+    } else {
+      console.warn(`[AudioSeparation] ⚠️ Cached stems failed validation (${validation.reason}), discarding corrupt cache...`);
+      try { if (fs.existsSync(cachedVocals)) fs.unlinkSync(cachedVocals); } catch (_) {}
+      try { if (fs.existsSync(cachedNoVocals)) fs.unlinkSync(cachedNoVocals); } catch (_) {}
     }
   }
 
@@ -532,13 +629,15 @@ function killSeparationJob(identifier = 'all') {
     currentDemucsMedia = null;
   } else {
     const cleanId = normalizeSeparationKey(identifier);
+    const targetClean = cleanId;
+    const targetBase = path.basename(identifier).toLowerCase();
 
-    // 1. Check if job is in the waiting queue first (Scoped Queue Cancellation)
+    // 1. Check if job is in the waiting queue first (Scoped Queue Cancellation - Exact Match Only)
     const qIdx = separationQueue.findIndex(j =>
-      j.cleanKey === cleanId ||
-      j.cleanKey.includes(cleanId) ||
-      cleanId.includes(j.cleanKey) ||
-      j.options?.jobId === identifier
+      j.cleanKey === targetClean ||
+      j.cleanKey === targetBase ||
+      j.options?.jobId === identifier ||
+      j.options?.audioPath === identifier
     );
     if (qIdx !== -1) {
       const removed = separationQueue.splice(qIdx, 1)[0];
@@ -558,17 +657,23 @@ function killSeparationJob(identifier = 'all') {
     }
 
     // 2. If it's the currently running job, terminate only this specific process
-    const proc = activeSeparationJobs.get(identifier) || activeSeparationJobs.get(cleanId);
+    const proc = activeSeparationJobs.get(identifier) || activeSeparationJobs.get(targetClean) || activeSeparationJobs.get(targetBase);
     if (proc) {
       terminateProcess(proc);
+      if (typeof proc.__completeWorker === 'function') {
+        proc.__completeWorker();
+      } else {
+        finishDemucsWorkerAndProcessQueue();
+      }
       activeSeparationJobs.delete(identifier);
-      activeSeparationJobs.delete(cleanId);
+      activeSeparationJobs.delete(targetClean);
+      activeSeparationJobs.delete(targetBase);
+    } else if (isDemucsRunning) {
+      finishDemucsWorkerAndProcessQueue();
     }
     activeSeparationProgress.delete(identifier);
-    activeSeparationProgress.delete(cleanId);
-
-    // Dequeue next job safely
-    finishDemucsWorkerAndProcessQueue();
+    activeSeparationProgress.delete(targetClean);
+    activeSeparationProgress.delete(targetBase);
   }
 
   return { success: true, killed };
@@ -592,6 +697,7 @@ process.on('SIGTERM', cleanupActiveSeparations);
 
 module.exports = {
   separateAudio,
+  validateDemucsStems,
   killSeparationJob,
   killAllDemucsSystemProcesses,
   getSeparationCacheDir,

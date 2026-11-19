@@ -239,7 +239,27 @@ async function generateSegmentTTS({
       // 2. Check if existing episode audio file is valid (Smart TTS Cache v2: verify audioSignature & size >= 500B)
       const existingAudioPath = seg.audioPath || (seg.audioFile ? path.join(audioDir, path.basename(seg.audioFile)) : null);
       const customSpeedMatchesExisting = !hasCustomSegSpeed || Boolean(seg.ttsRate && segSpeedInfo.valid && seg.ttsRate === segSpeedInfo.rate);
-      const sigMatches = !seg.audioSignature || seg.audioSignature === audioSignature;
+
+      // A segment without audioSignature MUST NOT be trusted on file existence alone unless verified against a trusted ledger/metadata file that recorded the exact text and voice
+      let sigMatches = Boolean(seg.audioSignature && seg.audioSignature === audioSignature);
+      if (!sigMatches && !seg.audioSignature && existingAudioPath && fs.existsSync(existingAudioPath)) {
+        const metaPath = existingAudioPath.replace(/\.[^.]+$/, '.json');
+        if (fs.existsSync(metaPath)) {
+          try {
+            const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+            if (
+              meta &&
+              meta.text &&
+              cleanTextForTts(meta.text) === cleanTextForTts(khmerText) &&
+              (meta.voiceId === chosenVoiceId || meta.voice === chosenVoiceId) &&
+              (!meta.audioSignature || meta.audioSignature === audioSignature)
+            ) {
+              sigMatches = true;
+              seg.audioSignature = audioSignature;
+            }
+          } catch (_) {}
+        }
+      }
       const canReuseExisting = !forceRegen && !seg.audioOutdated && customSpeedMatchesExisting && sigMatches && existingAudioPath && fs.existsSync(existingAudioPath) && fs.statSync(existingAudioPath).size > 500;
 
       if (canReuseExisting) {
@@ -370,6 +390,20 @@ async function generateSegmentTTS({
         seg.ttsStatus = 'ready';
         seg.audioOutdated = false;
         seg.audioSignature = audioSignature;
+
+        // Persist sidecar metadata next to audio file
+        if (result.audioPath && fs.existsSync(result.audioPath)) {
+          try {
+            const sidecarMeta = result.audioPath.replace(/\.[^.]+$/, '.json');
+            fs.writeFileSync(sidecarMeta, JSON.stringify({
+              text: khmerText,
+              voiceId: chosenVoiceId,
+              audioSignature,
+              audioDurationSec: result.audioDurationSec,
+              timestamp: Date.now(),
+            }, null, 2), 'utf8');
+          } catch (_) {}
+        }
 
         // Persist to segment ledger atomically
         if (jobId && result.audioPath && fs.existsSync(result.audioPath)) {

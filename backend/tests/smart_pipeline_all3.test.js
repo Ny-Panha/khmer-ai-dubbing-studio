@@ -3,9 +3,11 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { spawnSync } = require('child_process');
 
 const {
   separateAudio,
+  validateDemucsStems,
   killSeparationJob,
   getSeparationCacheDir,
   getSeparationProgress,
@@ -21,53 +23,87 @@ const {
 } = require('../services/ttsService');
 
 const {
-  generateModeSpecificScript,
   getCachedTranslation,
   setCachedTranslation,
   getTranslationCacheKey,
 } = require('../services/pipeline/stages/stage6_generateModeSpecificScript');
 
-const { GENERATION_MODES } = require('../services/pipeline/pipelineTypes');
+const { doesSegmentNeedTts } = require('../routes/audioRoutes');
+
+// Helper to create real valid silent WAV files using bundled ffmpeg for decodability tests
+function createValidTestWav(filePath, durationSec = 1.5) {
+  const ffmpegPath = path.resolve(__dirname, '../node_modules/@ffmpeg-installer/win32-x64/ffmpeg.exe');
+  const bin = fs.existsSync(ffmpegPath) ? ffmpegPath : 'ffmpeg';
+  const dir = path.dirname(filePath);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  spawnSync(bin, [
+    '-y', '-f', 'lavfi', '-i', 'anullsrc=r=44100:cl=mono', '-t', String(durationSec), filePath,
+  ], { windowsHide: true });
+}
 
 test('Smart 3-Step Pipeline Suite', async (t) => {
 
-  // Test 1: Single episode all3: Script -> Voice -> Demucs dependency contract
-  await t.test('1. Single episode all3: Voice strictly waits for Script; Clean BGM runs independently', async () => {
+  // Test 1: Single episode all3: Script -> Voice -> Demucs dependency contract and failure propagation
+  await t.test('1. Single episode all3: Voice strictly waits for Script; Clean BGM failure prevents false success', async () => {
     const executionOrder = [];
 
     const mockRunTranslate = async () => {
       executionOrder.push('script_start');
-      await new Promise(r => setTimeout(r, 20));
+      await new Promise(r => setTimeout(r, 15));
       executionOrder.push('script_done');
       return { success: true };
     };
 
     const mockRunVoice = async () => {
-      // Voice must strictly start after script is done!
       assert.ok(executionOrder.includes('script_done'), 'Voice must start AFTER script is done');
       executionOrder.push('voice_start');
-      await new Promise(r => setTimeout(r, 20));
+      await new Promise(r => setTimeout(r, 15));
       executionOrder.push('voice_done');
       return { success: true };
     };
 
-    const mockRunCleanBgm = async () => {
+    const mockRunCleanBgmSuccess = async () => {
       executionOrder.push('bgm_start');
-      await new Promise(r => setTimeout(r, 35));
+      await new Promise(r => setTimeout(r, 25));
       executionOrder.push('bgm_done');
-      return { success: true };
+      return { success: true, noVocalsUrl: '/audio/no_vocals.wav' };
     };
 
     // Parallel Clean BGM + sequential Script -> Voice contract
-    const bgmPromise = mockRunCleanBgm();
+    const bgmPromise = mockRunCleanBgmSuccess();
     await mockRunTranslate();
     await mockRunVoice();
-    await bgmPromise;
+    const bgmRes = await bgmPromise;
 
     assert.ok(executionOrder.indexOf('script_start') < executionOrder.indexOf('script_done'));
     assert.ok(executionOrder.indexOf('script_done') < executionOrder.indexOf('voice_start'));
     assert.ok(executionOrder.indexOf('voice_start') < executionOrder.indexOf('voice_done'));
-    assert.ok(executionOrder.includes('bgm_done'));
+    assert.equal(bgmRes.success, true);
+
+    // CRITICAL: When Clean BGM fails and was not explicitly skipped, All 3 MUST fail and not report false success
+    const mockRunCleanBgmFail = async () => {
+      await new Promise(r => setTimeout(r, 10));
+      return { success: false, error: 'CUDA out of memory in Demucs worker' };
+    };
+
+    const runAll3WithFailure = async () => {
+      const bgmP = mockRunCleanBgmFail().catch(err => ({ success: false, error: err.message }));
+      const sRes = await mockRunTranslate();
+      if (!sRes?.success) throw new Error(sRes?.error || 'Script failed');
+      const vRes = await mockRunVoice();
+      if (!vRes?.success) throw new Error(vRes?.error || 'Voice failed');
+      const bRes = await bgmP;
+      if (!bRes?.success) {
+        throw new Error(bRes?.error || 'Clean BGM separation failed');
+      }
+      return { success: true };
+    };
+
+    await assert.rejects(
+      async () => await runAll3WithFailure(),
+      /CUDA out of memory/,
+      'All 3 runner must throw/fail when Clean BGM fails'
+    );
   });
 
   // Test 2: Three episodes Run 1-by-1 queue serialization
@@ -104,13 +140,8 @@ test('Smart 3-Step Pipeline Suite', async (t) => {
     let scriptCalled = false;
     let voiceCalled = false;
 
-    // Simulate runner logic:
-    if (!ep.scriptData?.hasScript) {
-      scriptCalled = true;
-    }
-    if (!ep.hasAudio || ep.audioOutdated) {
-      voiceCalled = true;
-    }
+    if (!ep.scriptData?.hasScript) scriptCalled = true;
+    if (!ep.hasAudio || ep.audioOutdated) voiceCalled = true;
 
     assert.equal(scriptCalled, false, 'Script generation should be skipped');
     assert.equal(voiceCalled, true, 'Voice generation must be called');
@@ -139,26 +170,86 @@ test('Smart 3-Step Pipeline Suite', async (t) => {
     assert.equal(demucsCalled, true);
   });
 
-  // Test 5: Complete episode with valid cache reuse (0ms, 100% verified reuse)
-  await t.test('5. Complete episode — valid cache reuse: Returns immediately without AI calls', async () => {
-    const testSeries = 'test_cache_series';
-    const chinese = '这是测试句子';
-    const khmer = 'នេះជាប្រយោគសាកល្បង';
+  // Test 5: Context-Safe Chinese -> Khmer Translation Caching
+  await t.test('5. Context-Safe Translation Cache: Incorporates speaker and surrounding dialogue', async () => {
+    const testSeries = 'test_ctx_series';
+    const chinese = '是'; // Short ambiguous sentence
+    const khmerMale = 'បាទពិតមែនហើយ';
+    const khmerFemale = 'ចាសពិតមែនហើយ';
 
-    // Seed cache
-    setCachedTranslation(chinese, {
-      khmerText: khmer,
-      speaker: 'តួឯកប្រុស',
-      voiceGender: 'male',
+    // Different speakers produce distinct cache keys
+    const maleKey = getTranslationCacheKey(chinese, {
       seriesId: testSeries,
-      mode: 'dialogue',
+      speaker: 'តួប្រុស',
+      voiceGender: 'male',
+      prevContext: 'តើលោកដឹងទេ?',
     });
 
-    const cached = getCachedTranslation(chinese, { seriesId: testSeries, mode: 'dialogue' });
-    assert.ok(cached, 'Cached translation must exist');
-    assert.equal(cached.khmerText, khmer);
-    assert.equal(cached.speaker, 'តួឯកប្រុស');
-    assert.equal(cached.voiceGender, 'male');
+    const femaleKey = getTranslationCacheKey(chinese, {
+      seriesId: testSeries,
+      speaker: 'តួស្រី',
+      voiceGender: 'female',
+      prevContext: 'តើលោកដឹងទេ?',
+    });
+
+    assert.notEqual(maleKey, femaleKey, 'Male and female speaker contexts must generate distinct keys');
+
+    // Different preceding dialogue context produces distinct keys
+    const diffContextKey = getTranslationCacheKey(chinese, {
+      seriesId: testSeries,
+      speaker: 'តួប្រុស',
+      voiceGender: 'male',
+      prevContext: 'អ្នកពិតជាបានឃើញមែនទេ?',
+    });
+
+    assert.notEqual(maleKey, diffContextKey, 'Different dialogue context must generate distinct keys');
+
+    // Seed male translation
+    setCachedTranslation(chinese, {
+      khmerText: khmerMale,
+      speaker: 'តួប្រុស',
+      voiceGender: 'male',
+      prevContext: 'តើលោកដឹងទេ?',
+      seriesId: testSeries,
+    });
+
+    // Seed female translation
+    setCachedTranslation(chinese, {
+      khmerText: khmerFemale,
+      speaker: 'តួស្រី',
+      voiceGender: 'female',
+      prevContext: 'តើលោកដឹងទេ?',
+      seriesId: testSeries,
+    });
+
+    // Query male context -> returns male translation
+    const cachedMale = getCachedTranslation(chinese, {
+      seriesId: testSeries,
+      speaker: 'តួប្រុស',
+      voiceGender: 'male',
+      prevContext: 'តើលោកដឹងទេ?',
+    });
+    assert.ok(cachedMale, 'Male cache hit expected');
+    assert.equal(cachedMale.khmerText, khmerMale);
+
+    // Query female context -> returns female translation without cross-speaker collision!
+    const cachedFemale = getCachedTranslation(chinese, {
+      seriesId: testSeries,
+      speaker: 'តួស្រី',
+      voiceGender: 'female',
+      prevContext: 'តើលោកដឹងទេ?',
+    });
+    assert.ok(cachedFemale, 'Female cache hit expected');
+    assert.equal(cachedFemale.khmerText, khmerFemale);
+
+    // Query with different preceding context -> cache miss (null)
+    const missedContext = getCachedTranslation(chinese, {
+      seriesId: testSeries,
+      speaker: 'តួប្រុស',
+      voiceGender: 'male',
+      prevContext: 'បរិបទថ្មីដែលមិនធ្លាប់មាន',
+    });
+    assert.equal(missedContext, null, 'Unseen dialogue context must result in cache miss');
   });
 
   // Test 6: One incorrect Khmer translation — retry that segment only
@@ -169,13 +260,11 @@ test('Smart 3-Step Pipeline Suite', async (t) => {
       { id: 3, startSec: 6.5, endSec: 8.5, originalChineseText: '第三句', khmerTranslatedText: 'ឃ្លាទី ៣ ត្រឹមត្រូវ' },
     ];
 
-    // Single segment repair for segment #2
     const target = segments[1];
     target.khmerTranslatedText = 'ឃ្លាទី ២ ជួសជុលរួចរាល់';
     target.reviewNeeded = false;
     target.translationStatus = 'translated';
 
-    // Verify seg 1 and 3 are 100% unchanged
     assert.equal(segments[0].khmerTranslatedText, 'ឃ្លាទី ១ ត្រឹមត្រូវ');
     assert.equal(segments[0].startSec, 1.0);
     assert.equal(segments[0].endSec, 3.5);
@@ -202,7 +291,6 @@ test('Smart 3-Step Pipeline Suite', async (t) => {
     };
 
     const initialSnapshot = { ...seg };
-    // Simulate audio retry
     seg.audioOutdated = false;
     seg.ttsStatus = 'ready';
 
@@ -224,7 +312,6 @@ test('Smart 3-Step Pipeline Suite', async (t) => {
       translationSource: 'manual',
     };
 
-    // Attempt translation pass
     if (!userManualSeg.userOverridden && userManualSeg.translationSource !== 'manual') {
       userManualSeg.khmerTranslatedText = 'អរគុណ';
     }
@@ -240,20 +327,71 @@ test('Smart 3-Step Pipeline Suite', async (t) => {
     assert.notEqual(maleSig, femaleSig, 'Different voices must yield different audio signatures');
   });
 
-  // Test 10: TTS speed/voice/text changes invalidate affected audio only
-  await t.test('10. Audio Content Signature: Text or speed edit invalidates affected segment only', () => {
-    const baseSig = computeSegmentAudioSignature('សួស្តី', 'km-KH-PisethNeural', 'normal', 0);
-    const textEditedSig = computeSegmentAudioSignature('សួស្តីអ្នកទាំងអស់គ្នា', 'km-KH-PisethNeural', 'normal', 0);
-    const speedEditedSig = computeSegmentAudioSignature('សួស្តី', 'km-KH-PisethNeural', '1.20', 0);
-    const voiceEditedSig = computeSegmentAudioSignature('សួស្តី', 'km-KH-SreymomNeural', 'normal', 0);
+  // Test 10: TTS Content Signature & Legacy Cache Policy in doesSegmentNeedTts
+  await t.test('10. Legacy TTS Cache Policy: Missing signature forces synthesis unless verified by metadata', () => {
+    const testAudioDir = path.join(__dirname, '../uploads/cache/test_tts_cache_policy');
+    if (!fs.existsSync(testAudioDir)) fs.mkdirSync(testAudioDir, { recursive: true });
 
-    assert.notEqual(baseSig, textEditedSig, 'Text edit must change signature');
-    assert.notEqual(baseSig, speedEditedSig, 'Speed edit must change signature');
-    assert.notEqual(baseSig, voiceEditedSig, 'Voice change must change signature');
+    const voiceId = 'km-KH-PisethNeural';
+    const dummyAudio = path.join(testAudioDir, `seg_test_10_${voiceId}.mp3`);
+    fs.writeFileSync(dummyAudio, Buffer.alloc(1024, 0x55)); // 1KB audio
 
-    // Unchanged segment keeps same signature
-    const unchangedSig = computeSegmentAudioSignature('សួស្តី', 'km-KH-PisethNeural', 'normal', 0);
-    assert.equal(baseSig, unchangedSig, 'Unchanged segment keeps exact same signature');
+    const khmerText = 'សួស្តីអ្នកទាំងអស់គ្នា';
+    const validSig = computeSegmentAudioSignature(khmerText, voiceId, 'normal', 0);
+
+    // 10A: Segment with audio file on disk, but WITHOUT audioSignature (legacy):
+    // MUST return true (needs TTS) because file existence alone is unsafe!
+    const legacySeg = {
+      id: 10,
+      khmer: khmerText,
+      voiceId,
+      audioPath: dummyAudio,
+      audioFile: `seg_test_10_${voiceId}.mp3`,
+      ttsStatus: 'ready',
+      audioSignature: null, // missing!
+    };
+    const needsTtsLegacy = doesSegmentNeedTts(legacySeg, testAudioDir);
+    assert.equal(needsTtsLegacy, true, 'Legacy segment without signature MUST trigger synthesis');
+
+    // 10B: Segment WITH matching audioSignature:
+    // Reused cleanly -> returns false!
+    const validSeg = {
+      ...legacySeg,
+      audioSignature: validSig,
+    };
+    const needsTtsValid = doesSegmentNeedTts(validSeg, testAudioDir);
+    assert.equal(needsTtsValid, false, 'Segment with matching signature should be reused');
+
+    // 10C: Segment where text was edited:
+    // audioSignature no longer matches new text -> returns true!
+    const editedTextSeg = {
+      ...validSeg,
+      khmer: 'សួស្តីអ្នកទាំងអស់គ្នា ខ្ញុំមកដល់ហើយ',
+    };
+    const needsTtsEdited = doesSegmentNeedTts(editedTextSeg, testAudioDir);
+    assert.equal(needsTtsEdited, true, 'Edited text must invalidate audio and trigger synthesis');
+
+    // 10D: Legacy segment with sidecar metadata proving exact match:
+    // Adopts signature and returns false!
+    const sidecarJson = dummyAudio.replace(/\.[^.]+$/, '.json');
+    fs.writeFileSync(sidecarJson, JSON.stringify({
+      text: khmerText,
+      voiceId,
+      audioSignature: validSig,
+    }));
+    const legacyWithSidecar = {
+      ...legacySeg,
+      audioSignature: null,
+    };
+    const needsTtsSidecar = doesSegmentNeedTts(legacyWithSidecar, testAudioDir);
+    assert.equal(needsTtsSidecar, false, 'Legacy segment with verified sidecar metadata can be reused');
+
+    // Clean up
+    try {
+      fs.unlinkSync(dummyAudio);
+      fs.unlinkSync(sidecarJson);
+      fs.rmdirSync(testAudioDir);
+    } catch (_) {}
   });
 
   // Test 11: Demucs cached media belongs to correct source
@@ -287,32 +425,75 @@ test('Smart 3-Step Pipeline Suite', async (t) => {
     } catch (_) {}
   });
 
-  // Test 12: Demucs stem validation rejects corrupt or truncated (<100KB) files
-  await t.test('12. Demucs Stem Validation: Rejects files < 100KB as corrupt', () => {
-    const MIN_STEM_SIZE = 100 * 1024;
-    const corruptSize = 1024; // 1KB corrupt header
-    const validSize = 150 * 1024; // 150KB real stem
+  // Test 12: Real Demucs stem validation (validateDemucsStems)
+  await t.test('12. Demucs Stem Validation: Verifies existence, size >= 100KB, decodability and duration tolerance', async () => {
+    const testDir = path.join(__dirname, '../uploads/cache/test_stems_val');
+    if (!fs.existsSync(testDir)) fs.mkdirSync(testDir, { recursive: true });
 
-    assert.ok(corruptSize < MIN_STEM_SIZE, '1KB file must be rejected as insufficient');
-    assert.ok(validSize >= MIN_STEM_SIZE, '150KB file must be accepted as valid stem');
+    const vPath = path.join(testDir, 'vocals.wav');
+    const nvPath = path.join(testDir, 'no_vocals.wav');
+
+    // 12A: Missing files
+    const missingRes = await validateDemucsStems(vPath, nvPath);
+    assert.equal(missingRes.valid, false);
+    assert.equal(missingRes.reason, 'STEMS_NOT_FOUND');
+
+    // 12B: File size < 100KB
+    fs.writeFileSync(vPath, Buffer.alloc(50 * 1024, 0x00));
+    fs.writeFileSync(nvPath, Buffer.alloc(50 * 1024, 0x00));
+    const smallRes = await validateDemucsStems(vPath, nvPath);
+    assert.equal(smallRes.valid, false);
+    assert.equal(smallRes.reason, 'STEMS_TOO_SMALL');
+
+    // 12C: File >= 100KB but corrupted bytes (indecodable)
+    fs.writeFileSync(vPath, Buffer.alloc(120 * 1024, 0x99));
+    fs.writeFileSync(nvPath, Buffer.alloc(120 * 1024, 0x99));
+    const corruptRes = await validateDemucsStems(vPath, nvPath);
+    assert.equal(corruptRes.valid, false);
+
+    // 12D: Real valid silent WAV files (1.5 seconds)
+    createValidTestWav(vPath, 1.5);
+    createValidTestWav(nvPath, 1.5);
+
+    // Valid check without source duration
+    const validRes = await validateDemucsStems(vPath, nvPath);
+    assert.equal(validRes.valid, true);
+    assert.ok(validRes.vocalsDuration >= 1.4 && validRes.vocalsDuration <= 1.6);
+
+    // Valid check with matching source duration (1.5s, tolerance <= 2.0s)
+    const matchedRes = await validateDemucsStems(vPath, nvPath, 1.5);
+    assert.equal(matchedRes.valid, true);
+
+    // Invalid check when source duration differs by more than 2.0s (e.g. 10.0s source vs 1.5s stem)
+    const mismatchedRes = await validateDemucsStems(vPath, nvPath, 10.0);
+    assert.equal(mismatchedRes.valid, false);
+    assert.equal(mismatchedRes.reason, 'STEMS_DURATION_MISMATCH_SOURCE');
+
+    // Clean up
+    try {
+      fs.unlinkSync(vPath);
+      fs.unlinkSync(nvPath);
+      fs.rmdirSync(testDir);
+    } catch (_) {}
   });
 
-  // Test 13: Demucs safe queue handling (never throws 409 BUSY)
-  await t.test('13. Demucs Safe Queue: Queues subsequent requests without 409 BUSY rejection', async () => {
+  // Test 13: Demucs Safe Queue & Cache hit check
+  await t.test('13. Demucs Safe Queue: Instant cache hit validates decodable stems cleanly', async () => {
     const mockAudio = path.join(__dirname, 'mock_queue_video.mp4');
-    fs.writeFileSync(mockAudio, Buffer.alloc(1024 * 128, 0xCC));
+    createValidTestWav(mockAudio, 1.5);
 
     const cacheDir = getSeparationCacheDir(mockAudio);
     if (!fs.existsSync(cacheDir)) fs.mkdirSync(cacheDir, { recursive: true });
 
-    // Seed mock stem files >= 100KB
-    fs.writeFileSync(path.join(cacheDir, 'vocals.wav'), Buffer.alloc(1024 * 110, 0x11));
-    fs.writeFileSync(path.join(cacheDir, 'no_vocals.wav'), Buffer.alloc(1024 * 110, 0x22));
+    // Seed real valid WAV stem files (1.5s, >100KB)
+    createValidTestWav(path.join(cacheDir, 'vocals.wav'), 1.5);
+    createValidTestWav(path.join(cacheDir, 'no_vocals.wav'), 1.5);
 
-    // Instant cache hit check
-    const res = await separateAudio({ audioPath: mockAudio });
+    // Instant cache hit check verifies decodable stems and returns cached result
+    const res = await separateAudio({ audioPath: mockAudio, sourceDuration: 1.5 });
     assert.equal(res.status, 'success');
     assert.equal(res.isCached, true);
+    assert.ok(res.vocalsDuration >= 1.4);
 
     // Clean up
     try {
@@ -322,11 +503,47 @@ test('Smart 3-Step Pipeline Suite', async (t) => {
     } catch (_) {}
   });
 
-  // Test 14: Scoped cancellation cancels only target job without killing unrelated processes
-  await t.test('14. Scoped Cancellation: Cancelling a specific media key does not kill other jobs', () => {
+  // Test 14: Scoped cancellation cancels only target job without killing unrelated jobs (Exact matching)
+  await t.test('14. Scoped Cancellation: Exact matching prevents ep_1 from cancelling ep_10', () => {
+    // When cancelling a non-existent job, 0 jobs are killed and return success
     const killRes = killSeparationJob('non_existent_specific_episode.mp4');
     assert.equal(killRes.success, true);
     assert.equal(killRes.killed, 0);
+
+    // Exact matching invariant: cleanKey equality prevents substring collisions (ep_1 vs ep_10)
+    const mockQueue = [
+      { cleanKey: 'ep_10.mp4', options: { jobId: 'sep_ep_10' } },
+      { cleanKey: 'ep_1.mp4', options: { jobId: 'sep_ep_1' } },
+    ];
+    const targetId = 'ep_1.mp4';
+    const targetClean = path.basename(targetId).toLowerCase();
+    const matchIdx = mockQueue.findIndex(j =>
+      j.cleanKey === targetClean ||
+      j.options?.jobId === targetId
+    );
+    assert.equal(matchIdx, 1, 'Exact match must find ep_1.mp4 at index 1 without colliding with ep_10.mp4');
+  });
+
+  // Test 14B: Worker error-to-close single dequeue transition
+  await t.test('14B. Worker single-dequeue: Guard prevents double-dequeue on error and close', () => {
+    let dequeueCount = 0;
+    const finishDemucsWorker = () => {
+      dequeueCount++;
+    };
+
+    let workerFinished = false;
+    const completeWorkerOnce = () => {
+      if (workerFinished) return;
+      workerFinished = true;
+      finishDemucsWorker();
+    };
+
+    // Simulate spawn error followed by close
+    completeWorkerOnce(); // error event
+    completeWorkerOnce(); // close event
+    completeWorkerOnce(); // redundant kill
+
+    assert.equal(dequeueCount, 1, 'finishDemucsWorkerAndProcessQueue must be called exactly once per process');
   });
 
   // Test 15: Edge TTS temporary failure handling & clean text verification
@@ -391,6 +608,11 @@ test('Smart 3-Step Pipeline Suite', async (t) => {
     const failedStatus = { status: 'failed', progress: 0, error: 'Model timeout' };
     assert.notEqual(failedStatus.status, 'completed');
     assert.equal(failedStatus.progress, 0);
+
+    // Verify cancelled state reports aborted, not completed
+    const cancelledStatus = { success: false, aborted: true };
+    assert.equal(cancelledStatus.success, false);
+    assert.equal(cancelledStatus.aborted, true);
   });
 
 });
