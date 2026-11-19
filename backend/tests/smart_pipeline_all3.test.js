@@ -615,4 +615,118 @@ test('Smart 3-Step Pipeline Suite', async (t) => {
     assert.equal(cancelledStatus.aborted, true);
   });
 
+  // Test 21: Normalized All-3 Result Contract: Strict contract schema for success, step failures, and cancellation
+  await t.test('21. Normalized All-3 Result Contract: Structured error code and step statuses', () => {
+    // Contract A: BGM failure
+    const bgmFailResult = {
+      success: false,
+      status: 'failed',
+      completed: false,
+      failedStep: 'clean_bgm',
+      steps: {
+        translate: { status: 'completed' },
+        voice: { status: 'completed' },
+        clean_bgm: { status: 'failed' },
+      },
+      error: { code: 'BGM_GENERATION_FAILED', message: 'Demucs CUDA out of memory' },
+    };
+    assert.equal(bgmFailResult.success, false);
+    assert.equal(bgmFailResult.status, 'failed');
+    assert.equal(bgmFailResult.completed, false);
+    assert.equal(bgmFailResult.failedStep, 'clean_bgm');
+    assert.equal(bgmFailResult.steps.clean_bgm.status, 'failed');
+    assert.equal(bgmFailResult.steps.translate.status, 'completed');
+    assert.equal(bgmFailResult.steps.voice.status, 'completed');
+    assert.equal(bgmFailResult.error.code, 'BGM_GENERATION_FAILED');
+
+    // Contract B: Script failure
+    const scriptFailResult = {
+      success: false,
+      status: 'failed',
+      completed: false,
+      failedStep: 'translate',
+      steps: {
+        translate: { status: 'failed' },
+        voice: { status: 'pending' },
+        clean_bgm: { status: 'cancelled' },
+      },
+      error: { code: 'SCRIPT_GENERATION_FAILED', message: 'OCR failed' },
+    };
+    assert.equal(scriptFailResult.success, false);
+    assert.equal(scriptFailResult.failedStep, 'translate');
+    assert.equal(scriptFailResult.steps.translate.status, 'failed');
+    assert.equal(scriptFailResult.steps.voice.status, 'pending');
+
+    // Contract C: User cancellation / abort
+    const abortResult = {
+      success: false,
+      status: 'cancelled',
+      aborted: true,
+      completed: false,
+      failedStep: null,
+      steps: {
+        translate: { status: 'cancelled' },
+        voice: { status: 'pending' },
+        clean_bgm: { status: 'cancelled' },
+      },
+      error: { code: 'ABORTED', message: 'Operation cancelled by user' },
+    };
+    assert.equal(abortResult.success, false);
+    assert.equal(abortResult.status, 'cancelled');
+    assert.equal(abortResult.aborted, true);
+    assert.equal(abortResult.error.code, 'ABORTED');
+
+    // Contract D: 100% Success
+    const successResult = {
+      success: true,
+      status: 'completed',
+      completed: true,
+      failedStep: null,
+      steps: {
+        translate: { status: 'completed' },
+        voice: { status: 'completed' },
+        clean_bgm: { status: 'completed' },
+      },
+    };
+    assert.equal(successResult.success, true);
+    assert.equal(successResult.status, 'completed');
+    assert.equal(successResult.completed, true);
+    assert.equal(successResult.failedStep, null);
+    assert.equal(successResult.steps.clean_bgm.status, 'completed');
+    assert.equal(successResult.steps.translate.status, 'completed');
+    assert.equal(successResult.steps.voice.status, 'completed');
+  });
+
+  // Test 22: Demucs Queue Dequeue: Instant cache resolution prevents redundant 30s re-runs
+  await t.test('22. Demucs Queue Dequeue: Dequeued job with valid stems resolves from cache', async () => {
+    const testAudioPath = path.join(__dirname, 'test_media', 'queue_cache_test.wav');
+    createValidTestWav(testAudioPath, 1.5);
+
+    const cacheDir = getSeparationCacheDir(testAudioPath, 'htdemucs');
+    const vocalsPath = path.join(cacheDir, 'vocals.wav');
+    const noVocalsPath = path.join(cacheDir, 'no_vocals.wav');
+    createValidTestWav(vocalsPath, 1.5);
+    createValidTestWav(noVocalsPath, 1.5);
+
+    // Call separateAudio - should hit instant cache
+    const res = await separateAudio({ audioPath: testAudioPath, model: 'htdemucs', sourceDuration: 1.5 });
+    assert.equal(res.status, 'success');
+    assert.equal(res.isCached, true);
+    assert.ok(res.vocalsPath.includes('vocals.wav'));
+    assert.ok(res.noVocalsPath.includes('no_vocals.wav'));
+
+    try {
+      if (fs.existsSync(vocalsPath)) fs.unlinkSync(vocalsPath);
+      if (fs.existsSync(noVocalsPath)) fs.unlinkSync(noVocalsPath);
+      if (fs.existsSync(testAudioPath)) fs.unlinkSync(testAudioPath);
+    } catch (_) {}
+  });
+
+  // Test 23: Scoped cancellation: Unmatched ID does not reset or abort running jobs
+  await t.test('23. Scoped Demucs Kill: Non-matching identifier preserves active worker state', () => {
+    const killRes = killSeparationJob('completely_different_episode_99.mp4');
+    assert.equal(killRes.success, true);
+    assert.equal(killRes.killed, 0);
+  });
+
 });

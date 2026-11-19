@@ -670,8 +670,34 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
    * - Awaits Clean BGM before marking episode complete.
    */
   const runSingleEpisodeAll3 = useCallback(async (ep, options = {}, signal = null) => {
-    if (!ep) return createStepResult({ status: STEP_STATUS.FAILED, error: 'No episode provided' });
-    if (signal?.aborted) return createStepResult({ status: STEP_STATUS.CANCELLED, reason: 'aborted' });
+    const stepsStatus = {
+      translate: { status: 'pending' },
+      voice: { status: 'pending' },
+      clean_bgm: { status: 'pending' },
+    };
+
+    if (!ep) {
+      return {
+        ...createStepResult({ status: STEP_STATUS.FAILED, error: 'No episode provided' }),
+        failedStep: null,
+        steps: stepsStatus,
+        error: { code: 'INVALID_EPISODE', message: 'No episode provided' },
+      };
+    }
+
+    if (signal?.aborted) {
+      return {
+        ...createStepResult({ status: STEP_STATUS.CANCELLED, reason: 'aborted' }),
+        aborted: true,
+        failedStep: null,
+        steps: {
+          translate: { status: 'cancelled' },
+          voice: { status: 'pending' },
+          clean_bgm: { status: 'cancelled' },
+        },
+        error: { code: 'ABORTED', message: 'Operation cancelled by user' },
+      };
+    }
 
     const norm = normalizeDubbingOptions(ep, 'all3', options, { activeSeries });
     const seriesId = norm.seriesId;
@@ -680,21 +706,73 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
 
     // 1. Kick off Clean BGM in parallel if not already cached and not skipped
     if ((!hasDemucs || norm.force) && !options.skipCleanBgm) {
-      bgmPromise = runSingleCleanBgm(ep, options, signal).catch((bgmErr) => {
-        return createStepResult({ status: STEP_STATUS.FAILED, error: bgmErr?.message || 'Clean BGM separation failed' });
-      });
+      stepsStatus.clean_bgm = { status: 'running' };
+      bgmPromise = runSingleCleanBgm(ep, options, signal).catch((bgmErr) => ({
+        success: false,
+        error: bgmErr?.message || 'Clean BGM separation failed',
+      }));
+    } else {
+      stepsStatus.clean_bgm = { status: options.skipCleanBgm ? 'skipped' : 'completed' };
     }
 
     // 2. Step 1: Script Khmer (Chinese Subtitle OCR -> Khmer Translation)
-    if (signal?.aborted) return createStepResult({ status: STEP_STATUS.CANCELLED, reason: 'aborted' });
-    const scriptRes = await runSingleTranslate(ep, options, signal);
-    if (signal?.aborted) return createStepResult({ status: STEP_STATUS.CANCELLED, reason: 'aborted' });
+    if (signal?.aborted) {
+      return {
+        ...createStepResult({ status: STEP_STATUS.CANCELLED, reason: 'aborted' }),
+        aborted: true,
+        failedStep: null,
+        steps: stepsStatus,
+        error: { code: 'ABORTED', message: 'Operation cancelled by user' },
+      };
+    }
+
+    stepsStatus.translate = { status: 'running' };
+    let scriptRes = null;
+    try {
+      scriptRes = await runSingleTranslate(ep, options, signal);
+    } catch (sErr) {
+      if (signal?.aborted) {
+        return {
+          ...createStepResult({ status: STEP_STATUS.CANCELLED, reason: 'aborted' }),
+          aborted: true,
+          failedStep: null,
+          steps: stepsStatus,
+          error: { code: 'ABORTED', message: 'Operation cancelled by user' },
+        };
+      }
+      scriptRes = { success: false, error: sErr?.message || 'Script generation failed' };
+    }
+
+    if (signal?.aborted) {
+      return {
+        ...createStepResult({ status: STEP_STATUS.CANCELLED, reason: 'aborted' }),
+        aborted: true,
+        failedStep: null,
+        steps: stepsStatus,
+        error: { code: 'ABORTED', message: 'Operation cancelled by user' },
+      };
+    }
+
     if (!scriptRes?.success) {
       if (scriptRes?.skipped && checkEpisodeHasScript(ep)) {
-        // Valid script already exists
+        stepsStatus.translate = { status: 'completed' };
       } else {
-        throw new Error(scriptRes?.error || scriptRes?.reason || 'Script generation failed');
+        stepsStatus.translate = { status: 'failed' };
+        return {
+          ...createStepResult({
+            status: STEP_STATUS.FAILED,
+            error: scriptRes?.error || scriptRes?.reason || 'Script generation failed',
+          }),
+          failedStep: 'translate',
+          steps: stepsStatus,
+          error: {
+            code: 'SCRIPT_GENERATION_FAILED',
+            message: scriptRes?.error || scriptRes?.reason || 'Script generation failed',
+          },
+        };
       }
+    } else {
+      stepsStatus.translate = { status: 'completed' };
     }
     if (typeof refreshSeries === 'function') await refreshSeries();
 
@@ -709,44 +787,169 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
     } catch (_) {}
 
     // 3. Step 2: Voice TTS (Strictly depends on Script!)
-    if (signal?.aborted) return createStepResult({ status: STEP_STATUS.CANCELLED, reason: 'aborted' });
-    const voiceRes = await runSingleVoice(freshEp, options, signal);
-    if (signal?.aborted) return createStepResult({ status: STEP_STATUS.CANCELLED, reason: 'aborted' });
-    if (!voiceRes?.success) {
-      if (voiceRes?.skipped && checkEpisodeHasAudioReady(freshEp, null, null)) {
-        // Valid voice audio already exists
-      } else {
-        throw new Error(voiceRes?.error || voiceRes?.reason || 'Voice generation failed');
+    if (signal?.aborted) {
+      return {
+        ...createStepResult({ status: STEP_STATUS.CANCELLED, reason: 'aborted' }),
+        aborted: true,
+        failedStep: null,
+        steps: stepsStatus,
+        error: { code: 'ABORTED', message: 'Operation cancelled by user' },
+      };
+    }
+
+    stepsStatus.voice = { status: 'running' };
+    let voiceRes = null;
+    try {
+      voiceRes = await runSingleVoice(freshEp, options, signal);
+    } catch (vErr) {
+      if (signal?.aborted) {
+        return {
+          ...createStepResult({ status: STEP_STATUS.CANCELLED, reason: 'aborted' }),
+          aborted: true,
+          failedStep: null,
+          steps: stepsStatus,
+          error: { code: 'ABORTED', message: 'Operation cancelled by user' },
+        };
       }
+      voiceRes = { success: false, error: vErr?.message || 'Voice generation failed' };
+    }
+
+    if (signal?.aborted) {
+      return {
+        ...createStepResult({ status: STEP_STATUS.CANCELLED, reason: 'aborted' }),
+        aborted: true,
+        failedStep: null,
+        steps: stepsStatus,
+        error: { code: 'ABORTED', message: 'Operation cancelled by user' },
+      };
+    }
+
+    if (!voiceRes?.success) {
+      if (voiceRes?.skipped && checkEpisodeHasAudioReady(freshEp, null, null) && !freshEp.audioOutdated) {
+        stepsStatus.voice = { status: 'completed' };
+      } else {
+        stepsStatus.voice = { status: 'failed' };
+        return {
+          ...createStepResult({
+            status: STEP_STATUS.FAILED,
+            error: voiceRes?.error || voiceRes?.reason || 'Voice generation failed',
+          }),
+          failedStep: 'voice',
+          steps: stepsStatus,
+          error: {
+            code: 'VOICE_GENERATION_FAILED',
+            message: voiceRes?.error || voiceRes?.reason || 'Voice generation failed',
+          },
+        };
+      }
+    } else {
+      stepsStatus.voice = { status: 'completed' };
     }
     if (typeof refreshSeries === 'function') await refreshSeries();
 
     // 4. Step 3: Await Clean BGM if running in background
-    if (signal?.aborted) return createStepResult({ status: STEP_STATUS.CANCELLED, reason: 'aborted' });
+    if (signal?.aborted) {
+      return {
+        ...createStepResult({ status: STEP_STATUS.CANCELLED, reason: 'aborted' }),
+        aborted: true,
+        failedStep: null,
+        steps: stepsStatus,
+        error: { code: 'ABORTED', message: 'Operation cancelled by user' },
+      };
+    }
+
     if (bgmPromise) {
       const bgmRes = await bgmPromise;
-      if (signal?.aborted) return createStepResult({ status: STEP_STATUS.CANCELLED, reason: 'aborted' });
+      if (signal?.aborted) {
+        return {
+          ...createStepResult({ status: STEP_STATUS.CANCELLED, reason: 'aborted' }),
+          aborted: true,
+          failedStep: null,
+          steps: stepsStatus,
+          error: { code: 'ABORTED', message: 'Operation cancelled by user' },
+        };
+      }
       if (!bgmRes?.success && !options.skipCleanBgm) {
         if (bgmRes?.skipped && checkEpisodeHasDemucsReady(freshEp, null, null)) {
-          // Demucs was already cached/ready
+          stepsStatus.clean_bgm = { status: 'completed' };
         } else {
-          throw new Error(bgmRes?.error || 'Clean BGM separation failed');
+          stepsStatus.clean_bgm = { status: 'failed' };
+          return {
+            ...createStepResult({
+              status: STEP_STATUS.FAILED,
+              error: bgmRes?.error || 'Clean BGM separation failed',
+            }),
+            failedStep: 'clean_bgm',
+            steps: stepsStatus,
+            error: {
+              code: 'BGM_GENERATION_FAILED',
+              message: bgmRes?.error || 'Clean BGM separation failed',
+            },
+          };
         }
+      } else {
+        stepsStatus.clean_bgm = { status: 'completed' };
       }
-    } else if (!hasDemucs && !options.skipCleanBgm) {
-      const directBgmRes = await runSingleCleanBgm(freshEp, options, signal);
-      if (signal?.aborted) return createStepResult({ status: STEP_STATUS.CANCELLED, reason: 'aborted' });
+    } else if ((!hasDemucs || norm.force) && !options.skipCleanBgm) {
+      stepsStatus.clean_bgm = { status: 'running' };
+      let directBgmRes = null;
+      try {
+        directBgmRes = await runSingleCleanBgm(freshEp, options, signal);
+      } catch (bErr) {
+        if (signal?.aborted) {
+          return {
+            ...createStepResult({ status: STEP_STATUS.CANCELLED, reason: 'aborted' }),
+            aborted: true,
+            failedStep: null,
+            steps: stepsStatus,
+            error: { code: 'ABORTED', message: 'Operation cancelled by user' },
+          };
+        }
+        directBgmRes = { success: false, error: bErr?.message || 'Clean BGM separation failed' };
+      }
+
+      if (signal?.aborted) {
+        return {
+          ...createStepResult({ status: STEP_STATUS.CANCELLED, reason: 'aborted' }),
+          aborted: true,
+          failedStep: null,
+          steps: stepsStatus,
+          error: { code: 'ABORTED', message: 'Operation cancelled by user' },
+        };
+      }
+
       if (!directBgmRes?.success && !options.skipCleanBgm) {
         if (directBgmRes?.skipped && checkEpisodeHasDemucsReady(freshEp, null, null)) {
-          // Demucs was already cached/ready
+          stepsStatus.clean_bgm = { status: 'completed' };
         } else {
-          throw new Error(directBgmRes?.error || 'Clean BGM separation failed');
+          stepsStatus.clean_bgm = { status: 'failed' };
+          return {
+            ...createStepResult({
+              status: STEP_STATUS.FAILED,
+              error: directBgmRes?.error || 'Clean BGM separation failed',
+            }),
+            failedStep: 'clean_bgm',
+            steps: stepsStatus,
+            error: {
+              code: 'BGM_GENERATION_FAILED',
+              message: directBgmRes?.error || 'Clean BGM separation failed',
+            },
+          };
         }
+      } else {
+        stepsStatus.clean_bgm = { status: 'completed' };
       }
+    } else {
+      stepsStatus.clean_bgm = { status: options.skipCleanBgm ? 'skipped' : 'completed' };
     }
+
     if (typeof refreshSeries === 'function') await refreshSeries();
 
-    return createStepResult({ status: STEP_STATUS.COMPLETED });
+    return {
+      ...createStepResult({ status: STEP_STATUS.COMPLETED }),
+      failedStep: null,
+      steps: stepsStatus,
+    };
   }, [runSingleTranslate, runSingleVoice, runSingleCleanBgm, refreshSeries, activeSeries]);
 
   /**
@@ -962,11 +1165,11 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
           stepResult = await runSingleEpisodeAll3(currentEp, options, controller.signal);
         }
 
-        if (controller.signal.aborted || stepResult?.aborted || stepResult?.status === STEP_STATUS.CANCELLED) {
+        if (controller.signal.aborted || stepResult?.aborted || stepResult?.status === STEP_STATUS.CANCELLED || stepResult?.status === 'cancelled') {
           break;
         }
         if (stepResult && !stepResult.success && !stepResult.skipped) {
-          throw new Error(stepResult.error || `Episode ${stepType} step failed`);
+          throw new Error(stepResult?.error?.message || stepResult?.error || `Episode ${stepType} step failed`);
         }
 
         setActiveEpisodeIds((prev) => {

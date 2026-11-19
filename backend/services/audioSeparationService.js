@@ -223,7 +223,7 @@ function finishDemucsWorkerAndProcessQueue() {
   isDemucsRunning = false;
   currentDemucsMedia = null;
 
-  if (separationQueue.length > 0) {
+  while (separationQueue.length > 0) {
     const nextJob = separationQueue.shift();
     separationQueue.forEach((job, idx) => {
       const p = activeSeparationProgress.get(job.cleanKey);
@@ -232,11 +232,39 @@ function finishDemucsWorkerAndProcessQueue() {
         p.message = `រង់ចាំក្នុងជួរ (Queued: លេខរៀងទី ${idx + 1})...`;
       }
     });
+
+    // Check if dequeued job already has valid cache on disk (e.g. earlier identical run)
+    const cachedVocals = path.join(nextJob.targetDir, 'vocals.wav');
+    const cachedNoVocals = path.join(nextJob.targetDir, 'no_vocals.wav');
+    if (fs.existsSync(cachedVocals) && fs.existsSync(cachedNoVocals)) {
+      const vSize = fs.statSync(cachedVocals).size;
+      const nvSize = fs.statSync(cachedNoVocals).size;
+      if (vSize >= 100 * 1024 && nvSize >= 100 * 1024) {
+        console.log(`[AudioSeparation] ⚡ Dequeued separation for ${nextJob.cleanKey} resolved from cache!`);
+        activeSeparationProgress.set(nextJob.cleanKey, {
+          progress: 100,
+          status: 'completed',
+          message: 'Clean BGM រួចរាល់ 100%',
+        });
+        nextJob.resolve({
+          status: 'success',
+          isCached: true,
+          model: nextJob.options?.model || 'htdemucs',
+          vocalsPath: cachedVocals,
+          noVocalsPath: cachedNoVocals,
+          vocalsSizeBytes: vSize,
+          noVocalsSizeBytes: nvSize,
+        });
+        continue; // Advance to next in queue without blocking
+      }
+    }
+
     isDemucsRunning = true;
     currentDemucsMedia = path.basename(nextJob.options.audioPath);
     console.log(`[AudioSeparation] 🚀 Dequeued next separation for: ${nextJob.cleanKey}`);
     executeDemucsWorker(nextJob.options, nextJob.targetDir, nextJob.cleanKey)
       .then(nextJob.resolve, nextJob.reject);
+    break;
   }
 }
 
@@ -267,6 +295,7 @@ function executeDemucsWorker(options, targetDir, cleanKey) {
 
     const workerScript = path.join(__dirname, '../workers/demucs_worker.py');
     if (!fs.existsSync(workerScript)) {
+      finishDemucsWorkerAndProcessQueue();
       return reject(new Error(`Demucs worker script not found at ${workerScript}`));
     }
 
@@ -311,11 +340,17 @@ function executeDemucsWorker(options, targetDir, cleanKey) {
       NUMEXPR_NUM_THREADS: '4',
     };
 
-    const child = spawn(pythonBin, args, {
-      windowsHide: true,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: spawnEnv,
-    });
+    let child;
+    try {
+      child = spawn(pythonBin, args, {
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: spawnEnv,
+      });
+    } catch (spawnErr) {
+      finishDemucsWorkerAndProcessQueue();
+      return reject(spawnErr);
+    }
 
     let workerFinished = false;
     const completeWorkerOnce = () => {
@@ -660,16 +695,18 @@ function killSeparationJob(identifier = 'all') {
     const proc = activeSeparationJobs.get(identifier) || activeSeparationJobs.get(targetClean) || activeSeparationJobs.get(targetBase);
     if (proc) {
       terminateProcess(proc);
-      if (typeof proc.__completeWorker === 'function') {
-        proc.__completeWorker();
-      } else {
-        finishDemucsWorkerAndProcessQueue();
-      }
+      // Let proc's 'close' event trigger completeWorkerOnce() so OS process exits before advancing queue
+      const safetyTimer = setTimeout(() => {
+        if (typeof proc.__completeWorker === 'function') {
+          proc.__completeWorker();
+        }
+      }, 2500);
+      proc.once('close', () => {
+        clearTimeout(safetyTimer);
+      });
       activeSeparationJobs.delete(identifier);
       activeSeparationJobs.delete(targetClean);
       activeSeparationJobs.delete(targetBase);
-    } else if (isDemucsRunning) {
-      finishDemucsWorkerAndProcessQueue();
     }
     activeSeparationProgress.delete(identifier);
     activeSeparationProgress.delete(targetClean);
