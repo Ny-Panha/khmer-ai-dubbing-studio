@@ -119,7 +119,7 @@ export function useSeriesManager({
   };
 
   // Helper to apply an episode state to the React workspace (stable reference)
-  const applyEpisodeToWorkspace = useCallback((ep, explicitSeriesId = null) => {
+  const applyEpisodeToWorkspace = useCallback((ep, explicitSeriesId = null, options = {}) => {
     if (!ep) return;
     const cb = callbacksRef.current;
     const resolvedSeriesId = explicitSeriesId || activeSeriesIdRef.current || getActiveSeriesId();
@@ -342,7 +342,7 @@ export function useSeriesManager({
     }
     // Auto-align left workflow tab to the episode's actual stage:
     // If episode has no video yet, automatically open Step 1 (media) so user can import video directly!
-    if (cb.setLeftTab) {
+    if (cb.setLeftTab && !options.preserveTab) {
       if (!ep.video?.videoId && !ep.video?.videoUrl) {
         cb.setLeftTab('media');
       } else if (ep.scriptData?.segments?.length > 0) {
@@ -549,29 +549,19 @@ export function useSeriesManager({
     isTransitioningRef.current = true;
     try {
       const prevEpisodeId = activeEpisodeIdRef.current;
-      // 1. Flush any pending timeline writes for previous episode before switching
-      if (prevEpisodeId && prevEpisodeId !== targetEpisodeId) {
-        try {
-          await flushAllPendingTimelinePersists();
-        } catch (_) {}
-      }
-      // 2. Save previous episode if actually switching away from it
       const snapshot = getCurrentWorkspaceSnapshot();
-      if (prevEpisodeId && prevEpisodeId !== targetEpisodeId) {
-        saveEpisodeState(activeSeriesIdState, prevEpisodeId, snapshot);
-      }
 
-      // 2. Allow active in-flight AI requests to complete in background.
-      if (activeRequestRef?.current) {
-        activeRequestRef.current.activeEpisodeId = targetEpisodeId;
-      }
-
-      // 3. Set active episode pointer immediately
+      // 1. Update active episode pointer IMMEDIATELY for instant UI response (<16ms)
       setActiveEpisodeId(targetEpisodeId);
       setActiveEpisodeIdState(targetEpisodeId);
       activeEpisodeIdRef.current = targetEpisodeId;
 
-      // 4. Find target episode from current memory state or storage
+      // 2. Allow active in-flight AI requests to complete in background
+      if (activeRequestRef?.current) {
+        activeRequestRef.current.activeEpisodeId = targetEpisodeId;
+      }
+
+      // 3. Find target episode from current memory state or storage
       let currentSeries = currentSeriesInMem;
       if (!currentSeries) {
         const currentList = loadSeriesList();
@@ -579,9 +569,19 @@ export function useSeriesManager({
       }
       const targetEp = (currentSeries?.episodes || []).find((e) => e.id === targetEpisodeId);
 
-      // Apply immediate local state first for instant responsiveness
+      // 4. Apply immediate local state first for instant responsiveness
       if (targetEp) {
-        applyEpisodeToWorkspace(targetEp);
+        applyEpisodeToWorkspace(targetEp, null, { preserveTab: true });
+      }
+
+      // 5. Defer saving previous episode & flushing timeline to background microtask (never blocks UI thread)
+      if (prevEpisodeId && prevEpisodeId !== targetEpisodeId) {
+        Promise.resolve().then(async () => {
+          try {
+            saveEpisodeState(activeSeriesIdState, prevEpisodeId, snapshot);
+            await flushAllPendingTimelinePersists();
+          } catch (_) {}
+        });
       }
 
       // 5. Server-truth Hydration: always confirm latest episode state from backend series.json
@@ -624,7 +624,7 @@ export function useSeriesManager({
             (hydratedSegLen > 0 || localSegLen === 0 || audioOrBgmChanged) &&
             (hydratedSegLen !== localSegLen || hydratedUpdatedAt !== localUpdatedAt || localSegLen === 0 || audioOrBgmChanged)
           ) {
-            applyEpisodeToWorkspace(hydratedEp);
+            applyEpisodeToWorkspace(hydratedEp, null, { preserveTab: true });
           }
         }
       } catch (_) {}

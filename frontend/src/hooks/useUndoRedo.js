@@ -11,19 +11,31 @@ import { saveTimelineOperationToLocalStorage } from '../utils/projectStorage';
  */
 export function safeClone(value) {
   if (value === undefined || value === null) return value;
-  const seen = new WeakSet();
-  const jsonString = JSON.stringify(value, (key, val) => {
-    if (typeof val === 'function') return undefined;
-    if (typeof val === 'object' && val !== null) {
-      if (seen.has(val)) {
-        return undefined; // Replace circular repeat with undefined
-      }
-      seen.add(val);
+  // Use fast C++ structuredClone when supported in modern browser / Node runtimes
+  if (typeof structuredClone === 'function') {
+    try {
+      return structuredClone(value);
+    } catch (_) {
+      // Fallback for non-cloneable object types
     }
-    return val;
-  });
-  if (jsonString === undefined) return undefined;
-  return JSON.parse(jsonString);
+  }
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch (_) {
+    const seen = new WeakSet();
+    const jsonString = JSON.stringify(value, (key, val) => {
+      if (typeof val === 'function') return undefined;
+      if (typeof val === 'object' && val !== null) {
+        if (seen.has(val)) {
+          return undefined; // Replace circular repeat with undefined
+        }
+        seen.add(val);
+      }
+      return val;
+    });
+    if (jsonString === undefined) return undefined;
+    return JSON.parse(jsonString);
+  }
 }
 
 /**

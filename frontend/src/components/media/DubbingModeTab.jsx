@@ -441,10 +441,11 @@ export default function DubbingModeTab({
     return () => clearInterval(interval);
   }, [isThisEpisodeGeneratingScript, displayProgress, hasExistingScript]);
 
-  // Auto-scroll live terminal console to latest output when stage or logs update
+  // Auto-scroll live terminal console to latest output when stage or logs update (non-blocking instant scroll)
   useEffect(() => {
-    if (consoleEndRef.current) {
-      consoleEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    const el = consoleEndRef.current;
+    if (el && el.parentElement) {
+      el.parentElement.scrollTop = el.parentElement.scrollHeight;
     }
   }, [scriptLogs, currentStageText]);
 

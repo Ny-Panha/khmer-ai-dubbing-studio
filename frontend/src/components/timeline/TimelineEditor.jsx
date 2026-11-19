@@ -2414,4 +2414,26 @@ function TimelineEditor({
   );
 }
 
-export default React.memo(TimelineEditor);
+export default React.memo(TimelineEditor, (prev, next) => {
+  // During active playback, skip heavy React tree re-renders caused solely by 5Hz currentTime ticks,
+  // since subscribePlayhead already drives playhead position at silky-smooth 60fps via GPU transforms.
+  if (next.isPlaying && prev.isPlaying && prev.currentTime !== next.currentTime) {
+    return (
+      prev.videoClips === next.videoClips &&
+      prev.scriptSegments === next.scriptSegments &&
+      prev.activeClipId === next.activeClipId &&
+      prev.selectedSegmentId === next.selectedSegmentId &&
+      prev.selectedClipKind === next.selectedClipKind &&
+      prev.activeTab === next.activeTab &&
+      prev.duration === next.duration &&
+      prev.canUndo === next.canUndo &&
+      prev.canRedo === next.canRedo &&
+      prev.isGeneratingAudio === next.isGeneratingAudio &&
+      prev.voiceSettings === next.voiceSettings &&
+      prev.speakerRegistry === next.speakerRegistry &&
+      prev.timelineFocusRequest === next.timelineFocusRequest &&
+      prev.framingKeyframes === next.framingKeyframes
+    );
+  }
+  return false;
+});

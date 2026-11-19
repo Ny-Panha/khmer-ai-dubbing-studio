@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useTransition } from 'react';
 import {
   Plus, Trash2, Edit2, CheckCircle2,
   Clock, BookOpen, Layers, Check, Scissors, Loader2,
@@ -38,6 +38,13 @@ export default function EpisodesTab({
 }) {
   const [editingTitleId, setEditingTitleId] = useState(null);
   const [tempTitle, setTempTitle] = useState('');
+  // Optimistic active episode selection for instant visual response (<16ms)
+  const [optimisticEpisodeId, setOptimisticEpisodeId] = useState(null);
+  const [isPending, startTransition] = useTransition();
+
+  useEffect(() => {
+    setOptimisticEpisodeId(null);
+  }, [episodeId]);
   const [isEditingSeriesTitle, setIsEditingSeriesTitle] = useState(false);
   const [tempSeriesTitle, setTempSeriesTitle] = useState('');
   const [showSplitModal, setShowSplitModal] = useState(false);
@@ -297,6 +304,7 @@ export default function EpisodesTab({
         ) : (
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <select
+              data-testid="series-selector-dropdown"
               value={activeSeries?.id || ''}
               onChange={(e) => {
                 if (e.target.value === '__NEW__') {
@@ -517,7 +525,7 @@ export default function EpisodesTab({
         )}
 
         {episodes.map((ep, idx) => {
-          const isActive = ep.id === episodeId;
+          const isActive = optimisticEpisodeId ? ep.id === optimisticEpisodeId : ep.id === episodeId;
           const epDuration = ep.duration || (isActive ? (selectedVideo?.duration || videoMetadata?.durationSec || 0) : 0);
           const displayTitle = formatEpisodeDisplayTitle(ep.title, ep.episodeNumber || idx + 1);
 
@@ -527,8 +535,14 @@ export default function EpisodesTab({
               data-testid={`episode-card-item-${ep.id || idx}`}
               className="episode-card-item"
               onClick={() => {
-                if (!isActive && onSwitchEpisode) {
-                  onSwitchEpisode(ep.id);
+                const currentActiveId = optimisticEpisodeId || episodeId;
+                if (ep.id !== currentActiveId && onSwitchEpisode) {
+                  setOptimisticEpisodeId(ep.id);
+                  setTimeout(() => {
+                    startTransition(() => {
+                      onSwitchEpisode(ep.id);
+                    });
+                  }, 0);
                 }
               }}
               style={{

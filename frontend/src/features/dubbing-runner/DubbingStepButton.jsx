@@ -38,11 +38,12 @@ export default function DubbingStepButton({
   const isBatch = Array.isArray(episodes) && episodes.length > 1;
   const singleEp = Array.isArray(episodes) && episodes.length === 1 ? episodes[0] : null;
 
+  const [isSubmitting, setIsSubmitting] = React.useState(false);
   const runnerState = runnerStates?.[step] || {};
   const isRunnerActive = runnerState.status === 'running';
 
   // Check if this specific episode is currently being processed
-  const isThisEpisodeRunning = singleEp ? activeEpisodeIds?.has(singleEp.id) : isRunnerActive;
+  const isThisEpisodeRunning = isSubmitting || (singleEp ? activeEpisodeIds?.has(singleEp.id) : isRunnerActive);
 
   // Single episode completion checks
   const isStepDone = React.useMemo(() => {
@@ -64,11 +65,13 @@ export default function DubbingStepButton({
 
   const handleClick = async (e) => {
     e?.stopPropagation?.();
-    if (isThisEpisodeRunning) {
+    if (isThisEpisodeRunning && !isSubmitting) {
       stopStep(step);
       return;
     }
+    if (isSubmitting) return;
 
+    setIsSubmitting(true);
     try {
       let result = null;
       if (isBatch || !singleEp) {
@@ -85,6 +88,8 @@ export default function DubbingStepButton({
       }
     } catch (err) {
       console.error(`[DubbingStepButton] Step ${step} execution error:`, err);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 

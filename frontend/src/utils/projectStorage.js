@@ -536,6 +536,10 @@ function loadActiveProjectLegacy() {
   }
 }
 
+// In-memory cache for series list to eliminate repeated JSON.parse / localStorage reads on UI thread
+let cachedSeriesList = null;
+let cachedRawSeriesString = null;
+
 /**
  * Load all series from localStorage with automatic legacy migration & Mojibake auto-healing
  */
@@ -543,9 +547,14 @@ export function loadSeriesList() {
   try {
     const raw = localStorage.getItem(STORAGE_SERIES_LIST_KEY);
     if (raw) {
+      if (cachedSeriesList && raw === cachedRawSeriesString) {
+        return cachedSeriesList;
+      }
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed) && parsed.length > 0) {
-        return sanitizeAndHealSeriesList(parsed);
+        cachedRawSeriesString = raw;
+        cachedSeriesList = sanitizeAndHealSeriesList(parsed);
+        return cachedSeriesList;
       }
     }
   } catch (err) {
@@ -750,7 +759,10 @@ export function saveSeriesList(seriesList) {
   if (!Array.isArray(seriesList)) return;
   try {
     const optimized = createStorageOptimizedSeriesList(seriesList);
-    localStorage.setItem(STORAGE_SERIES_LIST_KEY, JSON.stringify(optimized));
+    const serialized = JSON.stringify(optimized);
+    localStorage.setItem(STORAGE_SERIES_LIST_KEY, serialized);
+    cachedRawSeriesString = serialized;
+    cachedSeriesList = sanitizeAndHealSeriesList(optimized);
   } catch (err) {
     if (err.name === 'QuotaExceededError' || err.code === 22 || err.number === -2147024882) {
       console.warn('[Storage] QuotaExceededError: cleaning legacy caches and applying ultra-compact save...');
@@ -792,7 +804,10 @@ export function saveSeriesList(seriesList) {
             };
           }),
         }));
-        localStorage.setItem(STORAGE_SERIES_LIST_KEY, JSON.stringify(ultraCompact));
+        const serializedUltra = JSON.stringify(ultraCompact);
+        localStorage.setItem(STORAGE_SERIES_LIST_KEY, serializedUltra);
+        cachedRawSeriesString = serializedUltra;
+        cachedSeriesList = sanitizeAndHealSeriesList(ultraCompact);
         console.log('[Storage] ✅ Ultra-compact series list saved cleanly to localStorage.');
       } catch (innerErr) {
         console.warn('[Storage] Could not write to localStorage; server truth is safely active on disk.');
