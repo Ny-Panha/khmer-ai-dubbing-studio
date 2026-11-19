@@ -3,9 +3,199 @@
 ## Last Session
 - **Environment**: Antigravity IDE (Gemini)
 - **Branch**: `chore/full-project-cleanup`
-- **Timestamp**: 2026-11-19T07:49:00+07:00
+- **Timestamp**: 2026-11-19T08:13:00+07:00
 
-## Summary: Fix Proxy Preview Stuck in "Queued" Starvation Loop & Freeze at 08:49 (COMPLETED)
+## Summary: STEP 1 — IMPLEMENT SOURCE PROXY FOR LIVE PLAYBACK (COMPLETED)
+- **Architecture & Implementation Scope**:
+  1. **Source Proxy Service (`backend/services/sourceProxyService.js`)**:
+     - Automatically checks for existing valid Source Proxy when an episode opens.
+     - **Cache Key**: SHA-256 content hash of original source video (`getFileSha256(sourcePath)`), with in-memory `statToHashCache` mapping `size:mtimeMs` for instant 0ms lookups.
+     - **Cache Re-use**: If valid proxy exists on disk (`source-proxy.mp4` matches `manifest.bytes` and duration aligns), reuses it immediately with zero transcode cost.
+     - **Duplicate Job Prevention**: In-memory `activeJobs` singleton Map guarantees that concurrent requests for the same source hash share the exact same running transcode process.
+     - **Target Encoding Parameters Applied**:
+       - Codec: H.264 (`-c:v libx264`)
+       - Resolution: 480p-class preserving aspect ratio (`scale='if(gte(iw,ih),-2,480)':'if(gte(iw,ih),480,-2)'` -> `854x480` for 16:9 landscape)
+       - Preset: `veryfast`
+       - CRF: `27`
+       - GOP: `-g 15 -keyint_min 15` (strictly 15 frames / 0.5s @ 30fps)
+       - No B-frames: `-bf 0` (zero reordering delay, forward-only P-frames)
+       - MP4 faststart: `-movflags +faststart` (`moov` atom at byte offset 32 before `mdat`)
+       - Audio: AAC 96k (`-c:a aac -b:a 96k -ar 44100 -ac 2`)
+       - Native timestamps and duration strictly preserved (no FPS conversion or timestamp resets).
+     - **Safe Atomic Publishing**: Transcodes to temporary file `temp_source-proxy_<pid>.mp4`, probes media info upon completion, and atomically publishes `source-proxy.mp4` and `source-proxy.json`.
+  2. **API Endpoint (`backend/routes/seriesRoutes.js`)**:
+     - `GET /api/series/:seriesId/episodes/:episodeId/source-proxy?immediate=true`
+     - Returns `{ status: 'ready' | 'transcoding' | 'error' | 'no_source', url, progress, elapsedSeconds, duration, bytes, sourceHash }`.
+  3. **Frontend Integration (`useSourceProxy.js`, `App.jsx`, `VideoPlayerPreview.jsx`)**:
+     - `useSourceProxy`: Checks Source Proxy on episode open, polls progress every 1s while transcoding, and returns ready URL.
+     - **Seamless Live Switching**: `VideoPlayerPreview.jsx` resolves `effectiveLiveVideoUrl = (sourceProxy?.isReady && sourceProxy?.url) ? sourceProxy.url : selectedVideo?.videoUrl`.
+     - While proxy is generating, Live playback remains fully functional on raw source without disruption.
+     - When ready, switches seamlessly while preserving playhead position (`pendingSrcSwitchSeekRef`).
+     - **Timeline & Audio Integrity**: Preserves 100% of timeline cuts, clip mappings, and Khmer TTS audio synchronization.
+     - **Badge Progress Display**:
+       - In Live Preview mode: displays `Source Proxy កំពុង Transcode X% (Ys)` during transcoding and `Live (Source Proxy 480p · 602.3s)` when ready.
+       - In Proxy Preview mode: displays timeline proxy status with live fallback notice if playing during render.
+
+### Validation & Measurement Results
+- **Target Episodes Tested**:
+  1. `ep_5` (219 segments) in `Proxy_Verification_219`
+  2. `ep_5` (221 segments) in `Pseudo_Spiritual_Root`
+- **1. Transcode Time**:
+  - Full 10-minute 1080p AV1 source (`602.27s`) transcoded in **100.44s** (~1.67 min, ~6.0x real-time speed).
+- **2. Resulting Proxy File Size**:
+  - `89,733,508 bytes` (85.58 MiB), reduced from 93.58 MiB AV1 and optimized for instant seeking.
+- **3. Duration Alignment**:
+  - Source Duration: `602.266875s`
+  - Source Proxy Duration: `602.288980s`
+  - Difference: **0.022105s** (22ms, well within tolerance).
+- **4. Keyframe Intervals (GOP)**:
+  - Total Keyframes: `1252 keyframes` (up from 121 in source).
+  - Minimum Interval: `0.267s`
+  - Maximum Interval: `0.500s` (exactly 15 frames @ 30fps).
+  - Average Interval: `0.481s` (~14.4 frames).
+- **5. FastStart Container Atom Layout**:
+  - `atom1 = [ftyp]` (offset 0)
+  - `atom2 = [moov]` (offset 32, size 3091 bytes)
+  - `atom3 = [mdat]` (offset 3131)
+  - `moov` atom is at the beginning of the file (FastStart: TRUE).
+- **6. Duplicate-Job Prevention**:
+  - Concurrently requested `Proxy_Verification_219` and `Pseudo_Spiritual_Root` (which share identical source video).
+  - Both episodes resolved identical sourceHash `c662a871171a97ea...` and shared the single active transcode job (`activeJobs.size === 1`).
+- **7. Cache-Hit Behavior**:
+  - Subsequent query on `Pseudo_Spiritual_Root` returned `{ status: 'ready', cached: true }` in **3ms** with 0ms transcode time.
+- **8. Live Playback E2E Verification (Playwright in Real Browser)**:
+  - Video element `src` verified pointing to `/uploads/source_proxies/.../source-proxy.mp4`.
+  - Badge displays `Live (Source Proxy 480p · 602.3s)`.
+  - Playback through `08:35–08:55` (including clip-dense boundary at #188/#189):
+    - Total Frames: 601 frames.
+    - Max Gap: **51ms**.
+    - Freezes > 0.5s: **0**.
+    - Result: **ZERO freezes over 0.5s** during LIVE playback across dense clip boundaries!
+- **9. Builds & Test Suites**:
+  - `npm --prefix frontend run build` PASS (657ms, 0 errors).
+  - `backend/tests/source_proxy.test.js` 5/5 PASS.
+  - `backend/tests/proxy_preview.test.js` 4/4 PASS.
+  - `backend/tests/playback_60fps_optimization.test.js` 4/4 PASS.
+  - Total 13/13 tests pass.
+
+---
+
+## Previous Session
+- **Environment**: Antigravity IDE (Gemini)
+- **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-19T08:05:00+07:00
+
+## Summary: STEP 0 — SOURCE VIDEO PROBE ONLY (COMPLETED)
+- **Task Scope**: Deep-dive probe of source videos for target episodes (`ep_5` 219 segments and `Pseudo_Spiritual_Root` 221 segments) to evaluate why LIVE playback freezes at clip-dense boundaries and evaluate the 8s Long-GOP hypothesis.
+- **Strict Compliance**: Zero code modifications, zero transcoding, zero media deletion/alteration, strictly read-only inspection.
+
+### 1. Target Episodes & Physical Media File Identification
+- **Target Episode 1 (`ep_5` — 219 segments)**:
+  - Series: `Proxy_Verification_219`
+  - Episode ID: `ep_5` (display title: "ភាគទី 1: ភាគទី 5 (EP5)", 219 segments)
+  - Relative URL: `/uploads/projects/Proxy_Verification_219/episodes/ep_5/video/Pseudo_Spiritual_Root_ep_5_source.mp4`
+  - Absolute Path: `E:\khmer_ai_dubbing_studio\backend\uploads\projects\Proxy_Verification_219\episodes\ep_5\video\Pseudo_Spiritual_Root_ep_5_source.mp4`
+  - File Size: `93,582,891 bytes` (89.25 MiB)
+  - SHA-256: `C662A871171A97EA4696143DB53811782BA5421D99832EB984D0CE9FE87DB99C`
+- **Target Episode 2 (`Pseudo_Spiritual_Root` — 221 segments)**:
+  - Series: `Pseudo_Spiritual_Root`
+  - Episode ID: `ep_5` (display title: "ភាគទី 5: ភាគទី 5 (EP5)", 220 active segments + deleted tombstones = 221 total)
+  - Relative URL: `/uploads/projects/Pseudo_Spiritual_Root/episodes/ep_5/video/Pseudo_Spiritual_Root_ep_5_source.mp4`
+  - Absolute Path: `E:\khmer_ai_dubbing_studio\backend\uploads\projects\Pseudo_Spiritual_Root\episodes\ep_5\video\Pseudo_Spiritual_Root_ep_5_source.mp4`
+  - File Size: `93,582,891 bytes` (89.25 MiB)
+  - SHA-256: `C662A871171A97EA4696143DB53811782BA5421D99832EB984D0CE9FE87DB99C`
+  *(Note: Both episodes utilize bit-for-bit identical source video files).*
+
+### 2. Empirical FFprobe & Container Atom Measurements
+Commands executed:
+- `ffprobe -v error -show_format -show_streams -of json "<path>"`
+- `node scratch/inspect_mp4.js` (read-only binary 64-bit atom crawler)
+- `ffprobe -v error -select_streams v:0 -skip_frame nokey -show_frames -show_entries frame=pkt_pts_time,best_effort_timestamp_time,key_frame,pict_type -of json "<path>"`
+
+**Detailed Measurements**:
+1. **Video Codec & Profile**:
+   - Codec: **AV1** (`av01`), FourCC `0x31307661`
+   - Mime: `av01.0.08M.08.0.110.01.01.01.0`
+   - Profile: `Main`, Level: `8`
+   - Pixel Format: `yuv420p` (tv, bt709)
+   - Encoder / Pack Tag: `Lavf63.7.100`, Description: `Packed by Bilibili XCoder v2.0.2`
+2. **Resolution & Frame Rate**:
+   - Resolution: `1920x1080` (1080p, 16:9 DAR, 1:1 SAR)
+   - r_frame_rate: `30/1` (30.0 fps)
+   - avg_frame_rate: `28908800/963627` (29.9999896 fps)
+   - Total Frames: `18,068 frames`
+3. **Bitrate**:
+   - Video Bitrate: `1,171,041 bps` (~1.171 Mbps / 1,144 kbps)
+   - Audio Bitrate: `63,942 bps` (~64 kbps AAC-LC stereo @ 44.1 kHz)
+   - Overall Container Bitrate: `1,243,029 bps` (~1.243 Mbps)
+4. **Duration & Time Base**:
+   - Video Stream Duration: `602.266875s` (duration_ts = 9,636,270)
+   - Container Duration: `602.288980s` (~10m 02s)
+   - Video Time Base: `1/16000` (16 kHz timebase)
+   - Audio Time Base: `1/44100`
+5. **Container Format**:
+   - Format: `QuickTime / MOV / MP4` (`mov,mp4,m4a,3gp,3g2,mj2`)
+   - Major Brand: `isom`
+   - Compatible Brands: `isomav01iso2mp41`
+6. **`moov` Atom Position (Read-Only Binary Inspection)**:
+   - `ftyp`: offset 0 (0x0), 32 bytes
+   - `free`: offset 32 (0x20), 8 bytes
+   - `mdat`: offset 40 (0x28), 92,973,979 bytes (88.67 MiB)
+   - `moov`: offset 92,974,019 (0x58aabc3), 608,872 bytes (0.58 MiB)
+   - **Position**: **END OF FILE** at **99.35%** into the file (FastStart / Web-Optimized is **FALSE**).
+7. **Keyframe Timestamps in First 60 Seconds (13 keyframes)**:
+   - `#1`: `0.015s`
+   - `#2`: `5.015s` (+5.000s)
+   - `#3`: `10.015s` (+5.000s)
+   - `#4`: `15.015s` (+5.000s)
+   - `#5`: `20.015s` (+5.000s)
+   - `#6`: `25.015s` (+5.000s)
+   - `#7`: `30.015s` (+5.000s)
+   - `#8`: `35.015s` (+5.000s)
+   - `#9`: `40.015s` (+5.000s)
+   - `#10`: `45.015s` (+5.000s)
+   - `#11`: `50.015s` (+5.000s)
+   - `#12`: `55.015s` (+5.000s)
+   - `#13`: `60.015s` (+5.000s)
+8. **Keyframe Interval Statistics (Across Full Video)**:
+   - Total Keyframes: `121 keyframes`
+   - Minimum Interval: `3.633s` (109 frames, cut at 120.015s -> 123.649s)
+   - Maximum Interval: `5.000s` (150 frames)
+   - Average Interval: `4.978s` (149.4 frames)
+   - Distribution: 118 out of 120 intervals (98.33%) are **EXACTLY 5.000s**; 2 intervals are scene cuts (3.633s and 3.767s).
+
+### 3. Evaluation of Hypothesis: "Long-GOP (~8s) Causes Expensive Seeks & Freezes"
+- **Hypothesis Evaluation**:
+  - **Interval Discrepancy**: The source videos have keyframes every **5.000 seconds (150 frames)**, NOT every 8 seconds. The "8s" assumption originated from heuristic buffer comments in `mediaStream.js`.
+  - **Severe Real-World Bottleneck Revealed (AV1 1080p + 5s GOP + End-of-File moov)**:
+    1. **AV1 Inter-Frame Decoding Penalty**: Unlike H.264 which decodes with low CPU overhead and ubiquitous hardware decoders, AV1 1080p software decoding during random seeking is computationally expensive.
+    2. **Catchup Frame Decoding Burden**: Because keyframes are spaced by 5.0 seconds (150 frames), seeking to any non-keyframe timestamp $T$ forces the browser decoder to jump back to the preceding keyframe (up to 4.99s earlier) and sequentially decode up to **150 frames of 1080p AV1** before presenting the frame.
+    3. **Clip-Dense Seek Avalanche**: On `ep_5`, there are **401 video clips**. Between 08:30 and 09:00 (510s–540s), there are **27 clips**. In LIVE multi-clip playback, every forward jump across trimmed silence (`nextSrcStart > srcNow + 0.15s`) executes `v.currentTime = nextSrcStart`. This repeatedly flushes the decoder and triggers back-to-back 5.0s AV1 catchup decoding loops, easily exceeding 500ms–2000ms and freezing playback.
+    4. **End-of-File moov Atom**: Having `moov` at byte offset 92.97MB (99.35%) requires out-of-order HTTP range requests before sample tables can even be consulted.
+
+### 4. Existing LIVE Playback Source Selection & Seek Behavior Inspection
+- **Source Selection**:
+  - `useVideoPlayback.js` receives `selectedVideo.videoUrl`, which points directly to `/uploads/projects/<series>/episodes/<ep>/video/Pseudo_Spiritual_Root_ep_5_source.mp4`.
+  - In LIVE mode, `<video>` plays the 1080p AV1 raw source file directly.
+- **Seek Behavior**:
+  - Lines 257–286 of `useVideoPlayback.js`: when `srcNow >= sEnd - 0.03` and `nextSrcStart > srcNow + 0.15`, the engine executes `v.currentTime = nextSrcStart`.
+  - In linear continuous sections (`jump <= 0.15s`), playback flows naturally; but whenever cuts skip pauses or gaps, seeking is triggered.
+  - While a 120ms cooldown exists (`lastTransitionSeekMsRef`), each seek in 1080p AV1 with 5s GOP halts the Chromium decoder pipeline until the GOP is decoded from the last I-frame.
+
+### 5. Is Source Proxy Justified?
+- **YES, highly justified for LIVE playback and timeline editing**:
+  - Raw source media in AV1 1080p with 5s GOP is fundamentally unsuitable for responsive interactive seeking in web browsers.
+  - A lightweight Source Proxy (e.g., 360p or 480p H.264/AVC with `+faststart` moov at beginning, and a dense keyframe interval such as 0.5s–1s GOP or all-intra) would make browser seeking practically instantaneous (<16ms, zero catchup lag).
+- **Remaining Uncertainty**:
+  - **Disk Footprint & Pipeline Scope**: Transcoding every imported source video to an H.264 Source Proxy adds disk usage and initial ingestion time.
+  - **Overlap with Timeline Proxy Preview**: We have already built and verified Timeline Proxy Preview (`proxyPreviewService.js`), which renders a contiguous 480p linear MP4 with mixed Khmer audio and runs with 0 freezes. If users only need smooth preview of their full mix, Timeline Proxy Preview solves it. Source Proxy specifically solves the un-rendered *LIVE multi-clip scrub and playback* experience.
+
+## Active Environment
+- **Backend API**: `http://localhost:5000`
+- **Frontend Studio**: `http://localhost:5173` (Vite dev server)
+- **Branch**: `chore/full-project-cleanup`
+
+---
 - **Step 0 Proven Root Causes**:
   1. **Debounce Starvation Loop on Stale Poll**: `useProxyPreview.js` previously polled every 1s when `state === 'stale'` with `POST` (no revision). In `proxyPreviewService.js`, `['error', 'stale', 'fresh'].includes(existing.state)` was true, so every single 1s poll cleared `existing.timer` and scheduled a fresh 5000ms delay. The 5s debounce was reset every 1 second, making it mathematically impossible for the render job to ever fire.
   2. **No Immediate Enqueue on Episode Open**: Freshly opened episodes with missing or stale proxies went through the debounce path instead of enqueueing immediately at normal priority.

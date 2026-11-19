@@ -13,6 +13,32 @@ const {
 
 const router = express.Router();
 const proxyPreview = require("../services/proxyPreviewService");
+const sourceProxy = require("../services/sourceProxyService");
+
+router.route("/:seriesId/episodes/:episodeId/source-proxy")
+  .get(async (req, res) => {
+    try {
+      const immediate = req.query.immediate === "true" || req.query.immediate === "1";
+      const status = await sourceProxy.getStatus(req.params.seriesId, req.params.episodeId, {
+        immediate,
+        videoUrl: req.query.videoUrl,
+      });
+      res.set("Cache-Control", "no-store").json(status);
+    } catch (err) {
+      res.status(400).json({ status: "error", error: err.message });
+    }
+  })
+  .post(async (req, res) => {
+    try {
+      const status = await sourceProxy.getStatus(req.params.seriesId, req.params.episodeId, {
+        immediate: true,
+        videoUrl: req.body?.videoUrl || req.query.videoUrl,
+      });
+      res.json(status);
+    } catch (err) {
+      res.status(400).json({ status: "error", error: err.message });
+    }
+  });
 
 router.route("/:seriesId/episodes/:episodeId/proxy-preview")
   .post((req, res) => {

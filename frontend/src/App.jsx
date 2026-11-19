@@ -1,5 +1,6 @@
 import React, { useRef, useCallback, useEffect, useMemo, useState } from 'react';
 import { useProxyPreview } from './hooks/useProxyPreview';
+import { useSourceProxy } from './hooks/useSourceProxy';
 import { AlertTriangle, X } from 'lucide-react';
 import Navbar from './components/layout/Navbar';
 import HomeDashboard from './components/layout/HomeDashboard';
@@ -496,6 +497,12 @@ export default function App() {
     framing: scriptData?.framingOverrides, keyframes: scriptData?.framingKeyframes,
     logo: globalLogoSettings, aspectRatio: currentAspectRatio, active: !isHomeRoute,
     stem: series.activeEpisode?.cleanBgmPath || series.activeEpisode?.bgmAudioUrl,
+  });
+  const sourceProxy = useSourceProxy({
+    seriesId: series.seriesId,
+    episodeId: series.episodeId,
+    videoUrl: media.selectedVideo?.videoUrl,
+    active: !isHomeRoute,
   });
   const playbackEffectiveRenderedVideo = isRenderedRatioMismatch(
     prevRawRendered,
@@ -1256,6 +1263,7 @@ export default function App() {
                   videoMetadata={media.videoMetadata}
                   seriesId={series.seriesId}
                   episodeId={series.episodeId}
+                  sourceProxy={sourceProxy}
                   scriptData={scriptData}
                   renderedVideo={previewMode === 'proxy' ? proxy.media : previewMode === 'live' ? null : effectiveRenderedVideo}
                   previewMode={previewMode}

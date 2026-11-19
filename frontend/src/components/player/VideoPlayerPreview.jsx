@@ -49,7 +49,7 @@ function VideoPlayerPreview({
   episodeId,
   scriptData,
   renderedVideo,
-  previewMode, onPreviewMode, canViewRender, proxyStatus,
+  previewMode, onPreviewMode, canViewRender, proxyStatus, sourceProxy = null,
   setRenderedVideo = null,
   onResetToPreview = null,
   isRendering,
@@ -1327,7 +1327,8 @@ function VideoPlayerPreview({
   const episodeSourceKey = `${seriesId || ''}::${episodeId || ''}::${selectedVideo?.videoId || selectedVideo?.videoUrl || ''}`;
   const prevEpisodeSourceKeyRef = useRef(episodeSourceKey);
   const pendingSrcSwitchSeekRef = useRef(null);
-  const rawVideoSrc = (typeof renderedVideo === 'string' ? renderedVideo : renderedVideo?.outputVideoUrl) || selectedVideo?.videoUrl;
+  const effectiveLiveVideoUrl = (sourceProxy?.isReady && sourceProxy?.url) ? sourceProxy.url : selectedVideo?.videoUrl;
+  const rawVideoSrc = (typeof renderedVideo === 'string' ? renderedVideo : renderedVideo?.outputVideoUrl) || effectiveLiveVideoUrl;
   const currentVideoSrc = rawVideoSrc && renderedVideo && typeof renderedVideo === 'object' && renderedVideo.renderedAt
     ? `${rawVideoSrc}${rawVideoSrc.includes('?') ? '&' : '?'}v=${renderedVideo.renderedAt}`
     : rawVideoSrc;
@@ -2034,6 +2035,41 @@ function VideoPlayerPreview({
     proxyStatus?.state === 'rendering' ? renderProgressText : queuedText;
   const showLiveFallbackNotice = previewMode === 'proxy' && !renderedVideo?.isProxyPreview && isPlaying;
 
+  const isLiveMode = previewMode === 'live';
+  const isSourceProxyTranscoding = sourceProxy?.status === 'transcoding';
+  const isSourceProxyReady = sourceProxy?.status === 'ready' && Boolean(sourceProxy?.url);
+
+  let badgeText = '';
+  let badgeState = 'stale';
+
+  if (isLiveMode) {
+    if (isSourceProxyTranscoding) {
+      badgeText = `Source Proxy កំពុង Transcode ${sourceProxy.progress || 0}% (${sourceProxy.elapsedSeconds || 0}s)`;
+      badgeState = 'rendering';
+    } else if (isSourceProxyReady) {
+      badgeText = `Live (Source Proxy 480p · ${sourceProxy.duration ? sourceProxy.duration.toFixed(1) + 's' : 'Ready'})`;
+      badgeState = 'fresh';
+    } else if (sourceProxy?.status === 'error') {
+      badgeText = `Live (Original Source · Error: ${sourceProxy.error || 'Transcode failed'})`;
+      badgeState = 'error';
+    } else {
+      badgeText = 'Live Preview (Original Source)';
+      badgeState = 'stale';
+    }
+  } else {
+    // Proxy Preview mode
+    if (proxyStatus?.state === 'fresh') {
+      badgeText = `${proxyStatus.duration.toFixed(1)}s · ${(proxyStatus.bytes / 1048576).toFixed(1)} MiB · Render ${proxyStatus.renderSeconds.toFixed(1)}s`;
+      badgeState = 'fresh';
+    } else {
+      badgeText = `Preview មិនទាន់ថ្មី · ${proxyStatus?.error ? `Error: ${proxyStatus.error}` : proxyActivity}`;
+      badgeState = proxyStatus?.state || 'stale';
+      if (isSourceProxyTranscoding && !proxyStatus?.error && proxyStatus?.state !== 'rendering') {
+        badgeText += ` · Source Proxy: ${sourceProxy.progress || 0}%`;
+      }
+    }
+  }
+
   return (
     <div className={`capcut-player-panel ${isFullscreen ? 'is-fullscreen-active' : ''}`} ref={containerRef}>
       {selectedVideo && onPreviewMode && (
@@ -2043,14 +2079,12 @@ function VideoPlayerPreview({
             <option value="live">Live Preview</option>
             {canViewRender && <option value="rendered">Rendered</option>}
           </select>
-          <span role="status" data-proxy-state={proxyStatus?.state || 'stale'}>
-            {proxyStatus?.state === 'fresh'
-              ? `${proxyStatus.duration.toFixed(1)}s · ${(proxyStatus.bytes / 1048576).toFixed(1)} MiB · Render ${proxyStatus.renderSeconds.toFixed(1)}s`
-              : `Preview មិនទាន់ថ្មី · ${proxyStatus?.error ? `Error: ${proxyStatus.error}` : proxyActivity}`}
+          <span role="status" data-proxy-state={badgeState}>
+            {badgeText}
           </span>
           {showLiveFallbackNotice && (
             <span className="proxy-live-fallback-badge" role="status">
-              ⚠️ កំពុងចាក់តាម Live Preview (Proxy កំពុង Render...)
+              ⚠️ កំពុងចាក់តាម Live Preview {isSourceProxyReady ? '(Source Proxy)' : '(Proxy កំពុង Render...)'}
             </span>
           )}
         </div>
