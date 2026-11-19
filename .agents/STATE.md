@@ -3,6 +3,36 @@
 ## Last Session
 - **Environment**: Antigravity IDE (Gemini)
 - **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-19T08:34:00+07:00
+
+## Summary: Remove Blocking Warning Overlay During Live Preview Playback (COMPLETED)
+- **Problem & Root Cause**:
+  - In commit `9557e46`, when live fallback notice was added, an in-viewport overlay element `<div className="proxy-live-fallback-notice"><span>⚠️ កំពុងចាក់តាម Live Preview (Proxy កំពុង Render...)</span></div>` was injected inside `.player-stage-viewport`.
+  - With CSS `position: absolute; top: 14px; left: 50%; transform: translateX(-50%); z-index: 60`, this banner directly obstructed the video during live playback even though LIVE playback uses the independent Source Proxy.
+- **Fix Applied**:
+  1. `frontend/src/components/player/VideoPlayerPreview.jsx`:
+     - Removed the blocking `<div className="proxy-live-fallback-notice">` from inside `.player-stage-viewport`.
+     - Renamed `showLiveFallbackNotice` -> `showLiveFallbackBadge` for clarity.
+     - Preserved rendering progress and status visibility in the existing header controls area (`.proxy-preview-controls [role="status"]`).
+     - Preserved non-intrusive live fallback indicator in the header bar (`.proxy-live-fallback-badge`) when proxy preview falls back during background rendering.
+     - Preserved legitimate viewport error banners (`.narration-error-banner`) and error status in the header (`data-proxy-state="error"`).
+     - Video playback canvas is now 100% unobstructed in all playback states.
+  2. `frontend/src/components/player/VideoPlayerPreview.css`:
+     - Cleaned up obsolete `.proxy-live-fallback-notice` CSS rules.
+  3. `backend/tests/player_preview_overlay_safety.test.js`:
+     - Added focused architectural and UI state regression test suite validating:
+       - Viewport contains zero blocking fallback overlays.
+       - Progress indicators remain strictly in the header controls area.
+       - State machine contract for LIVE mode + proxy rendering, Source Proxy transcoding, error handling, and fresh playback.
+- **Verification & Builds**:
+  - `npm --prefix frontend run build` (PASS, 0 errors, 2.60s).
+  - Test suites: 14/14 PASS across `player_preview_overlay_safety.test.js`, `source_proxy.test.js`, `proxy_preview.test.js`, and `playback_60fps_optimization.test.js`.
+
+---
+
+## Previous Session
+- **Environment**: Antigravity IDE (Gemini)
+- **Branch**: `chore/full-project-cleanup`
 - **Timestamp**: 2026-11-19T08:16:00+07:00
 
 ## Summary: STEP 2 — REAL APPLICATION SOURCE PROXY VERIFICATION (COMPLETED)

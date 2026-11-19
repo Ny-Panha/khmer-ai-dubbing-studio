@@ -2033,7 +2033,7 @@ function VideoPlayerPreview({
     : 'Queued';
   const proxyActivity = proxyStatus?.state === 'superseded' ? 'Reopen episode to load newer edits' :
     proxyStatus?.state === 'rendering' ? renderProgressText : queuedText;
-  const showLiveFallbackNotice = previewMode === 'proxy' && !renderedVideo?.isProxyPreview && isPlaying;
+  const showLiveFallbackBadge = previewMode === 'proxy' && !renderedVideo?.isProxyPreview && isPlaying;
 
   const isLiveMode = previewMode === 'live';
   const isSourceProxyTranscoding = sourceProxy?.status === 'transcoding';
@@ -2082,7 +2082,7 @@ function VideoPlayerPreview({
           <span role="status" data-proxy-state={badgeState}>
             {badgeText}
           </span>
-          {showLiveFallbackNotice && (
+          {showLiveFallbackBadge && (
             <span className="proxy-live-fallback-badge" role="status">
               ⚠️ កំពុងចាក់តាម Live Preview {isSourceProxyReady ? '(Source Proxy)' : '(Proxy កំពុង Render...)'}
             </span>
@@ -2108,12 +2108,6 @@ function VideoPlayerPreview({
                 onUpdateVoiceSettings={onUpdateVoiceSettings}
                 aspectRatio={aspectRatio}
               />
-
-              {showLiveFallbackNotice && (
-                <div className="proxy-live-fallback-notice" role="status" data-testid="proxy-live-fallback-notice">
-                  <span>⚠️ កំពុងចាក់តាម Live Preview (Proxy កំពុង Render...)</span>
-                </div>
-              )}
 
               <video
                 ref={videoRef}
