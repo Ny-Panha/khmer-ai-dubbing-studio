@@ -3357,25 +3357,42 @@ function extractSubtitleDifferenceGrid(inputVideoPath, startSec = 0, durationSec
         let sum = 0;
         let subSum = 0;
         let subPixels = 0;
+        let bgSum = 0;
+        let bgPixels = 0;
+        let strokePixels = 0;
 
         for (let r = 0; r < scaleH; r++) {
           for (let c = 0; c < scaleW; c++) {
             const p = r * scaleW + c;
             const d = Math.abs(fPrev[p] - fCurr[p]);
             sum += d;
-            if (r >= 4 && r <= 28 && c >= 8 && c <= 120) {
+            const isSubBox = (r >= 4 && r <= 28 && c >= 8 && c <= 120);
+            if (isSubBox) {
               subSum += d;
               subPixels++;
+              if (d >= 35 || fCurr[p] >= 200 || fPrev[p] >= 200) {
+                strokePixels++;
+              }
+            } else {
+              bgSum += d;
+              bgPixels++;
             }
           }
         }
         const avg = sum / frameSize;
         const subAvg = subPixels > 0 ? subSum / subPixels : avg;
+        const bgAvg = bgPixels > 0 ? bgSum / bgPixels : avg;
+        const netSubDiff = Math.max(0, subAvg - (bgAvg * 0.5));
+        const strokeRatio = strokePixels / (subPixels || 1);
+
         diffs.push({
           timestampSec: t,
           diff: parseFloat(avg.toFixed(2)),
           subDiff: parseFloat(subAvg.toFixed(2)),
-          isChange: subAvg >= 11.5 || avg >= 14.0,
+          bgDiff: parseFloat(bgAvg.toFixed(2)),
+          netSubDiff: parseFloat(netSubDiff.toFixed(2)),
+          strokeDiff: parseFloat(strokeRatio.toFixed(3)),
+          isChange: subAvg >= 11.5 || avg >= 14.0 || netSubDiff >= 7.0 || strokeRatio >= 0.08,
         });
       }
       resolve(diffs);

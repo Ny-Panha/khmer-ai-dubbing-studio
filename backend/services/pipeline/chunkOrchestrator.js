@@ -300,10 +300,11 @@ async function runChunkedDubbingPipeline({
             const batchPercent = p.totalBatches > 0
               ? Math.round(chunkPercent + (p.completedBatches / p.totalBatches) * ((1 / chunks.length) * 15))
               : chunkPercent;
+            const statusText = p.statusMessage || `ស្កេន OCR ${p.completedBatches}/${p.totalBatches} batches (${p.completedFrames}/${p.totalFrames} frames) [Model: ${p.modelUsed || effectiveModelName}]${p.retriesCount > 0 ? ` (Retries: ${p.retriesCount})` : ''}`;
             report(
               'chunkOCR',
               Math.min(70, batchPercent),
-              `Chunk ${cIdx + 1}/${chunks.length}: ស្កេន OCR ${p.completedBatches}/${p.totalBatches} batches (${p.completedFrames}/${p.totalFrames} frames) [Model: ${p.modelUsed || effectiveModelName}]${p.retriesCount > 0 ? ` (Retries: ${p.retriesCount})` : ''}`
+              `Chunk ${cIdx + 1}/${chunks.length}: ${statusText}`
             );
           },
         });
@@ -313,22 +314,37 @@ async function runChunkedDubbingPipeline({
 
         ocrPerf = ocrResult?.ocrMeta?.performance || {
           wallTimeMs: ocrResult?.ocrMeta?.wallTimeMs || 0,
+          totalStage3Ms: ocrResult?.ocrMeta?.wallTimeMs || 0,
           ffmpegPrepassMs: 0,
+          frameExtractionMs: 0,
+          localOcrMs: 0,
+          geminiVerificationMs: 0,
           apiTotalMs: 0,
           retrySleepMs: 0,
+          tieBreakMs: 0,
+          candidateFramesCount: ocrResult?.ocrMeta?.totalFramesSampled || 0,
+          localOcrFramesCount: 0,
+          localVerifiedCount: 0,
+          geminiVerifiedCount: 0,
+          geminiBatchCount: 0,
+          geminiActualAttemptsCount: ocrResult?.ocrMeta?.apiCallsCount || 0,
           apiCallsCount: ocrResult?.ocrMeta?.apiCallsCount || 0,
           retriesCount: ocrResult?.ocrMeta?.retriesCount || 0,
           batchSplitsCount: ocrResult?.ocrMeta?.batchSplitsCount || 0,
           dedupedFramesCount: ocrResult?.ocrMeta?.dedupedFramesCount || 0,
           verifiedFramesCount: ocrResult?.ocrMeta?.verifiedFramesCount || 0,
           unresolvedFramesCount: ocrResult?.ocrMeta?.unresolvedFramesCount || 0,
+          finalChineseCuesCount: ocrResult?.ocrMeta?.detectedSegmentsCount || 0,
         };
 
         console.log(`[ChunkOrchestrator] 📊 Chunk ${cIdx + 1}/${chunks.length} OCR Performance Metrics:`, {
           wallTimeMs: ocrPerf.wallTimeMs,
+          localOcrMs: ocrPerf.localOcrMs,
+          geminiVerificationMs: ocrPerf.geminiVerificationMs,
           ffmpegPrepassMs: ocrPerf.ffmpegPrepassMs,
-          apiTotalMs: ocrPerf.apiTotalMs,
-          retrySleepMs: ocrPerf.retrySleepMs,
+          localVerifiedCount: ocrPerf.localVerifiedCount,
+          geminiVerifiedCount: ocrPerf.geminiVerifiedCount,
+          geminiBatchCount: ocrPerf.geminiBatchCount,
           apiCallsCount: ocrPerf.apiCallsCount,
           retriesCount: ocrPerf.retriesCount,
           batchSplitsCount: ocrPerf.batchSplitsCount,

@@ -11,6 +11,11 @@ const { formatSecondsToTimecode } = require('../pipelineTypes');
 const { createAbortError } = require('../../../utils/asyncSemaphore');
 const { VISION_CASCADE_MODELS } = require('../../geminiModelCatalog');
 const { geminiQuotaTracker } = require('../../geminiQuotaTracker');
+const {
+  checkLocalChineseOcrStatus,
+  isLocalChineseOcrAvailable,
+  runLocalChineseOcr,
+} = require('../../ocr/localChineseOcrService');
 
 function sleepOrAbort(ms, signal) {
   if (!signal) {
@@ -602,6 +607,7 @@ async function extractChineseSubtitles({
   force = false,
   signal = null,
   onProgress = null,
+  enableLocalOcr = true,
 }) {
   let activeWorkingModel = modelName || geminiQuotaTracker.getPreferredPrimaryModel(CASCADE_VISION_MODELS[0]);
   const effectiveModel = activeWorkingModel;
@@ -680,11 +686,19 @@ async function extractChineseSubtitles({
   let lastBatchError = null;
   let ocrWallTimeMs = 0;
   let ffmpegPrepassMs = 0;
+  let frameExtractionMs = 0;
+  let localOcrMs = 0;
+  let geminiVerificationMs = 0;
   let batchLoopMs = 0;
   let fallbackDirectMs = 0;
   let tieBreakMs = 0;
   let batchSplitsCount = 0;
   let dedupedFramesCount = 0;
+  let localOcrFramesCount = 0;
+  let localVerifiedCount = 0;
+  let geminiVerifiedCount = 0;
+  let geminiBatchCount = 0;
+  let isLocalOcrActive = false;
   const telemetry = {
     apiTotalMs: 0,
     retrySleepMs: 0,
@@ -846,6 +860,7 @@ async function extractChineseSubtitles({
     // 2. Extract candidate frames at scheduled timestamps
     checkAbort();
     let extractedFrames = [];
+    const extractStartTime = Date.now();
     if (timesToExtract.length > 0) {
       try {
         extractedFrames = await extractFramesAtTimestamps(videoPath, timesToExtract, tempDir, { signal });
@@ -860,7 +875,8 @@ async function extractChineseSubtitles({
     } else {
       console.log(`[Stage 3 OCR] ⚡ All candidate frames already verified in checkpoint (${completedMap.size} frames). Skipping FFmpeg frame extraction.`);
     }
-    ffmpegPrepassMs = Date.now() - prepassStartTime;
+    frameExtractionMs = Date.now() - extractStartTime;
+    ffmpegPrepassMs = Math.max(0, Date.now() - prepassStartTime - frameExtractionMs);
 
     if (timesToExtract.length > 0 && (!extractedFrames || extractedFrames.length === 0)) {
       console.warn('[Stage 3 Extract Subtitles] No frames could be extracted for video');
@@ -959,6 +975,311 @@ Return JSON ONLY matching this schema:
       return parseVisionResponseFrames(resp, batchFrames);
     }
 
+    // 2.5 HYBRID LOCAL CHINESE OCR & VERIFICATION ROUTER
+    const effectiveEnableLocalOcr = (enableLocalOcr !== false) && (process.env.ENABLE_LOCAL_CHINESE_OCR !== 'false');
+    if (effectiveEnableLocalOcr) {
+      try {
+        isLocalOcrActive = await isLocalChineseOcrAvailable();
+      } catch (_) {
+        isLocalOcrActive = false;
+      }
+    }
+
+    if (isLocalOcrActive && framesToAnalyze.length > 0) {
+      const pendingForLocalOcr = framesToAnalyze.filter((f) => !completedMap.has(parseFloat(f.timestampSec.toFixed(2))));
+      if (pendingForLocalOcr.length > 0) {
+        const localOcrStart = Date.now();
+        console.log(`[Stage 3 OCR] ⚡ Running RapidOCR Local Chinese OCR on ${pendingForLocalOcr.length} candidate frames...`);
+        if (typeof onProgress === 'function') {
+          onProgress({
+            stage: 'stage3_local_ocr',
+            completedBatches: 0,
+            totalBatches: 1,
+            completedFrames: completedMap.size,
+            totalFrames: totalCandidateFrames,
+            localCompleted: 0,
+            localTotal: pendingForLocalOcr.length,
+            percent: 25,
+            modelUsed: 'rapidocr-local',
+            retriesCount,
+            statusMessage: `1. Local Chinese OCR: 0/${pendingForLocalOcr.length} frames (RapidOCR)...`,
+          });
+        }
+
+        let localResults = [];
+        try {
+          const ocrRun = await runLocalChineseOcr({
+            frames: pendingForLocalOcr,
+            signal,
+            onProgress: (p) => {
+              if (typeof onProgress === 'function') {
+                onProgress({
+                  stage: 'stage3_local_ocr',
+                  completedBatches: 0,
+                  totalBatches: 1,
+                  completedFrames: completedMap.size + (p.completed || 0),
+                  totalFrames: totalCandidateFrames,
+                  localCompleted: p.completed,
+                  localTotal: pendingForLocalOcr.length,
+                  percent: Math.min(60, 25 + Math.round(((p.completed || 0) / Math.max(1, pendingForLocalOcr.length)) * 35)),
+                  modelUsed: 'rapidocr-local',
+                  retriesCount,
+                  statusMessage: `Local Chinese OCR: ${p.completed}/${pendingForLocalOcr.length} frames (${p.percent}%)`,
+                });
+              }
+            },
+          });
+          localResults = ocrRun.results || [];
+        } catch (localErr) {
+          if (localErr?.name === 'AbortError' || signal?.aborted) {
+            throw localErr?.name === 'AbortError' ? localErr : createAbortError('Stage 3 OCR aborted');
+          }
+          console.warn(`[Stage 3 OCR] ⚠️ Local Chinese OCR failed (${localErr.message}). Falling back to Gemini Vision for all frames.`);
+          localResults = [];
+        }
+
+        localOcrMs = Date.now() - localOcrStart;
+        localOcrFramesCount = localResults.length;
+
+        if (localResults.length > 0) {
+          const localMap = new Map();
+          for (const lr of localResults) {
+            if (typeof lr.timestampSec === 'number') {
+              localMap.set(parseFloat(lr.timestampSec.toFixed(2)), lr);
+            }
+          }
+
+          // HYBRID VERIFICATION ROUTER (Section 5):
+          // A. LOCAL VERIFIED:
+          // 1. Both sampleA and sampleB empty with confidence >= 0.70
+          // 2. Both sampleA and sampleB have text, are equivalent, and confidence >= 0.70
+          // 3. Short cue (<1.0s) where sampleA has confidence >= 0.90 and sampleB is empty
+          if (cueStates.length > 0) {
+            for (const cs of cueStates) {
+              const tA = parseFloat(cs.sampleASec.toFixed(2));
+              const tB = parseFloat(cs.sampleBSec.toFixed(2));
+              const rA = localMap.get(tA);
+              const rB = localMap.get(tB);
+
+              if (!rA || !rB) continue;
+
+              const confA = rA.confidence || 0;
+              const confB = rB.confidence || 0;
+              const textA = rA.hasText ? (rA.chineseText || rA.textZh || '') : '';
+              const textB = rB.hasText ? (rB.chineseText || rB.textZh || '') : '';
+
+              if (!rA.hasText && !rB.hasText && confA >= 0.70 && confB >= 0.70) {
+                if (!completedMap.has(tA)) {
+                  completedMap.set(tA, {
+                    timestampSec: tA,
+                    reportedSec: tA,
+                    hasText: false,
+                    textZh: '',
+                    chineseText: '',
+                    confidence: confA,
+                    isSharp: true,
+                    position: 'bottom_subtitle',
+                    visualGender: 'unknown',
+                    speakerGender: 'UNKNOWN',
+                    speakerVisualHint: '',
+                    deliveryType: 'dialogue',
+                    genderConfidence: 0.5,
+                    ocrStatus: 'verified_empty',
+                    isVerified: true,
+                    isVerifiedEmpty: true,
+                    ocrFailed: false,
+                    reviewNeeded: false,
+                    uncertainOcr: false,
+                    ocrEngine: 'rapidocr-local',
+                  });
+                  localVerifiedCount++;
+                }
+                if (!completedMap.has(tB)) {
+                  completedMap.set(tB, {
+                    timestampSec: tB,
+                    reportedSec: tB,
+                    hasText: false,
+                    textZh: '',
+                    chineseText: '',
+                    confidence: confB,
+                    isSharp: true,
+                    position: 'bottom_subtitle',
+                    visualGender: 'unknown',
+                    speakerGender: 'UNKNOWN',
+                    speakerVisualHint: '',
+                    deliveryType: 'dialogue',
+                    genderConfidence: 0.5,
+                    ocrStatus: 'verified_empty',
+                    isVerified: true,
+                    isVerifiedEmpty: true,
+                    ocrFailed: false,
+                    reviewNeeded: false,
+                    uncertainOcr: false,
+                    ocrEngine: 'rapidocr-local',
+                  });
+                  localVerifiedCount++;
+                }
+              } else if (rA.hasText && rB.hasText && areChineseTextsEquivalent(textA, textB) && confA >= 0.70 && confB >= 0.70) {
+                const resolvedText = textA.length >= textB.length ? textA : textB;
+                if (!completedMap.has(tA)) {
+                  completedMap.set(tA, {
+                    timestampSec: tA,
+                    reportedSec: tA,
+                    hasText: true,
+                    textZh: resolvedText,
+                    chineseText: resolvedText,
+                    confidence: confA,
+                    isSharp: confA >= 0.70,
+                    position: 'bottom_subtitle',
+                    visualGender: 'unknown',
+                    speakerGender: 'UNKNOWN',
+                    speakerVisualHint: '',
+                    deliveryType: 'dialogue',
+                    genderConfidence: 0.5,
+                    ocrStatus: 'verified_text',
+                    isVerified: true,
+                    isVerifiedEmpty: false,
+                    ocrFailed: false,
+                    reviewNeeded: false,
+                    uncertainOcr: false,
+                    ocrEngine: 'rapidocr-local',
+                  });
+                  localVerifiedCount++;
+                }
+                if (!completedMap.has(tB)) {
+                  completedMap.set(tB, {
+                    timestampSec: tB,
+                    reportedSec: tB,
+                    hasText: true,
+                    textZh: resolvedText,
+                    chineseText: resolvedText,
+                    confidence: confB,
+                    isSharp: confB >= 0.70,
+                    position: 'bottom_subtitle',
+                    visualGender: 'unknown',
+                    speakerGender: 'UNKNOWN',
+                    speakerVisualHint: '',
+                    deliveryType: 'dialogue',
+                    genderConfidence: 0.5,
+                    ocrStatus: 'verified_text',
+                    isVerified: true,
+                    isVerifiedEmpty: false,
+                    ocrFailed: false,
+                    reviewNeeded: false,
+                    uncertainOcr: false,
+                    ocrEngine: 'rapidocr-local',
+                  });
+                  localVerifiedCount++;
+                }
+              } else if (rA.hasText && !rB.hasText && confA >= 0.90 && cs.duration <= 1.0) {
+                if (!completedMap.has(tA)) {
+                  completedMap.set(tA, {
+                    timestampSec: tA,
+                    reportedSec: tA,
+                    hasText: true,
+                    textZh: textA,
+                    chineseText: textA,
+                    confidence: confA,
+                    isSharp: true,
+                    position: 'bottom_subtitle',
+                    visualGender: 'unknown',
+                    speakerGender: 'UNKNOWN',
+                    speakerVisualHint: '',
+                    deliveryType: 'dialogue',
+                    genderConfidence: 0.5,
+                    ocrStatus: 'verified_text',
+                    isVerified: true,
+                    isVerifiedEmpty: false,
+                    ocrFailed: false,
+                    reviewNeeded: false,
+                    uncertainOcr: false,
+                    ocrEngine: 'rapidocr-local',
+                  });
+                  localVerifiedCount++;
+                }
+                if (!completedMap.has(tB)) {
+                  completedMap.set(tB, {
+                    timestampSec: tB,
+                    reportedSec: tB,
+                    hasText: false,
+                    textZh: '',
+                    chineseText: '',
+                    confidence: confB,
+                    isSharp: true,
+                    position: 'bottom_subtitle',
+                    visualGender: 'unknown',
+                    speakerGender: 'UNKNOWN',
+                    speakerVisualHint: '',
+                    deliveryType: 'dialogue',
+                    genderConfidence: 0.5,
+                    ocrStatus: 'verified_empty',
+                    isVerified: true,
+                    isVerifiedEmpty: true,
+                    ocrFailed: false,
+                    reviewNeeded: false,
+                    uncertainOcr: false,
+                    ocrEngine: 'rapidocr-local',
+                  });
+                  localVerifiedCount++;
+                }
+              }
+            }
+          }
+
+          // Baseline safety net frames: verify empty if local confidence >= 0.85
+          for (const cand of candidateTimestamps) {
+            const t = cand.timestampSec;
+            if (completedMap.has(t)) continue;
+            const loc = localMap.get(t);
+            if (loc && !loc.hasText && (loc.confidence || 0) >= 0.85) {
+              completedMap.set(t, {
+                timestampSec: t,
+                reportedSec: t,
+                hasText: false,
+                textZh: '',
+                chineseText: '',
+                confidence: loc.confidence,
+                isSharp: true,
+                position: 'bottom_subtitle',
+                visualGender: 'unknown',
+                speakerGender: 'UNKNOWN',
+                speakerVisualHint: '',
+                deliveryType: 'dialogue',
+                genderConfidence: 0.5,
+                ocrStatus: 'verified_empty',
+                isVerified: true,
+                isVerifiedEmpty: true,
+                ocrFailed: false,
+                reviewNeeded: false,
+                uncertainOcr: false,
+                ocrEngine: 'rapidocr-local',
+              });
+              localVerifiedCount++;
+            }
+          }
+
+          console.log(`[Stage 3 OCR] 🎯 Hybrid Router: ${localVerifiedCount} frame observations verified locally (${completedMap.size} total verified). Queuing remaining uncertain frames for Gemini...`);
+
+          // Checkpoint save after local OCR
+          if (checkpointPath) {
+            saveOcrCheckpoint(checkpointPath, {
+              version: 1,
+              videoPath,
+              startOffsetSec: Math.round(startOffsetSec),
+              durationSec: Math.round(durationSec),
+              updatedAt: Date.now(),
+              rawObservations: [...Array.from(completedMap.values()), ...Array.from(unresolvedMap.values())].sort((a, b) => a.timestampSec - b.timestampSec),
+              completedBatchesCount: 0,
+              totalCandidateFrames,
+              completed: unresolvedMap.size === 0 && completedMap.size === totalCandidateFrames,
+              hasUnresolvedFrames: unresolvedMap.size > 0,
+              unresolvedCount: unresolvedMap.size,
+            });
+          }
+        }
+      }
+    }
+
     // 3. Adaptive Batch Scheduler with Per-Batch Checkpointing & Concurrency Backoff
     console.log(`[Stage 3 Extract Subtitles] Running Gemini Vision OCR on ${framesToAnalyze.length} pending candidate frames (${completedMap.size} already verified)...`);
     const batchLoopStart = Date.now();
@@ -1008,6 +1329,7 @@ Return JSON ONLY matching this schema:
 
     reportProgress(resumedFromCheckpoint ? `Resumed (${completedMap.size}/${totalCandidateFrames} frames from checkpoint)` : 'Starting Vision OCR...');
 
+    const geminiBatchStart = Date.now();
     while (batchQueue.length > 0) {
       checkAbort();
 
@@ -1044,8 +1366,9 @@ Return JSON ONLY matching this schema:
             const existing = completedMap.get(t);
             if (existing && existing.userOverridden) continue;
             if (existing && existing.hasText && existing.chineseText && (!obs.hasText || !obs.chineseText)) continue;
-            completedMap.set(t, obs);
+            completedMap.set(t, { ...obs, ocrEngine: 'gemini-vision' });
             unresolvedMap.delete(t);
+            geminiVerifiedCount++;
           }
 
           if (unverifiedObsList.length > 0) {
@@ -1076,6 +1399,7 @@ Return JSON ONLY matching this schema:
 
           if (verifiedObsList.length > 0) {
             completedBatchesCount++;
+            geminiBatchCount++;
             consecutiveSuccesses++;
 
             // Conservative recovery: recover to concurrency 2 after 3 consecutive successes
@@ -1195,6 +1519,7 @@ Return JSON ONLY matching this schema:
         await sleepOrAbort(pacingMs, signal);
       }
     }
+    geminiVerificationMs = Date.now() - geminiBatchStart;
     batchLoopMs = Date.now() - batchLoopStart;
 
     // Point 3: Resolve Linked Secondary Frames with strict sharpness and verification checks
@@ -1967,22 +2292,27 @@ Return JSON ONLY matching this schema:
 
   const performance = {
     wallTimeMs: ocrWallTimeMs,
+    totalStage3Ms: ocrWallTimeMs,
     ffmpegPrepassMs,
-    batchLoopMs,
-    fallbackDirectMs,
-    tieBreakMs,
-    apiTotalMs: telemetry.apiTotalMs,
+    frameExtractionMs,
+    localOcrMs,
+    geminiVerificationMs,
     retrySleepMs: telemetry.retrySleepMs,
-    apiCallsCount,
-    retriesCount,
-    batchSplitsCount,
+    tieBreakMs,
+    candidateFramesCount: totalCandidateFrames,
+    localOcrFramesCount,
+    localVerifiedCount,
+    geminiVerifiedCount,
+    geminiActualAttemptsCount: apiCallsCount,
+    geminiBatchCount,
     dedupedFramesCount,
-    verifiedFramesCount: completedMap.size,
     unresolvedFramesCount: unresolvedMap.size,
+    finalChineseCuesCount: finalizedVisualSegments.length,
   };
 
+  const ocrEngineLabel = isLocalOcrActive ? (geminiVerifiedCount > 0 ? 'hybrid-rapidocr-gemini' : 'rapidocr-local') : 'gemini-vision';
   const ocrWallTimeSec = (ocrWallTimeMs / 1000).toFixed(1);
-  console.log(`[Stage 3 Extract Subtitles] OCR engine: gemini-vision (${activeWorkingModel}, wall time: ${ocrWallTimeSec}s, api: ${(telemetry.apiTotalMs / 1000).toFixed(1)}s, prepass: ${(ffmpegPrepassMs / 1000).toFixed(1)}s, retry sleep: ${(telemetry.retrySleepMs / 1000).toFixed(1)}s, calls: ${apiCallsCount}, deduped: ${dedupedFramesCount}, splits: ${batchSplitsCount}, ${finalizedVisualSegments.length} cues)`);
+  console.log(`[Stage 3 Extract Subtitles] OCR engine: ${ocrEngineLabel} (${activeWorkingModel}, wall time: ${ocrWallTimeSec}s, local OCR: ${(localOcrMs / 1000).toFixed(1)}s, api: ${(telemetry.apiTotalMs / 1000).toFixed(1)}s, prepass: ${(ffmpegPrepassMs / 1000).toFixed(1)}s, calls: ${apiCallsCount}, localVerified: ${localVerifiedCount}, geminiVerified: ${geminiVerifiedCount}, deduped: ${dedupedFramesCount}, ${finalizedVisualSegments.length} cues)`);
   console.log(`[Stage 3 Extract Subtitles] Completed with ${finalizedVisualSegments.length} deduplicated visual segments detected from ${rawObservations.length} observations.`);
 
   const result = {
@@ -2007,8 +2337,16 @@ Return JSON ONLY matching this schema:
       dedupedFramesCount,
       performance,
       modelUsed: activeWorkingModel,
-      ocrEngine: 'gemini-vision',
+      ocrEngine: ocrEngineLabel,
       wallTimeMs: ocrWallTimeMs,
+      totalStage3Ms: ocrWallTimeMs,
+      ffmpegPrepassMs,
+      frameExtractionMs,
+      localOcrMs,
+      geminiVerificationMs,
+      localVerifiedCount,
+      geminiVerifiedCount,
+      geminiBatchCount,
       hasVisualSubtitles: finalizedVisualSegments.length > 0,
       ocrNotice: lastBatchError || (hasUnresolvedFrames ? `${unresolvedMap.size} unresolved frame(s) require review` : null),
       adaptiveConcurrency,
