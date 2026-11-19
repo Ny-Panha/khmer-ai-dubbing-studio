@@ -1,6 +1,21 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
+- **Environment**: GitHub code inspection and targeted edits
+- **Branch**: `chore/full-project-cleanup`
+- **Date**: 2026-11-19
+
+## Summary: Sticky Customize Settings Across Episodes and Consistent Batch Export
+- **Request:** Customize Logo, Corner Mask, and Banner once and use them for existing and newly created episodes.
+- **Root cause:** Global Logo already worked through `logoSettingsStorage.js`, but `resolveStickyVoiceSettings` permitted old `ep.voiceSettings` to replace globally saved Mask/Banner on episode switch.
+- **Fix:** `frontend/src/utils/projectStorage.js` selectively restores non-logo Customize fields from global saved voice settings, preserving audio settings belonging to each episode. Explicit 0/false settings remain valid. No changes to the dedicated Logo store.
+- **Batch export fix:** `backend/services/batchExportService.js` now passes `cornerMask` to FFmpeg and uses a `batchVisualSignature` to avoid reusing previously rendered files that have older Logo/Mask/Banner/Sponsor settings.
+- **Regression tests added:** `backend/tests/global_logo_settings.test.js` covers episode load settings and batch export wiring. **Tests/build/browser playback have not been run in this GitHub-only environment.**
+- **Existing rendered files:** Require re-export to reflect new visual settings. These settings apply globally to the workspace across series, matching the requested edit-once behavior.
+
+---
+
+## Last Session
 - **Environment**: Antigravity IDE (Gemini)
 - **Branch**: `chore/full-project-cleanup`
 - **Timestamp**: 2026-11-19T18:30:00+07:00
