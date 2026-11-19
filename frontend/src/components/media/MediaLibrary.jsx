@@ -80,6 +80,7 @@ function MediaLibrary({
   onDeleteEpisode = null,
   onRenameEpisode = null,
   onRenameSeries = null,
+  onDeleteSeries = null,
   onRefreshSeries = null,
   apiKey = null,
 }) {
@@ -386,6 +387,7 @@ function MediaLibrary({
           onDeleteEpisode={onDeleteEpisode}
           onRenameEpisode={onRenameEpisode}
           onRenameSeries={onRenameSeries}
+          onDeleteSeries={onDeleteSeries}
           onFileUpload={(file, targetEpId) => handleFileUpload(file, targetEpId)}
           isUploading={isUploading}
           onTabChange={onTabChange}

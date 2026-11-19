@@ -31,6 +31,7 @@ export default function EpisodesTab({
   onDeleteEpisode,
   onRenameEpisode,
   onRenameSeries,
+  onDeleteSeries = null,
   onFileUpload,
   isUploading = false,
   onTabChange,
@@ -359,6 +360,33 @@ export default function EpisodesTab({
             >
               <Edit2 size={12} />
             </button>
+
+            {onDeleteSeries && (
+              <button
+                type="button"
+                onClick={() => {
+                  const sTitle = activeSeries?.title || activeSeries?.id || 'Series';
+                  if (window.confirm(`តើអ្នកពិតជាចង់លុបរឿងភាគ "${sTitle}" (Delete Series) នេះមែនទេ?`)) {
+                    onDeleteSeries(activeSeries?.id);
+                  }
+                }}
+                className="btn-ghost"
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  padding: '4px',
+                  cursor: 'pointer',
+                  color: 'rgba(239, 68, 68, 0.75)',
+                  borderRadius: 4,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+                title="លុបរឿងភាគនេះចោល (Delete Series)"
+              >
+                <Trash2 size={12} />
+              </button>
+            )}
           </div>
         )}
       </div>

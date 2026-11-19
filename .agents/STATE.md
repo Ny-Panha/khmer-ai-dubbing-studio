@@ -3,6 +3,50 @@
 ## Last Session
 - **Environment**: Antigravity IDE (Gemini) - Minimal Change Engineer
 - **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-20T03:08:00+07:00
+
+## Summary: Fix Ghost Series Retention & Add Direct Series Deletion (100% PASS)
+- **Task:** Resolve why deleting `backend/uploads` on disk left stale series (`ss2`, Chinese drama) in the frontend Series dropdown, eliminate ghost series re-syncing from browser `localStorage`, and add direct Series Deletion (`DELETE /api/series/:seriesId` + UI button).
+- **Confirmed Root Causes Addressed**:
+  1. **Stale `localStorage` Retention on Empty Server Response**: `useSeriesManager.js` initialized state with `loadSeriesList()` from browser `localStorage`. When `backend/uploads` was deleted, `GET /api/series` returned `{ success: true, series: [] }`. However, `useSeriesManager.js` guarded hydration with `if (data?.success && Array.isArray(data.series) && data.series.length > 0)`. Because `data.series.length === 0`, it ignored the server's empty response and left the stale series in `localStorage` forever.
+  2. **Zombie Re-creation on Auto-Sync**: When the user opened or clicked the UI, `saveEpisodeState` or `syncSeriesToBackend` sent `POST /api/series/:id/sync` using the stale `localStorage` series, silently recreating `uploads/projects/<seriesId>/series.json` on disk!
+  3. **Missing Series Deletion Endpoint & UI Action**: The backend had `router.delete("/:seriesId/episodes/:episodeId")` but lacked `DELETE /api/series/:seriesId`. The frontend UI only had a Rename Series button (`Edit2`), forcing users to manually delete files from disk.
+- **Surgical Changes Implemented (Minimal Change Discipline)**:
+  1. `frontend/src/hooks/useSeriesManager.js`:
+     - In server hydration `useEffect`: if `data?.success && Array.isArray(data.series)`, explicitly handles `data.series.length === 0` by resetting frontend state and `localStorage` to a clean single default series `រឿងភាគ (Series 1)`. Ghost series are wiped immediately upon backend wipe.
+     - Added `handleDeleteSeries(targetSeriesId)`: calls `deleteSeriesApi`, updates `seriesList` and `localStorage` via `deleteSeriesFromList`, and smoothly switches to remaining series or fresh default.
+  2. `backend/services/episodeService.js`:
+     - Added and exported `deleteSeries(seriesId, options)`: evicts in-memory cache and removes `uploads/projects/<seriesId>` recursively.
+  3. `backend/routes/seriesRoutes.js`:
+     - Added `router.delete("/:seriesId")` guarded by per-series mutex `withSeriesMetadataLock`.
+  4. `frontend/src/services/api/mediaApi.js`:
+     - Added `deleteSeriesApi(seriesId)` calling `DELETE /api/series/:seriesId`.
+  5. `frontend/src/utils/projectStorage.js`:
+     - Added `deleteSeriesFromList(seriesId)` to remove series from `localStorage` list with default series fallback.
+  6. `frontend/src/App.jsx` & `frontend/src/components/media/MediaLibrary.jsx`:
+     - Forwarded `onDeleteSeries` to `EpisodesTab`.
+  7. `frontend/src/components/media/EpisodesTab.jsx`:
+     - Added Delete Series button (`Trash2`) next to Rename button (`Edit2`) with confirmation dialog `តើអ្នកពិតជាចង់លុបរឿងភាគ ... (Delete Series) នេះមែនទេ?`.
+  8. `backend/tests/series_persist_and_sync.test.js`:
+     - Added unit tests for `deleteSeries` on disk and `deleteSeriesFromList` in storage (16/16 PASS).
+- **Verification Outcomes**:
+  - `backend/tests/series_persist_and_sync.test.js`: **16/16 PASS** (100%).
+  - Full Regression Suite (97 tests): **97/97 PASS** (0 failures).
+  - `npm --prefix frontend run build`: **PASS** (0 errors in 637ms).
+- **Active Environment**:
+  - Backend API: `http://localhost:5000`
+  - Frontend UI: `http://localhost:5173`
+  - Active Branch: `chore/full-project-cleanup`
+- **Next Steps**:
+  - Commit and push verified changes.
+
+---
+
+# Antigravity Shared State (Sync Memory)
+
+## Last Session
+- **Environment**: Antigravity IDE (Gemini) - Minimal Change Engineer
+- **Branch**: `chore/full-project-cleanup`
 - **Timestamp**: 2026-11-20T02:56:00+07:00
 
 ## Summary: Pipeline Performance Optimization — P0 Subtitle Pixel-Diff Bug Fix, P1 Skip Re-Decoding on Checkpoint Resume & Full Pipeline Profiling (100% PASS)

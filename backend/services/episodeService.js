@@ -1255,6 +1255,33 @@ async function createNewEpisode(seriesId, options = {}) {
 }
 
 /**
+ * Delete an entire series and remove its directory from disk atomically
+ */
+function deleteSeries(seriesId, options = {}) {
+  const cleanSeries = sanitizeProjectName(seriesId);
+  const projectsDir = options.projectsDir || PROJECTS_DIR;
+  const seriesDir = path.join(projectsDir, cleanSeries);
+  const cacheKey = buildSeriesCacheKey(cleanSeries, projectsDir);
+
+  seriesMetadataCache.delete(cacheKey);
+
+  if (fs.existsSync(seriesDir)) {
+    try {
+      fs.rmSync(seriesDir, { recursive: true, force: true });
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  }
+
+  console.log(`[EpisodeService] 🗑️ Deleted series "${cleanSeries}" from disk.`);
+  return {
+    success: true,
+    seriesId: cleanSeries,
+    message: `Series ${cleanSeries} deleted successfully.`,
+  };
+}
+
+/**
  * Delete an episode while preserving all other episodes and assets
  */
 function deleteEpisode(seriesId, episodeId) {
@@ -1515,5 +1542,6 @@ module.exports = {
   resetHydrationLogForTesting,
   createNewEpisode,
   deleteEpisode,
+  deleteSeries,
   resetEpisodeState,
 };

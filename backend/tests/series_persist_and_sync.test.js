@@ -7,6 +7,7 @@ const path = require('path');
 const {
   getSeriesMetadata,
   saveSeriesMetadata,
+  deleteSeries,
   withSeriesMetadataLock,
   persistEpisodeScriptData,
   syncSeriesMetadataSafely,
@@ -1175,4 +1176,59 @@ test('frontend GeminiRouteModal active translate queue & banner helpers scope st
   assert.equal(isTranslateQueueEnqueueBanner('✅ បានដាក់បញ្ចូល Translate ចំនួន 3 ភាគ!'), true);
   assert.equal(isTranslateQueueEnqueueBanner('🔧 បានជួសជុលឃ្លាខូចរួចរាល់!'), false);
   assert.equal(isTranslateQueueEnqueueBanner(''), false);
+});
+
+test('deleteSeries removes series directory from disk and evicts in-memory cache', () => {
+  const projectsDir = makeTempProjectsDir();
+  const seriesId = 'series_to_delete_test';
+  try {
+    seedSeriesWithEpisodes(projectsDir, seriesId, ['ep_1', 'ep_2']);
+    const seriesDir = path.join(projectsDir, seriesId);
+    assert.equal(fs.existsSync(seriesDir), true, 'Series directory must exist before delete');
+
+    const result = deleteSeries(seriesId, { projectsDir });
+    assert.equal(result.success, true, 'deleteSeries must succeed');
+    assert.equal(result.seriesId, seriesId);
+    assert.equal(fs.existsSync(seriesDir), false, 'Series directory must be removed from disk');
+
+    // Idempotent delete on non-existent directory must also succeed
+    const repeatResult = deleteSeries(seriesId, { projectsDir });
+    assert.equal(repeatResult.success, true, 'Subsequent deleteSeries calls must be idempotent');
+  } finally {
+    fs.rmSync(projectsDir, { recursive: true, force: true });
+  }
+});
+
+test('frontend projectStorage deleteSeriesFromList removes target series and resets to default when empty', async () => {
+  const storageModule = await import('../../frontend/src/utils/projectStorage.js');
+  const { deleteSeriesFromList, STORAGE_SERIES_LIST_KEY } = storageModule;
+
+  // Mock localStorage in global scope for testing
+  const memStore = new Map();
+  global.localStorage = {
+    getItem: (k) => (memStore.has(k) ? memStore.get(k) : null),
+    setItem: (k, v) => memStore.set(k, String(v)),
+    removeItem: (k) => memStore.delete(k),
+    clear: () => memStore.clear(),
+  };
+
+  try {
+    const initialList = [
+      { id: 'series_a', title: 'Series A', episodes: [] },
+      { id: 'series_b', title: 'Series B', episodes: [] },
+    ];
+    memStore.set(STORAGE_SERIES_LIST_KEY, JSON.stringify(initialList));
+
+    // Delete series_a -> series_b remains
+    const afterDeleteA = deleteSeriesFromList('series_a');
+    assert.equal(afterDeleteA.length, 1);
+    assert.equal(afterDeleteA[0].id, 'series_b');
+
+    // Delete series_b -> resets to clean default series
+    const afterDeleteB = deleteSeriesFromList('series_b');
+    assert.equal(afterDeleteB.length, 1);
+    assert.ok(afterDeleteB[0].title.includes('រឿងភាគ'), 'Must reset to default series when list is empty');
+  } finally {
+    delete global.localStorage;
+  }
 });

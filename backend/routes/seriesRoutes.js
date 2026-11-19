@@ -9,6 +9,7 @@ const {
   persistEpisodeTimelineOperation,
   createNewEpisode,
   deleteEpisode,
+  deleteSeries,
   resetEpisodeState,
 } = require("../services/episodeService");
 
@@ -111,6 +112,19 @@ router.delete("/:seriesId/episodes/:episodeId", async (req, res) => {
   try {
     const { seriesId, episodeId } = req.params;
     const result = await withSeriesMetadataLock(seriesId, () => deleteEpisode(seriesId, episodeId));
+    if (!result.success) {
+      return res.status(400).json(result);
+    }
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.delete("/:seriesId", async (req, res) => {
+  try {
+    const { seriesId } = req.params;
+    const result = await withSeriesMetadataLock(seriesId, () => deleteSeries(seriesId));
     if (!result.success) {
       return res.status(400).json(result);
     }

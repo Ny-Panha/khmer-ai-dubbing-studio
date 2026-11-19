@@ -178,6 +178,25 @@ export async function syncSeriesApi(series) {
 }
 
 /**
+ * Delete an entire series from backend
+ * @param {string} seriesId
+ */
+export async function deleteSeriesApi(seriesId) {
+  if (!seriesId) return { success: false };
+  try {
+    const res = await fetch(`/api/series/${encodeURIComponent(seriesId)}`, {
+      method: 'DELETE',
+    });
+    return await parseResponseJson(res, `Failed to delete series ${seriesId}`);
+  } catch (err) {
+    if (/ECONNREFUSED|unreachable|Failed to fetch|NetworkError/i.test(err?.message || '')) {
+      notifyBackendOffline();
+    }
+    throw err;
+  }
+}
+
+/**
  * Delete an episode from a series on backend
  * @param {string} seriesId
  * @param {string} episodeId

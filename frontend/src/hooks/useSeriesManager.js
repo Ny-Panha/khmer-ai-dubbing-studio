@@ -10,6 +10,7 @@ import {
   saveEpisodeState,
   addNewEpisodeToSeries,
   deleteEpisodeFromSeries,
+  deleteSeriesFromList,
   updateSeriesTitle,
   extractGlossaryFromEpisode,
   createDefaultEpisode,
@@ -22,7 +23,7 @@ import {
 } from '../utils/projectStorage';
 import { stripLogoSettings } from '../utils/logoSettingsStorage';
 import { generateVideoThumbnails } from '../utils/thumbnailUtils';
-import { fetchVideoThumbnails } from '../services/api';
+import { fetchVideoThumbnails, deleteSeriesApi } from '../services/api';
 import { normalizeClips, sanitizeScriptData } from '../utils/timelineUtils';
 import { loadEpisodeTimelineViewState } from '../utils/timelineViewState';
 import { applySpeakerVoiceToSegments } from '../utils/speakerUtils';
@@ -387,36 +388,53 @@ export function useSeriesManager({
       .then((res) => res.json())
       .then((data) => {
         if (cancelled) return;
-        if (data?.success && Array.isArray(data.series) && data.series.length > 0) {
-          const serverList = sanitizeAndHealSeriesList(data.series);
-          const resolvedSeriesId = storedSeriesId || series?.id;
-          const targetSeries = serverList.find((s) => s.id === resolvedSeriesId) || serverList[0];
-          const userMovedOffInitial = activeEpisodeIdRef.current && activeEpisodeIdRef.current !== episode?.id;
-          const preferredEpId = userMovedOffInitial
-            ? activeEpisodeIdRef.current
-            : (storedEpisodeId || episode?.id);
-          const targetEp = targetSeries
-            ? ((targetSeries.episodes || []).find((e) => e.id === preferredEpId) || targetSeries.episodes?.[0])
-            : null;
+        if (data?.success && Array.isArray(data.series)) {
+          if (data.series.length === 0) {
+            // When server returns 0 series (e.g. uploads/projects folder was wiped or deleted on disk),
+            // reset frontend state & localStorage so deleted series do not persist as ghosts.
+            const freshSeries = createDefaultSeries('រឿងភាគ (Series 1)');
+            setActiveSeriesId(freshSeries.id);
+            setActiveSeriesIdState(freshSeries.id);
+            activeSeriesIdRef.current = freshSeries.id;
+            setActiveEpisodeId(freshSeries.episodes[0].id);
+            setActiveEpisodeIdState(freshSeries.episodes[0].id);
+            activeEpisodeIdRef.current = freshSeries.episodes[0].id;
+            setSeriesList([freshSeries]);
+            try {
+              saveSeriesList([freshSeries]);
+            } catch (_) {}
+            applyEpisodeToWorkspace(freshSeries.episodes[0], freshSeries.id);
+          } else {
+            const serverList = sanitizeAndHealSeriesList(data.series);
+            const resolvedSeriesId = storedSeriesId || series?.id;
+            const targetSeries = serverList.find((s) => s.id === resolvedSeriesId) || serverList[0];
+            const userMovedOffInitial = activeEpisodeIdRef.current && activeEpisodeIdRef.current !== episode?.id;
+            const preferredEpId = userMovedOffInitial
+              ? activeEpisodeIdRef.current
+              : (storedEpisodeId || episode?.id);
+            const targetEp = targetSeries
+              ? ((targetSeries.episodes || []).find((e) => e.id === preferredEpId) || targetSeries.episodes?.[0])
+              : null;
 
-          if (targetSeries) {
-            setActiveSeriesId(targetSeries.id);
-            setActiveSeriesIdState(targetSeries.id);
-            activeSeriesIdRef.current = targetSeries.id;
-          }
-          if (targetEp) {
-            setActiveEpisodeId(targetEp.id);
-            setActiveEpisodeIdState(targetEp.id);
-            activeEpisodeIdRef.current = targetEp.id;
-          }
+            if (targetSeries) {
+              setActiveSeriesId(targetSeries.id);
+              setActiveSeriesIdState(targetSeries.id);
+              activeSeriesIdRef.current = targetSeries.id;
+            }
+            if (targetEp) {
+              setActiveEpisodeId(targetEp.id);
+              setActiveEpisodeIdState(targetEp.id);
+              activeEpisodeIdRef.current = targetEp.id;
+            }
 
-          setSeriesList(serverList);
-          try {
-            saveSeriesList(serverList);
-          } catch (_) {}
+            setSeriesList(serverList);
+            try {
+              saveSeriesList(serverList);
+            } catch (_) {}
 
-          if (targetEp) {
-            applyEpisodeToWorkspace(targetEp, targetSeries?.id);
+            if (targetEp) {
+              applyEpisodeToWorkspace(targetEp, targetSeries?.id);
+            }
           }
         }
       })
@@ -843,6 +861,31 @@ export function useSeriesManager({
     );
   }, [activeSeriesIdState]);
 
+  // 5b. Delete Series
+  const handleDeleteSeries = useCallback(async (targetSeriesId) => {
+    if (!targetSeriesId) return;
+    try {
+      await deleteSeriesApi(targetSeriesId);
+    } catch (err) {
+      console.warn('[useSeriesManager] Failed to delete series on backend:', err?.message || err);
+    }
+    const updated = deleteSeriesFromList(targetSeriesId);
+    setSeriesList(updated);
+    if (activeSeriesIdState === targetSeriesId) {
+      const nextSeries = updated[0];
+      setActiveSeriesId(nextSeries.id);
+      setActiveSeriesIdState(nextSeries.id);
+      activeSeriesIdRef.current = nextSeries.id;
+      const targetEp = nextSeries.episodes?.[0] || null;
+      if (targetEp) {
+        setActiveEpisodeId(targetEp.id);
+        setActiveEpisodeIdState(targetEp.id);
+        activeEpisodeIdRef.current = targetEp.id;
+        applyEpisodeToWorkspace(targetEp, nextSeries.id);
+      }
+    }
+  }, [activeSeriesIdState, applyEpisodeToWorkspace]);
+
   // 6. Save background results (e.g. if user switched to EP2 while EP1 was generating)
   const handleSaveEpisodeBackground = useCallback((targetEpisodeId, partialData) => {
     if (!targetEpisodeId || !partialData) return;
@@ -987,6 +1030,7 @@ export function useSeriesManager({
     handleResetAllEpisodes,
     handleRenameEpisode,
     handleRenameSeries,
+    handleDeleteSeries,
     handleSaveEpisodeBackground,
     getCurrentWorkspaceSnapshot,
   };

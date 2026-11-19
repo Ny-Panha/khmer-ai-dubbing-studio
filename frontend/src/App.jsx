@@ -1011,6 +1011,7 @@ export default function App() {
   const handleDeleteEpisode = useCallback((...args) => seriesRef.current.handleDeleteEpisode?.(...args), []);
   const handleRenameEpisode = useCallback((...args) => seriesRef.current.handleRenameEpisode?.(...args), []);
   const handleRenameSeries = useCallback((...args) => seriesRef.current.handleRenameSeries?.(...args), []);
+  const handleDeleteSeries = useCallback((...args) => seriesRef.current.handleDeleteSeries?.(...args), []);
   const handleResetAllEpisodes = useCallback((...args) => seriesRef.current.handleResetAllEpisodes?.(...args), []);
 
   // Persist Export Studio episode selections while app remains open
@@ -1284,6 +1285,7 @@ export default function App() {
                   onDeleteEpisode={handleDeleteEpisode}
                   onRenameEpisode={handleRenameEpisode}
                   onRenameSeries={handleRenameSeries}
+                  onDeleteSeries={handleDeleteSeries}
                   onRefreshSeries={series.refreshSeriesFromServer}
                 />
               </ErrorBoundary>

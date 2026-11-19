@@ -1529,6 +1529,17 @@ export function deleteEpisodeFromSeries(seriesId, episodeId) {
 }
 
 /**
+ * Delete a series from localStorage list (resets to default series if last one removed)
+ */
+export function deleteSeriesFromList(seriesId) {
+  const list = loadSeriesList();
+  const filtered = list.filter((s) => String(s.id) !== String(seriesId));
+  const final = filtered.length > 0 ? filtered : [createDefaultSeries('រឿងភាគ (Series 1)')];
+  saveSeriesList(final);
+  return final;
+}
+
+/**
  * Update Series Title
  */
 export function updateSeriesTitle(seriesId, newTitle) {
