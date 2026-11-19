@@ -12,9 +12,11 @@ export function useProxyPreview({ seriesId, episodeId, videoUrl, clips, segments
   const [result, setResult] = useState(null);
   const [epoch, setEpoch] = useState(0);
   const prevEpRef = useRef(null);
+  const lastValidProxyUrlRef = useRef(null);
   const isInitialOpen = prevEpRef.current !== episodeId;
   if (isInitialOpen) {
     prevEpRef.current = episodeId;
+    lastValidProxyUrlRef.current = null;
   }
 
   const invalidate = useCallback(() => setEpoch(n => n + 1), []);
@@ -76,7 +78,11 @@ export function useProxyPreview({ seriesId, episodeId, videoUrl, clips, segments
   const value = result?.base === base
     ? (result.body === body && result.epoch === epoch ? result.value : { state: 'queued', queuedSeconds: 0 })
     : null;
-  const media = useMemo(() => value?.state === 'fresh'
-    ? { outputVideoUrl: value.url, aspectRatio, isProxyPreview: true } : null, [value, aspectRatio]);
+  if (value?.state === 'fresh' && value?.url) {
+    lastValidProxyUrlRef.current = value.url;
+  }
+  const effectiveProxyUrl = value?.state === 'fresh' ? value.url : lastValidProxyUrlRef.current;
+  const media = useMemo(() => effectiveProxyUrl
+    ? { outputVideoUrl: effectiveProxyUrl, aspectRatio, isProxyPreview: true } : null, [effectiveProxyUrl, aspectRatio]);
   return { value, media, invalidate };
 }

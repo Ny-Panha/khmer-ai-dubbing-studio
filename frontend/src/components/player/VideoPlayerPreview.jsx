@@ -1339,10 +1339,11 @@ function VideoPlayerPreview({
       pendingSrcSwitchSeekRef.current = null;
     }
     if (prevVideoSrcRef.current && prevVideoSrcRef.current !== currentVideoSrc) {
+      const wasPlaying = Boolean(isPlayingRef.current || (videoRef?.current && !videoRef.current.paused));
       if (isSameEpisodeSource) {
         const t = Number(currentTimeRef.current);
         if (Number.isFinite(t) && t > 0) {
-          pendingSrcSwitchSeekRef.current = { timelineTime: t, applied: false, mediaTarget: t };
+          pendingSrcSwitchSeekRef.current = { timelineTime: t, applied: false, mediaTarget: t, wasPlaying, setAt: performance.now() };
         }
       }
       isPlayPendingRef.current = false;
@@ -1371,6 +1372,7 @@ function VideoPlayerPreview({
     }
     if (v && pendingSrcSwitchSeekRef.current && !pendingSrcSwitchSeekRef.current.applied) {
       const restoreTlTime = pendingSrcSwitchSeekRef.current.timelineTime;
+      const shouldResumePlay = Boolean(pendingSrcSwitchSeekRef.current.wasPlaying);
       let targetMediaTime = restoreTlTime;
       if (!renderedVideo && Array.isArray(videoClips) && videoClips.length > 0) {
         const mapping = mapTimelineToSourceTime(restoreTlTime, videoClips);
@@ -1393,6 +1395,9 @@ function VideoPlayerPreview({
       } else {
         pendingSrcSwitchSeekRef.current = null;
       }
+      if (shouldResumePlay && v && v.paused) {
+        v.play().catch(() => {});
+      }
     }
   };
 
@@ -1400,7 +1405,9 @@ function VideoPlayerPreview({
     const pending = pendingSrcSwitchSeekRef.current;
     if (pending) {
       const v = e?.target || videoRef?.current;
-      if (!pending.applied || !v || Math.abs((v.currentTime || 0) - pending.mediaTarget) > 0.15) {
+      const isClose = v && Math.abs((v.currentTime || 0) - pending.mediaTarget) <= 0.15;
+      const isStale = (performance.now() - (pending.setAt || 0)) > 600;
+      if (!pending.applied && !isClose && !isStale) {
         return;
       }
       pendingSrcSwitchSeekRef.current = null;

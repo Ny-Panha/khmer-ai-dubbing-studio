@@ -176,7 +176,7 @@ export function useVideoPlayback({
     const pendingTarget = pendingSeekTargetRef.current;
     if (pendingTarget !== null && Number.isFinite(pendingTarget)) {
       const elapsedMs = performance.now() - pendingSeekStartedMsRef.current;
-      if (Math.abs(srcNow - pendingTarget) <= 0.25 || (!v.seeking && elapsedMs >= 400) || elapsedMs >= 1500) {
+      if (Math.abs(srcNow - pendingTarget) <= 0.25 || (!v.seeking && elapsedMs >= 250) || elapsedMs >= 1000) {
         pendingSeekTargetRef.current = null;
       } else {
         return;
@@ -473,6 +473,10 @@ export function useVideoPlayback({
             activeClipIdxRef.current = targetIdx;
           }
         }
+      }
+
+      if (videoRef.current.readyState === 0) {
+        return;
       }
 
       if (Number.isFinite(targetTime) && Math.abs((videoRef.current.currentTime || 0) - targetTime) > 0.03) {

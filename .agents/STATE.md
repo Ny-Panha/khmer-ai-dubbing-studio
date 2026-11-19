@@ -3,6 +3,54 @@
 ## Last Session
 - **Environment**: Antigravity IDE (Gemini)
 - **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-19T09:12:00+07:00
+
+## Summary: Fix Voice Clip Drag / Move Video Preview Freeze & Playback Stall (COMPLETED)
+- **Problem & Root Cause**:
+  1. **Proxy Invalidation Video Source Flip on Drop**:
+     - When moving or dragging a voice clip, releasing the mouse called `onUpdateSegments` -> `invalidateRenderedPreview` -> `invalidateProxy()`.
+     - In `useProxyPreview.js`, `epoch` incremented and `media` immediately collapsed to `null` while the background proxy render was queued or rendering.
+     - In `VideoPlayerPreview.jsx:1327`, because `renderedVideo` collapsed to `null`, `rawVideoSrc` immediately flipped from the proxy MP4 (`proxy-...mp4`) to `effectiveLiveVideoUrl` (`source-proxy.mp4`).
+     - Changing the HTML5 `<video src>` forced the browser to unload the media, reset `readyState` to 0, and pause the video element.
+     - If the video was playing, playback was killed, narration/BGM paused, and was never resumed.
+     - If paused, the video preview flashed black/0s and then 5 seconds later when the new proxy completed, a second source switch occurred, causing another freeze.
+  2. **`pendingSrcSwitchSeekRef` Indefinite TimeUpdate Trapping**:
+     - When `currentVideoSrc` changed, `pendingSrcSwitchSeekRef.current` was set with `applied: false`.
+     - In `handleInternalTimeUpdate`: `if (!pending.applied || Math.abs(currentTime - mediaTarget) > 0.15) return;` permanently blocked and dropped all `timeupdate` events if `loadedmetadata` was missed or currentTime diverged.
+  3. **Playhead Jump on Drop during Playback**:
+     - In `TimelineEditor.jsx:handleMouseUp`, `onSeek(droppedStart)` was previously called if `!isPlayingRef.current`. But because the source switch in (1) had already caused `v.paused` to be true, `isPlayingRef.current` became false, falsely triggering `onSeek(droppedStart)` and violently jumping the playing playhead back to the dropped clip start.
+  4. **Video Decoder Seek Overload during Paused Drag**:
+     - During rapid paused dragging, `scheduleVoiceDragScrub` issued new video seeks on every RAF tick even while previous decoder seeks were still in flight (`v.seeking === true`), queueing seeks and triggering the stale rVFC frame guard.
+- **Fix Applied**:
+  1. `frontend/src/hooks/useProxyPreview.js`:
+     - Added `lastValidProxyUrlRef` to preserve the active valid proxy URL while a background re-render is queued or running (`effectiveProxyUrl = value?.state === 'fresh' ? value.url : lastValidProxyUrlRef.current`).
+     - Prevents `media` from collapsing to `null`, eliminating video source flipping and buffer unloading during timeline edits.
+     - Cleanly resets on episode change (`isInitialOpen`).
+  2. `frontend/src/components/player/VideoPlayerPreview.jsx`:
+     - Preserves `wasPlaying` state across any video source change and automatically resumes playback via `v.play()` in `handleInternalLoadedMetadata` once the new media is ready.
+     - Added staleness escape (`elapsed > 600ms`) and proximity check in `handleInternalTimeUpdate` so `pendingSrcSwitchSeekRef` can never trap `timeupdate` events indefinitely.
+  3. `frontend/src/components/timeline/TimelineEditor.jsx`:
+     - In `scheduleVoiceDragScrub`: skips issuing redundant seeks if `videoRef?.current?.seeking` is true, eliminating video decoder seek-storms during rapid dragging.
+     - In `handleMouseUp`: records `wasPlayingOnDrop = Boolean(isPlayingRef.current || (videoRef?.current && !videoRef.current.paused))` before `onUpdateSegments`. If playing, it does NOT seek the playhead back to `droppedStart`, allowing playback to flow forward smoothly.
+  4. `frontend/src/hooks/useVideoPlayback.js`:
+     - In `handleSeek`: guards against setting `.currentTime` if `videoRef.current.readyState === 0` (uninitialized).
+     - Tightened stale seek rVFC guard timeout to 250ms/1000ms.
+  5. `backend/tests/timeline_voice_drag_freeze_regression.test.js`:
+     - Added focused architectural regression test suite validating all 6 core invariant protections.
+- **Real-Application Verification (Playwright on `Proxy_Verification_219 ep_5` [219 segments] and `Pseudo_Spiritual_Root ep_5` [221 segments])**:
+  - **Check 1: Paused Drag & Drop**: Dragged voice clip left/right repeatedly; video scrubbed in real-time (`readyState: 4`, `paused: true`), on drop stayed at dropped clip start without freeze. (PASS on both episodes).
+  - **Check 2: Playback Resume after Drop**: Clicked Play after paused drop; playback advanced smoothly (`6.59s -> 8.71s`), Khmer narration audio played synchronized without freeze. (PASS on both episodes).
+  - **Check 3: Drag while PLAYING**: Dragged voice clip while actively playing; video continued playing continuously during drag (`10.63s -> 11.65s -> 13.18s`), on drop continued playing without pause or freeze, zero playhead snap-back. (PASS on both episodes).
+  - **Check 4: Distant Seeking after Edits**: Seeked to distant positions (200px, 500px); video seeked instantly (`readyState: 4`). (PASS on both episodes).
+- **Test Suites**:
+  - `npm --prefix frontend run build`: PASS (2.45s, 0 errors).
+  - 17/17 tests PASS across `timeline_voice_drag_freeze_regression.test.js`, `timeline_voice_drag_scrub.test.js`, `player_preview_overlay_safety.test.js`, `source_proxy.test.js`, `proxy_preview.test.js`, and `playback_60fps_optimization.test.js`.
+
+---
+
+## Previous Session
+- **Environment**: Antigravity IDE (Gemini)
+- **Branch**: `chore/full-project-cleanup`
 - **Timestamp**: 2026-11-19T08:34:00+07:00
 
 ## Summary: Remove Blocking Warning Overlay During Live Preview Playback (COMPLETED)

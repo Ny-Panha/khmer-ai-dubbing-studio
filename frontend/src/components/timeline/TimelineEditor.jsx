@@ -536,6 +536,9 @@ function TimelineEditor({
         if (lastVoiceDragSeekRef.current !== null && Math.abs(pending.time - lastVoiceDragSeekRef.current) < 0.01) {
           return;
         }
+        if (videoRef?.current?.seeking) {
+          return;
+        }
         lastVoiceDragSeekRef.current = pending.time;
         if (pending.segKey !== null && pending.segKey !== undefined) {
           manualFocusLockRef.current = {
@@ -1451,8 +1454,9 @@ function TimelineEditor({
                 const droppedStart = (dragState.itemType === 'audio' && droppedSeg && typeof droppedSeg.audioStartSec === 'number' && Number.isFinite(droppedSeg.audioStartSec))
                   ? droppedSeg.audioStartSec
                   : newStart;
+                const wasPlayingOnDrop = Boolean(isPlayingRef.current || (videoRef?.current && !videoRef.current.paused));
                 onUpdateSegments(opResult.state.segments, false, true);
-                if (!isPlayingRef.current && onSeek && typeof droppedStart === 'number') {
+                if (!wasPlayingOnDrop && onSeek && typeof droppedStart === 'number') {
                   manualFocusLockRef.current = {
                     segKey,
                     targetTime: droppedStart,
@@ -1468,7 +1472,8 @@ function TimelineEditor({
                 }
               } else if (opResult.reason) {
                 console.warn('[moveClip]', opResult.reason);
-                if (!isPlayingRef.current && dragState.itemType === 'audio' && onSeek && typeof dragState.origStart === 'number') {
+                const wasPlayingOnDrop = Boolean(isPlayingRef.current || (videoRef?.current && !videoRef.current.paused));
+                if (!wasPlayingOnDrop && dragState.itemType === 'audio' && onSeek && typeof dragState.origStart === 'number') {
                   onSeek(dragState.origStart);
                 }
                 if (typeof window !== 'undefined') {
