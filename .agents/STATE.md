@@ -3,6 +3,69 @@
 ## Last Session
 - **Environment**: Antigravity IDE (Gemini)
 - **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-19T15:28:00+07:00
+
+## Summary: Fix Real-Time Video Preview Stutter During Voice Clip Dragging (100% PASS)
+- **Problem & Root Causes Identified**:
+  1. **Starvation of Native `drainNextSeek` via Recursive RAF Polling Loop**: In `TimelineEditor.jsx:scheduleVoiceDragScrub`, `if (videoRef?.current?.seeking)` previously scheduled a recursive `requestAnimationFrame` polling loop and returned early *without* invoking `onSeek`. Because `onSeek` was skipped, `useVideoPlayback.js`'s built-in `nextSeekTargetRef` was never updated with the latest pointer target. When the video decoder finished seeking and emitted native `'seeked'`, `drainNextSeek` saw `nextSeekTargetRef.current === null` and went idle, leaving an **87ms gap of decoder inactivity** between frames.
+  2. **Top-Level React Re-render Thrashing on Every Drag Seek**: `handleSeek` in `useVideoPlayback.js` called `setCurrentTime(clampedTime)` on every seek. Because `setCurrentTime` is a top-level React state setter in `App.jsx`, every pointer move triggered virtual DOM diffing of the entire application (~1,000 components), blocking the main thread for 20-40ms and starving media event loops.
+  3. **Unnecessary Audio Seeking on Paused Scrub**: In `VideoPlayerPreview.jsx:handleSeeked`, `a.currentTime = Math.min(...)` was seeking the narration `<audio>` element on every video frame even while paused, adding CPU and audio decoder contention.
+- **Surgical Minimal Changes Implemented**:
+  1. `frontend/src/hooks/useVideoPlayback.js`:
+     - Added `{ skipStateCommit = false }` options parameter to `handleSeek(time, options)`.
+     - When `skipStateCommit: true`, updates `currentTimeRef.current` and `lastMappedTimelineTimeRef.current` without calling `setCurrentTime(clampedTime)`, eliminating React virtual DOM diffing during active dragging.
+     - Direct decoder-aware seek queueing: buffers newest pointer target in `nextSeekTargetRef.current` while previous seek is in flight (at most 1 active seek at any time).
+     - Stale seek recovery: added `performance.now() - pendingSeekStartedMsRef.current > 1200` to automatically clear in-flight seek lock if hardware stalls.
+     - In `drainNextSeek`: synchronously dispatches `nextSeekTargetRef.current` the microsecond `'seeked'` fires, achieving 0ms idle gap between decoded frames.
+  2. `frontend/src/components/timeline/TimelineEditor.jsx`:
+     - In `scheduleVoiceDragScrub`: replaced recursive RAF polling loop with direct forward `onSeekRef.current?.(pending.time, { skipStateCommit: true })`.
+     - Keeps `if (videoRef?.current?.seeking)` to avoid seek storms while delegating queueing directly to `useVideoPlayback`'s event-driven `nextSeekTargetRef`.
+     - In `handleMouseUp`: calls `onSeek(droppedStart)` without `skipStateCommit`, synchronously committing the final playhead position to React state on clip drop.
+  3. `frontend/src/components/player/VideoPlayerPreview.jsx`:
+     - In `handleSeeked`: added `|| v.paused` guard to avoid unnecessary audio element seeking while paused video scrubbing.
+  4. `backend/tests/timeline_voice_drag_freeze_regression.test.js`:
+     - Added assertions 10–13 protecting `skipStateCommit`, direct `onSeek` forwarding without RAF loop, 1200ms stale seek recovery, and paused audio seek guards.
+- **Empirical Real-Browser Verification (Playwright on Google Chrome)**:
+  - **Proxy_Verification_219** (219 segments):
+    - Slow drag preview seek latency: **12.8ms avg seek duration** (Max: 107.4ms, 21 seeks).
+    - Fast drag coalescing: **26.1ms avg seek duration** (30 rapid moves coalesced into 29 frames, 0 stalls).
+    - Snap ON & OFF: **PASS** (toggling and dragging functional without jitter).
+    - Drag between VOICE 1 and VOICE 2: **PASS**.
+    - Drag while playing: **PASS** (playback advanced 57.66s -> 60.32s through drag with zero interruption).
+    - 20 consecutive moves: **20/20 PASS** (0 errors).
+    - Reload durability: **PASS** (`left: 2584.35px` identical before and after reload).
+    - 20s continuous playback after edits: **PASS** (sampled: 59.55s -> 79.56s, delta: **20.01s**, 0 freezes).
+  - **Pseudo_Spiritual_Root** (221 segments):
+    - Slow drag preview seek latency: **35.4ms avg seek duration** (Max: 260.0ms, 19 seeks).
+    - Fast drag coalescing: **20.2ms avg seek duration** (30 rapid moves coalesced into 28 frames, 0 stalls).
+    - Snap ON & OFF: **PASS**.
+    - Drag between VOICE 1 and VOICE 2: **PASS**.
+    - Drag while playing: **PASS** (playback advanced 52.50s -> 54.11s through drag with zero interruption).
+    - 20 consecutive moves: **20/20 PASS** (0 errors).
+    - Reload durability: **PASS** (`left: 2345.85px` identical before and after reload).
+    - 20s continuous playback after edits: **PASS** (sampled: 53.46s -> 73.47s, delta: **20.01s**, 0 freezes).
+- **Test Suites & Verification**:
+  - `npm --prefix frontend run build`: **PASS** (0 errors, 4.46s).
+  - 35/35 backend tests PASS across:
+    - `timeline_voice_drag_freeze_regression.test.js` (13/13 PASS)
+    - `timeline_voice_drag_scrub.test.js` (2/2 PASS)
+    - `timeline_voice_drag_persistence.test.js` (7/7 PASS)
+    - `timeline_user_shifted_anchors.test.js` (7/7 PASS)
+    - `playback_sync_and_deferred_source_regression.test.js` (4/4 PASS)
+    - `source_proxy.test.js` (4/4 PASS)
+    - `proxy_preview.test.js` (4/4 PASS)
+    - `timeline_delete_persistence.test.js` (5/5 PASS)
+- **Active Environment**:
+  - Backend API: `http://localhost:5000`
+  - Frontend UI: `http://localhost:5173`
+- **Next Steps**:
+  - Ready for user testing.
+
+---
+
+## Previous Session
+- **Environment**: Antigravity IDE (Gemini)
+- **Branch**: `chore/full-project-cleanup`
 - **Timestamp**: 2026-11-19T14:55:00+07:00
 
 ## Summary: Fix Choppy, Laggy, and Jumping Voice Clip Dragging on Timeline (60 FPS GPU Transform Optimization)

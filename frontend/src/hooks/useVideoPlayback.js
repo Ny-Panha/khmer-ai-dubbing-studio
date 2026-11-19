@@ -495,7 +495,7 @@ export function useVideoPlayback({
     const drainNextSeek = () => {
       isSeekInFlightRef.current = false;
       pausedRecoveryCountRef.current = 0;
-      if (!v.seeking && nextSeekTargetRef.current !== null) {
+      if (nextSeekTargetRef.current !== null) {
         const next = nextSeekTargetRef.current;
         nextSeekTargetRef.current = null;
         if (Math.abs((v.currentTime || 0) - next) > 0.03) {
@@ -518,7 +518,8 @@ export function useVideoPlayback({
     };
   }, [videoRef]);
 
-  const handleSeek = useCallback((time) => {
+  const handleSeek = useCallback((time, options = {}) => {
+    const { skipStateCommit = false } = options || {};
     hasSeekedRef.current = true;
     stallRecoveryCountRef.current = 0;
     activeClipIdxRef.current = 0;
@@ -526,7 +527,10 @@ export function useVideoPlayback({
     const realDur = videoRef?.current?.duration || 0;
     const totalDur = timelineDuration > 0 ? timelineDuration : (duration > 0 ? duration : realDur);
     const clampedTime = Math.max(0, totalDur > 0 ? Math.min(totalDur, rawTime) : rawTime);
-    setCurrentTime(clampedTime);
+    if (!skipStateCommit) {
+      setCurrentTime(clampedTime);
+    }
+    currentTimeRef.current = clampedTime;
     lastMappedTimelineTimeRef.current = clampedTime;
 
     if (videoRef?.current) {
@@ -554,11 +558,17 @@ export function useVideoPlayback({
         return;
       }
 
+      // Stale seek recovery: if in-flight seek takes > 1200ms, unlock
+      const isSeekingStale = isSeekInFlightRef.current && (performance.now() - pendingSeekStartedMsRef.current > 1200);
+      if (isSeekingStale) {
+        isSeekInFlightRef.current = false;
+      }
+
       // If video is currently seeking, coalesce seek requests:
       // Store latest requested time so the in-flight seek can finish downloading
       // its 206 byte-range chunk without being aborted prematurely.
       // Once 'seeked' fires, drainNextSeek immediately dispatches this target.
-      if (videoRef.current.seeking || isSeekInFlightRef.current) {
+      if ((videoRef.current.seeking || isSeekInFlightRef.current) && !isSeekingStale) {
         nextSeekTargetRef.current = targetTime;
         return;
       }

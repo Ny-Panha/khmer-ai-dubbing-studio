@@ -16,10 +16,10 @@ test('Voice Clip Drag Freeze Regression Suite', () => {
   assert.ok(fs.existsSync(timelineEditorPath), 'TimelineEditor.jsx must exist');
   assert.ok(fs.existsSync(videoPlaybackPath), 'useVideoPlayback.js must exist');
 
-  const proxyCode = fs.readFileSync(proxyHookPath, 'utf8');
-  const playerCode = fs.readFileSync(playerPreviewPath, 'utf8');
-  const editorCode = fs.readFileSync(timelineEditorPath, 'utf8');
-  const playbackCode = fs.readFileSync(videoPlaybackPath, 'utf8');
+  const proxyCode = fs.readFileSync(proxyHookPath, 'utf8').replace(/\r\n/g, '\n');
+  const playerCode = fs.readFileSync(playerPreviewPath, 'utf8').replace(/\r\n/g, '\n');
+  const editorCode = fs.readFileSync(timelineEditorPath, 'utf8').replace(/\r\n/g, '\n');
+  const playbackCode = fs.readFileSync(videoPlaybackPath, 'utf8').replace(/\r\n/g, '\n');
 
   // 1. useProxyPreview: Cache retention during background renders to prevent src flapping
   assert.ok(
@@ -96,5 +96,33 @@ test('Voice Clip Drag Freeze Regression Suite', () => {
   assert.ok(
     cssCode.includes('will-change: transform;'),
     'TimelineEditor.css must set will-change: transform on dragging blocks'
+  );
+
+  // 10. useVideoPlayback: skipStateCommit option to avoid top-level React re-renders during active drag
+  assert.ok(
+    playbackCode.includes('const { skipStateCommit = false } = options || {}'),
+    'useVideoPlayback handleSeek must support skipStateCommit option'
+  );
+  assert.ok(
+    playbackCode.includes('if (!skipStateCommit) {\n      setCurrentTime(clampedTime);\n    }'),
+    'useVideoPlayback handleSeek must bypass setCurrentTime when skipStateCommit is true'
+  );
+
+  // 11. TimelineEditor: Non-blocking drag scrub without recursive RAF polling loop
+  assert.ok(
+    editorCode.includes('onSeekRef.current?.(pending.time, { skipStateCommit: true })'),
+    'TimelineEditor scheduleVoiceDragScrub must forward skipStateCommit: true to onSeek without polling RAF'
+  );
+
+  // 12. useVideoPlayback: Stale seek timeout recovery after 1200ms
+  assert.ok(
+    playbackCode.includes('performance.now() - pendingSeekStartedMsRef.current > 1200'),
+    'useVideoPlayback must include 1200ms stale seek recovery to prevent permanent decoder seek lock'
+  );
+
+  // 13. VideoPlayerPreview: Paused seek guard to eliminate unnecessary audio seeks during drag
+  assert.ok(
+    playerCode.includes('if (!a || renderedVideo || !audioGenerated || !fullAudioUrl || hasSegmentAudios || v.paused) return;'),
+    'VideoPlayerPreview handleSeeked must skip audio seeking while video is paused'
   );
 });

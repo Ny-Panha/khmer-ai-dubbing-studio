@@ -581,19 +581,6 @@ function TimelineEditor({
           pendingVoiceDragSeekRef.current = null;
           return;
         }
-        if (videoRef?.current?.seeking) {
-          if (!voiceDragSeekRafRef.current) {
-            voiceDragSeekRafRef.current = requestAnimationFrame(() => {
-              voiceDragSeekRafRef.current = null;
-              if (pendingVoiceDragSeekRef.current) {
-                scheduleVoiceDragScrub(pendingVoiceDragSeekRef.current.time, pendingVoiceDragSeekRef.current.segKey);
-              }
-            });
-          }
-          return;
-        }
-        pendingVoiceDragSeekRef.current = null;
-        lastVoiceDragSeekRef.current = pending.time;
         if (pending.segKey !== null && pending.segKey !== undefined) {
           manualFocusLockRef.current = {
             segKey: pending.segKey,
@@ -601,7 +588,17 @@ function TimelineEditor({
             expiresAt: Date.now() + 900,
           };
         }
-        onSeekRef.current?.(pending.time);
+        if (videoRef?.current?.seeking) {
+          // If video decoder is already busy, forward latest target with skipStateCommit so
+          // nextSeekTargetRef in useVideoPlayback stores it and drains on native 'seeked' without an RAF polling loop.
+          pendingVoiceDragSeekRef.current = null;
+          lastVoiceDragSeekRef.current = pending.time;
+          onSeekRef.current?.(pending.time, { skipStateCommit: true });
+          return;
+        }
+        pendingVoiceDragSeekRef.current = null;
+        lastVoiceDragSeekRef.current = pending.time;
+        onSeekRef.current?.(pending.time, { skipStateCommit: true });
       });
     }
   }, []);

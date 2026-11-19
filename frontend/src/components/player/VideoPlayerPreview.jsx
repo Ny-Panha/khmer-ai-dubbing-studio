@@ -1080,7 +1080,7 @@ function VideoPlayerPreview({
       }
 
       const a = narrationAudioRef.current;
-      if (!a || renderedVideo || !audioGenerated || !fullAudioUrl || hasSegmentAudios) return;
+      if (!a || renderedVideo || !audioGenerated || !fullAudioUrl || hasSegmentAudios || v.paused) return;
       a.playbackRate = v.playbackRate || 1.0;
 
       const targetTime = getTargetTimelineTime();
