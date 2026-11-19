@@ -277,6 +277,16 @@ async function runChunkedDubbingPipeline({
           startOffsetSec: chunk.startSec,
           force,
           signal,
+          onProgress: (p) => {
+            const batchPercent = p.totalBatches > 0
+              ? Math.round(chunkPercent + (p.completedBatches / p.totalBatches) * ((1 / chunks.length) * 15))
+              : chunkPercent;
+            report(
+              'chunkOCR',
+              Math.min(70, batchPercent),
+              `Chunk ${cIdx + 1}/${chunks.length}: ស្កេន OCR ${p.completedBatches}/${p.totalBatches} batches (${p.completedFrames}/${p.totalFrames} frames) [Model: ${p.modelUsed || effectiveModelName}]${p.retriesCount > 0 ? ` (Retries: ${p.retriesCount})` : ''}`
+            );
+          },
         });
 
         checkAbort();

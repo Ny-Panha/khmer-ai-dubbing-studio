@@ -48,6 +48,52 @@ function getOcrCachePath(videoPath, startOffsetSec = 0, durationSec = 0, modelNa
   }
 }
 
+function getOcrCheckpointPath(videoPath, startOffsetSec = 0, durationSec = 0) {
+  try {
+    const cacheDir = path.resolve(__dirname, '../../../uploads/cache');
+    const checkpointDir = path.join(cacheDir, 'ocr_checkpoints');
+    if (!fs.existsSync(checkpointDir)) {
+      fs.mkdirSync(checkpointDir, { recursive: true });
+    }
+    const stat = fs.statSync(videoPath);
+    const safeBase = path.basename(videoPath).replace(/[^a-zA-Z0-9_-]/g, '_');
+    const signature = `${stat.size}_${Math.round(stat.mtimeMs)}`;
+    return path.join(checkpointDir, `ocr_ckpt_${safeBase}_${signature}_${Math.round(startOffsetSec)}_${Math.round(durationSec)}.json`);
+  } catch (_) {
+    return null;
+  }
+}
+
+function saveOcrCheckpoint(checkpointPath, data) {
+  if (!checkpointPath || !data) return false;
+  const tempPath = `${checkpointPath}.tmp.${Date.now()}_${process.pid}`;
+  try {
+    const dir = path.dirname(checkpointPath);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(tempPath, JSON.stringify(data, null, 2), 'utf8');
+    fs.renameSync(tempPath, checkpointPath);
+    return true;
+  } catch (err) {
+    try { if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath); } catch (_) {}
+    console.warn('[Stage 3 OCR] Failed to persist OCR checkpoint atomically:', err.message);
+    return false;
+  }
+}
+
+function loadOcrCheckpoint(checkpointPath) {
+  if (!checkpointPath || !fs.existsSync(checkpointPath)) return null;
+  try {
+    const content = fs.readFileSync(checkpointPath, 'utf8');
+    const parsed = JSON.parse(content);
+    if (parsed && Array.isArray(parsed.rawObservations)) {
+      return parsed;
+    }
+  } catch (err) {
+    console.warn('[Stage 3 OCR] Failed to load checkpoint:', err.message);
+  }
+  return null;
+}
+
 function normalizeChineseChars(str = '') {
   return String(str)
     .replace(/[\s\r\n\t,，.。!！?？:：;；"'"'《》\(\)（）—\-_·、]/g, '')
@@ -85,92 +131,194 @@ function areChineseTextsEquivalent(a = '', b = '') {
 }
 
 const CASCADE_VISION_MODELS = VISION_CASCADE_MODELS;
+const visionModelCooldownMap = new Map();
+
+/**
+ * Distinguishes HTTP 429, 503, 504, network failures, true client timeouts, and auth errors.
+ */
+function classifyVisionError(err) {
+  if (!err) return { type: 'UNKNOWN', isRetryable: false, status: 0, message: '' };
+  if (err.name === 'AbortError' || err.code === 'ABORT_ERR') {
+    return { type: 'ABORT', isRetryable: false, status: 0, message: err.message || 'Aborted' };
+  }
+  const status = Number(err.status || err.statusCode || err.code) || 0;
+  const rawMsg = String(err.message || err.toString() || '');
+  const msgUpper = rawMsg.toUpperCase();
+
+  // True client-side deadline or timeout
+  if (
+    msgUpper.includes('TIMEOUT: GEMINI VISION OCR') ||
+    err.name === 'TimeoutError' ||
+    err.code === 'ETIMEDOUT'
+  ) {
+    return { type: 'CLIENT_TIMEOUT', isRetryable: true, status: 504, message: rawMsg };
+  }
+  // Server-side gateway timeout
+  if (status === 504 || msgUpper.includes('504') || msgUpper.includes('GATEWAY TIMEOUT') || msgUpper.includes('DEADLINE_EXCEEDED')) {
+    return { type: 'SERVER_TIMEOUT', isRetryable: true, status: 504, message: rawMsg };
+  }
+  // Service Unavailable / High demand / Overloaded
+  if (status === 503 || msgUpper.includes('503') || msgUpper.includes('UNAVAILABLE') || msgUpper.includes('HIGH DEMAND') || msgUpper.includes('OVERLOADED')) {
+    return { type: 'SERVICE_UNAVAILABLE', isRetryable: true, status: 503, message: rawMsg };
+  }
+  // Rate limit / Resource exhausted
+  if (status === 429 || msgUpper.includes('429') || msgUpper.includes('RESOURCE_EXHAUSTED') || msgUpper.includes('RATE LIMIT') || msgUpper.includes('TOO MANY REQUESTS')) {
+    return { type: 'RATE_LIMIT', isRetryable: true, status: 429, message: rawMsg };
+  }
+  // Network / Socket errors
+  if (
+    msgUpper.includes('ECONNRESET') ||
+    msgUpper.includes('ENOTFOUND') ||
+    msgUpper.includes('EAI_AGAIN') ||
+    msgUpper.includes('FETCH FAILED') ||
+    msgUpper.includes('NETWORK')
+  ) {
+    return { type: 'NETWORK_ERROR', isRetryable: true, status: 0, message: rawMsg };
+  }
+  // Auth errors
+  if (status === 401 || status === 403 || msgUpper.includes('UNAUTHENTICATED') || msgUpper.includes('PERMISSION_DENIED')) {
+    return { type: 'AUTH_ERROR', isRetryable: false, status, message: rawMsg };
+  }
+
+  return { type: 'OTHER', isRetryable: false, status, message: rawMsg };
+}
+
+/**
+ * Respect server-provided Retry-After / RetryInfo when available.
+ */
+function extractRetryDelayMs(err, fallbackMs = 1500) {
+  if (!err) return fallbackMs;
+  const headerVal = err.response?.headers?.get?.('retry-after') || err.headers?.['retry-after'];
+  if (headerVal) {
+    const parsed = Number(headerVal);
+    if (!isNaN(parsed) && parsed > 0) {
+      return Math.min(30000, Math.max(1000, Math.ceil(parsed * 1000)));
+    }
+  }
+  const details = err.statusDetails || err.details;
+  if (Array.isArray(details)) {
+    for (const d of details) {
+      if (d && (d['@type']?.includes('RetryInfo') || d.retryDelay)) {
+        const sec = typeof d.retryDelay === 'string' ? parseFloat(d.retryDelay) : Number(d.retryDelay?.seconds || 0);
+        if (!isNaN(sec) && sec > 0) {
+          return Math.min(30000, Math.max(1000, Math.ceil(sec * 1000)));
+        }
+      }
+    }
+  }
+  const match = String(err.message || '').match(/retry\s+(?:in\s+)?(\d+(?:\.\d+)?)\s*s/i) ||
+    String(err.message || '').match(/"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"/i);
+  if (match) {
+    const sec = parseFloat(match[1]);
+    if (!isNaN(sec) && sec > 0) {
+      return Math.min(30000, Math.max(1000, Math.ceil(sec * 1000)));
+    }
+  }
+  return fallbackMs;
+}
 
 /**
  * Checks if an OCR vision error is retryable / temporary (429, 503, 504 Deadline Exceeded, timeouts).
  */
 function isRetryableVisionError(err) {
-  if (!err) return false;
-  const status = err.status || err.statusCode;
-  const msg = String(err.message || err.toString() || '').toUpperCase();
-  return (
-    status === 429 ||
-    status === 503 ||
-    status === 504 ||
-    msg.includes('429') ||
-    msg.includes('503') ||
-    msg.includes('504') ||
-    msg.includes('RESOURCE_EXHAUSTED') ||
-    msg.includes('EXHAUSTED') ||
-    msg.includes('QUOTA') ||
-    msg.includes('RATE LIMIT') ||
-    msg.includes('TOO MANY REQUESTS') ||
-    msg.includes('HIGH DEMAND') ||
-    msg.includes('DEADLINE_EXCEEDED') ||
-    msg.includes('GATEWAY TIMEOUT') ||
-    msg.includes('ETIMEDOUT') ||
-    msg.includes('TIMEOUT')
-  );
+  const classified = classifyVisionError(err);
+  return classified.isRetryable;
 }
 
 function isTimeoutOrOverloadError(err) {
-  const msg = String(err?.message || '').toUpperCase();
-  const status = err?.status || err?.code;
-  return (
-    status === 503 ||
-    status === 504 ||
-    msg.includes('503') ||
-    msg.includes('504') ||
-    msg.includes('DEADLINE_EXCEEDED') ||
-    msg.includes('DEADLINE EXPIRED') ||
-    msg.includes('GATEWAY TIMEOUT') ||
-    msg.includes('HIGH DEMAND') ||
-    msg.includes('UNAVAILABLE') ||
-    msg.includes('ETIMEDOUT') ||
-    msg.includes('TIMEOUT')
-  );
+  const classified = classifyVisionError(err);
+  return classified.type === 'SERVICE_UNAVAILABLE' ||
+    classified.type === 'SERVER_TIMEOUT' ||
+    classified.type === 'CLIENT_TIMEOUT' ||
+    classified.type === 'NETWORK_ERROR';
 }
 
 /**
- * Helper: Call Gemini Vision with multi-model cascade and exponential backoff retry on 429 / 503 / 504
+ * Helper: Call Gemini Vision with bounded retry/backoff, model cooldown handling,
+ * and cancellation support for client timeouts and user aborts.
  */
 async function callGeminiVisionWithRetry(aiClient, modelName, contents, maxRetries = 2, signal = null, onModelSuccess = null) {
   const preferred = modelName || geminiQuotaTracker.getPreferredPrimaryModel(CASCADE_VISION_MODELS[0]);
   const otherModels = CASCADE_VISION_MODELS.filter((m) => m !== preferred);
   const poolKeys = Array.isArray(aiClient?.pool?.keys) ? aiClient.pool.keys : [];
   const allCandidateModels = [preferred, ...otherModels];
-  // Auto-demote exhausted models so healthy models (e.g. gemini-3.1-flash-lite) run first immediately
-  const modelsToTry = poolKeys.length > 0
-    ? geminiQuotaTracker.prioritizeAvailableModels(allCandidateModels, poolKeys)
-    : allCandidateModels;
-  let lastErr = null;
+  const now = Date.now();
 
-  for (const currentModel of modelsToTry) {
+  const prioritized = poolKeys.length > 0
+    ? geminiQuotaTracker.prioritizeAvailableModels(allCandidateModels, poolKeys, now)
+    : allCandidateModels;
+
+  const topCandidates = prioritized.slice(0, 4);
+  // Filter models not currently in cooldown
+  let candidateList = topCandidates.filter((m) => (visionModelCooldownMap.get(m) || 0) <= Date.now());
+
+  // If all models are in temporary cooldown, wait for shortest cooldown (Requirement 14)
+  if (candidateList.length === 0 && topCandidates.length > 0) {
+    const earliestExpiry = Math.min(...topCandidates.map((m) => visionModelCooldownMap.get(m) || 0));
+    const waitMs = Math.min(10000, Math.max(1000, earliestExpiry - Date.now()));
+    console.warn(`[Stage 3 OCR] ⏳ All cascade models in temporary cooldown. Waiting ${waitMs}ms before retrying...`);
+    await sleepOrAbort(waitMs, signal);
+    visionModelCooldownMap.delete(preferred);
+    candidateList = topCandidates.filter((m) => (visionModelCooldownMap.get(m) || 0) <= Date.now());
+    if (candidateList.length === 0) candidateList = [preferred];
+  }
+
+  let lastErr = null;
+  let classifiedLastErr = null;
+
+  for (const currentModel of candidateList) {
     let attempt = 0;
     while (attempt < maxRetries) {
       if (signal?.aborted) {
         throw createAbortError('Stage 3 OCR aborted');
       }
-      let timeoutId = null;
-      try {
-        const timeoutMs = 25000;
-        const timeoutPromise = new Promise((_, reject) => {
-          timeoutId = setTimeout(() => {
-            reject(new Error(`Timeout: Gemini Vision OCR on ${currentModel} exceeded ${timeoutMs}ms deadline`));
-          }, timeoutMs);
-        });
 
+      const abortController = new AbortController();
+      let timeoutId = null;
+      const timeoutMs = 25000;
+
+      const onSignalAbort = () => {
+        abortController.abort(signal?.reason || createAbortError('Stage 3 OCR aborted'));
+      };
+      if (signal) {
+        signal.addEventListener('abort', onSignalAbort, { once: true });
+      }
+
+      timeoutId = setTimeout(() => {
+        const tErr = new Error(`Timeout: Gemini Vision OCR on ${currentModel} exceeded ${timeoutMs}ms deadline`);
+        tErr.name = 'TimeoutError';
+        tErr.code = 'ETIMEDOUT';
+        abortController.abort(tErr);
+      }, timeoutMs);
+
+      let abortReject;
+      const abortPromise = new Promise((_, reject) => { abortReject = reject; });
+      const onAbortEvent = () => {
+        abortReject(abortController.signal.reason || createAbortError('Stage 3 OCR aborted'));
+      };
+      abortController.signal.addEventListener('abort', onAbortEvent, { once: true });
+
+      try {
         const callPromise = aiClient.models.generateContent({
           model: currentModel,
           contents,
           config: {
             temperature: 0.1,
             responseMimeType: 'application/json',
+            abortSignal: abortController.signal,
           },
         });
 
-        const resp = await Promise.race([callPromise, timeoutPromise]);
+        const resp = await Promise.race([callPromise, abortPromise]);
         clearTimeout(timeoutId);
+        abortController.signal.removeEventListener('abort', onAbortEvent);
+        if (signal) signal.removeEventListener('abort', onSignalAbort);
+
+        // Success: clear cooldown and record healthy probe
+        visionModelCooldownMap.delete(currentModel);
+        try {
+          geminiQuotaTracker.recordModelProbeStatus(currentModel, { statusCode: 200, latencyMs: 1000 });
+        } catch (_) {}
 
         if (typeof onModelSuccess === 'function') {
           onModelSuccess(currentModel);
@@ -178,35 +326,51 @@ async function callGeminiVisionWithRetry(aiClient, modelName, contents, maxRetri
         return resp;
       } catch (err) {
         if (timeoutId) clearTimeout(timeoutId);
-        if (err?.name === 'AbortError' || signal?.aborted) {
-          throw err?.name === 'AbortError' ? err : createAbortError('Stage 3 OCR aborted');
+        abortController.signal.removeEventListener('abort', onAbortEvent);
+        if (signal) signal.removeEventListener('abort', onSignalAbort);
+
+        if (err?.name === 'AbortError' && signal?.aborted) {
+          throw createAbortError('Stage 3 OCR aborted');
         }
+
         lastErr = err;
         attempt++;
-        const isRetryable = isRetryableVisionError(err);
-        if (!isRetryable) {
+        const classified = classifyVisionError(err);
+        classifiedLastErr = classified;
+
+        if (!classified.isRetryable) {
           throw err;
         }
 
-        // Fast-fail: If Google hits 504/503/Timeout/Overload, DO NOT hang retry on the same dead model!
-        // Immediately break to the next cascade model to prevent 4-5 minute stalls.
-        if (isTimeoutOrOverloadError(err) || attempt >= maxRetries) {
-          console.warn(`[Stage 3 OCR] Model ${currentModel} overloaded/timed out (${err.message}). Falling back immediately to next cascade model...`);
-          geminiQuotaTracker.recordModelProbeStatus(currentModel, {
-            statusCode: 504,
-            message: err.message,
-            latencyMs: 25000,
-          });
+        const serverRetryDelay = extractRetryDelayMs(err, Math.min(3000, 1000 * Math.pow(1.5, attempt)));
+
+        if (attempt < maxRetries) {
+          console.warn(`[Stage 3 OCR] Model ${currentModel} hit ${classified.type} (${err.message}). Retrying in ${serverRetryDelay}ms (attempt ${attempt}/${maxRetries})...`);
+          await sleepOrAbort(serverRetryDelay, signal);
+        } else {
+          // Model exhausted its attempts -> set cooldown (20s) and cascade to next model
+          const modelCdMs = Math.max(15000, serverRetryDelay);
+          visionModelCooldownMap.set(currentModel, Date.now() + modelCdMs);
+          try {
+            geminiQuotaTracker.recordModelProbeStatus(currentModel, {
+              statusCode: classified.status || 503,
+              message: err.message,
+              latencyMs: 25000,
+            });
+          } catch (_) {}
+          console.warn(`[Stage 3 OCR] Model ${currentModel} failed after ${maxRetries} attempts (${err.message}). Cascading to next candidate model...`);
           break;
         }
-
-        const backoffMs = Math.min(2000, 1000 * attempt);
-        await sleepOrAbort(backoffMs, signal);
       }
     }
   }
 
-  throw lastErr || new Error('All cascade Gemini models exceeded quota/rate limits or timed out (429/503/504)');
+  const finalErr = new Error(`All cascade Gemini models exceeded quota/rate limits or timed out (429/503/504): ${lastErr?.message || 'unknown error'}`);
+  if (classifiedLastErr) {
+    finalErr.classification = classifiedLastErr.type;
+    finalErr.statusCode = classifiedLastErr.status;
+  }
+  throw finalErr;
 }
 
 /**
@@ -233,6 +397,7 @@ async function extractChineseSubtitles({
   startOffsetSec = 0,
   force = false,
   signal = null,
+  onProgress = null,
 }) {
   let activeWorkingModel = modelName || geminiQuotaTracker.getPreferredPrimaryModel(CASCADE_VISION_MODELS[0]);
   const effectiveModel = activeWorkingModel;
@@ -263,6 +428,26 @@ async function extractChineseSubtitles({
         return cached;
       }
     } catch (_) {}
+  }
+
+  const checkpointPath = getOcrCheckpointPath(videoPath, startOffsetSec, durationSec);
+  if (force && checkpointPath && fs.existsSync(checkpointPath)) {
+    try { fs.unlinkSync(checkpointPath); } catch (_) {}
+  }
+
+  const completedMap = new Map();
+  let resumedFromCheckpoint = false;
+  if (!force && checkpointPath) {
+    const ckpt = loadOcrCheckpoint(checkpointPath);
+    if (ckpt && Array.isArray(ckpt.rawObservations) && ckpt.rawObservations.length > 0) {
+      for (const obs of ckpt.rawObservations) {
+        if (obs && typeof obs.timestampSec === 'number') {
+          completedMap.set(parseFloat(obs.timestampSec.toFixed(2)), obs);
+        }
+      }
+      resumedFromCheckpoint = true;
+      console.log(`[Stage 3 OCR] ⚡ Resuming from checkpoint (${path.basename(checkpointPath)}): ${completedMap.size} completed frame observations loaded.`);
+    }
   }
 
   const tempDir = path.join(os.tmpdir(), `sub_ocr_${Date.now()}_${process.pid}`);
@@ -459,107 +644,285 @@ Return JSON ONLY matching this schema:
       return contents;
     }
 
-    // Helper: Execute a batch call and push parsed frame observations
-    async function executeVisionBatch(batch) {
-      checkAbort();
-      const contents = buildVisionBatchContents(batch);
-      if (!contents) return;
+    // Helper: Parse Gemini Vision JSON response and return frame observations
+    function parseVisionResponseFrames(resp, batchFrames) {
+      const rawText = typeof resp.text === 'function' ? resp.text() : resp.text;
+      const clean = String(rawText || '').replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+      const parsed = JSON.parse(clean);
+      const frames = Array.isArray(parsed.frames) ? parsed.frames : [];
 
-      try {
-        apiCallsCount++;
-        const resp = await callGeminiVisionWithRetry(
-          aiClient,
-          activeWorkingModel,
-          contents,
-          2,
-          signal,
-          (winningModel) => {
-            if (winningModel && winningModel !== activeWorkingModel) {
-              console.log(`[Stage 3 OCR] ⚡ Auto-Cascade switched active model: ${activeWorkingModel} -> ${winningModel}`);
-              activeWorkingModel = winningModel;
-            }
-          }
-        );
-        const rawText = typeof resp.text === 'function' ? resp.text() : resp.text;
-        if (rawText) {
-          const clean = rawText.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
-          const parsed = JSON.parse(clean);
-          const frames = Array.isArray(parsed.frames) ? parsed.frames : [];
+      const batchObservations = [];
+      for (let fIdx = 0; fIdx < batchFrames.length; fIdx++) {
+        const fallbackTime = batchFrames[fIdx].timestampSec;
+        const f = frames[fIdx] || {};
+        const tSec = typeof f.timestampSec === 'number' && !isNaN(f.timestampSec)
+          ? parseFloat(f.timestampSec.toFixed(2))
+          : fallbackTime;
 
-          for (let fIdx = 0; fIdx < batch.length; fIdx++) {
-            const fallbackTime = batch[fIdx].timestampSec;
-            const f = frames[fIdx] || {};
-            const tSec = typeof f.timestampSec === 'number' && !isNaN(f.timestampSec)
-              ? parseFloat(f.timestampSec.toFixed(2))
-              : fallbackTime;
+        const rawChinese = String(f.textZh || f.chineseText || '').trim();
+        const cText = stripDecorativeSubtitleNoise(rawChinese);
+        const hasCleanText = Boolean(f.hasText && normalizeChineseChars(cText).length > 0);
+        const rawGender = String(f.visualGender || f.speakerGender || 'unknown').toLowerCase();
+        const validGender = rawGender === 'female' ? 'female' : (rawGender === 'male' ? 'male' : 'unknown');
+        const conf = typeof f.genderConfidence === 'number' && !isNaN(f.genderConfidence)
+          ? Math.min(1.0, Math.max(0.0, f.genderConfidence))
+          : (validGender === 'unknown' ? 0.5 : 0.85);
+        const speakerVisualHint = String(f.speakerVisualHint || '').trim();
+        const rawDelivery = String(f.deliveryType || 'dialogue').toLowerCase();
+        const validDelivery = ['dialogue', 'inner_thought', 'narration'].includes(rawDelivery)
+          ? rawDelivery
+          : 'dialogue';
 
-            const rawChinese = String(f.textZh || f.chineseText || '').trim();
-            const cText = stripDecorativeSubtitleNoise(rawChinese);
-            const hasCleanText = Boolean(f.hasText && normalizeChineseChars(cText).length > 0);
-            const rawGender = String(f.visualGender || f.speakerGender || 'unknown').toLowerCase();
-            const validGender = rawGender === 'female' ? 'female' : (rawGender === 'male' ? 'male' : 'unknown');
-            const conf = typeof f.genderConfidence === 'number' && !isNaN(f.genderConfidence)
-              ? Math.min(1.0, Math.max(0.0, f.genderConfidence))
-              : (validGender === 'unknown' ? 0.5 : 0.85);
-            const speakerVisualHint = String(f.speakerVisualHint || '').trim();
-            const rawDelivery = String(f.deliveryType || 'dialogue').toLowerCase();
-            const validDelivery = ['dialogue', 'inner_thought', 'narration'].includes(rawDelivery)
-              ? rawDelivery
-              : 'dialogue';
-
-            rawObservations.push({
-              timestampSec: fallbackTime,
-              reportedSec: tSec,
-              hasText: hasCleanText,
-              textZh: hasCleanText ? cText : '',
-              chineseText: hasCleanText ? cText : '',
-              position: f.position || 'bottom_subtitle',
-              isSharp: f.isSharp !== false,
-              visualGender: validGender,
-              speakerGender: validGender,
-              speakerVisualHint,
-              deliveryType: validDelivery,
-              genderConfidence: conf,
-            });
-          }
-        }
-      } catch (geminiErr) {
-        if (geminiErr?.name === 'AbortError' || signal?.aborted) {
-          throw geminiErr?.name === 'AbortError' ? geminiErr : createAbortError('Stage 3 OCR aborted');
-        }
-        retriesCount++;
-        lastBatchError = geminiErr.message;
-        console.error(`[Stage 3 Extract Subtitles] ❌ Batch OCR call failed at ${batch[0].timestampSec}s after full model cascade:`, geminiErr.message);
-        throw new Error(`[Stage 3 Batch Failure] Batch at ${batch[0].timestampSec}s failed after cascade: ${geminiErr.message}`);
+        batchObservations.push({
+          timestampSec: fallbackTime,
+          reportedSec: tSec,
+          hasText: hasCleanText,
+          textZh: hasCleanText ? cText : '',
+          chineseText: hasCleanText ? cText : '',
+          position: f.position || 'bottom_subtitle',
+          isSharp: f.isSharp !== false,
+          visualGender: validGender,
+          speakerGender: validGender,
+          speakerVisualHint,
+          deliveryType: validDelivery,
+          genderConfidence: conf,
+        });
       }
+      return batchObservations;
     }
 
-    // 3. Batch frames (15 frames per call) to Gemini Vision with Bounded Concurrency (2 batches at a time)
+    // Helper: Execute a single batch with model auto-cascade and cancellation
+    async function executeSingleVisionBatch(batchFrames) {
+      checkAbort();
+      const contents = buildVisionBatchContents(batchFrames);
+      if (!contents) return [];
+
+      apiCallsCount++;
+      const resp = await callGeminiVisionWithRetry(
+        aiClient,
+        activeWorkingModel,
+        contents,
+        2,
+        signal,
+        (winningModel) => {
+          if (winningModel && winningModel !== activeWorkingModel) {
+            console.log(`[Stage 3 OCR] ⚡ Auto-Cascade switched active model: ${activeWorkingModel} -> ${winningModel}`);
+            activeWorkingModel = winningModel;
+          }
+        }
+      );
+      return parseVisionResponseFrames(resp, batchFrames);
+    }
+
+    // 3. Adaptive Batch Scheduler with Per-Batch Checkpointing & Concurrency Backoff
     console.log(`[Stage 3 Extract Subtitles] Running Gemini Vision OCR on ${framesToAnalyze.length} candidate frames...`);
     const ocrStartTime = Date.now();
-    const BATCH_SIZE = 15;
-    const batchList = [];
-    for (let i = 0; i < framesToAnalyze.length; i += BATCH_SIZE) {
-      batchList.push(framesToAnalyze.slice(i, i + BATCH_SIZE));
+    const INITIAL_BATCH_SIZE = 15;
+
+    // Filter candidate frames against completed observations from checkpoint
+    const pendingFrames = framesToAnalyze.filter((f) => {
+      const t = parseFloat(f.timestampSec.toFixed(2));
+      return !completedMap.has(t);
+    });
+
+    const batchQueue = [];
+    for (let i = 0; i < pendingFrames.length; i += INITIAL_BATCH_SIZE) {
+      const slice = pendingFrames.slice(i, i + INITIAL_BATCH_SIZE);
+      const startT = slice[0].timestampSec.toFixed(2);
+      const endT = slice[slice.length - 1].timestampSec.toFixed(2);
+      batchQueue.push({
+        batchId: `batch_${startT}_${endT}_${i}`,
+        frames: slice,
+        splitDepth: 0,
+      });
     }
 
-    const CONCURRENCY = 2;
-    for (let bIdx = 0; bIdx < batchList.length; bIdx += CONCURRENCY) {
-      checkAbort();
-      const activeBatches = batchList.slice(bIdx, bIdx + CONCURRENCY);
-      await Promise.all(activeBatches.map((batch) => executeVisionBatch(batch)));
+    const totalCandidateFrames = framesToAnalyze.length;
+    let completedBatchesCount = Math.floor(completedMap.size / INITIAL_BATCH_SIZE);
+    let totalBatchesEstimated = completedBatchesCount + batchQueue.length;
+    let adaptiveConcurrency = 2; // starts at 2, reduces to 1 on overload
+    let consecutiveSuccesses = 0;
+    let failedBatchesCount = 0;
+    let recoveredBatchesCount = 0;
+    const inFlightBatchKeys = new Set(); // Prevents concurrent retries of same batch (Requirement 13)
 
-      if (bIdx + CONCURRENCY < batchList.length) {
-        await sleepOrAbort(400, signal);
+    const reportProgress = (statusMsg = '') => {
+      if (typeof onProgress === 'function') {
+        onProgress({
+          stage: 'stage3_ocr',
+          completedBatches: completedBatchesCount,
+          totalBatches: Math.max(completedBatchesCount, totalBatchesEstimated),
+          completedFrames: completedMap.size,
+          totalFrames: totalCandidateFrames,
+          modelUsed: activeWorkingModel,
+          retriesCount,
+          concurrency: adaptiveConcurrency,
+          statusMessage: statusMsg,
+        });
+      }
+    };
+
+    reportProgress(resumedFromCheckpoint ? `Resumed (${completedMap.size}/${totalCandidateFrames} frames from checkpoint)` : 'Starting Vision OCR...');
+
+    while (batchQueue.length > 0) {
+      checkAbort();
+
+      const currentWave = [];
+      while (currentWave.length < adaptiveConcurrency && batchQueue.length > 0) {
+        const nextBatch = batchQueue.shift();
+        if (inFlightBatchKeys.has(nextBatch.batchId)) continue;
+        inFlightBatchKeys.add(nextBatch.batchId);
+        currentWave.push(nextBatch);
+      }
+
+      if (currentWave.length === 0) break;
+
+      const waveResults = await Promise.allSettled(
+        currentWave.map(async (batch) => {
+          checkAbort();
+          const observations = await executeSingleVisionBatch(batch.frames);
+          return { batch, observations };
+        })
+      );
+
+      for (let wIdx = 0; wIdx < waveResults.length; wIdx++) {
+        const item = waveResults[wIdx];
+        const originalBatch = currentWave[wIdx];
+        inFlightBatchKeys.delete(originalBatch.batchId);
+
+        if (item.status === 'fulfilled') {
+          const obsList = item.value.observations || [];
+          for (const obs of obsList) {
+            completedMap.set(parseFloat(obs.timestampSec.toFixed(2)), obs);
+          }
+          completedBatchesCount++;
+          consecutiveSuccesses++;
+
+          // Conservative recovery: recover to concurrency 2 after 3 consecutive successes
+          if (consecutiveSuccesses >= 3 && adaptiveConcurrency < 2) {
+            adaptiveConcurrency = 2;
+            console.log('[Stage 3 OCR] ⚡ Concurrency recovered to 2 after demonstrated successes');
+          }
+
+          // Persist atomically after each verified batch (Requirement 7)
+          if (checkpointPath) {
+            saveOcrCheckpoint(checkpointPath, {
+              version: 1,
+              videoPath,
+              startOffsetSec: Math.round(startOffsetSec),
+              durationSec: Math.round(durationSec),
+              updatedAt: Date.now(),
+              rawObservations: Array.from(completedMap.values()),
+              completedBatchesCount,
+              totalCandidateFrames,
+            });
+          }
+
+          reportProgress(`Batch completed (${completedMap.size}/${totalCandidateFrames} frames)`);
+        } else {
+          // Failure on this batch
+          retriesCount++;
+          const batchErr = item.reason || new Error('Batch failed');
+          if (batchErr?.name === 'AbortError' || signal?.aborted) {
+            throw batchErr?.name === 'AbortError' ? batchErr : createAbortError('Stage 3 OCR aborted');
+          }
+
+          lastBatchError = batchErr.message;
+          consecutiveSuccesses = 0;
+
+          // Adaptive concurrency reduction (Requirement 5)
+          if (adaptiveConcurrency > 1) {
+            console.warn(`[Stage 3 OCR] ⚠️ Overload detected on batch at ${originalBatch.frames[0]?.timestampSec}s. Reducing concurrency to 1.`);
+            adaptiveConcurrency = 1;
+          }
+
+          // Adaptive batch splitting without discarding source frames (Requirement 6)
+          if (originalBatch.frames.length > 1) {
+            const mid = Math.ceil(originalBatch.frames.length / 2);
+            const subBatch1 = {
+              batchId: `${originalBatch.batchId}_s1`,
+              frames: originalBatch.frames.slice(0, mid),
+              splitDepth: (originalBatch.splitDepth || 0) + 1,
+            };
+            const subBatch2 = {
+              batchId: `${originalBatch.batchId}_s2`,
+              frames: originalBatch.frames.slice(mid),
+              splitDepth: (originalBatch.splitDepth || 0) + 1,
+            };
+            totalBatchesEstimated += 1;
+            batchQueue.unshift(subBatch2);
+            batchQueue.unshift(subBatch1);
+            console.warn(
+              `[Stage 3 OCR] 🔀 Batch at ${originalBatch.frames[0]?.timestampSec}s failed (${lastBatchError}). Split into sub-batches (${subBatch1.frames.length} & ${subBatch2.frames.length} frames) without discarding frames.`
+            );
+            recoveredBatchesCount++;
+          } else {
+            // Single frame batch that failed repeatedly across all models
+            // Requirement 10 & 11: Mark unresolved OCR as failed/review_needed rather than inventing Chinese text
+            const failedFrame = originalBatch.frames[0];
+            const fallbackObs = {
+              timestampSec: failedFrame.timestampSec,
+              reportedSec: failedFrame.timestampSec,
+              hasText: false,
+              textZh: '',
+              chineseText: '',
+              position: 'bottom_subtitle',
+              isSharp: false,
+              visualGender: 'unknown',
+              speakerGender: 'UNKNOWN',
+              speakerVisualHint: '',
+              deliveryType: 'dialogue',
+              genderConfidence: 0.5,
+              ocrFailed: true,
+              reviewNeeded: true,
+              uncertainOcr: true,
+              failureReason: lastBatchError,
+            };
+            completedMap.set(parseFloat(failedFrame.timestampSec.toFixed(2)), fallbackObs);
+            failedBatchesCount++;
+            console.warn(`[Stage 3 OCR] ⚠️ Frame at ${failedFrame.timestampSec}s unresolved after retries. Marked as review_needed.`);
+
+            if (checkpointPath) {
+              saveOcrCheckpoint(checkpointPath, {
+                version: 1,
+                videoPath,
+                startOffsetSec: Math.round(startOffsetSec),
+                durationSec: Math.round(durationSec),
+                updatedAt: Date.now(),
+                rawObservations: Array.from(completedMap.values()),
+                completedBatchesCount,
+                totalCandidateFrames,
+              });
+            }
+          }
+        }
+      }
+
+      const pacingMs = adaptiveConcurrency === 1 ? 750 : 350;
+      if (batchQueue.length > 0) {
+        await sleepOrAbort(pacingMs, signal);
       }
     }
     ocrWallTimeMs = Date.now() - ocrStartTime;
 
-    // Sort observations chronologically
+    // Requirement 12: Account for all frames
+    const unaccountedFrames = framesToAnalyze.filter(
+      (f) => !completedMap.has(parseFloat(f.timestampSec.toFixed(2)))
+    );
+    if (unaccountedFrames.length > 0) {
+      throw new Error(`[Stage 3 OCR] Incomplete chunk: ${unaccountedFrames.length} candidate frames could not be accounted for.`);
+    }
+
+    rawObservations.length = 0;
+    rawObservations.push(...Array.from(completedMap.values()));
     rawObservations.sort((a, b) => a.timestampSec - b.timestampSec);
 
     // Fast lookup helper to find observation closest to timestamp
     function getObservation(targetT) {
+      const roundedT = parseFloat(Number(targetT).toFixed(2));
+      if (completedMap.has(roundedT)) {
+        return completedMap.get(roundedT);
+      }
       let closest = null;
       let minD = 999;
       for (const obs of rawObservations) {
@@ -761,7 +1124,30 @@ Return JSON ONLY matching this schema:
         }
 
         if (tieFrames.length > 0) {
-          await executeVisionBatch(tieFrames);
+          for (let ti = 0; ti < tieFrames.length; ti += 15) {
+            const tieSlice = tieFrames.slice(ti, ti + 15);
+            try {
+              const tieObsList = await executeSingleVisionBatch(tieSlice);
+              for (const tobs of tieObsList) {
+                completedMap.set(parseFloat(tobs.timestampSec.toFixed(2)), tobs);
+                rawObservations.push(tobs);
+              }
+              if (checkpointPath) {
+                saveOcrCheckpoint(checkpointPath, {
+                  version: 1,
+                  videoPath,
+                  startOffsetSec: Math.round(startOffsetSec),
+                  durationSec: Math.round(durationSec),
+                  updatedAt: Date.now(),
+                  rawObservations: Array.from(completedMap.values()),
+                  completedBatchesCount,
+                  totalCandidateFrames,
+                });
+              }
+            } catch (tieErr) {
+              console.warn(`[Stage 3 OCR] Tie-break batch call failed: ${tieErr.message}`);
+            }
+          }
         }
 
         // Resolve each disagreement using tie-break read
@@ -1161,6 +1547,11 @@ Return JSON ONLY matching this schema:
       wallTimeMs: ocrWallTimeMs,
       hasVisualSubtitles: finalizedVisualSegments.length > 0,
       ocrNotice: lastBatchError || null,
+      adaptiveConcurrency,
+      failedBatchesCount,
+      recoveredBatchesCount,
+      completedBatchesCount,
+      resumedFromCheckpoint,
     },
   };
 
@@ -1168,6 +1559,16 @@ Return JSON ONLY matching this schema:
     try {
       fs.writeFileSync(cachePath, JSON.stringify(result, null, 2), 'utf8');
       console.log(`[Stage 3 OCR] 💾 Cached ${finalizedVisualSegments.length} segments to ${path.basename(cachePath)}`);
+    } catch (_) {}
+  }
+
+  if (checkpointPath && fs.existsSync(checkpointPath)) {
+    try {
+      saveOcrCheckpoint(checkpointPath, {
+        ...(loadOcrCheckpoint(checkpointPath) || {}),
+        completed: true,
+        finalizedAt: Date.now(),
+      });
     } catch (_) {}
   }
 
@@ -1398,6 +1799,14 @@ module.exports = {
   areChineseTextsEquivalent,
   deduplicateFastOcrCues,
   isRetryableVisionError,
+  isTimeoutOrOverloadError,
+  classifyVisionError,
+  extractRetryDelayMs,
   callGeminiVisionWithRetry,
   getOcrCachePath,
+  getOcrCheckpointPath,
+  saveOcrCheckpoint,
+  loadOcrCheckpoint,
+  CASCADE_VISION_MODELS,
+  visionModelCooldownMap,
 };

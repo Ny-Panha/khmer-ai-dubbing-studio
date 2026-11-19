@@ -3,6 +3,46 @@
 ## Last Session
 - **Environment**: Antigravity IDE (Gemini) - Minimal Change Engineer
 - **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-20T00:03:00+07:00
+
+## Summary: Gemini Vision OCR 503/Timeout Resilience, Adaptive Splitting & Checkpoint Resume (100% PASS)
+- **Task:** Make Stage 3 Vision OCR resilient to temporary Gemini 503 overload and client/server timeouts while preserving Chinese subtitle accuracy, timing, and all successful OCR work.
+- **Root Causes Identified**:
+  1. Immediate full-model cascade exhaustion: On the very first 503 or 504 on attempt 1, `callGeminiVisionWithRetry` immediately abandoned the model. When Google experienced temporary service-level overload, all 12 cascade models were exhausted in <200ms.
+  2. Uncancelled background requests on deadline: `Promise.race` rejected on timeout but never aborted the underlying `@google/genai` fetch, leaving uncontrolled requests competing for bandwidth and quota.
+  3. Static batch concurrency: Fixed concurrency of 2 batches (30 frames) sent large image payloads simultaneously during Google peak load, triggering 503 and 25s deadline timeouts.
+  4. Non-resumable chunk execution: Successful OCR batches were never persisted per batch (only at the very end of Stage 3). A single failed batch aborted the whole chunk, discarding all previous work and forcing `ProductionJobQueue` to repeat OCR from frame 0.
+- **Surgical Changes Implemented (Minimal Change Discipline)**:
+  1. `backend/services/pipeline/stages/stage3_extractChineseSubtitles.js`:
+     - **Structured Error Classification (`classifyVisionError`)**: Explicitly distinguishes `CLIENT_TIMEOUT`, `SERVER_TIMEOUT`, `SERVICE_UNAVAILABLE` (503), `RATE_LIMIT` (429), `NETWORK_ERROR`, and `AUTH_ERROR` (401/403).
+     - **Server Retry-After / RetryInfo Parsing (`extractRetryDelayMs`)**: Honors `retry-after` HTTP header, Google RPC `RetryInfo.retryDelay`, and regex in error messages.
+     - **Request Cancellation via `AbortController`**: Connects deadline timer and external abort signal directly to SDK `config.abortSignal`, aborting sockets on client timeout or user cancellation.
+     - **Bounded Model Retries & Cooldown Tracking (`callGeminiVisionWithRetry`)**: Retries once with server-directed backoff before cooldown; places overloaded models in a 20s cooldown map; bounds candidate cascade to top 4 models; waits for shortest cooldown expiry if all models temporarily unavailable (avoids rapid spinning).
+     - **Adaptive Batch Splitting**: When an OCR batch of 15 frames fails, dynamically splits it into 2 sub-batches (e.g. 8 and 7 frames) in chronological order without discarding any frames.
+     - **Adaptive Concurrency Control**: Starts at concurrency 2; immediately reduces to 1 on overload; conservatively recovers to 2 after 3 consecutive successes.
+     - **Atomic Per-Batch Checkpoint & Resume (`saveOcrCheckpoint`, `loadOcrCheckpoint`)**: Writes temporary file and renames atomically after each completed batch to `uploads/cache/ocr_checkpoints/ocr_ckpt_*.json`. On chunk retry/restart, resumes already completed frames and only queries pending frames.
+     - **Frame Accountability & Review Needed Guard**: Prevents false completion if any candidate frame is missing; flags unresolved frames as `reviewNeeded` and `ocrFailed` without inventing synthetic Chinese text.
+     - **Live Progress Reporting**: Emits `completedBatches`, `totalBatches`, `completedFrames`, `totalFrames`, `modelUsed`, and `retriesCount` via `onProgress`.
+  2. `backend/services/pipeline/chunkOrchestrator.js`:
+     - Relays live batch OCR progress to `ProductionJobQueue` and user console (`chunkOCR`).
+     - Preserves Stage 3 checkpoints on chunk failure so `ProductionJobQueue` retries resume from the exact failed batch without repeating completed work.
+  3. `backend/tests/stage3_gemini_vision_resilience.test.js` (NEW):
+     - 14-test comprehensive suite verifying 503 retry, 504 cancellation, all models unavailable, atomic checkpoints, resume without re-calling completed batches, adaptive splitting, adaptive concurrency, in-flight deduplication, unresolved frame safety, cancel during retry, and live progress.
+- **Verification Outcomes**:
+  - `backend/tests/stage3_gemini_vision_resilience.test.js`: **14/14 PASS** (100%).
+  - Fast OCR, Unified 3-Step, and Smart Pipeline regression suites: **92/92 PASS** (100%, 8.16s).
+  - `npm --prefix frontend run build`: **PASS** (0 errors, 676ms).
+- **Active Environment**:
+  - Backend API: `http://localhost:5000`
+  - Frontend UI: `http://localhost:5173`
+- **Next Steps**:
+  - Ready for production review and deployment.
+
+---
+
+## Last Session
+- **Environment**: Antigravity IDE (Gemini) - Minimal Change Engineer
+- **Branch**: `chore/full-project-cleanup`
 - **Timestamp**: 2026-11-19T23:10:00+07:00
 
 ## Summary: Smart 3-Step Pipeline Targeted Correctness Fixes & Unified Runner Contract (100% PASS)
@@ -52,8 +92,6 @@
 
 ---
 
-# Antigravity Shared State (Sync Memory)
-
 ## Last Session
 - **Environment**: Antigravity IDE (Gemini)
 - **Branch**: `chore/full-project-cleanup`
@@ -94,6 +132,46 @@
 ---
 
 # Antigravity Shared State (Sync Memory)
+
+## Last Session
+- **Environment**: Antigravity IDE (Gemini) - Minimal Change Engineer
+- **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-20T00:03:00+07:00
+
+## Summary: Gemini Vision OCR 503/Timeout Resilience, Adaptive Splitting & Checkpoint Resume (100% PASS)
+- **Task:** Make Stage 3 Vision OCR resilient to temporary Gemini 503 overload and client/server timeouts while preserving Chinese subtitle accuracy, timing, and all successful OCR work.
+- **Root Causes Identified**:
+  1. Immediate full-model cascade exhaustion: On the very first 503 or 504 on attempt 1, `callGeminiVisionWithRetry` immediately abandoned the model. When Google experienced temporary service-level overload, all 12 cascade models were exhausted in <200ms.
+  2. Uncancelled background requests on deadline: `Promise.race` rejected on timeout but never aborted the underlying `@google/genai` fetch, leaving uncontrolled requests competing for bandwidth and quota.
+  3. Static batch concurrency: Fixed concurrency of 2 batches (30 frames) sent large image payloads simultaneously during Google peak load, triggering 503 and 25s deadline timeouts.
+  4. Non-resumable chunk execution: Successful OCR batches were never persisted per batch (only at the very end of Stage 3). A single failed batch aborted the whole chunk, discarding all previous work and forcing `ProductionJobQueue` to repeat OCR from frame 0.
+- **Surgical Changes Implemented (Minimal Change Discipline)**:
+  1. `backend/services/pipeline/stages/stage3_extractChineseSubtitles.js`:
+     - **Structured Error Classification (`classifyVisionError`)**: Explicitly distinguishes `CLIENT_TIMEOUT`, `SERVER_TIMEOUT`, `SERVICE_UNAVAILABLE` (503), `RATE_LIMIT` (429), `NETWORK_ERROR`, and `AUTH_ERROR` (401/403).
+     - **Server Retry-After / RetryInfo Parsing (`extractRetryDelayMs`)**: Honors `retry-after` HTTP header, Google RPC `RetryInfo.retryDelay`, and regex in error messages.
+     - **Request Cancellation via `AbortController`**: Connects deadline timer and external abort signal directly to SDK `config.abortSignal`, aborting sockets on client timeout or user cancellation.
+     - **Bounded Model Retries & Cooldown Tracking (`callGeminiVisionWithRetry`)**: Retries once with server-directed backoff before cooldown; places overloaded models in a 20s cooldown map; bounds candidate cascade to top 4 models; waits for shortest cooldown expiry if all models temporarily unavailable (avoids rapid spinning).
+     - **Adaptive Batch Splitting**: When an OCR batch of 15 frames fails, dynamically splits it into 2 sub-batches (e.g. 8 and 7 frames) in chronological order without discarding any frames.
+     - **Adaptive Concurrency Control**: Starts at concurrency 2; immediately reduces to 1 on overload; conservatively recovers to 2 after 3 consecutive successes.
+     - **Atomic Per-Batch Checkpoint & Resume (`saveOcrCheckpoint`, `loadOcrCheckpoint`)**: Writes temporary file and renames atomically after each completed batch to `uploads/cache/ocr_checkpoints/ocr_ckpt_*.json`. On chunk retry/restart, resumes already completed frames and only queries pending frames.
+     - **Frame Accountability & Review Needed Guard**: Prevents false completion if any candidate frame is missing; flags unresolved frames as `reviewNeeded` and `ocrFailed` without inventing synthetic Chinese text.
+     - **Live Progress Reporting**: Emits `completedBatches`, `totalBatches`, `completedFrames`, `totalFrames`, `modelUsed`, and `retriesCount` via `onProgress`.
+  2. `backend/services/pipeline/chunkOrchestrator.js`:
+     - Relays live batch OCR progress to `ProductionJobQueue` and user console (`chunkOCR`).
+     - Preserves Stage 3 checkpoints on chunk failure so `ProductionJobQueue` retries resume from the exact failed batch without repeating completed work.
+  3. `backend/tests/stage3_gemini_vision_resilience.test.js` (NEW):
+     - 14-test comprehensive suite verifying 503 retry, 504 cancellation, all models unavailable, atomic checkpoints, resume without re-calling completed batches, adaptive splitting, adaptive concurrency, in-flight deduplication, unresolved frame safety, cancel during retry, and live progress.
+- **Verification Outcomes**:
+  - `backend/tests/stage3_gemini_vision_resilience.test.js`: **14/14 PASS** (100%).
+  - Fast OCR, Unified 3-Step, and Smart Pipeline regression suites: **92/92 PASS** (100%, 8.16s).
+  - `npm --prefix frontend run build`: **PASS** (0 errors, 676ms).
+- **Active Environment**:
+  - Backend API: `http://localhost:5000`
+  - Frontend UI: `http://localhost:5173`
+- **Next Steps**:
+  - Ready for production review and deployment.
+
+---
 
 ## Last Session
 - **Environment**: Antigravity IDE (Gemini)
