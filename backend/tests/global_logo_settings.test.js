@@ -227,6 +227,60 @@ test('Per-episode voiceSettings ignores logo* keys on load/switch and strips log
   }
 });
 
+test('Customize mask and banner settings remain sticky across episode switches without overriding episode audio', () => {
+  const globallySaved = {
+    enableCornerMask: true,
+    cornerMaskPosition: 'top-left',
+    cornerMaskWidth: 135,
+    cornerMaskHeight: 44,
+    enableAntiTheft: true,
+    marqueePosition: 'top',
+    watermarkText: 'My Page',
+    enableWatermark: false,
+    antiTheftBottomPercent: 0,
+    aspectRatio: '16:9',
+  };
+  for (const episodeVoiceSettings of [
+    { enableCornerMask: false, marqueePosition: 'bottom', watermarkText: 'Old EP1', duckingVolume: 0.21 },
+    { enableCornerMask: false, marqueePosition: 'bottom', watermarkText: 'Old EP2', duckingVolume: 0.32 },
+    {},
+  ]) {
+    const resolved = projectStorageMod.resolveStickyVoiceSettings({
+      prevSettings: projectStorageMod.DEFAULT_VOICE_SETTINGS,
+      savedGlobalSettings: globallySaved,
+      episodeVoiceSettings,
+    });
+    assert.equal(resolved.enableCornerMask, true);
+    assert.equal(resolved.cornerMaskPosition, 'top-left');
+    assert.equal(resolved.cornerMaskWidth, 135);
+    assert.equal(resolved.cornerMaskHeight, 44);
+    assert.equal(resolved.enableAntiTheft, true);
+    assert.equal(resolved.marqueePosition, 'top');
+    assert.equal(resolved.watermarkText, 'My Page');
+    assert.equal(resolved.enableWatermark, false);
+    assert.equal(resolved.antiTheftBottomPercent, 0);
+    assert.equal(resolved.aspectRatio, '16:9');
+    if (episodeVoiceSettings.duckingVolume !== undefined) {
+      assert.equal(resolved.duckingVolume, episodeVoiceSettings.duckingVolume);
+    }
+  }
+  // A custom value that was never saved globally remains episode-local.
+  const resolved = projectStorageMod.resolveStickyVoiceSettings({
+    savedGlobalSettings: { enableCornerMask: true },
+    episodeVoiceSettings: { cornerMaskWidth: 178 },
+  });
+  assert.equal(resolved.cornerMaskWidth, 178);
+});
+
+test('Batch export passes corner mask to FFmpeg and rejects reuse after shared overlay edits', () => {
+  const content = fs.readFileSync(path.join(__dirname, '../services/batchExportService.js'), 'utf8');
+  assert.match(content, /const cornerMask = exportSettings\\.cornerMask \\|\\| null/);
+  assert.match(content, /batchVisualSignature = JSON\\.stringify/);
+  assert.match(content, /previous\\?\\.batchVisualSignature === batchVisualSignature/);
+  assert.match(content, /antiTheft,\\s*cornerMask,\\s*logoSettings:/);
+  assert.ok(!content.includes('(epPlan.useOriginalAudio || sameBurn)'), 'Original-audio renders must not ignore visual changes');
+});
+
 test('Backend globalLogoSettingsService persists globally and episodeService strips logo* keys on series.json write', async () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'global-logo-test-'));
   try {
