@@ -3,6 +3,43 @@
 ## Last Session
 - **Environment**: Antigravity IDE (Gemini)
 - **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-19T13:05:00+07:00
+
+## Summary: Remove Intrusive Manual-Position Auto-Align Warning UI & Relocate to Contextual Actions (100% PASS)
+- **Scope & Objective**:
+  - Removed intrusive manual-position Auto-Align yellow warning UI across all Voice Clips without altering timeline behavior.
+  - Manual repositioning is a normal workflow state, not an application error; eliminated intrusive yellow warning presentation.
+- **Surgical Changes Made**:
+  1. `frontend/src/components/voice/ClipInspectorPanel.jsx`:
+     - Removed the top-level yellow warning banner (`data-testid="manual-position-release-banner"`, `rgba(245, 158, 11, 0.10)`, `<AlertCircle size={13} color="#f59e0b" />`, `ទីតាំងដៃ (Auto-Align មិនប៉ះ)`).
+     - Relocated the "Release to Auto-Align" action (`data-testid="btn-release-auto-align"`) into the bottom contextual actions row right below Split & Delete.
+     - Preserved clean, compact, non-warning styling (`btn-secondary`, cyan accent `#38bdf8`, `ឲ្យ Auto-Align គ្រប់គ្រងវិញ`, `RefreshCw` icon).
+     - Kept conditional rendering strictly tied to `Boolean(selectedSegment?.userShifted) && onReleaseSegmentToAutoAlign` (hidden for non-shifted clips).
+  2. `backend/tests/timeline_user_shifted_anchors.test.js`:
+     - Updated test 7 to explicitly verify that `data-testid="btn-release-auto-align"` remains accessible and functional while asserting `!src.includes('data-testid="manual-position-release-banner"')` and `!src.includes('ទីតាំងដៃ (Auto-Align មិនប៉ះ)')`.
+  3. **Preserved Invariants**:
+     - `userShifted`, manual clip positions, `trackRow`, `trackId`, `audioStartSec`, and Auto-Align protection logic remain 100% preserved.
+     - Playback, Source Proxy, Proxy Preview, audio scheduling, and backend persistence remain 100% untouched.
+     - Genuine errors (missing audio, failed TTS, save failures, invalid timeline state) remain intact.
+- **Test Suites & Verification**:
+  - `npm --prefix frontend run build`: **PASS** (0 errors, 675ms).
+  - `backend/tests/timeline_user_shifted_anchors.test.js`: **7/7 PASS**.
+  - `backend/tests/timeline_voice_drag_persistence.test.js`: **7/7 PASS**.
+  - `backend/tests/timeline_voice_drag_freeze_regression.test.js`: **1/1 PASS**.
+  - `backend/tests/auto_align_voice.test.js`: **9/9 PASS**.
+  - `backend/tests/timeline_delete_persistence.test.js`: **5/5 PASS**.
+  - `backend/tests/playback_sync_and_deferred_source_regression.test.js`: **4/4 PASS**.
+  - `backend/tests/source_proxy.test.js`: **5/5 PASS**.
+  - `backend/tests/proxy_preview.test.js`: **4/4 PASS**.
+- **Active Environment**:
+  - Backend API: `http://localhost:5000`
+  - Frontend UI: `http://localhost:5173`
+
+---
+
+## Previous Session
+- **Environment**: Antigravity IDE (Gemini)
+- **Branch**: `chore/full-project-cleanup`
 - **Timestamp**: 2026-11-19T13:00:00+07:00
 
 ## Summary: Targeted Persistence Lifecycle Safety & Flushed Write Coordination (100% PASS)

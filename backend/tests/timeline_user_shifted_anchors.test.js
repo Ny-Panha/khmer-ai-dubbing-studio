@@ -195,11 +195,13 @@ test('6. releaseSegmentFromManual clears userShifted & trackRow for ONLY that se
   assert.deepEqual(aligned.report.untouchedClipNumbers, [2, 3], 'Only #2 and #3 remain manual untouched');
 });
 
-test('7. ClipInspectorPanel shows Release to Auto-Align button ONLY for userShifted segments', () => {
+test('7. ClipInspectorPanel shows Release to Auto-Align button ONLY for userShifted segments and NO yellow warning banner', () => {
   const inspectorPath = path.join(ROOT_DIR, 'frontend', 'src', 'components', 'voice', 'ClipInspectorPanel.jsx');
   const src = fs.readFileSync(inspectorPath, 'utf8');
   assert.match(src, /Boolean\(selectedSegment\?\.userShifted\)\s*&&\s*onReleaseSegmentToAutoAlign/);
   assert.match(src, /ឲ្យ Auto-Align គ្រប់គ្រងវិញ/);
   assert.match(src, /data-testid="btn-release-auto-align"/);
+  assert.ok(!src.includes('data-testid="manual-position-release-banner"'), 'Intrusive yellow warning banner must be removed');
+  assert.ok(!src.includes('ទីតាំងដៃ (Auto-Align មិនប៉ះ)'), 'Intrusive warning title must be removed');
 });
 
