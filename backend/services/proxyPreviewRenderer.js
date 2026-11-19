@@ -44,7 +44,7 @@ function encode(args, jobId) {
   });
 }
 
-async function renderProxy(input, dir, jobId) {
+async function renderProxy(input, dir, jobId, onProgress = null) {
   const { source, stem, clips, voices, settings } = input;
   const info = await getMediaInfo(source);
   const ranges = planRanges(clips, Number(info.format.duration));
@@ -54,7 +54,9 @@ async function renderProxy(input, dir, jobId) {
     ? `scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h}`
     : `scale=${w}:${h}:force_original_aspect_ratio=decrease,pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2`;
   const parts = [];
-  for (const range of ranges) {
+  const totalRanges = ranges.length;
+  for (let i = 0; i < totalRanges; i++) {
+    const range = ranges[i];
     // Round absolute boundaries so rounding never accumulates across micro-clips.
     const seconds = (Math.round(range.end * 30) - Math.round(range.start * 30)) / 30;
     if (seconds <= 0) continue;
@@ -77,6 +79,10 @@ async function renderProxy(input, dir, jobId) {
       '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '28', '-g', '30', '-threads', '4',
       '-pix_fmt', 'yuv420p', '-c:a', 'pcm_s16le', '-ar', '44100', '-ac', '2', path.join(dir, name)], jobId);
     parts.push("file '" + name + "'\nduration " + length);
+    if (typeof onProgress === 'function') {
+      const percent = Math.min(85, Math.round(((i + 1) / totalRanges) * 85));
+      onProgress({ phase: 'encoding', percent, part: i + 1, totalParts: totalRanges });
+    }
   }
   await fs.promises.writeFile(path.join(dir, 'parts.txt'), parts.join('\n'));
   const args = ['-f', 'concat', '-i', path.join(dir, 'parts.txt')];
@@ -87,15 +93,24 @@ async function renderProxy(input, dir, jobId) {
   const bg = buildDynamicDuckingFilter(duckSegments, duck, normal, clips);
   let graph = '[0:a]' + bg + '[out]';
   if (voices.length) {
+    if (typeof onProgress === 'function') {
+      onProgress({ phase: 'narration', percent: 86 });
+    }
     const narration = path.join(dir, 'voices.mp3');
     await createSynchronizedNarrationAudio(voices, narration);
     args.push('-i', narration);
     graph = '[0:a]' + bg + '[bg];[1:a]volume=' + Number(settings.khmerVolume ?? 1.3) +
       '[voice];[bg][voice]amix=inputs=2:duration=first:dropout_transition=2147483647,volume=2,alimiter=limit=0.95[out]';
   }
+  if (typeof onProgress === 'function') {
+    onProgress({ phase: 'muxing', percent: 90 });
+  }
   const output = path.join(dir, 'preview.mp4');
   await encode([...args, '-filter_complex', graph, '-map', '0:v:0', '-map', '[out]', '-c:v', 'copy',
     '-c:a', 'aac', '-b:a', '96k', '-movflags', '+faststart', output], jobId);
+  if (typeof onProgress === 'function') {
+    onProgress({ phase: 'complete', percent: 100 });
+  }
   const metadata = await getMediaInfo(output);
   return { duration: Number(metadata.format.duration), bytes: fs.statSync(output).size };
 }

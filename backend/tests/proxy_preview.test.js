@@ -89,3 +89,47 @@ test('proxy encodes reordered source, black holes and positioned voice over Clea
     settings:{aspectRatio:'16:9',duckingVolume:.15} }, dir, 'test-original');
   assert.ok(peak(.3) > peak(1.15) * 1.3, 'original dialogue ducks inside the narration window');
 });
+
+test('immediate enqueue on open, progress reporting, and debounce stability on identical snapshots', async t => {
+  const root = fs.mkdtempSync(path.join(uploadsDir, 'projects', 'proxy-imm-'));
+  const series = path.basename(root), episode = 'ep_1', dir = path.join(root, 'episodes', episode);
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(dir, 'video'), { recursive: true });
+  const source = path.join(dir, 'video', 'source.mp4');
+  execFileSync(FFMPEG_PATH, ['-loglevel', 'error', '-f','lavfi','-i','color=green:s=80x60:d=0.3',
+    '-c:v','libx264', source], { windowsHide: true });
+  const videoUrl = '/uploads/' + path.relative(uploadsDir, source).split(path.sep).join('/');
+  fs.writeFileSync(path.join(root, 'series.json'), JSON.stringify({id:series,episodes:[{
+    id: episode, sourceVideoPath: source, video:{videoUrl,videoPath:source}, duration:.3,
+  }]}));
+
+  const snapshot = { videoUrl, segments:[], clips:[], settings:{aspectRatio:'16:9'}, immediate: true };
+  const first = proxyService.request(series, episode, snapshot);
+  assert.equal(first.state, 'queued');
+
+  // Immediate mode must enqueue immediately (delay = 0), transitions to rendering without waiting 5s
+  let sawRenderingOrFresh = false;
+  let result;
+  for (let n = 0; n < 40; n++) {
+    result = proxyService.status(series, episode, first.revision);
+    if (result.state === 'rendering' || result.state === 'fresh') {
+      sawRenderingOrFresh = true;
+      break;
+    }
+    await new Promise(res => setTimeout(res, 50));
+  }
+  assert.ok(sawRenderingOrFresh, 'Job should enter rendering/fresh immediately without 5s idle wait');
+
+  // Identical snapshot request must NOT reset running/queued job
+  const second = proxyService.request(series, episode, snapshot);
+  assert.equal(second.revision, first.revision);
+
+  // Wait for finish
+  for (let n = 0; n < 60; n++) {
+    result = proxyService.status(series, episode, first.revision);
+    if (result.state === 'fresh') break;
+    await new Promise(res => setTimeout(res, 100));
+  }
+  assert.equal(result.state, 'fresh');
+  assert.ok(result.bytes > 0);
+});

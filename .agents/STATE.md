@@ -3,9 +3,53 @@
 ## Last Session
 - **Environment**: Antigravity IDE (Gemini)
 - **Branch**: `chore/full-project-cleanup`
-- **Timestamp**: 2026-11-19T07:16:00+07:00
+- **Timestamp**: 2026-11-19T07:49:00+07:00
 
-## Summary: Proxy Preview Feature Implementation, E2E Verification & Codex Handover Continuation (COMPLETED)
+## Summary: Fix Proxy Preview Stuck in "Queued" Starvation Loop & Freeze at 08:49 (COMPLETED)
+- **Step 0 Proven Root Causes**:
+  1. **Debounce Starvation Loop on Stale Poll**: `useProxyPreview.js` previously polled every 1s when `state === 'stale'` with `POST` (no revision). In `proxyPreviewService.js`, `['error', 'stale', 'fresh'].includes(existing.state)` was true, so every single 1s poll cleared `existing.timer` and scheduled a fresh 5000ms delay. The 5s debounce was reset every 1 second, making it mathematically impossible for the render job to ever fire.
+  2. **No Immediate Enqueue on Episode Open**: Freshly opened episodes with missing or stale proxies went through the debounce path instead of enqueueing immediately at normal priority.
+  3. **Concurrency Lock `busy` without Progress Visibility**: When any episode rendered (taking ~140–180s for 10-minute 480p videos), other episodes sat in `queued` without progress or elapsed timer indicators, appearing completely frozen to the user.
+  4. **Silent Live Fallback & #188/#189 Freeze**: Because the proxy stayed stuck in `queued`, `proxy.media` was null. Clicking Play silently fell back to the multi-clip Live player, which stalled on micro-gaps at the `#188/#189` boundary (08:49–08:51).
+- **Step 1 Fixes Applied**:
+  1. `backend/services/proxyPreviewService.js`:
+     - Added `isImmediate` support (`immediate: true`, delay 0ms) on episode open or missing proxy (`pending.set(dir, job); setImmediate(() => void drain())`).
+     - Reduced edit debounce to 2000ms, capped at 5000ms max wait from `firstEditAt` (prevents indefinite debounce starvation).
+     - Fixed starvation loop: identical snapshots (`existing.id === id`) keep the existing timer/queue and never reset countdown.
+     - Added 25s watchdog: kickstarts stuck `drain()` and clears dangling `busy` flag if queued >= 25s without starting.
+     - `status()` returns real progress, elapsed seconds, and queued seconds.
+     - Safe media path handling: individual missing voice MP3 doesn't abort with HTTP 400.
+  2. `backend/services/proxyPreviewRenderer.js`: Real progress callback reporting (`encoding` 0–85%, `narration` 86%, `muxing` 90%, `complete` 100%).
+  3. `frontend/src/hooks/useProxyPreview.js`:
+     - Marks `immediate: true` on episode open or episode switch.
+     - Removed ephemeral playback fields (`audioOutdated`, `playbackRate`) so non-edit checks never invalidate snapshot.
+     - Polling while queued/rendering uses `GET ?revision=...` without resetting timer.
+     - Returns `{ state: 'queued', queuedSeconds: 0 }` during pending edits instead of dropping to `null`.
+  4. `frontend/src/components/player/VideoPlayerPreview.jsx` & `VideoPlayerPreview.css`:
+     - Real progress badge displays `កំពុង Render X% (Ys)` and `Queued (Xs)`.
+     - Added visible Live playback fallback notice and badge: `⚠️ កំពុងចាក់តាម Live Preview (Proxy កំពុង Render...)`.
+- **Step 2 Real App Verification (Playwright E2E on `Pseudo_Spiritual_Root` `ep_5`, 221 segments)**:
+  1. **Fresh Open**: Automatically detected and reached Fresh in 2s with full 480p proxy MP4 (602.3s, 63.1 MiB).
+  2. **Freeze Spot Playback (08:35–08:55 through #188/#189 boundary at 08:49, 3 runs)**:
+     - Run 1: 601 frames, max gap 66ms, 0 freezes > 0.5s (media 515.03s -> 535.03s).
+     - Run 2: 599 frames, max gap 70ms, 0 freezes > 0.5s (media 515.03s -> 535.03s).
+     - Run 3: 601 frames, max gap 51ms, 0 freezes > 0.5s (media 515.03s -> 535.03s).
+     - Result: ZERO freezes over 0.5s across all 3 runs (100% smooth 60fps playback through #188/#189 boundary).
+  3. **Edit -> Stale Badge -> Re-render -> Fresh Lifecycle**:
+     - Edit snapshot submitted -> queued -> auto background re-render completed in 0.878s without manual action -> reached fresh.
+  4. **Build & Test Suites**:
+     - `npm --prefix frontend run build` PASS (1.54s).
+     - `backend/tests/proxy_preview.test.js` & `playback_60fps_optimization.test.js` 8/8 PASS.
+
+## Active Environment
+- **Backend API**: `http://localhost:5000`
+- **Frontend Studio**: `http://localhost:5173` (Vite dev server)
+- **Branch**: `chore/full-project-cleanup`
+
+## Next Steps
+- Open Studio at `http://localhost:5173/studio` — Proxy Preview opens immediately, renders with live progress without starvation loops, and provides smooth 60fps playback.
+
+---
 - **Situation & Step 0 Audit**:
   - Resumed partial uncommitted edits left by Codex (rate limit pause) across 12 files.
   - Audit of Spec vs Diff:

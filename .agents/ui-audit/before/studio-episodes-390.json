@@ -1,0 +1,231 @@
+{
+  "scope": "BODY",
+  "body": [
+    390,
+    844
+  ],
+  "headings": [],
+  "scroll": [
+    [
+      "capcut-app-container",
+      [
+        0,
+        0,
+        390,
+        844
+      ],
+      [
+        1756,
+        844
+      ],
+      "hidden",
+      "hidden"
+    ],
+    [
+      "captions-list-container",
+      [
+        19,
+        303,
+        294,
+        220
+      ],
+      [
+        294,
+        1582
+      ],
+      "hidden",
+      "auto"
+    ],
+    [
+      "inspector-content",
+      [
+        1304,
+        97,
+        338,
+        438
+      ],
+      [
+        338,
+        2308
+      ],
+      "auto",
+      "auto"
+    ],
+    [
+      "timeline-scroll-area",
+      [
+        7,
+        587,
+        1635,
+        250
+      ],
+      [
+        28296,
+        264
+      ],
+      "auto",
+      "hidden"
+    ],
+    [
+      "track-title-box",
+      [
+        16,
+        687,
+        61,
+        18
+      ],
+      [
+        94,
+        18
+      ],
+      "hidden",
+      "hidden"
+    ],
+    [
+      "track-title-box",
+      [
+        16,
+        735,
+        61,
+        18
+      ],
+      [
+        95,
+        18
+      ],
+      "hidden",
+      "hidden"
+    ]
+  ],
+  "controlsInViewport": 61,
+  "compact": 58,
+  "overflowControls": [
+    [
+      "BUTTON",
+      "Batch Generate Studio (Translate",
+      [
+        237,
+        6,
+        206,
+        36
+      ]
+    ],
+    [
+      "BUTTON",
+      "Gemini API Keys Pool & Model Rat",
+      [
+        448,
+        6,
+        206,
+        36
+      ]
+    ],
+    [
+      "BUTTON",
+      "Job Queue Dashboard (Production ",
+      [
+        660,
+        6,
+        107,
+        36
+      ]
+    ],
+    [
+      "BUTTON",
+      "បង្រួមផ្ទាំងឆ្វេង (Collapse Left",
+      [
+        783,
+        10,
+        33,
+        28
+      ]
+    ],
+    [
+      "BUTTON",
+      "បង្រួមផ្ទាំង Timeline (Collapse ",
+      [
+        818,
+        10,
+        33,
+        28
+      ]
+    ],
+    [
+      "BUTTON",
+      "បង្រួមផ្ទាំងស្តាំ (Collapse Righ",
+      [
+        853,
+        10,
+        33,
+        28
+      ]
+    ],
+    [
+      "BUTTON",
+      "16:9 Landscape (ផ្ដេក — YouTube ",
+      [
+        902,
+        10,
+        68,
+        28
+      ]
+    ],
+    [
+      "BUTTON",
+      "9:16 Portrait (បញ្ឈរ — TikTok / ",
+      [
+        972,
+        10,
+        62,
+        28
+      ]
+    ],
+    [
+      "BUTTON",
+      "Configure Gemini AI API Key",
+      [
+        1183,
+        6,
+        132,
+        36
+      ]
+    ],
+    [
+      "BUTTON",
+      "Keyboard Shortcuts (Ctrl+/)",
+      [
+        1323,
+        6,
+        36,
+        36
+      ]
+    ],
+    [
+      "A",
+      "Download Rendered Video: ភាគទី 1",
+      [
+        1367,
+        6,
+        147,
+        36
+      ]
+    ],
+    [
+      "BUTTON",
+      "Re-Export Video",
+      [
+        1520,
+        10,
+        36,
+        28
+      ]
+    ]
+  ],
+  "fonts": [
+    "Inter",
+    "Kantumruy Pro",
+    "JetBrains Mono"
+  ],
+  "dom": 2138,
+  "errors": []
+}

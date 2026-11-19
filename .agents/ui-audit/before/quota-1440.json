@@ -1,0 +1,222 @@
+{
+  "viewport": [
+    1440,
+    900
+  ],
+  "appMetrics": {
+    "docScrollWidth": 1440,
+    "bodyScrollWidth": 1440,
+    "appScrollWidth": 1592,
+    "appClientWidth": 1440,
+    "overflowX": 152
+  },
+  "navbarMetrics": {
+    "clientWidth": 1517,
+    "scrollWidth": 1592,
+    "overflowPx": 152,
+    "rectWidth": 1517
+  },
+  "headingCount": 1,
+  "hasH1": false,
+  "skippedHeadings": [],
+  "headings": [
+    {
+      "tag": "H2",
+      "text": "GEMINI KEYS & MODEL QUOTA",
+      "fontSize": 14.7,
+      "rect": [
+        191,
+        57,
+        232,
+        25
+      ]
+    }
+  ],
+  "interactiveCount": 86,
+  "clippedControlsCount": 13,
+  "clippedControls": [
+    {
+      "tag": "BUTTON",
+      "cls": "navbar-gemini-route-btn ",
+      "text": "Batch Export\n1 ភាគ",
+      "rect": [
+        1406,
+        6,
+        185,
+        36
+      ]
+    },
+    {
+      "tag": "BUTTON",
+      "cls": "",
+      "text": "Reset កម្រិតសំឡេងស្តង់ដារ (15% / 100%)",
+      "rect": [
+        1288,
+        201,
+        199,
+        24
+      ]
+    },
+    {
+      "tag": "INPUT",
+      "cls": "capcut-slider",
+      "text": "Adjust Original Drama Audio from 0% to 1",
+      "rect": [
+        1195,
+        363,
+        292,
+        5
+      ]
+    },
+    {
+      "tag": "INPUT",
+      "cls": "capcut-slider",
+      "text": "Boost Khmer Voice from 20% up to 200% (S",
+      "rect": [
+        1195,
+        415,
+        292,
+        5
+      ]
+    },
+    {
+      "tag": "BUTTON",
+      "cls": "test-audio-btn ",
+      "text": "Voice Not Generated (បង្កើតសំឡេងនៅជំហានទ",
+      "rect": [
+        1195,
+        438,
+        292,
+        56
+      ]
+    },
+    {
+      "tag": "SELECT",
+      "cls": "inspector-select",
+      "text": "16:9 (Landscape / YouTube)\n9:16 (Portrai",
+      "rect": [
+        1195,
+        577,
+        292,
+        31
+      ]
+    },
+    {
+      "tag": "SELECT",
+      "cls": "inspector-select",
+      "text": "⬛ Title Banner (ប្រអប់ខ្មៅស្អាត CapCut P",
+      "rect": [
+        1201,
+        670,
+        286,
+        31
+      ]
+    },
+    {
+      "tag": "SELECT",
+      "cls": "inspector-select",
+      "text": "តូច\nស្តង់ដារ\nធំ",
+      "rect": [
+        1348,
+        730,
+        139,
+        31
+      ]
+    },
+    {
+      "tag": "BUTTON",
+      "cls": "",
+      "text": "🐉 ប្រើរូបគំរូ Dragon Town",
+      "rect": [
+        1264,
+        875,
+        212,
+        20
+      ]
+    },
+    {
+      "tag": "SELECT",
+      "cls": "inspector-select",
+      "text": "⭕ រង្វង់មូល (Circle - ដូចគេ)\n⬛ រាងដើម (O",
+      "rect": [
+        1344,
+        923,
+        132,
+        31
+      ]
+    },
+    {
+      "tag": "INPUT",
+      "cls": "",
+      "text": "",
+      "rect": [
+        1345,
+        982,
+        131,
+        16
+      ]
+    },
+    {
+      "tag": "BUTTON",
+      "cls": "timeline-icon-tool",
+      "text": "Fit Timeline (1.0x)",
+      "rect": [
+        1431,
+        610,
+        28,
+        28
+      ]
+    },
+    {
+      "tag": "BUTTON",
+      "cls": "timeline-icon-tool tool-locate active",
+      "text": "Auto-Center ON (Playhead នៅចំកណ្ដាលជានិច",
+      "rect": [
+        1463,
+        610,
+        28,
+        28
+      ]
+    }
+  ],
+  "under24TouchTargets": 31,
+  "under44TouchTargets": 85,
+  "unlabeledButtons": 0,
+  "inputsNoLabel": 8,
+  "imgsNoAlt": 0,
+  "clickableNonSemantic": 0,
+  "smallKhmerInteractive": 14,
+  "smallKhmerTextNodes": 43,
+  "uniqueFontSizesPx": [
+    8.1,
+    8.5,
+    8.7,
+    8.8,
+    9,
+    9.1,
+    9.2,
+    9.4,
+    9.5,
+    9.7,
+    9.8,
+    10,
+    10.1,
+    10.2,
+    10.4,
+    10.5,
+    10.6,
+    10.9,
+    11,
+    11.2,
+    11.4,
+    11.5,
+    12,
+    12.3,
+    12.6,
+    13,
+    13.2
+  ],
+  "gradientInteractiveCount": 4,
+  "glowShadowInteractiveCount": 6,
+  "consoleErrors": []
+}

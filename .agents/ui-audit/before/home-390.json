@@ -1,0 +1,268 @@
+{
+  "viewport": [
+    390,
+    844
+  ],
+  "appMetrics": {
+    "docScrollWidth": 390,
+    "bodyScrollWidth": 390,
+    "appScrollWidth": 1592,
+    "appClientWidth": 390,
+    "overflowX": 1202
+  },
+  "navbarMetrics": {
+    "clientWidth": 1517,
+    "scrollWidth": 1592,
+    "overflowPx": 1202,
+    "rectWidth": 1517
+  },
+  "headingCount": 5,
+  "hasH1": true,
+  "skippedHeadings": [],
+  "headings": [
+    {
+      "tag": "H1",
+      "text": "រឿងភាគ (Series 1)",
+      "fontSize": 17,
+      "rect": [
+        246,
+        114,
+        306,
+        29
+      ]
+    },
+    {
+      "tag": "H2",
+      "text": "Studio Editor",
+      "fontSize": 14,
+      "rect": [
+        182,
+        309,
+        1154,
+        24
+      ]
+    },
+    {
+      "tag": "H2",
+      "text": "Batch Studio",
+      "fontSize": 14,
+      "rect": [
+        182,
+        490,
+        1154,
+        24
+      ]
+    },
+    {
+      "tag": "H2",
+      "text": "Keys & Quota",
+      "fontSize": 14,
+      "rect": [
+        182,
+        670,
+        1154,
+        24
+      ]
+    },
+    {
+      "tag": "H2",
+      "text": "Export Studio",
+      "fontSize": 14,
+      "rect": [
+        182,
+        851,
+        1154,
+        24
+      ]
+    }
+  ],
+  "interactiveCount": 24,
+  "clippedControlsCount": 21,
+  "clippedControls": [
+    {
+      "tag": "BUTTON",
+      "cls": "navbar-gemini-route-btn ",
+      "text": "Batch Generate\n1 EPs",
+      "rect": [
+        237,
+        6,
+        199,
+        36
+      ]
+    },
+    {
+      "tag": "BUTTON",
+      "cls": "navbar-gemini-route-btn ",
+      "text": "Keys & Quota\nKeys",
+      "rect": [
+        442,
+        6,
+        180,
+        36
+      ]
+    },
+    {
+      "tag": "BUTTON",
+      "cls": "navbar-gemini-route-btn ",
+      "text": "Jobs",
+      "rect": [
+        627,
+        6,
+        78,
+        36
+      ]
+    },
+    {
+      "tag": "BUTTON",
+      "cls": "navbar-aspect-btn active",
+      "text": "បង្រួមផ្ទាំងឆ្វេង (Collapse Left Panel)",
+      "rect": [
+        722,
+        10,
+        33,
+        28
+      ]
+    },
+    {
+      "tag": "BUTTON",
+      "cls": "navbar-aspect-btn active",
+      "text": "បង្រួមផ្ទាំង Timeline (Collapse Timeline",
+      "rect": [
+        757,
+        10,
+        33,
+        28
+      ]
+    },
+    {
+      "tag": "BUTTON",
+      "cls": "navbar-aspect-btn active",
+      "text": "បង្រួមផ្ទាំងស្តាំ (Collapse Right Inspec",
+      "rect": [
+        792,
+        10,
+        33,
+        28
+      ]
+    },
+    {
+      "tag": "BUTTON",
+      "cls": "navbar-aspect-btn active",
+      "text": "16:9",
+      "rect": [
+        841,
+        10,
+        68,
+        28
+      ]
+    },
+    {
+      "tag": "BUTTON",
+      "cls": "navbar-aspect-btn ",
+      "text": "9:16",
+      "rect": [
+        911,
+        10,
+        62,
+        28
+      ]
+    },
+    {
+      "tag": "BUTTON",
+      "cls": "api-key-btn missing",
+      "text": "Set Gemini Key",
+      "rect": [
+        1121,
+        6,
+        132,
+        36
+      ]
+    },
+    {
+      "tag": "BUTTON",
+      "cls": "navbar-icon-btn",
+      "text": "Keyboard Shortcuts (Ctrl+/)",
+      "rect": [
+        1261,
+        6,
+        36,
+        36
+      ]
+    },
+    {
+      "tag": "BUTTON",
+      "cls": "navbar-export-btn",
+      "text": "Export",
+      "rect": [
+        1305,
+        6,
+        93,
+        36
+      ]
+    },
+    {
+      "tag": "BUTTON",
+      "cls": "navbar-gemini-route-btn ",
+      "text": "Batch Export\n1 ភាគ",
+      "rect": [
+        1406,
+        6,
+        185,
+        36
+      ]
+    },
+    {
+      "tag": "BUTTON",
+      "cls": "home-hero-cta",
+      "text": "ចូលផ្ទាំងកាត់ត (Open Studio)",
+      "rect": [
+        1080,
+        96,
+        250,
+        43
+      ]
+    },
+    {
+      "tag": "DIV",
+      "cls": "home-workspace-card",
+      "text": "/studio\nStudio Editor\n\nកាត់តវីដេអូ, កែសម",
+      "rect": [
+        163,
+        246,
+        1192,
+        166
+      ]
+    },
+    {
+      "tag": "DIV",
+      "cls": "home-workspace-card",
+      "text": "/batch\nBatch Studio\n\nកំណត់ទម្រង់ Script ",
+      "rect": [
+        163,
+        427,
+        1192,
+        166
+      ]
+    }
+  ],
+  "under24TouchTargets": 0,
+  "under44TouchTargets": 20,
+  "unlabeledButtons": 0,
+  "inputsNoLabel": 0,
+  "imgsNoAlt": 0,
+  "clickableNonSemantic": 0,
+  "smallKhmerInteractive": 8,
+  "smallKhmerTextNodes": 24,
+  "uniqueFontSizesPx": [
+    10.5,
+    11,
+    11.5,
+    12,
+    12.5,
+    12.6,
+    13
+  ],
+  "gradientInteractiveCount": 1,
+  "glowShadowInteractiveCount": 4,
+  "consoleErrors": []
+}

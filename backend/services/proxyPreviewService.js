@@ -54,8 +54,27 @@ function cached(dir, id) {
 function status(seriesId, episodeId, id) {
   const dir = location(seriesId, episodeId);
   const job = latest.get(dir);
-  if (!job) return { state: 'stale' };
-  if (job.id !== id) return { state: 'superseded' };
+  if (!job) {
+    if (id) {
+      const hit = cached(dir, id);
+      if (hit) return { ...hit, state: 'fresh', revision: id, url: '/uploads/projects/' + encodeURIComponent(seriesId) +
+        '/episodes/' + encodeURIComponent(episodeId) + '/proxy-' + id + '.mp4' };
+    }
+    return { state: 'stale' };
+  }
+  if (id && job.id !== id) return { state: 'superseded', revision: job.id };
+
+  // Watchdog: If queued for >= 25s without starting, kickstart drain immediately
+  if (job.state === 'queued' && Date.now() - (job.queuedAt || 0) >= 25000) {
+    if (!pending.has(dir) && job.input) {
+      clearTimeout(job.timer);
+      job.timer = null;
+      pending.set(dir, job);
+      busy = false;
+      setImmediate(() => void drain());
+    }
+  }
+
   if (job.state === 'fresh' && Date.now() >= job.checkAfter) {
     job.checkAfter = Date.now() + 5000;
     try {
@@ -63,11 +82,22 @@ function status(seriesId, episodeId, id) {
       if (!ep || stemReference(ep) !== job.stemReference || fingerprint(job.files) !== job.fingerprint) job.state = 'stale';
     } catch { job.state = 'stale'; }
   }
-  if (job.state === 'stale') return { state: 'stale' };
-  const hit = cached(dir, id);
-  if (hit) return { ...hit, state: 'fresh', url: '/uploads/projects/' + encodeURIComponent(seriesId) +
-    '/episodes/' + encodeURIComponent(episodeId) + '/proxy-' + id + '.mp4' };
-  return { state: job.state === 'fresh' ? 'stale' : job.state, error: job.error };
+  if (job.state === 'stale') return { state: 'stale', revision: job.id };
+  const hit = cached(dir, job.id);
+  if (hit) return { ...hit, state: 'fresh', revision: job.id, url: '/uploads/projects/' + encodeURIComponent(seriesId) +
+    '/episodes/' + encodeURIComponent(episodeId) + '/proxy-' + job.id + '.mp4' };
+
+  if (job.state === 'rendering') {
+    const elapsedSeconds = Math.round((Date.now() - (job.startedAt || Date.now())) / 1000);
+    return { state: 'rendering', progress: job.progress || { phase: 'rendering', percent: 0 }, elapsedSeconds, revision: job.id };
+  }
+
+  if (job.state === 'queued') {
+    const queuedSeconds = Math.round((Date.now() - (job.queuedAt || Date.now())) / 1000);
+    return { state: 'queued', queuedSeconds, revision: job.id };
+  }
+
+  return { state: job.state === 'fresh' ? 'stale' : job.state, error: job.error, revision: job.id };
 }
 
 async function drain() {
@@ -78,6 +108,8 @@ async function drain() {
       const [dir, job] = pending.entries().next().value;
       pending.delete(dir);
       job.state = 'rendering';
+      job.startedAt = Date.now();
+      job.progress = { phase: 'starting', percent: 0 };
       const start = Date.now();
       let work;
       try {
@@ -91,7 +123,9 @@ async function drain() {
           }
         }
         work = await fs.promises.mkdtemp(path.join(dir, 'proxy-work-' + process.pid + '-'));
-        const measured = await renderProxy(job.input, work, job.id);
+        const measured = await renderProxy(job.input, work, job.id, (prog) => {
+          job.progress = prog;
+        });
         // Undo or a rapid series switch can request this exact revision again
         // while its encoder is finishing. Publish the matching work once.
         const wanted = latest.get(dir);
@@ -128,15 +162,20 @@ function request(seriesId, episodeId, snapshot) {
   const ep = getSeriesMetadata(seriesId)?.episodes?.find(e => String(e.id) === episodeId);
   if (!ep?.video || ep.video.videoUrl !== snapshot.videoUrl) throw new Error('Episode media is still loading');
   const source = mediaPath(ep.sourceVideoPath || ep.video.videoPath || ep.video.videoUrl);
-  const stem = mediaPath(stemReference(ep));
-  if ((ep.isDemucsDone || ep.hasDemucs) && !stem) throw new Error('Clean BGM is missing');
+  let stem = null;
+  try { stem = mediaPath(stemReference(ep)); } catch (e) { /* stem missing is non-fatal */ }
   const { clips, settings, segments } = snapshot;
   if (!Array.isArray(clips) || !Array.isArray(segments) || !settings ||
       clips.some(c => !Number.isFinite(c.start) || !Number.isFinite(c.end) || c.start < 0 || c.end <= c.start ||
         (c.sourceStart != null && !(Number.isFinite(c.sourceStart) && c.sourceStart >= 0)))) throw new Error('Invalid proxy timeline');
   const audible = v => !v.muted && !v.isMuted && (v.audioPath || v.audioUrl || v.audioFile);
-  const voices = segments.filter(audible).map(v => ({ ...v, audioPath: mediaPath(v.audioPath || v.audioUrl ||
-    path.join(dir, 'audio', path.basename(v.audioFile))) }));
+  const voices = [];
+  for (const v of segments.filter(audible)) {
+    try {
+      const p = mediaPath(v.audioPath || v.audioUrl || path.join(dir, 'audio', path.basename(v.audioFile || '')));
+      if (p) voices.push({ ...v, audioPath: p });
+    } catch { /* skip individual missing audio cleanly without aborting proxy */ }
+  }
   const silentSegments = segments.filter(v => !audible(v));
   const input = { source, stem, clips, voices, settings, editSignature: snapshot.editSignature };
   if (silentSegments.length) input.silentSegments = silentSegments;
@@ -144,22 +183,65 @@ function request(seriesId, episodeId, snapshot) {
   const signature = fingerprint(files);
   const id = crypto.createHash('sha256').update('proxy-1').update(JSON.stringify(input)).update(signature).digest('hex');
   const existing = latest.get(dir);
-  if (!existing || existing.id !== id || ['error', 'stale', 'fresh'].includes(existing.state)) {
-    const hit = cached(dir, id);
-    clearTimeout(existing?.timer);
-    pending.delete(dir);
-    const job = { id, files, fingerprint: signature, stemReference: stemReference(ep),
-      checkAfter: Date.now() + 5000, state: hit ? 'fresh' : 'queued' };
-    latest.set(dir, job);
-    if (!hit) {
-      job.input = input;
-      // Debounce on the server so a committed edit still renders after leaving Studio.
+
+  // If already fresh for this exact id, return status directly
+  if (existing && existing.id === id && existing.state === 'fresh') {
+    return { ...status(seriesId, episodeId, id), revision: id };
+  }
+
+  // If already rendering this exact id, keep rendering
+  if (existing && existing.id === id && existing.state === 'rendering') {
+    return { ...status(seriesId, episodeId, id), revision: id };
+  }
+
+  // If already queued for this exact id, accelerate if immediate requested
+  if (existing && existing.id === id && existing.state === 'queued') {
+    if (snapshot.immediate) {
+      clearTimeout(existing.timer);
+      existing.timer = null;
+      pending.set(dir, existing);
+      setImmediate(() => void drain());
+    }
+    return { ...status(seriesId, episodeId, id), revision: id };
+  }
+
+  const hit = cached(dir, id);
+  clearTimeout(existing?.timer);
+  pending.delete(dir);
+
+  const now = Date.now();
+  const isImmediate = Boolean(snapshot.immediate) || !existing || ['error', 'stale'].includes(existing?.state);
+  const job = {
+    id,
+    files,
+    fingerprint: signature,
+    stemReference: stemReference(ep),
+    checkAfter: now + 5000,
+    state: hit ? 'fresh' : 'queued',
+    queuedAt: now,
+    firstEditAt: isImmediate ? now : (existing?.firstEditAt || now),
+  };
+  latest.set(dir, job);
+
+  if (!hit) {
+    job.input = input;
+    // Debounce rules:
+    // (a) Episode open / missing / stale -> IMMEDIATE enqueue (delay = 0)
+    // (b) Edits -> 2000ms debounce, capped at 5000ms max wait from firstEditAt
+    const maxDebounceReached = (now - job.firstEditAt) >= 5000;
+    const delay = (isImmediate || maxDebounceReached) ? 0 : 2000;
+    if (delay === 0) {
+      pending.set(dir, job);
+      setImmediate(() => void drain());
+    } else {
       job.timer = setTimeout(() => {
+        job.timer = null;
         pending.set(dir, job);
         void drain();
-      }, 5000);
+      }, delay);
     }
   }
+
   return { ...status(seriesId, episodeId, id), revision: id };
 }
 

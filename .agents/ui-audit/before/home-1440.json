@@ -1,0 +1,114 @@
+{
+  "viewport": [
+    1440,
+    900
+  ],
+  "appMetrics": {
+    "docScrollWidth": 1440,
+    "bodyScrollWidth": 1440,
+    "appScrollWidth": 1592,
+    "appClientWidth": 1440,
+    "overflowX": 152
+  },
+  "navbarMetrics": {
+    "clientWidth": 1517,
+    "scrollWidth": 1592,
+    "overflowPx": 152,
+    "rectWidth": 1517
+  },
+  "headingCount": 5,
+  "hasH1": true,
+  "skippedHeadings": [],
+  "headings": [
+    {
+      "tag": "H1",
+      "text": "រឿងភាគ (Series 1)",
+      "fontSize": 17,
+      "rect": [
+        246,
+        114,
+        306,
+        29
+      ]
+    },
+    {
+      "tag": "H2",
+      "text": "Studio Editor",
+      "fontSize": 14,
+      "rect": [
+        182,
+        309,
+        250,
+        24
+      ]
+    },
+    {
+      "tag": "H2",
+      "text": "Batch Studio",
+      "fontSize": 14,
+      "rect": [
+        483,
+        309,
+        250,
+        24
+      ]
+    },
+    {
+      "tag": "H2",
+      "text": "Keys & Quota",
+      "fontSize": 14,
+      "rect": [
+        785,
+        309,
+        250,
+        24
+      ]
+    },
+    {
+      "tag": "H2",
+      "text": "Export Studio",
+      "fontSize": 14,
+      "rect": [
+        1086,
+        309,
+        250,
+        24
+      ]
+    }
+  ],
+  "interactiveCount": 24,
+  "clippedControlsCount": 1,
+  "clippedControls": [
+    {
+      "tag": "BUTTON",
+      "cls": "navbar-gemini-route-btn ",
+      "text": "Batch Export\n1 ភាគ",
+      "rect": [
+        1406,
+        6,
+        185,
+        36
+      ]
+    }
+  ],
+  "under24TouchTargets": 0,
+  "under44TouchTargets": 20,
+  "unlabeledButtons": 0,
+  "inputsNoLabel": 0,
+  "imgsNoAlt": 0,
+  "clickableNonSemantic": 0,
+  "smallKhmerInteractive": 8,
+  "smallKhmerTextNodes": 25,
+  "uniqueFontSizesPx": [
+    10.5,
+    11,
+    11.5,
+    12,
+    12.5,
+    12.6,
+    13
+  ],
+  "gradientInteractiveCount": 1,
+  "glowShadowInteractiveCount": 4,
+  "consoleErrors": []
+}

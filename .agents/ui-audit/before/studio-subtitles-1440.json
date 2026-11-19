@@ -1,0 +1,206 @@
+{
+  "scope": "BODY",
+  "body": [
+    1440,
+    900
+  ],
+  "headings": [],
+  "scroll": [
+    [
+      "capcut-app-container",
+      [
+        0,
+        0,
+        1440,
+        900
+      ],
+      [
+        1592,
+        900
+      ],
+      "hidden",
+      "hidden"
+    ],
+    [
+      "inspector-content",
+      [
+        1172,
+        97,
+        338,
+        494
+      ],
+      [
+        338,
+        1098
+      ],
+      "auto",
+      "auto"
+    ],
+    [
+      "timeline-scroll-area",
+      [
+        7,
+        643,
+        1503,
+        250
+      ],
+      [
+        2354,
+        250
+      ],
+      "auto",
+      "hidden"
+    ],
+    [
+      "track-title-box",
+      [
+        16,
+        743,
+        61,
+        18
+      ],
+      [
+        94,
+        18
+      ],
+      "hidden",
+      "hidden"
+    ],
+    [
+      "track-title-box",
+      [
+        16,
+        791,
+        61,
+        18
+      ],
+      [
+        95,
+        18
+      ],
+      "hidden",
+      "hidden"
+    ]
+  ],
+  "controlsInViewport": 65,
+  "compact": 64,
+  "overflowControls": [
+    [
+      "BUTTON",
+      "Export Studio — Batch Export & M",
+      [
+        1406,
+        6,
+        185,
+        36
+      ]
+    ],
+    [
+      "BUTTON",
+      "Reset to default: Original Audio",
+      [
+        1288,
+        201,
+        199,
+        24
+      ]
+    ],
+    [
+      "INPUT",
+      "Adjust Original Drama Audio from",
+      [
+        1195,
+        363,
+        292,
+        5
+      ]
+    ],
+    [
+      "INPUT",
+      "Boost Khmer Voice from 20% up to",
+      [
+        1195,
+        415,
+        292,
+        5
+      ]
+    ],
+    [
+      "BUTTON",
+      "Voice Not Generated (បង្កើតសំឡេង",
+      [
+        1195,
+        438,
+        292,
+        56
+      ]
+    ],
+    [
+      "SELECT",
+      "16:9 (Landscape / YouTube)9:16 (",
+      [
+        1195,
+        577,
+        292,
+        31
+      ]
+    ],
+    [
+      "SELECT",
+      "⬛ Title Banner (ប្រអប់ខ្មៅស្អាត ",
+      [
+        1201,
+        670,
+        286,
+        31
+      ]
+    ],
+    [
+      "SELECT",
+      "តូចស្តង់ដារធំ",
+      [
+        1348,
+        730,
+        139,
+        31
+      ]
+    ],
+    [
+      "BUTTON",
+      "🐉 ប្រើរូបគំរូ Dragon Town",
+      [
+        1264,
+        875,
+        212,
+        20
+      ]
+    ],
+    [
+      "BUTTON",
+      "Fit Timeline (1.0x)",
+      [
+        1431,
+        610,
+        28,
+        28
+      ]
+    ],
+    [
+      "BUTTON",
+      "Auto-Center ON (Playhead នៅចំកណ្",
+      [
+        1463,
+        610,
+        28,
+        28
+      ]
+    ]
+  ],
+  "fonts": [
+    "Inter",
+    "Kantumruy Pro",
+    "JetBrains Mono"
+  ],
+  "dom": 729,
+  "errors": []
+}

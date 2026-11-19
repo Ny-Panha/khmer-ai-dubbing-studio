@@ -2024,8 +2024,15 @@ function VideoPlayerPreview({
 
   const videoObjectFit = (!renderedVideo && aspectRatio === '9:16' && verticalStyle === 'crop') ? 'cover' : 'contain';
   const overlayRender = renderedVideo?.isProxyPreview ? null : renderedVideo;
+  const renderProgressText = proxyStatus?.progress?.percent
+    ? `កំពុង Render ${proxyStatus.progress.percent}% (${proxyStatus.elapsedSeconds || 0}s)`
+    : `កំពុង Render (${proxyStatus?.elapsedSeconds || 0}s)`;
+  const queuedText = (proxyStatus?.queuedSeconds ?? 0) > 0
+    ? `Queued (${proxyStatus.queuedSeconds}s)`
+    : 'Queued';
   const proxyActivity = proxyStatus?.state === 'superseded' ? 'Reopen episode to load newer edits' :
-    proxyStatus?.state === 'rendering' ? 'Rendering…' : 'Queued';
+    proxyStatus?.state === 'rendering' ? renderProgressText : queuedText;
+  const showLiveFallbackNotice = previewMode === 'proxy' && !renderedVideo?.isProxyPreview && isPlaying;
 
   return (
     <div className={`capcut-player-panel ${isFullscreen ? 'is-fullscreen-active' : ''}`} ref={containerRef}>
@@ -2039,8 +2046,13 @@ function VideoPlayerPreview({
           <span role="status" data-proxy-state={proxyStatus?.state || 'stale'}>
             {proxyStatus?.state === 'fresh'
               ? `${proxyStatus.duration.toFixed(1)}s · ${(proxyStatus.bytes / 1048576).toFixed(1)} MiB · Render ${proxyStatus.renderSeconds.toFixed(1)}s`
-              : `Preview មិនទាន់ថ្មី · ${proxyStatus?.error || proxyActivity}`}
+              : `Preview មិនទាន់ថ្មី · ${proxyStatus?.error ? `Error: ${proxyStatus.error}` : proxyActivity}`}
           </span>
+          {showLiveFallbackNotice && (
+            <span className="proxy-live-fallback-badge" role="status">
+              ⚠️ កំពុងចាក់តាម Live Preview (Proxy កំពុង Render...)
+            </span>
+          )}
         </div>
       )}
       {/* Video View Canvas (Synced dynamically to 16:9 / 9:16 / 1:1) */}
@@ -2062,6 +2074,12 @@ function VideoPlayerPreview({
                 onUpdateVoiceSettings={onUpdateVoiceSettings}
                 aspectRatio={aspectRatio}
               />
+
+              {showLiveFallbackNotice && (
+                <div className="proxy-live-fallback-notice" role="status" data-testid="proxy-live-fallback-notice">
+                  <span>⚠️ កំពុងចាក់តាម Live Preview (Proxy កំពុង Render...)</span>
+                </div>
+              )}
 
               <video
                 ref={videoRef}

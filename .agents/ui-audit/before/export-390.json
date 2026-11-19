@@ -1,0 +1,239 @@
+{
+  "viewport": [
+    390,
+    844
+  ],
+  "appMetrics": {
+    "docScrollWidth": 390,
+    "bodyScrollWidth": 390,
+    "appScrollWidth": 1587,
+    "appClientWidth": 390,
+    "overflowX": 1197
+  },
+  "navbarMetrics": {
+    "clientWidth": 1514,
+    "scrollWidth": 1587,
+    "overflowPx": 1197,
+    "rectWidth": 1514
+  },
+  "headingCount": 1,
+  "hasH1": false,
+  "skippedHeadings": [],
+  "headings": [
+    {
+      "tag": "H2",
+      "text": "Export Studio — Batch Export & Merge",
+      "fontSize": 13.72,
+      "rect": [
+        85,
+        100,
+        263,
+        23
+      ]
+    }
+  ],
+  "interactiveCount": 84,
+  "clippedControlsCount": 46,
+  "clippedControls": [
+    {
+      "tag": "BUTTON",
+      "cls": "navbar-gemini-route-btn ",
+      "text": "Batch Generate\n1 EPs",
+      "rect": [
+        237,
+        6,
+        199,
+        36
+      ]
+    },
+    {
+      "tag": "BUTTON",
+      "cls": "navbar-gemini-route-btn ",
+      "text": "Keys & Quota\nKeys",
+      "rect": [
+        442,
+        6,
+        180,
+        36
+      ]
+    },
+    {
+      "tag": "BUTTON",
+      "cls": "navbar-gemini-route-btn ",
+      "text": "Jobs",
+      "rect": [
+        627,
+        6,
+        78,
+        36
+      ]
+    },
+    {
+      "tag": "BUTTON",
+      "cls": "navbar-aspect-btn active",
+      "text": "បង្រួមផ្ទាំងឆ្វេង (Collapse Left Panel)",
+      "rect": [
+        722,
+        10,
+        33,
+        28
+      ]
+    },
+    {
+      "tag": "BUTTON",
+      "cls": "navbar-aspect-btn active",
+      "text": "បង្រួមផ្ទាំង Timeline (Collapse Timeline",
+      "rect": [
+        757,
+        10,
+        33,
+        28
+      ]
+    },
+    {
+      "tag": "BUTTON",
+      "cls": "navbar-aspect-btn active",
+      "text": "បង្រួមផ្ទាំងស្តាំ (Collapse Right Inspec",
+      "rect": [
+        792,
+        10,
+        33,
+        28
+      ]
+    },
+    {
+      "tag": "BUTTON",
+      "cls": "navbar-aspect-btn active",
+      "text": "16:9",
+      "rect": [
+        841,
+        10,
+        68,
+        28
+      ]
+    },
+    {
+      "tag": "BUTTON",
+      "cls": "navbar-aspect-btn ",
+      "text": "9:16",
+      "rect": [
+        911,
+        10,
+        62,
+        28
+      ]
+    },
+    {
+      "tag": "BUTTON",
+      "cls": "api-key-btn missing",
+      "text": "Set Gemini Key",
+      "rect": [
+        1117,
+        6,
+        132,
+        36
+      ]
+    },
+    {
+      "tag": "BUTTON",
+      "cls": "navbar-icon-btn",
+      "text": "Keyboard Shortcuts (Ctrl+/)",
+      "rect": [
+        1256,
+        6,
+        36,
+        36
+      ]
+    },
+    {
+      "tag": "BUTTON",
+      "cls": "navbar-export-btn",
+      "text": "Export",
+      "rect": [
+        1300,
+        6,
+        93,
+        36
+      ]
+    },
+    {
+      "tag": "BUTTON",
+      "cls": "navbar-gemini-route-btn active",
+      "text": "Batch Export\n1 ភាគ",
+      "rect": [
+        1402,
+        6,
+        185,
+        36
+      ]
+    },
+    {
+      "tag": "BUTTON",
+      "cls": "btn btn-primary",
+      "text": "Import Video",
+      "rect": [
+        686,
+        325,
+        121,
+        34
+      ]
+    },
+    {
+      "tag": "BUTTON",
+      "cls": "player-control-btn icon-only",
+      "text": "Step Back 1s",
+      "rect": [
+        703,
+        502,
+        35,
+        23
+      ]
+    },
+    {
+      "tag": "BUTTON",
+      "cls": "player-play-btn",
+      "text": "Play (Space)",
+      "rect": [
+        746,
+        496,
+        36,
+        36
+      ]
+    }
+  ],
+  "under24TouchTargets": 30,
+  "under44TouchTargets": 81,
+  "unlabeledButtons": 0,
+  "inputsNoLabel": 8,
+  "imgsNoAlt": 0,
+  "clickableNonSemantic": 0,
+  "smallKhmerInteractive": 16,
+  "smallKhmerTextNodes": 46,
+  "uniqueFontSizesPx": [
+    9,
+    9.1,
+    9.2,
+    9.5,
+    9.8,
+    9.9,
+    10,
+    10.1,
+    10.2,
+    10.4,
+    10.5,
+    10.6,
+    10.9,
+    11,
+    11.2,
+    11.4,
+    11.5,
+    12,
+    12.3,
+    12.6,
+    13,
+    13.2
+  ],
+  "gradientInteractiveCount": 2,
+  "glowShadowInteractiveCount": 6,
+  "consoleErrors": []
+}
