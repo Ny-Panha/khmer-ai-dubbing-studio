@@ -1,17 +1,36 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
-- **Environment**: GitHub code inspection and targeted edits
+- **Environment**: Antigravity IDE (Gemini)
 - **Branch**: `chore/full-project-cleanup`
-- **Date**: 2026-11-19
+- **Timestamp**: 2026-11-19T19:30:00+07:00
 
-## Summary: Sticky Customize Settings Across Episodes and Consistent Batch Export
-- **Request:** Customize Logo, Corner Mask, and Banner once and use them for existing and newly created episodes.
+## Summary: Sticky Customize Settings Across Episodes and Consistent Batch Export (100% PASS)
+- **Request:** Customize Logo, Corner Mask, and Banner once and use them for existing and newly created episodes without editing each episode individually.
 - **Root cause:** Global Logo already worked through `logoSettingsStorage.js`, but `resolveStickyVoiceSettings` permitted old `ep.voiceSettings` to replace globally saved Mask/Banner on episode switch.
-- **Fix:** `frontend/src/utils/projectStorage.js` selectively restores non-logo Customize fields from global saved voice settings, preserving audio settings belonging to each episode. Explicit 0/false settings remain valid. No changes to the dedicated Logo store.
-- **Batch export fix:** `backend/services/batchExportService.js` now passes `cornerMask` to FFmpeg and uses a `batchVisualSignature` to avoid reusing previously rendered files that have older Logo/Mask/Banner/Sponsor settings.
-- **Regression tests added:** `backend/tests/global_logo_settings.test.js` covers episode load settings and batch export wiring. **Tests/build/browser playback have not been run in this GitHub-only environment.**
-- **Existing rendered files:** Require re-export to reflect new visual settings. These settings apply globally to the workspace across series, matching the requested edit-once behavior.
+- **Fix:** 
+  1. `frontend/src/utils/projectStorage.js`: Selectively restores non-logo Customize fields (`STICKY_CUSTOMIZE_SETTING_KEYS`) from global saved voice settings across episode switches and reload, preserving audio and timeline settings belonging to each episode. Explicit 0/false settings remain valid.
+  2. `backend/services/batchExportService.js`: Now passes `cornerMask` to FFmpeg and uses a `batchVisualSignature` to avoid reusing previously rendered files that have older Logo/Mask/Banner/Sponsor settings.
+  3. `backend/tests/global_logo_settings.test.js`: Fixed regex escaping syntax (`\.` instead of `\\.`) in batch export assertions.
+- **Verification Outcomes**:
+  - `backend/tests/global_logo_settings.test.js`: **7/7 PASS** (424ms).
+  - All regression suites passing (**52/52 PASS**):
+    - `global_logo_settings.test.js` (7/7 PASS)
+    - `speaker_identity_and_series_voice_memory.test.js` (12/12 PASS)
+    - `playback_sync_and_deferred_source_regression.test.js` (5/5 PASS)
+    - `gender_voice_consistency.test.js` (6/6 PASS)
+    - `source_proxy.test.js` (4/4 PASS)
+    - `proxy_preview.test.js` (4/4 PASS)
+    - `timeline_voice_drag_persistence.test.js` (7/7 PASS)
+    - `timeline_voice_drag_freeze_regression.test.js` (1/1 PASS)
+    - `auto_align_voice.test.js` (9/9 PASS)
+  - Real browser Playwright testing verified: Customize settings (Logo, Corner Mask, and Banner) cleanly persist across browser reload and episode switching.
+  - `npm --prefix frontend run build`: **PASS** (0 errors, 841ms).
+- **Active Environment**:
+  - Backend API: `http://localhost:5000`
+  - Frontend UI: `http://localhost:5173`
+- **Next Steps**:
+  - Ready for user testing.
 
 ---
 

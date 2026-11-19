@@ -274,10 +274,10 @@ test('Customize mask and banner settings remain sticky across episode switches w
 
 test('Batch export passes corner mask to FFmpeg and rejects reuse after shared overlay edits', () => {
   const content = fs.readFileSync(path.join(__dirname, '../services/batchExportService.js'), 'utf8');
-  assert.match(content, /const cornerMask = exportSettings\\.cornerMask \\|\\| null/);
-  assert.match(content, /batchVisualSignature = JSON\\.stringify/);
-  assert.match(content, /previous\\?\\.batchVisualSignature === batchVisualSignature/);
-  assert.match(content, /antiTheft,\\s*cornerMask,\\s*logoSettings:/);
+  assert.match(content, /const cornerMask = exportSettings\.cornerMask \|\| null/);
+  assert.match(content, /batchVisualSignature = JSON\.stringify/);
+  assert.match(content, /previous\?\.batchVisualSignature === batchVisualSignature/);
+  assert.match(content, /antiTheft,\s*cornerMask,\s*logoSettings:/);
   assert.ok(!content.includes('(epPlan.useOriginalAudio || sameBurn)'), 'Original-audio renders must not ignore visual changes');
 });
 
