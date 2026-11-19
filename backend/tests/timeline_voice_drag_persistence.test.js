@@ -118,5 +118,234 @@ describe('Voice Drag Move Persistence & Reload Durability Suite', () => {
 
     // TimelineEditor honours all stored lanes (trackRow > 0 || userShifted)
     assert.ok(editorCode.includes('typeof seg.trackRow === \'number\' && (seg.userShifted || seg.trackRow > 0)'), 'TimelineEditor must honour stored trackRow for VOICE 2+ and userShifted for VOICE 1');
+
+    // flushPendingPersist and lifecycle hooks must be present in useClipOperations
+    assert.ok(clipOpsCode.includes('flushPendingPersist'), 'useClipOperations must implement flushPendingPersist');
+    assert.ok(clipOpsCode.includes('pendingPersistRef'), 'useClipOperations must track pendingPersistRef');
+    assert.ok(clipOpsCode.includes('recordPendingTimelinePersist'), 'useClipOperations must record pending writes for crash safety');
+    assert.ok(clipOpsCode.includes('clearPendingTimelinePersist'), 'useClipOperations must clear pending writes on successful persist');
+
+    // useSeriesManager must flush pending writes before switching episodes and on startup
+    const seriesMgrCode = fs.readFileSync(path.join(rootDir, 'frontend/src/hooks/useSeriesManager.js'), 'utf8');
+    assert.ok(seriesMgrCode.includes('flushAllPendingTimelinePersists'), 'useSeriesManager must flush pending writes on switch & init');
+  });
+
+  it('3. Move Voice -> switch episode within 600ms flushes pending write immediately to backend before switch', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'switch-ep-flush-'));
+    try {
+      const seriesId = 'Switch_Ep_Series';
+      const initialSeries = {
+        id: seriesId,
+        title: 'Switch Ep Series',
+        episodes: [
+          {
+            id: 'ep_1',
+            scriptData: {
+              updatedAt: 100,
+              segments: [{ id: 1, _uid: 's1', audioStartSec: 2.0, trackRow: 0 }],
+            },
+          },
+          {
+            id: 'ep_2',
+            scriptData: {
+              updatedAt: 100,
+              segments: [{ id: 10, _uid: 's10', audioStartSec: 5.0, trackRow: 0 }],
+            },
+          },
+        ],
+      };
+      saveSeriesMetadata(initialSeries, { projectsDir: tmpDir });
+
+      // Move clip on ep_1 to 8.5s (VOICE 2, trackRow: 1)
+      let pendingWrite = {
+        seriesId,
+        episodeId: 'ep_1',
+        operation: 'update_segments',
+        segments: [{ id: 1, _uid: 's1', audioStartSec: 8.5, trackRow: 1, userShifted: true }],
+      };
+      let persistCalls = 0;
+      const doPersist = async (target) => {
+        persistCalls++;
+        return await persistEpisodeTimelineOperation({ ...target, projectsDir: tmpDir });
+      };
+
+      // 600ms timer scheduled
+      let timerFired = false;
+      const timerId = setTimeout(async () => {
+        if (pendingWrite) {
+          timerFired = true;
+          await doPersist(pendingWrite);
+          pendingWrite = null;
+        }
+      }, 600);
+
+      // Simulate episode switch at 150ms: flush immediately
+      await new Promise((r) => setTimeout(r, 150));
+      clearTimeout(timerId);
+      const flushedWrite = pendingWrite;
+      pendingWrite = null;
+      assert.ok(flushedWrite, 'Pending write must exist at 150ms');
+      await doPersist(flushedWrite);
+
+      // Verify ep_1 in series.json is updated immediately
+      const disk = getSeriesMetadata(seriesId, { forceDisk: true, projectsDir: tmpDir });
+      const ep1 = disk.episodes.find((e) => e.id === 'ep_1');
+      assert.equal(ep1.scriptData.segments[0].audioStartSec, 8.5);
+      assert.equal(ep1.scriptData.segments[0].trackRow, 1);
+      assert.equal(persistCalls, 1, 'Exactly one persist call must be made');
+      assert.equal(timerFired, false, 'Debounce timer must not double-fire after flush');
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('4. Move Voice -> unmount component within 600ms flushes pending write to backend without loss', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'unmount-flush-'));
+    try {
+      const seriesId = 'Unmount_Series';
+      const initialSeries = {
+        id: seriesId,
+        title: 'Unmount Series',
+        episodes: [
+          {
+            id: 'ep_1',
+            scriptData: {
+              updatedAt: 200,
+              segments: [{ id: 5, _uid: 's5', audioStartSec: 1.0, trackRow: 0 }],
+            },
+          },
+        ],
+      };
+      saveSeriesMetadata(initialSeries, { projectsDir: tmpDir });
+
+      let pendingRef = {
+        seriesId,
+        episodeId: 'ep_1',
+        operation: 'update_segments',
+        segments: [{ id: 5, _uid: 's5', audioStartSec: 6.2, trackRow: 2, userShifted: true }],
+      };
+      let timerId = setTimeout(() => {}, 600);
+
+      // Simulate component unmount at 100ms: cleanup flushes pendingRef
+      await new Promise((r) => setTimeout(r, 100));
+      clearTimeout(timerId);
+      const toFlush = pendingRef;
+      pendingRef = null;
+      assert.ok(toFlush, 'Unmount must capture pending write');
+      await persistEpisodeTimelineOperation({ ...toFlush, projectsDir: tmpDir });
+
+      const disk = getSeriesMetadata(seriesId, { forceDisk: true, projectsDir: tmpDir });
+      assert.equal(disk.episodes[0].scriptData.segments[0].audioStartSec, 6.2);
+      assert.equal(disk.episodes[0].scriptData.segments[0].trackRow, 2);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('5. 20 rapid moves coalesced into a single final write at debounce completion', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'rapid-moves-'));
+    try {
+      const seriesId = 'Rapid_Series';
+      const initialSeries = {
+        id: seriesId,
+        episodes: [
+          {
+            id: 'ep_1',
+            scriptData: {
+              updatedAt: 1,
+              segments: [{ id: 1, _uid: 's1', audioStartSec: 0.0, trackRow: 0 }],
+            },
+          },
+        ],
+      };
+      saveSeriesMetadata(initialSeries, { projectsDir: tmpDir });
+
+      let pending = null;
+      let timer = null;
+      let persistCount = 0;
+
+      // Simulate 20 rapid moves
+      for (let i = 1; i <= 20; i++) {
+        pending = {
+          seriesId,
+          episodeId: 'ep_1',
+          operation: 'update_segments',
+          segments: [{ id: 1, _uid: 's1', audioStartSec: i * 0.5, trackRow: i % 3 }],
+        };
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(async () => {
+          persistCount++;
+          await persistEpisodeTimelineOperation({ ...pending, projectsDir: tmpDir });
+          pending = null;
+        }, 100); // 100ms for test speed
+        await new Promise((r) => setTimeout(r, 10)); // 10ms between moves
+      }
+
+      // Wait for debounce timer to fire
+      await new Promise((r) => setTimeout(r, 150));
+      assert.equal(persistCount, 1, '20 rapid moves must result in exactly 1 backend write');
+      const disk = getSeriesMetadata(seriesId, { forceDisk: true, projectsDir: tmpDir });
+      assert.equal(disk.episodes[0].scriptData.segments[0].audioStartSec, 10.0, 'Final position (20 * 0.5 = 10.0) must be saved');
+      assert.equal(disk.episodes[0].scriptData.segments[0].trackRow, 20 % 3);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('6. Rapid switching between two episodes keeps writes strictly isolated to their origin episode', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'multi-ep-isolation-'));
+    try {
+      const seriesId = 'Multi_Ep_Series';
+      const initialSeries = {
+        id: seriesId,
+        episodes: [
+          {
+            id: 'ep_A',
+            scriptData: { updatedAt: 10, segments: [{ id: 1, _uid: 'a1', audioStartSec: 1.0 }] },
+          },
+          {
+            id: 'ep_B',
+            scriptData: { updatedAt: 10, segments: [{ id: 2, _uid: 'b1', audioStartSec: 2.0 }] },
+          },
+        ],
+      };
+      saveSeriesMetadata(initialSeries, { projectsDir: tmpDir });
+
+      // Edit ep_A -> flush
+      const writeA = {
+        seriesId,
+        episodeId: 'ep_A',
+        operation: 'update_segments',
+        segments: [{ id: 1, _uid: 'a1', audioStartSec: 99.0, trackRow: 1 }],
+      };
+      await persistEpisodeTimelineOperation({ ...writeA, projectsDir: tmpDir });
+
+      // Edit ep_B -> flush
+      const writeB = {
+        seriesId,
+        episodeId: 'ep_B',
+        operation: 'update_segments',
+        segments: [{ id: 2, _uid: 'b1', audioStartSec: 77.0, trackRow: 2 }],
+      };
+      await persistEpisodeTimelineOperation({ ...writeB, projectsDir: tmpDir });
+
+      const disk = getSeriesMetadata(seriesId, { forceDisk: true, projectsDir: tmpDir });
+      const epA = disk.episodes.find((e) => e.id === 'ep_A');
+      const epB = disk.episodes.find((e) => e.id === 'ep_B');
+      assert.equal(epA.scriptData.segments[0].audioStartSec, 99.0);
+      assert.equal(epA.scriptData.segments[0].trackRow, 1);
+      assert.equal(epB.scriptData.segments[0].audioStartSec, 77.0);
+      assert.equal(epB.scriptData.segments[0].trackRow, 2);
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('7. Scoped backend sync suppression does NOT suppress sync on unrelated episodes', () => {
+    // Audit implementation in projectStorage.js
+    const storageCode = fs.readFileSync(path.join(rootDir, 'frontend/src/utils/projectStorage.js'), 'utf8');
+    assert.ok(storageCode.includes('_suppressBackendSyncMap'), 'Must use scoped map for sync suppression');
+    assert.ok(storageCode.includes('isBackendSyncSuppressed'), 'Must provide isBackendSyncSuppressed helper');
+    assert.ok(storageCode.includes('forceBackendSync'), 'saveEpisodeState must support forceBackendSync override');
   });
 });

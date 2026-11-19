@@ -1,5 +1,5 @@
 import { SCHEMA_VERSION } from './timestampUtils.js';
-import { syncSeriesApi, deleteEpisodeApi } from '../services/api.js';
+import { syncSeriesApi, deleteEpisodeApi, persistTimelineOperationApi } from '../services/api.js';
 import { stripLogoSettings } from './logoSettingsStorage.js';
 
 export const STORAGE_SERIES_LIST_KEY = 'KHMER_AI_SERIES_LIST_V2';
@@ -1037,18 +1037,108 @@ export function saveTimelineOperationToLocalStorage({
   return timestamps;
 }
 
-let _suppressBackendSyncUntil = 0;
+const _suppressBackendSyncMap = new Map();
 
 /**
  * Temporarily skip redundant full-series POST /api/series/:id/sync when a targeted backend
- * endpoint (e.g. single-segment /api/generate-audio) already persisted the mutation on disk.
- * localStorage is still updated immediately.
+ * endpoint (e.g. persistTimelineOperationApi or single-segment /api/generate-audio) already
+ * persisted the mutation on disk.
+ * Can be scoped to a specific episode (`${seriesId}:${episodeId}`) so unrelated saves are never blocked.
  */
-export function suppressNextBackendSync(durationMs = 2500) {
+export function suppressNextBackendSync(durationMs = 2500, targetKey = null) {
   const until = Date.now() + Math.max(0, Number(durationMs) || 0);
-  if (until > _suppressBackendSyncUntil) {
-    _suppressBackendSyncUntil = until;
+  const key = targetKey ? String(targetKey) : '__global__';
+  const existing = _suppressBackendSyncMap.get(key) || 0;
+  if (until > existing) {
+    _suppressBackendSyncMap.set(key, until);
   }
+}
+
+export function isBackendSyncSuppressed(targetKey = null) {
+  const now = Date.now();
+  const globalUntil = _suppressBackendSyncMap.get('__global__') || 0;
+  if (globalUntil > now) return true;
+  if (targetKey) {
+    const keyUntil = _suppressBackendSyncMap.get(String(targetKey)) || 0;
+    if (keyUntil > now) return true;
+  }
+  return false;
+}
+
+export function clearSuppressedBackendSync(targetKey = null) {
+  if (targetKey) {
+    _suppressBackendSyncMap.delete(String(targetKey));
+  } else {
+    _suppressBackendSyncMap.clear();
+  }
+}
+
+export const PENDING_TIMELINE_WRITES_KEY = 'KHMER_AI_PENDING_TIMELINE_WRITES';
+
+export function getPendingTimelineWrites() {
+  try {
+    const raw = localStorage.getItem(PENDING_TIMELINE_WRITES_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch (_) {
+    return {};
+  }
+}
+
+export function recordPendingTimelinePersist({ seriesId, episodeId, operation = 'update_segments', segments = [], updatedAt = null }) {
+  if (!seriesId || !episodeId || !Array.isArray(segments)) return;
+  try {
+    const all = getPendingTimelineWrites();
+    const key = `${seriesId}:${episodeId}`;
+    all[key] = {
+      seriesId,
+      episodeId,
+      operation,
+      segments,
+      updatedAt: Number(updatedAt) || Date.now(),
+    };
+    localStorage.setItem(PENDING_TIMELINE_WRITES_KEY, JSON.stringify(all));
+  } catch (_) {}
+}
+
+export function clearPendingTimelinePersist(seriesId, episodeId, updatedAt = null) {
+  if (!seriesId || !episodeId) return;
+  try {
+    const all = getPendingTimelineWrites();
+    const key = `${seriesId}:${episodeId}`;
+    if (all[key]) {
+      if (updatedAt && all[key].updatedAt && Number(all[key].updatedAt) > Number(updatedAt)) {
+        return; // A newer edit was recorded while in flight; do not clear
+      }
+      delete all[key];
+      localStorage.setItem(PENDING_TIMELINE_WRITES_KEY, JSON.stringify(all));
+    }
+  } catch (_) {}
+}
+
+export async function flushAllPendingTimelinePersists() {
+  const all = getPendingTimelineWrites();
+  const keys = Object.keys(all);
+  if (keys.length === 0) return [];
+  const results = [];
+  for (const key of keys) {
+    const item = all[key];
+    if (item && item.seriesId && item.episodeId && Array.isArray(item.segments)) {
+      try {
+        const res = await persistTimelineOperationApi({
+          seriesId: item.seriesId,
+          episodeId: item.episodeId,
+          operation: item.operation || 'update_segments',
+          segments: item.segments,
+        });
+        clearPendingTimelinePersist(item.seriesId, item.episodeId, item.updatedAt);
+        results.push({ key, success: true, res });
+      } catch (err) {
+        console.warn(`[projectStorage] Failed to flush pending timeline write for ${key}:`, err?.message || err);
+        results.push({ key, success: false, error: err?.message || err });
+      }
+    }
+  }
+  return results;
 }
 
 /**
@@ -1283,8 +1373,10 @@ export function saveEpisodeState(seriesId, episodeId, stateData, options = {}) {
       } catch (_) {}
     }
 
-    // Background sync to backend for server-side persistence (skip when caller already persisted directly)
-    if (!options?.skipBackendSync && Date.now() >= _suppressBackendSyncUntil) {
+    // Background sync to backend for server-side persistence (skip when caller already persisted directly or when scoped-suppressed)
+    const episodeKey = `${seriesId}:${episodeId}`;
+    const isSuppressed = isBackendSyncSuppressed(episodeKey);
+    if (!options?.skipBackendSync && (options?.forceBackendSync || !isSuppressed)) {
       try {
         syncSeriesToBackend(series);
       } catch (_) {}

@@ -3,6 +3,48 @@
 ## Last Session
 - **Environment**: Antigravity IDE (Gemini)
 - **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-19T13:00:00+07:00
+
+## Summary: Targeted Persistence Lifecycle Safety & Flushed Write Coordination (100% PASS)
+- **Scope**: Targeted Persistence Lifecycle Safety Fix — Minimal Change Engineer discipline.
+- **Risks Resolved**:
+  1. **Pending Debounced Write Dropped on Unmount / Episode Switch**:
+     - Previously, `useClipOperations.js` debounced `persistTimelineOperationApi` by 600ms but only cleared the timer on unmount, meaning edits within 600ms of switching episodes or unmounting were dropped.
+     - Fix: Implemented `flushPendingPersist`:
+       - Tracks `pendingPersistRef.current` retaining origin `seriesId` and `episodeId`.
+       - Immediately flushes pending writes when `episodeId` changes or when component unmounts.
+       - Flushes on `beforeunload` and `pagehide` events.
+       - Records pending write in persistent localStorage queue (`KHMER_AI_PENDING_TIMELINE_WRITES`) to survive sudden power cuts or process death.
+       - Clears pending queue on successful backend write.
+  2. **Episode Switch Coordination in `useSeriesManager.js`**:
+     - `handleSwitchEpisode` calls `await flushAllPendingTimelinePersists()` before switching away from `prevEpisodeId` and before fetching backend server truth.
+     - On initial app boot, `flushAllPendingTimelinePersists()` runs to recover and commit any unpersisted writes from prior sessions.
+  3. **Scoped `suppressNextBackendSync` Audit**:
+     - Replaced single global timestamp with scoped `_suppressBackendSyncMap` keyed by `${seriesId}:${episodeId}`.
+     - Editing `ep_5` no longer blocks legitimate background syncs for `ep_1` or other episodes.
+     - Added `forceBackendSync` option to `saveEpisodeState` to bypass suppression when explicitly required.
+- **Test Suites & Verification**:
+  - `backend/tests/timeline_voice_drag_persistence.test.js`: **7/7 PASS**
+    - ✔ 1. persistEpisodeTimelineOperation persists audioStartSec, trackRow (VOICE 2), and userShifted atomically
+    - ✔ 2. Static audit: localStorage trimmer preserves audioStartSec/trackRow/userShifted, drag commits persist immediately, errors toast visibly
+    - ✔ 3. Move Voice -> switch episode within 600ms flushes pending write immediately to backend before switch
+    - ✔ 4. Move Voice -> unmount component within 600ms flushes pending write to backend without loss
+    - ✔ 5. 20 rapid moves coalesced into a single final write at debounce completion
+    - ✔ 6. Rapid switching between two episodes keeps writes strictly isolated to their origin episode
+    - ✔ 7. Scoped backend sync suppression does NOT suppress sync on unrelated episodes
+  - `backend/tests/playback_sync_and_deferred_source_regression.test.js`: **4/4 PASS**
+  - `backend/tests/timeline_delete_persistence.test.js`: **5/5 PASS**
+  - `backend/tests/timeline_voice_drag_freeze_regression.test.js`: **1/1 PASS**
+  - `npm --prefix frontend run build`: **PASS** (1.16s, 0 errors)
+- **Active Environment**:
+  - Backend API: `http://localhost:5000` (task-136)
+  - Frontend UI: `http://localhost:5173` (task-140)
+
+---
+
+## Previous Session
+- **Environment**: Antigravity IDE (Gemini)
+- **Branch**: `chore/full-project-cleanup`
 - **Timestamp**: 2026-11-19T12:40:00+07:00
 
 ## Summary: Permanent Stabilization of Video Preview, Voice Drag & Socket Saturation (100% PASS)

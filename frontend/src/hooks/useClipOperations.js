@@ -19,7 +19,7 @@ import { parseTimeToSeconds, formatTimecode, formatMinSec, getSegmentAudioDurati
 import { splitSegmentIntoNaturalSentences } from '../utils/khmerTextSplitter';
 import { buildSpeakerRegistry } from '../utils/speakerUtils';
 import { syncTimelineAudioApi, persistTimelineOperationApi, notifyBackendOffline, notifyBackendOnline } from '../services/api';
-import { saveTimelineOperationToLocalStorage, suppressNextBackendSync } from '../utils/projectStorage';
+import { saveTimelineOperationToLocalStorage, suppressNextBackendSync, recordPendingTimelinePersist, clearPendingTimelinePersist } from '../utils/projectStorage';
 
 /**
  * Format an array of clip numbers concisely for toast notices (e.g. "#4, #7, #12 (+3 more)")
@@ -172,12 +172,80 @@ export function useClipOperations({
   setAudioOutdated = null,
   onInvalidateRenderedPreview = null,
 }) {
+  const pendingPersistRef = useRef(null);
   const persistTimeoutRef = useRef(null);
+  const currentEpKeyRef = useRef(`${seriesId}:${episodeId}`);
+
+  const flushPendingPersist = useCallback(async (forcedTarget = null) => {
+    if (persistTimeoutRef.current) {
+      clearTimeout(persistTimeoutRef.current);
+      persistTimeoutRef.current = null;
+    }
+    const target = forcedTarget || pendingPersistRef.current;
+    if (!target) return null;
+
+    if (!forcedTarget || target === pendingPersistRef.current) {
+      pendingPersistRef.current = null;
+    }
+
+    try {
+      const persisted = await persistTimelineOperationApi({
+        seriesId: target.seriesId,
+        episodeId: target.episodeId,
+        operation: target.operation || 'update_segments',
+        segments: target.segments,
+      });
+      clearPendingTimelinePersist(target.seriesId, target.episodeId, target.updatedAt);
+      if (persisted?.updatedAt) {
+        setScriptData((prev) => (prev ? { ...prev, updatedAt: Math.max(Number(prev.updatedAt || 0), persisted.updatedAt) } : prev));
+      }
+      return persisted;
+    } catch (err) {
+      console.error('[useClipOperations] Failed to persist dragged/edited segments:', err);
+      showInAppToast(`⚠️ បរាជ័យក្នុងការរក្សាទុកទីតាំងសំឡេង (${err?.message || 'Backend error'}) — សូមពិនិត្យ Server!`, 4800);
+      if (err?.status === 502 || /ECONNREFUSED|unreachable|Failed to fetch|NetworkError/i.test(err?.message || '')) {
+        notifyBackendOffline();
+      }
+      if (!pendingPersistRef.current) {
+        pendingPersistRef.current = target;
+      }
+      return null;
+    }
+  }, [setScriptData]);
+
+  // Flush pending write if episode changes so previous episode's edits are never lost
   useEffect(() => {
-    return () => {
-      if (persistTimeoutRef.current) clearTimeout(persistTimeoutRef.current);
+    const nextKey = `${seriesId}:${episodeId}`;
+    if (currentEpKeyRef.current !== nextKey) {
+      if (pendingPersistRef.current) {
+        flushPendingPersist();
+      }
+      currentEpKeyRef.current = nextKey;
+    }
+  }, [seriesId, episodeId, flushPendingPersist]);
+
+  // Flush on unmount and page unload/hide
+  useEffect(() => {
+    const onPageHide = () => {
+      if (pendingPersistRef.current) {
+        flushPendingPersist();
+      }
     };
-  }, []);
+    window.addEventListener('beforeunload', onPageHide);
+    window.addEventListener('pagehide', onPageHide);
+
+    return () => {
+      window.removeEventListener('beforeunload', onPageHide);
+      window.removeEventListener('pagehide', onPageHide);
+      if (persistTimeoutRef.current) {
+        clearTimeout(persistTimeoutRef.current);
+        persistTimeoutRef.current = null;
+      }
+      if (pendingPersistRef.current) {
+        flushPendingPersist();
+      }
+    };
+  }, [flushPendingPersist]);
 
   const invalidateRendered = useCallback(() => {
     if (typeof onInvalidateRenderedPreview === 'function') {
@@ -808,30 +876,31 @@ export function useClipOperations({
         segments: newSegments,
       });
 
-      // Suppress redundant full-series POST /api/series/:id/sync from useSeriesManager while user is actively editing
-      suppressNextBackendSync(5000);
+      // Record in persistent pending queue for crash/reload safety
+      recordPendingTimelinePersist({
+        seriesId,
+        episodeId,
+        operation: 'update_segments',
+        segments: newSegments,
+        updatedAt: nextUpdatedAt,
+      });
 
-      // Debounce persistTimelineOperationApi so 20 rapid moves don't saturate HTTP connections
+      // Suppress redundant full-series POST /api/series/:id/sync while user is actively editing this episode
+      suppressNextBackendSync(5000, `${seriesId}:${episodeId}`);
+
+      // Set pending write snapshot
+      pendingPersistRef.current = {
+        seriesId,
+        episodeId,
+        operation: 'update_segments',
+        segments: newSegments,
+        updatedAt: nextUpdatedAt,
+      };
+
+      // Debounce persistTimelineOperationApi with 600ms trailing timer
       if (persistTimeoutRef.current) clearTimeout(persistTimeoutRef.current);
       persistTimeoutRef.current = setTimeout(() => {
-        persistTimelineOperationApi({
-          seriesId,
-          episodeId,
-          operation: 'update_segments',
-          segments: newSegments,
-        })
-          .then((persisted) => {
-            if (persisted?.updatedAt) {
-              setScriptData((prev) => (prev ? { ...prev, updatedAt: Math.max(Number(prev.updatedAt || 0), persisted.updatedAt) } : prev));
-            }
-          })
-          .catch((err) => {
-            console.error('[useClipOperations] Failed to persist dragged/edited segments:', err);
-            showInAppToast(`⚠️ បរាជ័យក្នុងការរក្សាទុកទីតាំងសំឡេង (${err?.message || 'Backend error'}) — សូមពិនិត្យ Server!`, 4800);
-            if (err?.status === 502 || /ECONNREFUSED|unreachable|Failed to fetch|NetworkError/i.test(err?.message || '')) {
-              notifyBackendOffline();
-            }
-          });
+        flushPendingPersist();
       }, 600);
     }
     invalidateRendered();
@@ -1099,5 +1168,6 @@ export function useClipOperations({
     handleAddSegmentAtTime,
     handleToggleMuteSegment,
     handleToggleMuteVideoClip,
+    flushPendingPersist,
   };
 }

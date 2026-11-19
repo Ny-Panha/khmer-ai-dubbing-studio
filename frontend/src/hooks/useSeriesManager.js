@@ -18,6 +18,7 @@ import {
   resolveStickyVoiceSettings,
   sanitizeRenderedVideo,
   sanitizeAndHealSeriesList,
+  flushAllPendingTimelinePersists,
 } from '../utils/projectStorage';
 import { stripLogoSettings } from '../utils/logoSettingsStorage';
 import { generateVideoThumbnails } from '../utils/thumbnailUtils';
@@ -353,6 +354,9 @@ export function useSeriesManager({
     // Safety fallback so initialization never stalls indefinitely if backend is offline
     const fallbackTimer = setTimeout(markInitialized, 1500);
 
+    // Flush any pending recovered timeline writes from a previous session or sudden reload
+    flushAllPendingTimelinePersists().catch(() => {});
+
     // Server-truth hydration: sync latest series and episodes from server
     fetch('/api/series')
       .then((res) => res.json())
@@ -520,7 +524,13 @@ export function useSeriesManager({
     isTransitioningRef.current = true;
     try {
       const prevEpisodeId = activeEpisodeIdRef.current;
-      // 1. Save previous episode if actually switching away from it
+      // 1. Flush any pending timeline writes for previous episode before switching
+      if (prevEpisodeId && prevEpisodeId !== targetEpisodeId) {
+        try {
+          await flushAllPendingTimelinePersists();
+        } catch (_) {}
+      }
+      // 2. Save previous episode if actually switching away from it
       const snapshot = getCurrentWorkspaceSnapshot();
       if (prevEpisodeId && prevEpisodeId !== targetEpisodeId) {
         saveEpisodeState(activeSeriesIdState, prevEpisodeId, snapshot);
