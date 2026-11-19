@@ -680,6 +680,9 @@ async function extractChineseSubtitles({
   let lastBatchError = null;
   let ocrWallTimeMs = 0;
   let ffmpegPrepassMs = 0;
+  let batchLoopMs = 0;
+  let fallbackDirectMs = 0;
+  let tieBreakMs = 0;
   let batchSplitsCount = 0;
   let dedupedFramesCount = 0;
   const telemetry = {
@@ -687,6 +690,7 @@ async function extractChineseSubtitles({
     retrySleepMs: 0,
   };
 
+  const stage3StartTime = Date.now();
   const prepassStartTime = Date.now();
   try {
     checkAbort();
@@ -711,13 +715,17 @@ async function extractChineseSubtitles({
     }
 
     // Helper: Inspect maximum subtitle pixel diff between two timestamps
+    // P0: Strictly inspect d.subDiff; never fall back to full-frame d.diff when subDiff === 0
     function getMaxSubtitleDiffBetween(startT, endT) {
       if (!Array.isArray(frameDiffs) || frameDiffs.length === 0) return 999;
       const minT = Math.min(startT, endT);
       const maxT = Math.max(startT, endT);
       const inRange = frameDiffs.filter((d) => d && typeof d.timestampSec === 'number' && d.timestampSec >= minT && d.timestampSec <= maxT);
       if (inRange.length === 0) return 999;
-      return inRange.reduce((max, d) => Math.max(max, Number(d.subDiff || d.diff || 0)), 0);
+      return inRange.reduce(
+        (max, d) => Math.max(max, typeof d?.subDiff === 'number' ? d.subDiff : (typeof d?.diff === 'number' ? d.diff : 0)),
+        0
+      );
     }
 
     // Schedule candidate frame timestamps:
@@ -803,7 +811,10 @@ async function extractChineseSubtitles({
       if (!isCovered) {
         const idx = Math.round((curTime - safeStartSec) / stepDiff);
         const nearDiffs = frameDiffs.slice(Math.max(0, idx - 2), Math.min(frameDiffs.length, idx + 3));
-        const maxNearDiff = nearDiffs.reduce((m, d) => Math.max(m, d.subDiff || d.diff || 0), 0);
+        const maxNearDiff = nearDiffs.reduce(
+          (m, d) => Math.max(m, typeof d?.subDiff === 'number' ? d.subDiff : (typeof d?.diff === 'number' ? d.diff : 0)),
+          0
+        );
 
         if (maxNearDiff >= 8.0 || frameDiffs.length === 0) {
           trySchedule(rounded, 'baseline_active', 0.20);
@@ -827,23 +838,31 @@ async function extractChineseSubtitles({
     // Sort candidate frame timestamps chronologically
     candidateTimestamps.sort((a, b) => a.timestampSec - b.timestampSec);
     const sortedTimes = candidateTimestamps.map((c) => c.timestampSec);
+    const totalCandidateFrames = candidateTimestamps.length;
+
+    // P1: Resume Checkpoint without re-decoding: Only extract frames that are NOT yet verified in completedMap
+    const timesToExtract = sortedTimes.filter((t) => !completedMap.has(parseFloat(Number(t).toFixed(2))));
 
     // 2. Extract candidate frames at scheduled timestamps
     checkAbort();
     let extractedFrames = [];
-    try {
-      extractedFrames = await extractFramesAtTimestamps(videoPath, sortedTimes, tempDir, { signal });
-    } catch (extractErr) {
-      if (extractErr?.name === 'AbortError' || signal?.aborted) {
-        throw extractErr?.name === 'AbortError' ? extractErr : createAbortError('Stage 3 OCR aborted');
+    if (timesToExtract.length > 0) {
+      try {
+        extractedFrames = await extractFramesAtTimestamps(videoPath, timesToExtract, tempDir, { signal });
+      } catch (extractErr) {
+        if (extractErr?.name === 'AbortError' || signal?.aborted) {
+          throw extractErr?.name === 'AbortError' ? extractErr : createAbortError('Stage 3 OCR aborted');
+        }
+        console.warn('[Stage 3 Extract Subtitles] Timestamp extraction error, attempting streaming fallback:', extractErr.message);
+        const fps = Math.min(2.0, Math.max(0.8, parseFloat((1 / effectiveStep).toFixed(2))));
+        extractedFrames = await extractFramesStreaming(videoPath, safeStartSec, durationSec, fps, tempDir, { signal });
       }
-      console.warn('[Stage 3 Extract Subtitles] Timestamp extraction error, attempting streaming fallback:', extractErr.message);
-      const fps = Math.min(2.0, Math.max(0.8, parseFloat((1 / effectiveStep).toFixed(2))));
-      extractedFrames = await extractFramesStreaming(videoPath, safeStartSec, durationSec, fps, tempDir, { signal });
+    } else {
+      console.log(`[Stage 3 OCR] ⚡ All candidate frames already verified in checkpoint (${completedMap.size} frames). Skipping FFmpeg frame extraction.`);
     }
     ffmpegPrepassMs = Date.now() - prepassStartTime;
 
-    if (!extractedFrames || extractedFrames.length === 0) {
+    if (timesToExtract.length > 0 && (!extractedFrames || extractedFrames.length === 0)) {
       console.warn('[Stage 3 Extract Subtitles] No frames could be extracted for video');
       return {
         rawObservations: [],
@@ -853,7 +872,7 @@ async function extractChineseSubtitles({
     }
 
     const framesToAnalyze = extractedFrames;
-    console.log(`[Stage 3 Extract Subtitles] Detected ${changePoints.length} change points (${cueStates.length} candidate cue states). Prioritized ${framesToAnalyze.length} candidate frames for Vision OCR`);
+    console.log(`[Stage 3 Extract Subtitles] Detected ${changePoints.length} change points (${cueStates.length} candidate cue states). Prioritized ${framesToAnalyze.length} pending frames for Vision OCR (${completedMap.size} already verified in checkpoint)`);
 
     // Helper: Build Vision OCR prompt contents
     function buildVisionBatchContents(batch) {
@@ -941,8 +960,8 @@ Return JSON ONLY matching this schema:
     }
 
     // 3. Adaptive Batch Scheduler with Per-Batch Checkpointing & Concurrency Backoff
-    console.log(`[Stage 3 Extract Subtitles] Running Gemini Vision OCR on ${framesToAnalyze.length} candidate frames...`);
-    const ocrStartTime = Date.now();
+    console.log(`[Stage 3 Extract Subtitles] Running Gemini Vision OCR on ${framesToAnalyze.length} pending candidate frames (${completedMap.size} already verified)...`);
+    const batchLoopStart = Date.now();
     const INITIAL_BATCH_SIZE = 15;
 
     // Filter candidate frames against completed observations from checkpoint
@@ -963,7 +982,6 @@ Return JSON ONLY matching this schema:
       });
     }
 
-    const totalCandidateFrames = framesToAnalyze.length;
     let completedBatchesCount = Math.floor(completedMap.size / INITIAL_BATCH_SIZE);
     let totalBatchesEstimated = completedBatchesCount + batchQueue.length;
     let adaptiveConcurrency = 2; // starts at 2, reduces to 1 on overload
@@ -1177,7 +1195,7 @@ Return JSON ONLY matching this schema:
         await sleepOrAbort(pacingMs, signal);
       }
     }
-    ocrWallTimeMs = Date.now() - ocrStartTime;
+    batchLoopMs = Date.now() - batchLoopStart;
 
     // Point 3: Resolve Linked Secondary Frames with strict sharpness and verification checks
     if (linkedSecondaryFrames.size > 0) {
@@ -1204,6 +1222,7 @@ Return JSON ONLY matching this schema:
       }
 
       if (framesNeedingDirectOcr.length > 0) {
+        const fallbackStart = Date.now();
         console.log(`[Stage 3 OCR] 🔍 Parent frame was blurry/unverified for ${framesNeedingDirectOcr.length} linked frame(s). Extracting and verifying directly via Gemini...`);
         let fallbackExtracted = [];
         try {
@@ -1254,12 +1273,13 @@ Return JSON ONLY matching this schema:
             }
           }
         }
+        fallbackDirectMs = Date.now() - fallbackStart;
       }
     }
 
-    // Account for all frames:
-    for (const f of framesToAnalyze) {
-      const t = parseFloat(f.timestampSec.toFixed(2));
+    // Account for all candidate frames:
+    for (const c of candidateTimestamps) {
+      const t = parseFloat(Number(c.timestampSec).toFixed(2));
       if (!completedMap.has(t) && !unresolvedMap.has(t)) {
         unresolvedMap.set(t, {
           timestampSec: t,
@@ -1515,6 +1535,7 @@ Return JSON ONLY matching this schema:
       // Execute tie-break read if any disagreements occurred
       if (statesNeedingTieBreak.length > 0) {
         checkAbort();
+        const tieBreakStart = Date.now();
         console.log(`[Stage 3 OCR] Executing tie-break verification for ${statesNeedingTieBreak.length} candidate cue states...`);
         const tieTimes = statesNeedingTieBreak.map((n) => n.cueState.sampleTieSec);
         let tieFrames = [];
@@ -1562,6 +1583,7 @@ Return JSON ONLY matching this schema:
             }
           }
         }
+        tieBreakMs = Date.now() - tieBreakStart;
 
         // Resolve each disagreement using tie-break read
         for (const item of statesNeedingTieBreak) {
@@ -1941,9 +1963,14 @@ Return JSON ONLY matching this schema:
     };
   });
 
+  ocrWallTimeMs = Date.now() - stage3StartTime;
+
   const performance = {
     wallTimeMs: ocrWallTimeMs,
     ffmpegPrepassMs,
+    batchLoopMs,
+    fallbackDirectMs,
+    tieBreakMs,
     apiTotalMs: telemetry.apiTotalMs,
     retrySleepMs: telemetry.retrySleepMs,
     apiCallsCount,

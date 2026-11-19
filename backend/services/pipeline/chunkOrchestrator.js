@@ -201,6 +201,15 @@ async function runChunkedDubbingPipeline({
   }
 
   const allChunkSegments = [];
+  const pipelineStartTime = Date.now();
+  const pipelineStageDurations = {
+    ocrMs: 0,
+    asrMs: 0,
+    reconcileMs: 0,
+    stage6ScriptMs: 0,
+    stage7ValidationMs: 0,
+    stage8TimingMs: 0,
+  };
 
   // Process chunks
   for (let cIdx = 0; cIdx < chunks.length; cIdx++) {
@@ -277,6 +286,7 @@ async function runChunkedDubbingPipeline({
           Math.min(70, Math.round(chunkPercent + (1 / chunks.length) * 15)),
           `Chunk ${cIdx + 1}/${chunks.length}: កំពុងស្កេនអក្សរចិនលើរូបភាព (Vision OCR)...`
         );
+        const chunkOcrStart = Date.now();
         const ocrResult = await extractChineseSubtitles({
           videoPath,
           durationSec: chunk.durationSec,
@@ -297,6 +307,7 @@ async function runChunkedDubbingPipeline({
             );
           },
         });
+        pipelineStageDurations.ocrMs += (Date.now() - chunkOcrStart);
 
         checkAbort();
 
@@ -381,6 +392,7 @@ async function runChunkedDubbingPipeline({
             Math.min(70, Math.round(chunkPercent + (1 / chunks.length) * 35)),
             `Chunk ${cIdx + 1}/${chunks.length}: កំពុងស្ដាប់សំឡេងតួអង្គចិន (ASR Audio Diarization)...`
           );
+          const asrStart = Date.now();
           const audioAnalysis = await analyzeDialogueAudio({
             videoPath,
             durationSec: chunk.durationSec,
@@ -390,6 +402,7 @@ async function runChunkedDubbingPipeline({
             force,
             signal,
           });
+          pipelineStageDurations.asrMs += (Date.now() - asrStart);
 
           const chunkEngine = audioAnalysis?.audioMeta?.asrEngineUsed || 'unknown';
           const chunkWallSec = audioAnalysis?.audioMeta?.wallTimeMs
@@ -405,12 +418,14 @@ async function runChunkedDubbingPipeline({
             Math.min(70, Math.round(chunkPercent + (1 / chunks.length) * 50)),
             `Chunk ${cIdx + 1}/${chunks.length}: ផ្គូផ្គងអក្សរ និងសំឡេង (Reconciling Timeline)...`
           );
+          const recStart = Date.now();
           const chunkReconciliation = await reconcileTimelineEvidence({
             visualSegments: ocrResult.visualSegments,
             audioSegments: audioAnalysis.audioSegments,
             rawObservations: ocrResult.rawObservations,
             durationSec: chunk.durationSec,
           });
+          pipelineStageDurations.reconcileMs += (Date.now() - recStart);
 
           const rawReconciled = chunkReconciliation.reconciledSegments || [];
           chunkSegments = rawReconciled.filter((seg) => !isNonChineseAsrHallucination(seg));
@@ -507,6 +522,7 @@ async function runChunkedDubbingPipeline({
         ? '⚡ កំពុងបកប្រែពាក្យសន្ទនា Subtitle ចិន ➡️ ខ្មែរ ភ្លាមៗ (Fast OCR)...'
         : 'កំពុងបកប្រែពាក្យសន្ទនាតាមបន្ទាត់ចិនដើម ១០០% (Mode A Faithful Dialogue)...')
   );
+  const stage6Start = Date.now();
   const scriptResult = await generateModeSpecificScript({
     mode: mode === GENERATION_MODES.FAST_OCR ? GENERATION_MODES.MODE_A_DIALOGUE : mode,
     generationMode: mode,
@@ -524,6 +540,8 @@ async function runChunkedDubbingPipeline({
     forceRegen,
     signal,
   });
+  pipelineStageDurations.stage6ScriptMs = Date.now() - stage6Start;
+  console.log(`[ChunkOrchestrator] ⏱️ Stage 6 Script Translation Duration: ${(pipelineStageDurations.stage6ScriptMs / 1000).toFixed(1)}s for ${stitchedSegments.length} segments.`);
 
   if (ingestResult?.seriesId) {
     try {
@@ -543,19 +561,23 @@ async function runChunkedDubbingPipeline({
 
   // 6. Stage 7: Translate and Validate Khmer
   report('translateAndValidateKhmer', 85, 'កំពុងផ្ទៀងផ្ទាត់ភាសាខ្មែរ រក្សាអក្សរចិនដើម និងសម្គាល់ Review Needed...');
+  const stage7Start = Date.now();
   const validationRes = await translateAndValidateKhmer({
     scriptSegments: scriptResult.scriptSegments,
     mode: scriptResult.mode,
   });
+  pipelineStageDurations.stage7ValidationMs = Date.now() - stage7Start;
 
   checkAbort();
 
   // 7. Stage 8: Validate Subtitle Timing
   report('validateSubtitleTiming', 92, 'កំពុងផ្ទៀងផ្ទាត់ Subtitle Timing (ទប់ស្កាត់ 0.01s និងចៀសវាង Overlap)...');
+  const stage8Start = Date.now();
   const timingRes = await validateSubtitleTiming({
     segments: validationRes.validatedSegments,
     durationSec,
   });
+  pipelineStageDurations.stage8TimingMs = Date.now() - stage8Start;
 
   let finalizedSegments = timingRes.timedSegments;
 
@@ -594,6 +616,20 @@ async function runChunkedDubbingPipeline({
     exportOptions: { renderVideo: false },
   });
 
+  const pipelineTotalWallTimeMs = Date.now() - pipelineStartTime;
+  console.log(`[ChunkOrchestrator] 🚀 Full Pipeline Performance Telemetry:`, {
+    totalWallTimeMs: pipelineTotalWallTimeMs,
+    totalWallTimeSec: (pipelineTotalWallTimeMs / 1000).toFixed(1),
+    stage3OcrTotalMs: pipelineStageDurations.ocrMs,
+    stage4AsrTotalMs: pipelineStageDurations.asrMs,
+    stage5ReconcileTotalMs: pipelineStageDurations.reconcileMs,
+    stage6ScriptMs: pipelineStageDurations.stage6ScriptMs,
+    stage7ValidationMs: pipelineStageDurations.stage7ValidationMs,
+    stage8TimingMs: pipelineStageDurations.stage8TimingMs,
+    chunksCount: chunks.length,
+    totalCues: finalizedSegments.length,
+  });
+
   const finalOutput = {
     success: true,
     mode: scriptResult.mode,
@@ -628,6 +664,15 @@ async function runChunkedDubbingPipeline({
       completedAt: Date.now(),
       assSubtitlePath: exportPrep.assSubtitlePath,
       srtSubtitlePath: exportPrep.srtSubtitlePath,
+      pipelinePerformance: {
+        totalWallTimeMs: pipelineTotalWallTimeMs,
+        stage3OcrTotalMs: pipelineStageDurations.ocrMs,
+        stage4AsrTotalMs: pipelineStageDurations.asrMs,
+        stage5ReconcileTotalMs: pipelineStageDurations.reconcileMs,
+        stage6ScriptMs: pipelineStageDurations.stage6ScriptMs,
+        stage7ValidationMs: pipelineStageDurations.stage7ValidationMs,
+        stage8TimingMs: pipelineStageDurations.stage8TimingMs,
+      },
       ...(scriptResult.translationReport ? { translationReport: scriptResult.translationReport } : {}),
       ...(validationRes?.validationReport ? { validationReport: validationRes.validationReport } : {}),
     },

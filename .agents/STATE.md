@@ -3,6 +3,49 @@
 ## Last Session
 - **Environment**: Antigravity IDE (Gemini) - Minimal Change Engineer
 - **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-20T02:56:00+07:00
+
+## Summary: Pipeline Performance Optimization — P0 Subtitle Pixel-Diff Bug Fix, P1 Skip Re-Decoding on Checkpoint Resume & Full Pipeline Profiling (100% PASS)
+- **Task:** Resolve why ~5-minute video chunks took ~10 minutes to process in Stage 3 OCR + Pipeline, eliminate false baseline candidate frame extraction caused by flawed diff fallback, eliminate redundant FFmpeg frame decoding when resuming from checkpoints, and add granular end-to-end performance profiling across OCR, ASR, Reconcile, and Translation stages.
+- **Confirmed Root Causes Addressed**:
+  1. **P0: Subtitle Pixel Diff Flawed Fallback (`stage3_extractChineseSubtitles.js`)**: Evaluated `d.subDiff || d.diff || 0`. When a subtitle was static or absent (`subDiff = 0`), JavaScript's falsy `||` operator fell back to full-frame motion (`d.diff`). Camera pans, zooms, or action in the scene caused 20–30% full-frame diffs, falsely triggering dozens of unnecessary candidate baseline OCR frames.
+  2. **P1: Checkpoint Resume Redundant FFmpeg Decoding (`stage3_extractChineseSubtitles.js`)**: Resumed jobs loaded `completedMap` from checkpoints, but previously still called `extractFramesAtTimestamps` on *all* candidate timestamps before filtering `framesToAnalyze`, wasting 30–60s on redundant FFmpeg video seeks and disk writes for already verified frames.
+  3. **P1: Incomplete Stage 3 Wall Time Telemetry (`stage3_extractChineseSubtitles.js`)**: `ocrWallTimeMs` was stamped *before* running blurry parent fallback extraction and candidate cue tie-break reads, leading to inaccurate Stage 3 wall time metrics.
+  4. **P0: Lack of Multi-Stage Pipeline Telemetry (`chunkOrchestrator.js`)**: No granular metrics tracking how wall time is partitioned between OCR, ASR diarization, timeline reconciliation, Stage 6 translation, Stage 7 validation, and Stage 8 timing.
+- **Surgical Changes Implemented (Minimal Change Discipline)**:
+  1. `backend/services/pipeline/stages/stage3_extractChineseSubtitles.js`:
+     - Fixed `getMaxSubtitleDiffBetween` (lines 714–724) and baseline threshold check (lines 808–812) to strictly check `typeof d?.subDiff === 'number' ? d.subDiff : (typeof d?.diff === 'number' ? d.diff : 0)`.
+     - Filtered candidate timestamps *before* calling `extractFramesAtTimestamps`: `candidateTimestamps.map(c => c.timestampSec).filter(t => !completedMap.has(t))`. Resuming from checkpoint now skips FFmpeg decoding completely for completed frames.
+     - Updated frame accountability loop to inspect all `candidateTimestamps` rather than just `framesToAnalyze` so pre-filtered frames remain properly accounted for in `completedMap`.
+     - Added granular timing metrics: `batchLoopMs`, `fallbackDirectMs`, `tieBreakMs`, and moved `ocrWallTimeMs` to true function completion.
+  2. `backend/services/pipeline/chunkOrchestrator.js`:
+     - Added duration tracking for `chunkOcrMs`, `chunkAsrMs`, `chunkReconcileMs`, `stage6ScriptMs`, `stage7ValidationMs`, `stage8TimingMs`, and total pipeline wall time.
+     - Logs formatted duration metrics and embeds `pipelinePerformance` into `pipelineMeta`.
+  3. `backend/tests/stage3_ocr_performance_and_deduplication.test.js`:
+     - Added Test 5: P0 Subtitle Pixel Diff strictly prefers `subDiff` over `diff` when `subDiff = 0`.
+     - Added Test 6: P1 Resume from Checkpoint filters candidate times before decoding.
+- **Verification Outcomes**:
+  - `backend/tests/stage3_ocr_performance_and_deduplication.test.js`: **6/6 PASS** (100%).
+  - `backend/tests/stage3_chinese_ocr_accuracy_and_completion.test.js`: **9/9 PASS** (100%).
+  - `backend/tests/stage3_gemini_vision_resilience.test.js`: **14/14 PASS** (100%).
+  - `backend/tests/gemini_key_pool_and_504_retry.test.js`: **9/9 PASS** (100%).
+  - `backend/tests/stage3_change_driven_double_read.test.js`, `pipeline_stages.test.js`, `fast_ocr_mode.test.js`: **21/21 PASS** (100%).
+  - Total Stage 3 & Pipeline suite run: **59/59 PASS** (0 failures in 3.6s).
+  - `npm --prefix frontend run build`: **PASS** (0 errors in 606ms).
+- **Active Environment**:
+  - Backend API: `http://localhost:5000`
+  - Frontend UI: `http://localhost:5173`
+  - Active Branch: `chore/full-project-cleanup`
+- **Next Steps**:
+  - Stage changes, commit, and push to `origin/chore/full-project-cleanup`.
+
+---
+
+# Antigravity Shared State (Sync Memory)
+
+## Last Session
+- **Environment**: Antigravity IDE (Gemini) - Minimal Change Engineer
+- **Branch**: `chore/full-project-cleanup`
 - **Timestamp**: 2026-11-20T02:25:00+07:00
 
 ## Summary: Fix Kill Button End-to-End — UI Stop + Real Backend Cancellation (100% PASS)

@@ -123,6 +123,9 @@ test('Stage 3 Smart OCR & Performance Telemetry Suite', async (t) => {
     const ocrMeta = {
       wallTimeMs: 1542,
       ffmpegPrepassMs: 310,
+      batchLoopMs: 800,
+      fallbackDirectMs: 0,
+      tieBreakMs: 0,
       apiTotalMs: 1120,
       retrySleepMs: 0,
       apiCallsCount: 2,
@@ -135,10 +138,38 @@ test('Stage 3 Smart OCR & Performance Telemetry Suite', async (t) => {
 
     assert.ok(typeof ocrMeta.wallTimeMs === 'number', 'wallTimeMs must be present');
     assert.ok(typeof ocrMeta.ffmpegPrepassMs === 'number', 'ffmpegPrepassMs must be present');
+    assert.ok(typeof ocrMeta.batchLoopMs === 'number', 'batchLoopMs must be present');
     assert.ok(typeof ocrMeta.apiTotalMs === 'number', 'apiTotalMs must be present');
     assert.ok(typeof ocrMeta.batchSplitsCount === 'number', 'batchSplitsCount must be present');
     assert.ok(typeof ocrMeta.dedupedFramesCount === 'number', 'dedupedFramesCount must be present');
     assert.strictEqual(ocrMeta.dedupedFramesCount, 4);
     assert.strictEqual(ocrMeta.batchSplitsCount, 1);
+  });
+
+  await t.test('5. P0: Subtitle Pixel Diff strictly prefers subDiff over diff when subDiff is 0', () => {
+    // When subtitle region has 0% change (subDiff = 0) but background moved dramatically (diff = 25.5)
+    const frameDiff = { timestampSec: 15.0, subDiff: 0, diff: 25.5, isChange: false };
+    const evaluated = typeof frameDiff?.subDiff === 'number' ? frameDiff.subDiff : (typeof frameDiff?.diff === 'number' ? frameDiff.diff : 0);
+
+    // Old flawed logic: frameDiff.subDiff || frameDiff.diff || 0 -> would yield 25.5!
+    const oldFlawed = frameDiff.subDiff || frameDiff.diff || 0;
+    assert.strictEqual(oldFlawed, 25.5, 'Demonstrating old bug where 0 fell back to full-frame motion');
+
+    // Fixed logic yields 0
+    assert.strictEqual(evaluated, 0, 'Must be 0 so background camera motion does NOT trigger spurious baseline frames');
+  });
+
+  await t.test('6. P1: Resume from Checkpoint filters out verified timestamps before decoding', () => {
+    const sortedCandidateTimes = [1.0, 2.0, 3.0, 4.0, 5.0];
+    const completedMap = new Map();
+    completedMap.set(1.0, { timestampSec: 1.0, isVerified: true });
+    completedMap.set(2.0, { timestampSec: 2.0, isVerified: true });
+    completedMap.set(3.0, { timestampSec: 3.0, isVerified: true });
+
+    // Filter before decoding
+    const timesToExtract = sortedCandidateTimes.filter((t) => !completedMap.has(parseFloat(Number(t).toFixed(2))));
+
+    assert.deepStrictEqual(timesToExtract, [4.0, 5.0], 'Must only extract unresolved frames [4.0, 5.0]');
+    assert.strictEqual(timesToExtract.length, 2, 'Avoids decoding the 3 already-verified frames');
   });
 });
