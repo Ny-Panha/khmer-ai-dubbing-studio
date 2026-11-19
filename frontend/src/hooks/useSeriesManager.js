@@ -166,7 +166,32 @@ export function useSeriesManager({
     if (cb.setVideoMetadata) {
       cb.setVideoMetadata(ep.metadata || null);
     }
-    const activeRegistry = ep.speakerRegistry || {};
+    const seriesSpeakerMap = {};
+    if (Array.isArray(activeSeries?.glossary?.characters)) {
+      activeSeries.glossary.characters.forEach((c) => {
+        const key = c.id || c.speakerId || c.name;
+        if (key && (c.voiceId || c.khmerVoiceId)) {
+          const isFemale = (c.gender === 'female' || c.gender === 'FEMALE');
+          const isMale = (c.gender === 'male' || c.gender === 'MALE');
+          seriesSpeakerMap[key] = {
+            id: key,
+            speakerId: key,
+            speakerName: c.khmerName || c.name || key,
+            name: c.khmerName || c.name || key,
+            gender: isFemale ? 'FEMALE' : (isMale ? 'MALE' : 'UNKNOWN'),
+            voiceGender: isFemale ? 'female' : (isMale ? 'male' : 'unknown'),
+            voiceId: c.voiceId || c.khmerVoiceId,
+            khmerVoiceId: c.khmerVoiceId || c.voiceId,
+            voiceAssignmentSource: c.voiceAssignmentSource || 'series_glossary',
+            userOverridden: Boolean(c.userOverridden),
+          };
+        }
+      });
+    }
+    const activeRegistry = {
+      ...seriesSpeakerMap,
+      ...(ep.speakerRegistry || {}),
+    };
     if (cb.setSpeakerRegistry) {
       cb.setSpeakerRegistry(activeRegistry);
     }

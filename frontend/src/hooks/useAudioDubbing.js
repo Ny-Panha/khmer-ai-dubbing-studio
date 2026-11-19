@@ -183,8 +183,6 @@ const FALLBACK_VOICE_CATALOG = {
   // Update a Character's assigned voice across the whole project
   const handleUpdateSpeakerVoice = (speakerId, newVoiceId, newSpeed = 'normal') => {
     const isFemale = String(newVoiceId || '').toLowerCase().includes('sreymom');
-    const targetGender = isFemale ? 'female' : 'male';
-    const targetGenderUpper = isFemale ? 'FEMALE' : 'MALE';
     const voiceLabel = isFemale ? 'ស្រីមុំ (Sreymom)' : 'ពិសិដ្ឋ (Piseth)';
     const avatar = isFemale ? '👩' : '👨';
     const badgeColor = isFemale ? '#ec4899' : '#38bdf8';
@@ -192,14 +190,19 @@ const FALLBACK_VOICE_CATALOG = {
     const existing = (speakerRegistry && speakerRegistry[speakerId]) || {};
     const targetName = (existing.speakerName || existing.name || (typeof speakerId === 'string' && !speakerId.startsWith('spk_') ? speakerId : '')).trim();
 
+    // Preserve existing detected gender identity - manual voice selection must not change character gender!
+    const preservedGender = existing.gender || 'UNKNOWN';
+    const preservedVoiceGender = existing.voiceGender || (preservedGender === 'FEMALE' ? 'female' : (preservedGender === 'MALE' ? 'male' : 'unknown'));
+
     const updatedSpk = {
       ...existing,
       id: speakerId,
       speakerId: speakerId,
       speakerName: targetName || existing.speakerName || speakerId,
       name: targetName || existing.name || speakerId,
-      gender: targetGenderUpper,
-      voiceGender: targetGender,
+      gender: preservedGender,
+      voiceGender: preservedVoiceGender,
+      speakerGender: preservedGender,
       voiceId: newVoiceId,
       khmerVoiceId: newVoiceId,
       voice: newVoiceId,
@@ -238,14 +241,17 @@ const FALLBACK_VOICE_CATALOG = {
           (typeof speakerId === 'string' && rawName && rawName.length >= 2 && speakerId.includes(rawName));
 
         if (matches) {
+          const segPreservedVoiceGender = seg.voiceGender || preservedVoiceGender;
+          const segPreservedGender = seg.gender || segPreservedVoiceGender;
+          const segPreservedSpeakerGender = seg.speakerGender || (segPreservedGender === 'female' ? 'FEMALE' : (segPreservedGender === 'male' ? 'MALE' : 'UNKNOWN'));
           return {
             ...seg,
             voiceId: newVoiceId,
             khmerVoiceId: newVoiceId,
             voice: newVoiceId,
-            voiceGender: targetGender,
-            gender: targetGender,
-            speakerGender: targetGenderUpper,
+            voiceGender: segPreservedVoiceGender,
+            gender: segPreservedGender,
+            speakerGender: segPreservedSpeakerGender,
             voiceLabel,
             avatar,
             badgeColor,
@@ -411,30 +417,18 @@ const FALLBACK_VOICE_CATALOG = {
     const targetSeg = scriptData.segments[segIdx];
     const segDisplayNum = targetSeg.id ?? (segIdx + 1);
     const isFemale = (newVoiceId || '').includes('Sreymom');
-    const isMale = (newVoiceId || '').includes('Piseth');
-    const updatedGender = isMale ? 'MALE' : (isFemale ? 'FEMALE' : targetSeg.speakerGender);
     const activeSpeed = targetSeg.userCustomSpeed ? targetSeg.speed : (voiceSettings.speed || 'normal');
-    const updatedVoiceGender = isFemale ? 'female' : 'male';
     const updatedVoiceLabel = isFemale ? 'ស្រីមុំ (Sreymom)' : 'ពិសិដ្ឋ (Piseth)';
     const updatedAvatar = isFemale ? '👩' : '👨';
     const updatedBadgeColor = isFemale ? '#ec4899' : '#38bdf8';
     const currentKhmerText = (targetSeg.khmer || targetSeg.khmerText || targetSeg.khmerTranslatedText || '').trim();
     const willRegen = Boolean(autoRegen && currentKhmerText);
 
+    // Individual segment override remains strictly segment-scoped without mutating character gender or registry
+    const preservedGender = targetSeg.voiceGender || targetSeg.gender || 'unknown';
+    const preservedSpeakerGender = targetSeg.speakerGender || (preservedGender === 'female' ? 'FEMALE' : (preservedGender === 'male' ? 'MALE' : 'UNKNOWN'));
     const spkKey = targetSeg.speakerId || targetSeg.speaker || null;
-    const prevSpeakerEntry = spkKey && speakerRegistry && Object.prototype.hasOwnProperty.call(speakerRegistry, spkKey)
-      ? { ...speakerRegistry[spkKey] }
-      : null;
-    const speakerEntryPatch = spkKey ? {
-      id: spkKey,
-      speakerId: spkKey,
-      voiceId: newVoiceId,
-      khmerVoiceId: newVoiceId,
-      gender: updatedGender,
-      voiceGender: updatedVoiceGender,
-      voiceAssignmentSource: 'manual',
-      userOverridden: true,
-    } : null;
+    const speakerEntryPatch = null;
 
     // Full rollback snapshot so any TTS failure restores the exact previous voice, color/label, and audio
     const prevSegSnapshot = {
@@ -470,15 +464,16 @@ const FALLBACK_VOICE_CATALOG = {
       voice: newVoiceId,
       voiceId: newVoiceId,
       khmerVoiceId: newVoiceId,
-      speakerGender: updatedGender,
-      voiceGender: updatedVoiceGender,
-      gender: updatedVoiceGender,
+      voiceOverride: newVoiceId,
+      speakerGender: preservedSpeakerGender,
+      voiceGender: preservedGender,
+      gender: preservedGender,
       voiceLabel: updatedVoiceLabel,
       avatar: updatedAvatar,
       badgeColor: updatedBadgeColor,
       voiceAssignmentSource: 'manual',
       userOverridden: true,
-      genderConfidence: 1.0,
+      genderConfidence: targetSeg.genderConfidence ?? (preservedGender === 'unknown' ? 0.5 : 0.85),
       speed: activeSpeed,
       voiceProvider: 'edge-tts',
       audioOutdated: true,
@@ -1137,18 +1132,21 @@ const FALLBACK_VOICE_CATALOG = {
         const detectedGender = (!isManualOverride && titleGender !== 'UNKNOWN')
           ? titleGender
           : (explicitKnown || detectSpeakerGender(seg.speaker, '', seg.khmer || seg.khmerText || seg.original));
-        const resolvedGender = detectedGender !== 'UNKNOWN' ? detectedGender : 'MALE';
         const resolvedVoice = isManualOverride
-          ? (seg.voiceOverride || seg.voiceId || seg.khmerVoiceId || (resolvedGender === 'FEMALE' ? 'km-KH-SreymomNeural' : 'km-KH-PisethNeural'))
-          : (detectedGender !== 'UNKNOWN'
-              ? (resolvedGender === 'FEMALE' ? 'km-KH-SreymomNeural' : 'km-KH-PisethNeural')
-              : (seg.voiceId || seg.khmerVoiceId || 'km-KH-PisethNeural'));
+          ? (seg.voiceOverride || seg.voiceId || seg.khmerVoiceId || (detectedGender === 'FEMALE' ? 'km-KH-SreymomNeural' : 'km-KH-PisethNeural'))
+          : (detectedGender === 'FEMALE'
+              ? 'km-KH-SreymomNeural'
+              : (detectedGender === 'MALE'
+                  ? 'km-KH-PisethNeural'
+                  : (seg.voiceId || seg.khmerVoiceId || 'km-KH-PisethNeural')));
 
         const base = !seg.userShifted ? { ...seg, userShifted: false } : { ...seg };
         delete base.autoShifted;
         return {
           ...base,
-          speakerGender: resolvedGender,
+          speakerGender: detectedGender,
+          voiceGender: detectedGender === 'FEMALE' ? 'female' : (detectedGender === 'MALE' ? 'male' : 'unknown'),
+          gender: detectedGender === 'FEMALE' ? 'female' : (detectedGender === 'MALE' ? 'male' : 'unknown'),
           voiceId: resolvedVoice,
           khmerVoiceId: resolvedVoice,
         };

@@ -427,8 +427,8 @@ function syncSegmentsWithSpeakerRegistry(segments = [], customSpeakerVoiceMap = 
     }
 
     // Map to supported Khmer TTS voice: male -> Piseth, female -> Sreymom, unknown -> Piseth (project default)
-    const effectiveGender = resolvedGender === "female" ? "female" : "male";
-    const profile = getVoiceProfile(effectiveGender, stats.customVoice);
+    const effectiveGender = resolvedGender === "female" ? "female" : (resolvedGender === "male" ? "male" : "unknown");
+    const profile = getVoiceProfile(resolvedGender === "female" ? "female" : "male", stats.customVoice);
     const assignedVoice = profile.voiceId;
     const isManual = stats.isManual || (Boolean(stats.customVoice) && stats.assignmentSource === "manual");
     const finalSource = stats.assignmentSource || (isManual ? "manual" : "automatic");
@@ -440,12 +440,13 @@ function syncSegmentsWithSpeakerRegistry(segments = [], customSpeakerVoiceMap = 
       speaker: stats.name,
       voiceGender: resolvedGender,
       gender: effectiveGender,
-      speakerGender: assignedVoice.includes("Sreymom") ? "FEMALE" : "MALE",
+      speakerGender: resolvedGender === "female" ? "FEMALE" : (resolvedGender === "male" ? "MALE" : "UNKNOWN"),
       genderConfidence,
       khmerVoiceId: assignedVoice,
       voiceId: assignedVoice,
       voice: assignedVoice,
       voiceAssignmentSource: finalSource,
+      userOverridden: isManual,
       voiceLabel: profile.voiceLabel,
       avatar: profile.avatar,
       badgeColor: profile.badgeColor,
@@ -498,23 +499,41 @@ function syncSegmentsWithSpeakerRegistry(segments = [], customSpeakerVoiceMap = 
       badgeColor: fallbackIsFemale ? "#ec4899" : "#3b82f6",
     };
 
-    const isRegManual = Boolean(reg.userOverridden) || reg.voiceAssignmentSource === "manual";
     const isUserOverridden = Boolean(seg.userOverridden);
-    const isManualOverride = isUserOverridden || isRegManual || seg.voiceAssignmentSource === "manual" || Boolean(seg.voiceOverride);
-    const activeVoice = (isRegManual && (reg.khmerVoiceId || reg.voiceId))
-      ? (reg.khmerVoiceId || reg.voiceId)
-      : (isManualOverride
-          ? (isUserOverridden
-              ? (seg.voiceOverride || seg.voiceId || seg.khmerVoiceId || seg.voice || reg.khmerVoiceId)
-              : (seg.voiceOverride || seg.khmerVoiceId || seg.voiceId || seg.voice || reg.khmerVoiceId))
-          : reg.khmerVoiceId);
-    const isFemale = String(activeVoice).includes("Sreymom");
-    const activeGender = isRegManual
-      ? (isFemale ? "female" : "male")
-      : ((isUserOverridden && (seg.voiceGender === "female" || seg.voiceGender === "male"))
-          ? seg.voiceGender
-          : (isFemale ? "female" : "male"));
-    const activeProfile = getVoiceProfile(activeGender, activeVoice);
+    const isSegManual = isUserOverridden || seg.voiceAssignmentSource === "manual" || Boolean(seg.voiceOverride);
+    const isRegManual = Boolean(reg.userOverridden) || reg.voiceAssignmentSource === "manual";
+    const isManualOverride = isSegManual || isRegManual;
+
+    // Selection priority:
+    // 1. Explicit manual segment voice override
+    // 2. Explicit manual character voice assignment
+    // 3. Confirmed series-level character voice assignment
+    // 4. Reliable detected character gender (male -> Piseth, female -> Sreymom)
+    // 5. Existing valid voice assignment
+    // 6. Default fallback (Piseth)
+    let activeVoice;
+    if (isSegManual && (seg.voiceOverride || seg.khmerVoiceId || seg.voiceId || seg.voice)) {
+      activeVoice = seg.voiceOverride || seg.khmerVoiceId || seg.voiceId || seg.voice;
+    } else if (isRegManual && (reg.khmerVoiceId || reg.voiceId || reg.voice)) {
+      activeVoice = reg.khmerVoiceId || reg.voiceId || reg.voice;
+    } else if (reg.voiceAssignmentSource === "series_glossary" && (reg.khmerVoiceId || reg.voiceId || reg.voice)) {
+      activeVoice = reg.khmerVoiceId || reg.voiceId || reg.voice;
+    } else if (reg.voiceGender === "female") {
+      activeVoice = "km-KH-SreymomNeural";
+    } else if (reg.voiceGender === "male") {
+      activeVoice = "km-KH-PisethNeural";
+    } else {
+      activeVoice = reg.khmerVoiceId || reg.voiceId || fallbackVoice;
+    }
+
+    // Keep character gender identity separate from chosen voice
+    // For non-overridden segments, character registry majority vote (reg.voiceGender) governs.
+    // For user-overridden segments, segment's own gender is preserved.
+    const resolvedGender = isUserOverridden
+      ? ((seg.voiceGender === "female" || seg.voiceGender === "male") ? seg.voiceGender : (reg.voiceGender || "unknown"))
+      : (reg.voiceGender || "unknown");
+    const resolvedSpeakerGender = resolvedGender === "female" ? "FEMALE" : (resolvedGender === "male" ? "MALE" : "UNKNOWN");
+    const activeProfile = getVoiceProfile(resolvedGender === "female" ? "female" : "male", activeVoice);
     const isNarrator = rawSpeaker.toLowerCase().includes("narrator") || rawSpeaker.includes("អ្នកសម្រាយរឿង") || rawSpeaker.includes("旁白");
     const safeSpkKey = isNarrator ? "spk_narrator" : spkKey;
 
@@ -536,18 +555,15 @@ function syncSegmentsWithSpeakerRegistry(segments = [], customSpeakerVoiceMap = 
       speakerId: isUserOverridden && seg.speakerId ? seg.speakerId : (reg.speakerId || safeSpkKey),
       speaker: isUserOverridden ? (seg.speaker || reg.speaker) : reg.speaker,
       speakerName: isUserOverridden ? (seg.speakerName || seg.speaker || reg.speaker) : reg.speaker,
-      voiceGender: isRegManual
-        ? (isFemale ? "female" : "male")
-        : (isUserOverridden
-            ? (seg.voiceGender || (isFemale ? "female" : "male"))
-            : (isManualOverride ? (isFemale ? "female" : "male") : reg.voiceGender)),
-      gender: activeGender,
-      speakerGender: isFemale ? "FEMALE" : (activeGender === "female" ? "FEMALE" : (reg.voiceGender === "unknown" && !isManualOverride ? "UNKNOWN" : "MALE")),
+      voiceGender: resolvedGender,
+      gender: resolvedGender,
+      speakerGender: resolvedSpeakerGender,
       genderConfidence: isUserOverridden ? (seg.genderConfidence ?? null) : reg.genderConfidence,
       khmerVoiceId: activeProfile.voiceId,
       voice: activeProfile.voiceId,
       voiceId: activeProfile.voiceId,
-      voiceAssignmentSource: isManualOverride ? (seg.voiceAssignmentSource || "manual") : reg.voiceAssignmentSource,
+      voiceAssignmentSource: isSegManual ? (seg.voiceAssignmentSource || "manual") : (isRegManual ? "manual" : reg.voiceAssignmentSource),
+      userOverridden: isManualOverride,
       voiceLabel: activeProfile.voiceLabel,
       avatar: activeProfile.avatar,
       badgeColor: activeProfile.badgeColor,
@@ -593,18 +609,23 @@ function buildSpeakerRegistry(segments = [], existingRegistry = {}) {
   const out = { ...existingRegistry };
   syncRes.speakers.forEach((spk) => {
     const id = spk.speakerId || getSpeakerId(spk.speaker);
+    const existing = existingRegistry[id] || {};
+    const isManual = Boolean(existing.userOverridden || existing.voiceAssignmentSource === "manual" || spk.voiceAssignmentSource === "manual");
     out[id] = {
+      ...existing,
       id,
       speakerId: id,
       name: spk.speaker,
       speaker: spk.speaker,
-      voiceGender: spk.voiceGender || (spk.gender === "female" ? "female" : "male"),
-      gender: spk.speakerGender || (spk.gender === "female" ? "FEMALE" : "MALE"),
-      genderConfidence: spk.genderConfidence || 0.8,
-      khmerVoiceId: spk.khmerVoiceId || spk.voiceId,
-      voiceId: spk.voiceId,
-      voiceAssignmentSource: spk.voiceAssignmentSource || "automatic",
-      speed: "normal",
+      voiceGender: spk.voiceGender || existing.voiceGender || "unknown",
+      gender: spk.gender || existing.gender || "unknown",
+      speakerGender: spk.speakerGender || existing.speakerGender || "UNKNOWN",
+      genderConfidence: spk.genderConfidence || existing.genderConfidence || 0.8,
+      khmerVoiceId: isManual ? (existing.khmerVoiceId || existing.voiceId || spk.khmerVoiceId || spk.voiceId) : (spk.khmerVoiceId || spk.voiceId),
+      voiceId: isManual ? (existing.voiceId || existing.khmerVoiceId || spk.voiceId || spk.khmerVoiceId) : (spk.voiceId || spk.khmerVoiceId),
+      voiceAssignmentSource: isManual ? "manual" : (existing.voiceAssignmentSource || spk.voiceAssignmentSource || "automatic"),
+      userOverridden: isManual,
+      speed: existing.speed || "normal",
       segmentCount: spk.lineCount,
       count: spk.lineCount,
     };

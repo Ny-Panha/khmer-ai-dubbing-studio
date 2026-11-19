@@ -1343,7 +1343,18 @@ export function saveEpisodeState(seriesId, episodeId, stateData, options = {}) {
         for (const ch of extracted.characters) {
           const existingIdx = mergedCharacters.findIndex((m) => m.name.toLowerCase() === ch.name.toLowerCase());
           if (existingIdx !== -1) {
-            mergedCharacters[existingIdx] = { ...mergedCharacters[existingIdx], ...ch };
+            const existing = mergedCharacters[existingIdx];
+            const isExistingManual = Boolean(existing.userOverridden || existing.voiceAssignmentSource === 'manual');
+            const isNewManual = Boolean(ch.userOverridden || ch.voiceAssignmentSource === 'manual');
+            mergedCharacters[existingIdx] = {
+              ...existing,
+              ...ch,
+              gender: (existing.gender && existing.gender !== 'unknown') ? existing.gender : (ch.gender || 'unknown'),
+              voiceId: isExistingManual ? existing.voiceId : (isNewManual ? ch.voiceId : (existing.voiceId || ch.voiceId)),
+              khmerVoiceId: isExistingManual ? (existing.khmerVoiceId || existing.voiceId) : (isNewManual ? (ch.khmerVoiceId || ch.voiceId) : (existing.khmerVoiceId || ch.voiceId)),
+              voiceAssignmentSource: isExistingManual ? 'manual' : (isNewManual ? 'manual' : (existing.voiceAssignmentSource || ch.voiceAssignmentSource || 'series_glossary')),
+              userOverridden: isExistingManual || isNewManual,
+            };
           } else {
             mergedCharacters.push(ch);
           }
@@ -1501,22 +1512,25 @@ export function extractGlossaryFromEpisode(scriptData, speakerRegistry) {
   const registry = speakerRegistry || {};
 
   const detectGender = (spk, name, fallback) => {
-    const rawG = String(spk?.gender || spk?.speakerGender || '').toLowerCase();
+    const rawG = String(spk?.voiceGender || spk?.gender || spk?.speakerGender || '').toLowerCase();
     if (rawG === 'female' || rawG === 'male') return rawG;
-    if (spk?.voiceId && spk.voiceId.includes('Sreymom')) return 'female';
-    if (spk?.voiceId && spk.voiceId.includes('Piseth')) return 'male';
     if (name && /ស្រី|នាង|យាយ|ម៉ែ|កញ្ញា|ជំទាវ/i.test(name)) return 'female';
-    return fallback || 'male';
+    if (name && /ប្រុស|លោក|តា|ពូ|ឪពុក/i.test(name)) return 'male';
+    return fallback || 'unknown';
   };
 
   Object.values(registry).forEach((spk) => {
     if (spk.name && spk.name !== 'Unknown' && !characters.some((c) => c.name === spk.name)) {
+      const isManual = Boolean(spk.userOverridden || spk.voiceAssignmentSource === 'manual');
       characters.push({
         id: spk.id || spk.speakerId,
         name: spk.name,
         khmerName: spk.khmerName || spk.name,
-        gender: detectGender(spk, spk.name, 'male'),
-        voiceId: spk.voiceId || null,
+        gender: detectGender(spk, spk.name, 'unknown'),
+        voiceId: spk.voiceId || spk.khmerVoiceId || null,
+        khmerVoiceId: spk.khmerVoiceId || spk.voiceId || null,
+        voiceAssignmentSource: isManual ? 'manual' : (spk.voiceAssignmentSource || 'automatic'),
+        userOverridden: isManual,
       });
     }
   });
@@ -1524,11 +1538,15 @@ export function extractGlossaryFromEpisode(scriptData, speakerRegistry) {
   (scriptData?.segments || []).forEach((seg) => {
     const rawSpeaker = (seg.speaker || '').trim();
     if (rawSpeaker && rawSpeaker !== 'Unknown' && !characters.some((c) => c.name === rawSpeaker)) {
+      const isManual = Boolean(seg.userOverridden || seg.voiceAssignmentSource === 'manual' || seg.voiceOverride);
       characters.push({
         name: rawSpeaker,
         khmerName: rawSpeaker,
-        gender: detectGender(seg, rawSpeaker, 'male'),
-        voiceId: seg.voiceId || null,
+        gender: detectGender(seg, rawSpeaker, 'unknown'),
+        voiceId: isManual ? (seg.voiceOverride || seg.voiceId || seg.khmerVoiceId || null) : (seg.voiceId || seg.khmerVoiceId || null),
+        khmerVoiceId: isManual ? (seg.voiceOverride || seg.khmerVoiceId || seg.voiceId || null) : (seg.khmerVoiceId || seg.voiceId || null),
+        voiceAssignmentSource: isManual ? 'manual' : (seg.voiceAssignmentSource || 'automatic'),
+        userOverridden: isManual,
       });
     }
   });

@@ -119,7 +119,13 @@ async function generateSegmentTTS({
         continue;
       }
 
-      // Speaker-to-voice assignment (manual override -> registry -> resolved gender/speaker title -> existing voiceId)
+      // Speaker-to-voice assignment following 6-tier precedence:
+      // 1. Explicit manual segment voice override
+      // 2. Explicit manual character voice assignment
+      // 3. Confirmed series-level character voice assignment
+      // 4. Reliable detected character gender (male -> Piseth, female -> Sreymom)
+      // 5. Existing valid voice assignment
+      // 6. Default fallback (Piseth)
       const segSpkName = String(seg.speaker || seg.speakerName || '').trim();
       const isGenericSegSpk = !segSpkName || segSpkName === 'តួអង្គ' || segSpkName.toLowerCase() === 'speaker';
       const localReg = speakerRegistry || seg.speakerRegistry || {};
@@ -130,13 +136,14 @@ async function generateSegmentTTS({
           (r.speakerId && (r.speakerId === seg.speakerId || r.id === seg.speakerId)) ||
           (!isGenericSegSpk && (r.speakerName === segSpkName || r.name === segSpkName))
         )) || null;
-      const registryVoice = regEntry?.voiceId || null;
+      const registryVoice = regEntry?.voiceId || regEntry?.khmerVoiceId || null;
       const regIsManual = Boolean(regEntry?.userOverridden) || regEntry?.voiceAssignmentSource === 'manual';
-      const isManualSeg = Boolean(seg.userOverridden || seg.voiceAssignmentSource === 'manual' || seg.voiceOverride) || regIsManual;
-      const normSegGender = String(regEntry?.voiceGender || seg.voiceGender || seg.gender || seg.speakerGender || '').trim().toLowerCase();
-      let knownSegGender = (normSegGender === 'female' || normSegGender === 'f' || normSegGender === 'girl')
+      const segHasManual = Boolean(seg.userOverridden || seg.voiceAssignmentSource === 'manual' || seg.voiceOverride);
+
+      const rawSegGender = String(regEntry?.voiceGender || seg.voiceGender || '').trim().toLowerCase();
+      let knownSegGender = (rawSegGender === 'female' || rawSegGender === 'f' || rawSegGender === 'girl')
         ? 'female'
-        : ((normSegGender === 'male' || normSegGender === 'm' || normSegGender === 'boy') ? 'male' : '');
+        : ((rawSegGender === 'male' || rawSegGender === 'm' || rawSegGender === 'boy') ? 'male' : '');
       if (!knownSegGender) {
         const kwG = detectSpeakerGender(segSpkName, '', khmerText);
         if (kwG === 'FEMALE') knownSegGender = 'female';
@@ -146,14 +153,30 @@ async function generateSegmentTTS({
         ? 'km-KH-SreymomNeural'
         : (knownSegGender === 'male' ? 'km-KH-PisethNeural' : null);
 
-      const chosenVoiceId = regIsManual && registryVoice
-        ? registryVoice
-        : (isManualSeg
-            ? (seg.voiceOverride || seg.voiceId || seg.khmerVoiceId || seg.voice || registryVoice || genderDerivedVoice || defaultVoiceId)
-            : (registryVoice || genderDerivedVoice || seg.khmerVoiceId || seg.voiceId || seg.voice || defaultVoiceId));
+      let chosenVoiceId;
+      if (segHasManual && (seg.voiceOverride || seg.khmerVoiceId || seg.voiceId || seg.voice)) {
+        chosenVoiceId = seg.voiceOverride || seg.khmerVoiceId || seg.voiceId || seg.voice;
+      } else if (regIsManual && registryVoice) {
+        chosenVoiceId = registryVoice;
+      } else if (regEntry?.voiceAssignmentSource === 'series_glossary' && registryVoice) {
+        chosenVoiceId = registryVoice;
+      } else if (genderDerivedVoice) {
+        chosenVoiceId = genderDerivedVoice;
+      } else if (registryVoice || seg.khmerVoiceId || seg.voiceId || seg.voice) {
+        chosenVoiceId = registryVoice || seg.khmerVoiceId || seg.voiceId || seg.voice;
+      } else {
+        chosenVoiceId = defaultVoiceId || 'km-KH-PisethNeural';
+      }
+
       seg.khmerVoiceId = chosenVoiceId;
       seg.voiceId = chosenVoiceId;
       seg.voice = chosenVoiceId;
+
+      // Preserve character identity metadata without defaulting unknown to male
+      const resolvedGender = knownSegGender || (regEntry?.voiceGender || seg.voiceGender || 'unknown');
+      seg.voiceGender = resolvedGender;
+      seg.gender = resolvedGender;
+      seg.speakerGender = resolvedGender === 'female' ? 'FEMALE' : (resolvedGender === 'male' ? 'MALE' : 'UNKNOWN');
 
       const segKey = String(seg.id || `seg_${idx + 1}`);
 

@@ -333,9 +333,9 @@ router.post("/generate-audio", async (req, res) => {
       const segSpeakerName = String(segment.speaker || segment.speakerName || "").trim();
       const segGender =
         normKnownGender(segment.voiceGender) ||
+        normKnownGender(detectSpeakerGender(segSpeakerName, "", segment.khmer || segment.khmerText)) ||
         normKnownGender(segment.gender) ||
         normKnownGender(segment.speakerGender) ||
-        normKnownGender(detectSpeakerGender(segSpeakerName, "", segment.khmer || segment.khmerText)) ||
         "unknown";
       const requestedVoice = rawBodyVoiceId || null;
       const isSegManual = Boolean(segment.userOverridden || segment.voiceAssignmentSource === "manual" || segment.voiceOverride);
@@ -407,20 +407,19 @@ router.post("/generate-audio", async (req, res) => {
         }
       } catch (_) {}
 
-      const resolvedVoiceGender = targetVoice.includes("Sreymom")
-        ? "female"
-        : (targetVoice.includes("Piseth") ? "male" : (segGender === "female" || segGender === "FEMALE" ? "female" : "male"));
-      const resolvedSpeakerGender = resolvedVoiceGender === "female" ? "FEMALE" : "MALE";
+      const resolvedGender = segGender !== "unknown" ? segGender : (segment.voiceGender || segment.gender || "unknown");
+      const resolvedSpeakerGender = resolvedGender === "female" ? "FEMALE" : (resolvedGender === "male" ? "MALE" : "UNKNOWN");
+      const isFemaleVoice = targetVoice.includes("Sreymom");
       const resolvedVoiceMeta = {
         voice: targetVoice,
         voiceId: targetVoice,
         khmerVoiceId: targetVoice,
-        gender: resolvedVoiceGender,
-        voiceGender: resolvedVoiceGender,
+        gender: resolvedGender,
+        voiceGender: resolvedGender,
         speakerGender: resolvedSpeakerGender,
-        voiceLabel: resolvedVoiceGender === "female" ? "ស្រីមុំ (Sreymom)" : "ពិសិដ្ឋ (Piseth)",
-        avatar: resolvedVoiceGender === "female" ? "👩" : "👨",
-        badgeColor: resolvedVoiceGender === "female" ? "#ec4899" : "#38bdf8",
+        voiceLabel: isFemaleVoice ? "ស្រីមុំ (Sreymom)" : "ពិសិដ្ឋ (Piseth)",
+        avatar: isFemaleVoice ? "👩" : "👨",
+        badgeColor: isFemaleVoice ? "#ec4899" : "#38bdf8",
         voiceAssignmentSource: isManual ? "manual" : (segment.voiceAssignmentSource || "automatic"),
         userOverridden: isManual ? true : Boolean(segment.userOverridden),
       };

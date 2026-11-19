@@ -298,7 +298,8 @@ export function useScriptWorkflow({
         // Safely persist to background storage for targetEpisodeId so work is preserved without corrupting active workspace
         if (onSaveEpisodeBackground && response?.data && targetEpisodeId) {
           const rawSegs = response.data.segments || [];
-          const bgRegistry = buildSpeakerRegistry(rawSegs, {});
+          const existingBgReg = seriesGlossary?.seriesSpeakerMap || {};
+          const bgRegistry = buildSpeakerRegistry(rawSegs, existingBgReg);
           const bgSegsWithVoices = applySpeakerVoiceToSegments(rawSegs, bgRegistry);
           onSaveEpisodeBackground(targetEpisodeId, {
             scriptData: {
@@ -326,8 +327,11 @@ export function useScriptWorkflow({
       const returnedData = response.data;
       const rawSegments = returnedData?.segments || [];
 
-      // 3. Build fresh speaker registry specifically for this video
-      const freshRegistry = buildSpeakerRegistry(rawSegments, {});
+      // 3. Build speaker registry, preserving confirmed series memory and manual user corrections
+      const existingReg = (speakerRegistry && Object.keys(speakerRegistry).length > 0)
+        ? speakerRegistry
+        : (seriesGlossary?.seriesSpeakerMap || {});
+      const freshRegistry = buildSpeakerRegistry(rawSegments, existingReg);
       const segmentsWithVoices = applySpeakerVoiceToSegments(rawSegments, freshRegistry);
 
       const validatedScript = {

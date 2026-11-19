@@ -211,40 +211,41 @@ export function applySpeakerVoiceToSegments(segments = [], speakerRegistry = {})
 
     const regIsManual = Boolean(reg?.userOverridden) || reg?.voiceAssignmentSource === 'manual';
     const segIsManual = Boolean(seg.userOverridden) || seg.voiceAssignmentSource === 'manual' || Boolean(seg.voiceOverride);
-    const isManual = regIsManual || segIsManual;
+    const isManual = segIsManual || regIsManual;
 
+    // Detect character gender identity independently from voice assignment
+    const regKnownGender = (reg?.gender === 'FEMALE' || reg?.gender === 'MALE') ? reg.gender : '';
+    const segKnownGender = (seg.speakerGender === 'FEMALE' || seg.speakerGender === 'MALE') ? seg.speakerGender : '';
+    const titleGender = detectSpeakerGender(rawName, '', seg.khmerText || seg.khmer || '');
+    const resolvedSpeakerGender = titleGender !== 'UNKNOWN'
+      ? titleGender
+      : (regKnownGender || segKnownGender || detectSpeakerGender(rawName, seg.gender || seg.voiceGender, seg.khmerText || seg.khmer || ''));
+    const resolvedVoiceGender = resolvedSpeakerGender === 'FEMALE' ? 'female' : (resolvedSpeakerGender === 'MALE' ? 'male' : (reg?.voiceGender || 'unknown'));
+
+    // Consistent voice selection priority:
+    // 1. Explicit manual segment voice override
+    // 2. Explicit manual character voice assignment
+    // 3. Confirmed series-level character voice assignment
+    // 4. Reliable detected character gender (male -> Piseth, female -> Sreymom)
+    // 5. Existing valid voice assignment
+    // 6. Default fallback (Piseth)
     let voiceId;
-    let voiceGender;
-    let gender;
-
-    // Explicit user character override takes top priority
-    if (regIsManual && reg?.voiceId) {
-      voiceId = reg.voiceId;
-      const isFemale = voiceId.toLowerCase().includes('sreymom');
-      voiceGender = isFemale ? 'female' : 'male';
-      gender = isFemale ? 'FEMALE' : 'MALE';
-    } else if (segIsManual && (seg.voiceOverride || seg.voiceId)) {
-      voiceId = seg.voiceOverride || seg.voiceId;
-      const isFemale = voiceId.toLowerCase().includes('sreymom');
-      voiceGender = isFemale ? 'female' : 'male';
-      gender = isFemale ? 'FEMALE' : 'MALE';
+    if (segIsManual && (seg.voiceOverride || seg.voiceId || seg.khmerVoiceId || seg.voice)) {
+      voiceId = seg.voiceOverride || seg.voiceId || seg.khmerVoiceId || seg.voice;
+    } else if (regIsManual && (reg?.voiceId || reg?.khmerVoiceId || reg?.voice)) {
+      voiceId = reg.voiceId || reg.khmerVoiceId || reg.voice;
+    } else if (reg?.voiceAssignmentSource === 'series_glossary' && (reg?.voiceId || reg?.khmerVoiceId || reg?.voice)) {
+      voiceId = reg.voiceId || reg.khmerVoiceId || reg.voice;
+    } else if (resolvedSpeakerGender !== 'UNKNOWN') {
+      voiceId = getDefaultVoiceForGender(resolvedSpeakerGender);
     } else {
-      const regKnownGender = (reg?.gender === 'FEMALE' || reg?.gender === 'MALE') ? reg.gender : '';
-      const segKnownGender = (seg.speakerGender === 'FEMALE' || seg.speakerGender === 'MALE') ? seg.speakerGender : '';
-      const titleGender = detectSpeakerGender(rawName, '', seg.khmerText || seg.khmer || '');
-      gender = titleGender !== 'UNKNOWN'
-        ? titleGender
-        : (regKnownGender || segKnownGender || detectSpeakerGender(rawName, seg.gender || seg.voiceGender, seg.khmerText || seg.khmer || ''));
-      voiceGender = gender === 'FEMALE' ? 'female' : (gender === 'MALE' ? 'male' : (reg?.voiceGender || 'unknown'));
-      voiceId = gender !== 'UNKNOWN'
-        ? getDefaultVoiceForGender(gender)
-        : (reg?.khmerVoiceId || reg?.voiceId || seg.khmerVoiceId || seg.voiceId || getDefaultVoiceForGender(gender));
+      voiceId = reg?.khmerVoiceId || reg?.voiceId || seg.khmerVoiceId || seg.voiceId || getDefaultVoiceForGender('MALE');
     }
 
-    const isFemale = voiceGender === 'female' || gender === 'FEMALE';
-    const voiceLabel = isFemale ? 'ស្រីមុំ (Sreymom)' : 'ពិសិដ្ឋ (Piseth)';
-    const avatar = isFemale ? '👩' : '👨';
-    const badgeColor = isFemale ? '#ec4899' : '#38bdf8';
+    const isFemaleVoice = voiceId ? voiceId.toLowerCase().includes('sreymom') : (resolvedVoiceGender === 'female');
+    const voiceLabel = isFemaleVoice ? 'ស្រីមុំ (Sreymom)' : 'ពិសិដ្ឋ (Piseth)';
+    const avatar = isFemaleVoice ? '👩' : '👨';
+    const badgeColor = isFemaleVoice ? '#ec4899' : '#38bdf8';
     const speed = seg.speed || reg?.speed || 'normal';
 
     const segId = seg.segmentId || seg.id || `seg_${idx + 1}`;
@@ -265,17 +266,17 @@ export function applySpeakerVoiceToSegments(segments = [], speakerRegistry = {})
       speaker: rawName,
       speakerName: rawName,
       speakerId: spkId,
-      speakerGender: gender,
-      voiceGender,
-      gender: voiceGender,
-      genderConfidence: reg?.genderConfidence ?? seg.genderConfidence ?? (voiceGender === 'unknown' ? 0.5 : 0.85),
+      speakerGender: resolvedSpeakerGender,
+      voiceGender: resolvedVoiceGender,
+      gender: resolvedVoiceGender,
+      genderConfidence: reg?.genderConfidence ?? seg.genderConfidence ?? (resolvedVoiceGender === 'unknown' ? 0.5 : 0.85),
       voiceId,
       khmerVoiceId: voiceId,
       voice: voiceId,
       voiceLabel,
       avatar,
       badgeColor,
-      voiceAssignmentSource: isManual ? 'manual' : 'automatic',
+      voiceAssignmentSource: segIsManual ? (seg.voiceAssignmentSource || 'manual') : (regIsManual ? 'manual' : (reg?.voiceAssignmentSource || 'automatic')),
       userOverridden: isManual,
       speed,
       voiceProvider: 'edge-tts',

@@ -3,6 +3,73 @@
 ## Last Session
 - **Environment**: Antigravity IDE (Gemini)
 - **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-19T18:30:00+07:00
+
+## Summary: Fix Speaker Identity, Gender-to-Voice Assignment & Series Voice Memory (100% PASS)
+- **Problem & Root Causes Identified**:
+  1. **Unknown Gender Relabeled as Male**: In `speakerRegistry.js` (lines 430, 442) and `audioRoutes.js` (line 412), when gender was unknown, fallback voice `km-KH-PisethNeural` was assigned and lines `gender: effectiveGender` and `speakerGender: assignedVoice.includes("Sreymom") ? "FEMALE" : "MALE"` silently mutated character identity to male.
+  2. **Manual Voice Changes Mutated Character Gender**: In `useAudioDubbing.js` (`handleUpdateSpeakerVoice` line 186 and `handleUpdateSegmentVoice` line 421) and `speakerUtils.js` (line 224), choosing Sreymom or Piseth directly mutated `voiceGender` and `speakerGender` (`FEMALE`/`MALE`), corrupting character identity.
+  3. **Series Glossary Overwrote Manual/Confirmed Assignments**: In `projectStorage.js` (`saveEpisodeState` line 1346) and `scriptRoutes.js` (line 125), episode-derived glossary extraction blindly spread `...ch` over `mergedCharacters`, wiping out user overrides and confirmed series voice memory from earlier episodes.
+  4. **Individual Segment Overrides Hijacked Whole Character**: In `useAudioDubbing.js:handleUpdateSegmentVoice`, overriding an individual segment's voice patched the entire character in `speakerRegistry`, forcing all other segments of that speaker to change voice.
+  5. **Re-running Speaker Detection Discarded Corrections**: In `useScriptWorkflow.js` (lines 301, 330), `buildSpeakerRegistry(rawSegments, {})` passed `{}` as existing registry, blowing away all existing series glossary and manual user corrections.
+  6. **Inconsistent Precedence Between Batch & Single-Segment TTS**: `stage9_generateSegmentTTS.js` and `audioRoutes.js` used differing precedence, leading to discrepancies between batch generation and single clip regeneration.
+
+- **Surgical Minimal Changes Implemented**:
+  1. **Established Authoritative 6-Tier Voice Selection Precedence**:
+     - Tier 1: Explicit manual segment voice override (`seg.voiceOverride` or `seg.userOverridden`)
+     - Tier 2: Explicit manual character voice assignment (`reg.userOverridden` or `reg.voiceAssignmentSource === "manual"`)
+     - Tier 3: Confirmed series-level character voice assignment (`reg.voiceAssignmentSource === "series_glossary"`)
+     - Tier 4: Reliable detected character gender (`male` -> `km-KH-PisethNeural`, `female` -> `km-KH-SreymomNeural`)
+     - Tier 5: Existing valid voice assignment
+     - Tier 6: Default fallback (`km-KH-PisethNeural`)
+  2. **Decoupled Character Gender Identity from Chosen TTS Voice**:
+     - In `speakerRegistry.js`, `speakerUtils.js`, `audioRoutes.js`, and `stage9_generateSegmentTTS.js`: character gender identity remains `female`, `male`, or `unknown` (and `speakerGender`: `FEMALE`, `MALE`, `UNKNOWN`), completely independent of chosen voice. Unknown gender stays `UNKNOWN`.
+  3. **Preserved Manual & Confirmed Series Voice Memory**:
+     - In `projectStorage.js`: protected `mergedCharacters` from being overwritten by unconfirmed episode extractions.
+     - In `scriptRoutes.js`: protected `resolvedSeriesSpeakerMap` from glossary character overwrite if existing entry is manual/userOverridden.
+     - In `useScriptWorkflow.js`: passed `speakerRegistry || seriesGlossary?.seriesSpeakerMap` into `buildSpeakerRegistry` rather than `{}`.
+     - In `useSeriesManager.js`: combined `activeSeries.glossary.characters` into active episode registry so subsequent episodes automatically inherit confirmed character voices.
+  4. **Isolated Single-Segment Overrides from Character-Wide Registry**:
+     - In `useAudioDubbing.js:handleUpdateSegmentVoice`: removed character registry mutation (`speakerEntryPatch = null`).
+     - In `speakerUtils.js:applySpeakerVoiceToSegments`: segment-level manual override (`segIsManual`) takes top priority over character registry without altering other segments.
+
+- **Test Suites & Verification**:
+  - `npm --prefix frontend run build`: **PASS** (0 errors, 1.86s).
+  - Added new 12-case regression test suite `backend/tests/speaker_identity_and_series_voice_memory.test.js` (**13/13 PASS**):
+    1. Male character -> Piseth (PASS)
+    2. Female character -> Sreymom (PASS)
+    3. Unknown gender stays UNKNOWN in identity metadata (PASS)
+    4. Manual voice selection survives reload (PASS)
+    5. Same confirmed character keeps voice across episodes (PASS)
+    6. Different characters do not share assignments by mistake (PASS)
+    7. Series glossary cannot overwrite manual choice (PASS)
+    8. Individual segment override remains independent from character-wide assignment (PASS)
+    9. Batch TTS and single-segment TTS resolve the same voice (PASS)
+    10. Existing generated audio remains unchanged unless explicitly regenerated (PASS)
+    11. Re-running speaker detection does not undo user corrections (PASS)
+    12. Save, reopen, and regenerate produce consistent results (PASS)
+  - All existing major test suites passing (**38/38 PASS**):
+    - `gender_voice_consistency.test.js` (6/6 PASS)
+    - `playback_sync_and_deferred_source_regression.test.js` (5/5 PASS)
+    - `source_proxy.test.js` (4/4 PASS)
+    - `timeline_voice_drag_freeze_regression.test.js` (1/1 PASS)
+    - `timeline_voice_drag_persistence.test.js` (7/7 PASS)
+    - `auto_align_voice.test.js` (9/9 PASS)
+    - `voice_instant_visual_assignment.test.js` (2/2 PASS)
+    - `voice_switch_fast_path.test.js` (4/4 PASS)
+
+- **Active Environment**:
+  - Backend API: `http://localhost:5000`
+  - Frontend UI: `http://localhost:5173`
+
+- **Next Steps**:
+  - Ready for user testing.
+
+---
+
+## Previous Session
+- **Environment**: Antigravity IDE (Gemini)
+- **Branch**: `chore/full-project-cleanup`
 - **Timestamp**: 2026-11-19T16:05:00+07:00
 
 ## Summary: Fix Live Video + Khmer Voice Normal Playback Lag, Audio Seeks, and React Render Thrashing (100% PASS)

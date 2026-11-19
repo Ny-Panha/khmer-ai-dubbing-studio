@@ -122,12 +122,26 @@ router.post("/generate-script", async (req, res) => {
           for (const char of seriesGlossary.characters) {
             const key = char.id || char.speakerId || char.name;
             if (key) {
+              const existing = resolvedSeriesSpeakerMap[key];
+              // Never overwrite an explicit manual assignment or user override with an unconfirmed glossary entry
+              if (existing && (existing.userOverridden || existing.voiceAssignmentSource === "manual")) {
+                continue;
+              }
+              const charGender = String(char.gender || char.voiceGender || "").toLowerCase();
+              const isFemale = charGender === "female" || charGender === "f" || charGender === "ស្រី";
+              const isMale = charGender === "male" || charGender === "m" || charGender === "ប្រុស";
+              const resolvedGender = isFemale ? "female" : (isMale ? "male" : "unknown");
+              const resolvedVoice = char.khmerVoiceId || char.voiceId || (isFemale ? "km-KH-SreymomNeural" : "km-KH-PisethNeural");
               resolvedSeriesSpeakerMap[key] = {
                 speakerId: key,
                 speakerName: char.khmerName || char.name || key,
-                voiceGender: char.voiceGender || (String(char.gender || "").toLowerCase() === "female" ? "female" : "male"),
-                khmerVoiceId: char.khmerVoiceId || (String(char.gender || "").toLowerCase() === "female" ? "km-KH-SreymomNeural" : "km-KH-PisethNeural"),
-                voiceAssignmentSource: "series_glossary",
+                voiceGender: resolvedGender,
+                gender: resolvedGender,
+                speakerGender: resolvedGender === "female" ? "FEMALE" : (resolvedGender === "male" ? "MALE" : "UNKNOWN"),
+                khmerVoiceId: resolvedVoice,
+                voiceId: resolvedVoice,
+                voiceAssignmentSource: char.voiceAssignmentSource || "series_glossary",
+                userOverridden: Boolean(char.userOverridden || char.voiceAssignmentSource === "manual"),
               };
             }
           }
