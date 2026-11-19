@@ -503,6 +503,48 @@ function TimelineEditor({
   const ppsRef = useRef(getPixelsPerSecond(zoom));
   ppsRef.current = getPixelsPerSecond(zoom);
 
+  // High-performance direct GPU drag interaction refs (bypasses 1,000 DOM element React re-render per mousemove)
+  const mouseRafRef = useRef(null);
+  const pendingMouseERef = useRef(null);
+  const draggedElementRef = useRef(null);
+  const cachedVoiceLaneBoundsRef = useRef(null);
+  const snapLineRef = useRef(null);
+  const lastTargetVoiceRowRef = useRef(null);
+  const snappingEnabledRef = useRef(snappingEnabled);
+  useEffect(() => { snappingEnabledRef.current = snappingEnabled; }, [snappingEnabled]);
+  const totalDurationRef = useRef(duration || 0);
+  const onUpdateSegmentsRef = useRef(onUpdateSegments);
+  useEffect(() => { onUpdateSegmentsRef.current = onUpdateSegments; }, [onUpdateSegments]);
+  const onUpdateClipsRef = useRef(onUpdateClips);
+  useEffect(() => { onUpdateClipsRef.current = onUpdateClips; }, [onUpdateClips]);
+
+  const measureVoiceLaneBounds = useCallback((curRow) => {
+    const container = timelineBodyRef.current;
+    const lanes = container ? Array.from(container.querySelectorAll('.track-lane.voice-lane')) : [];
+    if (lanes.length > 0) {
+      const firstRect = lanes[0].getBoundingClientRect();
+      const lastRect = lanes[lanes.length - 1].getBoundingClientRect();
+      const originLane = lanes.find((el) => Number(el.dataset?.trackRow) === curRow) || lanes[Math.min(curRow, lanes.length - 1)];
+      const originRect = originLane.getBoundingClientRect();
+      return {
+        firstLaneTop: firstRect.top,
+        lastLaneTop: lastRect.top,
+        lastLaneBottom: lastRect.bottom,
+        originLaneTop: originRect.top,
+        laneHeight: originRect.height > 0 ? originRect.height : 48,
+        laneCount: Math.max(lanes.length, voiceRowCount || 2),
+      };
+    }
+    return {
+      firstLaneTop: null,
+      lastLaneTop: null,
+      lastLaneBottom: null,
+      originLaneTop: null,
+      laneHeight: 48,
+      laneCount: Math.max(2, voiceRowCount || 2),
+    };
+  }, [voiceRowCount]);
+
   const cancelVoiceDragScrub = useCallback(() => {
     if (voiceDragSeekRafRef.current !== null && typeof cancelAnimationFrame === 'function') {
       cancelAnimationFrame(voiceDragSeekRafRef.current);
@@ -531,14 +573,26 @@ function TimelineEditor({
           return;
         }
         const pending = pendingVoiceDragSeekRef.current;
-        pendingVoiceDragSeekRef.current = null;
-        if (!pending || typeof pending.time !== 'number' || !Number.isFinite(pending.time)) return;
+        if (!pending || typeof pending.time !== 'number' || !Number.isFinite(pending.time)) {
+          pendingVoiceDragSeekRef.current = null;
+          return;
+        }
         if (lastVoiceDragSeekRef.current !== null && Math.abs(pending.time - lastVoiceDragSeekRef.current) < 0.01) {
+          pendingVoiceDragSeekRef.current = null;
           return;
         }
         if (videoRef?.current?.seeking) {
+          if (!voiceDragSeekRafRef.current) {
+            voiceDragSeekRafRef.current = requestAnimationFrame(() => {
+              voiceDragSeekRafRef.current = null;
+              if (pendingVoiceDragSeekRef.current) {
+                scheduleVoiceDragScrub(pendingVoiceDragSeekRef.current.time, pendingVoiceDragSeekRef.current.segKey);
+              }
+            });
+          }
           return;
         }
+        pendingVoiceDragSeekRef.current = null;
         lastVoiceDragSeekRef.current = pending.time;
         if (pending.segKey !== null && pending.segKey !== undefined) {
           manualFocusLockRef.current = {
@@ -769,6 +823,7 @@ function TimelineEditor({
     }
     return Math.max(duration > 0 ? duration : 0, subsMax);
   }, [duration, videoClips, scriptSegments]);
+  totalDurationRef.current = totalDuration;
 
   const pps = getPixelsPerSecond(zoom);
   // Provide extra tail padding (1000px) so playhead stays centered all the way to the end of the video
@@ -920,7 +975,7 @@ function TimelineEditor({
       onSeek(rawStart);
     }
 
-    setDragState({
+    const initialDrag = {
       mode,
       itemType: 'audio',
       index: idx,
@@ -933,7 +988,12 @@ function TimelineEditor({
       currentStart: rawStart,
       currentEnd: rawEnd,
       hasMoved: false,
-    });
+    };
+    dragStateRef.current = initialDrag;
+    draggedElementRef.current = e.currentTarget;
+    cachedVoiceLaneBoundsRef.current = measureVoiceLaneBounds(segRow);
+    lastTargetVoiceRowRef.current = `voice_${segRow}`;
+    setDragState(initialDrag);
   };
 
   const handleSubMouseDown = (e, seg, idx, mode = 'move') => {
@@ -976,7 +1036,7 @@ function TimelineEditor({
       onSeek(startSec);
     }
 
-    setDragState({
+    const initialDrag = {
       mode,
       itemType: 'subtitle',
       index: idx,
@@ -989,7 +1049,11 @@ function TimelineEditor({
       currentStart: startSec,
       currentEnd: endSec,
       hasMoved: false,
-    });
+    };
+    dragStateRef.current = initialDrag;
+    draggedElementRef.current = e.currentTarget;
+    lastTargetVoiceRowRef.current = `subs_${segRow}`;
+    setDragState(initialDrag);
   };
 
   const handleVideoMouseDown = (e, clip, idx, mode = 'move') => {
@@ -1036,7 +1100,7 @@ function TimelineEditor({
       onSeek(clip.start);
     }
 
-    setDragState({
+    const initialDrag = {
       mode,
       itemType: 'video',
       index: idx,
@@ -1049,274 +1113,284 @@ function TimelineEditor({
       currentStart: clip.start,
       currentEnd: clip.end,
       hasMoved: false,
-    });
+    };
+    dragStateRef.current = initialDrag;
+    draggedElementRef.current = e.currentTarget;
+    lastTargetVoiceRowRef.current = `video_${clipRow}`;
+    setDragState(initialDrag);
   };
 
   useEffect(() => {
-    let mouseRafId = null;
-    let pendingMouseE = null;
-
-    const measureVoiceLaneBounds = (curRow) => {
-      const container = timelineBodyRef.current;
-      const lanes = container ? Array.from(container.querySelectorAll('.track-lane.voice-lane')) : [];
-      if (lanes.length > 0) {
-        const firstRect = lanes[0].getBoundingClientRect();
-        const lastRect = lanes[lanes.length - 1].getBoundingClientRect();
-        const originLane = lanes.find((el) => Number(el.dataset?.trackRow) === curRow) || lanes[Math.min(curRow, lanes.length - 1)];
-        const originRect = originLane.getBoundingClientRect();
-        return {
-          firstLaneTop: firstRect.top,
-          lastLaneTop: lastRect.top,
-          lastLaneBottom: lastRect.bottom,
-          originLaneTop: originRect.top,
-          laneHeight: originRect.height > 0 ? originRect.height : 48,
-          laneCount: Math.max(lanes.length, voiceRowCount || 2),
-        };
-      }
-      return {
-        firstLaneTop: null,
-        lastLaneTop: null,
-        lastLaneBottom: null,
-        originLaneTop: null,
-        laneHeight: 48,
-        laneCount: Math.max(2, voiceRowCount || 2),
-      };
-    };
-
     const processMouseMove = (e) => {
+      const dragState = dragStateRef.current;
       if (!dragState) return;
-        const moveDistX = Math.abs(e.clientX - dragState.startX);
-        const moveDistY = Math.abs(e.clientY - (dragState.startY !== undefined ? dragState.startY : e.clientY));
-        if (!dragState.hasMoved && moveDistX < 4 && moveDistY < 4) return;
 
-        const deltaSec = (e.clientX - dragState.startX) / pps;
-        const deltaY = e.clientY - (dragState.startY !== undefined ? dragState.startY : e.clientY);
+      const moveDistX = Math.abs(e.clientX - dragState.startX);
+      const moveDistY = Math.abs(e.clientY - (dragState.startY !== undefined ? dragState.startY : e.clientY));
+      if (!dragState.hasMoved && moveDistX < 4 && moveDistY < 4) return;
 
-        if (dragState.mode === 'move') {
-          let newStart = Math.max(0, dragState.origStart + deltaSec);
-          const clipDur = dragState.origEnd - dragState.origStart;
-          let newEnd = newStart + clipDur;
-          let currentSnapTime = null;
-          let effectiveCurrentY = deltaY;
-          let voiceMinY = undefined;
-          let voiceMaxY = undefined;
-          let resolvedVoiceTargetRow = null;
+      const currentPps = ppsRef.current || 45;
+      const deltaSec = (e.clientX - dragState.startX) / currentPps;
+      const deltaY = e.clientY - (dragState.startY !== undefined ? dragState.startY : e.clientY);
 
-          // Highlight / hit-test target lane while dragging vertically (Strict lane type isolation)
-          const elements = typeof document.elementsFromPoint === 'function'
-            ? document.elementsFromPoint(e.clientX, e.clientY)
-            : [document.elementFromPoint(e.clientX, e.clientY)].filter(Boolean);
+      if (dragState.mode === 'move') {
+        let newStart = Math.max(0, dragState.origStart + deltaSec);
+        const clipDur = dragState.origEnd - dragState.origStart;
+        let newEnd = newStart + clipDur;
+        let currentSnapTime = null;
+        let effectiveCurrentY = deltaY;
+        let voiceMinY = undefined;
+        let voiceMaxY = undefined;
+        let resolvedVoiceTargetRow = null;
 
-          let targetLane = null;
-          for (const el of elements) {
-            const lane = el?.closest?.('.track-lane');
-            if (lane) {
-              const laneType = lane.dataset?.trackType; // 'video' | 'voice' | 'subs'
-              if (dragState.itemType === 'subtitle' && laneType === 'subs') {
-                targetLane = lane;
-                break;
-              } else if (dragState.itemType === 'audio' && isVoiceDropTargetAllowed(laneType)) {
-                targetLane = lane;
-                break;
-              } else if (dragState.itemType === 'video' && laneType === 'video') {
-                targetLane = lane;
-                break;
-              }
+        // Highlight / hit-test target lane while dragging vertically (Strict lane type isolation)
+        const elements = typeof document.elementsFromPoint === 'function'
+          ? document.elementsFromPoint(e.clientX, e.clientY)
+          : [document.elementFromPoint(e.clientX, e.clientY)].filter(Boolean);
+
+        let targetLane = null;
+        for (const el of elements) {
+          const lane = el?.closest?.('.track-lane');
+          if (lane) {
+            const laneType = lane.dataset?.trackType; // 'video' | 'voice' | 'subs'
+            if (dragState.itemType === 'subtitle' && laneType === 'subs') {
+              targetLane = lane;
+              break;
+            } else if (dragState.itemType === 'audio' && isVoiceDropTargetAllowed(laneType)) {
+              targetLane = lane;
+              break;
+            } else if (dragState.itemType === 'video' && laneType === 'video') {
+              targetLane = lane;
+              break;
+            }
+          }
+        }
+
+        if (dragState.itemType === 'audio') {
+          const curRow = segmentRows[dragState.index] ?? (scriptSegments?.[dragState.index]?.trackRow || 0);
+          const bounds = cachedVoiceLaneBoundsRef.current || measureVoiceLaneBounds(curRow);
+
+          // Clamp drag ghost / preview strictly inside the voice lanes area (NEVER enters VIDEO track)
+          const clamped = clampVoiceDragY({
+            deltaY,
+            curRow,
+            voiceRowCount: bounds.laneCount,
+            laneHeight: bounds.laneHeight,
+            firstLaneTop: bounds.firstLaneTop,
+            lastLaneTop: bounds.lastLaneTop,
+            originLaneTop: bounds.originLaneTop,
+          });
+          effectiveCurrentY = clamped.clampedY;
+          voiceMinY = clamped.minDeltaY;
+          voiceMaxY = clamped.maxDeltaY;
+
+          const pointerVoiceRow = targetLane?.dataset?.trackType === 'voice'
+            ? parseInt(targetLane.dataset.trackRow, 10)
+            : null;
+
+          resolvedVoiceTargetRow = resolveVoiceDropRow({
+            pointerLaneType: targetLane?.dataset?.trackType || null,
+            pointerLaneRow: Number.isFinite(pointerVoiceRow) ? pointerVoiceRow : null,
+            pointerClientY: e.clientY,
+            firstLaneTop: bounds.firstLaneTop,
+            lastLaneBottom: bounds.lastLaneBottom,
+            deltaY: effectiveCurrentY,
+            curRow,
+            voiceRowCount: bounds.laneCount,
+            laneHeight: bounds.laneHeight,
+          });
+
+          // Snap targets for VOICE clips are VOICE clips ONLY — NEVER video clip boundaries
+          const voicePos = computeVoiceDragPosition({
+            origStart: dragState.origStart,
+            origEnd: dragState.origEnd,
+            proposedStart: newStart,
+            draggedIndex: dragState.index,
+            curRow,
+            targetRow: resolvedVoiceTargetRow,
+            scriptSegments: scriptSegments || [],
+            segmentRows,
+            getSegEffectiveRange,
+            snappingEnabled: snappingEnabledRef.current,
+            shiftKey: Boolean(e.shiftKey),
+            pps: currentPps,
+          });
+          newStart = voicePos.newStart;
+          newEnd = voicePos.newEnd;
+          currentSnapTime = voicePos.snapTime;
+
+          if (resolvedVoiceTargetRow === curRow) {
+            const { prevBound, nextBound } = voicePos;
+            // Strict No-Overlap Clamp on the same track (Edge-to-edge ||)
+            if (newStart < prevBound) {
+              newStart = prevBound;
+              newEnd = newStart + clipDur;
+            }
+            if (nextBound !== Infinity && newEnd > nextBound) {
+              newEnd = nextBound;
+              newStart = Math.max(prevBound, newEnd - clipDur);
             }
           }
 
-          if (dragState.itemType === 'audio') {
-            const curRow = segmentRows[dragState.index] ?? (scriptSegments?.[dragState.index]?.trackRow || 0);
-            const bounds = measureVoiceLaneBounds(curRow);
-
-            // Clamp drag ghost / preview strictly inside the voice lanes area (NEVER enters VIDEO track)
-            const clamped = clampVoiceDragY({
-              deltaY,
-              curRow,
-              voiceRowCount: bounds.laneCount,
-              laneHeight: bounds.laneHeight,
-              firstLaneTop: bounds.firstLaneTop,
-              lastLaneTop: bounds.lastLaneTop,
-              originLaneTop: bounds.originLaneTop,
-            });
-            effectiveCurrentY = clamped.clampedY;
-            voiceMinY = clamped.minDeltaY;
-            voiceMaxY = clamped.maxDeltaY;
-
-            const pointerVoiceRow = targetLane?.dataset?.trackType === 'voice'
-              ? parseInt(targetLane.dataset.trackRow, 10)
-              : null;
-
-            resolvedVoiceTargetRow = resolveVoiceDropRow({
-              pointerLaneType: targetLane?.dataset?.trackType || null,
-              pointerLaneRow: Number.isFinite(pointerVoiceRow) ? pointerVoiceRow : null,
-              pointerClientY: e.clientY,
-              firstLaneTop: bounds.firstLaneTop,
-              lastLaneBottom: bounds.lastLaneBottom,
-              deltaY: effectiveCurrentY,
-              curRow,
-              voiceRowCount: bounds.laneCount,
-              laneHeight: bounds.laneHeight,
-            });
-
-            // Snap targets for VOICE clips are VOICE clips ONLY — NEVER video clip boundaries
-            const voicePos = computeVoiceDragPosition({
-              origStart: dragState.origStart,
-              origEnd: dragState.origEnd,
-              proposedStart: newStart,
-              draggedIndex: dragState.index,
-              curRow,
-              targetRow: resolvedVoiceTargetRow,
-              scriptSegments: scriptSegments || [],
-              segmentRows,
-              getSegEffectiveRange,
-              snappingEnabled,
-              shiftKey: Boolean(e.shiftKey),
-              pps,
-            });
-            newStart = voicePos.newStart;
-            newEnd = voicePos.newEnd;
-            currentSnapTime = voicePos.snapTime;
-
-            if (resolvedVoiceTargetRow === curRow) {
-              const { prevBound, nextBound } = voicePos;
-              // Strict No-Overlap Clamp on the same track (Edge-to-edge ||)
-              if (newStart < prevBound) {
-                newStart = prevBound;
-                newEnd = newStart + clipDur;
-              }
-              if (nextBound !== Infinity && newEnd > nextBound) {
-                newEnd = nextBound;
-                newStart = Math.max(prevBound, newEnd - clipDur);
-              }
-            }
-
-            // Live scrub-seek: move playhead + seek preview video frame in real time while paused & dragging a voice clip
-            const voiceScrubTime = resolveVoiceDragScrubTime({
-              itemType: dragState.itemType,
-              mode: dragState.mode,
-              isPlaying: isPlayingRef.current,
-              dragStartSec: newStart,
-              totalDuration,
-            });
-            if (voiceScrubTime !== null) {
-              scheduleVoiceDragScrub(voiceScrubTime, dragState.id);
-            }
-          } else if (snappingEnabled && !e.shiftKey) {
-            // CapCut Precision Snapping: subtle 8px window (~0.1s), NOT a violent 0.6s jump!
-            const snapThreshold = Math.min(0.2, Math.max(0.06, 8 / pps));
-            const currentLiveTime = currentTimeRef.current || 0;
-            if (newStart < snapThreshold || Math.abs(newStart) < snapThreshold) {
-              newStart = 0;
-              newEnd = clipDur;
-              currentSnapTime = 0;
-            } else if (Math.abs(newStart - currentLiveTime) < snapThreshold) {
-              newStart = currentLiveTime;
-              newEnd = newStart + clipDur;
-              currentSnapTime = currentLiveTime;
-            } else if (Math.abs(newEnd - currentLiveTime) < snapThreshold) {
-              newEnd = currentLiveTime;
-              newStart = Math.max(0, newEnd - clipDur);
-              currentSnapTime = currentLiveTime;
-            }
-            if (dragState.itemType === 'video' && videoClips) {
-              for (const other of videoClips) {
-                if (other.id !== dragState.id) {
-                  if (Math.abs(newStart - other.end) < snapThreshold) {
-                    newStart = other.end;
-                    newEnd = newStart + clipDur;
-                    currentSnapTime = other.end;
-                    break;
-                  } else if (Math.abs(newEnd - other.start) < snapThreshold) {
-                    newEnd = other.start;
-                    newStart = Math.max(0, newEnd - clipDur);
-                    currentSnapTime = other.start;
-                    break;
-                  }
+          // Live scrub-seek: move playhead + seek preview video frame in real time while paused & dragging a voice clip
+          const voiceScrubTime = resolveVoiceDragScrubTime({
+            itemType: dragState.itemType,
+            mode: dragState.mode,
+            isPlaying: isPlayingRef.current,
+            dragStartSec: newStart,
+            totalDuration: totalDurationRef.current,
+          });
+          if (voiceScrubTime !== null) {
+            scheduleVoiceDragScrub(voiceScrubTime, dragState.id);
+          }
+        } else if (snappingEnabledRef.current && !e.shiftKey) {
+          const snapThreshold = Math.min(0.2, Math.max(0.06, 8 / currentPps));
+          const currentLiveTime = currentTimeRef.current || 0;
+          if (newStart < snapThreshold || Math.abs(newStart) < snapThreshold) {
+            newStart = 0;
+            newEnd = clipDur;
+            currentSnapTime = 0;
+          } else if (Math.abs(newStart - currentLiveTime) < snapThreshold) {
+            newStart = currentLiveTime;
+            newEnd = newStart + clipDur;
+            currentSnapTime = currentLiveTime;
+          } else if (Math.abs(newEnd - currentLiveTime) < snapThreshold) {
+            newEnd = currentLiveTime;
+            newStart = Math.max(0, newEnd - clipDur);
+            currentSnapTime = currentLiveTime;
+          }
+          if (dragState.itemType === 'video' && videoClips) {
+            for (const other of videoClips) {
+              if (other.id !== dragState.id) {
+                if (Math.abs(newStart - other.end) < snapThreshold) {
+                  newStart = other.end;
+                  newEnd = newStart + clipDur;
+                  currentSnapTime = other.end;
+                  break;
+                } else if (Math.abs(newEnd - other.start) < snapThreshold) {
+                  newEnd = other.start;
+                  newStart = Math.max(0, newEnd - clipDur);
+                  currentSnapTime = other.start;
+                  break;
                 }
               }
             }
           }
-
-          setSnapLineTime(currentSnapTime);
-          setDragState(prev => prev ? ({ 
-            ...prev, 
-            hasMoved: true, 
-            currentStart: newStart, 
-            currentEnd: newEnd,
-            currentY: effectiveCurrentY,
-            ...(dragState.itemType === 'audio' ? {
-              minVoiceY: voiceMinY,
-              maxVoiceY: voiceMaxY,
-              targetVoiceRow: resolvedVoiceTargetRow,
-            } : {}),
-          }) : null);
-
-          if (dragState.itemType === 'audio') {
-            setDragOverTrack(`voice_${Math.max(0, resolvedVoiceTargetRow ?? 0)}`);
-          } else if (targetLane && targetLane.dataset?.trackKey) {
-            setDragOverTrack(targetLane.dataset.trackKey);
-          } else if (deltaY > 20 && dragState.itemType === 'video') {
-            const cur = videoClips?.find(c => c.id === dragState.id);
-            const curRow = cur?.trackRow || 0;
-            const rowShift = Math.max(1, Math.round(deltaY / 52));
-            setDragOverTrack(`video_${curRow + rowShift}`);
-          } else if (deltaY > 20 && dragState.itemType === 'subtitle') {
-            const curSeg = scriptSegments?.[dragState.index];
-            const curRow = (typeof curSeg?.subTrackRow === 'number' && curSeg.subTrackRow >= 0) ? curSeg.subTrackRow : 0;
-            const rowShift = Math.max(1, Math.round(deltaY / 42));
-            setDragOverTrack(`subs_${curRow + rowShift}`);
-          } else {
-            setDragOverTrack(null);
-          }
-        } else if (dragState.mode === 'trim-left') {
-          let minAllowedStart = 0;
-          if (dragState.itemType === 'audio' && scriptSegments && scriptSegments.length > 0) {
-            const curRow = segmentRows[dragState.index] ?? (scriptSegments[dragState.index]?.trackRow || 0);
-            for (let i = 0; i < scriptSegments.length; i++) {
-              if (i === dragState.index) continue;
-              const other = scriptSegments[i];
-              const otherRow = segmentRows[i] ?? (other.trackRow || 0);
-              if (otherRow !== curRow) continue;
-              const range = getSegEffectiveRange(other, i);
-              if (range.end <= dragState.origStart + 0.05 && range.end > minAllowedStart) {
-                minAllowedStart = range.end;
-              }
-            }
-          }
-          const newStart = Math.min(dragState.origEnd - 0.4, Math.max(minAllowedStart, dragState.origStart + deltaSec));
-          setDragState(prev => prev ? ({ ...prev, hasMoved: true, currentStart: newStart }) : null);
-        } else if (dragState.mode === 'trim-right') {
-          let maxAllowedEnd = Infinity;
-          if (dragState.itemType === 'audio' && scriptSegments && scriptSegments.length > 0) {
-            const curRow = segmentRows[dragState.index] ?? (scriptSegments[dragState.index]?.trackRow || 0);
-            for (let i = 0; i < scriptSegments.length; i++) {
-              if (i === dragState.index) continue;
-              const other = scriptSegments[i];
-              const otherRow = segmentRows[i] ?? (other.trackRow || 0);
-              if (otherRow !== curRow) continue;
-              const range = getSegEffectiveRange(other, i);
-              if (range.start >= dragState.origEnd - 0.05 && range.start < maxAllowedEnd) {
-                maxAllowedEnd = range.start;
-              }
-            }
-          }
-          let newEnd = Math.max(dragState.origStart + 0.4, dragState.origEnd + deltaSec);
-          if (maxAllowedEnd !== Infinity && newEnd > maxAllowedEnd) {
-            newEnd = maxAllowedEnd;
-          }
-          setDragState(prev => prev ? ({ ...prev, hasMoved: true, currentEnd: newEnd }) : null);
         }
+
+        // Apply direct GPU translation to dragged DOM element (instant 60 FPS, no React reconciliation!)
+        const dx = (newStart - dragState.origStart) * currentPps;
+        const dy = effectiveCurrentY;
+        if (draggedElementRef.current) {
+          draggedElementRef.current.style.transform = `translate3d(${dx}px, ${dy}px, 0)`;
+        }
+
+        // Direct snap line indicator transform
+        if (snapLineRef.current) {
+          if (currentSnapTime !== null) {
+            snapLineRef.current.style.display = 'block';
+            snapLineRef.current.style.transform = `translate3d(${currentSnapTime * currentPps}px, 0, 0)`;
+          } else {
+            snapLineRef.current.style.display = 'none';
+          }
+        }
+
+        // Direct track lane hover highlight via DOM class
+        let targetTrackKey = null;
+        if (dragState.itemType === 'audio') {
+          targetTrackKey = `voice_${Math.max(0, resolvedVoiceTargetRow ?? 0)}`;
+        } else if (targetLane && targetLane.dataset?.trackKey) {
+          targetTrackKey = targetLane.dataset.trackKey;
+        } else if (deltaY > 20 && dragState.itemType === 'video') {
+          const cur = videoClips?.find(c => c.id === dragState.id);
+          const curRow = cur?.trackRow || 0;
+          const rowShift = Math.max(1, Math.round(deltaY / 52));
+          targetTrackKey = `video_${curRow + rowShift}`;
+        } else if (deltaY > 20 && dragState.itemType === 'subtitle') {
+          const curSeg = scriptSegments?.[dragState.index];
+          const curRow = (typeof curSeg?.subTrackRow === 'number' && curSeg.subTrackRow >= 0) ? curSeg.subTrackRow : 0;
+          const rowShift = Math.max(1, Math.round(deltaY / 42));
+          targetTrackKey = `subs_${curRow + rowShift}`;
+        }
+
+        if (targetTrackKey !== lastTargetVoiceRowRef.current) {
+          const container = timelineBodyRef.current;
+          if (container) {
+            if (lastTargetVoiceRowRef.current) {
+              const prevLane = container.querySelector(`.track-lane[data-track-key="${lastTargetVoiceRowRef.current}"]`);
+              if (prevLane) prevLane.classList.remove('is-drag-over');
+            }
+            if (targetTrackKey) {
+              const nextLane = container.querySelector(`.track-lane[data-track-key="${targetTrackKey}"]`);
+              if (nextLane) nextLane.classList.add('is-drag-over');
+            }
+          }
+          lastTargetVoiceRowRef.current = targetTrackKey;
+        }
+
+        // Keep dragStateRef in sync with latest pointer calculations for drop commit
+        dragStateRef.current = {
+          ...dragState,
+          hasMoved: true,
+          currentStart: newStart,
+          currentEnd: newEnd,
+          currentY: effectiveCurrentY,
+          ...(dragState.itemType === 'audio' ? {
+            minVoiceY: voiceMinY,
+            maxVoiceY: voiceMaxY,
+            targetVoiceRow: resolvedVoiceTargetRow,
+          } : {}),
+        };
+      } else if (dragState.mode === 'trim-left') {
+        let minAllowedStart = 0;
+        if (dragState.itemType === 'audio' && scriptSegments && scriptSegments.length > 0) {
+          const curRow = segmentRows[dragState.index] ?? (scriptSegments[dragState.index]?.trackRow || 0);
+          for (let i = 0; i < scriptSegments.length; i++) {
+            if (i === dragState.index) continue;
+            const other = scriptSegments[i];
+            const otherRow = segmentRows[i] ?? (other.trackRow || 0);
+            if (otherRow !== curRow) continue;
+            const range = getSegEffectiveRange(other, i);
+            if (range.end <= dragState.origStart + 0.05 && range.end > minAllowedStart) {
+              minAllowedStart = range.end;
+            }
+          }
+        }
+        const newStart = Math.min(dragState.origEnd - 0.4, Math.max(minAllowedStart, dragState.origStart + deltaSec));
+        dragStateRef.current = { ...dragState, hasMoved: true, currentStart: newStart };
+        setDragState(dragStateRef.current);
+      } else if (dragState.mode === 'trim-right') {
+        let maxAllowedEnd = Infinity;
+        if (dragState.itemType === 'audio' && scriptSegments && scriptSegments.length > 0) {
+          const curRow = segmentRows[dragState.index] ?? (scriptSegments[dragState.index]?.trackRow || 0);
+          for (let i = 0; i < scriptSegments.length; i++) {
+            if (i === dragState.index) continue;
+            const other = scriptSegments[i];
+            const otherRow = segmentRows[i] ?? (other.trackRow || 0);
+            if (otherRow !== curRow) continue;
+            const range = getSegEffectiveRange(other, i);
+            if (range.start >= dragState.origEnd - 0.05 && range.start < maxAllowedEnd) {
+              maxAllowedEnd = range.start;
+            }
+          }
+        }
+        let newEnd = Math.max(dragState.origStart + 0.4, dragState.origEnd + deltaSec);
+        if (maxAllowedEnd !== Infinity && newEnd > maxAllowedEnd) {
+          newEnd = maxAllowedEnd;
+        }
+        dragStateRef.current = { ...dragState, hasMoved: true, currentEnd: newEnd };
+        setDragState(dragStateRef.current);
+      }
     };
 
     const handleMouseMove = (e) => {
-      if (dragState) {
-        pendingMouseE = e;
-        if (!mouseRafId) {
-          mouseRafId = requestAnimationFrame(() => {
-            mouseRafId = null;
-            if (pendingMouseE) {
-              processMouseMove(pendingMouseE);
+      if (dragStateRef.current) {
+        pendingMouseERef.current = e;
+        if (!mouseRafRef.current) {
+          mouseRafRef.current = requestAnimationFrame(() => {
+            mouseRafRef.current = null;
+            if (pendingMouseERef.current) {
+              processMouseMove(pendingMouseERef.current);
             }
           });
         }
@@ -1332,19 +1406,50 @@ function TimelineEditor({
     const handleMouseUp = (e) => {
       cancelVoiceDragScrub();
       lastVoiceDragSeekRef.current = null;
+
+      if (mouseRafRef.current) {
+        cancelAnimationFrame(mouseRafRef.current);
+        mouseRafRef.current = null;
+      }
+      if (pendingMouseERef.current) {
+        processMouseMove(pendingMouseERef.current);
+        pendingMouseERef.current = null;
+      }
+
+      // Reset direct styles
+      if (draggedElementRef.current) {
+        draggedElementRef.current.style.transform = '';
+        draggedElementRef.current = null;
+      }
+      if (snapLineRef.current) {
+        snapLineRef.current.style.display = 'none';
+      }
+      if (lastTargetVoiceRowRef.current) {
+        const container = timelineBodyRef.current;
+        if (container) {
+          const lane = container.querySelector(`.track-lane[data-track-key="${lastTargetVoiceRowRef.current}"]`);
+          if (lane) lane.classList.remove('is-drag-over');
+        }
+        lastTargetVoiceRowRef.current = null;
+      }
+      cachedVoiceLaneBoundsRef.current = null;
       setSnapLineTime(null);
       setDragOverTrack(null);
+
+      const activeDrag = dragStateRef.current;
+      dragStateRef.current = null;
+
       if (isNativeDraggingRef.current) {
         isNativeDraggingRef.current = false;
         setDragState(null);
         return;
       }
 
-      if (dragState) {
-        if (!dragState.hasMoved) {
+      if (activeDrag) {
+        if (!activeDrag.hasMoved) {
           // If simple click on an audio or subtitle segment while paused, jump the playhead line | to the start of this segment
-          if (!isPlayingRef.current && (dragState.itemType === 'audio' || dragState.itemType === 'subtitle') && onSeek && typeof dragState.origStart === 'number') {
-            onSeek(dragState.origStart);
+          if (!isPlayingRef.current && (activeDrag.itemType === 'audio' || activeDrag.itemType === 'subtitle') && onSeek && typeof activeDrag.origStart === 'number') {
+            onSeek(activeDrag.origStart);
           }
           setDragState(null);
           return;
@@ -1363,13 +1468,13 @@ function TimelineEditor({
             const lane = el?.closest?.('.track-lane');
             if (lane) {
               const laneType = lane.dataset?.trackType;
-              if (dragState.itemType === 'subtitle' && laneType === 'subs') {
+              if (activeDrag.itemType === 'subtitle' && laneType === 'subs') {
                 targetLane = lane;
                 break;
-              } else if (dragState.itemType === 'audio' && laneType === 'voice') {
+              } else if (activeDrag.itemType === 'audio' && laneType === 'voice') {
                 targetLane = lane;
                 break;
-              } else if (dragState.itemType === 'video' && laneType === 'video') {
+              } else if (activeDrag.itemType === 'video' && laneType === 'video') {
                 targetLane = lane;
                 break;
               }
@@ -1385,22 +1490,22 @@ function TimelineEditor({
           }
         }
 
-        const liveDeltaY = (typeof e?.clientY === 'number' && typeof dragState.startY === 'number')
-          ? (e.clientY - dragState.startY)
-          : (dragState.currentY || 0);
+        const liveDeltaY = (typeof e?.clientY === 'number' && typeof activeDrag.startY === 'number')
+          ? (e.clientY - activeDrag.startY)
+          : (activeDrag.currentY || 0);
 
-        if ((dragState.itemType === 'audio' || dragState.itemType === 'subtitle') && onUpdateSegments && scriptSegments) {
+        if ((activeDrag.itemType === 'audio' || activeDrag.itemType === 'subtitle') && onUpdateSegments && scriptSegments) {
           const segIdx = scriptSegments.findIndex((s, i) => 
-            (s._uid && dragState.id && String(s._uid) === String(dragState.id)) ||
-            (s.id !== undefined && s.id !== null && dragState.id !== undefined && dragState.id !== null && String(s.id) === String(dragState.id)) ||
-            i === dragState.index
+            (s._uid && activeDrag.id && String(s._uid) === String(activeDrag.id)) ||
+            (s.id !== undefined && s.id !== null && activeDrag.id !== undefined && activeDrag.id !== null && String(s.id) === String(activeDrag.id)) ||
+            i === activeDrag.index
           );
           const seg = segIdx >= 0 ? scriptSegments[segIdx] : null;
           if (seg) {
             const curSegRow = segmentRows[segIdx] ?? (seg.trackRow || 0);
             let finalTargetRow = curSegRow;
 
-            if (dragState.itemType === 'audio') {
+            if (activeDrag.itemType === 'audio') {
               const bounds = measureVoiceLaneBounds(curSegRow);
               finalTargetRow = resolveVoiceDropRow({
                 pointerLaneType: isVoiceDropTargetAllowed(targetType) ? targetType : null,
@@ -1417,7 +1522,7 @@ function TimelineEditor({
 
             const curSubRow = (typeof seg.subTrackRow === 'number' && seg.subTrackRow >= 0) ? seg.subTrackRow : 0;
             let finalSubTargetRow = curSubRow;
-            if (dragState.itemType === 'subtitle') {
+            if (activeDrag.itemType === 'subtitle') {
               if (targetType === 'subs' && targetRow !== null) {
                 finalSubTargetRow = targetRow;
               } else if (liveDeltaY < -20 && curSubRow > 0) {
@@ -1430,28 +1535,27 @@ function TimelineEditor({
             }
 
             const currentState = { videoClips: videoClips || [], segments: scriptSegments };
-            const segKey = seg._uid || seg.id || dragState.id;
+            const segKey = seg._uid || seg.id || activeDrag.id;
 
-            if (dragState.mode === 'move') {
-              const newStart = Math.max(0, parseFloat(dragState.currentStart.toFixed(2)));
+            if (activeDrag.mode === 'move') {
+              const newStart = Math.max(0, parseFloat(activeDrag.currentStart.toFixed(2)));
               // Enforce strict no-overlap clamp on final target row via moveClipOp
-              // Dynamic trackId generation for voice lanes: `voice-${finalTargetRow + 1}`
               const opResult = moveClipOp(currentState, {
                 clipId: segKey,
                 newStart,
                 trackRow: finalTargetRow,
-                subTrackRow: dragState.itemType === 'subtitle' ? finalSubTargetRow : undefined,
+                subTrackRow: activeDrag.itemType === 'subtitle' ? finalSubTargetRow : undefined,
               });
 
               if (opResult.applied) {
-                if (dragState.itemType === 'audio' && finalTargetRow >= userVoiceTrackCount) {
+                if (activeDrag.itemType === 'audio' && finalTargetRow >= userVoiceTrackCount) {
                   setUserVoiceTrackCount(finalTargetRow + 1);
                 }
-                if (dragState.itemType === 'subtitle' && finalSubTargetRow >= userSubTrackCount) {
+                if (activeDrag.itemType === 'subtitle' && finalSubTargetRow >= userSubTrackCount) {
                   setUserSubTrackCount(finalSubTargetRow + 1);
                 }
                 const droppedSeg = opResult.state.segments[segIdx];
-                const droppedStart = (dragState.itemType === 'audio' && droppedSeg && typeof droppedSeg.audioStartSec === 'number' && Number.isFinite(droppedSeg.audioStartSec))
+                const droppedStart = (activeDrag.itemType === 'audio' && droppedSeg && typeof droppedSeg.audioStartSec === 'number' && Number.isFinite(droppedSeg.audioStartSec))
                   ? droppedSeg.audioStartSec
                   : newStart;
                 const wasPlayingOnDrop = Boolean(isPlayingRef.current || (videoRef?.current && !videoRef.current.paused));
@@ -1473,19 +1577,19 @@ function TimelineEditor({
               } else if (opResult.reason) {
                 console.warn('[moveClip]', opResult.reason);
                 const wasPlayingOnDrop = Boolean(isPlayingRef.current || (videoRef?.current && !videoRef.current.paused));
-                if (!wasPlayingOnDrop && dragState.itemType === 'audio' && onSeek && typeof dragState.origStart === 'number') {
-                  onSeek(dragState.origStart);
+                if (!wasPlayingOnDrop && activeDrag.itemType === 'audio' && onSeek && typeof activeDrag.origStart === 'number') {
+                  onSeek(activeDrag.origStart);
                 }
                 if (typeof window !== 'undefined') {
                   window.dispatchEvent(new CustomEvent('timeline:toast', { detail: { message: opResult.reason } }));
                 }
               }
-            } else if (dragState.mode === 'trim-left' || dragState.mode === 'trim-right') {
-              const isLeft = dragState.mode === 'trim-left';
+            } else if (activeDrag.mode === 'trim-left' || activeDrag.mode === 'trim-right') {
+              const isLeft = activeDrag.mode === 'trim-left';
               const opResult = trimClipOp(currentState, {
                 clipId: segKey,
                 edge: isLeft ? 'left' : 'right',
-                newTime: isLeft ? dragState.currentStart : dragState.currentEnd,
+                newTime: isLeft ? activeDrag.currentStart : activeDrag.currentEnd,
               });
 
               if (opResult.applied) {
@@ -1498,17 +1602,17 @@ function TimelineEditor({
               }
             }
           }
-        } else if (dragState.itemType === 'video' && onUpdateClips && videoClips) {
-          const clip = videoClips.find(c => c.id === dragState.id) || videoClips[dragState.index];
+        } else if (activeDrag.itemType === 'video' && onUpdateClips && videoClips) {
+          const clip = videoClips.find(c => c.id === activeDrag.id) || videoClips[activeDrag.index];
           if (clip) {
             const currentState = { videoClips: videoClips || [], segments: scriptSegments || [] };
 
-            if (dragState.mode === 'trim-left' || dragState.mode === 'trim-right') {
-              const isLeft = dragState.mode === 'trim-left';
+            if (activeDrag.mode === 'trim-left' || activeDrag.mode === 'trim-right') {
+              const isLeft = activeDrag.mode === 'trim-left';
               const opResult = trimClipOp(currentState, {
                 clipId: clip.id,
                 edge: isLeft ? 'left' : 'right',
-                newTime: isLeft ? dragState.currentStart : dragState.currentEnd,
+                newTime: isLeft ? activeDrag.currentStart : activeDrag.currentEnd,
                 maxSourceDuration: totalDuration,
               });
 
@@ -1520,8 +1624,8 @@ function TimelineEditor({
                   window.dispatchEvent(new CustomEvent('timeline:toast', { detail: { message: opResult.reason } }));
                 }
               }
-            } else if (dragState.mode === 'move') {
-              let newStart = Math.max(0, parseFloat(dragState.currentStart.toFixed(2)));
+            } else if (activeDrag.mode === 'move') {
+              let newStart = Math.max(0, parseFloat(activeDrag.currentStart.toFixed(2)));
               if (snappingEnabled && newStart < 0.1) {
                 newStart = 0;
               }
@@ -1628,7 +1732,10 @@ function TimelineEditor({
     }
 
     return () => {
-      if (mouseRafId) cancelAnimationFrame(mouseRafId);
+      if (mouseRafRef.current) {
+        cancelAnimationFrame(mouseRafRef.current);
+        mouseRafRef.current = null;
+      }
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
       if (scrubRafRef.current) {
@@ -1636,7 +1743,7 @@ function TimelineEditor({
         scrubRafRef.current = null;
       }
     };
-  }, [dragState, isScrubbing, pps, scriptSegments, videoClips, onUpdateSegments, onUpdateClips, totalDuration, snappingEnabled, onSelectSegment, currentTime]);
+  }, [Boolean(dragState), isScrubbing, pps, onSelectSegment]);
 
   const selectedSegKey = selectedSubId !== null && selectedSubId !== undefined
     ? selectedSubId
@@ -2210,6 +2317,7 @@ function TimelineEditor({
           pps={pps}
           markers={markers}
           snapLineTime={snapLineTime}
+          snapLineRef={snapLineRef}
           selectedVideo={selectedVideo}
           totalDuration={totalDuration}
           playheadX={playheadX}

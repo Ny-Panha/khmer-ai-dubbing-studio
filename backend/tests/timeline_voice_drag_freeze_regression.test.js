@@ -68,4 +68,33 @@ test('Voice Clip Drag Freeze Regression Suite', () => {
     playbackCode.includes('if (videoRef.current.readyState === 0)'),
     'useVideoPlayback handleSeek must guard against seeking uninitialized video element'
   );
+
+  // 7. TimelineEditor: Direct RAF coalesced GPU pointer translation
+  assert.ok(
+    editorCode.includes('mouseRafRef.current = requestAnimationFrame('),
+    'TimelineEditor must coalesce pointer moves via mouseRafRef'
+  );
+  assert.ok(
+    editorCode.includes('draggedElementRef.current.style.transform = `translate3d(${dx}px, ${dy}px, 0)`'),
+    'TimelineEditor must use direct GPU translate3d on dragged DOM element'
+  );
+
+  // 8. TimelineEditor: Layout-thrashing prevention via cached lane bounds
+  assert.ok(
+    editorCode.includes('cachedVoiceLaneBoundsRef.current = measureVoiceLaneBounds(segRow)'),
+    'TimelineEditor must cache voice lane bounds on mousedown to prevent layout thrashing on mousemove'
+  );
+
+  // 9. TimelineEditor.css: Dragged blocks must have transitions disabled and will-change: transform
+  const cssPath = path.resolve(rootDir, 'frontend/src/components/timeline/TimelineEditor.css');
+  assert.ok(fs.existsSync(cssPath), 'TimelineEditor.css must exist');
+  const cssCode = fs.readFileSync(cssPath, 'utf8');
+  assert.ok(
+    cssCode.includes('.voice-segment-block.is-dragging'),
+    'TimelineEditor.css must style .voice-segment-block.is-dragging'
+  );
+  assert.ok(
+    cssCode.includes('will-change: transform;'),
+    'TimelineEditor.css must set will-change: transform on dragging blocks'
+  );
 });

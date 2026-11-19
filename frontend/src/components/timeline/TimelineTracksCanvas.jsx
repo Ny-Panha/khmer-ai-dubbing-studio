@@ -125,6 +125,7 @@ function TimelineTracksCanvas({
   pps,
   markers,
   snapLineTime,
+  snapLineRef = null,
   selectedVideo,
   totalDuration,
   playheadX,
@@ -587,14 +588,15 @@ function TimelineTracksCanvas({
           data-segment-id={seg.id ?? idx}
           data-voice-gender={isFemale ? 'female' : 'male'}
           data-voice-generating={isGeneratingVoice ? 'true' : 'false'}
-          className={`voice-segment-block ${isFemale ? 'voice-female' : 'voice-male'} ${!hasAudio ? 'is-pending-audio' : ''} ${isGeneratingVoice ? 'is-generating-voice' : ''} ${isSelected ? 'selected' : ''} ${isLinked ? 'is-linked-clip' : ''} ${isSliver ? 'clip-sliver' : ''} ${isCompactClip ? 'is-compact-clip' : ''} ${isOverrun ? 'has-audio-overrun' : ''}`}
+          className={`voice-segment-block ${isFemale ? 'voice-female' : 'voice-male'} ${!hasAudio ? 'is-pending-audio' : ''} ${isGeneratingVoice ? 'is-generating-voice' : ''} ${isSelected ? 'selected' : ''} ${isLinked ? 'is-linked-clip' : ''} ${isDragging ? 'is-dragging' : ''} ${isSliver ? 'clip-sliver' : ''} ${isCompactClip ? 'is-compact-clip' : ''} ${isOverrun ? 'has-audio-overrun' : ''}`}
           style={{
             cursor: isDragging ? 'grabbing' : 'grab',
             left: audioLeft,
             width: audioWidth,
             zIndex: isDragging ? 100 : (isSelected ? 20 : (isLinked ? 8 : 5)),
             transform: safeVoiceTranslateY !== null ? `translateY(${safeVoiceTranslateY}px)` : undefined,
-            transition: isDragging ? 'none' : undefined,
+            transition: isDragging ? 'none !important' : undefined,
+            willChange: isDragging ? 'transform' : undefined,
             pointerEvents: isDragging && dragState?.mode === 'move' ? 'none' : 'auto',
           }}
           title={`#${segmentNumber} [${speakerTooltipLabel}] (${startSec.toFixed(1)}s - ${endSec.toFixed(1)}s)${isOverrun ? ` ⚠️ Audio Overrun (${Math.round((seg.overrunRatio || 0.4) * 100)}% cut)` : ''}\n"${khmerPreview || '(មិនទាន់មានអត្ថបទ / រង់ចាំសំឡេង)'}"`}
@@ -789,14 +791,15 @@ function TimelineTracksCanvas({
             }
             onSeek(startSec);
           }}
-          className={`subtitle-segment-block ${isSelected ? 'selected' : ''} ${isLinked ? 'is-linked-clip' : ''} ${isSliver ? 'clip-sliver' : ''}`}
+          className={`subtitle-segment-block ${isSelected ? 'selected' : ''} ${isLinked ? 'is-linked-clip' : ''} ${isDragging ? 'is-dragging' : ''} ${isSliver ? 'clip-sliver' : ''}`}
           style={{
             cursor: isDragging ? 'grabbing' : 'grab',
             left: subLeft,
             width: subWidth,
             zIndex: isDragging ? 100 : (isSelected ? 20 : (isLinked ? 8 : 5)),
             transform: isDragging && dragState?.mode === 'move' && typeof dragState?.currentY === 'number' ? `translateY(${dragState.currentY}px)` : undefined,
-            transition: isDragging ? 'none' : undefined,
+            transition: isDragging ? 'none !important' : undefined,
+            willChange: isDragging ? 'transform' : undefined,
             pointerEvents: isDragging && dragState?.mode === 'move' ? 'none' : 'auto',
           }}
           title={`[${formatMinSec(startSec)} - ${formatMinSec(endSec)}] ${seg.khmer || seg.text || ''}`}
@@ -1072,12 +1075,16 @@ function TimelineTracksCanvas({
       </div>
 
       {/* Magnetic Snapping Guide Indicator Line (1px accent blue, no neon glow) */}
-      {snapLineTime !== null && (
-        <div 
-          className="timeline-snap-line"
-          style={{ left: snapLineTime * pps }}
-        />
-      )}
+      <div 
+        ref={snapLineRef}
+        className="timeline-snap-line"
+        style={{
+          left: 0,
+          display: snapLineTime !== null ? 'block' : 'none',
+          transform: snapLineTime !== null ? `translate3d(${snapLineTime * pps}px, 0, 0)` : 'translate3d(0, 0, 0)',
+          willChange: 'transform',
+        }}
+      />
 
       {/* CapCut-style 9:16 Framing Keyframe Diamonds (💎) */}
       {Array.isArray(framingKeyframes) && framingKeyframes.length > 0 && (
@@ -1579,8 +1586,9 @@ function TimelineTracksCanvas({
 }
 
 function areTimelineTracksCanvasPropsEqual(prev, next) {
-  // If actively dragging or scrubbing, re-render immediately
-  if (next.dragState || prev.dragState) return false;
+  // Re-render only when drag session starts or ends, or if dragged item changes
+  if (Boolean(prev.dragState) !== Boolean(next.dragState)) return false;
+  if (prev.dragState && next.dragState && prev.dragState.id !== next.dragState.id) return false;
 
   // Re-render when play/pause toggles, or when clips, segments, or settings actually change
   if (prev.isPlaying !== next.isPlaying) return false;
@@ -1607,7 +1615,6 @@ function areTimelineTracksCanvasPropsEqual(prev, next) {
   if (prev.audioGenerated !== next.audioGenerated) return false;
   if (prev.voiceSettings !== next.voiceSettings) return false;
   if (prev.showSubtitles !== next.showSubtitles) return false;
-  if (prev.snapLineTime !== next.snapLineTime) return false;
   if (prev.framingKeyframes !== next.framingKeyframes) return false;
   if (prev.selectedVideo !== next.selectedVideo) return false;
   if (prev.seriesId !== next.seriesId || prev.episodeId !== next.episodeId) return false;

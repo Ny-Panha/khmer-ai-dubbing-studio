@@ -3,6 +3,90 @@
 ## Last Session
 - **Environment**: Antigravity IDE (Gemini)
 - **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-19T14:55:00+07:00
+
+## Summary: Fix Choppy, Laggy, and Jumping Voice Clip Dragging on Timeline (60 FPS GPU Transform Optimization)
+- **Problem & Root Causes Identified**:
+  1. **Full-Timeline Virtual DOM Re-render on Every Mouse Movement**: `processMouseMove` previously invoked `setDragState` on every pointer move. In `TimelineTracksCanvas.jsx`, `if (next.dragState || prev.dragState) return false;` forced React virtual DOM reconciliation of ~1,000 DOM elements (221 video clips, 221 voice clips, 221 subtitle clips, BGM) on every frame.
+  2. **Synchronous Layout Thrashing**: On every mousemove, `measureVoiceLaneBounds` called `getBoundingClientRect()` on multiple track lanes immediately after DOM style mutations, triggering expensive browser reflows.
+  3. **Listener Teardown/Re-registration Thrashing**: `useEffect` dependencies included `dragState`, tearing down and re-binding `mousemove`/`mouseup` listeners and canceling RAF callbacks on every pointer movement.
+  4. **CSS Transition Delay**: `.track-lane.is-drag-over` had `transition: all 0.1s ease`, creating visual lag behind the cursor.
+- **Surgical Minimal Changes Implemented**:
+  1. `frontend/src/components/timeline/TimelineEditor.jsx`:
+     - Added direct GPU drag refs: `mouseRafRef`, `pendingMouseERef`, `draggedElementRef`, `cachedVoiceLaneBoundsRef`, `snapLineRef`, `lastTargetVoiceRowRef`.
+     - Coalesced mouse movement updates to at most once per display animation frame via `requestAnimationFrame`.
+     - Applied direct GPU hardware acceleration `translate3d(dx, dy, 0)` on the dragged DOM element, bypassing React virtual DOM diffing during active drag.
+     - Cached voice lane bounds on `mousedown` (`cachedVoiceLaneBoundsRef`), eliminating layout thrashing and reflows during pointer movement.
+     - Updated `.track-lane.is-drag-over` directly in DOM without triggering parent React re-renders.
+     - Retained `scheduleVoiceDragScrub` with decoder busy guard (`videoRef.current.seeking`), avoiding decoder seek flooding while keeping preview responsive.
+     - Bound window event listeners stably on drag start/end (`dragState !== null`) without listener churn during active move.
+     - Committed exact final position on `mouseup` via `moveClipOp` and `onUpdateSegments`, resetting GPU transforms and restoring default states.
+  2. `frontend/src/components/timeline/TimelineTracksCanvas.jsx`:
+     - Attached `snapLineRef` with direct `translate3d(snapLineTime * pps, 0, 0)` for hardware-accelerated snapping indicator.
+     - Added `.is-dragging` class, `transition: none !important`, and `will-change: transform` to dragging voice/subtitle blocks.
+     - Updated `areTimelineTracksCanvasPropsEqual` to re-render only when drag session starts or ends (`Boolean(prev.dragState) !== Boolean(next.dragState)` or `id` changes), preventing 1,000-clip virtual DOM diffs during drag.
+  3. `frontend/src/components/timeline/TimelineEditor.css`:
+     - Added `transition: none !important;` to `.track-lane.is-drag-over`.
+     - Added `transition: none !important;` and `will-change: transform;` to `.voice-segment-block.is-dragging` and `.subtitle-segment-block.is-dragging`.
+  4. `backend/tests/timeline_voice_drag_freeze_regression.test.js`:
+     - Added assertions 7-9 to protect direct RAF coalescing, direct GPU `translate3d`, cached voice lane bounds, and drag transition CSS styles.
+- **Empirical Browser Verification (Playwright + Chrome Performance Tracing)**:
+  - **Proxy_Verification_219** (219 segments):
+    - Slow drag: **16.67ms avg interval (~60.0 FPS)**, max interval 17.0ms, **0 long frames**, **0 severe jank**.
+    - Fast drag: 20.90ms avg interval (~47.8 FPS).
+    - Long Tasks (>50ms task duration on main thread): **0 tasks**.
+  - **Pseudo_Spiritual_Root** (220 segments):
+    - Slow drag: **19.14ms avg interval (~52.2 FPS)**, only 3 long frames out of 148 frames.
+    - Fast drag: **19.09ms avg interval (~52.4 FPS)**, only 4 long frames out of 55 frames.
+    - Long Tasks (>50ms task duration on main thread): **0 tasks** (down from 5 long tasks up to 75ms).
+  - **All 8 Test Cases Passed (PASS)**:
+    - 1. Slow dragging: Smooth 50-60 FPS UI updates.
+    - 2. Fast dragging: Fast responsive tracking.
+    - 3. Snap ON / OFF: Snap Line appears near voice clip boundary on Snap ON; disappears on Snap OFF without oscillation.
+    - 4. Drag between VOICE 1 and VOICE 2: Successfully dropped from VOICE 1 to VOICE 2 (`trackRow: 1`).
+    - 5. Drag while playing vs paused: Video plays smoothly during drag with zero playback freezes.
+    - 6. Drag across clip boundaries: Edge-to-edge clamping and non-overlap verified (`hasOverlap: false`).
+    - 7. 20 consecutive moves: 20/20 completed without drift or error.
+    - 8. Reload durability: Pre-reload position equals post-reload position (`left=1440.9px`, `left=1402.2px`).
+- **Regression Suite Verification**:
+  - `npm --prefix frontend run build`: **PASS** (0 errors, 674ms).
+  - `node --test backend/tests/timeline_voice_drag_freeze_regression.test.js`: **PASS** (1/1).
+  - `node --test backend/tests/timeline_voice_drag_persistence.test.js`: **PASS** (7/7).
+  - `node --test backend/tests/timeline_voice_drag_scrub.test.js`: **PASS** (2/2).
+  - `node --test backend/tests/timeline_user_shifted_anchors.test.js`: **PASS** (7/7).
+- **Active Environment**:
+  - Backend API: `http://localhost:5000`
+  - Frontend UI: `http://localhost:5173`
+- **Next Steps**:
+  - Ready for user testing and deployment.
+
+---
+
+## Previous Session
+- **Scope & Objective**:
+  - Upgraded `dub_pipeline.py` to support full **Series Folder Mode** (`series/<SeriesName>/...`).
+  - Auto-reads series-specific `glossary.txt` inside the series folder.
+  - Automatically iterates over all episodes in the folder and writes output to `series/<SeriesName>/out/`.
+  - Added smart quota protection: automatically skips already processed episodes if `out/<stem>.json` exists.
+  - Simplified `dev.ps1` dub block to `python dub_pipeline.py $args[1]`, accepting either a single media file or a series directory.
+  - Removed root `glossary.txt` placeholder to keep root clean (glossary lives inside each series folder).
+- **Verification**:
+  - `python -m py_compile dub_pipeline.py`: **PASS** (syntax clean).
+  - `python dub_pipeline.py --help`: **PASS** (accepts file or series folder).
+  - `powershell -ExecutionPolicy Bypass -File .\dev.ps1 -Help`: **PASS** (help text updated).
+- **Files Modified / Removed**:
+  1. `dub_pipeline.py`: Upgraded with `process_one`, `MEDIA_EXTS`, and series folder batch runner.
+  2. `dev.ps1`: Streamlined dub block to `python dub_pipeline.py $args[1]`.
+  3. `glossary.txt`: Removed from root (now lives per-series).
+- **Active Environment**:
+  - Backend API: `http://localhost:5000`
+  - Frontend UI: `http://localhost:5173`
+
+---
+
+## Previous Session
+- **Environment**: Antigravity IDE (Gemini)
+- **Branch**: `chore/full-project-cleanup`
 - **Timestamp**: 2026-11-19T13:05:00+07:00
 
 ## Summary: Remove Intrusive Manual-Position Auto-Align Warning UI & Relocate to Contextual Actions (100% PASS)
