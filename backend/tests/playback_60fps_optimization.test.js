@@ -4,12 +4,12 @@ const fs = require('fs');
 const path = require('path');
 
 describe('60FPS Smooth Video Playback & Zero-Stutter Optimization Suite', () => {
-  test('1. Backend Media Streamer caps open-ended video range to 3MB chunks', () => {
+  test('1. Backend Media Streamer caps open-ended video ranges at 8 MiB', () => {
     const mediaStreamFile = path.resolve(__dirname, '../middleware/mediaStream.js');
     const content = fs.readFileSync(mediaStreamFile, 'utf8');
 
-    assert.ok(content.includes('CHUNK_SIZE'), 'mediaStream.js must define CHUNK_SIZE for video streaming');
-    assert.ok(content.includes('Math.min(start + CHUNK_SIZE - 1, fileSize - 1)'), 'mediaStream.js must cap open-ended video range to chunk size');
+    assert.match(content, /VIDEO_CHUNK_SIZE = 8 \* 1024 \* 1024/);
+    assert.ok(content.includes('Math.min(start + VIDEO_CHUNK_SIZE - 1, fileSize - 1)'), 'mediaStream.js must cap open-ended video range to chunk size');
     assert.ok(content.includes('isVideo'), 'mediaStream.js must check isVideo file extension');
   });
 
@@ -19,7 +19,9 @@ describe('60FPS Smooth Video Playback & Zero-Stutter Optimization Suite', () => 
 
     assert.ok(content.includes('isPlayingRef.current'), 'VideoPlayerPreview must track isPlayingRef');
     assert.ok(content.includes('if (isPlayingRef.current) return;'), 'probeUrlLeadingSilence must return early during active playback');
-    assert.ok(content.includes('if (s > (now + 5)) break;'), 'syncSegmentAudiosAtTime must break early on sorted segments');
+    // A voice move can put a later array element earlier on the timeline.
+    assert.match(content, /if \(s > \(now \+ 0\.35\)\)\s*\{\s*continue;/,
+      'skip future voices while continuing to check other lanes for audible clips');
   });
 
   test('3. TimelineEditor auto-follows active dialogue segment and syncs Inspector during playback', () => {

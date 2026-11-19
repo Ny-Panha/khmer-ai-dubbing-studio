@@ -49,6 +49,7 @@ function VideoPlayerPreview({
   episodeId,
   scriptData,
   renderedVideo,
+  previewMode, onPreviewMode, canViewRender, proxyStatus,
   setRenderedVideo = null,
   onResetToPreview = null,
   isRendering,
@@ -2022,9 +2023,26 @@ function VideoPlayerPreview({
   }, [targetRatio, isFullscreen, canvasBounds.width, canvasBounds.height]);
 
   const videoObjectFit = (!renderedVideo && aspectRatio === '9:16' && verticalStyle === 'crop') ? 'cover' : 'contain';
+  const overlayRender = renderedVideo?.isProxyPreview ? null : renderedVideo;
+  const proxyActivity = proxyStatus?.state === 'superseded' ? 'Reopen episode to load newer edits' :
+    proxyStatus?.state === 'rendering' ? 'Rendering…' : 'Queued';
 
   return (
     <div className={`capcut-player-panel ${isFullscreen ? 'is-fullscreen-active' : ''}`} ref={containerRef}>
+      {selectedVideo && onPreviewMode && (
+        <div className="proxy-preview-controls">
+          <select aria-label="Preview playback mode" value={previewMode} onChange={e => onPreviewMode(e.target.value)}>
+            <option value="proxy">Proxy Preview</option>
+            <option value="live">Live Preview</option>
+            {canViewRender && <option value="rendered">Rendered</option>}
+          </select>
+          <span role="status" data-proxy-state={proxyStatus?.state || 'stale'}>
+            {proxyStatus?.state === 'fresh'
+              ? `${proxyStatus.duration.toFixed(1)}s · ${(proxyStatus.bytes / 1048576).toFixed(1)} MiB · Render ${proxyStatus.renderSeconds.toFixed(1)}s`
+              : `Preview មិនទាន់ថ្មី · ${proxyStatus?.error || proxyActivity}`}
+          </span>
+        </div>
+      )}
       {/* Video View Canvas (Synced dynamically to 16:9 / 9:16 / 1:1) */}
       <div
         ref={canvasContainerRef}
@@ -2194,7 +2212,7 @@ function VideoPlayerPreview({
               {/* Anti-Theft Running Marquee & Watermark Live Overlay (z-index: 1) */}
               <AntiTheftOverlay
                 voiceSettings={voiceSettings}
-                renderedVideo={renderedVideo}
+                renderedVideo={overlayRender}
                 aspectRatio={aspectRatio}
                 verticalStyle={verticalStyle}
                 videoMeta={videoMeta}
@@ -2205,7 +2223,7 @@ function VideoPlayerPreview({
               <LiveSubtitleOverlay
                 activeSegment={activeSegment}
                 voiceSettings={voiceSettings}
-                renderedVideo={renderedVideo}
+                renderedVideo={overlayRender}
                 currentTime={effectiveTimelineTime}
                 aspectRatio={aspectRatio}
                 verticalStyle={verticalStyle}
@@ -2215,7 +2233,7 @@ function VideoPlayerPreview({
               {/* Logo Watermark Live Overlay (សងខាង / ជ្រុងលើ) */}
               <LogoOverlay
                 voiceSettings={voiceSettings}
-                renderedVideo={renderedVideo}
+                renderedVideo={overlayRender}
                 aspectRatio={aspectRatio}
                 verticalStyle={verticalStyle}
                 videoMeta={videoMeta}
@@ -2225,7 +2243,7 @@ function VideoPlayerPreview({
               {/* Corner Disclaimer / Watermark Blocker Mask */}
               <CornerMaskOverlay
                 voiceSettings={voiceSettings}
-                renderedVideo={renderedVideo}
+                renderedVideo={overlayRender}
                 aspectRatio={aspectRatio}
                 verticalStyle={verticalStyle}
                 videoMeta={videoMeta}
@@ -2234,7 +2252,7 @@ function VideoPlayerPreview({
               {/* Sponsor Ads Live Overlay (Green Screen Video) */}
               <SponsorOverlay
                 voiceSettings={voiceSettings}
-                renderedVideo={renderedVideo}
+                renderedVideo={overlayRender}
                 aspectRatio={aspectRatio}
                 verticalStyle={verticalStyle}
                 videoMeta={videoMeta}
@@ -2341,7 +2359,7 @@ function VideoPlayerPreview({
         activeSegment={activeSegment}
         toggleFullscreen={toggleFullscreen}
         isFullscreen={isFullscreen}
-        renderedVideo={renderedVideo}
+        renderedVideo={overlayRender}
         onResetToPreview={onResetToPreview || (() => setRenderedVideo && setRenderedVideo(null))}
         onUpdateActiveCrop={handleUpdateActiveCrop}
         onAnalyzeFraming={handleAnalyzeFraming}

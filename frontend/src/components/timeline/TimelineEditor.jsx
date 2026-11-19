@@ -38,6 +38,7 @@ import './TimelineEditor.css';
 const TRACK_HEADER_WIDTH = 148;
 
 function TimelineEditor({
+  playingProxy = false,
   videoRef = null,
   currentTime = 0,
   playheadTimeRef = null,
@@ -1773,7 +1774,7 @@ function TimelineEditor({
           const currentPps = ppsRef.current || pps || 45;
           const currentClips = videoClipsRef.current || videoClips || [];
           let tlTime = smoothSrcTime;
-          if (currentClips && currentClips.length > 0) {
+          if (!playingProxy && currentClips && currentClips.length > 0) {
             let currentClipIdx = rafActiveClipIdxRef.current;
             if (currentClipIdx < 0 || currentClipIdx >= currentClips.length) {
               currentClipIdx = 0;
@@ -1870,7 +1871,7 @@ function TimelineEditor({
 
     animId = requestAnimationFrame(updatePlayheadAndScroll);
     return () => cancelAnimationFrame(animId);
-  }, [isPlaying, autoCenter, pps, isScrubbing, dragState]);
+  }, [isPlaying, playingProxy, autoCenter, pps, isScrubbing, dragState]);
 
   // --- Unified Per-Episode Timeline View State (Playhead, Scroll, Zoom) ---
   const episodeViewKey = buildEpisodeViewKey(seriesId, episodeId);

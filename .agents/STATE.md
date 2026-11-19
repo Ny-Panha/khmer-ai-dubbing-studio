@@ -1,46 +1,44 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
-- **Environment**: Antigravity IDE
+- **Environment**: Antigravity IDE (Gemini)
 - **Branch**: `chore/full-project-cleanup`
-- **Timestamp**: 2026-11-19T00:50:00+07:00
+- **Timestamp**: 2026-11-19T07:16:00+07:00
 
-## Summary: Extended Step 0 Diagnosis & Complete Fix for Playback Freeze #2 at ~08:42 & Duplicate #187 (COMPLETED)
-- **Extended Step 0 Exact Measured Findings (Pseudo_Spiritual_Root ep_5, 405 video clips, 221 segments around 518s–532s)**:
-  1. **Stored Layout & Micro-Clips**:
-     - All 405 video clips are 100% contiguous (`srcGapToNext === 0`, 0 non-contiguous jumps on unmodified footage).
-     - Found 59 micro Gap video clips (`0.07s–0.29s`) created by Auto-Cut to align dialogue onsets cleanly, and 2 micro voice segments (`#47` `0.05s`, `#95` `0.29s` slot / `2.47s` audio).
-  2. **Root Cause of `#187` Appearing in Two Places (`08:42` AND `08:46.8`)**:
-     - `ep_5` has **0 duplicate segment IDs**.
-     - Because 2 segments were inserted earlier via `+ ឃ្លា`, array `idx + 1` drifted by `+2` from `seg.id`!
-     - `autoSplitVideoBySegments` wrote `index: idx + 1` (`187`) into `name: '#187 តួអង្គទី២'` and `segmentIndex: 187` while setting `segmentId: 185`!
-     - `TimelineTracksCanvas.jsx` renders voice segments by `seg.segmentId ?? seg.id ?? idx + 1` (`#185` on VOICE 1 at `522.09s`, `#187` on VOICE 2 at `526.84s`).
-     - Result: VIDEO 1 at `08:42` (`522.09s`) displayed `#187` while VOICE 2 at `08:46.8` (`526.84s`) ALSO displayed `#187`, and selection/linking cross-linked `#187` to `#185`!
-  3. **Root Cause of Seek Storms / Freezes on Micro-Clips**:
-     - `useVideoPlayback.js` had NO seek-in-flight guard or cooldown for forward clip transitions (`v.currentTime = nextSrcStart` was issued without setting `pendingSeekTargetRef` or recording seek time).
-     - Queued `requestVideoFrameCallback` callbacks delivering stale pre-seek `mediaTime` could trigger back-to-back seeks before the previous seek landed.
-     - `timelineOps.js` had NO minimum clip duration guard in `splitClip` (allowed micro-splits `< 0.3s`).
-- **Fixes Applied**:
-  1. `frontend/src/utils/timelineOps.js` & `frontend/src/utils/timelineUtils.js`:
-     - Added `doesClipMatchSegment(clip, segOrId, fallbackSegmentNumber)` which matches by canonical `segmentId` first and only falls back to `segmentIndex` when `segmentId` is absent (legacy clips).
-     - Fixed `autoSplitVideoBySegments` to use canonical `seg.segmentId ?? seg.id ?? (idx + 1)` for `index`, `segmentIndex`, and `name`.
-     - In `splitClip` and `splitSegment`: enforced `MIN_SPLIT_SEC = 0.3s` guard, rejecting splits that would create `< 0.3s` micro-clips or micro-segments with clear feedback (`applied: false`).
-  2. `frontend/src/components/timeline/TimelineTracksCanvas.jsx` & `TimelineEditor.jsx`:
-     - Updated all clip-to-segment matching, selection highlighting, and Inspector linking to use `doesClipMatchSegment` instead of raw `segmentIndex`.
-     - Normalized video clip label rendering (`clip.segmentId ?? clip.segmentIndex`) so existing clips on disk immediately display their true canonical segment number (`#185 តួអង្គទី២` instead of `#187`).
-  3. `frontend/src/hooks/useVideoPlayback.js`:
-     - Added `resolveForwardPlaybackTransition`: flows contiguous micro-Gaps (`<= 0.15s`) naturally with 0 seeks; coalesces chained non-contiguous micro-slivers (`< 0.25s`) directly to the target clip.
-     - Added stale `rVFC` frame guard: while a forward seek is in flight, queued pre-seek frames are ignored until `mediaTime` lands near `pendingSeekTargetRef`.
-     - Added `lastTransitionSeekMsRef` cooldown (120ms) and synchronized `pendingSeekTargetRef` + `pendingSeekStartedMsRef`.
-  4. `backend/tests/timeline_microclip_and_id_sync.test.js` *(new)*: 5 unit + static audit tests covering canonical ID sync, legacy match precedence, `< 0.3s` micro-clip rejection, micro-gap flow & chaining coalescing, and player guards.
-- **Verification Results**:
-  - **Real App on `Pseudo_Spiritual_Root` `ep_5` (`08:38 → 08:50`, read-only)**:
-    - VIDEO 1 at `08:42`: now correctly displays **`#185 តួអង្គទី២`** (no longer duplicate `#187`).
-    - VIDEO 1 at `08:45.6`: correctly displays **`#187 តួអង្គទី២`**.
-    - `#187` count on VIDEO track: **1**, `#187` count on VOICE track: **1**.
-    - Clicking VOICE 2 `#187`: selects ONLY `#187` without cross-highlighting `#185`!
-    - Continuous Playback through `08:38 → 08:50`: `totalVideoSeeks: 0`, `frameGapsOver180ms: []` (0 freezes!), `consoleErrorsCount: 0`, `audioPlaysCount: 10`.
-  - **Suites & Build**: `node --test backend/tests/timeline_*.test.js` **126 / 126 PASS**; `npm --prefix frontend run build` **PASS** (`634ms`).
+## Summary: Proxy Preview Feature Implementation, E2E Verification & Codex Handover Continuation (COMPLETED)
+- **Situation & Step 0 Audit**:
+  - Resumed partial uncommitted edits left by Codex (rate limit pause) across 12 files.
+  - Audit of Spec vs Diff:
+    1. Per-episode 480p proxy render honouring timeline cuts + mixed audio: DONE (`proxyPreviewRenderer.js` + `proxyPreviewService.js`).
+    2. Proxy playback mode with identity mapping: DONE (`useProxyPreview.js`, `App.jsx`, `TimelineEditor.jsx`, `useVideoPlayback.js`).
+    3. Stale badge + debounced background re-render: DONE (`VideoPlayerPreview.jsx`, `VideoPlayerPreview.css`, `proxyPreviewService.js`).
+    4. Live player and export untouched: DONE (clean dropdown toggle with identity mapping in proxy mode; full linear live multi-clip player and export untouched).
+  - Codebase Compilation & Tests:
+    - Backend tests: `proxy_preview.test.js` (3/3 PASS), `playback_60fps_optimization.test.js` (4/4 PASS), all `timeline_*.test.js` (126/126 PASS), `reusable_1by1_dubbing_feature.test.js` (10/10 PASS).
+    - Frontend build: `npm --prefix frontend run build` PASS (621ms, 0 errors).
+- **Step 1 Completion**:
+  - Staged complete implementation including `useProxyPreview.js` superseded poll loop and exact server debounce + cache hit checks.
+- **Step 2 Verification (Real App via Headless Chrome / Playwright)**:
+  1. **Proxy Render Time & File Size**:
+     - `Proxy_Verification_219` `ep_5` (219 segments): 602.3s duration, 66,165,642 bytes (63.10 MiB), render time 167.039s (~2.78 min).
+     - `Pseudo_Spiritual_Root` `ep_5` (221 segments): 602.3s duration, 66,166,213 bytes (63.10 MiB), render time 178.449s (~2.97 min).
+  2. **Freeze Spot Playback (3x each, frame-timing log via requestVideoFrameCallback)**:
+     - `Proxy_Verification_219` `ep_5` @ `01:40 - 02:10` (100s -> 130s):
+       - Run 1: 901 frames, max gap: 50ms, freezes > 0.5s: 0
+       - Run 2: 901 frames, max gap: 58ms, freezes > 0.5s: 0
+       - Run 3: 671 frames, max gap: 84ms, freezes > 0.5s: 0
+       - Result: ZERO freezes over 0.5s (clean 60fps linear playback).
+     - `Pseudo_Spiritual_Root` `ep_5` @ `08:35 - 08:50` (515s -> 530s):
+       - Run 1: 451 frames, max gap: 51ms, freezes > 0.5s: 0
+       - Run 2: 450 frames, max gap: 69ms, freezes > 0.5s: 0
+       - Run 3: 451 frames, max gap: 50ms, freezes > 0.5s: 0
+       - Result: ZERO freezes over 0.5s.
+  3. **Edit -> Stale Badge -> Re-render -> Badge Clears Lifecycle**:
+     - Pre-edit state: `fresh` (`602.3s · 63.1 MiB · Render 167.0s`).
+     - On edit submission: status immediately transitions to `queued` (`Preview មិនទាន់ថ្មី · Queued`, warning gold color `#facc63`).
+     - 5s server debounce expires: status transitions to `rendering` (`Preview មិនទាន់ថ្មី · Rendering…`).
+     - Background render finishes: status transitions to `fresh`, badge displays updated metadata, and warning color clears.
+     - Immediate repeat request: cache hit in 0ms (`fresh`).
 
 ## Active Environment
 - **Backend API**: `http://localhost:5000`
@@ -48,7 +46,7 @@
 - **Branch**: `chore/full-project-cleanup` (committed & pushed)
 
 ## Next Steps
-- Continue editing/playback in Studio — `#187` will no longer duplicate on VIDEO 1, and playback through micro-Gaps runs seamlessly without freezing.
+- Open Studio at `http://localhost:5173/studio` — Proxy Preview mode is active by default with instant seek, zero freezes across micro-clips, and automatic background re-rendering on edit.
 
 ---
 

@@ -12,6 +12,19 @@ const {
 } = require("../services/episodeService");
 
 const router = express.Router();
+const proxyPreview = require("../services/proxyPreviewService");
+
+router.route("/:seriesId/episodes/:episodeId/proxy-preview")
+  .post((req, res) => {
+    try {
+      res.json(proxyPreview.request(req.params.seriesId, req.params.episodeId, req.body));
+    } catch (err) { res.status(400).json({ error: err.message }); }
+  })
+  .get((req, res) => {
+    try {
+      res.set("Cache-Control", "no-store").json(proxyPreview.status(req.params.seriesId, req.params.episodeId, req.query.revision));
+    } catch (err) { res.status(400).json({ error: err.message }); }
+  });
 
 router.get("/", (req, res) => {
   try {

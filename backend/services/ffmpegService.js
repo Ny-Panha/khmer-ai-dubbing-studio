@@ -4140,6 +4140,7 @@ async function mergeVideosConcat({
 }
 
 module.exports = {
+  FFMPEG_PATH,
   getOrCreateVideoThumbnails,
   checkQsvSupport,
   splitVideoIntoEpisodes,

@@ -380,7 +380,7 @@ export function useVideoPlayback({
   // with unchanged currentTime for >= 3.5s (e.g. hung HTTP range request), nudge strictly forward (+5ms)
   // to abort the stalled seek and resume cleanly without ever aborting normal 0.5-2s range buffering.
   useEffect(() => {
-    if (!isPlaying && !intendedPlayingRef.current) return undefined;
+    if (renderedVideo?.isProxyPreview || (!isPlaying && !intendedPlayingRef.current)) return undefined;
     const v = videoRef?.current;
     if (!v) return undefined;
 
@@ -441,7 +441,7 @@ export function useVideoPlayback({
       v.removeEventListener('seeked', onClearSeek);
       v.removeEventListener('canplay', onClearSeek);
     };
-  }, [isPlaying, playRequestTick, duration, videoRef]);
+  }, [isPlaying, playRequestTick, duration, videoRef, renderedVideo?.isProxyPreview]);
 
   const handleSeek = useCallback((time) => {
     hasSeekedRef.current = true;

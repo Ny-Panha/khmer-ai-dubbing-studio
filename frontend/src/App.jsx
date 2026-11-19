@@ -1,4 +1,5 @@
-import React, { useRef, useCallback, useEffect, useMemo } from 'react';
+import React, { useRef, useCallback, useEffect, useMemo, useState } from 'react';
+import { useProxyPreview } from './hooks/useProxyPreview';
 import { AlertTriangle, X } from 'lucide-react';
 import Navbar from './components/layout/Navbar';
 import HomeDashboard from './components/layout/HomeDashboard';
@@ -485,6 +486,17 @@ export default function App() {
   const currentAspectRatio = sanitizeAspectRatio(voiceSettings?.aspectRatio) || resolveDefaultAspectRatio(srcW, srcH) || '16:9';
 
   const prevRawRendered = renderRef.current.renderedVideo || null;
+  const [previewChoice, setPreviewChoice] = useState(null);
+  const proxySettings = useMemo(() => Object.fromEntries([
+    ...RENDER_INVALIDATING_SETTING_KEYS, 'videoZoom', 'videoPanX', 'videoPanY', 'verticalBg',
+  ].map(key => [key, readNormalizedSettingVal(voiceSettings, key)])), [voiceSettings]);
+  const proxy = useProxyPreview({
+    seriesId: series.seriesId, episodeId: series.episodeId, videoUrl: media.selectedVideo?.videoUrl,
+    clips: media.videoClips, segments: scriptData?.segments, settings: proxySettings,
+    framing: scriptData?.framingOverrides, keyframes: scriptData?.framingKeyframes,
+    logo: globalLogoSettings, aspectRatio: currentAspectRatio, active: !isHomeRoute,
+    stem: series.activeEpisode?.cleanBgmPath || series.activeEpisode?.bgmAudioUrl,
+  });
   const playbackEffectiveRenderedVideo = isRenderedRatioMismatch(
     prevRawRendered,
     currentAspectRatio,
@@ -492,6 +504,10 @@ export default function App() {
   )
     ? null
     : prevRawRendered;
+  const previewMode = previewChoice === 'live' || previewChoice === 'proxy' ? previewChoice :
+    playbackEffectiveRenderedVideo ? 'rendered' : 'proxy';
+  const playingProxy = previewMode === 'proxy' && Boolean(proxy.media);
+  const invalidateProxy = proxy.invalidate;
 
   // Central stale-render invalidator for any audio-mix / segment / timeline edit.
   // Mirrors the settings-change invalidation pattern: clears active renderedVideo and stamps
@@ -501,6 +517,7 @@ export default function App() {
     const activeEpId = seriesRef.current.episodeId;
     const eId = targetEpId || activeEpId;
     const isActiveEp = !targetEpId || String(targetEpId) === String(activeEpId);
+    if (isActiveEp) invalidateProxy();
     const hasActiveRendered = Boolean(renderRef.current?.renderedVideo);
     const prevRenderedAt = Number(renderRef.current?.renderedVideo?.renderedAt || 0);
     const invalidatedAt = Math.max(Date.now(), prevRenderedAt > 0 ? prevRenderedAt + 1 : 0);
@@ -524,7 +541,7 @@ export default function App() {
       seriesRef.current.handleSaveEpisodeBackground(eId, patch);
     }
     return invalidatedAt;
-  }, []);
+  }, [invalidateProxy]);
 
   // 4. Undo / Redo Stack Management Hook
   const undoRedo = useUndoRedo({
@@ -544,8 +561,8 @@ export default function App() {
   const playback = usePlaybackEngine({
     videoRef,
     videoClips: media.videoClips,
-    setVideoClips: media.setVideoClips,
-    renderedVideo: playbackEffectiveRenderedVideo,
+    setVideoClips: playingProxy ? undefined : media.setVideoClips,
+    renderedVideo: previewMode === 'proxy' ? proxy.media : previewMode === 'live' ? null : playbackEffectiveRenderedVideo,
     selectedVideo: media.selectedVideo,
     selectedClip: media.selectedClip,
     activeClipId: media.activeClipId,
@@ -926,7 +943,10 @@ export default function App() {
   }, []);
 
   // Render & Media callbacks
-  const handleRenderVideo = useCallback((...args) => renderRef.current.handleRenderVideo?.(...args), []);
+  const handleRenderVideo = useCallback((...args) => {
+    setPreviewChoice(null);
+    return renderRef.current.handleRenderVideo?.(...args);
+  }, []);
   const handleClearVideo = useCallback((...args) => mediaRef.current.handleClearVideo?.(...args), []);
   const handleImportClick = useCallback(() => setLeftTab('media'), []);
 
@@ -1237,7 +1257,11 @@ export default function App() {
                   seriesId={series.seriesId}
                   episodeId={series.episodeId}
                   scriptData={scriptData}
-                  renderedVideo={effectiveRenderedVideo}
+                  renderedVideo={previewMode === 'proxy' ? proxy.media : previewMode === 'live' ? null : effectiveRenderedVideo}
+                  previewMode={previewMode}
+                  onPreviewMode={setPreviewChoice}
+                  canViewRender={Boolean(effectiveRenderedVideo)}
+                  proxyStatus={proxy.value}
                   setRenderedVideo={render.setRenderedVideo}
                   onResetToPreview={handleResetToPreview}
                   isRendering={render.isRendering}
@@ -1361,6 +1385,7 @@ export default function App() {
           >
             <ErrorBoundary inline name="Timeline">
               <TimelineEditor
+                playingProxy={playingProxy}
                 videoRef={videoRef}
                 activeTab={leftTab}
                 currentTime={playback.currentTime}
