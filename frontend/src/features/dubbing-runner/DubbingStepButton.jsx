@@ -70,17 +70,22 @@ export default function DubbingStepButton({
     }
 
     try {
+      let result = null;
       if (isBatch || !singleEp) {
-        await runSequentialStep(step, episodes, setupOptions);
+        result = await runSequentialStep(step, episodes, setupOptions);
       } else {
-        if (step === 'translate') await runSingleTranslate(singleEp, setupOptions);
-        else if (step === 'voice') await runSingleVoice(singleEp, setupOptions);
-        else if (step === 'autofit') await runSingleAutoFitSpeed(singleEp, setupOptions);
-        else if (step === 'clean_bgm') await runSingleCleanBgm(singleEp, setupOptions);
-        else if (step === 'all3') await runSingleEpisodeAll3(singleEp, setupOptions);
+        if (step === 'translate') result = await runSingleTranslate(singleEp, setupOptions);
+        else if (step === 'voice') result = await runSingleVoice(singleEp, setupOptions);
+        else if (step === 'autofit') result = await runSingleAutoFitSpeed(singleEp, setupOptions);
+        else if (step === 'clean_bgm') result = await runSingleCleanBgm(singleEp, setupOptions);
+        else if (step === 'all3') result = await runSingleEpisodeAll3(singleEp, setupOptions);
       }
-      onComplete?.();
-    } catch (_) {}
+      if (result && result.success && (result.completed || result.count > 0)) {
+        onComplete?.(result);
+      }
+    } catch (err) {
+      console.error(`[DubbingStepButton] Step ${step} execution error:`, err);
+    }
   };
 
   // Label configuration based on step and status (Clean professional text, no duplicate emojis)
