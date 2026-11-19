@@ -598,6 +598,10 @@ async function runBatchExportWorker({
   const subtitleStyle = exportSettings.subtitleStyle || "banner";
   const enableDemucs = Boolean(exportSettings.enableDemucs);
   const antiTheft = exportSettings.antiTheft || null;
+  const cornerMask = exportSettings.cornerMask || null;
+  // Visual presets are batch-wide. Never reuse an output rendered with older
+  // logo/mask/banner options, even when subtitles have not changed.
+  const batchVisualSignature = JSON.stringify({ rawLogo, cornerMask, antiTheft, rawSponsor });
 
   const renderedFilePaths = [];
   let mergedTempOrTargetPath = null;
@@ -668,10 +672,11 @@ async function runBatchExportWorker({
       if (fs.existsSync(epOutputPath) && !exportSettings.forceReRender) {
         try {
           const stat = fs.statSync(epOutputPath);
-          const sameBurn = previous?.outputFilename === epOutputFilename &&
+          const sameVisuals = previous?.batchVisualSignature === batchVisualSignature;
+          const sameBurn = sameVisuals && previous?.outputFilename === epOutputFilename &&
             previous.renderedAt === stat.mtime.getTime() &&
             JSON.stringify(previous.burnedSubtitleOptions) === JSON.stringify(burnedSubtitleOptions);
-          if (stat.size > 2 * 1024 * 1024 && (epPlan.useOriginalAudio || sameBurn)) {
+          if (stat.size > 2 * 1024 * 1024 && sameBurn) {
             alreadyRenderedOnDisk = true;
           }
         } catch (_) {}
@@ -717,6 +722,7 @@ async function runBatchExportWorker({
           verticalStyle,
           videoClips: epPlan.videoClips,
           antiTheft,
+          cornerMask,
           logoSettings: resolvedLogoPath ? { ...rawLogo, logoPath: resolvedLogoPath } : null,
           sponsorSettings: resolvedSponsorPath ? { ...rawSponsor, sponsorPath: resolvedSponsorPath } : null,
           allowOriginalAudio: epPlan.useOriginalAudio,
@@ -756,6 +762,7 @@ async function runBatchExportWorker({
               downloadUrl,
               renderedAt,
               burnedSubtitleOptions,
+              batchVisualSignature,
               usedOriginalAudio: epPlan.useOriginalAudio,
               aspectRatio: epAspectRatio,
               verticalStyle,
