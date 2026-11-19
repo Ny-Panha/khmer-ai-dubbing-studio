@@ -29,7 +29,11 @@ const {
   cancelBatchExportJob,
 } = require("../services/batchExportService");
 const { analyzeEpisodeFraming } = require("../services/smartReframeService");
-const { getEffectiveGlobalLogoSettingsForExport } = require("../services/globalLogoSettingsService");
+const {
+  getEffectiveGlobalLogoSettingsForExport,
+  getEffectiveGlobalCornerMaskForExport,
+  getEffectiveGlobalAntiTheftForExport,
+} = require("../services/globalLogoSettingsService");
 
 const router = express.Router();
 
@@ -341,12 +345,12 @@ router.post("/render-video", async (req, res) => {
         videoClips,
         framingKeyframes: req.body?.framingKeyframes || [],
         framingOverrides: req.body?.framingOverrides || [],
-        antiTheft: antiTheft || req.body?.voiceSettings?.antiTheft || null,
+        antiTheft: antiTheft || req.body?.voiceSettings?.antiTheft || getEffectiveGlobalAntiTheftForExport() || null,
         logoSettings: resolvedLogoPath ? {
           ...rawLogo,
           logoPath: resolvedLogoPath,
         } : null,
-        cornerMask: cornerMask || req.body?.voiceSettings?.cornerMask || null,
+        cornerMask: cornerMask || req.body?.voiceSettings?.cornerMask || getEffectiveGlobalCornerMaskForExport() || null,
         sponsorSettings: resolvedSponsorPath ? {
           ...rawSponsor,
           sponsorPath: resolvedSponsorPath,

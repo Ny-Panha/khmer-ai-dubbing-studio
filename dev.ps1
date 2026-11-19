@@ -25,6 +25,12 @@ param (
     [switch]$Help
 )
 
+# --- Dub pipeline: .\dev.ps1 dub <file_or_series_folder> ---
+if ($args.Count -ge 2 -and $args[0] -eq 'dub') {
+    python dub_pipeline.py $args[1]
+    exit
+}
+
 $ErrorActionPreference = "Continue"
 
 # Parse raw args in case flags were passed in Linux style (--new-window, --fast, etc.)
@@ -54,6 +60,10 @@ if ($NoWatch) {
 
 if ($Help) {
     Write-Host "Usage: .\dev.ps1 [OPTIONS]  (or start.bat [OPTIONS])" -ForegroundColor White
+    Write-Host "       .\dev.ps1 dub <file|series_folder>  (or start.bat dub ...)" -ForegroundColor White
+    Write-Host ""
+    Write-Host "Commands:"
+    Write-Host "  dub <file|folder>                Run Chinese-to-Khmer dubbing pipeline (supports single file or series folder)"
     Write-Host ""
     Write-Host "Options:"
     Write-Host "  -NewWindow, --new-window         Launch services in separate terminal windows"

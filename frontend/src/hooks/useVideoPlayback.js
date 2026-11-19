@@ -5,9 +5,9 @@ function getUnfreezeTime(curT, maxDur) {
   const safeCur = Number.isFinite(curT) ? curT : 0;
   const safeMax = Number.isFinite(maxDur) && maxDur > 0 ? maxDur : safeCur + 1;
   if (safeCur >= safeMax - 0.03) {
-    return Math.max(0, safeCur - 0.003);
+    return Math.max(0, safeCur - 0.005);
   }
-  return safeCur + 0.003;
+  return curT + 0.005;
 }
 
 /**
@@ -623,9 +623,14 @@ export function useVideoPlayback({
         }
       }
 
+      const alreadySeekingToTarget = playTarget !== null && (
+        (pendingSeekTargetRef.current !== null && Math.abs(pendingSeekTargetRef.current - playTarget) <= 0.04) ||
+        (nextSeekTargetRef.current !== null && Math.abs(nextSeekTargetRef.current - playTarget) <= 0.04)
+      );
+
       if (v.ended || (totalDur > 0 && currentTime >= totalDur - 0.2)) {
         handleSeek(0);
-      } else if (playTarget !== null && Math.abs((v.currentTime || 0) - playTarget) > 0.04) {
+      } else if (!alreadySeekingToTarget && playTarget !== null && Math.abs((v.currentTime || 0) - playTarget) > 0.04) {
         hasSeekedRef.current = true;
         pendingSeekTargetRef.current = playTarget;
         pendingSeekStartedMsRef.current = performance.now();

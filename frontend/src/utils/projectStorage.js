@@ -1,6 +1,6 @@
 import { SCHEMA_VERSION } from './timestampUtils.js';
 import { syncSeriesApi, deleteEpisodeApi, persistTimelineOperationApi } from '../services/api.js';
-import { stripLogoSettings } from './logoSettingsStorage.js';
+import { stripLogoSettings, stripCustomizeSettings } from './logoSettingsStorage.js';
 
 export const STORAGE_SERIES_LIST_KEY = 'KHMER_AI_SERIES_LIST_V2';
 export const STORAGE_ACTIVE_SERIES_ID_KEY = 'KHMER_AI_ACTIVE_SERIES_ID';

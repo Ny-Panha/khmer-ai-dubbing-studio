@@ -86,12 +86,13 @@ export function useSourceProxy({ seriesId, episodeId, videoUrl, active = true })
             error: null,
           }));
 
-          // Poll every 1s while transcoding
+          // Poll every 1s while transcoding (back off during active live playback)
+          const isPlaying = typeof window !== 'undefined' && Boolean(window.__timelineIsPlaying);
           pollTimerRef.current = setTimeout(() => {
             if (!isCancelled && isMountedRef.current) {
               checkSourceProxy(false);
             }
-          }, 1000);
+          }, isPlaying ? 5000 : 1000);
         } else if (data.status === 'error') {
           setProxyData(prev => ({
             ...prev,

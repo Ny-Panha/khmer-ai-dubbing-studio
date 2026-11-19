@@ -1,4 +1,5 @@
 export const STORAGE_GLOBAL_LOGO_SETTINGS_KEY = 'KHMER_AI_GLOBAL_LOGO_SETTINGS_V1';
+export const STORAGE_GLOBAL_CUSTOMIZE_SETTINGS_KEY = STORAGE_GLOBAL_LOGO_SETTINGS_KEY;
 
 export const LOGO_SETTING_KEYS = Object.freeze([
   'enableLogo',
@@ -10,6 +11,39 @@ export const LOGO_SETTING_KEYS = Object.freeze([
   'logoMargin',
   'logoXPercent',
   'logoYPercent',
+]);
+
+export const MASK_SETTING_KEYS = Object.freeze([
+  'enableCornerMask',
+  'cornerMaskText',
+  'cornerMaskPosition',
+  'cornerMaskStyle',
+  'cornerMaskWidth',
+  'cornerMaskHeight',
+  'cornerMaskOpacity',
+  'cornerMaskBlur',
+  'cornerMaskOffsetX',
+  'cornerMaskOffsetY',
+]);
+
+export const BANNER_SETTING_KEYS = Object.freeze([
+  'enableAntiTheft',
+  'marqueeText',
+  'marqueeSpeed',
+  'marqueePosition',
+  'marqueeTextColor',
+  'enableWatermark',
+  'watermarkText',
+  'watermarkPosition',
+  'watermarkColor',
+  'antiTheftSize',
+  'antiTheftBottomPercent',
+]);
+
+export const CUSTOMIZE_SETTING_KEYS = Object.freeze([
+  ...LOGO_SETTING_KEYS,
+  ...MASK_SETTING_KEYS,
+  ...BANNER_SETTING_KEYS,
 ]);
 
 const VALID_LOGO_POSITIONS = new Set([
@@ -24,6 +58,18 @@ const VALID_LOGO_POSITIONS = new Set([
 
 const VALID_LOGO_SHAPES = new Set(['circle', 'square']);
 
+const VALID_MASK_POSITIONS = new Set([
+  'top-right',
+  'top-left',
+  'bottom-right',
+  'bottom-left',
+]);
+
+const VALID_MASK_STYLES = new Set(['badge', 'blur', 'solid']);
+
+const VALID_BANNER_POSITIONS = new Set(['bottom', 'top']);
+const VALID_BANNER_SIZES = new Set(['small', 'medium', 'large']);
+
 export const DEFAULT_GLOBAL_LOGO_SETTINGS = Object.freeze({
   enableLogo: true,
   logoImage: '/assets/dragon_town_logo.jpg',
@@ -34,6 +80,39 @@ export const DEFAULT_GLOBAL_LOGO_SETTINGS = Object.freeze({
   logoMargin: 20,
   logoXPercent: null,
   logoYPercent: null,
+});
+
+export const DEFAULT_GLOBAL_MASK_SETTINGS = Object.freeze({
+  enableCornerMask: false,
+  cornerMaskText: '«រឿងប្រឌិតសុទ្ធសាធ • ហាមចម្លង»',
+  cornerMaskPosition: 'top-right',
+  cornerMaskStyle: 'badge',
+  cornerMaskWidth: 220,
+  cornerMaskHeight: 54,
+  cornerMaskOpacity: 0.95,
+  cornerMaskBlur: 18,
+  cornerMaskOffsetX: 14,
+  cornerMaskOffsetY: 14,
+});
+
+export const DEFAULT_GLOBAL_BANNER_SETTINGS = Object.freeze({
+  enableAntiTheft: false,
+  marqueeText: '«ហាមផុសបន្ត • សូមឱ្យតម្លៃលើការខិតខំរបស់ម្ចាស់ដើម»',
+  marqueeSpeed: 'normal',
+  marqueePosition: 'bottom',
+  marqueeTextColor: '#FFE600',
+  enableWatermark: true,
+  watermarkText: 'រក្សាសិទ្ធិដោយ ៖ Holiday Kh Drama',
+  watermarkPosition: 'above-ticker',
+  watermarkColor: '#38BDF8',
+  antiTheftSize: 'small',
+  antiTheftBottomPercent: 2,
+});
+
+export const DEFAULT_GLOBAL_CUSTOMIZE_SETTINGS = Object.freeze({
+  ...DEFAULT_GLOBAL_LOGO_SETTINGS,
+  ...DEFAULT_GLOBAL_MASK_SETTINGS,
+  ...DEFAULT_GLOBAL_BANNER_SETTINGS,
 });
 
 function clampNumber(val, min, max, fallback) {
@@ -133,10 +212,236 @@ export function normalizeGlobalLogoSettings(input, fallback = DEFAULT_GLOBAL_LOG
   };
 }
 
+export function normalizeGlobalMaskSettings(input, fallback = DEFAULT_GLOBAL_MASK_SETTINGS) {
+  const base = fallback && typeof fallback === 'object' ? fallback : DEFAULT_GLOBAL_MASK_SETTINGS;
+  const src = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
+
+  const enableCornerMask =
+    src.enableCornerMask !== undefined
+      ? Boolean(src.enableCornerMask)
+      : src.enabled !== undefined
+        ? Boolean(src.enabled)
+        : Boolean(base.enableCornerMask);
+
+  const rawText = src.cornerMaskText !== undefined ? src.cornerMaskText : src.text;
+  const cornerMaskText =
+    rawText === null
+      ? ''
+      : typeof rawText === 'string'
+        ? rawText
+        : (base.cornerMaskText ?? DEFAULT_GLOBAL_MASK_SETTINGS.cornerMaskText);
+
+  const rawPos = src.cornerMaskPosition !== undefined ? src.cornerMaskPosition : src.position;
+  const cornerMaskPosition =
+    typeof rawPos === 'string' && VALID_MASK_POSITIONS.has(rawPos)
+      ? rawPos
+      : VALID_MASK_POSITIONS.has(base.cornerMaskPosition)
+        ? base.cornerMaskPosition
+        : DEFAULT_GLOBAL_MASK_SETTINGS.cornerMaskPosition;
+
+  const rawStyle = src.cornerMaskStyle !== undefined ? src.cornerMaskStyle : src.style;
+  const cornerMaskStyle =
+    typeof rawStyle === 'string' && VALID_MASK_STYLES.has(rawStyle)
+      ? rawStyle
+      : VALID_MASK_STYLES.has(base.cornerMaskStyle)
+        ? base.cornerMaskStyle
+        : DEFAULT_GLOBAL_MASK_SETTINGS.cornerMaskStyle;
+
+  const cornerMaskWidth = Math.round(
+    clampNumber(
+      src.cornerMaskWidth !== undefined ? src.cornerMaskWidth : src.width,
+      60,
+      500,
+      Number(base.cornerMaskWidth) || DEFAULT_GLOBAL_MASK_SETTINGS.cornerMaskWidth
+    )
+  );
+
+  const cornerMaskHeight = Math.round(
+    clampNumber(
+      src.cornerMaskHeight !== undefined ? src.cornerMaskHeight : src.height,
+      20,
+      200,
+      Number(base.cornerMaskHeight) || DEFAULT_GLOBAL_MASK_SETTINGS.cornerMaskHeight
+    )
+  );
+
+  const cornerMaskOpacity =
+    Math.round(
+      clampNumber(
+        src.cornerMaskOpacity !== undefined ? src.cornerMaskOpacity : src.opacity,
+        0.1,
+        1.0,
+        Number(base.cornerMaskOpacity) || DEFAULT_GLOBAL_MASK_SETTINGS.cornerMaskOpacity
+      ) * 100
+    ) / 100;
+
+  const cornerMaskBlur = Math.round(
+    clampNumber(
+      src.cornerMaskBlur !== undefined ? src.cornerMaskBlur : src.blurStrength,
+      4,
+      40,
+      Number(base.cornerMaskBlur) || DEFAULT_GLOBAL_MASK_SETTINGS.cornerMaskBlur
+    )
+  );
+
+  const cornerMaskOffsetX = Math.round(
+    clampNumber(
+      src.cornerMaskOffsetX !== undefined ? src.cornerMaskOffsetX : src.offsetX,
+      0,
+      200,
+      Number.isFinite(Number(base.cornerMaskOffsetX)) ? Number(base.cornerMaskOffsetX) : DEFAULT_GLOBAL_MASK_SETTINGS.cornerMaskOffsetX
+    )
+  );
+
+  const cornerMaskOffsetY = Math.round(
+    clampNumber(
+      src.cornerMaskOffsetY !== undefined ? src.cornerMaskOffsetY : src.offsetY,
+      0,
+      200,
+      Number.isFinite(Number(base.cornerMaskOffsetY)) ? Number(base.cornerMaskOffsetY) : DEFAULT_GLOBAL_MASK_SETTINGS.cornerMaskOffsetY
+    )
+  );
+
+  return {
+    enableCornerMask,
+    cornerMaskText,
+    cornerMaskPosition,
+    cornerMaskStyle,
+    cornerMaskWidth,
+    cornerMaskHeight,
+    cornerMaskOpacity,
+    cornerMaskBlur,
+    cornerMaskOffsetX,
+    cornerMaskOffsetY,
+  };
+}
+
+export function normalizeGlobalBannerSettings(input, fallback = DEFAULT_GLOBAL_BANNER_SETTINGS) {
+  const base = fallback && typeof fallback === 'object' ? fallback : DEFAULT_GLOBAL_BANNER_SETTINGS;
+  const src = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
+
+  const enableAntiTheft =
+    src.enableAntiTheft !== undefined
+      ? Boolean(src.enableAntiTheft)
+      : src.enabled !== undefined
+        ? Boolean(src.enabled)
+        : Boolean(base.enableAntiTheft);
+
+  const rawMarquee = src.marqueeText !== undefined ? src.marqueeText : src.text;
+  const marqueeText =
+    rawMarquee === null
+      ? ''
+      : typeof rawMarquee === 'string'
+        ? rawMarquee
+        : (base.marqueeText ?? DEFAULT_GLOBAL_BANNER_SETTINGS.marqueeText);
+
+  const rawSpeed = src.marqueeSpeed !== undefined ? src.marqueeSpeed : base.marqueeSpeed;
+  const marqueeSpeed = rawSpeed !== undefined && rawSpeed !== null ? String(rawSpeed) : DEFAULT_GLOBAL_BANNER_SETTINGS.marqueeSpeed;
+
+  const rawPos = src.marqueePosition !== undefined ? src.marqueePosition : base.marqueePosition;
+  const marqueePosition =
+    typeof rawPos === 'string' && VALID_BANNER_POSITIONS.has(rawPos)
+      ? rawPos
+      : VALID_BANNER_POSITIONS.has(base.marqueePosition)
+        ? base.marqueePosition
+        : DEFAULT_GLOBAL_BANNER_SETTINGS.marqueePosition;
+
+  const marqueeTextColor =
+    typeof src.marqueeTextColor === 'string' && src.marqueeTextColor.trim()
+      ? src.marqueeTextColor.trim()
+      : (base.marqueeTextColor || DEFAULT_GLOBAL_BANNER_SETTINGS.marqueeTextColor);
+
+  const enableWatermark =
+    src.enableWatermark !== undefined
+      ? Boolean(src.enableWatermark)
+      : (base.enableWatermark !== undefined ? Boolean(base.enableWatermark) : DEFAULT_GLOBAL_BANNER_SETTINGS.enableWatermark);
+
+  const rawWm = src.watermarkText !== undefined ? src.watermarkText : base.watermarkText;
+  const watermarkText =
+    rawWm === null
+      ? ''
+      : typeof rawWm === 'string'
+        ? rawWm
+        : (base.watermarkText ?? DEFAULT_GLOBAL_BANNER_SETTINGS.watermarkText);
+
+  const watermarkPosition =
+    typeof src.watermarkPosition === 'string' && src.watermarkPosition.trim()
+      ? src.watermarkPosition.trim()
+      : (base.watermarkPosition || DEFAULT_GLOBAL_BANNER_SETTINGS.watermarkPosition);
+
+  const watermarkColor =
+    typeof src.watermarkColor === 'string' && src.watermarkColor.trim()
+      ? src.watermarkColor.trim()
+      : (base.watermarkColor || DEFAULT_GLOBAL_BANNER_SETTINGS.watermarkColor);
+
+  const rawSize = src.antiTheftSize !== undefined ? src.antiTheftSize : base.antiTheftSize;
+  const antiTheftSize =
+    typeof rawSize === 'string' && VALID_BANNER_SIZES.has(rawSize)
+      ? rawSize
+      : VALID_BANNER_SIZES.has(base.antiTheftSize)
+        ? base.antiTheftSize
+        : DEFAULT_GLOBAL_BANNER_SETTINGS.antiTheftSize;
+
+  const antiTheftBottomPercent = Math.round(
+    clampNumber(
+      src.antiTheftBottomPercent !== undefined ? src.antiTheftBottomPercent : src.bottomPercent,
+      0,
+      80,
+      Number.isFinite(Number(base.antiTheftBottomPercent))
+        ? Number(base.antiTheftBottomPercent)
+        : DEFAULT_GLOBAL_BANNER_SETTINGS.antiTheftBottomPercent
+    ) * 10
+  ) / 10;
+
+  return {
+    enableAntiTheft,
+    marqueeText,
+    marqueeSpeed,
+    marqueePosition,
+    marqueeTextColor,
+    enableWatermark,
+    watermarkText,
+    watermarkPosition,
+    watermarkColor,
+    antiTheftSize,
+    antiTheftBottomPercent,
+  };
+}
+
+export function normalizeGlobalCustomizeSettings(input, fallback = DEFAULT_GLOBAL_CUSTOMIZE_SETTINGS) {
+  const base = fallback && typeof fallback === 'object' ? fallback : DEFAULT_GLOBAL_CUSTOMIZE_SETTINGS;
+  const src = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
+
+  const logoSrc = { ...src, ...(src.logoSettings || src.logo || {}) };
+  const maskSrc = { ...src, ...(src.cornerMaskSettings || src.cornerMask || {}) };
+  const bannerSrc = { ...src, ...(src.antiTheftSettings || src.antiTheft || {}) };
+
+  const logo = normalizeGlobalLogoSettings(logoSrc, base);
+  const mask = normalizeGlobalMaskSettings(maskSrc, base);
+  const banner = normalizeGlobalBannerSettings(bannerSrc, base);
+
+  return {
+    ...logo,
+    ...mask,
+    ...banner,
+  };
+}
+
 export function extractLogoSettings(obj) {
   if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return {};
   const out = {};
   for (const key of LOGO_SETTING_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(obj, key) && obj[key] !== undefined) {
+      out[key] = obj[key];
+    }
+  }
+  return out;
+}
+
+export function extractCustomizeSettings(obj) {
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return {};
+  const out = {};
+  for (const key of CUSTOMIZE_SETTING_KEYS) {
     if (Object.prototype.hasOwnProperty.call(obj, key) && obj[key] !== undefined) {
       out[key] = obj[key];
     }
@@ -151,16 +456,35 @@ export function hasAnyLogoSettings(obj) {
   );
 }
 
+export function hasAnyCustomizeSettings(obj) {
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return false;
+  return CUSTOMIZE_SETTING_KEYS.some(
+    (key) => Object.prototype.hasOwnProperty.call(obj, key) && obj[key] !== undefined
+  );
+}
+
 export function areLogoSettingsEqual(a, b) {
   const normA = normalizeGlobalLogoSettings(a);
   const normB = normalizeGlobalLogoSettings(b);
   return LOGO_SETTING_KEYS.every((key) => normA[key] === normB[key]);
 }
 
+export function areCustomizeSettingsEqual(a, b) {
+  const normA = normalizeGlobalCustomizeSettings(a);
+  const normB = normalizeGlobalCustomizeSettings(b);
+  return CUSTOMIZE_SETTING_KEYS.every((key) => normA[key] === normB[key]);
+}
+
 export function hasCustomLogoSettings(obj) {
   if (!hasAnyLogoSettings(obj)) return false;
   const normalized = normalizeGlobalLogoSettings(obj);
   return !areLogoSettingsEqual(normalized, DEFAULT_GLOBAL_LOGO_SETTINGS);
+}
+
+export function hasCustomCustomizeSettings(obj) {
+  if (!hasAnyCustomizeSettings(obj)) return false;
+  const normalized = normalizeGlobalCustomizeSettings(obj);
+  return !areCustomizeSettingsEqual(normalized, DEFAULT_GLOBAL_CUSTOMIZE_SETTINGS);
 }
 
 export function stripLogoSettings(obj) {
@@ -176,44 +500,66 @@ export function stripLogoSettings(obj) {
   return changed ? next : obj;
 }
 
-export function loadGlobalLogoSettingsRecord() {
+export function stripCustomizeSettings(obj) {
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return obj;
+  let changed = false;
+  const next = { ...obj };
+  for (const key of CUSTOMIZE_SETTING_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(next, key)) {
+      delete next[key];
+      changed = true;
+    }
+  }
+  return changed ? next : obj;
+}
+
+export function loadGlobalCustomizeSettingsRecord() {
   try {
     if (typeof localStorage === 'undefined') {
       return {
         initialized: false,
-        settings: { ...DEFAULT_GLOBAL_LOGO_SETTINGS },
+        settings: { ...DEFAULT_GLOBAL_CUSTOMIZE_SETTINGS },
         updatedAt: 0,
       };
     }
-    const raw = localStorage.getItem(STORAGE_GLOBAL_LOGO_SETTINGS_KEY);
+    const raw = localStorage.getItem(STORAGE_GLOBAL_CUSTOMIZE_SETTINGS_KEY);
     if (!raw) {
       return {
         initialized: false,
-        settings: { ...DEFAULT_GLOBAL_LOGO_SETTINGS },
+        settings: { ...DEFAULT_GLOBAL_CUSTOMIZE_SETTINGS },
         updatedAt: 0,
       };
     }
     const parsed = JSON.parse(raw);
-    const payload = parsed?.settings || parsed?.logoSettings || parsed;
+    const payload = parsed?.settings || parsed?.customizeSettings || parsed?.logoSettings || parsed;
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
       return {
         initialized: false,
-        settings: { ...DEFAULT_GLOBAL_LOGO_SETTINGS },
+        settings: { ...DEFAULT_GLOBAL_CUSTOMIZE_SETTINGS },
         updatedAt: 0,
       };
     }
     return {
       initialized: true,
-      settings: normalizeGlobalLogoSettings(payload),
+      settings: normalizeGlobalCustomizeSettings(payload),
       updatedAt: Number(parsed?.updatedAt) || 0,
     };
   } catch {
     return {
       initialized: false,
-      settings: { ...DEFAULT_GLOBAL_LOGO_SETTINGS },
+      settings: { ...DEFAULT_GLOBAL_CUSTOMIZE_SETTINGS },
       updatedAt: 0,
     };
   }
+}
+
+export function loadGlobalLogoSettingsRecord() {
+  const customRecord = loadGlobalCustomizeSettingsRecord();
+  return {
+    initialized: customRecord.initialized,
+    settings: normalizeGlobalLogoSettings(customRecord.settings),
+    updatedAt: customRecord.updatedAt,
+  };
 }
 
 export function hasStoredGlobalLogoSettings() {
@@ -222,6 +568,10 @@ export function hasStoredGlobalLogoSettings() {
 
 export function loadGlobalLogoSettings() {
   return loadGlobalLogoSettingsRecord().settings;
+}
+
+export function loadGlobalCustomizeSettings() {
+  return loadGlobalCustomizeSettingsRecord().settings;
 }
 
 let lastSavedUpdatedAt = 0;
@@ -245,7 +595,9 @@ async function flushPendingServerSync() {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            logoSettings: next.settings,
+            customizeSettings: next.settings,
+            logoSettings: normalizeGlobalLogoSettings(next.settings),
+            settings: next.settings,
             updatedAt: next.updatedAt,
           }),
         });
@@ -262,25 +614,32 @@ async function flushPendingServerSync() {
   return lastResult;
 }
 
-export async function syncGlobalLogoSettingsToServer(settings, updatedAt = Date.now()) {
+export async function syncGlobalCustomizeSettingsToServer(settings, updatedAt = Date.now()) {
   if (typeof fetch !== 'function') return null;
-  const normalized = normalizeGlobalLogoSettings(settings);
+  const normalized = normalizeGlobalCustomizeSettings(settings);
   const ts = Math.max(Number(updatedAt) || Date.now(), lastSavedUpdatedAt);
   lastSavedUpdatedAt = ts;
   pendingServerSyncPayload = { settings: normalized, updatedAt: ts };
   return flushPendingServerSync();
 }
 
-export async function fetchGlobalLogoSettingsFromServer() {
+export async function syncGlobalLogoSettingsToServer(settings, updatedAt = Date.now()) {
+  const current = loadGlobalCustomizeSettings();
+  const merged = { ...current, ...normalizeGlobalLogoSettings(settings) };
+  return syncGlobalCustomizeSettingsToServer(merged, updatedAt);
+}
+
+export async function fetchGlobalCustomizeSettingsFromServer() {
   if (typeof fetch !== 'function') return null;
   try {
     const res = await fetch('/api/logo-settings');
     if (!res.ok) return null;
     const data = await res.json();
     if (!data?.success) return null;
+    const payload = data.settings || data.customizeSettings || data.logoSettings || null;
     return {
-      initialized: Boolean(data.initialized && data.logoSettings),
-      settings: data.logoSettings ? normalizeGlobalLogoSettings(data.logoSettings) : null,
+      initialized: Boolean(data.initialized && payload),
+      settings: payload ? normalizeGlobalCustomizeSettings(payload) : null,
       updatedAt: Number(data.updatedAt) || 0,
     };
   } catch {
@@ -288,11 +647,21 @@ export async function fetchGlobalLogoSettingsFromServer() {
   }
 }
 
-export function saveGlobalLogoSettings(
+export async function fetchGlobalLogoSettingsFromServer() {
+  const s = await fetchGlobalCustomizeSettingsFromServer();
+  if (!s) return null;
+  return {
+    ...s,
+    settings: s.settings ? normalizeGlobalLogoSettings(s.settings) : null,
+  };
+}
+
+export function saveGlobalCustomizeSettings(
   settings,
   { syncServer = true, updatedAt = Date.now() } = {}
 ) {
-  const normalized = normalizeGlobalLogoSettings(settings);
+  const existingRecord = loadGlobalCustomizeSettingsRecord();
+  const normalized = normalizeGlobalCustomizeSettings(settings, existingRecord.settings);
   const rawTs = Number(updatedAt) || Date.now();
   const ts = syncServer ? Math.max(rawTs, lastSavedUpdatedAt + 1) : rawTs;
   if (ts > lastSavedUpdatedAt) {
@@ -301,7 +670,7 @@ export function saveGlobalLogoSettings(
   try {
     if (typeof localStorage !== 'undefined') {
       localStorage.setItem(
-        STORAGE_GLOBAL_LOGO_SETTINGS_KEY,
+        STORAGE_GLOBAL_CUSTOMIZE_SETTINGS_KEY,
         JSON.stringify({
           version: 1,
           updatedAt: ts,
@@ -312,9 +681,21 @@ export function saveGlobalLogoSettings(
   } catch {}
 
   if (syncServer) {
-    syncGlobalLogoSettingsToServer(normalized, ts).catch(() => {});
+    syncGlobalCustomizeSettingsToServer(normalized, ts).catch(() => {});
   }
   return normalized;
+}
+
+export function saveGlobalLogoSettings(
+  settings,
+  { syncServer = true, updatedAt = Date.now() } = {}
+) {
+  const existingRecord = loadGlobalCustomizeSettingsRecord();
+  const next = {
+    ...existingRecord.settings,
+    ...normalizeGlobalLogoSettings(settings, existingRecord.settings),
+  };
+  return saveGlobalCustomizeSettings(next, { syncServer, updatedAt });
 }
 
 /**
@@ -339,24 +720,58 @@ export function resolveInitialLogoSeed({
   return { ...DEFAULT_GLOBAL_LOGO_SETTINGS };
 }
 
+export function resolveInitialCustomizeSeed({
+  activeEpisodeVoiceSettings = null,
+  legacyVoiceSettings = null,
+} = {}) {
+  let base = { ...DEFAULT_GLOBAL_CUSTOMIZE_SETTINGS };
+
+  if (hasCustomLogoSettings(activeEpisodeVoiceSettings)) {
+    base = { ...base, ...normalizeGlobalLogoSettings(activeEpisodeVoiceSettings) };
+  } else if (hasCustomLogoSettings(legacyVoiceSettings)) {
+    base = { ...base, ...normalizeGlobalLogoSettings(legacyVoiceSettings) };
+  } else if (hasAnyLogoSettings(activeEpisodeVoiceSettings)) {
+    base = { ...base, ...normalizeGlobalLogoSettings(activeEpisodeVoiceSettings) };
+  } else if (hasAnyLogoSettings(legacyVoiceSettings)) {
+    base = { ...base, ...normalizeGlobalLogoSettings(legacyVoiceSettings) };
+  }
+
+  const hasCustomMask = (obj) =>
+    obj && typeof obj === 'object' && MASK_SETTING_KEYS.some((k) => obj[k] !== undefined);
+  if (hasCustomMask(activeEpisodeVoiceSettings)) {
+    base = { ...base, ...normalizeGlobalMaskSettings(activeEpisodeVoiceSettings) };
+  } else if (hasCustomMask(legacyVoiceSettings)) {
+    base = { ...base, ...normalizeGlobalMaskSettings(legacyVoiceSettings) };
+  }
+
+  const hasCustomBanner = (obj) =>
+    obj && typeof obj === 'object' && BANNER_SETTING_KEYS.some((k) => obj[k] !== undefined);
+  if (hasCustomBanner(activeEpisodeVoiceSettings)) {
+    base = { ...base, ...normalizeGlobalBannerSettings(activeEpisodeVoiceSettings) };
+  } else if (hasCustomBanner(legacyVoiceSettings)) {
+    base = { ...base, ...normalizeGlobalBannerSettings(legacyVoiceSettings) };
+  }
+
+  return normalizeGlobalCustomizeSettings(base);
+}
+
 /**
- * One-time migration: seeds the dedicated global logo store if it does not exist yet.
- * Once stored, per-episode logo values are ignored forever.
+ * One-time migration: seeds the dedicated global customize store if it does not exist yet.
  */
 export function migrateGlobalLogoSettingsIfNeeded({
   activeEpisodeVoiceSettings = null,
   legacyVoiceSettings = null,
   syncServer = true,
 } = {}) {
-  const existing = loadGlobalLogoSettingsRecord();
+  const existing = loadGlobalCustomizeSettingsRecord();
   if (existing.initialized) {
     return existing.settings;
   }
-  const seeded = resolveInitialLogoSeed({
+  const seeded = resolveInitialCustomizeSeed({
     activeEpisodeVoiceSettings,
     legacyVoiceSettings,
   });
-  return saveGlobalLogoSettings(seeded, { syncServer });
+  return saveGlobalCustomizeSettings(seeded, { syncServer });
 }
 
 export function buildLogoExportPayload(logoSettings = null) {
@@ -376,5 +791,38 @@ export function buildLogoExportPayload(logoSettings = null) {
           logoYPercent: normalized.logoYPercent,
         }
       : {}),
+  };
+}
+
+export function buildCornerMaskExportPayload(maskSettings = null) {
+  const normalized = normalizeGlobalMaskSettings(maskSettings || loadGlobalCustomizeSettings());
+  return {
+    enabled: Boolean(normalized.enableCornerMask),
+    text: normalized.cornerMaskText ?? '«រឿងប្រឌិតសុទ្ធសាធ • ហាមចម្លង»',
+    style: normalized.cornerMaskStyle || 'badge',
+    position: normalized.cornerMaskPosition || 'top-right',
+    width: Number(normalized.cornerMaskWidth) || 220,
+    height: Number(normalized.cornerMaskHeight) || 54,
+    opacity: Number(normalized.cornerMaskOpacity) || 0.95,
+    blurStrength: Number.isFinite(Number(normalized.cornerMaskBlur)) ? Number(normalized.cornerMaskBlur) : 18,
+    offsetX: Number.isFinite(Number(normalized.cornerMaskOffsetX)) ? Number(normalized.cornerMaskOffsetX) : 14,
+    offsetY: Number.isFinite(Number(normalized.cornerMaskOffsetY)) ? Number(normalized.cornerMaskOffsetY) : 14,
+  };
+}
+
+export function buildAntiTheftExportPayload(bannerSettings = null) {
+  const normalized = normalizeGlobalBannerSettings(bannerSettings || loadGlobalCustomizeSettings());
+  return {
+    enabled: Boolean(normalized.enableAntiTheft),
+    marqueeText: normalized.marqueeText || '«ហាមផុសបន្ត • សូមឱ្យតម្លៃលើការខិតខំរបស់ម្ចាស់ដើម»',
+    marqueeSpeed: normalized.marqueeSpeed || 'normal',
+    marqueePosition: normalized.marqueePosition || 'bottom',
+    marqueeTextColor: normalized.marqueeTextColor || '#FFE600',
+    enableWatermark: normalized.enableWatermark !== false,
+    watermarkText: normalized.watermarkText || 'រក្សាសិទ្ធិដោយ ៖ Holiday Kh Drama',
+    watermarkPosition: normalized.watermarkPosition || 'above-ticker',
+    watermarkColor: normalized.watermarkColor || '#38BDF8',
+    antiTheftSize: normalized.antiTheftSize || 'small',
+    antiTheftBottomPercent: normalized.antiTheftBottomPercent ?? 2,
   };
 }

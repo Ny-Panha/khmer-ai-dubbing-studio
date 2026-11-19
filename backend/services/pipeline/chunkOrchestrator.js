@@ -273,7 +273,7 @@ async function runChunkedDubbingPipeline({
           durationSec: chunk.durationSec,
           aiClient,
           modelName: effectiveModelName,
-          baseStepSec: 1.8,
+          baseStepSec: mode === GENERATION_MODES.FAST_OCR ? 0.75 : 1.0,
           startOffsetSec: chunk.startSec,
           force,
           signal,

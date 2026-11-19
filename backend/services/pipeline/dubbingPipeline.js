@@ -170,7 +170,7 @@ async function runDubbingPipeline({
     durationSec,
     aiClient,
     modelName: chosenModel,
-    baseStepSec: 1.0, // High coverage without exceeding rate limits
+    baseStepSec: mode === GENERATION_MODES.FAST_OCR ? 0.75 : 1.0, // High coverage without exceeding rate limits
     startOffsetSec: 0,
     force: Boolean(force || forceRegen),
     signal,

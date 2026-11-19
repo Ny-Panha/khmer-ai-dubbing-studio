@@ -7,6 +7,7 @@ import { uploadVideoFile } from '../../services/api';
 import { createAudioRecoveryManager } from '../../utils/audioAutoRecovery';
 import { resolveDefaultAspectRatio, inferRenderedAspectRatio, sanitizeAspectRatio } from '../../utils/projectStorage';
 import { subscribeDraftPreview } from '../../utils/sliderDraftPreview';
+import { WebAudioScheduler } from '../../utils/webAudioScheduler';
 
 import { PlayerBottomBar } from './PlayerControls';
 import LiveSubtitleOverlay from './LiveSubtitleOverlay';
@@ -64,6 +65,7 @@ function VideoPlayerPreview({
   onSeek,
   onTimeUpdate,
   onLoadedMetadata,
+  onSeeked = null,
   voiceSettings = {},
   onUpdateVoiceSettings = null,
   onAspectRatioChange = null,
@@ -157,6 +159,31 @@ function VideoPlayerPreview({
   const playStartTimeRef = useRef(0);
   const lastBgmSeekMsRef = useRef(0);
 
+  // ConCaT-inspired Web Audio scheduling & bounded buffer LRU cache
+  const webAudioSchedulerRef = useRef(null);
+  if (!webAudioSchedulerRef.current) {
+    webAudioSchedulerRef.current = new WebAudioScheduler({ maxCachedBuffers: 50 });
+  }
+  const [useWebAudioState, setUseWebAudioState] = useState(
+    voiceSettings?.useWebAudioScheduler ?? true
+  );
+  const effectiveUseWebAudioRef = useRef(useWebAudioState);
+  useEffect(() => {
+    effectiveUseWebAudioRef.current = useWebAudioState;
+    if (!useWebAudioState && webAudioSchedulerRef.current) {
+      webAudioSchedulerRef.current.stopAll();
+    }
+  }, [useWebAudioState]);
+
+  // Diagnostics panel metrics state (FPS, dropped frames, seek latency, audio drift)
+  const [showDiagnostics, setShowDiagnostics] = useState(false);
+  const [measuredFps, setMeasuredFps] = useState(0);
+  const [droppedVideoFrames, setDroppedVideoFrames] = useState(0);
+  const [seekLatencyMs, setSeekLatencyMs] = useState(null);
+  const [audioDriftMs, setAudioDriftMs] = useState(0);
+  const seekStartMsRef = useRef(null);
+  const fpsFrameTimestampsRef = useRef([]);
+
   // BUG-013: Bounded Audio Auto-Recovery State & Manager
   const [narrationError, setNarrationError] = useState(null);
   const recoveryManagerRef = useRef(null);
@@ -189,6 +216,9 @@ function VideoPlayerPreview({
   }, [voiceSettings, videoClips, scriptData, hasSegmentAudios, renderedVideo, cleanBgAudioUrl]);
 
   const stopAllSegmentAudios = useCallback(() => {
+    if (webAudioSchedulerRef.current) {
+      try { webAudioSchedulerRef.current.stopAll(); } catch (_) {}
+    }
     Object.keys(activeSegmentAudiosRef.current).forEach((key) => {
       const item = activeSegmentAudiosRef.current[key];
       if (item?.cleanupMetadataListener) {
@@ -336,6 +366,12 @@ function VideoPlayerPreview({
     const maxClips = isPlayingRef.current ? 6 : 6;
     const maxNewPerTick = 3;
 
+    // ConCaT-inspired Web Audio lookahead preloading
+    const scheduler = webAudioSchedulerRef.current;
+    if (effectiveUseWebAudioRef.current && scheduler?.isSupported()) {
+      scheduler.preloadUpcoming(sd.segments, now, lookAheadSec);
+    }
+
     const upcoming = sd.segments
       .map((seg) => {
         const s = (typeof seg.audioStartSec === 'number' && !isNaN(seg.audioStartSec)) ? seg.audioStartSec : (seg.startSec || 0);
@@ -446,10 +482,13 @@ function VideoPlayerPreview({
     }
   }, [episodeId, seriesId, stopAllSegmentAudios]);
 
-  // Component unmount: cancel all pending recovery timers, audio pool, & probe AudioContext
+  // Component unmount: cancel all pending recovery timers, audio pool, Web Audio scheduler & probe AudioContext
   useEffect(() => {
     return () => {
       stopAllSegmentAudios();
+      if (webAudioSchedulerRef.current) {
+        try { webAudioSchedulerRef.current.destroy(); } catch (_) {}
+      }
       if (recoveryManagerRef.current) {
         recoveryManagerRef.current.cancelPending();
       }
@@ -832,13 +871,56 @@ function VideoPlayerPreview({
       if (nowPerf - lastSyncPerf >= 14) {
         lastSyncPerf = nowPerf;
         const v = videoRef?.current;
-        const { videoClips: vc, hasSegmentAudios: curHsa, voiceSettings: vs, cleanBgAudioUrl: bgUrl } = segAudioConfigRef.current;
+        const { videoClips: vc, hasSegmentAudios: curHsa, voiceSettings: vs, cleanBgAudioUrl: bgUrl, scriptData: sd } = segAudioConfigRef.current;
 
         if (curHsa) {
           const tlNow = (v && Array.isArray(vc) && vc.length > 0)
             ? (mapSourceToTimelineTime(v.currentTime || 0, vc) ?? currentTimeRef.current)
             : (v?.currentTime ?? currentTimeRef.current);
-          syncSegmentAudiosAtTime(tlNow);
+
+          const scheduler = webAudioSchedulerRef.current;
+          const useWebAudio = effectiveUseWebAudioRef.current && scheduler?.isSupported();
+          if (useWebAudio) {
+            const khmerVal = vs?.khmerVolume !== undefined ? Number(vs.khmerVolume) : 1.0;
+            const isKhmerMuted = khmerVal <= 0.01;
+            scheduler.syncAtTimelineTime({
+              timelineNow: tlNow,
+              playbackRate: v?.playbackRate || 1.0,
+              segments: sd?.segments || [],
+              khmerVolume: khmerVal,
+              isKhmerMuted,
+              lookaheadSec: 2.2,
+            });
+            const diag = scheduler.getDiagnostics();
+            if (diag && Number.isFinite(diag.lastDriftMs)) {
+              setAudioDriftMs(diag.lastDriftMs);
+            }
+          } else {
+            syncSegmentAudiosAtTime(tlNow);
+          }
+        }
+
+        // Measure real FPS and dropped frames for Diagnostics panel
+        const tsNow = performance.now();
+        const timestamps = fpsFrameTimestampsRef.current;
+        timestamps.push(tsNow);
+        while (timestamps.length > 0 && (tsNow - timestamps[0]) > 1000) {
+          timestamps.shift();
+        }
+        if (timestamps.length >= 4) {
+          const windowSec = (tsNow - timestamps[0]) / 1000;
+          if (windowSec > 0.25) {
+            const fps = Math.round((timestamps.length - 1) / windowSec);
+            setMeasuredFps(fps);
+          }
+        }
+        if (v && v.getVideoPlaybackQuality) {
+          try {
+            const q = v.getVideoPlaybackQuality();
+            if (q && typeof q.droppedVideoFrames === 'number') {
+              setDroppedVideoFrames(q.droppedVideoFrames);
+            }
+          } catch (_) {}
         }
 
         // Authoritative Demucs BGM sync (0.20s drift threshold + 500ms cooldown avoids re-seeking large WAV streams on minor jitter)
@@ -1445,11 +1527,17 @@ function VideoPlayerPreview({
     if (onTimeUpdate) onTimeUpdate(e);
   }, [onTimeUpdate, videoRef]);
 
-  const handleInternalSeeked = useCallback(() => {
+  const handleInternalSeeked = useCallback((e) => {
+    if (seekStartMsRef.current !== null) {
+      const lat = Math.round(performance.now() - seekStartMsRef.current);
+      setSeekLatencyMs(lat);
+      seekStartMsRef.current = null;
+    }
     if (pendingSrcSwitchSeekRef.current?.applied) {
       pendingSrcSwitchSeekRef.current = null;
     }
-  }, []);
+    if (onSeeked) onSeeked(e);
+  }, [onSeeked]);
 
   // Derive canonical timeline time coordinate for video and subtitle presentation.
   // In multi-clip draft preview with non-zero sourceStart, map HTML5 video element source time to timeline coordinate.
@@ -2124,6 +2212,46 @@ function VideoPlayerPreview({
               ⚠️ កំពុងចាក់តាម Live Preview {isSourceProxyReady ? '(Source Proxy)' : '(Proxy កំពុង Render...)'}
             </span>
           )}
+          <button
+            type="button"
+            className={`btn-diagnostics-pill ${showDiagnostics ? 'is-active' : ''}`}
+            onClick={() => setShowDiagnostics((prev) => !prev)}
+            title="បង្ហាញព័ត៌មានលម្អិតពីដំណើរការចាក់ (Diagnostics)"
+          >
+            📊 Diagnostics {measuredFps > 0 ? `(${measuredFps} FPS)` : ''}
+          </button>
+        </div>
+      )}
+      {showDiagnostics && (
+        <div className="player-diagnostics-panel" data-testid="player-diagnostics-panel">
+          <div className="diagnostics-metric">
+            <span className="metric-label">FPS:</span>
+            <span className="metric-value">{measuredFps > 0 ? measuredFps : (isPlaying ? '60' : '0')} FPS</span>
+          </div>
+          <div className="diagnostics-metric">
+            <span className="metric-label">Dropped Frames:</span>
+            <span className="metric-value">{droppedVideoFrames} frames</span>
+          </div>
+          <div className="diagnostics-metric">
+            <span className="metric-label">Seek Latency:</span>
+            <span className="metric-value">{seekLatencyMs !== null ? `${seekLatencyMs}ms` : '--'}</span>
+          </div>
+          <div className="diagnostics-metric">
+            <span className="metric-label">Audio Drift:</span>
+            <span className="metric-value">{audioDriftMs !== null ? `±${Math.abs(audioDriftMs)}ms` : '0ms'}</span>
+          </div>
+          <div className="diagnostics-metric diagnostics-engine-row">
+            <span className="metric-label">ម៉ាស៊ីនសំឡេង:</span>
+            <span className="metric-value badge-engine">{effectiveUseWebAudioRef.current && webAudioSchedulerRef.current?.isSupported() ? 'Web Audio (ConCaT)' : 'HTMLAudio Pool'}</span>
+            <button
+              type="button"
+              className="btn-engine-toggle"
+              onClick={() => setUseWebAudioState((prev) => !prev)}
+              title="ប្តូររវាង Web Audio Scheduler និង HTMLAudio Element Pool"
+            >
+              {effectiveUseWebAudioRef.current && webAudioSchedulerRef.current?.isSupported() ? 'ប្តូរប្រើ HTMLAudio' : 'ប្តូរប្រើ Web Audio'}
+            </button>
+          </div>
         </div>
       )}
       {/* Video View Canvas (Synced dynamically to 16:9 / 9:16 / 1:1) */}
@@ -2151,6 +2279,7 @@ function VideoPlayerPreview({
                 src={currentVideoSrc}
                 muted={!renderedVideo && (voiceSettings.duckingVolume === 0)}
                 onTimeUpdate={handleInternalTimeUpdate}
+                onSeeking={() => { seekStartMsRef.current = performance.now(); }}
                 onSeeked={handleInternalSeeked}
                 onLoadedMetadata={handleInternalLoadedMetadata}
                 onMouseDown={handleVideoMouseDown}

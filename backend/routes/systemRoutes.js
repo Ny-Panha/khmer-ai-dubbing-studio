@@ -28,6 +28,8 @@ const { DEFAULT_MODELS } = require("../services/geminiService");
 const {
   readGlobalLogoSettings,
   writeGlobalLogoSettings,
+  readGlobalCustomizeSettings,
+  writeGlobalCustomizeSettings,
 } = require("../services/globalLogoSettingsService");
 
 const router = express.Router();
@@ -421,7 +423,7 @@ router.post("/gemini/quota-settings", (req, res) => {
  */
 router.get("/logo-settings", (req, res) => {
   try {
-    const state = readGlobalLogoSettings();
+    const state = readGlobalCustomizeSettings();
     res.json({
       success: true,
       ...state,
@@ -434,9 +436,9 @@ router.get("/logo-settings", (req, res) => {
 router.put("/logo-settings", (req, res) => {
   try {
     const body = req.body && typeof req.body === "object" ? req.body : {};
-    const incoming = body.logoSettings && typeof body.logoSettings === "object" ? body.logoSettings : body;
+    const incoming = body.customizeSettings || body.settings || body.logoSettings || body;
     const updatedAt = Number(body.updatedAt) || Date.now();
-    const state = writeGlobalLogoSettings(incoming, { updatedAt });
+    const state = writeGlobalCustomizeSettings(incoming, { updatedAt });
     res.json({
       success: true,
       ...state,
@@ -449,9 +451,9 @@ router.put("/logo-settings", (req, res) => {
 router.post("/logo-settings", (req, res) => {
   try {
     const body = req.body && typeof req.body === "object" ? req.body : {};
-    const incoming = body.logoSettings && typeof body.logoSettings === "object" ? body.logoSettings : body;
+    const incoming = body.customizeSettings || body.settings || body.logoSettings || body;
     const updatedAt = Number(body.updatedAt) || Date.now();
-    const state = writeGlobalLogoSettings(incoming, { updatedAt });
+    const state = writeGlobalCustomizeSettings(incoming, { updatedAt });
     res.json({
       success: true,
       ...state,

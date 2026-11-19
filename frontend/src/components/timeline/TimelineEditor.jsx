@@ -467,6 +467,10 @@ function TimelineEditor({
   const isScrubbingRef = useRef(isScrubbing);
   useEffect(() => {
     isScrubbingRef.current = isScrubbing;
+    if (typeof window !== 'undefined') window.__timelineIsActiveScrubbing = isScrubbing;
+    return () => {
+      if (typeof window !== 'undefined') window.__timelineIsActiveScrubbing = false;
+    };
   }, [isScrubbing]);
 
   const dragStateRef = useRef(dragState);
@@ -491,6 +495,12 @@ function TimelineEditor({
   const handleScrubRef = useRef(null);
   const isPlayingRef = useRef(isPlaying);
   isPlayingRef.current = isPlaying;
+  useEffect(() => {
+    if (typeof window !== 'undefined') window.__timelineIsPlaying = isPlaying;
+    return () => {
+      if (typeof window !== 'undefined') window.__timelineIsPlaying = false;
+    };
+  }, [isPlaying]);
   const onSeekRef = useRef(onSeek);
   onSeekRef.current = onSeek;
   const voiceDragSeekRafRef = useRef(null);
@@ -1012,6 +1022,7 @@ function TimelineEditor({
     draggedElementRef.current = e.currentTarget;
     cachedVoiceLaneBoundsRef.current = measureVoiceLaneBounds(segRow);
     lastTargetVoiceRowRef.current = `voice_${segRow}`;
+    if (typeof window !== 'undefined') window.__timelineIsDragging = true;
     setDragState(initialDrag);
   };
 
@@ -1072,6 +1083,7 @@ function TimelineEditor({
     dragStateRef.current = initialDrag;
     draggedElementRef.current = e.currentTarget;
     lastTargetVoiceRowRef.current = `subs_${segRow}`;
+    if (typeof window !== 'undefined') window.__timelineIsDragging = true;
     setDragState(initialDrag);
   };
 
@@ -1136,6 +1148,7 @@ function TimelineEditor({
     dragStateRef.current = initialDrag;
     draggedElementRef.current = e.currentTarget;
     lastTargetVoiceRowRef.current = `video_${clipRow}`;
+    if (typeof window !== 'undefined') window.__timelineIsDragging = true;
     setDragState(initialDrag);
   };
 
@@ -1233,6 +1246,7 @@ function TimelineEditor({
             snappingEnabled: snappingEnabledRef.current,
             shiftKey: Boolean(e.shiftKey),
             pps: currentPps,
+            currentLiveTime: currentTimeRef.current || 0,
           });
           newStart = voicePos.newStart;
           newEnd = voicePos.newEnd;
@@ -1454,6 +1468,7 @@ function TimelineEditor({
       cachedVoiceLaneBoundsRef.current = null;
       setSnapLineTime(null);
       setDragOverTrack(null);
+      if (typeof window !== 'undefined') window.__timelineIsDragging = false;
 
       const activeDrag = dragStateRef.current;
       dragStateRef.current = null;

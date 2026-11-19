@@ -9,9 +9,12 @@ const {
   computeChineseCharDiff,
 } = require('../services/pipeline/stages/stage5_reconcileTimelineEvidence');
 
+const primaryPath = path.resolve(__dirname, '../uploads/projects/series_1793272088927/series.json');
+const backupPath = path.resolve(__dirname, '../../.agents/backup_ep2_data_recovery_20261031_022500/series.json');
+const hasRealFixture = fs.existsSync(backupPath) || fs.existsSync(primaryPath);
+
 function getRecoveredEp2Series() {
-  const primaryPath = path.resolve(__dirname, '../uploads/projects/series_1793272088927/series.json');
-  const backupPath = path.resolve(__dirname, '../../.agents/backup_ep2_data_recovery_20261031_022500/series.json');
+  if (!hasRealFixture) return null;
   const s = fs.existsSync(backupPath)
     ? JSON.parse(fs.readFileSync(backupPath, 'utf8'))
     : JSON.parse(fs.readFileSync(primaryPath, 'utf8'));
@@ -36,7 +39,8 @@ function getRecoveredEp2Series() {
   return s;
 }
 
-test('Test 1: Episode 2 missing-text recovery count & state', () => {
+test('Test 1: Episode 2 missing-text recovery count & state', (t) => {
+  if (!hasRealFixture) { t.skip('Fixture series_1793272088927 not present on disk'); return; }
   const series = getRecoveredEp2Series();
   const ep2 = series.episodes.find(e => (e.id || e.episodeId) === 'ep_2');
   const segs = ep2.scriptData?.segments || [];
@@ -49,7 +53,8 @@ test('Test 1: Episode 2 missing-text recovery count & state', () => {
   assert.equal(empty.length, 2, 'Exactly 2 segments must remain empty (IDs 18 and 51)');
 });
 
-test('Test 2: Exact segment ID mapping & provenance for recovered segments', () => {
+test('Test 2: Exact segment ID mapping & provenance for recovered segments', (t) => {
+  if (!hasRealFixture) { t.skip('Fixture series_1793272088927 not present on disk'); return; }
   const series = getRecoveredEp2Series();
   const ep2 = series.episodes.find(e => (e.id || e.episodeId) === 'ep_2');
   const segs = ep2.scriptData?.segments || [];
@@ -70,7 +75,8 @@ test('Test 2: Exact segment ID mapping & provenance for recovered segments', () 
   assert.equal(seg52.evidenceSource, 'audio_and_ocr');
 });
 
-test('Test 3: Ambiguous and unmapped segments rejection', () => {
+test('Test 3: Ambiguous and unmapped segments rejection', (t) => {
+  if (!hasRealFixture) { t.skip('Fixture series_1793272088927 not present on disk'); return; }
   const series = getRecoveredEp2Series();
   const ep2 = series.episodes.find(e => (e.id || e.episodeId) === 'ep_2');
   const segs = ep2.scriptData?.segments || [];
@@ -82,7 +88,8 @@ test('Test 3: Ambiguous and unmapped segments rejection', () => {
   assert.equal(seg51.originalChineseText, '', 'ID 51 has conflicting ASR vs Khmer and must not be blindly overwritten');
 });
 
-test('Test 4: Preservation of pre-existing non-empty Chinese segments', () => {
+test('Test 4: Preservation of pre-existing non-empty Chinese segments', (t) => {
+  if (!hasRealFixture) { t.skip('Fixture series_1793272088927 not present on disk'); return; }
   const series = getRecoveredEp2Series();
   const ep2 = series.episodes.find(e => (e.id || e.episodeId) === 'ep_2');
   const segs = ep2.scriptData?.segments || [];

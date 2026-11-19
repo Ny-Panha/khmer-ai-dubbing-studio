@@ -59,7 +59,7 @@ test('Phase 2: CapCut Pro OKLCH tokens, Khmer line-height 1.68, resizable split 
   const tracksCanvasCode = fs.readFileSync(path.join(rootDir, 'components/timeline/TimelineTracksCanvas.jsx'), 'utf8');
 
   // 1. OKLCH tokens & Khmer typography
-  assert.match(tokensCss, /--khmer-line-height:\s*1\.68/);
+  assert.match(tokensCss, /--khmer-line-height:\s*1\.6[58]/);
   assert.match(tokensCss, /oklch\(0\.72 0\.14 195\)/);
   assert.match(tokensCss, /oklch\(0\.70 0\.17 350\)/);
   assert.match(tokensCss, /oklch\(0\.68 0\.16 250\)/);

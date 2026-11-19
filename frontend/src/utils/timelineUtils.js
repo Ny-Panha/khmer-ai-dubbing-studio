@@ -984,6 +984,7 @@ export function computeVoiceDragPosition({
   snappingEnabled = true,
   shiftKey = false,
   pps = 45,
+  currentLiveTime = null,
 } = {}) {
   const clipDur = Math.max(0.05, (Number.isFinite(origEnd) ? origEnd : 0) - (Number.isFinite(origStart) ? origStart : 0));
   let newStart = Math.max(0, Number.isFinite(proposedStart) ? proposedStart : 0);
@@ -1042,9 +1043,21 @@ export function computeVoiceDragPosition({
       }
     }
 
-    // 1. Magnetic edge snapping strictly to adjacent VOICE clips on the same voice lane
+    // 1. Magnetic edge snapping strictly to 0, playhead, and adjacent VOICE clips on the same voice lane
     if (snappingEnabled && !shiftKey) {
-      if (hasPrevVoice && Math.abs(newStart - prevBound) < snapThreshold) {
+      if (Math.abs(newStart - 0) < snapThreshold && 0 >= prevBound) {
+        newStart = 0;
+        newEnd = clipDur;
+        snapTime = 0;
+      } else if (typeof currentLiveTime === 'number' && Number.isFinite(currentLiveTime) && Math.abs(newStart - currentLiveTime) < snapThreshold && currentLiveTime >= prevBound && (currentLiveTime + clipDur) <= nextBound) {
+        newStart = currentLiveTime;
+        newEnd = currentLiveTime + clipDur;
+        snapTime = currentLiveTime;
+      } else if (typeof currentLiveTime === 'number' && Number.isFinite(currentLiveTime) && Math.abs(newEnd - currentLiveTime) < snapThreshold && (currentLiveTime - clipDur) >= prevBound && currentLiveTime <= nextBound) {
+        newEnd = currentLiveTime;
+        newStart = Math.max(prevBound, currentLiveTime - clipDur);
+        snapTime = currentLiveTime;
+      } else if (hasPrevVoice && Math.abs(newStart - prevBound) < snapThreshold) {
         newStart = prevBound;
         newEnd = newStart + clipDur;
         snapTime = prevBound;

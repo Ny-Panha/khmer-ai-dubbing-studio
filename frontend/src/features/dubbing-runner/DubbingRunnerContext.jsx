@@ -96,6 +96,7 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
       seriesId,
       episodeId: ep.id,
       pipelineMode: options.pipelineMode || 'fast_ocr',
+      generationMode: options.generationMode || options.pipelineMode || 'fast_ocr',
       dubbingMode: options.dubbingMode || 'dialogue',
       genre: options.genre || 'auto',
       narratorGender: options.narratorGender || 'male',

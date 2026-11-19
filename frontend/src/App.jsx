@@ -118,16 +118,27 @@ import {
 } from './utils/projectStorage';
 import {
   DEFAULT_GLOBAL_LOGO_SETTINGS,
+  DEFAULT_GLOBAL_CUSTOMIZE_SETTINGS,
   normalizeGlobalLogoSettings,
+  normalizeGlobalCustomizeSettings,
   extractLogoSettings,
+  extractCustomizeSettings,
   hasAnyLogoSettings,
+  hasAnyCustomizeSettings,
   areLogoSettingsEqual,
+  areCustomizeSettingsEqual,
   stripLogoSettings,
+  stripCustomizeSettings,
   loadGlobalLogoSettingsRecord,
+  loadGlobalCustomizeSettingsRecord,
   saveGlobalLogoSettings,
+  saveGlobalCustomizeSettings,
   fetchGlobalLogoSettingsFromServer,
+  fetchGlobalCustomizeSettingsFromServer,
   syncGlobalLogoSettingsToServer,
+  syncGlobalCustomizeSettingsToServer,
   resolveInitialLogoSeed,
+  resolveInitialCustomizeSeed,
 } from './utils/logoSettingsStorage';
 import { isSegmentMatch, resolveVoiceClipStartSec } from './utils/timelineUtils';
 import { parseTimeToSeconds } from './utils/timestampUtils';
@@ -351,41 +362,41 @@ export default function App() {
   const globalLogoSettingsRef = useRef(globalLogoSettings);
   globalLogoSettingsRef.current = globalLogoSettings;
   const userEditedLogoRef = useRef(false);
-  const initialLogoBootRef = useRef(null);
-  if (initialLogoBootRef.current === null) {
-    initialLogoBootRef.current = {
-      localRecord: loadGlobalLogoSettingsRecord(),
+  const initialCustomizeBootRef = useRef(null);
+  if (initialCustomizeBootRef.current === null) {
+    initialCustomizeBootRef.current = {
+      localRecord: loadGlobalCustomizeSettingsRecord(),
       legacyVoiceRaw: readLegacyVoiceSettingsRaw(),
       localEpisodeVoice: readLocalActiveEpisodeVoiceSettings(),
     };
   }
 
-  // Hydrate or perform one-time migration for global logo settings (server <-> localStorage)
+  // Hydrate or perform one-time migration for global customize settings (server <-> localStorage)
   useEffect(() => {
     let cancelled = false;
-    const { localRecord, legacyVoiceRaw, localEpisodeVoice } = initialLogoBootRef.current;
+    const { localRecord, legacyVoiceRaw, localEpisodeVoice } = initialCustomizeBootRef.current;
 
-    async function syncOrMigrateGlobalLogo() {
-      const serverState = await fetchGlobalLogoSettingsFromServer();
+    async function syncOrMigrateGlobalCustomize() {
+      const serverState = await fetchGlobalCustomizeSettingsFromServer();
       if (cancelled || userEditedLogoRef.current) return;
 
       if (serverState && serverState.initialized && serverState.settings) {
         if (!localRecord.initialized || serverState.updatedAt > localRecord.updatedAt) {
           globalLogoSettingsRef.current = serverState.settings;
           setGlobalLogoSettings(serverState.settings);
-          saveGlobalLogoSettings(serverState.settings, {
+          saveGlobalCustomizeSettings(serverState.settings, {
             syncServer: false,
             updatedAt: serverState.updatedAt || Date.now(),
           });
         } else if (localRecord.initialized && localRecord.updatedAt > serverState.updatedAt) {
-          syncGlobalLogoSettingsToServer(localRecord.settings, localRecord.updatedAt);
+          syncGlobalCustomizeSettingsToServer(localRecord.settings, localRecord.updatedAt);
         }
         return;
       }
 
       if (localRecord.initialized) {
         if (serverState && !serverState.initialized) {
-          syncGlobalLogoSettingsToServer(localRecord.settings, localRecord.updatedAt || Date.now());
+          syncGlobalCustomizeSettingsToServer(localRecord.settings, localRecord.updatedAt || Date.now());
         }
         return;
       }
@@ -409,16 +420,16 @@ export default function App() {
       }
 
       if (cancelled || userEditedLogoRef.current) return;
-      const seeded = resolveInitialLogoSeed({
+      const seeded = resolveInitialCustomizeSeed({
         activeEpisodeVoiceSettings: serverActiveEpVoice || localEpisodeVoice,
         legacyVoiceSettings: legacyVoiceRaw,
       });
       globalLogoSettingsRef.current = seeded;
       setGlobalLogoSettings(seeded);
-      saveGlobalLogoSettings(seeded, { syncServer: Boolean(serverState) });
+      saveGlobalCustomizeSettings(seeded, { syncServer: Boolean(serverState) });
     }
 
-    syncOrMigrateGlobalLogo();
+    syncOrMigrateGlobalCustomize();
     return () => {
       cancelled = true;
     };
@@ -514,9 +525,15 @@ export default function App() {
 
   const prevRawRendered = renderRef.current.renderedVideo || null;
   const [previewChoice, setPreviewChoice] = useState(null);
-  const proxySettings = useMemo(() => Object.fromEntries([
-    ...RENDER_INVALIDATING_SETTING_KEYS, 'videoZoom', 'videoPanX', 'videoPanY', 'verticalBg',
-  ].map(key => [key, readNormalizedSettingVal(voiceSettings, key)])), [voiceSettings]);
+  const proxySettings = useMemo(() => {
+    const combined = {
+      ...(voiceSettings || EMPTY_OBJECT),
+      ...(globalLogoSettings || DEFAULT_GLOBAL_CUSTOMIZE_SETTINGS),
+    };
+    return Object.fromEntries([
+      ...RENDER_INVALIDATING_SETTING_KEYS, 'videoZoom', 'videoPanX', 'videoPanY', 'verticalBg',
+    ].map(key => [key, readNormalizedSettingVal(combined, key)]));
+  }, [voiceSettings, globalLogoSettings]);
   const proxy = useProxyPreview({
     seriesId: series.seriesId, episodeId: series.episodeId, videoUrl: media.selectedVideo?.videoUrl,
     clips: media.videoClips, segments: scriptData?.segments, settings: proxySettings,
@@ -813,7 +830,7 @@ export default function App() {
   const handleUpdateVoiceSettings = useCallback((newSettings) => {
     const prevSettings = voiceSettingsRef.current || EMPTY_OBJECT;
     const prevRatio = sanitizeAspectRatio(prevSettings?.aspectRatio);
-    const prevLogo = globalLogoSettingsRef.current || DEFAULT_GLOBAL_LOGO_SETTINGS;
+    const prevCustomize = globalLogoSettingsRef.current || DEFAULT_GLOBAL_CUSTOMIZE_SETTINGS;
     const normalizedSettings = newSettings && typeof newSettings === 'object' && !Array.isArray(newSettings)
       ? {
           ...newSettings,
@@ -821,60 +838,60 @@ export default function App() {
         }
       : newSettings;
 
-    // Route logo* keys strictly to the single global logo store (never per-episode voiceSettings)
-    let logoChanged = false;
-    if (normalizedSettings && typeof normalizedSettings === 'object' && hasAnyLogoSettings(normalizedSettings)) {
-      const nextLogo = normalizeGlobalLogoSettings(extractLogoSettings(normalizedSettings), prevLogo);
-      if (!areLogoSettingsEqual(prevLogo, nextLogo)) {
-        logoChanged = true;
+    // Route customize keys (Logo, Corner Mask, Banner) strictly to the single global customize store
+    let customizeChanged = false;
+    if (normalizedSettings && typeof normalizedSettings === 'object' && hasAnyCustomizeSettings(normalizedSettings)) {
+      const nextCustomize = normalizeGlobalCustomizeSettings(extractCustomizeSettings(normalizedSettings), prevCustomize);
+      if (!areCustomizeSettingsEqual(prevCustomize, nextCustomize)) {
+        customizeChanged = true;
         userEditedLogoRef.current = true;
-        globalLogoSettingsRef.current = nextLogo;
-        setGlobalLogoSettings(nextLogo);
-        saveGlobalLogoSettings(nextLogo);
+        globalLogoSettingsRef.current = nextCustomize;
+        setGlobalLogoSettings(nextCustomize);
+        saveGlobalCustomizeSettings(nextCustomize);
       }
     }
 
-    const nonLogoSettings = normalizedSettings && typeof normalizedSettings === 'object'
-      ? stripLogoSettings(normalizedSettings)
+    const nonCustomizeSettings = normalizedSettings && typeof normalizedSettings === 'object'
+      ? stripCustomizeSettings(normalizedSettings)
       : normalizedSettings;
 
-    const hasNonLogoChange = Boolean(
-      nonLogoSettings &&
-      typeof nonLogoSettings === 'object' &&
-      !shallowEqualObjects(prevSettings, nonLogoSettings)
+    const hasNonCustomizeChange = Boolean(
+      nonCustomizeSettings &&
+      typeof nonCustomizeSettings === 'object' &&
+      !shallowEqualObjects(prevSettings, nonCustomizeSettings)
     );
-    const hasNonLogoRenderChange = Boolean(
-      nonLogoSettings &&
-      typeof nonLogoSettings === 'object' &&
+    const hasNonCustomizeRenderChange = Boolean(
+      nonCustomizeSettings &&
+      typeof nonCustomizeSettings === 'object' &&
       RENDER_INVALIDATING_SETTING_KEYS.some(
-        (key) => readNormalizedSettingVal(prevSettings, key) !== readNormalizedSettingVal(nonLogoSettings, key)
+        (key) => readNormalizedSettingVal(prevSettings, key) !== readNormalizedSettingVal(nonCustomizeSettings, key)
       )
     );
-    const clearedRenderedForEdit = hasNonLogoRenderChange || logoChanged;
+    const clearedRenderedForEdit = hasNonCustomizeRenderChange || customizeChanged;
     const hasSubtitleVisualChange = Boolean(
-      nonLogoSettings &&
-      typeof nonLogoSettings === 'object' &&
+      nonCustomizeSettings &&
+      typeof nonCustomizeSettings === 'object' &&
       SUBTITLE_PREVIEW_SETTING_KEYS.some(
-        (key) => readNormalizedSettingVal(prevSettings, key) !== readNormalizedSettingVal(nonLogoSettings, key)
+        (key) => readNormalizedSettingVal(prevSettings, key) !== readNormalizedSettingVal(nonCustomizeSettings, key)
       )
     );
 
-    if (nonLogoSettings && typeof nonLogoSettings === 'object' && (!logoChanged || hasNonLogoChange)) {
-      voiceSettingsRef.current = nonLogoSettings;
-      saveVoiceSettings(nonLogoSettings);
-      audioRef.current.handleUpdateVoiceSettings?.(nonLogoSettings);
+    if (nonCustomizeSettings && typeof nonCustomizeSettings === 'object' && (!customizeChanged || hasNonCustomizeChange)) {
+      voiceSettingsRef.current = nonCustomizeSettings;
+      saveVoiceSettings(nonCustomizeSettings);
+      audioRef.current.handleUpdateVoiceSettings?.(nonCustomizeSettings);
     }
 
     const sId = seriesRef.current.seriesId;
     const eId = seriesRef.current.episodeId;
-    const ratioChanged = Boolean(nonLogoSettings?.aspectRatio && nonLogoSettings.aspectRatio !== prevRatio);
+    const ratioChanged = Boolean(nonCustomizeSettings?.aspectRatio && nonCustomizeSettings.aspectRatio !== prevRatio);
 
     if (clearedRenderedForEdit) {
       if (renderRef.current.setRenderedVideo) {
         renderRef.current.setRenderedVideo(null);
       }
       const patch = { renderedVideo: null, renderInvalidatedAt: Date.now() };
-      if (hasNonLogoChange || ratioChanged) patch.voiceSettings = nonLogoSettings;
+      if (hasNonCustomizeChange || ratioChanged) patch.voiceSettings = nonCustomizeSettings;
       if (sId && eId) {
         saveEpisodeState(sId, eId, patch);
       }
@@ -885,7 +902,7 @@ export default function App() {
 
     if (
       hasSubtitleVisualChange &&
-      nonLogoSettings?.burnSubtitles !== false &&
+      nonCustomizeSettings?.burnSubtitles !== false &&
       !playbackRef.current?.isPlaying
     ) {
       const sampleTime = resolveSubtitleSampleSeekTime(
@@ -1056,7 +1073,7 @@ export default function App() {
   const studioSettings = useMemo(
     () => ({
       ...(voiceSettings || EMPTY_OBJECT),
-      ...(globalLogoSettings || DEFAULT_GLOBAL_LOGO_SETTINGS),
+      ...(globalLogoSettings || DEFAULT_GLOBAL_CUSTOMIZE_SETTINGS),
     }),
     [voiceSettings, globalLogoSettings]
   );

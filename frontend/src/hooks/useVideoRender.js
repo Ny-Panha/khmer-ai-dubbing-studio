@@ -7,7 +7,13 @@ import {
   killBatchRenderApi,
 } from '../services/api';
 import { resolveDefaultAspectRatio, inferRenderedAspectRatio, sanitizeAspectRatio } from '../utils/projectStorage';
-import { buildLogoExportPayload, loadGlobalLogoSettings } from '../utils/logoSettingsStorage';
+import {
+  buildLogoExportPayload,
+  buildCornerMaskExportPayload,
+  buildAntiTheftExportPayload,
+  loadGlobalLogoSettings,
+  loadGlobalCustomizeSettings,
+} from '../utils/logoSettingsStorage';
 
 /**
  * Custom hook to manage single-episode and multi-episode batch/merged video export
@@ -222,20 +228,9 @@ export function useVideoRender({
   }, [seriesId, stopBatchPolling, startBatchPolling]);
 
   const buildAntiTheftOptions = useCallback(() => {
-    const activeSettings = getLatestVoiceSettings();
-    return {
-      enabled: Boolean(activeSettings?.enableAntiTheft),
-      marqueeText: activeSettings?.marqueeText || '«ហាមផុសបន្ត • សូមឱ្យតម្លៃលើការខិតខំរបស់ម្ចាស់ដើម»',
-      marqueeSpeed: activeSettings?.marqueeSpeed || 'normal',
-      marqueePosition: activeSettings?.marqueePosition || 'bottom',
-      marqueeTextColor: activeSettings?.marqueeTextColor || '#FFE600',
-      enableWatermark: activeSettings?.enableWatermark !== false,
-      watermarkText: activeSettings?.watermarkText || 'រក្សាសិទ្ធិដោយ ៖ Holiday Kh Drama',
-      watermarkPosition: activeSettings?.watermarkPosition || 'above-ticker',
-      watermarkColor: activeSettings?.watermarkColor || '#38BDF8',
-      antiTheftSize: activeSettings?.antiTheftSize || 'small',
-    };
-  }, [getLatestVoiceSettings]);
+    const activeCustomize = getLatestGlobalLogoSettings();
+    return buildAntiTheftExportPayload(activeCustomize);
+  }, [getLatestGlobalLogoSettings]);
 
   const buildLogoOptions = useCallback(() => {
     const activeLogo = getLatestGlobalLogoSettings();
@@ -243,23 +238,9 @@ export function useVideoRender({
   }, [getLatestGlobalLogoSettings]);
 
   const buildCornerMaskOptions = useCallback(() => {
-    const activeSettings = getLatestVoiceSettings();
-    const rawOffsetX = activeSettings?.cornerMaskOffsetX;
-    const rawOffsetY = activeSettings?.cornerMaskOffsetY;
-    const rawBlur = activeSettings?.cornerMaskBlur;
-    return {
-      enabled: Boolean(activeSettings?.enableCornerMask),
-      text: activeSettings?.cornerMaskText ?? '«រឿងប្រឌិតសុទ្ធសាធ • ហាមចម្លង»',
-      style: activeSettings?.cornerMaskStyle || 'badge',
-      position: activeSettings?.cornerMaskPosition || 'top-right',
-      width: Number(activeSettings?.cornerMaskWidth) || 220,
-      height: Number(activeSettings?.cornerMaskHeight) || 54,
-      opacity: Number(activeSettings?.cornerMaskOpacity) || 0.95,
-      blurStrength: Number.isFinite(Number(rawBlur)) ? Number(rawBlur) : 18,
-      offsetX: Number.isFinite(Number(rawOffsetX)) ? Number(rawOffsetX) : 14,
-      offsetY: Number.isFinite(Number(rawOffsetY)) ? Number(rawOffsetY) : 14,
-    };
-  }, [getLatestVoiceSettings]);
+    const activeCustomize = getLatestGlobalLogoSettings();
+    return buildCornerMaskExportPayload(activeCustomize);
+  }, [getLatestGlobalLogoSettings]);
 
   const buildSponsorOptions = useCallback(() => {
     const activeSettings = getLatestVoiceSettings();

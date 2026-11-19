@@ -3421,10 +3421,11 @@ async function detectSubtitleChangePoints(inputVideoPath, startSec = 0, duration
     const curr = diffs[i].subDiff;
     const next = diffs[i + 1].subDiff;
 
-    const isPeak = (curr >= 11.5 && curr >= prev && curr >= next);
-    const isSharpRise = (curr >= 15.0 && curr > prev * 1.3);
+    const isPeak = (curr >= 10.0 && curr >= prev && curr >= next);
+    const isSharpRise = (curr >= 13.5 && curr > prev * 1.25);
+    const isProminentLocal = (curr >= 8.5 && curr >= prev + 2.0 && curr >= next + 2.0);
 
-    if (isPeak || isSharpRise) {
+    if (isPeak || isSharpRise || isProminentLocal) {
       const last = changePoints[changePoints.length - 1];
       if (!last || (diffs[i].timestampSec - last.timestampSec) >= minPeakDist) {
         changePoints.push(diffs[i]);

@@ -49,16 +49,18 @@ export function useProxyPreview({ seriesId, episodeId, videoUrl, clips, segments
         setResult(prev => prev?.base === base && prev.body === body && prev.epoch === epoch &&
           JSON.stringify(prev.value) === JSON.stringify(value) ? prev : { base, body, epoch, value });
 
-        // While queued or rendering, keep polling GET with revision every 1000ms
+        // While queued or rendering, keep polling GET with revision (relax during active live playback to free CPU)
         if (value.state === 'queued' || value.state === 'rendering') {
           const rev = value.revision || revision;
-          timer = setTimeout(() => check(rev), 1000);
+          const isPlayingLive = typeof window !== 'undefined' && Boolean(window.__timelineIsPlaying);
+          timer = setTimeout(() => check(rev), isPlayingLive ? 6000 : 1000);
           return;
         }
 
-        // Fresh or superseded: recheck every 5000ms
+        // Fresh or superseded: recheck every 5000ms (relax to 12000ms during active playback)
         if (value.state === 'fresh' || value.state === 'superseded') {
-          timer = setTimeout(() => check(value.revision || revision), 5000);
+          const isPlayingLive = typeof window !== 'undefined' && Boolean(window.__timelineIsPlaying);
+          timer = setTimeout(() => check(value.revision || revision), isPlayingLive ? 12000 : 5000);
           return;
         }
 

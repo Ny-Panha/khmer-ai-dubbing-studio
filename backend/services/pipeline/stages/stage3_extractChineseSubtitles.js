@@ -618,6 +618,123 @@ Return JSON ONLY matching this schema:
               [gB]: (gA === gB ? 2 : 1),
             },
           });
+        } else if (hasA && hasB && !areChineseTextsEquivalent(textA, textB)) {
+          // Both frames have valid distinct Chinese dialogue text!
+          // Split at transition peak in frameDiffs or midpoint so neither line is dropped
+          let splitT = parseFloat(((cs.sampleASec + cs.sampleBSec) / 2).toFixed(2));
+          const idxA = Math.round((cs.sampleASec - safeStartSec) / stepDiff);
+          const idxB = Math.round((cs.sampleBSec - safeStartSec) / stepDiff);
+          let maxD = 0;
+          for (let k = Math.max(0, idxA); k <= Math.min(frameDiffs.length - 1, idxB); k++) {
+            const d = frameDiffs[k];
+            if (d && (d.subDiff || 0) > maxD) {
+              maxD = d.subDiff;
+              splitT = d.timestampSec;
+            }
+          }
+          const s1 = cs.startSec;
+          const e1 = parseFloat(Math.max(s1 + 0.35, Math.min(cs.endSec - 0.35, splitT)).toFixed(2));
+          const s2 = e1;
+          const e2 = cs.endSec;
+
+          const gA = obsA.visualGender || obsA.speakerGender || 'unknown';
+          const gB = obsB.visualGender || obsB.speakerGender || 'unknown';
+
+          evaluatedCueStates.push({
+            ...cs,
+            startSec: s1,
+            endSec: e1,
+            duration: parseFloat((e1 - s1).toFixed(2)),
+            textZh: textA,
+            originalChineseText: textA,
+            chineseText: textA,
+            ocrConfidence: obsA.isSharp ? 'high' : 'medium',
+            reviewNeeded: !obsA.isSharp,
+            ocrDisagreement: false,
+            uncertainOcr: !obsA.isSharp,
+            visualGender: gA,
+            speakerVisualHint: obsA.speakerVisualHint || '',
+            deliveryType: obsA.deliveryType || 'dialogue',
+            genderVotes: { [gA]: 1 },
+          });
+
+          evaluatedCueStates.push({
+            ...cs,
+            startSec: s2,
+            endSec: e2,
+            duration: parseFloat((e2 - s2).toFixed(2)),
+            textZh: textB,
+            originalChineseText: textB,
+            chineseText: textB,
+            ocrConfidence: obsB.isSharp ? 'high' : 'medium',
+            reviewNeeded: !obsB.isSharp,
+            ocrDisagreement: false,
+            uncertainOcr: !obsB.isSharp,
+            visualGender: gB,
+            speakerVisualHint: obsB.speakerVisualHint || '',
+            deliveryType: obsB.deliveryType || 'dialogue',
+            genderVotes: { [gB]: 1 },
+          });
+        } else if (hasA && !hasB && obsA.isSharp) {
+          // Short dialogue cue (< 1s): textA appeared at startSec and ended before sampleBSec
+          let disappearT = parseFloat((cs.sampleBSec - 0.05).toFixed(2));
+          const idxA = Math.round((cs.sampleASec - safeStartSec) / stepDiff);
+          const idxB = Math.round((cs.sampleBSec - safeStartSec) / stepDiff);
+          for (let k = Math.max(0, idxA); k <= Math.min(frameDiffs.length - 1, idxB); k++) {
+            const d = frameDiffs[k];
+            if (d && (d.isChange || d.subDiff >= 10.0)) {
+              disappearT = d.timestampSec;
+              break;
+            }
+          }
+          const eSec = parseFloat(Math.max(cs.startSec + 0.35, Math.min(cs.endSec, disappearT)).toFixed(2));
+          const gA = obsA.visualGender || obsA.speakerGender || 'unknown';
+          evaluatedCueStates.push({
+            ...cs,
+            endSec: eSec,
+            duration: parseFloat((eSec - cs.startSec).toFixed(2)),
+            textZh: textA,
+            originalChineseText: textA,
+            chineseText: textA,
+            ocrConfidence: 'high',
+            reviewNeeded: false,
+            ocrDisagreement: false,
+            uncertainOcr: false,
+            visualGender: gA,
+            speakerVisualHint: obsA.speakerVisualHint || '',
+            deliveryType: obsA.deliveryType || 'dialogue',
+            genderVotes: { [gA]: 1 },
+          });
+        } else if (!hasA && hasB && obsB.isSharp) {
+          // Dialogue cue appeared near sampleBSec
+          let appearT = parseFloat((cs.sampleASec + 0.05).toFixed(2));
+          const idxA = Math.round((cs.sampleASec - safeStartSec) / stepDiff);
+          const idxB = Math.round((cs.sampleBSec - safeStartSec) / stepDiff);
+          for (let k = Math.min(frameDiffs.length - 1, idxB); k >= Math.max(0, idxA); k--) {
+            const d = frameDiffs[k];
+            if (d && (d.isChange || d.subDiff >= 10.0)) {
+              appearT = d.timestampSec;
+              break;
+            }
+          }
+          const sSec = parseFloat(Math.max(cs.startSec, Math.min(cs.endSec - 0.35, appearT)).toFixed(2));
+          const gB = obsB.visualGender || obsB.speakerGender || 'unknown';
+          evaluatedCueStates.push({
+            ...cs,
+            startSec: sSec,
+            duration: parseFloat((cs.endSec - sSec).toFixed(2)),
+            textZh: textB,
+            originalChineseText: textB,
+            chineseText: textB,
+            ocrConfidence: 'high',
+            reviewNeeded: false,
+            ocrDisagreement: false,
+            uncertainOcr: false,
+            visualGender: gB,
+            speakerVisualHint: obsB.speakerVisualHint || '',
+            deliveryType: obsB.deliveryType || 'dialogue',
+            genderVotes: { [gB]: 1 },
+          });
         } else {
           // Disagreement (either one frame had text and one didn't, or different texts)
           statesNeedingTieBreak.push({
@@ -761,6 +878,67 @@ Return JSON ONLY matching this schema:
     };
   }
 
+  // STEP 2B: Recover valid rawObservations with text that were not covered in evaluatedCueStates
+  if (Array.isArray(rawObservations) && rawObservations.length > 0) {
+    const uncapturedObservations = rawObservations.filter((obs) => {
+      if (!obs.hasText || !obs.chineseText || normalizeChineseChars(obs.chineseText).length === 0) {
+        return false;
+      }
+      const isCovered = evaluatedCueStates.some((c) => {
+        return (c.startSec - 0.25 <= obs.timestampSec && obs.timestampSec <= c.endSec + 0.25) &&
+          areChineseTextsEquivalent(c.originalChineseText, obs.chineseText);
+      });
+      return !isCovered;
+    });
+
+    if (uncapturedObservations.length > 0) {
+      console.log(`[Stage 3 OCR] Recovering ${uncapturedObservations.length} valid subtitle observation(s) outside primary cue states...`);
+      const stepDiff = 0.2;
+      const safeStartSec = Math.max(0, Number(startOffsetSec) || 0);
+      const endSec = durationSec > 0 ? safeStartSec + durationSec : (safeStartSec + 10);
+      for (const obs of uncapturedObservations) {
+        const t = obs.timestampSec;
+        const tIdx = Math.round((t - safeStartSec) / stepDiff);
+        let onset = Math.max(safeStartSec, t - 0.5);
+        for (let k = tIdx; k >= Math.max(0, tIdx - 10); k--) {
+          const d = frameDiffs[k];
+          if (d && (d.isChange || d.subDiff >= 10.0)) {
+            onset = d.timestampSec;
+            break;
+          }
+        }
+        let offset = Math.min(endSec, t + 1.0);
+        for (let k = tIdx + 1; k <= Math.min(frameDiffs.length - 1, tIdx + 12); k++) {
+          const d = frameDiffs[k];
+          if (d && (d.isChange || d.subDiff >= 10.0)) {
+            offset = d.timestampSec;
+            break;
+          }
+        }
+        const sSec = parseFloat(Math.max(safeStartSec, onset).toFixed(2));
+        const eSec = parseFloat(Math.max(sSec + 0.35, offset).toFixed(2));
+        const dur = parseFloat((eSec - sSec).toFixed(2));
+
+        evaluatedCueStates.push({
+          startSec: sSec,
+          endSec: eSec,
+          duration: dur,
+          textZh: obs.chineseText,
+          originalChineseText: obs.chineseText,
+          chineseText: obs.chineseText,
+          ocrConfidence: obs.isSharp ? 'high' : 'medium',
+          reviewNeeded: !obs.isSharp,
+          ocrDisagreement: false,
+          uncertainOcr: !obs.isSharp,
+          visualGender: obs.visualGender || 'unknown',
+          speakerVisualHint: obs.speakerVisualHint || '',
+          deliveryType: obs.deliveryType || 'dialogue',
+          genderVotes: { [obs.visualGender || 'unknown']: 1 },
+        });
+      }
+    }
+  }
+
   // STEP 3: Boundaries from change points & Deduplication
   const visualSegments = [];
 
@@ -803,6 +981,11 @@ Return JSON ONLY matching this schema:
           }
         }
       } else {
+        // Prevent overlaps between distinct consecutive cues
+        if (cue.startSec < prev.endSec) {
+          prev.endSec = parseFloat(Math.max(prev.startSec + 0.35, cue.startSec).toFixed(2));
+          prev.duration = parseFloat((prev.endSec - prev.startSec).toFixed(2));
+        }
         visualSegments.push({ ...cue });
       }
     }
@@ -1088,6 +1271,12 @@ function deduplicateFastOcrCues(rawCues = [], defaultGender = 'male') {
       }
     }
 
+    // Prevent overlaps between adjacent cues with different text
+    if (cStart < prev.endSec) {
+      prev.endSec = parseFloat(Math.max(prev.startSec + 0.35, cStart).toFixed(2));
+      prev.duration = parseFloat(Math.max(0.35, prev.endSec - prev.startSec).toFixed(2));
+    }
+
     deduped.push({
       ...cue,
       startSec: cStart,
@@ -1132,7 +1321,12 @@ function deduplicateFastOcrCues(rawCues = [], defaultGender = 'male') {
       }
     } else {
       // Rule 1: Non-overridden Fast OCR defaults ALWAYS re-derive voiceId/khmerVoiceId/voice from final voiceGender
-      resolvedGender = defGen;
+      const rawVisual = String(seg.visualGender || seg.voiceGender || '').toLowerCase();
+      if (rawVisual === 'female' || rawVisual === 'male') {
+        resolvedGender = rawVisual;
+      } else {
+        resolvedGender = defGen;
+      }
       voiceMeta = buildVoiceMeta(resolvedGender);
       resolvedVoice = voiceMeta.voiceId;
     }

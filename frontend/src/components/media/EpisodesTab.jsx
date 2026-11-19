@@ -524,6 +524,8 @@ export default function EpisodesTab({
           return (
             <div
               key={ep.id || idx}
+              data-testid={`episode-card-item-${ep.id || idx}`}
+              className="episode-card-item"
               onClick={() => {
                 if (!isActive && onSwitchEpisode) {
                   onSwitchEpisode(ep.id);

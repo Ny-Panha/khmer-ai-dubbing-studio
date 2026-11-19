@@ -56,6 +56,9 @@ export function generateVideoThumbnails(videoUrl, duration = 30, count = null) {
 
     const isMainPlayerBusy = () => {
       if (typeof document === 'undefined') return false;
+      if (typeof window !== 'undefined' && (window.__timelineIsActiveScrubbing || window.__timelineIsDragging || window.__timelineIsPlaying)) {
+        return true;
+      }
       const mainVideo = document.querySelector('.player-stage-viewport video');
       return Boolean(mainVideo && (mainVideo.seeking || !mainVideo.paused || mainVideo.readyState < 3));
     };

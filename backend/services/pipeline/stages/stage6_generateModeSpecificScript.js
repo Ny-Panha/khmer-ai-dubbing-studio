@@ -449,7 +449,10 @@ function createCanonicalSegment(raw = {}, index = 0, mode = 'dialogue') {
     speechStartSec: typeof raw.speechStartSec === 'number' ? raw.speechStartSec : null,
     speechEndSec: typeof raw.speechEndSec === 'number' ? raw.speechEndSec : null,
     speechDuration: typeof raw.speechDuration === 'number' ? raw.speechDuration : null,
-    reviewNeeded: Boolean(raw.reviewNeeded || !khmerText || raw.translationWarning === 'POTENTIAL_DUPLICATE_TRANSLATION'),
+    uncertainOcr: Boolean(raw.uncertainOcr || raw.ocrConfidence === 'low'),
+    ocrConfidence: raw.ocrConfidence || 'high',
+    ocrDisagreement: Boolean(raw.ocrDisagreement),
+    reviewNeeded: Boolean(raw.reviewNeeded || raw.uncertainOcr || raw.ocrDisagreement || !khmerText || raw.translationWarning === 'POTENTIAL_DUPLICATE_TRANSLATION'),
     uncertainTiming: Boolean(raw.uncertainTiming),
     audioGenerated: false,
     audioOutdated: true,
@@ -1272,8 +1275,12 @@ async function generateModeSpecificScript({
     // ==========================================
     let dialogueList = [];
     for (const seg of reconciledSegments) {
-      const pieces = splitLongDialogueSegment(seg);
-      dialogueList.push(...pieces);
+      if (isFastOcrMode) {
+        dialogueList.push(seg);
+      } else {
+        const pieces = splitLongDialogueSegment(seg);
+        dialogueList.push(...pieces);
+      }
     }
 
     // Re-index strictly sequential IDs across all split dialogue items

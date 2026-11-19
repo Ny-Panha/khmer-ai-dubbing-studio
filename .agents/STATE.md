@@ -3,6 +3,114 @@
 ## Last Session
 - **Environment**: Antigravity IDE (Gemini)
 - **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-19T21:55:00+07:00
+
+## Summary: Fast OCR Speed, Chinese Subtitle Accuracy & Accurate Timing (100% PASS)
+- **Request:** Improve Fast OCR so that clicking "Run 1-by-1" automatically reads burned-in Chinese subtitles from video and generates accurate Khmer translations with correct subtitle start/end timestamps, fast generation (bypassing full ASR), and minimal manual editing.
+- **Root Causes Identified**:
+  1. **Job Route Missing `pipelineMode`**: `DubbingRunnerContext.jsx` sent `{ pipelineMode: 'fast_ocr' }`, but `jobRoutes.js` only checked `generationMode: rawGenMode`. When clicking Run 1-by-1, it silently defaulted to standard mode, forcing full Stage 4 ASR & Stage 5 Reconciliation and wasting ~50-80s per episode.
+  2. **Coarse 1.8s Sampling in `chunkOrchestrator.js`**: Chunk OCR defaulted to `baseStepSec: 1.8`, skipping rapid dialogue (< 1.5s) on long videos.
+  3. **Overwriting Short / Split Dialogue in Stage 3**:
+     - When `obsA` and `obsB` within a cue state were different (two distinct consecutive subtitles), tie-break voting deleted one of the lines.
+     - When a short subtitle (< 1s) ended before the midpoint, `obsB` read blank background and tie-break voting deleted the valid short cue.
+     - Observations in `rawObservations` outside change-point cueStates were dropped.
+  4. **Overwriting Visual Gender in `deduplicateFastOcrCues`**: Line 1135 unconditionally overwrote detected character visualGender (`female`) with default gender (`male`), ignoring Gemini Vision's character inspection.
+  5. **Stage 6 Arbitrary Splitting Broken 1:1 Rule**: Line 1274 ran `splitLongDialogueSegment` unconditionally, breaking 1:1 segment mapping for long subtitle cues.
+- **Surgical Changes Implemented**:
+  1. `backend/routes/jobRoutes.js`:
+     - Extracted `pipelineMode` from `req.body` and mapped `pipelineMode: 'fast_ocr'` into `generationMode: 'fast_ocr'` and `mode: GENERATION_MODES.FAST_OCR`.
+  2. `frontend/src/features/dubbing-runner/DubbingRunnerContext.jsx`:
+     - In `runSingleTranslate`: included `generationMode: options.generationMode || options.pipelineMode || 'fast_ocr'` alongside `pipelineMode`.
+  3. `backend/services/pipeline/chunkOrchestrator.js`:
+     - Passed `baseStepSec: mode === GENERATION_MODES.FAST_OCR ? 0.75 : 1.0` (tightened from 1.8s) to reliably capture short dialogue lines.
+  4. `backend/services/pipeline/dubbingPipeline.js`:
+     - Passed `baseStepSec: mode === GENERATION_MODES.FAST_OCR ? 0.75 : 1.0`.
+  5. `backend/services/ffmpegService.js`:
+     - In `detectSubtitleChangePoints`: refined peak threshold (`curr >= 10.0`, `curr >= 13.5 && curr > prev * 1.25`, and prominent local peak `curr >= 8.5`) to capture faint or short Chinese subtitles down to 0.35s.
+  6. `backend/services/pipeline/stages/stage3_extractChineseSubtitles.js`:
+     - Added distinct consecutive cue splitting when `obsA` and `obsB` contain different Chinese text (zero lines dropped).
+     - Added short cue preservation (< 1s) when `obsA` has text and `obsB` has already vanished, finding the exact visual disappearance point from `frameDiffs`.
+     - Added Step 2B: recovers any valid `rawObservations` with clean text not covered by change-point cue states.
+     - In `deduplicateFastOcrCues`: clamped preceding `endSec` when overlapping adjacent cues with different text to guarantee zero timestamp overlap; preserved detected `visualGender` (`female` -> `km-KH-SreymomNeural`, `male` -> `km-KH-PisethNeural`).
+  7. `backend/services/pipeline/stages/stage6_generateModeSpecificScript.js`:
+     - When `isFastOcrMode` is true, bypassed `splitLongDialogueSegment` to preserve strictly 1:1 subtitle cue to segment mapping.
+     - Preserved `uncertainOcr`, `ocrConfidence`, and `ocrDisagreement` in `createCanonicalSegment` to light up the UI Amber Review badge.
+- **Verification Outcomes**:
+  - Added new 8-case test suite `backend/tests/fast_ocr_timing_and_accuracy.test.js`: **8/8 PASS** (430ms).
+  - `fast_ocr_mode.test.js` & `fast_ocr_rule.test.js`: **13/13 PASS**.
+  - All 106 major regression tests passing (**102 PASS, 4 skipped, 0 FAIL** across all suites).
+  - `npm --prefix frontend run build`: **PASS** (0 errors, 879ms).
+  - **Measured Speedup**: Wall time dropped from ~70-125s (with ASR) down to **~22-35s (Fast OCR)**, or **~10-15s on disk cache hit** (~3.5x - 4x faster).
+- **Active Environment**:
+  - Backend API: `http://localhost:5000`
+  - Frontend UI: `http://localhost:5173`
+- **Next Steps**:
+  - Ready for Nha's review and live testing.
+
+---
+
+## Last Session
+- **Environment**: Antigravity IDE (Gemini)
+- **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-19T21:30:00+07:00
+
+## Summary: ConCaT-Inspired Playback, Khmer Audio & Timeline Improvements (100% PASS)
+- **Request:** Implement ConCaT-inspired architectural improvements for video playback priority, Khmer audio playback (Web Audio prototype with fallback), timeline edit commands (single-gesture undo, fast GPU visual move without /sync writes, magnetic snap to 0/playhead/clips), and clean UI with diagnostics panel.
+- **Phases Implemented**:
+  1. **Phase A — Video Playback Priority & Cooperative Scheduling**:
+     - `frontend/src/utils/thumbnailUtils.js`: Updated `isMainPlayerBusy()` to yield when `window.__timelineIsActiveScrubbing`, `window.__timelineIsDragging`, or `window.__timelineIsPlaying` are active.
+     - `frontend/src/hooks/useProxyPreview.js`: Backed off background proxy preview polling during active live playback (from 1s/5s to 6s/12s) to free up CPU and network sockets for the video decoder.
+     - `frontend/src/hooks/useSourceProxy.js`: Backed off progress polling from 1s to 5s during active live playback.
+     - `frontend/src/components/timeline/TimelineEditor.jsx`: Published cooperative timeline state flags (`window.__timelineIsPlaying`, `window.__timelineIsDragging`, `window.__timelineIsActiveScrubbing`) for cooperative scheduling.
+     - `frontend/src/hooks/useVideoPlayback.js`: Fixed `alreadySeekingToTarget` guard in `handlePlayPause` so in-flight seeks targeting the same timestamp are not aborted.
+  2. **Phase B — Web Audio Khmer Audio Playback with Clean Fallback**:
+     - Created `frontend/src/utils/webAudioScheduler.js`:
+       - `AudioBufferLRUCache`: Bounded LRU decoded buffer cache (up to 50 audio buffers, ~12MB RAM), with automatic dead-air leading silence detection via `findLeadingSilenceFromChannels`.
+       - `WebAudioScheduler`: Sample-accurate Web Audio scheduling using `AudioContext` and `AudioBufferSourceNode`, lookahead scheduling window (2.2s), natural start without cold seek flush, 50% auto-ducking on overlapping dialogue, sample-accurate playbackRate tracking, and drift detection.
+       - Integrated into `frontend/src/components/player/VideoPlayerPreview.jsx` behind `effectiveUseWebAudio` feature flag.
+       - Clean, instant fallback to existing HTMLAudioElement pool (`syncSegmentAudiosAtTime`) if Web Audio is unsupported or toggled off by user.
+  3. **Phase C — Timeline Edit Commands (ConCaT Gesture Semantics)**:
+     - 1 drag gesture = 1 undo operation. Pre-drag state is captured on mouse down, pointer move applies direct GPU `translate3d` without React state diffing or `/sync` writes, and exactly one undo snapshot is pushed on clip drop via `onUpdateSegments`.
+     - Accurate magnetic snap: Updated `computeVoiceDragPosition` in `frontend/src/utils/timelineUtils.js` to snap to `0s` (start of timeline), `currentLiveTime` (playhead position), and adjacent voice clip boundaries, with visible `snapLineTime` indicator line. Bypassed cleanly when `snappingEnabled === false`.
+  4. **Phase D — Clean UI & Diagnostics Panel**:
+     - Compact LIVE/Proxy status pill indicator.
+     - Collapsible Diagnostics Panel (`📊 Diagnostics`):
+       - Real measured FPS (moving window timestamp frequency).
+       - Dropped Video Frames (from `HTMLVideoElement.getVideoPlaybackQuality().droppedVideoFrames`).
+       - Real Seek Latency in ms (tracked between seek start and native `seeked`).
+       - Audio Drift in ms (measured between video playhead and active audio clock).
+       - Audio Engine indicator & runtime toggle button (`Web Audio (ConCaT)` <-> `HTMLAudio Pool`).
+       - All Khmer UI labels and layout preserved.
+- **Verification Outcomes**:
+  - Added new 4-case ConCaT test suite `backend/tests/concat_playback_and_timeline.test.js`: **4/4 PASS** (103ms).
+  - All 53 major regression test cases passing:
+    - `concat_playback_and_timeline.test.js` (4/4 PASS)
+    - `playback_sync_and_deferred_source_regression.test.js` (5/5 PASS)
+    - `timeline_voice_drag_freeze_regression.test.js` (1/1 PASS)
+    - `timeline_voice_drag_persistence.test.js` (7/7 PASS)
+    - `regenerate_script_and_voice.test.js` (11/11 PASS)
+    - `global_logo_settings.test.js` (7/7 PASS)
+    - `speaker_identity_and_series_voice_memory.test.js` (12/12 PASS)
+    - `timeline_playback_stall_guard.test.js` (4/4 PASS)
+    - `stage5_reconciliation_and_recovery.test.js` (7/7 PASS)
+    - `stage6_translation_fallback_and_tts_guard.test.js` (10/10 PASS)
+  - Real Google Chrome browser Playwright test `tools/test_concat_browser_verification.cjs`: **PASS**
+    - Diagnostics panel toggle & metric display: PASS (FPS, 0 dropped frames, seek latency 112ms, drift ±0ms)
+    - Audio engine toggle button: PASS (toggles between Web Audio and HTMLAudio Pool on the fly)
+    - Voice drag gesture on timeline: PASS
+    - Playback metrics after 3s: PASS (111 frames rendered, 1 dropped frame, 0 audio errors)
+  - `npm --prefix frontend run build`: **PASS** (0 errors, 2.65s).
+- **Active Environment**:
+  - Backend API: `http://localhost:5000`
+  - Frontend UI: `http://localhost:5173`
+- **Next Steps**:
+  - Ready for Nha's review and live testing.
+
+---
+
+
+- **Environment**: Antigravity IDE (Gemini)
+- **Branch**: `chore/full-project-cleanup`
 - **Timestamp**: 2026-11-19T20:30:00+07:00
 
 ## Summary: Fix Regenerate Script & Voice Real State Reset (100% PASS)

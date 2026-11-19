@@ -152,6 +152,7 @@ router.post("/generate", async (req, res) => {
       mode: rawMode = "dialogue",
       dubbingMode: rawDubbingMode,
       generationMode: rawGenMode,
+      pipelineMode,
       recapStyle = "story_recap",
       customPrompt = "",
       narratorGender = "male",
@@ -165,7 +166,7 @@ router.post("/generate", async (req, res) => {
       overlapSec = 2,
     } = req.body;
 
-    const generationMode = rawGenMode || (rawMode === 'fast_ocr' ? 'fast_ocr' : 'standard');
+    const generationMode = rawGenMode || (pipelineMode === 'fast_ocr' ? 'fast_ocr' : null) || (rawMode === 'fast_ocr' ? 'fast_ocr' : 'standard');
     const effectiveDubbingMode = rawDubbingMode || (rawMode === 'recap' ? 'recap' : 'dialogue');
     const mode = effectiveDubbingMode === 'recap'
       ? GENERATION_MODES.MODE_B_RECAP

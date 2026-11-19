@@ -38,7 +38,7 @@ function resolveLatestCompletedJobForEpisode(epJobsDir) {
         const sortTs = Number(jobJson.completedAt || jobJson.updatedAt || jobJson.createdAt || 0);
         candidates.push({ jFile, jobJson, segs, sortTs });
       }
-    } catch (_) {}
+    } catch (_) { }
   }
   if (candidates.length === 0) return null;
   candidates.sort((a, b) => {
@@ -67,7 +67,7 @@ function atomicWriteSeriesJson(filePath, data) {
 
   try {
     if (fs.existsSync(filePath)) {
-      try { fs.unlinkSync(filePath); } catch (_) {}
+      try { fs.unlinkSync(filePath); } catch (_) { }
     }
     fs.renameSync(tempPath, filePath);
   } catch (renameErr) {
@@ -76,7 +76,7 @@ function atomicWriteSeriesJson(filePath, data) {
       fs.unlinkSync(tempPath);
     } catch (copyErr) {
       if (fs.existsSync(tempPath)) {
-        try { fs.unlinkSync(tempPath); } catch (_) {}
+        try { fs.unlinkSync(tempPath); } catch (_) { }
       }
       throw copyErr;
     }
@@ -145,11 +145,11 @@ function sanitizeRenderedVideoRef(renderedVideo, { checkDisk = false, uploadsDir
   const refs = typeof renderedVideo === 'string'
     ? [renderedVideo]
     : [
-        renderedVideo.outputVideoUrl,
-        renderedVideo.videoUrl,
-        renderedVideo.downloadUrl,
-        renderedVideo.outputFilename,
-      ];
+      renderedVideo.outputVideoUrl,
+      renderedVideo.videoUrl,
+      renderedVideo.downloadUrl,
+      renderedVideo.outputFilename,
+    ];
   const hasMockRef = refs.some(
     (ref) => typeof ref === 'string' && /(?:^|\/|\\)mock_(?:render|16-9|9-16|1-1)/i.test(ref.trim())
   );
@@ -242,7 +242,7 @@ function applySafeDiskHydration(ep, cleanSeries, seriesDir, resolvedProjectsDir 
           }
         }
       }
-    } catch (_) {}
+    } catch (_) { }
   }
 
   // 1. Hydration Check: Auto-recover scriptData from completed jobs on disk if missing
@@ -349,7 +349,7 @@ function applySafeDiskHydration(ep, cleanSeries, seriesDir, resolvedProjectsDir 
                 bestMtime = st.mtimeMs;
                 best = fname;
               }
-            } catch (_) {}
+            } catch (_) { }
           }
           return best;
         };
@@ -455,7 +455,7 @@ function applySafeDiskHydration(ep, cleanSeries, seriesDir, resolvedProjectsDir 
           mutated = true;
         }
       }
-    } catch (_) {}
+    } catch (_) { }
   }
 
   return mutated;
@@ -526,7 +526,7 @@ function getSeriesMetadata(seriesId, options = {}) {
             lastCheckTime: Date.now(),
           });
           return payloadToWrite;
-        } catch (_) {}
+        } catch (_) { }
       }
 
       seriesMetadataCache.set(cacheKey, {
@@ -536,7 +536,7 @@ function getSeriesMetadata(seriesId, options = {}) {
         lastCheckTime: Date.now(),
       });
       return sanitized;
-    } catch (_) {}
+    } catch (_) { }
   }
 
   // Fallback: discover existing episode directories on disk (numerically sorted 1..N)
@@ -565,7 +565,7 @@ function getSeriesMetadata(seriesId, options = {}) {
         applySafeDiskHydration(discoveredEp, cleanSeries, seriesDir, projectsDir);
         discoveredEpisodes.push(discoveredEp);
       }
-    } catch (_) {}
+    } catch (_) { }
   }
 
   const fallbackData = {
@@ -1271,7 +1271,7 @@ function deleteEpisode(seriesId, episodeId) {
     // Idempotent: If episode already removed or not found, return clean success without 400 Bad Request
     const epDir = path.join(PROJECTS_DIR, cleanSeries, 'episodes', cleanEp);
     if (fs.existsSync(epDir)) {
-      try { fs.rmSync(epDir, { recursive: true, force: true }); } catch (_) {}
+      try { fs.rmSync(epDir, { recursive: true, force: true }); } catch (_) { }
     }
     return {
       success: true,
@@ -1296,7 +1296,7 @@ function deleteEpisode(seriesId, episodeId) {
       const oldNum = ep.episodeNumber;
       ep.episodeNumber = newNum;
 
-      const isGeneric = !ep.title || 
+      const isGeneric = !ep.title ||
         new RegExp(`^ភាគទី\\s*${oldNum}\\s*\\(EP${oldNum}\\)$`, 'i').test(ep.title.trim()) ||
         /^ភាគទី\s*[\d០-៩]+\s*\(EP[\d០-៩]+\)$/i.test(ep.title.trim()) ||
         /^\(EP[\d០-៩]+\)$/i.test(ep.title.trim()) ||
@@ -1321,7 +1321,7 @@ function deleteEpisode(seriesId, episodeId) {
 
   const epDir = path.join(PROJECTS_DIR, cleanSeries, 'episodes', cleanEp);
   if (fs.existsSync(epDir)) {
-    try { fs.rmSync(epDir, { recursive: true, force: true }); } catch (_) {}
+    try { fs.rmSync(epDir, { recursive: true, force: true }); } catch (_) { }
   }
 
   console.log(`[EpisodeService] Deleted Episode ${cleanEp} from series "${cleanSeries}". Remaining episodes re-indexed sequentially (1..${series.episodes.length}).`);
@@ -1331,7 +1331,7 @@ function deleteEpisode(seriesId, episodeId) {
 let queueModuleRef = null;
 function getProductionJobQueueSafe() {
   if (!queueModuleRef) {
-    try { queueModuleRef = require('./pipeline/productionJobQueue'); } catch (_) {}
+    try { queueModuleRef = require('./pipeline/productionJobQueue'); } catch (_) { }
   }
   return queueModuleRef?.productionJobQueue || null;
 }
@@ -1402,8 +1402,8 @@ async function resetEpisodeState(seriesId, episodeId, options = {}) {
             queueModuleRef.cancelJob(active.jobId);
           }
         }
-      } catch (_) {}
-      try { q.releaseEpisodeLock(cleanSeries, cleanEp); } catch (_) {}
+      } catch (_) { }
+      try { q.releaseEpisodeLock(cleanSeries, cleanEp); } catch (_) { }
     }
 
     // 3. Clear verified generated audio files for this episode (NEVER touch video/)
@@ -1413,7 +1413,7 @@ async function resetEpisodeState(seriesId, episodeId, options = {}) {
         for (const file of audioFiles) {
           // Delete only .mp3, .wav, and .meta.json files
           if (file.endsWith('.mp3') || file.endsWith('.wav') || file.endsWith('.json')) {
-            try { fs.unlinkSync(path.join(epAudioDir, file)); } catch (_) {}
+            try { fs.unlinkSync(path.join(epAudioDir, file)); } catch (_) { }
           }
         }
       } catch (aErr) {
@@ -1435,9 +1435,9 @@ async function resetEpisodeState(seriesId, episodeId, options = {}) {
         try {
           const jFiles = fs.readdirSync(epJobsDir).filter((f) => f.endsWith('.json'));
           for (const jf of jFiles) {
-            try { fs.unlinkSync(path.join(epJobsDir, jf)); } catch (_) {}
+            try { fs.unlinkSync(path.join(epJobsDir, jf)); } catch (_) { }
           }
-        } catch (_) {}
+        } catch (_) { }
       }
 
       // Clear chunk cache on disk matching this video/episode
@@ -1446,10 +1446,10 @@ async function resetEpisodeState(seriesId, episodeId, options = {}) {
         if (fs.existsSync(chunkCacheDir)) {
           const cFiles = fs.readdirSync(chunkCacheDir).filter((f) => f.startsWith('chunk_') && f.endsWith('.json'));
           for (const cf of cFiles) {
-            try { fs.unlinkSync(path.join(chunkCacheDir, cf)); } catch (_) {}
+            try { fs.unlinkSync(path.join(chunkCacheDir, cf)); } catch (_) { }
           }
         }
-      } catch (_) {}
+      } catch (_) { }
 
       // Reset scriptData
       targetEp.scriptData = null;

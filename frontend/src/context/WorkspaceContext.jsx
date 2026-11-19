@@ -9,7 +9,9 @@ import {
 } from '../utils/projectStorage';
 import {
   DEFAULT_GLOBAL_LOGO_SETTINGS,
+  DEFAULT_GLOBAL_CUSTOMIZE_SETTINGS,
   loadGlobalLogoSettings,
+  loadGlobalCustomizeSettings,
 } from '../utils/logoSettingsStorage';
 
 const NOOP = () => {};
@@ -23,7 +25,9 @@ const DEFAULT_WORKSPACE_CONTEXT = Object.freeze({
   setSpeakerRegistry: NOOP,
   voiceSettings: {},
   setVoiceSettings: NOOP,
-  globalLogoSettings: DEFAULT_GLOBAL_LOGO_SETTINGS,
+  globalCustomizeSettings: DEFAULT_GLOBAL_CUSTOMIZE_SETTINGS,
+  setGlobalCustomizeSettings: NOOP,
+  globalLogoSettings: DEFAULT_GLOBAL_CUSTOMIZE_SETTINGS,
   setGlobalLogoSettings: NOOP,
   audioGenerated: false,
   setAudioGenerated: NOOP,
@@ -82,7 +86,9 @@ export function useStudioWorkspaceState() {
   const [scriptData, setScriptData] = useState(null);
   const [speakerRegistry, setSpeakerRegistry] = useState({});
   const [voiceSettings, setVoiceSettings] = useState(loadSavedVoiceSettings);
-  const [globalLogoSettings, setGlobalLogoSettings] = useState(loadGlobalLogoSettings);
+  const [globalCustomizeSettings, setGlobalCustomizeSettings] = useState(loadGlobalCustomizeSettings);
+  const globalLogoSettings = globalCustomizeSettings;
+  const setGlobalLogoSettings = setGlobalCustomizeSettings;
   const [audioGenerated, setAudioGenerated] = useState(false);
   const [audioOutdated, setAudioOutdated] = useState(false);
   const [fullAudioPath, setFullAudioPath] = useState(null);
@@ -99,6 +105,8 @@ export function useStudioWorkspaceState() {
       setSpeakerRegistry,
       voiceSettings,
       setVoiceSettings,
+      globalCustomizeSettings,
+      setGlobalCustomizeSettings,
       globalLogoSettings,
       setGlobalLogoSettings,
       audioGenerated,
@@ -123,6 +131,7 @@ export function useStudioWorkspaceState() {
       scriptData,
       speakerRegistry,
       voiceSettings,
+      globalCustomizeSettings,
       globalLogoSettings,
       audioGenerated,
       audioOutdated,

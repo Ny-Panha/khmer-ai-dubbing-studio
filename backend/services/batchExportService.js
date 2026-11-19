@@ -22,7 +22,11 @@ const {
   getMediaDuration,
   cancelJobRenderProcess,
 } = require("./ffmpegService");
-const { getEffectiveGlobalLogoSettingsForExport } = require("./globalLogoSettingsService");
+const {
+  getEffectiveGlobalLogoSettingsForExport,
+  getEffectiveGlobalCustomizeSettingsForExport,
+  computeVisualFingerprint,
+} = require("./globalLogoSettingsService");
 
 const batchExportJobs = new Map();
 const batchJobControllers = new Map();
@@ -551,7 +555,8 @@ async function runBatchExportWorker({
 
   const targetDownloadsDir = resolveDownloadsDirectory(downloadsDir);
 
-  const rawLogo = exportSettings.logoSettings || getEffectiveGlobalLogoSettingsForExport() || null;
+  const effectiveGlobalCustomize = getEffectiveGlobalCustomizeSettingsForExport();
+  const rawLogo = exportSettings.logoSettings || effectiveGlobalCustomize.logoSettings || null;
   const { logoPath: resolvedLogoPath, tempLogoFile } = resolveLogoInputForBatch(rawLogo, exportsDir);
   const rawSponsor = exportSettings.sponsorSettings || null;
   const resolvedSponsorPath = resolveSponsorInputForBatch(rawSponsor);
@@ -597,8 +602,8 @@ async function runBatchExportWorker({
   const subtitleColor = exportSettings.subtitleColor || "white";
   const subtitleStyle = exportSettings.subtitleStyle || "banner";
   const enableDemucs = Boolean(exportSettings.enableDemucs);
-  const antiTheft = exportSettings.antiTheft || null;
-  const cornerMask = exportSettings.cornerMask || null;
+  const antiTheft = exportSettings.antiTheft || effectiveGlobalCustomize.antiTheft || null;
+  const cornerMask = exportSettings.cornerMask || null || effectiveGlobalCustomize.cornerMask;
   // Visual presets are batch-wide. Never reuse an output rendered with older
   // logo/mask/banner options, even when subtitles have not changed.
   const batchVisualSignature = JSON.stringify({ rawLogo, cornerMask, antiTheft, rawSponsor });
@@ -667,14 +672,23 @@ async function runBatchExportWorker({
 
       const burnedSubtitleOptions = epPlan.hasVoice && burnSubtitles ? subtitleOptions : null;
       const previous = epPlan.rawEpisode.renderedVideo;
+      const currentVisualFingerprint = computeVisualFingerprint({
+        logo: rawLogo,
+        antiTheft,
+        cornerMask,
+        aspectRatio: epAspectRatio,
+        verticalStyle,
+      });
       // Named episode outputs can be overwritten. Only reuse a known matching burn.
       let alreadyRenderedOnDisk = false;
       if (fs.existsSync(epOutputPath) && !exportSettings.forceReRender) {
         try {
           const stat = fs.statSync(epOutputPath);
+          const sameVisual = !previous?.burnedVisualFingerprint || previous.burnedVisualFingerprint === currentVisualFingerprint;
           const sameVisuals = previous?.batchVisualSignature === batchVisualSignature;
           const sameBurn = sameVisuals && previous?.outputFilename === epOutputFilename &&
             previous.renderedAt === stat.mtime.getTime() &&
+            sameVisual &&
             JSON.stringify(previous.burnedSubtitleOptions) === JSON.stringify(burnedSubtitleOptions);
           if (stat.size > 2 * 1024 * 1024 && sameBurn) {
             alreadyRenderedOnDisk = true;
@@ -766,6 +780,7 @@ async function runBatchExportWorker({
               usedOriginalAudio: epPlan.useOriginalAudio,
               aspectRatio: epAspectRatio,
               verticalStyle,
+              burnedVisualFingerprint: currentVisualFingerprint,
             };
             if (epPlan.hasVoice) {
               targetEp.status = "completed";
