@@ -6,6 +6,7 @@ const {
   cleanTextForTts,
   isPlaceholderOrEmptyTtsText,
   speedToEdgeRate,
+  computeSegmentAudioSignature,
 } = require('../../ttsService');
 const { getMediaDuration } = require('../../ffmpegService');
 const {
@@ -32,7 +33,7 @@ function getTtsAudioCacheKey(text, voiceId, durationSec) {
  * @param {string} params.audioDir - Physical episode audio directory
  * @param {string} [params.defaultVoiceId='km-KH-PisethNeural']
  * @param {boolean} [params.forceRegen=false]
- * @param {number} [params.concurrency=5]
+ * @param {number} [params.concurrency=3]
  * @param {string} [params.jobId=null]
  * @param {string} [params.seriesId='series_default']
  * @param {string} [params.episodeId='ep_1']
@@ -47,7 +48,7 @@ async function generateSegmentTTS({
   defaultVoiceId = 'km-KH-PisethNeural',
   speakerRegistry = {},
   forceRegen = false,
-  concurrency = 5,
+  concurrency = 3,
   jobId = null,
   seriesId = 'series_default',
   episodeId = 'ep_1',
@@ -200,6 +201,7 @@ async function generateSegmentTTS({
 
       const segSpeedInfo = speedToEdgeRate(seg.speed ?? seg.rate);
       const hasCustomSegSpeed = Boolean(seg.userCustomSpeed || segSpeedInfo.isCustomNonDefault);
+      const audioSignature = computeSegmentAudioSignature(khmerText, chosenVoiceId, seg.speed ?? seg.rate, seg.pitch);
 
       // 1. Check Durable Segment Ledger First (Phase 4.2 & 4.3 Requirement)
       const existingLedgerRecord = jobId ? ledger[segKey] : null;
@@ -220,10 +222,11 @@ async function generateSegmentTTS({
           reusedCount++;
           seg.audioPath = integrity.audioPath;
           seg.audioFile = path.basename(integrity.audioPath);
-          seg.audioUrl = toPublicAudioUrl(integrity.audioPath); // សម្រាប់ចំណុចទី 1 (Ledger)
+          seg.audioUrl = toPublicAudioUrl(integrity.audioPath);
           seg.audioDurationSec = integrity.durationSec;
           seg.ttsStatus = 'ready';
           seg.audioOutdated = false;
+          seg.audioSignature = audioSignature;
           results[idx] = seg;
 
           if (typeof onSegmentCompleted === 'function') {
@@ -233,16 +236,18 @@ async function generateSegmentTTS({
         }
       }
 
-      // 2. Check if existing episode audio file is valid
+      // 2. Check if existing episode audio file is valid (Smart TTS Cache v2: verify audioSignature & size >= 500B)
       const existingAudioPath = seg.audioPath || (seg.audioFile ? path.join(audioDir, path.basename(seg.audioFile)) : null);
       const customSpeedMatchesExisting = !hasCustomSegSpeed || Boolean(seg.ttsRate && segSpeedInfo.valid && seg.ttsRate === segSpeedInfo.rate);
-      const canReuseExisting = !forceRegen && !seg.audioOutdated && customSpeedMatchesExisting && existingAudioPath && fs.existsSync(existingAudioPath) && fs.statSync(existingAudioPath).size > 200;
+      const sigMatches = !seg.audioSignature || seg.audioSignature === audioSignature;
+      const canReuseExisting = !forceRegen && !seg.audioOutdated && customSpeedMatchesExisting && sigMatches && existingAudioPath && fs.existsSync(existingAudioPath) && fs.statSync(existingAudioPath).size > 500;
 
       if (canReuseExisting) {
         reusedCount++;
         seg.audioPath = existingAudioPath;
         seg.audioFile = path.basename(existingAudioPath);
-        seg.audioUrl = toPublicAudioUrl(existingAudioPath);   // សម្រាប់ចំណុចទី 2 (Existing Audio)
+        seg.audioUrl = toPublicAudioUrl(existingAudioPath);
+        seg.audioSignature = audioSignature;
         try {
           const realDur = await getMediaDuration(existingAudioPath);
           if (typeof realDur === 'number' && realDur > 0) {
@@ -281,12 +286,12 @@ async function generateSegmentTTS({
         continue;
       }
 
-      // 3. Check persistent disk TTS cache
-      const cacheKey = getTtsAudioCacheKey(khmerText, chosenVoiceId, effectiveTargetDuration);
+      // 3. Check persistent disk TTS cache (Smart TTS Cache v2: keyed by audioSignature)
+      const cacheKey = audioSignature;
       const cachedAudioPath = path.join(cacheDir, `tts_${cacheKey}.mp3`);
       const cachedMetaPath = path.join(cacheDir, `tts_${cacheKey}.json`);
 
-      if (!forceRegen && !hasCustomSegSpeed && fs.existsSync(cachedAudioPath) && fs.statSync(cachedAudioPath).size > 200) {
+      if (!forceRegen && !hasCustomSegSpeed && fs.existsSync(cachedAudioPath) && fs.statSync(cachedAudioPath).size > 500) {
         try {
           const destFile = `seg_${seg.id || idx + 1}_${cacheKey.substring(0, 8)}.mp3`;
           const destPath = path.join(audioDir, destFile);
@@ -301,8 +306,9 @@ async function generateSegmentTTS({
           reusedCount++;
           seg.audioFile = destFile;
           seg.audioPath = destPath;
-          seg.audioUrl = toPublicAudioUrl(destPath);            // សម្រាប់ចំណុចទី 3 (Disk Cache)
+          seg.audioUrl = toPublicAudioUrl(destPath);
           seg.audioDurationSec = cachedDuration;
+          seg.audioSignature = audioSignature;
           seg.ttsStatus = 'ready';
           seg.audioOutdated = false;
           results[idx] = seg;
@@ -363,6 +369,7 @@ async function generateSegmentTTS({
         seg.overflowSec = result.overflowSec;
         seg.ttsStatus = 'ready';
         seg.audioOutdated = false;
+        seg.audioSignature = audioSignature;
 
         // Persist to segment ledger atomically
         if (jobId && result.audioPath && fs.existsSync(result.audioPath)) {

@@ -560,7 +560,7 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
       while (!signal?.aborted) {
         await new Promise((r) => setTimeout(r, 1200));
         if (signal?.aborted) {
-          await killSeparationApi({ videoPath: videoRef, jobId: 'all' }).catch(() => {});
+          await killSeparationApi({ videoPath: videoRef, jobId: videoRef }).catch(() => {});
           throw new Error('Demucs separation aborted by user');
         }
 
@@ -624,19 +624,50 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
   }, [activeSeries?.id, updateRunnerState]);
 
   /**
-   * 4. Run all 3 steps for 1 single episode sequentially
+   * 4. Run all 3 steps for 1 single episode
+   * Resource-aware Smart Pipeline:
+   * - Clean BGM (Demucs) depends only on video; starts in parallel or queues safely.
+   * - Script (Fast OCR / Translation) runs.
+   * - Voice (TTS) waits for Script completion (strict dependency contract).
+   * - Awaits Clean BGM before marking episode complete.
    */
   const runSingleEpisodeAll3 = useCallback(async (ep, options = {}, signal = null) => {
-    // 1. Script
-    await runSingleTranslate(ep, options, signal);
+    if (!ep) return { success: false, error: 'No episode provided' };
+
+    const hasDemucs = checkEpisodeHasDemucsReady(ep, null, null);
+    let bgmPromise = null;
+
+    // 1. Kick off Clean BGM in parallel if not already cached and not skipped
+    if (!hasDemucs && !options.skipCleanBgm) {
+      bgmPromise = runSingleCleanBgm(ep, options, signal).catch((bgmErr) => {
+        console.warn(`[All 3] Clean BGM background task notice for EP${ep.episodeNumber || ep.id}:`, bgmErr.message);
+        return { success: false, error: bgmErr.message };
+      });
+    }
+
+    // 2. Step 1: Script ខ្មែរ (Chinese Subtitle OCR -> Khmer Translation)
+    const scriptRes = await runSingleTranslate(ep, options, signal);
+    if (!scriptRes?.success && !scriptRes?.skipped) {
+      throw new Error(scriptRes?.error || 'Script generation failed');
+    }
     if (typeof refreshSeries === 'function') await refreshSeries();
 
-    // 2. Voice
-    await runSingleVoice(ep, options, signal);
+    // 3. Step 2: សំឡេង AI (Strictly depends on Script!)
+    const voiceRes = await runSingleVoice(ep, options, signal);
+    if (!voiceRes?.success && !voiceRes?.skipped) {
+      throw new Error(voiceRes?.error || 'Voice generation failed');
+    }
     if (typeof refreshSeries === 'function') await refreshSeries();
 
-    // 3. Demucs
-    await runSingleCleanBgm(ep, options, signal);
+    // 4. Step 3: Await Clean BGM if running in background
+    if (bgmPromise) {
+      const bgmRes = await bgmPromise;
+      if (!bgmRes?.success && !bgmRes?.skipped) {
+        console.warn(`[All 3] Clean BGM finished with notice:`, bgmRes?.error);
+      }
+    } else if (!hasDemucs && !options.skipCleanBgm) {
+      await runSingleCleanBgm(ep, options, signal);
+    }
     if (typeof refreshSeries === 'function') await refreshSeries();
 
     return { success: true };

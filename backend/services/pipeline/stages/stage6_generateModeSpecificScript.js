@@ -1,3 +1,6 @@
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
 const { GENERATION_MODES, formatSecondsToTimecode } = require('../pipelineTypes');
 const { detectSpeakerGender } = require('../../../models/speakerRegistry');
 const { isAuthOrInvalidKeyError, isQuotaOrRateLimitError } = require('../../geminiKeyManager');
@@ -7,6 +10,55 @@ const {
   stripPunctuationForSpeech,
   isExplicitFillerKhmer,
 } = require('../../../utils/translationQuality');
+
+// Smart Segment-Level Translation Cache (Persists verified Chinese -> Khmer segment translations)
+function getTranslationCacheDir() {
+  const dir = path.join(__dirname, '../../../uploads/cache/translation');
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+
+function getTranslationCacheKey(chineseSource, { seriesId = 'default', glossaryHash = '', mode = 'dialogue' } = {}) {
+  const norm = String(chineseSource || '')
+    .trim()
+    .replace(/\s+/g, '')
+    .replace(/[，。！？,.!?、]/g, '');
+  const sId = String(seriesId || 'default').trim();
+  return crypto.createHash('sha256')
+    .update(`${norm}__${sId}__${glossaryHash}__${mode}`)
+    .digest('hex')
+    .substring(0, 16);
+}
+
+function getCachedTranslation(chineseSource, options = {}) {
+  if (!chineseSource) return null;
+  const key = getTranslationCacheKey(chineseSource, options);
+  const cachePath = path.join(getTranslationCacheDir(), `tr_${key}.json`);
+  if (!fs.existsSync(cachePath)) return null;
+  try {
+    const data = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
+    if (data && data.khmerText && !isPlaceholderTranslationText(data.khmerText)) {
+      return data;
+    }
+  } catch (_) {}
+  return null;
+}
+
+function setCachedTranslation(chineseSource, { khmerText, speaker, voiceGender, seriesId = 'default', glossaryHash = '', mode = 'dialogue' } = {}) {
+  if (!chineseSource || !khmerText || isPlaceholderTranslationText(khmerText)) return;
+  const key = getTranslationCacheKey(chineseSource, { seriesId, glossaryHash, mode });
+  const cachePath = path.join(getTranslationCacheDir(), `tr_${key}.json`);
+  try {
+    fs.writeFileSync(cachePath, JSON.stringify({
+      chineseSource,
+      khmerText,
+      speaker: speaker || 'តួអង្គ',
+      voiceGender: voiceGender || 'unknown',
+      seriesId,
+      timestamp: Date.now(),
+    }, null, 2), 'utf8');
+  } catch (_) {}
+}
 
 // Full Gemini cascade matching Shared Catalog (all 10 usable dubbing models)
 const STAGE6_CASCADE_MODELS = DUBBING_CASCADE_MODELS;
@@ -1248,8 +1300,13 @@ async function generateModeSpecificScript({
   userDirection = '',
   narratorGender = 'male',
   seriesGlossary = {},
+  seriesId = null,
+  episodeId = null,
   genre = 'auto',
   translationStyle = 'compact',
+  force = false,
+  forceRegen = false,
+  useTranslationCache = true,
   signal = null,
   fallbackModels = STAGE6_CASCADE_MODELS,
   retryDelayMs = 1500,
@@ -1265,6 +1322,7 @@ async function generateModeSpecificScript({
   const poolKeys = Array.isArray(aiClient?.pool?.keys) ? aiClient.pool.keys : [];
 
   const isFastOcrMode = generationMode === GENERATION_MODES.FAST_OCR;
+  const isForce = Boolean(force || forceRegen);
   const normMode = (mode === GENERATION_MODES.MODE_B_RECAP || mode === 'cinematic_recap' || mode === 'recap')
     ? GENERATION_MODES.MODE_B_RECAP
     : GENERATION_MODES.MODE_A_DIALOGUE;
@@ -1311,6 +1369,40 @@ async function generateModeSpecificScript({
     const totalBatches = Math.ceil(dialogueList.length / TRANSLATION_BATCH);
     console.log(`[Stage 6 Mode A] 🌐 ចាប់ផ្តើមបកប្រែពាក្យសន្ទនាចិនទៅជាខ្មែរសរុប ${dialogueList.length} បន្ទាត់ (ចែកជា ${totalBatches} Batches)...`);
 
+    const effectiveSeriesId = seriesId ? String(seriesId).trim() : '';
+    const canUseCache = Boolean(useTranslationCache && !isForce && effectiveSeriesId);
+
+    const glossaryHash = crypto.createHash('md5')
+      .update(JSON.stringify(seriesGlossary || {}))
+      .digest('hex')
+      .substring(0, 8);
+
+    // Smart Translation Cache: reuse verified translations for unchanged Chinese dialogue
+    let cachedHitsCount = 0;
+    if (canUseCache) {
+      for (let i = 0; i < dialogueList.length; i++) {
+        const s = dialogueList[i];
+        if (s.userOverridden || s.translationSource === 'manual') continue; // User manual edits are strictly protected!
+        const targetChinese = String(s.originalChineseText || s.chineseText || s.originalText || '').trim();
+        if (!targetChinese) continue;
+
+        if (!s.khmerTranslatedText || isPlaceholderTranslationText(s.khmerTranslatedText)) {
+          const cached = getCachedTranslation(targetChinese, { seriesId: effectiveSeriesId, glossaryHash, mode: isFastOcrMode ? 'fast_ocr' : 'dialogue' });
+          if (cached && cached.khmerText && !isPlaceholderTranslationText(cached.khmerText)) {
+            s.khmerTranslatedText = cached.khmerText;
+            if (cached.speaker && (!s.speaker || s.speaker === 'តួអង្គ')) s.speaker = cached.speaker;
+            if (cached.voiceGender && (!s.voiceGender || s.voiceGender === 'unknown')) s.voiceGender = cached.voiceGender;
+            s.translationStatus = 'translated';
+            s.isTranslationCached = true;
+            cachedHitsCount++;
+          }
+        }
+      }
+      if (cachedHitsCount > 0) {
+        console.log(`[Stage 6 Smart Cache] ⚡ Reused ${cachedHitsCount}/${dialogueList.length} verified cached Khmer translations for series "${effectiveSeriesId}".`);
+      }
+    }
+
     const batchFailures = [];
     const retiredModels = new Set();
     const quotaDemotedModels = new Set();
@@ -1324,6 +1416,16 @@ async function generateModeSpecificScript({
 
       const batchNum = Math.floor(b / TRANSLATION_BATCH) + 1;
       const batchSlice = dialogueList.slice(b, b + TRANSLATION_BATCH);
+
+      // If all segments in this batch are already validly translated (from cache, prior pass, or manual edit), skip Gemini call
+      const batchNeedsTranslation = batchSlice.some((s) =>
+        !s.userOverridden && (!s.khmerTranslatedText || isPlaceholderTranslationText(s.khmerTranslatedText))
+      );
+      if (canUseCache && !batchNeedsTranslation) {
+        console.log(`[Stage 6 Mode A] ⚡ Batch ${batchNum}/${totalBatches} already 100% translated (Reusing verified cache).`);
+        continue;
+      }
+
       console.log(`[Stage 6 Mode A] ⏳ កំពុងបកប្រែ Batch ទី ${batchNum}/${totalBatches} (បន្ទាត់ ${b + 1} -> ${Math.min(dialogueList.length, b + TRANSLATION_BATCH)})...`);
       const dialoguePayload = batchSlice.map((s, idx) => {
         const globalIdx = b + idx;
@@ -1574,6 +1676,24 @@ Return JSON ONLY matching this schema:
                   ...(targetSeg.validationErrors || []),
                   `មិនមានលទ្ធផលបកប្រែពី AI សម្រាប់បន្ទាត់ #${b + missIdx + 1} (ត្រូវការ Review ឬបកប្រែឡើងវិញ)`,
                 ];
+              }
+            }
+
+            // Cache successful translations for future runs (Smart Translation Cache)
+            if (canUseCache) {
+              for (let sIdx = 0; sIdx < batchSlice.length; sIdx++) {
+                const seg = dialogueList[b + sIdx];
+                if (seg && seg.khmerTranslatedText && !isPlaceholderTranslationText(seg.khmerTranslatedText)) {
+                  const targetChinese = String(seg.originalChineseText || seg.chineseText || seg.originalText || '').trim();
+                  setCachedTranslation(targetChinese, {
+                    khmerText: seg.khmerTranslatedText,
+                    speaker: seg.speaker,
+                    voiceGender: seg.voiceGender,
+                    seriesId: effectiveSeriesId,
+                    glossaryHash,
+                    mode: isFastOcrMode ? 'fast_ocr' : 'dialogue',
+                  });
+                }
               }
             }
 
@@ -1928,6 +2048,16 @@ Return ONE JSON object ONLY (no array, no extra commentary):
                 const ok = applyTranslatedSegmentResult(targetSeg, candidate, payloadItem.maxKhmerWords, globalIdx, { isFastOcrMode });
                 if (ok) {
                   clearRescuedSegmentFailureState(targetSeg);
+                  if (canUseCache) {
+                    setCachedTranslation(payloadItem.sourceChineseToTranslate, {
+                      khmerText: targetSeg.khmerTranslatedText,
+                      speaker: targetSeg.speaker,
+                      voiceGender: targetSeg.voiceGender,
+                      seriesId: effectiveSeriesId,
+                      glossaryHash,
+                      mode: isFastOcrMode ? 'fast_ocr' : 'dialogue',
+                    });
+                  }
                   lineRescued = true;
                   singleRescuedCount++;
                   break;
@@ -2167,5 +2297,8 @@ module.exports = {
   computeKhmerSimilarity,
   detectDuplicateTranslations,
   isPlaceholderTranslationText,
+  getCachedTranslation,
+  setCachedTranslation,
+  getTranslationCacheKey,
   STAGE6_CASCADE_MODELS,
 };

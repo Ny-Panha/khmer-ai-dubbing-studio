@@ -22,6 +22,7 @@ const {
   resolvePriorSegmentAudioPath,
   cancelTtsJob,
   generateVoicePreview,
+  computeSegmentAudioSignature,
 } = require("../services/ttsService");
 const { detectSpeakerGender } = require("../models/speakerRegistry");
 const { createSynchronizedNarrationAudio, parseTimeToSec, autoStretchTtsAudio, getMediaDuration } = require("../services/ffmpegService");
@@ -55,6 +56,21 @@ function doesSegmentNeedTts(seg, audioDir, batchSpeedInfo = null, batchExplicitC
 
   const existingPath = resolvePriorSegmentAudioPath(seg, audioDir);
   if (!existingPath) return true;
+
+  // Verify physical file validity (size >= 500 bytes)
+  try {
+    const stat = fs.statSync(existingPath);
+    if (stat.size < 500) return true;
+  } catch (_) {
+    return true;
+  }
+
+  // Smart TTS Cache v2: verify content signature
+  const targetVoice = seg.voiceId || seg.khmerVoiceId || "km-KH-PisethNeural";
+  const currentSig = computeSegmentAudioSignature(raw, targetVoice, seg.speed ?? seg.rate, seg.pitch);
+  if (seg.audioSignature && seg.audioSignature !== currentSig) {
+    return true;
+  }
 
   const ownInfo = speedToEdgeRate(seg.speed ?? seg.rate);
   if ((seg.userCustomSpeed || ownInfo.isCustomNonDefault) && seg.ttsRate && ownInfo.valid && seg.ttsRate !== ownInfo.rate) {
@@ -493,6 +509,10 @@ router.post("/generate-audio", async (req, res) => {
         }
       );
 
+      const rawSingleTxt = updatedSegment.khmer || updatedSegment.khmerText || updatedSegment.khmerTranslatedText || updatedSegment.text || "";
+      const singleSig = computeSegmentAudioSignature(rawSingleTxt, targetVoice, updatedSegment.speed ?? updatedSegment.rate, updatedSegment.pitch);
+      updatedSegment.audioSignature = singleSig;
+
       await prePersistPromise;
 
       // Optionally re-sync master narration audio for Track A1 if allSegments is passed
@@ -671,6 +691,8 @@ router.post("/generate-audio", async (req, res) => {
               audioOutdated: true,
             };
           }
+          const targetVoice = s.voiceId || s.khmerVoiceId || rawBodyVoiceId || "km-KH-PisethNeural";
+          const sig = computeSegmentAudioSignature(raw, targetVoice, s.speed ?? s.rate, s.pitch);
           const verifiedPath = resolvePriorSegmentAudioPath(s, audioDir);
           if (verifiedPath && (!s.audioPath || !s.audioFile)) {
             const relSeg = path.relative(uploadsRoot, verifiedPath).replace(/\\/g, "/");
@@ -680,9 +702,13 @@ router.post("/generate-audio", async (req, res) => {
               audioFile: s.audioFile || path.basename(verifiedPath),
               audioUrl: s.audioUrl || `/uploads/${relSeg}`,
               ttsStatus: "ready",
+              audioSignature: sig,
             };
           }
-          return s;
+          return {
+            ...s,
+            audioSignature: s.audioSignature || sig,
+          };
         });
         const skippedEmptyCount = mappedSegments.filter((s) => s.ttsStatus === "empty_text").length;
         const validCount = mappedSegments.length - skippedEmptyCount;
@@ -1028,6 +1054,8 @@ router.get("/audio/separation-progress", (req, res) => {
       success: true,
       progress: progressData ? progressData.progress : 0,
       status: progressData ? progressData.status : 'idle',
+      queuePosition: progressData?.queuePosition || 0,
+      queueLength: typeof audioSeparationService.getSeparationQueueLength === 'function' ? audioSeparationService.getSeparationQueueLength() : 0,
       message: progressData ? progressData.message : '',
       error: progressData?.error || null,
       model: progressData?.model || 'htdemucs',

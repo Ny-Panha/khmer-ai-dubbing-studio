@@ -11,6 +11,7 @@ const { registerProcess, unregisterProcess } = require('../utils/processRegistry
 
 const activeSeparationJobs = new Map();
 const activeSeparationProgress = new Map();
+const separationQueue = [];
 
 function normalizeSeparationKey(mediaRef) {
   if (!mediaRef) return '';
@@ -41,6 +42,10 @@ function getSeparationProgress(mediaRef) {
 
 function isSeparationBusy() {
   return Boolean(isDemucsRunning);
+}
+
+function getSeparationQueueLength() {
+  return separationQueue.length;
 }
 
 function getCurrentSeparationMedia() {
@@ -135,23 +140,6 @@ function getSeparationCacheDir(audioPath, model = 'htdemucs') {
       return fpDir;
     }
 
-    // 3. Check known existing caches (e.g. cd3effdd05d529352737cfff7fd03a71) if size matches
-    const sepBaseDir = path.join(__dirname, '../uploads/cache/separation');
-    if (fs.existsSync(sepBaseDir)) {
-      const knownDirs = fs.readdirSync(sepBaseDir);
-      for (const d of knownDirs) {
-        const candidateDir = path.join(sepBaseDir, d);
-        const candidateWav = path.join(candidateDir, 'no_vocals.wav');
-        if (fs.existsSync(candidateWav)) {
-          // If candidate exists and matches our 5.4-minute test video (approx 57MB stem)
-          const stemStat = fs.statSync(candidateWav);
-          if (stat.size === 49732451 && stemStat.size > 50000000) {
-            return candidateDir;
-          }
-        }
-      }
-    }
-
     // Default to content fingerprint directory
     return fpDir;
   } catch (err) {
@@ -174,6 +162,27 @@ function getSeparationCacheDir(audioPath, model = 'htdemucs') {
  */
 let isDemucsRunning = false;
 let currentDemucsMedia = null;
+
+function finishDemucsWorkerAndProcessQueue() {
+  isDemucsRunning = false;
+  currentDemucsMedia = null;
+
+  if (separationQueue.length > 0) {
+    const nextJob = separationQueue.shift();
+    separationQueue.forEach((job, idx) => {
+      const p = activeSeparationProgress.get(job.cleanKey);
+      if (p && p.status === 'queued') {
+        p.queuePosition = idx + 1;
+        p.message = `រង់ចាំក្នុងជួរ (Queued: លេខរៀងទី ${idx + 1})...`;
+      }
+    });
+    isDemucsRunning = true;
+    currentDemucsMedia = path.basename(nextJob.options.audioPath);
+    console.log(`[AudioSeparation] 🚀 Dequeued next separation for: ${nextJob.cleanKey}`);
+    executeDemucsWorker(nextJob.options, nextJob.targetDir, nextJob.cleanKey)
+      .then(nextJob.resolve, nextJob.reject);
+  }
+}
 
 function executeDemucsWorker(options, targetDir, cleanKey) {
   return new Promise((resolve, reject) => {
@@ -297,8 +306,6 @@ function executeDemucsWorker(options, targetDir, cleanKey) {
     });
 
     child.on('error', (err) => {
-      isDemucsRunning = false;
-      currentDemucsMedia = null;
       unregisterProcess(child);
       activeSeparationJobs.delete(jobId);
       activeSeparationJobs.delete(cleanKey);
@@ -314,15 +321,15 @@ function executeDemucsWorker(options, targetDir, cleanKey) {
           activeSeparationProgress.delete(cleanKey);
         }
       }, 60000);
+      finishDemucsWorkerAndProcessQueue();
       reject(err);
     });
 
     child.on('close', (code) => {
-      isDemucsRunning = false;
-      currentDemucsMedia = null;
       unregisterProcess(child);
       activeSeparationJobs.delete(jobId);
       activeSeparationJobs.delete(cleanKey);
+      finishDemucsWorkerAndProcessQueue();
       if (code !== 0) {
         let cleanDetail = '';
         if (stdoutData) {
@@ -421,11 +428,12 @@ function separateAudio(options = {}) {
   const cachedNoVocals = path.join(targetDir, 'no_vocals.wav');
   const cleanKey = path.basename(audioPath).toLowerCase();
 
-  // 1. Instant Cache Hit Check
+  // 1. Instant Cache Hit Check (Strict validation: both stems must exist & be >= 100KB)
+  const MIN_STEM_SIZE = 100 * 1024; // 100 KB
   if (fs.existsSync(cachedVocals) && fs.existsSync(cachedNoVocals)) {
     const vStat = fs.statSync(cachedVocals);
     const nvStat = fs.statSync(cachedNoVocals);
-    if (vStat.size > 1000 && nvStat.size > 1000) {
+    if (vStat.size >= MIN_STEM_SIZE && nvStat.size >= MIN_STEM_SIZE) {
       console.log(`[AudioSeparation] ⚡ Using cached Demucs separation: ${targetDir}`);
       activeSeparationProgress.set(cleanKey, { progress: 100, status: 'completed', message: 'Clean BGM រួចរាល់ 100%' });
       return Promise.resolve({
@@ -440,14 +448,26 @@ function separateAudio(options = {}) {
     }
   }
 
-  // 2. Reject if another Demucs separation is already in progress (Allow ONE process at a time, no queue)
+  // 2. Safe Queue when another Demucs separation is active (prevents 409 BUSY crashes)
   if (isDemucsRunning) {
-    const busyErr = new Error(`Demucs AI កំពុងដំណើរការបំបែកសំឡេង (${currentDemucsMedia || 'វីដេអូផ្សេង'})។ សូមរង់ចាំឱ្យចប់ជាមុនសិន ទើបអាចបំបែកភាគបន្ទាប់បាន។`);
-    busyErr.statusCode = 409;
-    busyErr.status = 409;
-    busyErr.code = 'DEMUCS_BUSY';
-    busyErr.isBusy = true;
-    return Promise.reject(busyErr);
+    return new Promise((resolve, reject) => {
+      separationQueue.push({
+        options,
+        targetDir,
+        cleanKey,
+        resolve,
+        reject,
+        enqueuedAt: Date.now(),
+      });
+      activeSeparationProgress.set(cleanKey, {
+        progress: 0,
+        status: 'queued',
+        message: `រង់ចាំក្នុងជួរ (Queued: លេខរៀងទី ${separationQueue.length})...`,
+        queuePosition: separationQueue.length,
+        model,
+      });
+      console.log(`[AudioSeparation] ⏳ Queued Demucs separation for ${cleanKey} (Position: ${separationQueue.length})`);
+    });
   }
 
   isDemucsRunning = true;
@@ -486,6 +506,16 @@ function killSeparationJob(identifier = 'all') {
   };
 
   if (!identifier || identifier === 'all') {
+    // 1. Drain & cancel all queued jobs
+    while (separationQueue.length > 0) {
+      const qJob = separationQueue.shift();
+      const cancelErr = new Error('Demucs separation aborted by user');
+      cancelErr.name = 'AbortError';
+      qJob.reject(cancelErr);
+      activeSeparationProgress.set(qJob.cleanKey, { status: 'cancelled', progress: 0, message: 'បានលុបចោល' });
+    }
+
+    // 2. Terminate all active jobs
     const seenPids = new Set();
     for (const [, proc] of activeSeparationJobs.entries()) {
       if (proc && proc.pid && !seenPids.has(proc.pid)) {
@@ -497,8 +527,37 @@ function killSeparationJob(identifier = 'all') {
     activeSeparationProgress.clear();
     // System-wide sweep on Windows to eliminate orphaned/detached Python demucs workers
     killAllDemucsSystemProcesses();
+
+    isDemucsRunning = false;
+    currentDemucsMedia = null;
   } else {
     const cleanId = normalizeSeparationKey(identifier);
+
+    // 1. Check if job is in the waiting queue first (Scoped Queue Cancellation)
+    const qIdx = separationQueue.findIndex(j =>
+      j.cleanKey === cleanId ||
+      j.cleanKey.includes(cleanId) ||
+      cleanId.includes(j.cleanKey) ||
+      j.options?.jobId === identifier
+    );
+    if (qIdx !== -1) {
+      const removed = separationQueue.splice(qIdx, 1)[0];
+      const cancelErr = new Error('Demucs separation cancelled by user');
+      cancelErr.name = 'AbortError';
+      removed.reject(cancelErr);
+      activeSeparationProgress.set(removed.cleanKey, { status: 'cancelled', progress: 0, message: 'បានលុបចោល' });
+      // Update remaining queue positions
+      separationQueue.forEach((job, idx) => {
+        const p = activeSeparationProgress.get(job.cleanKey);
+        if (p && p.status === 'queued') {
+          p.queuePosition = idx + 1;
+          p.message = `រង់ចាំក្នុងជួរ (Queued: លេខរៀងទី ${idx + 1})...`;
+        }
+      });
+      return { success: true, killed: 0, cancelledFromQueue: true };
+    }
+
+    // 2. If it's the currently running job, terminate only this specific process
     const proc = activeSeparationJobs.get(identifier) || activeSeparationJobs.get(cleanId);
     if (proc) {
       terminateProcess(proc);
@@ -507,11 +566,10 @@ function killSeparationJob(identifier = 'all') {
     }
     activeSeparationProgress.delete(identifier);
     activeSeparationProgress.delete(cleanId);
-  }
 
-  // Reset Demucs single-process lock
-  isDemucsRunning = false;
-  currentDemucsMedia = null;
+    // Dequeue next job safely
+    finishDemucsWorkerAndProcessQueue();
+  }
 
   return { success: true, killed };
 }
@@ -539,6 +597,7 @@ module.exports = {
   getSeparationCacheDir,
   getSeparationProgress,
   isSeparationBusy,
+  getSeparationQueueLength,
   getCurrentSeparationMedia,
   resolvePythonBinary,
 };

@@ -266,7 +266,11 @@ async function runDubbingPipeline({
     userDirection: customPrompt,
     narratorGender,
     seriesGlossary,
+    seriesId: ingestResult?.seriesId,
+    episodeId: ingestResult?.episodeId,
     genre,
+    force,
+    forceRegen,
     signal,
   });
 

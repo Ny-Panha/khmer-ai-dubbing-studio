@@ -103,12 +103,12 @@ export default function DubbingStepCardsBar({ episodes = [], selectedEpIds = nul
               fontWeight: 700,
               padding: '2px 7px',
               borderRadius: 'var(--radius-xs)',
-              background: stats.translatePercent === 100 ? 'rgba(16, 185, 129, 0.16)' : 'rgba(56, 189, 248, 0.14)',
-              color: stats.translatePercent === 100 ? '#6EE7B7' : '#7DD3FC',
+              background: tState.status === 'failed' ? 'rgba(239, 68, 68, 0.18)' : stats.translatePercent === 100 ? 'rgba(16, 185, 129, 0.16)' : 'rgba(56, 189, 248, 0.14)',
+              color: tState.status === 'failed' ? '#FCA5A5' : stats.translatePercent === 100 ? '#6EE7B7' : '#7DD3FC',
               flexShrink: 0,
             }}
           >
-            {isTranslateRunning ? `EP${tState.currentEpIndex}/${tState.totalEps}` : `${stats.translatePercent}%`}
+            {tState.status === 'failed' ? 'បរាជ័យ' : isTranslateRunning ? `EP${tState.currentEpIndex}/${tState.totalEps}` : `${stats.translatePercent}%`}
           </span>
         </div>
 
@@ -238,12 +238,12 @@ export default function DubbingStepCardsBar({ episodes = [], selectedEpIds = nul
               fontWeight: 700,
               padding: '2px 7px',
               borderRadius: 'var(--radius-xs)',
-              background: stats.voicePercent === 100 ? 'rgba(16, 185, 129, 0.16)' : 'rgba(244, 114, 182, 0.16)',
-              color: stats.voicePercent === 100 ? '#6EE7B7' : '#F9A8D4',
+              background: vState.status === 'failed' ? 'rgba(239, 68, 68, 0.18)' : stats.voicePercent === 100 ? 'rgba(16, 185, 129, 0.16)' : 'rgba(244, 114, 182, 0.16)',
+              color: vState.status === 'failed' ? '#FCA5A5' : stats.voicePercent === 100 ? '#6EE7B7' : '#F9A8D4',
               flexShrink: 0,
             }}
           >
-            {isVoiceRunning ? `EP${vState.currentEpIndex}/${vState.totalEps}` : `${stats.voicePercent}%`}
+            {vState.status === 'failed' ? 'បរាជ័យ' : isVoiceRunning ? `EP${vState.currentEpIndex}/${vState.totalEps}` : `${stats.voicePercent}%`}
           </span>
         </div>
 
@@ -472,12 +472,26 @@ export default function DubbingStepCardsBar({ episodes = [], selectedEpIds = nul
               fontWeight: 700,
               padding: '2px 7px',
               borderRadius: 'var(--radius-xs)',
-              background: 'rgba(16, 185, 129, 0.16)',
-              color: '#6EE7B7',
+              background: cState.status === 'failed'
+                ? 'rgba(239, 68, 68, 0.18)'
+                : cState.status === 'queued'
+                  ? 'rgba(245, 158, 11, 0.18)'
+                  : 'rgba(16, 185, 129, 0.16)',
+              color: cState.status === 'failed'
+                ? '#FCA5A5'
+                : cState.status === 'queued'
+                  ? '#FDE68A'
+                  : '#6EE7B7',
               flexShrink: 0,
             }}
           >
-            {isCleanBgmRunning ? `EP${cState.currentEpIndex}/${cState.totalEps}` : `${stats.cleanBgmPercent}%`}
+            {cState.status === 'failed'
+              ? 'បរាជ័យ'
+              : cState.status === 'queued'
+                ? 'ក្នុងជួរ'
+                : isCleanBgmRunning
+                  ? `EP${cState.currentEpIndex}/${cState.totalEps}`
+                  : `${stats.cleanBgmPercent}%`}
           </span>
         </div>
 

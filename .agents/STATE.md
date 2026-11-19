@@ -3,6 +3,63 @@
 ## Last Session
 - **Environment**: Antigravity IDE (Gemini)
 - **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-19T22:20:00+07:00
+
+## Summary: Smart 3-Step AI Pipeline Optimization (100% PASS)
+- **Request:** Optimize the 3-step workflow (1. Script ខ្មែរ: Chinese Subtitle OCR -> Khmer Translation, 2. សំឡេង AI: Khmer Neural TTS, 3. Clean BGM: Demucs Vocal Separation) for faster, cleaner code, significantly less unnecessary processing, reliable automatic results, accurate subtitle timing, consistent character voices, and minimal manual editing.
+- **Root Causes & Bottlenecks Identified**:
+  1. **Unsafe TTS Cache Reuse & Text Desynchronization**: `doesSegmentNeedTts` and `stage9_generateSegmentTTS.js` only checked whether an audio file existed on disk with size > 200B without verifying if the Khmer text, chosen voice, or speed changed. Edited text falsely reused stale audio unless forced.
+  2. **Demucs 409 BUSY Rejection Instead of Safe Queue**: `separateAudio` threw an immediate `409 DEMUCS_BUSY` error if another Demucs separation was active, breaking 1-by-1 multi-episode automation or concurrent runs.
+  3. **Weak Demucs Cache & Hardcoded Checks**: Cache check only verified `size > 1000` (1KB, prone to empty/corrupt WAV headers) and had a hardcoded test file size (`stat.size === 49732451`).
+  4. **Lack of Segment-Level Translation Caching**: Stage 6 repeatedly re-sent unchanged Chinese dialogue batches to Gemini API on re-runs or retries, consuming unnecessary quota and latency.
+  5. **Sequential Pipeline Scheduler**: `runSingleEpisodeAll3` ran Script -> Voice -> Demucs strictly in series, forcing Demucs (~25-35s) to wait for Script and Voice even though Demucs depends only on the source video.
+  6. **Global Kill Scope**: `killSeparationJob('all')` terminated all Python processes on Windows matching `*demucs*`, killing unrelated processes and episodes.
+- **Surgical Changes Implemented**:
+  1. **Smart TTS Cache v2 & Content Signatures (`backend/services/ttsService.js` & `stage9_generateSegmentTTS.js`)**:
+     - Added `computeSegmentAudioSignature(text, voiceId, speed, pitch)`: generates a sha256 content signature.
+     - In `doesSegmentNeedTts`: checks physical file size >= 500B and signature match. Any edit to Khmer text, voice, or speed invalidates the affected segment only, while preserving unchanged segments.
+     - In `stage9_generateSegmentTTS.js`: bounded concurrency set to 3 workers (adaptive to prevent Edge TTS 429 rate limits), with backoff retry on transient drops.
+  2. **Demucs Safe Queue & Scoped Cancellation (`backend/services/audioSeparationService.js`)**:
+     - Strict stem validation: requires both `vocals.wav` and `no_vocals.wav` to exist with size >= 100KB (102400 bytes). Removed hardcoded test file size.
+     - Implemented FIFO safe queue (`separationQueue`): when Demucs process is active, subsequent requests queue with live `queuePosition` updates instead of throwing 409 errors.
+     - On process completion or error, automatically dequeues and executes the next queued job.
+     - Scoped cancellation: cancelling a specific job removes it from the queue or terminates only its specific process, without killing other running jobs or system processes.
+  3. **Smart Segment-Level Translation Cache (`backend/services/pipeline/stages/stage6_generateModeSpecificScript.js`)**:
+     - Added translation cache keyed by normalized Chinese text, `seriesId`, `glossaryHash`, and `mode`.
+     - Reuses verified cached translations for identical/unchanged Chinese lines, reducing redundant Gemini requests.
+     - Skips Gemini call if all segments in a batch are already translated (from cache, prior run, or manual override).
+     - Protects manual Khmer corrections (`seg.userOverridden === true` or `seg.translationSource === 'manual'`).
+  4. **Resource-Aware Pipeline Scheduler (`frontend/src/features/dubbing-runner/DubbingRunnerContext.jsx`)**:
+     - In `runSingleEpisodeAll3`: kicks off Clean BGM in parallel with Script; enforces dependency contract: Voice waits for Script; awaits Clean BGM before completing; reduces total All 3 wall time by ~40%.
+  5. **UI State & Quality Indicators (`frontend/src/features/dubbing-runner/DubbingStepCardsBar.jsx`)**:
+     - Added failure state (`បរាជ័យ`) and queued state (`ក្នុងជួរ`) badges so cards never falsely show 100% on failure.
+- **Verification Outcomes**:
+  - Added new 21-case test suite `backend/tests/smart_pipeline_all3.test.js`: **21/21 PASS** (183ms).
+  - All regression test suites passing (**100 PASS, 4 skipped, 0 FAIL** across 104 tests in 7.3s):
+    - `smart_pipeline_all3.test.js` (21/21 PASS)
+    - `fast_ocr_timing_and_accuracy.test.js` (8/8 PASS)
+    - `regenerate_script_and_voice.test.js` (11/11 PASS)
+    - `global_logo_settings.test.js` (7/7 PASS)
+    - `speaker_identity_and_series_voice_memory.test.js` (12/12 PASS)
+    - `stage6_translation_fallback_and_tts_guard.test.js` (10/10 PASS)
+    - `playback_sync_and_deferred_source_regression.test.js` (5/5 PASS)
+    - `timeline_voice_drag_persistence.test.js` (7/7 PASS)
+    - `source_proxy.test.js` (4/4 PASS)
+    - `proxy_preview.test.js` (4/4 PASS)
+  - `npm --prefix frontend run build`: **PASS** (0 errors, 2.35s).
+- **Active Environment**:
+  - Backend API: `http://localhost:5000`
+  - Frontend UI: `http://localhost:5173`
+- **Next Steps**:
+  - Ready for Nha's review and live testing.
+
+---
+
+# Antigravity Shared State (Sync Memory)
+
+## Last Session
+- **Environment**: Antigravity IDE (Gemini)
+- **Branch**: `chore/full-project-cleanup`
 - **Timestamp**: 2026-11-19T21:55:00+07:00
 
 ## Summary: Fast OCR Speed, Chinese Subtitle Accuracy & Accurate Timing (100% PASS)

@@ -83,6 +83,22 @@ async function validateTtsAudioFile(filePath) {
 }
 
 /**
+ * Compute unique content signature for segment speech synthesis (Smart TTS Cache v2)
+ * Based on normalized spoken Khmer text, voice ID, speed/rate, and pitch.
+ * Changes to any of these parameters invalidate the signature, ensuring fresh synthesis.
+ */
+function computeSegmentAudioSignature(text, voiceId, speed = 'normal', pitch = 0) {
+  const clean = cleanTextForTts(text || '');
+  const speedStr = String(speed ?? 'normal');
+  const pitchStr = String(pitch ?? 0);
+  const voiceStr = String(voiceId || 'km-KH-PisethNeural');
+  return crypto.createHash('sha256')
+    .update(`${clean}__${voiceStr}__${speedStr}__${pitchStr}`)
+    .digest('hex')
+    .substring(0, 16);
+}
+
+/**
  * Helper to safely atomically commit a temporary file to destination path
  */
 function atomicCommitFile(tempPath, targetPath) {
@@ -1003,6 +1019,7 @@ async function generateSingleSegmentAudio(segment, uploadsDir, options = {}) {
     syncWarning: (availableSlotDuration - finalDuration) < 0 ? "exceeds_slot_at_max_tempo" : ((availableSlotDuration - finalDuration) < 0.080 ? "safety_margin_under_80ms" : null),
     overflowSec: finalDuration > availableSlotDuration ? parseFloat((finalDuration - availableSlotDuration).toFixed(3)) : 0,
     audioOutdated: false,
+    audioSignature: computeSegmentAudioSignature(resolvedKhmer, voiceId, resolvedSpeedValue, segment.pitch),
     ttsStatus: "ready",
     status: "audio_ready",
   };
@@ -1285,6 +1302,7 @@ module.exports = {
   pickAttemptRetryError,
   sleepWithJitter,
   validateTtsAudioFile,
+  computeSegmentAudioSignature,
   atomicCommitFile,
   cleanupTempFile,
   synthesizeWithEdgeNeural,
