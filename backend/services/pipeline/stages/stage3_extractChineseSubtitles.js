@@ -374,6 +374,153 @@ async function callGeminiVisionWithRetry(aiClient, modelName, contents, maxRetri
 }
 
 /**
+ * Helper: Parse Gemini Vision JSON response and return frame observations.
+ * Distinguishes verified empty subtitle frames from failed or missing OCR responses.
+ * Never classifies OCR failure or missing frame responses as verified completed frames.
+ */
+function parseVisionResponseFrames(resp, batchFrames = []) {
+  const rawText = typeof resp?.text === 'function' ? resp.text() : resp?.text;
+  const clean = String(rawText || '').replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
+  let parsed = {};
+  try {
+    parsed = JSON.parse(clean);
+  } catch (jsonErr) {
+    parsed = { frames: [] };
+  }
+  const returnedFrames = Array.isArray(parsed?.frames) ? parsed.frames : [];
+  const claimedIndices = new Set();
+
+  const batchObservations = [];
+  for (let fIdx = 0; fIdx < batchFrames.length; fIdx++) {
+    const batchFrame = batchFrames[fIdx];
+    const targetTime = parseFloat(Number(batchFrame.timestampSec).toFixed(2));
+
+    // 1. First try matching by timestamp within 0.20s tolerance
+    let matchedIdx = -1;
+    for (let rIdx = 0; rIdx < returnedFrames.length; rIdx++) {
+      if (claimedIndices.has(rIdx)) continue;
+      const rf = returnedFrames[rIdx];
+      if (rf && typeof rf.timestampSec === 'number' && !isNaN(rf.timestampSec)) {
+        if (Math.abs(rf.timestampSec - targetTime) <= 0.20) {
+          matchedIdx = rIdx;
+          break;
+        }
+      }
+    }
+
+    // 2. Fallback to positional index if not matched by timestamp
+    if (matchedIdx === -1 && fIdx < returnedFrames.length && !claimedIndices.has(fIdx)) {
+      const cand = returnedFrames[fIdx];
+      if (!cand || typeof cand.timestampSec !== 'number' || isNaN(cand.timestampSec) || Math.abs(cand.timestampSec - targetTime) <= 0.50) {
+        matchedIdx = fIdx;
+      }
+    }
+
+    if (matchedIdx !== -1) {
+      claimedIndices.add(matchedIdx);
+      const f = returnedFrames[matchedIdx] || {};
+
+      const hasExplicitHasText = typeof f.hasText === 'boolean';
+      const rawChinese = String(f.textZh || f.chineseText || '').trim();
+      const cText = stripDecorativeSubtitleNoise(rawChinese);
+      const cleanChineseLen = normalizeChineseChars(cText).length;
+
+      // If entry is empty object or missing explicit boolean / text, treat as missing response
+      if (!hasExplicitHasText && cleanChineseLen === 0 && !f.position && !f.visualGender && !f.speakerGender) {
+        batchObservations.push({
+          timestampSec: targetTime,
+          reportedSec: targetTime,
+          hasText: false,
+          textZh: '',
+          chineseText: '',
+          position: 'bottom_subtitle',
+          isSharp: false,
+          visualGender: 'unknown',
+          speakerGender: 'UNKNOWN',
+          speakerVisualHint: '',
+          deliveryType: 'dialogue',
+          genderConfidence: 0.5,
+          ocrStatus: 'missing',
+          ocrFailed: true,
+          isVerified: false,
+          isVerifiedEmpty: false,
+          reviewNeeded: true,
+          uncertainOcr: true,
+          failureReason: 'Model response omitted evaluation for this frame',
+        });
+        continue;
+      }
+
+      const hasCleanText = Boolean(cleanChineseLen > 0 && f.hasText !== false);
+      const isVerifiedEmpty = Boolean(f.hasText === false && cleanChineseLen === 0);
+      const tSec = typeof f.timestampSec === 'number' && !isNaN(f.timestampSec)
+        ? parseFloat(f.timestampSec.toFixed(2))
+        : targetTime;
+
+      const rawGender = String(f.visualGender || f.speakerGender || 'unknown').toLowerCase();
+      const validGender = rawGender === 'female' ? 'female' : (rawGender === 'male' ? 'male' : 'unknown');
+      const conf = typeof f.genderConfidence === 'number' && !isNaN(f.genderConfidence)
+        ? Math.min(1.0, Math.max(0.0, f.genderConfidence))
+        : (validGender === 'unknown' ? 0.5 : 0.85);
+      const speakerVisualHint = String(f.speakerVisualHint || '').trim();
+      const rawDelivery = String(f.deliveryType || 'dialogue').toLowerCase();
+      const validDelivery = ['dialogue', 'inner_thought', 'narration'].includes(rawDelivery)
+        ? rawDelivery
+        : 'dialogue';
+
+      const ocrStatus = hasCleanText ? 'verified_text' : (isVerifiedEmpty ? 'verified_empty' : (hasExplicitHasText ? 'verified_empty' : 'missing'));
+      const isVerified = ocrStatus === 'verified_text' || ocrStatus === 'verified_empty';
+
+      batchObservations.push({
+        timestampSec: targetTime,
+        reportedSec: tSec,
+        hasText: hasCleanText,
+        textZh: hasCleanText ? cText : '',
+        chineseText: hasCleanText ? cText : '',
+        position: f.position || 'bottom_subtitle',
+        isSharp: f.isSharp !== false,
+        visualGender: validGender,
+        speakerGender: validGender,
+        speakerVisualHint,
+        deliveryType: validDelivery,
+        genderConfidence: conf,
+        ocrStatus,
+        isVerified,
+        isVerifiedEmpty: ocrStatus === 'verified_empty',
+        ocrFailed: !isVerified,
+        reviewNeeded: !isVerified || f.isSharp === false,
+        uncertainOcr: !isVerified || f.isSharp === false,
+        failureReason: isVerified ? null : 'Uncertain or unverified OCR frame',
+      });
+    } else {
+      // Frame omitted by Gemini
+      batchObservations.push({
+        timestampSec: targetTime,
+        reportedSec: targetTime,
+        hasText: false,
+        textZh: '',
+        chineseText: '',
+        position: 'bottom_subtitle',
+        isSharp: false,
+        visualGender: 'unknown',
+        speakerGender: 'UNKNOWN',
+        speakerVisualHint: '',
+        deliveryType: 'dialogue',
+        genderConfidence: 0.5,
+        ocrStatus: 'missing',
+        ocrFailed: true,
+        isVerified: false,
+        isVerifiedEmpty: false,
+        reviewNeeded: true,
+        uncertainOcr: true,
+        failureReason: 'Missing frame entry in Gemini response array',
+      });
+    }
+  }
+  return batchObservations;
+}
+
+/**
  * Stage 3: Extract Chinese Subtitles
  * Inspects candidate frames across the video or chunk using high-coverage sampling,
  * fast FFmpeg streaming frame extraction, and batched Gemini Vision OCR.
@@ -423,9 +570,18 @@ async function extractChineseSubtitles({
   if (!force && cachePath && fs.existsSync(cachePath)) {
     try {
       const cached = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
-      if (cached && Array.isArray(cached.visualSegments) && Array.isArray(cached.rawObservations) && cached.visualSegments.length > 0) {
+      const hasUnresolved = Boolean(
+        cached.hasUnresolvedFrames ||
+        cached.isComplete === false ||
+        cached.ocrMeta?.hasUnresolvedFrames ||
+        cached.ocrMeta?.isComplete === false ||
+        (Array.isArray(cached.rawObservations) && cached.rawObservations.some((o) => o.ocrFailed || o.isVerified === false || o.ocrStatus === 'failed' || o.ocrStatus === 'missing'))
+      );
+      if (!hasUnresolved && cached && Array.isArray(cached.visualSegments) && Array.isArray(cached.rawObservations) && cached.visualSegments.length > 0) {
         console.log(`[Stage 3 OCR] ⚡ Cache Hit: Reusing ${cached.visualSegments.length} visual segments from disk cache (${path.basename(cachePath)})`);
         return cached;
+      } else if (hasUnresolved) {
+        console.warn(`[Stage 3 OCR] ⚠️ Cache at ${path.basename(cachePath)} contains unresolved/failed frames. Rejecting incomplete cache.`);
       }
     } catch (_) {}
   }
@@ -436,17 +592,24 @@ async function extractChineseSubtitles({
   }
 
   const completedMap = new Map();
+  const unresolvedMap = new Map();
   let resumedFromCheckpoint = false;
   if (!force && checkpointPath) {
     const ckpt = loadOcrCheckpoint(checkpointPath);
     if (ckpt && Array.isArray(ckpt.rawObservations) && ckpt.rawObservations.length > 0) {
       for (const obs of ckpt.rawObservations) {
         if (obs && typeof obs.timestampSec === 'number') {
-          completedMap.set(parseFloat(obs.timestampSec.toFixed(2)), obs);
+          const t = parseFloat(obs.timestampSec.toFixed(2));
+          const isVerified = Boolean(obs.isVerified && !obs.ocrFailed && obs.ocrStatus !== 'failed' && obs.ocrStatus !== 'missing');
+          if (isVerified) {
+            completedMap.set(t, obs);
+          } else {
+            unresolvedMap.set(t, obs);
+          }
         }
       }
       resumedFromCheckpoint = true;
-      console.log(`[Stage 3 OCR] ⚡ Resuming from checkpoint (${path.basename(checkpointPath)}): ${completedMap.size} completed frame observations loaded.`);
+      console.log(`[Stage 3 OCR] ⚡ Resuming from checkpoint (${path.basename(checkpointPath)}): ${completedMap.size} completed frame observations loaded (${unresolvedMap.size} unresolved to retry).`);
     }
   }
 
@@ -644,53 +807,6 @@ Return JSON ONLY matching this schema:
       return contents;
     }
 
-    // Helper: Parse Gemini Vision JSON response and return frame observations
-    function parseVisionResponseFrames(resp, batchFrames) {
-      const rawText = typeof resp.text === 'function' ? resp.text() : resp.text;
-      const clean = String(rawText || '').replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
-      const parsed = JSON.parse(clean);
-      const frames = Array.isArray(parsed.frames) ? parsed.frames : [];
-
-      const batchObservations = [];
-      for (let fIdx = 0; fIdx < batchFrames.length; fIdx++) {
-        const fallbackTime = batchFrames[fIdx].timestampSec;
-        const f = frames[fIdx] || {};
-        const tSec = typeof f.timestampSec === 'number' && !isNaN(f.timestampSec)
-          ? parseFloat(f.timestampSec.toFixed(2))
-          : fallbackTime;
-
-        const rawChinese = String(f.textZh || f.chineseText || '').trim();
-        const cText = stripDecorativeSubtitleNoise(rawChinese);
-        const hasCleanText = Boolean(f.hasText && normalizeChineseChars(cText).length > 0);
-        const rawGender = String(f.visualGender || f.speakerGender || 'unknown').toLowerCase();
-        const validGender = rawGender === 'female' ? 'female' : (rawGender === 'male' ? 'male' : 'unknown');
-        const conf = typeof f.genderConfidence === 'number' && !isNaN(f.genderConfidence)
-          ? Math.min(1.0, Math.max(0.0, f.genderConfidence))
-          : (validGender === 'unknown' ? 0.5 : 0.85);
-        const speakerVisualHint = String(f.speakerVisualHint || '').trim();
-        const rawDelivery = String(f.deliveryType || 'dialogue').toLowerCase();
-        const validDelivery = ['dialogue', 'inner_thought', 'narration'].includes(rawDelivery)
-          ? rawDelivery
-          : 'dialogue';
-
-        batchObservations.push({
-          timestampSec: fallbackTime,
-          reportedSec: tSec,
-          hasText: hasCleanText,
-          textZh: hasCleanText ? cText : '',
-          chineseText: hasCleanText ? cText : '',
-          position: f.position || 'bottom_subtitle',
-          isSharp: f.isSharp !== false,
-          visualGender: validGender,
-          speakerGender: validGender,
-          speakerVisualHint,
-          deliveryType: validDelivery,
-          genderConfidence: conf,
-        });
-      }
-      return batchObservations;
-    }
-
     // Helper: Execute a single batch with model auto-cascade and cancellation
     async function executeSingleVisionBatch(batchFrames) {
       checkAbort();
@@ -792,16 +908,53 @@ Return JSON ONLY matching this schema:
 
         if (item.status === 'fulfilled') {
           const obsList = item.value.observations || [];
-          for (const obs of obsList) {
-            completedMap.set(parseFloat(obs.timestampSec.toFixed(2)), obs);
-          }
-          completedBatchesCount++;
-          consecutiveSuccesses++;
+          const verifiedObsList = obsList.filter((obs) => obs.isVerified);
+          const unverifiedObsList = obsList.filter((obs) => !obs.isVerified);
 
-          // Conservative recovery: recover to concurrency 2 after 3 consecutive successes
-          if (consecutiveSuccesses >= 3 && adaptiveConcurrency < 2) {
-            adaptiveConcurrency = 2;
-            console.log('[Stage 3 OCR] ⚡ Concurrency recovered to 2 after demonstrated successes');
+          for (const obs of verifiedObsList) {
+            const t = parseFloat(obs.timestampSec.toFixed(2));
+            const existing = completedMap.get(t);
+            if (existing && existing.userOverridden) continue;
+            if (existing && existing.hasText && existing.chineseText && (!obs.hasText || !obs.chineseText)) continue;
+            completedMap.set(t, obs);
+            unresolvedMap.delete(t);
+          }
+
+          if (unverifiedObsList.length > 0) {
+            console.warn(`[Stage 3 OCR] ⚠️ Batch at ${originalBatch.frames[0]?.timestampSec}s returned ${verifiedObsList.length}/${obsList.length} verified frames (${unverifiedObsList.length} missing/unresolved).`);
+
+            const missingFramesToRetry = originalBatch.frames.filter((f) => {
+              const t = parseFloat(f.timestampSec.toFixed(2));
+              return !completedMap.has(t);
+            });
+
+            if (missingFramesToRetry.length > 0 && (originalBatch.splitDepth || 0) < 3) {
+              const subBatch = {
+                batchId: `${originalBatch.batchId}_retry_unres_${Date.now()}`,
+                frames: missingFramesToRetry,
+                splitDepth: (originalBatch.splitDepth || 0) + 1,
+              };
+              totalBatchesEstimated += 1;
+              batchQueue.unshift(subBatch);
+              console.log(`[Stage 3 OCR] 🔄 Queued retry for ${missingFramesToRetry.length} unresolved frame(s)...`);
+            } else {
+              for (const unres of unverifiedObsList) {
+                const t = parseFloat(unres.timestampSec.toFixed(2));
+                unresolvedMap.set(t, unres);
+              }
+              failedBatchesCount++;
+            }
+          }
+
+          if (verifiedObsList.length > 0) {
+            completedBatchesCount++;
+            consecutiveSuccesses++;
+
+            // Conservative recovery: recover to concurrency 2 after 3 consecutive successes
+            if (consecutiveSuccesses >= 3 && adaptiveConcurrency < 2) {
+              adaptiveConcurrency = 2;
+              console.log('[Stage 3 OCR] ⚡ Concurrency recovered to 2 after demonstrated successes');
+            }
           }
 
           // Persist atomically after each verified batch (Requirement 7)
@@ -812,13 +965,16 @@ Return JSON ONLY matching this schema:
               startOffsetSec: Math.round(startOffsetSec),
               durationSec: Math.round(durationSec),
               updatedAt: Date.now(),
-              rawObservations: Array.from(completedMap.values()),
+              rawObservations: [...Array.from(completedMap.values()), ...Array.from(unresolvedMap.values())].sort((a, b) => a.timestampSec - b.timestampSec),
               completedBatchesCount,
               totalCandidateFrames,
+              completed: unresolvedMap.size === 0 && completedMap.size === totalCandidateFrames,
+              hasUnresolvedFrames: unresolvedMap.size > 0,
+              unresolvedCount: unresolvedMap.size,
             });
           }
 
-          reportProgress(`Batch completed (${completedMap.size}/${totalCandidateFrames} frames)`);
+          reportProgress(`Batch processed (${completedMap.size}/${totalCandidateFrames} frames verified${unresolvedMap.size > 0 ? `, ${unresolvedMap.size} unresolved` : ''})`);
         } else {
           // Failure on this batch
           retriesCount++;
@@ -858,7 +1014,7 @@ Return JSON ONLY matching this schema:
             recoveredBatchesCount++;
           } else {
             // Single frame batch that failed repeatedly across all models
-            // Requirement 10 & 11: Mark unresolved OCR as failed/review_needed rather than inventing Chinese text
+            // Mark unresolved OCR as failed/review_needed without classifying as completed
             const failedFrame = originalBatch.frames[0];
             const fallbackObs = {
               timestampSec: failedFrame.timestampSec,
@@ -873,14 +1029,18 @@ Return JSON ONLY matching this schema:
               speakerVisualHint: '',
               deliveryType: 'dialogue',
               genderConfidence: 0.5,
+              ocrStatus: 'failed',
               ocrFailed: true,
+              isVerified: false,
+              isVerifiedEmpty: false,
               reviewNeeded: true,
               uncertainOcr: true,
-              failureReason: lastBatchError,
+              failureReason: lastBatchError || 'Exhausted retries across cascade models',
             };
-            completedMap.set(parseFloat(failedFrame.timestampSec.toFixed(2)), fallbackObs);
+            const t = parseFloat(failedFrame.timestampSec.toFixed(2));
+            unresolvedMap.set(t, fallbackObs);
             failedBatchesCount++;
-            console.warn(`[Stage 3 OCR] ⚠️ Frame at ${failedFrame.timestampSec}s unresolved after retries. Marked as review_needed.`);
+            console.warn(`[Stage 3 OCR] ⚠️ Frame at ${failedFrame.timestampSec}s unresolved after retries. Marked as review_needed (not completed).`);
 
             if (checkpointPath) {
               saveOcrCheckpoint(checkpointPath, {
@@ -889,9 +1049,12 @@ Return JSON ONLY matching this schema:
                 startOffsetSec: Math.round(startOffsetSec),
                 durationSec: Math.round(durationSec),
                 updatedAt: Date.now(),
-                rawObservations: Array.from(completedMap.values()),
+                rawObservations: [...Array.from(completedMap.values()), ...Array.from(unresolvedMap.values())].sort((a, b) => a.timestampSec - b.timestampSec),
                 completedBatchesCount,
                 totalCandidateFrames,
+                completed: false,
+                hasUnresolvedFrames: true,
+                unresolvedCount: unresolvedMap.size,
               });
             }
           }
@@ -905,16 +1068,39 @@ Return JSON ONLY matching this schema:
     }
     ocrWallTimeMs = Date.now() - ocrStartTime;
 
-    // Requirement 12: Account for all frames
-    const unaccountedFrames = framesToAnalyze.filter(
-      (f) => !completedMap.has(parseFloat(f.timestampSec.toFixed(2)))
-    );
-    if (unaccountedFrames.length > 0) {
-      throw new Error(`[Stage 3 OCR] Incomplete chunk: ${unaccountedFrames.length} candidate frames could not be accounted for.`);
+    // Account for all frames:
+    for (const f of framesToAnalyze) {
+      const t = parseFloat(f.timestampSec.toFixed(2));
+      if (!completedMap.has(t) && !unresolvedMap.has(t)) {
+        unresolvedMap.set(t, {
+          timestampSec: t,
+          reportedSec: t,
+          hasText: false,
+          textZh: '',
+          chineseText: '',
+          position: 'bottom_subtitle',
+          isSharp: false,
+          visualGender: 'unknown',
+          speakerGender: 'UNKNOWN',
+          speakerVisualHint: '',
+          deliveryType: 'dialogue',
+          genderConfidence: 0.5,
+          ocrStatus: 'missing',
+          ocrFailed: true,
+          isVerified: false,
+          isVerifiedEmpty: false,
+          reviewNeeded: true,
+          uncertainOcr: true,
+          failureReason: 'Frame unreached during batch execution',
+        });
+      }
     }
 
+    const hasUnresolvedFrames = unresolvedMap.size > 0;
+    const isComplete = !hasUnresolvedFrames;
+
     rawObservations.length = 0;
-    rawObservations.push(...Array.from(completedMap.values()));
+    rawObservations.push(...Array.from(completedMap.values()), ...Array.from(unresolvedMap.values()));
     rawObservations.sort((a, b) => a.timestampSec - b.timestampSec);
 
     // Fast lookup helper to find observation closest to timestamp
@@ -922,6 +1108,9 @@ Return JSON ONLY matching this schema:
       const roundedT = parseFloat(Number(targetT).toFixed(2));
       if (completedMap.has(roundedT)) {
         return completedMap.get(roundedT);
+      }
+      if (unresolvedMap.has(roundedT)) {
+        return unresolvedMap.get(roundedT);
       }
       let closest = null;
       let minD = 999;
@@ -932,7 +1121,7 @@ Return JSON ONLY matching this schema:
           closest = obs;
         }
       }
-      return minD <= 0.35 ? closest : { timestampSec: targetT, hasText: false, chineseText: '' };
+      return minD <= 0.35 ? closest : { timestampSec: targetT, hasText: false, chineseText: '', isVerified: false, ocrStatus: 'missing', ocrFailed: true };
     }
 
     // 4. STEP 2: Double-Read Verification per Candidate Cue State
@@ -1129,7 +1318,13 @@ Return JSON ONLY matching this schema:
             try {
               const tieObsList = await executeSingleVisionBatch(tieSlice);
               for (const tobs of tieObsList) {
-                completedMap.set(parseFloat(tobs.timestampSec.toFixed(2)), tobs);
+                const t = parseFloat(tobs.timestampSec.toFixed(2));
+                if (tobs.isVerified) {
+                  completedMap.set(t, tobs);
+                  unresolvedMap.delete(t);
+                } else {
+                  unresolvedMap.set(t, tobs);
+                }
                 rawObservations.push(tobs);
               }
               if (checkpointPath) {
@@ -1139,9 +1334,12 @@ Return JSON ONLY matching this schema:
                   startOffsetSec: Math.round(startOffsetSec),
                   durationSec: Math.round(durationSec),
                   updatedAt: Date.now(),
-                  rawObservations: Array.from(completedMap.values()),
+                  rawObservations: [...Array.from(completedMap.values()), ...Array.from(unresolvedMap.values())].sort((a, b) => a.timestampSec - b.timestampSec),
                   completedBatchesCount,
                   totalCandidateFrames,
+                  completed: unresolvedMap.size === 0,
+                  hasUnresolvedFrames: unresolvedMap.size > 0,
+                  unresolvedCount: unresolvedMap.size,
                 });
               }
             } catch (tieErr) {
@@ -1535,10 +1733,18 @@ Return JSON ONLY matching this schema:
   const result = {
     rawObservations,
     visualSegments: finalizedVisualSegments,
+    hasUnresolvedFrames,
+    isComplete,
+    unresolvedFrames: Array.from(unresolvedMap.values()),
     ocrMeta: {
       totalFramesSampled: rawObservations.length,
       totalObservations: rawObservations.length,
       detectedSegmentsCount: finalizedVisualSegments.length,
+      verifiedFramesCount: completedMap.size,
+      unresolvedFramesCount: unresolvedMap.size,
+      hasUnresolvedFrames,
+      isComplete,
+      status: isComplete ? 'completed' : 'review_needed',
       baseStepSec,
       apiCallsCount,
       retriesCount,
@@ -1546,7 +1752,7 @@ Return JSON ONLY matching this schema:
       ocrEngine: 'gemini-vision',
       wallTimeMs: ocrWallTimeMs,
       hasVisualSubtitles: finalizedVisualSegments.length > 0,
-      ocrNotice: lastBatchError || null,
+      ocrNotice: lastBatchError || (hasUnresolvedFrames ? `${unresolvedMap.size} unresolved frame(s) require review` : null),
       adaptiveConcurrency,
       failedBatchesCount,
       recoveredBatchesCount,
@@ -1555,18 +1761,23 @@ Return JSON ONLY matching this schema:
     },
   };
 
-  if (cachePath && finalizedVisualSegments.length > 0) {
+  // Only cache on disk if completely resolved with NO unresolved frames
+  if (cachePath && isComplete && finalizedVisualSegments.length > 0) {
     try {
       fs.writeFileSync(cachePath, JSON.stringify(result, null, 2), 'utf8');
       console.log(`[Stage 3 OCR] 💾 Cached ${finalizedVisualSegments.length} segments to ${path.basename(cachePath)}`);
     } catch (_) {}
+  } else if (cachePath && !isComplete) {
+    console.warn(`[Stage 3 OCR] ⚠️ Skipping disk cache write: ${unresolvedMap.size} frame(s) remain unresolved.`);
   }
 
   if (checkpointPath && fs.existsSync(checkpointPath)) {
     try {
       saveOcrCheckpoint(checkpointPath, {
         ...(loadOcrCheckpoint(checkpointPath) || {}),
-        completed: true,
+        completed: isComplete,
+        hasUnresolvedFrames,
+        unresolvedCount: unresolvedMap.size,
         finalizedAt: Date.now(),
       });
     } catch (_) {}
@@ -1794,6 +2005,7 @@ function deduplicateFastOcrCues(rawCues = [], defaultGender = 'male') {
 
 module.exports = {
   extractChineseSubtitles,
+  parseVisionResponseFrames,
   normalizeChineseChars,
   stripDecorativeSubtitleNoise,
   areChineseTextsEquivalent,

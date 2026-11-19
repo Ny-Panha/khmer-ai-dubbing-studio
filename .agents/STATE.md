@@ -1,6 +1,56 @@
 # Antigravity Shared State (Sync Memory)
 
 ## Last Session
+- **Environment**: Antigravity IDE (Gemini) - engineering-minimal-change-engineer
+- **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-20T00:31:00+07:00
+
+## Summary: Critical Chinese Subtitle Accuracy, Missing Frame Guard & False OCR Completion Resolution (100% PASS)
+- **Task:** Fix critical Chinese subtitle accuracy, prevent false OCR completion, distinguish verified empty subtitle frames from failed or missing responses, and prevent downstream translation/TTS from silently executing on incomplete OCR.
+- **Confirmed Root Causes Resolved**:
+  1. **Placeholder Frame Misclassification**: Failed single-frame batches were previously inserted into `completedMap` as `{ ocrFailed: true, reviewNeeded: true }`, causing `unaccountedFrames` check to falsely consider them completed.
+  2. **Silently Empty Missing Frames**: When Gemini omitted a frame in `parsed.frames`, `frames[fIdx] || {}` produced an empty object where `hasText` was undefined/falsy, falsely treating missing frames as "verified empty" observations.
+  3. **Premature Cache Acceptance**: Stage 3 cached visual segments even when unresolved frames existed, and cache reader did not validate `hasUnresolvedFrames` or `isComplete` status.
+  4. **Silent Downstream Leakage**: `chunkOrchestrator.js` marked chunks as `completed` without validating OCR completeness, allowing downstream Khmer translation (Stage 6) and TTS (Stage 9) to silently process incomplete Chinese subtitle results.
+  5. **Checkpoint Pollution on Resume**: `loadOcrCheckpoint` loaded failed frames directly into `completedMap`, preventing them from ever being rescheduled or retried.
+- **Surgical Changes Implemented (Minimal Change Discipline)**:
+  1. `backend/services/pipeline/stages/stage3_extractChineseSubtitles.js`:
+     - **Frame Status & Accountability Separation**: `completedMap` strictly contains verified frames (`isVerified: true`, status `verified_text` or `verified_empty`). Unresolved frames are tracked separately in `unresolvedMap` (`isVerified: false`, status `failed` or `missing`, `ocrFailed: true`, `reviewNeeded: true`).
+     - **Explicit Missing Frame Detection in `parseVisionResponseFrames`**: Positional and timestamp-based frame matching. Any omitted frame or empty response object is explicitly tagged `ocrStatus: 'missing'`, `isVerified: false`, `ocrFailed: true`, and queued for retry.
+     - **Verified Empty Subtitle Observations**: Frames where the model explicitly reports `hasText: false` are recorded as `ocrStatus: 'verified_empty'`, `isVerified: true`, `isVerifiedEmpty: true`, and `ocrFailed: false`.
+     - **Unresolved Frame Retries with Text Protection**: Retries schedule only unresolved frames (`!completedMap.has(t)`); verified frames and manual user overrides are protected from overwrite.
+     - **Strict Cache & Checkpoint Validation**: Disk cache is only written when `isComplete === true` and `hasUnresolvedFrames === false`. Checkpoints track `completed: isComplete`, `hasUnresolvedFrames`, and `unresolvedCount`. Disk cache reader rejects any cache containing unresolved/failed frames.
+  2. `backend/services/pipeline/chunkOrchestrator.js`:
+     - **OCR Completeness Enforcement**: Validates `ocrResult.isComplete` and `ocrResult.hasUnresolvedFrames`. If unresolved frames remain after Stage 3 retry exhaustion, raises `OCR_REVIEW_NEEDED`, updates chunk and job status to `review_needed`, and halts downstream translation and TTS.
+     - **Chunk Cache Validation**: Cached chunk files with `status: 'review_needed'`, `isComplete: false`, or `hasUnresolvedFrames: true` are rejected and re-run.
+  3. `backend/tests/stage3_chinese_ocr_accuracy_and_completion.test.js` (NEW):
+     - Deterministic 9-test suite verifying:
+       1. All frames OCR successfully -> completed.
+       2. Verified frame without subtitle -> valid empty observation.
+       3. Missing Gemini response frame -> retry/review_needed, not silently empty.
+       4. Unresolved frame after retry exhaustion -> no false completion.
+       5. Partial checkpoint -> resume only unresolved frames.
+       6. Incomplete cached OCR -> reject as complete.
+       7. Chinese text and timestamps remain unchanged during retry.
+       8. Failed OCR cannot silently trigger downstream translation/TTS.
+       9. Previously successful batches remain reusable.
+- **Verification Outcomes**:
+  - `backend/tests/stage3_chinese_ocr_accuracy_and_completion.test.js`: **9/9 PASS** (100%).
+  - `backend/tests/stage3_gemini_vision_resilience.test.js`: **14/14 PASS** (100%).
+  - Fast OCR and Stage Pipeline suites: **35/35 PASS** (100%).
+  - `npm --prefix frontend run build`: **PASS** (0 errors, 4.27s).
+- **Active Environment**:
+  - Backend API: `http://localhost:5000`
+  - Frontend UI: `http://localhost:5173`
+  - Active Branch: `chore/full-project-cleanup`
+- **Next Steps**:
+  - Verified and ready for commit and push.
+
+---
+
+# Antigravity Shared State (Sync Memory)
+
+## Last Session
 - **Environment**: Antigravity IDE (Gemini) - Minimal Change Engineer
 - **Branch**: `chore/full-project-cleanup`
 - **Timestamp**: 2026-11-20T00:03:00+07:00
@@ -128,6 +178,56 @@
   - Frontend UI: `http://localhost:5173`
 - **Next Steps**:
   - Commit and push to `chore/full-project-cleanup`.
+
+---
+
+# Antigravity Shared State (Sync Memory)
+
+## Last Session
+- **Environment**: Antigravity IDE (Gemini) - engineering-minimal-change-engineer
+- **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-20T00:31:00+07:00
+
+## Summary: Critical Chinese Subtitle Accuracy, Missing Frame Guard & False OCR Completion Resolution (100% PASS)
+- **Task:** Fix critical Chinese subtitle accuracy, prevent false OCR completion, distinguish verified empty subtitle frames from failed or missing responses, and prevent downstream translation/TTS from silently executing on incomplete OCR.
+- **Confirmed Root Causes Resolved**:
+  1. **Placeholder Frame Misclassification**: Failed single-frame batches were previously inserted into `completedMap` as `{ ocrFailed: true, reviewNeeded: true }`, causing `unaccountedFrames` check to falsely consider them completed.
+  2. **Silently Empty Missing Frames**: When Gemini omitted a frame in `parsed.frames`, `frames[fIdx] || {}` produced an empty object where `hasText` was undefined/falsy, falsely treating missing frames as "verified empty" observations.
+  3. **Premature Cache Acceptance**: Stage 3 cached visual segments even when unresolved frames existed, and cache reader did not validate `hasUnresolvedFrames` or `isComplete` status.
+  4. **Silent Downstream Leakage**: `chunkOrchestrator.js` marked chunks as `completed` without validating OCR completeness, allowing downstream Khmer translation (Stage 6) and TTS (Stage 9) to silently process incomplete Chinese subtitle results.
+  5. **Checkpoint Pollution on Resume**: `loadOcrCheckpoint` loaded failed frames directly into `completedMap`, preventing them from ever being rescheduled or retried.
+- **Surgical Changes Implemented (Minimal Change Discipline)**:
+  1. `backend/services/pipeline/stages/stage3_extractChineseSubtitles.js`:
+     - **Frame Status & Accountability Separation**: `completedMap` strictly contains verified frames (`isVerified: true`, status `verified_text` or `verified_empty`). Unresolved frames are tracked separately in `unresolvedMap` (`isVerified: false`, status `failed` or `missing`, `ocrFailed: true`, `reviewNeeded: true`).
+     - **Explicit Missing Frame Detection in `parseVisionResponseFrames`**: Positional and timestamp-based frame matching. Any omitted frame or empty response object is explicitly tagged `ocrStatus: 'missing'`, `isVerified: false`, `ocrFailed: true`, and queued for retry.
+     - **Verified Empty Subtitle Observations**: Frames where the model explicitly reports `hasText: false` are recorded as `ocrStatus: 'verified_empty'`, `isVerified: true`, `isVerifiedEmpty: true`, and `ocrFailed: false`.
+     - **Unresolved Frame Retries with Text Protection**: Retries schedule only unresolved frames (`!completedMap.has(t)`); verified frames and manual user overrides are protected from overwrite.
+     - **Strict Cache & Checkpoint Validation**: Disk cache is only written when `isComplete === true` and `hasUnresolvedFrames === false`. Checkpoints track `completed: isComplete`, `hasUnresolvedFrames`, and `unresolvedCount`. Disk cache reader rejects any cache containing unresolved/failed frames.
+  2. `backend/services/pipeline/chunkOrchestrator.js`:
+     - **OCR Completeness Enforcement**: Validates `ocrResult.isComplete` and `ocrResult.hasUnresolvedFrames`. If unresolved frames remain after Stage 3 retry exhaustion, raises `OCR_REVIEW_NEEDED`, updates chunk and job status to `review_needed`, and halts downstream translation and TTS.
+     - **Chunk Cache Validation**: Cached chunk files with `status: 'review_needed'`, `isComplete: false`, or `hasUnresolvedFrames: true` are rejected and re-run.
+  3. `backend/tests/stage3_chinese_ocr_accuracy_and_completion.test.js` (NEW):
+     - Deterministic 9-test suite verifying:
+       1. All frames OCR successfully -> completed.
+       2. Verified frame without subtitle -> valid empty observation.
+       3. Missing Gemini response frame -> retry/review_needed, not silently empty.
+       4. Unresolved frame after retry exhaustion -> no false completion.
+       5. Partial checkpoint -> resume only unresolved frames.
+       6. Incomplete cached OCR -> reject as complete.
+       7. Chinese text and timestamps remain unchanged during retry.
+       8. Failed OCR cannot silently trigger downstream translation/TTS.
+       9. Previously successful batches remain reusable.
+- **Verification Outcomes**:
+  - `backend/tests/stage3_chinese_ocr_accuracy_and_completion.test.js`: **9/9 PASS** (100%).
+  - `backend/tests/stage3_gemini_vision_resilience.test.js`: **14/14 PASS** (100%).
+  - Fast OCR and Stage Pipeline suites: **35/35 PASS** (100%).
+  - `npm --prefix frontend run build`: **PASS** (0 errors, 4.27s).
+- **Active Environment**:
+  - Backend API: `http://localhost:5000`
+  - Frontend UI: `http://localhost:5173`
+  - Active Branch: `chore/full-project-cleanup`
+- **Next Steps**:
+  - Verified and ready for commit and push.
 
 ---
 

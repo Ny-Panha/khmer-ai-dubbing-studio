@@ -246,7 +246,12 @@ async function runChunkedDubbingPipeline({
     if (!force && fs.existsSync(chunkFile)) {
       try {
         const cachedChunk = JSON.parse(fs.readFileSync(chunkFile, 'utf8'));
-        if (Array.isArray(cachedChunk.segments) && cachedChunk.segments.length > 0) {
+        const hasUnresolved = Boolean(
+          cachedChunk.hasUnresolvedFrames ||
+          cachedChunk.isComplete === false ||
+          cachedChunk.status === 'review_needed'
+        );
+        if (!hasUnresolved && Array.isArray(cachedChunk.segments) && cachedChunk.segments.length > 0) {
           const beforeCacheCount = cachedChunk.segments.length;
           chunkSegments = cachedChunk.segments.filter((seg) => !isNonChineseAsrHallucination(seg));
           const droppedCacheJunk = beforeCacheCount - chunkSegments.length;
@@ -256,6 +261,8 @@ async function runChunkedDubbingPipeline({
           console.log(
             `[ChunkOrchestrator] ⚡ Resuming Chunk ${cIdx + 1}/${chunks.length}: Loaded ${chunkSegments.length} validated segments from disk cache${droppedCacheJunk > 0 ? ` (dropped ${droppedCacheJunk} non-Chinese ASR junk)` : ''}`
           );
+        } else if (hasUnresolved) {
+          console.warn(`[ChunkOrchestrator] ⚠️ Chunk cache at ${path.basename(chunkFile)} contains unresolved frames or was not completed. Re-running chunk.`);
         }
       } catch (_) {}
     }
@@ -290,6 +297,43 @@ async function runChunkedDubbingPipeline({
         });
 
         checkAbort();
+
+        // Validate OCR completeness: Do not allow incomplete OCR to silently trigger downstream stages
+        const hasUnresolvedOcr = Boolean(
+          ocrResult?.hasUnresolvedFrames ||
+          ocrResult?.ocrMeta?.hasUnresolvedFrames ||
+          ocrResult?.isComplete === false ||
+          ocrResult?.ocrMeta?.isComplete === false ||
+          (ocrResult?.ocrMeta?.unresolvedFramesCount > 0)
+        );
+
+        if (hasUnresolvedOcr) {
+          const unresCount = ocrResult?.ocrMeta?.unresolvedFramesCount || ocrResult?.unresolvedFrames?.length || 1;
+          const msg = `Chunk ${cIdx + 1}/${chunks.length} contains ${unresCount} unresolved OCR frame(s). Downstream translation/TTS paused for review.`;
+          console.warn(`[ChunkOrchestrator] ⚠️ ${msg}`);
+          if (jobId) {
+            updateChunk(jobId, chunk.chunkIndex, {
+              status: 'review_needed',
+              reviewNeeded: true,
+              hasUnresolvedFrames: true,
+              unresolvedCount: unresCount,
+              segmentsCount: (ocrResult.visualSegments || []).length,
+              updatedAt: Date.now(),
+            });
+            updateJob(jobId, {
+              status: 'review_needed',
+              reviewNeeded: true,
+              error: msg,
+              failedChunkIndex: chunk.chunkIndex,
+            });
+          }
+          const unresErr = new Error(`[ChunkOrchestrator] ${msg}`);
+          unresErr.code = 'OCR_REVIEW_NEEDED';
+          unresErr.reviewNeeded = true;
+          unresErr.chunkIndex = chunk.chunkIndex;
+          unresErr.ocrResult = ocrResult;
+          throw unresErr;
+        }
 
         const ocrCuesCount = Array.isArray(ocrResult?.visualSegments) ? ocrResult.visualSegments.length : 0;
 
@@ -361,6 +405,9 @@ async function runChunkedDubbingPipeline({
             visualOnlyCount,
             fusedCount,
             videoSignature,
+            isComplete: true,
+            hasUnresolvedFrames: false,
+            status: 'completed',
             savedAt: Date.now(),
           }, null, 2), 'utf8');
         } catch (_) {}
@@ -368,6 +415,10 @@ async function runChunkedDubbingPipeline({
         if (chunkErr?.name === 'AbortError' || signal?.aborted) {
           console.warn(`[ChunkOrchestrator] 🛑 Chunk ${cIdx + 1}/${chunks.length} aborted by user.`);
           throw chunkErr?.name === 'AbortError' ? chunkErr : createAbortError('Pipeline execution was cancelled by user');
+        }
+        if (chunkErr?.code === 'OCR_REVIEW_NEEDED' || chunkErr?.reviewNeeded) {
+          console.warn(`[ChunkOrchestrator] ⚠️ Chunk ${cIdx + 1}/${chunks.length} entered review_needed state without silent completion.`);
+          throw chunkErr;
         }
         console.error(`[ChunkOrchestrator] ❌ Chunk ${cIdx + 1}/${chunks.length} failed: ${chunkErr.message}`);
         if (jobId) {
