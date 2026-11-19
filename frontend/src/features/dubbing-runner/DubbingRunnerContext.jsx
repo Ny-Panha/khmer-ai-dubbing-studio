@@ -18,6 +18,11 @@ import {
   checkEpisodeHasAutoFitReady,
   getEpisodeBrokenSummary,
 } from '../../components/dashboard/geminiRouteHelpers';
+import {
+  STEP_STATUS,
+  normalizeDubbingOptions,
+  createStepResult,
+} from './dubbingExecutionAdapter';
 
 const DubbingRunnerContext = createContext(null);
 
@@ -68,19 +73,20 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
    * Skips immediately if episode already has script and options.force is not set (NO repair, NO TTS here).
    */
   const runSingleTranslate = useCallback(async (ep, options = {}, signal = null) => {
-    if (!ep) return { success: false, error: 'No episode provided' };
-    const seriesId = activeSeries?.id || ep.seriesId || 'drama_project';
-    const videoRef = ep.videoPath || ep.sourceVideoPath || ep.videoFile || (typeof ep.video === 'string' ? ep.video : ep.video?.videoPath) || '';
-    const videoId = ep.videoId || ep.video?.videoId || videoRef;
+    if (!ep) return createStepResult({ status: STEP_STATUS.FAILED, error: 'No episode provided' });
+    const norm = normalizeDubbingOptions(ep, 'translate', options, { activeSeries });
+    const seriesId = norm.seriesId;
+    const videoRef = norm.videoPath;
+    const videoId = norm.videoId;
 
     const hasScript = checkEpisodeHasScript(ep);
 
     // If episode already has script and not forcing: skip immediately (Pure translate, no repair / no TTS)
-    if (hasScript && !options.force) {
-      return { success: true, skipped: true };
+    if (hasScript && !norm.force) {
+      return createStepResult({ status: STEP_STATUS.SKIPPED, reason: 'already_has_script' });
     }
 
-    if (options.force) {
+    if (norm.force) {
       try {
         await resetEpisodeStateApi({ seriesId, episodeId: ep.id, resetType: 'script' });
       } catch (rErr) {
@@ -95,14 +101,16 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
       videoPath: videoRef,
       seriesId,
       episodeId: ep.id,
-      pipelineMode: options.pipelineMode || 'fast_ocr',
-      generationMode: options.generationMode || options.pipelineMode || 'fast_ocr',
-      dubbingMode: options.dubbingMode || 'dialogue',
-      genre: options.genre || 'auto',
-      narratorGender: options.narratorGender || 'male',
-      customPrompt: options.customDirection || '',
-      force: Boolean(options.force),
-      confirmed: Boolean(options.force || options.confirmed),
+      pipelineMode: norm.pipelineMode,
+      generationMode: norm.generationMode,
+      dubbingMode: norm.dubbingMode,
+      recapStyle: norm.recapStyle,
+      genre: norm.genre,
+      narratorGender: norm.narratorGender,
+      customPrompt: norm.customPrompt,
+      seriesGlossary: norm.seriesGlossary,
+      force: norm.force,
+      confirmed: norm.confirmed,
     });
 
     const jobId = jobRes?.jobId || jobRes?.id;
@@ -195,7 +203,7 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
             },
           },
         }));
-        return { success: true, jobId, data: st };
+        return createStepResult({ status: STEP_STATUS.COMPLETED, jobId, data: st });
       }
       if (curStatus === 'failed') {
         console.error(`[Translate 📝] ❌ EP${ep.episodeNumber || ep.id} បរាជ័យ:`, st?.error || st?.job?.error);
@@ -215,20 +223,21 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
       }
     }
 
-    return { success: false, aborted: true };
-  }, [activeSeries?.id, updateRunnerState]);
+    return createStepResult({ status: STEP_STATUS.CANCELLED, reason: 'aborted' });
+  }, [activeSeries, updateRunnerState]);
 
   /**
    * 1b. Repair Broken Text for a Single Episode (Text only, NO voice/TTS generation)
    */
   const runSingleTextRepair = useCallback(async (ep, options = {}, signal = null) => {
-    if (!ep) return { success: false, error: 'No episode provided' };
-    const seriesId = activeSeries?.id || ep.seriesId || 'drama_project';
+    if (!ep) return createStepResult({ status: STEP_STATUS.FAILED, error: 'No episode provided' });
+    const norm = normalizeDubbingOptions(ep, 'repair', options, { activeSeries });
+    const seriesId = norm.seriesId;
     const brokenScan = getEpisodeBrokenSummary(ep);
     const textBrokenCount = brokenScan?.textBrokenCount || 0;
 
     if (textBrokenCount === 0) {
-      return { success: true, skipped: true };
+      return createStepResult({ status: STEP_STATUS.SKIPPED, reason: 'no_broken_text' });
     }
 
     updateRunnerState('repair', { message: `[EP${ep.episodeNumber || ep.id}] ជួសជុលឃ្លាអក្សរខូច (${textBrokenCount} ឃ្លា)...` });
@@ -267,28 +276,43 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
         }
       }
     }
-    return { success: true, repaired: true };
-  }, [activeSeries?.id, updateRunnerState]);
+    return createStepResult({ status: STEP_STATUS.COMPLETED, count: textBrokenCount });
+  }, [activeSeries, updateRunnerState]);
 
   /**
    * 2. AI Khmer Voice TTS for a Single Episode (Awaits 100% completion before resolving)
    */
   const runSingleVoice = useCallback(async (ep, options = {}, signal = null) => {
-    if (!ep) return { success: false, error: 'No episode provided' };
-    const seriesId = activeSeries?.id || ep.seriesId || 'drama_project';
-    const videoId = ep.videoId || ep.videoFile || ep.video?.videoId || ep.videoPath || '';
+    if (!ep) return createStepResult({ status: STEP_STATUS.FAILED, error: 'No episode provided' });
+    const norm = normalizeDubbingOptions(ep, 'voice', options, { activeSeries });
+    const seriesId = norm.seriesId;
+    const videoId = norm.videoId;
 
-    const segments = ep.scriptData?.segments || [];
+    let segments = ep.scriptData?.segments || [];
+    // If segments are empty, attempt to hydrate fresh episode if scriptData exists on server
+    if ((!Array.isArray(segments) || segments.length === 0) && checkEpisodeHasScript(ep)) {
+      try {
+        const epRes = await fetch(`/api/series/${encodeURIComponent(seriesId)}/episodes/${encodeURIComponent(ep.id)}`);
+        if (epRes.ok) {
+          const epData = await epRes.json();
+          if (Array.isArray(epData?.episode?.scriptData?.segments) && epData.episode.scriptData.segments.length > 0) {
+            segments = epData.episode.scriptData.segments;
+            ep = epData.episode;
+          }
+        }
+      } catch (_) {}
+    }
+
     if (!Array.isArray(segments) || segments.length === 0) {
-      return { success: false, skipped: true, reason: 'no_segments' };
+      return createStepResult({ status: STEP_STATUS.SKIPPED, reason: 'no_segments' });
     }
 
     const hasAudio = checkEpisodeHasAudioReady(ep, null, null);
-    if (hasAudio && !ep.audioOutdated && !options.force) {
-      return { success: true, skipped: true };
+    if (hasAudio && !ep.audioOutdated && !norm.force) {
+      return createStepResult({ status: STEP_STATUS.SKIPPED, reason: 'already_has_audio' });
     }
 
-    if (options.force) {
+    if (norm.force) {
       try {
         await resetEpisodeStateApi({ seriesId, episodeId: ep.id, resetType: 'voice' });
       } catch (rErr) {
@@ -318,9 +342,9 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
       },
     }));
 
-    // Build speaker map if character mapping exists
-    const speakerMap = options.speakerMap || {};
-    const voiceId = options.voiceId || 'km-KH-PisethNeural';
+    const speakerMap = norm.speakerMap;
+    const voiceId = norm.voiceId;
+    const speed = norm.speed;
 
     console.log(`[Voice 🎙️] EP${ep.episodeNumber || ep.id}: កំពុងបង្កើតសំឡេង AI (${segments.length} ឃ្លា)...`);
 
@@ -371,11 +395,12 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
       ttsRes = await generateAudioApi({
         segments,
         voiceId,
+        speed,
         seriesId,
         episodeId: ep.id,
         videoId,
         speakerMap,
-        forceRegen: Boolean(options.force || options.forceRegen),
+        forceRegen: norm.forceRegen,
         signal,
       });
     } finally {
@@ -428,24 +453,25 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
       }
     } catch (_) {}
 
-    return { success: true, data: ttsRes };
-  }, [activeSeries?.id, updateRunnerState]);
+    return createStepResult({ status: STEP_STATUS.COMPLETED, data: ttsRes, count: segments.length });
+  }, [activeSeries, updateRunnerState]);
 
   /**
    * 3. AI Vocal Separation (Demucs Clean BGM) for a Single Episode
    */
   const runSingleCleanBgm = useCallback(async (ep, options = {}, signal = null) => {
-    if (!ep) return { success: false, error: 'No episode provided' };
-    const seriesId = activeSeries?.id || ep.seriesId || 'drama_project';
-    const videoRef = ep.videoPath || ep.sourceVideoPath || ep.videoFile || (typeof ep.video === 'string' ? ep.video : ep.video?.videoPath) || '';
+    if (!ep) return createStepResult({ status: STEP_STATUS.FAILED, error: 'No episode provided' });
+    const norm = normalizeDubbingOptions(ep, 'clean_bgm', options, { activeSeries });
+    const seriesId = norm.seriesId;
+    const videoRef = norm.videoPath;
 
     if (!videoRef) {
-      return { success: false, skipped: true, reason: 'no_video' };
+      return createStepResult({ status: STEP_STATUS.SKIPPED, reason: 'no_video' });
     }
 
     const hasDemucs = checkEpisodeHasDemucsReady(ep, null, null);
-    if (hasDemucs && !options.force) {
-      return { success: true, skipped: true };
+    if (hasDemucs && !norm.force) {
+      return createStepResult({ status: STEP_STATUS.SKIPPED, reason: 'already_has_demucs' });
     }
 
     updateRunnerState('clean_bgm', { message: `[EP${ep.episodeNumber || ep.id}] កំពុងបិទសំឡេងចិន (Demucs Clean BGM)...` });
@@ -508,6 +534,12 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
               });
             }
 
+            const isDoneVerified = Boolean(
+              prog.status === 'completed' ||
+              (prog.isDone && prog.noVocalsUrl) ||
+              (pct >= 100 && prog.noVocalsUrl)
+            );
+
             return {
               ...prev,
               demucs: {
@@ -517,7 +549,7 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
                   logs: mergedLogs.slice(-60),
                   message: prog.message || `Demucs Separation: ${pct}%`,
                   model: prog.model || options.model || 'htdemucs',
-                  isDone: Boolean(prog.status === 'completed' || (prog.isDone && prog.noVocalsUrl) || pct >= 100),
+                  isDone: isDoneVerified,
                   isFailed: Boolean(prog.status === 'error' || prog.isFailed),
                 },
               },
@@ -570,7 +602,13 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
           if (pct > 0) hadProgress = true;
           updateRunnerState('clean_bgm', { progress: pct });
 
-          if (prog.status === 'completed' || (prog.isDone && prog.noVocalsUrl) || pct >= 100) {
+          const isFinished = Boolean(
+            prog.status === 'completed' ||
+            (prog.isDone && prog.noVocalsUrl) ||
+            (pct >= 100 && prog.noVocalsUrl)
+          );
+
+          if (isFinished) {
             sepRes = { success: true, noVocalsUrl: prog.noVocalsUrl, noVocalsPath: prog.noVocalsPath };
             break;
           }
@@ -620,8 +658,8 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
       },
     }));
 
-    return { success: true, noVocalsUrl: sepRes?.noVocalsUrl };
-  }, [activeSeries?.id, updateRunnerState]);
+    return createStepResult({ status: STEP_STATUS.COMPLETED, data: sepRes });
+  }, [activeSeries, updateRunnerState]);
 
   /**
    * 4. Run all 3 steps for 1 single episode
@@ -632,23 +670,25 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
    * - Awaits Clean BGM before marking episode complete.
    */
   const runSingleEpisodeAll3 = useCallback(async (ep, options = {}, signal = null) => {
-    if (!ep) return { success: false, error: 'No episode provided' };
-    if (signal?.aborted) return { success: false, aborted: true };
+    if (!ep) return createStepResult({ status: STEP_STATUS.FAILED, error: 'No episode provided' });
+    if (signal?.aborted) return createStepResult({ status: STEP_STATUS.CANCELLED, reason: 'aborted' });
 
+    const norm = normalizeDubbingOptions(ep, 'all3', options, { activeSeries });
+    const seriesId = norm.seriesId;
     const hasDemucs = checkEpisodeHasDemucsReady(ep, null, null);
     let bgmPromise = null;
 
     // 1. Kick off Clean BGM in parallel if not already cached and not skipped
-    if (!hasDemucs && !options.skipCleanBgm) {
+    if ((!hasDemucs || norm.force) && !options.skipCleanBgm) {
       bgmPromise = runSingleCleanBgm(ep, options, signal).catch((bgmErr) => {
-        return { success: false, error: bgmErr?.message || 'Clean BGM separation failed' };
+        return createStepResult({ status: STEP_STATUS.FAILED, error: bgmErr?.message || 'Clean BGM separation failed' });
       });
     }
 
-    // 2. Step 1: Script ខ្មែរ (Chinese Subtitle OCR -> Khmer Translation)
-    if (signal?.aborted) return { success: false, aborted: true };
+    // 2. Step 1: Script Khmer (Chinese Subtitle OCR -> Khmer Translation)
+    if (signal?.aborted) return createStepResult({ status: STEP_STATUS.CANCELLED, reason: 'aborted' });
     const scriptRes = await runSingleTranslate(ep, options, signal);
-    if (signal?.aborted) return { success: false, aborted: true };
+    if (signal?.aborted) return createStepResult({ status: STEP_STATUS.CANCELLED, reason: 'aborted' });
     if (!scriptRes?.success) {
       if (scriptRes?.skipped && checkEpisodeHasScript(ep)) {
         // Valid script already exists
@@ -658,12 +698,22 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
     }
     if (typeof refreshSeries === 'function') await refreshSeries();
 
-    // 3. Step 2: សំឡេង AI (Strictly depends on Script!)
-    if (signal?.aborted) return { success: false, aborted: true };
-    const voiceRes = await runSingleVoice(ep, options, signal);
-    if (signal?.aborted) return { success: false, aborted: true };
+    // Hydrate fresh episode from server to ensure fresh script segments reach Voice TTS
+    let freshEp = ep;
+    try {
+      const epRes = await fetch(`/api/series/${encodeURIComponent(seriesId)}/episodes/${encodeURIComponent(ep.id)}`);
+      if (epRes.ok) {
+        const epData = await epRes.json();
+        if (epData?.episode) freshEp = epData.episode;
+      }
+    } catch (_) {}
+
+    // 3. Step 2: Voice TTS (Strictly depends on Script!)
+    if (signal?.aborted) return createStepResult({ status: STEP_STATUS.CANCELLED, reason: 'aborted' });
+    const voiceRes = await runSingleVoice(freshEp, options, signal);
+    if (signal?.aborted) return createStepResult({ status: STEP_STATUS.CANCELLED, reason: 'aborted' });
     if (!voiceRes?.success) {
-      if (voiceRes?.skipped && checkEpisodeHasAudioReady(ep, null, null)) {
+      if (voiceRes?.skipped && checkEpisodeHasAudioReady(freshEp, null, null)) {
         // Valid voice audio already exists
       } else {
         throw new Error(voiceRes?.error || voiceRes?.reason || 'Voice generation failed');
@@ -672,22 +722,22 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
     if (typeof refreshSeries === 'function') await refreshSeries();
 
     // 4. Step 3: Await Clean BGM if running in background
-    if (signal?.aborted) return { success: false, aborted: true };
+    if (signal?.aborted) return createStepResult({ status: STEP_STATUS.CANCELLED, reason: 'aborted' });
     if (bgmPromise) {
       const bgmRes = await bgmPromise;
-      if (signal?.aborted) return { success: false, aborted: true };
+      if (signal?.aborted) return createStepResult({ status: STEP_STATUS.CANCELLED, reason: 'aborted' });
       if (!bgmRes?.success && !options.skipCleanBgm) {
-        if (bgmRes?.skipped && checkEpisodeHasDemucsReady(ep, null, null)) {
+        if (bgmRes?.skipped && checkEpisodeHasDemucsReady(freshEp, null, null)) {
           // Demucs was already cached/ready
         } else {
           throw new Error(bgmRes?.error || 'Clean BGM separation failed');
         }
       }
     } else if (!hasDemucs && !options.skipCleanBgm) {
-      const directBgmRes = await runSingleCleanBgm(ep, options, signal);
-      if (signal?.aborted) return { success: false, aborted: true };
+      const directBgmRes = await runSingleCleanBgm(freshEp, options, signal);
+      if (signal?.aborted) return createStepResult({ status: STEP_STATUS.CANCELLED, reason: 'aborted' });
       if (!directBgmRes?.success && !options.skipCleanBgm) {
-        if (directBgmRes?.skipped && checkEpisodeHasDemucsReady(ep, null, null)) {
+        if (directBgmRes?.skipped && checkEpisodeHasDemucsReady(freshEp, null, null)) {
           // Demucs was already cached/ready
         } else {
           throw new Error(directBgmRes?.error || 'Clean BGM separation failed');
@@ -696,20 +746,20 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
     }
     if (typeof refreshSeries === 'function') await refreshSeries();
 
-    return { success: true };
-  }, [runSingleTranslate, runSingleVoice, runSingleCleanBgm, refreshSeries]);
+    return createStepResult({ status: STEP_STATUS.COMPLETED });
+  }, [runSingleTranslate, runSingleVoice, runSingleCleanBgm, refreshSeries, activeSeries]);
 
   /**
    * 4B. Auto-Fit Speech Speed for a Single Episode (1.05x - 1.50x)
    * Speeds up any red/overflowing/trimmed segments so they fit subtitle slots without cutting off speech
    */
   const runSingleAutoFitSpeed = useCallback(async (ep, options = {}, signal = null) => {
-    if (!ep) return { success: false, error: 'No episode provided' };
+    if (!ep) return createStepResult({ status: STEP_STATUS.FAILED, error: 'No episode provided' });
     const seriesId = activeSeries?.id || ep.seriesId || 'drama_project';
     const epId = ep.id;
 
     try {
-      if (signal?.aborted) return { success: false, aborted: true };
+      if (signal?.aborted) return createStepResult({ status: STEP_STATUS.CANCELLED, reason: 'aborted' });
 
       setRunnerLiveStats((prev) => ({
         ...prev,
@@ -754,7 +804,7 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
         if (typeof refreshSeries === 'function') {
           await refreshSeries();
         }
-        return { success: true, fittedCount: res.fittedCount || 0 };
+        return createStepResult({ status: STEP_STATUS.COMPLETED, count: res.fittedCount || 0 });
       }
 
       setRunnerLiveStats((prev) => ({
@@ -771,9 +821,9 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
           },
         },
       }));
-      return { success: false, error: res?.error || 'Auto-fit speed failed' };
+      return createStepResult({ status: STEP_STATUS.FAILED, error: res?.error || 'Auto-fit speed failed' });
     } catch (err) {
-      if (signal?.aborted) return { success: false, aborted: true };
+      if (signal?.aborted) return createStepResult({ status: STEP_STATUS.CANCELLED, reason: 'aborted' });
       console.error(`[DubbingRunner] Auto-fit speed failed for EP ${epId}:`, err);
       setRunnerLiveStats((prev) => ({
         ...prev,
@@ -789,7 +839,7 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
           },
         },
       }));
-      return { success: false, error: err.message };
+      return createStepResult({ status: STEP_STATUS.FAILED, error: err.message });
     }
   }, [activeSeries?.id, refreshSeries]);
 
@@ -810,7 +860,7 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
       });
       if (queue.length === 0) {
         updateRunnerState('repair', { message: '✅ គ្រប់ភាគទាំងអស់មានអត្ថបទត្រឹមត្រូវ (គ្មានឃ្លាខូចទេ)' });
-        return { success: true, count: 0 };
+        return createStepResult({ status: STEP_STATUS.COMPLETED, count: 0 });
       }
     } else if (stepType === 'autofit') {
       const candidates = queue.length > 0 ? queue : allEpisodes;
@@ -835,7 +885,7 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
             queue = voiced;
           } else {
             updateRunnerState('autofit', { message: 'មិនទាន់មានភាគដែលមានសំឡេងសម្រាប់ Auto-Fit ទេ' });
-            return { success: true, count: 0 };
+            return createStepResult({ status: STEP_STATUS.COMPLETED, count: 0 });
           }
         }
       }
@@ -859,7 +909,7 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
 
     if (queue.length === 0) {
       updateRunnerState(stepType, { message: 'គ្រប់ភាគទាំងអស់រួចរាល់ហើយ' });
-      return { success: true, count: 0 };
+      return createStepResult({ status: STEP_STATUS.COMPLETED, count: 0 });
     }
 
     // Set up AbortController for clean cancellation
@@ -897,20 +947,26 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
         console.log(`%c[1-by-1 Runner] 🚀 [EP${currentEp.episodeNumber || currentEp.id}] ចាប់ផ្ដើម ${stepType.toUpperCase()} (${idx + 1}/${queue.length})...`, 'color: #38bdf8; font-weight: bold;');
 
         // Await 100% completion of single episode step before proceeding to next!
+        let stepResult = null;
         if (stepType === 'translate') {
-          await runSingleTranslate(currentEp, options, controller.signal);
+          stepResult = await runSingleTranslate(currentEp, options, controller.signal);
         } else if (stepType === 'repair') {
-          await runSingleTextRepair(currentEp, options, controller.signal);
+          stepResult = await runSingleTextRepair(currentEp, options, controller.signal);
         } else if (stepType === 'voice') {
-          await runSingleVoice(currentEp, options, controller.signal);
+          stepResult = await runSingleVoice(currentEp, options, controller.signal);
         } else if (stepType === 'clean_bgm') {
-          await runSingleCleanBgm(currentEp, options, controller.signal);
+          stepResult = await runSingleCleanBgm(currentEp, options, controller.signal);
         } else if (stepType === 'autofit') {
-          await runSingleAutoFitSpeed(currentEp, options, controller.signal);
+          stepResult = await runSingleAutoFitSpeed(currentEp, options, controller.signal);
         } else if (stepType === 'all3') {
-          const all3Res = await runSingleEpisodeAll3(currentEp, options, controller.signal);
-          if (controller.signal.aborted || all3Res?.aborted) break;
-          if (!all3Res?.success) throw new Error(all3Res?.error || 'Episode All 3 processing failed');
+          stepResult = await runSingleEpisodeAll3(currentEp, options, controller.signal);
+        }
+
+        if (controller.signal.aborted || stepResult?.aborted || stepResult?.status === STEP_STATUS.CANCELLED) {
+          break;
+        }
+        if (stepResult && !stepResult.success && !stepResult.skipped) {
+          throw new Error(stepResult.error || `Episode ${stepType} step failed`);
         }
 
         setActiveEpisodeIds((prev) => {
@@ -935,11 +991,11 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
         message: 'រួចរាល់ 100%!',
       });
 
-      return { success: true, count: queue.length };
+      return createStepResult({ status: STEP_STATUS.COMPLETED, count: queue.length });
     } catch (err) {
       if (controller.signal.aborted) {
         updateRunnerState(stepType, { status: 'idle', message: 'បានបញ្ឈប់ដោយអ្នកប្រើប្រាស់' });
-        return { success: false, aborted: true };
+        return createStepResult({ status: STEP_STATUS.CANCELLED, reason: 'aborted' });
       }
       updateRunnerState(stepType, { status: 'failed', message: err.message || 'ជួបបញ្ហាពេលដំណើរការ' });
       throw err;
@@ -963,17 +1019,22 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
       abortControllersRef.current[stepType] = null;
     }
 
-    // 2. Transmit kill command to backend worker processes immediately
+    const currentEpId = runnerStates[stepType]?.currentEpId;
+    const targetSeriesId = activeSeries?.id || 'drama_project';
+    const allEpisodes = Array.isArray(activeSeries?.episodes) ? activeSeries.episodes : [];
+    const activeEp = allEpisodes.find((e) => e.id === currentEpId);
+    const videoRef = activeEp?.videoPath || activeEp?.sourceVideoPath || activeEp?.videoFile || '';
+
+    // 2. Transmit scoped kill command to backend worker processes immediately
     try {
       if (stepType === 'clean_bgm' || stepType === 'all3') {
-        await killSeparationApi({ jobId: 'all' }).catch(() => {});
+        await killSeparationApi({ videoPath: videoRef, jobId: currentEpId || 'all' }).catch(() => {});
       }
       if (stepType === 'translate' || stepType === 'repair' || stepType === 'all3') {
-        const targetSeriesId = activeSeries?.id || 'drama_project';
         await fetch('/api/jobs/kill', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ seriesId: targetSeriesId, jobId: 'all' }),
+          body: JSON.stringify({ seriesId: targetSeriesId, jobId: currentEpId || 'all' }),
         }).catch(() => {});
       }
     } catch (_) {}
@@ -983,7 +1044,7 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
       currentEpId: null,
       message: '🛑 បានបញ្ឈប់ (Stopped UI & Backend)',
     });
-  }, [activeSeries?.id, updateRunnerState]);
+  }, [activeSeries, runnerStates, updateRunnerState]);
 
   const value = {
     runnerStates,
@@ -1010,4 +1071,3 @@ export function useDubbingRunnerContext() {
   const context = useContext(DubbingRunnerContext);
   return context;
 }
-
