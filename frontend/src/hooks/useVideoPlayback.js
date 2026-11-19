@@ -23,6 +23,7 @@ export function useVideoPlayback({
   const hasSeekedRef = useRef(false);
   const intendedPlayingRef = useRef(false);
   const pendingSeekTargetRef = useRef(null);
+  const nextSeekTargetRef = useRef(null);
   const pendingSeekStartedMsRef = useRef(0);
   const lastTransitionSeekMsRef = useRef(0);
   const stallRecoveryCountRef = useRef(0);
@@ -443,6 +444,45 @@ export function useVideoPlayback({
     };
   }, [isPlaying, playRequestTick, duration, videoRef, renderedVideo?.isProxyPreview]);
 
+  // Bi-directional synchronization between native HTML5 <video> events and React state
+  useEffect(() => {
+    const v = videoRef?.current;
+    if (!v) return undefined;
+
+    const onNativePlay = () => {
+      intendedPlayingRef.current = true;
+      setIsPlaying(true);
+    };
+
+    const onNativePause = () => {
+      if (v.seeking) return;
+      intendedPlayingRef.current = false;
+      setIsPlaying(false);
+    };
+
+    const onNativeSeeked = () => {
+      if (nextSeekTargetRef.current !== null) {
+        const next = nextSeekTargetRef.current;
+        nextSeekTargetRef.current = null;
+        if (Math.abs((v.currentTime || 0) - next) > 0.03) {
+          pendingSeekTargetRef.current = next;
+          pendingSeekStartedMsRef.current = performance.now();
+          try { v.currentTime = next; } catch (_) {}
+        }
+      }
+    };
+
+    v.addEventListener('play', onNativePlay);
+    v.addEventListener('pause', onNativePause);
+    v.addEventListener('seeked', onNativeSeeked);
+
+    return () => {
+      v.removeEventListener('play', onNativePlay);
+      v.removeEventListener('pause', onNativePause);
+      v.removeEventListener('seeked', onNativeSeeked);
+    };
+  }, [videoRef]);
+
   const handleSeek = useCallback((time) => {
     hasSeekedRef.current = true;
     stallRecoveryCountRef.current = 0;
@@ -476,6 +516,11 @@ export function useVideoPlayback({
       }
 
       if (videoRef.current.readyState === 0) {
+        return;
+      }
+
+      if (videoRef.current.seeking) {
+        nextSeekTargetRef.current = targetTime;
         return;
       }
 

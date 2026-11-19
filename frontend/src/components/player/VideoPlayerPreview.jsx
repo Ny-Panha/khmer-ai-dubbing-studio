@@ -1329,10 +1329,27 @@ function VideoPlayerPreview({
   const pendingSrcSwitchSeekRef = useRef(null);
   const effectiveLiveVideoUrl = (sourceProxy?.isReady && sourceProxy?.url) ? sourceProxy.url : selectedVideo?.videoUrl;
   const rawVideoSrc = (typeof renderedVideo === 'string' ? renderedVideo : renderedVideo?.outputVideoUrl) || effectiveLiveVideoUrl;
-  const currentVideoSrc = rawVideoSrc && renderedVideo && typeof renderedVideo === 'object' && renderedVideo.renderedAt
+  const targetVideoSrc = rawVideoSrc && renderedVideo && typeof renderedVideo === 'object' && renderedVideo.renderedAt
     ? `${rawVideoSrc}${rawVideoSrc.includes('?') ? '&' : '?'}v=${renderedVideo.renderedAt}`
     : rawVideoSrc;
-  const prevVideoSrcRef = useRef(currentVideoSrc);
+
+  const prevPreviewModeRef = useRef(previewMode);
+  const deferredVideoSrcRef = useRef(null);
+  const prevVideoSrcRef = useRef(targetVideoSrc);
+
+  const isExplicitModeSwitch = prevPreviewModeRef.current !== previewMode;
+  prevPreviewModeRef.current = previewMode;
+
+  const isActivelyPlaying = Boolean(isPlayingRef.current || (videoRef?.current && !videoRef.current.paused));
+
+  // Safety Condition 1: Defer background proxy src hot-swapping during active playback to prevent buffer drops
+  if (isActivelyPlaying && !isExplicitModeSwitch && prevVideoSrcRef.current && prevVideoSrcRef.current !== targetVideoSrc) {
+    deferredVideoSrcRef.current = targetVideoSrc;
+  } else if (!isActivelyPlaying || isExplicitModeSwitch) {
+    deferredVideoSrcRef.current = null;
+  }
+
+  const currentVideoSrc = (deferredVideoSrcRef.current && isActivelyPlaying) ? prevVideoSrcRef.current : targetVideoSrc;
   useEffect(() => {
     const isSameEpisodeSource = prevEpisodeSourceKeyRef.current === episodeSourceKey;
     if (!isSameEpisodeSource) {
