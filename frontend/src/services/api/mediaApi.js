@@ -297,3 +297,20 @@ export async function renderVideoApi({
   return await parseResponseJson(res, 'Failed to render video with FFmpeg');
 }
 
+/**
+ * Safely reset an episode's generated script or voice state on backend.
+ * @param {Object} options - { seriesId, episodeId, resetType: 'script' | 'voice' }
+ */
+export async function resetEpisodeStateApi({ seriesId, episodeId, resetType = 'script' }) {
+  if (!seriesId || !episodeId) {
+    throw new Error('seriesId and episodeId are required for episode reset');
+  }
+  const res = await fetch(`/api/series/${encodeURIComponent(seriesId)}/episodes/${encodeURIComponent(episodeId)}/reset`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ resetType }),
+  });
+  return await parseResponseJson(res, `Failed to reset episode ${resetType}`);
+}
+
+

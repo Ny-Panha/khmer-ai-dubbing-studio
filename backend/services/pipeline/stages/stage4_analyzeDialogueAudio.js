@@ -264,6 +264,7 @@ async function analyzeDialogueAudio({
   aiClient,
   modelName = 'gemini-3.5-flash-lite',
   startOffsetSec = 0,
+  force = false,
   signal = null,
 }) {
   const checkAbort = () => {
@@ -279,7 +280,10 @@ async function analyzeDialogueAudio({
   }
 
   const cachePath = getAudioCachePath(videoPath, startOffsetSec, durationSec, modelName);
-  if (cachePath && fs.existsSync(cachePath)) {
+  if (force && cachePath && fs.existsSync(cachePath)) {
+    try { fs.unlinkSync(cachePath); } catch (_) {}
+  }
+  if (!force && cachePath && fs.existsSync(cachePath)) {
     try {
       const cached = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
       if (cached && Array.isArray(cached.audioSegments) && cached.audioSegments.length > 0) {

@@ -10,6 +10,7 @@ import {
   startRepairBrokenJobApi,
   fetchJobStatusApi,
   importSubtitlesApi,
+  resetEpisodeStateApi,
 } from '../../services/api';
 import { useGeminiQuotaMonitor } from '../../hooks/useGeminiQuotaMonitor';
 import { useSharedJobQueue } from '../../context/jobQueueStore';
@@ -975,6 +976,15 @@ export default function GeminiRouteModal({
         ? 'recap'
         : (pipelineMode === 'fast_ocr' ? 'fast_ocr' : 'dialogue');
 
+      if (force === true) {
+        const targetSeriesId = activeSeries?.id || seriesId || 'drama_project';
+        await Promise.allSettled(
+          episodesToProcess.map((ep) =>
+            resetEpisodeStateApi({ seriesId: targetSeriesId, episodeId: ep.id, resetType: 'script' })
+          )
+        );
+      }
+
       const promises = episodesToProcess.map(async (ep) => {
         const rawVideoRef = ep.video?.videoPath || ep.video?.videoId || ep.videoFile || ep.sourceVideoPath;
         return startGenerationJob({
@@ -988,6 +998,7 @@ export default function GeminiRouteModal({
           recapStyle,
           customPrompt: customDirection,
           force: force === true,
+          confirmed: force === true,
           genre: dramaGenre,
           narratorGender,
           seriesGlossary: activeSeries?.glossary,
@@ -1324,8 +1335,8 @@ export default function GeminiRouteModal({
         const serverEp = freshServerEpisodes.find((fe) => String(fe.id) === String(ep.id));
         const effectiveEp = serverEp || ep;
 
-        // Skip immediately if fresh server state confirms non-outdated completed narration on disk
-        if (checkEpisodeHasAudioReady(effectiveEp, serverEp ? null : completedTtsEpIds, null)) {
+        // Skip immediately if fresh server state confirms non-outdated completed narration on disk (unless force: true)
+        if (!force && checkEpisodeHasAudioReady(effectiveEp, serverEp ? null : completedTtsEpIds, null)) {
           console.log(`[Batch TTS] Episode ${ep.id} already has completed narration on disk. Skipping.`);
           setCompletedTtsEpIds((prev) => new Set([...prev, ep.id]));
           setActiveTtsEpisodeIds((prev) => {
@@ -1334,6 +1345,17 @@ export default function GeminiRouteModal({
             return next;
           });
           return;
+        }
+
+        if (force) {
+          try {
+            await resetEpisodeStateApi({ seriesId: targetSeriesId, episodeId: ep.id, resetType: 'voice' });
+          } catch (_) {}
+          setCompletedTtsEpIds((prev) => {
+            const next = new Set(prev);
+            next.delete(ep.id);
+            return next;
+          });
         }
 
         // Ensure we have up-to-date script segments for this episode (prefer newer/repaired server segments when available)
@@ -1463,6 +1485,7 @@ export default function GeminiRouteModal({
               segments: segs,
               speed: 'normal',
               speakerMap,
+              forceRegen: Boolean(force),
             }),
           });
           const data = await res.json().catch(() => ({}));
@@ -3675,9 +3698,19 @@ export default function GeminiRouteModal({
                                     <button
                                       type="button"
                                       disabled={isStartingBatch}
-                                      onClick={(e) => {
+                                      onClick={async (e) => {
                                         e.stopPropagation();
-                                        executeBatchTranslateEnqueue([ep], { force: true });
+                                        const confirmed = await openStudioDialog({
+                                          variant: 'warning',
+                                          badge: 'RE-TRANSLATE SCRIPT',
+                                          title: `បញ្ជាក់ការបកប្រែ Script ឡើងវិញ (ភាគ ${ep.episodeNumber || ep.id})`,
+                                          message: `តើអ្នកពិតជាចង់បកប្រែ Script ភាគ ${ep.episodeNumber || ep.id} ឡើងវិញមែនទេ? Script ចាស់ និងសំឡេងដែលបានបង្កើតនឹងត្រូវលុបចេញ ដើម្បីវិភាគវីដេអូ និងបកប្រែថ្មីពីដើម។`,
+                                          confirmText: 'យល់ព្រមបកប្រែឡើងវិញ',
+                                          cancelText: 'បោះបង់',
+                                        });
+                                        if (confirmed) {
+                                          executeBatchTranslateEnqueue([ep], { force: true });
+                                        }
                                       }}
                                       title="បកប្រែឡើងវិញ (FORCE)"
                                       style={{
@@ -3847,9 +3880,19 @@ export default function GeminiRouteModal({
                                   <button
                                     type="button"
                                     disabled={isGeneratingBatchTTS}
-                                    onClick={(e) => {
+                                    onClick={async (e) => {
                                       e.stopPropagation();
-                                      handleBatchGenerateTTS([ep], { force: true });
+                                      const confirmed = await openStudioDialog({
+                                        variant: 'warning',
+                                        badge: 'RE-GENERATE VOICE',
+                                        title: `បញ្ជាក់ការបង្កើតសំឡេងឡើងវិញ (ភាគ ${ep.episodeNumber || ep.id})`,
+                                        message: `តើអ្នកពិតជាចង់បង្កើតសំឡេងភាគ ${ep.episodeNumber || ep.id} ឡើងវិញមែនទេ? សំឡេងចាស់នឹងត្រូវលុបចេញ ដើម្បីបង្កើតសំឡេងថ្មី ដោយរក្សាទុក Script ដដែល។`,
+                                        confirmText: 'យល់ព្រមបង្កើតសំឡេងឡើងវិញ',
+                                        cancelText: 'បោះបង់',
+                                      });
+                                      if (confirmed) {
+                                        handleBatchGenerateTTS([ep], { force: true });
+                                      }
                                     }}
                                     title="បង្កើតសំឡេងឡើងវិញ"
                                     style={{

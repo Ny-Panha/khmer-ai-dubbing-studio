@@ -290,6 +290,8 @@ router.post("/generate", async (req, res) => {
         narratorGender,
         seriesGlossary,
         genre,
+        force: Boolean(req.body.force || req.body.confirmed),
+        forceRegen: Boolean(req.body.force || req.body.confirmed || req.body.forceRegen),
       },
       baseUploadsDir: uploadsDir,
     });

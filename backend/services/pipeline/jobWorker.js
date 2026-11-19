@@ -118,6 +118,7 @@ function createPipelineWorkerHandler(queue = productionJobQueue, deps = {}) {
       seriesGlossary: cfg.seriesGlossary,
       genre: cfg.genre || 'auto',
       jobId: job.jobId,
+      force: Boolean(cfg.force || job.force || cfg.forceRegen),
       signal: abortSignal,
     });
 

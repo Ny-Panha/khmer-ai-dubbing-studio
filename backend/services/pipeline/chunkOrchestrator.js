@@ -154,6 +154,7 @@ async function runChunkedDubbingPipeline({
   onProgress = null,
   chunkSizeSec = 300,
   overlapSec = 2,
+  force = false,
 }) {
   const cleanRequestedModel = String(modelName || '').trim();
   const effectiveModelName = (cleanRequestedModel && cleanRequestedModel !== 'auto' && isUsableDubbingModel(cleanRequestedModel))
@@ -238,7 +239,11 @@ async function runChunkedDubbingPipeline({
     let visualOnlyCount = 0;
     let fusedCount = 0;
 
-    if (fs.existsSync(chunkFile)) {
+    if (force && fs.existsSync(chunkFile)) {
+      try { fs.unlinkSync(chunkFile); } catch (_) {}
+    }
+
+    if (!force && fs.existsSync(chunkFile)) {
       try {
         const cachedChunk = JSON.parse(fs.readFileSync(chunkFile, 'utf8'));
         if (Array.isArray(cachedChunk.segments) && cachedChunk.segments.length > 0) {
@@ -270,6 +275,7 @@ async function runChunkedDubbingPipeline({
           modelName: effectiveModelName,
           baseStepSec: 1.8,
           startOffsetSec: chunk.startSec,
+          force,
           signal,
         });
 
@@ -300,6 +306,7 @@ async function runChunkedDubbingPipeline({
             aiClient,
             modelName: effectiveModelName,
             startOffsetSec: chunk.startSec,
+            force,
             signal,
           });
 

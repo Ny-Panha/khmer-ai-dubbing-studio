@@ -9,6 +9,7 @@ const {
   persistEpisodeTimelineOperation,
   createNewEpisode,
   deleteEpisode,
+  resetEpisodeState,
 } = require("../services/episodeService");
 
 const router = express.Router();
@@ -113,6 +114,17 @@ router.delete("/:seriesId/episodes/:episodeId", async (req, res) => {
     if (!result.success) {
       return res.status(400).json(result);
     }
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.post("/:seriesId/episodes/:episodeId/reset", async (req, res) => {
+  try {
+    const { seriesId, episodeId } = req.params;
+    const { resetType } = req.body || {};
+    const result = await resetEpisodeState(seriesId, episodeId, { resetType });
     res.json(result);
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });

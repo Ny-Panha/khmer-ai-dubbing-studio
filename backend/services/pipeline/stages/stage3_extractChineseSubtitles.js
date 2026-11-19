@@ -231,6 +231,7 @@ async function extractChineseSubtitles({
   modelName = null,
   baseStepSec = 0.75,
   startOffsetSec = 0,
+  force = false,
   signal = null,
 }) {
   let activeWorkingModel = modelName || geminiQuotaTracker.getPreferredPrimaryModel(CASCADE_VISION_MODELS[0]);
@@ -251,7 +252,10 @@ async function extractChineseSubtitles({
   }
 
   const cachePath = getOcrCachePath(videoPath, startOffsetSec, durationSec, effectiveModel);
-  if (cachePath && fs.existsSync(cachePath)) {
+  if (force && cachePath && fs.existsSync(cachePath)) {
+    try { fs.unlinkSync(cachePath); } catch (_) {}
+  }
+  if (!force && cachePath && fs.existsSync(cachePath)) {
     try {
       const cached = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
       if (cached && Array.isArray(cached.visualSegments) && Array.isArray(cached.rawObservations) && cached.visualSegments.length > 0) {

@@ -931,7 +931,10 @@ export function useSeriesManager({
         const nextSegLen = Array.isArray(currentActiveEp?.scriptData?.segments) ? currentActiveEp.scriptData.segments.length : 0;
         const nextUpdatedAt = Number(currentActiveEp?.scriptData?.updatedAt || 0);
         const serverOlderThanWorkspace =
-          workspaceUpdatedAt > nextUpdatedAt && nextUpdatedAt > 0 && workspaceSegLen > 0;
+          Boolean(currentActiveEp?.scriptData) &&
+          workspaceUpdatedAt > nextUpdatedAt &&
+          nextUpdatedAt > 0 &&
+          workspaceSegLen > 0;
         const serverRv = sanitizeRenderedVideo(currentActiveEp?.renderedVideo);
         const prevRv = sanitizeRenderedVideo(prevActiveEp?.renderedVideo);
         const serverRvUrl = typeof serverRv === 'string' ? serverRv : (serverRv?.outputVideoUrl || serverRv?.videoUrl || null);

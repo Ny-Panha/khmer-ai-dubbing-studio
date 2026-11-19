@@ -3,6 +3,71 @@
 ## Last Session
 - **Environment**: Antigravity IDE (Gemini)
 - **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-19T20:30:00+07:00
+
+## Summary: Fix Regenerate Script & Voice Real State Reset (100% PASS)
+- **Request:** Make "ធ្វើឡើងវិញ" (Regenerate) buttons for Step 1 (Translate Script) and Step 2 (AI Translate Voice) reliably start fresh generation without reusing old scripts, audio, cache, or completed job states.
+- **Root Causes Identified**:
+  1. **Voice Fast-Path & Missing `forceRegen`**:
+     - `DubbingRunnerContext.jsx:runSingleVoice` and `GeminiRouteModal.jsx:handleBatchGenerateTTS` did not pass `forceRegen: Boolean(force)` to `/api/generate-audio`.
+     - In `backend/routes/audioRoutes.js:637`, when `forceRegen` was false, the fast path skipped duplicate generation and returned `alreadyCompleted: true` immediately.
+     - In `GeminiRouteModal.jsx:1328`, `checkEpisodeHasAudioReady` unconditionally skipped execution without checking `!force`.
+  2. **Zombie Script Resurrection**:
+     - When `scriptData` was emptied, `episodeService.js` hydrated old script data from completed job manifests in `episodes/:epId/jobs/`, and re-attached old narration and segment audio from `episodes/:epId/audio/`.
+  3. **Unconditional Chunk Cache & OCR/ASR Cache Reuse**:
+     - `chunkOrchestrator.js:241` checked `if (fs.existsSync(chunkFile))` without checking `!force`.
+     - Stage 3 OCR and Stage 4 ASR returned cached results from `uploads/cache/` without checking `!force`.
+  4. **Missing User Confirmation**:
+     - Neither `DubbingStepCardsBar.jsx` nor `GeminiRouteModal.jsx` prompted for confirmation before triggering destructive regeneration.
+- **Surgical Changes Implemented**:
+  1. `backend/services/episodeService.js`:
+     - Implemented `resetEpisodeState(seriesId, episodeId, { resetType: 'script' | 'voice' })`.
+     - 'script': clears `scriptData`, audio references, disk audio files, completed job manifests, and chunk cache under mutex lock; keeps original video 100% intact. Creates snapshot backup.
+     - 'voice': keeps `scriptData` (Khmer text, speaker identity, gender, voice assignments), clears audio references, disk audio files, and resets `ttsStatus` to `pending`.
+  2. `backend/routes/seriesRoutes.js`:
+     - Exposed `POST /api/series/:seriesId/episodes/:episodeId/reset`.
+  3. `backend/routes/jobRoutes.js`, `jobWorker.js`, `dubbingPipeline.js`, `chunkOrchestrator.js`, `stage3_extractChineseSubtitles.js`, `stage4_analyzeDialogueAudio.js`:
+     - Passed `force` / `forceRegen` through pipeline stages.
+     - Only reused disk cache when `!force`. Unlinked stale chunk and OCR/ASR cache files when `force === true`.
+  4. `frontend/src/services/api/mediaApi.js`:
+     - Added `resetEpisodeStateApi({ seriesId, episodeId, resetType })`.
+  5. `frontend/src/features/dubbing-runner/DubbingRunnerContext.jsx`:
+     - In `runSingleTranslate`: resets script on backend before dispatching job when `options.force` is true; passes `force: true, confirmed: true`.
+     - In `runSingleVoice`: resets voice on backend before dispatching TTS; passes `forceRegen: Boolean(options.force)`.
+  6. `frontend/src/features/dubbing-runner/DubbingStepCardsBar.jsx`:
+     - Added user confirmation dialogs to `btn-bar-retranslate` and `btn-bar-revoice`.
+  7. `frontend/src/components/dashboard/GeminiRouteModal.jsx`:
+     - In `executeBatchTranslateEnqueue`: calls `resetEpisodeStateApi` when `force: true`.
+     - In `handleBatchGenerateTTS`: only skips audio-ready when `!force`; resets voice on backend when `force: true`; passes `forceRegen: Boolean(force)`.
+     - Added `openStudioDialog` confirmation before executing Stage 1 and Stage 2 regenerate buttons.
+  8. `frontend/src/hooks/useSeriesManager.js`:
+     - Prevented `serverOlderThanWorkspace` from blocking workspace synchronization when script is intentionally reset on server.
+- **Verification Outcomes**:
+  - Added new 11-case test suite `backend/tests/regenerate_script_and_voice.test.js`: **11/11 PASS** (598ms).
+  - All regression test suites passing (**69/69 PASS**, 17.9s):
+    - `regenerate_script_and_voice.test.js` (11/11 PASS)
+    - `global_logo_settings.test.js` (7/7 PASS)
+    - `speaker_identity_and_series_voice_memory.test.js` (12/12 PASS)
+    - `playback_sync_and_deferred_source_regression.test.js` (5/5 PASS)
+    - `gender_voice_consistency.test.js` (6/6 PASS)
+    - `source_proxy.test.js` (4/4 PASS)
+    - `proxy_preview.test.js` (4/4 PASS)
+    - `timeline_voice_drag_persistence.test.js` (7/7 PASS)
+    - `timeline_voice_drag_freeze_regression.test.js` (1/1 PASS)
+    - `auto_align_voice.test.js` (9/9 PASS)
+  - `npm --prefix frontend run build`: **PASS** (0 errors, 1.65s).
+- **Active Environment**:
+  - Backend API: `http://localhost:5000`
+  - Frontend UI: `http://localhost:5173`
+- **Next Steps**:
+  - Ready for user testing.
+
+---
+
+
+## Last Session
+- **Environment**: Antigravity IDE (Gemini)
+- **Branch**: `chore/full-project-cleanup`
 - **Timestamp**: 2026-11-19T19:30:00+07:00
 
 ## Summary: Sticky Customize Settings Across Episodes and Consistent Batch Export (100% PASS)

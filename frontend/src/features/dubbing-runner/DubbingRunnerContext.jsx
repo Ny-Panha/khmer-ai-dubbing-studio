@@ -9,6 +9,7 @@ import {
   getSeparationProgressApi,
   killSeparationApi,
   autoFitSpeechSpeedApi,
+  resetEpisodeStateApi,
 } from '../../services/api';
 import {
   checkEpisodeHasScript,
@@ -79,6 +80,14 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
       return { success: true, skipped: true };
     }
 
+    if (options.force) {
+      try {
+        await resetEpisodeStateApi({ seriesId, episodeId: ep.id, resetType: 'script' });
+      } catch (rErr) {
+        console.warn(`[DubbingRunner] Reset script notice for ${ep.id}:`, rErr.message);
+      }
+    }
+
     updateRunnerState('translate', { message: `[EP${ep.episodeNumber || ep.id}] កំពុង Translate Script...` });
 
     const jobRes = await startGenerationJob({
@@ -92,6 +101,7 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
       narratorGender: options.narratorGender || 'male',
       customPrompt: options.customDirection || '',
       force: Boolean(options.force),
+      confirmed: Boolean(options.force || options.confirmed),
     });
 
     const jobId = jobRes?.jobId || jobRes?.id;
@@ -277,6 +287,14 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
       return { success: true, skipped: true };
     }
 
+    if (options.force) {
+      try {
+        await resetEpisodeStateApi({ seriesId, episodeId: ep.id, resetType: 'voice' });
+      } catch (rErr) {
+        console.warn(`[DubbingRunner] Reset voice notice for ${ep.id}:`, rErr.message);
+      }
+    }
+
     updateRunnerState('voice', { message: `[EP${ep.episodeNumber || ep.id}] បង្កើតសំឡេងខ្មែរ AI (${segments.length} ឃ្លា)...` });
 
     setRunnerLiveStats((prev) => ({
@@ -356,6 +374,7 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
         episodeId: ep.id,
         videoId,
         speakerMap,
+        forceRegen: Boolean(options.force || options.forceRegen),
         signal,
       });
     } finally {

@@ -147,7 +147,14 @@ export default function DubbingStepCardsBar({ episodes = [], selectedEpIds = nul
               <button
                 type="button"
                 data-testid="btn-bar-retranslate"
-                onClick={() => runSequentialStep('translate', targetEpisodes, { ...setupOptions, force: true })}
+                onClick={async () => {
+                  const confirmed = typeof window !== 'undefined' && typeof window.confirm === 'function'
+                    ? window.confirm('តើអ្នកពិតជាចង់បកប្រែ Script ឡើងវិញមែនទេ? Script ចាស់ និងសំឡេងដែលបានបង្កើតនឹងត្រូវលុបចេញ ដើម្បីបកប្រែថ្មីពីដើម។')
+                    : true;
+                  if (confirmed) {
+                    runSequentialStep('translate', targetEpisodes, { ...setupOptions, force: true });
+                  }
+                }}
                 style={{
                   ...STEP_BTN_BASE,
                   background: 'var(--bg-elevated-panel)',
@@ -275,7 +282,14 @@ export default function DubbingStepCardsBar({ episodes = [], selectedEpIds = nul
               <button
                 type="button"
                 data-testid="btn-bar-revoice"
-                onClick={() => runSequentialStep('voice', targetEpisodes, { ...setupOptions, force: true })}
+                onClick={async () => {
+                  const confirmed = typeof window !== 'undefined' && typeof window.confirm === 'function'
+                    ? window.confirm('តើអ្នកពិតជាចង់បង្កើតសំឡេង AI ឡើងវិញមែនទេ? សំឡេងចាស់នឹងត្រូវលុបចេញ ដើម្បីបង្កើតសំឡេងថ្មី ដោយរក្សាទុក Script ដដែល។')
+                    : true;
+                  if (confirmed) {
+                    runSequentialStep('voice', targetEpisodes, { ...setupOptions, force: true });
+                  }
+                }}
                 style={{
                   ...STEP_BTN_BASE,
                   background: 'var(--bg-elevated-panel)',

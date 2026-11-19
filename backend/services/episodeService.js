@@ -1328,6 +1328,172 @@ function deleteEpisode(seriesId, episodeId) {
   return { success: true, remainingEpisodes: series.episodes };
 }
 
+let queueModuleRef = null;
+function getProductionJobQueueSafe() {
+  if (!queueModuleRef) {
+    try { queueModuleRef = require('./pipeline/productionJobQueue'); } catch (_) {}
+  }
+  return queueModuleRef?.productionJobQueue || null;
+}
+
+/**
+ * Safely reset an episode's generated script or voice state.
+ * - 'script': Clears scriptData, audio references, disk audio, and old jobs so regeneration is 100% fresh. Original video is NEVER touched.
+ * - 'voice': Keeps translated scriptData, but clears audio references and disk audio files.
+ */
+async function resetEpisodeState(seriesId, episodeId, options = {}) {
+  const resetType = options.resetType === 'voice' ? 'voice' : 'script';
+  const projectsDir = options.projectsDir || PROJECTS_DIR;
+  const cleanSeries = sanitizeProjectName(seriesId);
+  const cleanEp = sanitizeEpisodeId(episodeId);
+
+  return await withSeriesMetadataLock(cleanSeries, async () => {
+    const seriesDir = path.join(projectsDir, cleanSeries);
+    const metaPath = path.join(seriesDir, 'series.json');
+    if (!fs.existsSync(seriesDir) || !fs.existsSync(metaPath)) {
+      throw new Error(`Series not found: ${cleanSeries}`);
+    }
+
+    const series = getSeriesMetadata(cleanSeries, { forceDisk: true, projectsDir });
+    if (!series || !Array.isArray(series.episodes)) {
+      throw new Error(`Series not found: ${cleanSeries}`);
+    }
+
+    const targetEp = series.episodes.find(
+      (e) => sanitizeEpisodeId(e.id) === cleanEp || String(e.id) === String(episodeId)
+    );
+    if (!targetEp) {
+      throw new Error(`Episode ${cleanEp} not found in series ${cleanSeries}`);
+    }
+
+    const epDir = path.join(seriesDir, 'episodes', cleanEp);
+    const epAudioDir = path.join(epDir, 'audio');
+    const epJobsDir = path.join(epDir, 'jobs');
+    const backupsDir = path.join(epDir, 'backups');
+
+    // 1. Snapshot backup before any reset
+    try {
+      if (!fs.existsSync(backupsDir)) {
+        fs.mkdirSync(backupsDir, { recursive: true });
+      }
+      const now = Date.now();
+      if (targetEp.scriptData) {
+        fs.writeFileSync(
+          path.join(backupsDir, `reset_${resetType}_script_${now}.json`),
+          JSON.stringify(targetEp.scriptData, null, 2),
+          'utf8'
+        );
+      }
+      const metaPath = path.join(seriesDir, 'series.json');
+      if (fs.existsSync(metaPath)) {
+        fs.copyFileSync(metaPath, path.join(seriesDir, `series.json.backup_${now}`));
+      }
+    } catch (bErr) {
+      console.warn(`[ResetEpisodeState] Backup notice:`, bErr.message);
+    }
+
+    // 2. Cancel conflicting active generation jobs for this episode
+    const q = getProductionJobQueueSafe();
+    if (q && typeof q.hasActiveJobForEpisode === 'function' && q.hasActiveJobForEpisode(cleanSeries, cleanEp)) {
+      try {
+        const active = q.getActiveJobForEpisode(cleanSeries, cleanEp);
+        if (active?.jobId) {
+          if (typeof queueModuleRef?.cancelJob === 'function') {
+            queueModuleRef.cancelJob(active.jobId);
+          }
+        }
+      } catch (_) {}
+      try { q.releaseEpisodeLock(cleanSeries, cleanEp); } catch (_) {}
+    }
+
+    // 3. Clear verified generated audio files for this episode (NEVER touch video/)
+    if (fs.existsSync(epAudioDir)) {
+      try {
+        const audioFiles = fs.readdirSync(epAudioDir);
+        for (const file of audioFiles) {
+          // Delete only .mp3, .wav, and .meta.json files
+          if (file.endsWith('.mp3') || file.endsWith('.wav') || file.endsWith('.json')) {
+            try { fs.unlinkSync(path.join(epAudioDir, file)); } catch (_) {}
+          }
+        }
+      } catch (aErr) {
+        console.warn(`[ResetEpisodeState] Audio cleanup notice:`, aErr.message);
+      }
+    }
+
+    // 4. Invalidate render cache and audio flags
+    targetEp.audioGenerated = false;
+    targetEp.audioOutdated = false;
+    targetEp.hasAudio = false;
+    targetEp.fullAudioUrl = null;
+    targetEp.fullAudioPath = null;
+    targetEp.renderedVideo = null;
+
+    if (resetType === 'script') {
+      // Clear old completed job manifests so hydration doesn't resurrect deleted script
+      if (fs.existsSync(epJobsDir)) {
+        try {
+          const jFiles = fs.readdirSync(epJobsDir).filter((f) => f.endsWith('.json'));
+          for (const jf of jFiles) {
+            try { fs.unlinkSync(path.join(epJobsDir, jf)); } catch (_) {}
+          }
+        } catch (_) {}
+      }
+
+      // Clear chunk cache on disk matching this video/episode
+      try {
+        const chunkCacheDir = path.resolve(UPLOADS_DIR, 'cache', 'chunks');
+        if (fs.existsSync(chunkCacheDir)) {
+          const cFiles = fs.readdirSync(chunkCacheDir).filter((f) => f.startsWith('chunk_') && f.endsWith('.json'));
+          for (const cf of cFiles) {
+            try { fs.unlinkSync(path.join(chunkCacheDir, cf)); } catch (_) {}
+          }
+        }
+      } catch (_) {}
+
+      // Reset scriptData
+      targetEp.scriptData = null;
+      targetEp.status = 'uploaded';
+    } else {
+      // Voice reset: Keep scriptData, but reset all segment audio references to pending
+      if (targetEp.scriptData && Array.isArray(targetEp.scriptData.segments)) {
+        targetEp.scriptData.segments = targetEp.scriptData.segments.map((seg) => ({
+          ...seg,
+          audioPath: null,
+          audioFile: null,
+          audioUrl: null,
+          audioFileName: null,
+          ttsStatus: 'pending',
+          audioDuration: null,
+          audioDurationSec: null,
+          audioDurationMs: null,
+          rawAudioDur: null,
+          originalAudioDuration: null,
+          finalAudioDuration: null,
+          audioOffset: 0,
+          audioTrimmed: false,
+          userTrimmed: false,
+          audioGenerated: false,
+          audioOutdated: false,
+        }));
+        targetEp.scriptData.updatedAt = Date.now();
+      }
+    }
+
+    targetEp.lastModified = Date.now();
+    saveSeriesMetadata(series, { projectsDir });
+
+    console.log(`[ResetEpisodeState] ✅ Episode ${cleanEp} in "${cleanSeries}" reset successfully (${resetType}).`);
+    return {
+      success: true,
+      seriesId: cleanSeries,
+      episodeId: cleanEp,
+      resetType,
+      episode: targetEp,
+    };
+  });
+}
+
 module.exports = {
   getNextAvailableEpisodeNumber,
   generateUniqueEpisodeId,
@@ -1345,4 +1511,5 @@ module.exports = {
   resetHydrationLogForTesting,
   createNewEpisode,
   deleteEpisode,
+  resetEpisodeState,
 };

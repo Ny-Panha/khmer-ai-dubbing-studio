@@ -62,6 +62,8 @@ async function runDubbingPipeline({
   generateAudio = false,
   jobId = null,
   forceChunking = false,
+  force = false,
+  forceRegen = false,
   signal = null,
   onProgress = null,
 }) {
@@ -152,6 +154,7 @@ async function runDubbingPipeline({
       onProgress,
       chunkSizeSec: 300,
       overlapSec: 2,
+      force: Boolean(force || forceRegen),
     });
   }
 
@@ -169,6 +172,7 @@ async function runDubbingPipeline({
     modelName: chosenModel,
     baseStepSec: 1.0, // High coverage without exceeding rate limits
     startOffsetSec: 0,
+    force: Boolean(force || forceRegen),
     signal,
   });
 
@@ -212,6 +216,7 @@ async function runDubbingPipeline({
       aiClient,
       modelName: chosenModel,
       startOffsetSec: 0,
+      force: Boolean(force || forceRegen),
       signal,
     });
 
