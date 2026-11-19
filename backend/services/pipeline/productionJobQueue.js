@@ -144,6 +144,7 @@ class ProductionJobQueue {
     this.activeAbortControllers = new Map();
     this.activeEpisodeLocks = new Map();
     this.activeExecutions = new Set();
+    this.retryTimers = new Map();
     this.workerHandler = null;
     this.baseUploadsDir = options.baseUploadsDir || CANONICAL_UPLOADS_DIR;
     
@@ -646,6 +647,12 @@ class ProductionJobQueue {
     const job = this.getJob(jobId);
     const controller = this.activeAbortControllers.get(jobId);
 
+    // 1. Clear any active auto-recovery retry timer for this job
+    if (this.retryTimers && this.retryTimers.has(jobId)) {
+      try { clearTimeout(this.retryTimers.get(jobId)); } catch (_) {}
+      this.retryTimers.delete(jobId);
+    }
+
     if (job) {
       const wasActive = job.status === JOB_STATUS.RUNNING || job.status === JOB_STATUS.RECOVERING;
       job.status = JOB_STATUS.CANCELLED;
@@ -653,9 +660,14 @@ class ProductionJobQueue {
       job.completedAt = Date.now();
       job.updatedAt = Date.now();
 
+      // Release mutual exclusion lock so episode can be retried immediately
+      if (job.seriesId && job.episodeId) {
+        this.releaseEpisodeLock(job.seriesId, job.episodeId);
+      }
+
+      // Signal abort to active worker
       if (controller) {
-        controller.abort();
-        this.activeAbortControllers.delete(jobId);
+        controller.abort(new Error('Job was cancelled by user'));
       }
 
       try {
@@ -671,8 +683,7 @@ class ProductionJobQueue {
     }
 
     if (controller) {
-      controller.abort();
-      this.activeAbortControllers.delete(jobId);
+      controller.abort(new Error('Job was cancelled by user'));
     }
     return null;
   }
@@ -776,13 +787,28 @@ class ProductionJobQueue {
               }
             })
             .catch((err) => {
-              if (job.status === JOB_STATUS.CANCELLED || err?.name === 'AbortError') {
+              const isAborted =
+                job.status === JOB_STATUS.CANCELLED ||
+                err?.name === 'AbortError' ||
+                err?.code === 'ABORT_ERR' ||
+                Boolean(this.getJobSignal(job.jobId)?.aborted) ||
+                err?.message?.toLowerCase().includes('abort') ||
+                err?.message?.toLowerCase().includes('cancel');
+
+              if (isAborted) {
                 if (job.status === JOB_STATUS.RUNNING) {
                   this.updateJob(job.jobId, {
                     status: JOB_STATUS.CANCELLED,
                     error: err?.message || 'Job was cancelled by user',
                     stageMessage: 'Job was cancelled by user',
                   });
+                }
+                if (this.retryTimers && this.retryTimers.has(job.jobId)) {
+                  try { clearTimeout(this.retryTimers.get(job.jobId)); } catch (_) {}
+                  this.retryTimers.delete(job.jobId);
+                }
+                if (job.seriesId && job.episodeId) {
+                  this.releaseEpisodeLock(job.seriesId, job.episodeId);
                 }
                 return;
               }
@@ -815,7 +841,7 @@ class ProductionJobQueue {
                 console.log(`[ProductionJobQueue] 🔄 Auto-recovering job ${job.jobId} (Attempt ${nextRetry}/${maxRetries}) in ${backoffMs}ms...`);
 
                 this.updateJob(job.jobId, {
-                  status: JOB_STATUS.QUEUED,
+                  status: JOB_STATUS.RECOVERING,
                   stageMessage: `កំពុងព្យាយាមឡើងវិញដោយស្វ័យប្រវត្តិ (Auto-retry ${nextRetry}/${maxRetries})...`,
                   retryPolicy: {
                     ...job.retryPolicy,
@@ -825,11 +851,16 @@ class ProductionJobQueue {
                 });
 
                 const retryTimer = setTimeout(() => {
-                  this.processQueue();
+                  this.retryTimers.delete(job.jobId);
+                  if (job.status === JOB_STATUS.RECOVERING) {
+                    this.updateJob(job.jobId, { status: JOB_STATUS.QUEUED });
+                    this.processQueue();
+                  }
                 }, backoffMs);
                 if (typeof retryTimer.unref === 'function') {
                   retryTimer.unref();
                 }
+                this.retryTimers.set(job.jobId, retryTimer);
                 return;
               }
 
@@ -1033,6 +1064,12 @@ class ProductionJobQueue {
     }
     if (this.activeExecutions) {
       this.activeExecutions.clear();
+    }
+    if (this.retryTimers) {
+      for (const t of this.retryTimers.values()) {
+        try { clearTimeout(t); } catch (_) {}
+      }
+      this.retryTimers.clear();
     }
     this.workerHandler = null;
     this.maxConcurrency = DEFAULT_MAX_CONCURRENCY;

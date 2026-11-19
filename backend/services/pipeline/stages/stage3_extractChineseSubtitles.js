@@ -372,7 +372,7 @@ async function callGeminiVisionWithRetry(
         abortController.signal.removeEventListener('abort', onAbortEvent);
         if (signal) signal.removeEventListener('abort', onSignalAbort);
 
-        if (err?.name === 'AbortError' && signal?.aborted) {
+        if (signal?.aborted || err?.name === 'AbortError' || abortController.signal?.reason?.name === 'AbortError') {
           throw createAbortError('Stage 3 OCR aborted');
         }
 

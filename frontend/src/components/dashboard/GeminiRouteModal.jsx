@@ -338,18 +338,57 @@ export default function GeminiRouteModal({
   const handleKillTranslate = async (targetOrJob = null) => {
     try {
       isTranslateCancelledRef.current = true;
-      const jobId = targetOrJob?.jobId || targetOrJob?.id;
-      const targetEpId = targetOrJob?.episodeId || (targetOrJob && !targetOrJob.jobId ? targetOrJob.id : null);
-      await fetch('/api/jobs/kill', {
+      let targetJobId = null;
+      let targetEpisodeId = null;
+      let targetSeriesId = activeSeries?.id || seriesId || null;
+
+      if (targetOrJob) {
+        // Explicit production jobId provided (avoid using generic ep.id or runner- mock IDs as jobId)
+        if (targetOrJob.jobId && typeof targetOrJob.jobId === 'string' && !targetOrJob.jobId.startsWith('runner-')) {
+          targetJobId = targetOrJob.jobId;
+        }
+
+        // Resolve exact episodeId without confusing it with a production jobId
+        targetEpisodeId = targetOrJob.episodeId || (targetOrJob.id && !targetOrJob.jobId ? targetOrJob.id : null);
+        if (targetOrJob.seriesId) {
+          targetSeriesId = targetOrJob.seriesId;
+        }
+
+        // Authoritative resolution: If targetJobId is not directly known, resolve from jobsByEpisodeId
+        if (!targetJobId && targetEpisodeId && jobsByEpisodeId.has(targetEpisodeId)) {
+          const matched = jobsByEpisodeId.get(targetEpisodeId);
+          if (matched?.jobId && !matched.jobId.startsWith('runner-')) {
+            targetJobId = matched.jobId;
+            targetSeriesId = matched.seriesId || targetSeriesId;
+          }
+        }
+
+        // If target cannot be safely resolved, do not guess or cancel unrelated jobs
+        if (!targetJobId && !targetEpisodeId) {
+          setBatchError('⚠️ មិនអាចកំណត់ Job ឬភាគដែលត្រូវ Kill បានទេ (Target unresolved)');
+          return { success: false, error: 'Target unresolved' };
+        }
+      }
+
+      const res = await fetch('/api/jobs/kill', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          jobId: jobId || undefined,
-          episodeId: targetEpId || undefined,
-          seriesId: activeSeries?.id || seriesId || undefined,
+          jobId: targetJobId || undefined,
+          episodeId: targetEpisodeId || undefined,
+          seriesId: targetSeriesId || undefined,
           all: !targetOrJob,
         }),
       });
+
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok || data.success === false) {
+        const errMsg = data.error || 'បរាជ័យក្នុងការបញ្ឈប់ (Failed to cancel job)';
+        setBatchError(`⚠️ ${errMsg}`);
+        return { success: false, error: errMsg };
+      }
+
       setIsStartingBatch(false);
       setBatchInfo(null);
       setBatchSuccess((prev) => (isTranslateQueueEnqueueBanner(prev) ? null : prev));
@@ -357,8 +396,11 @@ export default function GeminiRouteModal({
       if (typeof onRefreshSeries === 'function') {
         try { await onRefreshSeries(); } catch (_) {}
       }
+      return { success: true, ...data };
     } catch (err) {
       console.error('[Kill Translate] Error:', err);
+      setBatchError(`⚠️ ${err.message || 'Error stopping translate job'}`);
+      return { success: false, error: err.message };
     }
   };
 
@@ -3305,6 +3347,7 @@ export default function GeminiRouteModal({
                 const isRunning = Boolean((activeJob && activeJob.status === 'running') || isRunnerTranslateActive);
                 const isQueued = Boolean((activeJob && activeJob.status === 'queued') || isRunnerTranslateQueued);
                 const isFailed = Boolean(activeJob && activeJob.status === 'failed' && !hasScript);
+                const isCancelled = Boolean(activeJob && activeJob.status === 'cancelled');
                 const effectiveActiveJob = activeJob || runnerLiveStats?.translate?.[ep.id] || (isRunnerTranslateActive ? {
                   jobId: `runner-${ep.id}`,
                   episodeId: ep.id,
@@ -3515,19 +3558,20 @@ export default function GeminiRouteModal({
                       <div style={{ display: 'flex', flexDirection: 'column', gap: 7, marginTop: 4 }}>
                         {/* ── STAGE 1: 📝 1. Translate Script ── */}
                         {(cardStageView === 'all' || cardStageView === 'translate') && (
-                          (isRunning || isFailed) ? (
+                          (isRunning || isFailed || isCancelled) ? (
                             <EpisodeTranslateProgressCard
                               activeJob={effectiveActiveJob}
                               assignedKeyNum={assignedKeyNum}
                               isQueued={false}
                               isFailed={isFailed}
+                              isCancelled={isCancelled}
                               onRetry={() => handleRetryEpisode(ep)}
                               onRepair={() => handleRepairBrokenSegments([ep])}
-                              onKill={() => {
+                              onKill={async () => {
                                 if (isRunnerTranslateActive) {
                                   runnerStopStep(runnerStates?.repair?.status === 'running' ? 'repair' : 'translate');
                                 }
-                                handleKillTranslate(activeJob || ep);
+                                return await handleKillTranslate(activeJob || ep);
                               }}
                               onRequestConfirm={openStudioDialog}
                             />

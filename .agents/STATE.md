@@ -3,7 +3,70 @@
 ## Last Session
 - **Environment**: Antigravity IDE (Gemini) - Minimal Change Engineer
 - **Branch**: `chore/full-project-cleanup`
-- **Timestamp**: 2026-11-20T02:16:00+07:00
+- **Timestamp**: 2026-11-20T02:25:00+07:00
+
+## Summary: Fix Kill Button End-to-End — UI Stop + Real Backend Cancellation (100% PASS)
+- **Task:** Eliminate disconnection between Kill button and backend pipeline. Ensure clicking Kill and confirming cancellation accurately resolves job identity, aborts active Gemini OCR network requests, stops retry/backoff, prevents automatic restart in ProductionJobQueue, transitions UI to STOPPING then CANCELLED only upon backend confirmation, and leaves unrelated jobs completely unaffected.
+- **Confirmed Root Causes Addressed**:
+  1. **Generic `.id` Job Resolution Bug in UI**: `GeminiRouteModal.jsx` previously ran `targetOrJob?.jobId || targetOrJob?.id`. When passed an Episode object (`{ id: 'ep_4' }`), it sent `jobId: 'ep_4'` to `/api/jobs/kill`, failing to match the real production job ID (`job_...`) and returning false success without cancelling anything.
+  2. **False 200 OK Backend Contract**: `backend/routes/jobRoutes.js` (`/cancel`, `/kill`) returned `{ success: true, count: 0 }` even when 0 jobs were found, or fell back to cancelling all jobs across all series on empty bodies.
+  3. **Auto-Recovery Timer Race in ProductionJobQueue**: During temporary failures (e.g. 503), jobs scheduled a retry timer. If cancelled during the backoff window, the timer was not tracked per job and could re-dispatch the job.
+  4. **Socket Abort Error Misclassification in Stage 3 OCR**: Network sockets aborted by `AbortController` could throw non-`AbortError` exceptions (e.g. `TypeError: fetch failed`), causing Stage 3 to misclassify user cancellation as retryable `NETWORK_ERROR` and triggering cascades.
+  5. **Missing Stopping & Cancelled States in Progress Card**: `EpisodeTranslateProgressCard.jsx` had no `isStopping` visual indicator, and unmounted if status became `cancelled`, leaving no visible confirmation or instant Retry button.
+- **Surgical Changes Implemented (Minimal Change Discipline)**:
+  1. `backend/routes/jobRoutes.js`:
+     - Added `executeJobCancellation({ jobId, episodeId, seriesId, all })`:
+       - Requires explicit target (`jobId`, `episodeId`, or `all: true`); rejects empty targets with HTTP 400.
+       - Resolves authoritative active job by `jobId` with smart fallback for callers inadvertently sending episode IDs.
+       - Returns HTTP 404 with `{ success: false, status: 'not_found', cancelledCount: 0 }` when no matching active job exists.
+       - Returns HTTP 200 with `{ success: true, status: 'cancelled', cancelledCount, cancelledJobIds }` when cancelled.
+       - Releases episode locks on cancellation for immediate re-run eligibility.
+       - Unified `/api/jobs/cancel`, `/api/jobs/kill`, and `/:jobId/cancel` on this contract.
+  2. `backend/services/pipeline/productionJobQueue.js`:
+     - Added `this.retryTimers = new Map()` to track active auto-recovery backoff timers.
+     - In `cancelJob`: clears pending retry timer, sets terminal `JOB_STATUS.CANCELLED`, releases episode lock, and aborts `AbortController` (leaving signal accessible through catch/finally).
+     - During auto-recovery, sets `job.status = JOB_STATUS.RECOVERING` to prevent `.finally()` from re-dispatching before timer expiration.
+     - In worker catch block, checks `isAborted` (`CANCELLED`, `AbortError`, signal aborted, message text) to prevent auto-recovery.
+     - Protected terminal status: `updateJob` prevents background workers from overwriting `CANCELLED` with `COMPLETED`.
+  3. `backend/services/pipeline/stages/stage3_extractChineseSubtitles.js`:
+     - In `callGeminiVisionWithRetry`: catches any error while `signal?.aborted` is true and immediately throws `createAbortError('Stage 3 OCR aborted')` without incrementing retry attempts, applying cooldowns, or triggering cascades.
+  4. `frontend/src/features/dubbing-runner/DubbingRunnerContext.jsx`:
+     - In `stopStep`: properly passes `episodeId: currentEpId || undefined, all: !currentEpId` instead of ambiguous `jobId: currentEpId || 'all'`.
+  5. `frontend/src/components/dashboard/GeminiRouteModal.jsx`:
+     - Rewrote `handleKillTranslate`: resolves authoritative `jobId` from `jobsByEpisodeId` or explicit `targetOrJob.jobId`, preserves `episodeId` and `seriesId` targeting, checks `res.ok`, and surfaces backend errors visibly.
+     - Added `isCancelled` state check for episode cards.
+     - Passes `isCancelled` and asynchronous `onKill` to `EpisodeTranslateProgressCard`.
+  6. `frontend/src/components/dashboard/route-runners/EpisodeTranslateProgressCard.jsx`:
+     - Added `isStopping` local state: displays `🛑 កំពុងបញ្ឈប់... (Stopping...)` with spinning loader and disables button during cancellation request.
+     - Added `isCancelled` view: shows `🛑 1. Translate Script ត្រូវបានបញ្ឈប់ (Cancelled)` with amber theme and provides instant `ធ្វើឡើងវិញ (Retry)` button to re-run without page refresh.
+  7. `backend/tests/kill_button_and_cancellation.test.js` (NEW):
+     - 13 comprehensive integration tests verifying:
+       1. Scoped cancellation with `jobId`.
+       2. Scoped cancellation with `{ seriesId, episodeId }`.
+       3. Episode ID passed in `jobId` fallback resolution.
+       4. 404 on non-existent job.
+       5. 400 on missing target.
+       6. Job isolation (cancelling job A leaves B and C running).
+       7. Scoped Kill All for series.
+       8. Queue `cancelJob` abort signal.
+       9. Queue retry timer cancellation during backoff.
+       10. Terminal state protection against late worker completions.
+       11. Episode lock release.
+       12. Stage 3 OCR abort signal propagation without cascade.
+       13. Atomic checkpoint preservation after cancellation.
+- **Verification Outcomes**:
+  - `backend/tests/kill_button_and_cancellation.test.js`: **13/13 PASS** (100%).
+  - Stage 3 OCR resilience and accuracy suites: **23/23 PASS** (100%).
+  - Smart Pipeline & Unified 3-Step suites: **55/55 PASS** (100%).
+  - Fast OCR test suites: **13/13 PASS** (100%).
+  - Total verified backend tests: **104/104 PASS** (0 failures).
+  - `npm --prefix frontend run build`: **PASS** (0 errors, 596ms).
+- **Active Environment**:
+  - Backend API: `http://localhost:5000`
+  - Frontend UI: `http://localhost:5173`
+  - Active Branch: `chore/full-project-cleanup`
+- **Next Steps**:
+  - Commit verified changes and push to `origin/chore/full-project-cleanup`.
 
 ## Summary: Stage 3 Smart OCR Speed Restoration, Fast Batch Splitting & Performance Telemetry (100% PASS)
 - **Task:** Recover OCR speed lost to retry/cascade backoff while maintaining 100% Chinese subtitle accuracy, verified empty frame protection, and zero false completions across Stage 3.
@@ -275,7 +338,70 @@
 ## Last Session
 - **Environment**: Antigravity IDE (Gemini) - Minimal Change Engineer
 - **Branch**: `chore/full-project-cleanup`
-- **Timestamp**: 2026-11-20T02:16:00+07:00
+- **Timestamp**: 2026-11-20T02:25:00+07:00
+
+## Summary: Fix Kill Button End-to-End — UI Stop + Real Backend Cancellation (100% PASS)
+- **Task:** Eliminate disconnection between Kill button and backend pipeline. Ensure clicking Kill and confirming cancellation accurately resolves job identity, aborts active Gemini OCR network requests, stops retry/backoff, prevents automatic restart in ProductionJobQueue, transitions UI to STOPPING then CANCELLED only upon backend confirmation, and leaves unrelated jobs completely unaffected.
+- **Confirmed Root Causes Addressed**:
+  1. **Generic `.id` Job Resolution Bug in UI**: `GeminiRouteModal.jsx` previously ran `targetOrJob?.jobId || targetOrJob?.id`. When passed an Episode object (`{ id: 'ep_4' }`), it sent `jobId: 'ep_4'` to `/api/jobs/kill`, failing to match the real production job ID (`job_...`) and returning false success without cancelling anything.
+  2. **False 200 OK Backend Contract**: `backend/routes/jobRoutes.js` (`/cancel`, `/kill`) returned `{ success: true, count: 0 }` even when 0 jobs were found, or fell back to cancelling all jobs across all series on empty bodies.
+  3. **Auto-Recovery Timer Race in ProductionJobQueue**: During temporary failures (e.g. 503), jobs scheduled a retry timer. If cancelled during the backoff window, the timer was not tracked per job and could re-dispatch the job.
+  4. **Socket Abort Error Misclassification in Stage 3 OCR**: Network sockets aborted by `AbortController` could throw non-`AbortError` exceptions (e.g. `TypeError: fetch failed`), causing Stage 3 to misclassify user cancellation as retryable `NETWORK_ERROR` and triggering cascades.
+  5. **Missing Stopping & Cancelled States in Progress Card**: `EpisodeTranslateProgressCard.jsx` had no `isStopping` visual indicator, and unmounted if status became `cancelled`, leaving no visible confirmation or instant Retry button.
+- **Surgical Changes Implemented (Minimal Change Discipline)**:
+  1. `backend/routes/jobRoutes.js`:
+     - Added `executeJobCancellation({ jobId, episodeId, seriesId, all })`:
+       - Requires explicit target (`jobId`, `episodeId`, or `all: true`); rejects empty targets with HTTP 400.
+       - Resolves authoritative active job by `jobId` with smart fallback for callers inadvertently sending episode IDs.
+       - Returns HTTP 404 with `{ success: false, status: 'not_found', cancelledCount: 0 }` when no matching active job exists.
+       - Returns HTTP 200 with `{ success: true, status: 'cancelled', cancelledCount, cancelledJobIds }` when cancelled.
+       - Releases episode locks on cancellation for immediate re-run eligibility.
+       - Unified `/api/jobs/cancel`, `/api/jobs/kill`, and `/:jobId/cancel` on this contract.
+  2. `backend/services/pipeline/productionJobQueue.js`:
+     - Added `this.retryTimers = new Map()` to track active auto-recovery backoff timers.
+     - In `cancelJob`: clears pending retry timer, sets terminal `JOB_STATUS.CANCELLED`, releases episode lock, and aborts `AbortController` (leaving signal accessible through catch/finally).
+     - During auto-recovery, sets `job.status = JOB_STATUS.RECOVERING` to prevent `.finally()` from re-dispatching before timer expiration.
+     - In worker catch block, checks `isAborted` (`CANCELLED`, `AbortError`, signal aborted, message text) to prevent auto-recovery.
+     - Protected terminal status: `updateJob` prevents background workers from overwriting `CANCELLED` with `COMPLETED`.
+  3. `backend/services/pipeline/stages/stage3_extractChineseSubtitles.js`:
+     - In `callGeminiVisionWithRetry`: catches any error while `signal?.aborted` is true and immediately throws `createAbortError('Stage 3 OCR aborted')` without incrementing retry attempts, applying cooldowns, or triggering cascades.
+  4. `frontend/src/features/dubbing-runner/DubbingRunnerContext.jsx`:
+     - In `stopStep`: properly passes `episodeId: currentEpId || undefined, all: !currentEpId` instead of ambiguous `jobId: currentEpId || 'all'`.
+  5. `frontend/src/components/dashboard/GeminiRouteModal.jsx`:
+     - Rewrote `handleKillTranslate`: resolves authoritative `jobId` from `jobsByEpisodeId` or explicit `targetOrJob.jobId`, preserves `episodeId` and `seriesId` targeting, checks `res.ok`, and surfaces backend errors visibly.
+     - Added `isCancelled` state check for episode cards.
+     - Passes `isCancelled` and asynchronous `onKill` to `EpisodeTranslateProgressCard`.
+  6. `frontend/src/components/dashboard/route-runners/EpisodeTranslateProgressCard.jsx`:
+     - Added `isStopping` local state: displays `🛑 កំពុងបញ្ឈប់... (Stopping...)` with spinning loader and disables button during cancellation request.
+     - Added `isCancelled` view: shows `🛑 1. Translate Script ត្រូវបានបញ្ឈប់ (Cancelled)` with amber theme and provides instant `ធ្វើឡើងវិញ (Retry)` button to re-run without page refresh.
+  7. `backend/tests/kill_button_and_cancellation.test.js` (NEW):
+     - 13 comprehensive integration tests verifying:
+       1. Scoped cancellation with `jobId`.
+       2. Scoped cancellation with `{ seriesId, episodeId }`.
+       3. Episode ID passed in `jobId` fallback resolution.
+       4. 404 on non-existent job.
+       5. 400 on missing target.
+       6. Job isolation (cancelling job A leaves B and C running).
+       7. Scoped Kill All for series.
+       8. Queue `cancelJob` abort signal.
+       9. Queue retry timer cancellation during backoff.
+       10. Terminal state protection against late worker completions.
+       11. Episode lock release.
+       12. Stage 3 OCR abort signal propagation without cascade.
+       13. Atomic checkpoint preservation after cancellation.
+- **Verification Outcomes**:
+  - `backend/tests/kill_button_and_cancellation.test.js`: **13/13 PASS** (100%).
+  - Stage 3 OCR resilience and accuracy suites: **23/23 PASS** (100%).
+  - Smart Pipeline & Unified 3-Step suites: **55/55 PASS** (100%).
+  - Fast OCR test suites: **13/13 PASS** (100%).
+  - Total verified backend tests: **104/104 PASS** (0 failures).
+  - `npm --prefix frontend run build`: **PASS** (0 errors, 596ms).
+- **Active Environment**:
+  - Backend API: `http://localhost:5000`
+  - Frontend UI: `http://localhost:5173`
+  - Active Branch: `chore/full-project-cleanup`
+- **Next Steps**:
+  - Commit verified changes and push to `origin/chore/full-project-cleanup`.
 
 ## Summary: Stage 3 Smart OCR Speed Restoration, Fast Batch Splitting & Performance Telemetry (100% PASS)
 - **Task:** Recover OCR speed lost to retry/cascade backoff while maintaining 100% Chinese subtitle accuracy, verified empty frame protection, and zero false completions across Stage 3.

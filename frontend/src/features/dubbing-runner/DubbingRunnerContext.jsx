@@ -1312,7 +1312,11 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
         await fetch('/api/jobs/kill', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ seriesId: targetSeriesId, jobId: currentEpId || 'all' }),
+          body: JSON.stringify({
+            seriesId: targetSeriesId,
+            episodeId: currentEpId || undefined,
+            all: !currentEpId,
+          }),
         }).catch(() => {});
       }
     } catch (_) {}

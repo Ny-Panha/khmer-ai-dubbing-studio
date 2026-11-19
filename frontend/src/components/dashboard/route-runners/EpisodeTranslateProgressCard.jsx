@@ -12,6 +12,7 @@ export default function EpisodeTranslateProgressCard({
   assignedKeyNum,
   isQueued,
   isFailed = false,
+  isCancelled = false,
   onRetry = null,
   onRepair = null,
   onKill = null,
@@ -23,6 +24,7 @@ export default function EpisodeTranslateProgressCard({
   const [smoothProgress, setSmoothProgress] = useState(targetProgress || (isQueued ? 0 : 1));
   const [showConsole, setShowConsole] = useState(false);
   const [showKillConfirm, setShowKillConfirm] = useState(false);
+  const [isStopping, setIsStopping] = useState(false);
   const consoleBottomRef = useRef(null);
 
   useEffect(() => {
@@ -52,24 +54,43 @@ export default function EpisodeTranslateProgressCard({
     }
   }, [logs.length, smoothProgress, showConsole]);
 
+  const effectiveCancelled = isCancelled || activeJob?.status === 'cancelled';
+  const effectiveFailed = isFailed && !effectiveCancelled;
+
   const rawMessage = activeJob?.stageMessage || activeJob?.message || '';
-  const message = isFailed
-    ? (rawMessage ? rawMessage.replace(/^បរាជ័យ:\s*/, '') : 'ការងារបានបរាជ័យ')
-    : (rawMessage || (isQueued ? `ក្នុង Queue (រង់ចាំ Route Key #${assignedKeyNum})...` : 'ដំណើរការ AI Pipeline...'));
-  const isDone = smoothProgress >= 100 && !isFailed;
+  const message = isStopping
+    ? 'កំពុងផ្ញើសញ្ញាបញ្ឈប់ និងរំលត់ដំណើរការ (Stopping...)...'
+    : (effectiveCancelled
+      ? (rawMessage || 'ការងារត្រូវបានបញ្ឈប់ (Job cancelled)')
+      : (effectiveFailed
+        ? (rawMessage ? rawMessage.replace(/^បរាជ័យ:\s*/, '') : 'ការងារបានបរាជ័យ')
+        : (rawMessage || (isQueued ? `ក្នុង Queue (រង់ចាំ Route Key #${assignedKeyNum})...` : 'ដំណើរការ AI Pipeline...'))));
+  const isDone = smoothProgress >= 100 && !effectiveFailed && !effectiveCancelled;
 
   // Theme styling based on state
-  const stateColor = isFailed ? '#ef4444' : (isDone ? '#10b981' : (isQueued ? '#fbbf24' : '#38bdf8'));
-  const stateGlow = isFailed
-    ? '0 4px 20px rgba(239, 68, 68, 0.22)'
-    : (isDone
-      ? '0 4px 20px rgba(16, 185, 129, 0.18)'
-      : (isQueued ? '0 4px 16px rgba(251, 191, 36, 0.15)' : '0 4px 20px rgba(56, 189, 248, 0.22)'));
-  const stateBorder = isFailed
-    ? 'rgba(239, 68, 68, 0.55)'
-    : (isDone
-      ? 'rgba(16, 185, 129, 0.5)'
-      : (isQueued ? 'rgba(251, 191, 36, 0.45)' : 'rgba(56, 189, 248, 0.5)'));
+  const stateColor = isStopping
+    ? '#f59e0b'
+    : (effectiveCancelled
+      ? '#fb923c'
+      : (effectiveFailed ? '#ef4444' : (isDone ? '#10b981' : (isQueued ? '#fbbf24' : '#38bdf8'))));
+  const stateGlow = isStopping
+    ? '0 4px 16px rgba(245, 158, 11, 0.25)'
+    : (effectiveCancelled
+      ? '0 4px 16px rgba(251, 146, 60, 0.22)'
+      : (effectiveFailed
+        ? '0 4px 20px rgba(239, 68, 68, 0.22)'
+        : (isDone
+          ? '0 4px 20px rgba(16, 185, 129, 0.18)'
+          : (isQueued ? '0 4px 16px rgba(251, 191, 36, 0.15)' : '0 4px 20px rgba(56, 189, 248, 0.22)'))));
+  const stateBorder = isStopping
+    ? 'rgba(245, 158, 11, 0.55)'
+    : (effectiveCancelled
+      ? 'rgba(251, 146, 60, 0.55)'
+      : (effectiveFailed
+        ? 'rgba(239, 68, 68, 0.55)'
+        : (isDone
+          ? 'rgba(16, 185, 129, 0.5)'
+          : (isQueued ? 'rgba(251, 191, 36, 0.45)' : 'rgba(56, 189, 248, 0.5)'))));
 
   return (
     <div
@@ -90,7 +111,39 @@ export default function EpisodeTranslateProgressCard({
       {/* Header: Stage info + Big Tabular Percentage / Retry button */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flex: 1 }}>
-          {isFailed ? (
+          {isStopping ? (
+            <div style={{
+              width: 26,
+              height: 26,
+              borderRadius: '50%',
+              background: 'rgba(245, 158, 11, 0.2)',
+              border: '1px solid rgba(245, 158, 11, 0.45)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: '#f59e0b',
+              boxShadow: '0 0 10px rgba(245, 158, 11, 0.35)',
+              flexShrink: 0,
+            }}>
+              <Loader2 size={15} className="animate-spin" />
+            </div>
+          ) : effectiveCancelled ? (
+            <div style={{
+              width: 26,
+              height: 26,
+              borderRadius: '50%',
+              background: 'rgba(251, 146, 60, 0.2)',
+              border: '1px solid rgba(251, 146, 60, 0.45)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: '#fb923c',
+              boxShadow: '0 0 10px rgba(251, 146, 60, 0.35)',
+              flexShrink: 0,
+            }}>
+              <AlertCircle size={15} />
+            </div>
+          ) : effectiveFailed ? (
             <div style={{
               width: 26,
               height: 26,
@@ -158,22 +211,26 @@ export default function EpisodeTranslateProgressCard({
             <div style={{
               fontSize: '0.80rem',
               fontWeight: 800,
-              color: isFailed ? '#fca5a5' : '#f8fafc',
+              color: isStopping ? '#fde68a' : (effectiveCancelled ? '#fed7aa' : (effectiveFailed ? '#fca5a5' : '#f8fafc')),
               whiteSpace: 'nowrap',
               overflow: 'hidden',
               textOverflow: 'ellipsis',
               letterSpacing: '-0.01em',
             }}>
-              {isFailed
-                ? '⚠️ 1. Translate Script បរាជ័យ (Stage Error)'
-                : (isDone
-                  ? '🎉 📝 1. Translate Script ជោគជ័យ 100%'
-                  : (isQueued ? `⏳ 📝 1. Translate Script (រង់ចាំ Route Key #${assignedKeyNum})` : '📝 1. កំពុងវិភាគ & បកប្រែ Script...'))}
+              {isStopping
+                ? '🛑 1. កំពុងបញ្ឈប់ (Stopping...)'
+                : (effectiveCancelled
+                  ? '🛑 1. Translate Script ត្រូវបានបញ្ឈប់ (Cancelled)'
+                  : (effectiveFailed
+                    ? '⚠️ 1. Translate Script បរាជ័យ (Stage Error)'
+                    : (isDone
+                      ? '🎉 📝 1. Translate Script ជោគជ័យ 100%'
+                      : (isQueued ? `⏳ 📝 1. Translate Script (រង់ចាំ Route Key #${assignedKeyNum})` : '📝 1. កំពុងវិភាគ & បកប្រែ Script...'))))}
             </div>
             <div
               style={{
                 fontSize: '0.68rem',
-                color: isFailed ? '#f87171' : (isDone ? '#34d399' : (isQueued ? '#fbbf24' : '#94a3b8')),
+                color: isStopping ? '#fde68a' : (effectiveCancelled ? '#fb923c' : (effectiveFailed ? '#f87171' : (isDone ? '#34d399' : (isQueued ? '#fbbf24' : '#94a3b8')))),
                 whiteSpace: 'nowrap',
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
@@ -185,11 +242,11 @@ export default function EpisodeTranslateProgressCard({
           </div>
         </div>
 
-        {/* Counter or Retry/Repair Buttons on Failure / Kill Button */}
+        {/* Counter or Retry/Repair Buttons on Failure/Cancellation / Kill Button */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0, marginLeft: 8 }}>
-          {isFailed ? (
+          {(effectiveFailed || effectiveCancelled) ? (
             <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-              {typeof onRepair === 'function' && (
+              {typeof onRepair === 'function' && !effectiveCancelled && (
                 <button
                   type="button"
                   onClick={(e) => {
@@ -224,8 +281,12 @@ export default function EpisodeTranslateProgressCard({
                   if (typeof onRetry === 'function') onRetry();
                 }}
                 style={{
-                  background: 'linear-gradient(135deg, rgba(239, 68, 68, 0.28) 0%, rgba(220, 38, 38, 0.45) 100%)',
-                  border: '1px solid rgba(239, 68, 68, 0.65)',
+                  background: effectiveCancelled
+                    ? 'linear-gradient(135deg, rgba(251, 146, 60, 0.28) 0%, rgba(234, 88, 12, 0.45) 100%)'
+                    : 'linear-gradient(135deg, rgba(239, 68, 68, 0.28) 0%, rgba(220, 38, 38, 0.45) 100%)',
+                  border: effectiveCancelled
+                    ? '1px solid rgba(251, 146, 60, 0.65)'
+                    : '1px solid rgba(239, 68, 68, 0.65)',
                   color: '#ffffff',
                   borderRadius: 6,
                   padding: '4px 10px',
@@ -235,7 +296,9 @@ export default function EpisodeTranslateProgressCard({
                   display: 'flex',
                   alignItems: 'center',
                   gap: 5,
-                  boxShadow: '0 0 14px rgba(239, 68, 68, 0.35)',
+                  boxShadow: effectiveCancelled
+                    ? '0 0 14px rgba(251, 146, 60, 0.35)'
+                    : '0 0 14px rgba(239, 68, 68, 0.35)',
                   transition: 'all 0.15s ease',
                   flexShrink: 0,
                 }}
@@ -250,8 +313,10 @@ export default function EpisodeTranslateProgressCard({
               {!isDone && onKill && (
                 <button
                   type="button"
+                  disabled={isStopping}
                   onClick={async (e) => {
                     e.stopPropagation();
+                    if (isStopping) return;
                     if (typeof onRequestConfirm === 'function') {
                       const confirmed = await onRequestConfirm({
                         variant: 'danger',
@@ -262,28 +327,43 @@ export default function EpisodeTranslateProgressCard({
                         confirmLabel: '🛑 បញ្ឈប់ (Kill)',
                         cancelLabel: 'បន្តដំណើរការ',
                       });
-                      if (confirmed) onKill(activeJob);
+                      if (confirmed) {
+                        setIsStopping(true);
+                        try {
+                          await onKill(activeJob);
+                        } finally {
+                          setIsStopping(false);
+                        }
+                      }
                       return;
                     }
                     setShowKillConfirm(true);
                   }}
                   title="Kill Translate Process"
                   style={{
-                    background: 'rgba(239, 68, 68, 0.22)',
-                    border: '1px solid rgba(239, 68, 68, 0.55)',
-                    color: '#fca5a5',
+                    background: isStopping ? 'rgba(245, 158, 11, 0.22)' : 'rgba(239, 68, 68, 0.22)',
+                    border: isStopping ? '1px solid rgba(245, 158, 11, 0.55)' : '1px solid rgba(239, 68, 68, 0.55)',
+                    color: isStopping ? '#fde68a' : '#fca5a5',
                     padding: '4px 8px',
                     borderRadius: 6,
                     fontSize: '0.68rem',
                     fontWeight: 800,
-                    cursor: 'pointer',
+                    cursor: isStopping ? 'wait' : 'pointer',
                     display: 'flex',
                     alignItems: 'center',
                     gap: 4,
                     transition: 'all 0.15s ease',
+                    opacity: isStopping ? 0.75 : 1,
                   }}
                 >
-                  🛑 Kill
+                  {isStopping ? (
+                    <>
+                      <Loader2 size={11} className="animate-spin" />
+                      <span>Stopping...</span>
+                    </>
+                  ) : (
+                    <span>🛑 Kill</span>
+                  )}
                 </button>
               )}
               <div style={{
@@ -335,19 +415,27 @@ export default function EpisodeTranslateProgressCard({
             height: '100%',
             width: `${Math.max(isQueued ? 0 : 3, Math.min(100, smoothProgress))}%`,
             transition: 'width 0.22s ease-out',
-            background: isFailed
-              ? 'linear-gradient(90deg, #f87171, #ef4444)'
-              : (isDone
-                ? 'linear-gradient(90deg, #10b981, #34d399)'
-                : (isQueued
-                  ? 'linear-gradient(90deg, #f59e0b, #fbbf24)'
-                  : 'linear-gradient(90deg, rgba(59, 130, 246, 0.4), #38bdf8, rgba(6, 182, 212, 0.4))')),
+            background: isStopping
+              ? 'linear-gradient(90deg, #f59e0b, #fbbf24)'
+              : (effectiveCancelled
+                ? 'linear-gradient(90deg, #ea580c, #fb923c)'
+                : (effectiveFailed
+                  ? 'linear-gradient(90deg, #f87171, #ef4444)'
+                  : (isDone
+                    ? 'linear-gradient(90deg, #10b981, #34d399)'
+                    : (isQueued
+                      ? 'linear-gradient(90deg, #f59e0b, #fbbf24)'
+                      : 'linear-gradient(90deg, rgba(59, 130, 246, 0.4), #38bdf8, rgba(6, 182, 212, 0.4))')))),
             borderRadius: 9999,
-            boxShadow: isFailed
-              ? '0 0 12px rgba(239, 68, 68, 0.7)'
-              : (isDone
-                ? '0 0 12px rgba(16, 185, 129, 0.7)'
-                : (isQueued ? 'none' : '0 0 12px rgba(56, 189, 248, 0.5)')),
+            boxShadow: isStopping
+              ? '0 0 12px rgba(245, 158, 11, 0.6)'
+              : (effectiveCancelled
+                ? '0 0 12px rgba(251, 146, 60, 0.6)'
+                : (effectiveFailed
+                  ? '0 0 12px rgba(239, 68, 68, 0.7)'
+                  : (isDone
+                    ? '0 0 12px rgba(16, 185, 129, 0.7)'
+                    : (isQueued ? 'none' : '0 0 12px rgba(56, 189, 248, 0.5)')))),
           }}
         />
       </div>
@@ -554,9 +642,16 @@ export default function EpisodeTranslateProgressCard({
         message="តើអ្នកពិតជាចង់បញ្ឈប់ (Kill) ដំណើរការ Translate នេះមែនទេ?"
         confirmLabel="🛑 បញ្ឈប់ (Kill)"
         cancelLabel="បន្តដំណើរការ"
-        onConfirm={() => {
+        onConfirm={async () => {
           setShowKillConfirm(false);
-          onKill?.(activeJob);
+          if (typeof onKill === 'function') {
+            setIsStopping(true);
+            try {
+              await onKill(activeJob);
+            } finally {
+              setIsStopping(false);
+            }
+          }
         }}
         onCancel={() => setShowKillConfirm(false)}
       />

@@ -640,73 +640,187 @@ router.post("/:jobId/retry", (req, res) => {
   }
 });
 
-router.post("/cancel", (req, res) => {
-  try {
-    const { jobId, episodeId, seriesId } = req.body || {};
-    if (jobId) {
-      cancelJobRenderProcess(jobId);
-      const job = cancelJob(jobId);
-      clearTransientJobApiKey(jobId);
-      return res.json({ success: true, cancelledJobs: job ? [serializeJobForList(job)] : [] });
-    }
-    const jobs = getAllJobs();
-    const cancelled = [];
-    for (const j of jobs) {
-      if (["running", "queued", "processing", "recovering"].includes(j.status)) {
-        if (episodeId && String(j.episodeId) !== String(episodeId)) continue;
-        if (seriesId && String(j.seriesId) !== String(seriesId)) continue;
-        cancelJobRenderProcess(j.jobId);
-        const c = cancelJob(j.jobId);
-        clearTransientJobApiKey(j.jobId);
-        if (c) cancelled.push(serializeJobForList(c));
+function executeJobCancellation({ jobId, episodeId, seriesId, all = false }) {
+  const hasJobId = Boolean(jobId && typeof jobId === "string" && jobId.trim());
+  const hasEpisodeId = Boolean(episodeId && typeof episodeId === "string" && episodeId.trim());
+  const hasSeriesId = Boolean(seriesId && typeof seriesId === "string" && seriesId.trim());
+  const isKillAll = Boolean(all === true || all === "true");
+
+  // Reject missing or ambiguous targets
+  if (!hasJobId && !hasEpisodeId && !isKillAll) {
+    return {
+      status: 400,
+      body: {
+        success: false,
+        status: "bad_request",
+        error: "Missing cancellation target. Please specify jobId, episodeId, or all: true",
+        cancelledCount: 0,
+        cancelledJobIds: [],
+        cancelledJobs: [],
+      },
+    };
+  }
+
+  const cancelledJobs = [];
+  const cancelledJobIds = [];
+
+  // Case 1: Specific jobId requested
+  if (hasJobId) {
+    const cleanJobId = jobId.trim();
+    let job = getJob(cleanJobId);
+
+    // Fallback: If cleanJobId wasn't found as a job ID, check if an episode identifier was passed as jobId
+    if (!job && (cleanJobId.startsWith("ep_") || cleanJobId.startsWith("episode_") || cleanJobId.match(/^ep\d+$/i))) {
+      const candidateJobs = getAllJobs();
+      for (const j of candidateJobs) {
+        if (["running", "queued", "processing", "recovering"].includes(j.status)) {
+          if (String(j.episodeId) === cleanJobId) {
+            if (!hasSeriesId || String(j.seriesId) === seriesId.trim()) {
+              job = j;
+              break;
+            }
+          }
+        }
       }
     }
-    return res.json({ success: true, count: cancelled.length, cancelledJobs: cancelled });
+
+    if (job) {
+      cancelJobRenderProcess(job.jobId);
+      const c = cancelJob(job.jobId);
+      clearTransientJobApiKey(job.jobId);
+      if (c) {
+        cancelledJobs.push(serializeJobForList(c));
+        cancelledJobIds.push(c.jobId);
+      }
+      if (job.seriesId && job.episodeId) {
+        productionJobQueue.releaseEpisodeLock(job.seriesId, job.episodeId);
+      }
+    }
+
+    if (cancelledJobIds.length === 0) {
+      return {
+        status: 404,
+        body: {
+          success: false,
+          status: "not_found",
+          error: `No active or queued job found for target #${cleanJobId}`,
+          cancelledCount: 0,
+          cancelledJobIds: [],
+          cancelledJobs: [],
+        },
+      };
+    }
+
+    return {
+      status: 200,
+      body: {
+        success: true,
+        status: "cancelled",
+        cancelledCount: cancelledJobIds.length,
+        count: cancelledJobIds.length,
+        cancelledJobIds,
+        cancelledJobs,
+      },
+    };
+  }
+
+  // Case 2: Scoped by episodeId and/or seriesId, or explicit Kill All
+  const jobs = getAllJobs();
+  const targetSeries = hasSeriesId ? seriesId.trim() : null;
+  const targetEpisode = hasEpisodeId ? episodeId.trim() : null;
+
+  for (const j of jobs) {
+    if (["running", "queued", "processing", "recovering"].includes(j.status)) {
+      if (targetEpisode && String(j.episodeId) !== targetEpisode) continue;
+      if (targetSeries && String(j.seriesId) !== targetSeries) continue;
+
+      cancelJobRenderProcess(j.jobId);
+      const c = cancelJob(j.jobId);
+      clearTransientJobApiKey(j.jobId);
+      if (c) {
+        cancelledJobs.push(serializeJobForList(c));
+        cancelledJobIds.push(c.jobId);
+      }
+    }
+  }
+
+  // Clean up virtual lock if held for this episode
+  if (targetSeries && targetEpisode && productionJobQueue.hasActiveJobForEpisode(targetSeries, targetEpisode)) {
+    productionJobQueue.releaseEpisodeLock(targetSeries, targetEpisode);
+  }
+
+  if (cancelledJobIds.length === 0) {
+    const targetDesc = targetEpisode ? `episode ${targetEpisode}` : (targetSeries ? `series ${targetSeries}` : "all");
+    return {
+      status: 404,
+      body: {
+        success: false,
+        status: "not_found",
+        error: `No active or queued job found for ${targetDesc}`,
+        cancelledCount: 0,
+        cancelledJobIds: [],
+        cancelledJobs: [],
+      },
+    };
+  }
+
+  return {
+    status: 200,
+    body: {
+      success: true,
+      status: "cancelled",
+      cancelledCount: cancelledJobIds.length,
+      count: cancelledJobIds.length,
+      cancelledJobIds,
+      cancelledJobs,
+    },
+  };
+}
+
+router.post("/cancel", (req, res) => {
+  try {
+    const outcome = executeJobCancellation(req.body || {});
+    return res.status(outcome.status).json(outcome.body);
   } catch (err) {
     console.error("[Job Cancel] Error:", err);
-    return res.status(500).json({ success: false, error: err.message });
+    return res.status(500).json({ success: false, status: "error", error: err.message, cancelledCount: 0, cancelledJobIds: [] });
   }
 });
 
 router.post("/kill", (req, res) => {
   try {
-    const { jobId, episodeId, seriesId } = req.body || {};
-    if (jobId) {
-      cancelJobRenderProcess(jobId);
-      const job = cancelJob(jobId);
-      clearTransientJobApiKey(jobId);
-      return res.json({ success: true, cancelledJobs: job ? [serializeJobForList(job)] : [] });
-    }
-    const jobs = getAllJobs();
-    const cancelled = [];
-    for (const j of jobs) {
-      if (["running", "queued", "processing", "recovering"].includes(j.status)) {
-        if (episodeId && String(j.episodeId) !== String(episodeId)) continue;
-        if (seriesId && String(j.seriesId) !== String(seriesId)) continue;
-        cancelJobRenderProcess(j.jobId);
-        const c = cancelJob(j.jobId);
-        clearTransientJobApiKey(j.jobId);
-        if (c) cancelled.push(serializeJobForList(c));
-      }
-    }
-    return res.json({ success: true, count: cancelled.length, cancelledJobs: cancelled });
+    const outcome = executeJobCancellation(req.body || {});
+    return res.status(outcome.status).json(outcome.body);
   } catch (err) {
     console.error("[Job Kill] Error:", err);
-    return res.status(500).json({ success: false, error: err.message });
+    return res.status(500).json({ success: false, status: "error", error: err.message, cancelledCount: 0, cancelledJobIds: [] });
   }
 });
 
 router.post("/:jobId/cancel", (req, res) => {
-  const { jobId } = req.params;
-  cancelJobRenderProcess(jobId);
-  const job = cancelJob(jobId);
-  clearTransientJobApiKey(jobId);
-  if (!job) {
-    return res.status(404).json({ success: false, error: `រកមិនឃើញ Job #${jobId} ឡើយ` });
+  try {
+    const { jobId } = req.params;
+    const outcome = executeJobCancellation({ jobId });
+    if (!outcome.body.success) {
+      return res.status(outcome.status).json(outcome.body);
+    }
+    const cancelledJob = outcome.body.cancelledJobs?.[0] || null;
+    return res.status(200).json({
+      success: true,
+      status: "cancelled",
+      cancelledCount: 1,
+      cancelledJobIds: [jobId],
+      message: `Job #${jobId} cancelled successfully`,
+      job: cancelledJob,
+      cancelledJobs: outcome.body.cancelledJobs,
+    });
+  } catch (err) {
+    console.error("[Job Cancel] Error:", err);
+    return res.status(500).json({ success: false, status: "error", error: err.message, cancelledCount: 0, cancelledJobIds: [] });
   }
-  res.json({ success: true, message: `Job #${jobId} cancelled successfully`, job: serializeJobForList(job) });
 });
 
+router.executeJobCancellation = executeJobCancellation;
 router.closeAllJobStreams = closeAllJobStreams;
 
 module.exports = router;
