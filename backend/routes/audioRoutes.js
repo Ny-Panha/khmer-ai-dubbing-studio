@@ -774,13 +774,15 @@ router.post("/generate-audio", async (req, res) => {
       }
 
       const batchKey = cleanEpisode ? `${cleanSeries}:${cleanEpisode}` : cleanSeries;
+      const batchStartTime = Date.now();
+      let masterAudioMergeMs = 0;
       console.log(`[TTS] Batch generating audio for ${segments.length} segments in ${cleanSeries}${cleanEpisode ? ` [Episode: ${cleanEpisode}]` : ""} (forceRegen=${Boolean(forceRegen)}, batchSpeed=${batchRequestedSpeed ?? "default"}, batchRate=${batchSpeedInfo.valid ? batchSpeedInfo.rate : "INVALID"})...`);
       let updatedSegments;
       let narrationSynced = false;
       try {
         activeBatchStages.set(batchKey, { stage: "synthesizing", total: segments.length });
         updatedSegments = await generateBatchSegmentsAudio(segments, audioDir, {
-          concurrency: 3,
+          concurrency: 4,
           autoStretch,
           maxSpeed,
           speed: hasBodySpeed ? rawBodySpeed : undefined,
@@ -822,6 +824,9 @@ router.post("/generate-audio", async (req, res) => {
           }
         }
 
+        const newlySynthesizedCount = (updatedSegments || []).filter((s) => s && s._wasNewlySynthesized).length;
+        const reusedCount = (updatedSegments || []).filter((s) => s && s.audioGenerated && !s._wasNewlySynthesized).length;
+
         const syncSegments = updatedSegments
           .filter((s) => s.audioPath && s.ttsStatus !== "empty_text" && fs.existsSync(s.audioPath))
           .map((s, idx) => ({
@@ -834,11 +839,16 @@ router.post("/generate-audio", async (req, res) => {
                 : parseTimeToSec(s.start, idx * 4)),
           }));
 
-        if (syncSegments.length > 0) {
+        if (!forceRegen && newlySynthesizedCount === 0 && fs.existsSync(fullAudioPath) && fs.statSync(fullAudioPath).size > 1000) {
+          console.log(`[TTS] ⚡ All ${reusedCount} segments reused from cache and master narration already exists (${fs.statSync(fullAudioPath).size} bytes). Skipping redundant master audio merge.`);
+          narrationSynced = true;
+        } else if (syncSegments.length > 0) {
           activeBatchStages.set(batchKey, { stage: "syncing", total: segments.length });
+          const masterMergeStart = Date.now();
           try {
             await createSynchronizedNarrationAudio(syncSegments, fullAudioPath);
             narrationSynced = fs.existsSync(fullAudioPath);
+            masterAudioMergeMs = Date.now() - masterMergeStart;
           } catch (syncErr) {
             console.warn("[TTS] Could not build master narration audio:", syncErr.message);
           }
@@ -904,6 +914,14 @@ router.post("/generate-audio", async (req, res) => {
         skippedEmptyCount,
         validCount: validGeneratedCount,
         summaryMessage,
+        telemetry: {
+          totalDurationMs: Date.now() - batchStartTime,
+          masterAudioMergeMs,
+          totalSegmentsCount: segments.length,
+          reusedSegmentsCount: (updatedSegments || []).filter((s) => s && s.audioGenerated && !s._wasNewlySynthesized).length,
+          synthesizedSegmentsCount: (updatedSegments || []).filter((s) => s && s._wasNewlySynthesized).length,
+          skippedEmptyCount,
+        },
       });
     }
 

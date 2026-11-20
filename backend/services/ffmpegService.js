@@ -481,6 +481,8 @@ async function autoStretchTtsAudio({
   leadOutCushionSec = 0.060, // 60ms decay cushion protects final syllable and tail consonants
   microFadeMs = 8,           // 8ms micro-fade within silence cushion to eliminate boundary clicks
   allowSlowdown = false,     // Only allow stretching down if explicitly requested (e.g. for mouth sync, never when fitting slot)
+  isPreTrimmed = false,
+  currentDuration = null,
 }) {
   if (!fs.existsSync(inputAudioPath)) {
     throw new Error(`រកមិនឃើញ File សំឡេង TTS៖ ${inputAudioPath}`);
@@ -492,49 +494,57 @@ async function autoStretchTtsAudio({
   const trimmedPath = path.join(dir, `${base}_trimmed${ext}`);
   const stretchedPath = path.join(dir, `${base}_synced${ext}`);
 
-  // 1. Measure natural speech boundaries using conservative threshold
-  const bounds = await detectSpeechBounds(inputAudioPath, "-50dB", 0.03);
-  const totalDur = bounds.totalDur || (await getMediaDuration(inputAudioPath));
-
-  // Determine safe trim boundaries that strictly PRESERVE speech onset:
-  let safeStart = 0;
-  if (bounds.leadingSilence > 0.060) {
-    safeStart = Math.max(0, parseFloat((bounds.leadingSilence - leadInCushionSec).toFixed(3)));
-  }
-
-  // Trim trailing dead silence while keeping leadOutCushionSec of room decay
-  let safeEnd = totalDur;
-  if (bounds.tailSilence > 0 && totalDur - bounds.tailSilence > 0.12) {
-    safeEnd = Math.min(totalDur, bounds.tailSilence + leadOutCushionSec);
-  }
-
   let activeSourcePath = inputAudioPath;
-  const needsTrim = safeStart > 0.02 || (safeEnd > 0 && safeEnd < totalDur - 0.05);
+  let actualDuration;
+  let leadingSilence = 0;
+  let safeStart = 0;
 
-  if (needsTrim && safeEnd > safeStart + 0.2) {
-    await new Promise((resolve) => {
-      const trimArgs = [
-        "-y",
-        "-i", getSafeCliPath(inputAudioPath),
-        "-af", `atrim=start=${safeStart.toFixed(3)}:end=${safeEnd.toFixed(3)},asetpts=PTS-STARTPTS,afade=t=in:st=0:d=${(microFadeMs / 1000).toFixed(3)},afade=t=out:st=${Math.max(0, (safeEnd - safeStart) - (microFadeMs / 1000)).toFixed(3)}:d=${(microFadeMs / 1000).toFixed(3)}`,
-        "-c:a", "libmp3lame",
-        "-q:a", "2",
-        getSafeCliPath(trimmedPath),
-      ];
-      const p = spawn(FFMPEG_PATH, trimArgs);
-      p.on("close", (code) => {
-        if (code === 0 && fs.existsSync(trimmedPath)) {
-          activeSourcePath = trimmedPath;
-          resolve(true);
-        } else {
-          resolve(false);
-        }
+  if (isPreTrimmed && typeof currentDuration === 'number' && currentDuration > 0) {
+    actualDuration = currentDuration;
+  } else {
+    // 1. Measure natural speech boundaries using conservative threshold
+    const bounds = await detectSpeechBounds(inputAudioPath, "-50dB", 0.03);
+    const totalDur = bounds.totalDur || (await getMediaDuration(inputAudioPath));
+    leadingSilence = bounds.leadingSilence || 0;
+
+    // Determine safe trim boundaries that strictly PRESERVE speech onset:
+    if (bounds.leadingSilence > 0.060) {
+      safeStart = Math.max(0, parseFloat((bounds.leadingSilence - leadInCushionSec).toFixed(3)));
+    }
+
+    // Trim trailing dead silence while keeping leadOutCushionSec of room decay
+    let safeEnd = totalDur;
+    if (bounds.tailSilence > 0 && totalDur - bounds.tailSilence > 0.12) {
+      safeEnd = Math.min(totalDur, bounds.tailSilence + leadOutCushionSec);
+    }
+
+    const needsTrim = safeStart > 0.02 || (safeEnd > 0 && safeEnd < totalDur - 0.05);
+
+    if (needsTrim && safeEnd > safeStart + 0.2) {
+      await new Promise((resolve) => {
+        const trimArgs = [
+          "-y",
+          "-i", getSafeCliPath(inputAudioPath),
+          "-af", `atrim=start=${safeStart.toFixed(3)}:end=${safeEnd.toFixed(3)},asetpts=PTS-STARTPTS,afade=t=in:st=0:d=${(microFadeMs / 1000).toFixed(3)},afade=t=out:st=${Math.max(0, (safeEnd - safeStart) - (microFadeMs / 1000)).toFixed(3)}:d=${(microFadeMs / 1000).toFixed(3)}`,
+          "-c:a", "libmp3lame",
+          "-q:a", "2",
+          getSafeCliPath(trimmedPath),
+        ];
+        const p = spawn(FFMPEG_PATH, trimArgs);
+        p.on("close", (code) => {
+          if (code === 0 && fs.existsSync(trimmedPath)) {
+            activeSourcePath = trimmedPath;
+            resolve(true);
+          } else {
+            resolve(false);
+          }
+        });
+        p.on("error", () => resolve(false));
       });
-      p.on("error", () => resolve(false));
-    });
-  }
+    }
 
-  const actualDuration = await getMediaDuration(activeSourcePath);
+    actualDuration = await getMediaDuration(activeSourcePath);
+  }
 
   if (!actualDuration || !targetDuration || targetDuration <= 0.2) {
     if (activeSourcePath !== inputAudioPath && fs.existsSync(trimmedPath)) {
@@ -547,8 +557,8 @@ async function autoStretchTtsAudio({
       originalDuration: actualDuration,
       finalDuration: actualDuration,
       appliedSpeed: 1.0,
-      leadInSec: Number((bounds.leadingSilence - safeStart).toFixed(3)),
-      effectiveLeadInCushionSec: Number((bounds.leadingSilence - safeStart).toFixed(3)),
+      leadInSec: Number((leadingSilence - safeStart).toFixed(3)),
+      effectiveLeadInCushionSec: Number((leadingSilence - safeStart).toFixed(3)),
     };
   }
 
@@ -576,8 +586,8 @@ async function autoStretchTtsAudio({
       originalDuration: actualDuration,
       finalDuration: actualDuration,
       appliedSpeed: 1.0,
-      leadInSec: Number((bounds.leadingSilence - safeStart).toFixed(3)),
-      effectiveLeadInCushionSec: Number((bounds.leadingSilence - safeStart).toFixed(3)),
+      leadInSec: Number((leadingSilence - safeStart).toFixed(3)),
+      effectiveLeadInCushionSec: Number((leadingSilence - safeStart).toFixed(3)),
     };
   }
 
@@ -616,10 +626,12 @@ async function autoStretchTtsAudio({
     try { fs.unlinkSync(trimmedPath); } catch (_) {}
   }
 
-  const finalDuration = await getMediaDuration(inputAudioPath);
+  const finalDuration = isPreTrimmed
+    ? parseFloat((actualDuration / appliedSpeed).toFixed(3))
+    : ((await getMediaDuration(inputAudioPath)) || parseFloat((actualDuration / appliedSpeed).toFixed(3)));
 
   console.log(
-    `[FFmpegService] 🎚️ Auto-Stretch: ${actualDuration.toFixed(2)}s ➜ ${finalDuration.toFixed(2)}s (Target: ${targetDuration.toFixed(2)}s | Speed: ${appliedSpeed.toFixed(2)}x | Lead-in Cushion: ${((bounds.leadingSilence - safeStart) * 1000).toFixed(0)}ms)`
+    `[FFmpegService] 🎚️ Auto-Stretch: ${actualDuration.toFixed(2)}s ➜ ${finalDuration.toFixed(2)}s (Target: ${targetDuration.toFixed(2)}s | Speed: ${appliedSpeed.toFixed(2)}x | Lead-in Cushion: ${((leadingSilence - safeStart) * 1000).toFixed(0)}ms)`
   );
 
   return {
@@ -627,8 +639,8 @@ async function autoStretchTtsAudio({
     originalDuration: actualDuration,
     finalDuration: finalDuration,
     appliedSpeed: Number(appliedSpeed.toFixed(2)),
-    leadInSec: Number((bounds.leadingSilence - safeStart).toFixed(3)),
-    effectiveLeadInCushionSec: Number(((bounds.leadingSilence - safeStart) / appliedSpeed).toFixed(3)),
+    leadInSec: Number((leadingSilence - safeStart).toFixed(3)),
+    effectiveLeadInCushionSec: Number(((leadingSilence - safeStart) / appliedSpeed).toFixed(3)),
   };
 }
 

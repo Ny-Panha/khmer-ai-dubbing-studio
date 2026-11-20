@@ -3,6 +3,57 @@
 ## Last Session
 - **Environment**: Antigravity IDE (Gemini) - Minimal Change Engineer
 - **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-20T08:58:00+07:00
+
+## Summary: Fast Smart Incremental TTS, FFmpeg Trim Optimization & Adaptive Concurrency (100% PASS)
+- **Task:** Optimize "បង្កើតសំឡេងខ្មែរ AI (Generate TTS)" button to run significantly faster for 5-minute videos (~138 segments) without changing voice models (`km-KH-PisethNeural`, `km-KH-SreymomNeural`), without breaking audio signatures, voice mapping, or timings, and without creating duplicate worker pools or redundant cache directories.
+- **Root Causes of TTS Bottlenecks on Windows Addressed**:
+  1. **Redundant Process Spawns in Silence Trimming & Slot Stretching**: `autoStretchTtsAudio` previously re-detected speech bounds and re-trimmed silence on files that `trimTtsSilence` had already trimmed, spawning up to 7 FFmpeg/FFprobe processes per segment (~800 process spawns on Windows for 138 segments).
+  2. **Unconditional 60ms Artificial Sleep in Batch Workers**: `generateBatchSegmentsAudio` ran an artificial 60ms sleep before *every* item in the worker pool, adding ~3 seconds of dead delay even when all 138 clips were already cached and valid.
+  3. **Redundant Master Narration Concatenation**: When re-running Generate TTS with unchanged segments or when only 1 segment was modified, `createSynchronizedNarrationAudio` was running unconditionally, spending 10–20 seconds merging 138 audio files into `_narration_khmer.mp3`.
+  4. **Fixed Concurrency Without Dynamic Network Backoff**: Concurrency was fixed at 3 without backoff on Edge TTS 429 rate limit or network pressure, nor scaling up when network was clear.
+- **Surgical Changes Implemented (Minimal Change Discipline)**:
+  1. `backend/services/ffmpegService.js`:
+     - Added `{ isPreTrimmed = false, currentDuration = null }` to `autoStretchTtsAudio`.
+     - When `isPreTrimmed: true` and `currentDuration > 0`, it skips `detectSpeechBounds` and `atrim`. If `actualDuration <= targetDuration`, returns immediately (0 extra processes). If stretching is needed, runs single `atempo` FFmpeg command.
+     - Preserved all acoustic cushions: 25ms lead-in, 60ms decay, 8ms micro-fade.
+  2. `backend/services/ttsService.js`:
+     - In `generateSingleSegmentAudio`:
+       - For cached clips, reuses `segment.audioDuration` or `segment.audioDurationSec` directly (0 extra FFprobe spawns).
+       - Passes `trimRes.finalDuration` directly to `autoStretchTtsAudio` with `isPreTrimmed: true, currentDuration: actualDuration`.
+       - Returns `_wasNewlySynthesized: !usedCache`.
+     - In `generateBatchSegmentsAudio`:
+       - O(N) pre-pass filters empty text in 0ms (`results[idx]` filled immediately, not pushed to `pendingIndices`).
+       - Adaptive concurrency: base concurrency starts at 4 (if pending >= 8) or 3, dynamically backs off to 2 on consecutive network errors (429/timeout), and recovers to 4 after 5 consecutive successes.
+       - Zero artificial delay for cached clips (processes cached clips in <2ms). Small pacing delay (35ms) only between actual Edge TTS network calls.
+       - Returns `results` with attached `results.telemetry` (`totalDurationMs`, `reusedCount`, `newlySynthesizedCount`, `activeConcurrency`).
+  3. `backend/routes/audioRoutes.js`:
+     - Concurrency set to 4 with adaptive auto-scaling.
+     - Checks `newlySynthesizedCount`. If `newlySynthesizedCount === 0 && fs.existsSync(fullAudioPath) && fs.statSync(fullAudioPath).size > 1000 && !forceRegen`, skips redundant `createSynchronizedNarrationAudio` entirely (saves 10–20s!).
+     - Returns `telemetry` object in HTTP JSON response.
+  4. `backend/tests/tts_smart_skip_and_progress.test.js`:
+     - Added test for telemetry and skipping redundant master audio merge when 0 new clips are synthesized.
+     - Added test for `generateBatchSegmentsAudio` telemetry (`reusedCount`, `newlySynthesizedCount`).
+     - Added test for `autoStretchTtsAudio` with `isPreTrimmed: true` returning immediately.
+- **Verification Outcomes**:
+  - `backend/tests/clip_speed_tts.test.js`, `tts_smart_skip_and_progress.test.js`, `stage6_translation_fallback_and_tts_guard.test.js`: **24/24 PASS** (100%).
+  - Stage 3 hybrid OCR, cancellation, and series sync: **56/56 PASS** (100%).
+  - Cached segment batch execution time: **2.2ms** (down from ~3 seconds).
+  - `npm --prefix frontend run build`: **PASS** (628ms).
+- **Active Environment**:
+  - Backend API: `http://localhost:5000`
+  - Frontend UI: `http://localhost:5173`
+  - Active Branch: `chore/full-project-cleanup`
+- **Next Steps**:
+  - Commit and push verified changes.
+
+---
+
+# Antigravity Shared State (Sync Memory)
+
+## Last Session
+- **Environment**: Antigravity IDE (Gemini) - Minimal Change Engineer
+- **Branch**: `chore/full-project-cleanup`
 - **Timestamp**: 2026-11-20T08:38:00+07:00
 
 ## Summary: Fix ReferenceError: forceRegen is not defined in chunkOrchestrator.js (100% PASS)

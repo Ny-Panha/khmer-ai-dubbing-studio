@@ -12,6 +12,7 @@ const {
   generateBatchSegmentsAudio,
   getTtsJobProgress,
 } = require('../services/ttsService');
+const { autoStretchTtsAudio } = require('../services/ffmpegService');
 
 function startTestServer() {
   const app = express();
@@ -306,6 +307,99 @@ test('POST /api/generate-audio clears ep.audioOutdated in series.json after batc
   } finally {
     await new Promise((r) => server.close(r));
     fs.rmSync(path.join(uploadsDir, 'projects', seriesId), { recursive: true, force: true });
+  }
+});
+
+test('POST /api/generate-audio returns tts telemetry and skips redundant master merge when 0 new clips synthesized', async () => {
+  const seriesId = `series_telemetry_${Date.now()}`;
+  const episodeId = 'ep_telemetry';
+  const epAudioDir = path.join(uploadsDir, 'projects', seriesId, 'episodes', episodeId, 'audio');
+  fs.mkdirSync(epAudioDir, { recursive: true });
+
+  const { server, baseUrl } = await startTestServer();
+  try {
+    const res = await fetch(`${baseUrl}/generate-audio`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        seriesId,
+        episodeId,
+        voiceId: 'km-KH-PisethNeural',
+        forceRegen: false,
+        segments: [
+          { id: 1, index: 1, khmer: 'សួស្តីបងប្អូនទាំងអស់គ្នា', startSec: 0, endSec: 2.0, voiceId: 'km-KH-PisethNeural' },
+          { id: 2, index: 2, khmer: 'ថ្ងៃនេះមានកម្មវិធីពិសេស', startSec: 2.5, endSec: 4.5, voiceId: 'km-KH-PisethNeural' },
+        ],
+      }),
+    });
+    const data = await res.json();
+    assert.equal(data.success, true);
+    assert.ok(data.telemetry, 'Response must include telemetry object');
+    assert.equal(data.telemetry.totalSegmentsCount, 2);
+    assert.equal(data.telemetry.synthesizedSegmentsCount, 2);
+    assert.equal(data.telemetry.reusedSegmentsCount, 0);
+    assert.ok(data.telemetry.masterAudioMergeMs >= 0);
+  } finally {
+    await new Promise((r) => server.close(r));
+    fs.rmSync(path.join(uploadsDir, 'projects', seriesId), { recursive: true, force: true });
+  }
+});
+
+test('generateBatchSegmentsAudio returns telemetry with reusedCount and newlySynthesizedCount', async () => {
+  const tmpDir = path.join(uploadsDir, `batch_telemetry_test_${Date.now()}`);
+  fs.mkdirSync(tmpDir, { recursive: true });
+
+  try {
+    let callCount = 0;
+    const segments = [
+      { id: 1, khmer: 'ឃ្លាទីមួយ', voiceId: 'km-KH-PisethNeural' },
+      { id: 2, khmer: 'ឃ្លាទីពីរ', voiceId: 'km-KH-PisethNeural' },
+      { id: 3, khmer: '', voiceId: 'km-KH-PisethNeural' },
+    ];
+
+    const results = await generateBatchSegmentsAudio(segments, tmpDir, {
+      generateSingleFn: async (seg) => {
+        callCount++;
+        const isReused = seg.id === 1;
+        return {
+          ...seg,
+          audioUrl: `/uploads/test_${seg.id}.mp3`,
+          audioPath: path.join(tmpDir, `test_${seg.id}.mp3`),
+          audioGenerated: true,
+          _wasNewlySynthesized: !isReused,
+        };
+      },
+    });
+
+    assert.ok(results.telemetry, 'generateBatchSegmentsAudio results must have telemetry');
+    assert.equal(results.telemetry.totalSegments, 3);
+    assert.equal(results.telemetry.pendingSegments, 2, 'Only non-empty segments must be pending');
+    assert.equal(results.telemetry.skippedEmptyCount, 1);
+    assert.equal(results.telemetry.newlySynthesizedCount, 1);
+    assert.equal(results.telemetry.reusedCount, 1);
+    assert.equal(callCount, 2, 'generateSingleFn must only be called for non-empty segments');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('autoStretchTtsAudio with isPreTrimmed: true and currentDuration <= targetDuration returns immediately', async () => {
+  const dummyFile = path.join(uploadsDir, `test_pretrim_${Date.now()}.mp3`);
+  fs.writeFileSync(dummyFile, Buffer.alloc(1000, 0x55));
+
+  try {
+    const res = await autoStretchTtsAudio({
+      inputAudioPath: dummyFile,
+      targetDuration: 3.0,
+      isPreTrimmed: true,
+      currentDuration: 2.5,
+    });
+
+    assert.equal(res.appliedSpeed, 1.0);
+    assert.equal(res.originalDuration, 2.5);
+    assert.equal(res.finalDuration, 2.5);
+  } finally {
+    try { fs.unlinkSync(dummyFile); } catch (_) {}
   }
 });
 

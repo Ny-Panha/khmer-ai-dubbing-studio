@@ -704,7 +704,12 @@ async function generateSingleSegmentAudio(segment, uploadsDir, options = {}) {
 
   if (cacheCandidatePath) {
     try {
-      const cachedDur = await getMediaDuration(cacheCandidatePath);
+      const knownDur = (typeof segment.audioDuration === 'number' && segment.audioDuration > 0)
+        ? segment.audioDuration
+        : ((typeof segment.audioDurationSec === 'number' && segment.audioDurationSec > 0)
+          ? segment.audioDurationSec
+          : null);
+      const cachedDur = knownDur || (await getMediaDuration(cacheCandidatePath));
       if (cachedDur && cachedDur > 0) {
         outputPath = cacheCandidatePath;
         fileName = path.basename(cacheCandidatePath);
@@ -802,16 +807,18 @@ async function generateSingleSegmentAudio(segment, uploadsDir, options = {}) {
       }
 
       // Always trim Edge TTS dead ~200ms leading & ~800ms trailing padding before duration measurement / slot fit
+      let trimRes = null;
       try {
-        await trimTtsSilence(outputPath, { leadInCushionSec: 0.025, leadOutCushionSec: 0.060, microFadeMs: 8 });
+        trimRes = await trimTtsSilence(outputPath, { leadInCushionSec: 0.025, leadOutCushionSec: 0.060, microFadeMs: 8 });
       } catch (trimErr) {
         console.warn(`[TTSService] ⚠️ trimTtsSilence warning: ${trimErr.message}`);
       }
 
-      const probed = await getMediaDuration(outputPath);
-      originalDuration = probed || targetDuration;
-      finalDuration = originalDuration;
-      const actualDuration = originalDuration;
+      const actualDuration = (trimRes && typeof trimRes.finalDuration === 'number' && trimRes.finalDuration > 0)
+        ? trimRes.finalDuration
+        : ((await getMediaDuration(outputPath)) || targetDuration);
+      originalDuration = actualDuration;
+      finalDuration = actualDuration;
 
       if (effectiveAutoStretch && fs.existsSync(outputPath)) {
         // Dubbing Policy:
@@ -839,6 +846,8 @@ async function generateSingleSegmentAudio(segment, uploadsDir, options = {}) {
               leadOutCushionSec: 0.060,
               microFadeMs: 8,
               allowSlowdown: false,
+              isPreTrimmed: true,
+              currentDuration: actualDuration,
             });
             finalDuration = stretchResult.finalDuration;
             originalDuration = stretchResult.finalDuration;
@@ -864,6 +873,8 @@ async function generateSingleSegmentAudio(segment, uploadsDir, options = {}) {
               leadOutCushionSec: 0.060,
               microFadeMs: 8,
               allowSlowdown: true,
+              isPreTrimmed: true,
+              currentDuration: actualDuration,
             });
             finalDuration = stretchResult.finalDuration;
             originalDuration = stretchResult.originalDuration;
@@ -1025,6 +1036,7 @@ async function generateSingleSegmentAudio(segment, uploadsDir, options = {}) {
     audioSignature: computeSegmentAudioSignature(resolvedKhmer, voiceId, resolvedSpeedValue, segment.pitch),
     ttsStatus: "ready",
     status: "audio_ready",
+    _wasNewlySynthesized: !usedCache,
   };
 }
 
@@ -1071,10 +1083,8 @@ function cancelTtsJob(targetKey = 'all') {
  * 4. បង្កើតសំឡេងសម្រាប់គ្រប់ឃ្លាទាំងអស់ (Batch Parallel Generation, Concurrency = 3 default)
  */
 async function generateBatchSegmentsAudio(segments = [], uploadsDir, options = {}) {
-  const concurrency = Math.max(1, Math.min(10, Number(options.concurrency || 3)));
   const { autoStretch = true, maxSpeed = 1.50 } = options;
   const results = new Array(segments.length);
-  let currentIndex = 0;
 
   const hasBatchRate = options.rate !== undefined && options.rate !== null && options.rate !== "";
   const hasBatchSpeed = options.speed !== undefined && options.speed !== null && options.speed !== "";
@@ -1114,41 +1124,68 @@ async function generateBatchSegmentsAudio(segments = [], uploadsDir, options = {
   };
   activeTtsJobs.set(jobKey, jobState);
 
+  // Fast pre-filter: empty/placeholder text handled immediately in 0ms
+  const pendingIndices = [];
+  for (let i = 0; i < segments.length; i++) {
+    const seg = segments[i];
+    const text = seg.khmer || seg.khmerText || seg.khmerTranslatedText || seg.text || "";
+    const cleanedTextToSpeak = cleanTextForTts(text);
+    if (!cleanedTextToSpeak || isPlaceholderOrEmptyTtsText(text)) {
+      results[i] = {
+        ...seg,
+        audioUrl: null,
+        audioPath: null,
+        audioFile: null,
+        audioGenerated: false,
+        audioDuration: 0,
+        audioDurationSec: 0,
+        ttsStatus: "empty_text",
+        _wasNewlySynthesized: false,
+      };
+      jobState.skippedEmpty++;
+      jobState.completed++;
+    } else {
+      pendingIndices.push(i);
+    }
+  }
+
+  // Base concurrency: 4 if pending >= 8, else 3 (bounded between 1 and 6)
+  const userRequestedConcurrency = Number(options.concurrency);
+  const baseConcurrency = !isNaN(userRequestedConcurrency) && userRequestedConcurrency > 0
+    ? Math.max(1, Math.min(6, userRequestedConcurrency))
+    : (pendingIndices.length >= 8 ? 4 : 3);
+
+  let activeConcurrency = baseConcurrency;
+  let consecutiveErrors = 0;
+  let consecutiveSuccesses = 0;
+
   console.log(
-    `[TTSService] 🎙️ ចាប់ផ្តើមបង្កើតសំឡេងខ្មែរចំនួន ${segments.length} ឃ្លា (Concurrency: ${concurrency}, Job: ${jobKey}, BatchRate: ${batchSpeedInfo.valid ? batchSpeedInfo.rate : 'INVALID'})...`
+    `[TTSService] 🎙️ ចាប់ផ្តើមបង្កើតសំឡេងខ្មែរចំនួន ${segments.length} ឃ្លា (${pendingIndices.length} pending, Concurrency: ${baseConcurrency}, Job: ${jobKey}, BatchRate: ${batchSpeedInfo.valid ? batchSpeedInfo.rate : 'INVALID'})...`
   );
   const startTime = Date.now();
 
-  async function worker() {
-    while (currentIndex < segments.length) {
+  let nextPendingIndex = 0;
+
+  async function worker(workerId) {
+    while (nextPendingIndex < pendingIndices.length) {
       if (jobState.aborted || options.signal?.aborted) {
         console.log(`[TTSService] 🛑 TTS Generation stopped/killed for ${jobKey}`);
         break;
       }
-      const idx = currentIndex++;
+
+      // If concurrency was backed off due to network errors, let higher-index workers yield
+      if (workerId >= activeConcurrency) {
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        if (workerId >= activeConcurrency) continue;
+      }
+
+      const currentQueuePos = nextPendingIndex++;
+      if (currentQueuePos >= pendingIndices.length) break;
+      const idx = pendingIndices[currentQueuePos];
       const seg = segments[idx];
 
       const text = seg.khmer || seg.khmerText || seg.khmerTranslatedText || seg.text || "";
       const cleanedTextToSpeak = cleanTextForTts(text);
-      if (!cleanedTextToSpeak || isPlaceholderOrEmptyTtsText(text)) {
-        results[idx] = {
-          ...seg,
-          audioUrl: null,
-          audioPath: null,
-          audioFile: null,
-          audioGenerated: false,
-          audioDuration: 0,
-          audioDurationSec: 0,
-          ttsStatus: "empty_text",
-        };
-        jobState.skippedEmpty++;
-        jobState.completed++;
-        continue;
-      }
-
-      if (idx > 0) {
-        await new Promise((resolve) => setTimeout(resolve, 60));
-      }
 
       try {
         const generateFn = options.generateSingleFn || generateSingleSegmentAudio;
@@ -1203,10 +1240,31 @@ async function generateBatchSegmentsAudio(segments = [], uploadsDir, options = {
         if (results[idx]?.audioFileName) {
           jobState.lastFile = results[idx].audioFileName;
         }
+
+        const wasNewlySynth = Boolean(results[idx]?._wasNewlySynthesized);
+        if (wasNewlySynth) {
+          consecutiveSuccesses++;
+          consecutiveErrors = 0;
+          if (consecutiveSuccesses >= 5 && activeConcurrency < baseConcurrency) {
+            activeConcurrency = baseConcurrency;
+          }
+          // Small pacing delay between network Edge TTS requests to avoid bursting WebSocket
+          const pacingDelay = consecutiveErrors > 0 ? 250 : 35;
+          await new Promise((resolve) => setTimeout(resolve, pacingDelay));
+        }
+
         const completedCount = jobState.completed;
         const pct = Math.round((completedCount / segments.length) * 100);
-        console.log(`[TTSService] 🎙️ [${completedCount}/${segments.length}] (${pct}%) Seg #${seg.id || idx + 1}: "${cleanedTextToSpeak.substring(0, 30)}..." [${results[idx]?.voiceId || 'Neural'}, rate=${perSegOptions.rate || '+0%'}, fit=${perSegOptions.autoStretch}]`);
+        console.log(`[TTSService] 🎙️ [${completedCount}/${segments.length}] (${pct}%) Seg #${seg.id || idx + 1}: "${cleanedTextToSpeak.substring(0, 30)}..." [${results[idx]?.voiceId || 'Neural'}, rate=${perSegOptions.rate || '+0%'}, fit=${perSegOptions.autoStretch}${wasNewlySynth ? '' : ' (cached)'}]`);
       } catch (err) {
+        consecutiveErrors++;
+        consecutiveSuccesses = 0;
+        // Adaptive backoff on network/server errors (e.g. 429)
+        if (consecutiveErrors >= 2 && activeConcurrency > 2) {
+          console.warn(`[TTSService] ⚠️ Network pressure detected (${consecutiveErrors} consecutive errors) — backing off concurrency to 2`);
+          activeConcurrency = 2;
+        }
+
         const isEmptyErr = err.message && (err.message.includes("Empty text") || err.message.includes("ទទេ"));
         if (isEmptyErr) {
           console.warn(`[TTSService] ⚠️ រំលងឃ្លា #${seg.id || idx + 1} (គ្មានអត្ថបទខ្មែរ)`);
@@ -1214,6 +1272,8 @@ async function generateBatchSegmentsAudio(segments = [], uploadsDir, options = {
         } else {
           console.error(`[TTSService] ❌ បរាជ័យឃ្លា #${seg.id || idx + 1}:`, err.message);
           jobState.failed++;
+          // Brief pause after error before next attempt
+          await new Promise((resolve) => setTimeout(resolve, 300));
         }
         jobState.completed++;
         results[idx] = {
@@ -1227,26 +1287,42 @@ async function generateBatchSegmentsAudio(segments = [], uploadsDir, options = {
           ttsStatus: isEmptyErr ? "empty_text" : "error",
           status: isEmptyErr ? "empty_text" : "tts_error",
           error: isEmptyErr ? null : err.message,
+          _wasNewlySynthesized: false,
         };
       }
     }
   }
 
   try {
-    const workers = Array.from(
-      { length: Math.min(concurrency, segments.length) },
-      () => worker()
-    );
-    await Promise.all(workers);
+    const workerCount = Math.min(baseConcurrency, pendingIndices.length);
+    if (workerCount > 0) {
+      const workers = Array.from({ length: workerCount }, (_, i) => worker(i));
+      await Promise.all(workers);
+    }
   } finally {
     activeTtsJobs.delete(jobKey);
   }
 
   const succeededCount = results.filter((r) => r && r.audioUrl).length;
   const failedCount = results.filter((r) => r && r.error).length;
+  const newlySynthesizedCount = results.filter((r) => r && r._wasNewlySynthesized).length;
+  const reusedCount = results.filter((r) => r && r.audioGenerated && !r._wasNewlySynthesized).length;
   const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+
+  results.telemetry = {
+    totalDurationMs: Date.now() - startTime,
+    totalSegments: segments.length,
+    pendingSegments: pendingIndices.length,
+    succeededCount,
+    failedCount,
+    newlySynthesizedCount,
+    reusedCount,
+    skippedEmptyCount: jobState.skippedEmpty,
+    activeConcurrency: baseConcurrency,
+  };
+
   console.log(
-    `[TTSService] ✅ បង្កើតសំឡេងទាំង ${segments.length} ឃ្លារួចរាល់ក្នុង ${elapsed}s (ជោគជ័យ: ${succeededCount}, បរាជ័យ: ${failedCount})!`
+    `[TTSService] ✅ បង្កើតសំឡេងទាំង ${segments.length} ឃ្លារួចរាល់ក្នុង ${elapsed}s (បង្កើតថ្មី: ${newlySynthesizedCount}, ប្រើឡើងវិញ: ${reusedCount}, ជោគជ័យ: ${succeededCount}, បរាជ័យ: ${failedCount})!`
   );
 
   return results;
