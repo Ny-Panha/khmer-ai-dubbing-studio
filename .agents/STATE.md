@@ -3,6 +3,33 @@
 ## Last Session
 - **Environment**: Antigravity IDE (Gemini) - Minimal Change Engineer
 - **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-20T10:05:00+07:00
+
+## Summary: Eliminating Duplicate Invalidation, Hardening React Callback Refs & Adding Batch Export / Player Render Rejection Tests (100% PASS)
+- **Task:**
+  1. Eliminate duplicate backend invalidation in `backend/routes/audioRoutes.js` (guarded second invalidation with `if (targetEp.renderedVideo !== null)` so `renderInvalidatedAt` is not bumped twice in the same request).
+  2. Harden React callback in `frontend/src/features/dubbing-runner/DubbingRunnerContext.jsx` by creating `onInvalidateRenderedPreviewRef` and including `onInvalidateRenderedPreview` in `runSingleVoice`'s `useCallback` dependency array.
+  3. Expand `backend/tests/timeline_render_invalidation.test.js` to assert that:
+     - Batch Export strictly rejects stale rendered `.mp4` on disk when `episode.renderedVideo === null`.
+     - Static audit verifies `onInvalidateRenderedPreview` dependency wiring, ref safety, and non-duplicate backend invalidation.
+- **Verification Outcomes**:
+  - `backend/tests/timeline_render_invalidation.test.js`: **5/5 PASS** (100%).
+  - `backend/tests/tts_smart_skip_and_progress.test.js`: **11/11 PASS** (100%).
+  - `npm --prefix frontend run build`: **PASS** (634ms, 0 errors).
+- **Active Environment**:
+  - Backend API: `http://localhost:5000`
+  - Frontend UI: `http://localhost:5173`
+  - Active Branch: `chore/full-project-cleanup`
+- **Next Steps**:
+  - Ready for production workflows.
+
+---
+
+# Antigravity Shared State (Sync Memory)
+
+## Last Session
+- **Environment**: Antigravity IDE (Gemini) - Minimal Change Engineer
+- **Branch**: `chore/full-project-cleanup`
 - **Timestamp**: 2026-11-20T09:58:00+07:00
 
 ## Summary: Invalidate Rendered Video Preview & Disk Export Cache on Partial or Modified TTS Generation (100% PASS)

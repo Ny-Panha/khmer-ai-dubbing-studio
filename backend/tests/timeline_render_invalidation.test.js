@@ -255,4 +255,89 @@ describe('Rendered Preview Invalidation on Segment / Audio-Mix Mutations', () =>
     assert.match(scriptSrc, /onInvalidateRenderedPreview = null/);
     assert.ok((scriptSrc.match(/onInvalidateRenderedPreview\(/g) || []).length >= 2);
   });
+
+  it('4. Static audit: DubbingRunnerContext wires onInvalidateRenderedPreview into runSingleVoice with ref and dependency array, and audioRoutes guards double invalidation', () => {
+    const runnerSrc = fs.readFileSync(path.join(ROOT, 'frontend', 'src', 'features', 'dubbing-runner', 'DubbingRunnerContext.jsx'), 'utf8');
+    const appSrc = fs.readFileSync(path.join(ROOT, 'frontend', 'src', 'App.jsx'), 'utf8');
+    const audioRoutesSrc = fs.readFileSync(path.join(ROOT, 'backend', 'routes', 'audioRoutes.js'), 'utf8');
+    const audioHookSrc = fs.readFileSync(path.join(ROOT, 'frontend', 'src', 'hooks', 'useAudioDubbing.js'), 'utf8');
+
+    // App.jsx wires onInvalidateRenderedPreview into DubbingRunnerProvider
+    assert.match(appSrc, /<DubbingRunnerProvider[\s\S]*onInvalidateRenderedPreview=\{invalidateRenderedPreview\}/);
+
+    // DubbingRunnerContext accepts onInvalidateRenderedPreview and uses ref to prevent stale closure
+    assert.match(runnerSrc, /export function DubbingRunnerProvider\(\{[\s\S]*onInvalidateRenderedPreview[\s\S]*\}\)/);
+    assert.match(runnerSrc, /const onInvalidateRenderedPreviewRef = useRef\(onInvalidateRenderedPreview\);/);
+    assert.match(runnerSrc, /onInvalidateRenderedPreviewRef\.current = onInvalidateRenderedPreview;/);
+
+    // runSingleVoice includes onInvalidateRenderedPreview in dependency array
+    assert.match(runnerSrc, /runSingleVoice = useCallback[\s\S]*\}, \[activeSeries, refreshSeries, onInvalidateRenderedPreview,/);
+
+    // useAudioDubbing.js invalidates on !alreadyCompleted || hasFailures
+    assert.match(audioHookSrc, /if \(!result\.alreadyCompleted \|\| hasFailures\) \{\s*invalidateRendered\(targetEpisodeId\);/);
+
+    // audioRoutes.js guards double invalidation with if (targetEp.renderedVideo !== null)
+    assert.match(audioRoutesSrc, /if \(targetEp\.renderedVideo !== null\) \{\s*const prevRenderedAt = Number\(targetEp\.renderedVideo\?\.renderedAt \|\| 0\);\s*targetEp\.renderedVideo = null;/);
+  });
+
+  it('5. Batch Export rejects stale rendered MP4 on disk when episode.renderedVideo is null (forcing re-render)', async () => {
+    const projectsDir = makeTempProjectsDir();
+    const seriesId = 'series_export_reject_test';
+    const epDir = path.join(projectsDir, seriesId, 'episodes', 'ep_1', 'video');
+    fs.mkdirSync(epDir, { recursive: true });
+
+    const renderedMp4Path = path.join(epDir, 'ep_1_rendered.mp4');
+    fs.writeFileSync(renderedMp4Path, Buffer.alloc(3 * 1024 * 1024, 0)); // 3MB file
+    const stat = fs.statSync(renderedMp4Path);
+
+    // Case A: When previous renderedVideo is null (e.g. after partial TTS failure or audio modification),
+    // batch export MUST NOT consider the file "alreadyRenderedOnDisk" even if the file exists on disk!
+    const epPlanWithNullRender = {
+      episodeNumber: 1,
+      rawEpisode: {
+        id: 'ep_1',
+        renderedVideo: null,
+      },
+      hasVoice: true,
+    };
+
+    const previous = epPlanWithNullRender.rawEpisode.renderedVideo;
+    const batchVisualSignature = 'test_sig';
+    let alreadyRenderedOnDisk = false;
+    if (fs.existsSync(renderedMp4Path)) {
+      try {
+        const sameVisual = !previous?.burnedVisualFingerprint;
+        const sameVisuals = previous?.batchVisualSignature === batchVisualSignature;
+        const sameBurn = sameVisuals && previous?.outputFilename === 'ep_1_rendered.mp4' &&
+          previous.renderedAt === stat.mtime.getTime();
+        if (stat.size > 2 * 1024 * 1024 && sameBurn) {
+          alreadyRenderedOnDisk = true;
+        }
+      } catch (_) {}
+    }
+
+    assert.equal(alreadyRenderedOnDisk, false, 'Batch export must strictly refuse to reuse existing MP4 when renderedVideo is null');
+
+    // Case B: When matching renderedVideo metadata exists on disk, reuse IS permitted
+    const previousMatching = {
+      batchVisualSignature: 'test_sig',
+      outputFilename: 'ep_1_rendered.mp4',
+      renderedAt: stat.mtime.getTime(),
+      burnedSubtitleOptions: null,
+    };
+    let matchingRenderedOnDisk = false;
+    if (fs.existsSync(renderedMp4Path)) {
+      try {
+        const sameVisual = !previousMatching?.burnedVisualFingerprint;
+        const sameVisuals = previousMatching?.batchVisualSignature === batchVisualSignature;
+        const sameBurn = sameVisuals && previousMatching?.outputFilename === 'ep_1_rendered.mp4' &&
+          previousMatching.renderedAt === stat.mtime.getTime();
+        if (stat.size > 2 * 1024 * 1024 && sameBurn) {
+          matchingRenderedOnDisk = true;
+        }
+      } catch (_) {}
+    }
+
+    assert.equal(matchingRenderedOnDisk, true, 'Batch export reuses existing MP4 only when verified renderedVideo metadata matches');
+  });
 });

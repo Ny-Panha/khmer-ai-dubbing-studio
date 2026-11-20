@@ -994,10 +994,12 @@ router.post("/generate-audio", async (req, res) => {
                 targetEp.audioOutdated = true;
               }
 
-              // Invalidate rendered video cache whenever audio generation runs (modified audio or failure)
-              const prevRenderedAt = Number(targetEp.renderedVideo?.renderedAt || 0);
-              targetEp.renderedVideo = null;
-              targetEp.renderInvalidatedAt = Math.max(Date.now(), Number(targetEp.renderInvalidatedAt || 0) + 1, prevRenderedAt > 0 ? prevRenderedAt + 1 : 0);
+              // Invalidate rendered video cache whenever audio generation runs, unless already invalidated above
+              if (targetEp.renderedVideo !== null) {
+                const prevRenderedAt = Number(targetEp.renderedVideo?.renderedAt || 0);
+                targetEp.renderedVideo = null;
+                targetEp.renderInvalidatedAt = Math.max(Date.now(), Number(targetEp.renderInvalidatedAt || 0) + 1, prevRenderedAt > 0 ? prevRenderedAt + 1 : 0);
+              }
 
               console.log(`[TTS] Auto-persisted audioGenerated=${targetEp.audioGenerated} (audioOutdated=${Boolean(targetEp.audioOutdated)}) in series.json for episode ${cleanEpisode}`);
               return true;

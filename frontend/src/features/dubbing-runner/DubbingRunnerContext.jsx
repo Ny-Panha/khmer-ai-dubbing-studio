@@ -27,6 +27,9 @@ import {
 const DubbingRunnerContext = createContext(null);
 
 export function DubbingRunnerProvider({ children, activeSeries, refreshSeries, onInvalidateRenderedPreview }) {
+  const onInvalidateRenderedPreviewRef = useRef(onInvalidateRenderedPreview);
+  onInvalidateRenderedPreviewRef.current = onInvalidateRenderedPreview;
+
   // Global runners state per step: 'translate' | 'repair' | 'voice' | 'clean_bgm' | 'autofit' | 'all3'
   const [runnerStates, setRunnerStates] = useState({
     translate: { status: 'idle', currentEpId: null, currentEpIndex: 0, totalEps: 0, progress: 0, message: '' },
@@ -500,9 +503,10 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries, o
 
     const failedCount = Number(ttsRes?.failedCount || 0);
     if (!ttsRes?.alreadyCompleted || failedCount > 0) {
-      if (typeof onInvalidateRenderedPreview === 'function') {
+      const invFn = onInvalidateRenderedPreviewRef.current || onInvalidateRenderedPreview;
+      if (typeof invFn === 'function') {
         try {
-          onInvalidateRenderedPreview(ep.id);
+          invFn(ep.id);
         } catch (_) {}
       }
     }
@@ -568,7 +572,7 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries, o
       markEpisodeInactive(ep.id);
       updateRunnerState('voice', (prev) => (prev.currentEpId === ep.id ? { ...prev, status: 'idle' } : prev));
     }
-  }, [activeSeries, refreshSeries, updateRunnerState, markEpisodeActive, markEpisodeInactive]);
+  }, [activeSeries, refreshSeries, onInvalidateRenderedPreview, updateRunnerState, markEpisodeActive, markEpisodeInactive]);
 
   /**
    * 3. AI Vocal Separation (Demucs Clean BGM) for a Single Episode
