@@ -132,11 +132,12 @@ async function runBenchmark() {
     };
 
     console.log('\nExecuting Stage 3 with Hybrid Local Chinese OCR enabled...');
+    const testDuration = Number(process.argv[2]) > 0 ? Number(process.argv[2]) : 60.0;
+    console.log(`Running on ${testDuration.toFixed(1)}s segment of the real video...`);
     const stage3Start = Date.now();
-    // Run on 60-second representative chunk of the real video
     const stage3Res = await extractChineseSubtitles({
       videoPath,
-      durationSec: 60.0,
+      durationSec: testDuration,
       startOffsetSec: 0,
       aiClient: mockAiClient,
       baseStepSec: 0.75,
@@ -161,23 +162,20 @@ async function runBenchmark() {
     console.log(`  - Local OCR Processed: ${p.localOcrFramesCount}`);
     console.log(`  - Local Verified Count: ${p.localVerifiedCount}`);
     console.log(`  - Gemini Verified Count: ${p.geminiVerifiedCount}`);
-    console.log(`  - Gemini Actual Batches: ${p.geminiBatchCount} (vs ~8 baseline batches for 60s)`);
+    console.log(`  - Gemini Actual Batches: ${p.geminiBatchCount}`);
     console.log(`  - Final Detected Cues: ${p.finalChineseCuesCount}`);
     console.log(`  - Memory Delta: RSS +${((memAfter.rss - memBefore.rss) / 1024 / 1024).toFixed(1)} MB`);
 
     console.log('\n================================================================');
-    console.log('📈 BENCHMARK SUMMARY TABLE (5-MINUTE VIDEO PROJECTION)');
+    console.log(`📈 BENCHMARK SUMMARY TABLE (${testDuration.toFixed(0)}s TEST WINDOW)`);
     console.log('================================================================');
-    console.log('| Metric                     | Baseline (Gemini Vision) | Hybrid Local OCR (Measured) |');
+    console.log('| Metric                     | Baseline (Gemini Cloud)  | Hybrid Local OCR (Measured) |');
     console.log('|----------------------------|--------------------------|-----------------------------|');
-    console.log(`| Stage 3 Wall Time (60s)    | ~60–120s                 | ${(stage3DurationMs / 1000).toFixed(1)}s (Faster)            |`);
-    console.log(`| Projected 5-Min Video Time | ~250–450s (4–7.5m)       | ~80–120s (1.3–2.0m)         |`);
-    console.log(`| Gemini Cloud Batches (60s) | 8 batches                | ${p.geminiBatchCount} batches (100% reduction)   |`);
-    console.log(`| Projected 5-Min Batches    | 39 batches               | 0–3 batches (92–100% cut)   |`);
-    console.log(`| Chinese Subtitle Accuracy  | 98–100%                  | ${accuracyPercent}% (Preserved)        |`);
+    console.log(`| Measured Wall Time         | ~60–120s                 | ${(stage3DurationMs / 1000).toFixed(1)}s (Measured)          |`);
+    console.log(`| Gemini Cloud Batches       | ~8 batches / min         | ${p.geminiBatchCount} batches (Measured)     |`);
+    console.log(`| Chinese Subtitle Accuracy  | 98–100%                  | ${accuracyPercent}% (Ground-truth verified) |`);
     console.log(`| Missed Dialogue Cues       | 0                        | 0 (Zero dropped)            |`);
     console.log(`| Local OCR Engine           | None (Cloud only)        | RapidOCR (ONNXRuntime CPU)  |`);
-    console.log(`| Cloud Dependency           | 100%                     | < 8% (Hybrid fallback only) |`);
     console.log('================================================================');
 
   } finally {

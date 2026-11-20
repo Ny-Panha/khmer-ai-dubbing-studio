@@ -793,7 +793,8 @@ async function extractChineseSubtitles({
 
     // (b) Baseline safety net (0.75s grid deduplicated)
     const effectiveStep = Math.max(0.5, Number(baseStepSec) || 0.75);
-    let curTime = safeStartSec === 0 ? 0.5 : safeStartSec + 0.3;
+    // Align chunk boundary: start immediately at safeStartSec when safeStartSec > 0 to eliminate boundary dead-zones
+    let curTime = safeStartSec === 0 ? 0.5 : safeStartSec;
     const stepDiff = 0.2; // 5 fps pre-pass step
 
     while (curTime < endSec) {
@@ -1592,17 +1593,23 @@ Return JSON ONLY matching this schema:
       for (const [secB, linkInfo] of linkedSecondaryFrames.entries()) {
         const parentObs = completedMap.get(linkInfo.parentTimestampSec);
         if (parentObs && parentObs.isVerified && parentObs.isSharp) {
-          // Parent frame is sharp and verified (either text or empty) -> inherit observation safely
-          const inheritedObs = {
-            ...parentObs,
-            timestampSec: secB,
-            reportedSec: secB,
-            dedupedFromSec: linkInfo.parentTimestampSec,
-            isDeduped: true,
-          };
-          completedMap.set(secB, inheritedObs);
-          unresolvedMap.delete(secB);
-          dedupedFramesCount++;
+          if (parentObs.hasText) {
+            // Parent frame has verified text -> safe to inherit observation
+            const inheritedObs = {
+              ...parentObs,
+              timestampSec: secB,
+              reportedSec: secB,
+              dedupedFromSec: linkInfo.parentTimestampSec,
+              isDeduped: true,
+            };
+            completedMap.set(secB, inheritedObs);
+            unresolvedMap.delete(secB);
+            dedupedFramesCount++;
+          } else {
+            // P0 Guard (Empty-to-Text): Parent had NO text. We cannot assume Sample B is empty!
+            // Sample B must be extracted and verified directly with independent OCR.
+            framesNeedingDirectOcr.push(secB);
+          }
         } else {
           // Parent frame was blurry, failed, or unverified -> cannot assume! Must verify directly!
           framesNeedingDirectOcr.push(secB);

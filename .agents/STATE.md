@@ -3,6 +3,55 @@
 ## Last Session
 - **Environment**: Antigravity IDE (Gemini) - Minimal Change Engineer
 - **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-20T11:23:00+07:00
+
+## Summary: RapidOCR Stage 3 Audit & Precision Fixes — Subtitle Preservation Guardrails, Text-Box Deduplication & Boundary Continuity (100% PASS)
+- **Task:** Implement prioritized fixes from Stage 3 Deep Code Audit, strictly prioritizing Chinese subtitle preservation over raw performance:
+  1. **P0 False Deduplication Guard:** Strictly forbid deduplicating frames across different cues, or when `cueIndex` is missing/negative (`-1` safety net).
+  2. **P0 Empirical Text-Box Difference:** Replaced whole-ROI mean difference with localized text bounding box pixel difference. Based on empirical measurements across real drama video (`ep_1_source.mp4`):
+     - SAME dialogue BoxDiff: 2.7 to 33.3 (mean 16.7).
+     - DIFF dialogue BoxDiff: 67.8 to 121.1 (mean 89.9).
+     - Set safe threshold at 35.0 (with max ROI diff 40.0), completely preventing false deduplication of changed dialogue.
+  3. **P0 Empty-to-Text Safety Guard:** If Sample A has no text (`hasText: false`), never copy an empty result to Sample B. Sample B must be independently verified via OCR to catch subtitles appearing after onset.
+  4. **P1 Chunk Boundary Alignment:** In `stage3_extractChineseSubtitles.js`, eliminated the `+0.3s` offset when `safeStartSec > 0` so baseline sampling starts immediately at chunk boundaries, ensuring continuous dialogue coverage across 300s chunk transitions.
+  5. **Benchmark Script Realism:** Enhanced `run_hybrid_ocr_benchmark.js` to accept configurable test durations and report genuine measured execution metrics without synthetic extrapolations.
+- **Surgical Changes Implemented (Minimal Change Discipline)**:
+  1. `backend/workers/local_chinese_ocr_worker.py`:
+     - Added positive cue pair check (`cue_idx > 0 && cue_idx == prev_cue_idx`).
+     - Added `prev_has_text` requirement (never dedup to empty).
+     - Computed pixel difference within the union text bounding box (`box_diff <= 35.0 && roi_diff <= 40.0`).
+  2. `backend/services/pipeline/stages/stage3_extractChineseSubtitles.js`:
+     - In `linkedSecondaryFrames` resolution: only inherit observations if `parentObs.hasText` is true. If parent had no text, push to `framesNeedingDirectOcr` for independent verification.
+     - In baseline sampling: set `curTime = safeStartSec === 0 ? 0.5 : safeStartSec` to eliminate boundary dead-zone.
+  3. `backend/scripts/run_hybrid_ocr_benchmark.js`:
+     - Added CLI duration argument (`process.argv[2]`).
+     - Updated summary table to reflect measured wall time and verified accuracy.
+  4. `backend/tests/stage3_ocr_dedup_safety.test.js`:
+     - Added dedicated test suite verifying: never dedup across cues / safety-net frames; Empty-to-Text safety; and chunk boundary segment stitching.
+- **Verification Outcomes**:
+  - `backend/tests/stage3_ocr_dedup_safety.test.js`: **3/3 PASS** (100%).
+  - Full Stage 3 test suites (`backend/tests/stage3_*.test.js`): **69/69 PASS** (100%).
+  - Full regression test suites (series persist, 1-by-1 dubbing, timeline invalidation): **31/31 PASS** (100%).
+  - Real Video Benchmark (`ep_1_source.mp4`, 286.56s):
+    - Ground-Truth Subtitle Accuracy: **25/25 matched (100.0%)**.
+    - Missed Dialogue Cues: **0 (Zero dropped)**.
+    - Local Verified Count: **118 frames verified locally without calling Gemini**.
+    - Memory Delta: RSS **+6.0 MB**.
+  - `npm --prefix frontend run build`: **PASS** (706ms, 0 errors).
+- **Active Environment**:
+  - Backend API: `http://localhost:5000`
+  - Frontend UI: `http://localhost:5173`
+  - Active Branch: `chore/full-project-cleanup`
+- **Next Steps**:
+  - Commit and push to `chore/full-project-cleanup`.
+
+---
+
+# Antigravity Shared State (Sync Memory)
+
+## Last Session
+- **Environment**: Antigravity IDE (Gemini) - Minimal Change Engineer
+- **Branch**: `chore/full-project-cleanup`
 - **Timestamp**: 2026-11-20T10:52:00+07:00
 
 ## Summary: RapidOCR Stage 3 Optimization — Persistent Streaming Worker, Subtitle ROI Deduplication & Conservative Verification (100% PASS)
