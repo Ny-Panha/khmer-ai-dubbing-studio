@@ -49,7 +49,18 @@ export default function DubbingStepButton({
   const isStepDone = React.useMemo(() => {
     if (!singleEp) return false;
     if (step === 'translate') return checkEpisodeHasScript(singleEp);
-    if (step === 'voice') return checkEpisodeHasAudioReady(singleEp, null, null) && !singleEp.audioOutdated;
+    if (step === 'voice') {
+      const hasAudio = checkEpisodeHasAudioReady(singleEp, null, null) && !singleEp.audioOutdated;
+      if (!hasAudio) return false;
+      const segs = singleEp.scriptData?.segments || [];
+      const hasUnresolved = segs.some((s) => {
+        const isSpoken = s && (s.isSpoken !== false) && Boolean(s.khmer || s.khmerText || s.khmerTranslatedText || s.text);
+        if (!isSpoken) return false;
+        const st = String(s.ttsStatus || s.status || '').toLowerCase();
+        return s.audioOutdated === true || st === 'outdated' || st === 'error' || st === 'failed' || (!s.audioUrl && !s.audioFile && !s.audioPath);
+      });
+      return !hasUnresolved;
+    }
     if (step === 'autofit') return checkEpisodeHasAudioReady(singleEp, null, null) && checkEpisodeHasAutoFitReady(singleEp);
     if (step === 'clean_bgm') return checkEpisodeHasDemucsReady(singleEp, null, null);
     if (step === 'all3') {
@@ -73,15 +84,18 @@ export default function DubbingStepButton({
 
     setIsSubmitting(true);
     try {
+      const runOptions = isStepDone
+        ? { ...setupOptions, force: true, forceRegen: true }
+        : setupOptions;
       let result = null;
       if (isBatch || !singleEp) {
-        result = await runSequentialStep(step, episodes, setupOptions);
+        result = await runSequentialStep(step, episodes, runOptions);
       } else {
-        if (step === 'translate') result = await runSingleTranslate(singleEp, setupOptions);
-        else if (step === 'voice') result = await runSingleVoice(singleEp, setupOptions);
-        else if (step === 'autofit') result = await runSingleAutoFitSpeed(singleEp, setupOptions);
-        else if (step === 'clean_bgm') result = await runSingleCleanBgm(singleEp, setupOptions);
-        else if (step === 'all3') result = await runSingleEpisodeAll3(singleEp, setupOptions);
+        if (step === 'translate') result = await runSingleTranslate(singleEp, runOptions);
+        else if (step === 'voice') result = await runSingleVoice(singleEp, runOptions);
+        else if (step === 'autofit') result = await runSingleAutoFitSpeed(singleEp, runOptions);
+        else if (step === 'clean_bgm') result = await runSingleCleanBgm(singleEp, runOptions);
+        else if (step === 'all3') result = await runSingleEpisodeAll3(singleEp, runOptions);
       }
       if (result && result.success && (result.completed || result.count > 0)) {
         onComplete?.(result);
@@ -104,6 +118,11 @@ export default function DubbingStepButton({
       idle: 'បង្កើតសំឡេង AI',
       running: 'កំពុង TTS...',
       done: 'សំឡេងរួចរាល់',
+    },
+    autofit: {
+      idle: 'Auto-Fit Speed',
+      running: 'កំពុង Auto-Fit...',
+      done: 'Auto-Fit រួចរាល់',
     },
     clean_bgm: {
       idle: 'បិទសំឡេងចិន',
@@ -186,6 +205,7 @@ export default function DubbingStepButton({
   const stepColorMap = {
     translate: { bg: '#0284C7', border: '#38BDF8', color: '#FFFFFF' },
     voice: { bg: '#BE185D', border: '#F472B6', color: '#FFFFFF' },
+    autofit: { bg: '#D97706', border: '#FBBF24', color: '#FFFFFF' },
     clean_bgm: { bg: '#059669', border: '#34D399', color: '#FFFFFF' },
     all3: {
       bg: 'linear-gradient(135deg, #4F46E5 0%, #0284C7 100%)',

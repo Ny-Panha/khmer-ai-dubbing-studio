@@ -3,6 +3,52 @@
 ## Last Session
 - **Environment**: Antigravity IDE (Gemini) - Minimal Change Engineer
 - **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-20T09:25:00+07:00
+
+## Summary: Unified 4-Step Dubbing Buttons, Progress Telemetry & Completion Guards Across `/batch` and `/studio` (100% PASS)
+- **Task:** Unify all 4 dubbing step buttons across `/batch` (`GeminiRouteModal.jsx`) and `/studio` (`DubbingModeTab.jsx`):
+  1. **Script Khmer**: Generate / Regenerate / Run 1-by-1 (`translate`)
+  2. **AI Voice TTS**: Generate / Re-TTS / Run 1-by-1 (`voice`)
+  3. **Auto-Fit Speed**: Run / Re-Fit (`autofit`)
+  4. **Clean BGM**: Run / Re-run (`clean_bgm`)
+- **Root Causes & Gaps Addressed**:
+  1. **Premature Audio Skip on Segment Drift**: `runSingleVoice` previously skipped execution if `checkEpisodeHasAudioReady(ep)` was true even when individual spoken segments had `audioOutdated: true`, `ttsStatus: "error"`, or missing audio files.
+  2. **Stale Segments Passed to Timeline Sync**: `syncTimelineAudioApi` was receiving pre-generation `segments` rather than `ttsRes.segments`, losing newly generated audio filenames, offsets, and durations.
+  3. **False Completion on Sequential Abort**: In `runSequentialStep`, breaking out of the loop on abort/cancellation continued execution into the 100% completed block, falsely reporting completion.
+  4. **Missing Step 3 (Auto-Fit) in `/studio`**: `DubbingModeTab.jsx` jumped from Step 2 (Voice Studio) to Step 3.5 (Demucs Clean BGM) with no dedicated Auto-Fit button, while `DubbingStepButton` lacked `autofit` labels and re-run option forwarding.
+- **Surgical Changes Implemented (Minimal Change Discipline)**:
+  1. `frontend/src/features/dubbing-runner/DubbingRunnerContext.jsx`:
+     - In `runSingleVoice`: Added `hasUnresolvedSpokenSegments` inspection checking `s.audioOutdated`, `ttsStatus === 'outdated' | 'error' | 'failed'`, or missing audio refs. Prevents skipping when work remains.
+     - Added strict failure guard: `ttsRes?.failedCount > 0` or `!ttsRes?.success` blocks 100% completion and marks `isFailed: true`.
+     - In post-TTS sync: Passes `ttsRes?.segments || segments` to `syncTimelineAudioApi` and calls `refreshSeries()`.
+     - In `runSingleAutoFitSpeed`: Validates that audio is ready before attempting auto-fit, syncs `res.segments` with timeline audio, and triggers `refreshSeries()`.
+     - In `runSequentialStep`: Tracks `lastStepResult` and abort signal; returns `STEP_STATUS.CANCELLED` without reporting 100% completion when cancelled.
+  2. `frontend/src/features/dubbing-runner/DubbingStepButton.jsx`:
+     - Added `autofit` labels and amber/yellow color scheme.
+     - Added segment-level resolution check to `isStepDone` for `voice`.
+     - When `isStepDone` is true, clicking the button injects `{ force: true, forceRegen: true }` to guarantee re-run execution.
+  3. `frontend/src/components/media/DubbingModeTab.jsx`:
+     - Imported and rendered `DubbingStepCardsBar` at top of Dubbing Mode tab for `activeEpisode`.
+     - Added dedicated Step 3: Auto-Fit Speed (`DubbingStepButton step="autofit"`) between Voice Studio and Clean BGM.
+- **Verification Outcomes**:
+  - `reusable_1by1_dubbing_feature.test.js`, `clean_unified_3step_batch_pipeline.test.js`, `ai_detection_and_dubbing_prompt_fix.test.js`: **24/24 PASS** (100%).
+  - `tts_smart_skip_and_progress.test.js`, `clip_speed_tts.test.js`, `stage6_translation_fallback_and_tts_guard.test.js`, `auto_fit_speech_speed.test.js`: **27/27 PASS** (100%).
+  - `kill_button_and_cancellation.test.js`, `series_persist_and_sync.test.js`, `stage3_hybrid_ocr.test.js`: **56/56 PASS** (100%).
+  - `npm --prefix frontend run build`: **PASS** (9.51s, 0 errors).
+- **Active Environment**:
+  - Backend API: `http://localhost:5000`
+  - Frontend UI: `http://localhost:5173`
+  - Active Branch: `chore/full-project-cleanup`
+- **Next Steps**:
+  - Commit and push verified fixes.
+
+---
+
+# Antigravity Shared State (Sync Memory)
+
+## Last Session
+- **Environment**: Antigravity IDE (Gemini) - Minimal Change Engineer
+- **Branch**: `chore/full-project-cleanup`
 - **Timestamp**: 2026-11-20T09:10:00+07:00
 
 ## Summary: Master Audio Content Signature, Timeline Drift Protection & Failure Guard (100% PASS)

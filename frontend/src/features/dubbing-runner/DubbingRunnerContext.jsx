@@ -346,8 +346,21 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
       return createStepResult({ status: STEP_STATUS.SKIPPED, reason: 'no_segments' });
     }
 
+    const hasUnresolvedSpokenSegments = segments.some((s) => {
+      const isSpoken = s && (s.isSpoken !== false) && Boolean(s.khmer || s.khmerText || s.khmerTranslatedText || s.text);
+      if (!isSpoken) return false;
+      const statusLower = String(s.ttsStatus || s.status || '').toLowerCase();
+      return (
+        s.audioOutdated === true ||
+        statusLower === 'outdated' ||
+        statusLower === 'error' ||
+        statusLower === 'failed' ||
+        (!s.audioUrl && !s.audioFile && !s.audioPath)
+      );
+    });
+
     const hasAudio = checkEpisodeHasAudioReady(ep, null, null);
-    if (hasAudio && !ep.audioOutdated && !norm.force) {
+    if (hasAudio && !ep.audioOutdated && !hasUnresolvedSpokenSegments && !norm.force) {
       return createStepResult({ status: STEP_STATUS.SKIPPED, reason: 'already_has_audio' });
     }
 
@@ -452,7 +465,7 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
       if (pollTimer) clearInterval(pollTimer);
     }
 
-    if (!ttsRes?.success && ttsRes?.error) {
+    if (!ttsRes?.success) {
       setRunnerLiveStats((prev) => ({
         ...prev,
         tts: {
@@ -460,12 +473,41 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
           [ep.id]: {
             ...(prev.tts[ep.id] || {}),
             isFailed: true,
-            message: `❌ បរាជ័យ: ${ttsRes.error}`,
+            isDone: false,
+            message: `❌ បរាជ័យ: ${ttsRes?.error || 'TTS Generation failed'}`,
           },
         },
       }));
-      console.error(`[Voice 🎙️] ❌ EP${ep.episodeNumber || ep.id} បរាជ័យ:`, ttsRes.error);
-      throw new Error(ttsRes.error || 'TTS Generation failed');
+      console.error(`[Voice 🎙️] ❌ EP${ep.episodeNumber || ep.id} បរាជ័យ:`, ttsRes?.error);
+      throw new Error(ttsRes?.error || 'TTS Generation failed');
+    }
+
+    const failedCount = Number(ttsRes?.failedCount || 0);
+    if (failedCount > 0) {
+      setRunnerLiveStats((prev) => ({
+        ...prev,
+        tts: {
+          ...prev.tts,
+          [ep.id]: {
+            ...(prev.tts[ep.id] || {}),
+            isFailed: true,
+            isDone: false,
+            message: `⚠️ បង្កើតសំឡេងមាន ${failedCount} ឃ្លាបរាជ័យ`,
+            logs: [
+              ...(prev.tts[ep.id]?.logs || []),
+              {
+                time: new Date().toLocaleTimeString(),
+                message: `⚠️ បង្កើតសំឡេងមាន ${failedCount} ឃ្លាមិនទាន់ជោគជ័យ សូម Re-TTS ម្តងទៀត`,
+              },
+            ],
+          },
+        },
+      }));
+      return createStepResult({
+        status: STEP_STATUS.FAILED,
+        error: `${failedCount} segments failed TTS synthesis`,
+        data: ttsRes,
+      });
     }
 
     setRunnerLiveStats((prev) => ({
@@ -476,6 +518,7 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
           ...(prev.tts[ep.id] || {}),
           percent: 100,
           isDone: true,
+          isFailed: false,
           message: '✅ សំឡេងខ្មែរ AI រួចរាល់ 100%!',
           logs: [
             ...(prev.tts[ep.id]?.logs || []),
@@ -491,12 +534,21 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
 
     console.log(`[Voice 🎙️] ✅ EP${ep.episodeNumber || ep.id}: 100% បង្កើតសំឡេងរួចរាល់!`);
 
-    // Sync timeline audio tracks if available
+    // Sync timeline audio tracks with returned updated segments
+    const finalSegments = Array.isArray(ttsRes?.segments) && ttsRes.segments.length > 0
+      ? ttsRes.segments
+      : segments;
     try {
       if (typeof syncTimelineAudioApi === 'function') {
-        await syncTimelineAudioApi(segments, ep.title || `EP${ep.episodeNumber || ep.id}`, videoId, ep.id, seriesId);
+        await syncTimelineAudioApi(finalSegments, ep.title || `EP${ep.episodeNumber || ep.id}`, videoId, ep.id, seriesId);
       }
     } catch (_) {}
+
+    if (typeof refreshSeries === 'function') {
+      try {
+        await refreshSeries();
+      } catch (_) {}
+    }
 
       return createStepResult({ status: STEP_STATUS.COMPLETED, data: ttsRes, count: segments.length });
     } finally {
@@ -504,7 +556,7 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
       markEpisodeInactive(ep.id);
       updateRunnerState('voice', (prev) => (prev.currentEpId === ep.id ? { ...prev, status: 'idle' } : prev));
     }
-  }, [activeSeries, updateRunnerState, markEpisodeActive, markEpisodeInactive]);
+  }, [activeSeries, refreshSeries, updateRunnerState, markEpisodeActive, markEpisodeInactive]);
 
   /**
    * 3. AI Vocal Separation (Demucs Clean BGM) for a Single Episode
@@ -1034,6 +1086,16 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
     const seriesId = activeSeries?.id || ep.seriesId || 'drama_project';
     const epId = ep.id;
 
+    // Guard: Verify episode has audio ready before attempting speed fitting
+    const hasAudio = checkEpisodeHasAudioReady(ep, null, null);
+    if (!hasAudio && !ep.audioGenerated && !ep.fullAudioUrl && !ep.hasAudio) {
+      return createStepResult({
+        status: STEP_STATUS.SKIPPED,
+        reason: 'no_audio',
+        error: 'មិនទាន់មានសំឡេងសម្រាប់ Auto-Fit ទេ សូមបង្កើតសំឡេង AI ជាមុនសិន',
+      });
+    }
+
     markEpisodeActive(epId);
     updateRunnerState('autofit', {
       status: 'running',
@@ -1073,6 +1135,7 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
             [epId]: {
               percent: 100,
               isDone: true,
+              isFailed: false,
               message: `✅ Auto-Fit រួចរាល់: បានពន្លឿន ${res.fittedCount || 0} ឃ្លា`,
               logs: Array.isArray(res.logs) && res.logs.length > 0 ? res.logs : [
                 {
@@ -1084,10 +1147,16 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
           },
         }));
 
+        if (Array.isArray(res?.segments) && typeof syncTimelineAudioApi === 'function') {
+          try {
+            await syncTimelineAudioApi(res.segments, ep.title || `EP${ep.episodeNumber || epId}`, ep.videoId, epId, seriesId);
+          } catch (_) {}
+        }
+
         if (typeof refreshSeries === 'function') {
           await refreshSeries();
         }
-        return createStepResult({ status: STEP_STATUS.COMPLETED, count: res.fittedCount || 0 });
+        return createStepResult({ status: STEP_STATUS.COMPLETED, count: res.fittedCount || 0, data: res });
       }
 
       setRunnerLiveStats((prev) => ({
@@ -1097,6 +1166,7 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
           [epId]: {
             percent: 100,
             isFailed: true,
+            isDone: false,
             message: `❌ ${res?.error || 'Auto-fit speed failed'}`,
             logs: [
               { time: new Date().toLocaleTimeString(), message: `❌ ${res?.error || 'Auto-fit speed failed'}` },
@@ -1115,6 +1185,7 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
           [epId]: {
             percent: 100,
             isFailed: true,
+            isDone: false,
             message: `❌ បរាជ័យ: ${err.message}`,
             logs: [
               { time: new Date().toLocaleTimeString(), message: `❌ Auto-Fit Error: ${err.message}` },
@@ -1213,6 +1284,7 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
     });
 
     try {
+      let lastStepResult = null;
       for (let idx = 0; idx < queue.length; idx++) {
         if (controller.signal.aborted) {
           console.log(`[1-by-1 Runner] 🛑 បញ្ឈប់ដំណើរការ ${stepType} ដោយអ្នកប្រើប្រាស់`);
@@ -1247,6 +1319,7 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
         } else if (stepType === 'all3') {
           stepResult = await runSingleEpisodeAll3(currentEp, options, controller.signal);
         }
+        lastStepResult = stepResult;
 
         if (controller.signal.aborted || stepResult?.aborted || stepResult?.status === STEP_STATUS.CANCELLED || stepResult?.status === 'cancelled') {
           break;
@@ -1260,6 +1333,11 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
         if (typeof refreshSeries === 'function') {
           await refreshSeries();
         }
+      }
+
+      if (controller.signal.aborted || lastStepResult?.aborted || lastStepResult?.status === STEP_STATUS.CANCELLED || lastStepResult?.status === 'cancelled') {
+        updateRunnerState(stepType, { status: 'idle', message: 'បានបញ្ឈប់ដោយអ្នកប្រើប្រាស់' });
+        return createStepResult({ status: STEP_STATUS.CANCELLED, reason: 'aborted' });
       }
 
       console.log(`%c[1-by-1 Runner] 🎉 ជោគជ័យ 100% លើគ្រប់ទាំង ${queue.length} ភាគសម្រាប់ ${stepType.toUpperCase()}!`, 'color: #34d399; font-weight: bold;');
