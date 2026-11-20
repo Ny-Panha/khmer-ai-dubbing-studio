@@ -3,6 +3,33 @@
 ## Last Session
 - **Environment**: Antigravity IDE (Gemini) - Minimal Change Engineer
 - **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-20T10:13:00+07:00
+
+## Summary: Removed Redundant DubbingStepCardsBar from /studio Tab (100% PASS)
+- **Task:** Remove redundant top runner cards block (`DubbingStepCardsBar`) from `frontend/src/components/media/DubbingModeTab.jsx` per user UI request to keep `/studio` clean and focused on script & voice editing.
+- **Surgical Changes Implemented (Minimal Change Discipline)**:
+  1. `frontend/src/components/media/DubbingModeTab.jsx`:
+     - Removed `DubbingStepCardsBar` render block above the script ready hero card.
+     - Cleaned up unused import of `DubbingStepCardsBar` while retaining `DubbingStepButton`.
+- **Verification Outcomes**:
+  - `backend/tests/reusable_1by1_dubbing_feature.test.js`: **PASS** (10/10).
+  - `backend/tests/timeline_render_invalidation.test.js`: **PASS** (5/5).
+  - `backend/tests/tts_smart_skip_and_progress.test.js`: **PASS** (11/11).
+  - `npm --prefix frontend run build`: **PASS** (620ms, 0 errors).
+- **Active Environment**:
+  - Backend API: `http://localhost:5000`
+  - Frontend UI: `http://localhost:5173`
+  - Active Branch: `chore/full-project-cleanup`
+- **Next Steps**:
+  - Push commit to GitHub `chore/full-project-cleanup`.
+
+---
+
+# Antigravity Shared State (Sync Memory)
+
+## Last Session
+- **Environment**: Antigravity IDE (Gemini) - Minimal Change Engineer
+- **Branch**: `chore/full-project-cleanup`
 - **Timestamp**: 2026-11-20T10:05:00+07:00
 
 ## Summary: Eliminating Duplicate Invalidation, Hardening React Callback Refs & Adding Batch Export / Player Render Rejection Tests (100% PASS)
