@@ -101,7 +101,7 @@ function createSegment(raw = {}, index = 0, defaultMode = 'dialogue') {
     ? raw.genderConfidence
     : (voiceGender === 'unknown' ? null : 0.85);
   const khmerVoiceId = raw.khmerVoiceId || voiceId;
-  const voiceAssignmentSource = raw.voiceAssignmentSource || 'automatic';
+  const voiceAssignmentSource = raw.voiceAssignmentSource || (isManual ? 'manual' : (voiceGender === 'unknown' ? 'fallback' : 'automatic'));
 
   // Inner-Thought & Delivery Classification metadata
   const deliveryType = raw.deliveryType && ['out_loud', 'inner_thought', 'narration', 'unknown'].includes(raw.deliveryType)
@@ -167,7 +167,8 @@ function createSegment(raw = {}, index = 0, defaultMode = 'dialogue') {
     translationStatus,
     ttsStatus,
     audioOutdated: ttsStatus === 'outdated',
-    reviewNeeded: Boolean(isMicroDuration || raw.reviewNeeded || translationStatus === 'review_needed'),
+    reviewNeeded: Boolean(isMicroDuration || raw.reviewNeeded || translationStatus === 'review_needed' || voiceGender === 'unknown'),
+    isFallback: Boolean(raw.isFallback || (voiceGender === 'unknown' && !isManual)),
     uncertainTiming: Boolean(isMicroDuration || raw.uncertainTiming),
     duration: parseFloat((rawEndSec - rawStartSec).toFixed(2)),
     timingType: raw.timingType || (isMicroDuration ? 'uncertain_micro_adjusted' : 'approximate'), // 'approximate' | 'exact' | 'user_adjusted'

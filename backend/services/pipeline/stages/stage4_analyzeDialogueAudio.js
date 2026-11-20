@@ -248,12 +248,10 @@ function normalizeSegmentGenderAndSpeaker(seg) {
     }
   }
 
-  const normGender = (seg.audioGender === 'female' || seg.audioGender === 'male')
-    ? seg.audioGender
-    : 'unknown';
-  const baseSpk = (!seg.speakerId || seg.speakerId === 'spk_1') ? 'spk' : seg.speakerId;
-  if (!baseSpk.endsWith(`_${normGender}`) && normGender !== 'unknown') {
-    seg.speakerId = `${baseSpk}_${normGender}`;
+  // Preserve genuine diarization speaker ID without corrupting it into gender tags (spk_male / spk_female)
+  // Two different male speakers or two different female speakers must remain distinguishable.
+  if (!seg.speakerId) {
+    seg.speakerId = 'spk_1';
   }
   return seg;
 }
@@ -719,13 +717,10 @@ Return JSON ONLY matching this schema:
               }
             }
 
-            // បំបែក speakerId តាមភេទ ដើម្បីកុំឱ្យតួប្រុស និងតួស្រីប្រើ 'spk_1' រួមគ្នាដាច់ខាត!
-            const normGender = (seg.audioGender === 'female' || seg.audioGender === 'male')
-              ? seg.audioGender
-              : 'unknown';
-            const baseSpk = (!seg.speakerId || seg.speakerId === 'spk_1') ? 'spk' : seg.speakerId;
-            if (!baseSpk.endsWith(`_${normGender}`) && normGender !== 'unknown') {
-              seg.speakerId = `${baseSpk}_${normGender}`;
+            // Preserve genuine diarization speaker ID without corrupting it into gender tags (spk_male / spk_female)
+            // Never merge distinct speakers solely because both have male- or female-presenting voices!
+            if (!seg.speakerId) {
+              seg.speakerId = 'spk_1';
             }
           }
         }

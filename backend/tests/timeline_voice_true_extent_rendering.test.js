@@ -1,10 +1,13 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import path from 'node:path';
+
+const getFrontendFile = (rel) => fs.existsSync(rel) ? rel : path.resolve(process.cwd(), '..', rel);
 
 describe('Timeline Voice Clip True Audio Extent Rendering Suite', () => {
   it('1. Static audit: TimelineTracksCanvas computes box width matching true audio extent without empty tail', () => {
-    const canvasCode = fs.readFileSync('frontend/src/components/timeline/TimelineTracksCanvas.jsx', 'utf8');
+    const canvasCode = fs.readFileSync(getFrontendFile('frontend/src/components/timeline/TimelineTracksCanvas.jsx'), 'utf8');
 
     // Audio extent resolution
     assert.ok(canvasCode.includes('rawAudioExtent = seg.finalAudioDuration'), 'Resolves rawAudioExtent from finalAudioDuration');
@@ -167,7 +170,7 @@ describe('Timeline Voice Clip True Audio Extent Rendering Suite', () => {
   });
 
   it('7. Fallback order & waveform alignment audit: peaks-derived -> finalAudioDuration -> audioDurationSec/speed -> probed audio -> slot; bars use 4px pitch without 40-bar cutoff', () => {
-    const canvasCode = fs.readFileSync('frontend/src/components/timeline/TimelineTracksCanvas.jsx', 'utf8');
+    const canvasCode = fs.readFileSync(getFrontendFile('frontend/src/components/timeline/TimelineTracksCanvas.jsx'), 'utf8');
 
     assert.ok(canvasCode.includes('function resolvePeaksDuration(seg)'), 'Defines peaks/waveform duration resolver');
     assert.ok(canvasCode.includes('function resolveVoiceAudioExtent(seg, appliedSpeed, probedDuration)'), 'Defines unified voice extent resolver');

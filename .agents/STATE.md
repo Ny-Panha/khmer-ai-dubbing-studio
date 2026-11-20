@@ -3,6 +3,48 @@
 ## Last Session
 - **Environment**: Antigravity IDE (Gemini) - Minimal Change Engineer
 - **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-20T13:17:00+07:00
+
+## Summary: Accurate Speaker Detection & Male/Female Voice Assignment Fix (100% PASS)
+- **Task:** Eliminate wrong male/female voice assignments (`km-KH-PisethNeural` vs `km-KH-SreymomNeural`) for Chinese drama dubbing by separating acoustic voice presentation, character metadata, speaker identity, and selected TTS voice:
+  1. **P0 — Speaker ID Collision Elimination (`backend/services/pipeline/stages/stage4_analyzeDialogueAudio.js`)**:
+     - Removed code collapsing generic `spk_1` into `spk_male` and `spk_female`.
+     - Preserves genuine diarization `speakerId` across dialogue segments so distinct male and female speakers never merge solely because of voice gender.
+  2. **P0 — Generic Character Isolation & Anti-Crushing (`backend/models/speakerRegistry.js`)**:
+     - Generic `តួអង្គ` segments with no distinct diarization ID are partitioned by unique segment keys (`spk_generic_${id}`).
+     - Prevents majority-voting from crushing opposite-gender lines in multi-character scenes.
+  3. **P0 — Unbiased Fallback & Unknown Gender Preservation (`backend/models/speakerRegistry.js`, `backend/services/pipeline/stages/stage6_generateModeSpecificScript.js`, `backend/models/segmentModel.js`, `backend/services/pipeline/stages/stage9_generateSegmentTTS.js`, `backend/routes/audioRoutes.js`)**:
+     - Unresolved voice classification retains `voiceGender: 'unknown'`, `gender: 'unknown'`, `speakerGender: 'UNKNOWN'`.
+     - Assigned fallback voice (`km-KH-PisethNeural`) is explicitly flagged with `isFallback: true`, `reviewNeeded: true`, `voiceAssignmentSource: 'fallback'`, and `voiceLabel: 'ពិសិដ្ឋ (Piseth - Fallback)'`.
+     - Prevents fallback TTS voice selection from mutating character metadata into confirmed male.
+  4. **P0 — Calibrated Acoustic Pitch & Multi-Frame Aggregation (`backend/services/audioClassifierService.js`)**:
+     - Enforced minimum 5 voiced frames (~160ms) and minimum harmonic confidence (0.58) in `computeYinPitch`.
+     - Calibrated thresholds: Female $F_0 \ge 175$ Hz ($\le 320$ Hz); Male $80 \le F_0 \le 152$ Hz; Ambiguous $152 < F_0 < 175$ Hz returns `'unknown'`.
+     - Implemented `aggregateSpeakerAcoustics()` computing weighted median $F_0$ across segments of the same speaker.
+  5. **P1 — Multi-Signal Evidence Priority (`backend/services/pipeline/stages/stage6_generateModeSpecificScript.js` & `backend/models/speakerRegistry.js`)**:
+     - Ground-truth priority: Manual User Override $\rightarrow$ Series Glossary / Confirmed Memory $\rightarrow$ Explicit Character Role Title $\rightarrow$ Reliable Acoustic Pitch $\rightarrow$ On-screen Visual Face $\rightarrow$ Speaker Title Keywords $\rightarrow$ AI Dialogue Context $\rightarrow$ Unknown Fallback with review flag.
+     - Protects off-screen dialogue from inheriting passive on-screen actor appearance.
+  6. **Comprehensive 21-Case Test Suite & Real Drama Ground-Truth Benchmark (`backend/tests/accurate_speaker_detection_and_voice_assignment.test.js`)**:
+     - Tested 20 edge cases + real drama benchmark (Suspect vs Forensic Expert dialogue turns).
+- **Verification Outcomes**:
+  - `backend/tests/accurate_speaker_detection_and_voice_assignment.test.js`: **21/21 PASS (100%)** (Benchmark: 12/12 correct, 0 wrong voice assignments, 4ms).
+  - Existing Regression Suites (5 files, 42 tests): **42/42 PASS (100%)**.
+  - Timeline Suites (3 files, 17 tests): **17/17 PASS (100%)**.
+  - `npm --prefix frontend run build`: **PASS (0 errors, 644ms)**.
+- **Active Environment**:
+  - Backend API: `http://localhost:5000`
+  - Frontend UI: `http://localhost:5173`
+  - Active Branch: `chore/full-project-cleanup`
+- **Next Steps**:
+  - Git commit and push to `origin/chore/full-project-cleanup`.
+
+---
+
+# Antigravity Shared State (Sync Memory)
+
+## Last Session
+- **Environment**: Antigravity IDE (Gemini) - Minimal Change Engineer
+- **Branch**: `chore/full-project-cleanup`
 - **Timestamp**: 2026-11-20T13:05:00+07:00
 
 ## Summary: Direct Pipeline Lock, Force Re-Translate Worker Targeting & Runner Stop State Hardening (100% PASS)

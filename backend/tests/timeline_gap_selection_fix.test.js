@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import path from 'node:path';
 import {
   deleteGap,
   deleteVideoClip,
@@ -12,9 +13,11 @@ import {
   autoSplitVideoBySegments,
 } from '../../frontend/src/utils/timelineUtils.js';
 
+const getFrontendFile = (rel) => fs.existsSync(rel) ? rel : path.resolve(process.cwd(), '..', rel);
+
 describe('Gap Selection and Ripple Deletion Suite', () => {
   it('1. Static audit: Gap click and mouse-down handlers isolate Gap selection and clear segments', () => {
-    const canvasCode = fs.readFileSync('frontend/src/components/timeline/TimelineTracksCanvas.jsx', 'utf8');
+    const canvasCode = fs.readFileSync(getFrontendFile('frontend/src/components/timeline/TimelineTracksCanvas.jsx'), 'utf8');
     assert.ok(canvasCode.includes("import { isGapClip } from '../../utils/timelineOps'"), 'TimelineTracksCanvas imports isGapClip');
     assert.ok(canvasCode.includes('if (isGapClip(clip)) {'), 'renderVideoClip onClick checks isGapClip');
     assert.ok(canvasCode.includes('if (setSelectedAudioId) setSelectedAudioId(null)'), 'Gap click clears setSelectedAudioId');
@@ -22,7 +25,7 @@ describe('Gap Selection and Ripple Deletion Suite', () => {
     assert.ok(canvasCode.includes('if (onSelectSegment) onSelectSegment(null)'), 'Gap click clears onSelectSegment');
     assert.ok(canvasCode.includes('!isGapClip(clip) &&'), 'isAssociatedWithSeg guards against Gap clips');
 
-    const editorCode = fs.readFileSync('frontend/src/components/timeline/TimelineEditor.jsx', 'utf8');
+    const editorCode = fs.readFileSync(getFrontendFile('frontend/src/components/timeline/TimelineEditor.jsx'), 'utf8');
     assert.ok(editorCode.includes('if (isGapClip(clip)) {'), 'handleVideoMouseDown checks isGapClip');
     assert.ok(editorCode.includes('selectedSegmentIdRef.current = null;'), 'Gap mouse-down clears selectedSegmentIdRef');
   });

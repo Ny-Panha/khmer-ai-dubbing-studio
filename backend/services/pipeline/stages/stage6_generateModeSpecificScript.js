@@ -372,16 +372,31 @@ function deriveVoiceFromGender(gender = 'unknown') {
       badgeColor: '#ec4899',
     };
   }
+  if (norm === 'male') {
+    return {
+      voiceGender: 'male',
+      gender: 'male',
+      speakerGender: 'MALE',
+      voiceId: 'km-KH-PisethNeural',
+      khmerVoiceId: 'km-KH-PisethNeural',
+      voice: 'km-KH-PisethNeural',
+      voiceLabel: 'ពិសិដ្ឋ (Piseth)',
+      avatar: '👨',
+      badgeColor: '#3b82f6',
+    };
+  }
   return {
-    voiceGender: norm === 'male' ? 'male' : 'unknown',
-    gender: 'male',
-    speakerGender: norm === 'male' ? 'MALE' : 'UNKNOWN',
+    voiceGender: 'unknown',
+    gender: 'unknown',
+    speakerGender: 'UNKNOWN',
     voiceId: 'km-KH-PisethNeural',
     khmerVoiceId: 'km-KH-PisethNeural',
     voice: 'km-KH-PisethNeural',
-    voiceLabel: 'ពិសិដ្ឋ (Piseth)',
-    avatar: '👨',
-    badgeColor: '#3b82f6',
+    voiceLabel: 'ពិសិដ្ឋ (Piseth - Fallback)',
+    avatar: '👤',
+    badgeColor: '#64748b',
+    isFallback: true,
+    reviewNeeded: true,
   };
 }
 
@@ -412,6 +427,9 @@ function createCanonicalSegment(raw = {}, index = 0, mode = 'dialogue') {
   const isUserOverridden = Boolean(raw.userOverridden);
   const isGenericSpeaker = cleanSpk === 'តួអង្គ' || cleanSpk.toLowerCase() === 'speaker';
 
+  const hasFemalePitch = typeof raw.pitchHz === 'number' && raw.pitchHz >= 175;
+  const hasMalePitch = typeof raw.pitchHz === 'number' && raw.pitchHz > 0 && raw.pitchHz <= 152;
+
   let resolvedGender = String(raw.voiceGender || '').toLowerCase();
   const titleKwGender = !isUserOverridden ? detectSpeakerGender(cleanSpk) : 'UNKNOWN';
   if (isUserOverridden) {
@@ -421,13 +439,20 @@ function createCanonicalSegment(raw = {}, index = 0, mode = 'dialogue') {
       else if (explicitVoice.includes('Piseth')) resolvedGender = 'male';
       else resolvedGender = mode === 'recap' ? 'male' : 'unknown';
     }
+  } else if (isGenericSpeaker && (hasFemalePitch || hasMalePitch)) {
+    // Generic placeholder characters without manual override follow verified acoustic pitch
+    resolvedGender = hasFemalePitch ? 'female' : 'male';
   } else if (titleKwGender === 'FEMALE' || titleKwGender === 'MALE') {
     resolvedGender = titleKwGender === 'FEMALE' ? 'female' : 'male';
   } else if (resolvedGender !== 'female' && resolvedGender !== 'male') {
-    if (typeof raw.pitchHz === 'number' && raw.pitchHz >= 170) {
+    if (hasFemalePitch) {
       resolvedGender = 'female';
+    } else if (hasMalePitch) {
+      resolvedGender = 'male';
     } else if (/ស្រី|នាង|អ្នកនាង|ម៉ែ|យាយ|ព្រះនាង|សិស្សប្អូនស្រី|ប្រព័ន្ធ|កុមារី|មាតា|ធីតា/i.test(cleanSpk)) {
       resolvedGender = 'female';
+    } else if (!raw.isOffScreen && (raw.visualGender === 'female' || raw.visualGender === 'male')) {
+      resolvedGender = raw.visualGender;
     } else {
       resolvedGender = mode === 'recap' ? 'male' : 'unknown';
     }
@@ -466,9 +491,11 @@ function createCanonicalSegment(raw = {}, index = 0, mode = 'dialogue') {
   } else if (isUserOverridden && raw.speakerId) {
     safeSpeakerId = raw.speakerId;
   } else if (isOcrOnly) {
-    safeSpeakerId = buildSafeSpeakerId(cleanSpk, resolvedGender, index);
+    safeSpeakerId = raw.speakerId || buildSafeSpeakerId(cleanSpk, resolvedGender, index);
   } else {
-    safeSpeakerId = (raw.speakerId && !raw.speakerId.startsWith('spk_1') && !raw.speakerId.endsWith('_unknown') && (raw.speakerId.includes('female') || raw.speakerId.includes('male')))
+    // Preserve genuine diarization IDs (e.g. spk_1, spk_2, spk_lead, etc.)
+    // Only fall back to buildSafeSpeakerId if raw.speakerId is missing or generic
+    safeSpeakerId = (raw.speakerId && !['spk_1', 'spk_default', 'spk'].includes(String(raw.speakerId).trim()))
       ? raw.speakerId
       : buildSafeSpeakerId(cleanSpk, resolvedGender, index);
   }
@@ -605,22 +632,27 @@ function applyTranslatedSegmentResult(targetSeg, t, maxWords, segIdx, { isFastOc
   if (!isOcrSeg) {
     // Standard Mode: explicit unambiguous speaker title beats noisy un-isolated YIN pitch;
     // generic/neutral characters still follow real acoustic pitch, visual gender, or AI dialogue context.
-    const hasFemalePitch = typeof targetSeg.pitchHz === 'number' && targetSeg.pitchHz >= 172;
-    const hasMalePitch = typeof targetSeg.pitchHz === 'number' && targetSeg.pitchHz > 0 && targetSeg.pitchHz <= 148;
+    const hasFemalePitch = typeof targetSeg.pitchHz === 'number' && targetSeg.pitchHz >= 175;
+    const hasMalePitch = typeof targetSeg.pitchHz === 'number' && targetSeg.pitchHz > 0 && targetSeg.pitchHz <= 152;
     const titleGender = detectSpeakerGender(cleanSpk);
+    const isExplicitRoleTitle = /ប្រព័ន្ធ|តួឯកស្រី|តួស្រី|តួឯកប្រុស|តួប្រុស|女主|男主|女主角|男主角/i.test(cleanSpk);
 
-    if (titleGender === 'FEMALE') {
+    if (isExplicitRoleTitle && (titleGender === 'FEMALE' || titleGender === 'MALE')) {
+      targetSeg.voiceGender = titleGender === 'FEMALE' ? 'female' : 'male';
+    } else if (hasFemalePitch) {
+      targetSeg.voiceGender = 'female';
+    } else if (hasMalePitch) {
+      targetSeg.voiceGender = 'male';
+    } else if (!targetSeg.isOffScreen && (visGender === 'female' || visGender === 'male')) {
+      targetSeg.voiceGender = visGender;
+    } else if (titleGender === 'FEMALE') {
       targetSeg.voiceGender = 'female';
     } else if (titleGender === 'MALE') {
       targetSeg.voiceGender = 'male';
-    } else if (visGender === 'female' || visGender === 'male') {
-      targetSeg.voiceGender = visGender;
-    } else if (hasFemalePitch) {
-      targetSeg.voiceGender = 'female';
-    } else if (hasMalePitch && aiGender !== 'female') {
-      targetSeg.voiceGender = 'male';
     } else if (aiGender === 'female' || aiGender === 'male') {
       targetSeg.voiceGender = aiGender;
+    } else {
+      targetSeg.voiceGender = 'unknown';
     }
 
     const vMeta = deriveVoiceFromGender(targetSeg.voiceGender);
@@ -632,7 +664,9 @@ function applyTranslatedSegmentResult(targetSeg, t, maxWords, segIdx, { isFastOc
     targetSeg.badgeColor = vMeta.badgeColor;
     targetSeg.gender = vMeta.gender;
     targetSeg.speakerGender = vMeta.speakerGender;
-    targetSeg.speakerId = buildSafeSpeakerId(cleanSpk, targetSeg.voiceGender, segIdx);
+    targetSeg.isFallback = Boolean(vMeta.isFallback);
+    targetSeg.reviewNeeded = Boolean(vMeta.reviewNeeded);
+    targetSeg.speakerId = targetSeg.speakerId || buildSafeSpeakerId(cleanSpk, targetSeg.voiceGender, segIdx);
     return !isPlaceholderTranslationText(targetSeg.khmerTranslatedText);
   }
 
@@ -780,7 +814,7 @@ function enforceEpisodeCharacterConsistency(segments = [], { defaultGender = 'ma
         winnerGender = 'male';
       } else {
         const firstG = String(updated[entry.indices[0]]?.voiceGender || '').toLowerCase();
-        winnerGender = (firstG === 'female' || firstG === 'male') ? firstG : normDefault;
+        winnerGender = (firstG === 'female' || firstG === 'male') ? firstG : 'unknown';
       }
     }
 
@@ -817,6 +851,8 @@ function enforceEpisodeCharacterConsistency(segments = [], { defaultGender = 'ma
       seg.voiceLabel = vMeta.voiceLabel;
       seg.avatar = vMeta.avatar;
       seg.badgeColor = vMeta.badgeColor;
+      seg.isFallback = Boolean(vMeta.isFallback);
+      seg.reviewNeeded = Boolean(vMeta.reviewNeeded);
     }
 
     genderCorrectedCount += charCorrected;

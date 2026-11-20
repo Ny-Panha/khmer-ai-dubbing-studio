@@ -173,11 +173,19 @@ async function generateSegmentTTS({
       seg.voiceId = chosenVoiceId;
       seg.voice = chosenVoiceId;
 
+      const isManualChoice = Boolean(segHasManual || regIsManual);
+      const isFallbackChoice = !isManualChoice && !genderDerivedVoice && !registryVoice;
+
       // Preserve character identity metadata without defaulting unknown to male
       const resolvedGender = knownSegGender || (regEntry?.voiceGender || seg.voiceGender || 'unknown');
       seg.voiceGender = resolvedGender;
       seg.gender = resolvedGender;
       seg.speakerGender = resolvedGender === 'female' ? 'FEMALE' : (resolvedGender === 'male' ? 'MALE' : 'UNKNOWN');
+      seg.isFallback = isFallbackChoice;
+      if (isFallbackChoice) {
+        seg.reviewNeeded = true;
+        seg.voiceAssignmentSource = 'fallback';
+      }
 
       const segKey = String(seg.id || `seg_${idx + 1}`);
 

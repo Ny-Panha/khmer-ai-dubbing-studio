@@ -118,7 +118,7 @@ function computeYinPitch(pcmData, sampleRate = 16000, threshold = 0.15) {
   }
 
   if (pitchEstimates.length === 0) {
-    return { f0: 0, confidence: 0, gender: "unknown", voicedFrames: 0 };
+    return { f0: 0, confidence: 0, gender: "unknown", voicedFrames: 0, voicedDurationSec: 0 };
   }
 
   // Calculate median F0 and average confidence
@@ -132,18 +132,91 @@ function computeYinPitch(pcmData, sampleRate = 16000, threshold = 0.15) {
     ).toFixed(2)
   );
 
+  const voicedFrames = pitchEstimates.length;
+  const voicedDurationSec = parseFloat(((voicedFrames * hopSize) / sampleRate).toFixed(2));
+  const voicedRatio = numFrames > 0 ? voicedFrames / numFrames : 0;
+
+  // Calibrated Acoustic Voice Presentation decisions:
+  // Require at least 5 voiced frames (~160ms) and minimum harmonic confidence
   let gender = "unknown";
-  if (avgConf >= 0.50) {
-    if (medianF0 >= 170) gender = "female";
-    else if (medianF0 <= 155) gender = "male";
-    else gender = "unknown"; // Ambiguous range 155-170 Hz
+  if (voicedFrames >= 5 && avgConf >= 0.58 && voicedRatio >= 0.08) {
+    if (medianF0 >= 175 && medianF0 <= 320) {
+      gender = "female";
+    } else if (medianF0 <= 152 && medianF0 >= 80) {
+      gender = "male";
+    } else {
+      // Ambiguous boundary zone (152 Hz - 175 Hz) or extreme outlier frequency
+      gender = "unknown";
+    }
   }
 
   return {
     f0: medianF0,
     confidence: avgConf,
     gender,
-    voicedFrames: pitchEstimates.length,
+    voicedFrames,
+    voicedDurationSec,
+  };
+}
+
+/**
+ * Aggregates acoustic pitch and voice presentation evidence across multiple segments
+ * for the SAME verified speaker, preventing single-segment shouting or whispering outliers
+ * from flipping speaker voice assignments.
+ * 
+ * @param {Array<object>} segments - Segments belonging to one verified speaker
+ * @returns {{ f0: number, confidence: number, gender: 'male'|'female'|'unknown', totalVoicedFrames: number, observationCount: number }}
+ */
+function aggregateSpeakerAcoustics(segments = []) {
+  if (!Array.isArray(segments) || segments.length === 0) {
+    return { f0: 0, confidence: 0, gender: "unknown", totalVoicedFrames: 0, observationCount: 0 };
+  }
+
+  const validAcousticSegs = segments.filter((s) => {
+    const f0 = Number(s.pitchHz || s.acousticF0 || 0);
+    const conf = Number(s.acousticConfidence || s.genderConfidence || 0);
+    return f0 >= 75 && f0 <= 340 && conf >= 0.50;
+  });
+
+  if (validAcousticSegs.length === 0) {
+    return { f0: 0, confidence: 0, gender: "unknown", totalVoicedFrames: 0, observationCount: 0 };
+  }
+
+  let totalWeight = 0;
+  let weightedF0Sum = 0;
+  let weightedConfSum = 0;
+  let totalVoicedFrames = 0;
+
+  for (const seg of validAcousticSegs) {
+    const f0 = Number(seg.pitchHz || seg.acousticF0);
+    const conf = Number(seg.acousticConfidence || seg.genderConfidence || 0.6);
+    const vf = Number(seg.voicedFrames || 5);
+    const weight = conf * Math.max(1, Math.min(10, vf / 5));
+
+    weightedF0Sum += f0 * weight;
+    weightedConfSum += conf * weight;
+    totalWeight += weight;
+    totalVoicedFrames += vf;
+  }
+
+  const aggF0 = Math.round(weightedF0Sum / totalWeight);
+  const aggConf = parseFloat((weightedConfSum / totalWeight).toFixed(2));
+
+  let aggGender = "unknown";
+  if (totalVoicedFrames >= 5 && aggConf >= 0.58) {
+    if (aggF0 >= 175 && aggF0 <= 320) {
+      aggGender = "female";
+    } else if (aggF0 <= 152 && aggF0 >= 80) {
+      aggGender = "male";
+    }
+  }
+
+  return {
+    f0: aggF0,
+    confidence: aggConf,
+    gender: aggGender,
+    totalVoicedFrames,
+    observationCount: validAcousticSegs.length,
   };
 }
 
@@ -225,4 +298,5 @@ function classifySegmentAcousticGender(mediaFilePathOrPcm, startSecOrSampleRate 
 module.exports = {
   computeYinPitch,
   classifySegmentAcousticGender,
+  aggregateSpeakerAcoustics,
 };

@@ -465,6 +465,7 @@ router.post("/generate-audio", async (req, res) => {
       const resolvedGender = segGender !== "unknown" ? segGender : (segment.voiceGender || segment.gender || "unknown");
       const resolvedSpeakerGender = resolvedGender === "female" ? "FEMALE" : (resolvedGender === "male" ? "MALE" : "UNKNOWN");
       const isFemaleVoice = targetVoice.includes("Sreymom");
+      const isUnknownVoice = resolvedGender === "unknown" && !isManual;
       const resolvedVoiceMeta = {
         voice: targetVoice,
         voiceId: targetVoice,
@@ -472,11 +473,13 @@ router.post("/generate-audio", async (req, res) => {
         gender: resolvedGender,
         voiceGender: resolvedGender,
         speakerGender: resolvedSpeakerGender,
-        voiceLabel: isFemaleVoice ? "ស្រីមុំ (Sreymom)" : "ពិសិដ្ឋ (Piseth)",
-        avatar: isFemaleVoice ? "👩" : "👨",
-        badgeColor: isFemaleVoice ? "#ec4899" : "#38bdf8",
-        voiceAssignmentSource: isManual ? "manual" : (segment.voiceAssignmentSource || "automatic"),
+        voiceLabel: isFemaleVoice ? "ស្រីមុំ (Sreymom)" : (isUnknownVoice ? "ពិសិដ្ឋ (Piseth - Fallback)" : "ពិសិដ្ឋ (Piseth)"),
+        avatar: isFemaleVoice ? "👩" : (isUnknownVoice ? "👤" : "👨"),
+        badgeColor: isFemaleVoice ? "#ec4899" : (isUnknownVoice ? "#64748b" : "#38bdf8"),
+        voiceAssignmentSource: isManual ? "manual" : (isUnknownVoice ? "fallback" : (segment.voiceAssignmentSource || "automatic")),
         userOverridden: isManual ? true : Boolean(segment.userOverridden),
+        isFallback: isUnknownVoice,
+        reviewNeeded: isUnknownVoice || Boolean(segment.reviewNeeded),
       };
 
       // Persist manual voice assignment immediately in parallel with Edge TTS so a mid-generation

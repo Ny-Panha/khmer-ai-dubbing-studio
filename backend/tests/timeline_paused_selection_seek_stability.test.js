@@ -1,22 +1,25 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import path from 'node:path';
 import {
   mapTimelineToSourceTime,
   mapSourceToTimelineTime,
 } from '../../frontend/src/utils/timelineUtils.js';
 
+const getFrontendFile = (rel) => fs.existsSync(rel) ? rel : path.resolve(process.cwd(), '..', rel);
+
 describe('Paused Selection & Playhead Stability Suite (No Snap-back)', () => {
   it('1. Static audit: timelineUtils maps Gap source ranges, and useVideoPlayback / TimelineEditor guard paused state', () => {
-    const utilsCode = fs.readFileSync('frontend/src/utils/timelineUtils.js', 'utf8');
+    const utilsCode = fs.readFileSync(getFrontendFile('frontend/src/utils/timelineUtils.js'), 'utf8');
     assert.ok(utilsCode.includes("import { isGapClip } from './timelineOps.js'"), 'timelineUtils imports isGapClip');
     assert.ok(!utilsCode.includes('if (isGapClip(c)) continue'), 'mapTimelineToSourceTime includes Gap clips for real footage preview');
     assert.ok(utilsCode.includes('isGap: isGapClip(c)'), 'mapTimelineToSourceTime tags matched Gap clips with isGap');
 
-    const playbackCode = fs.readFileSync('frontend/src/hooks/useVideoPlayback.js', 'utf8').replace(/\r\n/g, '\n');
+    const playbackCode = fs.readFileSync(getFrontendFile('frontend/src/hooks/useVideoPlayback.js'), 'utf8').replace(/\r\n/g, '\n');
     assert.ok(playbackCode.includes('if (!isPlaying) {\n      return;\n    }'), 'handleTimeUpdate early-returns when !isPlaying');
 
-    const editorCode = fs.readFileSync('frontend/src/components/timeline/TimelineEditor.jsx', 'utf8');
+    const editorCode = fs.readFileSync(getFrontendFile('frontend/src/components/timeline/TimelineEditor.jsx'), 'utf8');
     assert.ok(editorCode.includes('if (!isPlaying) return;'), 'Auto-follow effect early-returns when !isPlaying');
     assert.ok(editorCode.includes('if (isPlaying && selectedClipKind === \'video\''), 'Video cut tracking checks isPlaying');
   });
