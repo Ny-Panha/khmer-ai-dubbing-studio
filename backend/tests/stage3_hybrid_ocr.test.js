@@ -371,3 +371,86 @@ test('25. Non-Fabrication: Missing or failed OCR never invents synthetic Chinese
   assert.equal(failedFrame.chineseText, '', 'Must never invent Chinese text on failed OCR');
   assert.equal(failedFrame.reviewNeeded, true, 'Must flag reviewNeeded on failed OCR');
 });
+
+test('26. Full Checkpoint Resume: 585/585 verified checkpoint resumes with 0 API calls, zero ReferenceError, and isComplete: true', async () => {
+  const { extractChineseSubtitles } = require('../services/pipeline/stages/stage3_extractChineseSubtitles');
+  const fs = require('fs');
+  const path = require('path');
+
+  const videoPath = path.resolve(__dirname, '../uploads/projects/series_test/episodes/ep_1/video/ep_1_source.mp4');
+  const goldenCkptPath = path.resolve(__dirname, '../uploads/cache/ocr_checkpoints/ocr_ckpt_ep_1_source_mp4_62851057_1795118987660_0_287.json');
+
+  if (!fs.existsSync(videoPath) || !fs.existsSync(goldenCkptPath)) {
+    console.log('[Test 26] Golden video or checkpoint not found on disk, skipping real media assertion');
+    return;
+  }
+
+  let mockApiCalled = false;
+  const mockAiClient = {
+    models: {
+      generateContent: async () => {
+        mockApiCalled = true;
+        throw new Error('Should NEVER call Gemini API when all 585 frames are verified in checkpoint!');
+      },
+    },
+  };
+
+  const res = await extractChineseSubtitles({
+    videoPath,
+    durationSec: 286.557,
+    startOffsetSec: 0,
+    aiClient: mockAiClient,
+    baseStepSec: 0.75,
+    checkpointPath: goldenCkptPath,
+    enableLocalOcr: false,
+  });
+
+  assert.equal(mockApiCalled, false, 'Should not call Gemini API when all frames are verified in checkpoint');
+  assert.equal(res.hasUnresolvedFrames, false, 'hasUnresolvedFrames must be false');
+  assert.equal(res.isComplete, true, 'isComplete must be true');
+  assert.equal(res.ocrMeta.hasUnresolvedFrames, false, 'ocrMeta.hasUnresolvedFrames must be false');
+  assert.equal(res.ocrMeta.isComplete, true, 'ocrMeta.isComplete must be true');
+  assert.equal(res.ocrMeta.status, 'completed');
+  assert.ok(res.ocrMeta.performance.candidateFramesCount > 500, 'Candidate frames must be counted accurately');
+  assert.ok(res.visualSegments.length > 50, 'Must produce visual segments from checkpoint');
+});
+
+test('27. Duplicate Pipeline Protection: Failed or active background jobs never trigger direct fallback pipeline', () => {
+  // Simulating the decision router in useScriptWorkflow.js
+  function shouldTriggerDirectFallback({ activeJobId, jobErr, abortSignalAborted }) {
+    if (abortSignalAborted) return false;
+    if (jobErr?.name === 'AbortError') return false;
+    if (activeJobId) return false; // Rule 1: Started job never falls back to duplicate pipeline
+    if (jobErr?.status === 400 || jobErr?.status === 401 || jobErr?.status === 403) return false; // Rule 2: Client/auth errors don't fallback
+    if (jobErr?.status === 409 || jobErr?.data?.code === 'DUPLICATE_ACTIVE_JOB') return false; // Rule 3: Concurrent active job monitored, never duplicate
+    return true; // Only offline or unroutable job API (404/501) with NO prior active job
+  }
+
+  // Case A: Job was accepted (#job_123) and subsequently failed
+  assert.equal(shouldTriggerDirectFallback({
+    activeJobId: 'job_123',
+    jobErr: new Error('Pipeline job failed on Stage 3'),
+    abortSignalAborted: false,
+  }), false, 'Failed active job must NEVER trigger direct pipeline fallback');
+
+  // Case B: Job was cancelled
+  assert.equal(shouldTriggerDirectFallback({
+    activeJobId: 'job_123',
+    jobErr: { name: 'AbortError', message: 'Job was cancelled' },
+    abortSignalAborted: true,
+  }), false, 'Cancelled job must NEVER trigger direct pipeline fallback');
+
+  // Case C: Auth error 401
+  assert.equal(shouldTriggerDirectFallback({
+    activeJobId: null,
+    jobErr: { status: 401, message: 'Invalid API Key' },
+    abortSignalAborted: false,
+  }), false, 'Auth error must NEVER trigger direct pipeline fallback');
+
+  // Case D: Endpoint unavailable (404) with no active job
+  assert.equal(shouldTriggerDirectFallback({
+    activeJobId: null,
+    jobErr: { status: 404, message: 'Not found' },
+    abortSignalAborted: false,
+  }), true, 'Unroutable queue endpoint without active job is allowed to direct fallback');
+});

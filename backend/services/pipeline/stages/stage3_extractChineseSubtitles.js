@@ -1982,13 +1982,6 @@ Return JSON ONLY matching this schema:
     if (apiCallsCount > 0 && retriesCount >= apiCallsCount) {
       console.warn(`[Stage 3 Extract Subtitles] Notice: Vision OCR batch calls failed (${lastBatchError}). Continuing with Audio ASR as primary source.`);
     }
-  } finally {
-    try {
-      if (fs.existsSync(tempDir)) {
-        fs.rmSync(tempDir, { recursive: true, force: true });
-      }
-    } catch (_) {}
-  }
 
   function resolveGenderFromVotes(genderVotes = {}, explicitVisualGender = null) {
     const mCount = genderVotes.male || 0;
@@ -2379,7 +2372,14 @@ Return JSON ONLY matching this schema:
     } catch (_) {}
   }
 
-  return result;
+    return result;
+  } finally {
+    try {
+      if (fs.existsSync(tempDir)) {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+      }
+    } catch (_) {}
+  }
 }
 
 /**

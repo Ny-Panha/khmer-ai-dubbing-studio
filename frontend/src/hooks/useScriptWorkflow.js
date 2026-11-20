@@ -261,12 +261,25 @@ export function useScriptWorkflow({
             return;
           }
         } else {
-          console.warn('[useScriptWorkflow] Background job API fallback to direct pipeline:', jobErr.message);
+          // If a job was already started/accepted (activeJobId exists), any failure is an actual job failure.
+          // Show the true error and NEVER launch a duplicate second pipeline!
+          if (activeJobId) {
+            throw jobErr;
+          }
+          // If aborted/cancelled, never fallback
+          if (jobErr.name === 'AbortError' || abortController.signal.aborted) {
+            throw jobErr;
+          }
+          // Do not fallback on client validation or authentication errors
+          if (jobErr.status === 400 || jobErr.status === 401 || jobErr.status === 403) {
+            throw jobErr;
+          }
+          console.warn('[useScriptWorkflow] Background job API unavailable, falling back to direct pipeline:', jobErr.message);
         }
       }
 
-      // Step B: Fallback to direct synchronous generation if job queue was bypassed
-      if (!response && !abortController.signal.aborted) {
+      // Step B: Fallback to direct synchronous generation ONLY if background job was never started, not cancelled, and no response yet
+      if (!response && !activeJobId && !abortController.signal.aborted) {
         response = await generateScriptApi({
           videoId: targetVideoId,
           mode,

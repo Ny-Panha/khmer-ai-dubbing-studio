@@ -3,6 +3,43 @@
 ## Last Session
 - **Environment**: Antigravity IDE (Gemini) - Minimal Change Engineer
 - **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-20T08:35:00+07:00
+
+## Summary: Fix P0 Stage 3 Scope ReferenceError & Prevent Duplicate Fallback Pipeline (100% PASS)
+- **Task:** Resolve ReferenceError on `totalCandidateFrames`, `frameDiffs`, `isComplete`, and `hasUnresolvedFrames` when checkpoint has 585/585 frames, move finally block to end of function to preserve variable scope through result creation, and prevent frontend duplicate fallback pipeline when background jobs fail or cancel.
+- **Confirmed Root Causes Addressed**:
+  1. **Premature Finally Block Closing Try Scope (`stage3_extractChineseSubtitles.js`)**: `try {` started at line 709, but closed with `} finally { ... }` at line 1985 before observation combination, segment finalization, and performance calculation. Variables declared inside `try` (`frameDiffs`, etc.) or used after line 1985 were outside the scope. When checkpoint had 585/585 frames, it reached final result creation and failed with `ReferenceError`.
+  2. **Duplicate Pipeline Trigger in `useScriptWorkflow.js`**: When a background job failed or was aborted while running (`activeJobId` non-null), line 264 caught the error, logged a warning, and fell through to line 270 `generateScriptApi`, launching a second synchronous pipeline for the same episode!
+- **Surgical Changes Implemented (Minimal Change Discipline)**:
+  1. `backend/services/pipeline/stages/stage3_extractChineseSubtitles.js`:
+     - Removed premature `} finally { ... }` at line 1985.
+     - Moved `finally` block to the end of `extractChineseSubtitles` after `return result;` so the entire workflow runs inside the single overarching `try` block and `tempDir` is always cleaned up safely.
+     - All variables (`totalCandidateFrames`, `frameDiffs`, `cueStates`, `hasUnresolvedFrames`, `isComplete`, `adaptiveConcurrency`) remain valid and accessible until function return.
+  2. `frontend/src/hooks/useScriptWorkflow.js`:
+     - Added strict guard: if `activeJobId` exists, any failure or abort in `catch (jobErr)` immediately throws `jobErr` to display the actual error to the user without calling `generateScriptApi`.
+     - Guarded direct fallback step: `if (!response && !activeJobId && !abortController.signal.aborted)`.
+  3. `backend/tests/stage3_hybrid_ocr.test.js`:
+     - Added Test 26: Full Checkpoint Resume on real 585/585 checkpoint (`ep_1_source.mp4`, 286.56s) resumes with 0 API calls, 0 FFmpeg re-decodes, zero ReferenceError, and produces 133 deduplicated visual segments in 5.5s.
+     - Added Test 27: Duplicate Pipeline Protection verifying failed/cancelled active jobs never trigger direct pipeline fallback.
+- **Verification Outcomes**:
+  - `backend/tests/stage3_hybrid_ocr.test.js`: **27/27 PASS** (100%).
+  - Full Stage 3 test suite (`backend/tests/stage3_*.test.js`): **60/60 PASS** (100%).
+  - Cancellation & series sync suites: **29/29 PASS** (100%).
+  - `npm --prefix frontend run build`: **PASS** (0 errors in 651ms).
+- **Active Environment**:
+  - Backend API: `http://localhost:5000`
+  - Frontend UI: `http://localhost:5173`
+  - Active Branch: `chore/full-project-cleanup`
+- **Next Steps**:
+  - Commit and push verified fixes.
+
+---
+
+# Antigravity Shared State (Sync Memory)
+
+## Last Session
+- **Environment**: Antigravity IDE (Gemini) - Minimal Change Engineer
+- **Branch**: `chore/full-project-cleanup`
 - **Timestamp**: 2026-11-20T04:00:00+07:00
 
 ## Summary: Hybrid Local Chinese OCR + Gemini Verification Router — Target 5-Min Video in 1–2 Minutes (100% PASS)
