@@ -25,6 +25,7 @@ export default function EpisodeTranslateProgressCard({
   const [showConsole, setShowConsole] = useState(false);
   const [showKillConfirm, setShowKillConfirm] = useState(false);
   const [isStopping, setIsStopping] = useState(false);
+  const [stopError, setStopError] = useState(null);
   const consoleBottomRef = useRef(null);
 
   useEffect(() => {
@@ -54,26 +55,29 @@ export default function EpisodeTranslateProgressCard({
     }
   }, [logs.length, smoothProgress, showConsole]);
 
-  const effectiveCancelled = isCancelled || activeJob?.status === 'cancelled';
-  const effectiveFailed = isFailed && !effectiveCancelled;
+  const effectiveStopping = isStopping || Boolean(activeJob?.isStopping);
+  const effectiveCancelled = (isCancelled || activeJob?.status === 'cancelled') && !effectiveStopping;
+  const effectiveFailed = isFailed && !effectiveCancelled && !effectiveStopping;
 
   const rawMessage = activeJob?.stageMessage || activeJob?.message || '';
-  const message = isStopping
+  const message = effectiveStopping
     ? 'កំពុងផ្ញើសញ្ញាបញ្ឈប់ និងរំលត់ដំណើរការ (Stopping...)...'
-    : (effectiveCancelled
-      ? (rawMessage || 'ការងារត្រូវបានបញ្ឈប់ (Job cancelled)')
-      : (effectiveFailed
-        ? (rawMessage ? rawMessage.replace(/^បរាជ័យ:\s*/, '') : 'ការងារបានបរាជ័យ')
-        : (rawMessage || (isQueued ? `ក្នុង Queue (រង់ចាំ Route Key #${assignedKeyNum})...` : 'ដំណើរការ AI Pipeline...'))));
-  const isDone = smoothProgress >= 100 && !effectiveFailed && !effectiveCancelled;
+    : (stopError
+      ? `⚠️ ${stopError}`
+      : (effectiveCancelled
+        ? (rawMessage || 'ការងារត្រូវបានបញ្ឈប់ (Job cancelled)')
+        : (effectiveFailed
+          ? (rawMessage ? rawMessage.replace(/^បរាជ័យ:\s*/, '') : 'ការងារបានបរាជ័យ')
+          : (rawMessage || (isQueued ? `ក្នុង Queue (រង់ចាំ Route Key #${assignedKeyNum})...` : 'ដំណើរការ AI Pipeline...')))));
+  const isDone = smoothProgress >= 100 && !effectiveFailed && !effectiveCancelled && !effectiveStopping;
 
   // Theme styling based on state
-  const stateColor = isStopping
+  const stateColor = effectiveStopping
     ? '#f59e0b'
     : (effectiveCancelled
       ? '#fb923c'
       : (effectiveFailed ? '#ef4444' : (isDone ? '#10b981' : (isQueued ? '#fbbf24' : '#38bdf8'))));
-  const stateGlow = isStopping
+  const stateGlow = effectiveStopping
     ? '0 4px 16px rgba(245, 158, 11, 0.25)'
     : (effectiveCancelled
       ? '0 4px 16px rgba(251, 146, 60, 0.22)'
@@ -82,7 +86,7 @@ export default function EpisodeTranslateProgressCard({
         : (isDone
           ? '0 4px 20px rgba(16, 185, 129, 0.18)'
           : (isQueued ? '0 4px 16px rgba(251, 191, 36, 0.15)' : '0 4px 20px rgba(56, 189, 248, 0.22)'))));
-  const stateBorder = isStopping
+  const stateBorder = effectiveStopping
     ? 'rgba(245, 158, 11, 0.55)'
     : (effectiveCancelled
       ? 'rgba(251, 146, 60, 0.55)'
@@ -91,6 +95,22 @@ export default function EpisodeTranslateProgressCard({
         : (isDone
           ? 'rgba(16, 185, 129, 0.5)'
           : (isQueued ? 'rgba(251, 191, 36, 0.45)' : 'rgba(56, 189, 248, 0.5)'))));
+
+  const handlePerformKill = async () => {
+    if (typeof onKill !== 'function') return;
+    setIsStopping(true);
+    setStopError(null);
+    try {
+      const res = await onKill(activeJob);
+      if (res && res.success === false) {
+        setStopError(res.error || 'Failed to stop translate process');
+      }
+    } catch (err) {
+      setStopError(err?.message || 'Failed to stop translate process');
+    } finally {
+      setIsStopping(false);
+    }
+  };
 
   return (
     <div
@@ -111,7 +131,7 @@ export default function EpisodeTranslateProgressCard({
       {/* Header: Stage info + Big Tabular Percentage / Retry button */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flex: 1 }}>
-          {isStopping ? (
+          {effectiveStopping ? (
             <div style={{
               width: 26,
               height: 26,
@@ -211,13 +231,13 @@ export default function EpisodeTranslateProgressCard({
             <div style={{
               fontSize: '0.80rem',
               fontWeight: 800,
-              color: isStopping ? '#fde68a' : (effectiveCancelled ? '#fed7aa' : (effectiveFailed ? '#fca5a5' : '#f8fafc')),
+              color: effectiveStopping ? '#fde68a' : (effectiveCancelled ? '#fed7aa' : (effectiveFailed ? '#fca5a5' : '#f8fafc')),
               whiteSpace: 'nowrap',
               overflow: 'hidden',
               textOverflow: 'ellipsis',
               letterSpacing: '-0.01em',
             }}>
-              {isStopping
+              {effectiveStopping
                 ? '🛑 1. កំពុងបញ្ឈប់ (Stopping...)'
                 : (effectiveCancelled
                   ? '🛑 1. Translate Script ត្រូវបានបញ្ឈប់ (Cancelled)'
@@ -230,7 +250,7 @@ export default function EpisodeTranslateProgressCard({
             <div
               style={{
                 fontSize: '0.68rem',
-                color: isStopping ? '#fde68a' : (effectiveCancelled ? '#fb923c' : (effectiveFailed ? '#f87171' : (isDone ? '#34d399' : (isQueued ? '#fbbf24' : '#94a3b8')))),
+                color: effectiveStopping ? '#fde68a' : (effectiveCancelled ? '#fb923c' : (effectiveFailed ? '#f87171' : (isDone ? '#34d399' : (isQueued ? '#fbbf24' : '#94a3b8')))),
                 whiteSpace: 'nowrap',
                 overflow: 'hidden',
                 textOverflow: 'ellipsis',
@@ -276,8 +296,10 @@ export default function EpisodeTranslateProgressCard({
               )}
               <button
                 type="button"
+                disabled={effectiveStopping}
                 onClick={(e) => {
                   e.stopPropagation();
+                  if (effectiveStopping) return;
                   if (typeof onRetry === 'function') onRetry();
                 }}
                 style={{
@@ -292,7 +314,7 @@ export default function EpisodeTranslateProgressCard({
                   padding: '4px 10px',
                   fontSize: '0.70rem',
                   fontWeight: 800,
-                  cursor: 'pointer',
+                  cursor: effectiveStopping ? 'wait' : 'pointer',
                   display: 'flex',
                   alignItems: 'center',
                   gap: 5,
@@ -301,8 +323,9 @@ export default function EpisodeTranslateProgressCard({
                     : '0 0 14px rgba(239, 68, 68, 0.35)',
                   transition: 'all 0.15s ease',
                   flexShrink: 0,
+                  opacity: effectiveStopping ? 0.6 : 1,
                 }}
-                title="Retry ដំណើរការ Translation ឡើងវិញ (ធ្វើឡើងវិញ)"
+                title={effectiveStopping ? 'កំពុងរង់ចាំ Worker បញ្ឈប់...' : 'Retry ដំណើរការ Translation ឡើងវិញ (ធ្វើឡើងវិញ)'}
               >
                 <RotateCcw size={12} />
                 <span>ធ្វើឡើងវិញ (Retry)</span>
@@ -313,10 +336,10 @@ export default function EpisodeTranslateProgressCard({
               {!isDone && onKill && (
                 <button
                   type="button"
-                  disabled={isStopping}
+                  disabled={effectiveStopping}
                   onClick={async (e) => {
                     e.stopPropagation();
-                    if (isStopping) return;
+                    if (effectiveStopping) return;
                     if (typeof onRequestConfirm === 'function') {
                       const confirmed = await onRequestConfirm({
                         variant: 'danger',
@@ -328,12 +351,7 @@ export default function EpisodeTranslateProgressCard({
                         cancelLabel: 'បន្តដំណើរការ',
                       });
                       if (confirmed) {
-                        setIsStopping(true);
-                        try {
-                          await onKill(activeJob);
-                        } finally {
-                          setIsStopping(false);
-                        }
+                        await handlePerformKill();
                       }
                       return;
                     }
@@ -341,22 +359,22 @@ export default function EpisodeTranslateProgressCard({
                   }}
                   title="Kill Translate Process"
                   style={{
-                    background: isStopping ? 'rgba(245, 158, 11, 0.22)' : 'rgba(239, 68, 68, 0.22)',
-                    border: isStopping ? '1px solid rgba(245, 158, 11, 0.55)' : '1px solid rgba(239, 68, 68, 0.55)',
-                    color: isStopping ? '#fde68a' : '#fca5a5',
+                    background: effectiveStopping ? 'rgba(245, 158, 11, 0.22)' : 'rgba(239, 68, 68, 0.22)',
+                    border: effectiveStopping ? '1px solid rgba(245, 158, 11, 0.55)' : '1px solid rgba(239, 68, 68, 0.55)',
+                    color: effectiveStopping ? '#fde68a' : '#fca5a5',
                     padding: '4px 8px',
                     borderRadius: 6,
                     fontSize: '0.68rem',
                     fontWeight: 800,
-                    cursor: isStopping ? 'wait' : 'pointer',
+                    cursor: effectiveStopping ? 'wait' : 'pointer',
                     display: 'flex',
                     alignItems: 'center',
                     gap: 4,
                     transition: 'all 0.15s ease',
-                    opacity: isStopping ? 0.75 : 1,
+                    opacity: effectiveStopping ? 0.75 : 1,
                   }}
                 >
-                  {isStopping ? (
+                  {effectiveStopping ? (
                     <>
                       <Loader2 size={11} className="animate-spin" />
                       <span>Stopping...</span>
@@ -644,14 +662,7 @@ export default function EpisodeTranslateProgressCard({
         cancelLabel="បន្តដំណើរការ"
         onConfirm={async () => {
           setShowKillConfirm(false);
-          if (typeof onKill === 'function') {
-            setIsStopping(true);
-            try {
-              await onKill(activeJob);
-            } finally {
-              setIsStopping(false);
-            }
-          }
+          await handlePerformKill();
         }}
         onCancel={() => setShowKillConfirm(false)}
       />

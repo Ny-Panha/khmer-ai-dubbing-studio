@@ -261,6 +261,7 @@ export default function GeminiRouteModal({
   const isDemucsCancelledRef = useRef(false);
   const isTranslateCancelledRef = useRef(false);
   const isTtsCancelledRef = useRef(false);
+  const [isStoppingAllTranslate, setIsStoppingAllTranslate] = useState(false);
   const activeTimersRef = useRef(new Set());
   const [confirmDialog, setConfirmDialog] = useState(null);
   const confirmResolverRef = useRef(null);
@@ -311,7 +312,6 @@ export default function GeminiRouteModal({
 
   const handleKillTranslate = async (targetOrJob = null) => {
     try {
-      isTranslateCancelledRef.current = true;
       let targetJobId = null;
       let targetEpisodeId = null;
       let targetSeriesId = activeSeries?.id || seriesId || null;
@@ -339,8 +339,9 @@ export default function GeminiRouteModal({
 
         // If target cannot be safely resolved, do not guess or cancel unrelated jobs
         if (!targetJobId && !targetEpisodeId) {
-          setBatchError('⚠️ មិនអាចកំណត់ Job ឬភាគដែលត្រូវ Kill បានទេ (Target unresolved)');
-          return { success: false, error: 'Target unresolved' };
+          const errMsg = '⚠️ មិនអាចកំណត់ Job ឬភាគដែលត្រូវ Kill បានទេ (Target unresolved)';
+          setBatchError(errMsg);
+          return { success: false, error: errMsg };
         }
       }
 
@@ -358,11 +359,13 @@ export default function GeminiRouteModal({
       const data = await res.json().catch(() => ({}));
 
       if (!res.ok || data.success === false) {
-        const errMsg = data.error || 'បរាជ័យក្នុងការបញ្ឈប់ (Failed to cancel job)';
+        const errMsg = data.error || `បរាជ័យក្នុងការបញ្ឈប់ (HTTP ${res.status})`;
         setBatchError(`⚠️ ${errMsg}`);
         return { success: false, error: errMsg };
       }
 
+      // ONLY mark cancelled after authoritative backend confirmation!
+      isTranslateCancelledRef.current = true;
       setIsStartingBatch(false);
       setBatchInfo(null);
       setBatchSuccess((prev) => (isTranslateQueueEnqueueBanner(prev) ? null : prev));
@@ -373,8 +376,9 @@ export default function GeminiRouteModal({
       return { success: true, ...data };
     } catch (err) {
       console.error('[Kill Translate] Error:', err);
-      setBatchError(`⚠️ ${err.message || 'Error stopping translate job'}`);
-      return { success: false, error: err.message };
+      const errMsg = err.message || 'Error stopping translate job';
+      setBatchError(`⚠️ ${errMsg}`);
+      return { success: false, error: errMsg };
     }
   };
 
@@ -3042,8 +3046,10 @@ export default function GeminiRouteModal({
                   {(isStartingBatch || activeSeriesTranslateJobs.some((j) => selectedEpIds.size === 0 || selectedEpIds.has(j.episodeId))) && (
                     <button
                       type="button"
+                      disabled={isStoppingAllTranslate}
                       onClick={async (e) => {
                         e.stopPropagation();
+                        if (isStoppingAllTranslate) return;
                         const confirmed = await openStudioDialog({
                           variant: 'danger',
                           badge: 'KILL TRANSLATE',
@@ -3056,24 +3062,37 @@ export default function GeminiRouteModal({
                           cancelLabel: 'បន្តដំណើរការ',
                         });
                         if (confirmed) {
-                          handleKillTranslate();
+                          setIsStoppingAllTranslate(true);
+                          try {
+                            await handleKillTranslate();
+                          } finally {
+                            setIsStoppingAllTranslate(false);
+                          }
                         }
                       }}
                       style={{
                         padding: '5px 9px',
                         borderRadius: 6,
-                        background: 'rgba(239, 68, 68, 0.14)',
-                        border: '1px solid rgba(239, 68, 68, 0.45)',
-                        color: '#FCA5A5',
+                        background: isStoppingAllTranslate ? 'rgba(245, 158, 11, 0.22)' : 'rgba(239, 68, 68, 0.14)',
+                        border: isStoppingAllTranslate ? '1px solid rgba(245, 158, 11, 0.55)' : '1px solid rgba(239, 68, 68, 0.45)',
+                        color: isStoppingAllTranslate ? '#FDE68A' : '#FCA5A5',
                         fontSize: '0.68rem',
                         fontWeight: 700,
-                        cursor: 'pointer',
+                        cursor: isStoppingAllTranslate ? 'wait' : 'pointer',
                         display: 'inline-flex',
                         alignItems: 'center',
                         gap: 4,
+                        opacity: isStoppingAllTranslate ? 0.75 : 1,
                       }}
                     >
-                      <span>🛑 Kill</span>
+                      {isStoppingAllTranslate ? (
+                        <>
+                          <Loader2 size={11} className="animate-spin" />
+                          <span>Stopping...</span>
+                        </>
+                      ) : (
+                        <span>🛑 Kill</span>
+                      )}
                     </button>
                   )}
                 </div>

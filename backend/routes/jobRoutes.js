@@ -123,6 +123,8 @@ function serializeJobForList(job) {
       : [],
     logs: Array.isArray(job.logs) ? job.logs.slice(-40) : [],
     finalResult: lightFinalResult,
+    isExecuting: productionJobQueue.isWorkerExecuting(job.jobId),
+    isStopping: job.status === "cancelled" && productionJobQueue.isWorkerExecuting(job.jobId),
   };
 }
 
@@ -268,12 +270,21 @@ router.post("/generate", async (req, res) => {
     // If force re-translate is requested and an active job/lock exists, cancel it cleanly first
     if (isForce && productionJobQueue.hasActiveJobForEpisode(seriesId, episodeId)) {
       const active = productionJobQueue.getActiveJobForEpisode(seriesId, episodeId);
-      if (active?.jobId) {
+      if (active?.jobId && !active.isVirtualLock) {
         cancelJobRenderProcess(active.jobId);
         cancelJob(active.jobId);
         clearTransientJobApiKey(active.jobId);
+        if (productionJobQueue.isWorkerExecuting(active.jobId)) {
+          await productionJobQueue.waitForWorkerSettlement(active.jobId, 2500);
+        }
       }
-      productionJobQueue.releaseEpisodeLock(seriesId, episodeId);
+      if (productionJobQueue.isWorkerExecutingForEpisode(seriesId, episodeId)) {
+        return res.status(409).json({
+          success: false,
+          error: `ភាគ ${episodeId} កំពុងដំណើរការបញ្ឈប់ Worker ចាស់ (Worker is still terminating/cleaning up). សូមរង់ចាំបន្តិចរួចចុច Retry ម្តងទៀត។`,
+        });
+      }
+      productionJobQueue.releaseEpisodeLock(seriesId, episodeId, true);
       console.log(`[Job Dispatch] 🔄 Force Re-Run: Cancelled previous active job for ${seriesId}/${episodeId}`);
     }
 
@@ -577,10 +588,14 @@ router.get("/:jobId/status", (req, res) => {
   if (!job) {
     return res.status(404).json({ success: false, error: `រកមិនឃើញ Job #${jobId} ឡើយ` });
   }
+  const isExecuting = productionJobQueue.isWorkerExecuting(job.jobId);
+  const isStopping = job.status === "cancelled" && isExecuting;
   res.json({
     success: true,
     jobId,
     status: job.status,
+    isExecuting,
+    isStopping,
     progress: job.progress,
     stage: job.currentStage,
     message: job.stageMessage,
@@ -674,32 +689,30 @@ function executeJobCancellation({ jobId, episodeId, seriesId, all = false }) {
     // Fallback: If cleanJobId wasn't found as a job ID, check if an episode identifier was passed as jobId
     if (!job && (cleanJobId.startsWith("ep_") || cleanJobId.startsWith("episode_") || cleanJobId.match(/^ep\d+$/i))) {
       const candidateJobs = getAllJobs();
-      for (const j of candidateJobs) {
-        if (["running", "queued", "processing", "recovering"].includes(j.status)) {
-          if (String(j.episodeId) === cleanJobId) {
-            if (!hasSeriesId || String(j.seriesId) === seriesId.trim()) {
-              job = j;
-              break;
-            }
-          }
-        }
+      const activeCandidates = candidateJobs.filter((j) =>
+        ["running", "queued", "processing", "recovering"].includes(j.status) &&
+        String(j.episodeId) === cleanJobId &&
+        (!hasSeriesId || String(j.seriesId) === seriesId.trim())
+      );
+      if (activeCandidates.length > 1) {
+        return {
+          status: 400,
+          body: {
+            success: false,
+            status: "bad_request",
+            error: `Ambiguous cancellation target: multiple active jobs match episode '${cleanJobId}'. Please specify seriesId.`,
+            cancelledCount: 0,
+            cancelledJobIds: [],
+            cancelledJobs: [],
+          },
+        };
+      }
+      if (activeCandidates.length === 1) {
+        job = activeCandidates[0];
       }
     }
 
-    if (job) {
-      cancelJobRenderProcess(job.jobId);
-      const c = cancelJob(job.jobId);
-      clearTransientJobApiKey(job.jobId);
-      if (c) {
-        cancelledJobs.push(serializeJobForList(c));
-        cancelledJobIds.push(c.jobId);
-      }
-      if (job.seriesId && job.episodeId) {
-        productionJobQueue.releaseEpisodeLock(job.seriesId, job.episodeId);
-      }
-    }
-
-    if (cancelledJobIds.length === 0) {
+    if (!job) {
       return {
         status: 404,
         body: {
@@ -713,13 +726,79 @@ function executeJobCancellation({ jobId, episodeId, seriesId, all = false }) {
       };
     }
 
+    // Strict Scope Validation: Validate supplied scope identifiers against authoritative job
+    if (hasSeriesId && String(job.seriesId) !== seriesId.trim()) {
+      return {
+        status: 400,
+        body: {
+          success: false,
+          status: "bad_request",
+          error: `Job #${job.jobId} belongs to series '${job.seriesId}', which does not match requested series '${seriesId.trim()}'`,
+          cancelledCount: 0,
+          cancelledJobIds: [],
+          cancelledJobs: [],
+        },
+      };
+    }
+    if (hasEpisodeId && String(job.episodeId) !== episodeId.trim()) {
+      return {
+        status: 400,
+        body: {
+          success: false,
+          status: "bad_request",
+          error: `Job #${job.jobId} belongs to episode '${job.episodeId}', which does not match requested episode '${episodeId.trim()}'`,
+          cancelledCount: 0,
+          cancelledJobIds: [],
+          cancelledJobs: [],
+        },
+      };
+    }
+
+    // Terminal State Protection: Never cancel an already completed, failed, or cancelled job
+    if (["completed", "failed", "partial"].includes(job.status)) {
+      return {
+        status: 409,
+        body: {
+          success: false,
+          status: "conflict",
+          error: `Cannot cancel job #${job.jobId} because it is already ${job.status}`,
+          cancelledCount: 0,
+          cancelledJobIds: [],
+          cancelledJobs: [],
+        },
+      };
+    }
+    if (job.status === "cancelled") {
+      return {
+        status: 409,
+        body: {
+          success: false,
+          status: "conflict",
+          error: `Job #${job.jobId} is already cancelled`,
+          cancelledCount: 0,
+          cancelledJobIds: [],
+          cancelledJobs: [],
+        },
+      };
+    }
+
+    // Only cancel FFmpeg and job after validating scope and terminal state
+    cancelJobRenderProcess(job.jobId);
+    const c = cancelJob(job.jobId);
+    clearTransientJobApiKey(job.jobId);
+
+    if (c) {
+      cancelledJobs.push(serializeJobForList(c));
+      cancelledJobIds.push(c.jobId);
+    }
+
     return {
       status: 200,
       body: {
         success: true,
         status: "cancelled",
-        cancelledCount: cancelledJobIds.length,
-        count: cancelledJobIds.length,
+        cancelledCount: 1,
+        count: 1,
         cancelledJobIds,
         cancelledJobs,
       },
@@ -730,6 +809,27 @@ function executeJobCancellation({ jobId, episodeId, seriesId, all = false }) {
   const jobs = getAllJobs();
   const targetSeries = hasSeriesId ? seriesId.trim() : null;
   const targetEpisode = hasEpisodeId ? episodeId.trim() : null;
+
+  // Ambiguity guard: If episodeId is given without seriesId and without all: true, check for ambiguous match across series
+  if (targetEpisode && !targetSeries && !isKillAll) {
+    const matchingActiveJobs = jobs.filter(
+      (j) => ["running", "queued", "processing", "recovering"].includes(j.status) && String(j.episodeId) === targetEpisode
+    );
+    const seriesSet = new Set(matchingActiveJobs.map((j) => j.seriesId));
+    if (seriesSet.size > 1) {
+      return {
+        status: 400,
+        body: {
+          success: false,
+          status: "bad_request",
+          error: `Ambiguous cancellation target: episode '${targetEpisode}' is active in multiple series (${Array.from(seriesSet).join(", ")}). Please specify seriesId.`,
+          cancelledCount: 0,
+          cancelledJobIds: [],
+          cancelledJobs: [],
+        },
+      };
+    }
+  }
 
   for (const j of jobs) {
     if (["running", "queued", "processing", "recovering"].includes(j.status)) {
@@ -746,9 +846,9 @@ function executeJobCancellation({ jobId, episodeId, seriesId, all = false }) {
     }
   }
 
-  // Clean up virtual lock if held for this episode
-  if (targetSeries && targetEpisode && productionJobQueue.hasActiveJobForEpisode(targetSeries, targetEpisode)) {
-    productionJobQueue.releaseEpisodeLock(targetSeries, targetEpisode);
+  // Clean up virtual lock if held for this episode and no worker is actively executing
+  if (targetSeries && targetEpisode && !productionJobQueue.isWorkerExecutingForEpisode(targetSeries, targetEpisode)) {
+    productionJobQueue.releaseEpisodeLock(targetSeries, targetEpisode, true);
   }
 
   if (cancelledJobIds.length === 0) {
@@ -802,7 +902,11 @@ router.post("/kill", (req, res) => {
 router.post("/:jobId/cancel", (req, res) => {
   try {
     const { jobId } = req.params;
-    const outcome = executeJobCancellation({ jobId });
+    const outcome = executeJobCancellation({
+      jobId,
+      seriesId: req.body?.seriesId || req.query?.seriesId,
+      episodeId: req.body?.episodeId || req.query?.episodeId,
+    });
     if (!outcome.body.success) {
       return res.status(outcome.status).json(outcome.body);
     }

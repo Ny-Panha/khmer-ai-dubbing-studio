@@ -3,6 +3,54 @@
 ## Last Session
 - **Environment**: Antigravity IDE (Gemini) - Minimal Change Engineer
 - **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-20T12:50:00+07:00
+
+## Summary: Kill Button & Cancellation Bugs Surgical Fix — End-to-End Safety, Strict Episode Locks, Terminal State Protection & UI Synchronization (100% PASS)
+- **Task:** End-to-end fix for remaining cancellation race conditions, terminal state protection, and UI synchronization across backend job queue, routes, and React components without breaking working Translate, OCR, TTS, Demucs, Timeline, or Export:
+  1. **P0 — Episode Lock Release Race (`backend/services/pipeline/productionJobQueue.js`)**:
+     - Separated cancellation request from actual worker settlement.
+     - Added `activeExecutions` tracking map, `isWorkerExecuting(jobId)`, `isWorkerExecutingForEpisode(seriesId, episodeId, excludeJobId)`, and `waitForWorkerSettlement(jobId, timeoutMs)`.
+     - Hardened `releaseEpisodeLock(seriesId, episodeId, force = false)`: strictly refuses release if a worker is still executing in `this.activeExecutions`.
+     - Hardened `hasActiveJobForEpisode`: checks `activeEpisodeLocks`, `isWorkerExecutingForEpisode`, and `ACTIVE_STATUSES` to prevent any new job/worker from starting while an old worker is stopping.
+     - Hardened `cancelJob(jobId)`: marks `cancelRequested = true` and aborts controller, but does NOT release episode lock until worker promise settles in `.finally()`.
+     - In `processQueue()`: skips candidates if an existing worker is stopping for the episode; acquires `queue_worker` lock; guards `.then()` against cancelled/aborted workers; in `.finally()` deletes from `activeExecutions`, releases lock upon settlement, and emits `worker_settled`.
+  2. **P1 — Strict Job Identity & Series Isolation (`backend/routes/jobRoutes.js`)**:
+     - Hardened `executeJobCancellation()`: validates `seriesId` and `episodeId` against resolved job; rejects mismatches with HTTP 400 Bad Request; prevents ambiguous episode ID matching across multiple series.
+     - Scoped Kill All strictly enforces series boundaries; rejects empty cancellation targets.
+     - Cancels child FFmpeg render processes only after authoritative target validation.
+     - In `POST /generate`: if `isForce` is passed and an active job exists, cancels it and awaits `waitForWorkerSettlement(active.jobId, 2500)`. If still executing, returns HTTP 409 Conflict instead of allowing concurrent execution.
+     - Added `isExecuting` and `isStopping` fields to `serializeJobForList` and `GET /:jobId/status`.
+  3. **P1 — Terminal State Protection (`backend/services/pipeline/productionJobQueue.js` & `backend/routes/jobRoutes.js`)**:
+     - `cancelJob()` never alters terminal states (`COMPLETED`, `FAILED`, `PARTIAL`, or repeated `CANCELLED`).
+     - Returns HTTP 409 Conflict when attempting to cancel an already completed or failed job.
+     - Preserves completed results and checkpoint metadata against late callbacks.
+  4. **P1 — Real Episode Lock Concurrency Tests (`backend/tests/kill_button_and_cancellation.test.js`)**:
+     - Replaced flawed mock test with 18 comprehensive integration and concurrency tests using real production queue and controllable promise barriers.
+     - Tested: running job cancel, queued job cancel, cancel during recovery/backoff, cancel completed job (409), cancel already cancelled job (idempotent), wrong seriesId (400), wrong episodeId (400), shared episode IDs across series, scoped Kill All, empty payload (400), no auto-restart, late worker result ignored, new job blocked while old worker is stopping, safe retry after settlement, UI error handling, OCR checkpoint preservation, `series.json` integrity, and multi-episode isolation.
+  5. **P2 — Frontend False Cancelled State Elimination (`GeminiRouteModal.jsx`, `EpisodeTranslateProgressCard.jsx`, `DubbingRunnerContext.jsx`)**:
+     - In `GeminiRouteModal.jsx`: removed premature `isTranslateCancelledRef.current = true`; sets it only AFTER backend returns `res.ok && data.success !== false`. Returns `{ success: false, error: errMsg }` on API errors (400/404/500/network) without false cancellation.
+     - In `GeminiRouteModal.jsx` Kill All: added `isStoppingAllTranslate` state, spinner, and disabled guard to prevent duplicate clicks.
+     - In `EpisodeTranslateProgressCard.jsx`: added `stopError` state and `handlePerformKill` helper to catch API errors; defined `effectiveStopping = isStopping || Boolean(activeJob?.isStopping)`; defined `effectiveCancelled = (isCancelled || activeJob?.status === 'cancelled') && !effectiveStopping`. Disables "ធ្វើឡើងវិញ (Retry)" button while `effectiveStopping` is true so retry is only enabled after termination is confirmed.
+     - In `DubbingRunnerContext.jsx`: scoped cancel calls with `{ seriesId, episodeId }` and added error logging on failed cancellations.
+- **Verification Outcomes**:
+  - `backend/tests/kill_button_and_cancellation.test.js`: **18/18 PASS** (100%).
+  - Full Regression Suite (69 tests across 8 files): **69/69 PASS** (100%).
+  - Stage 3 OCR safety & Demucs pipeline: **4/4 PASS** (100%).
+  - `npm --prefix frontend run build`: **PASS** (1.80s, 0 errors).
+- **Active Environment**:
+  - Backend API: `http://localhost:5000`
+  - Frontend UI: `http://localhost:5173`
+  - Active Branch: `chore/full-project-cleanup`
+- **Next Steps**:
+  - Commit and push to `chore/full-project-cleanup`.
+
+---
+
+# Antigravity Shared State (Sync Memory)
+
+## Last Session
+- **Environment**: Antigravity IDE (Gemini) - Minimal Change Engineer
+- **Branch**: `chore/full-project-cleanup`
 - **Timestamp**: 2026-11-20T12:12:00+07:00
 
 ## Summary: Drama Genre & Direction Presets Audit & Surgical Fix — State Isolation, Authoritative Genre & Conflict Prevention (100% PASS)

@@ -176,6 +176,64 @@ class ProductionJobQueue {
   }
 
   /**
+   * Checks whether a worker is currently executing for a job ID.
+   */
+  isWorkerExecuting(jobId) {
+    if (!jobId || !this.activeExecutions) return false;
+    return this.activeExecutions.has(jobId);
+  }
+
+  /**
+   * Checks whether any active execution is currently running for an episode.
+   */
+  isWorkerExecutingForEpisode(seriesId, episodeId, excludeJobId = null) {
+    if (!this.activeExecutions || this.activeExecutions.size === 0) return false;
+    const cleanSeries = sanitizeIdentifier(seriesId, 'series_default');
+    const cleanEpisode = sanitizeIdentifier(episodeId, 'ep_1');
+    for (const jobId of this.activeExecutions) {
+      if (excludeJobId && jobId === excludeJobId) continue;
+      const job = this.inMemoryJobs.get(jobId);
+      if (job && job.seriesId === cleanSeries && job.episodeId === cleanEpisode) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Waits for a running worker to fully settle (clean up and finish execution).
+   */
+  waitForWorkerSettlement(jobId, timeoutMs = 5000) {
+    if (!jobId || !this.activeExecutions || !this.activeExecutions.has(jobId)) {
+      return Promise.resolve(true);
+    }
+    return new Promise((resolve) => {
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (!settled) {
+          settled = true;
+          this.events.off('worker_settled', onSettled);
+          resolve(!this.activeExecutions.has(jobId));
+        }
+      }, timeoutMs);
+      if (typeof timer.unref === 'function') timer.unref();
+
+      const onSettled = (event) => {
+        if (event?.jobId === jobId) {
+          if (!settled) {
+            settled = true;
+            clearTimeout(timer);
+            this.events.off('worker_settled', onSettled);
+            resolve(true);
+          }
+        }
+      };
+
+      this.events.on('worker_settled', onSettled);
+    });
+  }
+
+  /**
    * Acquires a mutual exclusion lock for an episode (used by direct pipeline).
    */
   acquireEpisodeLock(seriesId, episodeId, lockType = 'pipeline', workerId = 'direct_worker') {
@@ -183,15 +241,22 @@ class ProductionJobQueue {
     const cleanEpisode = sanitizeIdentifier(episodeId, 'ep_1');
     const lockKey = `${cleanSeries}/${cleanEpisode}`;
 
-    if (this.hasActiveJobForEpisode(cleanSeries, cleanEpisode)) {
+    const existingLock = this.activeEpisodeLocks.get(lockKey);
+    if (existingLock && existingLock.workerId === workerId) {
+      return true;
+    }
+
+    if (this.hasActiveJobForEpisode(cleanSeries, cleanEpisode, workerId)) {
       const active = this.getActiveJobForEpisode(cleanSeries, cleanEpisode);
-      const duplicateMsg = `Duplicate Active Job: An active job or lock (#${active?.jobId || 'episode_lock'}) is already running for ${cleanSeries}/${cleanEpisode}`;
-      const err = new Error(duplicateMsg);
-      err.code = 'DUPLICATE_ACTIVE_JOB';
-      err.existingJobId = active?.jobId || 'episode_lock';
-      err.status = active?.status || 'running';
-      err.httpStatus = 409;
-      throw err;
+      if (active?.jobId !== workerId) {
+        const duplicateMsg = `Duplicate Active Job: An active job or lock (#${active?.jobId || 'episode_lock'}) is already running for ${cleanSeries}/${cleanEpisode}`;
+        const err = new Error(duplicateMsg);
+        err.code = 'DUPLICATE_ACTIVE_JOB';
+        err.existingJobId = active?.jobId || 'episode_lock';
+        err.status = active?.status || 'running';
+        err.httpStatus = 409;
+        throw err;
+      }
     }
 
     this.activeEpisodeLocks.set(lockKey, {
@@ -205,29 +270,41 @@ class ProductionJobQueue {
   }
 
   /**
-   * Releases an episode lock.
+   * Releases an episode lock safely.
+   * If a worker is still executing, refuses release unless force=true.
    */
-  releaseEpisodeLock(seriesId, episodeId) {
+  releaseEpisodeLock(seriesId, episodeId, force = false) {
     const cleanSeries = sanitizeIdentifier(seriesId, 'series_default');
     const cleanEpisode = sanitizeIdentifier(episodeId, 'ep_1');
+    if (!force && this.isWorkerExecutingForEpisode(cleanSeries, cleanEpisode)) {
+      return false;
+    }
     const lockKey = `${cleanSeries}/${cleanEpisode}`;
     return this.activeEpisodeLocks.delete(lockKey);
   }
 
   /**
    * Checks if an active job or execution lock already exists for the given series and episode.
-   * Active statuses: queued, running, recovering.
+   * Active statuses: queued, running, recovering, or activeExecutions worker running.
    */
-  hasActiveJobForEpisode(seriesId, episodeId) {
+  hasActiveJobForEpisode(seriesId, episodeId, excludeJobId = null) {
     const cleanSeries = sanitizeIdentifier(seriesId, 'series_default');
     const cleanEpisode = sanitizeIdentifier(episodeId, 'ep_1');
     const lockKey = `${cleanSeries}/${cleanEpisode}`;
 
     if (this.activeEpisodeLocks.has(lockKey)) {
+      const lock = this.activeEpisodeLocks.get(lockKey);
+      if (!excludeJobId || lock.workerId !== excludeJobId) {
+        return true;
+      }
+    }
+
+    if (this.isWorkerExecutingForEpisode(cleanSeries, cleanEpisode, excludeJobId)) {
       return true;
     }
 
     for (const job of this.inMemoryJobs.values()) {
+      if (excludeJobId && job.jobId === excludeJobId) continue;
       if (
         job.seriesId === cleanSeries &&
         job.episodeId === cleanEpisode &&
@@ -260,12 +337,10 @@ class ProductionJobQueue {
     }
 
     for (const job of this.inMemoryJobs.values()) {
-      if (
-        job.seriesId === cleanSeries &&
-        job.episodeId === cleanEpisode &&
-        ACTIVE_STATUSES.has(job.status)
-      ) {
-        return job;
+      if (job.seriesId === cleanSeries && job.episodeId === cleanEpisode) {
+        if (ACTIVE_STATUSES.has(job.status) || this.activeExecutions.has(job.jobId)) {
+          return job;
+        }
       }
     }
     return null;
@@ -653,39 +728,60 @@ class ProductionJobQueue {
       this.retryTimers.delete(jobId);
     }
 
-    if (job) {
-      const wasActive = job.status === JOB_STATUS.RUNNING || job.status === JOB_STATUS.RECOVERING;
-      job.status = JOB_STATUS.CANCELLED;
-      job.stageMessage = 'Job was cancelled by user';
-      job.completedAt = Date.now();
-      job.updatedAt = Date.now();
-
-      // Release mutual exclusion lock so episode can be retried immediately
-      if (job.seriesId && job.episodeId) {
-        this.releaseEpisodeLock(job.seriesId, job.episodeId);
-      }
-
-      // Signal abort to active worker
+    if (!job) {
       if (controller) {
         controller.abort(new Error('Job was cancelled by user'));
       }
-
-      try {
-        const filePath = getJobFilePath(job.seriesId, job.episodeId, jobId, this.baseUploadsDir);
-        atomicWriteJson(filePath, job);
-      } catch (_) {}
-
-      this.events.emit('job_change', { action: 'cancel', job });
-      if (wasActive) {
-        this.processQueue();
-      }
-      return job;
+      return null;
     }
 
+    // Terminal State Protection:
+    // Never change COMPLETED, FAILED, or PARTIAL to CANCELLED.
+    if (
+      job.status === JOB_STATUS.COMPLETED ||
+      job.status === JOB_STATUS.FAILED ||
+      job.status === JOB_STATUS.PARTIAL
+    ) {
+      return null;
+    }
+
+    // Repeated cancellation: If already CANCELLED, do not re-cancel or report false success
+    if (job.status === JOB_STATUS.CANCELLED) {
+      if (controller && !controller.signal.aborted) {
+        controller.abort(new Error('Job was cancelled by user'));
+      }
+      return null;
+    }
+
+    const wasActive = job.status === JOB_STATUS.RUNNING || job.status === JOB_STATUS.RECOVERING;
+    job.status = JOB_STATUS.CANCELLED;
+    job.cancelRequested = true;
+    job.stageMessage = 'Job was cancelled by user';
+    job.completedAt = Date.now();
+    job.updatedAt = Date.now();
+
+    // Signal abort to active worker immediately
     if (controller) {
       controller.abort(new Error('Job was cancelled by user'));
     }
-    return null;
+
+    // Episode Lock Release Race Prevention:
+    // Only release mutual exclusion lock immediately if the worker is NOT currently executing!
+    // If worker is running, lock is strictly retained and released in worker .finally() upon actual settlement.
+    if (job.seriesId && job.episodeId && !this.isWorkerExecuting(job.jobId)) {
+      this.releaseEpisodeLock(job.seriesId, job.episodeId, true);
+    }
+
+    try {
+      const filePath = getJobFilePath(job.seriesId, job.episodeId, jobId, this.baseUploadsDir);
+      atomicWriteJson(filePath, job);
+    } catch (_) {}
+
+    this.events.emit('job_change', { action: 'cancel', job });
+    if (wasActive) {
+      this.processQueue();
+    }
+    return job;
   }
 
   /**
@@ -748,8 +844,26 @@ class ProductionJobQueue {
       const jobsToStart = queuedJobs.slice(0, availableSlots);
 
       for (const job of jobsToStart) {
+        // Strict Episode Isolation: Do not start a job if another worker is already active or stopping for this episode
+        if (this.hasActiveJobForEpisode(job.seriesId, job.episodeId, job.jobId)) {
+          continue;
+        }
+
         if (!this.activeAbortControllers.has(job.jobId)) {
           this.activeAbortControllers.set(job.jobId, new AbortController());
+        }
+
+        const cleanSeries = sanitizeIdentifier(job.seriesId, 'series_default');
+        const cleanEpisode = sanitizeIdentifier(job.episodeId, 'ep_1');
+        const lockKey = `${cleanSeries}/${cleanEpisode}`;
+        if (!this.activeEpisodeLocks.has(lockKey)) {
+          this.activeEpisodeLocks.set(lockKey, {
+            seriesId: cleanSeries,
+            episodeId: cleanEpisode,
+            lockType: 'queue_worker',
+            workerId: job.jobId,
+            acquiredAt: Date.now(),
+          });
         }
 
         job.status = JOB_STATUS.RUNNING;
@@ -770,7 +884,7 @@ class ProductionJobQueue {
           Promise.resolve()
             .then(() => this.workerHandler(job))
             .then((result) => {
-              if (job.status === JOB_STATUS.CANCELLED || job.status === JOB_STATUS.PAUSED) {
+              if (job.status === JOB_STATUS.CANCELLED || job.cancelRequested || this.getJobSignal(job.jobId)?.aborted) {
                 return;
               }
               if (job.status === JOB_STATUS.RUNNING) {
@@ -789,6 +903,7 @@ class ProductionJobQueue {
             .catch((err) => {
               const isAborted =
                 job.status === JOB_STATUS.CANCELLED ||
+                job.cancelRequested ||
                 err?.name === 'AbortError' ||
                 err?.code === 'ABORT_ERR' ||
                 Boolean(this.getJobSignal(job.jobId)?.aborted) ||
@@ -806,9 +921,6 @@ class ProductionJobQueue {
                 if (this.retryTimers && this.retryTimers.has(job.jobId)) {
                   try { clearTimeout(this.retryTimers.get(job.jobId)); } catch (_) {}
                   this.retryTimers.delete(job.jobId);
-                }
-                if (job.seriesId && job.episodeId) {
-                  this.releaseEpisodeLock(job.seriesId, job.episodeId);
                 }
                 return;
               }
@@ -872,10 +984,25 @@ class ProductionJobQueue {
             })
             .finally(() => {
               this.activeExecutions.delete(job.jobId);
+              if (job.seriesId && job.episodeId) {
+                if (!this.isWorkerExecutingForEpisode(job.seriesId, job.episodeId)) {
+                  this.releaseEpisodeLock(job.seriesId, job.episodeId, true);
+                }
+              }
+              this.events.emit('worker_settled', {
+                jobId: job.jobId,
+                seriesId: job.seriesId,
+                episodeId: job.episodeId,
+              });
               this.processQueue();
             });
         } else {
           this.activeExecutions.delete(job.jobId);
+          if (job.seriesId && job.episodeId) {
+            if (!this.isWorkerExecutingForEpisode(job.seriesId, job.episodeId)) {
+              this.releaseEpisodeLock(job.seriesId, job.episodeId, true);
+            }
+          }
         }
       }
     } finally {

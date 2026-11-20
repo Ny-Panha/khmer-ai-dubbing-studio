@@ -182,7 +182,18 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries, o
     while (!signal?.aborted) {
       await new Promise((r) => setTimeout(r, 1500));
       if (signal?.aborted) {
-        await fetch(`/api/jobs/${encodeURIComponent(jobId)}/cancel`, { method: 'POST' }).catch(() => {});
+        try {
+          const cancelRes = await fetch(`/api/jobs/${encodeURIComponent(jobId)}/cancel`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ seriesId, episodeId: ep.id }),
+          });
+          if (!cancelRes.ok) {
+            console.warn(`[DubbingRunner] Cancellation request for job ${jobId} returned HTTP ${cancelRes.status}`);
+          }
+        } catch (cancelErr) {
+          console.error(`[DubbingRunner] Error cancelling job ${jobId}:`, cancelErr.message);
+        }
         throw new Error('Translation aborted by user');
       }
       const st = await getJobStatus(jobId, { seriesId, episodeId: ep.id, signal }).catch(() => null);
@@ -1400,10 +1411,13 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries, o
     // 2. Transmit scoped kill command to backend worker processes immediately
     try {
       if (stepType === 'clean_bgm' || stepType === 'all3') {
-        await killSeparationApi({ videoPath: videoRef, jobId: currentEpId || 'all' }).catch(() => {});
+        const killSepRes = await killSeparationApi({ videoPath: videoRef, jobId: currentEpId || 'all' }).catch((err) => ({ success: false, error: err.message }));
+        if (killSepRes && killSepRes.success === false) {
+          console.warn('[DubbingRunner] Demucs kill returned error:', killSepRes.error);
+        }
       }
       if (stepType === 'translate' || stepType === 'repair' || stepType === 'all3') {
-        await fetch('/api/jobs/kill', {
+        const res = await fetch('/api/jobs/kill', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -1411,9 +1425,15 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries, o
             episodeId: currentEpId || undefined,
             all: !currentEpId,
           }),
-        }).catch(() => {});
+        });
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          console.warn(`[DubbingRunner] Kill jobs returned HTTP ${res.status}:`, errData.error);
+        }
       }
-    } catch (_) {}
+    } catch (killErr) {
+      console.error('[DubbingRunner] Error in stopStep kill call:', killErr.message);
+    }
 
     updateRunnerState(stepType, {
       status: 'idle',
