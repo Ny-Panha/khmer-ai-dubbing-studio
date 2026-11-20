@@ -3,6 +3,58 @@
 ## Last Session
 - **Environment**: Antigravity IDE (Gemini) - Minimal Change Engineer
 - **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-20T10:52:00+07:00
+
+## Summary: RapidOCR Stage 3 Optimization — Persistent Streaming Worker, Subtitle ROI Deduplication & Conservative Verification (100% PASS)
+- **Task:** Speed up Stage 3 Local RapidOCR on ~585 candidate frames for 5-minute drama video:
+  1. Replace repeated Python process spawning with a persistent, job-scoped worker that initializes RapidOCR ONNXRuntime models only once.
+  2. Implement bounded streaming batches with backpressure, live progress reporting, cancellation via AbortSignal, resource cleanup, and retry of incomplete frames.
+  3. Implement verified subtitle-region deduplication BEFORE expensive RapidOCR, strictly preserving cue boundaries, short cues (<=1.0s), scene changes, timestamps, and speaker metadata.
+  4. Enforce conservative empty verification: do NOT automatically mark frames `verified_empty` without independent supporting evidence (dual temporal sampling across cue or pixel diff confirmation). Neutral empty confidence (0.40–0.75), ocrStatus `empty`.
+  5. In Hybrid Router: High-confidence local text continues without Gemini; uncertain frames route to Gemini without re-verifying confident text.
+  6. Granular telemetry tracking: `workerStartupMs`, `rapidOcrInitMs`, `avgMsPerFrame`, `actualOcrFramesCount`, `dedupedFramesCount`, `geminiFallbackFramesCount`, `totalStage3Ms`, `peakMemoryMb`.
+- **Root Causes & Bottlenecks Addressed**:
+  1. **Repeated Python & ONNX Initialization Overhead**: Spawning Python per batch took ~2.5s per batch on Windows (~25s wasted on 10 batches of 585 frames).
+  2. **False Empty Confidence**: Worker previously output `confidence: 1.0` or `0.85` with `ocrStatus: "verified_empty"` for any frame without text, bypassing Gemini Vision even on low-contrast subtitles.
+  3. **Lack of Pre-OCR Subtitle ROI Deduplication**: Identical subtitle frames in the safe zone were re-passed to heavy RapidOCR inference rather than reusing matched results.
+- **Surgical Changes Implemented (Minimal Change Discipline)**:
+  1. `backend/workers/local_chinese_ocr_worker.py`:
+     - Added `--persistent` mode: initializes `RapidOCR` once, signals ready via stdout JSON line, and reads line-delimited batch commands over `stdin`.
+     - Added `process_frames_batch` with subtitle ROI deduplication check (`cv2.absdiff(roi, prev_roi).mean() < 1.8`) before inference.
+     - Changed empty detection confidence from hardcoded 1.0/0.85 to dynamic edge-density check (0.40–0.75) and `ocrStatus: "empty"` (preventing false local verification).
+     - Handled UTF-8 BOM stripping on Windows PowerShell pipes.
+     - Retained 100% backward compatibility for legacy CLI mode.
+  2. `backend/services/ocr/localChineseOcrService.js`:
+     - Implemented `PersistentChineseOcrWorker` managing subprocess lifecycle, streaming batches, cancellation, backpressure, and resource cleanup.
+     - Implemented `deduplicateSubtitleFrames` helper preserving cue boundaries, short subtitles (<=1.0s), scene cuts, timestamps, and speaker metadata.
+     - In `runLocalChineseOcr`: Streams bounded batches (60 frames) through the persistent worker with automatic fallback to legacy CLI mode if persistent worker crashes.
+     - Returns granular telemetry: `workerStartupMs`, `rapidOcrInitMs`, `totalWallMs`, `avgMsPerFrame`, `actualOcrFramesCount`, `dedupedFramesCount`.
+  3. `backend/services/pipeline/stages/stage3_extractChineseSubtitles.js`:
+     - Tagged candidate frames with `cueIndex`, `isShortCue`, and `sceneCut`.
+     - Collected and surfaced all 8 required performance telemetry metrics in `performance` and `ocrMeta`.
+     - Updated Hybrid Router: Verified empty requires independent supporting evidence (dual temporal sampling or surrounding static diff). High-confidence local text continues without Gemini; uncertain frames route to Gemini without re-verifying confident text.
+  4. `backend/tests/stage3_persistent_rapidocr.test.js`:
+     - Added 6 comprehensive integration tests covering single model init, streaming batches, deduplication preservation, conservative empty verification, router logic, telemetry, and legacy fallback.
+- **Verification Outcomes**:
+  - `backend/tests/stage3_persistent_rapidocr.test.js`: **6/6 PASS** (100%).
+  - Full Stage 3 test suites (`backend/tests/stage3_*.test.js`): **66/66 PASS** (100%).
+  - Full regression test suites (series persist, cancellation, TTS skip): **45/45 PASS** (100%).
+  - Real Video Benchmark (`ep_1_source.mp4`, 286.56s): **25/25 matched (100.0% accuracy)**, 118 frames verified locally, 0 Gemini batches required, memory delta RSS +7.2 MB.
+  - `npm --prefix frontend run build`: **PASS** (651ms, 0 errors).
+- **Active Environment**:
+  - Backend API: `http://localhost:5000`
+  - Frontend UI: `http://localhost:5173`
+  - Active Branch: `chore/full-project-cleanup`
+- **Next Steps**:
+  - Commit and push verified fixes.
+
+---
+
+# Antigravity Shared State (Sync Memory)
+
+## Last Session
+- **Environment**: Antigravity IDE (Gemini) - Minimal Change Engineer
+- **Branch**: `chore/full-project-cleanup`
 - **Timestamp**: 2026-11-20T10:19:00+07:00
 
 ## Summary: Fixed 409 Conflict on Episode Retry & Re-Translate (100% PASS)

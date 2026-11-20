@@ -1255,6 +1255,29 @@ async function createNewEpisode(seriesId, options = {}) {
 }
 
 /**
+ * Safe directory removal with retries and Windows fallback for locked files / transient EPERM
+ */
+function safeRemoveDirectorySync(dirPath, maxRetries = 10, retryDelay = 100) {
+  if (!dirPath || !fs.existsSync(dirPath)) return true;
+  try {
+    fs.rmSync(dirPath, { recursive: true, force: true, maxRetries, retryDelay });
+    return true;
+  } catch (err) {
+    if (process.platform === 'win32') {
+      try {
+        const { spawnSync } = require('child_process');
+        spawnSync('cmd.exe', ['/c', 'rmdir', '/s', '/q', dirPath], {
+          windowsHide: true,
+          stdio: 'ignore',
+        });
+        if (!fs.existsSync(dirPath)) return true;
+      } catch (_) {}
+    }
+    throw err;
+  }
+}
+
+/**
  * Delete an entire series and remove its directory from disk atomically
  */
 function deleteSeries(seriesId, options = {}) {
@@ -1265,11 +1288,35 @@ function deleteSeries(seriesId, options = {}) {
 
   seriesMetadataCache.delete(cacheKey);
 
+  // 1. Cancel active generation jobs & release episode locks for this series
+  const q = getProductionJobQueueSafe();
+  if (q) {
+    try {
+      if (q.inMemoryJobs) {
+        for (const [jobId, job] of q.inMemoryJobs.entries()) {
+          if (job?.seriesId === cleanSeries && (job.status === 'running' || job.status === 'queued')) {
+            try { q.cancelJob(jobId); } catch (_) {}
+          }
+        }
+      }
+      if (q.activeEpisodeLocks) {
+        for (const lockKey of Array.from(q.activeEpisodeLocks.keys())) {
+          if (lockKey.startsWith(`${cleanSeries}/`)) {
+            q.activeEpisodeLocks.delete(lockKey);
+          }
+        }
+      }
+    } catch (_) {}
+  }
+
+  // 2. Remove series directory from disk with Windows retry and fallback
   if (fs.existsSync(seriesDir)) {
     try {
-      fs.rmSync(seriesDir, { recursive: true, force: true });
+      safeRemoveDirectorySync(seriesDir, 10, 100);
     } catch (err) {
-      return { success: false, error: err.message };
+      if (fs.existsSync(seriesDir)) {
+        return { success: false, error: err.message };
+      }
     }
   }
 
@@ -1298,7 +1345,7 @@ function deleteEpisode(seriesId, episodeId) {
     // Idempotent: If episode already removed or not found, return clean success without 400 Bad Request
     const epDir = path.join(PROJECTS_DIR, cleanSeries, 'episodes', cleanEp);
     if (fs.existsSync(epDir)) {
-      try { fs.rmSync(epDir, { recursive: true, force: true }); } catch (_) { }
+      try { safeRemoveDirectorySync(epDir, 5, 100); } catch (_) { }
     }
     return {
       success: true,
@@ -1348,7 +1395,7 @@ function deleteEpisode(seriesId, episodeId) {
 
   const epDir = path.join(PROJECTS_DIR, cleanSeries, 'episodes', cleanEp);
   if (fs.existsSync(epDir)) {
-    try { fs.rmSync(epDir, { recursive: true, force: true }); } catch (_) { }
+    try { safeRemoveDirectorySync(epDir, 5, 100); } catch (_) { }
   }
 
   console.log(`[EpisodeService] Deleted Episode ${cleanEp} from series "${cleanSeries}". Remaining episodes re-indexed sequentially (1..${series.episodes.length}).`);

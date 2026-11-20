@@ -695,6 +695,10 @@ async function extractChineseSubtitles({
   let batchSplitsCount = 0;
   let dedupedFramesCount = 0;
   let localOcrFramesCount = 0;
+  let actualOcrFramesCount = 0;
+  let workerStartupMs = 0;
+  let rapidOcrInitMs = 0;
+  let avgMsPerFrame = 0;
   let localVerifiedCount = 0;
   let geminiVerifiedCount = 0;
   let geminiBatchCount = 0;
@@ -986,7 +990,19 @@ Return JSON ONLY matching this schema:
     }
 
     if (isLocalOcrActive && framesToAnalyze.length > 0) {
-      const pendingForLocalOcr = framesToAnalyze.filter((f) => !completedMap.has(parseFloat(f.timestampSec.toFixed(2))));
+      const pendingForLocalOcr = framesToAnalyze
+        .filter((f) => !completedMap.has(parseFloat(f.timestampSec.toFixed(2))))
+        .map((f, idx) => {
+          const t = parseFloat(f.timestampSec.toFixed(2));
+          const matchedCue = cueStates.find((cs) => t >= cs.startSec - 0.10 && t <= cs.endSec + 0.10);
+          return {
+            ...f,
+            id: f.id || `f_${idx}_${t}`,
+            cueIndex: matchedCue ? matchedCue.cueIndex : -1,
+            isShortCue: matchedCue ? matchedCue.duration <= 1.0 : false,
+            sceneCut: changePoints.some((cp) => Math.abs(cp.timestampSec - t) <= 0.15),
+          };
+        });
       if (pendingForLocalOcr.length > 0) {
         const localOcrStart = Date.now();
         console.log(`[Stage 3 OCR] ⚡ Running RapidOCR Local Chinese OCR on ${pendingForLocalOcr.length} candidate frames...`);
@@ -1030,6 +1046,11 @@ Return JSON ONLY matching this schema:
             },
           });
           localResults = ocrRun.results || [];
+          workerStartupMs = ocrRun.workerStartupMs || 0;
+          rapidOcrInitMs = ocrRun.rapidOcrInitMs || 0;
+          actualOcrFramesCount = ocrRun.actualOcrFramesCount || localResults.length;
+          dedupedFramesCount = ocrRun.dedupedFramesCount || 0;
+          avgMsPerFrame = ocrRun.avgMsPerFrame || 0;
         } catch (localErr) {
           if (localErr?.name === 'AbortError' || signal?.aborted) {
             throw localErr?.name === 'AbortError' ? localErr : createAbortError('Stage 3 OCR aborted');
@@ -1226,35 +1247,77 @@ Return JSON ONLY matching this schema:
             }
           }
 
-          // Baseline safety net frames: verify empty if local confidence >= 0.85
+          // Baseline frames: high-confidence local text continues without Gemini;
+          // Empty frames require independent supporting evidence before marking verified_empty
           for (const cand of candidateTimestamps) {
             const t = cand.timestampSec;
             if (completedMap.has(t)) continue;
             const loc = localMap.get(t);
-            if (loc && !loc.hasText && (loc.confidence || 0) >= 0.85) {
+            if (!loc) continue;
+
+            if (loc.hasText && (loc.confidence || 0) >= 0.85) {
+              // High-confidence local text continues without Gemini
               completedMap.set(t, {
                 timestampSec: t,
                 reportedSec: t,
-                hasText: false,
-                textZh: '',
-                chineseText: '',
+                hasText: true,
+                textZh: loc.chineseText || loc.textZh || '',
+                chineseText: loc.chineseText || loc.textZh || '',
                 confidence: loc.confidence,
-                isSharp: true,
+                isSharp: loc.confidence >= 0.70,
                 position: 'bottom_subtitle',
                 visualGender: 'unknown',
                 speakerGender: 'UNKNOWN',
                 speakerVisualHint: '',
                 deliveryType: 'dialogue',
                 genderConfidence: 0.5,
-                ocrStatus: 'verified_empty',
+                ocrStatus: 'verified_text',
                 isVerified: true,
-                isVerifiedEmpty: true,
+                isVerifiedEmpty: false,
                 ocrFailed: false,
                 reviewNeeded: false,
                 uncertainOcr: false,
                 ocrEngine: 'rapidocr-local',
               });
               localVerifiedCount++;
+            } else if (!loc.hasText && (loc.confidence || 0) >= 0.70) {
+              // Independent supporting evidence: verify empty ONLY if surrounded by verified empty frames
+              // within a static window where max subtitle difference is < 1.0 (subDiff < 1.0)
+              const prevVerified = Array.from(completedMap.values())
+                .filter((o) => o.timestampSec < t && o.isVerifiedEmpty)
+                .pop();
+              const hasIndependentEmptyContext = Boolean(
+                prevVerified &&
+                Math.abs(t - prevVerified.timestampSec) <= 1.5 &&
+                getMaxSubtitleDiffBetween(prevVerified.timestampSec, t) < 1.0
+              );
+
+              if (hasIndependentEmptyContext) {
+                completedMap.set(t, {
+                  timestampSec: t,
+                  reportedSec: t,
+                  hasText: false,
+                  textZh: '',
+                  chineseText: '',
+                  confidence: loc.confidence,
+                  isSharp: true,
+                  position: 'bottom_subtitle',
+                  visualGender: 'unknown',
+                  speakerGender: 'UNKNOWN',
+                  speakerVisualHint: '',
+                  deliveryType: 'dialogue',
+                  genderConfidence: 0.5,
+                  ocrStatus: 'verified_empty',
+                  isVerified: true,
+                  isVerifiedEmpty: true,
+                  ocrFailed: false,
+                  reviewNeeded: false,
+                  uncertainOcr: false,
+                  ocrEngine: 'rapidocr-local',
+                });
+                localVerifiedCount++;
+              }
+              // If no independent supporting evidence, frame remains unverified and routes to Gemini Vision
             }
           }
 
@@ -2294,13 +2357,19 @@ Return JSON ONLY matching this schema:
     tieBreakMs,
     candidateFramesCount: totalCandidateFrames,
     localOcrFramesCount,
+    actualOcrFramesCount: actualOcrFramesCount || localOcrFramesCount,
     localVerifiedCount,
     geminiVerifiedCount,
     geminiActualAttemptsCount: apiCallsCount,
     geminiBatchCount,
+    geminiFallbackFramesCount: geminiVerifiedCount + unresolvedMap.size,
     dedupedFramesCount,
     unresolvedFramesCount: unresolvedMap.size,
     finalChineseCuesCount: finalizedVisualSegments.length,
+    workerStartupMs,
+    rapidOcrInitMs,
+    avgMsPerFrame,
+    peakMemoryMb: parseFloat((process.memoryUsage().rss / 1024 / 1024).toFixed(1)),
   };
 
   const ocrEngineLabel = isLocalOcrActive ? (geminiVerifiedCount > 0 ? 'hybrid-rapidocr-gemini' : 'rapidocr-local') : 'gemini-vision';
@@ -2337,6 +2406,10 @@ Return JSON ONLY matching this schema:
       frameExtractionMs,
       localOcrMs,
       geminiVerificationMs,
+      workerStartupMs,
+      rapidOcrInitMs,
+      avgMsPerFrame,
+      actualOcrFramesCount: actualOcrFramesCount || localOcrFramesCount,
       localVerifiedCount,
       geminiVerifiedCount,
       geminiBatchCount,

@@ -17,15 +17,23 @@ async function runBenchmark() {
   console.log('🚀 STAGE 3 HYBRID LOCAL OCR BENCHMARK — REAL 5-MINUTE VIDEO');
   console.log('================================================================');
 
-  const videoPath = path.resolve(__dirname, '../uploads/projects/series_test/episodes/ep_1/video/ep_1_source.mp4');
-  if (!fs.existsSync(videoPath)) {
-    console.error('❌ Video not found:', videoPath);
+  const candidateVideoPaths = [
+    path.resolve(__dirname, '../uploads/projects/series_test/episodes/ep_1/video/ep_1_source.mp4'),
+    path.resolve(__dirname, '../uploads/projects/series_delayed/episodes/ep_1/video/ep_1_source.mp4'),
+  ];
+  const videoPath = candidateVideoPaths.find((p) => fs.existsSync(p));
+  if (!videoPath) {
+    console.error('❌ Video not found in series_test or series_delayed');
     process.exit(1);
   }
 
-  const goldenCkptPath = path.resolve(__dirname, '../uploads/cache/ocr_checkpoints/ocr_ckpt_ep_1_source_mp4_62851057_1795118987660_0_287.json');
-  if (!fs.existsSync(goldenCkptPath)) {
-    console.error('❌ Golden checkpoint not found:', goldenCkptPath);
+  const candidateCkptPaths = [
+    path.resolve(__dirname, '../uploads/cache/ocr_checkpoints/ocr_ckpt_ep_1_source_mp4_62851057_1795118987660_0_287.json'),
+    path.resolve(__dirname, '../uploads/cache/ocr_checkpoints/ocr_ckpt_ep_1_source_mp4_62851057_1795118987660_0_60.json'),
+  ];
+  const goldenCkptPath = candidateCkptPaths.find((p) => fs.existsSync(p));
+  if (!goldenCkptPath) {
+    console.error('❌ Golden checkpoint not found');
     process.exit(1);
   }
 

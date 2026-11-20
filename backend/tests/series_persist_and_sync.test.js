@@ -1178,13 +1178,19 @@ test('frontend GeminiRouteModal active translate queue & banner helpers scope st
   assert.equal(isTranslateQueueEnqueueBanner(''), false);
 });
 
-test('deleteSeries removes series directory from disk and evicts in-memory cache', () => {
+test('deleteSeries removes series directory from disk, cleans active locks, and evicts in-memory cache', () => {
   const projectsDir = makeTempProjectsDir();
   const seriesId = 'series_to_delete_test';
   try {
     seedSeriesWithEpisodes(projectsDir, seriesId, ['ep_1', 'ep_2']);
     const seriesDir = path.join(projectsDir, seriesId);
     assert.equal(fs.existsSync(seriesDir), true, 'Series directory must exist before delete');
+
+    // Seed dummy subfiles and folders (like video, proxy-work, etc.)
+    const ep1Dir = path.join(seriesDir, 'episodes', 'ep_1');
+    const proxyWorkDir = path.join(ep1Dir, 'proxy-work-test');
+    fs.mkdirSync(proxyWorkDir, { recursive: true });
+    fs.writeFileSync(path.join(proxyWorkDir, 'dummy.mkv'), 'dummy data');
 
     const result = deleteSeries(seriesId, { projectsDir });
     assert.equal(result.success, true, 'deleteSeries must succeed');

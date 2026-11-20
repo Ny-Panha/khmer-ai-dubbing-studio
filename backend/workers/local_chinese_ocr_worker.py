@@ -4,6 +4,7 @@
 DragonDub AI - Local Chinese OCR Worker
 High-speed local Chinese text recognition powered by RapidOCR (ONNXRuntime).
 Extracts burned-in Chinese dialogue subtitles locally with sub-second latency per frame.
+Supports persistent streaming mode (single model init) and legacy one-shot CLI.
 Zero cloud API dependency, CPU & GPU compatible, Windows safe.
 """
 
@@ -43,6 +44,7 @@ def clean_chinese_text(text: str) -> str:
 def parse_args():
     parser = argparse.ArgumentParser(description="DragonDub Local Chinese OCR Worker")
     parser.add_argument("--check", action="store_true", help="Check RapidOCR availability and exit")
+    parser.add_argument("--persistent", action="store_true", help="Run in persistent JSON-lines streaming mode over stdin/stdout")
     parser.add_argument("--input_json", default="", help="Path to input JSON file containing frames to process")
     parser.add_argument("--output_json", default="", help="Path to write output JSON results")
     parser.add_argument("--det_limit_side_len", type=int, default=360, help="Max detection side length (default 360 for high speed)")
@@ -70,34 +72,113 @@ def check_engine():
         }
 
 
-def run_ocr(args):
-    # Verify input JSON
-    if not args.input_json or not os.path.exists(args.input_json):
-        sys.stderr.write(f"Input JSON file not found: {args.input_json}\n")
-        sys.exit(1)
-
-    with open(args.input_json, "r", encoding="utf-8") as f:
-        manifest = json.load(f)
-
-    frames = manifest.get("frames", [])
-    if not isinstance(frames, list):
-        sys.stderr.write("Invalid input JSON: frames must be an array\n")
-        sys.exit(1)
-
+def process_single_frame(img, engine, roi_ymin, roi_ymax, roi_xmin, roi_xmax):
+    """Crops subtitle safe zone and runs RapidOCR with conservative empty confidence."""
     import cv2
-    from rapidocr_onnxruntime import RapidOCR
+    h, w = img.shape[:2]
 
-    # Initialize RapidOCR engine once per worker process
-    engine = RapidOCR(det_limit_side_len=args.det_limit_side_len)
+    # Crop center-bottom subtitle safe zone
+    y_min = int(h * max(0.0, min(1.0, roi_ymin)))
+    y_max = int(h * max(0.0, min(1.0, roi_ymax)))
+    x_min = int(w * max(0.0, min(1.0, roi_xmin)))
+    x_max = int(w * max(0.0, min(1.0, roi_xmax)))
 
-    total_frames = len(frames)
+    if y_max <= y_min or x_max <= x_min:
+        roi = img
+    else:
+        roi = img[y_min:y_max, x_min:x_max]
+
+    ocr_res, elapse = engine(roi, use_det=True, use_cls=False, use_rec=True)
+
+    if not ocr_res:
+        # Check edge activity to determine empty confidence
+        # Clean uniform background = 0.75, high stroke/edge activity = 0.40 (uncertain)
+        try:
+            gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY) if len(roi.shape) == 3 else roi
+            edges = cv2.Canny(gray, 50, 150)
+            edge_ratio = float(edges.mean()) / 255.0
+            empty_conf = 0.40 if edge_ratio > 0.035 else 0.75
+        except Exception:
+            empty_conf = 0.50
+
+        return {
+            "hasText": False,
+            "textZh": "",
+            "chineseText": "",
+            "confidence": round(empty_conf, 2),
+            "isSharp": True,
+            "position": "bottom_subtitle",
+            "ocrStatus": "empty",
+            "bboxes": [],
+            "roi": roi
+        }
+
+    valid_lines = []
+    confidences = []
+    bboxes = []
+
+    # Sort lines by y coordinate (supports multi-line subtitles)
+    sorted_res = sorted(ocr_res, key=lambda r: min(pt[1] for pt in r[0]) if r[0] else 0)
+
+    for box, raw_text, conf in sorted_res:
+        cleaned = clean_chinese_text(raw_text)
+        if cleaned and float(conf) >= 0.40:
+            valid_lines.append(cleaned)
+            confidences.append(float(conf))
+            bboxes.append(box)
+
+    if valid_lines:
+        combined_text = "\n".join(valid_lines) if len(valid_lines) > 1 else valid_lines[0]
+        avg_conf = sum(confidences) / len(confidences)
+        return {
+            "hasText": True,
+            "textZh": combined_text,
+            "chineseText": combined_text,
+            "confidence": round(avg_conf, 4),
+            "isSharp": avg_conf >= 0.70,
+            "position": "bottom_subtitle",
+            "ocrStatus": "verified_text",
+            "bboxes": bboxes,
+            "roi": roi
+        }
+    else:
+        return {
+            "hasText": False,
+            "textZh": "",
+            "chineseText": "",
+            "confidence": 0.50,
+            "isSharp": True,
+            "position": "bottom_subtitle",
+            "ocrStatus": "empty",
+            "bboxes": [],
+            "roi": roi
+        }
+
+
+def process_frames_batch(frames, engine, args, roi_ymin, roi_ymax, roi_xmin, roi_xmax, batch_id=""):
+    """
+    Processes a slice of candidate frames using the already-initialized engine.
+    Applies verified subtitle-region deduplication before calling RapidOCR.
+    """
+    import cv2
+
     results = []
-    start_time = time.time()
+    actual_ocr_count = 0
+    deduped_count = 0
+    total_frames = len(frames)
+
+    prev_roi = None
+    prev_res = None
+    prev_cue_idx = None
+    prev_ts = None
 
     for idx, item in enumerate(frames):
         file_path = item.get("filePath", "")
         timestamp_sec = float(item.get("timestampSec", 0.0))
         item_id = item.get("id", str(idx + 1))
+        cue_idx = item.get("cueIndex")
+        is_short = bool(item.get("isShortCue", False))
+        is_scene_cut = bool(item.get("sceneCut", False))
 
         if not file_path or not os.path.exists(file_path):
             results.append({
@@ -134,79 +215,69 @@ def run_ocr(args):
                 continue
 
             h, w = img.shape[:2]
-
-            # Crop center-bottom subtitle safe zone
-            y_min = int(h * max(0.0, min(1.0, args.roi_ymin)))
-            y_max = int(h * max(0.0, min(1.0, args.roi_ymax)))
-            x_min = int(w * max(0.0, min(1.0, args.roi_xmin)))
-            x_max = int(w * max(0.0, min(1.0, args.roi_xmax)))
+            y_min = int(h * max(0.0, min(1.0, roi_ymin)))
+            y_max = int(h * max(0.0, min(1.0, roi_ymax)))
+            x_min = int(w * max(0.0, min(1.0, roi_xmin)))
+            x_max = int(w * max(0.0, min(1.0, roi_xmax)))
 
             if y_max <= y_min or x_max <= x_min:
                 roi = img
             else:
                 roi = img[y_min:y_max, x_min:x_max]
 
-            # Run RapidOCR on subtitle region crop
-            ocr_res, elapse = engine(roi, use_det=True, use_cls=False, use_rec=True)
+            # Fast subtitle ROI deduplication check BEFORE expensive RapidOCR
+            is_deduped = False
+            if (
+                prev_roi is not None
+                and prev_res is not None
+                and not is_scene_cut
+                and not is_short
+                and (cue_idx is None or prev_cue_idx is None or cue_idx == prev_cue_idx)
+                and prev_roi.shape == roi.shape
+            ):
+                # Pixel difference between consecutive subtitle ROIs
+                diff = float(cv2.absdiff(roi, prev_roi).mean())
+                if diff < 1.8:  # Static subtitle region (<1.8 out of 255 mean pixel change)
+                    is_deduped = True
 
-            if not ocr_res:
-                # No text detected in subtitle region
+            if is_deduped:
+                deduped_count += 1
                 results.append({
                     "id": item_id,
                     "timestampSec": timestamp_sec,
-                    "hasText": False,
-                    "textZh": "",
-                    "chineseText": "",
-                    "confidence": 1.0,
-                    "isSharp": True,
+                    "hasText": prev_res["hasText"],
+                    "textZh": prev_res["textZh"],
+                    "chineseText": prev_res["chineseText"],
+                    "confidence": prev_res["confidence"],
+                    "isSharp": prev_res["isSharp"],
                     "position": "bottom_subtitle",
-                    "ocrStatus": "verified_empty",
-                    "bboxes": []
+                    "ocrStatus": prev_res["ocrStatus"],
+                    "bboxes": prev_res.get("bboxes", []),
+                    "isDeduped": True,
+                    "sourceTimestampSec": prev_ts,
                 })
             else:
-                # Filter valid text lines
-                valid_lines = []
-                confidences = []
-                bboxes = []
+                actual_ocr_count += 1
+                ocr_out = process_single_frame(img, engine, roi_ymin, roi_ymax, roi_xmin, roi_xmax)
+                ocr_out_clean = {
+                    "id": item_id,
+                    "timestampSec": timestamp_sec,
+                    "hasText": ocr_out["hasText"],
+                    "textZh": ocr_out["textZh"],
+                    "chineseText": ocr_out["chineseText"],
+                    "confidence": ocr_out["confidence"],
+                    "isSharp": ocr_out["isSharp"],
+                    "position": "bottom_subtitle",
+                    "ocrStatus": ocr_out["ocrStatus"],
+                    "bboxes": ocr_out.get("bboxes", []),
+                    "isDeduped": False,
+                }
+                results.append(ocr_out_clean)
+                prev_roi = roi
+                prev_res = ocr_out_clean
+                prev_cue_idx = cue_idx
+                prev_ts = timestamp_sec
 
-                # Sort lines by y coordinate (supports multi-line subtitles)
-                sorted_res = sorted(ocr_res, key=lambda r: min(pt[1] for pt in r[0]) if r[0] else 0)
-
-                for box, raw_text, conf in sorted_res:
-                    cleaned = clean_chinese_text(raw_text)
-                    if cleaned and float(conf) >= 0.40:
-                        valid_lines.append(cleaned)
-                        confidences.append(float(conf))
-                        bboxes.append(box)
-
-                if valid_lines:
-                    combined_text = "\n".join(valid_lines) if len(valid_lines) > 1 else valid_lines[0]
-                    avg_conf = sum(confidences) / len(confidences)
-                    results.append({
-                        "id": item_id,
-                        "timestampSec": timestamp_sec,
-                        "hasText": True,
-                        "textZh": combined_text,
-                        "chineseText": combined_text,
-                        "confidence": round(avg_conf, 4),
-                        "isSharp": avg_conf >= 0.70,
-                        "position": "bottom_subtitle",
-                        "ocrStatus": "verified_text",
-                        "bboxes": bboxes
-                    })
-                else:
-                    results.append({
-                        "id": item_id,
-                        "timestampSec": timestamp_sec,
-                        "hasText": False,
-                        "textZh": "",
-                        "chineseText": "",
-                        "confidence": 0.85,
-                        "isSharp": True,
-                        "position": "bottom_subtitle",
-                        "ocrStatus": "verified_empty",
-                        "bboxes": []
-                    })
         except Exception as err:
             results.append({
                 "id": item_id,
@@ -223,22 +294,123 @@ def run_ocr(args):
             })
 
         # Emit progress update to stdout as JSON line
-        if (idx + 1) % 5 == 0 or (idx + 1) == total_frames:
+        if (idx + 1) % 10 == 0 or (idx + 1) == total_frames:
             progress_msg = {
                 "type": "progress",
+                "batchId": batch_id,
                 "completed": idx + 1,
                 "total": total_frames,
                 "percent": round(((idx + 1) / max(1, total_frames)) * 100, 1),
-                "elapsedSec": round(time.time() - start_time, 2)
             }
             sys.stdout.write(json.dumps(progress_msg) + "\n")
             sys.stdout.flush()
 
+    return results, actual_ocr_count, deduped_count
+
+
+def run_persistent_worker(args):
+    """
+    Persistent JSON-lines streaming mode.
+    Initializes RapidOCR engine once during startup and processes requests via stdin.
+    """
+    from rapidocr_onnxruntime import RapidOCR
+
+    t_init_start = time.time()
+    engine = RapidOCR(det_limit_side_len=args.det_limit_side_len)
+    init_ms = round((time.time() - t_init_start) * 1000)
+
+    # Emit ready handshake
+    ready_msg = {
+        "type": "ready",
+        "engine": "rapidocr-onnxruntime",
+        "initMs": init_ms,
+        "pid": os.getpid()
+    }
+    sys.stdout.write(json.dumps(ready_msg) + "\n")
+    sys.stdout.flush()
+
+    for line in sys.stdin:
+        line = line.strip().lstrip('\ufeff')
+        if not line:
+            continue
+
+        try:
+            req = json.loads(line)
+        except Exception as e:
+            sys.stderr.write(f"Failed to parse stdin JSON: {e}\n")
+            continue
+
+        cmd = req.get("cmd")
+        if cmd == "ping":
+            sys.stdout.write(json.dumps({"type": "pong"}) + "\n")
+            sys.stdout.flush()
+
+        elif cmd == "process_batch":
+            batch_id = req.get("batchId", "")
+            frames = req.get("frames", [])
+            roi_ymin = float(req.get("roiYMin", args.roi_ymin))
+            roi_ymax = float(req.get("roiYMax", args.roi_ymax))
+            roi_xmin = float(req.get("roiXMin", args.roi_xmin))
+            roi_xmax = float(req.get("roiXMax", args.roi_xmax))
+
+            t_batch_start = time.time()
+            batch_results, actual_ocr, deduped = process_frames_batch(
+                frames, engine, args, roi_ymin, roi_ymax, roi_xmin, roi_xmax, batch_id=batch_id
+            )
+            wall_ms = round((time.time() - t_batch_start) * 1000)
+
+            res_msg = {
+                "type": "batch_result",
+                "batchId": batch_id,
+                "success": True,
+                "results": batch_results,
+                "totalFrames": len(frames),
+                "actualOcrFrames": actual_ocr,
+                "dedupedFrames": deduped,
+                "wallTimeMs": wall_ms
+            }
+            sys.stdout.write(json.dumps(res_msg) + "\n")
+            sys.stdout.flush()
+
+        elif cmd in ("stop", "exit"):
+            sys.stdout.write(json.dumps({"type": "stopped"}) + "\n")
+            sys.stdout.flush()
+            break
+
+
+def run_legacy_ocr(args):
+    """Legacy one-shot batch CLI mode for backward compatibility."""
+    if not args.input_json or not os.path.exists(args.input_json):
+        sys.stderr.write(f"Input JSON file not found: {args.input_json}\n")
+        sys.exit(1)
+
+    with open(args.input_json, "r", encoding="utf-8") as f:
+        manifest = json.load(f)
+
+    frames = manifest.get("frames", [])
+    if not isinstance(frames, list):
+        sys.stderr.write("Invalid input JSON: frames must be an array\n")
+        sys.exit(1)
+
+    from rapidocr_onnxruntime import RapidOCR
+
+    t_init_start = time.time()
+    engine = RapidOCR(det_limit_side_len=args.det_limit_side_len)
+    init_ms = round((time.time() - t_init_start) * 1000)
+
+    start_time = time.time()
+    results, actual_ocr, deduped = process_frames_batch(
+        frames, engine, args, args.roi_ymin, args.roi_ymax, args.roi_xmin, args.roi_xmax
+    )
     total_wall_ms = round((time.time() - start_time) * 1000)
+
     output_data = {
         "success": True,
         "engine": "rapidocr-onnxruntime",
-        "totalFrames": total_frames,
+        "initMs": init_ms,
+        "totalFrames": len(frames),
+        "actualOcrFrames": actual_ocr,
+        "dedupedFrames": deduped,
         "totalWallMs": total_wall_ms,
         "results": results
     }
@@ -251,7 +423,13 @@ def run_ocr(args):
             json.dump(output_data, f, ensure_ascii=False, indent=2)
 
     # Also emit completion JSON to stdout
-    sys.stdout.write(json.dumps({"type": "complete", "totalFrames": total_frames, "wallTimeMs": total_wall_ms}) + "\n")
+    sys.stdout.write(json.dumps({
+        "type": "complete",
+        "totalFrames": len(frames),
+        "actualOcrFrames": actual_ocr,
+        "dedupedFrames": deduped,
+        "wallTimeMs": total_wall_ms
+    }) + "\n")
     sys.stdout.flush()
 
 
@@ -263,7 +441,10 @@ def main():
         sys.stdout.flush()
         sys.exit(0 if res.get("available") else 1)
 
-    run_ocr(args)
+    if args.persistent:
+        run_persistent_worker(args)
+    else:
+        run_legacy_ocr(args)
 
 
 if __name__ == "__main__":
