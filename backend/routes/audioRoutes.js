@@ -23,6 +23,7 @@ const {
   cancelTtsJob,
   generateVoicePreview,
   computeSegmentAudioSignature,
+  computeMasterAudioSignature,
 } = require("../services/ttsService");
 const { detectSpeakerGender } = require("../models/speakerRegistry");
 const { createSynchronizedNarrationAudio, parseTimeToSec, autoStretchTtsAudio, getMediaDuration } = require("../services/ffmpegService");
@@ -43,6 +44,13 @@ function countUniqueSegmentMp3s(mp3s = []) {
     uniqueSegIds.add(m && m[1] ? m[1] : f);
   }
   return uniqueSegIds.size;
+}
+
+function isSpokenSegment(seg) {
+  if (!seg || typeof seg !== "object") return false;
+  if (seg.ttsStatus === "empty_text") return false;
+  const raw = seg.khmer || seg.khmerText || seg.khmerTranslatedText || seg.text || "";
+  return Boolean(typeof raw === "string" && raw.trim() && cleanTextForTts(raw) && !isPlaceholderOrEmptyTtsText(raw));
 }
 
 function doesSegmentNeedTts(seg, audioDir, batchSpeedInfo = null, batchExplicitCustom = false) {
@@ -694,11 +702,42 @@ router.post("/generate-audio", async (req, res) => {
       const batchExplicitCustom = Boolean(rawBodyUserCustomSpeed) || batchSpeedInfo.isCustomNonDefault;
 
       // Fast Path: If master narration audio already exists, all valid segments have ready files on disk,
-      // and forceRegen is false, return immediately without re-rendering any TTS clips.
+      // master audio content signature matches current timeline positions, and forceRegen is false,
+      // return immediately without re-rendering any TTS clips or re-merging master narration.
       const needsAnySegmentWork = segments.some((s) =>
         doesSegmentNeedTts(s, audioDir, batchSpeedInfo, batchExplicitCustom)
       );
-      if (!forceRegen && !needsAnySegmentWork && fs.existsSync(fullAudioPath) && fs.statSync(fullAudioPath).size > 1000) {
+
+      const fastSyncSegments = segments
+        .filter(isSpokenSegment)
+        .map((s, idx) => {
+          const verifiedPath = resolvePriorSegmentAudioPath(s, audioDir);
+          return {
+            ...s,
+            audioPath: s.audioPath || verifiedPath,
+            startSec: typeof s.audioStartSec === "number" && !isNaN(s.audioStartSec)
+              ? s.audioStartSec
+              : (typeof s.startSec === "number" && !isNaN(s.startSec)
+                ? s.startSec
+                : parseTimeToSec(s.start, idx * 4)),
+          };
+        });
+      const sigPath = `${fullAudioPath}.sig`;
+      const currentFastMasterSig = computeMasterAudioSignature(fastSyncSegments);
+      let recordedMasterSig = fs.existsSync(sigPath) ? fs.readFileSync(sigPath, "utf8").trim() : null;
+      if (!recordedMasterSig && isEpisode && cleanSeries && cleanEpisode) {
+        try {
+          const metaPath = path.join(uploadsDir, "projects", cleanSeries, "series.json");
+          if (fs.existsSync(metaPath)) {
+            const seriesMeta = JSON.parse(fs.readFileSync(metaPath, "utf8"));
+            const targetEp = (seriesMeta?.episodes || []).find((e) => String(e.id) === String(cleanEpisode));
+            recordedMasterSig = targetEp?.masterAudioSignature || null;
+          }
+        } catch (_) {}
+      }
+      const isFastMasterSigValid = Boolean(currentFastMasterSig && recordedMasterSig && recordedMasterSig === currentFastMasterSig);
+
+      if (!forceRegen && !needsAnySegmentWork && fs.existsSync(fullAudioPath) && fs.statSync(fullAudioPath).size > 1000 && isFastMasterSigValid) {
         const relAudioUrl = isEpisode
           ? `/uploads/projects/${cleanSeries}/episodes/${cleanEpisode}/audio/${fullAudioFilename}`
           : `/uploads/projects/${cleanName}/audio/${fullAudioFilename}`;
@@ -770,6 +809,17 @@ router.post("/generate-audio", async (req, res) => {
           skippedEmptyCount,
           validCount,
           summaryMessage: skippedEmptyCount > 0 ? `✅ សំឡេងខ្មែរមានរួចរាល់ ${validCount} ឃ្លា (រក្សាទុកដើម, រំលង ${skippedEmptyCount} ឃ្លា គ្មានអត្ថបទ)` : `✅ សំឡេងខ្មែរមានរួចរាល់ ${validCount} ឃ្លា (រក្សាទុកដើម)`,
+          telemetry: {
+            totalDurationMs: 0,
+            masterAudioMergeMs: 0,
+            totalSegmentsCount: segments.length,
+            reusedSegmentsCount: validCount,
+            synthesizedSegmentsCount: 0,
+            failedCount: 0,
+            skippedEmptyCount,
+            masterAudioSignature: currentFastMasterSig,
+            masterMergeSkipped: true,
+          },
         });
       }
 
@@ -779,6 +829,11 @@ router.post("/generate-audio", async (req, res) => {
       console.log(`[TTS] Batch generating audio for ${segments.length} segments in ${cleanSeries}${cleanEpisode ? ` [Episode: ${cleanEpisode}]` : ""} (forceRegen=${Boolean(forceRegen)}, batchSpeed=${batchRequestedSpeed ?? "default"}, batchRate=${batchSpeedInfo.valid ? batchSpeedInfo.rate : "INVALID"})...`);
       let updatedSegments;
       let narrationSynced = false;
+      let failedSegments = [];
+      let hasAnyFailures = false;
+      let newlySynthesizedCount = 0;
+      let reusedCount = 0;
+      let currentMasterSig = null;
       try {
         activeBatchStages.set(batchKey, { stage: "synthesizing", total: segments.length });
         updatedSegments = await generateBatchSegmentsAudio(segments, audioDir, {
@@ -824,8 +879,14 @@ router.post("/generate-audio", async (req, res) => {
           }
         }
 
-        const newlySynthesizedCount = (updatedSegments || []).filter((s) => s && s._wasNewlySynthesized).length;
-        const reusedCount = (updatedSegments || []).filter((s) => s && s.audioGenerated && !s._wasNewlySynthesized).length;
+        failedSegments = (updatedSegments || []).filter((s) => {
+          if (!isSpokenSegment(s)) return false;
+          return s.ttsStatus === "error" || s.status === "tts_error" || Boolean(s.error) || Boolean(s._failed) || !s.audioPath || !fs.existsSync(s.audioPath);
+        });
+        hasAnyFailures = failedSegments.length > 0;
+
+        newlySynthesizedCount = (updatedSegments || []).filter((s) => s && s._wasNewlySynthesized).length;
+        reusedCount = (updatedSegments || []).filter((s) => s && s.audioGenerated && !s._wasNewlySynthesized && !s._failed).length;
 
         const syncSegments = updatedSegments
           .filter((s) => s.audioPath && s.ttsStatus !== "empty_text" && fs.existsSync(s.audioPath))
@@ -839,8 +900,23 @@ router.post("/generate-audio", async (req, res) => {
                 : parseTimeToSec(s.start, idx * 4)),
           }));
 
-        if (!forceRegen && newlySynthesizedCount === 0 && fs.existsSync(fullAudioPath) && fs.statSync(fullAudioPath).size > 1000) {
-          console.log(`[TTS] ⚡ All ${reusedCount} segments reused from cache and master narration already exists (${fs.statSync(fullAudioPath).size} bytes). Skipping redundant master audio merge.`);
+        const currentMasterSig = computeMasterAudioSignature(syncSegments);
+        const sigPath = `${fullAudioPath}.sig`;
+        let recordedMasterSig = fs.existsSync(sigPath) ? fs.readFileSync(sigPath, "utf8").trim() : null;
+        if (!recordedMasterSig && isEpisode && cleanSeries && cleanEpisode) {
+          try {
+            const metaPath = path.join(uploadsDir, "projects", cleanSeries, "series.json");
+            if (fs.existsSync(metaPath)) {
+              const seriesMeta = JSON.parse(fs.readFileSync(metaPath, "utf8"));
+              const targetEp = (seriesMeta?.episodes || []).find((e) => String(e.id) === String(cleanEpisode));
+              recordedMasterSig = targetEp?.masterAudioSignature || null;
+            }
+          } catch (_) {}
+        }
+        const isMasterSigValid = Boolean(currentMasterSig && recordedMasterSig && recordedMasterSig === currentMasterSig);
+
+        if (!forceRegen && !hasAnyFailures && newlySynthesizedCount === 0 && fs.existsSync(fullAudioPath) && fs.statSync(fullAudioPath).size > 1000 && isMasterSigValid) {
+          console.log(`[TTS] ⚡ Master Audio Signature matched (${currentMasterSig.substring(0, 8)}) and all ${reusedCount} clips verified. Skipping redundant master audio merge.`);
           narrationSynced = true;
         } else if (syncSegments.length > 0) {
           activeBatchStages.set(batchKey, { stage: "syncing", total: segments.length });
@@ -848,6 +924,9 @@ router.post("/generate-audio", async (req, res) => {
           try {
             await createSynchronizedNarrationAudio(syncSegments, fullAudioPath);
             narrationSynced = fs.existsSync(fullAudioPath);
+            if (narrationSynced && currentMasterSig) {
+              try { fs.writeFileSync(sigPath, currentMasterSig, "utf8"); } catch (_) {}
+            }
             masterAudioMergeMs = Date.now() - masterMergeStart;
           } catch (syncErr) {
             console.warn("[TTS] Could not build master narration audio:", syncErr.message);
@@ -870,21 +949,35 @@ router.post("/generate-audio", async (req, res) => {
             updateSeriesMetadata(cleanSeries, (seriesMeta) => {
               const targetEp = (seriesMeta?.episodes || []).find((e) => String(e.id) === String(cleanEpisode));
               if (!targetEp) return false;
-              targetEp.audioGenerated = true;
-              targetEp.hasAudio = true;
+              targetEp.audioGenerated = !hasAnyFailures && (updatedSegments || []).some((s) => s.audioGenerated);
+              targetEp.hasAudio = fs.existsSync(fullAudioPath);
               if (fs.existsSync(fullAudioPath)) {
                 targetEp.fullAudioUrl = relAudioUrl;
                 targetEp.fullAudioPath = fullAudioPath;
               }
+              if (narrationSynced && currentMasterSig) {
+                targetEp.masterAudioSignature = currentMasterSig;
+              }
               const hasRemainingOutdatedSpoken = Array.isArray(targetEp.scriptData?.segments) &&
                 targetEp.scriptData.segments.some((s) => {
-                  const txt = String(s?.khmer || s?.khmerText || s?.khmerTranslatedText || s?.text || "").trim();
-                  return Boolean(txt) && s?.ttsStatus !== "empty_text" && !isPlaceholderOrEmptyTtsText(txt) && Boolean(s?.audioOutdated || s?.ttsStatus === "outdated");
+                  if (!isSpokenSegment(s)) return false;
+                  return Boolean(
+                    s?.audioOutdated ||
+                    s?.ttsStatus === "outdated" ||
+                    s?.ttsStatus === "error" ||
+                    s?.status === "tts_error" ||
+                    Boolean(s?.error) ||
+                    Boolean(s?._failed) ||
+                    !s?.audioPath ||
+                    !fs.existsSync(s?.audioPath)
+                  );
                 });
-              if (narrationSynced && !hasRemainingOutdatedSpoken) {
+              if (narrationSynced && !hasRemainingOutdatedSpoken && !hasAnyFailures) {
                 targetEp.audioOutdated = false;
+              } else {
+                targetEp.audioOutdated = true;
               }
-              console.log(`[TTS] Auto-persisted audioGenerated=true (audioOutdated=${Boolean(targetEp.audioOutdated)}) in series.json for episode ${cleanEpisode}`);
+              console.log(`[TTS] Auto-persisted audioGenerated=${targetEp.audioGenerated} (audioOutdated=${Boolean(targetEp.audioOutdated)}) in series.json for episode ${cleanEpisode}`);
               return true;
             });
           });
@@ -896,10 +989,12 @@ router.post("/generate-audio", async (req, res) => {
       const skippedEmptyCount = updatedSegments.filter(
         (s) => s.ttsStatus === 'empty_text' || isPlaceholderOrEmptyTtsText(s.khmer || s.khmerText || s.khmerTranslatedText || s.text || '')
       ).length;
-      const validGeneratedCount = updatedSegments.length - skippedEmptyCount;
-      const summaryMessage = skippedEmptyCount > 0
-        ? `ជោគជ័យ ${validGeneratedCount} ឃ្លា (រំលង ${skippedEmptyCount} ឃ្លា គ្មានអត្ថបទ)`
-        : `ជោគជ័យ ${validGeneratedCount} ឃ្លា (100%)`;
+      const validGeneratedCount = updatedSegments.length - skippedEmptyCount - (failedSegments ? failedSegments.length : 0);
+      const summaryMessage = (failedSegments && failedSegments.length > 0)
+        ? `⚠️ បង្កើតសំឡេងបាន ${validGeneratedCount} ឃ្លា (បរាជ័យ ${failedSegments.length} ឃ្លា - សូមចុច Generate ម្តងទៀត)`
+        : (skippedEmptyCount > 0
+          ? `ជោគជ័យ ${validGeneratedCount} ឃ្លា (រំលង ${skippedEmptyCount} ឃ្លា គ្មានអត្ថបទ)`
+          : `ជោគជ័យ ${validGeneratedCount} ឃ្លា (100%)`);
 
       return res.json({
         success: true,
@@ -913,14 +1008,18 @@ router.post("/generate-audio", async (req, res) => {
         segments: updatedSegments,
         skippedEmptyCount,
         validCount: validGeneratedCount,
+        failedCount: failedSegments ? failedSegments.length : 0,
         summaryMessage,
         telemetry: {
           totalDurationMs: Date.now() - batchStartTime,
           masterAudioMergeMs,
           totalSegmentsCount: segments.length,
-          reusedSegmentsCount: (updatedSegments || []).filter((s) => s && s.audioGenerated && !s._wasNewlySynthesized).length,
-          synthesizedSegmentsCount: (updatedSegments || []).filter((s) => s && s._wasNewlySynthesized).length,
+          reusedSegmentsCount: reusedCount,
+          synthesizedSegmentsCount: newlySynthesizedCount,
+          failedCount: failedSegments ? failedSegments.length : 0,
           skippedEmptyCount,
+          masterAudioSignature: currentMasterSig,
+          masterMergeSkipped: Boolean(narrationSynced && masterAudioMergeMs === 0),
         },
       });
     }

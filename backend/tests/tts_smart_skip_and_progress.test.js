@@ -11,6 +11,7 @@ const {
   generateSingleSegmentAudio,
   generateBatchSegmentsAudio,
   getTtsJobProgress,
+  computeMasterAudioSignature,
 } = require('../services/ttsService');
 const { autoStretchTtsAudio } = require('../services/ffmpegService');
 
@@ -310,15 +311,53 @@ test('POST /api/generate-audio clears ep.audioOutdated in series.json after batc
   }
 });
 
-test('POST /api/generate-audio returns tts telemetry and skips redundant master merge when 0 new clips synthesized', async () => {
-  const seriesId = `series_telemetry_${Date.now()}`;
-  const episodeId = 'ep_telemetry';
+test('computeMasterAudioSignature differentiates timeline startSec, offsets, ordering, and audio files', () => {
+  const base = [
+    { id: 1, audioPath: '/path/seg_1.mp3', startSec: 0.0, audioOffset: 0.0, audioSignature: 'sig1' },
+    { id: 2, audioPath: '/path/seg_2.mp3', startSec: 2.5, audioOffset: 0.0, audioSignature: 'sig2' },
+  ];
+  const sigBase = computeMasterAudioSignature(base);
+  assert.ok(sigBase && sigBase.length >= 16);
+
+  // 1. Same timings and files produces identical signature
+  const sigSame = computeMasterAudioSignature([
+    { id: 1, audioPath: '/path/seg_1.mp3', startSec: 0.0, audioOffset: 0.0, audioSignature: 'sig1' },
+    { id: 2, audioPath: '/path/seg_2.mp3', startSec: 2.5, audioOffset: 0.0, audioSignature: 'sig2' },
+  ]);
+  assert.equal(sigSame, sigBase);
+
+  // 2. Moving clip timing on timeline produces different signature (P0 fix)
+  const sigMoved = computeMasterAudioSignature([
+    { id: 1, audioPath: '/path/seg_1.mp3', startSec: 0.0, audioOffset: 0.0, audioSignature: 'sig1' },
+    { id: 2, audioPath: '/path/seg_2.mp3', startSec: 3.8, audioOffset: 0.0, audioSignature: 'sig2' },
+  ]);
+  assert.notEqual(sigMoved, sigBase, 'Changing startSec must invalidate master audio signature');
+
+  // 3. Changing audioOffset produces different signature
+  const sigOffset = computeMasterAudioSignature([
+    { id: 1, audioPath: '/path/seg_1.mp3', startSec: 0.0, audioOffset: 0.15, audioSignature: 'sig1' },
+    { id: 2, audioPath: '/path/seg_2.mp3', startSec: 2.5, audioOffset: 0.0, audioSignature: 'sig2' },
+  ]);
+  assert.notEqual(sigOffset, sigBase, 'Changing audioOffset must invalidate master audio signature');
+
+  // 4. Reordering clips produces different signature
+  const sigReordered = computeMasterAudioSignature([
+    { id: 2, audioPath: '/path/seg_2.mp3', startSec: 2.5, audioOffset: 0.0, audioSignature: 'sig2' },
+    { id: 1, audioPath: '/path/seg_1.mp3', startSec: 0.0, audioOffset: 0.0, audioSignature: 'sig1' },
+  ]);
+  assert.notEqual(sigReordered, sigBase, 'Reordering segments must invalidate master audio signature');
+});
+
+test('POST /api/generate-audio: Initial run creates master + sig, second all-cached run skips merge, moving clip forces re-merge', async () => {
+  const seriesId = `series_sig_e2e_${Date.now()}`;
+  const episodeId = 'ep_sig';
   const epAudioDir = path.join(uploadsDir, 'projects', seriesId, 'episodes', episodeId, 'audio');
   fs.mkdirSync(epAudioDir, { recursive: true });
 
   const { server, baseUrl } = await startTestServer();
   try {
-    const res = await fetch(`${baseUrl}/generate-audio`, {
+    // 1. Initial run: synthesize 2 segments
+    const res1 = await fetch(`${baseUrl}/generate-audio`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -332,13 +371,97 @@ test('POST /api/generate-audio returns tts telemetry and skips redundant master 
         ],
       }),
     });
-    const data = await res.json();
-    assert.equal(data.success, true);
-    assert.ok(data.telemetry, 'Response must include telemetry object');
-    assert.equal(data.telemetry.totalSegmentsCount, 2);
-    assert.equal(data.telemetry.synthesizedSegmentsCount, 2);
-    assert.equal(data.telemetry.reusedSegmentsCount, 0);
-    assert.ok(data.telemetry.masterAudioMergeMs >= 0);
+    const data1 = await res1.json();
+    assert.equal(data1.success, true);
+    assert.equal(data1.telemetry.synthesizedSegmentsCount, 2);
+    assert.ok(fs.existsSync(data1.fullAudioPath), 'Master narration MP3 must be created');
+    const sigPath = `${data1.fullAudioPath}.sig`;
+    assert.ok(fs.existsSync(sigPath), 'Master audio .sig file must be written');
+    const sigInitial = fs.readFileSync(sigPath, 'utf8').trim();
+
+    // 2. Second all-cached run with identical segments and timings -> must skip master merge safely!
+    const res2 = await fetch(`${baseUrl}/generate-audio`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        seriesId,
+        episodeId,
+        voiceId: 'km-KH-PisethNeural',
+        forceRegen: false,
+        segments: data1.segments,
+      }),
+    });
+    const data2 = await res2.json();
+    assert.equal(data2.success, true);
+    assert.equal(data2.telemetry.synthesizedSegmentsCount, 0);
+    assert.equal(data2.telemetry.reusedSegmentsCount, 2);
+    assert.equal(data2.telemetry.masterMergeSkipped, true, 'Master merge must be skipped when all cached and signature matches');
+    assert.equal(data2.telemetry.masterAudioMergeMs, 0);
+
+    // 3. Third run: move segment 2 on the timeline (startSec: 2.5 -> 3.8) without changing text/MP3
+    const movedSegments = data1.segments.map((s) => (s.id === 2 ? { ...s, startSec: 3.8, audioStartSec: 3.8 } : s));
+    const res3 = await fetch(`${baseUrl}/generate-audio`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        seriesId,
+        episodeId,
+        voiceId: 'km-KH-PisethNeural',
+        forceRegen: false,
+        segments: movedSegments,
+      }),
+    });
+    const data3 = await res3.json();
+    assert.equal(data3.success, true);
+    assert.equal(data3.telemetry.synthesizedSegmentsCount, 0, 'Audio MP3 files did not need re-synthesis');
+    assert.equal(data3.telemetry.masterMergeSkipped, false, 'Master audio merge MUST NOT be skipped when timeline timings changed');
+    assert.ok(data3.telemetry.masterAudioMergeMs >= 0);
+    const sigMoved = fs.readFileSync(sigPath, 'utf8').trim();
+    assert.notEqual(sigMoved, sigInitial, 'Updated master audio .sig must reflect the new timeline positions');
+  } finally {
+    await new Promise((r) => server.close(r));
+    fs.rmSync(path.join(uploadsDir, 'projects', seriesId), { recursive: true, force: true });
+  }
+});
+
+test('Failed segment in batch prevents false completion and keeps episode audioOutdated: true', async () => {
+  const seriesId = `series_failure_guard_${Date.now()}`;
+  const episodeId = 'ep_fail';
+  const epAudioDir = path.join(uploadsDir, 'projects', seriesId, 'episodes', episodeId, 'audio');
+  fs.mkdirSync(epAudioDir, { recursive: true });
+
+  const { server, baseUrl } = await startTestServer();
+  try {
+    const tmpDir = path.join(uploadsDir, `batch_fail_test_${Date.now()}`);
+    fs.mkdirSync(tmpDir, { recursive: true });
+
+    const segments = [
+      { id: 1, khmer: 'សួស្តីបងប្អូន', voiceId: 'km-KH-PisethNeural' },
+      { id: 2, khmer: 'ឃ្លាបរាជ័យ', voiceId: 'km-KH-PisethNeural' },
+    ];
+
+    const results = await generateBatchSegmentsAudio(segments, tmpDir, {
+      generateSingleFn: async (seg) => {
+        if (seg.id === 2) {
+          throw new Error('Simulated Edge TTS Network Connection Reset');
+        }
+        return {
+          ...seg,
+          audioUrl: `/uploads/ok_${seg.id}.mp3`,
+          audioPath: path.join(tmpDir, `ok_${seg.id}.mp3`),
+          audioGenerated: true,
+          ttsStatus: 'ready',
+          _wasNewlySynthesized: true,
+        };
+      },
+    });
+
+    assert.equal(results.telemetry.failedCount, 1);
+    assert.equal(results.telemetry.succeededCount, 1);
+    assert.equal(results[1]._failed, true, 'Failed segment must be explicitly flagged with _failed=true');
+    assert.equal(results[1].ttsStatus, 'error');
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
   } finally {
     await new Promise((r) => server.close(r));
     fs.rmSync(path.join(uploadsDir, 'projects', seriesId), { recursive: true, force: true });

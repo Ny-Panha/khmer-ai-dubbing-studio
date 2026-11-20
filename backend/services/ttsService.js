@@ -99,6 +99,32 @@ function computeSegmentAudioSignature(text, voiceId, speed = 'normal', pitch = 0
 }
 
 /**
+ * Compute unique content signature for the master narration track (Master Audio Content Signature).
+ * Strictly incorporates segment IDs, ordering, audio files, startSec, audioOffset, and individual audio signatures.
+ * If any clip is shifted on the timeline, reordered, offset, or regenerated, this signature changes,
+ * preventing stale master narration reuse.
+ */
+function computeMasterAudioSignature(syncSegments = []) {
+  if (!Array.isArray(syncSegments) || syncSegments.length === 0) return null;
+  const canonicalEntries = syncSegments.map((s, idx) => {
+    const segId = String(s.id ?? s.index ?? idx);
+    const fileName = s.audioPath ? path.basename(s.audioPath) : (s.audioFile ? path.basename(s.audioFile) : '');
+    const startSec = (typeof s.audioStartSec === "number" && !isNaN(s.audioStartSec))
+      ? s.audioStartSec.toFixed(3)
+      : ((typeof s.startSec === "number" && !isNaN(s.startSec))
+        ? s.startSec.toFixed(3)
+        : (typeof s.start === "number" ? s.start.toFixed(3) : '0.000'));
+    const offset = (typeof s.audioOffset === "number" && !isNaN(s.audioOffset)) ? s.audioOffset.toFixed(3) : "0.000";
+    const sig = s.audioSignature || '';
+    return `${segId}:${fileName}:${startSec}:${offset}:${sig}`;
+  });
+  return crypto.createHash('sha256')
+    .update(canonicalEntries.join('\n'))
+    .digest('hex')
+    .substring(0, 32);
+}
+
+/**
  * Helper to safely atomically commit a temporary file to destination path
  */
 function atomicCommitFile(tempPath, targetPath) {
@@ -1288,6 +1314,7 @@ async function generateBatchSegmentsAudio(segments = [], uploadsDir, options = {
           status: isEmptyErr ? "empty_text" : "tts_error",
           error: isEmptyErr ? null : err.message,
           _wasNewlySynthesized: false,
+          _failed: !isEmptyErr,
         };
       }
     }
@@ -1382,6 +1409,7 @@ module.exports = {
   sleepWithJitter,
   validateTtsAudioFile,
   computeSegmentAudioSignature,
+  computeMasterAudioSignature,
   atomicCommitFile,
   cleanupTempFile,
   synthesizeWithEdgeNeural,

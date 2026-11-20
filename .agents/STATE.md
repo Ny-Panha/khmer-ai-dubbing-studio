@@ -3,6 +3,50 @@
 ## Last Session
 - **Environment**: Antigravity IDE (Gemini) - Minimal Change Engineer
 - **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-20T09:10:00+07:00
+
+## Summary: Master Audio Content Signature, Timeline Drift Protection & Failure Guard (100% PASS)
+- **Task:** Resolve risks identified by Nha:
+  1. **P0 Master Audio Stale Timing on Voice Clip Movement**: Prevent skipping master audio merge if timeline positions (`startSec`, `audioStartSec`), segment ordering, or offsets change while MP3 clips remain identical.
+  2. **P1 Failed Segments Impact on Completion**: Prevent `newlySynthesizedCount === 0` from falsely skipping master merge or clearing `audioOutdated: false` when 1 or more spoken segments fail synthesis (`failedCount > 0`).
+  3. **P1 Comprehensive Test Coverage**: Add integration tests for `computeMasterAudioSignature`, real all-cached zero-merge re-run, timeline clip shifting forcing re-merge, and batch failure handling.
+- **Surgical Changes Implemented (Minimal Change Discipline)**:
+  1. `backend/services/ttsService.js`:
+     - Added `computeMasterAudioSignature(syncSegments)` based on segment IDs, clip ordering, audio filenames, startSec (3 decimals), audioOffset, and individual audio signatures.
+     - Exported `computeMasterAudioSignature`.
+     - In `generateBatchSegmentsAudio` error handling, explicitly marked `_failed: !isEmptyErr`.
+  2. `backend/routes/audioRoutes.js`:
+     - Imported `computeMasterAudioSignature` and defined `isSpokenSegment(s)`.
+     - In Fast Path (lines 705–735): checks `isFastMasterSigValid = Boolean(currentFastMasterSig && recordedMasterSig && recordedMasterSig === currentFastMasterSig)`. If timeline moved, skips out of Fast Path to re-render master narration.
+     - In Batch Runner (lines 875–935):
+       - Explicitly calculates `failedSegments` (spoken segments with `ttsStatus === "error"`, `_failed`, or missing audio file).
+       - Computes `currentMasterSig` and compares with disk `.sig` or `targetEp.masterAudioSignature`.
+       - Skip condition strictly requires: `!forceRegen && !hasAnyFailures && newlySynthesizedCount === 0 && fs.existsSync(fullAudioPath) && isMasterSigValid`.
+       - On master audio sync success, writes sidecar `.sig` file and saves `targetEp.masterAudioSignature`.
+       - `targetEp.audioOutdated = false` is ONLY set if `narrationSynced && !hasRemainingOutdatedSpoken && !hasAnyFailures`. If any failure occurred, `audioOutdated` remains `true`!
+     - Telemetry returned in response includes: `failedCount`, `masterAudioSignature`, `masterMergeSkipped`.
+  3. `backend/tests/tts_smart_skip_and_progress.test.js`:
+     - Unit test for `computeMasterAudioSignature` verifying changes on startSec, offset, ordering, and audio files.
+     - End-to-end integration test verifying: initial run creates `.sig`, second all-cached run skips merge (`masterMergeSkipped: true, masterAudioMergeMs: 0`), and third run with shifted `startSec` detects signature mismatch and re-merges master audio.
+     - Integration test verifying failed segment in batch prevents false completion and keeps `audioOutdated: true`.
+- **Verification Outcomes**:
+  - `backend/tests/clip_speed_tts.test.js`, `tts_smart_skip_and_progress.test.js`, `stage6_translation_fallback_and_tts_guard.test.js`: **26/26 PASS** (100%).
+  - Stage 3 hybrid OCR, cancellation, and series sync: **56/56 PASS** (100%).
+  - `npm --prefix frontend run build`: **PASS** (629ms, 0 errors).
+- **Active Environment**:
+  - Backend API: `http://localhost:5000`
+  - Frontend UI: `http://localhost:5173`
+  - Active Branch: `chore/full-project-cleanup`
+- **Next Steps**:
+  - Commit and push verified fixes.
+
+---
+
+# Antigravity Shared State (Sync Memory)
+
+## Last Session
+- **Environment**: Antigravity IDE (Gemini) - Minimal Change Engineer
+- **Branch**: `chore/full-project-cleanup`
 - **Timestamp**: 2026-11-20T08:58:00+07:00
 
 ## Summary: Fast Smart Incremental TTS, FFmpeg Trim Optimization & Adaptive Concurrency (100% PASS)
