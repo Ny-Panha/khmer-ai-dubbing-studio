@@ -6,13 +6,15 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 
+import { fileURLToPath } from 'node:url';
+
 const require = createRequire(import.meta.url);
 const {
   buildCornerBlurVideoFilterChain,
   generateKhmerAssSubtitleFile,
 } = require('../services/ffmpegService');
 
-const REPO_ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), '..', '..');
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 test('1. buildCornerBlurVideoFilterChain produces valid FFmpeg split->crop->gblur->overlay graph for 16:9 and 9:16', () => {
   const configs = [
@@ -87,7 +89,8 @@ test('3. Frontend Preview & Render Payload wire real transparent blur, 100% opaq
   const overlayJsx = fs.readFileSync(path.join(REPO_ROOT, 'frontend/src/components/player/CornerMaskOverlay.jsx'), 'utf8');
   const overlayCss = fs.readFileSync(path.join(REPO_ROOT, 'frontend/src/components/player/CornerMaskOverlay.css'), 'utf8');
   const panelJsx = fs.readFileSync(path.join(REPO_ROOT, 'frontend/src/components/voice/ExportSettingsPanel.jsx'), 'utf8');
-  const renderHook = fs.readFileSync(path.join(REPO_ROOT, 'frontend/src/hooks/useVideoRender.js'), 'utf8');
+  const renderHook = fs.readFileSync(path.join(REPO_ROOT, 'frontend/src/hooks/useVideoRender.js'), 'utf8') +
+                     fs.readFileSync(path.join(REPO_ROOT, 'frontend/src/utils/logoSettingsStorage.js'), 'utf8');
 
   assert.match(overlayJsx, /cornerMaskStyle === 'solid' \|\| cornerMaskStyle === 'blur'\)\s*\?\s*1/s, 'Solid & Blur must render at opacity 1');
   assert.match(overlayJsx, /backdropFilter:\s*`blur\(\$\{blurPx\}px\)`/, 'Blur preview must bind dynamic blurPx');

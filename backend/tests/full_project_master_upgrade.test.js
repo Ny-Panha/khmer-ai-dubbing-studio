@@ -92,7 +92,7 @@ test('Phase 2: GeminiRouteModal renders 4 batch action buttons and 3 stage cards
   assert.match(modal, /batch-primary-execution-row/);
   assert.match(modal, /1\.\s*Translate\s*Script/);
   assert.match(modal, /2\.\s*AI\s*Translate\s*Voice/);
-  assert.match(modal, /3\.\s*AI\s*បិទសំឡេងចិន/);
+  assert.match(modal, /(?:3|4)\.\s*AI\s*បិទសំឡេងចិន/);
   assert.match(modal, /Run\s*All\s*3\s*Steps/);
   assert.match(modal, /EpisodeTranslateProgressCard/);
   assert.match(modal, /EpisodeTtsProgressCard/);

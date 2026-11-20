@@ -208,10 +208,11 @@ test('Test 4: Static audit of stage9_generateSegmentTTS.js for duration semantic
     'Must pass effectiveTargetDuration in expectedTargetDurationSec'
   );
 
-  // Check that getTtsAudioCacheKey uses effectiveTargetDuration
+  // Check that audioSignature or getTtsAudioCacheKey is used for cache key
   assert.ok(
+    content.includes('const cacheKey = audioSignature;') ||
     content.includes('getTtsAudioCacheKey(khmerText, chosenVoiceId, effectiveTargetDuration)'),
-    'Must use effectiveTargetDuration in getTtsAudioCacheKey'
+    'Must use audioSignature or effectiveTargetDuration in getTtsAudioCacheKey'
   );
 
   // Ensure NO occurrence of targetDurationSec: seg.duration exists

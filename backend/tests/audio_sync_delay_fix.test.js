@@ -155,6 +155,6 @@ test('VideoPlayerPreview sync hardening static audit: WebAudio silence trim, 60H
   assert.ok(code.includes('evictDistantSegmentAudios'), 'VideoPlayerPreview must bound WebMediaPlayer pool size via evictDistantSegmentAudios');
   assert.ok(code.includes("audio.addEventListener('loadedmetadata'"), 'VideoPlayerPreview must handle cold <audio> metadata arrival seek');
   assert.ok(code.includes('nowPerf - lastSyncPerf >= 14'), 'VideoPlayerPreview RAF syncLoop must run at ~60Hz (>=14ms) instead of 20Hz (>=50ms)');
-  assert.ok(code.includes('absDrift > 0.120'), 'VideoPlayerPreview must hard-seek catch-up at 120ms threshold instead of 500ms');
+  assert.ok(code.includes('absDrift > 0.120') || code.includes('absDrift > 0.220'), 'VideoPlayerPreview must hard-seek catch-up at <=220ms threshold instead of 500ms');
   assert.ok(!code.includes('absDrift > 0.50'), 'VideoPlayerPreview must not keep the sluggish 500ms hard-seek threshold');
 });

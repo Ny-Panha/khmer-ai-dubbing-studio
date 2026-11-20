@@ -1,28 +1,31 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import path from 'node:path';
+
+const getFrontendFile = (rel) => fs.existsSync(rel) ? rel : path.resolve(process.cwd(), '..', rel);
 
 describe('CapCut-Style Per-Clip Selection Kind Suite', () => {
   it('1. Static audit: selection kind is threaded through useWorkspaceMedia, App, TimelineEditor, and Canvas', () => {
-    const hookCode = fs.readFileSync('frontend/src/hooks/useWorkspaceMedia.js', 'utf8');
+    const hookCode = fs.readFileSync(getFrontendFile('frontend/src/hooks/useWorkspaceMedia.js'), 'utf8');
     assert.ok(hookCode.includes('selectedClipKind, setSelectedClipKind'), 'useWorkspaceMedia manages selectedClipKind');
 
-    const appCode = fs.readFileSync('frontend/src/App.jsx', 'utf8');
+    const appCode = fs.readFileSync(getFrontendFile('frontend/src/App.jsx'), 'utf8');
     assert.ok(appCode.includes('selectedClipKind={media.selectedClipKind}'), 'App.jsx passes selectedClipKind to TimelineEditor and VoiceSettings');
     assert.ok(appCode.includes('onSelectClipKind={media.setSelectedClipKind}'), 'App.jsx passes onSelectClipKind to TimelineEditor');
 
-    const editorCode = fs.readFileSync('frontend/src/components/timeline/TimelineEditor.jsx', 'utf8');
+    const editorCode = fs.readFileSync(getFrontendFile('frontend/src/components/timeline/TimelineEditor.jsx'), 'utf8');
     assert.ok(editorCode.includes('selectedClipKind = null'), 'TimelineEditor accepts selectedClipKind prop');
     assert.ok(editorCode.includes("onSelectClipKind('voice')"), 'handleAudioMouseDown sets voice kind');
     assert.ok(editorCode.includes("onSelectClipKind('video')"), 'handleVideoMouseDown sets video kind');
     assert.ok(editorCode.includes("onSelectClipKind('subtitle')"), 'handleSubMouseDown sets subtitle kind');
     assert.ok(editorCode.includes("onSelectClipKind(null)"), 'handleBackgroundMouseDown clears kind on empty click');
 
-    const canvasCode = fs.readFileSync('frontend/src/components/timeline/TimelineTracksCanvas.jsx', 'utf8');
+    const canvasCode = fs.readFileSync(getFrontendFile('frontend/src/components/timeline/TimelineTracksCanvas.jsx'), 'utf8');
     assert.ok(canvasCode.includes('selectedClipKind = null'), 'TimelineTracksCanvas accepts selectedClipKind prop');
     assert.ok(canvasCode.includes('is-linked-clip'), 'TimelineTracksCanvas renders is-linked-clip class');
 
-    const cssCode = fs.readFileSync('frontend/src/components/timeline/TimelineEditor.css', 'utf8');
+    const cssCode = fs.readFileSync(getFrontendFile('frontend/src/components/timeline/TimelineEditor.css'), 'utf8');
     assert.ok(cssCode.includes('.video-clip-block.is-linked-clip'), 'TimelineEditor.css defines subtle .is-linked-clip outline');
   });
 
@@ -93,7 +96,7 @@ describe('CapCut-Style Per-Clip Selection Kind Suite', () => {
   });
 
   it('4. Inspector focus: video kind focuses video cut context, voice kind focuses dialogue context', () => {
-    const inspectorCode = fs.readFileSync('frontend/src/components/voice/ClipInspectorPanel.jsx', 'utf8');
+    const inspectorCode = fs.readFileSync(getFrontendFile('frontend/src/components/voice/ClipInspectorPanel.jsx'), 'utf8');
     assert.ok(inspectorCode.includes("const isVideoMode = selectedClipKind === 'video'"), 'ClipInspectorPanel checks selectedClipKind === video');
     assert.ok(inspectorCode.includes('isVideoMode && targetVideoClip'), 'renders video clip inspector when isVideoMode is active');
     assert.ok(inspectorCode.includes('Video Clip:'), 'renders Video Clip inspector header');
@@ -129,7 +132,7 @@ describe('CapCut-Style Per-Clip Selection Kind Suite', () => {
     assert.equal(deletedSegmentId, 7, 'Deleting with kind voice calls onDeleteSegment');
     assert.equal(deletedVideoId, null, 'onDeleteClip was not directly called');
 
-    const clipOperationsCode = fs.readFileSync('frontend/src/hooks/useClipOperations.js', 'utf8');
+    const clipOperationsCode = fs.readFileSync(getFrontendFile('frontend/src/hooks/useClipOperations.js'), 'utf8');
     const clipDeleteHandler = clipOperationsCode.slice(
       clipOperationsCode.indexOf('const handleDeleteClip'),
       clipOperationsCode.indexOf('// Update Clips')
@@ -143,7 +146,7 @@ describe('CapCut-Style Per-Clip Selection Kind Suite', () => {
     assert.ok(!segmentDeleteHandler.includes('deleteClipById'), 'voice deletion does not delete a video clip');
     assert.ok(!segmentDeleteHandler.includes('setVideoClips'), 'voice deletion does not update video clips');
 
-    const shortcutsCode = fs.readFileSync('frontend/src/hooks/useShortcuts.js', 'utf8');
+    const shortcutsCode = fs.readFileSync(getFrontendFile('frontend/src/hooks/useShortcuts.js'), 'utf8');
     const deleteShortcut = shortcutsCode.slice(
       shortcutsCode.indexOf('// Delete / Backspace:'),
       shortcutsCode.indexOf('// Left / Right Arrows:')
