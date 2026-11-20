@@ -112,7 +112,30 @@ export default function GeminiRouteModal({
   const genre = dramaGenre;
   const setGenre = setDramaGenre;
   const [narratorGender, setNarratorGender] = useState('male');
-  const [customDirection, setCustomDirection] = useState(DEFAULT_BATCH_DIRECTION);
+
+  const [presetIds, setPresetIds] = useState(() => {
+    const raw = activeEpisode?.scriptData?.customPrompt || activeSeries?.customPrompt || DEFAULT_BATCH_DIRECTION;
+    return parseDirectionPrompt(raw).presetIds;
+  });
+  const [customText, setCustomText] = useState(() => {
+    const raw = activeEpisode?.scriptData?.customPrompt || activeSeries?.customPrompt || DEFAULT_BATCH_DIRECTION;
+    return parseDirectionPrompt(raw).customText;
+  });
+
+  const customDirection = useMemo(
+    () => composeEffectivePrompt({ presetIds, customText, genre: dramaGenre }),
+    [presetIds, customText, dramaGenre]
+  );
+
+  // Sync presetIds & customText when activeEpisode or series changes
+  useEffect(() => {
+    const raw = activeEpisode?.scriptData?.customPrompt || activeSeries?.customPrompt || DEFAULT_BATCH_DIRECTION;
+    const parsed = parseDirectionPrompt(raw);
+    setPresetIds(parsed.presetIds);
+    setCustomText(parsed.customText);
+    const epGenre = activeEpisode?.scriptData?.genre || activeEpisode?.scriptData?.detectedGenre || activeSeries?.genre || 'auto';
+    setDramaGenre(epGenre);
+  }, [activeEpisode?.id, activeSeries?.id]);
   const [isScriptSetupExpanded, setIsScriptSetupExpanded] = useState(false);
   const [isDirectionExpanded, setIsDirectionExpanded] = useState(false);
   const [isImportingSubtitles, setIsImportingSubtitles] = useState(false);
@@ -2897,6 +2920,7 @@ export default function GeminiRouteModal({
                           aria-label="សម្អាតទិសដៅបន្ថែម"
                           onClick={() => {
                             setCustomText('');
+                            setPresetIds([]);
                           }}
                           style={{ background: 'none', border: 'none', color: '#94A3B8', fontSize: '0.68rem', cursor: 'pointer', fontWeight: 600 }}
                           title="សម្អាតទិសដៅបន្ថែម (Clear custom text)"

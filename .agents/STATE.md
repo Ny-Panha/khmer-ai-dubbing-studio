@@ -3,6 +3,29 @@
 ## Last Session
 - **Environment**: Antigravity IDE (Gemini) - Minimal Change Engineer
 - **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-20T13:34:00+07:00
+
+## Summary: Fix ReferenceError presetIds in GeminiRouteModal.jsx (100% PASS)
+- **Task:** Fix frontend crash `ReferenceError: presetIds is not defined at GeminiRouteModal.jsx:2853:46`:
+  1. **Root Cause**: `presetIds`, `setPresetIds`, `customText`, and `setCustomText` were used in the Direction & Chips JSX section of `GeminiRouteModal.jsx`, but their `useState` / `useMemo` declarations were missing from the component state.
+  2. **Fix (`frontend/src/components/dashboard/GeminiRouteModal.jsx`)**:
+     - Declared `[presetIds, setPresetIds]` initialized with `parseDirectionPrompt(raw).presetIds`.
+     - Declared `[customText, setCustomText]` initialized with `parseDirectionPrompt(raw).customText`.
+     - Declared `customDirection` as `useMemo(() => composeEffectivePrompt({ presetIds, customText, genre: dramaGenre }), [presetIds, customText, dramaGenre])`.
+     - Added `useEffect` to sync preset and genre state when switching episodes or series.
+     - Updated clear button to reset both `customText` and `presetIds`.
+  3. **Verification**:
+     - `npm --prefix frontend run build`: **PASS (0 errors, 649ms)**.
+     - `node --test backend/tests/drama_genre_and_direction_presets.test.js`: **13/13 PASS (100%)**.
+     - `node --test backend/tests/full_project_master_upgrade.test.js`: **8/8 PASS (100%)**.
+
+---
+
+# Antigravity Shared State (Sync Memory)
+
+## Last Session
+- **Environment**: Antigravity IDE (Gemini) - Minimal Change Engineer
+- **Branch**: `chore/full-project-cleanup`
 - **Timestamp**: 2026-11-20T13:28:00+07:00
 
 ## Summary: Full Project Zero-Error Cleanup & Test Suite Parity (100% PASS)
