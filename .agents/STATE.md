@@ -3,6 +3,35 @@
 ## Last Session
 - **Environment**: Antigravity IDE (Gemini) - Minimal Change Engineer
 - **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-20T08:38:00+07:00
+
+## Summary: Fix ReferenceError: forceRegen is not defined in chunkOrchestrator.js (100% PASS)
+- **Task:** Resolve `Error: forceRegen is not defined` occurring when `chunkOrchestrator.js` passes `forceRegen` to `generateModeSpecificScript` on long-video chunks (>150s).
+- **Confirmed Root Cause**: `runChunkedDubbingPipeline` in `backend/services/pipeline/chunkOrchestrator.js` omitted `forceRegen` from its parameter destructuring object. When reaching Stage 6 (line 556), accessing `forceRegen` threw `ReferenceError: forceRegen is not defined`, failing the job in `jobWorker.js`.
+- **Surgical Changes Implemented (Minimal Change Discipline)**:
+  1. `backend/services/pipeline/chunkOrchestrator.js`:
+     - Added `forceRegen = false` to `runChunkedDubbingPipeline` parameter destructuring (line 158).
+     - Ensured `force: Boolean(force || forceRegen)` and `forceRegen: Boolean(forceRegen)` are passed cleanly to Stage 6.
+  2. `backend/services/pipeline/dubbingPipeline.js`:
+     - Forwarded `forceRegen: Boolean(forceRegen)` into `runChunkedDubbingPipeline` at line 158.
+- **Verification Outcomes**:
+  - Full Stage 3 and Pipeline tests: **41/41 PASS** (100%).
+  - Cancellation & Series Persist tests: **29/29 PASS** (100%).
+  - `npm --prefix frontend run build`: **PASS** (0 errors).
+- **Active Environment**:
+  - Backend API: `http://localhost:5000`
+  - Frontend UI: `http://localhost:5173`
+  - Active Branch: `chore/full-project-cleanup`
+- **Next Steps**:
+  - Commit and push verified fixes.
+
+---
+
+# Antigravity Shared State (Sync Memory)
+
+## Last Session
+- **Environment**: Antigravity IDE (Gemini) - Minimal Change Engineer
+- **Branch**: `chore/full-project-cleanup`
 - **Timestamp**: 2026-11-20T08:35:00+07:00
 
 ## Summary: Fix P0 Stage 3 Scope ReferenceError & Prevent Duplicate Fallback Pipeline (100% PASS)

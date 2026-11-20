@@ -155,6 +155,7 @@ async function runChunkedDubbingPipeline({
   chunkSizeSec = 300,
   overlapSec = 2,
   force = false,
+  forceRegen = false,
 }) {
   const cleanRequestedModel = String(modelName || '').trim();
   const effectiveModelName = (cleanRequestedModel && cleanRequestedModel !== 'auto' && isUsableDubbingModel(cleanRequestedModel))
@@ -552,8 +553,8 @@ async function runChunkedDubbingPipeline({
     seriesId: ingestResult?.seriesId,
     episodeId: ingestResult?.episodeId,
     genre,
-    force,
-    forceRegen,
+    force: Boolean(force || forceRegen),
+    forceRegen: Boolean(forceRegen),
     signal,
   });
   pipelineStageDurations.stage6ScriptMs = Date.now() - stage6Start;

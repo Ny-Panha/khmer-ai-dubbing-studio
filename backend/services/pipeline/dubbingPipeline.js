@@ -155,6 +155,7 @@ async function runDubbingPipeline({
       chunkSizeSec: 300,
       overlapSec: 2,
       force: Boolean(force || forceRegen),
+      forceRegen: Boolean(forceRegen),
     });
   }
 
