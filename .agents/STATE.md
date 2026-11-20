@@ -3,6 +3,28 @@
 ## Last Session
 - **Environment**: Antigravity IDE (Gemini) - Minimal Change Engineer
 - **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-20T13:38:00+07:00
+
+## Summary: Align Batch Script Setup UI in GeminiRouteModal with Studio DubbingModeTab (100% PASS)
+- **Task:** "check mer code img ti2 hxx yk mk dak img ti1" — transplant the clean, professional Genre & Direction design from `/studio` (`DubbingModeTab.jsx`) into `/batch` (`GeminiRouteModal.jsx`):
+  1. **DRAMA GENRE Section**:
+     - Aligned header with `BookOpen` icon and uppercase `ប្រភេទរឿង (DRAMA GENRE)` styling.
+     - Upgraded genre buttons to 11px font, modern gradient backgrounds, 1.5px cyan active border glow, and smooth shadow matching Studio.
+  2. **DIRECTION & Custom Text Section**:
+     - Transferred `ឈ្មោះតួអង្គ / DIRECTION` header with `ស្រេចចិត្ត` optional pill badge and `✕ សម្អាត` clear button.
+     - Transplanted 1-Click Smart Prompt Chips with 10.5px font, Kantumruy Pro typography, active cyan pill glow, and size 12 icons.
+     - Replaced the awkward truncated 1-line preview with an always-visible, sleek dark textarea (`#0a0d15`, border `#1e2536`, focus `#38bdf8`) with placeholder `ឧ. រឿងភាគបុរាណចិន, តួប្រុសឈ្មោះ: លីនហ្វេង...`.
+  3. **Verification**:
+     - `npm --prefix frontend run build`: **PASS (0 errors, 644ms)**.
+     - `node --test backend/tests/drama_genre_and_direction_presets.test.js backend/tests/ai_detection_and_dubbing_prompt_fix.test.js`: **21/21 PASS (100%)**.
+
+---
+
+# Antigravity Shared State (Sync Memory)
+
+## Last Session
+- **Environment**: Antigravity IDE (Gemini) - Minimal Change Engineer
+- **Branch**: `chore/full-project-cleanup`
 - **Timestamp**: 2026-11-20T13:34:00+07:00
 
 ## Summary: Fix ReferenceError presetIds in GeminiRouteModal.jsx (100% PASS)

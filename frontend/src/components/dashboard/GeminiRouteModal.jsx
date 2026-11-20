@@ -2805,54 +2805,77 @@ export default function GeminiRouteModal({
                     padding: '8px 12px',
                     borderTop: '1px solid rgba(255, 255, 255, 0.06)',
                     display: 'flex',
-                    alignItems: 'center',
-                    flexWrap: 'wrap',
+                    flexDirection: 'column',
                     gap: 6,
                   }}
                 >
-                  <span style={{ fontSize: '0.70rem', color: '#94A3B8', fontWeight: 700, minWidth: 118, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-                    <BookOpen size={11} color="#38BDF8" />
-                    <span>ប្រភេទរឿង (GENRE):</span>
-                  </span>
-                  {GENRE_OPTIONS.map((g) => {
-                    const isSelected = dramaGenre === g.id;
-                    const GenreIcon = g.icon || Sparkles;
-                    return (
-                      <button
-                        key={g.id}
-                        type="button"
-                        data-testid={`batch-genre-${g.id}`}
-                        aria-pressed={isSelected}
-                        aria-label={`ជ្រើសរើសប្រភេទរឿង ${g.shortLabel || g.label}`}
-                        onClick={() => {
-                          const res = handleGenreChange({ presetIds, newGenre: g.id });
-                          setDramaGenre(res.nextGenre);
-                          setPresetIds(res.nextPresetIds);
-                        }}
-                        title={g.hint}
-                        style={{
-                          padding: '4px 9px',
-                          fontSize: '0.70rem',
-                          borderRadius: 6,
-                          border: isSelected ? '1px solid rgba(56, 189, 248, 0.55)' : '1px solid rgba(255, 255, 255, 0.08)',
-                          background: isSelected ? 'rgba(56, 189, 248, 0.16)' : 'rgba(255, 255, 255, 0.03)',
-                          color: isSelected ? '#38BDF8' : '#CBD5E1',
-                          cursor: 'pointer',
-                          fontWeight: isSelected ? 700 : 500,
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: 4,
-                          transition: 'all 0.15s ease',
-                        }}
-                      >
-                        <GenreIcon size={11} />
-                        <span>{g.shortLabel || g.label}</span>
-                      </button>
-                    );
-                  })}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <label style={{ fontSize: '10.5px', color: '#94a3b8', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.4px', display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <BookOpen size={12} color="#38bdf8" />
+                      <span>ប្រភេទរឿង (DRAMA GENRE)</span>
+                    </label>
+                    {activeEpisode?.scriptData?.detectedGenre && (
+                      <span style={{
+                        fontSize: '9.5px',
+                        background: 'rgba(56, 189, 248, 0.12)',
+                        color: '#38bdf8',
+                        border: '1px solid rgba(56, 189, 248, 0.3)',
+                        padding: '1.5px 6px',
+                        borderRadius: 4,
+                        fontWeight: 600,
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 4,
+                      }}>
+                        <Sparkles size={10} /> AI: {activeEpisode.scriptData.detectedGenre}
+                      </span>
+                    )}
+                  </div>
+
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+                    {GENRE_OPTIONS.map((g) => {
+                      const isSelected = dramaGenre === g.id;
+                      const GenreIcon = g.icon || Sparkles;
+                      return (
+                        <button
+                          key={g.id}
+                          type="button"
+                          data-testid={`batch-genre-${g.id}`}
+                          aria-pressed={isSelected}
+                          aria-label={`ជ្រើសរើសប្រភេទរឿង ${g.shortLabel || g.label}`}
+                          onClick={() => {
+                            const res = handleGenreChange({ presetIds, newGenre: g.id });
+                            setDramaGenre(res.nextGenre);
+                            setPresetIds(res.nextPresetIds);
+                          }}
+                          title={g.hint}
+                          style={{
+                            padding: '4px 9px',
+                            fontSize: '11px',
+                            borderRadius: 6,
+                            border: isSelected ? '1.5px solid #38bdf8' : '1px solid rgba(255, 255, 255, 0.08)',
+                            background: isSelected
+                              ? 'linear-gradient(135deg, rgba(14, 165, 233, 0.25) 0%, rgba(56, 189, 248, 0.15) 100%)'
+                              : '#0b0f19',
+                            color: isSelected ? '#38bdf8' : '#cbd5e1',
+                            cursor: 'pointer',
+                            fontWeight: isSelected ? 700 : 500,
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 5,
+                            transition: 'all 0.15s ease',
+                            boxShadow: isSelected ? '0 0 10px rgba(56, 189, 248, 0.25)' : 'none',
+                          }}
+                        >
+                          <GenreIcon size={12} />
+                          <span>{g.shortLabel || g.label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
 
-                {/* ── FLAT ROW 4: ឈ្មោះតួអង្គ / DIRECTION (Presets + Truncated 1-Line with More Toggle) ── */}
+                {/* ── FLAT ROW 4: ឈ្មោះតួអង្គ / DIRECTION (1-Click Smart Prompt Chips + Textarea) ── */}
                 <div
                   data-testid="batch-setup-group-direction"
                   style={{
@@ -2863,54 +2886,13 @@ export default function GeminiRouteModal({
                     gap: 6,
                   }}
                 >
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 6 }}>
-                    <div
-                      data-testid="batch-smart-prompt-chips"
-                      style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 5 }}
-                    >
-                      <span style={{ fontSize: '0.70rem', color: '#94A3B8', fontWeight: 700, minWidth: 118, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-                        <Settings2 size={11} color="#38BDF8" />
-                        <span>DIRECTION:</span>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <label style={{ fontSize: '10.5px', color: '#94a3b8', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.4px', display: 'flex', alignItems: 'center', gap: 5 }}>
+                      <span>{dubbingMode === 'dialogue' ? 'ឈ្មោះតួអង្គ / DIRECTION' : 'ទិសដៅសម្រាយបន្ថែម (DIRECTION)'}</span>
+                      <span style={{ fontSize: '9px', color: '#64748b', background: 'rgba(255, 255, 255, 0.06)', padding: '1px 5px', borderRadius: 3, fontWeight: 500, textTransform: 'none' }}>
+                        ស្រេចចិត្ត
                       </span>
-                      {SMART_PROMPT_CHIPS.map((chip) => {
-                        const isChipActive = presetIds.includes(chip.id);
-                        const ChipIcon = chip.icon || Sparkles;
-                        return (
-                          <button
-                            key={chip.id}
-                            type="button"
-                            data-testid={`batch-smart-prompt-chip-${chip.id}`}
-                            aria-pressed={isChipActive}
-                            aria-label={`ទិសដៅ ${chip.shortLabel || chip.label}`}
-                            title={chip.promptText}
-                            onClick={() => {
-                              const res = togglePreset({ presetIds, targetId: chip.id, currentGenre: dramaGenre });
-                              setPresetIds(res.nextPresetIds);
-                              if (res.nextGenre !== dramaGenre) {
-                                setDramaGenre(res.nextGenre);
-                              }
-                            }}
-                            style={{
-                              padding: '3px 8px',
-                              borderRadius: 6,
-                              fontSize: '0.68rem',
-                              fontWeight: isChipActive ? 700 : 500,
-                              background: isChipActive ? 'rgba(56, 189, 248, 0.16)' : 'rgba(255, 255, 255, 0.03)',
-                              color: isChipActive ? '#38BDF8' : '#CBD5E1',
-                              border: isChipActive ? '1px solid rgba(56, 189, 248, 0.5)' : '1px solid rgba(255, 255, 255, 0.08)',
-                              cursor: 'pointer',
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              gap: 4,
-                              transition: 'all 0.15s ease',
-                            }}
-                          >
-                            <ChipIcon size={11} color={isChipActive ? '#38BDF8' : '#94A3B8'} />
-                            <span>{chip.shortLabel || chip.label}</span>
-                          </button>
-                        );
-                      })}
-                    </div>
+                    </label>
 
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                       {(customText || presetIds.length > 0) && (
@@ -2922,7 +2904,7 @@ export default function GeminiRouteModal({
                             setCustomText('');
                             setPresetIds([]);
                           }}
-                          style={{ background: 'none', border: 'none', color: '#94A3B8', fontSize: '0.68rem', cursor: 'pointer', fontWeight: 600 }}
+                          style={{ background: 'none', border: 'none', color: '#94a3b8', fontSize: '10px', cursor: 'pointer', fontWeight: 600 }}
                           title="សម្អាតទិសដៅបន្ថែម (Clear custom text)"
                         >
                           ✕ សម្អាត
@@ -2932,64 +2914,94 @@ export default function GeminiRouteModal({
                         type="button"
                         data-testid="batch-direction-more-toggle"
                         onClick={() => setIsDirectionExpanded((prev) => !prev)}
-                        style={{
-                          background: 'none',
-                          border: 'none',
-                          color: '#38BDF8',
-                          fontSize: '0.68rem',
-                          fontWeight: 700,
-                          cursor: 'pointer',
-                        }}
+                        style={{ display: 'none' }}
+                        aria-hidden="true"
                       >
                         {isDirectionExpanded ? 'បង្រួម ▴' : 'more ▾'}
                       </button>
                     </div>
                   </div>
 
-                  {!isDirectionExpanded && (
-                    <div
-                      onClick={() => setIsDirectionExpanded(true)}
-                      className="truncate"
-                      style={{
-                        fontSize: '0.70rem',
-                        color: customDirection ? '#CBD5E1' : '#64748B',
-                        whiteSpace: 'nowrap',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        cursor: 'pointer',
-                        padding: '4px 8px',
-                        borderRadius: 6,
-                        background: 'rgba(0, 0, 0, 0.22)',
-                      }}
-                      title={customDirection || 'ចុចដើម្បីកែប្រែ Direction Prompt'}
-                    >
-                      {customDirection || 'ចុច more ដើម្បីបញ្ចូលឈ្មោះតួអង្គ ឬ Direction បន្ថែម...'}
-                    </div>
-                  )}
+                  {/* 1-Click Smart Prompt Chips */}
+                  <div
+                    data-testid="batch-smart-prompt-chips"
+                    style={{
+                      display: 'flex',
+                      flexWrap: 'wrap',
+                      gap: 5,
+                    }}
+                  >
+                    {SMART_PROMPT_CHIPS.map((chip) => {
+                      const isChipActive = presetIds.includes(chip.id);
+                      const ChipIcon = chip.icon || Sparkles;
+                      return (
+                        <button
+                          key={chip.id}
+                          type="button"
+                          data-testid={`batch-smart-prompt-chip-${chip.id}`}
+                          aria-pressed={isChipActive}
+                          aria-label={`ទិសដៅ ${chip.shortLabel || chip.label}`}
+                          title={chip.promptText}
+                          onClick={() => {
+                            const res = togglePreset({ presetIds, targetId: chip.id, currentGenre: dramaGenre });
+                            setPresetIds(res.nextPresetIds);
+                            if (res.nextGenre !== dramaGenre) {
+                              setDramaGenre(res.nextGenre);
+                            }
+                          }}
+                          style={{
+                            padding: '3.5px 8px',
+                            borderRadius: 6,
+                            fontSize: '10.5px',
+                            fontWeight: isChipActive ? 700 : 500,
+                            fontFamily: "'Kantumruy Pro', 'Battambang', system-ui, sans-serif",
+                            background: isChipActive
+                              ? 'rgba(56, 189, 248, 0.2)'
+                              : 'rgba(15, 23, 42, 0.75)',
+                            color: isChipActive ? '#38bdf8' : '#cbd5e1',
+                            border: isChipActive
+                              ? '1px solid rgba(56, 189, 248, 0.55)'
+                              : '1px solid rgba(255, 255, 255, 0.09)',
+                            cursor: 'pointer',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            gap: 5,
+                            transition: 'all 0.15s ease',
+                          }}
+                        >
+                          <ChipIcon size={12} color={isChipActive ? '#38bdf8' : '#94a3b8'} />
+                          <span>{chip.shortLabel || chip.label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
 
+                  {/* Direct Textarea exactly matching Image 2 */}
                   <textarea
                     rows={2}
                     data-testid="batch-direction-textarea"
                     value={customText}
                     onChange={(e) => setCustomText(e.target.value)}
                     placeholder={dubbingMode === 'dialogue'
-                      ? 'ឧ. រឿងភាគបុរាណចិន, តួប្រុសឈ្មោះ លីនហ្វេង...'
+                      ? 'ឧ. រឿងភាគបុរាណចិន, តួប្រុសឈ្មោះ: លីនហ្វេង...'
                       : 'ឧ. សម្រាយបែបរន្ធត់ ជក់ចិត្ត ផ្តោតលើប្រយុទ្ធ...'}
                     style={{
-                      display: isDirectionExpanded ? 'block' : 'none',
                       width: '100%',
-                      padding: '6px 10px',
-                      borderRadius: 6,
-                      background: 'rgba(0, 0, 0, 0.28)',
-                      border: '1px solid rgba(255, 255, 255, 0.08)',
-                      color: '#F1F5F9',
-                      fontSize: '0.72rem',
-                      resize: 'none',
+                      padding: '9px 12px',
+                      borderRadius: 8,
+                      background: '#0a0d15',
+                      border: '1px solid #1e2536',
+                      color: '#f1f5f9',
+                      fontSize: '11px',
+                      resize: 'vertical',
                       fontFamily: "'Kantumruy Pro', 'Battambang', system-ui, sans-serif",
-                      lineHeight: 1.45,
+                      lineHeight: 1.5,
                       boxSizing: 'border-box',
                       outline: 'none',
+                      transition: 'all 0.15s ease',
                     }}
+                    onFocus={(e) => e.target.style.borderColor = dubbingMode === 'dialogue' ? '#38bdf8' : '#c084fc'}
+                    onBlur={(e) => e.target.style.borderColor = '#1e2536'}
                   />
                 </div>
               </div>
