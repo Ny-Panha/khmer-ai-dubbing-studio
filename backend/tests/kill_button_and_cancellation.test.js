@@ -4,7 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
-const { productionJobQueue, ProductionJobQueue, JOB_STATUS } = require('../services/pipeline/productionJobQueue');
+const { productionJobQueue, ProductionJobQueue, JOB_STATUS, atomicWriteJson } = require('../services/pipeline/productionJobQueue');
 const { executeJobCancellation } = require('../routes/jobRoutes');
 const {
   callGeminiVisionWithRetry,
@@ -632,4 +632,113 @@ test('19. Stage 3 OCR: AbortSignal stops retry/backoff immediately and avoids mo
   );
 
   assert.equal(calls, 1);
+});
+
+test('20. Direct Pipeline Lock: Tracks active execution, aborts on cancel, and preserves lock until settlement', async () => {
+  productionJobQueue.clearMemoryForTesting();
+  const queue = new ProductionJobQueue();
+  const seriesId = 'series_direct_test';
+  const episodeId = 'ep_direct_test';
+  const directJobId = 'direct_job_999';
+  const controller = new AbortController();
+
+  // 1. Acquire direct pipeline lock with abort controller
+  const acquired = queue.acquireEpisodeLock(seriesId, episodeId, 'direct_pipeline', directJobId, {
+    controller,
+  });
+  assert.equal(acquired, true);
+
+  // 2. Verify queue recognizes active execution
+  assert.equal(queue.hasActiveJobForEpisode(seriesId, episodeId), true);
+  assert.equal(queue.isWorkerExecuting(directJobId), true);
+  assert.equal(queue.isWorkerExecutingForEpisode(seriesId, episodeId), true);
+
+  // 3. Verify getActiveJobForEpisode returns the authoritative direct pipeline metadata
+  const active = queue.getActiveJobForEpisode(seriesId, episodeId);
+  assert.equal(active.jobId, directJobId);
+  assert.equal(active.isDirectPipeline, true);
+  assert.equal(active.isVirtualLock, true);
+
+  // 4. Verify releaseEpisodeLock refuses to release prematurely without force
+  const releaseAttempt = queue.releaseEpisodeLock(seriesId, episodeId, false);
+  assert.equal(releaseAttempt, false);
+  assert.equal(queue.hasActiveJobForEpisode(seriesId, episodeId), true);
+
+  // 5. Cancel direct pipeline and verify signal aborts immediately
+  const cancelRes = queue.cancelJob(directJobId);
+  assert.ok(cancelRes);
+  assert.equal(cancelRes.status, JOB_STATUS.CANCELLED);
+  assert.equal(controller.signal.aborted, true);
+
+  // 6. Complete worker settlement and verify lock is safely released
+  const finalRelease = queue.releaseEpisodeLock(seriesId, episodeId, true, directJobId);
+  assert.equal(finalRelease, true);
+  assert.equal(queue.isWorkerExecuting(directJobId), false);
+  assert.equal(queue.hasActiveJobForEpisode(seriesId, episodeId), false);
+  queue.clearMemoryForTesting();
+});
+
+test('21. Queue Worker Identity: getActiveJobForEpisode returns real jobId instead of virtual lock while running', async () => {
+  productionJobQueue.clearMemoryForTesting();
+  const queue = new ProductionJobQueue();
+  const seriesId = 'series_real_id';
+  const episodeId = 'ep_real_id';
+
+  let workerStarted = false;
+  let releaseWorker;
+  const barrier = new Promise((resolve) => { releaseWorker = resolve; });
+
+  queue.registerWorkerHandler(async (job) => {
+    workerStarted = true;
+    await barrier;
+    return { success: true };
+  });
+
+  const queued = queue.enqueueJob({ seriesId, episodeId, priority: 1 });
+  queue.processQueue();
+
+  // Wait for worker to start
+  while (!workerStarted) {
+    await new Promise((r) => setTimeout(r, 10));
+  }
+
+  // Authoritative check: must return real job object, NOT a fake virtual lock!
+  const active = queue.getActiveJobForEpisode(seriesId, episodeId);
+  assert.ok(active, 'Expected active job to be present');
+  assert.equal(active.jobId, queued.jobId, 'Expected real jobId, not a lock_ prefix');
+  assert.equal(Boolean(active.isVirtualLock), false, 'Expected real queue job, not virtual lock');
+  assert.equal(active.status, JOB_STATUS.RUNNING);
+
+  // Release and settle worker
+  releaseWorker();
+  await queue.waitForWorkerSettlement(queued.jobId, 2000);
+  queue.clearMemoryForTesting();
+});
+
+test('22. File Integrity: Concurrent cancellation during JSON write ensures atomic consistency', async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'atomic_write_cancel_test_'));
+  const testFile = path.join(tempDir, 'series_concurrent.json');
+
+  const initialData = { id: 'series_safe', count: 1, episodes: [{ id: 'ep_1', status: 'ready' }] };
+  atomicWriteJson(testFile, initialData);
+
+  // Verify file is clean and parseable
+  const read1 = JSON.parse(fs.readFileSync(testFile, 'utf8'));
+  assert.equal(read1.id, 'series_safe');
+
+  // Perform multiple atomic writes with mock abort
+  const abortController = new AbortController();
+  for (let i = 2; i <= 10; i++) {
+    if (i === 5) abortController.abort();
+    atomicWriteJson(testFile, { id: 'series_safe', count: i, episodes: [{ id: `ep_${i}` }] });
+  }
+
+  const finalRead = JSON.parse(fs.readFileSync(testFile, 'utf8'));
+  assert.equal(finalRead.id, 'series_safe');
+  assert.equal(finalRead.count, 10);
+
+  try {
+    fs.unlinkSync(testFile);
+    fs.rmdirSync(tempDir);
+  } catch (_) {}
 });

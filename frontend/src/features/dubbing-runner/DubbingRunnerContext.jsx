@@ -1408,12 +1408,17 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries, o
     const activeEp = allEpisodes.find((e) => e.id === currentEpId);
     const videoRef = activeEp?.videoPath || activeEp?.sourceVideoPath || activeEp?.videoFile || '';
 
+    let stopFailed = false;
+    let stopErrorMessage = '';
+
     // 2. Transmit scoped kill command to backend worker processes immediately
     try {
       if (stepType === 'clean_bgm' || stepType === 'all3') {
         const killSepRes = await killSeparationApi({ videoPath: videoRef, jobId: currentEpId || 'all' }).catch((err) => ({ success: false, error: err.message }));
         if (killSepRes && killSepRes.success === false) {
           console.warn('[DubbingRunner] Demucs kill returned error:', killSepRes.error);
+          stopFailed = true;
+          stopErrorMessage = killSepRes.error || 'បរាជ័យក្នុងការបញ្ឈប់ Demucs';
         }
       }
       if (stepType === 'translate' || stepType === 'repair' || stepType === 'all3') {
@@ -1429,17 +1434,30 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries, o
         if (!res.ok) {
           const errData = await res.json().catch(() => ({}));
           console.warn(`[DubbingRunner] Kill jobs returned HTTP ${res.status}:`, errData.error);
+          stopFailed = true;
+          stopErrorMessage = errData.error || `Server ឆ្លើយតប error HTTP ${res.status}`;
         }
       }
     } catch (killErr) {
       console.error('[DubbingRunner] Error in stopStep kill call:', killErr.message);
+      stopFailed = true;
+      stopErrorMessage = killErr.message;
     }
 
-    updateRunnerState(stepType, {
-      status: 'idle',
-      currentEpId: null,
-      message: '🛑 បានបញ្ឈប់ (Stopped UI & Backend)',
-    });
+    if (stopFailed) {
+      updateRunnerState(stepType, {
+        status: 'error',
+        currentEpId,
+        message: `⚠️ ការបញ្ឈប់បរាជ័យ: ${stopErrorMessage}`,
+        error: stopErrorMessage,
+      });
+    } else {
+      updateRunnerState(stepType, {
+        status: 'idle',
+        currentEpId: null,
+        message: '🛑 បានបញ្ឈប់ (Stopped UI & Backend)',
+      });
+    }
   }, [activeSeries, runnerStates, updateRunnerState]);
 
   const value = {

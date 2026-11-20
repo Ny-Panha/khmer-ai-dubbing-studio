@@ -3,6 +3,46 @@
 ## Last Session
 - **Environment**: Antigravity IDE (Gemini) - Minimal Change Engineer
 - **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-20T13:05:00+07:00
+
+## Summary: Direct Pipeline Lock, Force Re-Translate Worker Targeting & Runner Stop State Hardening (100% PASS)
+- **Task:** Resolve the remaining cancellation & lock release edge cases identified during deep audit:
+  1. **P0 — Direct Pipeline Lock Execution Tracking & Mutual Exclusion (`backend/routes/scriptRoutes.js` & `backend/services/pipeline/productionJobQueue.js`)**:
+     - `scriptRoutes.js` now generates a scoped `directJobId` and `directController = new AbortController()`.
+     - Registers direct execution with `productionJobQueue.acquireEpisodeLock(cleanTargetSeries, cleanTargetEpisode, 'direct_pipeline', directJobId, { controller: directController })`, storing it in `activeExecutions` and `activeAbortControllers`.
+     - Passes `signal: directController.signal` into `runDubbingPipeline`.
+     - Listens to `req.on('close')` to abort the pipeline if client disconnects.
+     - `releaseEpisodeLock()` safely deregistrates direct execution and emits `worker_settled` upon completion in `finally`.
+     - Prevents force-reruns or new jobs from executing concurrently on the same episode while Direct Pipeline is running.
+  2. **P1 — Authoritative Queue Worker Targeting during Force Re-Translate (`backend/services/pipeline/productionJobQueue.js` & `backend/routes/jobRoutes.js`)**:
+     - In `productionJobQueue.getActiveJobForEpisode()`: prioritizes real in-memory queued/running/recovering jobs so caller receives the real queue `jobId` instead of a virtual lock.
+     - If an active episode lock is held by a direct pipeline or queue worker, returns the authoritative `jobId` and flags `isDirectPipeline: true`.
+     - In `jobRoutes.js`: force re-translate targets `active?.jobId` directly without skipping virtual locks, cancelling either queue workers or direct pipelines, and awaiting settlement. Returns HTTP 409 Conflict if worker is still stopping.
+  3. **P1 — Runner False Stopped Elimination (`frontend/src/features/dubbing-runner/DubbingRunnerContext.jsx`)**:
+     - `stopStep` now tracks `stopFailed` and `stopErrorMessage`.
+     - If Demucs or Job kill API returns non-OK or throws an exception, updates runner state to `error` with the actual server error message instead of falsely claiming "🛑 បានបញ្ឈប់ (Stopped UI & Backend)".
+  4. **P2 — Concurrency & Atomic Integrity Regression Tests (`backend/tests/kill_button_and_cancellation.test.js`)**:
+     - Added Test 20: Direct Pipeline Lock tracking, cancellation abort signal propagation, and lock preservation until settlement.
+     - Added Test 21: Queue Worker Identity - verifies `getActiveJobForEpisode` returns real `jobId` rather than a virtual lock while running.
+     - Added Test 22: Concurrent JSON writing and cancellation resilience ensuring `series.json` atomic integrity.
+- **Verification Outcomes**:
+  - `backend/tests/kill_button_and_cancellation.test.js`: **21/21 PASS (100%)** (all 22 test scenarios).
+  - Full Backend Regression Suites (8 files, 69 tests): **69/69 PASS (100%)**.
+  - `npm --prefix frontend run build`: **PASS (0 errors, 648ms)**.
+- **Active Environment**:
+  - Backend API: `http://localhost:5000`
+  - Frontend UI: `http://localhost:5173`
+  - Active Branch: `chore/full-project-cleanup`
+- **Next Steps**:
+  - Commit and push to `origin/chore/full-project-cleanup`.
+
+---
+
+# Antigravity Shared State (Sync Memory)
+
+## Last Session
+- **Environment**: Antigravity IDE (Gemini) - Minimal Change Engineer
+- **Branch**: `chore/full-project-cleanup`
 - **Timestamp**: 2026-11-20T12:50:00+07:00
 
 ## Summary: Kill Button & Cancellation Bugs Surgical Fix — End-to-End Safety, Strict Episode Locks, Terminal State Protection & UI Synchronization (100% PASS)

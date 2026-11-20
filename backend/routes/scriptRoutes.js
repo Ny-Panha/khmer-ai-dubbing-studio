@@ -163,8 +163,21 @@ router.post("/generate-script", async (req, res) => {
         });
       }
 
-      // Acquire exclusive episode execution lock for direct pipeline
-      productionJobQueue.acquireEpisodeLock(cleanTargetSeries, cleanTargetEpisode, 'direct_pipeline');
+      // Acquire exclusive episode execution lock for direct pipeline and register execution
+      const directJobId = jobId || requestId || `direct_${cleanTargetSeries}_${cleanTargetEpisode}_${Date.now()}`;
+      const directController = new AbortController();
+
+      productionJobQueue.acquireEpisodeLock(cleanTargetSeries, cleanTargetEpisode, 'direct_pipeline', directJobId, {
+        controller: directController,
+      });
+
+      const onClientClose = () => {
+        if (!res.writableEnded) {
+          console.warn(`[GenerateScript] Client disconnected from direct pipeline ${directJobId}, aborting...`);
+          directController.abort();
+        }
+      };
+      req.on('close', onClientClose);
 
       try {
         console.log(`[GenerateScript] 🚀 Running Clean 10-Stage Dubbing Pipeline (Mode: ${mode}, Model: ${modelName || "default"})...`);
@@ -179,10 +192,12 @@ router.post("/generate-script", async (req, res) => {
           narratorGender,
           seriesGlossary,
           genre,
-          jobId: jobId || requestId,
+          jobId: directJobId,
+          signal: directController.signal,
         });
       } finally {
-        productionJobQueue.releaseEpisodeLock(cleanTargetSeries, cleanTargetEpisode);
+        req.off('close', onClientClose);
+        productionJobQueue.releaseEpisodeLock(cleanTargetSeries, cleanTargetEpisode, true, directJobId);
       }
     } else if (!rawVideoRef && promptText && promptText.trim()) {
       console.log(`[GenerateScript] Processing text prompt (Mode: ${mode}): ${promptText.slice(0, 50)}...`);

@@ -190,6 +190,9 @@ class ProductionJobQueue {
     if (!this.activeExecutions || this.activeExecutions.size === 0) return false;
     const cleanSeries = sanitizeIdentifier(seriesId, 'series_default');
     const cleanEpisode = sanitizeIdentifier(episodeId, 'ep_1');
+    const lockKey = `${cleanSeries}/${cleanEpisode}`;
+
+    // 1. Check in-memory background queue workers
     for (const jobId of this.activeExecutions) {
       if (excludeJobId && jobId === excludeJobId) continue;
       const job = this.inMemoryJobs.get(jobId);
@@ -197,6 +200,17 @@ class ProductionJobQueue {
         return true;
       }
     }
+
+    // 2. Check active episode locks (including direct pipelines)
+    if (this.activeEpisodeLocks.has(lockKey)) {
+      const lock = this.activeEpisodeLocks.get(lockKey);
+      if (lock && (!excludeJobId || lock.workerId !== excludeJobId)) {
+        if (this.activeExecutions.has(lock.workerId)) {
+          return true;
+        }
+      }
+    }
+
     return false;
   }
 
@@ -236,7 +250,7 @@ class ProductionJobQueue {
   /**
    * Acquires a mutual exclusion lock for an episode (used by direct pipeline).
    */
-  acquireEpisodeLock(seriesId, episodeId, lockType = 'pipeline', workerId = 'direct_worker') {
+  acquireEpisodeLock(seriesId, episodeId, lockType = 'pipeline', workerId = 'direct_worker', options = {}) {
     const cleanSeries = sanitizeIdentifier(seriesId, 'series_default');
     const cleanEpisode = sanitizeIdentifier(episodeId, 'ep_1');
     const lockKey = `${cleanSeries}/${cleanEpisode}`;
@@ -259,12 +273,20 @@ class ProductionJobQueue {
       }
     }
 
+    if (options.controller) {
+      this.activeAbortControllers.set(workerId, options.controller);
+    }
+    if (lockType === 'direct_pipeline' || options.controller) {
+      this.activeExecutions.add(workerId);
+    }
+
     this.activeEpisodeLocks.set(lockKey, {
       seriesId: cleanSeries,
       episodeId: cleanEpisode,
       lockType,
       workerId,
       acquiredAt: Date.now(),
+      controller: options.controller || null,
     });
     return true;
   }
@@ -273,13 +295,29 @@ class ProductionJobQueue {
    * Releases an episode lock safely.
    * If a worker is still executing, refuses release unless force=true.
    */
-  releaseEpisodeLock(seriesId, episodeId, force = false) {
+  releaseEpisodeLock(seriesId, episodeId, force = false, workerId = null) {
     const cleanSeries = sanitizeIdentifier(seriesId, 'series_default');
     const cleanEpisode = sanitizeIdentifier(episodeId, 'ep_1');
+    const lockKey = `${cleanSeries}/${cleanEpisode}`;
+
+    // If not forced and worker is still executing for episode, refuse release
     if (!force && this.isWorkerExecutingForEpisode(cleanSeries, cleanEpisode)) {
       return false;
     }
-    const lockKey = `${cleanSeries}/${cleanEpisode}`;
+
+    const existingLock = this.activeEpisodeLocks.get(lockKey);
+    const targetWorkerId = workerId || (force ? existingLock?.workerId : null);
+
+    if (targetWorkerId && (this.activeExecutions.has(targetWorkerId) || this.activeAbortControllers.has(targetWorkerId))) {
+      this.activeExecutions.delete(targetWorkerId);
+      this.activeAbortControllers.delete(targetWorkerId);
+      this.events.emit('worker_settled', {
+        jobId: targetWorkerId,
+        seriesId: cleanSeries,
+        episodeId: cleanEpisode,
+      });
+    }
+
     return this.activeEpisodeLocks.delete(lockKey);
   }
 
@@ -318,24 +356,14 @@ class ProductionJobQueue {
 
   /**
    * Retrieves the current active job or execution lock for an episode, if any.
+   * Prioritizes actual in-memory queued/running jobs so caller receives real jobId instead of virtual lock.
    */
   getActiveJobForEpisode(seriesId, episodeId) {
     const cleanSeries = sanitizeIdentifier(seriesId, 'series_default');
     const cleanEpisode = sanitizeIdentifier(episodeId, 'ep_1');
     const lockKey = `${cleanSeries}/${cleanEpisode}`;
 
-    if (this.activeEpisodeLocks.has(lockKey)) {
-      const lock = this.activeEpisodeLocks.get(lockKey);
-      return {
-        jobId: `lock_${lock.lockType}`,
-        seriesId: cleanSeries,
-        episodeId: cleanEpisode,
-        status: JOB_STATUS.RUNNING,
-        lockType: lock.lockType,
-        isVirtualLock: true,
-      };
-    }
-
+    // 1. Check if a real queue job exists in memory (queued, running, recovering)
     for (const job of this.inMemoryJobs.values()) {
       if (job.seriesId === cleanSeries && job.episodeId === cleanEpisode) {
         if (ACTIVE_STATUSES.has(job.status) || this.activeExecutions.has(job.jobId)) {
@@ -343,6 +371,24 @@ class ProductionJobQueue {
         }
       }
     }
+
+    // 2. Check active episode locks (including direct pipelines or standalone locks)
+    if (this.activeEpisodeLocks.has(lockKey)) {
+      const lock = this.activeEpisodeLocks.get(lockKey);
+      if (lock.workerId && this.inMemoryJobs.has(lock.workerId)) {
+        return this.inMemoryJobs.get(lock.workerId);
+      }
+      return {
+        jobId: lock.workerId || `lock_${lock.lockType}`,
+        seriesId: cleanSeries,
+        episodeId: cleanEpisode,
+        status: JOB_STATUS.RUNNING,
+        lockType: lock.lockType,
+        isVirtualLock: true,
+        isDirectPipeline: lock.lockType === 'direct_pipeline',
+      };
+    }
+
     return null;
   }
 
@@ -731,6 +777,7 @@ class ProductionJobQueue {
     if (!job) {
       if (controller) {
         controller.abort(new Error('Job was cancelled by user'));
+        return { jobId, status: JOB_STATUS.CANCELLED, isDirectPipeline: true };
       }
       return null;
     }
