@@ -172,6 +172,8 @@ router.post("/generate", async (req, res) => {
       ? GENERATION_MODES.MODE_B_RECAP
       : (generationMode === 'fast_ocr' ? GENERATION_MODES.FAST_OCR : rawMode);
 
+    const isForce = req.body.force === true || req.body.force === 'true' || req.body.confirmed === true || req.body.confirmed === 'true';
+
     const rawVideoRef = videoPath || (videoFileName ? (path.isAbsolute(videoFileName) ? videoFileName : path.join(uploadsDir, videoFileName)) : null) || videoId;
     const resolvedVideoPath = rawVideoRef ? resolveMediaFile(rawVideoRef) : null;
 
@@ -185,7 +187,7 @@ router.post("/generate", async (req, res) => {
     const hasExistingSegments = Boolean(targetEp?.scriptData?.segments?.length > 0);
 
     if (hasExistingSegments) {
-      if (!req.body.force || (req.body.confirmed !== true && req.body.force !== true)) {
+      if (!isForce) {
         console.log(`[Job Dispatch] ⚡ Episode ${episodeId} in series ${seriesId} already completed (${targetEp.scriptData.segments.length} segments). Re-translation requires confirmation.`);
         return res.status(409).json({
           success: false,
@@ -264,7 +266,7 @@ router.post("/generate", async (req, res) => {
     ensurePipelineWorkerRegistered(productionJobQueue);
 
     // If force re-translate is requested and an active job/lock exists, cancel it cleanly first
-    if ((req.body.force === true || req.body.confirmed === true) && productionJobQueue.hasActiveJobForEpisode(seriesId, episodeId)) {
+    if (isForce && productionJobQueue.hasActiveJobForEpisode(seriesId, episodeId)) {
       const active = productionJobQueue.getActiveJobForEpisode(seriesId, episodeId);
       if (active?.jobId) {
         cancelJobRenderProcess(active.jobId);

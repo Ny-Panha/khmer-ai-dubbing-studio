@@ -662,6 +662,10 @@ export default function GeminiRouteModal({
   const handleRetryEpisode = async (ep) => {
     try {
       setBatchError(null);
+      const targetSeriesId = activeSeries?.id || seriesId || 'drama_project';
+      try {
+        await resetEpisodeStateApi({ seriesId: targetSeriesId, episodeId: ep.id, resetType: 'script' });
+      } catch (_) {}
       const rawVideoRef = ep.video?.videoPath || ep.video?.videoId || ep.videoFile || ep.sourceVideoPath;
       const effectiveMode = dubbingMode === 'recap'
         ? 'recap'
@@ -669,14 +673,15 @@ export default function GeminiRouteModal({
       await startGenerationJob({
         videoId: rawVideoRef,
         videoPath: ep.video?.videoPath || ep.sourceVideoPath,
-        seriesId: activeSeries?.id || seriesId || 'drama_project',
+        seriesId: targetSeriesId,
         episodeId: ep.id,
         mode: effectiveMode,
         dubbingMode,
         generationMode: pipelineMode,
         recapStyle,
         customPrompt: customDirection,
-        force: false,
+        force: true,
+        confirmed: true,
         genre: dramaGenre,
         narratorGender,
         seriesGlossary: activeSeries?.glossary,

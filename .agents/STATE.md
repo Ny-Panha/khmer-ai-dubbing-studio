@@ -3,6 +3,38 @@
 ## Last Session
 - **Environment**: Antigravity IDE (Gemini) - Minimal Change Engineer
 - **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-20T10:19:00+07:00
+
+## Summary: Fixed 409 Conflict on Episode Retry & Re-Translate (100% PASS)
+- **Task:** Fix `POST /api/jobs/generate 409 (Conflict)` triggered when clicking "Retry / ធ្វើឡើងវិញ" on `EpisodeTranslateProgressCard.jsx`.
+- **Root Cause**:
+  - In `frontend/src/components/dashboard/GeminiRouteModal.jsx:679`, `handleRetryEpisode` hardcoded `force: false` and omitted `confirmed`.
+  - When retrying an episode that already had script segments or a previous failed/cancelled lock, `backend/routes/jobRoutes.js:188` rejected the request with HTTP 409 (`alreadyCompleted / requireConfirmation`).
+- **Surgical Changes Implemented (Minimal Change Discipline)**:
+  1. `frontend/src/components/dashboard/GeminiRouteModal.jsx`:
+     - In `handleRetryEpisode(ep)`: Added `await resetEpisodeStateApi({ seriesId: targetSeriesId, episodeId: ep.id, resetType: 'script' })`.
+     - In `startGenerationJob`: Changed `force: false` to `force: true, confirmed: true` to indicate explicit retry intent.
+  2. `backend/routes/jobRoutes.js`:
+     - Normalized `isForce = req.body.force === true || req.body.force === 'true' || req.body.confirmed === true || req.body.confirmed === 'true'`.
+     - Used `isForce` in both the anti-duplication 409 guard and previous active job lock cancellation.
+- **Verification Outcomes**:
+  - `backend/tests/series_persist_and_sync.test.js`: **PASS** (16/16).
+  - `backend/tests/queue_dispatch_and_payload.test.js`: **PASS** (5/5).
+  - `npm --prefix frontend run build`: **PASS** (662ms, 0 errors).
+- **Active Environment**:
+  - Backend API: `http://localhost:5000`
+  - Frontend UI: `http://localhost:5173`
+  - Active Branch: `chore/full-project-cleanup`
+- **Next Steps**:
+  - Ready for production use.
+
+---
+
+# Antigravity Shared State (Sync Memory)
+
+## Last Session
+- **Environment**: Antigravity IDE (Gemini) - Minimal Change Engineer
+- **Branch**: `chore/full-project-cleanup`
 - **Timestamp**: 2026-11-20T10:13:00+07:00
 
 ## Summary: Removed Redundant DubbingStepCardsBar from /studio Tab (100% PASS)
