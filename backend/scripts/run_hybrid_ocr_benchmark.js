@@ -1,192 +1,215 @@
 /**
- * DragonDub AI - Real Video Hybrid OCR Benchmark & Accuracy Verification
- * Tests the exact 5-minute drama video:
- * backend/uploads/projects/series_test/episodes/ep_1/video/ep_1_source.mp4 (286.55s)
- * Compares Hybrid Local OCR vs Golden Baseline Checkpoint
+ * Cold Stage 3 benchmark with real media + RapidOCR and a timestamp-matched
+ * checkpoint replay in place of Gemini. No paid API calls or production cache writes.
+ * node scripts/run_hybrid_ocr_benchmark.js --video FILE [--duration SEC]
+ *   [--reference CHECKPOINT] [--output NEW_JSON] [--sweep [--frames-dir DIR]]
  */
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { parseArgs } = require('node:util');
+const { performance } = require('node:perf_hooks');
+const { once } = require('node:events');
+const ocr = require('../services/ocr/localChineseOcrService');
+const { getVideoMetadata, extractFramesAtTimestamps } = require('../services/ffmpegService');
 
-const fs = require('fs');
-const path = require('path');
-const os = require('os');
-const { extractChineseSubtitles, areChineseTextsEquivalent } = require('../services/pipeline/stages/stage3_extractChineseSubtitles');
-const { isLocalChineseOcrAvailable, runLocalChineseOcr } = require('../services/ocr/localChineseOcrService');
-const { extractFramesAtTimestamps } = require('../services/ffmpegService');
-
-async function runBenchmark() {
-  console.log('================================================================');
-  console.log('🚀 STAGE 3 HYBRID LOCAL OCR BENCHMARK — REAL 5-MINUTE VIDEO');
-  console.log('================================================================');
-
-  const candidateVideoPaths = [
-    path.resolve(__dirname, '../uploads/projects/series_test/episodes/ep_1/video/ep_1_source.mp4'),
-    path.resolve(__dirname, '../uploads/projects/series_delayed/episodes/ep_1/video/ep_1_source.mp4'),
-  ];
-  const videoPath = candidateVideoPaths.find((p) => fs.existsSync(p));
-  if (!videoPath) {
-    console.error('❌ Video not found in series_test or series_delayed');
-    process.exit(1);
+function checkpointReference(file, durationSec, videoPath) {
+  if (!file) return new Map();
+  const { rawObservations, videoPath: recordedPath } = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const filename = path.basename(file);
+  const stat = fs.statSync(videoPath);
+  const safeBase = path.basename(videoPath).replace(/[^a-zA-Z0-9_-]/g, '_');
+  const signature = `ocr_ckpt_${safeBase}_${stat.size}_${Math.round(stat.mtimeMs)}_`;
+  if (/^ocr_ckpt_.*_\d+_\d+_\d+_\d+\.json$/.test(filename)) {
+    if (!filename.startsWith(signature)) throw new Error('Reference checkpoint signature does not match the input video');
+  } else if (!recordedPath || path.relative(path.resolve(videoPath), path.resolve(recordedPath)) !== '') {
+    throw new Error('Renamed reference checkpoint must record the input video path');
   }
+  if (!Array.isArray(rawObservations)) throw new Error('Reference must contain checkpoint rawObservations');
+  return new Map(rawObservations
+    .filter(r => r?.isVerified === true && !r.ocrFailed && !r.isDeduped && typeof r.hasText === 'boolean' && Number.isFinite(r.timestampSec)
+      && r.timestampSec >= 0 && r.timestampSec <= durationSec)
+    .map(r => [r.timestampSec, r]));
+}
 
-  const candidateCkptPaths = [
-    path.resolve(__dirname, '../uploads/cache/ocr_checkpoints/ocr_ckpt_ep_1_source_mp4_62851057_1795118987660_0_287.json'),
-    path.resolve(__dirname, '../uploads/cache/ocr_checkpoints/ocr_ckpt_ep_1_source_mp4_62851057_1795118987660_0_60.json'),
-  ];
-  const goldenCkptPath = candidateCkptPaths.find((p) => fs.existsSync(p));
-  if (!goldenCkptPath) {
-    console.error('❌ Golden checkpoint not found');
-    process.exit(1);
-  }
-
-  const goldenData = JSON.parse(fs.readFileSync(goldenCkptPath, 'utf8'));
-  const goldenObs = goldenData.rawObservations || [];
-  console.log(`\n📋 Golden Baseline Checkpoint loaded:`);
-  console.log(`   - Total Candidate Frames: ${goldenObs.length}`);
-  const textObs = goldenObs.filter(o => o.hasText && o.chineseText);
-  console.log(`   - Frames with Subtitle Text: ${textObs.length}`);
-  const uniqueGoldenLines = Array.from(new Set(textObs.map(o => o.chineseText)));
-  console.log(`   - Unique Chinese Dialogue Lines: ${uniqueGoldenLines.length}`);
-
-  const localAvail = await isLocalChineseOcrAvailable();
-  console.log(`\n⚙️ Local Chinese OCR Available: ${localAvail ? 'YES (RapidOCR ONNXRuntime)' : 'NO'}`);
-
-  // 1. Accuracy Benchmark on Ground-Truth Dialogue Samples
-  console.log('\n----------------------------------------------------------------');
-  console.log('🔬 Step 1: Accuracy Benchmark against Golden Subtitle Frames');
-  console.log('----------------------------------------------------------------');
-
-  // Select 25 diverse ground-truth dialogue frames across the 5 minutes
-  const step = Math.floor(textObs.length / 25);
-  const sampleFrames = [];
-  for (let i = 0; i < textObs.length; i += step) {
-    if (sampleFrames.length < 25) {
-      sampleFrames.push(textObs[i]);
-    }
-  }
-
-  const tempDir = path.join(os.tmpdir(), `bench_frames_${Date.now()}`);
-  fs.mkdirSync(tempDir, { recursive: true });
-
-  try {
-    const sampleTimes = sampleFrames.map(s => s.timestampSec);
-    console.log(`Extracting ${sampleTimes.length} golden test frames...`);
-    const extracted = await extractFramesAtTimestamps(videoPath, sampleTimes, tempDir);
-
-    console.log(`Running RapidOCR Local Chinese OCR on ${extracted.length} frames...`);
-    const t0 = Date.now();
-    const ocrRun = await runLocalChineseOcr({ frames: extracted });
-    const localOcrDuration = Date.now() - t0;
-    console.log(`RapidOCR inference completed in ${(localOcrDuration / 1000).toFixed(2)}s (${(localOcrDuration / extracted.length).toFixed(1)}ms/frame)`);
-
-    let matchedCount = 0;
-    let totalCompared = 0;
-    console.log('\nFrame-by-Frame Subtitle Accuracy Comparison:');
-    for (let i = 0; i < extracted.length; i++) {
-      const ext = extracted[i];
-      const gold = sampleFrames.find(s => Math.abs(s.timestampSec - ext.timestampSec) < 0.05);
-      const local = ocrRun.results.find(r => Math.abs(r.timestampSec - ext.timestampSec) < 0.05);
-      if (gold && local) {
-        totalCompared++;
-        const goldText = gold.chineseText;
-        const localText = local.chineseText;
-        const isEquivalent = areChineseTextsEquivalent(goldText, localText);
-        if (isEquivalent) matchedCount++;
-        const mark = isEquivalent ? '✅' : '⚠️';
-        console.log(`  ${mark} [${gold.timestampSec.toFixed(2)}s] Gold: "${goldText}" | Local: "${localText}" (conf: ${local.confidence})`);
-      }
-    }
-
-    const accuracyPercent = ((matchedCount / totalCompared) * 100).toFixed(1);
-    console.log(`\n🎯 Ground-Truth Accuracy: ${matchedCount}/${totalCompared} matched (${accuracyPercent}%)`);
-
-    // 2. Full 5-Minute Video End-to-End Stage 3 Telemetry Simulation
-    console.log('\n----------------------------------------------------------------');
-    console.log('⚡ Step 2: Full 5-Minute Stage 3 Performance Simulation');
-    console.log('----------------------------------------------------------------');
-
-    // Measure memory & CPU baseline
-    const memBefore = process.memoryUsage();
-    console.log(`Memory before Stage 3: Heap ${(memBefore.heapUsed / 1024 / 1024).toFixed(1)} MB, RSS ${(memBefore.rss / 1024 / 1024).toFixed(1)} MB`);
-
-    const mockAiClient = {
-      models: {
-        generateContent: async () => ({
-          text: JSON.stringify({
-            frames: [
-              {
-                timestampSec: 1.0,
-                hasText: true,
-                textZh: '云端验证完成',
-                chineseText: '云端验证完成',
-                position: 'bottom_subtitle',
-                isSharp: true,
-                visualGender: 'female',
-                speakerGender: 'female',
-                speakerVisualHint: 'female_lead',
-                deliveryType: 'dialogue',
-                genderConfidence: 0.9,
-              },
-            ],
-          }),
-        }),
-      },
-    };
-
-    console.log('\nExecuting Stage 3 with Hybrid Local Chinese OCR enabled...');
-    const testDuration = Number(process.argv[2]) > 0 ? Number(process.argv[2]) : 60.0;
-    console.log(`Running on ${testDuration.toFixed(1)}s segment of the real video...`);
-    const stage3Start = Date.now();
-    const stage3Res = await extractChineseSubtitles({
-      videoPath,
-      durationSec: testDuration,
-      startOffsetSec: 0,
-      aiClient: mockAiClient,
-      baseStepSec: 0.75,
-      force: true,
-      enableLocalOcr: true,
-      onProgress: (p) => {
-        if (p.statusMessage) process.stdout.write(`\r[Progress] ${p.statusMessage}                       `);
-      },
+function replayClient(reference, calls) {
+  return { models: { generateContent: async ({ contents }) => {
+    const times = contents.flatMap(part => {
+      const match = /^\[FRAME_TIMESTAMP: ([\d.]+)s \|/.exec(part.text);
+      return match ? [Number(match[1])] : [];
     });
-    console.log('\nStage 3 completed!');
-    const stage3DurationMs = Date.now() - stage3Start;
-    const memAfter = process.memoryUsage();
+    calls.push(times);
+    // A timestamp-only placeholder explicitly parses as missing. Dropping the
+    // entry entirely lets the tolerant production parser take a nearby answer.
+    const frames = times.map(timestampSec => reference.get(timestampSec) || { timestampSec });
+    return { text: JSON.stringify({ frames }) };
+  } } };
+}
 
-    console.log('\n📊 Measured Performance Telemetry:');
-    const p = stage3Res.ocrMeta.performance;
-    console.log(`  - Total Stage 3 Wall Time: ${(p.totalStage3Ms / 1000).toFixed(2)}s`);
-    console.log(`  - FFmpeg Prepass Time: ${(p.ffmpegPrepassMs / 1000).toFixed(2)}s`);
-    console.log(`  - Frame Extraction Time: ${(p.frameExtractionMs / 1000).toFixed(2)}s`);
-    console.log(`  - Local OCR Time: ${(p.localOcrMs / 1000).toFixed(2)}s`);
-    console.log(`  - Gemini Verification Time: ${(p.geminiVerificationMs / 1000).toFixed(2)}s`);
-    console.log(`  - Candidate Frames Sampled: ${p.candidateFramesCount}`);
-    console.log(`  - Local OCR Processed: ${p.localOcrFramesCount}`);
-    console.log(`  - Local Verified Count: ${p.localVerifiedCount}`);
-    console.log(`  - Gemini Verified Count: ${p.geminiVerifiedCount}`);
-    console.log(`  - Gemini Actual Batches: ${p.geminiBatchCount}`);
-    console.log(`  - Final Detected Cues: ${p.finalChineseCuesCount}`);
-    console.log(`  - Memory Delta: RSS +${((memAfter.rss - memBefore.rss) / 1024 / 1024).toFixed(1)} MB`);
+function agreement(results, reference) {
+  const seen = new Set();
+  let matched = 0;
+  const differences = [];
+  for (const row of results) {
+    const expected = reference.get(row.timestampSec);
+    if (!expected) continue;
+    seen.add(row.timestampSec);
+    if (row.ocrStatus !== 'failed' && row.hasText === expected.hasText
+      && row.chineseText === expected.chineseText) {
+      matched++;
+    } else {
+      differences.push({ timestampSec: row.timestampSec, expected: expected.chineseText, observed: row.chineseText, status: row.ocrStatus });
+    }
+  }
+  return { exactMatched: matched, compared: matched + differences.length, differences,
+    referenceTimestampsNotSampled: [...reference.keys()].filter(t => !seen.has(t)) };
+}
 
-    console.log('\n================================================================');
-    console.log(`📈 BENCHMARK SUMMARY TABLE (${testDuration.toFixed(0)}s TEST WINDOW)`);
-    console.log('================================================================');
-    console.log('| Metric                     | Baseline (Gemini Cloud)  | Hybrid Local OCR (Measured) |');
-    console.log('|----------------------------|--------------------------|-----------------------------|');
-    console.log(`| Measured Wall Time         | ~60–120s                 | ${(stage3DurationMs / 1000).toFixed(1)}s (Measured)          |`);
-    console.log(`| Gemini Cloud Batches       | ~8 batches / min         | ${p.geminiBatchCount} batches (Measured)     |`);
-    console.log(`| Chinese Subtitle Accuracy  | 98–100%                  | ${accuracyPercent}% (Ground-truth verified) |`);
-    console.log(`| Missed Dialogue Cues       | 0                        | 0 (Zero dropped)            |`);
-    console.log(`| Local OCR Engine           | None (Cloud only)        | RapidOCR (ONNXRuntime CPU)  |`);
-    console.log('================================================================');
+function spread(items, n) {
+  if (items.length <= n) return items;
+  return Array.from({ length: n }, (_, i) => items[Math.round(i * (items.length - 1) / (n - 1))]);
+}
 
-  } finally {
+async function sweep({ videoPath, durationSec, reference, dir, framesDir }) {
+  let frames;
+  if (framesDir) {
+    frames = fs.readdirSync(framesDir).flatMap(name => {
+      const match = /^f([0-9]+(?:\.[0-9]+)?)\.jpg$/i.exec(name);
+      if (!match || Number(match[1]) > durationSec) return [];
+      return [{ timestampSec: Number(match[1]), filePath: path.join(framesDir, name) }];
+    }).sort((a, b) => a.timestampSec - b.timestampSec);
+    const text = spread(frames.filter(f => reference.get(f.timestampSec)?.hasText === true), 8);
+    const empty = spread(frames.filter(f => reference.get(f.timestampSec)?.hasText === false), 4);
+    const selected = new Set([...text, ...empty]);
+    frames = [...selected, ...spread(frames.filter(f => !selected.has(f)), 24 - selected.size)]
+      .sort((a, b) => a.timestampSec - b.timestampSec);
+  } else {
+    const known = [...reference.values()].sort((a, b) => a.timestampSec - b.timestampSec);
+    const chosen = new Set([...spread(known.filter(r => r.hasText), 8), ...spread(known.filter(r => !r.hasText), 4)].map(r => r.timestampSec));
+    const additional = 24 - chosen.size;
+    for (let i = 0; i < additional; i++) chosen.add(Number(((i + 0.5) * durationSec / additional).toFixed(2)));
+    frames = await extractFramesAtTimestamps(videoPath, [...chosen], dir);
+    if (frames.length !== chosen.size) throw new Error('FFmpeg could not extract every CPU sweep frame');
+  }
+  if (frames.length < 2) throw new Error('CPU sweep needs at least two real frames');
+  if (!await ocr.isLocalChineseOcrAvailable()) throw new Error('RapidOCR unavailable');
+  const configs = [];
+  let stockResults;
+  const logicalCpus = os.cpus().length;
+  // Each configuration starts fresh sessions. Process startup is inside wallMs.
+  for (const [workers, threads] of [[1, 0], [1, 1], [1, 2], [1, 4], [2, 1], [2, 2]]) {
+    process.env.RAPIDOCR_INTRA_OP_THREADS = String(threads);
+    const pool = Array.from({ length: workers }, () => new ocr.PersistentChineseOcrWorker());
+    const started = performance.now();
+    let batches;
     try {
-      if (fs.existsSync(tempDir)) fs.rmSync(tempDir, { recursive: true, force: true });
-    } catch (_) {}
+      await Promise.all(pool.map(worker => worker.start()));
+      batches = await Promise.all(pool.map((worker, index) => {
+        const slice = frames.slice(Math.floor(index * frames.length / workers), Math.floor((index + 1) * frames.length / workers));
+        return worker.processBatch(slice, 'sweep_' + index);
+      }));
+    } finally {
+      const exiting = pool.filter(w => w.child && !w.isTerminated).map(w => once(w.child, 'close'));
+      await Promise.all(pool.map(worker => worker.stop()));
+      await Promise.all(exiting);
+    }
+    const wallMs = performance.now() - started;
+    const results = batches.flatMap(b => b.results);
+    if (results.length !== frames.length || results.some((r, i) => r.timestampSec !== frames[i].timestampSec || r.ocrStatus === 'failed')) {
+      throw new Error('CPU sweep returned incomplete OCR');
+    }
+    const workerCpuMs = batches.reduce((sum, b, i) => sum + b.workerCpuMs + pool[i].workerCpuMs, 0);
+    const actualInferences = batches.reduce((sum, b) => sum + b.actualOcrFrames, 0);
+    const inferenceMs = batches.reduce((sum, b) => sum + b.inferenceMs, 0);
+    stockResults ??= new Map(results.map(r => [r.timestampSec, r]));
+    const config = { workers, threads, logicalCpus, wallMs, actualInferences, inferenceMs,
+      avgInferenceMs: inferenceMs / actualInferences, imageDecodeMs: batches.reduce((sum, b) => sum + b.imageDecodeMs, 0),
+      modelInitMsByWorker: pool.map(w => w.rapidOcrInitMs), workerCpuMs, workerCpuPercentOfMachine: 100 * workerCpuMs / wallMs / logicalCpus,
+      peakRssMiBByWorker: batches.map(b => b.workerPeakRssMb),
+      vsStock: agreement(results, stockResults), vsReference: agreement(results, reference),
+      confidenceChangesVsStock: results.filter(r => r.confidence !== stockResults.get(r.timestampSec).confidence)
+        .map(r => ({ timestampSec: r.timestampSec, stock: stockResults.get(r.timestampSec).confidence, measured: r.confidence })) };
+    console.log('CPU sweep', JSON.stringify({ workers, threads, wallMs, actualInferences, differencesVsStock: config.vsStock.differences.length }));
+    configs.push(config);
+  }
+  return { kind: 'cpu-sweep', sampleTimestamps: frames.map(f => f.timestampSec), configs };
+}
+
+async function runStage({ videoPath, durationSec, reference, dir }) {
+  // This standalone CLI captures results before the hybrid router can replace
+  // uncertain local reads with a replayed response. Keep the production worker.
+  const local = ocr.runLocalChineseOcr;
+  let localResults;
+  ocr.runLocalChineseOcr = async args => {
+    const run = await local(args);
+    localResults.push(...run.results.map((r, i) => {
+      const { timestampSec, hasText, chineseText, confidence, ocrStatus, isDeduped, sourceTimestampSec } = r;
+      const { cueIndex, isShortCue, sceneCut } = args.frames[i];
+      return { timestampSec, hasText, chineseText, confidence, ocrStatus, isDeduped, sourceTimestampSec, cueIndex, isShortCue, sceneCut };
+    }));
+    return run;
+  };
+  const quota = require('../services/geminiQuotaTracker');
+  quota.geminiQuotaTracker = new quota.GeminiQuotaTracker({ persistEnabled: false });
+  const { extractChineseSubtitles } = require('../services/pipeline/stages/stage3_extractChineseSubtitles');
+  const { generateChunkPlan } = require('../services/pipeline/chunkOrchestrator');
+  const chunks = [];
+  const calls = [];
+  const aiClient = replayClient(reference, calls);
+  const started = performance.now();
+  for (const chunk of generateChunkPlan(durationSec)) {
+    localResults = [];
+    // generateChunkPlan rounds to centiseconds. Keep the exact media endpoint.
+    const remaining = durationSec - chunk.startSec;
+    const chunkDuration = chunk.isLast ? remaining : Math.min(chunk.durationSec, remaining);
+    const result = await extractChineseSubtitles({ videoPath, startOffsetSec: chunk.startSec,
+      durationSec: chunkDuration, aiClient, baseStepSec: 0.75, enableLocalOcr: true, cacheDir: dir });
+    if (result.ocrMeta.resumedFromCheckpoint || (!localResults.length && result.ocrMeta.performance?.candidateFramesCount !== 0)) throw new Error('Cold benchmark requires fresh local OCR results in every chunk');
+    chunks.push({ startSec: chunk.startSec, durationSec: chunkDuration, performance: result.ocrMeta.performance,
+      rawObservations: result.rawObservations, visualSegments: result.visualSegments, localResults });
+  }
+  const wallTimeMs = performance.now() - started;
+  const uniqueRequests = new Set(calls.flat());
+  return { kind: 'stage3', wallTimeMs, chunks,
+    mockGemini: { mode: 'exact timestamp checkpoint replay; unknown timestamps unresolved', calls,
+      distinctFramesRequested: uniqueRequests.size, distinctUnansweredFrames: [...uniqueRequests].filter(t => !reference.has(t)).length },
+    referenceAgreement: agreement(chunks.flatMap(c => c.localResults), reference) };
+}
+
+async function main() {
+  const { values, positionals } = parseArgs({ allowPositionals: true, options: {
+    video: { type: 'string' }, reference: { type: 'string' }, duration: { type: 'string' },
+    output: { type: 'string' }, sweep: { type: 'boolean' }, 'frames-dir': { type: 'string' },
+  } });
+  if (positionals.length > 1 || (values.duration && positionals.length)) throw new Error('Supply a single benchmark duration');
+  if (values['frames-dir'] && !values.sweep) throw new Error('--frames-dir requires --sweep');
+  const videoPath = values.video ? path.resolve(values.video) : ['series_test', 'series_delayed']
+    .map(name => path.join(__dirname, '../uploads/projects', name, 'episodes/ep_1/video/ep_1_source.mp4')).find(p => fs.existsSync(p));
+  if (!videoPath) throw new Error('Specify --video FILE');
+  const { durationSec: mediaDurationSec } = await getVideoMetadata(videoPath);
+  const durationSec = Number(values.duration ?? positionals[0] ?? mediaDurationSec);
+  if (!Number.isFinite(durationSec) || durationSec <= 0 || durationSec > mediaDurationSec) throw new Error('Requested duration is outside the media duration');
+  const reference = checkpointReference(values.reference, durationSec, videoPath);
+  const output = path.resolve(values.output || path.join(os.tmpdir(), 'stage3-benchmark-' + Date.now() + '.json'));
+  if (fs.existsSync(output)) throw new Error('Choose a new output file: ' + output);
+  const hardware = { cpu: os.cpus()[0]?.model, logicalCpus: os.cpus().length, installedMemoryMiB: Math.round(os.totalmem() / 1048576),
+    platform: process.platform, nodeVersion: process.version, requestedIntraOpThreads: process.env.RAPIDOCR_INTRA_OP_THREADS ?? null };
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'stage3-benchmark-'));
+  try {
+    const options = { videoPath, durationSec, reference, dir, framesDir: values['frames-dir'] };
+    const result = values.sweep ? await sweep(options) : await runStage(options);
+    const report = { videoPath, mediaDurationSec, durationSec, hardware, referenceFile: values.reference ? path.resolve(values.reference) : null,
+      referenceVerifiedTimestamps: reference.size, ...result };
+    fs.writeFileSync(output, JSON.stringify(report, null, 2), { flag: 'wx' });
+    console.log('Report:', output);
+    if (!values.sweep) console.log(JSON.stringify({ wallTimeMs: report.wallTimeMs, chunks: report.chunks.map(c => c.performance),
+      mockGeminiRequested: report.mockGemini.distinctFramesRequested, localCheckpointMatches: report.referenceAgreement.exactMatched,
+      localCheckpointComparisons: report.referenceAgreement.compared }));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
   }
 }
 
-runBenchmark().catch(err => {
-  console.error('Benchmark error:', err);
-  process.exit(1);
-});
+module.exports = { checkpointReference, replayClient };
 
+if (require.main === module) main().catch(err => { console.error(err); process.exitCode = 1; });

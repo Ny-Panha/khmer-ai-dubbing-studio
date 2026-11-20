@@ -1,7 +1,7 @@
 /**
  * DragonDub AI - Local Chinese OCR Service
  * High-performance, offline Chinese subtitle text recognition using RapidOCR (ONNXRuntime).
- * Replaces unnecessary Gemini Vision API calls while maintaining 100% subtitle accuracy.
+ * Verifies confident frames locally before Gemini Vision fallback.
  * Features persistent worker lifecycle (single RapidOCR model init), bounded streaming batches,
  * subtitle ROI deduplication, cancellation, resource cleanup, and automatic legacy fallback.
  */
@@ -87,6 +87,7 @@ class PersistentChineseOcrWorker {
   constructor(options = {}) {
     this.options = options;
     this.child = null;
+    this.closed = null;
     this.pythonBin = resolvePythonBinary();
     this.workerPath = path.resolve(__dirname, '../../workers/local_chinese_ocr_worker.py');
     this.isReady = false;
@@ -94,6 +95,7 @@ class PersistentChineseOcrWorker {
     this.stdoutBuffer = '';
     this.workerStartupMs = 0;
     this.rapidOcrInitMs = 0;
+    this.workerCpuMs = 0;
     this.currentBatchResolve = null;
     this.currentBatchReject = null;
     this.currentBatchId = null;
@@ -115,6 +117,7 @@ class PersistentChineseOcrWorker {
       '--roi_ymax', String(this.options.roiYMax ?? 0.98),
       '--roi_xmin', String(this.options.roiXMin ?? 0.10),
       '--roi_xmax', String(this.options.roiXMax ?? 0.90),
+      '--intra_op_num_threads', String(this.options.intraOpNumThreads || process.env.RAPIDOCR_INTRA_OP_THREADS || 2),
     ];
 
     return new Promise((resolve, reject) => {
@@ -133,6 +136,9 @@ class PersistentChineseOcrWorker {
         type: 'local_chinese_ocr_persistent_worker',
         label: `persistent_ocr_${this.child.pid}`,
       });
+      this.closed = new Promise((done) => this.child.once('close', done));
+      // A write racing with child exit can emit EPIPE on stdin before 'close'.
+      this.child.stdin.on('error', (err) => this.currentBatchReject?.(err));
 
       const onAbort = () => {
         if (!settled) {
@@ -164,10 +170,11 @@ class PersistentChineseOcrWorker {
             try {
               const msg = JSON.parse(trimmed);
               if (msg.type === 'ready') {
-                if (!settled) {
+                if (!settled && !this.isTerminated) {
                   settled = true;
                   this.isReady = true;
                   this.rapidOcrInitMs = msg.initMs || 0;
+                  this.workerCpuMs = msg.workerCpuMs || 0;
                   this.workerStartupMs = Date.now() - startTime;
                   if (signal) signal.removeEventListener('abort', onAbort);
                   resolve(this);
@@ -293,92 +300,26 @@ class PersistentChineseOcrWorker {
   }
 
   terminate() {
+    if (this.isTerminated) return;
     this.isTerminated = true;
     this.isReady = false;
-    if (this.unregisterProcess) {
-      try { this.unregisterProcess(); } catch (_) {}
-    }
     if (this.child) {
       try {
         this.child.stdin.write(JSON.stringify({ cmd: 'stop' }) + '\n');
       } catch (_) {}
-      setTimeout(() => {
-        if (this.child) {
+      const timer = setTimeout(() => {
+        if (this.child.exitCode === null && this.child.signalCode === null) {
           try { terminateChildProcess(this.child); } catch (_) {}
         }
       }, 300);
+      this.closed.then(() => clearTimeout(timer));
     }
   }
 
   async stop() {
     this.terminate();
+    await this.closed;
   }
-}
-
-/**
- * Verified subtitle-region deduplication before expensive local OCR.
- * Groups consecutive candidate frames that share identical subtitle safe-zone visual content
- * while strictly preserving:
- * - Cue boundaries (never merges across different cueIndex values)
- * - Short subtitles (never deduplicates cues with duration <= 1.0s or isShortCue: true)
- * - Scene-change evidence (never deduplicates frames flagged with sceneCut: true)
- * - Original timestamps & reportedSec (each frame maintains its exact timestamp)
- * - Speaker metadata (visual speaker hint, gender, deliveryType)
- * 
- * @param {Array<object>} frames - Candidate frames
- * @param {object} [options={}]
- * @returns {{ uniqueFrames: Array<object>, dedupMap: Map<string|number, object>, dedupedCount: number }}
- */
-function deduplicateSubtitleFrames(frames = [], options = {}) {
-  if (!Array.isArray(frames) || frames.length <= 1) {
-    return {
-      uniqueFrames: frames ? [...frames] : [],
-      dedupMap: new Map(),
-      dedupedCount: 0,
-    };
-  }
-
-  const uniqueFrames = [];
-  const dedupMap = new Map();
-  let dedupedCount = 0;
-
-  for (let i = 0; i < frames.length; i++) {
-    const curr = frames[i];
-    const prev = uniqueFrames.length > 0 ? uniqueFrames[uniqueFrames.length - 1] : null;
-
-    const isShortCue = Boolean(curr.isShortCue || (typeof curr.cueDuration === 'number' && curr.cueDuration <= 1.0));
-    const isSceneCut = Boolean(curr.sceneCut);
-    const hasDifferentCue = prev && typeof curr.cueIndex !== 'undefined' && typeof prev.cueIndex !== 'undefined' && curr.cueIndex !== -1 && prev.cueIndex !== -1 && curr.cueIndex !== prev.cueIndex;
-
-    const canDedupe = Boolean(
-      prev &&
-      !isShortCue &&
-      !isSceneCut &&
-      !hasDifferentCue &&
-      curr.filePath &&
-      prev.filePath &&
-      curr.isStaticSubtitleSample === true
-    );
-
-    if (canDedupe) {
-      dedupedCount++;
-      dedupMap.set(curr.timestampSec, {
-        parentTimestampSec: prev.timestampSec,
-        parentId: prev.id,
-        currId: curr.id,
-        timestampSec: curr.timestampSec,
-        cueIndex: curr.cueIndex,
-      });
-    } else {
-      uniqueFrames.push(curr);
-    }
-  }
-
-  return {
-    uniqueFrames,
-    dedupMap,
-    dedupedCount,
-  };
 }
 
 /**
@@ -394,6 +335,7 @@ async function executeLegacyBatch({
   roiYMax,
   roiXMin,
   roiXMax,
+  intraOpNumThreads,
   tempDir,
   signal,
   onProgress,
@@ -414,6 +356,7 @@ async function executeLegacyBatch({
     '--roi_ymax', String(roiYMax),
     '--roi_xmin', String(roiXMin),
     '--roi_xmax', String(roiXMax),
+    '--intra_op_num_threads', String(intraOpNumThreads || process.env.RAPIDOCR_INTRA_OP_THREADS || 2),
   ];
 
   return new Promise((resolveBatch, rejectBatch) => {
@@ -434,8 +377,6 @@ async function executeLegacyBatch({
     const cleanup = () => {
       unregister();
       if (signal) signal.removeEventListener('abort', onAbort);
-      try { if (fs.existsSync(batchInputFile)) fs.unlinkSync(batchInputFile); } catch (_) {}
-      try { if (fs.existsSync(batchOutputFile)) fs.unlinkSync(batchOutputFile); } catch (_) {}
     };
 
     const onAbort = () => {
@@ -530,6 +471,7 @@ async function executeLegacyBatch({
  * @param {number} [params.options.batchSize=60] - Bound frames per batch to maintain low RAM & streaming progress
  * @param {AbortSignal} [params.signal=null]
  * @param {function} [params.onProgress=null]
+ * @param {function} [params.onBatchComplete=null] - Synchronously save each complete batch before starting the next.
  * @returns {Promise<{ success: boolean, results: Array, totalFrames: number, actualOcrFramesCount: number, dedupedFramesCount: number, workerStartupMs: number, rapidOcrInitMs: number, wallTimeMs: number, avgMsPerFrame: number, engine: string }>}
  */
 async function runLocalChineseOcr({
@@ -537,6 +479,7 @@ async function runLocalChineseOcr({
   options = {},
   signal = null,
   onProgress = null,
+  onBatchComplete = null,
 }) {
   if (signal?.aborted) {
     throw createAbortError('Local Chinese OCR aborted before execution');
@@ -553,10 +496,16 @@ async function runLocalChineseOcr({
       rapidOcrInitMs: 0,
       wallTimeMs: 0,
       avgMsPerFrame: 0,
+      imageDecodeMs: 0,
+      inferenceMs: 0,
+      avgInferenceMs: 0,
+      workerCpuMs: 0,
+      workerPeakRssMb: null,
       engine: 'rapidocr-onnxruntime',
     };
   }
 
+  const overallStartTime = Date.now();
   const availability = await checkLocalChineseOcrStatus();
   if (!availability.available) {
     throw new Error(`Local Chinese OCR engine is not available: ${availability.error || 'RapidOCR not installed'}`);
@@ -572,12 +521,28 @@ async function runLocalChineseOcr({
   const detLimitSideLen = typeof options.detLimitSideLen === 'number' ? options.detLimitSideLen : 360;
   const BATCH_SIZE = Math.min(100, Math.max(10, options.batchSize || 60));
 
-  const overallStartTime = Date.now();
   const allResults = [];
   let actualOcrFramesCount = 0;
   let dedupedFramesCount = 0;
   let workerStartupMs = 0;
   let rapidOcrInitMs = 0;
+  let imageDecodeMs = 0;
+  let inferenceMs = 0;
+  let workerCpuMs = 0;
+  let workerPeakRssMb = null;
+  let processedCount = 0;
+
+  function collectBatch(batch, expectedCount) {
+    if (!batch?.success || batch.results?.length !== expectedCount) throw new Error('Incomplete OCR worker batch');
+    allResults.push(...batch.results);
+    actualOcrFramesCount += batch.actualOcrFrames;
+    dedupedFramesCount += batch.dedupedFrames;
+    imageDecodeMs += batch.imageDecodeMs;
+    inferenceMs += batch.inferenceMs;
+    workerCpuMs += batch.workerCpuMs;
+    if (batch.workerPeakRssMb != null) workerPeakRssMb = Math.max(workerPeakRssMb ?? 0, batch.workerPeakRssMb);
+    processedCount += expectedCount;
+  }
 
   // 1. Attempt Persistent Worker (One-time RapidOCR model initialization)
   let persistentWorker = null;
@@ -594,19 +559,16 @@ async function runLocalChineseOcr({
     await persistentWorker.start(signal);
     workerStartupMs = persistentWorker.workerStartupMs;
     rapidOcrInitMs = persistentWorker.rapidOcrInitMs;
+    workerCpuMs = persistentWorker.workerCpuMs;
   } catch (workerStartErr) {
+    await persistentWorker?.stop();
+    persistentWorker = null;
     if (signal?.aborted || workerStartErr?.name === 'AbortError') {
       throw workerStartErr?.name === 'AbortError' ? workerStartErr : createAbortError('Local Chinese OCR aborted');
     }
     console.warn(`[Local OCR] Persistent worker failed to start (${workerStartErr.message}). Falling back to legacy CLI mode.`);
     persistentWorkerFailed = true;
-    if (persistentWorker) {
-      try { persistentWorker.stop(); } catch (_) {}
-      persistentWorker = null;
-    }
   }
-
-  let processedCount = 0;
 
   try {
     if (!persistentWorkerFailed && persistentWorker && persistentWorker.isReady) {
@@ -619,8 +581,9 @@ async function runLocalChineseOcr({
         const batchSlice = frames.slice(i, i + BATCH_SIZE);
         const batchId = `stream_batch_${i}_${Date.now()}`;
 
+        let batchRes;
         try {
-          const batchRes = await persistentWorker.processBatch(
+          batchRes = await persistentWorker.processBatch(
             batchSlice,
             batchId,
             signal,
@@ -637,22 +600,18 @@ async function runLocalChineseOcr({
             }
           );
 
-          if (batchRes && Array.isArray(batchRes.results)) {
-            allResults.push(...batchRes.results);
-            actualOcrFramesCount += Number(batchRes.actualOcrFrames || batchRes.results.length);
-            dedupedFramesCount += Number(batchRes.dedupedFrames || 0);
-            processedCount += batchSlice.length;
-          }
+          collectBatch(batchRes, batchSlice.length);
         } catch (batchErr) {
           if (signal?.aborted || batchErr?.name === 'AbortError') {
             throw batchErr?.name === 'AbortError' ? batchErr : createAbortError('Local Chinese OCR aborted');
           }
           console.warn(`[Local OCR] Persistent batch execution failed at index ${i} (${batchErr.message}). Switching remaining frames to legacy CLI.`);
           persistentWorkerFailed = true;
-          try { persistentWorker.stop(); } catch (_) {}
+          await persistentWorker.stop();
           persistentWorker = null;
           break; // Break loop to handle remaining frames in legacy fallback
         }
+        onBatchComplete?.(batchRes.results);
       }
     }
 
@@ -662,8 +621,7 @@ async function runLocalChineseOcr({
         throw createAbortError('Local Chinese OCR aborted');
       }
 
-      const tempDir = path.join(os.tmpdir(), `dragondub_local_ocr_fallback_${Date.now()}_${process.pid}`);
-      fs.mkdirSync(tempDir, { recursive: true });
+      const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dragondub_local_ocr_fallback_'));
 
       try {
         for (let i = processedCount; i < frames.length; i += BATCH_SIZE) {
@@ -682,6 +640,7 @@ async function runLocalChineseOcr({
             roiYMax,
             roiXMin,
             roiXMax,
+            intraOpNumThreads: options.intraOpNumThreads,
             tempDir,
             signal,
             onProgress,
@@ -689,12 +648,9 @@ async function runLocalChineseOcr({
             framesTotal: frames.length,
           });
 
-          if (batchResult && Array.isArray(batchResult.results)) {
-            allResults.push(...batchResult.results);
-            actualOcrFramesCount += Number(batchResult.actualOcrFrames || batchResult.results.length);
-            dedupedFramesCount += Number(batchResult.dedupedFrames || 0);
-            processedCount += batchSlice.length;
-          }
+          collectBatch(batchResult, batchSlice.length);
+          rapidOcrInitMs += batchResult.initMs;
+          onBatchComplete?.(batchResult.results);
         }
       } finally {
         try {
@@ -718,7 +674,12 @@ async function runLocalChineseOcr({
     success: true,
     engine: 'rapidocr-onnxruntime',
     totalFrames: frames.length,
-    actualOcrFramesCount: actualOcrFramesCount || frames.length,
+    actualOcrFramesCount,
+    imageDecodeMs,
+    inferenceMs,
+    avgInferenceMs: actualOcrFramesCount ? inferenceMs / actualOcrFramesCount : 0,
+    workerCpuMs,
+    workerPeakRssMb,
     dedupedFramesCount,
     workerStartupMs,
     rapidOcrInitMs,
@@ -732,6 +693,5 @@ module.exports = {
   checkLocalChineseOcrStatus,
   isLocalChineseOcrAvailable,
   PersistentChineseOcrWorker,
-  deduplicateSubtitleFrames,
   runLocalChineseOcr,
 };

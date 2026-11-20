@@ -10,6 +10,10 @@ const {
   stripPunctuationForSpeech,
   isExplicitFillerKhmer,
 } = require('../../../utils/translationQuality');
+const {
+  normalizeGenre,
+  resolveEffectiveGenre,
+} = require('../../../utils/dramaGenreUtils');
 
 // Smart Segment-Level Translation Cache (Persists verified Chinese -> Khmer segment translations)
 function getTranslationCacheDir() {
@@ -1385,10 +1389,11 @@ async function generateModeSpecificScript({
     }));
 
     if (dialogueList.length === 0) {
+      const normRequested = normalizeGenre(genre);
       return {
         mode: normMode,
-        genre: genre || 'general',
-        detectedGenre: genre || 'general',
+        genre: normRequested,
+        detectedGenre: normRequested !== 'auto' ? normRequested : 'auto',
         summary: 'គ្មានការសន្ទនាក្នុងវីដេអូនេះទេ (Genuine Silence/No Dialogue Detected)',
         scriptSegments: [],
       };
@@ -1396,7 +1401,11 @@ async function generateModeSpecificScript({
 
     // Sample dialogue text for automatic genre detection
     const sampleText = dialogueList.slice(0, 40).map(s => s.originalChineseText || '').join(' ');
-    let effectiveGenre = (genre && genre !== 'auto') ? genre : detectDramaGenre(sampleText, userDirection);
+    const normRequestedGenre = normalizeGenre(genre);
+    let effectiveGenre = normRequestedGenre !== 'auto'
+      ? normRequestedGenre
+      : detectDramaGenre(sampleText, userDirection);
+    if (effectiveGenre === 'ceo') effectiveGenre = 'modern';
 
     // Process translations in batches of 20 lines to keep context tight and prevent token cut-off
     const TRANSLATION_BATCH = 20;
@@ -1705,8 +1714,8 @@ Return JSON ONLY matching this schema:
             }
 
             if (parsed.summary && b === 0) overallSummary = parsed.summary;
-            if (parsed.detectedGenre && genre === 'auto' && b === 0) {
-              effectiveGenre = parsed.detectedGenre;
+            if (parsed.detectedGenre && normRequestedGenre === 'auto' && b === 0) {
+              effectiveGenre = normalizeGenre(parsed.detectedGenre);
             }
 
             // Flag any individual omitted lines inside an otherwise successful partial batch
@@ -2164,7 +2173,7 @@ Return ONE JSON object ONLY (no array, no extra commentary):
 
     return {
       mode: normMode,
-      genre: effectiveGenre,
+      genre: normRequestedGenre,
       detectedGenre: effectiveGenre,
       summary: overallSummary,
       ...(consistencySummary ? { consistencySummary } : {}),
@@ -2292,11 +2301,15 @@ Return JSON ONLY:
       throw new Error('[Stage 6 Mode B] Recap generation produced 0 segments');
     }
 
+    const normRequestedGenre = normalizeGenre(genre);
+    const modeBEffectiveGenre = normRequestedGenre !== 'auto'
+      ? normRequestedGenre
+      : detectDramaGenre('', userDirection);
     const scriptSegments = segmentsOut.map((s, idx) => createCanonicalSegment(s, idx, normMode));
     return {
       mode: normMode,
-      genre: genre || 'general',
-      detectedGenre: genre || 'general',
+      genre: normRequestedGenre,
+      detectedGenre: modeBEffectiveGenre,
       summary,
       scriptSegments,
     };

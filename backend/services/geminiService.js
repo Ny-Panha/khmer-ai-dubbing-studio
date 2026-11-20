@@ -311,7 +311,8 @@ const SCRIPT_RESPONSE_SCHEMA = {
 
 function buildDialoguePrompt(userDirection = "", durationSec = 0, options = {}) {
   const cleanDirection = String(userDirection || "").trim();
-  const genre = options?.genre || "auto";
+  const rawGenre = options?.genre ? String(options.genre).trim().toLowerCase() : "auto";
+  const genre = rawGenre === "ceo" ? "modern" : (rawGenre === "general" ? "auto" : rawGenre);
   const durationInstruction =
     durationSec > 0
       ? `\nការគ្របដណ្តប់រយៈពេលវីដេអូទាំងមូល៖ វីដេអូនេះមានប្រវែង ${formatSecondsToTimecode(durationSec)} (${Math.round(durationSec)} វិនាទី)។ សូមវិភាគ និងបកប្រែការសន្ទនាឱ្យគ្រប់ឈុតឆាកតាំងពី 00:00.00 រហូតដល់ ${formatSecondsToTimecode(durationSec)} ដោយហាមឈប់ពាក់កណ្តាលទី។`

@@ -52,13 +52,37 @@ def parse_args():
     parser.add_argument("--roi_ymax", type=float, default=0.98, help="Normalized Y max for subtitle safe zone")
     parser.add_argument("--roi_xmin", type=float, default=0.10, help="Normalized X min for subtitle safe zone")
     parser.add_argument("--roi_xmax", type=float, default=0.90, help="Normalized X max for subtitle safe zone")
+    parser.add_argument("--intra_op_num_threads", type=int, default=2, help="ONNXRuntime intra_op_num_threads (default 2 for optimal CPU performance)")
     return parser.parse_args()
+
+
+def create_engine(rapidocr, det_limit_side_len, threads=None):
+    if threads is None:
+        raw_env = os.environ.get("RAPIDOCR_INTRA_OP_THREADS", "2")
+        threads = int(raw_env) if raw_env.isdigit() else 2
+    if threads not in (1, 2, 4):
+        threads = 2
+    import cv2
+    cv2.setNumThreads(1)
+    return rapidocr(det_limit_side_len=det_limit_side_len, intra_op_num_threads=threads, inter_op_num_threads=1)
+
+
+def peak_rss_mb():
+    if sys.platform == "win32":
+        try:
+            import psutil
+            return round(psutil.Process().memory_info().peak_wset / 1048576, 2)
+        except (ImportError, AttributeError):
+            return None
+    import resource
+    peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    return round(peak / (1048576 if sys.platform == "darwin" else 1024), 2)
 
 
 def check_engine():
     try:
         from rapidocr_onnxruntime import RapidOCR
-        engine = RapidOCR()
+        create_engine(RapidOCR, 360)
         return {
             "available": True,
             "engine": "rapidocr-onnxruntime",
@@ -72,24 +96,8 @@ def check_engine():
         }
 
 
-def process_single_frame(img, engine, roi_ymin, roi_ymax, roi_xmin, roi_xmax):
-    """Crops subtitle safe zone and runs RapidOCR with conservative empty confidence."""
+def read_ocr_result(roi, ocr_res):
     import cv2
-    h, w = img.shape[:2]
-
-    # Crop center-bottom subtitle safe zone
-    y_min = int(h * max(0.0, min(1.0, roi_ymin)))
-    y_max = int(h * max(0.0, min(1.0, roi_ymax)))
-    x_min = int(w * max(0.0, min(1.0, roi_xmin)))
-    x_max = int(w * max(0.0, min(1.0, roi_xmax)))
-
-    if y_max <= y_min or x_max <= x_min:
-        roi = img
-    else:
-        roi = img[y_min:y_max, x_min:x_max]
-
-    ocr_res, elapse = engine(roi, use_det=True, use_cls=False, use_rec=True)
-
     if not ocr_res:
         # Check edge activity to determine empty confidence
         # Clean uniform background = 0.75, high stroke/edge activity = 0.40 (uncertain)
@@ -109,8 +117,7 @@ def process_single_frame(img, engine, roi_ymin, roi_ymax, roi_xmin, roi_xmax):
             "isSharp": True,
             "position": "bottom_subtitle",
             "ocrStatus": "empty",
-            "bboxes": [],
-            "roi": roi
+            "bboxes": []
         }
 
     valid_lines = []
@@ -138,8 +145,7 @@ def process_single_frame(img, engine, roi_ymin, roi_ymax, roi_xmin, roi_xmax):
             "isSharp": avg_conf >= 0.70,
             "position": "bottom_subtitle",
             "ocrStatus": "verified_text",
-            "bboxes": bboxes,
-            "roi": roi
+            "bboxes": bboxes
         }
     else:
         return {
@@ -150,8 +156,7 @@ def process_single_frame(img, engine, roi_ymin, roi_ymax, roi_xmin, roi_xmax):
             "isSharp": True,
             "position": "bottom_subtitle",
             "ocrStatus": "empty",
-            "bboxes": [],
-            "roi": roi
+            "bboxes": []
         }
 
 
@@ -161,7 +166,10 @@ def process_frames_batch(frames, engine, args, roi_ymin, roi_ymax, roi_xmin, roi
     Applies verified subtitle-region deduplication before calling RapidOCR.
     """
     import cv2
+    import numpy as np
 
+    decode_sec = 0.0
+    inference_sec = 0.0
     results = []
     actual_ocr_count = 0
     deduped_count = 0
@@ -180,7 +188,11 @@ def process_frames_batch(frames, engine, args, roi_ymin, roi_ymax, roi_xmin, roi
         is_short = bool(item.get("isShortCue", False))
         is_scene_cut = bool(item.get("sceneCut", False))
 
+        if is_short or is_scene_cut or cue_idx != prev_cue_idx:
+            prev_roi = None
+
         if not file_path or not os.path.exists(file_path):
+            prev_roi = None
             results.append({
                 "id": item_id,
                 "timestampSec": timestamp_sec,
@@ -197,8 +209,11 @@ def process_frames_batch(frames, engine, args, roi_ymin, roi_ymax, roi_xmin, roi
             continue
 
         try:
+            decode_start = time.perf_counter()
             img = cv2.imread(file_path)
+            decode_sec += time.perf_counter() - decode_start
             if img is None:
+                prev_roi = None
                 results.append({
                     "id": item_id,
                     "timestampSec": timestamp_sec,
@@ -225,45 +240,13 @@ def process_frames_batch(frames, engine, args, roi_ymin, roi_ymax, roi_xmin, roi
             else:
                 roi = img[y_min:y_max, x_min:x_max]
 
-            # Fast, conservative subtitle ROI deduplication check BEFORE expensive RapidOCR
-            # P0 Safety Guards:
-            # 1. Strictly forbid deduplication across different cues or when cueIndex is missing/negative (e.g. -1 safety net)
-            # 2. Never copy empty result (hasText: False) to subsequent samples without independent evaluation (Empty-to-Text safety)
-            # 3. For frames in the same valid cue with confirmed text: measure diff within the text bounding box (not whole ROI mean)
-            is_deduped = False
-            is_valid_cue_pair = (
-                cue_idx is not None
-                and prev_cue_idx is not None
-                and isinstance(cue_idx, (int, float))
-                and cue_idx > 0
-                and cue_idx == prev_cue_idx
+            # An edit outside the previous text box can add a second line.
+            # Compare every pixel RapidOCR would see, including its original color.
+            is_deduped = (
+                type(cue_idx) is int and cue_idx > 0 and cue_idx == prev_cue_idx
+                and prev_roi is not None and prev_res["hasText"]
+                and np.array_equal(roi, prev_roi)
             )
-            prev_has_text = bool(prev_res and prev_res.get("hasText"))
-
-            if (
-                is_valid_cue_pair
-                and prev_has_text
-                and prev_roi is not None
-                and not is_scene_cut
-                and not is_short
-                and prev_roi.shape == roi.shape
-            ):
-                bboxes = prev_res.get("bboxes", [])
-                if bboxes and len(bboxes) > 0:
-                    ymin = max(0, min(int(min(pt[1] for pt in b)) for b in bboxes))
-                    ymax = min(roi.shape[0], max(int(max(pt[1] for pt in b)) for b in bboxes))
-                    xmin = max(0, min(int(min(pt[0] for pt in b)) for b in bboxes))
-                    xmax = min(roi.shape[1], max(int(max(pt[0] for pt in b)) for b in bboxes))
-
-                    if ymax > ymin and xmax > xmin:
-                        box_diff = float(cv2.absdiff(roi[ymin:ymax, xmin:xmax], prev_roi[ymin:ymax, xmin:xmax]).mean())
-                        roi_diff = float(cv2.absdiff(roi, prev_roi).mean())
-                        # Verified empirical thresholds from real drama video:
-                        # SAME dialogue BoxDiff is 2.7 to 33.3 (mean 16.7)
-                        # DIFF dialogue BoxDiff is 67.8 to 121.1 (mean 89.9)
-                        # Threshold 35.0 safely separates identical text without ever dropping new dialogue
-                        if box_diff <= 35.0 and roi_diff <= 40.0:
-                            is_deduped = True
 
             if is_deduped:
                 deduped_count += 1
@@ -283,7 +266,12 @@ def process_frames_batch(frames, engine, args, roi_ymin, roi_ymax, roi_xmin, roi
                 })
             else:
                 actual_ocr_count += 1
-                ocr_out = process_single_frame(img, engine, roi_ymin, roi_ymax, roi_xmin, roi_xmax)
+                infer_start = time.perf_counter()
+                try:
+                    ocr_res, _ = engine(roi, use_det=True, use_cls=False, use_rec=True)
+                finally:
+                    inference_sec += time.perf_counter() - infer_start
+                ocr_out = read_ocr_result(roi, ocr_res)
                 ocr_out_clean = {
                     "id": item_id,
                     "timestampSec": timestamp_sec,
@@ -298,12 +286,13 @@ def process_frames_batch(frames, engine, args, roi_ymin, roi_ymax, roi_xmin, roi
                     "isDeduped": False,
                 }
                 results.append(ocr_out_clean)
-                prev_roi = roi
+                prev_roi = None if is_short or is_scene_cut else roi
                 prev_res = ocr_out_clean
                 prev_cue_idx = cue_idx
                 prev_ts = timestamp_sec
 
         except Exception as err:
+            prev_roi = None
             results.append({
                 "id": item_id,
                 "timestampSec": timestamp_sec,
@@ -330,7 +319,13 @@ def process_frames_batch(frames, engine, args, roi_ymin, roi_ymax, roi_xmin, roi
             sys.stdout.write(json.dumps(progress_msg) + "\n")
             sys.stdout.flush()
 
-    return results, actual_ocr_count, deduped_count
+    return results, {
+        "actualOcrFrames": actual_ocr_count,
+        "dedupedFrames": deduped_count,
+        "inferenceMs": round(inference_sec * 1000, 3),
+        "imageDecodeMs": round(decode_sec * 1000, 3),
+        "workerPeakRssMb": peak_rss_mb(),
+    }
 
 
 def run_persistent_worker(args):
@@ -340,15 +335,16 @@ def run_persistent_worker(args):
     """
     from rapidocr_onnxruntime import RapidOCR
 
-    t_init_start = time.time()
-    engine = RapidOCR(det_limit_side_len=args.det_limit_side_len)
-    init_ms = round((time.time() - t_init_start) * 1000)
+    t_init_start = time.perf_counter()
+    engine = create_engine(RapidOCR, args.det_limit_side_len, threads=getattr(args, 'intra_op_num_threads', 2))
+    init_ms = round((time.perf_counter() - t_init_start) * 1000)
 
     # Emit ready handshake
     ready_msg = {
         "type": "ready",
         "engine": "rapidocr-onnxruntime",
         "initMs": init_ms,
+        "workerCpuMs": round(time.process_time() * 1000, 2),
         "pid": os.getpid()
     }
     sys.stdout.write(json.dumps(ready_msg) + "\n")
@@ -378,11 +374,12 @@ def run_persistent_worker(args):
             roi_xmin = float(req.get("roiXMin", args.roi_xmin))
             roi_xmax = float(req.get("roiXMax", args.roi_xmax))
 
-            t_batch_start = time.time()
-            batch_results, actual_ocr, deduped = process_frames_batch(
+            t_batch_start = time.perf_counter()
+            cpu_start = time.process_time()
+            batch_results, metrics = process_frames_batch(
                 frames, engine, args, roi_ymin, roi_ymax, roi_xmin, roi_xmax, batch_id=batch_id
             )
-            wall_ms = round((time.time() - t_batch_start) * 1000)
+            wall_ms = round((time.perf_counter() - t_batch_start) * 1000)
 
             res_msg = {
                 "type": "batch_result",
@@ -390,8 +387,8 @@ def run_persistent_worker(args):
                 "success": True,
                 "results": batch_results,
                 "totalFrames": len(frames),
-                "actualOcrFrames": actual_ocr,
-                "dedupedFrames": deduped,
+                **metrics,
+                "workerCpuMs": round((time.process_time() - cpu_start) * 1000, 2),
                 "wallTimeMs": wall_ms
             }
             sys.stdout.write(json.dumps(res_msg) + "\n")
@@ -419,12 +416,12 @@ def run_legacy_ocr(args):
 
     from rapidocr_onnxruntime import RapidOCR
 
-    t_init_start = time.time()
-    engine = RapidOCR(det_limit_side_len=args.det_limit_side_len)
-    init_ms = round((time.time() - t_init_start) * 1000)
+    t_init_start = time.perf_counter()
+    engine = create_engine(RapidOCR, args.det_limit_side_len, threads=getattr(args, 'intra_op_num_threads', 2))
+    init_ms = round((time.perf_counter() - t_init_start) * 1000)
 
     start_time = time.time()
-    results, actual_ocr, deduped = process_frames_batch(
+    results, metrics = process_frames_batch(
         frames, engine, args, args.roi_ymin, args.roi_ymax, args.roi_xmin, args.roi_xmax
     )
     total_wall_ms = round((time.time() - start_time) * 1000)
@@ -434,8 +431,8 @@ def run_legacy_ocr(args):
         "engine": "rapidocr-onnxruntime",
         "initMs": init_ms,
         "totalFrames": len(frames),
-        "actualOcrFrames": actual_ocr,
-        "dedupedFrames": deduped,
+        **metrics,
+        "workerCpuMs": round(time.process_time() * 1000, 2),
         "totalWallMs": total_wall_ms,
         "results": results
     }
@@ -451,8 +448,8 @@ def run_legacy_ocr(args):
     sys.stdout.write(json.dumps({
         "type": "complete",
         "totalFrames": len(frames),
-        "actualOcrFrames": actual_ocr,
-        "dedupedFrames": deduped,
+        "actualOcrFrames": metrics["actualOcrFrames"],
+        "dedupedFrames": metrics["dedupedFrames"],
         "wallTimeMs": total_wall_ms
     }) + "\n")
     sys.stdout.flush()

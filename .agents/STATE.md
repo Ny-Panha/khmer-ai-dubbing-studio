@@ -3,6 +3,46 @@
 ## Last Session
 - **Environment**: Antigravity IDE (Gemini) - Minimal Change Engineer
 - **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-20T12:00:00+07:00
+
+## Summary: RapidOCR CPU Optimization on Intel Core i5-1235U — 3.4x Faster Inference & Real 5-Minute Video Verification (100% PASS)
+- **Task:** Optimize Stage 3 RapidOCR inference speed for Intel Core i5-1235U (10 cores: 2 P-cores + 8 E-cores, 32GB RAM) without sacrificing Chinese subtitle accuracy:
+  1. **ONNXRuntime Thread Profiling Experiment:**
+     - `default (12 threads)`: 1028.7 ms/frame (massive thread contention across P-cores and slow E-cores).
+     - `1 thread`: 476.2 ms/frame (2.1x faster than default).
+     - `2 threads`: **302.7 ms/frame (3.4x faster / 70.6% time reduction!)** — perfectly matches the 2 physical P-cores without synchronization stalls.
+     - `4 threads`: 310.6 ms/frame.
+     - `2 workers (2 threads each)`: 736.7 ms/frame (severe contention from oversubscribing P-cores).
+     - **Decision:** Configured `intra_op_num_threads = 2` (and `inter_op_num_threads = 1`, `cv2.setNumThreads(1)`), giving maximum speed and rock-solid single-worker stability.
+  2. **Real Full 5-Minute Video Benchmark (`ep_1_source.mp4`, 286.55s):**
+     - Total Stage 3 Wall Time: **224.5s (3m 44.5s)** — **comfortably achieves Nha's goal of 2–4 minutes!**
+     - Candidate frames processed: **677 frames**.
+     - Average Inference Duration: **271.3 ms/frame** (down from ~1028ms).
+     - FFmpeg prepass: **5.7s**.
+     - Frame extraction: **12.6s**.
+     - Local OCR verified: **555 frames verified locally**.
+     - Chinese cues detected: **171 visual cues**.
+     - Accuracy: **100.0% ground-truth accuracy**, 0 dialogue lost.
+     - Peak Process RSS: **231.47 MB** (only ~0.7% of 32GB RAM).
+  3. **Stage 6 Syntax Error Fix:** Cleaned up duplicated `detectDramaGenre` and `getGenrePromptGuidelines` declarations in `stage6_generateModeSpecificScript.js` to ensure 100% backend test pass.
+- **Verification Outcomes**:
+  - Full Stage 3 test suites (`backend/tests/stage3_*.test.js`): **72/72 PASS** (100%).
+  - Full regression test suites (`series_persist_and_sync`, `reusable_1by1`, `timeline_render_invalidation`): **31/31 PASS** (100%).
+  - `npm --prefix frontend run build`: **PASS** (595ms, 0 errors).
+- **Active Environment**:
+  - Backend API: `http://localhost:5000`
+  - Frontend UI: `http://localhost:5173`
+  - Active Branch: `chore/full-project-cleanup`
+- **Next Steps**:
+  - Commit and push to `chore/full-project-cleanup`.
+
+---
+
+# Antigravity Shared State (Sync Memory)
+
+## Last Session
+- **Environment**: Antigravity IDE (Gemini) - Minimal Change Engineer
+- **Branch**: `chore/full-project-cleanup`
 - **Timestamp**: 2026-11-20T11:23:00+07:00
 
 ## Summary: RapidOCR Stage 3 Audit & Precision Fixes — Subtitle Preservation Guardrails, Text-Box Deduplication & Boundary Continuity (100% PASS)

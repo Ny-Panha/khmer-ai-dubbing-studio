@@ -15,11 +15,11 @@ const assert = require('node:assert/strict');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
-const { spawn } = require('child_process');
+const { spawnSync } = require('child_process');
+const { resolvePythonBinary } = require('../services/audioSeparationService');
 
 const {
   PersistentChineseOcrWorker,
-  deduplicateSubtitleFrames,
   runLocalChineseOcr,
   checkLocalChineseOcrStatus,
   isLocalChineseOcrAvailable,
@@ -88,38 +88,10 @@ test('1. Persistent Worker: Initializes RapidOCR once and processes sequential b
   }
 });
 
-test('2. Subtitle ROI Deduplication: Preserves cue boundaries, short cues, scene cuts, and timestamps', () => {
-  const frames = [
-    // Cue 1: duration = 2.5s (normal dialogue, sample A and sample B)
-    { id: '1', timestampSec: 2.0, cueIndex: 1, cueDuration: 2.5, isShortCue: false, filePath: 'f1.jpg', isStaticSubtitleSample: false },
-    { id: '2', timestampSec: 3.5, cueIndex: 1, cueDuration: 2.5, isShortCue: false, filePath: 'f2.jpg', isStaticSubtitleSample: true },
-
-    // Cue 2: short cue (duration = 0.5s <= 1.0s), must NEVER be deduplicated
-    { id: '3', timestampSec: 5.0, cueIndex: 2, cueDuration: 0.5, isShortCue: true, filePath: 'f3.jpg', isStaticSubtitleSample: false },
-    { id: '4', timestampSec: 5.3, cueIndex: 2, cueDuration: 0.5, isShortCue: true, filePath: 'f4.jpg', isStaticSubtitleSample: true },
-
-    // Cue 3: scene cut onset, must NEVER be deduplicated
-    { id: '5', timestampSec: 8.0, cueIndex: 3, cueDuration: 2.0, isShortCue: false, sceneCut: true, filePath: 'f5.jpg', isStaticSubtitleSample: false },
-    { id: '6', timestampSec: 8.5, cueIndex: 3, cueDuration: 2.0, isShortCue: false, sceneCut: true, filePath: 'f6.jpg', isStaticSubtitleSample: true },
-  ];
-
-  const { uniqueFrames, dedupMap, dedupedCount } = deduplicateSubtitleFrames(frames);
-
-  // Frame 2 in Cue 1 should be deduplicated (linked to Frame 1)
-  assert.equal(dedupedCount, 1, 'Only Frame 2 in Cue 1 should be deduplicated');
-  assert.ok(dedupMap.has(3.5), 'Frame at 3.5s should be in dedupMap');
-  assert.equal(dedupMap.get(3.5).parentTimestampSec, 2.0, 'Parent must be 2.0s');
-
-  // Short cue frames (id 3 and 4) must BOTH remain in uniqueFrames
-  assert.ok(uniqueFrames.some((f) => f.id === '3'));
-  assert.ok(uniqueFrames.some((f) => f.id === '4'));
-
-  // Scene cut frames (id 5 and 6) must BOTH remain in uniqueFrames
-  assert.ok(uniqueFrames.some((f) => f.id === '5'));
-  assert.ok(uniqueFrames.some((f) => f.id === '6'));
-
-  // Original timestamps must be strictly preserved
-  assert.equal(uniqueFrames[0].timestampSec, 2.0);
+test('2. Worker compares all decoded subtitle pixels before reusing same-cue text', (t) => {
+  const result = spawnSync(resolvePythonBinary(), [path.join(__dirname, 'stage3_worker_pixels.py')], { encoding: 'utf8' });
+  if (result.error?.code === 'ENOENT' || result.status === 77) return t.skip('Python with OpenCV is unavailable');
+  assert.equal(result.status, 0, result.stderr || result.error?.message);
 });
 
 test('3. Conservative verified_empty: Do NOT mark empty without independent supporting evidence', () => {
@@ -185,28 +157,44 @@ test('5. Telemetry & Metrics: Granular telemetry fields returned by runLocalChin
   assert.equal(typeof res.dedupedFramesCount, 'number');
 });
 
-test('6. Automatic Fallback: Legacy CLI handles execution if persistent worker fails', async () => {
+test('6. Automatic Fallback: Legacy CLI handles execution if persistent worker fails', async (t) => {
   const isAvail = await isLocalChineseOcrAvailable();
-  if (!isAvail) return;
+  if (!isAvail) return t.skip('RapidOCR unavailable');
+  t.mock.method(PersistentChineseOcrWorker.prototype, 'start', async () => { throw new Error('forced startup failure'); });
 
-  const tempDir = path.join(os.tmpdir(), `test_fallback_${Date.now()}`);
-  fs.mkdirSync(tempDir, { recursive: true });
+  const batches = [];
+  const res = await runLocalChineseOcr({
+    frames: [{ filePath: __filename + '.missing', timestampSec: 0.5, id: 'fb1' }],
+    onBatchComplete: (results) => batches.push(results),
+  });
+  assert.deepEqual(batches, [res.results]);
+  assert.equal(res.success, true);
+  assert.equal(res.results.length, 1);
+  assert.equal(res.results[0].timestampSec, 0.5);
+  assert.equal(res.results[0].ocrStatus, 'failed');
+  assert.equal(res.actualOcrFramesCount, 0);
+  assert.equal(res.inferenceMs, 0);
+  assert.ok(res.rapidOcrInitMs > 0);
+});
 
-  try {
-    const f1 = path.join(tempDir, 'dummy.jpg');
-    createDummyJpeg(f1);
-
-    // Call runLocalChineseOcr with valid frame
-    const res = await runLocalChineseOcr({
-      frames: [{ filePath: f1, timestampSec: 0.5, id: 'fb1' }],
-      options: { batchSize: 10 },
-    });
-
-    assert.equal(res.success, true);
-    assert.equal(res.results.length, 1);
-    assert.equal(res.results[0].timestampSec, 0.5);
-    assert.ok(typeof res.wallTimeMs === 'number');
-  } finally {
-    try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch (_) {}
+test('Stopping during initialization and cancelling a pending batch both release the worker', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ocr-lifecycle-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const workerPath = path.join(dir, 'worker.cjs');
+  for (const phase of ['startup', 'batch']) {
+    fs.writeFileSync(workerPath, (phase === 'batch' ? "console.log(JSON.stringify({ type: 'ready' }));" : '') + 'process.stdin.resume();');
+    const worker = new PersistentChineseOcrWorker();
+    worker.pythonBin = process.execPath;
+    worker.workerPath = workerPath;
+    const controller = new AbortController();
+    const starting = worker.start(controller.signal);
+    if (phase === 'batch') await starting;
+    const pending = phase === 'batch' ? worker.processBatch([], 'held', controller.signal) : starting;
+    const rejected = assert.rejects(pending, { name: 'AbortError' });
+    controller.abort();
+    await rejected;
+    await worker.stop();
+    assert.ok(worker.child.exitCode !== null || worker.child.signalCode !== null);
+    assert.equal(worker.isReady, false);
   }
 });

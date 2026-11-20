@@ -51,51 +51,19 @@ import {
   selectIsBatchExecutionActive,
 } from '../../features/gemini-route/utils/geminiRouteSelectors';
 
+import {
+  GENRE_OPTIONS,
+  SMART_PROMPT_CHIPS,
+  DEFAULT_BATCH_PRESET_IDS,
+  DEFAULT_BATCH_DIRECTION,
+  normalizeGenre,
+  togglePreset,
+  handleGenreChange,
+  composeEffectivePrompt,
+  parseDirectionPrompt,
+} from '../../utils/dramaGenrePresets';
+
 const EMPTY_EPISODES = [];
-
-const GENRE_OPTIONS = [
-  { id: 'auto', label: '✨ Auto (ស្គាល់ស្វ័យប្រវត្តិ)', shortLabel: 'Auto', icon: Sparkles, hint: 'AI វិភាគ Audio + OCR កំណត់ប្រភេទរឿងស្វ័យប្រវត្តិ' },
-  { id: 'ancient', label: '🏛️ បុរាណចិន / Xianxia', shortLabel: 'បុរាណចិន', icon: BookOpen, hint: 'រឿងគុណនិយម, Wuxia, សម្អាតកាយ, វិញ្ញាណ, លោកម្ចាស់, ព្រឹទ្ធាចារ្យ' },
-  { id: 'modern', label: '🏙️ សម័យទំនើប / CEO', shortLabel: 'សម័យទំនើប', icon: Building2, hint: 'រឿងស្នេហា, CEO, ក្រុមហ៊ុន, លោកប្រធាន, អ្នកស្រី, បង/អូន' },
-  { id: 'action', label: '⚔️ Action / សងសឹក', shortLabel: 'Action', icon: Zap, hint: 'រឿងប្រយុទ្ធ, ប៉ូលិស, ឧក្រិដ្ឋកម្ម, ស៊ើបអង្កេត, ចង្វាក់សន្ទនារហ័ស' },
-  { id: 'comedy', label: '🎭 កំប្លែង / គ្រួសារ', shortLabel: 'កំប្លែង', icon: Smile, hint: 'រឿងកំប្លែងសើចចុកពោះ, ភាសាកំប្លុកកំប្លែងធម្មជាតិ' },
-];
-
-const SMART_PROMPT_CHIPS = [
-  {
-    id: 'auto_face_gender',
-    label: '🎭 ស្គាល់ភេទតាមមុខតួអង្គ (Auto Face Gender)',
-    shortLabel: 'ស្គាល់ភេទតាមមុខ',
-    icon: UserCheck,
-    promptText: 'កំណត់ភេទតួអង្គតាមមុខមាត់ក្នុងវីដេអូ និងវេនសន្ទនា (Auto Face Gender & Turn-Taking)',
-  },
-  {
-    id: 'royal_xianxia',
-    label: '👑 រាជស័ព្ទបុរាណចិន (Royal/Xianxia)',
-    shortLabel: 'រាជស័ព្ទបុរាណចិន',
-    icon: Crown,
-    promptText: 'រឿងបុរាណចិន/គុណនិយម ប្រើរាជស័ព្ទ និងពាក្យគុណនិយម (ទូលបង្គំ, ព្រះអង្គ, ម្ចាស់ក្សត្រី, លោកម្ចាស់)',
-    genreId: 'ancient',
-  },
-  {
-    id: 'modern_ceo',
-    label: '💼 សន្ទនាអគ្គនាយក (Modern CEO)',
-    shortLabel: 'សន្ទនាអគ្គនាយក',
-    icon: Briefcase,
-    promptText: 'រឿងសម័យទំនើប CEO ប្រើភាសាធម្មជាតិសម័យទំនើប (លោកប្រធាន, អ្នកនាង, បង/អូន, ខ្ញុំ/លោក)',
-    genreId: 'modern',
-  },
-  {
-    id: 'strict_lipsync',
-    label: '⚡ ឃ្លាខ្លីត្រូវមាត់ 100% (Strict Lip-Sync)',
-    shortLabel: 'ឃ្លាខ្លីត្រូវមាត់ 100%',
-    icon: Zap,
-    promptText: 'បកប្រែឃ្លាខ្លីណែន ត្រូវចังหวាក់មាត់ 100% (<= 5.5 ព្យាង្គ/វិនាទី ដោយអត្ថន័យពេញ)',
-  },
-];
-
-const DEFAULT_BATCH_DIRECTION =
-  'កំណត់ភេទតួអង្គតាមមុខមាត់ក្នុងវីដេអូ និងវេនសន្ទនា (Auto Face Gender & Turn-Taking) • បកប្រែឃ្លាខ្លីណែន ត្រូវចังหวាក់មាត់ 100% (<= 5.5 ព្យាង្គ/វិនាទី ដោយអត្ថន័យពេញ)';
 
 export default function GeminiRouteModal({
   isOpen,
