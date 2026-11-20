@@ -3,6 +3,53 @@
 ## Last Session
 - **Environment**: Antigravity IDE (Gemini) - Minimal Change Engineer
 - **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-20T09:58:00+07:00
+
+## Summary: Invalidate Rendered Video Preview & Disk Export Cache on Partial or Modified TTS Generation (100% PASS)
+- **Task:**
+  1. Fix render cache leakage: In `useAudioDubbing.js`, `if (!result.alreadyCompleted && !hasFailures)` was skipping `invalidateRendered(targetEpisodeId)` when `hasFailures` was true, leaving stale rendered video active after partial failures or audio modifications.
+  2. In `backend/routes/audioRoutes.js`: Invalidate `targetEp.renderedVideo = null` and update `renderInvalidatedAt` on disk in both immediate segment save and final metadata save whenever audio generation runs.
+  3. Wire `onInvalidateRenderedPreview` into `DubbingRunnerProvider` (`App.jsx` + `DubbingRunnerContext.jsx`) so `/batch` mode also invalidates player preview and localStorage on modified/partial audio.
+  4. Expand integration test `tts_smart_skip_and_progress.test.js` to assert `diskEp.renderedVideo === null` and `diskEp.renderInvalidatedAt > 0` on disk `series.json` when segment fails.
+- **Root Causes & Gaps Addressed**:
+  1. **Rendered Video Leakage on Partial Failure**: If a previous export existed, and TTS was re-run with 1 segment failing, the frontend previously kept the old rendered video active in player preview, and batch export could mistakenly reuse the stale render.
+  2. **Backend Metadata Cache Residual**: `backend/routes/audioRoutes.js` previously did not clear `targetEp.renderedVideo` when audio was generated or failed, allowing disk `series.json` to keep stale video URLs.
+- **Surgical Changes Implemented (Minimal Change Discipline)**:
+  1. `frontend/src/hooks/useAudioDubbing.js`:
+     - Changed guard to `if (!result.alreadyCompleted || hasFailures) { invalidateRendered(targetEpisodeId); }`.
+     - In background save: `...((!result.alreadyCompleted || hasFailures) ? { renderedVideo: null, renderInvalidatedAt: Date.now() } : {})`.
+  2. `backend/routes/audioRoutes.js`:
+     - In both `updateSeriesMetadata` calls, added:
+       ```javascript
+       const prevRenderedAt = Number(targetEp.renderedVideo?.renderedAt || 0);
+       targetEp.renderedVideo = null;
+       targetEp.renderInvalidatedAt = Math.max(Date.now(), Number(targetEp.renderInvalidatedAt || 0) + 1, prevRenderedAt > 0 ? prevRenderedAt + 1 : 0);
+       ```
+     - Ensured `targetEp.audioGenerated = !hasAnyFailures && ...` and `targetEp.audioOutdated = hasAnyFailures` on immediate save.
+  3. `frontend/src/features/dubbing-runner/DubbingRunnerContext.jsx` & `App.jsx`:
+     - Wired `onInvalidateRenderedPreview={invalidateRenderedPreview}` to `DubbingRunnerProvider`.
+     - In `runSingleVoice`, calls `onInvalidateRenderedPreview(ep.id)` if `!ttsRes?.alreadyCompleted || failedCount > 0`.
+  4. `backend/tests/tts_smart_skip_and_progress.test.js`:
+     - Seeded initial episode with `renderedVideo: { outputVideoUrl: ..., outputFilename: ... }`.
+     - Asserted that on partial route failure, `diskEp.renderedVideo === null` and `diskEp.renderInvalidatedAt > 0`.
+- **Verification Outcomes**:
+  - `backend/tests/tts_smart_skip_and_progress.test.js`: **11/11 PASS** (100%).
+  - `backend/tests/timeline_render_invalidation.test.js`, `regenerate_script_and_voice.test.js`, `reusable_1by1_dubbing_feature.test.js`: **24/24 PASS** (100%).
+  - `npm --prefix frontend run build`: **PASS** (640ms, 0 errors).
+- **Active Environment**:
+  - Backend API: `http://localhost:5000`
+  - Frontend UI: `http://localhost:5173`
+  - Active Branch: `chore/full-project-cleanup`
+- **Next Steps**:
+  - Push commit to GitHub `chore/full-project-cleanup`.
+
+---
+
+# Antigravity Shared State (Sync Memory)
+
+## Last Session
+- **Environment**: Antigravity IDE (Gemini) - Minimal Change Engineer
+- **Branch**: `chore/full-project-cleanup`
 - **Timestamp**: 2026-11-20T09:40:00+07:00
 
 ## Summary: Fixed TTS Partial Failure UI False Completion Guard, Master Audio Signature Shadowing, and Real-Route Disk Persistence

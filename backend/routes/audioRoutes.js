@@ -849,6 +849,15 @@ router.post("/generate-audio", async (req, res) => {
           forceRegen: Boolean(forceRegen),
         });
 
+        failedSegments = (updatedSegments || []).filter((s) => {
+          if (!isSpokenSegment(s)) return false;
+          return s.ttsStatus === "error" || s.status === "tts_error" || Boolean(s.error) || Boolean(s._failed) || !s.audioPath || !fs.existsSync(s.audioPath);
+        });
+        hasAnyFailures = failedSegments.length > 0;
+
+        newlySynthesizedCount = (updatedSegments || []).filter((s) => s && s._wasNewlySynthesized).length;
+        reusedCount = (updatedSegments || []).filter((s) => s && s.audioGenerated && !s._wasNewlySynthesized && !s._failed).length;
+
         // Save updated segments to series.json IMMEDIATELY under per-series mutex so individual segment playback and inspector work!
         if (isEpisode && cleanSeries && cleanEpisode) {
           try {
@@ -868,8 +877,15 @@ router.post("/generate-audio", async (req, res) => {
                 targetEp.scriptData.hasScript = targetEp.scriptData.segments.length > 0;
                 targetEp.scriptData.totalSegments = targetEp.scriptData.segments.length;
                 targetEp.scriptData.updatedAt = Date.now();
-                targetEp.audioGenerated = true;
-                targetEp.hasAudio = true;
+                targetEp.audioGenerated = !hasAnyFailures && (updatedSegments || []).some((s) => s.audioGenerated && !s._failed);
+                targetEp.audioOutdated = hasAnyFailures;
+                targetEp.hasAudio = (updatedSegments || []).some((s) => s.audioPath && fs.existsSync(s.audioPath));
+
+                // Invalidate rendered video cache whenever audio generation runs (modified audio or failure)
+                const prevRenderedAt = Number(targetEp.renderedVideo?.renderedAt || 0);
+                targetEp.renderedVideo = null;
+                targetEp.renderInvalidatedAt = Math.max(Date.now(), Number(targetEp.renderInvalidatedAt || 0) + 1, prevRenderedAt > 0 ? prevRenderedAt + 1 : 0);
+
                 console.log(`[TTS] Immediately persisted ${targetEp.scriptData.segments.length} segments with audio to series.json for episode ${cleanEpisode}`);
                 return true;
               });
@@ -878,15 +894,6 @@ router.post("/generate-audio", async (req, res) => {
             console.warn("[TTS] Error saving updated segments to series.json:", saveErr.message);
           }
         }
-
-        failedSegments = (updatedSegments || []).filter((s) => {
-          if (!isSpokenSegment(s)) return false;
-          return s.ttsStatus === "error" || s.status === "tts_error" || Boolean(s.error) || Boolean(s._failed) || !s.audioPath || !fs.existsSync(s.audioPath);
-        });
-        hasAnyFailures = failedSegments.length > 0;
-
-        newlySynthesizedCount = (updatedSegments || []).filter((s) => s && s._wasNewlySynthesized).length;
-        reusedCount = (updatedSegments || []).filter((s) => s && s.audioGenerated && !s._wasNewlySynthesized && !s._failed).length;
 
         const syncSegments = updatedSegments
           .filter((s) => s.audioPath && s.ttsStatus !== "empty_text" && fs.existsSync(s.audioPath))
@@ -986,6 +993,12 @@ router.post("/generate-audio", async (req, res) => {
               } else {
                 targetEp.audioOutdated = true;
               }
+
+              // Invalidate rendered video cache whenever audio generation runs (modified audio or failure)
+              const prevRenderedAt = Number(targetEp.renderedVideo?.renderedAt || 0);
+              targetEp.renderedVideo = null;
+              targetEp.renderInvalidatedAt = Math.max(Date.now(), Number(targetEp.renderInvalidatedAt || 0) + 1, prevRenderedAt > 0 ? prevRenderedAt + 1 : 0);
+
               console.log(`[TTS] Auto-persisted audioGenerated=${targetEp.audioGenerated} (audioOutdated=${Boolean(targetEp.audioOutdated)}) in series.json for episode ${cleanEpisode}`);
               return true;
             });

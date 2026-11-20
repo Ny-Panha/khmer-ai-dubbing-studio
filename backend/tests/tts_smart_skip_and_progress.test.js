@@ -442,6 +442,11 @@ test('Failed segment in batch prevents false completion and keeps episode audioO
         episodeNumber: 1,
         audioGenerated: true,
         audioOutdated: false,
+        renderedVideo: {
+          outputVideoUrl: '/uploads/projects/mock_render.mp4',
+          outputFilename: 'mock_render.mp4',
+          renderedAt: 1234567,
+        },
         scriptData: {
           segments: [
             { id: 1, index: 1, khmer: 'សួស្តីបងប្អូនទាំងអស់គ្នា', startSec: 0, endSec: 2.0 },
@@ -507,11 +512,13 @@ test('Failed segment in batch prevents false completion and keeps episode audioO
     assert.equal(data.failedCount, 1, 'Route must report failedCount: 1 when a segment fails');
     assert.equal(data.telemetry.failedCount, 1);
 
-    // Verify series.json on disk: targetEp must have audioOutdated: true and audioGenerated: false!
+    // Verify series.json on disk: targetEp must have audioOutdated: true, audioGenerated: false, and renderedVideo: null!
     const diskMeta = JSON.parse(fs.readFileSync(path.join(seriesDir, 'series.json'), 'utf8'));
     const diskEp = diskMeta.episodes.find((e) => e.id === episodeId);
     assert.equal(diskEp.audioOutdated, true, 'Episode in series.json on disk must have audioOutdated: true when any segment fails');
     assert.equal(diskEp.audioGenerated, false, 'Episode in series.json on disk must have audioGenerated: false when any segment fails');
+    assert.equal(diskEp.renderedVideo, null, 'Episode in series.json on disk must have renderedVideo: null when any segment fails');
+    assert.ok(diskEp.renderInvalidatedAt > 0, 'renderInvalidatedAt must be recorded on disk');
   } finally {
     await new Promise((r) => server.close(r));
     fs.rmSync(seriesDir, { recursive: true, force: true });

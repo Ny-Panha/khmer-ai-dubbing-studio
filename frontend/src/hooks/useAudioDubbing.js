@@ -1246,7 +1246,7 @@ const FALLBACK_VOICE_CATALOG = {
             fullAudioUrl: result.fullAudioUrl,
             audioGenerated: !hasFailures,
             audioOutdated: hasFailures ? true : false,
-            ...(!result.alreadyCompleted ? { renderedVideo: null, renderInvalidatedAt: Date.now() } : {}),
+            ...((!result.alreadyCompleted || hasFailures) ? { renderedVideo: null, renderInvalidatedAt: Date.now() } : {}),
           });
         }
         return;
@@ -1281,7 +1281,7 @@ const FALLBACK_VOICE_CATALOG = {
       });
       setFullAudioPath(result.fullAudioPath);
       setFullAudioUrl(result.fullAudioUrl);
-      if (!result.alreadyCompleted && !hasFailures) {
+      if (!result.alreadyCompleted || hasFailures) {
         invalidateRendered(targetEpisodeId);
       }
 

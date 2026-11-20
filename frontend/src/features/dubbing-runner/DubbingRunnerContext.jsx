@@ -26,7 +26,7 @@ import {
 
 const DubbingRunnerContext = createContext(null);
 
-export function DubbingRunnerProvider({ children, activeSeries, refreshSeries }) {
+export function DubbingRunnerProvider({ children, activeSeries, refreshSeries, onInvalidateRenderedPreview }) {
   // Global runners state per step: 'translate' | 'repair' | 'voice' | 'clean_bgm' | 'autofit' | 'all3'
   const [runnerStates, setRunnerStates] = useState({
     translate: { status: 'idle', currentEpId: null, currentEpIndex: 0, totalEps: 0, progress: 0, message: '' },
@@ -499,6 +499,13 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
     }
 
     const failedCount = Number(ttsRes?.failedCount || 0);
+    if (!ttsRes?.alreadyCompleted || failedCount > 0) {
+      if (typeof onInvalidateRenderedPreview === 'function') {
+        try {
+          onInvalidateRenderedPreview(ep.id);
+        } catch (_) {}
+      }
+    }
     if (failedCount > 0) {
       const partialPct = segments.length > 0
         ? Math.round(((segments.length - failedCount) / segments.length) * 100)

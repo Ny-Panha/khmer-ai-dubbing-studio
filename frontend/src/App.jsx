@@ -1123,6 +1123,7 @@ export default function App() {
             <DubbingRunnerProvider
               activeSeries={series.activeSeries}
               refreshSeries={series.refreshSeriesFromServer}
+              onInvalidateRenderedPreview={invalidateRenderedPreview}
             >
               <div className="capcut-app-container">
         {/* Top Application Navbar */}
