@@ -63,6 +63,12 @@ import {
   parseDirectionPrompt,
 } from '../../utils/dramaGenrePresets';
 
+/**
+ * Supported Genre Options & Batch Direction (canonical from dramaGenrePresets.js)
+ * - 🎭 កំប្លែង / គ្រួសារ
+ * - បកប្រែឃ្លាខ្លីណែន ត្រូវចังหวាក់មាត់ 100% (<= 5.5 ព្យាង្គ/វិនាទី ដោយអត្ថន័យពេញ)
+ */
+
 const EMPTY_EPISODES = [];
 
 export default function GeminiRouteModal({
@@ -2789,13 +2795,19 @@ export default function GeminiRouteModal({
                         key={g.id}
                         type="button"
                         data-testid={`batch-genre-${g.id}`}
-                        onClick={() => setDramaGenre(g.id)}
+                        aria-pressed={isSelected}
+                        aria-label={`ជ្រើសរើសប្រភេទរឿង ${g.shortLabel || g.label}`}
+                        onClick={() => {
+                          const res = handleGenreChange({ presetIds, newGenre: g.id });
+                          setDramaGenre(res.nextGenre);
+                          setPresetIds(res.nextPresetIds);
+                        }}
                         title={g.hint}
                         style={{
                           padding: '4px 9px',
                           fontSize: '0.70rem',
                           borderRadius: 6,
-                          border: isSelected ? '1px solid rgba(56, 189, 248, 0.55)' : '1px solid transparent',
+                          border: isSelected ? '1px solid rgba(56, 189, 248, 0.55)' : '1px solid rgba(255, 255, 255, 0.08)',
                           background: isSelected ? 'rgba(56, 189, 248, 0.16)' : 'rgba(255, 255, 255, 0.03)',
                           color: isSelected ? '#38BDF8' : '#CBD5E1',
                           cursor: 'pointer',
@@ -2834,31 +2846,21 @@ export default function GeminiRouteModal({
                         <span>DIRECTION:</span>
                       </span>
                       {SMART_PROMPT_CHIPS.map((chip) => {
-                        const currentText = String(customDirection || '');
-                        const isChipActive = currentText.includes(chip.promptText) || currentText.includes(chip.label) || (chip.shortLabel && currentText.includes(chip.shortLabel));
+                        const isChipActive = presetIds.includes(chip.id);
                         const ChipIcon = chip.icon || Sparkles;
                         return (
                           <button
                             key={chip.id}
                             type="button"
                             data-testid={`batch-smart-prompt-chip-${chip.id}`}
+                            aria-pressed={isChipActive}
+                            aria-label={`ទិសដៅ ${chip.shortLabel || chip.label}`}
                             title={chip.promptText}
                             onClick={() => {
-                              if (chip.genreId && dubbingMode === 'dialogue') {
-                                setDramaGenre(chip.genreId);
-                              }
-                              if (isChipActive) {
-                                const nextText = currentText
-                                  .replace(chip.promptText, '')
-                                  .replace(chip.label, '')
-                                  .replace(chip.shortLabel || '', '')
-                                  .replace(/\s*•\s*•\s*/g, ' • ')
-                                  .replace(/^\s*•\s*|\s*•\s*$/g, '')
-                                  .trim();
-                                setCustomDirection(nextText);
-                              } else {
-                                const trimmed = currentText.trim();
-                                setCustomDirection(trimmed ? `${trimmed} • ${chip.promptText}` : chip.promptText);
+                              const res = togglePreset({ presetIds, targetId: chip.id, currentGenre: dramaGenre });
+                              setPresetIds(res.nextPresetIds);
+                              if (res.nextGenre !== dramaGenre) {
+                                setDramaGenre(res.nextGenre);
                               }
                             }}
                             style={{
@@ -2868,7 +2870,7 @@ export default function GeminiRouteModal({
                               fontWeight: isChipActive ? 700 : 500,
                               background: isChipActive ? 'rgba(56, 189, 248, 0.16)' : 'rgba(255, 255, 255, 0.03)',
                               color: isChipActive ? '#38BDF8' : '#CBD5E1',
-                              border: isChipActive ? '1px solid rgba(56, 189, 248, 0.5)' : '1px solid transparent',
+                              border: isChipActive ? '1px solid rgba(56, 189, 248, 0.5)' : '1px solid rgba(255, 255, 255, 0.08)',
                               cursor: 'pointer',
                               display: 'inline-flex',
                               alignItems: 'center',
@@ -2884,13 +2886,16 @@ export default function GeminiRouteModal({
                     </div>
 
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      {customDirection && (
+                      {(customText || presetIds.length > 0) && (
                         <button
                           type="button"
                           data-testid="batch-direction-clear"
-                          onClick={() => setCustomDirection('')}
+                          aria-label="សម្អាតទិសដៅបន្ថែម"
+                          onClick={() => {
+                            setCustomText('');
+                          }}
                           style={{ background: 'none', border: 'none', color: '#94A3B8', fontSize: '0.68rem', cursor: 'pointer', fontWeight: 600 }}
-                          title="Clear input"
+                          title="សម្អាតទិសដៅបន្ថែម (Clear custom text)"
                         >
                           ✕ សម្អាត
                         </button>
@@ -2937,8 +2942,8 @@ export default function GeminiRouteModal({
                   <textarea
                     rows={2}
                     data-testid="batch-direction-textarea"
-                    value={customDirection}
-                    onChange={(e) => setCustomDirection(e.target.value)}
+                    value={customText}
+                    onChange={(e) => setCustomText(e.target.value)}
                     placeholder={dubbingMode === 'dialogue'
                       ? 'ឧ. រឿងភាគបុរាណចិន, តួប្រុសឈ្មោះ លីនហ្វេង...'
                       : 'ឧ. សម្រាយបែបរន្ធត់ ជក់ចិត្ត ផ្តោតលើប្រយុទ្ធ...'}

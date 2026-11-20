@@ -3,6 +3,57 @@
 ## Last Session
 - **Environment**: Antigravity IDE (Gemini) - Minimal Change Engineer
 - **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-20T12:12:00+07:00
+
+## Summary: Drama Genre & Direction Presets Audit & Surgical Fix — State Isolation, Authoritative Genre & Conflict Prevention (100% PASS)
+- **Task:** Deep audit and surgical fix for "ប្រភេទរឿង (DRAMA GENRE)" and "DIRECTION" preset controls across `/batch` (`GeminiRouteModal.jsx`) and `/studio` (`DubbingModeTab.jsx`):
+  1. **Consolidated Configuration & Pure Helpers (`frontend/src/utils/dramaGenrePresets.js` & `backend/utils/dramaGenreUtils.js`)**:
+     - Single source of truth for `GENRE_OPTIONS`, `SMART_PROMPT_CHIPS`, `DEFAULT_BATCH_PRESET_IDS`, and `DEFAULT_BATCH_DIRECTION`.
+     - Pure helper functions: `normalizeGenre`, `isGenrePresetConflict`, `filterPresetsForGenre`, `togglePreset`, `handleGenreChange`, `composeEffectivePrompt`, and `parseDirectionPrompt`.
+     - Backend helper `dramaGenreUtils.js` handles `normalizeGenre` (normalizing `ceo` -> `modern` and `general` -> `auto`), `detectDramaGenre`, `getGenrePromptGuidelines`, and `resolveEffectiveGenre`.
+  2. **Fixed Unintended Genre Mutation When Deselecting Presets**:
+     - Previously, clicking a preset unconditionally called `setDramaGenre(chip.genreId)` before checking if the preset was active.
+     - With `togglePreset`, manual genre selection is authoritative; activating a preset can select its genre, but deselecting a preset NEVER mutates or overrides the active genre.
+  3. **Replaced Substring-based Toggle with Structured State**:
+     - Previously, `String.includes()` on raw prompt text caused false active states when users typed words like "CEO" or "100%", and chained `.replace()` wiped out custom user instructions.
+     - Replaced with structured state: `presetIds` (Set/Array of preset IDs) + `customText` (user-authored text).
+     - Manual direction text remains byte-for-byte unchanged when adding or removing presets.
+     - Effective prompt is generated deterministically via `composeEffectivePrompt({ presetIds, customText })`.
+  4. **Resolved Conflicting AI Instructions & Normalization**:
+     - Enforced conflict prevention: activating `ancient_rules` automatically drops `modern_ceo` and switches genre to `ancient`; activating `modern_ceo` drops `ancient_rules` and switches genre to `modern`.
+     - Changing genre to `ancient` automatically drops any conflicting modern presets (and vice versa).
+     - Fixed `ceo` vs `modern` discrepancy: Gemini's `detectedGenre: "ceo"` is normalized to `modern` across all frontend and backend prompt layers.
+     - Priority order enforced: Explicit Manual Genre > Genre Presets > AI Auto-Detection.
+  5. **Auto Genre State & Retry / Re-Translate Predictability**:
+     - In Stage 6 (`stage6_generateModeSpecificScript.js`), preserved `genre: normRequestedGenre` on output so selecting `Auto` remains `auto` upon Retry and Re-Translate instead of permanently locking into the detected genre.
+     - `detectedGenre` is recorded separately in script metadata.
+  6. **State Isolation Across Series & Episodes**:
+     - Added `useEffect` in both `GeminiRouteModal.jsx` and `DubbingModeTab.jsx` resetting preset state when `activeSeriesId` or `activeEpisode.id` changes, preventing settings leakage.
+  7. **Batch Defaults & UI / UX Hardening**:
+     - Batch initializes with `DEFAULT_BATCH_PRESET_IDS` and `DEFAULT_BATCH_DIRECTION`.
+     - Added accessibility attributes (`aria-pressed`, `aria-label`) to all genre and preset buttons.
+     - Adjusted label to pacing preference ("បកប្រែឃ្លាខ្លីណែន ត្រូវចังหวាក់មាត់ (<= 5.5 ព្យាង្គ/វិនាទី)") rather than impossible 100% guarantees.
+  8. **Comprehensive Integration & Regression Tests**:
+     - Added `backend/tests/drama_genre_and_direction_presets.test.js` covering 13 test scenarios: genre selection, preset activation, deselecting without mutation, byte-for-byte custom text preservation, substring immunity, conflict handling, series isolation, batch/studio equivalence, auto detection preservation, retry/re-translate persistence, legacy metadata compatibility, static UI audit, and backend prompt integration.
+- **Verification Outcomes**:
+  - `backend/tests/drama_genre_and_direction_presets.test.js`: **13/13 PASS** (100%).
+  - `backend/tests/ai_detection_and_dubbing_prompt_fix.test.js`: **8/8 PASS** (100%).
+  - Full Regression Suites (Stage 6 translation, series persist, timeline invalidation, reusable 1-by-1, TTS skip): **81/81 PASS** (100%).
+  - `npm --prefix frontend run build`: **PASS** (593ms, 0 errors).
+- **Active Environment**:
+  - Backend API: `http://localhost:5000`
+  - Frontend UI: `http://localhost:5173`
+  - Active Branch: `chore/full-project-cleanup`
+- **Next Steps**:
+  - Git commit and push to `origin/chore/full-project-cleanup`.
+
+---
+
+# Antigravity Shared State (Sync Memory)
+
+## Last Session
+- **Environment**: Antigravity IDE (Gemini) - Minimal Change Engineer
+- **Branch**: `chore/full-project-cleanup`
 - **Timestamp**: 2026-11-20T12:00:00+07:00
 
 ## Summary: RapidOCR CPU Optimization on Intel Core i5-1235U — 3.4x Faster Inference & Real 5-Minute Video Verification (100% PASS)

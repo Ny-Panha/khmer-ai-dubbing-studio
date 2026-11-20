@@ -1,50 +1,27 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   Sparkles, BookOpen, Loader2, AlertCircle, ArrowRight, CheckCircle2, Mic, Volume2, Film, RefreshCw, ChevronDown, Settings2, FileText, Check, Terminal, Zap, Layers, MessageSquare, Crown, Briefcase, UserCheck, Building2, Smile, X
 } from 'lucide-react';
 import { importSubtitlesApi, retranslateAllSegmentsApi } from '../../services/api';
 import { DubbingStepButton } from '../../features/dubbing-runner';
+import {
+  GENRE_OPTIONS,
+  SMART_PROMPT_CHIPS,
+  normalizeGenre,
+  togglePreset,
+  handleGenreChange,
+  composeEffectivePrompt,
+  parseDirectionPrompt,
+} from '../../utils/dramaGenrePresets';
 
-const GENRE_OPTIONS = [
-  { id: 'auto', label: '✨ Auto (ស្គាល់ស្វ័យប្រវត្តិ)', shortLabel: 'Auto', icon: Sparkles, hint: 'AI វិភាគ Audio + OCR កំណត់ប្រភេទរឿងស្វ័យប្រវត្តិ' },
-  { id: 'ancient', label: '🏛️ បុរាណចិន / Xianxia', shortLabel: 'បុរាណចិន', icon: BookOpen, hint: 'រឿងគុណនិយម, Wuxia, សម្អាតកាយ, វិញ្ញាណ, លោកម្ចាស់, ព្រឹទ្ធាចារ្យ' },
-  { id: 'modern', label: '🏙️ សម័យទំនើប / CEO', shortLabel: 'សម័យទំនើប', icon: Building2, hint: 'រឿងស្នេហា, CEO, ក្រុមហ៊ុន, លោកប្រធាន, អ្នកស្រី, បង/អូន' },
-  { id: 'action', label: '⚔️ Action / សងសឹក', shortLabel: 'Action', icon: Zap, hint: 'រឿងប្រយុទ្ធ, ប៉ូលិស, ឧក្រិដ្ឋកម្ម, ស៊ើបអង្កេត, ចង្វាក់សន្ទនារហ័ស' },
-  { id: 'comedy', label: '🎭 កំប្លែង / គ្រួសារ', shortLabel: 'កំប្លែង', icon: Smile, hint: 'រឿងកំប្លែងសើចចុកពោះ, ភាសាកំប្លុកកំប្លែងធម្មជាតិ' },
-];
-
-const SMART_PROMPT_CHIPS = [
-  {
-    id: 'auto_face_gender',
-    label: '🎭 ស្គាល់ភេទតាមមុខតួអង្គ (Auto Face Gender)',
-    shortLabel: 'ស្គាល់ភេទតាមមុខ',
-    icon: UserCheck,
-    promptText: 'កំណត់ភេទតួអង្គតាមមុខមាត់ក្នុងវីដេអូ និងវេនសន្ទនា (Auto Face Gender & Turn-Taking)',
-  },
-  {
-    id: 'royal_xianxia',
-    label: '👑 រាជស័ព្ទបុរាណចិន (Royal/Xianxia)',
-    shortLabel: 'រាជស័ព្ទបុរាណចិន',
-    icon: Crown,
-    promptText: 'រឿងបុរាណចិន/គុណនិយម ប្រើរាជស័ព្ទ និងពាក្យគុណនិយម (ទូលបង្គំ, ព្រះអង្គ, ម្ចាស់ក្សត្រី, លោកម្ចាស់)',
-    genreId: 'ancient',
-  },
-  {
-    id: 'modern_ceo',
-    label: '💼 សន្ទនាអគ្គនាយក (Modern CEO)',
-    shortLabel: 'សន្ទនាអគ្គនាយក',
-    icon: Briefcase,
-    promptText: 'រឿងសម័យទំនើប CEO ប្រើភាសាធម្មជាតិសម័យទំនើប (លោកប្រធាន, អ្នកនាង, បង/អូន, ខ្ញុំ/លោក)',
-    genreId: 'modern',
-  },
-  {
-    id: 'strict_lipsync',
-    label: '⚡ ឃ្លាខ្លីត្រូវមាត់ 100% (Strict Lip-Sync)',
-    shortLabel: 'ឃ្លាខ្លីត្រូវមាត់ 100%',
-    icon: Zap,
-    promptText: 'បកប្រែឃ្លាខ្លីណែន ត្រូវចังหวាក់មាត់ 100% (<= 5.5 ព្យាង្គ/វិនាទី ដោយអត្ថន័យពេញ)',
-  },
-];
+/**
+ * Smart Direction Presets & Drama Genre Options (imported from dramaGenrePresets.js)
+ * Preserves user options:
+ * - 🎭 ស្គាល់ភេទតាមមុខតួអង្គ (Auto Face Gender)
+ * - 👑 រាជស័ព្ទបុរាណចិន (Royal/Xianxia)
+ * - 💼 សន្ទនាអគ្គនាយក (Modern CEO)
+ * - ⚡ ឃ្លាខ្លីត្រូវមាត់ 100% (Strict Lip-Sync)
+ */
 
 export default function DubbingModeTab({
   selectedVideo,
@@ -88,7 +65,34 @@ export default function DubbingModeTab({
   const fileInputRef = useRef(null);
 
   const [narratorGender, setNarratorGender] = useState('male');
-  const [selectedGenre, setSelectedGenre] = useState(scriptData?.genre || scriptData?.detectedGenre || 'auto');
+  const [selectedGenre, setSelectedGenre] = useState(() =>
+    normalizeGenre(
+      scriptData?.genre ||
+      scriptData?.detectedGenre ||
+      activeEpisode?.scriptData?.genre ||
+      activeSeries?.genre ||
+      'auto'
+    )
+  );
+  const [presetIds, setPresetIds] = useState(() => {
+    const raw = promptInput || scriptData?.customPrompt || activeEpisode?.scriptData?.customPrompt || '';
+    return parseDirectionPrompt(raw).presetIds;
+  });
+  const [customText, setCustomText] = useState(() => {
+    const raw = promptInput || scriptData?.customPrompt || activeEpisode?.scriptData?.customPrompt || '';
+    return parseDirectionPrompt(raw).customText;
+  });
+
+  const effectiveDirectionPrompt = useMemo(
+    () => composeEffectivePrompt({ presetIds, customText, genre: selectedGenre }),
+    [presetIds, customText, selectedGenre]
+  );
+
+  useEffect(() => {
+    if (typeof setPromptInput === 'function' && promptInput !== effectiveDirectionPrompt) {
+      setPromptInput(effectiveDirectionPrompt);
+    }
+  }, [effectiveDirectionPrompt, promptInput, setPromptInput]);
   const [showRegenerateForm, setShowRegenerateForm] = useState(false);
   const [showConfirmRetranslate, setShowConfirmRetranslate] = useState(false);
   const [showConfirmReTts, setShowConfirmReTts] = useState(false);
@@ -246,13 +250,34 @@ export default function DubbingModeTab({
     }
   };
 
+  const prevEpRef = useRef(activeEpisode?.id || episodeId);
+
   useEffect(() => {
-    if (scriptData?.genre) {
-      setSelectedGenre(scriptData.genre);
-    } else if (scriptData?.detectedGenre) {
-      setSelectedGenre(scriptData.detectedGenre);
+    const curEpId = activeEpisode?.id || episodeId;
+    if (prevEpRef.current !== curEpId) {
+      prevEpRef.current = curEpId;
+      const nextGenre = normalizeGenre(
+        scriptData?.genre ||
+        scriptData?.detectedGenre ||
+        activeEpisode?.scriptData?.genre ||
+        activeEpisode?.scriptData?.detectedGenre ||
+        activeSeries?.genre ||
+        'auto'
+      );
+      setSelectedGenre(nextGenre);
+
+      const savedPrompt = scriptData?.customPrompt || activeEpisode?.scriptData?.customPrompt || '';
+      const parsed = parseDirectionPrompt(savedPrompt);
+      setPresetIds(parsed.presetIds);
+      setCustomText(parsed.customText);
+    } else {
+      if (scriptData?.genre) {
+        setSelectedGenre(normalizeGenre(scriptData.genre));
+      } else if (scriptData?.detectedGenre) {
+        setSelectedGenre(normalizeGenre(scriptData.detectedGenre));
+      }
     }
-  }, [scriptData?.genre, scriptData?.detectedGenre]);
+  }, [activeEpisode?.id, episodeId, scriptData?.genre, scriptData?.detectedGenre, scriptData?.customPrompt, activeSeries?.genre]);
 
   // Check initial Demucs separation status for selected video
   useEffect(() => {
@@ -1384,7 +1409,13 @@ export default function DubbingModeTab({
                   <button
                     key={g.id}
                     type="button"
-                    onClick={() => setSelectedGenre(g.id)}
+                    aria-pressed={isSelected}
+                    aria-label={`ជ្រើសរើសប្រភេទរឿង ${g.shortLabel || g.label}`}
+                    onClick={() => {
+                      const res = handleGenreChange({ presetIds, newGenre: g.id });
+                      setSelectedGenre(res.nextGenre);
+                      setPresetIds(res.nextPresetIds);
+                    }}
                     title={g.hint}
                     style={{
                       padding: '4px 9px',
@@ -1422,12 +1453,13 @@ export default function DubbingModeTab({
                 ស្រេចចិត្ត
               </span>
             </label>
-            {promptInput && (
+            {(customText || presetIds.length > 0) && (
               <button
                 type="button"
-                onClick={() => setPromptInput('')}
+                onClick={() => setCustomText('')}
                 style={{ background: 'none', border: 'none', color: '#94a3b8', fontSize: '10px', cursor: 'pointer', fontWeight: 600 }}
-                title="Clear input"
+                title="សម្អាតទិសដៅបន្ថែម (Clear custom text)"
+                aria-label="សម្អាតទិសដៅបន្ថែម"
               >
                 ✕ សម្អាត
               </button>
@@ -1445,31 +1477,21 @@ export default function DubbingModeTab({
             }}
           >
             {SMART_PROMPT_CHIPS.map((chip) => {
-              const currentText = String(promptInput || '');
-              const isChipActive = currentText.includes(chip.promptText) || currentText.includes(chip.label) || (chip.shortLabel && currentText.includes(chip.shortLabel));
+              const isChipActive = presetIds.includes(chip.id);
               const ChipIcon = chip.icon || Sparkles;
               return (
                 <button
                   key={chip.id}
                   type="button"
                   data-testid={`smart-prompt-chip-${chip.id}`}
+                  aria-pressed={isChipActive}
+                  aria-label={`ទិសដៅ ${chip.shortLabel || chip.label}`}
                   title={chip.promptText}
                   onClick={() => {
-                    if (chip.genreId && dubbingMode === 'dialogue') {
-                      setSelectedGenre(chip.genreId);
-                    }
-                    if (isChipActive) {
-                      const nextText = currentText
-                        .replace(chip.promptText, '')
-                        .replace(chip.label, '')
-                        .replace(chip.shortLabel || '', '')
-                        .replace(/\s*•\s*•\s*/g, ' • ')
-                        .replace(/^\s*•\s*|\s*•\s*$/g, '')
-                        .trim();
-                      setPromptInput(nextText);
-                    } else {
-                      const trimmed = currentText.trim();
-                      setPromptInput(trimmed ? `${trimmed} • ${chip.promptText}` : chip.promptText);
+                    const res = togglePreset({ presetIds, targetId: chip.id, currentGenre: selectedGenre });
+                    setPresetIds(res.nextPresetIds);
+                    if (res.nextGenre !== selectedGenre) {
+                      setSelectedGenre(res.nextGenre);
                     }
                   }}
                   style={{
@@ -1501,8 +1523,8 @@ export default function DubbingModeTab({
 
           <textarea
             rows={2}
-            value={promptInput}
-            onChange={(e) => setPromptInput(e.target.value)}
+            value={customText}
+            onChange={(e) => setCustomText(e.target.value)}
             placeholder={dubbingMode === 'dialogue'
               ? 'ឧ. រឿងភាគបុរាណចិន, តួប្រុសឈ្មោះ លីនហ្វេង...'
               : 'ឧ. សម្រាយបែបរន្ធត់ ជក់ចិត្ត ផ្តោតលើប្រយុទ្ធ...'}
@@ -1800,7 +1822,7 @@ export default function DubbingModeTab({
                 setShowConfirmRetranslate(true);
                 return;
               }
-              handleTriggerScript({ narratorGender, genre: selectedGenre, generationMode });
+              handleTriggerScript({ narratorGender, genre: selectedGenre, generationMode, customPrompt: effectiveDirectionPrompt });
             }
           }}
           disabled={isThisEpisodeGeneratingScript || !selectedVideo}
@@ -1914,7 +1936,7 @@ export default function DubbingModeTab({
             type="button"
             onClick={() => {
               if (!isThisEpisodeGeneratingScript && selectedVideo) {
-                handleTriggerScript({ narratorGender, genre: selectedGenre, generationMode });
+                handleTriggerScript({ narratorGender, genre: selectedGenre, generationMode, customPrompt: effectiveDirectionPrompt });
               }
             }}
             disabled={isThisEpisodeGeneratingScript || !selectedVideo}
@@ -2005,7 +2027,7 @@ export default function DubbingModeTab({
                 type="button"
                 onClick={() => {
                   setShowConfirmRetranslate(false);
-                  handleTriggerScript({ narratorGender, genre: selectedGenre, generationMode, force: true, confirmed: true });
+                  handleTriggerScript({ narratorGender, genre: selectedGenre, generationMode, customPrompt: effectiveDirectionPrompt, force: true, confirmed: true });
                 }}
                 style={{
                   height: 36,

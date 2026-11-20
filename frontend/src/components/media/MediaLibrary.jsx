@@ -167,7 +167,7 @@ function MediaLibrary({
       recapStyle: dubbingMode === 'dialogue' ? 'standard' : (recapStyle || 'story_recap'),
       narratorGender: options?.narratorGender || 'male',
       genre: options?.genre || 'auto',
-      customPrompt: promptInput.trim(),
+      customPrompt: options?.customPrompt !== undefined ? String(options.customPrompt).trim() : promptInput.trim(),
       force: Boolean(options?.force),
       confirmed: Boolean(options?.confirmed),
     });
