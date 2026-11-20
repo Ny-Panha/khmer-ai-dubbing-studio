@@ -1232,6 +1232,9 @@ const FALLBACK_VOICE_CATALOG = {
       const updatedMap = new Map((result.segments || []).map((s) => [String(s.id), s]));
       const mergedSegments = (scriptData?.segments || []).map((s) => updatedMap.get(String(s.id)) || s);
 
+      const failedCount = Number(result?.failedCount || 0);
+      const hasFailures = failedCount > 0;
+
       // Episode switch protection: If user switched episodes during generation,
       // DO NOT attach EP1 audio to EP2 workspace! Save to background store instead.
       if (targetEpisodeId && targetEpisodeId !== activeTtsEpisodeRef.current) {
@@ -1241,21 +1244,32 @@ const FALLBACK_VOICE_CATALOG = {
             scriptData: { ...scriptData, segments: mergedSegments, updatedAt: Date.now() },
             fullAudioPath: result.fullAudioPath,
             fullAudioUrl: result.fullAudioUrl,
-            audioGenerated: true,
-            audioOutdated: false,
+            audioGenerated: !hasFailures,
+            audioOutdated: hasFailures ? true : false,
             ...(!result.alreadyCompleted ? { renderedVideo: null, renderInvalidatedAt: Date.now() } : {}),
           });
         }
         return;
       }
 
-      setAudioProgress(100);
-      const summaryMsg = result.alreadyCompleted
-        ? (result.summaryMessage || `✅ សំឡេងខ្មែរ AI មានរួចរាល់ ${validSegments.length} ឃ្លា (រក្សាទុកដើម)!`)
-        : skippedEmptyCount > 0
-          ? `✅ បង្កើតសំឡេង AI ជោគជ័យ ${validSegments.length} ឃ្លា (រំលង ${skippedEmptyCount} ឃ្លា គ្មានអត្ថបទ)!`
-          : `✅ បង្កើតសំឡេងខ្មែរ AI ជោគជ័យ ${validSegments.length} ឃ្លា (100%)!`;
-      setAudioStage(summaryMsg);
+      if (hasFailures) {
+        const completedCount = Math.max(0, validSegments.length - failedCount);
+        const partialPct = validSegments.length > 0 ? Math.round((completedCount / validSegments.length) * 100) : 0;
+        setAudioProgress(partialPct);
+        setAudioStage(`⚠️ សំយោគបាន ${completedCount}/${validSegments.length} ឃ្លា (${failedCount} ឃ្លាបរាជ័យ - សូមចុច Generate TTS ម្តងទៀត)`);
+        setAudioOutdated(true);
+        setAudioGenerated(false);
+      } else {
+        setAudioProgress(100);
+        const summaryMsg = result.alreadyCompleted
+          ? (result.summaryMessage || `✅ សំឡេងខ្មែរ AI មានរួចរាល់ ${validSegments.length} ឃ្លា (រក្សាទុកដើម)!`)
+          : skippedEmptyCount > 0
+            ? `✅ បង្កើតសំឡេង AI ជោគជ័យ ${validSegments.length} ឃ្លា (រំលង ${skippedEmptyCount} ឃ្លា គ្មានអត្ថបទ)!`
+            : `✅ បង្កើតសំឡេងខ្មែរ AI ជោគជ័យ ${validSegments.length} ឃ្លា (100%)!`;
+        setAudioStage(summaryMsg);
+        setAudioGenerated(true);
+        setAudioOutdated(false);
+      }
 
       setScriptData((prev) => {
         if (!prev?.segments) return prev;
@@ -1267,16 +1281,16 @@ const FALLBACK_VOICE_CATALOG = {
       });
       setFullAudioPath(result.fullAudioPath);
       setFullAudioUrl(result.fullAudioUrl);
-      setAudioGenerated(true);
-      setAudioOutdated(false);
-      if (!result.alreadyCompleted) {
+      if (!result.alreadyCompleted && !hasFailures) {
         invalidateRendered(targetEpisodeId);
       }
 
-      setTimeout(() => {
-        setAudioProgress(0);
-        setAudioStage('');
-      }, 3000);
+      if (!hasFailures) {
+        setTimeout(() => {
+          setAudioProgress(0);
+          setAudioStage('');
+        }, 3000);
+      }
     } catch (err) {
       if (audioProgressTimerRef.current) clearInterval(audioProgressTimerRef.current);
       setAudioProgress(0);

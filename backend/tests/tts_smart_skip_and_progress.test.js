@@ -374,10 +374,12 @@ test('POST /api/generate-audio: Initial run creates master + sig, second all-cac
     const data1 = await res1.json();
     assert.equal(data1.success, true);
     assert.equal(data1.telemetry.synthesizedSegmentsCount, 2);
+    assert.ok(data1.telemetry.masterAudioSignature, 'Master Audio Signature in telemetry must not be null');
     assert.ok(fs.existsSync(data1.fullAudioPath), 'Master narration MP3 must be created');
     const sigPath = `${data1.fullAudioPath}.sig`;
     assert.ok(fs.existsSync(sigPath), 'Master audio .sig file must be written');
     const sigInitial = fs.readFileSync(sigPath, 'utf8').trim();
+    assert.equal(data1.telemetry.masterAudioSignature, sigInitial, 'Telemetry masterAudioSignature must match .sig file on disk');
 
     // 2. Second all-cached run with identical segments and timings -> must skip master merge safely!
     const res2 = await fetch(`${baseUrl}/generate-audio`, {
@@ -427,11 +429,33 @@ test('POST /api/generate-audio: Initial run creates master + sig, second all-cac
 test('Failed segment in batch prevents false completion and keeps episode audioOutdated: true', async () => {
   const seriesId = `series_failure_guard_${Date.now()}`;
   const episodeId = 'ep_fail';
-  const epAudioDir = path.join(uploadsDir, 'projects', seriesId, 'episodes', episodeId, 'audio');
+  const seriesDir = path.join(uploadsDir, 'projects', seriesId);
+  const epAudioDir = path.join(seriesDir, 'episodes', episodeId, 'audio');
   fs.mkdirSync(epAudioDir, { recursive: true });
+
+  // 1. Write real series.json to disk with episode
+  const initialMeta = {
+    id: seriesId,
+    episodes: [
+      {
+        id: episodeId,
+        episodeNumber: 1,
+        audioGenerated: true,
+        audioOutdated: false,
+        scriptData: {
+          segments: [
+            { id: 1, index: 1, khmer: 'សួស្តីបងប្អូនទាំងអស់គ្នា', startSec: 0, endSec: 2.0 },
+            { id: 'fail:invalid:id', index: 2, khmer: 'ឃ្លាបរាជ័យដោយសារអក្សរឈ្មោះឯកសារ', startSec: 2.5, endSec: 4.5 },
+          ],
+        },
+      },
+    ],
+  };
+  fs.writeFileSync(path.join(seriesDir, 'series.json'), JSON.stringify(initialMeta, null, 2), 'utf8');
 
   const { server, baseUrl } = await startTestServer();
   try {
+    // 2. Unit level test with generateSingleFn throwing
     const tmpDir = path.join(uploadsDir, `batch_fail_test_${Date.now()}`);
     fs.mkdirSync(tmpDir, { recursive: true });
 
@@ -460,11 +484,37 @@ test('Failed segment in batch prevents false completion and keeps episode audioO
     assert.equal(results.telemetry.succeededCount, 1);
     assert.equal(results[1]._failed, true, 'Failed segment must be explicitly flagged with _failed=true');
     assert.equal(results[1].ttsStatus, 'error');
-
     fs.rmSync(tmpDir, { recursive: true, force: true });
+
+    // Pre-create the exact destination output path for segment 2 as a directory to trigger an unrecoverable filesystem write error (EISDIR)
+    const blockingDir = path.join(epAudioDir, 'ep_ep_fail_seg_fail_invalid_id_km-KH-PisethNeural_voice_7bda5d51.mp3');
+    fs.mkdirSync(blockingDir, { recursive: true });
+
+    // 3. Real Backend Route test: POST /api/generate-audio with segment 2 blocked by directory
+    const res = await fetch(`${baseUrl}/generate-audio`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        seriesId,
+        episodeId,
+        voiceId: 'km-KH-PisethNeural',
+        forceRegen: false,
+        segments: initialMeta.episodes[0].scriptData.segments,
+      }),
+    });
+    const data = await res.json();
+    assert.equal(data.success, true);
+    assert.equal(data.failedCount, 1, 'Route must report failedCount: 1 when a segment fails');
+    assert.equal(data.telemetry.failedCount, 1);
+
+    // Verify series.json on disk: targetEp must have audioOutdated: true and audioGenerated: false!
+    const diskMeta = JSON.parse(fs.readFileSync(path.join(seriesDir, 'series.json'), 'utf8'));
+    const diskEp = diskMeta.episodes.find((e) => e.id === episodeId);
+    assert.equal(diskEp.audioOutdated, true, 'Episode in series.json on disk must have audioOutdated: true when any segment fails');
+    assert.equal(diskEp.audioGenerated, false, 'Episode in series.json on disk must have audioGenerated: false when any segment fails');
   } finally {
     await new Promise((r) => server.close(r));
-    fs.rmSync(path.join(uploadsDir, 'projects', seriesId), { recursive: true, force: true });
+    fs.rmSync(seriesDir, { recursive: true, force: true });
   }
 });
 

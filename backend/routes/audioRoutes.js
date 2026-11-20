@@ -900,7 +900,7 @@ router.post("/generate-audio", async (req, res) => {
                 : parseTimeToSec(s.start, idx * 4)),
           }));
 
-        const currentMasterSig = computeMasterAudioSignature(syncSegments);
+        currentMasterSig = computeMasterAudioSignature(syncSegments);
         const sigPath = `${fullAudioPath}.sig`;
         let recordedMasterSig = fs.existsSync(sigPath) ? fs.readFileSync(sigPath, "utf8").trim() : null;
         if (!recordedMasterSig && isEpisode && cleanSeries && cleanEpisode) {
@@ -949,6 +949,15 @@ router.post("/generate-audio", async (req, res) => {
             updateSeriesMetadata(cleanSeries, (seriesMeta) => {
               const targetEp = (seriesMeta?.episodes || []).find((e) => String(e.id) === String(cleanEpisode));
               if (!targetEp) return false;
+              if (Array.isArray(updatedSegments) && updatedSegments.length > 0) {
+                const segMap = new Map(updatedSegments.map((s) => [String(s.id), s]));
+                if (Array.isArray(targetEp.scriptData?.segments)) {
+                  targetEp.scriptData.segments = targetEp.scriptData.segments.map((s) => {
+                    const fresh = segMap.get(String(s.id));
+                    return fresh ? { ...s, ...fresh } : s;
+                  });
+                }
+              }
               targetEp.audioGenerated = !hasAnyFailures && (updatedSegments || []).some((s) => s.audioGenerated);
               targetEp.hasAudio = fs.existsSync(fullAudioPath);
               if (fs.existsSync(fullAudioPath)) {

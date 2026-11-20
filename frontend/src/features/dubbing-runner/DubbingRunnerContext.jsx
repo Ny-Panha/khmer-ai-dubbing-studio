@@ -482,22 +482,43 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
       throw new Error(ttsRes?.error || 'TTS Generation failed');
     }
 
+    // Sync timeline audio tracks with returned updated segments (persists successful clips even on partial fail)
+    const finalSegments = Array.isArray(ttsRes?.segments) && ttsRes.segments.length > 0
+      ? ttsRes.segments
+      : segments;
+    try {
+      if (typeof syncTimelineAudioApi === 'function') {
+        await syncTimelineAudioApi(finalSegments, ep.title || `EP${ep.episodeNumber || ep.id}`, videoId, ep.id, seriesId);
+      }
+    } catch (_) {}
+
+    if (typeof refreshSeries === 'function') {
+      try {
+        await refreshSeries();
+      } catch (_) {}
+    }
+
     const failedCount = Number(ttsRes?.failedCount || 0);
     if (failedCount > 0) {
+      const partialPct = segments.length > 0
+        ? Math.round(((segments.length - failedCount) / segments.length) * 100)
+        : 0;
       setRunnerLiveStats((prev) => ({
         ...prev,
         tts: {
           ...prev.tts,
           [ep.id]: {
             ...(prev.tts[ep.id] || {}),
+            percent: partialPct,
             isFailed: true,
             isDone: false,
-            message: `⚠️ បង្កើតសំឡេងមាន ${failedCount} ឃ្លាបរាជ័យ`,
+            message: `⚠️ បង្កើតសំឡេងមាន ${failedCount} ឃ្លាបរាជ័យ (រក្សាទុក audioOutdated = true)`,
             logs: [
               ...(prev.tts[ep.id]?.logs || []),
               {
                 time: new Date().toLocaleTimeString(),
-                message: `⚠️ បង្កើតសំឡេងមាន ${failedCount} ឃ្លាមិនទាន់ជោគជ័យ សូម Re-TTS ម្តងទៀត`,
+                progress: partialPct,
+                message: `⚠️ បង្កើតសំឡេងមាន ${failedCount} ឃ្លាមិនទាន់ជោគជ័យ សូម Re-TTS ឃ្លាដែលនៅសល់`,
               },
             ],
           },
@@ -533,22 +554,6 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries })
     }));
 
     console.log(`[Voice 🎙️] ✅ EP${ep.episodeNumber || ep.id}: 100% បង្កើតសំឡេងរួចរាល់!`);
-
-    // Sync timeline audio tracks with returned updated segments
-    const finalSegments = Array.isArray(ttsRes?.segments) && ttsRes.segments.length > 0
-      ? ttsRes.segments
-      : segments;
-    try {
-      if (typeof syncTimelineAudioApi === 'function') {
-        await syncTimelineAudioApi(finalSegments, ep.title || `EP${ep.episodeNumber || ep.id}`, videoId, ep.id, seriesId);
-      }
-    } catch (_) {}
-
-    if (typeof refreshSeries === 'function') {
-      try {
-        await refreshSeries();
-      } catch (_) {}
-    }
 
       return createStepResult({ status: STEP_STATUS.COMPLETED, data: ttsRes, count: segments.length });
     } finally {

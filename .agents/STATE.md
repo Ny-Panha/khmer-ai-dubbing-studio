@@ -3,6 +3,52 @@
 ## Last Session
 - **Environment**: Antigravity IDE (Gemini) - Minimal Change Engineer
 - **Branch**: `chore/full-project-cleanup`
+- **Timestamp**: 2026-11-20T09:40:00+07:00
+
+## Summary: Fixed TTS Partial Failure UI False Completion Guard, Master Audio Signature Shadowing, and Real-Route Disk Persistence
+- **Task:**
+  1. Fix P0 false 100% completion bug when TTS partially fails (UI must show partial progress %, keep `audioOutdated: true`, `audioGenerated: false`, and keep warning message visible).
+  2. Fix P1 master audio signature variable shadowing in `backend/routes/audioRoutes.js` (telemetry was returning `masterAudioSignature: null`).
+  3. Add real HTTP `POST /api/generate-audio` on-disk test verifying `series.json` persists `audioOutdated: true` and `audioGenerated: false` when a segment fails.
+- **Root Causes & Gaps Addressed**:
+  1. **Variable Shadowing in `audioRoutes.js`**: `let currentMasterSig = null;` at outer scope was shadowed by `const currentMasterSig = computeMasterAudioSignature(syncSegments);` inside `try { ... }`, leaving outer `currentMasterSig` as `null` when building HTTP response.
+  2. **Unconditional 100% Progress in `useAudioDubbing.js`**: Regardless of `result.failedCount`, `useAudioDubbing.js` executed `setAudioProgress(100)` and `setAudioOutdated(false)` whenever the route returned HTTP 200 `{ success: true }`.
+  3. **Premature Done in `DubbingRunnerContext.jsx`**: When `failedCount > 0`, Dubbing Runner marked `isDone: true` and did not sync already-synthesized clips or report failure status.
+  4. **Missing Real Route Persistence Test**: Previous test only mocked `generateSingleFn` without testing real route HTTP execution, directory structures, and `series.json` disk persistence.
+- **Surgical Changes Implemented (Minimal Change Discipline)**:
+  1. `backend/routes/audioRoutes.js`:
+     - Changed `const currentMasterSig` to `currentMasterSig = computeMasterAudioSignature(syncSegments);` (line 903), fixing shadowing.
+     - Merged segment error states (`ttsStatus: "error"`, `_failed: true`) into `targetEp.scriptData.segments` when updating `series.json`.
+  2. `frontend/src/hooks/useAudioDubbing.js`:
+     - Extracted `failedCount = Number(result?.failedCount || 0)`.
+     - When `failedCount > 0`: calculated partial percentage, set `audioProgress(partialPct)` (preventing 100%), set warning message `⚠️ សំយោគបាន X/Y ឃ្លា (Z ឃ្លាបរាជ័យ - សូមចុច Generate TTS ម្តងទៀត)`, and set `audioOutdated: true, audioGenerated: false` in state and storage without auto-clearing after 3s.
+  3. `frontend/src/features/dubbing-runner/DubbingRunnerContext.jsx`:
+     - Extracted `failedCount = Number(ttsRes?.failedCount || 0)`.
+     - Synced newly generated clips with timeline audio via `syncTimelineAudioApi` and refreshed series *before* failure evaluation to preserve successful audio on disk.
+     - When `failedCount > 0`: set partial percentage, marked `isFailed: true, isDone: false`, and returned `STEP_STATUS.FAILED`.
+  4. `backend/tests/tts_smart_skip_and_progress.test.js`:
+     - Added telemetry assertion: `data1.telemetry.masterAudioSignature` is non-null and matches disk `.sig` file.
+     - Added real HTTP `POST /api/generate-audio` on-disk integration test with directory-conflict injection, asserting `failedCount: 1`, `diskEp.audioOutdated === true`, and `diskEp.audioGenerated === false`.
+- **Verification Outcomes**:
+  - `backend/tests/tts_smart_skip_and_progress.test.js`: **11/11 PASS** (100%).
+  - `reusable_1by1_dubbing_feature.test.js`, `clean_unified_3step_batch_pipeline.test.js`, `ai_detection_and_dubbing_prompt_fix.test.js`: **24/24 PASS** (100%).
+  - `clip_speed_tts.test.js`, `stage6_translation_fallback_and_tts_guard.test.js`, `auto_fit_speech_speed.test.js`: **27/27 PASS** (100%).
+  - `kill_button_and_cancellation.test.js`, `series_persist_and_sync.test.js`, `stage3_hybrid_ocr.test.js`: **56/56 PASS** (100%).
+  - `npm --prefix frontend run build`: **PASS** (9.51s, 0 errors).
+- **Active Environment**:
+  - Backend API: `http://localhost:5000`
+  - Frontend UI: `http://localhost:5173`
+  - Active Branch: `chore/full-project-cleanup`
+- **Next Steps**:
+  - Ready for production use or next pipeline optimization.
+
+---
+
+# Antigravity Shared State (Sync Memory)
+
+## Last Session
+- **Environment**: Antigravity IDE (Gemini) - Minimal Change Engineer
+- **Branch**: `chore/full-project-cleanup`
 - **Timestamp**: 2026-11-20T09:25:00+07:00
 
 ## Summary: Unified 4-Step Dubbing Buttons, Progress Telemetry & Completion Guards Across `/batch` and `/studio` (100% PASS)
