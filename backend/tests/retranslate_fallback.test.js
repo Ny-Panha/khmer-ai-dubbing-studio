@@ -176,6 +176,14 @@ test('Retranslate Model Fallback & Route Error Mapping Suite', async (t) => {
     assert.equal(authFormatted.code, 'INVALID_API_KEY');
     assert.equal(authFormatted.error.includes('AIzaFakeSecret'), false);
 
+    const unavailableFormatted = scriptRoutes.formatRetranslateRouteError({
+      status: 503,
+      message: '{"error":{"code":503,"message":"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.","status":"UNAVAILABLE"}}',
+    });
+    assert.equal(unavailableFormatted.statusCode, 503);
+    assert.equal(unavailableFormatted.code, 'UPSTREAM_UNAVAILABLE');
+    assert.ok(unavailableFormatted.error.includes('503'));
+
     // Mount router cleanly and test missing chineseText 400 response
     const app = express();
     app.use(express.json());

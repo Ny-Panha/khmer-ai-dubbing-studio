@@ -323,11 +323,25 @@ export default function ClipInspectorPanel({
   };
 
   const formatRetranslateUiError = (err) => {
-    const rawMsg = String(err?.message || err || 'បរាជ័យក្នុងការបកប្រែឡើងវិញ');
+    let rawMsg = String(err?.message || err || 'បរាជ័យក្នុងការបកប្រែឡើងវិញ');
+    try {
+      if (rawMsg.includes('{"error":')) {
+        const jsonMatch = rawMsg.match(/\{"error":.*\}/);
+        if (jsonMatch) {
+          const parsed = JSON.parse(jsonMatch[0]);
+          if (parsed?.error?.message) {
+            rawMsg = parsed.error.message;
+          }
+        }
+      }
+    } catch (_) {}
     if (err?.status === 429 || /\b429\b|RESOURCE_EXHAUSTED|quota/i.test(rawMsg)) {
       return rawMsg.includes('Gemini API Quota')
         ? rawMsg
         : 'Gemini API Quota ពេញហើយ (429) — សូមរង់ចាំបន្តិច ឬពិនិត្យ API Key ក្នុង Settings។';
+    }
+    if (err?.status === 503 || /\b503\b|high demand|unavailable/i.test(rawMsg)) {
+      return 'Google Gemini AI កំពុងមានអ្នកប្រើច្រើន (High Demand / 503) — សូមចុច "សាកម្តងទៀត" បន្តិចទៀត!';
     }
     if (err?.status === 401 || err?.status === 403) {
       return rawMsg.includes('Gemini API Key')

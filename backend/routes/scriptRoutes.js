@@ -295,11 +295,22 @@ function formatRetranslateRouteError(err) {
     };
   }
 
-  if (isQuotaOrRateLimitError(err) || status === 504 || lowerMsg.includes("504") || lowerMsg.includes("deadline_exceeded")) {
+  const isOverloadOrUnavailable =
+    status === 503 ||
+    status === 504 ||
+    lowerMsg.includes("503") ||
+    lowerMsg.includes("504") ||
+    lowerMsg.includes("high demand") ||
+    lowerMsg.includes("unavailable") ||
+    lowerMsg.includes("deadline_exceeded") ||
+    isModelOverloadOrUnavailable(err) ||
+    isQuotaOrRateLimitError(err);
+
+  if (isOverloadOrUnavailable) {
     return {
       statusCode: 503,
       code: "UPSTREAM_UNAVAILABLE",
-      error: "ការតភ្ជាប់ទៅកាន់ Google Gemini AI រអាក់រអួល ឬយឺតពេក (503/Timeout)។ សូមសាកល្បងម្ដងទៀត។",
+      error: "Google Gemini AI កំពុងមានអ្នកប្រើប្រាស់ច្រើន (High Demand / 503)។ សូមចុច 'សាកម្តងទៀត' បន្តិចទៀត!",
     };
   }
 

@@ -175,6 +175,12 @@ async function generateContentWithModelFallback(
         throw err;
       }
 
+      // If it's a 503 high demand spike, add a small 800ms backoff before next model so Google servers have time to recover
+      const is503Spike = String(err?.message || "").includes("high demand") || err?.status === 503;
+      if (is503Spike) {
+        await new Promise((r) => setTimeout(r, 800));
+      }
+
       const hasNext = i < orderedModels.length - 1;
       if (hasNext) {
         console.warn(
