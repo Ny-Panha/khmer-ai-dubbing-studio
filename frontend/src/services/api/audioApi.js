@@ -141,22 +141,30 @@ export async function generateSingleSegmentAudio(segment, options = {}) {
     forceRegen,
   });
 
-  // Safe retry for transient 502 / ECONNRESET during server reload
+  // Safe retry for transient 502 / ECONNRESET during server reload with 25s timeout
   let res = null;
   for (let attempt = 0; attempt < 2; attempt++) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 25000);
     try {
       res = await fetch('/api/generate-audio', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: payload,
+        signal: controller.signal,
       });
+      clearTimeout(timeoutId);
       if (res.status !== 502 && res.status !== 503) {
         break;
       }
     } catch (err) {
+      clearTimeout(timeoutId);
       if (attempt === 0) {
         await new Promise((r) => setTimeout(r, 1000));
         continue;
+      }
+      if (err.name === 'AbortError') {
+        throw new Error('TTS request timed out after 25s');
       }
       throw err;
     }
