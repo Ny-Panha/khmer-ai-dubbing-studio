@@ -54,6 +54,7 @@ export default function DubbingStepCardsBar({
   activeStageView = 'all',
   onSelectStageView = null,
   navOnly = false,
+  openStudioDialog = null,
 }) {
   const feature = useDubbingFeature(episodes) || {};
   const {
@@ -255,14 +256,30 @@ export default function DubbingStepCardsBar({
             <>
               <button
                 type="button"
-                onClick={() => runSequentialStep('translate', targetEpisodes, setupOptions)}
+                onClick={async () => {
+                  const unscripted = targetEpisodes.filter((ep) => !checkEpisodeHasScript(ep));
+                  if (unscripted.length === 0) {
+                    if (typeof openStudioDialog === 'function') {
+                      await openStudioDialog({
+                        showCancel: false,
+                        variant: 'info',
+                        badge: 'SCRIPT READY',
+                        title: 'គ្រប់ភាគទាំងអស់មាន Script រួចរាល់ 100% ហើយ',
+                        message: `គ្រប់ភាគទាំងអស់ (${targetEpisodes.length} ភាគ) មាន Script រួចរាល់អស់ហើយ មិនបាច់រត់ឡើងវិញទេ។ ប្រសិនបើអ្នកចង់បកប្រែថ្មីពីដើមឡើងវិញ សូមចុចប៊ូតុង "ធ្វើឡើងវិញ" (Re-Translate)។`,
+                        confirmLabel: 'យល់ព្រម',
+                      });
+                    }
+                    return;
+                  }
+                  runSequentialStep('translate', targetEpisodes, setupOptions);
+                }}
                 style={{
                   ...STEP_BTN_BASE,
                   background: 'rgba(56, 189, 248, 0.14)',
                   border: '1px solid rgba(56, 189, 248, 0.38)',
                   color: '#7DD3FC',
                 }}
-                title="រត់ Translate ភាគដែលមិនទាន់មាន Script (1-by-1)"
+                title={targetEpisodes.every((ep) => checkEpisodeHasScript(ep)) ? 'គ្រប់ភាគទាំងអស់មាន Script រួចរាល់ 100% ហើយ (បើចង់ធ្វើឡើងវិញ សូមប្រើ "ធ្វើឡើងវិញ")' : 'រត់ Translate ភាគដែលមិនទាន់មាន Script (1-by-1)'}
               >
                 <Play size={10} fill="currentColor" />
                 <span>Run 1-by-1</span>
@@ -271,8 +288,37 @@ export default function DubbingStepCardsBar({
                 type="button"
                 data-testid="btn-bar-retranslate"
                 onClick={async () => {
-                  const confirmed = typeof window !== 'undefined' && typeof window.confirm === 'function'
-                    ? window.confirm('តើអ្នកពិតជាចង់បកប្រែ Script ឡើងវិញមែនទេ? Script ចាស់ និងសំឡេងដែលបានបង្កើតនឹងត្រូវលុបចេញ ដើម្បីបកប្រែថ្មីពីដើម។')
+                  const unscripted = targetEpisodes.filter((ep) => !checkEpisodeHasScript(ep));
+                  const broken = targetEpisodes.filter((ep) => (getEpisodeBrokenSummary(ep)?.textBrokenCount || 0) > 0);
+                  const todo = targetEpisodes.filter((ep) => !checkEpisodeHasScript(ep) || (getEpisodeBrokenSummary(ep)?.textBrokenCount || 0) > 0);
+                  const done = targetEpisodes.filter((ep) => checkEpisodeHasScript(ep) && (getEpisodeBrokenSummary(ep)?.textBrokenCount || 0) === 0);
+
+                  if (done.length > 0 && todo.length > 0) {
+                    const confirmed = typeof openStudioDialog === 'function'
+                      ? await openStudioDialog({
+                          variant: 'warning',
+                          badge: 'RE-TRANSLATE',
+                          title: 'បកប្រែ Script ឡើងវិញ?',
+                          message: `មាន ${done.length} ភាគបានធ្វើរួចរាល់ 100% ហើយ។ ប្រព័ន្ធនឹងបកប្រែឡើងវិញតែ ${todo.length} ភាគដែលមិនទាន់រួចរាល់/ខូចប៉ុណ្ណោះ ដើម្បីការពារកុំឱ្យបាត់ភាគដែលបានធ្វើរួច។`,
+                          confirmLabel: `បកប្រែឡើងវិញតែភាគខូច/មិនទាន់ធ្វើ (${todo.length} ភាគ)`,
+                          cancelLabel: 'បោះបង់',
+                        })
+                      : true;
+                    if (confirmed) {
+                      runSequentialStep('translate', todo, { ...setupOptions, force: true });
+                    }
+                    return;
+                  }
+
+                  const confirmed = typeof openStudioDialog === 'function'
+                    ? await openStudioDialog({
+                        variant: 'warning',
+                        badge: 'RE-TRANSLATE',
+                        title: 'បកប្រែ Script ឡើងវិញ?',
+                        message: `តើអ្នកពិតជាចង់បកប្រែ Script ឡើងវិញលើ ${targetEpisodes.length} ភាគនេះមែនទេ? Script ចាស់ និងសំឡេងដែលបានបង្កើតនឹងត្រូវលុបចេញ ដើម្បីបកប្រែថ្មីពីដើម។`,
+                        confirmLabel: 'បកប្រែឡើងវិញ',
+                        cancelLabel: 'បោះបង់',
+                      })
                     : true;
                   if (confirmed) {
                     runSequentialStep('translate', targetEpisodes, { ...setupOptions, force: true });
@@ -559,7 +605,23 @@ export default function DubbingStepCardsBar({
             <>
               <button
                 type="button"
-                onClick={() => runSequentialStep('voice', targetEpisodes, setupOptions)}
+                onClick={async () => {
+                  const unvoiced = targetEpisodes.filter((ep) => checkEpisodeHasScript(ep) && (!checkEpisodeHasAudioReady(ep, null, null) || ep.audioOutdated));
+                  if (unvoiced.length === 0) {
+                    if (typeof openStudioDialog === 'function') {
+                      await openStudioDialog({
+                        showCancel: false,
+                        variant: 'info',
+                        badge: 'AI VOICE READY',
+                        title: 'គ្រប់ភាគទាំងអស់មានសំឡេង AI រួចរាល់ 100% ហើយ',
+                        message: `គ្រប់ភាគទាំងអស់ (${targetEpisodes.length} ភាគ) មានសំឡេង AI រួចរាល់អស់ហើយ មិនបាច់រត់ឡើងវិញទេ។ ប្រសិនបើអ្នកចង់បង្កើតសំឡេងឡើងវិញ សូមចុចប៊ូតុង "ធ្វើឡើងវិញ" (Re-Voice)។`,
+                        confirmLabel: 'យល់ព្រម',
+                      });
+                    }
+                    return;
+                  }
+                  runSequentialStep('voice', targetEpisodes, setupOptions);
+                }}
                 style={{
                   ...STEP_BTN_BASE,
                   background: 'rgba(244, 114, 182, 0.14)',
@@ -575,8 +637,15 @@ export default function DubbingStepCardsBar({
                 type="button"
                 data-testid="btn-bar-revoice"
                 onClick={async () => {
-                  const confirmed = typeof window !== 'undefined' && typeof window.confirm === 'function'
-                    ? window.confirm('តើអ្នកពិតជាចង់បង្កើតសំឡេង AI ឡើងវិញមែនទេ? សំឡេងចាស់នឹងត្រូវលុបចេញ ដើម្បីបង្កើតសំឡេងថ្មី ដោយរក្សាទុក Script ដដែល។')
+                  const confirmed = typeof openStudioDialog === 'function'
+                    ? await openStudioDialog({
+                        variant: 'warning',
+                        badge: 'RE-VOICE',
+                        title: 'បង្កើតសំឡេង AI ឡើងវិញ?',
+                        message: 'តើអ្នកពិតជាចង់បង្កើតសំឡេង AI ឡើងវិញមែនទេ? សំឡេងចាស់នឹងត្រូវលុបចេញ ដើម្បីបង្កើតសំឡេងថ្មី ដោយរក្សាទុក Script ដដែល។',
+                        confirmLabel: 'បង្កើតឡើងវិញ',
+                        cancelLabel: 'បោះបង់',
+                      })
                     : true;
                   if (confirmed) {
                     runSequentialStep('voice', targetEpisodes, { ...setupOptions, force: true });
@@ -704,7 +773,23 @@ export default function DubbingStepCardsBar({
               <button
                 type="button"
                 data-testid="btn-bar-run-autofit"
-                onClick={() => runSequentialStep('autofit', targetEpisodes, setupOptions)}
+                onClick={async () => {
+                  const unfitted = targetEpisodes.filter((ep) => checkEpisodeHasScript(ep) && checkEpisodeHasAudioReady(ep, null, null) && !checkEpisodeHasAutoFitReady(ep));
+                  if (unfitted.length === 0) {
+                    if (typeof openStudioDialog === 'function') {
+                      await openStudioDialog({
+                        showCancel: false,
+                        variant: 'info',
+                        badge: 'AUTO-FIT READY',
+                        title: 'គ្រប់ភាគទាំងអស់បាន Auto-Fit Speed រួចរាល់ 100% ហើយ',
+                        message: `គ្រប់ភាគទាំងអស់ (${targetEpisodes.length} ភាគ) បាន Auto-Fit Speed រួចរាល់អស់ហើយ មិនបាច់រត់ឡើងវិញទេ។ ប្រសិនបើអ្នកចង់ Auto-Fit ឡើងវិញ សូមចុចប៊ូតុង "ធ្វើឡើងវិញ"។`,
+                        confirmLabel: 'យល់ព្រម',
+                      });
+                    }
+                    return;
+                  }
+                  runSequentialStep('autofit', targetEpisodes, setupOptions);
+                }}
                 style={{
                   ...STEP_BTN_BASE,
                   background: 'rgba(245, 158, 11, 0.14)',
@@ -902,7 +987,23 @@ export default function DubbingStepCardsBar({
             <>
               <button
                 type="button"
-                onClick={() => runSequentialStep('clean_bgm', targetEpisodes, effectiveSetupOptions)}
+                onClick={async () => {
+                  const unseparated = targetEpisodes.filter((ep) => !checkEpisodeHasDemucsReady(ep, null, null));
+                  if (unseparated.length === 0) {
+                    if (typeof openStudioDialog === 'function') {
+                      await openStudioDialog({
+                        showCancel: false,
+                        variant: 'info',
+                        badge: 'CLEAN BGM READY',
+                        title: 'គ្រប់ភាគទាំងអស់មាន Clean BGM រួចរាល់ 100% ហើយ',
+                        message: `គ្រប់ភាគទាំងអស់ (${targetEpisodes.length} ភាគ) បានបំបែកសំឡេង Clean BGM រួចរាល់អស់ហើយ មិនបាច់រត់ឡើងវិញទេ។ ប្រសិនបើអ្នកចង់បំបែកឡើងវិញ សូមចុចប៊ូតុង "ធ្វើឡើងវិញ"។`,
+                        confirmLabel: 'យល់ព្រម',
+                      });
+                    }
+                    return;
+                  }
+                  runSequentialStep('clean_bgm', targetEpisodes, effectiveSetupOptions);
+                }}
                 style={{
                   ...STEP_BTN_BASE,
                   background: 'rgba(16, 185, 129, 0.14)',
@@ -1050,6 +1151,20 @@ export default function DubbingStepCardsBar({
                 data-testid="btn-confirm-compact-now-batch"
                 onClick={() => {
                   setShowCompactConfirm(false);
+                  const uncompacted = targetEpisodes.filter((ep) => checkEpisodeHasScript(ep) && !ep.scriptData?.autoCompacted);
+                  if (uncompacted.length === 0) {
+                    if (typeof openStudioDialog === 'function') {
+                      openStudioDialog({
+                        showCancel: false,
+                        variant: 'info',
+                        badge: 'COMPACT READY',
+                        title: 'គ្រប់ភាគទាំងអស់បានបម្លែង Script ខ្លីរួចរាល់ 100% ហើយ',
+                        message: `គ្រប់ភាគទាំងអស់ (${targetEpisodes.length} ភាគ) បានបម្លែង Script ខ្លីរួចរាល់អស់ហើយ មិនបាច់រត់ឡើងវិញទេ។`,
+                        confirmLabel: 'យល់ព្រម',
+                      });
+                    }
+                    return;
+                  }
                   runSequentialStep('compact', targetEpisodes, setupOptions);
                 }}
                 style={{

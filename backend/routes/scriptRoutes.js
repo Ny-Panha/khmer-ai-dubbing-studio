@@ -364,6 +364,9 @@ router.post("/dubbing/retranslate-all", async (req, res) => {
             const match = segmentMap.get(String(orig.id || orig.index));
             return match ? { ...orig, ...match } : orig;
           });
+          if (targetOptions.style === 'compact') {
+            freshTargetEp.scriptData.autoCompacted = true;
+          }
           freshTargetEp.scriptData.updatedAt = Date.now();
           return true;
         })

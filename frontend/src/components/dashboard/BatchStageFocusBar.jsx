@@ -6,6 +6,7 @@ import {
   checkEpisodeHasAudioReady,
   checkEpisodeHasDemucsReady,
   checkEpisodeHasAutoFitReady,
+  checkEpisodeHasCompactReady,
   getEpisodeBrokenSummary,
 } from './geminiRouteHelpers';
 
@@ -89,7 +90,7 @@ export function checkEpisodeDoneForStage(
     return Boolean(checkEpisodeHasScript(ep) && (getEpisodeBrokenSummary(ep)?.textBrokenCount || 0) === 0);
   }
   if (stageKey === 'compact') {
-    return Boolean(ep?.scriptData?.autoCompacted || (ep?.scriptData?.segments && ep.scriptData.segments.length > 0 && ep.scriptData.segments.every((s) => s.translationStyle === 'compact')));
+    return Boolean(checkEpisodeHasCompactReady(ep));
   }
   if (stageKey === 'tts') {
     return Boolean(checkEpisodeHasAudioReady(ep, completedTtsEpIds, ttsLiveStats) && !ep?.audioOutdated);
@@ -145,6 +146,7 @@ export default function BatchStageFocusBar({
   onSelectStageTodoEpisodes,
   onSelectStageView,
   onExitStageFocus,
+  openStudioDialog = null,
 }) {
   const feature = useDubbingFeature(episodes) || {};
   const {
@@ -161,9 +163,22 @@ export default function BatchStageFocusBar({
     return episodes;
   }, [episodes, selectedEpIds]);
 
+  // Scope target episodes by stageStatusFilter ('todo' -> only incomplete episodes for this stage, 'done' -> only completed)
+  const effectiveTargetEpisodes = React.useMemo(() => {
+    let list = targetEpisodes;
+    if (cardStageView && cardStageView !== 'all') {
+      if (stageStatusFilter === 'todo') {
+        list = targetEpisodes.filter((ep) => !checkEpisodeDoneForStage(ep, cardStageView));
+      } else if (stageStatusFilter === 'done') {
+        list = targetEpisodes.filter((ep) => checkEpisodeDoneForStage(ep, cardStageView));
+      }
+    }
+    return list;
+  }, [targetEpisodes, cardStageView, stageStatusFilter]);
+
   const brokenTextCount = React.useMemo(() => {
-    return targetEpisodes.reduce((sum, ep) => sum + (getEpisodeBrokenSummary(ep)?.textBrokenCount || 0), 0);
-  }, [targetEpisodes]);
+    return effectiveTargetEpisodes.reduce((sum, ep) => sum + (getEpisodeBrokenSummary(ep)?.textBrokenCount || 0), 0);
+  }, [effectiveTargetEpisodes]);
 
   const effectiveSetupOptions = React.useMemo(
     () => ({ ...setupOptions, separationPreset: separationPreset || 'turbo' }),
@@ -342,14 +357,37 @@ export default function BatchStageFocusBar({
                 <button
                   type="button"
                   data-testid="top-btn-run-translate"
-                  onClick={() => runSequentialStep('translate', targetEpisodes, setupOptions)}
+                  onClick={async () => {
+                    const unscripted = effectiveTargetEpisodes.filter((ep) => !checkEpisodeHasScript(ep));
+                    const broken = effectiveTargetEpisodes.filter((ep) => (getEpisodeBrokenSummary(ep)?.textBrokenCount || 0) > 0);
+
+                    if (unscripted.length === 0 && broken.length === 0) {
+                      if (typeof openStudioDialog === 'function') {
+                        await openStudioDialog({
+                          showCancel: false,
+                          variant: 'info',
+                          badge: 'SCRIPT READY',
+                          title: 'គ្រប់ភាគដែលបានជ្រើសមាន Script រួចរាល់ 100% ហើយ',
+                          message: `ភាគដែលបានជ្រើស (${effectiveTargetEpisodes.length} ភាគ) មាន Script រួចរាល់អស់ហើយ មិនបាច់រត់ឡើងវិញទេ។ ប្រសិនបើអ្នកចង់បកប្រែថ្មីពីដើមឡើងវិញ សូមចុចប៊ូតុង "ធ្វើឡើងវិញ" (Re-Translate)។`,
+                          confirmLabel: 'យល់ព្រម',
+                        });
+                      }
+                      return;
+                    }
+
+                    if (unscripted.length > 0) {
+                      runSequentialStep('translate', effectiveTargetEpisodes, setupOptions);
+                    } else if (broken.length > 0) {
+                      runSequentialStep('repair', broken, setupOptions);
+                    }
+                  }}
                   style={{
                     ...ACTION_BTN_STYLE,
                     background: 'rgba(56, 189, 248, 0.16)',
                     border: '1px solid rgba(56, 189, 248, 0.42)',
                     color: '#7DD3FC',
                   }}
-                  title="រត់ Translate ភាគដែលមិនទាន់មាន Script (1-by-1)"
+                  title={stageSummary.todo === 0 ? 'គ្រប់ភាគទាំងអស់មាន Script រួចរាល់ 100% ហើយ (បើចង់ធ្វើឡើងវិញ សូមប្រើ "ធ្វើឡើងវិញ")' : 'រត់ Translate ភាគដែលមិនទាន់មាន Script (1-by-1)'}
                 >
                   <Play size={10} fill="currentColor" />
                   <span>Run 1-by-1</span>
@@ -357,12 +395,40 @@ export default function BatchStageFocusBar({
                 <button
                   type="button"
                   data-testid="top-btn-retranslate"
-                  onClick={() => {
-                    const confirmed = typeof window !== 'undefined' && typeof window.confirm === 'function'
-                      ? window.confirm('តើអ្នកពិតជាចង់បកប្រែ Script ឡើងវិញមែនទេ? Script ចាស់ និងសំឡេងដែលបានបង្កើតនឹងត្រូវលុបចេញ ដើម្បីបកប្រែថ្មីពីដើម។')
+                  onClick={async () => {
+                    const todoInTarget = effectiveTargetEpisodes.filter((ep) => !checkEpisodeDoneForStage(ep, 'translate'));
+                    const doneInTarget = effectiveTargetEpisodes.filter((ep) => checkEpisodeDoneForStage(ep, 'translate'));
+
+                    // Protect completed episodes if target contains both done and todo
+                    if (doneInTarget.length > 0 && todoInTarget.length > 0) {
+                      const confirmed = typeof openStudioDialog === 'function'
+                        ? await openStudioDialog({
+                            variant: 'warning',
+                            badge: 'RE-TRANSLATE',
+                            title: 'បកប្រែ Script ឡើងវិញ?',
+                            message: `មាន ${doneInTarget.length} ភាគបានធ្វើរួចរាល់ 100% ហើយ។ ប្រព័ន្ធនឹងបកប្រែឡើងវិញតែ ${todoInTarget.length} ភាគដែលមិនទាន់រួចរាល់/ខូចប៉ុណ្ណោះ ដើម្បីការពារកុំឱ្យបាត់ភាគដែលបានធ្វើរួច។`,
+                            confirmLabel: `បកប្រែឡើងវិញតែភាគខូច/មិនទាន់ធ្វើ (${todoInTarget.length} ភាគ)`,
+                            cancelLabel: 'បោះបង់',
+                          })
+                        : true;
+                      if (confirmed) {
+                        runSequentialStep('translate', todoInTarget, { ...setupOptions, force: true });
+                      }
+                      return;
+                    }
+
+                    const confirmed = typeof openStudioDialog === 'function'
+                      ? await openStudioDialog({
+                          variant: 'warning',
+                          badge: 'RE-TRANSLATE',
+                          title: 'បកប្រែ Script ឡើងវិញ?',
+                          message: `តើអ្នកពិតជាចង់បកប្រែ Script ឡើងវិញលើ ${effectiveTargetEpisodes.length} ភាគនេះមែនទេ? Script ចាស់ និងសំឡេងដែលបានបង្កើតនឹងត្រូវលុបចេញ ដើម្បីបកប្រែថ្មីពីដើម។`,
+                          confirmLabel: 'បកប្រែឡើងវិញ',
+                          cancelLabel: 'បោះបង់',
+                        })
                       : true;
                     if (confirmed) {
-                      runSequentialStep('translate', targetEpisodes, { ...setupOptions, force: true });
+                      runSequentialStep('translate', effectiveTargetEpisodes, { ...setupOptions, force: true });
                     }
                   }}
                   style={{
@@ -378,7 +444,7 @@ export default function BatchStageFocusBar({
                 <button
                   type="button"
                   data-testid="top-btn-repair-text"
-                  onClick={() => runSequentialStep('repair', targetEpisodes, setupOptions)}
+                  onClick={() => runSequentialStep('repair', effectiveTargetEpisodes, setupOptions)}
                   style={{
                     ...ACTION_BTN_STYLE,
                     background: brokenTextCount > 0 ? 'rgba(245, 158, 11, 0.2)' : 'var(--bg-elevated-panel)',
@@ -414,14 +480,30 @@ export default function BatchStageFocusBar({
                 <button
                   type="button"
                   data-testid="top-btn-auto-compact"
-                  onClick={() => runSequentialStep('compact', targetEpisodes, setupOptions)}
+                  onClick={async () => {
+                    const todoInTarget = effectiveTargetEpisodes.filter((ep) => !checkEpisodeDoneForStage(ep, 'compact'));
+                    if (todoInTarget.length === 0) {
+                      if (typeof openStudioDialog === 'function') {
+                        await openStudioDialog({
+                          showCancel: false,
+                          variant: 'info',
+                          badge: 'COMPACT READY',
+                          title: 'គ្រប់ភាគទាំងអស់បានបម្លែង Script ខ្លីរួចរាល់ 100% ហើយ',
+                          message: `គ្រប់ភាគទាំងអស់ (${effectiveTargetEpisodes.length} ភាគ) បានបម្លែង Script ខ្លីរួចរាល់អស់ហើយ មិនបាច់រត់ឡើងវិញទេ។ ប្រសិនបើអ្នកចង់បម្លែងឡើងវិញ សូមចុចប៊ូតុង "ធ្វើឡើងវិញ"។`,
+                          confirmLabel: 'យល់ព្រម',
+                        });
+                      }
+                      return;
+                    }
+                    runSequentialStep('compact', effectiveTargetEpisodes, setupOptions);
+                  }}
                   style={{
                     ...ACTION_BTN_STYLE,
                     background: 'linear-gradient(135deg, rgba(147, 51, 234, 0.25) 0%, rgba(124, 58, 237, 0.25) 100%)',
                     border: '1px solid rgba(168, 85, 247, 0.55)',
                     color: '#E9D5FF',
                   }}
-                  title="រត់បម្លែង Script ខ្លីចំអត្ថន័យ 1-by-1"
+                  title={stageSummary.todo === 0 ? 'គ្រប់ភាគទាំងអស់បានបម្លែង Script ខ្លីរួចរាល់ 100% ហើយ (បើចង់ធ្វើឡើងវិញ សូមប្រើ "ធ្វើឡើងវិញ")' : 'រត់បម្លែង Script ខ្លីចំអត្ថន័យ 1-by-1'}
                 >
                   <Play size={10} fill="currentColor" />
                   <span>Run 1-by-1</span>
@@ -429,7 +511,27 @@ export default function BatchStageFocusBar({
                 <button
                   type="button"
                   data-testid="top-btn-recompact"
-                  onClick={() => runSequentialStep('compact', targetEpisodes, { ...setupOptions, force: true })}
+                  onClick={async () => {
+                    const todoInTarget = effectiveTargetEpisodes.filter((ep) => !checkEpisodeDoneForStage(ep, 'compact'));
+                    const doneInTarget = effectiveTargetEpisodes.filter((ep) => checkEpisodeDoneForStage(ep, 'compact'));
+                    if (doneInTarget.length > 0 && todoInTarget.length > 0) {
+                      const confirmed = typeof openStudioDialog === 'function'
+                        ? await openStudioDialog({
+                            variant: 'warning',
+                            badge: 'RE-COMPACT',
+                            title: 'បម្លែង Script ឡើងវិញ?',
+                            message: `មាន ${doneInTarget.length} ភាគបានបម្លែងខ្លីរួចរាល់ហើយ។ តើចង់បម្លែងឡើងវិញតែ ${todoInTarget.length} ភាគដែលមិនទាន់បានបម្លែងមែនទេ?`,
+                            confirmLabel: `បម្លែងតែភាគមិនទាន់ធ្វើ (${todoInTarget.length} ភាគ)`,
+                            cancelLabel: 'បោះបង់',
+                          })
+                        : true;
+                      if (confirmed) {
+                        runSequentialStep('compact', todoInTarget, { ...setupOptions, force: true });
+                      }
+                      return;
+                    }
+                    runSequentialStep('compact', effectiveTargetEpisodes, { ...setupOptions, force: true });
+                  }}
                   style={{
                     ...ACTION_BTN_STYLE,
                     background: 'var(--bg-elevated-panel)',
@@ -466,13 +568,30 @@ export default function BatchStageFocusBar({
                 <button
                   type="button"
                   data-testid="top-btn-run-tts"
-                  onClick={() => runSequentialStep('voice', targetEpisodes, setupOptions)}
+                  onClick={async () => {
+                    const todoInTarget = effectiveTargetEpisodes.filter((ep) => !checkEpisodeDoneForStage(ep, 'tts'));
+                    if (todoInTarget.length === 0) {
+                      if (typeof openStudioDialog === 'function') {
+                        await openStudioDialog({
+                          showCancel: false,
+                          variant: 'info',
+                          badge: 'AI VOICE READY',
+                          title: 'គ្រប់ភាគទាំងអស់មានសំឡេង AI រួចរាល់ 100% ហើយ',
+                          message: `គ្រប់ភាគទាំងអស់ (${effectiveTargetEpisodes.length} ភាគ) មានសំឡេង AI រួចរាល់អស់ហើយ មិនបាច់រត់ឡើងវិញទេ។ ប្រសិនបើអ្នកចង់បង្កើតសំឡេងឡើងវិញ សូមចុចប៊ូតុង "ធ្វើឡើងវិញ" (Re-Voice)។`,
+                          confirmLabel: 'យល់ព្រម',
+                        });
+                      }
+                      return;
+                    }
+                    runSequentialStep('voice', effectiveTargetEpisodes, setupOptions);
+                  }}
                   style={{
                     ...ACTION_BTN_STYLE,
                     background: 'rgba(244, 114, 182, 0.16)',
                     border: '1px solid rgba(244, 114, 182, 0.42)',
                     color: '#F9A8D4',
                   }}
+                  title={stageSummary.todo === 0 ? 'គ្រប់ភាគទាំងអស់មានសំឡេង AI រួចរាល់ 100% ហើយ (បើចង់ធ្វើឡើងវិញ សូមប្រើ "ធ្វើឡើងវិញ")' : 'រត់បង្កើតសំឡេង AI ភាគដែលមិនទាន់មាន (1-by-1)'}
                 >
                   <Play size={10} fill="currentColor" />
                   <span>Run 1-by-1</span>
@@ -480,12 +599,39 @@ export default function BatchStageFocusBar({
                 <button
                   type="button"
                   data-testid="top-btn-revoice"
-                  onClick={() => {
-                    const confirmed = typeof window !== 'undefined' && typeof window.confirm === 'function'
-                      ? window.confirm('តើអ្នកពិតជាចង់បង្កើតសំឡេង AI ឡើងវិញមែនទេ? សំឡេងចាស់នឹងត្រូវលុបចេញ ដើម្បីបង្កើតសំឡេងថ្មី ដោយរក្សាទុក Script ដដែល។')
+                  onClick={async () => {
+                    const todoInTarget = effectiveTargetEpisodes.filter((ep) => !checkEpisodeDoneForStage(ep, 'tts'));
+                    const doneInTarget = effectiveTargetEpisodes.filter((ep) => checkEpisodeDoneForStage(ep, 'tts'));
+
+                    if (doneInTarget.length > 0 && todoInTarget.length > 0) {
+                      const confirmed = typeof openStudioDialog === 'function'
+                        ? await openStudioDialog({
+                            variant: 'warning',
+                            badge: 'RE-VOICE',
+                            title: 'បង្កើតសំឡេង AI ឡើងវិញ?',
+                            message: `មាន ${doneInTarget.length} ភាគមានសំឡេងរួចរាល់ហើយ។ តើអ្នកចង់បង្កើតសំឡេងឡើងវិញតែលើ ${todoInTarget.length} ភាគដែលមិនទាន់មានសំឡេងមែនទេ?`,
+                            confirmLabel: `បង្កើតសំឡេងតែភាគមិនទាន់មាន (${todoInTarget.length} ភាគ)`,
+                            cancelLabel: 'បោះបង់',
+                          })
+                        : true;
+                      if (confirmed) {
+                        runSequentialStep('voice', todoInTarget, { ...setupOptions, force: true });
+                      }
+                      return;
+                    }
+
+                    const confirmed = typeof openStudioDialog === 'function'
+                      ? await openStudioDialog({
+                          variant: 'warning',
+                          badge: 'RE-VOICE',
+                          title: 'បង្កើតសំឡេង AI ឡើងវិញ?',
+                          message: `តើអ្នកពិតជាចង់បង្កើតសំឡេង AI ឡើងវិញលើ ${effectiveTargetEpisodes.length} ភាគនេះមែនទេ? សំឡេងចាស់នឹងត្រូវលុបចេញ ដើម្បីបង្កើតសំឡេងថ្មី ដោយរក្សាទុក Script ដដែល។`,
+                          confirmLabel: 'បង្កើតឡើងវិញ',
+                          cancelLabel: 'បោះបង់',
+                        })
                       : true;
                     if (confirmed) {
-                      runSequentialStep('voice', targetEpisodes, { ...setupOptions, force: true });
+                      runSequentialStep('voice', effectiveTargetEpisodes, { ...setupOptions, force: true });
                     }
                   }}
                   style={{
@@ -523,13 +669,30 @@ export default function BatchStageFocusBar({
                 <button
                   type="button"
                   data-testid="top-btn-run-autofit"
-                  onClick={() => runSequentialStep('autofit', targetEpisodes, setupOptions)}
+                  onClick={async () => {
+                    const todoInTarget = effectiveTargetEpisodes.filter((ep) => !checkEpisodeDoneForStage(ep, 'autofit'));
+                    if (todoInTarget.length === 0) {
+                      if (typeof openStudioDialog === 'function') {
+                        await openStudioDialog({
+                          showCancel: false,
+                          variant: 'info',
+                          badge: 'AUTO-FIT READY',
+                          title: 'គ្រប់ភាគទាំងអស់បាន Auto-Fit Speed រួចរាល់ 100% ហើយ',
+                          message: `គ្រប់ភាគទាំងអស់ (${effectiveTargetEpisodes.length} ភាគ) បាន Auto-Fit Speed រួចរាល់អស់ហើយ មិនបាច់រត់ឡើងវិញទេ។ ប្រសិនបើអ្នកចង់ Auto-Fit ឡើងវិញ សូមចុចប៊ូតុង "ធ្វើឡើងវិញ"។`,
+                          confirmLabel: 'យល់ព្រម',
+                        });
+                      }
+                      return;
+                    }
+                    runSequentialStep('autofit', effectiveTargetEpisodes, setupOptions);
+                  }}
                   style={{
                     ...ACTION_BTN_STYLE,
                     background: 'rgba(245, 158, 11, 0.16)',
                     border: '1px solid rgba(245, 158, 11, 0.42)',
                     color: '#FDE68A',
                   }}
+                  title={stageSummary.todo === 0 ? 'គ្រប់ភាគទាំងអស់បាន Auto-Fit Speed រួចរាល់ 100% ហើយ (បើចង់ធ្វើឡើងវិញ សូមប្រើ "ធ្វើឡើងវិញ")' : 'រត់ Auto-Fit Speed ភាគដែលមិនទាន់បាន Fit (1-by-1)'}
                 >
                   <Play size={10} fill="currentColor" />
                   <span>Run 1-by-1</span>
@@ -537,7 +700,29 @@ export default function BatchStageFocusBar({
                 <button
                   type="button"
                   data-testid="top-btn-reautofit"
-                  onClick={() => runSequentialStep('autofit', targetEpisodes, { ...setupOptions, force: true })}
+                  onClick={async () => {
+                    const todoInTarget = effectiveTargetEpisodes.filter((ep) => !checkEpisodeDoneForStage(ep, 'autofit'));
+                    const doneInTarget = effectiveTargetEpisodes.filter((ep) => checkEpisodeDoneForStage(ep, 'autofit'));
+
+                    if (doneInTarget.length > 0 && todoInTarget.length > 0) {
+                      const confirmed = typeof openStudioDialog === 'function'
+                        ? await openStudioDialog({
+                            variant: 'warning',
+                            badge: 'RE-AUTOFIT',
+                            title: 'Auto-Fit Speed ឡើងវិញ?',
+                            message: `មាន ${doneInTarget.length} ភាគបាន Auto-Fit រួចរាល់ហើយ។ តើអ្នកចង់ Auto-Fit ឡើងវិញតែលើ ${todoInTarget.length} ភាគដែលមិនទាន់បាន Fit មែនទេ?`,
+                            confirmLabel: `Auto-Fit តែភាគមិនទាន់ធ្វើ (${todoInTarget.length} ភាគ)`,
+                            cancelLabel: 'បោះបង់',
+                          })
+                        : true;
+                      if (confirmed) {
+                        runSequentialStep('autofit', todoInTarget, { ...setupOptions, force: true });
+                      }
+                      return;
+                    }
+
+                    runSequentialStep('autofit', effectiveTargetEpisodes, { ...setupOptions, force: true });
+                  }}
                   style={{
                     ...ACTION_BTN_STYLE,
                     background: 'var(--bg-elevated-panel)',
@@ -612,13 +797,30 @@ export default function BatchStageFocusBar({
                   <button
                     type="button"
                     data-testid="top-btn-run-demucs"
-                    onClick={() => runSequentialStep('clean_bgm', targetEpisodes, effectiveSetupOptions)}
+                    onClick={async () => {
+                      const todoInTarget = effectiveTargetEpisodes.filter((ep) => !checkEpisodeDoneForStage(ep, 'demucs'));
+                      if (todoInTarget.length === 0) {
+                        if (typeof openStudioDialog === 'function') {
+                          await openStudioDialog({
+                            showCancel: false,
+                            variant: 'info',
+                            badge: 'CLEAN BGM READY',
+                            title: 'គ្រប់ភាគទាំងអស់មាន Clean BGM រួចរាល់ 100% ហើយ',
+                            message: `គ្រប់ភាគទាំងអស់ (${effectiveTargetEpisodes.length} ភាគ) បានបំបែកសំឡេង Clean BGM រួចរាល់អស់ហើយ មិនបាច់រត់ឡើងវិញទេ។ ប្រសិនបើអ្នកចង់បំបែកឡើងវិញ សូមចុចប៊ូតុង "ធ្វើឡើងវិញ"។`,
+                            confirmLabel: 'យល់ព្រម',
+                          });
+                        }
+                        return;
+                      }
+                      runSequentialStep('clean_bgm', effectiveTargetEpisodes, effectiveSetupOptions);
+                    }}
                     style={{
                       ...ACTION_BTN_STYLE,
                       background: 'rgba(16, 185, 129, 0.16)',
                       border: '1px solid rgba(16, 185, 129, 0.42)',
                       color: '#6EE7B7',
                     }}
+                    title={stageSummary.todo === 0 ? 'គ្រប់ភាគទាំងអស់មាន Clean BGM រួចរាល់ 100% ហើយ (បើចង់ធ្វើឡើងវិញ សូមប្រើ "ធ្វើឡើងវិញ")' : 'រត់បំបែក Clean BGM ភាគដែលមិនទាន់មាន (1-by-1)'}
                   >
                     <Play size={10} fill="currentColor" />
                     <span>Run 1-by-1</span>
@@ -626,7 +828,29 @@ export default function BatchStageFocusBar({
                   <button
                     type="button"
                     data-testid="top-btn-reclean-bgm"
-                    onClick={() => runSequentialStep('clean_bgm', targetEpisodes, { ...effectiveSetupOptions, force: true })}
+                    onClick={async () => {
+                      const todoInTarget = effectiveTargetEpisodes.filter((ep) => !checkEpisodeDoneForStage(ep, 'demucs'));
+                      const doneInTarget = effectiveTargetEpisodes.filter((ep) => checkEpisodeDoneForStage(ep, 'demucs'));
+
+                      if (doneInTarget.length > 0 && todoInTarget.length > 0) {
+                        const confirmed = typeof openStudioDialog === 'function'
+                          ? await openStudioDialog({
+                              variant: 'warning',
+                              badge: 'RE-DEMUCS',
+                              title: 'បំបែក Clean BGM ឡើងវិញ?',
+                              message: `មាន ${doneInTarget.length} ភាគបាន Clean BGM រួចរាល់ហើយ។ តើអ្នកចង់បំបែកឡើងវិញតែលើ ${todoInTarget.length} ភាគដែលមិនទាន់មាន BGM មែនទេ?`,
+                              confirmLabel: `បំបែកតែភាគមិនទាន់មាន (${todoInTarget.length} ភាគ)`,
+                              cancelLabel: 'បោះបង់',
+                            })
+                          : true;
+                        if (confirmed) {
+                          runSequentialStep('clean_bgm', todoInTarget, { ...effectiveSetupOptions, force: true });
+                        }
+                        return;
+                      }
+
+                      runSequentialStep('clean_bgm', effectiveTargetEpisodes, { ...effectiveSetupOptions, force: true });
+                    }}
                     style={{
                       ...ACTION_BTN_STYLE,
                       background: 'var(--bg-elevated-panel)',

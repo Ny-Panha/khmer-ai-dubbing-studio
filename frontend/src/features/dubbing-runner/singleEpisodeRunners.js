@@ -82,6 +82,15 @@ export async function runSingleTranslate(ep, options = {}, signal = null, ctx = 
       if (startErr.status === 409 && existingJobId && existingJobId !== 'episode_lock') {
         console.log(`[Translate 📝] Job already active (#${existingJobId}) for EP${ep.episodeNumber || ep.id}. Attaching to existing job...`);
         jobRes = { jobId: existingJobId, status: 'running' };
+      } else if (startErr.status === 409 && (startErr.data?.alreadyCompleted || startErr.data?.requireConfirmation)) {
+        console.log(`[Translate 📝] Episode EP${ep.episodeNumber || ep.id} is already completed on backend (${startErr.data?.segmentsCount || 'verified'} segments). Skipping gracefully.`);
+        markEpisodeInactive(ep.id);
+        return createStepResult({
+          status: STEP_STATUS.SKIPPED,
+          skipped: true,
+          reason: 'already_completed',
+          message: startErr.data?.error || `ភាគ ${ep.id} បាន Translate រួចរាល់ហើយ`,
+        });
       } else {
         throw startErr;
       }
@@ -925,7 +934,7 @@ export async function runSingleAutoFitSpeed(ep, options = {}, signal = null, ctx
  * Calls /api/dubbing/retranslate-all in chunks of 25 segments with style='compact'.
  */
 export async function runSingleAutoCompact(ep, options = {}, signal = null, ctx = {}) {
-  const { activeSeries, updateRunnerState, setRunnerLiveStats, markEpisodeActive, markEpisodeInactive } = ctx;
+  const { activeSeries, updateRunnerState, setRunnerLiveStats, markEpisodeActive, markEpisodeInactive, refreshSeries } = ctx;
   if (!ep) return createStepResult({ status: STEP_STATUS.FAILED, error: 'No episode provided' });
   const norm = normalizeDubbingOptions(ep, 'translate', options, { activeSeries });
   const seriesId = norm.seriesId;
@@ -998,6 +1007,17 @@ export async function runSingleAutoCompact(ep, options = {}, signal = null, ctx 
 
     if (ep.scriptData) {
       ep.scriptData.autoCompacted = true;
+      if (Array.isArray(ep.scriptData.segments)) {
+        ep.scriptData.segments.forEach((s) => {
+          if (!s.translationStyle) s.translationStyle = 'compact';
+        });
+      }
+    }
+
+    if (typeof refreshSeries === 'function') {
+      try {
+        await refreshSeries();
+      } catch (_) {}
     }
 
     return createStepResult({

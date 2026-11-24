@@ -5,6 +5,7 @@ import {
   checkEpisodeHasAudioReady,
   checkEpisodeHasDemucsReady,
   checkEpisodeHasAutoFitReady,
+  checkEpisodeHasCompactReady,
   getEpisodeBrokenSummary,
 } from '../../components/dashboard/geminiRouteHelpers';
 import {
@@ -132,12 +133,13 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries, o
     (ep, options = {}, signal = null) =>
       runSingleAutoCompactExec(ep, options, signal, {
         activeSeries,
+        refreshSeries,
         updateRunnerState,
         setRunnerLiveStats,
         markEpisodeActive,
         markEpisodeInactive,
       }),
-    [activeSeries, updateRunnerState, markEpisodeActive, markEpisodeInactive]
+    [activeSeries, refreshSeries, updateRunnerState, markEpisodeActive, markEpisodeInactive]
   );
 
   /**
@@ -532,7 +534,7 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries, o
       if (options.force) {
         queue = candidates.filter((ep) => checkEpisodeHasScript(ep));
       } else {
-        queue = candidates.filter((ep) => checkEpisodeHasScript(ep) && !ep.scriptData?.autoCompacted && !(ep.scriptData?.segments && ep.scriptData.segments.length > 0 && ep.scriptData.segments.every((s) => s.translationStyle === 'compact')));
+        queue = candidates.filter((ep) => checkEpisodeHasScript(ep) && !checkEpisodeHasCompactReady(ep));
       }
 
       if (queue.length === 0) {

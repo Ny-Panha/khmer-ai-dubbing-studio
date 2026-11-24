@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useTransition } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useTransition } from 'react';
 import {
   Plus, Trash2, Edit2, CheckCircle2,
   Clock, BookOpen, Layers, Check, Scissors, Loader2,
@@ -63,7 +63,7 @@ export default function EpisodesTab({
   const [showDeleteSeriesModal, setShowDeleteSeriesModal] = useState(false);
   const [isDeletingSeries, setIsDeletingSeries] = useState(false);
 
-  const handleConfirmDeleteActiveSeries = async () => {
+  const handleConfirmDeleteActiveSeries = useCallback(async () => {
     if (!onDeleteSeries || !activeSeries?.id) return;
     try {
       setIsDeletingSeries(true);
@@ -72,7 +72,40 @@ export default function EpisodesTab({
     } finally {
       setIsDeletingSeries(false);
     }
-  };
+  }, [onDeleteSeries, activeSeries?.id]);
+
+  const confirmDeleteSeriesBtnRef = useRef(null);
+
+  // Keyboard shortcut: Press Enter / NumpadEnter to confirm delete, Escape to cancel
+  useEffect(() => {
+    if (!showDeleteSeriesModal) return;
+
+    const timer = setTimeout(() => {
+      confirmDeleteSeriesBtnRef.current?.focus();
+    }, 50);
+
+    const handleKeyDown = (e) => {
+      if (e.key === 'Enter' || e.key === 'NumpadEnter') {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!isDeletingSeries) {
+          handleConfirmDeleteActiveSeries();
+        }
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!isDeletingSeries) {
+          setShowDeleteSeriesModal(false);
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown, true);
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener('keydown', handleKeyDown, true);
+    };
+  }, [showDeleteSeriesModal, isDeletingSeries, handleConfirmDeleteActiveSeries]);
 
   const handleConfirmCreateNewSeries = async () => {
     const cleanTitle = (newSeriesTitle || '').trim();
@@ -1199,7 +1232,9 @@ export default function EpisodesTab({
                 បោះបង់ (Cancel)
               </button>
               <button
+                ref={confirmDeleteSeriesBtnRef}
                 type="button"
+                autoFocus
                 onClick={handleConfirmDeleteActiveSeries}
                 style={{
                   padding: '6px 14px',
@@ -1215,6 +1250,7 @@ export default function EpisodesTab({
                   cursor: isDeletingSeries ? 'not-allowed' : 'pointer',
                 }}
                 disabled={isDeletingSeries}
+                title="ចុច Enter ដើម្បីលុប (Press Enter to delete)"
               >
                 {isDeletingSeries ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
                 <span>{isDeletingSeries ? 'កំពុងលុប...' : 'លុប Folder ចោល'}</span>

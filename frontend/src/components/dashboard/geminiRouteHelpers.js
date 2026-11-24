@@ -128,6 +128,26 @@ export function checkEpisodeHasAutoFitReady(ep) {
   return !hasOverflow && Boolean(ep.scriptData || ep.audioGenerated);
 }
 
+export function checkEpisodeHasCompactReady(ep) {
+  if (!ep) return false;
+  if (ep.autoCompacted || ep.scriptData?.autoCompacted) return true;
+  const segments = getStoredEpisodeSegments(ep);
+  if (!Array.isArray(segments) || segments.length === 0) return false;
+
+  // Filter segments that have source dialogue to translate (exclude manual userAdded lines with no source text)
+  const translatableSegs = segments.filter((s) => {
+    const src = String(s.originalChineseText || s.chineseText || s.originalText || s.original || s.spokenAudioText || '').trim();
+    return Boolean(src) && !s.userAdded;
+  });
+
+  if (translatableSegs.length === 0) {
+    return segments.some((s) => s.translationStyle === 'compact');
+  }
+
+  const compactCount = translatableSegs.filter((s) => s.translationStyle === 'compact').length;
+  return compactCount === translatableSegs.length || (compactCount / translatableSegs.length >= 0.9);
+}
+
 export function getEpisodeSegmentCount(ep) {
   return getStoredEpisodeSegments(ep).length;
 }

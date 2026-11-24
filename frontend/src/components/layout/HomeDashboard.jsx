@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import {
   Film,
   Layers,
@@ -173,6 +173,7 @@ export default function HomeDashboard({
   onRenameSeries = null,
   onDeleteSeries = null,
   onRefreshSeries = null,
+  onRefreshAllSeries = null,
   onTabChange = null,
 }) {
   // Default to Folder View (null = show Series Folders; string = opened Series Folder ID showing episodes inside)
@@ -191,12 +192,31 @@ export default function HomeDashboard({
   const [deleteTargetFolder, setDeleteTargetFolder] = useState(null);
   const [isDeletingFolder, setIsDeletingFolder] = useState(false);
 
-  // Ensure we always have a clean array of series folders
+  // Always synchronize full series list from server truth on mount so folders created on disk (e.g. ss2) appear immediately
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/series')
+      .then((res) => res.json())
+      .then((data) => {
+        if (!cancelled && data?.success && Array.isArray(data.series)) {
+          if (typeof onRefreshAllSeries === 'function') {
+            onRefreshAllSeries(data.series);
+          } else if (typeof onRefreshSeries === 'function') {
+            onRefreshSeries();
+          }
+        }
+      })
+      .catch((err) => console.warn('[HomeDashboard] Server series sync notice:', err?.message));
+    return () => { cancelled = true; };
+  }, [onRefreshAllSeries, onRefreshSeries]);
+
+  // Ensure we always have a clean array of series folders (including activeSeries even if seriesList is temporarily stale)
   const allSeriesFolders = useMemo(() => {
-    const raw = Array.isArray(seriesList) && seriesList.length > 0
-      ? seriesList
-      : (activeSeries ? [activeSeries] : []);
-    return raw.filter(Boolean).map((s) => {
+    let list = Array.isArray(seriesList) ? [...seriesList] : [];
+    if (activeSeries && !list.some((s) => String(s.id) === String(activeSeries.id))) {
+      list.push(activeSeries);
+    }
+    return list.filter(Boolean).map((s) => {
       const isCurrentActive = String(s.id) === String(activeSeries?.id || seriesId);
       // Merge activeSeries episodes if this is the active series (ensures freshest in-memory state)
       const resolvedSeries = isCurrentActive && activeSeries ? activeSeries : s;
@@ -209,6 +229,13 @@ export default function HomeDashboard({
       };
     });
   }, [seriesList, activeSeries, seriesId]);
+
+  // Sync openedFolderId when activeSeries changes so the opened view matches the current series
+  useEffect(() => {
+    if (activeSeries?.id && openedFolderId && String(openedFolderId) !== String(activeSeries.id)) {
+      setOpenedFolderId(activeSeries.id);
+    }
+  }, [activeSeries?.id]);
 
   const activeFolderSummary = useMemo(() => {
     return (
@@ -374,7 +401,7 @@ export default function HomeDashboard({
     setDeleteTargetFolder(folderItem);
   };
 
-  const handleConfirmDeleteFolder = async () => {
+  const handleConfirmDeleteFolder = useCallback(async () => {
     if (!deleteTargetFolder || !onDeleteSeries) return;
     try {
       setIsDeletingFolder(true);
@@ -387,7 +414,40 @@ export default function HomeDashboard({
     } finally {
       setIsDeletingFolder(false);
     }
-  };
+  }, [deleteTargetFolder, onDeleteSeries, openedFolderId]);
+
+  const confirmDeleteBtnRef = useRef(null);
+
+  // Keyboard shortcut: Press Enter / NumpadEnter to confirm delete, Escape to cancel
+  useEffect(() => {
+    if (!deleteTargetFolder) return;
+
+    const timer = setTimeout(() => {
+      confirmDeleteBtnRef.current?.focus();
+    }, 50);
+
+    const handleKeyDown = (e) => {
+      if (e.key === 'Enter' || e.key === 'NumpadEnter') {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!isDeletingFolder) {
+          handleConfirmDeleteFolder();
+        }
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!isDeletingFolder) {
+          setDeleteTargetFolder(null);
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown, true);
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener('keydown', handleKeyDown, true);
+    };
+  }, [deleteTargetFolder, isDeletingFolder, handleConfirmDeleteFolder]);
 
   return (
     <div data-testid="home-dashboard-view" className="home-dashboard-view">
@@ -757,7 +817,19 @@ export default function HomeDashboard({
 
                   <div className="home-opened-folder-pill">
                     <FolderOpen size={14} className="home-folder-header-icon" />
-                    <span className="home-opened-folder-name">{openedFolderSummary.displayTitle}</span>
+                    <select
+                      className="home-opened-folder-select"
+                      value={String(openedFolderSummary.id)}
+                      onChange={(e) => handleOpenFolder(e.target.value)}
+                      title="ជ្រើសរើស Folder រឿងផ្សេងទៀត (Switch Folder)"
+                      aria-label="Select Series Folder"
+                    >
+                      {allSeriesFolders.map((f) => (
+                        <option key={f.id} value={String(f.id)}>
+                          {f.displayTitle} ({f.metrics.totalEps} ភាគ){f.isCurrentActive ? ' ★' : ''}
+                        </option>
+                      ))}
+                    </select>
                     <span className="home-folder-count-badge">{openedMetrics.totalEps} ភាគ</span>
                   </div>
 
@@ -1039,11 +1111,14 @@ export default function HomeDashboard({
                   បោះបង់ (Cancel)
                 </button>
                 <button
+                  ref={confirmDeleteBtnRef}
                   type="button"
+                  autoFocus
                   data-testid="btn-confirm-delete-folder"
                   onClick={handleConfirmDeleteFolder}
                   disabled={isDeletingFolder}
                   className="home-btn-danger-confirm"
+                  title="ចុច Enter ដើម្បីលុប (Press Enter to delete)"
                 >
                   <Trash2 size={14} />
                   <span>{isDeletingFolder ? 'កំពុងលុប...' : 'លុប Folder ចោល'}</span>

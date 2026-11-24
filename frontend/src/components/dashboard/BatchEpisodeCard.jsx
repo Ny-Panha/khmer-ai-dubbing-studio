@@ -9,6 +9,7 @@ import {
   checkEpisodeHasAudioReady,
   checkEpisodeHasDemucsReady,
   checkEpisodeHasAutoFitReady,
+  checkEpisodeHasCompactReady,
   getEpisodeSegmentCount,
   getEpisodeGenderCounts,
   getEpisodeBrokenSummary,
@@ -119,10 +120,7 @@ function BatchEpisodeCard({
   const isDemucsReady = checkEpisodeHasDemucsReady(ep, completedDemucsEpIds, demucsLiveStats);
   const isAutoFitted = Boolean(isAudioReady && checkEpisodeHasAutoFitReady(ep));
   const isAudioOutdated = Boolean(ep.audioOutdated && !isAudioReady);
-  const isCompactDone = Boolean(
-    ep.scriptData?.autoCompacted ||
-    (ep.scriptData?.segments && ep.scriptData.segments.length > 0 && ep.scriptData.segments.every((s) => s.translationStyle === 'compact'))
-  );
+  const isCompactDone = Boolean(checkEpisodeHasCompactReady(ep));
   const missingAudioCount = epBrokenScan.voiceBrokenCount > 0
     ? epBrokenScan.voiceBrokenCount
     : (isAudioReady ? 0 : (segmentCount || 0));

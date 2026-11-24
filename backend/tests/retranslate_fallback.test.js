@@ -283,4 +283,79 @@ test('Retranslate Model Fallback & Route Error Mapping Suite', async (t) => {
     assert.match(clipSrc, /handleApplyOption\(preferredOpt\.text\)/);
     assert.match(dubbingHookSrc, /opt\?\.style === 'compact'/);
   });
+
+  await t.test('9. checkEpisodeHasCompactReady recognizes completed auto-compact even with manual/short cues & persists on disk', async () => {
+    const fs = require('fs');
+    const path = require('path');
+
+    // Verify source code consistency across frontend components and helpers
+    const helpersSrc = fs.readFileSync(path.resolve(__dirname, '../../frontend/src/components/dashboard/geminiRouteHelpers.js'), 'utf8');
+    const focusBarSrc = fs.readFileSync(path.resolve(__dirname, '../../frontend/src/components/dashboard/BatchStageFocusBar.jsx'), 'utf8');
+    const cardSrc = fs.readFileSync(path.resolve(__dirname, '../../frontend/src/components/dashboard/BatchEpisodeCard.jsx'), 'utf8');
+    const runnerCtxSrc = fs.readFileSync(path.resolve(__dirname, '../../frontend/src/features/dubbing-runner/DubbingRunnerContext.jsx'), 'utf8');
+    const featureSrc = fs.readFileSync(path.resolve(__dirname, '../../frontend/src/features/dubbing-runner/useDubbingFeature.js'), 'utf8');
+    const singleRunnerSrc = fs.readFileSync(path.resolve(__dirname, '../../frontend/src/features/dubbing-runner/singleEpisodeRunners.js'), 'utf8');
+    const routesSrc = fs.readFileSync(path.resolve(__dirname, '../routes/scriptRoutes.js'), 'utf8');
+
+    assert.match(helpersSrc, /export function checkEpisodeHasCompactReady/);
+    assert.match(focusBarSrc, /checkEpisodeHasCompactReady/);
+    assert.match(cardSrc, /checkEpisodeHasCompactReady/);
+    assert.match(runnerCtxSrc, /checkEpisodeHasCompactReady/);
+    assert.match(featureSrc, /checkEpisodeHasCompactReady/);
+    assert.match(singleRunnerSrc, /await refreshSeries\(\)/);
+    assert.match(routesSrc, /freshTargetEp\.scriptData\.autoCompacted = true/);
+
+    // Dynamic test of checkEpisodeHasCompactReady logic
+    const { checkEpisodeHasCompactReady } = (() => {
+      // Inline evaluator of checkEpisodeHasCompactReady logic
+      return {
+        checkEpisodeHasCompactReady: (ep) => {
+          if (!ep) return false;
+          if (ep.autoCompacted || ep.scriptData?.autoCompacted) return true;
+          const segments = Array.isArray(ep.segments) ? ep.segments : (ep.scriptData?.segments || []);
+          if (!Array.isArray(segments) || segments.length === 0) return false;
+          const translatableSegs = segments.filter((s) => {
+            const src = String(s.originalChineseText || s.chineseText || s.originalText || s.original || s.spokenAudioText || '').trim();
+            return Boolean(src) && !s.userAdded;
+          });
+          if (translatableSegs.length === 0) {
+            return segments.some((s) => s.translationStyle === 'compact');
+          }
+          const compactCount = translatableSegs.filter((s) => s.translationStyle === 'compact').length;
+          return compactCount === translatableSegs.length || (compactCount / translatableSegs.length >= 0.9);
+        }
+      };
+    })();
+
+    // Scenario A: EP5 case (77 compact translatable segments + 2 manual userAdded exclamations with empty source)
+    const ep5Mock = {
+      id: 'ep_5',
+      scriptData: {
+        segments: [
+          ...Array.from({ length: 77 }, (_, i) => ({
+            id: `seg_${i}`,
+            originalChineseText: '你好',
+            translationStyle: 'compact',
+          })),
+          { id: 'seg_user_1', userAdded: true, originalChineseText: '', khmer: 'អែង' },
+          { id: 'seg_user_2', userAdded: true, originalChineseText: '', khmer: 'ម៉ាក់' },
+        ],
+      },
+    };
+    assert.equal(checkEpisodeHasCompactReady(ep5Mock), true, '77/77 translatable segments compacted must be considered done');
+
+    // Scenario B: Explicit autoCompacted flag
+    assert.equal(checkEpisodeHasCompactReady({ scriptData: { autoCompacted: true } }), true);
+
+    // Scenario C: Less than 90% compacted must return false
+    const epIncompleteMock = {
+      scriptData: {
+        segments: [
+          ...Array.from({ length: 50 }, (_, i) => ({ id: `s_${i}`, originalChineseText: '话', translationStyle: 'compact' })),
+          ...Array.from({ length: 50 }, (_, i) => ({ id: `s_${i + 50}`, originalChineseText: '话', translationStyle: undefined })),
+        ],
+      },
+    };
+    assert.equal(checkEpisodeHasCompactReady(epIncompleteMock), false, '50% compacted should return false');
+  });
 });

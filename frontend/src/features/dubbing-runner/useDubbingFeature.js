@@ -5,11 +5,13 @@ import {
   checkEpisodeHasAudioReady,
   checkEpisodeHasDemucsReady,
   checkEpisodeHasAutoFitReady,
+  checkEpisodeHasCompactReady,
   getEpisodeBrokenSummary,
 } from '../../components/dashboard/geminiRouteHelpers';
 
 const DEFAULT_RUNNER_STATES = {
   translate: { status: 'idle', currentEpId: null, currentEpIndex: 0, totalEps: 0, progress: 0, message: '' },
+  compact: { status: 'idle', currentEpId: null, currentEpIndex: 0, totalEps: 0, progress: 0, message: '' },
   repair: { status: 'idle', currentEpId: null, currentEpIndex: 0, totalEps: 0, progress: 0, message: '' },
   voice: { status: 'idle', currentEpId: null, currentEpIndex: 0, totalEps: 0, progress: 0, message: '' },
   clean_bgm: { status: 'idle', currentEpId: null, currentEpIndex: 0, totalEps: 0, progress: 0, message: '' },
@@ -41,7 +43,7 @@ export function useDubbingFeature(episodes = [], activeSeries = null) {
     const voicedCount = epList.filter((ep) => checkEpisodeHasAudioReady(ep, null, null) && !ep.audioOutdated).length;
     const autofitCount = epList.filter((ep) => checkEpisodeHasAudioReady(ep, null, null) && checkEpisodeHasAutoFitReady(ep)).length;
     const cleanBgmCount = epList.filter((ep) => checkEpisodeHasDemucsReady(ep, null, null)).length;
-    const compactCount = epList.filter((ep) => ep.scriptData?.autoCompacted || (ep.scriptData?.segments && ep.scriptData.segments.length > 0 && ep.scriptData.segments.every((s) => s.translationStyle === 'compact'))).length;
+    const compactCount = epList.filter((ep) => checkEpisodeHasCompactReady(ep)).length;
     const allDoneCount = epList.filter(isEpisodeDone).length;
 
     return {
