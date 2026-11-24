@@ -104,7 +104,9 @@ export async function generateSingleSegmentAudio(segment, options = {}) {
   const audioEffect = isObj ? (options.audioEffect || segment.audioEffect || (deliveryType === 'inner_thought' ? 'inner_thought_reverb' : 'none')) : (segment.audioEffect || 'none');
   const deliveryOverride = isObj && options.deliveryOverride !== undefined ? options.deliveryOverride : Boolean(segment.deliveryOverride);
   const effectConfig = isObj ? (options.effectConfig || segment.effectConfig) : segment.effectConfig;
-  const forceRegen = isObj && options.forceRegen !== undefined ? options.forceRegen : true;
+  const forceRegen = isObj && options.forceRegen !== undefined ? Boolean(options.forceRegen) : false;
+  const timeoutMs = isObj && typeof options.timeoutMs === 'number' ? options.timeoutMs : 15000;
+  const maxAttempts = isObj && typeof options.maxAttempts === 'number' ? options.maxAttempts : 1;
   const skipPeerDiskScan = isObj ? Boolean(options.skipPeerDiskScan) : false;
   const sharedAudioFiles = isObj && Array.isArray(options.sharedAudioFiles) ? options.sharedAudioFiles : undefined;
   const speakerUpdate = isObj && options.speakerUpdate && typeof options.speakerUpdate === 'object' ? options.speakerUpdate : undefined;
@@ -141,11 +143,11 @@ export async function generateSingleSegmentAudio(segment, options = {}) {
     forceRegen,
   });
 
-  // Safe retry for transient 502 / ECONNRESET during server reload with 25s timeout
+  // Safe retry for transient 502 / ECONNRESET during server reload with configurable timeout
   let res = null;
-  for (let attempt = 0; attempt < 2; attempt++) {
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 25000);
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
     try {
       res = await fetch('/api/generate-audio', {
         method: 'POST',

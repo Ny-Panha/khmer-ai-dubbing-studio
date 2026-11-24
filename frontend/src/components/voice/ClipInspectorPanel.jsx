@@ -546,7 +546,7 @@ export default function ClipInspectorPanel({
     ? Math.round(selectedSegment.genderConfidence * 100)
     : null;
 
-  const segVoiceId = selectedSegment.khmerVoiceId || selectedSegment.voiceId || '';
+  const segVoiceId = selectedSegment.voiceOverride || selectedSegment.khmerVoiceId || selectedSegment.voiceId || selectedSegment.voice || '';
   const isThought = selectedSegment.deliveryType === 'inner_thought';
   const isPisethActive = segVoiceId.includes('Piseth') || (!segVoiceId.includes('Sreymom') && detectedGender !== 'female');
   const isSreymomActive = segVoiceId.includes('Sreymom') || (!segVoiceId.includes('Piseth') && detectedGender === 'female');

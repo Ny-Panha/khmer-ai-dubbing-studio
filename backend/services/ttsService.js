@@ -959,10 +959,15 @@ async function generateSingleSegmentAudio(segment, uploadsDir, options = {}) {
       try {
         const baseName = path.basename(resolvedPrior);
         const expectedPrefix = `${epPrefix}seg_${cleanId}_`;
+        const isOtherVoiceVariant = (
+          (baseName.includes("Piseth") && !voiceId.includes("Piseth")) ||
+          (baseName.includes("Sreymom") && !voiceId.includes("Sreymom"))
+        );
         if (
           (baseName.startsWith(expectedPrefix) || (!epPrefix && baseName.startsWith(`seg_${cleanId}_`))) &&
           !baseName.includes(cacheHash) &&
-          !baseName.includes("_raw_")
+          !baseName.includes("_raw_") &&
+          !isOtherVoiceVariant
         ) {
           fs.unlinkSync(resolvedPrior);
         }

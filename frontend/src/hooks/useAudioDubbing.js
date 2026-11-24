@@ -673,6 +673,17 @@ const FALLBACK_VOICE_CATALOG = {
 
     const targetSeg = scriptData.segments[segIdx];
     const segDisplayNum = targetSeg.id ?? (segIdx + 1);
+
+    // Fast return: if segment already has this exact voice assigned, has valid audio, and is ready, no-op
+    const currentVoice = targetSeg.voiceOverride || targetSeg.khmerVoiceId || targetSeg.voiceId || targetSeg.voice;
+    const isSameVoice = currentVoice === newVoiceId;
+    const isAlreadyReady = Boolean(targetSeg.audioUrl || targetSeg.audioPath || targetSeg.audioFile) &&
+      !targetSeg.audioOutdated &&
+      targetSeg.textStatus === 'ready';
+    if (isSameVoice && isAlreadyReady) {
+      return targetSeg;
+    }
+
     const isFemale = (newVoiceId || '').includes('Sreymom');
     const activeSpeed = targetSeg.userCustomSpeed ? targetSeg.speed : (voiceSettings.speed || 'normal');
     const updatedVoiceLabel = isFemale ? 'ស្រីមុំ (Sreymom)' : 'ពិសិដ្ឋ (Piseth)';
@@ -686,6 +697,12 @@ const FALLBACK_VOICE_CATALOG = {
     const preservedSpeakerGender = targetSeg.speakerGender || (preservedGender === 'female' ? 'FEMALE' : (preservedGender === 'male' ? 'MALE' : 'UNKNOWN'));
     const spkKey = targetSeg.speakerId || targetSeg.speaker || null;
     const speakerEntryPatch = null;
+    const prevSpeakerEntry = spkKey && speakerRegistry ? speakerRegistry[spkKey] : null;
+
+    // Preserve previous audio references so waveforms remain visible and playback works during generation
+    const previousAudioUrl = targetSeg.audioUrl || targetSeg.previousAudioUrl || null;
+    const previousAudioFile = targetSeg.audioFile || targetSeg.previousAudioFile || null;
+    const previousAudioPath = targetSeg.audioPath || targetSeg.previousAudioPath || null;
 
     // Full rollback snapshot so any TTS failure restores the exact previous voice, color/label, and audio
     const prevSegSnapshot = {
@@ -708,6 +725,7 @@ const FALLBACK_VOICE_CATALOG = {
       audioDurationSec: targetSeg.audioDurationSec,
       audioOutdated: targetSeg.audioOutdated,
       textStatus: targetSeg.textStatus,
+      voiceAudioVariants: targetSeg.voiceAudioVariants,
     };
 
     // Fast path: when auto-regenerating a single text-ready segment, /api/generate-audio
@@ -734,16 +752,18 @@ const FALLBACK_VOICE_CATALOG = {
       speed: activeSpeed,
       voiceProvider: 'edge-tts',
       audioOutdated: true,
+      previousAudioUrl,
+      previousAudioFile,
+      previousAudioPath,
     };
 
+    // Waveform preservation: keep targetSeg.audioUrl so waveform stays visible during synthesis
     const updatedSeg = {
       ...targetSeg,
       ...assignedFields,
       ...(willRegen ? {
         textStatus: 'generating',
-        audioUrl: null,
-        audioFile: null,
-        audioPath: null,
+        isVoiceSwitching: true,
       } : {}),
     };
 
@@ -798,7 +818,7 @@ const FALLBACK_VOICE_CATALOG = {
       return updatedSeg;
     }
 
-    // 3. Async TTS generation (non-blocking UI; pre-TTS manual assignment also saved on backend in parallel)
+    // 3. Async TTS generation (non-blocking UI; backend TTS cache reused if matching audio exists)
     const sharedAudioFiles = [];
     const targetRef = targetSeg.audioPath || targetSeg.audioFile || (targetSeg.audioUrl ? targetSeg.audioUrl.split('?')[0] : null);
     if (targetRef) {
@@ -826,13 +846,15 @@ const FALLBACK_VOICE_CATALOG = {
           speed: activeSpeed,
           userCustomSpeed: Boolean(targetSeg.userCustomSpeed),
           voiceId: newVoiceId,
-          forceRegen: true,
+          forceRegen: false,
           projectName: getProjectName(),
           videoId: getVideoId(),
           episodeId,
           seriesId,
           skipPeerDiskScan: true,
           sharedAudioFiles,
+          timeoutMs: 15000,
+          maxAttempts: 1,
           ...(spkKey && speakerEntryPatch ? { speakerUpdate: { key: spkKey, entry: speakerEntryPatch } } : {}),
         }
       );
@@ -843,6 +865,7 @@ const FALLBACK_VOICE_CATALOG = {
         ...assignedFields,
         audioOutdated: false,
         textStatus: 'ready',
+        isVoiceSwitching: false,
       };
 
       let stillOutdated = false;
@@ -877,6 +900,7 @@ const FALLBACK_VOICE_CATALOG = {
           rolledBack[matchIdx] = {
             ...rolledBack[matchIdx],
             ...prevSegSnapshot,
+            isVoiceSwitching: false,
           };
         }
         revertedSegments = rolledBack;
