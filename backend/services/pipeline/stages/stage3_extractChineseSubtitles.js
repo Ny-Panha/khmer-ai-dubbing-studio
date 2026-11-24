@@ -27,6 +27,7 @@ const {
   stripDecorativeSubtitleNoise,
   stripRepeatedLeadingTimeCardPrefix,
   sameSubtitleText,
+  isExactChineseSubtitleMatch,
   areChineseTextsEquivalent,
   CASCADE_VISION_MODELS,
   visionModelCooldownMap,
@@ -294,18 +295,6 @@ async function extractChineseSubtitles({
       }
 
       if (!isCovered) {
-        // Keep independent reads at the former static baseline timestamps.
-        const insideCue = cueStates.find((cs) => rounded >= cs.startSec && rounded <= cs.endSec);
-        if (insideCue) {
-          const diffFromA = getMaxSubtitleDiffBetween(insideCue.sampleASec, rounded);
-          if (diffFromA < 2.5) {
-            additionalSamples.add(rounded);
-            isCovered = true;
-          }
-        }
-      }
-
-      if (!isCovered) {
         const idx = Math.round((curTime - safeStartSec) / stepDiff);
         const nearDiffs = frameDiffs.slice(Math.max(0, idx - 2), Math.min(frameDiffs.length, idx + 3));
         const maxNearDiff = nearDiffs.reduce(
@@ -333,7 +322,7 @@ async function extractChineseSubtitles({
     }
 
     if (!fastOcrActive) {
-      for (const t of [...cueSamples.keys(), ...additionalSamples]) {
+      for (const t of cueSamples.keys()) {
         if (!scheduled.has(t)) trySchedule(t, 'independent_sample', 0);
       }
     }
@@ -515,7 +504,7 @@ async function extractChineseSubtitles({
                     chineseText: '',
                     confidence: confA,
                     isSharp: true,
-                    position: 'bottom_subtitle',
+                    position: rA.position || 'bottom_subtitle',
                     visualGender: 'unknown',
                     speakerGender: 'UNKNOWN',
                     speakerVisualHint: '',
@@ -540,7 +529,7 @@ async function extractChineseSubtitles({
                     chineseText: '',
                     confidence: confB,
                     isSharp: true,
-                    position: 'bottom_subtitle',
+                    position: rB.position || 'bottom_subtitle',
                     visualGender: 'unknown',
                     speakerGender: 'UNKNOWN',
                     speakerVisualHint: '',
@@ -567,7 +556,7 @@ async function extractChineseSubtitles({
                     chineseText: resolvedText,
                     confidence: confA,
                     isSharp: confA >= 0.70,
-                    position: 'bottom_subtitle',
+                    position: rA.position || 'bottom_subtitle',
                     visualGender: 'unknown',
                     speakerGender: 'UNKNOWN',
                     speakerVisualHint: '',
@@ -592,7 +581,7 @@ async function extractChineseSubtitles({
                     chineseText: resolvedText,
                     confidence: confB,
                     isSharp: confB >= 0.70,
-                    position: 'bottom_subtitle',
+                    position: rB.position || 'bottom_subtitle',
                     visualGender: 'unknown',
                     speakerGender: 'UNKNOWN',
                     speakerVisualHint: '',
@@ -630,7 +619,7 @@ async function extractChineseSubtitles({
                 chineseText: loc.chineseText || loc.textZh || '',
                 confidence: loc.confidence,
                 isSharp: loc.confidence >= 0.70,
-                position: 'bottom_subtitle',
+                position: loc.position || 'bottom_subtitle',
                 visualGender: 'unknown',
                 speakerGender: 'UNKNOWN',
                 speakerVisualHint: '',
@@ -1020,6 +1009,7 @@ async function extractChineseSubtitles({
             textZh: obs.chineseText,
             originalChineseText: obs.chineseText,
             chineseText: obs.chineseText,
+            position: obs.position || 'bottom_subtitle',
             ocrConfidence: 'high',
             reviewNeeded: false,
             ocrDisagreement: false,
@@ -1063,6 +1053,7 @@ async function extractChineseSubtitles({
             textZh: resolvedText,
             originalChineseText: resolvedText,
             chineseText: resolvedText,
+            position: (obsA.position && obsA.position !== 'bottom_subtitle') ? obsA.position : (obsB.position || 'bottom_subtitle'),
             ocrConfidence: 'high',
             reviewNeeded: false,
             ocrDisagreement: false,
@@ -1105,6 +1096,7 @@ async function extractChineseSubtitles({
             textZh: textA,
             originalChineseText: textA,
             chineseText: textA,
+            position: obsA.position || 'bottom_subtitle',
             ocrConfidence: obsA.isSharp ? 'high' : 'medium',
             reviewNeeded: !obsA.isSharp,
             ocrDisagreement: false,
@@ -1123,6 +1115,7 @@ async function extractChineseSubtitles({
             textZh: textB,
             originalChineseText: textB,
             chineseText: textB,
+            position: obsB.position || 'bottom_subtitle',
             ocrConfidence: obsB.isSharp ? 'high' : 'medium',
             reviewNeeded: !obsB.isSharp,
             ocrDisagreement: false,
@@ -1153,6 +1146,7 @@ async function extractChineseSubtitles({
             textZh: textA,
             originalChineseText: textA,
             chineseText: textA,
+            position: obsA.position || 'bottom_subtitle',
             ocrConfidence: 'high',
             reviewNeeded: false,
             ocrDisagreement: false,
@@ -1183,6 +1177,7 @@ async function extractChineseSubtitles({
             textZh: textB,
             originalChineseText: textB,
             chineseText: textB,
+            position: obsB.position || 'bottom_subtitle',
             ocrConfidence: 'high',
             reviewNeeded: false,
             ocrDisagreement: false,
@@ -1316,6 +1311,7 @@ async function extractChineseSubtitles({
               textZh: resolvedText,
               originalChineseText: resolvedText,
               chineseText: resolvedText,
+              position: (obsA?.position && obsA.position !== 'bottom_subtitle') ? obsA.position : ((obsB?.position && obsB.position !== 'bottom_subtitle') ? obsB.position : (obsTie?.position || 'bottom_subtitle')),
               ocrConfidence,
               reviewNeeded,
               ocrDisagreement,
@@ -1330,46 +1326,9 @@ async function extractChineseSubtitles({
       }
     }
 
-    // Auto-resolve remaining uncertain/empty frames in unresolvedMap for Fast OCR mode (Step 1)
-    if (isFastOcr && !strictOcrReviewGate && unresolvedMap.size > 0) {
-      console.warn(`[Stage 3 Extract Subtitles] ⚠️ Auto-resolving ${unresolvedMap.size} remaining uncertain/empty frame(s) as non-text frames so downstream translation never stalls.`);
-      for (const [t, unres] of unresolvedMap.entries()) {
-        const rawText = String(unres?.textZh || unres?.chineseText || '').trim();
-        const cleanLen = normalizeChineseChars(stripDecorativeSubtitleNoise(rawText)).length;
-        if (cleanLen > 0) {
-          completedMap.set(t, {
-            ...unres,
-            hasText: true,
-            isVerified: true,
-            reviewNeeded: false,
-            uncertainOcr: false,
-            ocrFailed: false,
-          });
-        } else {
-          completedMap.set(t, {
-            timestampSec: t,
-            reportedSec: t,
-            hasText: false,
-            textZh: '',
-            chineseText: '',
-            position: 'bottom_subtitle',
-            isSharp: true,
-            visualGender: unres?.visualGender || 'unknown',
-            speakerGender: unres?.speakerGender || 'unknown',
-            speakerVisualHint: '',
-            deliveryType: 'dialogue',
-            genderConfidence: 0.5,
-            ocrStatus: 'verified_empty',
-            ocrFailed: false,
-            isVerified: true,
-            isVerifiedEmpty: true,
-            reviewNeeded: false,
-            uncertainOcr: false,
-            failureReason: null,
-          });
-        }
-      }
-      unresolvedMap.clear();
+    // Unresolved OCR frames remain in unresolvedMap (never auto-classified as verified_empty).
+    if (unresolvedMap.size > 0) {
+      console.warn(`[Stage 3 Extract Subtitles] ⚠️ ${unresolvedMap.size} OCR frame(s) remain unresolved/failed and will NOT be marked verified_empty.`);
     }
 
     rawObservations.length = 0;
@@ -1434,7 +1393,9 @@ async function extractChineseSubtitles({
       const stepDiff = 0.2;
       const safeStartSec = Math.max(0, Number(startOffsetSec) || 0);
       const endSec = durationSec > 0 ? safeStartSec + durationSec : (safeStartSec + 10);
-      for (const obs of uncapturedObservations) {
+      const sortedUncaptured = [...uncapturedObservations].sort((a, b) => a.timestampSec - b.timestampSec);
+      let prevRecoveredEnd = safeStartSec;
+      for (const obs of sortedUncaptured) {
         const t = obs.timestampSec;
         const tIdx = Math.round((t - safeStartSec) / stepDiff);
         let onset = Math.max(safeStartSec, t - 0.5);
@@ -1444,6 +1405,18 @@ async function extractChineseSubtitles({
             onset = d.timestampSec;
             break;
           }
+        }
+        // Prevent distinct sequential recovered observations from snapping onto the same earlier onset
+        const prevObsDistinct = rawObservations
+          .filter((o) => o.timestampSec < t && o.hasText && !isExactChineseSubtitleMatch(o.chineseText, obs.chineseText))
+          .pop();
+        const floorOnset = Math.max(
+          safeStartSec,
+          prevObsDistinct ? parseFloat((prevObsDistinct.timestampSec + 0.05).toFixed(2)) : safeStartSec,
+          prevRecoveredEnd <= t ? prevRecoveredEnd : safeStartSec
+        );
+        if (onset < floorOnset && floorOnset < t) {
+          onset = floorOnset;
         }
         let offset = Math.min(endSec, t + 1.0);
         for (let k = tIdx + 1; k <= Math.min(frameDiffs.length - 1, tIdx + 12); k++) {
@@ -1456,6 +1429,7 @@ async function extractChineseSubtitles({
         const sSec = parseFloat(Math.max(safeStartSec, onset).toFixed(2));
         const eSec = parseFloat(Math.max(sSec + 0.35, offset).toFixed(2));
         const dur = parseFloat((eSec - sSec).toFixed(2));
+        prevRecoveredEnd = Math.max(prevRecoveredEnd, eSec);
 
         evaluatedCueStates.push({
           startSec: sSec,
@@ -1464,6 +1438,7 @@ async function extractChineseSubtitles({
           textZh: obs.chineseText,
           originalChineseText: obs.chineseText,
           chineseText: obs.chineseText,
+          position: obs.position || 'bottom_subtitle',
           ocrConfidence: obs.isSharp ? 'high' : 'medium',
           reviewNeeded: !obs.isSharp,
           ocrDisagreement: false,
@@ -1483,7 +1458,8 @@ async function extractChineseSubtitles({
   if (evaluatedCueStates && evaluatedCueStates.length > 0) {
     evaluatedCueStates.sort((a, b) => a.startSec - b.startSec);
 
-    // Pass 2: Merge adjacent states ONLY when Chinese text is equivalent AND gap <= 0.45s
+    // Pass 2: Merge adjacent states ONLY when exact normalized Chinese text matches,
+    // gap <= 0.25s, and no verified empty frame intervened between them.
     for (const cue of evaluatedCueStates) {
       if (visualSegments.length === 0) {
         visualSegments.push({ ...cue });
@@ -1491,10 +1467,13 @@ async function extractChineseSubtitles({
       }
       const prev = visualSegments[visualSegments.length - 1];
       const gap = parseFloat((cue.startSec - prev.endSec).toFixed(2));
-      const isAdjacent = gap <= 0.45;
-      const isEquivalent = areChineseTextsEquivalent(prev.originalChineseText, cue.originalChineseText);
+      const isAdjacent = gap <= 0.25;
+      const isEquivalent = isExactChineseSubtitleMatch(prev.originalChineseText, cue.originalChineseText);
+      const hasInterveningEmpty = gap > 0.05 && rawObservations.some(
+        (o) => o.isVerifiedEmpty && o.timestampSec > prev.endSec + 0.02 && o.timestampSec < cue.startSec - 0.02
+      );
 
-      if (isAdjacent && isEquivalent) {
+      if (isAdjacent && isEquivalent && !hasInterveningEmpty) {
         prev.endSec = Math.max(prev.endSec, cue.endSec);
         prev.duration = parseFloat((prev.endSec - prev.startSec).toFixed(2));
         if (cue.originalChineseText.length > prev.originalChineseText.length) {
@@ -1652,23 +1631,29 @@ async function extractChineseSubtitles({
     }
   }
 
-  // Finalize segments with valid timecodes, gender resolution, and minimum duration 0.35s (supports rapid short cues)
+  // Finalize segments with immutable sourceCueId, timecodes, gender resolution, and minimum duration 0.35s
+  const chunkOffsetTag = Math.round(Math.max(0, Number(startOffsetSec) || 0) * 100);
   const finalizedVisualSegments = stripRepeatedLeadingTimeCardPrefix(visualSegments.map((s, idx) => {
     const rawDur = parseFloat((s.endSec - s.startSec).toFixed(2));
     const dur = Math.max(0.35, rawDur);
     const endSec = parseFloat((s.startSec + dur).toFixed(2));
     const genderData = resolveGenderFromVotes(s.genderVotes, s.visualGender);
     const resolvedChinese = s.originalChineseText || s.chineseText || s.textZh || '';
+    const sourceCueId = s.sourceCueId || `cue_${chunkOffsetTag}_${Math.round(s.startSec * 100)}_${idx + 1}`;
 
     return {
       ...s,
       id: idx + 1,
       segmentId: idx + 1,
+      sourceCueId,
+      sourceStartSec: typeof s.sourceStartSec === 'number' ? s.sourceStartSec : s.startSec,
+      sourceEndSec: typeof s.sourceEndSec === 'number' ? s.sourceEndSec : endSec,
       endSec,
       duration: dur,
       textZh: resolvedChinese,
       originalChineseText: resolvedChinese,
       chineseText: resolvedChinese,
+      position: s.position || 'bottom_subtitle',
       visualGender: genderData.visualGender || s.visualGender || 'unknown',
       speakerVisualHint: s.speakerVisualHint || '',
       deliveryType: s.deliveryType || 'dialogue',
@@ -1815,6 +1800,7 @@ module.exports = {
   normalizeChineseChars,
   stripDecorativeSubtitleNoise,
   stripRepeatedLeadingTimeCardPrefix,
+  isExactChineseSubtitleMatch,
   areChineseTextsEquivalent,
   deduplicateFastOcrCues,
   isRetryableVisionError,

@@ -30,7 +30,8 @@ async function validateSubtitleTiming({ segments = [], durationSec = 0 }) {
       const sameTime = Math.abs((cur.startSec || 0) - (prev.startSec || 0)) < 0.35;
       const curText = (cur.khmerTranslatedText || cur.originalChineseText || '').trim();
       const prevText = (prev.khmerTranslatedText || prev.originalChineseText || '').trim();
-      const textMatches = curText === prevText || curText.includes(prevText) || prevText.includes(curText);
+      const hasDistinctSourceCueIds = Boolean(cur.sourceCueId && prev.sourceCueId && cur.sourceCueId !== prev.sourceCueId);
+      const textMatches = !hasDistinctSourceCueIds && curText.length > 0 && curText === prevText;
 
       if (sameTime && textMatches) {
         duplicatesRemoved++;

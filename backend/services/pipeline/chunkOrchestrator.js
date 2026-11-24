@@ -1,8 +1,8 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { GENERATION_MODES } = require('./pipelineTypes');
-const { extractChineseSubtitles, areChineseTextsEquivalent, deduplicateFastOcrCues } = require('./stages/stage3_extractChineseSubtitles');
+const { GENERATION_MODES, computePipelineCompletenessReport } = require('./pipelineTypes');
+const { extractChineseSubtitles, isExactChineseSubtitleMatch, areChineseTextsEquivalent, deduplicateFastOcrCues } = require('./stages/stage3_extractChineseSubtitles');
 const { analyzeDialogueAudio, enrichCuesWithAcousticPitch } = require('./stages/stage4_analyzeDialogueAudio');
 const { reconcileTimelineEvidence } = require('./stages/stage5_reconcileTimelineEvidence');
 const { generateModeSpecificScript } = require('./stages/stage6_generateModeSpecificScript');
@@ -84,14 +84,15 @@ function stitchAndDeduplicateSegments(allChunkSegments = []) {
     }
 
     const prev = stitched[stitched.length - 1];
-    // Check overlap condition:
-    // If start times are within 2.5s and Chinese texts are equivalent
-    const isTimeAdjacent = Math.abs(seg.startSec - prev.startSec) < 2.5 || (seg.startSec < prev.endSec + 0.6);
+    // Check overlap condition across chunk boundaries only:
+    // Start times within 2.5s (or overlapping) and exact normalized Chinese text match
+    const isTimeAdjacent = Math.abs(seg.startSec - prev.startSec) < 2.5 || (seg.startSec < prev.endSec + 0.25);
     const textA = seg.originalChineseText || seg.chineseText || '';
     const textB = prev.originalChineseText || prev.chineseText || '';
-    const isTextMatch = areChineseTextsEquivalent(textA, textB);
+    const isTextMatch = isExactChineseSubtitleMatch(textA, textB);
+    const sameChunkSourceIds = Boolean(prev.sourceCueId && seg.sourceCueId && prev.sourceCueId !== seg.sourceCueId && prev.sourceCueId.split('_')[1] === seg.sourceCueId.split('_')[1]);
 
-    if (isTimeAdjacent && isTextMatch) {
+    if (!sameChunkSourceIds && isTimeAdjacent && isTextMatch) {
       // Merge boundary segment without creating duplicate
       const mergedStart = Math.min(prev.startSec, seg.startSec);
       const mergedEnd = Math.max(prev.endSec, seg.endSec);
@@ -710,6 +711,18 @@ async function runChunkedDubbingPipeline({
   const transSec = (pipelineStageDurations.stage6ScriptMs / 1000).toFixed(1);
   console.log(`[Turbo Pipeline] ✅ Script generated in ${totalSec}s (FFmpeg+Frames: ${frameSec}s, Acoustic F0: ${f0Sec}s, Stage 3 Vision OCR: ${ocrSec}s, Stage 6 Khmer Translation: ${transSec}s)`);
 
+  const totalOcrFrames = chunkResults.reduce((sum, r) => sum + (r?.ocrPerf?.candidateFramesCount || 0), 0);
+  const totalOcrVerifiedFrames = chunkResults.reduce((sum, r) => sum + (r?.ocrPerf?.verifiedFramesCount ?? ((r?.ocrPerf?.localVerifiedCount || 0) + (r?.ocrPerf?.geminiVerifiedCount || 0))), 0);
+  const totalOcrUnresolvedFrames = chunkResults.reduce((sum, r) => sum + (r?.ocrPerf?.unresolvedFramesCount || 0), 0);
+  const coverageReport = computePipelineCompletenessReport({
+    durationSec,
+    verifiedSourceCuesCount: stitchedSegments.length,
+    ocrTotalFrames: totalOcrFrames,
+    ocrVerifiedFrames: totalOcrVerifiedFrames,
+    ocrUnresolvedFrames: totalOcrUnresolvedFrames,
+    finalizedSegments,
+  });
+
   const finalOutput = {
     success: true,
     mode: scriptResult.mode,
@@ -722,14 +735,9 @@ async function runChunkedDubbingPipeline({
     script: finalizedSegments,
     speakers,
     speakerRegistry,
-    coverage: {
-      status: 'good',
-      totalDurationSec: durationSec,
-      totalSegments: finalizedSegments.length,
-      coveragePercentage: 100,
-    },
+    coverage: coverageReport,
     recoveryReport: {
-      status: 'completed',
+      status: coverageReport.oneToOneMappingValid ? 'completed' : 'review_needed',
       recoveredSegmentsCount: finalizedSegments.length,
       totalChunksProcessed: chunks.length,
     },
@@ -782,7 +790,7 @@ async function runChunkedDubbingPipeline({
       updatedAt: Date.now(),
     },
     generationMode: mode,
-    status: 'translated',
+    status: coverageReport.oneToOneMappingValid ? 'translated' : 'review_needed',
     seriesGenre: scriptResult.genre || genre,
     seriesDetectedGenre: scriptResult.detectedGenre || scriptResult.genre || genre,
     jobId: jobId || ingestResult?.jobId,

@@ -92,7 +92,7 @@ async function generateModeSpecificScript({
     // ==========================================
     let dialogueList = [];
     for (const seg of reconciledSegments) {
-      if (isFastOcrMode) {
+      if (isFastOcrMode || seg?.sourceCueId) {
         dialogueList.push(seg);
       } else {
         const pieces = splitLongDialogueSegment(seg);
@@ -260,6 +260,7 @@ async function generateModeSpecificScript({
         return {
           index: globalIdx + 1,
           segmentId: s.segmentId || s.id || (globalIdx + 1),
+          ...(s.sourceCueId ? { sourceCueId: s.sourceCueId } : {}),
           startTime: formatSecondsToTimecode(s.startSec),
           endTime: formatSecondsToTimecode(s.endSec),
           durationSec: slotBudget.durationSec,
@@ -671,8 +672,7 @@ Return JSON ONLY matching this schema:
     let retryQuotaAborted = false;
     if (missingRetryIndices.length > 0 && aiClient?.models?.generateContent) {
       const RETRY_BATCH_SIZE = 25;
-      const MAX_RETRY_ITEMS = 60;
-      const targetRetryIndices = missingRetryIndices.slice(0, MAX_RETRY_ITEMS);
+      const targetRetryIndices = missingRetryIndices;
       const rTotalBatches = Math.ceil(targetRetryIndices.length / RETRY_BATCH_SIZE);
       let rescuedCount = 0;
 
@@ -811,8 +811,7 @@ Return JSON ONLY matching this schema:
         }
       }
 
-      const MAX_SINGLE_LINE_RESCUE = 15;
-      const singleLineTargets = [...stillMissingPrioritized, ...stillMissingFailed].slice(0, MAX_SINGLE_LINE_RESCUE);
+      const singleLineTargets = [...stillMissingPrioritized, ...stillMissingFailed];
       if (singleLineTargets.length > 0 && !retryQuotaAborted) {
         let singleRescuedCount = 0;
         let consecAllFailedLines = 0;
@@ -938,6 +937,13 @@ Return ONE JSON object ONLY (no array, no extra commentary):
     const scriptSegments = dialogueList.map((s, idx) => createCanonicalSegment(s, idx, normMode));
     const finalTranslatedCount = scriptSegments.filter((s) => !isPlaceholderTranslationText(s.khmerTranslatedText)).length;
     const finalUntranslatedCount = scriptSegments.length - finalTranslatedCount;
+    const missingCueIds = scriptSegments
+      .filter((s) => isPlaceholderTranslationText(s.khmerTranslatedText))
+      .map((s) => s.sourceCueId || s.segmentId);
+    const verifiedSourceCuesCount = reconciledSegments.length;
+    const translationCompletenessPct = verifiedSourceCuesCount > 0
+      ? parseFloat(((finalTranslatedCount / verifiedSourceCuesCount) * 100).toFixed(2))
+      : 0;
 
     return {
       mode: normMode,
@@ -947,8 +953,12 @@ Return ONE JSON object ONLY (no array, no extra commentary):
       ...(consistencySummary ? { consistencySummary } : {}),
       translationReport: {
         totalSegments: scriptSegments.length,
+        verifiedSourceCuesCount,
         translatedCount: finalTranslatedCount,
         untranslatedCount: finalUntranslatedCount,
+        missingCueIds,
+        translationCompletenessPct,
+        oneToOneMappingValid: scriptSegments.length === verifiedSourceCuesCount && finalUntranslatedCount === 0,
         totalBatches,
         failedBatches: batchFailures.length,
         isPartial: finalUntranslatedCount > 0,

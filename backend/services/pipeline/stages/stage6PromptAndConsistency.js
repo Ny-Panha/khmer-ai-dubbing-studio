@@ -502,6 +502,7 @@ function createCanonicalSegment(raw = {}, index = 0, mode = 'dialogue') {
   return {
     id: index + 1,
     segmentId: index + 1,
+    ...(raw.sourceCueId ? { sourceCueId: raw.sourceCueId } : {}),
     startSec: parseFloat(startSec.toFixed(2)),
     endSec: parseFloat((startSec + dur).toFixed(2)),
     duration: dur,
@@ -1113,9 +1114,29 @@ function resolveBatchTranslationMatches(translations = [], expectedItems = []) {
   const matches = new Array(expectedItems.length).fill(null);
   const usedTransIndices = new Set();
 
+  // Pass 0: Exact immutable sourceCueId match if returned
+  const bySourceCueId = new Map();
+  items.forEach((t, ti) => {
+    if (typeof t.sourceCueId === 'string' && t.sourceCueId.trim()) {
+      const cid = t.sourceCueId.trim();
+      if (!bySourceCueId.has(cid)) bySourceCueId.set(cid, ti);
+    }
+  });
+  for (let ei = 0; ei < expectedItems.length; ei++) {
+    const expCid = typeof expectedItems[ei]?.sourceCueId === 'string' ? expectedItems[ei].sourceCueId.trim() : '';
+    if (expCid && bySourceCueId.has(expCid)) {
+      const ti = bySourceCueId.get(expCid);
+      if (!usedTransIndices.has(ti)) {
+        matches[ei] = items[ti];
+        usedTransIndices.add(ti);
+      }
+    }
+  }
+
   // Pass 1: Strict unambiguous key match (exact index, segmentId, or id; supports numeric strings like "86")
   const byKey = new Map();
   items.forEach((t, ti) => {
+    if (usedTransIndices.has(ti)) return;
     const keys = [
       normalizePositiveLookupKey(t.index),
       normalizePositiveLookupKey(t.segmentId),
@@ -1127,6 +1148,7 @@ function resolveBatchTranslationMatches(translations = [], expectedItems = []) {
   });
 
   for (let ei = 0; ei < expectedItems.length; ei++) {
+    if (matches[ei]) continue;
     const exp = expectedItems[ei] || {};
     const expKeys = [
       normalizePositiveLookupKey(exp.index),
@@ -1221,10 +1243,11 @@ function resolveBatchTranslationMatches(translations = [], expectedItems = []) {
 function applyBatchTranslations({ batchSlice, dialogueList, dialoguePayload, batchOffset, parsed, isFastOcrMode }) {
   const translations = extractSegmentsFromParsedResponse(parsed);
   const castRegistry = Array.isArray(parsed?.castRegistry) ? parsed.castRegistry : [];
-  const expectedItems = batchSlice.map((_, i) => ({
+  const expectedItems = batchSlice.map((seg, i) => ({
     index: batchOffset + i + 1,
     segmentId: dialoguePayload[i]?.segmentId ?? (batchOffset + i + 1),
     id: dialoguePayload[i]?.segmentId ?? (batchOffset + i + 1),
+    ...(seg?.sourceCueId ? { sourceCueId: seg.sourceCueId } : {}),
   }));
   const matchedTranslations = resolveBatchTranslationMatches(translations, expectedItems);
 
@@ -1285,6 +1308,7 @@ function buildRetrySegmentPayload(dialogueList, globalIdx) {
   return {
     index: s.segmentId || s.id || (globalIdx + 1),
     segmentId: s.segmentId || s.id || (globalIdx + 1),
+    ...(s.sourceCueId ? { sourceCueId: s.sourceCueId } : {}),
     sourceChineseToTranslate: segChinese,
     ...(prevChinese ? { prevContext: prevChinese } : {}),
     ...(nextChinese ? { nextContext: nextChinese } : {}),

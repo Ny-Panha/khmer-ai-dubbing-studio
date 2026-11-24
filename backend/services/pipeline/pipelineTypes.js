@@ -153,6 +153,45 @@ function createCanonicalSegment(raw = {}, index = 0, defaultMode = GENERATION_MO
   };
 }
 
+function computePipelineCompletenessReport({
+  durationSec = 0,
+  verifiedSourceCuesCount = 0,
+  ocrTotalFrames = 0,
+  ocrVerifiedFrames = 0,
+  ocrUnresolvedFrames = 0,
+  finalizedSegments = [],
+} = {}) {
+  const segs = Array.isArray(finalizedSegments) ? finalizedSegments : [];
+  const extractedChineseCuesCount = segs.filter((s) => Boolean(String(s?.originalChineseText || s?.chineseText || '').trim())).length;
+  const translatedKhmerCuesCount = segs.filter((s) => Boolean(String(s?.khmerTranslatedText || s?.khmerText || '').trim()) && s?.translationStatus !== 'review_needed').length;
+  const effectiveSourceCount = verifiedSourceCuesCount > 0 ? verifiedSourceCuesCount : segs.length;
+  const missingSubtitlesCount = Math.max(0, effectiveSourceCount - extractedChineseCuesCount);
+  const missingTranslationsCount = Math.max(0, effectiveSourceCount - translatedKhmerCuesCount);
+  const translationCompletenessPct = effectiveSourceCount > 0
+    ? parseFloat(((translatedKhmerCuesCount / effectiveSourceCount) * 100).toFixed(2))
+    : 0;
+  const ocrFrameCompletenessPct = ocrTotalFrames > 0
+    ? parseFloat(((ocrVerifiedFrames / ocrTotalFrames) * 100).toFixed(2))
+    : (ocrUnresolvedFrames === 0 ? 100 : 0);
+  const oneToOneMappingValid = effectiveSourceCount > 0 && missingSubtitlesCount === 0 && missingTranslationsCount === 0 && ocrUnresolvedFrames === 0;
+
+  return {
+    status: oneToOneMappingValid ? 'complete' : 'incomplete',
+    totalDurationSec: durationSec,
+    totalSegments: segs.length,
+    verifiedSourceCuesCount: effectiveSourceCount,
+    extractedChineseCuesCount,
+    translatedKhmerCuesCount,
+    missingSubtitlesCount,
+    missingTranslationsCount,
+    oneToOneMappingValid,
+    translationCompletenessPct,
+    ocrFrameCompletenessPct,
+    ocrUnresolvedFramesCount: ocrUnresolvedFrames,
+    coveragePercentage: translationCompletenessPct,
+  };
+}
+
 module.exports = {
   PIPELINE_STAGES,
   PIPELINE_STATUS,
@@ -160,4 +199,5 @@ module.exports = {
   formatSecondsToTimecode,
   parseTimeToSeconds,
   createCanonicalSegment,
+  computePipelineCompletenessReport,
 };

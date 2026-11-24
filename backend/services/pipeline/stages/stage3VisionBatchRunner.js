@@ -193,6 +193,30 @@ function sameSubtitleText(a, b) {
   return left.length > 0 && left === normalizeChineseChars(b);
 }
 
+function isExactChineseSubtitleMatch(a = '', b = '') {
+  const normA = normalizeChineseChars(a);
+  const normB = normalizeChineseChars(b);
+  return normA.length > 0 && normA === normB;
+}
+
+function computeNormalizedLevenshtein(s1 = '', s2 = '') {
+  if (s1 === s2) return 0;
+  const m = s1.length;
+  const n = s2.length;
+  if (!m) return n;
+  if (!n) return m;
+  let prev = Array.from({ length: n + 1 }, (_, j) => j);
+  for (let i = 1; i <= m; i++) {
+    const curr = [i];
+    for (let j = 1; j <= n; j++) {
+      const cost = s1[i - 1] === s2[j - 1] ? 0 : 1;
+      curr[j] = Math.min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost);
+    }
+    prev = curr;
+  }
+  return prev[n];
+}
+
 function areChineseTextsEquivalent(a = '', b = '') {
   const normA = normalizeChineseChars(a);
   const normB = normalizeChineseChars(b);
@@ -202,17 +226,16 @@ function areChineseTextsEquivalent(a = '', b = '') {
   // For Khmer or non-Chinese scripts, equivalence is exact normalized equality (prevents false phonetic character overlap)
   const hasChinese = /[\u4e00-\u9fa5]/.test(normA) && /[\u4e00-\u9fa5]/.test(normB);
   if (!hasChinese) {
-    return normA === normB;
+    return false;
   }
 
-  if (normA.length >= 2 && normB.length >= 2) {
-    if (normA.includes(normB) || normB.includes(normA)) return true;
-    const minL = Math.min(normA.length, normB.length);
-    let common = 0;
-    for (const ch of normA) {
-      if (normB.includes(ch)) common++;
-    }
-    if (common / minL >= 0.75) return true;
+  // Only allow ordered edit-distance tolerance for longer lines (>= 6 chars) to absorb minor ASR/OCR homophone noise
+  // without merging short lines or 1-char negation differences (e.g. "我相信你" vs "我不相信你", "凶兆" vs "有一些凶兆").
+  const minL = Math.min(normA.length, normB.length);
+  const maxL = Math.max(normA.length, normB.length);
+  if (minL >= 6 && minL / maxL >= 0.75) {
+    const dist = computeNormalizedLevenshtein(normA, normB);
+    if (1 - dist / maxL >= 0.78) return true;
   }
   return false;
 }
@@ -523,8 +546,9 @@ async function callGeminiVisionWithRetry(
  * Distinguishes verified empty subtitle frames from failed or missing OCR responses.
  * Never classifies OCR failure or missing frame responses as verified completed frames.
  */
-function parseVisionResponseFrames(resp, batchFrames = [], options = {}) {
-  const autoVerifyOmitted = Boolean(options?.autoVerifyOmitted);
+function parseVisionResponseFrames(resp, batchFrames = [], _options = {}) {
+  // Never auto-verify omitted/failed frames as completed_empty (Req #11).
+  const autoVerifyOmitted = false;
   const rawText = typeof resp?.text === 'function' ? resp.text() : resp?.text;
   const clean = String(rawText || '').replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
   let parsed = {};
@@ -895,18 +919,30 @@ function deduplicateFastOcrCues(rawCues = [], defaultGender = 'male') {
 
     const prev = deduped[deduped.length - 1];
     const prevText = String(prev.originalChineseText || prev.chineseText || prev.textZh || '').trim();
-    const isEq = areChineseTextsEquivalent(prevText, cueText);
+    const isExactText = isExactChineseSubtitleMatch(prevText, cueText);
+    const hasDistinctSourceIds = Boolean(prev.sourceCueId && cue.sourceCueId && prev.sourceCueId !== cue.sourceCueId);
 
-    if (isEq) {
+    if (isExactText) {
       const timeDiff = cStart - prev.startSec;
       const isChunkBoundaryRepeat = (Math.abs(timeDiff) <= 0.3) || (cStart < prev.endSec);
       const gap = parseFloat((cStart - prev.endSec).toFixed(2));
-      const isContinuous = gap <= 0.45;
+      const isContinuous = gap <= 0.25;
 
-      if (isContinuous || isChunkBoundaryRepeat) {
+      if ((!hasDistinctSourceIds && isContinuous) || isChunkBoundaryRepeat) {
         if (cEnd > prev.endSec) {
           prev.endSec = parseFloat(Number(cEnd).toFixed(2));
           prev.duration = parseFloat(Math.max(0.35, prev.endSec - prev.startSec).toFixed(2));
+          if (typeof prev.sourceEndSec === 'number') {
+            prev.sourceEndSec = Math.max(prev.sourceEndSec, prev.endSec);
+          }
+        }
+        if (cueText.length > prevText.length) {
+          prev.textZh = cue.textZh || cueText;
+          prev.originalChineseText = cue.originalChineseText || cueText;
+          prev.chineseText = cue.chineseText || cueText;
+        }
+        if (!prev.sourceCueId && cue.sourceCueId) {
+          prev.sourceCueId = cue.sourceCueId;
         }
         if (cue.ocrConfidence === 'low') {
           prev.ocrConfidence = 'low';
@@ -1069,6 +1105,7 @@ module.exports = {
   stripDecorativeSubtitleNoise,
   stripRepeatedLeadingTimeCardPrefix,
   sameSubtitleText,
+  isExactChineseSubtitleMatch,
   areChineseTextsEquivalent,
   CASCADE_VISION_MODELS,
   visionModelCooldownMap,

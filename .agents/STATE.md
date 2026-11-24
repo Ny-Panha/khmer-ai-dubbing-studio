@@ -1,43 +1,20 @@
 # Project State (.agents/STATE.md)
-Last Session: IDE - 2026-11-25T00:31:00+07:00
+Last Session: Antigravity IDE - 2026-11-25T01:30:00+07:00
 
 ## Summary
-- Khmer SRT Import & Dubbing Workflow (Zero-Gemini API Key):
-  1. Subtitle Parser Language Detection & Modes (`backend/utils/subtitleParser.js`):
-     - Added `isKhmerText` via Unicode regex `[\u1780-\u17FF]`.
-     - Supports `importMode`: `'auto'` (default), `'khmer_direct'`, `'chinese_translate'`, `'import_only'`.
-     - For Khmer SRT or detected Khmer text: populates `khmerTranslatedText: text`, `khmerText: text`, `khmer: text`, `translationStatus: 'translated'`, `status: 'translated'`.
-  2. OCR Deduplication & Equality Fix (`backend/services/pipeline/stages/stage3VisionBatchRunner.js`):
-     - In `areChineseTextsEquivalent`: restricted 75% bag-of-characters matching strictly to CJK Han characters (`/[\u4e00-\u9fa5]/`), preventing different Khmer sentences from falsely colliding due to shared vowels/consonants.
-     - Preserves `khmerTranslatedText`, `status: 'translated'`, and `translationStatus: 'translated'` during fast deduplication.
-  3. Zero-Gemini Subtitle Import Route (`backend/routes/scriptRoutes.js`):
-     - In `/api/dubbing/import-subtitles`: detects Khmer cues and honors `importMode` / `skipTranslation`.
-     - When `isKhmerDirect` is true: completely skips `retranslateBatchDialogues` -> **0 Gemini API calls**.
-     - Sets `freshTargetEp.scriptData.source = 'imported_khmer_subtitles'` and `status = 'translated'`.
-  4. Batch TTS Auto-Shorten Pass Bypass (`backend/routes/audioRoutes.js` & `frontend/src/services/api/audioApi.js`):
-     - Added flags `disableAiAutoShorten: true`, `enableAiAutoShorten: false`, `isZeroGemini: true`, `autoShortenOverflow: false`.
-     - Completely bypasses Gemini AI rewriting pass during Batch TTS; audio time-stretch is handled cleanly via FFmpeg `atempo`.
-  5. Frontend UI Mode Selection & Feedback:
-     - In `frontend/src/components/media/DubbingModeTab.jsx` and `BatchScriptSetupPanel.jsx` / `GeminiRouteModal.jsx`:
-       - Added Subtitle Import Mode selector:
-         - `⚡ ស្វ័យប្រវត្តិ (Auto-Detect)`
-         - `🇰🇭 Khmer SRT (0 Gemini API · បកប្រែរួច)`
-         - `🇨🇳 Chinese SRT (Gemini AI · បកប្រែចិន ➜ ខ្មែរ)`
-         - `📁 Import Only (មិនបកប្រែ)`
-       - Dynamic button label and clear success banner indicating `⚡ 0 Gemini API · រួចរាល់សម្រាប់ Edge TTS`.
-  6. Verification:
-     - Created `backend/tests/khmer_srt_zero_gemini.test.js` (8/8 tests PASSED).
-     - Regression tests `speed_control_instant.test.js`, `stage3_hybrid_ocr.test.js`, `subtitle_sync_and_zero_overlap_fixes.test.js` (34/34 tests PASSED).
-     - Frontend production build succeeded (`npm run build` in 2.03s).
+- **APK Static Analysis (`com.phoenix.read.oversea.gp` v7.4.3.32 / `74332`) — Read-Only Verification:**
+  1. Inspected `E:\khmer_ai_dubbing_studio\Hongguo_APK\base.apk` (25 DEX files, 253.4 MB DEX) and `split_config.arm64_v8a.apk` (170 `.so` native libraries) using `aapt2` and DEX bytecode/string inspection.
+  2. Verified official in-app offline caching uses ByteDance `TTVideoEngine` (`Downloader` / `DownloadVidTask` / `libavmdlv2.so` / `libttmplayer.so`), storing media under app-private `/Android/data/com.phoenix.read.oversea.gp/files/ttvideo_offline` and Room DB `series_download_db` (`t_series_download_task`), bound to login `identity` and supporting `spade_a` encryption (`LocalFileSourceInfo`).
+  3. Confirmed **no official MP4 export to Gallery/MediaStore** for short dramas (`ExportVideo` = 0 hits; `VideoDownloadServiceImpl` / `SeriesDownloadServiceImpl` never call `MediaStore`).
+  4. Verified cache limits in `VideoDownloadServiceImpl.checkBeforeDownload` (`video_download_limit_expansion_v711` / `Ltr5/f;` defaults `300`, `3`, `10`; fallback `30`).
+- **Previous Session (Pending):** Step 1 Chinese Subtitle Extraction — Deep Audit & Performance Benchmark (pending user approval before editing Stage 3 OCR / deduplication / ROI filtering).
 
 ## Active Environment
-- Backend Server: http://localhost:5000 (running)
-- Frontend Dev: http://localhost:5173 (running)
-- TTS Engine: Microsoft Edge Neural (km-KH-PisethNeural & km-KH-SreymomNeural)
+- Backend Server: http://localhost:5000 (not restarted during audit)
+- Frontend Dev: http://localhost:5173
+- APK Files Inspected: `E:\khmer_ai_dubbing_studio\Hongguo_APK\{base.apk, split_config.arm64_v8a.apk, split_config.xxhdpi.apk}`
+- Scratch Analysis Artifacts: `C:\Users\nhastar\.gemini\antigravity\brain\61e00ff1-7170-494c-a5b5-5f4f64973742\scratch\`
 
 ## Next Steps for User
-- Refresh browser (F5) on `http://localhost:5173`.
-- In Dubbing Mode Tab or Batch Script Setup:
-  - Choose `🇰🇭 Khmer SRT (0 Gemini API · បកប្រែរួច)` or `⚡ ស្វ័យប្រវត្តិ (Auto-Detect)`.
-  - Click `Import Khmer .srt (0 API)` to upload pre-translated Khmer subtitles.
-  - Subtitles will import instantly with 0 Gemini API calls, ready immediately for Edge TTS.
+- Use authorized local/direct `.mp4` files with `hongguo_importer.py` instead of attempting to extract/decrypt in-app encrypted cache from `com.phoenix.read.oversea.gp`.
+- Confirm approval before applying production fixes from the Stage 3 OCR audit (`C:\Users\nhastar\.gemini\antigravity\brain\7be44cdf-da55-41d3-8821-7b28ac6a3da6\scratch\`).

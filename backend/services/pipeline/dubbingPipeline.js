@@ -2,7 +2,7 @@ const { GoogleGenAI } = require('@google/genai');
 const { createSmartGenAIClient, extractAllGeminiKeys } = require('../geminiKeyManager');
 const { DUBBING_CASCADE_MODELS, isUsableDubbingModel } = require('../geminiModelCatalog');
 const { geminiQuotaTracker } = require('../geminiQuotaTracker');
-const { PIPELINE_STAGES, PIPELINE_STATUS, GENERATION_MODES } = require('./pipelineTypes');
+const { PIPELINE_STAGES, PIPELINE_STATUS, GENERATION_MODES, computePipelineCompletenessReport } = require('./pipelineTypes');
 const { ingestEpisode } = require('./stages/stage1_ingestEpisode');
 const { analyzeSourceMedia } = require('./stages/stage2_analyzeSourceMedia');
 const { extractChineseSubtitles, deduplicateFastOcrCues } = require('./stages/stage3_extractChineseSubtitles');
@@ -354,6 +354,15 @@ async function runDubbingPipeline({
 
   const totalTimeMs = Date.now() - startTime;
 
+  const coverageReport = computePipelineCompletenessReport({
+    durationSec,
+    verifiedSourceCuesCount: inputSegmentsForScript.length,
+    ocrTotalFrames: ocrResult?.ocrMeta?.performance?.candidateFramesCount || ocrResult?.ocrMeta?.totalFramesSampled || 0,
+    ocrVerifiedFrames: ocrResult?.ocrMeta?.verifiedFramesCount || 0,
+    ocrUnresolvedFrames: ocrResult?.ocrMeta?.unresolvedFramesCount || 0,
+    finalizedSegments,
+  });
+
   const resultPayload = {
     success: true,
     mode: scriptResult.mode,
@@ -366,14 +375,9 @@ async function runDubbingPipeline({
     script: finalizedSegments,
     speakers,
     speakerRegistry,
-    coverage: {
-      status: 'good',
-      totalDurationSec: durationSec,
-      totalSegments: finalizedSegments.length,
-      coveragePercentage: 100,
-    },
+    coverage: coverageReport,
     recoveryReport: {
-      status: 'completed',
+      status: coverageReport.oneToOneMappingValid ? 'completed' : 'review_needed',
       recoveredSegmentsCount: reconciliation?.reconciliationMeta?.fusedSegmentsCount || 0,
       visualObservationsCount: ocrResult?.ocrMeta?.totalObservations || 0,
     },
@@ -405,7 +409,7 @@ async function runDubbingPipeline({
     expectedEpisodeId: jobEpisodeId,
     scriptData: resultPayload,
     generationMode: mode,
-    status: 'translated',
+    status: coverageReport.oneToOneMappingValid ? 'translated' : 'review_needed',
     seriesGenre: scriptResult.genre || genre,
     seriesDetectedGenre: scriptResult.detectedGenre || scriptResult.genre || genre,
     jobId: jobId || ingestResult?.jobId,

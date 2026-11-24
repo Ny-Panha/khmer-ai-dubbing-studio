@@ -490,7 +490,7 @@ async function extractFramesAtTimestamps(inputVideoPath, timestampsSec = [], out
               bestIdx = i;
             }
           }
-          if (bestIdx >= 0 && bestDiff <= 0.45 && fs.existsSync(producedFiles[bestIdx]) && fs.statSync(producedFiles[bestIdx]).size > 400) {
+          if (bestIdx >= 0 && bestDiff <= 0.20 && fs.existsSync(producedFiles[bestIdx]) && fs.statSync(producedFiles[bestIdx]).size > 400) {
             const destName = `frame_${targetT.toFixed(2).replace(".", "_")}.jpg`;
             const destPath = path.join(outputDir, destName);
             fs.copyFileSync(producedFiles[bestIdx], destPath);
@@ -749,7 +749,7 @@ function extractSubtitleDifferenceGrid(inputVideoPath, startSec = 0, durationSec
             const p = r * scaleW + c;
             const d = Math.abs(fPrev[p] - fCurr[p]);
             sum += d;
-            const isSubBox = (r >= 4 && r <= 28 && c >= 8 && c <= 120);
+            const isSubBox = (r >= 4 && r <= 28 && c >= 14 && c <= 114);
             if (isSubBox) {
               subSum += d;
               subPixels++;

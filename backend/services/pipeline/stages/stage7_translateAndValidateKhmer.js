@@ -20,6 +20,7 @@ async function translateAndValidateKhmer({ scriptSegments = [], mode = 'dialogue
   let translatedCount = 0;
   let missingTranslationCount = 0;
 
+  const missingCueIds = [];
   for (let idx = 0; idx < scriptSegments.length; idx++) {
     const seg = { ...scriptSegments[idx] };
     const origChinese = String(seg.originalChineseText || seg.originalText || '').trim();
@@ -65,6 +66,7 @@ async function translateAndValidateKhmer({ scriptSegments = [], mode = 'dialogue
 
     if (!khmerText) {
       missingTranslationCount++;
+      missingCueIds.push(seg.sourceCueId || seg.segmentId || idx + 1);
       seg.translationStatus = 'review_needed';
       seg.reviewNeeded = true;
       errors.push(
@@ -78,6 +80,7 @@ async function translateAndValidateKhmer({ scriptSegments = [], mode = 'dialogue
       );
     } else if (hasChineseLeak) {
       missingTranslationCount++;
+      missingCueIds.push(seg.sourceCueId || seg.segmentId || idx + 1);
       seg.translationStatus = 'review_needed';
       seg.reviewNeeded = true;
       errors.push(`រកឃើញតួអក្សរចិនលាយក្នុងអត្ថបទខ្មែរ "${khmerText}" (Chinese Hanzi Leak — ត្រូវបកប្រែជាខ្មែរ ១០០%)`);
@@ -101,12 +104,20 @@ async function translateAndValidateKhmer({ scriptSegments = [], mode = 'dialogue
     validatedSegments.push(seg);
   }
 
+  const totalSegs = validatedSegments.length;
+  const translationCompletenessPct = totalSegs > 0
+    ? parseFloat(((translatedCount / totalSegs) * 100).toFixed(2))
+    : 0;
+
   return {
     validatedSegments,
     validationReport: {
-      totalSegments: validatedSegments.length,
+      totalSegments: totalSegs,
       translatedCount,
       missingTranslationCount,
+      missingCueIds,
+      translationCompletenessPct,
+      oneToOneMappingValid: totalSegs > 0 && missingTranslationCount === 0,
       reviewNeededCount,
       mode,
     },

@@ -60,7 +60,7 @@ def create_engine(rapidocr, det_limit_side_len, threads=None):
     if threads is None:
         raw_env = os.environ.get("RAPIDOCR_INTRA_OP_THREADS", "2")
         threads = int(raw_env) if raw_env.isdigit() else 2
-    if threads not in (1, 2, 4):
+    if threads not in (0, 1, 2, 4):
         threads = 2
     import cv2
     cv2.setNumThreads(1)
@@ -96,11 +96,39 @@ def check_engine():
         }
 
 
+WATERMARK_TEXT_RE = re.compile(
+    r"(?:bilibili|抖音|快手|小红书|西瓜视频|小饼漫播|偷了.*的视频|^@[A-Za-z0-9_.-]+$)",
+    re.IGNORECASE,
+)
+CORNER_ID_WATERMARK_RE = re.compile(r"^[\u4e00-\u9fa5A-Za-z_-]{1,8}\d{3,}$")
+
+
+def is_corner_watermark_item(it: dict) -> bool:
+    """Reject platform watermarks, pure-numeric HUD counters, and extreme-corner creator IDs."""
+    txt = it.get("text", "")
+    if not txt:
+        return True
+    if WATERMARK_TEXT_RE.search(txt):
+        return True
+    # Pure numbers/decimal HUD counters (e.g. "587.46") are never Chinese dialogue
+    if re.match(r"^[\d.,:%+\-/\s]+$", txt):
+        return True
+    # Single-character noise outside the centered subtitle zone or at low confidence
+    if len(txt) == 1 and (not it.get("is_centered") or it.get("conf", 0.0) < 0.80):
+        return True
+    in_extreme_x_corner = it["x_min"] >= 0.78 or it["x_max"] <= 0.22
+    in_extreme_y_corner = it["y_min"] >= 0.72 or it["y_max"] <= 0.22
+    if in_extreme_x_corner and in_extreme_y_corner:
+        if CORNER_ID_WATERMARK_RE.match(txt) or re.search(r"[A-Za-z0-9@]", txt) or len(txt) <= 6:
+            return True
+    return False
+
+
 def filter_dialogue_ocr_results(ocr_res, roi_w: int, roi_h: int):
     """
-    Filter out off-center side/corner time-cards (e.g. '几个月前'), vertical nameplates,
-    and floating location banners when a centered bottom dialogue subtitle is present.
-    Preserves single-box results and legitimate stacked 2-line centered dialogue subtitles.
+    Filter out corner watermarks, off-center side/corner time-cards (e.g. '几个月前'),
+    vertical nameplates, and upper HUD overlays when centered or off-center dialogue is present.
+    Preserves legitimate off-center dialogue subtitles and stacked 2-line centered subtitles.
     """
     if not ocr_res:
         return []
@@ -125,7 +153,7 @@ def filter_dialogue_ocr_results(ocr_res, roi_w: int, roi_h: int):
         box_h_px = max(1.0, max(ys) - min(ys))
         is_vertical = (box_h_px > box_w_px * 1.55) and (len(cleaned) >= 2)
         is_centered = (0.30 <= x_center <= 0.70) or (x_min <= 0.46 and x_max >= 0.54)
-        items.append({
+        it = {
             "box": box,
             "text": cleaned,
             "conf": float(conf),
@@ -135,9 +163,13 @@ def filter_dialogue_ocr_results(ocr_res, roi_w: int, roi_h: int):
             "y_max": y_max,
             "x_center": x_center,
             "y_center": y_center,
+            "box_h": y_max - y_min,
             "is_vertical": is_vertical,
             "is_centered": is_centered,
-        })
+        }
+        if is_corner_watermark_item(it):
+            continue
+        items.append(it)
 
     if len(items) >= 2:
         centered_horiz = [it for it in items if it["is_centered"] and not it["is_vertical"]]
@@ -147,10 +179,23 @@ def filter_dialogue_ocr_results(ocr_res, roi_w: int, roi_h: int):
             for it in items:
                 if it["is_vertical"]:
                     continue
-                if not it["is_centered"]:
+                # Preserve off-center horizontal dialogue at same subtitle band, drop side corner stamps
+                in_side_corner = (it["x_min"] >= 0.76 or it["x_max"] <= 0.24) and abs(it["y_center"] - anchor["y_center"]) > 0.12
+                if in_side_corner:
                     continue
-                # Drop upper floating badge/time-card separated vertically & shifted off anchor center
-                if (anchor["y_min"] - it["y_max"]) > 0.22 and abs(it["x_center"] - anchor["x_center"]) > 0.18:
+                # Drop upper HUD/badge lines separated vertically above the main subtitle anchor
+                # while keeping stacked 2-line centered dialogue subtitles of similar font height
+                y_gap = anchor["y_min"] - it["y_max"]
+                is_stacked_dialogue = (
+                    it["is_centered"]
+                    and abs(it["x_center"] - anchor["x_center"]) <= 0.12
+                    and y_gap <= 0.10
+                    and abs(it["box_h"] - anchor["box_h"]) <= 0.08
+                )
+                if y_gap > 0.08 and not is_stacked_dialogue:
+                    continue
+                # Drop non-centered side labels sitting far from anchor
+                if not it["is_centered"] and abs(it["x_center"] - anchor["x_center"]) > 0.28 and y_gap > 0.06:
                     continue
                 kept.append(it)
             if kept:
@@ -159,6 +204,56 @@ def filter_dialogue_ocr_results(ocr_res, roi_w: int, roi_h: int):
     # Sort lines top-to-bottom, then left-to-right
     items.sort(key=lambda it: (round(it["y_min"], 2), it["x_min"]))
     return items
+
+
+def detect_top_center_subtitle(img, engine):
+    """
+    Fast pre-checked fallback for top-center subtitles / scene title cards (y=0.06..0.28, x=0.20..0.80)
+    when bottom ROI is empty. Runs RapidOCR only if bright centered stroke density is present (<0.5ms skip).
+    """
+    import cv2
+    if img is None or not hasattr(img, "shape"):
+        return None
+    h, w = img.shape[:2]
+    if h < 80 or w < 160:
+        return None
+    ty0, ty1 = int(h * 0.06), int(h * 0.28)
+    tx0, tx1 = int(w * 0.20), int(w * 0.80)
+    top_roi = img[ty0:ty1, tx0:tx1]
+    if top_roi.size == 0:
+        return None
+    gray = cv2.cvtColor(top_roi, cv2.COLOR_BGR2GRAY) if len(top_roi.shape) == 3 else top_roi
+    bright_ratio = float((gray >= 215).mean())
+    if bright_ratio < 0.004 or bright_ratio > 0.22:
+        return None
+    edges = cv2.Canny(gray, 80, 180)
+    edge_ratio = float(edges.mean()) / 255.0
+    if edge_ratio < 0.015:
+        return None
+    ocr_res, _ = engine(top_roi, use_det=True, use_cls=False, use_rec=True)
+    if not ocr_res:
+        return None
+    th, tw = top_roi.shape[:2]
+    items = filter_dialogue_ocr_results(ocr_res, tw, th)
+    # Require centered Chinese Hanzi (>= 2 Han chars) for top-zone capture
+    centered_cn = [
+        it for it in items
+        if it["is_centered"] and len(re.findall(r"[\u4e00-\u9fa5]", it["text"])) >= 2 and it["conf"] >= 0.70
+    ]
+    if not centered_cn:
+        return None
+    text = "\n".join(it["text"] for it in centered_cn) if len(centered_cn) > 1 else centered_cn[0]["text"]
+    avg_conf = sum(it["conf"] for it in centered_cn) / len(centered_cn)
+    return {
+        "hasText": True,
+        "textZh": text,
+        "chineseText": text,
+        "confidence": round(avg_conf, 4),
+        "isSharp": avg_conf >= 0.70,
+        "position": "title_card",
+        "ocrStatus": "verified_text",
+        "bboxes": [it["box"] for it in centered_cn],
+    }
 
 
 def read_ocr_result(roi, ocr_res):
@@ -330,6 +425,10 @@ def process_frames_batch(frames, engine, args, roi_ymin, roi_ymax, roi_xmin, roi
                 finally:
                     inference_sec += time.perf_counter() - infer_start
                 ocr_out = read_ocr_result(roi, ocr_res)
+                if not ocr_out["hasText"] and roi_ymin >= 0.50:
+                    top_hit = detect_top_center_subtitle(img, engine)
+                    if top_hit:
+                        ocr_out = top_hit
                 ocr_out_clean = {
                     "id": item_id,
                     "timestampSec": timestamp_sec,
@@ -338,7 +437,7 @@ def process_frames_batch(frames, engine, args, roi_ymin, roi_ymax, roi_xmin, roi
                     "chineseText": ocr_out["chineseText"],
                     "confidence": ocr_out["confidence"],
                     "isSharp": ocr_out["isSharp"],
-                    "position": "bottom_subtitle",
+                    "position": ocr_out.get("position", "bottom_subtitle"),
                     "ocrStatus": ocr_out["ocrStatus"],
                     "bboxes": ocr_out.get("bboxes", []),
                     "isDeduped": False,

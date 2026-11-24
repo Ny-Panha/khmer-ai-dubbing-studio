@@ -24,6 +24,8 @@ test_smart_crop.py
 
 # Large Models & Binaries (>100MB exceeds GitHub limit)
 *.onnx
+*.apk
+Hongguo_APK/
 
 # Build output
 dist/
