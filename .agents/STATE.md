@@ -1,26 +1,38 @@
 # Project State (.agents/STATE.md)
-Last Session: Antigravity IDE - 2026-11-25T02:18:00+07:00
+Last Session: Antigravity IDE - 2026-11-25T02:27:00+07:00
 
 ## Summary
-- **Standalone Hongguo Downloader — Phase 1 Source Investigation (BLOCKED before Phase 2; zero pipeline/UI/OCR/TTS code modified):**
-  1. Investigated `https://hongguoduanju.com/detail?series_id=7709114780467858456` (`谁让这个文盲修仙的第七季`, `series_id=7709114780467858456`) via official SSR `_ROUTER_DATA`, public player JS bundles, and live HTTP + `ffprobe` checks on Windows without phone/USB/ADB/emulator.
-  2. **Episode Enumeration:** `seriesDetail` reports `episode_cnt = 210` with all `210` `vid_list` IDs, but guest PC access is capped at `accessible_episode_cnt = 5` (`pcPlaybackAuthState = "guest"`, `pcAuthenticatedPlayback = false`, `protectedPlayback = true`).
-  3. **Preview vs Full Stream Root Cause:** The public `<video>` SEO path `/video/public/<vid>/360p.mp4` is a `10.066667s` (`946,754` bytes, `640x360`, `h264`/`aac`) preview (explaining `yt-dlp`'s `10.066s, 360p` output).
-  4. **Exact Access / Encryption Blockers:**
-     - **Episodes 1–5:** `POST /api/video/protected/play-info` returns `200` `720p` (`1280x720`) **encrypted DASH** (`format="dash"`, `kid` + `player_access_key`, `encrypt: true`); `POST /api/video/protected/fallback-play-info` returns `200` unencrypted `640x360` MP4 (`89.28s` Ep 1, `95.81s` Ep 2, `90.42s` Ep 5).
-     - **Episodes 6–210 (205 of 210 episodes):** Both `POST /api/video/protected/play-info` and `POST /api/video/protected/fallback-play-info` return **HTTP `403 Forbidden`** (`{"error":"protected_playback_unavailable"}` / `{"error":"public_fallback_unavailable"}`), gated behind account login / App QR unlock (`"扫码进入App端，免费看全集"`).
-     - **Android APK (`com.phoenix.read.oversea.gp` v7.4.3.32):** Uses `TTVideoEngine` + `libavmdlv2.so` private cache (`ttvideo_offline`), account `identity` lock (`t_series_download_task`), `spade_a` encryption (`LocalFileSourceInfo`), and zero official MP4 export.
-  5. Stopped at Phase 1 per strict gate ("Only proceed when an authorized downloadable full-video source is verified").
+- **Phase 1.1 — Hongguo Authenticated PC Playback Verification (No AI Dubbing systems modified):**
+  1. **Official PC Login Workflow Verified (`hongguoduanju.com`):** Uses ByteDance `WebInterfaceSdk` (`aid: 513755`, chunks `57.16836a6409.js`, `32.01258fb02f.js`, `d.f8bcfe815c.js`) supporting 3 official login methods:
+     - Phone + SMS code (`LOGIN_MOBILE_CODE`, supports `+855` Cambodia, `+86`, etc. via `sendCode` / `smsLogin`)
+     - Hongguo App QR Scan (`LOGIN_SCAN_CODE` via `/passport/open/check_qrcode/`)
+     - Douyin OAuth (`platform: "aweme"`, `platform_app_id: 23377` via `bindWithMobileLogin`)
+     - Auth state exposed via `GET /api/pc/profile` and SSR `req.pcPlaybackAuthState` (`"guest"` vs `"authenticated"`).
+  2. **Guest vs Authenticated Code Behavior (`f.486c0bc822.js`, `fk.a229907b0c.js`):**
+     - Frontend episode selection (`canSelect`) and lock gating (`onPcLockEpisodeClick`, `onPcNextEpisode`) always enforce `index < seriesDetail.accessible_episode_cnt`.
+     - Past `accessible_episode_cnt`, web UI shows the mobile App QR prompt (`"扫码进入App端，免费看全集"`).
+  3. **Live Authenticated Verification (`accessible_episode_cnt` 5 -> 210) — BLOCKED:**
+     - No authenticated user credentials/cookies available without user sign-in; `chrome_devtools` could not connect (`ENOENT: DevToolsActivePort` missing). Live post-login `accessible_episode_cnt` and Ep 6/100/210 server responses remain **NOT VERIFIED**.
+  4. **Guest Playback Endpoint Matrix Tested (`series_id=7709114780467858456`):**
+     - Ep 1–5: `play-info` returns `200` `720p` (`1280x720`) **encrypted DASH** (`kid` + `player_access_key`); `fallback-play-info` returns `200` unencrypted `640x360` MP4 (full duration).
+     - Ep 6, 100, 210: Both `play-info` and `fallback-play-info` return **HTTP `403 Forbidden`** (`protected_playback_unavailable` / `public_fallback_unavailable`).
+  5. **Ep 1–5 Fallback MP4 Download + FFprobe + `hongguo_importer.validate()` — PASS (`360p` only, Ep 1–5 only):**
+     - `Episode_001.mp4`: `11,671,123` bytes, `89.281s`, `h264 640x360@30/1`, `aac 44100Hz ch=2`
+     - `Episode_002.mp4`: `14,316,325` bytes, `95.806s`, `h264 640x360@30/1`, `aac 44100Hz ch=2`
+     - `Episode_003.mp4`: `11,605,751` bytes, `87.702s`, `h264 640x360@30/1`, `aac 44100Hz ch=2`
+     - `Episode_004.mp4`: `10,964,518` bytes, `90.813s`, `h264 640x360@30/1`, `aac 44100Hz ch=2`
+     - `Episode_005.mp4`: `9,691,828` bytes, `90.419s`, `h264 640x360@30/1`, `aac 44100Hz ch=2`
+     - Note: Web player sets `controlsList="nodownload"` (no official MP4 download UI button).
 - **Previous Sessions:**
-  - APK Static Analysis (`base.apk` + `split_config.arm64_v8a.apk`) completed at `2026-11-25T01:30:00+07:00`.
+  - Phase 1 Source Investigation (`c99725b`) & APK Static Analysis (`base.apk` + `split_config.arm64_v8a.apk`) completed.
   - Step 1 Chinese Subtitle Extraction audit pending user approval (`C:\Users\nhastar\.gemini\antigravity\brain\7be44cdf-da55-41d3-8821-7b28ac6a3da6\scratch\`).
 
 ## Active Environment
 - Backend Server: http://localhost:5000 (not restarted)
 - Frontend Dev: http://localhost:5173
 - Branch: `chore/full-project-cleanup`
-- Phase 1 Scratch Artifacts: `C:\Users\nhastar\.gemini\antigravity\brain\61e00ff1-7170-494c-a5b5-5f4f64973742\scratch\`
+- Scratch Artifacts & Ep 1–5 Test MP4s: `C:\Users\nhastar\.gemini\antigravity\brain\61e00ff1-7170-494c-a5b5-5f4f64973742\scratch\`
 
 ## Next Steps for User
-- **If pursuing Hongguo web source:** Provide or verify an authorized/licensed source or authenticated session where full episodes `6–210` are legitimately served without DRM/encryption lock, before implementing Phase 2 `hongguo_downloader.py`.
-- **Recommended path:** Import authorized/owned `.mp4` files directly via `hongguo_importer.py`.
+- To verify Task 3 (`accessible_episode_cnt` after real login), enable Chrome remote debugging (`chrome://inspect/#remote-debugging`), sign into `hongguoduanju.com` legitimately in Chrome, and re-run authenticated verification.
+- Until verified that all 210 episodes become accessible as unencrypted MP4s after login, **210-episode download support remains BLOCKED**; use `hongguo_importer.py` for authorized local MP4 files.
