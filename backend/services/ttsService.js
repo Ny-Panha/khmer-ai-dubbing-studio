@@ -222,10 +222,36 @@ function resolveKhmerVoice(requestedVoice, gender = "male") {
 }
 
 /**
+ * ធ្វើ Normalization លើសូរអក្សរឡាតាំងដែល AI Edge TTS ច្រើនបញ្ចេញសូរខុស
+ * ឧ. "កម្រិត A" -> "កម្រិត អា" (ជំនួសសូរអង់គ្លេស /eɪ/ "អេ" ដែលស្តាប់ទៅច្រឡំនឹង "អេស/S")
+ */
+function normalizePhoneticsForTts(text = "") {
+  if (!text || typeof text !== "string") return "";
+
+  let result = text;
+
+  // 1. Specific Rank / Grade / Level patterns: កម្រិត A, ថ្នាក់ A, លំដាប់ A, Rank A, Level A, Class A
+  result = result.replace(
+    /(កម្រិត|កំរិត|ថ្នាក់|លំដាប់|ចំណាត់ថ្នាក់|Rank|rank|Level|level|Class|class)\s*A(?=[\s\u1780-\u17FF.,!?+«»"“”'()]|$)/g,
+    "$1 អា"
+  );
+
+  // 2. Standalone uppercase letter 'A' when isolated or adjacent to Khmer characters
+  // Avoid modifying words like AI, API, ASR, Apple, Auto, BGM, etc.
+  result = result.replace(
+    /(^|[\s\u1780-\u17FF(«"“'—–\-])A(?=[\s\u1780-\u17FF.,!?);:»”'—–\-+]|$)/g,
+    "$1អា"
+  );
+
+  return result;
+}
+
+/**
  * សម្អាតអត្ថបទខ្មែរមុនពេលបញ្ជូនទៅ TTS
  */
 function cleanTextForTts(text = "") {
-  return String(text)
+  const phoneticallyNormalized = normalizePhoneticsForTts(String(text));
+  return phoneticallyNormalized
     .normalize("NFC")
     .replace(/[*_~`#<>[\]{}|\\]/g, " ")
     .replace(/^[\s\-–—….:,;!?«»"“”'()]+/u, "")
