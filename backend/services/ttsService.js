@@ -1031,6 +1031,45 @@ async function generateSingleSegmentAudio(segment, uploadsDir, options = {}) {
       : (speedInfo.numericSpeed ?? 1.0))
     : (segment.speed ?? "normal");
 
+  const existingVariants = (segment.voiceAudioVariants && typeof segment.voiceAudioVariants === "object")
+    ? { ...segment.voiceAudioVariants }
+    : {};
+  const otherVoice = voiceId.includes("Piseth") ? "km-KH-SreymomNeural" : "km-KH-PisethNeural";
+  const updatedVariants = {
+    ...existingVariants,
+    [voiceId]: {
+      voiceId: voiceId,
+      audioUrl: calculatedAudioUrl,
+      audioFile: fileName,
+      audioPath: outputPath,
+      audioDurationSec: finalDuration,
+      speed: resolvedSpeedValue,
+      text: resolvedKhmer,
+      timestamp: Date.now(),
+    },
+  };
+
+  // Auto-discover if the other voice variant already exists in uploadsDir
+  if (!updatedVariants[otherVoice] && uploadsDir && fs.existsSync(uploadsDir)) {
+    try {
+      const prefix = `${epPrefix}seg_${cleanId}_${otherVoice}_`;
+      const files = fs.readdirSync(uploadsDir);
+      const match = files.find((f) => f.startsWith(prefix) && f.endsWith(".mp3") && !f.includes("_raw_"));
+      if (match) {
+        const otherPath = path.join(uploadsDir, match);
+        const otherRel = path.relative(uploadsRoot, otherPath).replace(/\\/g, "/");
+        updatedVariants[otherVoice] = {
+          voiceId: otherVoice,
+          audioUrl: `/uploads/${otherRel}`,
+          audioFile: match,
+          audioPath: otherPath,
+          text: resolvedKhmer,
+          timestamp: Date.now(),
+        };
+      }
+    } catch (_) {}
+  }
+
   return {
     ...segment,
     id: segment.segmentId || segment.id,
@@ -1093,6 +1132,7 @@ async function generateSingleSegmentAudio(segment, uploadsDir, options = {}) {
     audioSignature: computeSegmentAudioSignature(resolvedKhmer, voiceId, resolvedSpeedValue, segment.pitch),
     ttsStatus: "ready",
     status: "audio_ready",
+    voiceAudioVariants: updatedVariants,
     _wasNewlySynthesized: !usedCache,
   };
 }

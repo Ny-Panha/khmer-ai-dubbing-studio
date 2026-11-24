@@ -1035,15 +1035,20 @@ export default function ClipInspectorPanel({
             type="button"
             data-testid="voice-switch-male-btn"
             onClick={async () => {
-              setSwitchingVoiceTarget('MALE');
-              const minSpin = new Promise((r) => setTimeout(r, 300));
+              if (isPisethActive) return;
+              const isCached = Boolean(
+                selectedSegment?.voiceAudioVariants?.['km-KH-PisethNeural']?.audioUrl &&
+                (!selectedSegment?.voiceAudioVariants?.['km-KH-PisethNeural']?.text || selectedSegment.voiceAudioVariants['km-KH-PisethNeural'].text === (selectedSegment.khmer || selectedSegment.khmerText || '').trim())
+              );
+              if (!isCached) {
+                setSwitchingVoiceTarget('MALE');
+              }
               try {
-                await Promise.all([
-                  Promise.resolve(onClipVoiceChange(selectedSegment.id || selectedSegmentIndex, 'km-KH-PisethNeural', selectedSegmentIndex)),
-                  minSpin,
-                ]);
+                await onClipVoiceChange(selectedSegment.id || selectedSegmentIndex, 'km-KH-PisethNeural', selectedSegmentIndex);
               } finally {
-                setSwitchingVoiceTarget(null);
+                if (!isCached) {
+                  setSwitchingVoiceTarget(null);
+                }
               }
             }}
             disabled={regeneratingId === (selectedSegment.id || selectedSegmentIndex) || switchingVoiceTarget !== null}
@@ -1055,7 +1060,7 @@ export default function ClipInspectorPanel({
               border: `1px solid ${isPisethActive ? 'rgba(56, 189, 248, 0.55)' : 'var(--border-subtle)'}`,
               background: isPisethActive ? 'rgba(56, 189, 248, 0.16)' : 'var(--bg-desktop)',
               color: isPisethActive ? '#FFFFFF' : 'var(--text-secondary)',
-              cursor: 'pointer',
+              cursor: isPisethActive ? 'default' : 'pointer',
               fontWeight: isPisethActive ? 700 : 500,
               display: 'flex',
               alignItems: 'center',
@@ -1072,15 +1077,20 @@ export default function ClipInspectorPanel({
             type="button"
             data-testid="voice-switch-female-btn"
             onClick={async () => {
-              setSwitchingVoiceTarget('FEMALE');
-              const minSpin = new Promise((r) => setTimeout(r, 300));
+              if (isSreymomActive) return;
+              const isCached = Boolean(
+                selectedSegment?.voiceAudioVariants?.['km-KH-SreymomNeural']?.audioUrl &&
+                (!selectedSegment?.voiceAudioVariants?.['km-KH-SreymomNeural']?.text || selectedSegment.voiceAudioVariants['km-KH-SreymomNeural'].text === (selectedSegment.khmer || selectedSegment.khmerText || '').trim())
+              );
+              if (!isCached) {
+                setSwitchingVoiceTarget('FEMALE');
+              }
               try {
-                await Promise.all([
-                  Promise.resolve(onClipVoiceChange(selectedSegment.id || selectedSegmentIndex, 'km-KH-SreymomNeural', selectedSegmentIndex)),
-                  minSpin,
-                ]);
+                await onClipVoiceChange(selectedSegment.id || selectedSegmentIndex, 'km-KH-SreymomNeural', selectedSegmentIndex);
               } finally {
-                setSwitchingVoiceTarget(null);
+                if (!isCached) {
+                  setSwitchingVoiceTarget(null);
+                }
               }
             }}
             disabled={regeneratingId === (selectedSegment.id || selectedSegmentIndex) || switchingVoiceTarget !== null}
@@ -1092,7 +1102,7 @@ export default function ClipInspectorPanel({
               border: `1px solid ${isSreymomActive ? 'rgba(244, 114, 182, 0.6)' : 'var(--border-subtle)'}`,
               background: isSreymomActive ? 'rgba(244, 114, 182, 0.16)' : 'var(--bg-desktop)',
               color: isSreymomActive ? '#FFFFFF' : 'var(--text-secondary)',
-              cursor: 'pointer',
+              cursor: isSreymomActive ? 'default' : 'pointer',
               fontWeight: isSreymomActive ? 700 : 500,
               display: 'flex',
               alignItems: 'center',

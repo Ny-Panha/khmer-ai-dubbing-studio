@@ -176,8 +176,37 @@ export class WebAudioScheduler {
       .slice(0, 8);
 
     for (const item of upcoming) {
-      if (!this.lruCache.has(item.rawUrl)) {
+      if (item.rawUrl && !this.lruCache.has(item.rawUrl)) {
         this.lruCache.loadAndDecode(item.rawUrl, ctx);
+      }
+      // Pre-warm male & female voice variants (Piseth & Sreymom) so voice switching is instant with 0ms decode latency
+      if (item.seg?.voiceAudioVariants && typeof item.seg.voiceAudioVariants === 'object') {
+        for (const vKey of Object.keys(item.seg.voiceAudioVariants)) {
+          const variantUrl = item.seg.voiceAudioVariants[vKey]?.audioUrl;
+          if (variantUrl && !this.lruCache.has(variantUrl)) {
+            this.lruCache.loadAndDecode(variantUrl, ctx);
+          }
+        }
+      }
+    }
+  }
+
+  /**
+   * Pre-warm all voice variants for an active or inspected segment
+   */
+  preloadSegmentVariants(segment) {
+    if (!segment) return;
+    const ctx = this.ensureContext();
+    if (!ctx) return;
+    if (segment.audioUrl && !this.lruCache.has(segment.audioUrl)) {
+      this.lruCache.loadAndDecode(segment.audioUrl, ctx);
+    }
+    if (segment.voiceAudioVariants && typeof segment.voiceAudioVariants === 'object') {
+      for (const vKey of Object.keys(segment.voiceAudioVariants)) {
+        const variantUrl = segment.voiceAudioVariants[vKey]?.audioUrl;
+        if (variantUrl && !this.lruCache.has(variantUrl)) {
+          this.lruCache.loadAndDecode(variantUrl, ctx);
+        }
       }
     }
   }

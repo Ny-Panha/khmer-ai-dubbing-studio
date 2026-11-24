@@ -259,19 +259,48 @@ const FALLBACK_VOICE_CATALOG = {
       const segPreservedSpeakerGender = seg.speakerGender || (segPreservedGender === 'female' ? 'FEMALE' : (segPreservedGender === 'male' ? 'MALE' : 'UNKNOWN'));
       const hasText = Boolean((seg.khmer || seg.khmerText || seg.khmerTranslatedText || '').trim());
 
-      // Safe reuse: if segment already has valid audio for this exact voiceId and is not outdated, reuse it
-      const currentVoice = seg.voiceId || seg.khmerVoiceId || seg.voice;
-      const hasValidAudioForTarget = (currentVoice === newVoiceId) &&
-        Boolean(seg.audioUrl || seg.audioFile || seg.audioPath) &&
-        !seg.audioOutdated;
-
       // Preserve existing custom speed if user set one
       const activeSpeed = seg.userCustomSpeed && seg.speed ? seg.speed : newSpeed;
 
+      // Extract existing variants and perform Client-side cache lookup
+      const currentVoice = seg.voiceId || seg.khmerVoiceId || seg.voice || 'km-KH-PisethNeural';
+      const currentSegText = (seg.khmer || seg.khmerText || seg.khmerTranslatedText || '').trim();
+      const currentVariants = {
+        ...(seg.voiceAudioVariants || {}),
+        ...(seg.audioUrl ? {
+          [currentVoice]: {
+            voiceId: currentVoice,
+            audioUrl: seg.audioUrl,
+            audioFile: seg.audioFile,
+            audioPath: seg.audioPath,
+            audioDurationSec: seg.audioDurationSec,
+            speed: seg.speed || activeSpeed,
+            text: currentSegText,
+            timestamp: Date.now(),
+          }
+        } : {})
+      };
+
+      const cachedVariant = currentVariants[newVoiceId];
+      const isLocalCacheHit = Boolean(
+        cachedVariant &&
+        cachedVariant.audioUrl &&
+        (!cachedVariant.text || cachedVariant.text === currentSegText)
+      );
+
+      // Safe reuse: if segment already has valid audio for this exact voiceId and is not outdated, or local cache hit
+      const hasValidAudioForTarget = ((currentVoice === newVoiceId) &&
+        Boolean(seg.audioUrl || seg.audioFile || seg.audioPath) &&
+        !seg.audioOutdated) || isLocalCacheHit;
+
       // Preserve previous audio references so waveforms remain visible and playback works during generation
-      const previousAudioUrl = seg.audioUrl || seg.previousAudioUrl || null;
-      const previousAudioFile = seg.audioFile || seg.previousAudioFile || null;
-      const previousAudioPath = seg.audioPath || seg.previousAudioPath || null;
+      const previousAudioUrl = isLocalCacheHit ? cachedVariant.audioUrl : (seg.audioUrl || seg.previousAudioUrl || null);
+      const previousAudioFile = isLocalCacheHit ? (cachedVariant.audioFile || seg.audioFile) : (seg.audioFile || seg.previousAudioFile || null);
+      const previousAudioPath = isLocalCacheHit ? (cachedVariant.audioPath || seg.audioPath) : (seg.audioPath || seg.previousAudioPath || null);
+      const effectiveAudioUrl = isLocalCacheHit ? cachedVariant.audioUrl : seg.audioUrl;
+      const effectiveAudioFile = isLocalCacheHit ? (cachedVariant.audioFile || seg.audioFile) : seg.audioFile;
+      const effectiveAudioPath = isLocalCacheHit ? (cachedVariant.audioPath || seg.audioPath) : seg.audioPath;
+      const effectiveAudioDur = isLocalCacheHit ? (cachedVariant.audioDurationSec || seg.audioDurationSec) : seg.audioDurationSec;
 
       const segUpdated = {
         ...seg,
@@ -290,14 +319,19 @@ const FALLBACK_VOICE_CATALOG = {
         speed: activeSpeed,
         voiceProvider: 'edge-tts',
         audioOutdated: !hasValidAudioForTarget,
+        audioUrl: effectiveAudioUrl,
+        audioFile: effectiveAudioFile,
+        audioPath: effectiveAudioPath,
+        audioDurationSec: effectiveAudioDur,
         previousAudioUrl,
         previousAudioFile,
         previousAudioPath,
+        voiceAudioVariants: currentVariants,
         ...(hasText && !hasValidAudioForTarget ? {
           textStatus: 'generating',
           isVoiceSwitching: true,
         } : {
-          textStatus: seg.textStatus || 'ready',
+          textStatus: hasValidAudioForTarget ? 'ready' : (seg.textStatus || 'ready'),
           isVoiceSwitching: false,
         }),
       };
@@ -389,7 +423,7 @@ const FALLBACK_VOICE_CATALOG = {
                 speed: activeSpeed,
                 userCustomSpeed: Boolean(seg.userCustomSpeed),
                 voiceId: newVoiceId,
-                forceRegen: true,
+                forceRegen: false,
                 projectName: dramaName,
                 videoId: videoId,
                 episodeId: episodeAtStart,
@@ -411,6 +445,22 @@ const FALLBACK_VOICE_CATALOG = {
               if (!prev?.segments) return prev;
               const nextSegs = prev.segments.map((s) => {
                 if (String(s.id) !== String(seg.id)) return s;
+                const segVariants = {
+                  ...(s.voiceAudioVariants || {}),
+                  ...(res?.voiceAudioVariants || {}),
+                  ...(res?.audioUrl ? {
+                    [newVoiceId]: {
+                      voiceId: newVoiceId,
+                      audioUrl: cacheBustedUrl || res.audioUrl,
+                      audioFile: res.audioFile,
+                      audioPath: res.audioPath,
+                      audioDurationSec: res.audioDurationSec || res.audioDuration,
+                      speed: activeSpeed,
+                      text: res.khmer || res.khmerText || s.khmer || s.khmerText || '',
+                      timestamp: Date.now(),
+                    }
+                  } : {})
+                };
                 return {
                   ...s,
                   ...(res || {}),
@@ -424,6 +474,7 @@ const FALLBACK_VOICE_CATALOG = {
                   audioOutdated: false,
                   textStatus: 'voice_updated',
                   isVoiceSwitching: false,
+                  voiceAudioVariants: segVariants,
                   previousAudioUrl: null,
                   previousAudioFile: null,
                   previousAudioPath: null,
@@ -596,6 +647,18 @@ const FALLBACK_VOICE_CATALOG = {
           episodeId,
           seriesId,
         });
+        const speedVariants = {
+          [targetVoiceId]: {
+            voiceId: targetVoiceId,
+            audioUrl: regenerated.audioUrl,
+            audioFile: regenerated.audioFile,
+            audioPath: regenerated.audioPath,
+            audioDurationSec: regenerated.audioDurationSec || regenerated.audioDuration,
+            speed: normalizedSpeed,
+            text: currentKhmerText,
+            timestamp: Date.now(),
+          },
+        };
         const finalSegments = [...newSegments];
         finalSegments[segIdx] = {
           ...regenerated,
@@ -606,6 +669,7 @@ const FALLBACK_VOICE_CATALOG = {
           appliedSpeed: regenerated?.appliedSpeed ?? normalizedSpeed,
           userCustomSpeed: customFlag,
           audioOutdated: false,
+          voiceAudioVariants: speedVariants,
         };
         const nextUpdatedAt = Date.now();
         setScriptData((prev) => (prev ? {
@@ -673,16 +737,21 @@ const FALLBACK_VOICE_CATALOG = {
 
     const targetSeg = scriptData.segments[segIdx];
     const segDisplayNum = targetSeg.id ?? (segIdx + 1);
+    const segKey = String(targetSeg?.id ?? segIdx);
 
     // Fast return: if segment already has this exact voice assigned, has valid audio, and is ready, no-op
     const currentVoice = targetSeg.voiceOverride || targetSeg.khmerVoiceId || targetSeg.voiceId || targetSeg.voice;
     const isSameVoice = currentVoice === newVoiceId;
     const isAlreadyReady = Boolean(targetSeg.audioUrl || targetSeg.audioPath || targetSeg.audioFile) &&
       !targetSeg.audioOutdated &&
-      targetSeg.textStatus === 'ready';
+      (targetSeg.textStatus === 'ready' || targetSeg.textStatus === 'voice_updated');
     if (isSameVoice && isAlreadyReady) {
       return targetSeg;
     }
+
+    // Sequence token to prevent race conditions & stale responses
+    const currentSeq = (segmentRegenSeqRef.current[segKey] || 0) + 1;
+    segmentRegenSeqRef.current[segKey] = currentSeq;
 
     const isFemale = (newVoiceId || '').includes('Sreymom');
     const activeSpeed = targetSeg.userCustomSpeed ? targetSeg.speed : (voiceSettings.speed || 'normal');
@@ -757,10 +826,100 @@ const FALLBACK_VOICE_CATALOG = {
       previousAudioPath,
     };
 
+    // 0. Extract & normalize existing variants
+    const currentVoiceKey = targetSeg.voiceOverride || targetSeg.khmerVoiceId || targetSeg.voiceId || targetSeg.voice || 'km-KH-PisethNeural';
+    const existingVariants = {
+      ...(targetSeg.voiceAudioVariants || {}),
+      ...(targetSeg.audioUrl ? {
+        [currentVoiceKey]: {
+          voiceId: currentVoiceKey,
+          audioUrl: targetSeg.audioUrl,
+          audioFile: targetSeg.audioFile,
+          audioPath: targetSeg.audioPath,
+          audioDurationSec: targetSeg.audioDurationSec,
+          speed: activeSpeed,
+          deliveryType: targetSeg.deliveryType || 'out_loud',
+          audioEffect: targetSeg.audioEffect || 'none',
+          text: currentKhmerText,
+          timestamp: Date.now(),
+        }
+      } : {})
+    };
+
+    // Client-side cache lookup before calling backend: Click -> Local Cache -> Play
+    const cachedVariant = existingVariants[newVoiceId];
+    const isLocalCacheHit = Boolean(
+      cachedVariant &&
+      cachedVariant.audioUrl &&
+      (!cachedVariant.text || cachedVariant.text === currentKhmerText) &&
+      (!cachedVariant.speed || cachedVariant.speed === activeSpeed) &&
+      (!cachedVariant.deliveryType || cachedVariant.deliveryType === (targetSeg.deliveryType || 'out_loud')) &&
+      (!cachedVariant.audioEffect || cachedVariant.audioEffect === (targetSeg.audioEffect || 'none'))
+    );
+
+    if (isLocalCacheHit) {
+      console.log(`[useAudioDubbing] ⚡ Client-side instant voice switch cache hit for seg #${segDisplayNum} (${newVoiceId})`);
+      const instantSeg = {
+        ...targetSeg,
+        ...assignedFields,
+        audioUrl: cachedVariant.audioUrl,
+        audioFile: cachedVariant.audioFile || targetSeg.audioFile,
+        audioPath: cachedVariant.audioPath || targetSeg.audioPath,
+        audioDurationSec: cachedVariant.audioDurationSec || targetSeg.audioDurationSec,
+        audioOutdated: false,
+        textStatus: 'ready',
+        isVoiceSwitching: false,
+        voiceAudioVariants: existingVariants,
+      };
+
+      const instantSegments = [...scriptData.segments];
+      instantSegments[segIdx] = instantSeg;
+
+      if (spkKey && speakerEntryPatch) {
+        setSpeakerRegistry((prev) => ({
+          ...prev,
+          [spkKey]: {
+            ...(prev[spkKey] || {}),
+            ...speakerEntryPatch,
+          }
+        }));
+      }
+
+      setScriptData((prev) => (prev ? {
+        ...prev,
+        segments: instantSegments,
+        updatedAt: Date.now(),
+      } : prev));
+      invalidateRendered();
+
+      if (seriesId && episodeId) {
+        try {
+          saveTimelineOperationToLocalStorage(seriesId, episodeId, {
+            segments: instantSegments,
+            updatedAt: Date.now(),
+          });
+          persistTimelineOperationApi({
+            seriesId,
+            episodeId,
+            operation: 'update_segments',
+            segments: instantSegments,
+            updatedAt: Date.now(),
+          }).catch(() => {});
+        } catch (_) {}
+      }
+
+      setFullAudioUrl(null);
+      setFullAudioPath(null);
+      setAudioGenerated(true);
+      setAudioOutdated(instantSegments.some((s) => s.audioOutdated));
+      return instantSeg;
+    }
+
     // Waveform preservation: keep targetSeg.audioUrl so waveform stays visible during synthesis
     const updatedSeg = {
       ...targetSeg,
       ...assignedFields,
+      voiceAudioVariants: existingVariants,
       ...(willRegen ? {
         textStatus: 'generating',
         isVoiceSwitching: true,
@@ -859,13 +1018,35 @@ const FALLBACK_VOICE_CATALOG = {
         }
       );
 
+      // Discard stale in-flight response if a newer voice switch already occurred
+      if (segmentRegenSeqRef.current[segKey] !== currentSeq) {
+        console.log(`[useAudioDubbing] Discarding stale voice response for segment #${segKey} (seq mismatch ${currentSeq} vs ${segmentRegenSeqRef.current[segKey]})`);
+        return null;
+      }
+
       suppressNextBackendSync(2500);
+      const committedVariants = {
+        ...existingVariants,
+        ...(regenerated.voiceAudioVariants || {}),
+        [newVoiceId]: {
+          voiceId: newVoiceId,
+          audioUrl: regenerated.audioUrl,
+          audioFile: regenerated.audioFile,
+          audioPath: regenerated.audioPath,
+          audioDurationSec: regenerated.audioDurationSec || regenerated.audioDuration,
+          speed: regenerated.speed || activeSpeed,
+          text: currentKhmerText,
+          timestamp: Date.now(),
+        },
+      };
+
       const committedSeg = {
         ...regenerated,
         ...assignedFields,
         audioOutdated: false,
         textStatus: 'ready',
         isVoiceSwitching: false,
+        voiceAudioVariants: committedVariants,
       };
 
       let stillOutdated = false;
@@ -889,6 +1070,9 @@ const FALLBACK_VOICE_CATALOG = {
       setAudioOutdated(stillOutdated);
       return committedSeg;
     } catch (err) {
+      if (segmentRegenSeqRef.current[segKey] !== currentSeq) {
+        return null;
+      }
       console.warn('Auto-regen segment audio failed — reverting voice assignment:', err);
       // Full rollback: restore previous voice, color/label, speakerRegistry, and prior audio
       let revertedSegments = null;
@@ -997,6 +1181,21 @@ const FALLBACK_VOICE_CATALOG = {
           seriesId,
         });
 
+        const effectVariants = {
+          [activeVoiceId]: {
+            voiceId: activeVoiceId,
+            audioUrl: regenerated.audioUrl,
+            audioFile: regenerated.audioFile,
+            audioPath: regenerated.audioPath,
+            audioDurationSec: regenerated.audioDurationSec || regenerated.audioDuration,
+            speed: activeSpeed,
+            deliveryType: nextDelivery,
+            audioEffect,
+            text: currentKhmerText,
+            timestamp: Date.now(),
+          },
+        };
+
         const finalSegments = [...newSegments];
         finalSegments[segIdx] = {
           ...regenerated,
@@ -1005,6 +1204,7 @@ const FALLBACK_VOICE_CATALOG = {
           audioEffect,
           textStatus: 'voice_updated',
           audioOutdated: false,
+          voiceAudioVariants: effectVariants,
         };
 
         setScriptData((prev) => (prev ? {
@@ -1142,6 +1342,21 @@ const FALLBACK_VOICE_CATALOG = {
         const currentItem = (scriptData?.segments && scriptData.segments[segIdx]) || targetSeg;
         const isTextStillCurrent = (currentItem?.khmer || '').trim() === cleanText;
 
+        const textVariants = {
+          ...(currentItem?.voiceAudioVariants || {}),
+          ...(regenerated?.voiceAudioVariants || {}),
+          [targetVoiceId]: {
+            voiceId: targetVoiceId,
+            audioUrl: cacheBustedUrl,
+            audioFile: regenerated.audioFile,
+            audioPath: regenerated.audioPath,
+            audioDurationSec: effAudioDur,
+            speed: activeSpeed,
+            text: newText,
+            timestamp: Date.now(),
+          },
+        };
+
         const merged = {
           ...currentItem,
           ...regenerated,
@@ -1157,6 +1372,7 @@ const FALLBACK_VOICE_CATALOG = {
           audioDurationSec: effAudioDur,
           voiceId: targetVoiceId,
           speed: activeSpeed,
+          voiceAudioVariants: textVariants,
           audioOutdated: !isTextStillCurrent,
           textStatus: isTextStillCurrent ? 'voice_updated' : 'text_updated',
         };
@@ -1568,7 +1784,32 @@ const FALLBACK_VOICE_CATALOG = {
         if (!prev?.segments) return prev;
         return {
           ...prev,
-          segments: prev.segments.map((s) => updatedMap.get(String(s.id)) || s),
+          segments: prev.segments.map((s) => {
+            const updated = updatedMap.get(String(s.id));
+            if (!updated) return s;
+            const segVoiceId = updated.voiceId || updated.khmerVoiceId || s.voiceId || s.khmerVoiceId || activeVoiceId;
+            const updatedVariants = {
+              ...(s.voiceAudioVariants || {}),
+              ...(updated.voiceAudioVariants || {}),
+              ...(updated.audioUrl ? {
+                [segVoiceId]: {
+                  voiceId: segVoiceId,
+                  audioUrl: updated.audioUrl,
+                  audioFile: updated.audioFile,
+                  audioPath: updated.audioPath,
+                  audioDurationSec: updated.audioDurationSec || updated.audioDuration,
+                  speed: updated.speed || s.speed,
+                  text: updated.khmer || updated.khmerText || s.khmer || s.khmerText || '',
+                  timestamp: Date.now(),
+                },
+              } : {}),
+            };
+            return {
+              ...s,
+              ...updated,
+              voiceAudioVariants: updatedVariants,
+            };
+          }),
           updatedAt: Date.now(),
         };
       });
@@ -1687,6 +1928,24 @@ const FALLBACK_VOICE_CATALOG = {
         : null;
 
       const currentItem = (scriptData?.segments && scriptData.segments[segIdx]) || baseSeg || targetSeg;
+      const currentItemVariants = (currentItem?.voiceAudioVariants && typeof currentItem.voiceAudioVariants === 'object')
+        ? currentItem.voiceAudioVariants
+        : (targetSeg.voiceAudioVariants || {});
+      const updatedVariants = {
+        ...currentItemVariants,
+        ...(updatedSeg?.voiceAudioVariants || {}),
+        [targetVoiceId]: {
+          voiceId: targetVoiceId,
+          audioUrl: cacheBustedUrl,
+          audioFile: updatedSeg.audioFile,
+          audioPath: updatedSeg.audioPath,
+          audioDurationSec: effAudioDur,
+          speed: activeSpeed,
+          text: textToUse,
+          timestamp: Date.now(),
+        },
+      };
+
       const merged = {
         ...currentItem,
         ...updatedSeg,
@@ -1703,6 +1962,7 @@ const FALLBACK_VOICE_CATALOG = {
         voiceId: targetVoiceId,
         speed: activeSpeed,
         userCustomSpeed: overrideSpeed !== null ? isCustomClipSpeed(overrideSpeed) : Boolean(targetSeg.userCustomSpeed),
+        voiceAudioVariants: updatedVariants,
         audioOutdated: false,
         textStatus: 'voice_updated',
       };

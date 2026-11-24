@@ -1,35 +1,38 @@
 # Project State (.agents/STATE.md)
-Last Session: IDE - 2026-11-24T22:23:00+07:00
+Last Session: IDE - 2026-11-24T23:33:00+07:00
 
 ## Summary
-- User Question: "why check code then test then fix" + screenshots:
-  1. `localhost:5173/quota` modal displaying `0/10 Ready` with `503 Busy` across all models.
-  2. Clip #43 (`兽`) displaying error banner for Google Gemini 503 High Demand.
-- Root Cause Identified:
-  1. Permanent 503 Probe Freeze in `geminiQuotaTracker.js`:
-     - When Google servers have a brief 503 "High Demand" spike, probing or requests record `lastProbeCode: 503` into `gemini_quota_usage.json`.
-     - In `geminiQuotaTracker.js` (lines 701 and 942), there was NO TTL/expiration timestamp check on `lastProbeCode === 503`.
-     - Consequently, even after Google's servers returned to normal, the models remained frozen in `liveStatus = 'busy'` indefinitely!
-     - This caused `readyCascadeModelsCount` to stay at `0/10 Ready` and pushed all models to degraded priority.
-- Implementation Details:
-  1. `backend/services/geminiQuotaTracker.js`:
-     - Added 45-second TTL check (`now - lastProbeAt < 45000`) for 503 / 504 codes in both `prioritizeAvailableModels` and `getPoolStatusSnapshot`.
-     - Once 45 seconds pass after a spike, models automatically recover to `'ready'`, clearing the temporary 503 latency and error message.
-     - `readyCascadeModelsCount` automatically restores to `10/10 Ready`.
-  2. `backend/tests/gemini_quota_tracker_and_routes.test.js`:
-     - Added test asserting that after 45s TTL, 503 models automatically recover to `liveStatus: 'ready'` with cleared latency.
-- Verification & Benchmarks:
-  - All 15 tests PASSED in `gemini_quota_tracker_and_routes.test.js` and `retranslate_fallback.test.js`.
-  - Backend restarted with new code; live verified on `http://localhost:5000/api/gemini/keys-status`:
-    - `readyCascadeModelsCount: 10 / 10` (All models healthy and ready).
-    - Auto-recovery verified in production.
+- Audio Cache Architecture Upgrade: Instant Client-side Voice Switching & Preloading:
+  1. Frontend Instant Voice Switching (Click -> Local Cache -> Play):
+     - Updated `frontend/src/hooks/useAudioDubbing.js` in `handleUpdateSegmentVoice`:
+       - Before sending any network request to backend, checks `targetSeg.voiceAudioVariants[newVoiceId]`.
+       - If cached audio URL exists and text matches, switches audio, waveform, duration, and voice metadata INSTANTLY (0ms latency, zero spinner/waiting).
+       - Persists updated segments to localStorage and synchronizes in the background via `persistTimelineOperationApi`.
+  2. Cast Voices Cache Reuse:
+     - In `handleUpdateSpeakerVoice`:
+       - Changed `forceRegen: true` to `forceRegen: false`.
+       - Added client-side cache lookup across character segments to immediately reuse existing audio variants for `newVoiceId` without adding them to regeneration queue.
+       - Records generated audio into `voiceAudioVariants` upon progressive commit.
+  3. Preloading Both Male & Female Voices (Piseth & Sreymom):
+     - Updated `frontend/src/utils/webAudioScheduler.js`:
+       - `preloadUpcoming` pre-decodes both primary and alternative voice variant URLs in `voiceAudioVariants` into `AudioBufferLRUCache`.
+       - Added `preloadSegmentVariants(segment)` to pre-warm both voice variants in Web Audio API.
+  4. Backend Voice Audio Variants Tracking & Auto-Discovery:
+     - Updated `backend/services/ttsService.js`:
+       - Returns `voiceAudioVariants` mapping for synthesized voices.
+       - Automatically discovers sibling voice files on disk (Piseth / Sreymom) and populates them into `voiceAudioVariants`.
+  5. Verification & Tests:
+     - Created `backend/tests/voice_variants_cache.test.js` (PASSED 100%).
+     - All 4 TTS backend test suites passed (11/11, 10/10, 4/4 tests).
+     - Frontend production build succeeded cleanly (`npm run build` in 1.53s).
 
 ## Active Environment
 - Backend Server: http://localhost:5000 (running, task-2440)
 - Frontend Dev: http://localhost:5173 (running)
-- Quota Monitor: 7/7 Keys Active, 10/10 Cascade Models Ready
+- TTS Engine: Microsoft Edge Neural (km-KH-PisethNeural & km-KH-SreymomNeural)
 
 ## Next Steps for User
-- Refresh browser (F5) in Studio or Quota modal.
-- You will now see `10/10 Models Ready` in the Quota modal instead of `0/10 Ready`.
-- On Clip #43 (`兽`), click `🔄 សាកម្តងទៀត` to retranslate smoothly.
+- Refresh browser (F5) on `http://localhost:5173`.
+- Test voice switching on any segment between Piseth and Sreymom:
+  - First switch generates/caches the audio.
+  - Subsequent switches between Piseth and Sreymom will be INSTANT (0ms delay, no backend wait).

@@ -214,6 +214,17 @@ export default function VoiceSettings({
 
   const selectedSegment = selectedSegmentIndex !== -1 ? scriptData.segments[selectedSegmentIndex] : null;
 
+  // Preload available voice variants for the currently selected clip only
+  useEffect(() => {
+    if (!selectedSegment?.voiceAudioVariants) return;
+    const variants = selectedSegment.voiceAudioVariants;
+    Object.values(variants).forEach((v) => {
+      if (v?.audioUrl) {
+        fetch(v.audioUrl, { cache: 'force-cache' }).catch(() => {});
+      }
+    });
+  }, [selectedSegment?.id, selectedSegment?.voiceAudioVariants]);
+
   // When video is playing, avoid thrashing selectedSegmentId to prevent layout freezes and stuttering.
   // Segment selection is reserved for user clicks while editing or paused.
 
@@ -395,14 +406,23 @@ export default function VoiceSettings({
         segmentAudioRef.current.removeAttribute('src');
         setPlayingSegmentId(null);
       }
-      setRegeneratingId(segIdOrIndex);
+      const seg = scriptData?.segments?.[effectiveIndex];
+      const isCached = Boolean(
+        seg?.voiceAudioVariants?.[newVoiceId]?.audioUrl &&
+        (!seg?.voiceAudioVariants?.[newVoiceId]?.text || seg.voiceAudioVariants[newVoiceId].text === (seg.khmer || seg.khmerText || '').trim())
+      );
+      if (!isCached) {
+        setRegeneratingId(segIdOrIndex);
+      }
       try {
         await onUpdateSegmentVoice(segIdOrIndex, newVoiceId, true, effectiveIndex);
       } finally {
-        setRegeneratingId(null);
+        if (!isCached) {
+          setRegeneratingId(null);
+        }
       }
     }
-  }, [onUpdateSegmentVoice, selectedSegmentIndex]);
+  }, [onUpdateSegmentVoice, selectedSegmentIndex, scriptData?.segments]);
 
   const handleClipSpeedChange = useCallback(async (segIdOrIndex, newSpeed, targetIndex = null) => {
     if (onUpdateSegmentSpeed) {
