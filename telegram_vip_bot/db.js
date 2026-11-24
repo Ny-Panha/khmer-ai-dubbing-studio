@@ -1,22 +1,41 @@
 const fs = require('fs');
 const path = require('path');
 
-const DB_FILE = process.env.DB_PATH || path.join(__dirname, 'data', 'db.json');
+let activeDbPath = path.join(__dirname, 'data', 'db.json');
 let memoryDB = null;
+
+function resolveDbFile() {
+  const customPath = process.env.DB_PATH;
+  if (customPath) {
+    try {
+      const customDir = path.dirname(customPath);
+      if (!fs.existsSync(customDir)) {
+        fs.mkdirSync(customDir, { recursive: true });
+      }
+      fs.accessSync(customDir, fs.constants.W_OK);
+      return customPath;
+    } catch (err) {
+      console.warn(`⚠️ Cannot write to DB_PATH="${customPath}" (${err.message}). Falling back to local data/db.json`);
+    }
+  }
+  const defaultPath = path.join(__dirname, 'data', 'db.json');
+  const defaultDir = path.dirname(defaultPath);
+  if (!fs.existsSync(defaultDir)) {
+    fs.mkdirSync(defaultDir, { recursive: true });
+  }
+  return defaultPath;
+}
 
 // Ensure db file exists with initial structure
 function initDB() {
-  const dir = path.dirname(DB_FILE);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
-  if (!fs.existsSync(DB_FILE)) {
+  activeDbPath = resolveDbFile();
+  if (!fs.existsSync(activeDbPath)) {
     const initialData = {
       users: {},
       payments: {},
       usedSlips: {}
     };
-    fs.writeFileSync(DB_FILE, JSON.stringify(initialData, null, 2), 'utf8');
+    fs.writeFileSync(activeDbPath, JSON.stringify(initialData, null, 2), 'utf8');
     memoryDB = initialData;
   }
 }
@@ -24,7 +43,7 @@ function initDB() {
 function readDB() {
   initDB();
   try {
-    const raw = fs.readFileSync(DB_FILE, 'utf8');
+    const raw = fs.readFileSync(activeDbPath, 'utf8');
     if (raw && raw.trim().length > 0) {
       const data = JSON.parse(raw);
       if (!data.usedSlips) data.usedSlips = {};
@@ -44,7 +63,7 @@ function readDB() {
 function writeDB(data) {
   memoryDB = data;
   try {
-    fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2), 'utf8');
+    fs.writeFileSync(activeDbPath, JSON.stringify(data, null, 2), 'utf8');
     return true;
   } catch (err) {
     console.error('Error writing DB:', err.message);
