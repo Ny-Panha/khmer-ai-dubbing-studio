@@ -230,13 +230,16 @@ export default function VoiceSettings({
       if (Array.isArray(activeSeries?.glossary?.characters) && activeSeries.glossary.characters.length > 0) {
         return activeSeries.glossary.characters.map((ch) => {
           const currentVoice = ch.voiceId || ch.khmerVoiceId || settings?.voiceId || 'km-KH-PisethNeural';
-          const isFemale = (ch.gender === 'female' || ch.gender === 'FEMALE') || String(currentVoice).toLowerCase().includes('sreymom');
+          const isVoiceFemale = String(currentVoice).toLowerCase().includes('sreymom');
+          const isCharacterFemale = (ch.gender === 'female' || ch.gender === 'FEMALE');
           return {
             key: ch.id || ch.name,
             name: ch.khmerName || ch.name,
             count: 0,
             voiceId: currentVoice,
-            isFemale,
+            isVoiceFemale,
+            isFemale: isVoiceFemale,
+            isCharacterFemale,
           };
         });
       }
@@ -259,15 +262,17 @@ export default function VoiceSettings({
       )) || {};
 
       const currentVoice = reg.voiceId || reg.khmerVoiceId || settings?.voiceId || 'km-KH-PisethNeural';
-      const isFemale = String(reg.voiceGender || reg.gender || '').toLowerCase() === 'female' ||
-        String(currentVoice).toLowerCase().includes('sreymom');
+      const isVoiceFemale = String(currentVoice).toLowerCase().includes('sreymom');
+      const isCharacterFemale = String(reg.gender || reg.speakerGender || '').toLowerCase() === 'female';
 
       list.push({
         key: reg.id || name,
         name,
         count,
         voiceId: currentVoice,
-        isFemale,
+        isVoiceFemale,
+        isFemale: isVoiceFemale,
+        isCharacterFemale,
         userOverridden: Boolean(reg.userOverridden || reg.voiceAssignmentSource === 'manual'),
       });
     }
@@ -964,7 +969,7 @@ export default function VoiceSettings({
                       {activeEpisodeSpeakers.map((spk) => {
                         return (
                           <div key={spk.key || spk.name} className="inspector-speaker-row">
-                            <span className={`inspector-speaker-name ${spk.isFemale ? 'is-female' : 'is-male'}`}>
+                            <span className={`inspector-speaker-name ${spk.isCharacterFemale ? 'is-female' : 'is-male'}`}>
                               {spk.name} {spk.count > 0 && <span style={{ fontSize: '0.68rem', opacity: 0.6 }}>({spk.count} ឃ្លា)</span>}
                             </span>
                             <button
@@ -972,12 +977,12 @@ export default function VoiceSettings({
                               onClick={() =>
                                 onUpdateSpeakerVoice?.(
                                   spk.key || spk.name,
-                                  spk.isFemale ? 'km-KH-PisethNeural' : 'km-KH-SreymomNeural'
+                                  spk.isVoiceFemale ? 'km-KH-PisethNeural' : 'km-KH-SreymomNeural'
                                 )
                               }
-                              className={`inspector-speaker-voice-btn ${spk.isFemale ? 'is-female' : 'is-male'}`}
+                              className={`inspector-speaker-voice-btn ${spk.isVoiceFemale ? 'is-female' : 'is-male'}`}
                             >
-                              {spk.isFemale ? 'ស្រី (ស្រីមុំ)' : 'ប្រុស (ពិសិដ្ឋ)'}
+                              {spk.isVoiceFemale ? 'ស្រី (ស្រីមុំ)' : 'ប្រុស (ពិសិដ្ឋ)'}
                             </button>
                           </div>
                         );

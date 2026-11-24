@@ -104,6 +104,7 @@ export function useAudioDubbing({
   const syncAudioTimeoutRef = useRef(null);
   const audioProgressTimerRef = useRef(null);
   const segmentRegenSeqRef = useRef({});
+  const speakerRegenSeqRef = useRef({});
   const activeTtsEpisodeRef = useRef(episodeId);
   activeTtsEpisodeRef.current = episodeId;
 
@@ -180,8 +181,8 @@ const FALLBACK_VOICE_CATALOG = {
     };
   }, []);
 
-  // Update a Character's assigned voice across the whole project
-  const handleUpdateSpeakerVoice = (speakerId, newVoiceId, newSpeed = 'normal') => {
+  // Update a Character's assigned voice across the whole project and auto-regenerate matching segments in current episode
+  const handleUpdateSpeakerVoice = async (speakerId, newVoiceId, newSpeed = 'normal') => {
     const isFemale = String(newVoiceId || '').toLowerCase().includes('sreymom');
     const voiceLabel = isFemale ? 'ស្រីមុំ (Sreymom)' : 'ពិសិដ្ឋ (Piseth)';
     const avatar = isFemale ? '👩' : '👨';
@@ -228,23 +229,31 @@ const FALLBACK_VOICE_CATALOG = {
 
     setSpeakerRegistry(newReg);
 
+    const isMatchingSegment = (seg) => {
+      if (!seg) return false;
+      const rawName = (seg.speaker || seg.speakerName || '').trim();
+      return (
+        seg.speakerId === speakerId ||
+        (targetName && (rawName === targetName || seg.speakerName === targetName)) ||
+        (existing.id && seg.speakerId === existing.id) ||
+        (typeof speakerId === 'string' && rawName && rawName.length >= 2 && (speakerId === rawName || speakerId.includes(rawName))) ||
+        (typeof speakerId === 'string' && seg.speakerId && seg.speakerId === speakerId)
+      );
+    };
+
     let updatedSegments = null;
+    const segmentsToRegen = [];
+
     setScriptData((sPrev) => {
       if (!sPrev?.segments) return sPrev;
 
       updatedSegments = sPrev.segments.map((seg) => {
-        const rawName = (seg.speaker || seg.speakerName || '').trim();
-        const matches =
-          seg.speakerId === speakerId ||
-          (targetName && (rawName === targetName || seg.speakerName === targetName)) ||
-          (existing.id && seg.speakerId === existing.id) ||
-          (typeof speakerId === 'string' && rawName && rawName.length >= 2 && speakerId.includes(rawName));
-
-        if (matches) {
+        if (isMatchingSegment(seg)) {
           const segPreservedVoiceGender = seg.voiceGender || preservedVoiceGender;
           const segPreservedGender = seg.gender || segPreservedVoiceGender;
           const segPreservedSpeakerGender = seg.speakerGender || (segPreservedGender === 'female' ? 'FEMALE' : (segPreservedGender === 'male' ? 'MALE' : 'UNKNOWN'));
-          return {
+          const hasText = Boolean((seg.khmer || seg.khmerText || seg.khmerTranslatedText || '').trim());
+          const segUpdated = {
             ...seg,
             voiceId: newVoiceId,
             khmerVoiceId: newVoiceId,
@@ -261,7 +270,17 @@ const FALLBACK_VOICE_CATALOG = {
             speed: newSpeed,
             voiceProvider: 'edge-tts',
             audioOutdated: true,
+            ...(hasText ? {
+              textStatus: 'generating',
+              audioUrl: null,
+              audioFile: null,
+              audioPath: null,
+            } : {}),
           };
+          if (hasText) {
+            segmentsToRegen.push(segUpdated);
+          }
+          return segUpdated;
         }
         return seg;
       });
@@ -276,6 +295,16 @@ const FALLBACK_VOICE_CATALOG = {
     setAudioOutdated(true);
     invalidateRendered();
 
+    // Persist manual voice assignment immediately to localStorage and backend
+    if (seriesId && episodeId && updatedSegments) {
+      try {
+        saveTimelineOperationToLocalStorage(seriesId, episodeId, {
+          segments: updatedSegments,
+          updatedAt: Date.now(),
+        });
+      } catch (_) {}
+    }
+
     const saveFn = onSaveEpisodeBackground || handleSaveEpisodeBackground;
     if (saveFn && updatedSegments) {
       saveFn({
@@ -287,6 +316,144 @@ const FALLBACK_VOICE_CATALOG = {
         speakerRegistry: newReg,
         audioOutdated: true,
       });
+    }
+
+    if (segmentsToRegen.length === 0) {
+      return updatedSegments;
+    }
+
+    // Sequence token for safe concurrency
+    const spkToken = String(speakerId || targetName || 'all');
+    speakerRegenSeqRef.current[spkToken] = (speakerRegenSeqRef.current[spkToken] || 0) + 1;
+    const currentSeq = speakerRegenSeqRef.current[spkToken];
+
+    const dramaName = getProjectName();
+    const videoId = getVideoId();
+
+    try {
+      const regenResults = await Promise.all(
+        segmentsToRegen.map(async (seg) => {
+          try {
+            const activeSpeed = seg.userCustomSpeed ? seg.speed : newSpeed;
+            const res = await generateSingleSegmentAudio(
+              {
+                ...seg,
+                voiceId: newVoiceId,
+                textStatus: 'ready',
+              },
+              {
+                speed: activeSpeed,
+                userCustomSpeed: Boolean(seg.userCustomSpeed),
+                voiceId: newVoiceId,
+                forceRegen: true,
+                projectName: dramaName,
+                videoId: videoId,
+                episodeId,
+                seriesId,
+              }
+            );
+            return { id: seg.id, success: true, res };
+          } catch (err) {
+            console.warn(`[CastVoiceSwitch] Auto-regen failed for segment #${seg.id}:`, err?.message || err);
+            return { id: seg.id, success: false, error: err?.message || 'TTS generation failed' };
+          }
+        })
+      );
+
+      // Discard stale in-flight results if user switched voice again
+      if (speakerRegenSeqRef.current[spkToken] !== currentSeq) {
+        console.log(`[CastVoiceSwitch] Discarding stale audio response for speaker ${spkToken}`);
+        return null;
+      }
+
+      let finalSegments = null;
+      setScriptData((prev) => {
+        if (!prev?.segments) return prev;
+        const resultMap = new Map(regenResults.map((r) => [String(r.id), r]));
+        const nextSegs = prev.segments.map((s) => {
+          const match = resultMap.get(String(s.id));
+          if (!match) return s;
+          if (match.success && match.res) {
+            const cacheBustedUrl = match.res.audioUrl
+              ? (match.res.audioUrl.includes('?t=') ? match.res.audioUrl : `${match.res.audioUrl}?t=${Date.now()}`)
+              : null;
+            return {
+              ...s,
+              ...match.res,
+              audioUrl: cacheBustedUrl,
+              voiceId: newVoiceId,
+              khmerVoiceId: newVoiceId,
+              voice: newVoiceId,
+              voiceLabel,
+              avatar,
+              badgeColor,
+              audioOutdated: false,
+              textStatus: 'voice_updated',
+            };
+          } else {
+            return {
+              ...s,
+              textStatus: 'error',
+              regenError: match.error,
+              audioOutdated: true,
+            };
+          }
+        });
+        finalSegments = nextSegs;
+        return {
+          ...prev,
+          segments: nextSegs,
+          updatedAt: Date.now(),
+        };
+      });
+
+      setAudioGenerated(true);
+      invalidateRendered();
+
+      if (finalSegments) {
+        const stillOutdated = finalSegments.some((s) => s.audioOutdated);
+        setAudioOutdated(stillOutdated);
+
+        // Re-stitch timeline audio so playback immediately plays the new voice
+        if (finalSegments.some((s) => s.audioFile || s.audioPath || s.audioUrl)) {
+          syncTimelineAudioApi(finalSegments, dramaName, videoId, episodeId, seriesId)
+            .then((syncRes) => {
+              if (syncRes && syncRes.fullAudioUrl) {
+                const cacheBusted = `${syncRes.fullAudioUrl.split('?')[0]}?t=${Date.now()}`;
+                setFullAudioUrl(cacheBusted);
+                setFullAudioPath(syncRes.fullAudioPath);
+                setAudioGenerated(true);
+              }
+            })
+            .catch((syncErr) => console.warn('Auto re-sync timeline audio error:', syncErr.message));
+        }
+
+        // Final persistence
+        if (seriesId && episodeId) {
+          try {
+            saveTimelineOperationToLocalStorage(seriesId, episodeId, {
+              segments: finalSegments,
+              updatedAt: Date.now(),
+            });
+          } catch (_) {}
+        }
+        if (saveFn) {
+          saveFn({
+            scriptData: {
+              ...(scriptData || {}),
+              segments: finalSegments,
+              updatedAt: Date.now(),
+            },
+            speakerRegistry: newReg,
+            audioOutdated: stillOutdated,
+          });
+        }
+      }
+
+      return finalSegments;
+    } catch (batchErr) {
+      console.warn('[CastVoiceSwitch] Auto-regen batch error:', batchErr);
+      return updatedSegments;
     }
   };
 
