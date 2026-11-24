@@ -121,6 +121,10 @@ describe('Global Series Folder Selector with isolated multi-series workspaces', 
     const src = fs.readFileSync(path.join(rootDir, 'frontend/src/features/gemini-route/hooks/useEpisodeSelection.js'), 'utf8');
 
     assert.ok(
+      src.includes('useRef') && src.includes("import { useState, useMemo, useEffect, useCallback, useRef } from 'react';"),
+      'Must import useRef from react in useEpisodeSelection'
+    );
+    assert.ok(
       src.includes('prevSeriesIdRef') && src.includes('prevSeriesIdRef.current !== seriesId'),
       'Must listen for seriesId changes and reset/scope selectedEpIds for the new series'
     );

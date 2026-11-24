@@ -27,7 +27,8 @@ Last Session: IDE - 2026-11-24T19:18:00+07:00
 - Verification:
   - `node --test backend/tests/series_folder_selector_workspace.test.js`: 7/7 PASSED.
   - `node --test backend/tests/cast_voice_switching.test.js`: 9/9 PASSED.
-  - `npm run build`: Succeeded in 1.28s (0 errors).
+  - `npm run build`: Succeeded in 1.24s (0 errors).
+  - Fixed missing `useRef` import in `useEpisodeSelection.js` that caused ErrorBoundary trigger on Batch route.
 
 ## Active Environment
 - Backend Server: http://localhost:5000 (running)
