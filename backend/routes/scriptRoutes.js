@@ -414,6 +414,9 @@ router.post("/dubbing/import-subtitles", async (req, res) => {
       apiKey,
       force = false,
       confirmed = false,
+      importMode = "auto",
+      skipTranslation = false,
+      subtitleLanguage = "auto",
     } = req.body;
 
     if (!fileContent || typeof fileContent !== "string" || !fileContent.trim()) {
@@ -427,8 +430,8 @@ router.post("/dubbing/import-subtitles", async (req, res) => {
     // 1. Parse Subtitle
     const isJson = fileType === "json" || fileContent.trim().startsWith("{") || fileContent.trim().startsWith("[");
     const parseResult = isJson
-      ? parseJsonContent(fileContent, GENERATION_MODES.FAST_OCR)
-      : parseSrtContent(fileContent, GENERATION_MODES.FAST_OCR);
+      ? parseJsonContent(fileContent, GENERATION_MODES.FAST_OCR, { importMode, subtitleLanguage, skipTranslation })
+      : parseSrtContent(fileContent, GENERATION_MODES.FAST_OCR, { importMode, subtitleLanguage, skipTranslation });
 
     // If parsing produced 0 segments or fatal errors, return detailed validation errors
     if (!parseResult.success || !Array.isArray(parseResult.segments) || parseResult.segments.length === 0) {
@@ -492,23 +495,43 @@ router.post("/dubbing/import-subtitles", async (req, res) => {
       return res.status(400).json({
         success: false,
         validationErrors: ["All subtitle cues were dropped during deduplication."],
-        error: "រកមិនឃើញអត្ថបទចិនត្រឹមត្រូវក្នុង File Subtitle នេះឡើយ!",
+        error: "រកមិនឃើញអត្ថបទត្រឹមត្រូវក្នុង File Subtitle នេះឡើយ!",
       });
     }
 
-    // 4. Batch Translate Chinese Text to Khmer
+    // 4. Batch Translate Chinese Text to Khmer (Skip if Khmer direct, import only, or skipTranslation is true)
     let finalizedSegments = dedupedCues;
+    const hasKhmerCues = dedupedCues.some((s) => /[\u1780-\u17FF]/.test(String(s.khmerTranslatedText || s.khmerText || s.khmer || '')));
+    const isKhmerDirect = importMode === 'khmer_direct' || subtitleLanguage === 'khmer' || (importMode === 'auto' && hasKhmerCues);
+    const isImportOnly = importMode === 'import_only';
+    const shouldTranslate = !skipTranslation && !isKhmerDirect && !isImportOnly;
+
     const availableKeys = extractAllGeminiKeys(apiKey);
     const keyToUse = availableKeys.length > 0 ? availableKeys.join(',') : undefined;
+    let geminiCallsCount = 0;
 
-    if (keyToUse) {
+    if (shouldTranslate && keyToUse) {
       try {
         finalizedSegments = await retranslateBatchDialogues(dedupedCues, keyToUse, {
           narratorGender: defaultGender,
         });
+        geminiCallsCount = 1;
       } catch (transErr) {
         console.warn(`[SubtitleImport] Batch translation warning: ${transErr.message}. Keeping raw segments.`);
       }
+    } else if (isKhmerDirect) {
+      // Ensure all segments have translated status and proper Khmer text fields
+      finalizedSegments = dedupedCues.map((seg) => {
+        const kmText = String(seg.khmerTranslatedText || seg.khmerText || seg.khmer || seg.originalChineseText || seg.chineseText || seg.text || '').trim();
+        return {
+          ...seg,
+          khmerTranslatedText: kmText,
+          khmerText: kmText,
+          khmer: kmText,
+          translationStatus: 'translated',
+          status: 'translated',
+        };
+      });
     }
 
     // 5. Persist to Episode & series.json under per-series mutex (re-reading latest disk state after async translation)
@@ -519,7 +542,9 @@ router.post("/dubbing/import-subtitles", async (req, res) => {
         freshTargetEp.scriptData = {
           mode: GENERATION_MODES.FAST_OCR,
           generationMode: 'fast_ocr',
-          source: 'imported_subtitles',
+          source: isKhmerDirect ? 'imported_khmer_subtitles' : 'imported_subtitles',
+          subtitleLanguage: isKhmerDirect ? 'khmer' : (subtitleLanguage || 'auto'),
+          importMode,
           segments: finalizedSegments,
           hasScript: finalizedSegments.length > 0,
           totalSegments: finalizedSegments.length,
@@ -533,9 +558,13 @@ router.post("/dubbing/import-subtitles", async (req, res) => {
 
     return res.json({
       success: true,
-      message: `Import Subtitle ជោគជ័យ! (${finalizedSegments.length} ឃ្លា)`,
+      message: isKhmerDirect
+        ? `Import Subtitle ខ្មែរជោគជ័យ! (${finalizedSegments.length} ឃ្លា - រួចរាល់សម្រាប់ Edge TTS ដោយមិនប្រើ Gemini API)`
+        : `Import Subtitle ជោគជ័យ! (${finalizedSegments.length} ឃ្លា)`,
       count: finalizedSegments.length,
       segments: finalizedSegments,
+      isKhmerDirect: Boolean(isKhmerDirect),
+      geminiCallsCount,
       validationErrors: parseResult.warnings || [],
       warnings: parseResult.warnings || [],
     });

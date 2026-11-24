@@ -198,6 +198,13 @@ function areChineseTextsEquivalent(a = '', b = '') {
   const normB = normalizeChineseChars(b);
   if (!normA || !normB) return false;
   if (normA === normB) return true;
+
+  // For Khmer or non-Chinese scripts, equivalence is exact normalized equality (prevents false phonetic character overlap)
+  const hasChinese = /[\u4e00-\u9fa5]/.test(normA) && /[\u4e00-\u9fa5]/.test(normB);
+  if (!hasChinese) {
+    return normA === normB;
+  }
+
   if (normA.length >= 2 && normB.length >= 2) {
     if (normA.includes(normB) || normB.includes(normA)) return true;
     const minL = Math.min(normA.length, normB.length);
@@ -854,7 +861,10 @@ function deduplicateFastOcrCues(rawCues = [], defaultGender = 'male') {
   };
 
   for (const cue of sorted) {
-    const rawCueText = String(cue.originalChineseText || cue.chineseText || cue.textZh || cue.text || '').trim();
+    const rawCueText = String(
+      cue.originalChineseText || cue.chineseText || cue.textZh || cue.text ||
+      cue.khmerTranslatedText || cue.khmerText || cue.khmer || ''
+    ).trim();
     const cueText = stripDecorativeSubtitleNoise(rawCueText);
     if (!cueText) continue;
 
@@ -867,15 +877,18 @@ function deduplicateFastOcrCues(rawCues = [], defaultGender = 'male') {
         startSec: cStart,
         endSec: cEnd,
         duration: parseFloat(Math.max(0.35, cEnd - cStart).toFixed(2)),
-        textZh: cueText,
-        originalChineseText: cueText,
-        chineseText: cueText,
+        textZh: cue.textZh || cueText,
+        originalChineseText: cue.originalChineseText || cueText,
+        chineseText: cue.chineseText || cueText,
+        khmerTranslatedText: cue.khmerTranslatedText || cue.khmerText || cue.khmer || '',
+        khmerText: cue.khmerText || cue.khmerTranslatedText || cue.khmer || '',
+        khmer: cue.khmer || cue.khmerTranslatedText || cue.khmerText || '',
         visualGender: cue.visualGender || 'unknown',
         speakerVisualHint: cue.speakerVisualHint || '',
         deliveryType: cue.deliveryType || 'dialogue',
-        source: 'visual_ocr',
-        evidenceSource: 'visual_ocr',
-        evidenceType: 'visual_only',
+        source: cue.source || 'visual_ocr',
+        evidenceSource: cue.evidenceSource || 'visual_ocr',
+        evidenceType: cue.evidenceType || 'visual_only',
       });
       continue;
     }
@@ -925,15 +938,18 @@ function deduplicateFastOcrCues(rawCues = [], defaultGender = 'male') {
       startSec: cStart,
       endSec: cEnd,
       duration: parseFloat(Math.max(0.35, cEnd - cStart).toFixed(2)),
-      textZh: cueText,
-      originalChineseText: cueText,
-      chineseText: cueText,
+      textZh: cue.textZh || cueText,
+      originalChineseText: cue.originalChineseText || cueText,
+      chineseText: cue.chineseText || cueText,
+      khmerTranslatedText: cue.khmerTranslatedText || cue.khmerText || cue.khmer || '',
+      khmerText: cue.khmerText || cue.khmerTranslatedText || cue.khmer || '',
+      khmer: cue.khmer || cue.khmerTranslatedText || cue.khmerText || '',
       visualGender: cue.visualGender || 'unknown',
       speakerVisualHint: cue.speakerVisualHint || '',
       deliveryType: cue.deliveryType || 'dialogue',
-      source: 'visual_ocr',
-      evidenceSource: 'visual_ocr',
-      evidenceType: 'visual_only',
+      source: cue.source || 'visual_ocr',
+      evidenceSource: cue.evidenceSource || 'visual_ocr',
+      evidenceType: cue.evidenceType || 'visual_only',
     });
   }
 
@@ -1030,8 +1046,13 @@ function deduplicateFastOcrCues(rawCues = [], defaultGender = 'male') {
       audioPath: null,
       audioDurationSec: 0,
       rawAudioDur: 0,
-      ttsStatus: 'pending',
-      status: 'needs_translation',
+      ttsStatus: seg.ttsStatus || (seg.audioFile ? 'ready' : 'pending'),
+      status: (seg.translationStatus === 'translated' || seg.khmerTranslatedText || seg.khmerText)
+        ? 'translated'
+        : (seg.status || 'needs_translation'),
+      translationStatus: seg.translationStatus || (
+        (seg.khmerTranslatedText || seg.khmerText) ? 'translated' : 'review_needed'
+      ),
     };
   });
 }

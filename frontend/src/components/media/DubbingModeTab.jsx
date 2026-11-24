@@ -60,6 +60,7 @@ export default function DubbingModeTab({
     'standard'
   );
   const [isImportingSubtitles, setIsImportingSubtitles] = useState(false);
+  const [subtitleImportMode, setSubtitleImportMode] = useState('auto');
   const [importErrors, setImportErrors] = useState([]);
   const [importSuccess, setImportSuccess] = useState(null);
   const fileInputRef = useRef(null);
@@ -219,10 +220,15 @@ export default function DubbingModeTab({
             defaultGender: narratorGender,
             force: true,
             confirmed: true,
+            importMode: subtitleImportMode,
+            skipTranslation: subtitleImportMode === 'import_only',
           });
 
           if (res.success && res.segments) {
-            setImportSuccess(`Import ជោគជ័យ ${res.count || res.segments.length} ឃ្លា!`);
+            const successMsg = res.isKhmerDirect
+              ? `Import Subtitle ខ្មែរជោគជ័យ ${res.count || res.segments.length} ឃ្លា (⚡ 0 Gemini API · រួចរាល់សម្រាប់ Edge TTS)!`
+              : `Import ជោគជ័យ ${res.count || res.segments.length} ឃ្លា!`;
+            setImportSuccess(successMsg);
             setGenerationMode('fast_ocr');
             if (onUpdateScript) {
               onUpdateScript({
@@ -1149,9 +1155,30 @@ export default function DubbingModeTab({
               </button>
             </div>
 
-            {/* Import .srt / .json Button */}
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingTop: 6, borderTop: '1px solid rgba(255, 255, 255, 0.06)' }}>
-              <span style={{ fontSize: '10.5px', color: '#94a3b8' }}>មាន Subtitle ស្រាប់? (Import Subtitles):</span>
+            {/* Import .srt / .json Button with Mode Selector */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingTop: 6, borderTop: '1px solid rgba(255, 255, 255, 0.06)', flexWrap: 'wrap', gap: 6 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ fontSize: '10.5px', color: '#94a3b8' }}>មាន Subtitle ស្រាប់? (Import):</span>
+                <select
+                  value={subtitleImportMode}
+                  onChange={(e) => setSubtitleImportMode(e.target.value)}
+                  style={{
+                    fontSize: '10px',
+                    padding: '2px 6px',
+                    borderRadius: 4,
+                    background: '#1e293b',
+                    color: subtitleImportMode === 'khmer_direct' ? '#34d399' : '#cbd5e1',
+                    border: '1px solid rgba(255,255,255,0.15)',
+                    cursor: 'pointer',
+                  }}
+                  title="ជ្រើសរើសប្រភេទ Subtitle ដែលត្រូវនាំចូល"
+                >
+                  <option value="auto">⚡ ស្វ័យប្រវត្តិ (Auto-Detect)</option>
+                  <option value="khmer_direct">🇰🇭 Khmer SRT (0 Gemini API · បកប្រែរួច)</option>
+                  <option value="chinese_translate">🇨🇳 Chinese SRT (Gemini AI · បកប្រែចិន ➜ ខ្មែរ)</option>
+                  <option value="import_only">📁 Import Only (មិនបកប្រែ)</option>
+                </select>
+              </div>
               <div>
                 <input
                   ref={fileInputRef}
@@ -1173,9 +1200,9 @@ export default function DubbingModeTab({
                     borderRadius: 5,
                     fontSize: '10.5px',
                     fontWeight: 600,
-                    background: 'rgba(56, 189, 248, 0.12)',
-                    color: '#38bdf8',
-                    border: '1px solid rgba(56, 189, 248, 0.3)',
+                    background: subtitleImportMode === 'khmer_direct' ? 'rgba(52, 211, 153, 0.15)' : 'rgba(56, 189, 248, 0.12)',
+                    color: subtitleImportMode === 'khmer_direct' ? '#34d399' : '#38bdf8',
+                    border: subtitleImportMode === 'khmer_direct' ? '1px solid rgba(52, 211, 153, 0.35)' : '1px solid rgba(56, 189, 248, 0.3)',
                     cursor: isImportingSubtitles ? 'not-allowed' : 'pointer',
                     display: 'flex',
                     alignItems: 'center',
@@ -1183,7 +1210,7 @@ export default function DubbingModeTab({
                   }}
                 >
                   {isImportingSubtitles ? <Loader2 size={11} className="spin" /> : <FileText size={11} />}
-                  <span>Import .srt / .json</span>
+                  <span>{subtitleImportMode === 'khmer_direct' ? 'Import Khmer .srt (0 API)' : 'Import .srt / .json'}</span>
                 </button>
               </div>
             </div>

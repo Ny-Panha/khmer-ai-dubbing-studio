@@ -858,7 +858,14 @@ router.post("/generate-audio", async (req, res) => {
         });
 
         // Post-TTS Auto-Shorten Pass: condense only segments still overflowing slot (>0.15s) or containing Hanzi leaks
-        if (autoStretch !== false && req.body.autoShortenOverflow !== false && !batchExplicitCustom) {
+        // Allows skipping Gemini AI auto-shorten for Zero-Gemini workflows (e.g. imported Khmer subtitles)
+        const disableGeminiShorten =
+          req.body.disableAiAutoShorten === true ||
+          req.body.enableAiAutoShorten === false ||
+          req.body.autoShortenOverflow === false ||
+          req.body.isZeroGemini === true;
+
+        if (autoStretch !== false && !disableGeminiShorten && !batchExplicitCustom) {
           try {
             const overflowCandidates = findOverflowShortenCandidates(updatedSegments, { maxOverflowThresholdSec: 0.15 });
             if (overflowCandidates.length > 0) {

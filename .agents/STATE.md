@@ -1,41 +1,43 @@
 # Project State (.agents/STATE.md)
-Last Session: IDE - 2026-11-25T00:18:00+07:00
+Last Session: IDE - 2026-11-25T00:31:00+07:00
 
 ## Summary
-- Single Clip Speed Control (0.5x–2.0x) Zero-TTS Architecture:
-  1. Clean 1.0x Base Audio Reuse (Zero Edge TTS Calls):
-     - In `backend/services/ttsService.js`:
-       - Immutable `natural1xPath` (`seg_<cleanId>_<voiceId>_base1x_<hash>.mp3`) is cached on first 1.0x synthesis.
-       - All subsequent speed changes (0.5x, 0.75x, 1.25x, 1.5x, 2.0x) reuse `natural1xPath` directly and apply FFmpeg `atempo` (~180ms).
-       - Zero speed stacking: speed transformations are always calculated directly from the natural 1.0x base audio, preventing pitch distortion or prosody drift.
-       - Protected `_base1x_` and speed variants from deletion in `unlinkSync` (`!isBase1xFile && !isSpeedVariant`).
-       - Re-selecting any previously rendered speed is an instant backend cache hit (1ms).
-  2. Frontend Instant Preview & State Preservation:
-     - In `frontend/src/hooks/useAudioDubbing.js`:
-       - Changed `forceRegen: true` to `forceRegen: false`.
-       - Preserved `audioTrimmed`, `userTrimmed`, `audioOffset`, and timeline start positions.
-       - Preserved existing `voiceAudioVariants` (Piseth/Sreymom) and `deliveryVariants` (out_loud/inner_thought).
-       - Removed blocking full-episode `syncTimelineAudioApi` on single speed change.
-       - Added fast return on same-speed click (0.0039ms latency, 0 requests).
-       - Added `segmentRegenSeqRef` sequence token to discard stale in-flight responses.
-  3. UI Smooth Slider & Presets:
-     - In `frontend/src/components/voice/ClipInspectorPanel.jsx`:
-       - Preset buttons (0.75x, 1.0x, 1.25x, 1.5x) have same-speed fast return checks.
-       - Dragging updates local draft speed in real time; commits only on pointer release.
-  4. Verification:
-     - Created `backend/tests/speed_control_instant.test.js` (PASSED 100%).
-     - All 4 test suites passed (`speed_control_instant`, `delivery_style_switching`, `voice_variants_cache`, `instant_voice_switching`).
-     - Frontend production build succeeded (`npm run build` in 1.17s).
+- Khmer SRT Import & Dubbing Workflow (Zero-Gemini API Key):
+  1. Subtitle Parser Language Detection & Modes (`backend/utils/subtitleParser.js`):
+     - Added `isKhmerText` via Unicode regex `[\u1780-\u17FF]`.
+     - Supports `importMode`: `'auto'` (default), `'khmer_direct'`, `'chinese_translate'`, `'import_only'`.
+     - For Khmer SRT or detected Khmer text: populates `khmerTranslatedText: text`, `khmerText: text`, `khmer: text`, `translationStatus: 'translated'`, `status: 'translated'`.
+  2. OCR Deduplication & Equality Fix (`backend/services/pipeline/stages/stage3VisionBatchRunner.js`):
+     - In `areChineseTextsEquivalent`: restricted 75% bag-of-characters matching strictly to CJK Han characters (`/[\u4e00-\u9fa5]/`), preventing different Khmer sentences from falsely colliding due to shared vowels/consonants.
+     - Preserves `khmerTranslatedText`, `status: 'translated'`, and `translationStatus: 'translated'` during fast deduplication.
+  3. Zero-Gemini Subtitle Import Route (`backend/routes/scriptRoutes.js`):
+     - In `/api/dubbing/import-subtitles`: detects Khmer cues and honors `importMode` / `skipTranslation`.
+     - When `isKhmerDirect` is true: completely skips `retranslateBatchDialogues` -> **0 Gemini API calls**.
+     - Sets `freshTargetEp.scriptData.source = 'imported_khmer_subtitles'` and `status = 'translated'`.
+  4. Batch TTS Auto-Shorten Pass Bypass (`backend/routes/audioRoutes.js` & `frontend/src/services/api/audioApi.js`):
+     - Added flags `disableAiAutoShorten: true`, `enableAiAutoShorten: false`, `isZeroGemini: true`, `autoShortenOverflow: false`.
+     - Completely bypasses Gemini AI rewriting pass during Batch TTS; audio time-stretch is handled cleanly via FFmpeg `atempo`.
+  5. Frontend UI Mode Selection & Feedback:
+     - In `frontend/src/components/media/DubbingModeTab.jsx` and `BatchScriptSetupPanel.jsx` / `GeminiRouteModal.jsx`:
+       - Added Subtitle Import Mode selector:
+         - `⚡ ស្វ័យប្រវត្តិ (Auto-Detect)`
+         - `🇰🇭 Khmer SRT (0 Gemini API · បកប្រែរួច)`
+         - `🇨🇳 Chinese SRT (Gemini AI · បកប្រែចិន ➜ ខ្មែរ)`
+         - `📁 Import Only (មិនបកប្រែ)`
+       - Dynamic button label and clear success banner indicating `⚡ 0 Gemini API · រួចរាល់សម្រាប់ Edge TTS`.
+  6. Verification:
+     - Created `backend/tests/khmer_srt_zero_gemini.test.js` (8/8 tests PASSED).
+     - Regression tests `speed_control_instant.test.js`, `stage3_hybrid_ocr.test.js`, `subtitle_sync_and_zero_overlap_fixes.test.js` (34/34 tests PASSED).
+     - Frontend production build succeeded (`npm run build` in 2.03s).
 
 ## Active Environment
-- Backend Server: http://localhost:5000 (running, task-2440)
+- Backend Server: http://localhost:5000 (running)
 - Frontend Dev: http://localhost:5173 (running)
 - TTS Engine: Microsoft Edge Neural (km-KH-PisethNeural & km-KH-SreymomNeural)
 
 ## Next Steps for User
 - Refresh browser (F5) on `http://localhost:5173`.
-- Test speed adjustment on any clip:
-  - Drag the slider between 0.5x and 2.0x or click presets (0.75x, 1.0x, 1.25x, 1.5x):
-    - Audio is scaled directly from natural 1.0x clean speech via FFmpeg `atempo` without Edge TTS synthesis.
-    - Re-selecting a previously used speed returns INSTANTLY (1ms).
-    - Trimming and offsets are fully preserved.
+- In Dubbing Mode Tab or Batch Script Setup:
+  - Choose `🇰🇭 Khmer SRT (0 Gemini API · បកប្រែរួច)` or `⚡ ស្វ័យប្រវត្តិ (Auto-Detect)`.
+  - Click `Import Khmer .srt (0 API)` to upload pre-translated Khmer subtitles.
+  - Subtitles will import instantly with 0 Gemini API calls, ready immediately for Edge TTS.

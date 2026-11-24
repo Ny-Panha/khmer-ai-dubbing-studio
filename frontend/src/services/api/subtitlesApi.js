@@ -43,6 +43,9 @@ export async function importSubtitlesApi({
   apiKey,
   force = false,
   confirmed = false,
+  importMode = 'auto',
+  skipTranslation = false,
+  subtitleLanguage = 'auto',
 }) {
   const res = await fetch('/api/dubbing/import-subtitles', {
     method: 'POST',
@@ -56,6 +59,9 @@ export async function importSubtitlesApi({
       apiKey,
       force,
       confirmed,
+      importMode,
+      skipTranslation,
+      subtitleLanguage,
     }),
   });
   return await parseResponseJson(res, 'Failed to import subtitles');

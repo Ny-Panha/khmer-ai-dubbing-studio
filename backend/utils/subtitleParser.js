@@ -6,6 +6,17 @@
 
 const { createCanonicalSegment, parseTimeToSeconds, GENERATION_MODES } = require('../services/pipeline/pipelineTypes');
 
+const KHMER_UNICODE_REGEX = /[\u1780-\u17FF]/;
+
+/**
+ * Check if text contains Khmer Unicode characters
+ * @param {string} str
+ * @returns {boolean}
+ */
+function isKhmerText(str = '') {
+  return KHMER_UNICODE_REGEX.test(String(str || ''));
+}
+
 /**
  * Parse an SRT timestamp string (e.g. "00:01:23,456" or "00:01:23.456") into float seconds.
  * 
@@ -38,9 +49,15 @@ function parseSrtTimestamp(timeStr = '') {
  * 
  * @param {string} srtText - Raw SRT text
  * @param {string} [mode=GENERATION_MODES.FAST_OCR]
+ * @param {object} [options={}] - { importMode: 'auto'|'khmer_direct'|'chinese_translate'|'import_only', subtitleLanguage: 'auto'|'khmer'|'chinese', skipTranslation: boolean }
  * @returns {{ success: boolean, segments: Array<object>, warnings: Array<string> }}
  */
-function parseSrtContent(srtText = '', mode = GENERATION_MODES.FAST_OCR) {
+function parseSrtContent(srtText = '', mode = GENERATION_MODES.FAST_OCR, options = {}) {
+  const {
+    importMode = 'auto',
+    subtitleLanguage = 'auto',
+    skipTranslation = false,
+  } = options;
   const warnings = [];
   if (!srtText || typeof srtText !== 'string' || srtText.trim().length === 0) {
     return { success: false, segments: [], warnings: ['SRT file is empty or invalid.'] };
@@ -103,13 +120,39 @@ function parseSrtContent(srtText = '', mode = GENERATION_MODES.FAST_OCR) {
       continue;
     }
 
-    rawSegments.push({
-      startSec,
-      endSec,
-      originalChineseText: text,
-      chineseText: text,
-      source: 'external_srt',
-    });
+    const hasKhmerChars = isKhmerText(text);
+    const isKhmer = importMode === 'khmer_direct' ||
+      subtitleLanguage === 'khmer' ||
+      hasKhmerChars;
+
+    if (isKhmer) {
+      rawSegments.push({
+        startSec,
+        endSec,
+        khmerTranslatedText: text,
+        khmerText: text,
+        khmer: text,
+        originalChineseText: text, // Fallback
+        chineseText: text,
+        text,
+        source: 'external_srt',
+        translationStatus: 'translated',
+        status: 'translated',
+        detectedLanguage: 'km',
+      });
+    } else {
+      rawSegments.push({
+        startSec,
+        endSec,
+        originalChineseText: text,
+        chineseText: text,
+        text,
+        source: 'external_srt',
+        translationStatus: skipTranslation || importMode === 'import_only' ? 'imported' : 'review_needed',
+        status: skipTranslation || importMode === 'import_only' ? 'imported' : 'needs_translation',
+        detectedLanguage: 'zh',
+      });
+    }
   }
 
   if (rawSegments.length === 0) {
@@ -140,9 +183,15 @@ function parseSrtContent(srtText = '', mode = GENERATION_MODES.FAST_OCR) {
  * 
  * @param {string|Array<object>} jsonInput
  * @param {string} [mode=GENERATION_MODES.FAST_OCR]
+ * @param {object} [options={}] - { importMode: 'auto'|'khmer_direct'|'chinese_translate'|'import_only', subtitleLanguage: 'auto'|'khmer'|'chinese', skipTranslation: boolean }
  * @returns {{ success: boolean, segments: Array<object>, warnings: Array<string> }}
  */
-function parseJsonContent(jsonInput, mode = GENERATION_MODES.FAST_OCR) {
+function parseJsonContent(jsonInput, mode = GENERATION_MODES.FAST_OCR, options = {}) {
+  const {
+    importMode = 'auto',
+    subtitleLanguage = 'auto',
+    skipTranslation = false,
+  } = options;
   const warnings = [];
   let parsedArray = null;
 
@@ -175,6 +224,7 @@ function parseJsonContent(jsonInput, mode = GENERATION_MODES.FAST_OCR) {
     if (endSec <= startSec) endSec = startSec + 1.5;
 
     const text = String(
+      item.khmerTranslatedText ?? item.khmerText ?? item.khmer ??
       item.originalChineseText ?? item.chineseText ?? item.text ?? item.originalText ?? item.content ?? ''
     ).trim();
 
@@ -183,14 +233,42 @@ function parseJsonContent(jsonInput, mode = GENERATION_MODES.FAST_OCR) {
       continue;
     }
 
-    rawSegments.push({
-      ...item,
-      startSec,
-      endSec,
-      originalChineseText: text,
-      chineseText: text,
-      source: 'external_json',
-    });
+    const hasKhmerField = Boolean(item.khmerTranslatedText || item.khmerText || item.khmer);
+    const isKhmer = importMode === 'khmer_direct' ||
+      subtitleLanguage === 'khmer' ||
+      hasKhmerField ||
+      (importMode === 'auto' && isKhmerText(text));
+
+    if (isKhmer) {
+      rawSegments.push({
+        ...item,
+        startSec,
+        endSec,
+        khmerTranslatedText: text,
+        khmerText: text,
+        khmer: text,
+        originalChineseText: item.originalChineseText || item.chineseText || text,
+        chineseText: item.chineseText || text,
+        text,
+        source: 'external_json',
+        translationStatus: 'translated',
+        status: 'translated',
+        detectedLanguage: 'km',
+      });
+    } else {
+      rawSegments.push({
+        ...item,
+        startSec,
+        endSec,
+        originalChineseText: text,
+        chineseText: text,
+        text,
+        source: 'external_json',
+        translationStatus: skipTranslation || importMode === 'import_only' ? 'imported' : 'review_needed',
+        status: skipTranslation || importMode === 'import_only' ? 'imported' : 'needs_translation',
+        detectedLanguage: 'zh',
+      });
+    }
   }
 
   if (rawSegments.length === 0) {
@@ -216,6 +294,7 @@ function parseJsonContent(jsonInput, mode = GENERATION_MODES.FAST_OCR) {
 }
 
 module.exports = {
+  isKhmerText,
   parseSrtTimestamp,
   parseSrtContent,
   parseJsonContent,

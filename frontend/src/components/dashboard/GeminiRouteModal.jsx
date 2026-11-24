@@ -857,7 +857,7 @@ export default function GeminiRouteModal({
   };
 
   // Import .srt / .json subtitle file for the first selected episode (or active episode)
-  const handleImportBatchSubtitleFile = async (file) => {
+  const handleImportBatchSubtitleFile = async (file, importMode = 'auto') => {
     if (!file) return;
     setImportErrors([]);
     setImportSuccess(null);
@@ -883,10 +883,15 @@ export default function GeminiRouteModal({
             defaultGender: narratorGender,
             force: true,
             confirmed: true,
+            importMode,
+            skipTranslation: importMode === 'import_only',
           });
 
           if (res.success && res.segments) {
-            setImportSuccess(`Import ជោគជ័យ ${res.count || res.segments.length} ឃ្លា ចូល ${targetEpLabel}!`);
+            const successMsg = res.isKhmerDirect
+              ? `Import Subtitle ខ្មែរជោគជ័យ ${res.count || res.segments.length} ឃ្លា (⚡ 0 Gemini API · រួចរាល់សម្រាប់ Edge TTS) ចូល ${targetEpLabel}!`
+              : `Import ជោគជ័យ ${res.count || res.segments.length} ឃ្លា ចូល ${targetEpLabel}!`;
+            setImportSuccess(successMsg);
             setPipelineMode('fast_ocr');
             if (typeof onRefreshSeries === 'function') {
               try { await onRefreshSeries(); } catch (_) {}

@@ -37,6 +37,7 @@ function BatchScriptSetupPanel({
   importErrors,
   handleImportBatchSubtitleFile,
 }) {
+  const [batchSubtitleImportMode, setBatchSubtitleImportMode] = React.useState('auto');
   return (
   <div
     data-testid="batch-script-setup-section"
@@ -187,7 +188,27 @@ function BatchScriptSetupPanel({
             </button>
           </div>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+            <select
+              value={batchSubtitleImportMode}
+              onChange={(e) => setBatchSubtitleImportMode(e.target.value)}
+              style={{
+                fontSize: '0.68rem',
+                padding: '3px 6px',
+                borderRadius: 5,
+                background: '#1e293b',
+                color: batchSubtitleImportMode === 'khmer_direct' ? '#34D399' : '#cbd5e1',
+                border: '1px solid rgba(255,255,255,0.15)',
+                cursor: 'pointer',
+              }}
+              title="ជ្រើសរើសប្រភេទ Subtitle ដែលត្រូវនាំចូល"
+            >
+              <option value="auto">⚡ ស្វ័យប្រវត្តិ (Auto-Detect)</option>
+              <option value="khmer_direct">🇰🇭 Khmer SRT (0 Gemini API · បកប្រែរួច)</option>
+              <option value="chinese_translate">🇨🇳 Chinese SRT (Gemini AI · បកប្រែចិន ➜ ខ្មែរ)</option>
+              <option value="import_only">📁 Import Only (មិនបកប្រែ)</option>
+            </select>
+
             <input
               ref={subtitleFileInputRef}
               type="file"
@@ -195,7 +216,7 @@ function BatchScriptSetupPanel({
               style={{ display: 'none' }}
               onChange={(e) => {
                 const file = e.target.files?.[0];
-                if (file) handleImportBatchSubtitleFile(file);
+                if (file) handleImportBatchSubtitleFile(file, batchSubtitleImportMode);
                 e.target.value = '';
               }}
             />
@@ -209,9 +230,9 @@ function BatchScriptSetupPanel({
                 borderRadius: 6,
                 fontSize: '0.70rem',
                 fontWeight: 700,
-                background: 'rgba(56, 189, 248, 0.10)',
-                color: '#38BDF8',
-                border: '1px solid rgba(56, 189, 248, 0.28)',
+                background: batchSubtitleImportMode === 'khmer_direct' ? 'rgba(52, 211, 153, 0.15)' : 'rgba(56, 189, 248, 0.10)',
+                color: batchSubtitleImportMode === 'khmer_direct' ? '#34D399' : '#38BDF8',
+                border: batchSubtitleImportMode === 'khmer_direct' ? '1px solid rgba(52, 211, 153, 0.35)' : '1px solid rgba(56, 189, 248, 0.28)',
                 cursor: isImportingSubtitles ? 'not-allowed' : 'pointer',
                 display: 'inline-flex',
                 alignItems: 'center',
@@ -219,7 +240,7 @@ function BatchScriptSetupPanel({
               }}
             >
               {isImportingSubtitles ? <Loader2 size={12} className="animate-spin" /> : <FileText size={12} />}
-              <span>📄 Import .srt / .json</span>
+              <span>{batchSubtitleImportMode === 'khmer_direct' ? '📄 Import Khmer .srt (0 API)' : '📄 Import .srt / .json'}</span>
             </button>
             {importSuccess && (
               <span style={{ color: '#34D399', fontSize: '0.68rem', fontWeight: 700 }}>

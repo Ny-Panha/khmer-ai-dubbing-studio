@@ -45,11 +45,27 @@ export async function generateAudioApi(params) {
   const seriesId = isObject ? params.seriesId : undefined;
   const episodeId = isObject ? params.episodeId : undefined;
   const forceRegen = isObject && params.forceRegen !== undefined ? Boolean(params.forceRegen) : false;
+  const autoShortenOverflow = isObject && params.autoShortenOverflow !== undefined ? params.autoShortenOverflow : undefined;
+  const disableAiAutoShorten = isObject && params.disableAiAutoShorten !== undefined ? Boolean(params.disableAiAutoShorten) : undefined;
+  const isZeroGemini = isObject && params.isZeroGemini !== undefined ? Boolean(params.isZeroGemini) : undefined;
 
   const res = await fetch('/api/generate-audio', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ segments, voiceId, speed, speakerMap, projectName, videoId, seriesId, episodeId, forceRegen }),
+    body: JSON.stringify({
+      segments,
+      voiceId,
+      speed,
+      speakerMap,
+      projectName,
+      videoId,
+      seriesId,
+      episodeId,
+      forceRegen,
+      autoShortenOverflow,
+      disableAiAutoShorten,
+      isZeroGemini,
+    }),
   });
 
   const data = await parseResponseJson(res, 'Failed to generate audio speech with TTS');
