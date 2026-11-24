@@ -696,9 +696,12 @@ class GeminiQuotaTracker {
           break;
         }
       }
+      const isTransientBusy =
+        (mRec?.lastProbeCode === 503 || mRec?.lastProbeCode === 504) &&
+        (now - (mRec?.lastProbeAt || 0) < 45000);
       if (!hasReadyKey) {
         exhaustedOrRetired.push(modelId);
-      } else if (mRec?.lastProbeCode === 503 || mRec?.lastProbeCode === 504) {
+      } else if (isTransientBusy) {
         busyOrDegraded.push(modelId);
       } else {
         ready.push(modelId);
@@ -929,6 +932,9 @@ class GeminiQuotaTracker {
           : Math.round(effectivePoolRpdUsed / poolMultiplier)
       );
 
+      const isRecent503 = mRec?.lastProbeCode === 503 && (now - (mRec?.lastProbeAt || 0) < 45000);
+      const isRecent504 = (mRec?.lastProbeCode === 504 || mRec?.lastProbeCode === 408) && (now - (mRec?.lastProbeAt || 0) < 45000);
+
       let liveStatus = 'untested';
       if (catalogEntry.deprecated || catalogEntry.rpdLimit === 0) {
         liveStatus = (mRec?.lastProbeCode === 404 || catalogEntry.deprecated) ? 'deprecated' : 'zero_limit';
@@ -936,13 +942,18 @@ class GeminiQuotaTracker {
         liveStatus = 'deprecated';
       } else if (exhaustedDailyKeys >= validKeyIds.length && validKeyIds.length > 0) {
         liveStatus = 'exhausted';
-      } else if (mRec?.lastProbeCode === 503) {
+      } else if (isRecent503) {
         liveStatus = 'busy';
-      } else if (mRec?.lastProbeCode === 504 || mRec?.lastProbeCode === 408) {
+      } else if (isRecent504) {
         liveStatus = 'timeout';
       } else if (exhaustedDailyKeys > 0 || cooldownTempKeys > 0) {
         liveStatus = (validKeyIds.length - exhaustedDailyKeys - cooldownTempKeys) > 0 ? 'partial' : 'rate_limited';
-      } else if (mRec?.lastProbeCode === 200 || (mRec?.lastSuccessAt || 0) > 0) {
+      } else if (
+        mRec?.lastProbeCode === 200 ||
+        (mRec?.lastSuccessAt || 0) > 0 ||
+        (!isRecent503 && mRec?.lastProbeCode === 503) ||
+        (!isRecent504 && (mRec?.lastProbeCode === 504 || mRec?.lastProbeCode === 408))
+      ) {
         liveStatus = 'ready';
       } else if (mRec?.lastProbeCode === 429) {
         liveStatus = 'exhausted';
@@ -993,8 +1004,12 @@ class GeminiQuotaTracker {
         liveStatus,
         lastProbeAt: mRec?.lastProbeAt || 0,
         lastProbeCode: mRec?.lastProbeCode ?? null,
-        lastLatencyMs: mRec?.lastProbeLatencyMs ?? null,
-        lastErrorMessage: mRec?.lastErrorMessage || null,
+        lastLatencyMs: (mRec?.lastProbeCode === 503 && !isRecent503) || ((mRec?.lastProbeCode === 504 || mRec?.lastProbeCode === 408) && !isRecent504)
+          ? null
+          : (mRec?.lastProbeLatencyMs ?? null),
+        lastErrorMessage: (mRec?.lastProbeCode === 503 && !isRecent503) || ((mRec?.lastProbeCode === 504 || mRec?.lastProbeCode === 408) && !isRecent504)
+          ? null
+          : (mRec?.lastErrorMessage || null),
         isPreferred: preferredModel === catalogEntry.id,
       };
     });

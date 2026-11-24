@@ -231,6 +231,13 @@ test('HTTP GET /api/gemini/keys-status?probe=live|matrix & POST /api/gemini/quot
     assert.equal(rowTranscribe.usableInDubbing, false);
     assert.equal(rowTranscribe.liveStatus, 'ready');
 
+    // Verify that after 45s TTL expires, transient 503 model automatically recovers to ready
+    const mockKeys = process.env.GEMINI_API_KEYS.split(',');
+    const futureSnapshot = geminiQuotaTracker.getPoolStatusSnapshot(mockKeys, { now: Date.now() + 46000 });
+    const row37Recovered = futureSnapshot.modelRateLimits.find((m) => m.id === 'gemini-3.7-flash');
+    assert.equal(row37Recovered.liveStatus, 'ready', '503 Busy status should expire and revert to ready after 45s');
+    assert.equal(row37Recovered.lastLatencyMs, null, 'Expired 503 latency should be cleared');
+
     // Test POST /api/gemini/quota-settings persisting Safe Pacing, daily cap, valid preferredModel & ignoring non-dubbing model
     const settingsRes = await requestJson('POST', '/api/gemini/quota-settings', {
       useAllKeysFast: false,
