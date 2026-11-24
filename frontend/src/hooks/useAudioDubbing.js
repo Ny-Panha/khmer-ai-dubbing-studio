@@ -1124,7 +1124,7 @@ const FALLBACK_VOICE_CATALOG = {
     }
   };
 
-  // 1-Click Toggle Inner-Thought Mode with Subtle FFmpeg aecho Effect & Caching
+  // 1-Click Fast Toggle Delivery Style (ធម្មតា ↔ ក្នុងចិត្ត) with Cache-First Instant Switching
   const handleToggleDeliveryType = async (segIdOrIndex, newDeliveryType = null, autoRegen = true, targetIndex = null) => {
     if (!scriptData?.segments) return null;
     const segIdx = typeof targetIndex === 'number' && targetIndex >= 0 && targetIndex < scriptData.segments.length
@@ -1139,11 +1139,109 @@ const FALLBACK_VOICE_CATALOG = {
     const targetSeg = scriptData.segments[segIdx];
     const currentDelivery = targetSeg.deliveryType || 'out_loud';
     const nextDelivery = newDeliveryType || (currentDelivery === 'inner_thought' ? 'out_loud' : 'inner_thought');
+
+    // Fast Return / No-op: clicking the active mode returns immediately with zero churn
+    if (currentDelivery === nextDelivery && (targetSeg.audioUrl || targetSeg.audioPath || !autoRegen)) {
+      return targetSeg;
+    }
+
     const isThought = nextDelivery === 'inner_thought';
     const audioEffect = isThought ? 'inner_thought_reverb' : 'none';
     const activeVoiceId = targetSeg.khmerVoiceId || targetSeg.voiceId || voiceSettings.voiceId || 'km-KH-PisethNeural';
     const activeSpeed = targetSeg.userCustomSpeed ? targetSeg.speed : (voiceSettings.speed || 'normal');
+    const currentKhmerText = (targetSeg.khmer || targetSeg.khmerText || targetSeg.khmerTranslatedText || '').trim();
 
+    // Invalidate cached delivery variants if text or voice does not match
+    const existingDeliveryVariants = (targetSeg.deliveryVariants && typeof targetSeg.deliveryVariants === 'object')
+      ? { ...targetSeg.deliveryVariants }
+      : {};
+
+    // Record current audio into existingDeliveryVariants if not already cached
+    if (targetSeg.audioUrl && (!existingDeliveryVariants[currentDelivery] || existingDeliveryVariants[currentDelivery]?.text !== currentKhmerText)) {
+      existingDeliveryVariants[currentDelivery] = {
+        deliveryType: currentDelivery,
+        audioEffect: targetSeg.audioEffect || (currentDelivery === 'inner_thought' ? 'inner_thought_reverb' : 'none'),
+        audioUrl: targetSeg.audioUrl,
+        audioFile: targetSeg.audioFile,
+        audioPath: targetSeg.audioPath,
+        audioDurationSec: targetSeg.audioDurationSec || targetSeg.audioDuration,
+        voiceId: activeVoiceId,
+        speed: activeSpeed,
+        text: currentKhmerText,
+        timestamp: Date.now(),
+      };
+    }
+
+    // Check client delivery cache
+    const cachedTargetVariant = existingDeliveryVariants[nextDelivery];
+    const isLocalDeliveryHit = Boolean(
+      cachedTargetVariant?.audioUrl &&
+      (!cachedTargetVariant.text || cachedTargetVariant.text === currentKhmerText) &&
+      (!cachedTargetVariant.voiceId || cachedTargetVariant.voiceId === activeVoiceId)
+    );
+
+    const segKey = String(targetSeg._uid || targetSeg.id || segIdx);
+    const currentSeq = (segmentRegenSeqRef.current[segKey] || 0) + 1;
+    segmentRegenSeqRef.current[segKey] = currentSeq;
+
+    // Instant Client Cache Hit: <100ms response, zero TTS synthesis, zero network requests
+    if (isLocalDeliveryHit) {
+      const updatedDeliveryVariants = {
+        ...existingDeliveryVariants,
+        [nextDelivery]: {
+          ...cachedTargetVariant,
+          timestamp: Date.now(),
+        },
+      };
+
+      const committedSeg = {
+        ...targetSeg,
+        deliveryType: nextDelivery,
+        deliveryOverride: true,
+        deliveryConfidence: 1.0,
+        deliveryReviewNeeded: false,
+        audioEffect,
+        audioUrl: cachedTargetVariant.audioUrl,
+        audioFile: cachedTargetVariant.audioFile || targetSeg.audioFile,
+        audioPath: cachedTargetVariant.audioPath || targetSeg.audioPath,
+        audioDurationSec: cachedTargetVariant.audioDurationSec || targetSeg.audioDurationSec,
+        audioDuration: cachedTargetVariant.audioDurationSec || targetSeg.audioDuration,
+        textStatus: 'ready',
+        audioOutdated: false,
+        deliveryVariants: updatedDeliveryVariants,
+      };
+
+      const newSegments = [...scriptData.segments];
+      newSegments[segIdx] = committedSeg;
+
+      setScriptData((prev) => (prev ? {
+        ...prev,
+        segments: newSegments,
+        updatedAt: Date.now(),
+      } : prev));
+
+      // Asynchronous background persistence without blocking UI
+      if (seriesId && episodeId) {
+        try {
+          saveTimelineOperationToLocalStorage(seriesId, episodeId, {
+            segments: newSegments,
+            updatedAt: Date.now(),
+          });
+        } catch (_) {}
+        persistTimelineOperationApi({
+          seriesId,
+          episodeId,
+          operation: 'update_segments',
+          segments: newSegments,
+          updatedAt: Date.now(),
+        }).catch(() => {});
+      }
+
+      setAudioGenerated(true);
+      return committedSeg;
+    }
+
+    // Cache Miss: Generate or effect audio via backend (forceRegen: false reuses clean speech)
     const updatedSeg = {
       ...targetSeg,
       deliveryType: nextDelivery,
@@ -1153,6 +1251,7 @@ const FALLBACK_VOICE_CATALOG = {
       audioEffect,
       textStatus: autoRegen ? 'generating' : targetSeg.textStatus,
       audioOutdated: true,
+      deliveryVariants: existingDeliveryVariants,
     };
 
     const newSegments = [...scriptData.segments];
@@ -1165,7 +1264,6 @@ const FALLBACK_VOICE_CATALOG = {
     } : prev));
     invalidateRendered();
 
-    const currentKhmerText = (updatedSeg.khmer || updatedSeg.khmerText || updatedSeg.khmerTranslatedText || '').trim();
     if (autoRegen && currentKhmerText) {
       try {
         const regenerated = await generateSingleSegmentAudio(updatedSeg, {
@@ -1174,38 +1272,49 @@ const FALLBACK_VOICE_CATALOG = {
           deliveryType: nextDelivery,
           audioEffect,
           deliveryOverride: true,
-          forceRegen: false, // Reuses cache if text and effect haven't changed!
+          forceRegen: false, // Reuses cache or clean speech!
           projectName: getProjectName(),
           videoId: getVideoId(),
           episodeId,
           seriesId,
         });
 
-        const effectVariants = {
-          [activeVoiceId]: {
-            voiceId: activeVoiceId,
+        if (segmentRegenSeqRef.current[segKey] !== currentSeq) {
+          return null;
+        }
+
+        const mergedDeliveryVariants = {
+          ...existingDeliveryVariants,
+          ...(regenerated.deliveryVariants || {}),
+          [nextDelivery]: {
+            deliveryType: nextDelivery,
+            audioEffect,
             audioUrl: regenerated.audioUrl,
             audioFile: regenerated.audioFile,
             audioPath: regenerated.audioPath,
             audioDurationSec: regenerated.audioDurationSec || regenerated.audioDuration,
+            voiceId: activeVoiceId,
             speed: activeSpeed,
-            deliveryType: nextDelivery,
-            audioEffect,
             text: currentKhmerText,
             timestamp: Date.now(),
           },
         };
 
-        const finalSegments = [...newSegments];
-        finalSegments[segIdx] = {
+        const finalSegments = [...scriptData.segments];
+        const matchIdx = finalSegments.findIndex((s, i) => i === segIdx || String(s.id) === String(targetSeg.id));
+        const committedSeg = {
           ...regenerated,
           deliveryType: nextDelivery,
           deliveryOverride: true,
           audioEffect,
           textStatus: 'voice_updated',
           audioOutdated: false,
-          voiceAudioVariants: effectVariants,
+          deliveryVariants: mergedDeliveryVariants,
         };
+
+        if (matchIdx !== -1) {
+          finalSegments[matchIdx] = committedSeg;
+        }
 
         setScriptData((prev) => (prev ? {
           ...prev,
@@ -1215,32 +1324,38 @@ const FALLBACK_VOICE_CATALOG = {
         setAudioGenerated(true);
         invalidateRendered();
 
-        const stillOutdated = finalSegments.some((s) => s.audioOutdated);
-        setAudioOutdated(stillOutdated);
-
-        if (finalSegments.some((s) => s.audioFile || s.audioPath || s.audioUrl)) {
-          syncTimelineAudioApi(finalSegments, getProjectName(), getVideoId(), episodeId, seriesId)
-            .then((res) => {
-              if (res.fullAudioUrl) {
-                const cacheBusted = `${res.fullAudioUrl.split('?')[0]}?t=${Date.now()}`;
-                setFullAudioUrl(cacheBusted);
-                setFullAudioPath(res.fullAudioPath);
-                setAudioGenerated(true);
-              }
-            })
-            .catch((syncErr) => console.warn('Auto re-sync timeline audio error:', syncErr.message));
+        // Non-blocking async background persistence
+        if (seriesId && episodeId) {
+          try {
+            saveTimelineOperationToLocalStorage(seriesId, episodeId, {
+              segments: finalSegments,
+              updatedAt: Date.now(),
+            });
+          } catch (_) {}
+          persistTimelineOperationApi({
+            seriesId,
+            episodeId,
+            operation: 'update_segments',
+            segments: finalSegments,
+            updatedAt: Date.now(),
+          }).catch(() => {});
         }
 
-        return finalSegments[segIdx];
+        return committedSeg;
       } catch (err) {
+        if (segmentRegenSeqRef.current[segKey] !== currentSeq) {
+          return null;
+        }
         console.warn('Auto-regen inner thought audio failed:', err);
-        // Preserves previous working audio and reports error clearly
-        const errorSegments = [...newSegments];
-        errorSegments[segIdx] = {
-          ...targetSeg,
-          textStatus: 'error',
-          regenError: err.message || 'Inner thought generation failed',
-        };
+        const errorSegments = [...scriptData.segments];
+        const matchIdx = errorSegments.findIndex((s, i) => i === segIdx || String(s.id) === String(targetSeg.id));
+        if (matchIdx !== -1) {
+          errorSegments[matchIdx] = {
+            ...targetSeg,
+            textStatus: 'error',
+            regenError: err.message || 'Inner thought generation failed',
+          };
+        }
         setScriptData((prev) => (prev ? {
           ...prev,
           segments: errorSegments,

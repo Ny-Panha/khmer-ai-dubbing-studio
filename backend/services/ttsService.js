@@ -781,6 +781,27 @@ async function generateSingleSegmentAudio(segment, uploadsDir, options = {}) {
       rawFileName = `${epPrefix}seg_${cleanId}_${voiceId}_raw_${rawHash}.mp3`;
       rawFilePath = path.join(uploadsDir, rawFileName);
 
+      // Deterministic clean out_loud file name for this exact text and voice
+      const cleanCacheKey = `${textToSpeak}__${voiceId}__out_loud__clean__${rate}__${speedCacheMode}__lt1`;
+      const cleanHash = crypto.createHash("md5").update(cleanCacheKey).digest("hex").substring(0, 8);
+      const cleanVoiceFileName = `${epPrefix}seg_${cleanId}_${voiceId}_voice_${cleanHash}.mp3`;
+      const cleanVoiceFilePath = path.join(uploadsDir, cleanVoiceFileName);
+
+      // Re-use existing clean speech audio if already available on disk (0 new Edge TTS synthesis)
+      if (!options.forceRegen && (!fs.existsSync(rawFilePath) || fs.statSync(rawFilePath).size < 200)) {
+        if (fs.existsSync(cleanVoiceFilePath) && fs.statSync(cleanVoiceFilePath).size > 200) {
+          try {
+            fs.copyFileSync(cleanVoiceFilePath, rawFilePath);
+            console.log(`[TTSService] ⚡ Reused existing clean voice audio as raw base for thought effect: ${cleanVoiceFileName}`);
+          } catch (_) {}
+        } else if (segment.rawAudioPath && fs.existsSync(segment.rawAudioPath) && fs.statSync(segment.rawAudioPath).size > 200) {
+          try {
+            fs.copyFileSync(segment.rawAudioPath, rawFilePath);
+            console.log(`[TTSService] ⚡ Reused segment.rawAudioPath as raw base for thought effect`);
+          } catch (_) {}
+        }
+      }
+
       if (options.forceRegen || !fs.existsSync(rawFilePath) || fs.statSync(rawFilePath).size < 200) {
         // Always synthesize natural 1.0x speech (+0%) so exact speed is applied once via FFmpeg atempo (zero stacking/prosody drift)
         try {
@@ -838,123 +859,149 @@ async function generateSingleSegmentAudio(segment, uploadsDir, options = {}) {
       finalDuration = effectRes.duration;
       originalDuration = await getMediaDuration(rawFilePath) || finalDuration;
     } else {
-      // Normal spoken dialogue — always synthesize at natural 1.0x (+0%) so exact speed is applied once via FFmpeg atempo
-      try {
-        if (voiceId === "google-km-standard") {
-          await synthesizeWithGoogleFallback(textToSpeak, outputPath);
-        } else {
-          await synthesizeWithEdgeNeural(textToSpeak, voiceId, outputPath, "+0%", pitch, { requestedSpeed: speedInfo.requested });
-        }
-      } catch (edgeErr) {
-        console.warn(`[TTSService] ⚠️ Edge TTS failed for segment #${segment.id}, using Google TTS: ${edgeErr.message}`);
-        await synthesizeWithGoogleFallback(textToSpeak, outputPath);
-      }
+      // Normal spoken dialogue — check if clean speech already exists in raw candidate path
+      const rawHash = crypto.createHash("md5").update(`${textToSpeak}__${voiceId}__raw__${rate}__${speedCacheMode}__lt1`).digest("hex").substring(0, 8);
+      const rawCandidatePath = path.join(uploadsDir, `${epPrefix}seg_${cleanId}_${voiceId}_raw_${rawHash}.mp3`);
 
-      // Verify generated audio file existence and non-zero size
-      if (!fs.existsSync(outputPath) || fs.statSync(outputPath).size < 200) {
-        if (fs.existsSync(outputPath)) {
-          try { fs.unlinkSync(outputPath); } catch (_) { }
-        }
-        throw new Error(`TTS audio file is missing or invalid (<200 bytes) for segment #${segment.id || 'unknown'}`);
-      }
-
-      // Always trim Edge TTS dead ~200ms leading & ~800ms trailing padding before duration measurement / slot fit
-      let trimRes = null;
-      try {
-        trimRes = await trimTtsSilence(outputPath, { leadInCushionSec: 0.025, leadOutCushionSec: 0.060, microFadeMs: 8 });
-      } catch (trimErr) {
-        console.warn(`[TTSService] ⚠️ trimTtsSilence warning: ${trimErr.message}`);
-      }
-
-      const actualDuration = (trimRes && typeof trimRes.finalDuration === 'number' && trimRes.finalDuration > 0)
-        ? trimRes.finalDuration
-        : ((await getMediaDuration(outputPath)) || targetDuration);
-      originalDuration = actualDuration;
-      finalDuration = actualDuration;
-
-      if (effectiveAutoStretch && fs.existsSync(outputPath)) {
-        // Dubbing Policy:
-        // availableSlotDuration is the reference boundary for avoiding collision with subsequent dialogue.
-        // If the speech is only slightly longer than the slot (<= 30%), a gentle speed adjustment (up to 1.25x) fits naturally.
-        // But if dialogue is significantly longer than an artificially short visual slot (e.g. 4s sentence in 1.35s slot),
-        // NEVER artificially crush or chipmunk the speech: keep full natural delivery (subsequent dialogue safely alternates to Track A2).
-        const MIN_COLLISION_SAFETY_MARGIN_SEC = 0.100;
-        const safeSlotTarget = Math.max(0.20, parseFloat((availableSlotDuration - MIN_COLLISION_SAFETY_MARGIN_SEC).toFixed(3)));
-
-        const ratio = actualDuration / safeSlotTarget;
-        // Auto-fit speech speed (1.05x - 1.50x): Speed up overflowing speech so dialogue finishes all words without cut
-        const maxAllowedStretchSpeed = Math.max(1.50, maxSpeed || 1.50);
-        const shouldStretch = ratio > 1.02;
-        const targetSpeed = Math.min(maxAllowedStretchSpeed, ratio);
-
-        if (shouldStretch) {
+      let reusedCleanSpeech = false;
+      if (!options.forceRegen) {
+        if (fs.existsSync(rawCandidatePath) && fs.statSync(rawCandidatePath).size > 200) {
           try {
-            const stretchResult = await autoStretchTtsAudio({
-              inputAudioPath: outputPath,
-              targetDuration: safeSlotTarget,
-              maxSpeed: targetSpeed,
-              minSpeed: 1.0,
-              leadInCushionSec: 0.025,
-              leadOutCushionSec: 0.060,
-              microFadeMs: 8,
-              allowSlowdown: false,
-              isPreTrimmed: true,
-              currentDuration: actualDuration,
-            });
-            finalDuration = stretchResult.finalDuration;
-            originalDuration = stretchResult.finalDuration;
-            appliedSpeed = stretchResult.appliedSpeed;
-          } catch (stretchErr) {
-            console.warn(`[TTSService] ⚠️ autoStretchTtsAudio error (${stretchErr.message}), keeping original audio duration`);
+            fs.copyFileSync(rawCandidatePath, outputPath);
+            reusedCleanSpeech = true;
+            console.log(`[TTSService] ⚡ Reused existing raw clean speech for out_loud dialogue: ${path.basename(rawCandidatePath)}`);
+          } catch (_) {}
+        } else if (segment.rawAudioPath && fs.existsSync(segment.rawAudioPath) && fs.statSync(segment.rawAudioPath).size > 200) {
+          try {
+            fs.copyFileSync(segment.rawAudioPath, outputPath);
+            reusedCleanSpeech = true;
+            console.log(`[TTSService] ⚡ Reused segment.rawAudioPath for out_loud dialogue`);
+          } catch (_) {}
+        }
+      }
+
+      if (!reusedCleanSpeech) {
+        // Synthesize natural 1.0x speech (+0%) via Edge TTS
+        try {
+          if (voiceId === "google-km-standard") {
+            await synthesizeWithGoogleFallback(textToSpeak, outputPath);
+          } else {
+            await synthesizeWithEdgeNeural(textToSpeak, voiceId, outputPath, "+0%", pitch, { requestedSpeed: speedInfo.requested });
           }
-        } else if (
-          actualDuration >= 0.80 &&
-          sourceSpeechDuration >= 0.80 &&
-          actualDuration < sourceSpeechDuration * 0.50 &&
-          sourceSpeechDuration <= availableSlotDuration
-        ) {
-          // Slow down only if non-short dialogue is unnaturally rushed compared to mouth movement
-          // (Skip short segments <0.8s to preserve crisp Khmer monosyllabic/disyllabic delivery)
-          try {
-            const stretchResult = await autoStretchTtsAudio({
-              inputAudioPath: outputPath,
-              targetDuration: sourceSpeechDuration,
-              maxSpeed: 1.0,
-              minSpeed: 0.92,
-              leadInCushionSec: 0.025,
-              leadOutCushionSec: 0.060,
-              microFadeMs: 8,
-              allowSlowdown: true,
-              isPreTrimmed: true,
-              currentDuration: actualDuration,
-            });
-            finalDuration = stretchResult.finalDuration;
-            originalDuration = stretchResult.originalDuration;
-            appliedSpeed = stretchResult.appliedSpeed;
-          } catch (_) { }
-        } else {
-          finalDuration = actualDuration;
-          originalDuration = actualDuration;
-          appliedSpeed = 1.0;
+        } catch (edgeErr) {
+          console.warn(`[TTSService] ⚠️ Edge TTS failed for segment #${segment.id}, using Google TTS: ${edgeErr.message}`);
+          await synthesizeWithGoogleFallback(textToSpeak, outputPath);
         }
-      } else if (hasExplicitUserSpeed && fs.existsSync(outputPath)) {
-        // Manual Clip Speed ALWAYS wins over Auto-Fit: apply exact FFmpeg atempo ONCE on natural 1.0x TTS
-        const exactTargetSpeed = Number(speedInfo.numericSpeed || 1.0);
-        if (Math.abs(exactTargetSpeed - 1.0) > 0.001) {
-          const exactRes = await applyExactAudioSpeed(outputPath, exactTargetSpeed);
-          finalDuration = exactRes.finalDuration;
-          originalDuration = exactRes.finalDuration;
-          appliedSpeed = exactRes.appliedSpeed;
-        } else {
-          finalDuration = actualDuration;
-          originalDuration = actualDuration;
-          appliedSpeed = 1.0;
+
+        // Verify generated audio file existence and non-zero size
+        if (!fs.existsSync(outputPath) || fs.statSync(outputPath).size < 200) {
+          if (fs.existsSync(outputPath)) {
+            try { fs.unlinkSync(outputPath); } catch (_) { }
+          }
+          throw new Error(`TTS audio file is missing or invalid (<200 bytes) for segment #${segment.id || 'unknown'}`);
         }
-        console.log(`[TTS] Segment #${segment.id || 'N/A'} explicit user speed (ttsRate=+0%, requestedRate=${rate}, atempo=${appliedSpeed}x) — skipped slot autoStretch (natural=${actualDuration.toFixed(3)}s -> final=${finalDuration.toFixed(3)}s, slot=${availableSlotDuration.toFixed(3)}s)`);
-      } else {
-        finalDuration = actualDuration;
+
+        // Always trim Edge TTS dead ~200ms leading & ~800ms trailing padding before duration measurement / slot fit
+        let trimRes = null;
+        try {
+          trimRes = await trimTtsSilence(outputPath, { leadInCushionSec: 0.025, leadOutCushionSec: 0.060, microFadeMs: 8 });
+        } catch (trimErr) {
+          console.warn(`[TTSService] ⚠️ trimTtsSilence warning: ${trimErr.message}`);
+        }
+
+        const actualDuration = (trimRes && typeof trimRes.finalDuration === 'number' && trimRes.finalDuration > 0)
+          ? trimRes.finalDuration
+          : ((await getMediaDuration(outputPath)) || targetDuration);
         originalDuration = actualDuration;
-        appliedSpeed = 1.0;
+        finalDuration = actualDuration;
+
+        if (effectiveAutoStretch && fs.existsSync(outputPath)) {
+          const MIN_COLLISION_SAFETY_MARGIN_SEC = 0.100;
+          const safeSlotTarget = Math.max(0.20, parseFloat((availableSlotDuration - MIN_COLLISION_SAFETY_MARGIN_SEC).toFixed(3)));
+
+          const ratio = actualDuration / safeSlotTarget;
+          const maxAllowedStretchSpeed = Math.max(1.50, maxSpeed || 1.50);
+          const shouldStretch = ratio > 1.02;
+          const targetSpeed = Math.min(maxAllowedStretchSpeed, ratio);
+
+          if (shouldStretch) {
+            try {
+              const stretchResult = await autoStretchTtsAudio({
+                inputAudioPath: outputPath,
+                targetDuration: safeSlotTarget,
+                maxSpeed: targetSpeed,
+                minSpeed: 1.0,
+                leadInCushionSec: 0.025,
+                leadOutCushionSec: 0.060,
+                microFadeMs: 8,
+                allowSlowdown: false,
+                isPreTrimmed: true,
+                currentDuration: actualDuration,
+              });
+              finalDuration = stretchResult.finalDuration;
+              originalDuration = stretchResult.finalDuration;
+              appliedSpeed = stretchResult.appliedSpeed;
+            } catch (stretchErr) {
+              console.warn(`[TTSService] ⚠️ autoStretchTtsAudio error (${stretchErr.message}), keeping original audio duration`);
+            }
+          } else if (
+            actualDuration >= 0.80 &&
+            sourceSpeechDuration >= 0.80 &&
+            actualDuration < sourceSpeechDuration * 0.50 &&
+            sourceSpeechDuration <= availableSlotDuration
+          ) {
+            try {
+              const stretchResult = await autoStretchTtsAudio({
+                inputAudioPath: outputPath,
+                targetDuration: sourceSpeechDuration,
+                maxSpeed: 1.0,
+                minSpeed: 0.92,
+                leadInCushionSec: 0.025,
+                leadOutCushionSec: 0.060,
+                microFadeMs: 8,
+                allowSlowdown: true,
+                isPreTrimmed: true,
+                currentDuration: actualDuration,
+              });
+              finalDuration = stretchResult.finalDuration;
+              originalDuration = stretchResult.originalDuration;
+              appliedSpeed = stretchResult.appliedSpeed;
+            } catch (_) { }
+          } else {
+            finalDuration = actualDuration;
+            originalDuration = actualDuration;
+            appliedSpeed = 1.0;
+          }
+        } else if (hasExplicitUserSpeed && fs.existsSync(outputPath)) {
+          const exactTargetSpeed = Number(speedInfo.numericSpeed || 1.0);
+          if (Math.abs(exactTargetSpeed - 1.0) > 0.001) {
+            const exactRes = await applyExactAudioSpeed(outputPath, exactTargetSpeed);
+            finalDuration = exactRes.finalDuration;
+            originalDuration = exactRes.finalDuration;
+            appliedSpeed = exactRes.appliedSpeed;
+          } else {
+            finalDuration = actualDuration;
+            originalDuration = actualDuration;
+            appliedSpeed = 1.0;
+          }
+          console.log(`[TTS] Segment #${segment.id || 'N/A'} explicit user speed (ttsRate=+0%, requestedRate=${rate}, atempo=${appliedSpeed}x) — skipped slot autoStretch (natural=${actualDuration.toFixed(3)}s -> final=${finalDuration.toFixed(3)}s, slot=${availableSlotDuration.toFixed(3)}s)`);
+        } else {
+          finalDuration = actualDuration;
+          originalDuration = actualDuration;
+          appliedSpeed = 1.0;
+        }
+
+        // Cache clean speech as raw base so future thought effects reuse it with zero Edge TTS synthesis
+        if (fs.existsSync(outputPath) && (!fs.existsSync(rawCandidatePath) || fs.statSync(rawCandidatePath).size < 200)) {
+          try {
+            fs.copyFileSync(outputPath, rawCandidatePath);
+          } catch (_) {}
+        }
+      } else {
+        const reusedDur = (await getMediaDuration(outputPath)) || targetDuration;
+        finalDuration = reusedDur;
+        originalDuration = reusedDur;
+        appliedSpeed = hasExplicitUserSpeed ? (speedInfo.numericSpeed || 1.0) : 1.0;
       }
 
       rawFilePath = outputPath;
@@ -989,11 +1036,16 @@ async function generateSingleSegmentAudio(segment, uploadsDir, options = {}) {
           (baseName.includes("Piseth") && !voiceId.includes("Piseth")) ||
           (baseName.includes("Sreymom") && !voiceId.includes("Sreymom"))
         );
+        const isOtherDeliveryVariant = (
+          (baseName.includes("_voice_") && isThought) ||
+          (baseName.includes("_thought_") && !isThought)
+        );
         if (
           (baseName.startsWith(expectedPrefix) || (!epPrefix && baseName.startsWith(`seg_${cleanId}_`))) &&
           !baseName.includes(cacheHash) &&
           !baseName.includes("_raw_") &&
-          !isOtherVoiceVariant
+          !isOtherVoiceVariant &&
+          !isOtherDeliveryVariant
         ) {
           fs.unlinkSync(resolvedPrior);
         }
@@ -1070,6 +1122,53 @@ async function generateSingleSegmentAudio(segment, uploadsDir, options = {}) {
     } catch (_) {}
   }
 
+  // Delivery Variants Cache (Normal out_loud ↔ Inner Thought with reverb)
+  const existingDeliveryVariants = (segment.deliveryVariants && typeof segment.deliveryVariants === "object")
+    ? { ...segment.deliveryVariants }
+    : {};
+  const otherDelivery = isThought ? "out_loud" : "inner_thought";
+  const updatedDeliveryVariants = {
+    ...existingDeliveryVariants,
+    [deliveryType]: {
+      deliveryType,
+      audioEffect,
+      audioUrl: calculatedAudioUrl,
+      audioFile: fileName,
+      audioPath: outputPath,
+      audioDurationSec: finalDuration,
+      voiceId,
+      speed: resolvedSpeedValue,
+      text: resolvedKhmer,
+      timestamp: Date.now(),
+    },
+  };
+
+  // Auto-discover if the other delivery variant already exists on disk
+  if (!updatedDeliveryVariants[otherDelivery] && uploadsDir && fs.existsSync(uploadsDir)) {
+    try {
+      const otherTag = isThought ? "voice" : "thought";
+      const prefix = `${epPrefix}seg_${cleanId}_${voiceId}_${otherTag}_`;
+      const files = fs.readdirSync(uploadsDir);
+      const match = files.find((f) => f.startsWith(prefix) && f.endsWith(".mp3") && !f.includes("_raw_"));
+      if (match) {
+        const otherPath = path.join(uploadsDir, match);
+        const otherRel = path.relative(uploadsRoot, otherPath).replace(/\\/g, "/");
+        const otherDur = (await getMediaDuration(otherPath)) || finalDuration;
+        updatedDeliveryVariants[otherDelivery] = {
+          deliveryType: otherDelivery,
+          audioEffect: otherDelivery === "inner_thought" ? "inner_thought_reverb" : "none",
+          audioUrl: `/uploads/${otherRel}`,
+          audioFile: match,
+          audioPath: otherPath,
+          audioDurationSec: otherDur,
+          voiceId,
+          text: resolvedKhmer,
+          timestamp: Date.now(),
+        };
+      }
+    } catch (_) {}
+  }
+
   return {
     ...segment,
     id: segment.segmentId || segment.id,
@@ -1133,6 +1232,7 @@ async function generateSingleSegmentAudio(segment, uploadsDir, options = {}) {
     ttsStatus: "ready",
     status: "audio_ready",
     voiceAudioVariants: updatedVariants,
+    deliveryVariants: updatedDeliveryVariants,
     _wasNewlySynthesized: !usedCache,
   };
 }

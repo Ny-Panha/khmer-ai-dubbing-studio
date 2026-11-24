@@ -1,30 +1,29 @@
 # Project State (.agents/STATE.md)
-Last Session: IDE - 2026-11-24T23:33:00+07:00
+Last Session: IDE - 2026-11-24T23:56:00+07:00
 
 ## Summary
-- Audio Cache Architecture Upgrade: Instant Client-side Voice Switching & Preloading:
-  1. Frontend Instant Voice Switching (Click -> Local Cache -> Play):
-     - Updated `frontend/src/hooks/useAudioDubbing.js` in `handleUpdateSegmentVoice`:
-       - Before sending any network request to backend, checks `targetSeg.voiceAudioVariants[newVoiceId]`.
-       - If cached audio URL exists and text matches, switches audio, waveform, duration, and voice metadata INSTANTLY (0ms latency, zero spinner/waiting).
-       - Persists updated segments to localStorage and synchronizes in the background via `persistTimelineOperationApi`.
-  2. Cast Voices Cache Reuse:
-     - In `handleUpdateSpeakerVoice`:
-       - Changed `forceRegen: true` to `forceRegen: false`.
-       - Added client-side cache lookup across character segments to immediately reuse existing audio variants for `newVoiceId` without adding them to regeneration queue.
-       - Records generated audio into `voiceAudioVariants` upon progressive commit.
-  3. Preloading Both Male & Female Voices (Piseth & Sreymom):
-     - Updated `frontend/src/utils/webAudioScheduler.js`:
-       - `preloadUpcoming` pre-decodes both primary and alternative voice variant URLs in `voiceAudioVariants` into `AudioBufferLRUCache`.
-       - Added `preloadSegmentVariants(segment)` to pre-warm both voice variants in Web Audio API.
-  4. Backend Voice Audio Variants Tracking & Auto-Discovery:
-     - Updated `backend/services/ttsService.js`:
-       - Returns `voiceAudioVariants` mapping for synthesized voices.
-       - Automatically discovers sibling voice files on disk (Piseth / Sreymom) and populates them into `voiceAudioVariants`.
-  5. Verification & Tests:
-     - Created `backend/tests/voice_variants_cache.test.js` (PASSED 100%).
-     - All 4 TTS backend test suites passed (11/11, 10/10, 4/4 tests).
-     - Frontend production build succeeded cleanly (`npm run build` in 1.53s).
+- Cache-First Delivery Style Switching (ធម្មតា ↔ ក្នុងចិត្ត / Normal ↔ Inner Thought with Reverb):
+  1. Fast Return / No-op on Same-Mode Click:
+     - In `frontend/src/hooks/useAudioDubbing.js` & `ClipInspectorPanel.jsx`:
+       - Clicking the currently active delivery mode returns immediately with zero churn (0 requests, 0.002ms latency).
+  2. Frontend Instant Delivery Switching (Cache-First):
+     - Added `targetSeg.deliveryVariants` tracking `out_loud` and `inner_thought` variants.
+     - On warm cache hit, swaps `audioUrl`, `deliveryType`, `audioEffect`, and waveform immediately without calling backend (<0.01ms latency, 0 spinner, 0 TTS synthesis).
+     - Asynchronously saves to `localStorage` and persists via `persistTimelineOperationApi` in the background without blocking the UI.
+     - Removed blocking full-episode `syncTimelineAudioApi` on single delivery mode toggle.
+  3. Clean Speech Reuse in Backend (Zero Edge TTS Calls):
+     - In `backend/services/ttsService.js`:
+       - When toggling to `inner_thought`: checks if clean speech already exists in `cleanVoiceFilePath` or `rawCandidatePath`. If present, skips Edge TTS completely and applies FFmpeg `aecho` filter (~180ms).
+       - When toggling to `out_loud`: checks if clean speech already exists in `rawCandidatePath`. If present, copies directly with zero Edge TTS synthesis.
+       - Returns `deliveryVariants` mapping and auto-discovers sibling variants on disk.
+  4. Variant Deletion Protection:
+     - Fixed `unlinkSync` in `ttsService.js`: added `isOtherDeliveryVariant` check to ensure creating `_thought_` never deletes clean `_voice_`, and vice versa.
+  5. Audio Preloading & Web Audio Support:
+     - Updated `frontend/src/utils/webAudioScheduler.js` and `ClipInspectorPanel.jsx` to pre-warm both `out_loud` and `inner_thought` buffers in `AudioBufferLRUCache` and browser cache.
+  6. Verification:
+     - Created `backend/tests/delivery_style_switching.test.js` (PASSED 100%).
+     - All regression suites passed (`voice_variants_cache.test.js`, `instant_voice_switching.test.js`).
+     - Frontend production build succeeded cleanly (`npm run build` in 1.72s).
 
 ## Active Environment
 - Backend Server: http://localhost:5000 (running, task-2440)
@@ -33,6 +32,7 @@ Last Session: IDE - 2026-11-24T23:33:00+07:00
 
 ## Next Steps for User
 - Refresh browser (F5) on `http://localhost:5173`.
-- Test voice switching on any segment between Piseth and Sreymom:
-  - First switch generates/caches the audio.
-  - Subsequent switches between Piseth and Sreymom will be INSTANT (0ms delay, no backend wait).
+- Test delivery style switching on any clip:
+  - Click "ធម្មតា" ↔ "ក្នុងចិត្ត" in Clip Inspector:
+    - First switch generates/applies Reverb to clean speech without regenerating text.
+    - Subsequent switches between Normal and Inner Thought are INSTANT (0ms delay, no backend wait).

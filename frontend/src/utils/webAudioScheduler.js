@@ -188,11 +188,20 @@ export class WebAudioScheduler {
           }
         }
       }
+      // Pre-warm delivery variants (out_loud & inner_thought) so style switching is instant
+      if (item.seg?.deliveryVariants && typeof item.seg.deliveryVariants === 'object') {
+        for (const dKey of Object.keys(item.seg.deliveryVariants)) {
+          const variantUrl = item.seg.deliveryVariants[dKey]?.audioUrl;
+          if (variantUrl && !this.lruCache.has(variantUrl)) {
+            this.lruCache.loadAndDecode(variantUrl, ctx);
+          }
+        }
+      }
     }
   }
 
   /**
-   * Pre-warm all voice variants for an active or inspected segment
+   * Pre-warm all voice and delivery variants for an active or inspected segment
    */
   preloadSegmentVariants(segment) {
     if (!segment) return;
@@ -204,6 +213,14 @@ export class WebAudioScheduler {
     if (segment.voiceAudioVariants && typeof segment.voiceAudioVariants === 'object') {
       for (const vKey of Object.keys(segment.voiceAudioVariants)) {
         const variantUrl = segment.voiceAudioVariants[vKey]?.audioUrl;
+        if (variantUrl && !this.lruCache.has(variantUrl)) {
+          this.lruCache.loadAndDecode(variantUrl, ctx);
+        }
+      }
+    }
+    if (segment.deliveryVariants && typeof segment.deliveryVariants === 'object') {
+      for (const dKey of Object.keys(segment.deliveryVariants)) {
+        const variantUrl = segment.deliveryVariants[dKey]?.audioUrl;
         if (variantUrl && !this.lruCache.has(variantUrl)) {
           this.lruCache.loadAndDecode(variantUrl, ctx);
         }

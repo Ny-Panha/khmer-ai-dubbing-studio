@@ -108,6 +108,28 @@ export default function ClipInspectorPanel({
       lastCommittedTextRef.current = khmerText;
       prevPropKhmerTextRef.current = khmerText;
 
+      // Preload available voice and delivery variants for the currently selected clip only
+      const urls = [];
+      if (selectedSegment.voiceAudioVariants && typeof selectedSegment.voiceAudioVariants === 'object') {
+        for (const v of Object.values(selectedSegment.voiceAudioVariants)) {
+          if (v?.audioUrl) urls.push(v.audioUrl);
+        }
+      }
+      if (selectedSegment.deliveryVariants && typeof selectedSegment.deliveryVariants === 'object') {
+        for (const d of Object.values(selectedSegment.deliveryVariants)) {
+          if (d?.audioUrl) urls.push(d.audioUrl);
+        }
+      }
+      urls.forEach((url) => {
+        if (typeof window !== 'undefined' && typeof Audio !== 'undefined') {
+          try {
+            const a = new Audio();
+            a.preload = 'auto';
+            a.src = url;
+          } catch (_) {}
+        }
+      });
+
       setLocalChineseText(originalChinese);
       localChineseTextRef.current = originalChinese;
       lastCommittedChineseRef.current = originalChinese;
@@ -953,13 +975,16 @@ export default function ClipInspectorPanel({
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4, background: 'var(--bg-desktop)', padding: 3, borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }}>
           <button
             type="button"
-            onClick={() => onToggleDeliveryType && onToggleDeliveryType(selectedSegment.id || selectedSegmentIndex, 'out_loud', true, selectedSegmentIndex)}
+            onClick={() => {
+              if (!isThought) return; // Same-mode fast no-op
+              onToggleDeliveryType && onToggleDeliveryType(selectedSegment.id || selectedSegmentIndex, 'out_loud', true, selectedSegmentIndex);
+            }}
             disabled={isGenerating}
             style={{
               height: 30,
               fontSize: 'var(--text-sm)',
               borderRadius: 'var(--radius-xs)',
-              cursor: 'pointer',
+              cursor: !isThought ? 'default' : 'pointer',
               fontWeight: !isThought ? 700 : 500,
               border: !isThought ? '1px solid rgba(56, 189, 248, 0.45)' : '1px solid transparent',
               background: !isThought ? 'var(--bg-active-card)' : 'transparent',
@@ -977,13 +1002,16 @@ export default function ClipInspectorPanel({
 
           <button
             type="button"
-            onClick={() => onToggleDeliveryType && onToggleDeliveryType(selectedSegment.id || selectedSegmentIndex, 'inner_thought', true, selectedSegmentIndex)}
+            onClick={() => {
+              if (isThought) return; // Same-mode fast no-op
+              onToggleDeliveryType && onToggleDeliveryType(selectedSegment.id || selectedSegmentIndex, 'inner_thought', true, selectedSegmentIndex);
+            }}
             disabled={isGenerating}
             style={{
               height: 30,
               fontSize: 'var(--text-sm)',
               borderRadius: 'var(--radius-xs)',
-              cursor: 'pointer',
+              cursor: isThought ? 'default' : 'pointer',
               fontWeight: isThought ? 700 : 500,
               border: isThought ? '1px solid rgba(56, 189, 248, 0.45)' : '1px solid transparent',
               background: isThought ? 'var(--bg-active-card)' : 'transparent',
