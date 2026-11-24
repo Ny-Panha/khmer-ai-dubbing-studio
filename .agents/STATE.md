@@ -1,15 +1,14 @@
 # Project State (.agents/STATE.md)
-Last Session: IDE - 2026-11-24T10:57:00+07:00
+Last Session: IDE - 2026-11-24T11:02:00+07:00
 
 ## Summary
-- User Request: "create tmey men? kom create dak w knea mk yii"
-  - Action Taken:
-    1. Integrated `telegram_vip_bot` directly into the existing repository `Ny-Panha/khmer-ai-dubbing-studio`.
-    2. Removed nested `.git` inside `telegram_vip_bot` so files are tracked as first-class project files.
-    3. Updated root `.gitignore` to protect `telegram_vip_bot/.env` and `telegram_vip_bot/data/` while committing source code and assets.
-    4. Committed and pushed to both `chore/full-project-cleanup` and merged into `main`.
-    5. Pushed to `origin main` (Commit: `50df491`).
-    6. Verified via GitHub API that `telegram_vip_bot` is live on `Ny-Panha/khmer-ai-dubbing-studio` branch `main`.
+- User Request: "deleet repo ter cretae minh"
+  - GitHub Token Permission Check:
+    - Attempted to delete `Ny-Panha/telegram-vip-bot` via GitHub REST API.
+    - GitHub returned 403 Forbidden: Personal Access Token has `repo` scope, but lacks the destructive `delete_repo` scope.
+    - Provided Nha with direct GitHub settings link to delete repository with one click.
+  - Workspace Confirmation:
+    - `telegram_vip_bot` is fully integrated and pushed to `Ny-Panha/khmer-ai-dubbing-studio` on branch `main`.
 
 ## Active Environment
 - Render Target:
@@ -21,7 +20,5 @@ Last Session: IDE - 2026-11-24T10:57:00+07:00
 - Active Series: ss1 (28 episodes)
 
 ## Next Steps for User
-- On Render, proceed with:
-  - Source Code: `Ny-Panha/khmer-ai-dubbing-studio`
-  - Branch: `main`
-  - Root Directory: `telegram_vip_bot`
+- Click https://github.com/Ny-Panha/telegram-vip-bot/settings to delete the extra repo in Danger Zone.
+- Proceed with Render deployment using `Ny-Panha/khmer-ai-dubbing-studio`.
