@@ -105,8 +105,8 @@ export async function generateSingleSegmentAudio(segment, options = {}) {
   const deliveryOverride = isObj && options.deliveryOverride !== undefined ? options.deliveryOverride : Boolean(segment.deliveryOverride);
   const effectConfig = isObj ? (options.effectConfig || segment.effectConfig) : segment.effectConfig;
   const forceRegen = isObj && options.forceRegen !== undefined ? Boolean(options.forceRegen) : false;
-  const timeoutMs = isObj && typeof options.timeoutMs === 'number' ? options.timeoutMs : 15000;
-  const maxAttempts = isObj && typeof options.maxAttempts === 'number' ? options.maxAttempts : 1;
+  const timeoutMs = isObj && typeof options.timeoutMs === 'number' ? options.timeoutMs : 30000;
+  const maxAttempts = isObj && typeof options.maxAttempts === 'number' ? options.maxAttempts : 2;
   const skipPeerDiskScan = isObj ? Boolean(options.skipPeerDiskScan) : false;
   const sharedAudioFiles = isObj && Array.isArray(options.sharedAudioFiles) ? options.sharedAudioFiles : undefined;
   const speakerUpdate = isObj && options.speakerUpdate && typeof options.speakerUpdate === 'object' ? options.speakerUpdate : undefined;
@@ -145,6 +145,7 @@ export async function generateSingleSegmentAudio(segment, options = {}) {
 
   // Safe retry for transient 502 / ECONNRESET during server reload with configurable timeout
   let res = null;
+  let lastErr = null;
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
@@ -161,18 +162,29 @@ export async function generateSingleSegmentAudio(segment, options = {}) {
       }
     } catch (err) {
       clearTimeout(timeoutId);
-      if (attempt === 0) {
+      lastErr = err;
+      if (attempt + 1 < maxAttempts) {
         await new Promise((r) => setTimeout(r, 1000));
         continue;
       }
       if (err.name === 'AbortError') {
-        throw new Error('TTS request timed out after 25s');
+        throw new Error(`TTS request timed out after ${(timeoutMs / 1000).toFixed(0)}s`);
       }
       throw err;
     }
-    if (attempt === 0 && (res.status === 502 || res.status === 503)) {
+    if (attempt + 1 < maxAttempts && (res.status === 502 || res.status === 503)) {
       await new Promise((r) => setTimeout(r, 1000));
     }
+  }
+
+  if (!res) {
+    if (lastErr) {
+      if (lastErr.name === 'AbortError') {
+        throw new Error(`TTS request timed out after ${(timeoutMs / 1000).toFixed(0)}s`);
+      }
+      throw lastErr;
+    }
+    throw new Error('Failed to generate single audio segment: No response received from server');
   }
 
   const data = await parseResponseJson(res, 'Failed to generate single audio segment');

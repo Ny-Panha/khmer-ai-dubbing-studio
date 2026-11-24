@@ -853,8 +853,8 @@ const FALLBACK_VOICE_CATALOG = {
           seriesId,
           skipPeerDiskScan: true,
           sharedAudioFiles,
-          timeoutMs: 15000,
-          maxAttempts: 1,
+          timeoutMs: 25000,
+          maxAttempts: 2,
           ...(spkKey && speakerEntryPatch ? { speakerUpdate: { key: spkKey, entry: speakerEntryPatch } } : {}),
         }
       );
@@ -1111,11 +1111,15 @@ const FALLBACK_VOICE_CATALOG = {
           ...updatedSeg,
           projectName: dramaName,
           videoId: videoId,
+          seriesId,
+          episodeId,
         }, {
           speed: activeSpeed,
           voiceId: targetVoiceId,
           projectName: dramaName,
           videoId: videoId,
+          seriesId,
+          episodeId,
           forceRegen: true,
         });
 

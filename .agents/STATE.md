@@ -1,30 +1,39 @@
 # Project State (.agents/STATE.md)
-Last Session: IDE - 2026-11-24T21:05:00+07:00
+Last Session: IDE - 2026-11-24T21:44:00+07:00
 
 ## Summary
-- User Request: "mx yy A tv S vinh?" -> User chose option 2 to implement auto-phonetic normalization in backend so "កម្រិត A" automatically speaks as "កម្រិត អា" without confusing "S" (អេស) or requiring manual edits.
+- User Request: "error" with screenshot showing:
+  `Failed to generate single audio segment: Could not read response stream (Cannot read properties of null (reading 'text'))` on text `ម៉ាក់`.
 - Root Cause Identified:
-  - In Edge TTS (`km-KH-PisethNeural` and `km-KH-SreymomNeural`), single Latin uppercase letter `A` is pronounced using English phoneme `/eɪ/` ("អេ").
-  - In Khmer speech context (e.g. `កម្រិត A`), `/eɪ/` spoken quickly sounds confusingly like `S` ("អេស"). Cambodians expect `កម្រិត អា` (Rank A) vs `កម្រិត អេស` (Rank S).
+  1. In `frontend/src/services/api/audioApi.js` (`generateSingleSegmentAudio`):
+     - `maxAttempts` defaulted to 1.
+     - When an error or timeout occurred on `attempt = 0`, the `catch` block did `if (attempt === 0) continue;` unconditionally without checking `if (attempt + 1 < maxAttempts)`.
+     - With `maxAttempts = 1`, `continue` terminated the loop without retrying, leaving `res = null`.
+     - `res = null` was then passed to `parseResponseJson(res)`.
+  2. In `frontend/src/services/api/client.js` (`parseResponseJson`):
+     - `parseResponseJson` called `await res.text()` without guarding `if (!res)`.
+     - When `res` was null, it threw `TypeError: Cannot read properties of null (reading 'text')`, masking the underlying network or timeout error.
+  3. In `frontend/src/hooks/useAudioDubbing.js` (`handleUpdateSegmentText`):
+     - `seriesId` and `episodeId` were omitted in the parameters sent to `generateSingleSegmentAudio`.
+  4. Timeout Duration:
+     - `timeoutMs` was previously set to 15000ms (15s), which is too aggressive for Edge TTS WebSocket handshakes under network jitter, causing premature aborts.
 - Implementation Details:
-  1. `backend/services/ttsService.js`:
-     - Added `normalizePhoneticsForTts(text)` inside `cleanTextForTts()`:
-       - Normalizes Rank/Level patterns (e.g. `កម្រិត A`, `ថ្នាក់ A`, `លំដាប់ A`, `Rank A`, `Level A`, `Class A`) to `កម្រិត អា`.
-       - Normalizes standalone uppercase `A` in Khmer sentences to `អា`.
-       - Preserves full English words intact (e.g. `Apple`, `Admin`, `AI`, `Auto`, `Attack`, `DNA`).
-       - Preserves other rank letters (`កម្រិត S`, `កម្រិត B`, `កម្រិត C`, `កម្រិត D`).
-       - The displayed subtitle text remains clean `កម្រិត A` while the generated audio speaks `កម្រិត អា`.
-  2. `backend/uploads/projects/ss1/series.json`:
-     - Regenerated EP2 Segment 73 with Piseth Neural using the new phonetic normalization. Verified with Gemini ASR that it articulates `កាំបិត ជា ឧបករណ៍ កម្រិត A` with distinct "អា" pronunciation.
-  3. `backend/tests/phonetic_normalization.test.js`:
-     - Automated test suite verifying rank pattern replacements, word boundaries, and real Edge TTS audio synthesis.
+  1. `frontend/src/services/api/client.js`:
+     - Added `if (!res)` guard in `parseResponseJson` to eliminate null dereference and return clean error messages.
+  2. `frontend/src/services/api/audioApi.js`:
+     - Defaulted `timeoutMs` to 30000ms (30s) and `maxAttempts` to 2.
+     - Guarded retry loop with `attempt + 1 < maxAttempts` so errors are never swallowed.
+     - Tracked `lastErr` and verified `res` before calling `parseResponseJson`.
+  3. `frontend/src/hooks/useAudioDubbing.js`:
+     - In `handleUpdateSegmentText`, passed `seriesId` and `episodeId`.
+     - In `handleUpdateSegmentVoice`, increased timeout to 25s with 2 attempts.
 - Verification & Benchmarks:
   - All 23 tests PASSED:
-    - `backend/tests/phonetic_normalization.test.js` (4/4)
-    - `backend/tests/single_clip_voice_switching.test.js` (3/3)
-    - `backend/tests/cast_voice_switching.test.js` (9/9)
-    - `backend/tests/series_folder_selector_workspace.test.js` (7/7)
-  - Frontend Vite build: PASSED in 1.13s (0 errors).
+    - `single_clip_voice_switching.test.js` (3/3)
+    - `phonetic_normalization.test.js` (4/4)
+    - `cast_voice_switching.test.js` (9/9)
+    - `series_folder_selector_workspace.test.js` (7/7)
+  - Vite build: PASSED in 2.09s (0 errors).
 
 ## Active Environment
 - Backend Server: http://localhost:5000 (running)
@@ -33,6 +42,4 @@ Last Session: IDE - 2026-11-24T21:05:00+07:00
 
 ## Next Steps for User
 - Refresh browser (F5) in Studio at `localhost:5173`.
-- Play Clip #73 in EP2:
-  - Audio now speaks "កាំបិតជាឧបករណ៍កម្រិត អា" យ៉ាងច្បាស់ ដោយមិនច្រឡំជាមួយ S (អេស) ឡើយ។
-  - Subtitle នៅតែបង្ហាញ "កម្រិត A" ស្អាតដដែល។
+- Click the retry button (`សាកម្តងទៀត`) on the segment or type new text; the generation will now succeed smoothly without the stream error.

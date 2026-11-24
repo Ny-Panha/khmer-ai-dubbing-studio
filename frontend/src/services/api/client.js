@@ -25,6 +25,9 @@ export function notifyBackendOnline() {
  * @param {string} defaultErrMsg
  */
 export async function parseResponseJson(res, defaultErrMsg = 'Request failed') {
+  if (!res) {
+    throw new Error(`${defaultErrMsg}: No response received from server`);
+  }
   let text = '';
   try {
     text = await res.text();
