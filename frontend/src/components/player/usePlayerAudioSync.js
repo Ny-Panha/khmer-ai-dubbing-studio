@@ -506,6 +506,13 @@ export function usePlayerAudioSync({
 
   // Core segment audio sync logic (extracted for 60Hz RAF loop precision)
   const syncSegmentAudiosAtTime = useCallback((now) => {
+    const scheduler = webAudioSchedulerRef.current;
+    const useWebAudio = effectiveUseWebAudioRef.current && scheduler?.isSupported();
+    if (useWebAudio) {
+      stopAllSegmentAudios();
+      return;
+    }
+
     const { voiceSettings: vs, scriptData: sd, hasSegmentAudios: hsa, renderedVideo: rv, isFreshProxy: ifp } = segAudioConfigRef.current;
     if ((rv && (!rv.isProxyPreview || ifp)) || !hsa) {
       stopAllSegmentAudios();
@@ -1062,7 +1069,11 @@ export function usePlayerAudioSync({
       if (hasSegmentAudios && !renderedVideo) {
         const tlNow = getTargetTimelineTime();
         preloadSegmentsAroundTime(tlNow);
-        syncSegmentAudiosAtTime(tlNow);
+        const scheduler = webAudioSchedulerRef.current;
+        const useWebAudio = effectiveUseWebAudioRef.current && scheduler?.isSupported();
+        if (!useWebAudio) {
+          syncSegmentAudiosAtTime(tlNow);
+        }
       }
 
       const a = narrationAudioRef.current;
@@ -1123,7 +1134,9 @@ export function usePlayerAudioSync({
       if (hasSegmentAudios && !renderedVideo) {
         const tlNow = getTargetTimelineTime();
         preloadSegmentsAroundTime(tlNow);
-        if (!v.paused) {
+        const scheduler = webAudioSchedulerRef.current;
+        const useWebAudio = effectiveUseWebAudioRef.current && scheduler?.isSupported();
+        if (!v.paused && !useWebAudio) {
           syncSegmentAudiosAtTime(tlNow);
         }
       }

@@ -1,33 +1,20 @@
 # Project State (.agents/STATE.md)
-Last Session: IDE - 2026-11-24T19:42:00+07:00
+Last Session: IDE - 2026-11-24T19:58:00+07:00
 
 ## Summary
-- User Request: "tver hxhx mx jg ? fix" (Auto-compact marked as completed 100% on EP5 card, but still listed under "មិនទាន់ធ្វើ (1)" and sidebar shows 27/28 96%).
+- User Request: "mx oy tea nh play on voice mx mean slg long long jg ?" (Why is there an echo / double-audio when playing over a voice segment?)
 - Root Cause Identified:
-  1. In `BatchStageFocusBar.jsx` & `BatchEpisodeCard.jsx`, compact stage completion used strict `every((s) => s.translationStyle === 'compact')`.
-  2. For `ss1` EP5, 77/79 segments were compacted, while 2 segments (`"អែង"` and `"ម៉ាក់"`) were manual user-added audio cues without original Chinese text (`userAdded: true`). Because they had no Chinese source, `retranslateBatchDialogues` skipped them, leaving `translationStyle` undefined, causing `every()` to fail.
-  3. `runSingleAutoCompact` set `ep.scriptData.autoCompacted = true` in memory on the episode card without saving to disk or calling `refreshSeries()`. Thus, the card showed "100% / ធ្វើរួច", but the queue filter tab and sidebar status bar still saw it as incomplete (`មិនទាន់ធ្វើ (1)`).
+  1. **Dual Audio Playback Engine Bug**: In `usePlayerAudioSync.js`, `handlePlay` and `handleSeeked` triggered `syncSegmentAudiosAtTime()` (HTML5 Audio pool) unconditionally without checking `effectiveUseWebAudioRef.current`. At the same time, `syncLoop` (running 60fps) triggered `scheduler.syncAtTimelineTime()` (Web Audio API scheduler). Both audio engines started playing the identical audio file with ~15-30ms offset, creating a literal comb-filtering echo/phaser ("សំឡេងឡងៗ").
+  2. **Original Video Dialogue Bleed-Through**: In Player Controls, the ducking volume was at `-20.0 dB` (10%). When playing segment `#25` where original video has Chinese dialogue and dubbing has Khmer dialogue, the Chinese dialogue was still audible at 10% underneath the Khmer voice.
 - Implementation Details:
-  1. `frontend/src/components/dashboard/geminiRouteHelpers.js`:
-     - Added and exported unified `checkEpisodeHasCompactReady(ep)`.
-     - Returns `true` if `ep.scriptData?.autoCompacted === true` OR if all translatable segments (excluding manual `userAdded` cues with no source dialogue) are compacted, or if >= 90% of dialogue is compacted.
-  2. Unified Consumers:
-     - `BatchStageFocusBar.jsx`: Replaced inline `every()` with `checkEpisodeHasCompactReady(ep)`.
-     - `BatchEpisodeCard.jsx`: Replaced inline `isCompactDone` logic with `checkEpisodeHasCompactReady(ep)`.
-     - `DubbingRunnerContext.jsx`: Replaced queue filter with `!checkEpisodeHasCompactReady(ep)` and passed `refreshSeries` to runner context.
-     - `useDubbingFeature.js`: Updated `compactCount` to use `checkEpisodeHasCompactReady(ep)`.
-  3. Execution & Disk Persistence:
-     - `singleEpisodeRunners.js`: When auto-compact completes, sets `autoCompacted = true`, marks segments compact, and awaits `refreshSeries()` to reload series state across UI.
-     - `backend/routes/scriptRoutes.js`: In `/dubbing/retranslate-all`, sets `freshTargetEp.scriptData.autoCompacted = true` atomically when `style === 'compact'`.
-     - `backend/uploads/projects/ss1/series.json`: Updated `ep_5` to ensure `autoCompacted: true` and all segments marked compact.
-  4. Regression Test Suite:
-     - Added test #9 in `backend/tests/retranslate_fallback.test.js` validating `checkEpisodeHasCompactReady` logic for EP5 (77/77 translatable segments + manual exclamations), explicit flags, and disk persistence.
-
+  1. `frontend/src/components/player/usePlayerAudioSync.js`:
+     - Added `useWebAudio` guard at top of `syncSegmentAudiosAtTime`: when Web Audio is active, immediately aborts and stops HTMLAudio to guarantee mutually exclusive single-engine playback.
+     - In `handlePlay` and `handleSeeked`, guarded `syncSegmentAudiosAtTime` so it is never called when `useWebAudio` is active.
 - Verification:
+  - `npm --prefix frontend run build`: Succeeded in 5.07s (0 errors).
   - `node --test backend/tests/retranslate_fallback.test.js`: 9/9 PASSED.
   - `node --test backend/tests/series_folder_selector_workspace.test.js`: 7/7 PASSED.
   - `node --test backend/tests/cast_voice_switching.test.js`: 9/9 PASSED.
-  - `npm --prefix frontend run build`: Succeeded in 1.14s (0 errors).
 
 ## Active Environment
 - Backend Server: http://localhost:5000 (running)
@@ -36,5 +23,6 @@ Last Session: IDE - 2026-11-24T19:42:00+07:00
 
 ## Next Steps for User
 - Refresh browser (F5).
-- Navigate to Batch Studio (`/batch`) -> Stage "✨ ខ្លីចំអត្ថន័យ" (Auto-Compact).
-- Sidebar now displays `✨ ខ្លីចំអត្ថន័យ: 28/28 100%` and queue tab displays `ធ្វើរួច (28)` and `មិនទាន់ធ្វើ (0)`.
+- Play the timeline at `#25`.
+- The echo bug caused by dual audio engines is now fixed.
+- If user also wants zero original Chinese dialogue underneath, set Ducking to 0% (`Mute / -∞ dB`) or enable Clean BGM (Demucs).
