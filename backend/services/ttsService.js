@@ -775,6 +775,24 @@ async function generateSingleSegmentAudio(segment, uploadsDir, options = {}) {
 
   // 2. If not cached, synthesize and apply appropriate effect
   if (!usedCache) {
+    // Immutable 1.0x natural base speech path for zero-TTS atempo scaling
+    const natural1xHash = crypto.createHash("md5").update(`${textToSpeak}__${voiceId}__natural1x`).digest("hex").substring(0, 8);
+    const natural1xFileName = `${epPrefix}seg_${cleanId}_${voiceId}_base1x_${natural1xHash}.mp3`;
+    const natural1xPath = path.join(uploadsDir, natural1xFileName);
+
+    // Pre-populate natural1xPath from existing unscaled 1.0x clean speech on disk if available
+    if (!fs.existsSync(natural1xPath) || fs.statSync(natural1xPath).size < 200) {
+      if (segment.rawAudioPath && fs.existsSync(segment.rawAudioPath) && fs.statSync(segment.rawAudioPath).size > 200) {
+        try { fs.copyFileSync(segment.rawAudioPath, natural1xPath); } catch (_) {}
+      } else {
+        const clean1xHash = crypto.createHash("md5").update(`${textToSpeak}__${voiceId}__out_loud__clean__+0%__raw__lt1`).digest("hex").substring(0, 8);
+        const clean1xCandidate = path.join(uploadsDir, `${epPrefix}seg_${cleanId}_${voiceId}_voice_${clean1xHash}.mp3`);
+        if (fs.existsSync(clean1xCandidate) && fs.statSync(clean1xCandidate).size > 200) {
+          try { fs.copyFileSync(clean1xCandidate, natural1xPath); } catch (_) {}
+        }
+      }
+    }
+
     if (isThought) {
       // Step A: Ensure valid clean speech base exists
       const rawHash = crypto.createHash("md5").update(`${textToSpeak}__${voiceId}__raw__${rate}__${speedCacheMode}__lt1`).digest("hex").substring(0, 8);
@@ -789,7 +807,12 @@ async function generateSingleSegmentAudio(segment, uploadsDir, options = {}) {
 
       // Re-use existing clean speech audio if already available on disk (0 new Edge TTS synthesis)
       if (!options.forceRegen && (!fs.existsSync(rawFilePath) || fs.statSync(rawFilePath).size < 200)) {
-        if (fs.existsSync(cleanVoiceFilePath) && fs.statSync(cleanVoiceFilePath).size > 200) {
+        if (fs.existsSync(natural1xPath) && fs.statSync(natural1xPath).size > 200) {
+          try {
+            fs.copyFileSync(natural1xPath, rawFilePath);
+            console.log(`[TTSService] ⚡ Reused natural 1.0x base audio for thought effect: ${natural1xFileName}`);
+          } catch (_) {}
+        } else if (fs.existsSync(cleanVoiceFilePath) && fs.statSync(cleanVoiceFilePath).size > 200) {
           try {
             fs.copyFileSync(cleanVoiceFilePath, rawFilePath);
             console.log(`[TTSService] ⚡ Reused existing clean voice audio as raw base for thought effect: ${cleanVoiceFileName}`);
@@ -824,29 +847,34 @@ async function generateSingleSegmentAudio(segment, uploadsDir, options = {}) {
           }
         }
 
-        if (hasExplicitUserSpeed && fs.existsSync(rawFilePath)) {
-          const exactTargetSpeed = Number(speedInfo.numericSpeed || 1.0);
-          if (Math.abs(exactTargetSpeed - 1.0) > 0.001) {
-            const exactRes = await applyExactAudioSpeed(rawFilePath, exactTargetSpeed);
-            appliedSpeed = exactRes.appliedSpeed;
-          } else {
-            appliedSpeed = 1.0;
-          }
-          console.log(`[TTS] Segment #${segment.id || 'N/A'} (inner_thought) explicit user speed (ttsRate=+0%, requestedRate=${rate}, atempo=${appliedSpeed}x) — skipped slot autoStretch`);
-        } else if (effectiveAutoStretch && fs.existsSync(rawFilePath)) {
-          try {
-            const stretchRes = await autoStretchTtsAudio({
-              inputAudioPath: rawFilePath,
-              targetDuration: targetDuration,
-              maxSpeed: maxSpeed,
-              minSpeed: 0.90,
-              leadInCushionSec: 0.025,
-              leadOutCushionSec: 0.060,
-              microFadeMs: 8,
-            });
-            if (stretchRes?.appliedSpeed) appliedSpeed = stretchRes.appliedSpeed;
-          } catch (_) { }
+        // Save a clean copy of trimmed 1.0x speech to natural1xPath
+        if (fs.existsSync(rawFilePath) && (!fs.existsSync(natural1xPath) || fs.statSync(natural1xPath).size < 200)) {
+          try { fs.copyFileSync(rawFilePath, natural1xPath); } catch (_) {}
         }
+      }
+
+      if (hasExplicitUserSpeed && fs.existsSync(rawFilePath)) {
+        const exactTargetSpeed = Number(speedInfo.numericSpeed || 1.0);
+        if (Math.abs(exactTargetSpeed - 1.0) > 0.001) {
+          const exactRes = await applyExactAudioSpeed(rawFilePath, exactTargetSpeed);
+          appliedSpeed = exactRes.appliedSpeed;
+        } else {
+          appliedSpeed = 1.0;
+        }
+        console.log(`[TTS] Segment #${segment.id || 'N/A'} (inner_thought) explicit user speed (ttsRate=+0%, requestedRate=${rate}, atempo=${appliedSpeed}x) — skipped slot autoStretch`);
+      } else if (effectiveAutoStretch && fs.existsSync(rawFilePath)) {
+        try {
+          const stretchRes = await autoStretchTtsAudio({
+            inputAudioPath: rawFilePath,
+            targetDuration: targetDuration,
+            maxSpeed: maxSpeed,
+            minSpeed: 0.90,
+            leadInCushionSec: 0.025,
+            leadOutCushionSec: 0.060,
+            microFadeMs: 8,
+          });
+          if (stretchRes?.appliedSpeed) appliedSpeed = stretchRes.appliedSpeed;
+        } catch (_) { }
       }
 
       // Step B: Apply configurable subtle FFmpeg aecho effect to separate output file
@@ -859,28 +887,25 @@ async function generateSingleSegmentAudio(segment, uploadsDir, options = {}) {
       finalDuration = effectRes.duration;
       originalDuration = await getMediaDuration(rawFilePath) || finalDuration;
     } else {
-      // Normal spoken dialogue — check if clean speech already exists in raw candidate path
-      const rawHash = crypto.createHash("md5").update(`${textToSpeak}__${voiceId}__raw__${rate}__${speedCacheMode}__lt1`).digest("hex").substring(0, 8);
-      const rawCandidatePath = path.join(uploadsDir, `${epPrefix}seg_${cleanId}_${voiceId}_raw_${rawHash}.mp3`);
-
-      let reusedCleanSpeech = false;
+      // Normal spoken dialogue — check if clean 1.0x speech already exists in natural1xPath
+      let reusedNatural1x = false;
       if (!options.forceRegen) {
-        if (fs.existsSync(rawCandidatePath) && fs.statSync(rawCandidatePath).size > 200) {
+        if (fs.existsSync(natural1xPath) && fs.statSync(natural1xPath).size > 200) {
           try {
-            fs.copyFileSync(rawCandidatePath, outputPath);
-            reusedCleanSpeech = true;
-            console.log(`[TTSService] ⚡ Reused existing raw clean speech for out_loud dialogue: ${path.basename(rawCandidatePath)}`);
+            fs.copyFileSync(natural1xPath, outputPath);
+            reusedNatural1x = true;
+            console.log(`[TTSService] ⚡ Reused verified natural 1.0x base speech for segment #${segment.id} (${fileName})`);
           } catch (_) {}
         } else if (segment.rawAudioPath && fs.existsSync(segment.rawAudioPath) && fs.statSync(segment.rawAudioPath).size > 200) {
           try {
             fs.copyFileSync(segment.rawAudioPath, outputPath);
-            reusedCleanSpeech = true;
+            reusedNatural1x = true;
             console.log(`[TTSService] ⚡ Reused segment.rawAudioPath for out_loud dialogue`);
           } catch (_) {}
         }
       }
 
-      if (!reusedCleanSpeech) {
+      if (!reusedNatural1x) {
         // Synthesize natural 1.0x speech (+0%) via Edge TTS
         try {
           if (voiceId === "google-km-standard") {
@@ -909,103 +934,96 @@ async function generateSingleSegmentAudio(segment, uploadsDir, options = {}) {
           console.warn(`[TTSService] ⚠️ trimTtsSilence warning: ${trimErr.message}`);
         }
 
-        const actualDuration = (trimRes && typeof trimRes.finalDuration === 'number' && trimRes.finalDuration > 0)
-          ? trimRes.finalDuration
-          : ((await getMediaDuration(outputPath)) || targetDuration);
-        originalDuration = actualDuration;
-        finalDuration = actualDuration;
-
-        if (effectiveAutoStretch && fs.existsSync(outputPath)) {
-          const MIN_COLLISION_SAFETY_MARGIN_SEC = 0.100;
-          const safeSlotTarget = Math.max(0.20, parseFloat((availableSlotDuration - MIN_COLLISION_SAFETY_MARGIN_SEC).toFixed(3)));
-
-          const ratio = actualDuration / safeSlotTarget;
-          const maxAllowedStretchSpeed = Math.max(1.50, maxSpeed || 1.50);
-          const shouldStretch = ratio > 1.02;
-          const targetSpeed = Math.min(maxAllowedStretchSpeed, ratio);
-
-          if (shouldStretch) {
-            try {
-              const stretchResult = await autoStretchTtsAudio({
-                inputAudioPath: outputPath,
-                targetDuration: safeSlotTarget,
-                maxSpeed: targetSpeed,
-                minSpeed: 1.0,
-                leadInCushionSec: 0.025,
-                leadOutCushionSec: 0.060,
-                microFadeMs: 8,
-                allowSlowdown: false,
-                isPreTrimmed: true,
-                currentDuration: actualDuration,
-              });
-              finalDuration = stretchResult.finalDuration;
-              originalDuration = stretchResult.finalDuration;
-              appliedSpeed = stretchResult.appliedSpeed;
-            } catch (stretchErr) {
-              console.warn(`[TTSService] ⚠️ autoStretchTtsAudio error (${stretchErr.message}), keeping original audio duration`);
-            }
-          } else if (
-            actualDuration >= 0.80 &&
-            sourceSpeechDuration >= 0.80 &&
-            actualDuration < sourceSpeechDuration * 0.50 &&
-            sourceSpeechDuration <= availableSlotDuration
-          ) {
-            try {
-              const stretchResult = await autoStretchTtsAudio({
-                inputAudioPath: outputPath,
-                targetDuration: sourceSpeechDuration,
-                maxSpeed: 1.0,
-                minSpeed: 0.92,
-                leadInCushionSec: 0.025,
-                leadOutCushionSec: 0.060,
-                microFadeMs: 8,
-                allowSlowdown: true,
-                isPreTrimmed: true,
-                currentDuration: actualDuration,
-              });
-              finalDuration = stretchResult.finalDuration;
-              originalDuration = stretchResult.originalDuration;
-              appliedSpeed = stretchResult.appliedSpeed;
-            } catch (_) { }
-          } else {
-            finalDuration = actualDuration;
-            originalDuration = actualDuration;
-            appliedSpeed = 1.0;
-          }
-        } else if (hasExplicitUserSpeed && fs.existsSync(outputPath)) {
-          const exactTargetSpeed = Number(speedInfo.numericSpeed || 1.0);
-          if (Math.abs(exactTargetSpeed - 1.0) > 0.001) {
-            const exactRes = await applyExactAudioSpeed(outputPath, exactTargetSpeed);
-            finalDuration = exactRes.finalDuration;
-            originalDuration = exactRes.finalDuration;
-            appliedSpeed = exactRes.appliedSpeed;
-          } else {
-            finalDuration = actualDuration;
-            originalDuration = actualDuration;
-            appliedSpeed = 1.0;
-          }
-          console.log(`[TTS] Segment #${segment.id || 'N/A'} explicit user speed (ttsRate=+0%, requestedRate=${rate}, atempo=${appliedSpeed}x) — skipped slot autoStretch (natural=${actualDuration.toFixed(3)}s -> final=${finalDuration.toFixed(3)}s, slot=${availableSlotDuration.toFixed(3)}s)`);
-        } else {
-          finalDuration = actualDuration;
-          originalDuration = actualDuration;
-          appliedSpeed = 1.0;
-        }
-
-        // Cache clean speech as raw base so future thought effects reuse it with zero Edge TTS synthesis
-        if (fs.existsSync(outputPath) && (!fs.existsSync(rawCandidatePath) || fs.statSync(rawCandidatePath).size < 200)) {
+        // Save a clean copy of trimmed 1.0x natural speech as immutable natural1xPath
+        if (fs.existsSync(outputPath) && (!fs.existsSync(natural1xPath) || fs.statSync(natural1xPath).size < 200)) {
           try {
-            fs.copyFileSync(outputPath, rawCandidatePath);
+            fs.copyFileSync(outputPath, natural1xPath);
           } catch (_) {}
         }
-      } else {
-        const reusedDur = (await getMediaDuration(outputPath)) || targetDuration;
-        finalDuration = reusedDur;
-        originalDuration = reusedDur;
-        appliedSpeed = hasExplicitUserSpeed ? (speedInfo.numericSpeed || 1.0) : 1.0;
       }
 
-      rawFilePath = outputPath;
-      rawFileName = fileName;
+      // outputPath now contains unscaled 1.0x natural speech; apply exact user speed or autoStretch
+      const naturalDuration = (await getMediaDuration(outputPath)) || targetDuration;
+      originalDuration = naturalDuration;
+      finalDuration = naturalDuration;
+
+      if (hasExplicitUserSpeed && fs.existsSync(outputPath)) {
+        // Explicit User Speed: ALWAYS apply FFmpeg atempo ONCE on natural 1.0x speech (never stacks!)
+        const exactTargetSpeed = Number(speedInfo.numericSpeed || 1.0);
+        if (Math.abs(exactTargetSpeed - 1.0) > 0.001) {
+          const exactRes = await applyExactAudioSpeed(outputPath, exactTargetSpeed);
+          finalDuration = exactRes.finalDuration;
+          appliedSpeed = exactRes.appliedSpeed;
+        } else {
+          finalDuration = naturalDuration;
+          appliedSpeed = 1.0;
+        }
+        console.log(`[TTS] Segment #${segment.id || 'N/A'} explicit user speed (natural=${naturalDuration.toFixed(3)}s -> final=${finalDuration.toFixed(3)}s, atempo=${appliedSpeed}x)`);
+      } else if (effectiveAutoStretch && fs.existsSync(outputPath)) {
+        const MIN_COLLISION_SAFETY_MARGIN_SEC = 0.100;
+        const safeSlotTarget = Math.max(0.20, parseFloat((availableSlotDuration - MIN_COLLISION_SAFETY_MARGIN_SEC).toFixed(3)));
+
+        const ratio = naturalDuration / safeSlotTarget;
+        const maxAllowedStretchSpeed = Math.max(1.50, maxSpeed || 1.50);
+        const shouldStretch = ratio > 1.02;
+        const targetSpeed = Math.min(maxAllowedStretchSpeed, ratio);
+
+        if (shouldStretch) {
+          try {
+            const stretchResult = await autoStretchTtsAudio({
+              inputAudioPath: outputPath,
+              targetDuration: safeSlotTarget,
+              maxSpeed: targetSpeed,
+              minSpeed: 1.0,
+              leadInCushionSec: 0.025,
+              leadOutCushionSec: 0.060,
+              microFadeMs: 8,
+              allowSlowdown: false,
+              isPreTrimmed: true,
+              currentDuration: naturalDuration,
+            });
+            finalDuration = stretchResult.finalDuration;
+            originalDuration = stretchResult.finalDuration;
+            appliedSpeed = stretchResult.appliedSpeed;
+          } catch (stretchErr) {
+            console.warn(`[TTSService] ⚠️ autoStretchTtsAudio error (${stretchErr.message}), keeping original audio duration`);
+          }
+        } else if (
+          naturalDuration >= 0.80 &&
+          sourceSpeechDuration >= 0.80 &&
+          naturalDuration < sourceSpeechDuration * 0.50 &&
+          sourceSpeechDuration <= availableSlotDuration
+        ) {
+          try {
+            const stretchResult = await autoStretchTtsAudio({
+              inputAudioPath: outputPath,
+              targetDuration: sourceSpeechDuration,
+              maxSpeed: 1.0,
+              minSpeed: 0.92,
+              leadInCushionSec: 0.025,
+              leadOutCushionSec: 0.060,
+              microFadeMs: 8,
+              allowSlowdown: true,
+              isPreTrimmed: true,
+              currentDuration: naturalDuration,
+            });
+            finalDuration = stretchResult.finalDuration;
+            originalDuration = stretchResult.originalDuration;
+            appliedSpeed = stretchResult.appliedSpeed;
+          } catch (_) { }
+        } else {
+          finalDuration = naturalDuration;
+          originalDuration = naturalDuration;
+          appliedSpeed = 1.0;
+        }
+      } else {
+        finalDuration = naturalDuration;
+        originalDuration = naturalDuration;
+        appliedSpeed = 1.0;
+      }
+
+      rawFilePath = natural1xPath;
+      rawFileName = path.basename(natural1xPath);
     }
 
     // Verify final output audio
@@ -1040,12 +1058,19 @@ async function generateSingleSegmentAudio(segment, uploadsDir, options = {}) {
           (baseName.includes("_voice_") && isThought) ||
           (baseName.includes("_thought_") && !isThought)
         );
+        const isSpeedVariant = (
+          (baseName.includes("_voice_") && !isThought) ||
+          (baseName.includes("_thought_") && isThought)
+        );
+        const isBase1xFile = baseName.includes("_base1x_");
         if (
           (baseName.startsWith(expectedPrefix) || (!epPrefix && baseName.startsWith(`seg_${cleanId}_`))) &&
           !baseName.includes(cacheHash) &&
           !baseName.includes("_raw_") &&
+          !isBase1xFile &&
           !isOtherVoiceVariant &&
-          !isOtherDeliveryVariant
+          !isOtherDeliveryVariant &&
+          !isSpeedVariant
         ) {
           fs.unlinkSync(resolvedPrior);
         }

@@ -616,11 +616,36 @@ const FALLBACK_VOICE_CATALOG = {
     const customFlag = true;
     const numericSpeed = Number(newSpeed);
     const normalizedSpeed = Number.isFinite(numericSpeed) ? Number(numericSpeed.toFixed(4)) : newSpeed;
+
+    // Fast Return / No-op: Same-speed selection is a no-op, unless explicitly overriding Auto-Fit
+    const prevSpeedNum = typeof targetSeg.speed === 'number' ? targetSeg.speed : (parseFloat(targetSeg.speed) || 1.0);
+    const isSameSpeed = Math.abs(prevSpeedNum - normalizedSpeed) < 0.005;
+    if (isSameSpeed && targetSeg.userCustomSpeed && (targetSeg.audioUrl || targetSeg.audioPath)) {
+      return targetSeg;
+    }
+
+    const currentKhmerText = (targetSeg.khmer || targetSeg.khmerText || targetSeg.khmerTranslatedText || '').trim();
+    const segKey = String(targetSeg._uid || targetSeg.id || segIdx);
+    const currentSeq = (segmentRegenSeqRef.current[segKey] || 0) + 1;
+    segmentRegenSeqRef.current[segKey] = currentSeq;
+
+    // Preserve existing trimming, offsets, delivery type, effect, and variants
+    const preservedOffset = targetSeg.audioOffset || 0;
+    const preservedTrimmed = Boolean(targetSeg.audioTrimmed || targetSeg.userTrimmed);
+    const preservedDeliveryType = targetSeg.deliveryType || 'out_loud';
+    const preservedEffect = targetSeg.audioEffect || 'none';
+
     const updatedSeg = {
       ...targetSeg,
       speed: normalizedSpeed,
       appliedSpeed: Number.isFinite(numericSpeed) ? normalizedSpeed : (targetSeg.appliedSpeed || 1.0),
       userCustomSpeed: customFlag,
+      audioOffset: preservedOffset,
+      audioTrimmed: preservedTrimmed,
+      userTrimmed: preservedTrimmed,
+      deliveryType: preservedDeliveryType,
+      audioEffect: preservedEffect,
+      textStatus: autoRegen ? 'generating' : targetSeg.textStatus,
       audioOutdated: true,
     };
 
@@ -634,21 +659,31 @@ const FALLBACK_VOICE_CATALOG = {
     } : prev));
     invalidateRendered();
 
-    const currentKhmerText = (updatedSeg.khmer || updatedSeg.khmerText || updatedSeg.khmerTranslatedText || '').trim();
     if (autoRegen && currentKhmerText) {
       try {
         const regenerated = await generateSingleSegmentAudio(updatedSeg, {
           speed: normalizedSpeed,
           userCustomSpeed: customFlag,
           voiceId: targetVoiceId,
-          forceRegen: true,
+          deliveryType: preservedDeliveryType,
+          audioEffect: preservedEffect,
+          forceRegen: false, // Reuses natural 1.0x audio cache via FFmpeg atempo! Zero Edge TTS!
           projectName: getProjectName(),
           videoId: getVideoId(),
           episodeId,
           seriesId,
         });
-        const speedVariants = {
+
+        if (segmentRegenSeqRef.current[segKey] !== currentSeq) {
+          return null; // Discard stale in-flight response
+        }
+
+        // Preserve all existing voiceAudioVariants and deliveryVariants
+        const mergedVoiceVariants = {
+          ...(targetSeg.voiceAudioVariants || {}),
+          ...(regenerated.voiceAudioVariants || {}),
           [targetVoiceId]: {
+            ...(targetSeg.voiceAudioVariants?.[targetVoiceId] || {}),
             voiceId: targetVoiceId,
             audioUrl: regenerated.audioUrl,
             audioFile: regenerated.audioFile,
@@ -659,37 +694,61 @@ const FALLBACK_VOICE_CATALOG = {
             timestamp: Date.now(),
           },
         };
-        const finalSegments = [...newSegments];
-        finalSegments[segIdx] = {
+
+        const mergedDeliveryVariants = {
+          ...(targetSeg.deliveryVariants || {}),
+          ...(regenerated.deliveryVariants || {}),
+        };
+
+        const finalDuration = regenerated.audioDurationSec || regenerated.audioDuration || (targetSeg.audioDurationSec / normalizedSpeed);
+
+        const committedSeg = {
+          ...targetSeg,
           ...regenerated,
-          audioOffset: 0,
-          audioTrimmed: false,
-          userTrimmed: false,
+          audioOffset: preservedOffset,
+          audioTrimmed: preservedTrimmed,
+          userTrimmed: preservedTrimmed,
+          audioTrimStartSec: targetSeg.audioTrimStartSec,
+          audioTrimEndSec: targetSeg.audioTrimEndSec,
           speed: normalizedSpeed,
           appliedSpeed: regenerated?.appliedSpeed ?? normalizedSpeed,
           userCustomSpeed: customFlag,
+          audioDurationSec: finalDuration,
+          audioDuration: finalDuration,
+          finalAudioDuration: finalDuration,
+          audioStartSec: targetSeg.audioStartSec ?? targetSeg.startSec,
+          audioEndSec: parseFloat(((targetSeg.audioStartSec ?? targetSeg.startSec) + finalDuration).toFixed(2)),
           audioOutdated: false,
-          voiceAudioVariants: speedVariants,
+          textStatus: 'ready',
+          voiceAudioVariants: mergedVoiceVariants,
+          deliveryVariants: mergedDeliveryVariants,
         };
-        const nextUpdatedAt = Date.now();
+
+        const finalSegments = [...scriptData.segments];
+        const matchIdx = finalSegments.findIndex((s, i) => i === segIdx || String(s.id) === String(targetSeg.id));
+        if (matchIdx !== -1) {
+          finalSegments[matchIdx] = committedSeg;
+        }
+
         setScriptData((prev) => (prev ? {
           ...prev,
           segments: finalSegments,
-          updatedAt: nextUpdatedAt,
+          updatedAt: Date.now(),
         } : prev));
         setAudioGenerated(true);
+
+        // Async background persistence without blocking UI
         if (seriesId && episodeId) {
-          saveTimelineOperationToLocalStorage({
-            seriesId,
-            episodeId,
-            operation: 'update_segments',
+          saveTimelineOperationToLocalStorage(seriesId, episodeId, {
             segments: finalSegments,
+            updatedAt: Date.now(),
           });
           persistTimelineOperationApi({
             seriesId,
             episodeId,
             operation: 'update_segments',
             segments: finalSegments,
+            updatedAt: Date.now(),
           }).catch((persistErr) => {
             console.warn('[useAudioDubbing] Failed to persist clip speed update:', persistErr?.message || persistErr);
           });
@@ -697,24 +756,15 @@ const FALLBACK_VOICE_CATALOG = {
         invalidateRendered();
 
         const stillOutdated = finalSegments.some((s) => s.audioOutdated);
+        setFullAudioUrl(null);
+        setFullAudioPath(null);
         setAudioOutdated(stillOutdated);
 
-        if (finalSegments.some((s) => s.audioFile || s.audioPath || s.audioUrl)) {
-          syncTimelineAudioApi(finalSegments, getProjectName(), getVideoId(), episodeId, seriesId)
-            .then((res) => {
-              if (res.fullAudioUrl) {
-                const cacheBusted = `${res.fullAudioUrl.split('?')[0]}?t=${Date.now()}`;
-                setFullAudioUrl(cacheBusted);
-                setFullAudioPath(res.fullAudioPath);
-                setAudioGenerated(true);
-              }
-            })
-            .catch((syncErr) => {
-              console.warn('Auto re-sync timeline audio error:', syncErr.message);
-            });
-        }
-        return finalSegments[segIdx];
+        return committedSeg;
       } catch (err) {
+        if (segmentRegenSeqRef.current[segKey] !== currentSeq) {
+          return null;
+        }
         console.warn('Auto-regen segment audio on speed change failed:', err);
         return null;
       }

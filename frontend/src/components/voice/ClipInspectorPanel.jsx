@@ -1267,6 +1267,11 @@ export default function ClipInspectorPanel({
                 disabled={regeneratingId === (selectedSegment.id || selectedSegmentIndex)}
                 onDraftChange={setDraftClipSpeed}
                 onCommit={(val) => {
+                  if (Math.abs(val - segSpeedNum) < 0.005 && selectedSegment.userCustomSpeed) {
+                    setDraftClipSpeed(null);
+                    return; // Same-speed fast no-op
+                  }
+                  setDraftClipSpeed(null);
                   onClipSpeedChange(selectedSegment.id || selectedSegmentIndex, val, selectedSegmentIndex);
                 }}
                 data-testid="slider-clip-speed"
@@ -1284,7 +1289,11 @@ export default function ClipInspectorPanel({
                     key={p.val}
                     type="button"
                     disabled={regeneratingId === (selectedSegment.id || selectedSegmentIndex)}
-                    onClick={() => onClipSpeedChange(selectedSegment.id || selectedSegmentIndex, p.val, selectedSegmentIndex)}
+                    onClick={() => {
+                      if (isMatch && selectedSegment.userCustomSpeed) return; // Same-speed fast no-op
+                      setDraftClipSpeed(null);
+                      onClipSpeedChange(selectedSegment.id || selectedSegmentIndex, p.val, selectedSegmentIndex);
+                    }}
                     style={{
                       height: 26,
                       fontFamily: 'var(--font-mono)',
