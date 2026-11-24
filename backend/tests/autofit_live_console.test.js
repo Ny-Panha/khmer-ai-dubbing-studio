@@ -17,7 +17,8 @@ describe("Auto-Fit Speed Live Console & Episode Card Parity", () => {
   });
 
   test("2. GeminiRouteModal renders EpisodeAutoFitProgressCard in episode cards", () => {
-    const code = fs.readFileSync(modalPath, "utf8");
+    const epCardPath = path.resolve(__dirname, "../../frontend/src/components/dashboard/BatchEpisodeCard.jsx");
+    const code = fs.readFileSync(modalPath, "utf8") + "\n" + fs.readFileSync(epCardPath, "utf8");
     assert.ok(code.includes("EpisodeAutoFitProgressCard"), "Must import and use EpisodeAutoFitProgressCard");
     assert.ok(code.includes("⚡ 3. Auto-Fit Speed"), "Must render Stage 3 Auto-Fit Speed");
     assert.ok(code.includes("🔇 4. AI បិទសំឡេងចិន"), "Must render Clean BGM");

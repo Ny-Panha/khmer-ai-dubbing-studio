@@ -35,22 +35,32 @@ test('Demucs Worker Defaults & Service Inheritance', async (t) => {
     const stdout = execFileSync(pythonBin, ['-c', pyCode], { encoding: 'utf8' });
     const parsed = JSON.parse(stdout.trim().split(/\r?\n/).pop());
 
+    const os = require('os');
+    const totalCores = os.cpus().length || 4;
+    const reserveCores = totalCores >= 8 ? 2 : totalCores >= 4 ? 1 : 0;
+    const usableCores = Math.max(1, totalCores - reserveCores);
+    const expectedDefaultJobs = usableCores >= 2 ? Math.max(2, Math.min(4, Math.floor(usableCores / 3))) : 1;
+
     assert.strictEqual(parsed.model, 'htdemucs');
     assert.strictEqual(parsed.shifts, 0, 'shifts default must be 0');
-    assert.strictEqual(parsed.overlap, 0.25, 'overlap default must be 0.25');
-    assert.strictEqual(parsed.segment, 7, 'segment default must be 7');
-    assert.ok(parsed.jobs >= 1 && parsed.jobs <= 2, 'jobs default must be 1 (Eco Mode) or 2');
+    assert.strictEqual(parsed.overlap, 0.1, 'overlap default must be 0.1 (Turbo CPU speed)');
+    assert.strictEqual(parsed.segment, null, 'segment default must be None (resolved safely per model: 7.8 for htdemucs, 10 for mdx_extra_q)');
+    assert.strictEqual(parsed.jobs, expectedDefaultJobs, `jobs default must auto-scale to multi-core (${expectedDefaultJobs})`);
     assert.strictEqual(parsed.suppress_residuals, true, 'suppress_residuals must stay ON by default');
   });
 
-  await t.test('2. audioSeparationService.js inherits worker defaults instead of forcing shifts=1 or overlap=0.25', () => {
+  await t.test('2. audioSeparationService.js uses multi-core Turbo presets instead of hardcoded Eco CPU -j 1', () => {
     const serviceSrc = fs.readFileSync(path.join(__dirname, '../services/audioSeparationService.js'), 'utf8');
-    assert.strictEqual(serviceSrc.includes('options.shifts || 1'), false, 'must never fall back to shifts=1');
-    assert.strictEqual(serviceSrc.includes("options.shifts !== undefined"), true, 'must only pass --shifts when explicitly provided');
-    assert.strictEqual(serviceSrc.includes("options.overlap !== undefined"), true, 'must only pass --overlap when explicitly provided');
-    assert.strictEqual(serviceSrc.includes("options.segment !== undefined"), true, 'must only pass --segment when explicitly provided');
-    assert.strictEqual(serviceSrc.includes("options.jobs !== undefined"), true, 'must only pass --jobs when explicitly provided');
+    assert.strictEqual(serviceSrc.includes('options.shifts || 1'), false, 'must never force shifts=1 in Turbo mode');
+    assert.strictEqual(serviceSrc.includes('(Eco CPU)'), false, 'must no longer hardcode Eco CPU -j 1');
+    assert.strictEqual(serviceSrc.includes("OMP_NUM_THREADS: '4'"), false, 'must no longer hardcode OMP_NUM_THREADS to 4');
+    assert.strictEqual(serviceSrc.includes("options.shifts !== undefined"), true, 'must honor explicit --shifts override');
+    assert.strictEqual(serviceSrc.includes("options.overlap !== undefined"), true, 'must honor explicit --overlap override');
+    assert.strictEqual(serviceSrc.includes("options.segment !== undefined"), true, 'must honor explicit --segment override');
+    assert.strictEqual(serviceSrc.includes("options.jobs !== undefined"), true, 'must honor explicit --jobs override');
     assert.strictEqual(serviceSrc.includes("args.push('--suppress_residuals')"), true, 'second-stage suppression remains enabled by default');
+    assert.strictEqual(serviceSrc.includes('computeDefaultCpuConfig'), true, 'must dynamically compute multi-core CPU config');
+    assert.strictEqual(serviceSrc.includes('resolveSeparationPresetConfig'), true, 'must resolve turbo / studio / ffmpeg_fast presets');
   });
 
   await t.test('3. killSeparationJob handles specific identifier without ReferenceError and busy state resets', () => {

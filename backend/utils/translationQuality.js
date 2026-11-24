@@ -22,9 +22,14 @@ const EXPLICIT_FILLER_KHMERS = Object.freeze([
 const EXPLICIT_FILLER_SET = new Set(EXPLICIT_FILLER_KHMERS);
 const EXPLICIT_FILLER_REGEX = /^សូមរង់(?:ចា(?:ំ)?)?[\s.…។!?,:;~'"«»()\-–—]*$/u;
 const CHINESE_HANZI_REGEX = /[\u3400-\u4dbf\u4e00-\u9fa5]/;
+const FOREIGN_SCRIPT_LEAK_REGEX = /[\u3400-\u4dbf\u4e00-\u9fff\u0590-\u06FF\u0900-\u0DFF\u0E00-\u0EFF\u1000-\u109F\u0400-\u04FF\u3040-\u30FF\uAC00-\uD7AF\u1E00-\u1EFF]/;
 
 function containsChineseHanzi(text = '') {
   return CHINESE_HANZI_REGEX.test(String(text || '').normalize('NFC'));
+}
+
+function containsForeignScriptLeak(text = '') {
+  return FOREIGN_SCRIPT_LEAK_REGEX.test(String(text || '').normalize('NFC'));
 }
 
 function getSegmentKhmerText(seg) {
@@ -136,6 +141,7 @@ function isSegmentTextBroken(seg, repeatedJunkSet = null) {
   if (!km) return true;
   if (!stripPunctuationForSpeech(km)) return true;
   if (isExplicitFillerKhmer(km)) return true;
+  if (containsForeignScriptLeak(km)) return true;
   if (repeatedJunkSet && repeatedJunkSet.has(km)) return true;
   return false;
 }
@@ -266,6 +272,7 @@ function scanSeriesBrokenSegments(episodes = [], { checkAudioFileFn = null } = {
 module.exports = {
   EXPLICIT_FILLER_KHMERS,
   containsChineseHanzi,
+  containsForeignScriptLeak,
   isNonChineseAsrHallucination,
   getSegmentKhmerText,
   getSegmentChineseText,

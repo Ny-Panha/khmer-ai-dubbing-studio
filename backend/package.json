@@ -5,7 +5,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch-path=server.js --watch-path=routes --watch-path=services --watch-path=utils --watch-path=middleware --watch-path=models/episodeModel.js --watch-path=models/segmentModel.js --watch-path=models/speakerRegistry.js --watch-path=models/timestampUtils.js server.js",
+    "dev": "node scripts/safeWatch.js",
     "test": "node --test tests/*.test.js"
   },
   "dependencies": {

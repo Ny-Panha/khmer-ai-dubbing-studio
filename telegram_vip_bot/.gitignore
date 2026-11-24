@@ -1,0 +1,17 @@
+# Dependencies
+node_modules/
+
+# Secrets & Environment
+.env
+.env.*
+*.env
+!.env.example
+
+# Local database / state
+data/
+*.db
+*.sqlite
+
+# Logs
+logs/
+*.log

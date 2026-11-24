@@ -561,6 +561,18 @@ async function runBatchExportWorker({
   const rawSponsor = exportSettings.sponsorSettings || null;
   const resolvedSponsorPath = resolveSponsorInputForBatch(rawSponsor);
 
+  let resolvedCustomBgmPath = null;
+  const rawEnableCustomBgm = Boolean(exportSettings.enableCustomBgm);
+  const rawCustomBgmRef = exportSettings.customBgmPath || exportSettings.customBgmUrl || null;
+  if (rawEnableCustomBgm && typeof rawCustomBgmRef === "string" && rawCustomBgmRef.trim()) {
+    const candidate1 = path.join(uploadsDir, "bgm", path.basename(rawCustomBgmRef));
+    const candidate2 = path.join(uploadsDir, path.basename(rawCustomBgmRef));
+    const candidate3 = resolveMediaFile(rawCustomBgmRef);
+    if (fs.existsSync(candidate1) && isSafeUploadPath(candidate1, uploadsDir)) resolvedCustomBgmPath = candidate1;
+    else if (fs.existsSync(candidate2) && isSafeUploadPath(candidate2, uploadsDir)) resolvedCustomBgmPath = candidate2;
+    else if (candidate3 && fs.existsSync(candidate3) && isSafeUploadPath(candidate3, uploadsDir)) resolvedCustomBgmPath = candidate3;
+  }
+
   const totalCount = plan.eligible.length;
   const isMergeMode = job.mode === "merge";
   const renderWeight = isMergeMode ? 80 : 100;
@@ -604,119 +616,151 @@ async function runBatchExportWorker({
   const enableDemucs = Boolean(exportSettings.enableDemucs);
   const antiTheft = exportSettings.antiTheft || effectiveGlobalCustomize.antiTheft || null;
   const cornerMask = exportSettings.cornerMask || null || effectiveGlobalCustomize.cornerMask;
+  const youtubeTransform = exportSettings.youtubeTransform || null;
+  const youtubeSafeAudio = Boolean(youtubeTransform?.youtubeSafeAudio);
   // Visual presets are batch-wide. Never reuse an output rendered with older
-  // logo/mask/banner options, even when subtitles have not changed.
-  const batchVisualSignature = JSON.stringify({ rawLogo, cornerMask, antiTheft, rawSponsor });
+  // logo/mask/banner/youtubeTransform/customBgm options, even when subtitles have not changed.
+  const batchVisualSignature = JSON.stringify({
+    renderParityVersion: "v3_font64_margin81_parity",
+    rawLogo,
+    cornerMask,
+    antiTheft,
+    rawSponsor,
+    youtubeTransform,
+    enableCustomBgm: Boolean(resolvedCustomBgmPath),
+    customBgmPath: resolvedCustomBgmPath,
+  });
 
-  const renderedFilePaths = [];
+  const renderedFilePathsByIdx = new Array(totalCount).fill(null);
+  const outputsByIdx = new Array(totalCount).fill(null);
+  const episodeProgressByIdx = new Array(totalCount).fill(0);
+  const pendingTempPaths = new Set();
   let mergedTempOrTargetPath = null;
-  let pendingEpisodePath = null;
 
-  try {
-    for (let i = 0; i < totalCount; i++) {
-      if (signal.aborted) {
-        const abortErr = new Error("Batch export cancelled by user");
-        abortErr.name = "AbortError";
-        throw abortErr;
-      }
+  const recomputeOverallRenderProgress = () => {
+    if (totalCount <= 0) return 1;
+    const sumPct = episodeProgressByIdx.reduce((acc, v) => acc + (Number(v) || 0), 0);
+    return Math.max(1, Math.min(renderWeight, Math.round((sumPct / (totalCount * 100)) * renderWeight)));
+  };
 
-      const epPlan = plan.eligible[i];
-      job.currentIndex = i + 1;
-      job.currentEpisodeId = epPlan.episodeId;
-      job.currentEpisodeNumber = epPlan.episodeNumber;
-      job.currentEpisodeTitle = epPlan.title;
-      job.currentEpisodePercent = 0;
+  const renderSingleEpisodeSlot = async (i) => {
+    if (signal.aborted) {
+      const abortErr = new Error("Batch export cancelled by user");
+      abortErr.name = "AbortError";
+      throw abortErr;
+    }
 
-      let epAspectRatio = batchForcedAspectRatio;
-      if (!epAspectRatio) {
-        let w = epPlan.videoMetaWidth;
-        let h = epPlan.videoMetaHeight;
-        if (!w || !h) {
-          try {
-            const meta = await getVideoMetadata(epPlan.inputVideoPath);
-            w = meta?.width || 0;
-            h = meta?.height || 0;
-          } catch (_) {}
-        }
-        epAspectRatio = w && h ? (h > w ? "9:16" : (w > h ? "16:9" : "1:1")) : "16:9";
-      }
+    const epPlan = plan.eligible[i];
+    job.currentIndex = Math.max(job.currentIndex || 0, i + 1);
+    job.currentEpisodeId = epPlan.episodeId;
+    job.currentEpisodeNumber = epPlan.episodeNumber;
+    job.currentEpisodeTitle = epPlan.title;
+    job.currentEpisodePercent = 0;
 
-      const ratioSuffix =
-        epAspectRatio === "9:16"
-          ? " [9-16 TikTok Reels]"
-          : epAspectRatio === "1:1"
-          ? " [1-1 Square]"
-          : "";
-
-      const audioTag = epPlan.useOriginalAudio ? "_OriginalAudio" : "_Khmer_Dubbed";
-      const epOutputFilename = `${seriesTitle}_EP${epPlan.episodeNumber}${audioTag}${ratioSuffix}.mp4`;
-      const epOutputPath = path.join(epPlan.videoDir, epOutputFilename);
-
-      const epStartPct = Math.round((i / totalCount) * renderWeight);
-      const epEndPct = Math.round(((i + 1) / totalCount) * renderWeight);
-
-      const subtitleOptions = {
-        ...(exportSettings.subtitleOptions || {}),
-        fontName: exportSettings.subtitleOptions?.fontName || "Khmer OS Battambang",
-        fontSize: exportSettings.subtitleOptions?.fontSize || null,
-        subtitleSize: exportSettings.subtitleOptions?.subtitleSize || exportSettings.subtitleSize || null,
-        textColor:
-          exportSettings.subtitleOptions?.textColor ||
-          (subtitleColor === "yellow" ? "#FFE600" : "#FFFFFF"),
-        outlineColor: exportSettings.subtitleOptions?.outlineColor || "#000000",
-        subtitleStyle: exportSettings.subtitleOptions?.subtitleStyle || subtitleStyle,
-        aspectRatio: epAspectRatio,
-        verticalStyle,
-        marginV: exportSettings.subtitleOptions?.marginV || null,
-      };
-
-      const burnedSubtitleOptions = epPlan.hasVoice && burnSubtitles ? subtitleOptions : null;
-      const previous = epPlan.rawEpisode.renderedVideo;
-      const currentVisualFingerprint = computeVisualFingerprint({
-        logo: rawLogo,
-        antiTheft,
-        cornerMask,
-        aspectRatio: epAspectRatio,
-        verticalStyle,
-      });
-      // Named episode outputs can be overwritten. Only reuse a known matching burn.
-      let alreadyRenderedOnDisk = false;
-      if (fs.existsSync(epOutputPath) && !exportSettings.forceReRender) {
+    let epAspectRatio = batchForcedAspectRatio;
+    if (!epAspectRatio) {
+      let w = epPlan.videoMetaWidth;
+      let h = epPlan.videoMetaHeight;
+      if (!w || !h) {
         try {
-          const stat = fs.statSync(epOutputPath);
-          const sameVisual = !previous?.burnedVisualFingerprint || previous.burnedVisualFingerprint === currentVisualFingerprint;
-          const sameVisuals = previous?.batchVisualSignature === batchVisualSignature;
-          const sameBurn = sameVisuals && previous?.outputFilename === epOutputFilename &&
-            previous.renderedAt === stat.mtime.getTime() &&
-            sameVisual &&
-            JSON.stringify(previous.burnedSubtitleOptions) === JSON.stringify(burnedSubtitleOptions);
-          if (stat.size > 2 * 1024 * 1024 && sameBurn) {
-            alreadyRenderedOnDisk = true;
-          }
+          const meta = await getVideoMetadata(epPlan.inputVideoPath);
+          w = meta?.width || 0;
+          h = meta?.height || 0;
+        } catch (_) {}
+      }
+      epAspectRatio = w && h ? (h > w ? "9:16" : (w > h ? "16:9" : "1:1")) : "16:9";
+    }
+
+    const ratioSuffix =
+      epAspectRatio === "9:16"
+        ? " [9-16 TikTok Reels]"
+        : epAspectRatio === "1:1"
+        ? " [1-1 Square]"
+        : "";
+
+    const audioTag = epPlan.useOriginalAudio ? "_OriginalAudio" : "_Khmer_Dubbed";
+    const epOutputFilename = `${seriesTitle}_EP${epPlan.episodeNumber}${audioTag}${ratioSuffix}.mp4`;
+    const epOutputPath = path.join(epPlan.videoDir, epOutputFilename);
+    const sidecarMetaPath = `${epOutputPath}.render-meta.json`;
+
+    const subtitleOptions = {
+      ...(exportSettings.subtitleOptions || {}),
+      fontName: exportSettings.subtitleOptions?.fontName || "Khmer OS Battambang",
+      fontSize: exportSettings.subtitleOptions?.fontSize || null,
+      subtitleSize: exportSettings.subtitleOptions?.subtitleSize || exportSettings.subtitleSize || null,
+      textColor:
+        exportSettings.subtitleOptions?.textColor ||
+        (subtitleColor === "yellow" ? "#FFE600" : "#FFFFFF"),
+      outlineColor: exportSettings.subtitleOptions?.outlineColor || "#000000",
+      subtitleStyle: exportSettings.subtitleOptions?.subtitleStyle || subtitleStyle,
+      aspectRatio: epAspectRatio,
+      verticalStyle,
+      marginV: exportSettings.subtitleOptions?.marginV || null,
+    };
+
+    const burnedSubtitleOptions = epPlan.hasVoice && burnSubtitles ? subtitleOptions : null;
+    const currentVisualFingerprint = computeVisualFingerprint({
+      logo: rawLogo,
+      antiTheft,
+      cornerMask,
+      aspectRatio: epAspectRatio,
+      verticalStyle,
+    });
+
+    let previous = epPlan.rawEpisode.renderedVideo || null;
+    if (!previous && fs.existsSync(sidecarMetaPath)) {
+      try {
+        previous = JSON.parse(fs.readFileSync(sidecarMetaPath, "utf8"));
+      } catch (_) {}
+    }
+
+    // Named episode outputs can be overwritten. Only reuse a known matching burn.
+    let alreadyRenderedOnDisk = false;
+    if (fs.existsSync(epOutputPath) && !exportSettings.forceReRender) {
+      try {
+        const stat = fs.statSync(epOutputPath);
+        const sameVisual = !previous?.burnedVisualFingerprint || previous.burnedVisualFingerprint === currentVisualFingerprint;
+        const sameVisuals = previous?.batchVisualSignature === batchVisualSignature;
+        const sameBurn =
+          sameVisuals &&
+          previous?.outputFilename === epOutputFilename &&
+          previous.renderedAt === stat.mtime.getTime() &&
+          sameVisual &&
+          JSON.stringify(previous.burnedSubtitleOptions) === JSON.stringify(burnedSubtitleOptions);
+        if (stat.size > 2 * 1024 * 1024 && sameBurn) {
+          alreadyRenderedOnDisk = true;
+        }
+      } catch (_) {}
+    }
+
+    let renderRes = null;
+    let slotPendingPath = null;
+    if (alreadyRenderedOnDisk) {
+      console.log(`[BatchExport] ⚡ Episode EP${epPlan.episodeNumber} is already rendered (${epOutputFilename}). Reusing existing file.`);
+      renderRes = { outputVideoPath: epOutputPath, renderTimeSeconds: 0 };
+      episodeProgressByIdx[i] = 100;
+      job.currentEpisodePercent = 100;
+      job.progress = Math.max(job.progress, recomputeOverallRenderProgress());
+      job.stage = `ភាគ ${i + 1}/${totalCount} (EP${epPlan.episodeNumber}): ប្រើប្រាស់វីដេអូដែល Render រួចស្រាប់ (Skip)...`;
+      job.updatedAt = Date.now();
+    } else {
+      slotPendingPath = path.join(epPlan.videoDir, `batch_${job.jobId}_${i}.tmp.mp4`);
+      pendingTempPaths.add(slotPendingPath);
+
+      job.progress = Math.max(job.progress, recomputeOverallRenderProgress());
+      job.stage = `ភាគ ${i + 1}/${totalCount} (EP${epPlan.episodeNumber}): កំពុង Render 0%${epPlan.useOriginalAudio ? " (សំឡេងដើម)" : " សំឡេងខ្មែរ & Subtitles"}...`;
+      job.updatedAt = Date.now();
+
+      let expectedDur = epPlan.durationSec || 0;
+      if (!expectedDur) {
+        try {
+          expectedDur = await getMediaDuration(epPlan.inputVideoPath);
         } catch (_) {}
       }
 
-      let renderRes = null;
-      if (alreadyRenderedOnDisk) {
-        console.log(`[BatchExport] ⚡ Episode EP${epPlan.episodeNumber} is already rendered (${epOutputFilename}). Reusing existing file.`);
-        renderRes = { outputVideoPath: epOutputPath, renderTimeSeconds: 0 };
-        job.currentEpisodePercent = 100;
-        job.stage = `ភាគ ${i + 1}/${totalCount} (EP${epPlan.episodeNumber}): ប្រើប្រាស់វីដេអូដែល Render រួចស្រាប់ (Skip)...`;
-        job.updatedAt = Date.now();
-      } else {
-        pendingEpisodePath = path.join(epPlan.videoDir, `batch_${job.jobId}_${i}.tmp.mp4`);
+      const hasPreSeparatedBgm = Boolean(epPlan.separatedBgAudioPath && fs.existsSync(epPlan.separatedBgAudioPath));
 
-        job.progress = Math.max(job.progress, epStartPct);
-        job.stage = `ភាគ ${i + 1}/${totalCount} (EP${epPlan.episodeNumber}): កំពុង Render 0%${epPlan.useOriginalAudio ? " (សំឡេងដើម)" : " សំឡេងខ្មែរ & Subtitles"}...`;
-        job.updatedAt = Date.now();
-
-        let expectedDur = epPlan.durationSec || 0;
-        if (!expectedDur) {
-          try {
-            expectedDur = await getMediaDuration(epPlan.inputVideoPath);
-          } catch (_) {}
-        }
-
+      try {
         renderRes = await renderDubbedVideoWithDucking({
           jobId: job.jobId,
           signal,
@@ -724,10 +768,10 @@ async function runBatchExportWorker({
           masterAudioPath: epPlan.hasVoice ? epPlan.masterAudioPath : null,
           fullAudioPath: epPlan.hasVoice ? epPlan.masterAudioPath : null,
           segments: epPlan.hasVoice ? epPlan.preparedSegments : [],
-          outputVideoPath: pendingEpisodePath,
+          outputVideoPath: slotPendingPath,
           soundMode,
-          enableDemucs: epPlan.hasVoice ? enableDemucs : false,
-          separatedBgAudioPath: epPlan.hasVoice && enableDemucs ? epPlan.separatedBgAudioPath : null,
+          enableDemucs: epPlan.hasVoice && !youtubeSafeAudio ? (enableDemucs || hasPreSeparatedBgm) : false,
+          separatedBgAudioPath: epPlan.hasVoice && !youtubeSafeAudio && hasPreSeparatedBgm ? epPlan.separatedBgAudioPath : null,
           bgVolume: effectiveBgVolume,
           khmerVolume: effectiveKhmerVolume,
           burnSubtitles: epPlan.hasVoice ? burnSubtitles : false,
@@ -739,94 +783,136 @@ async function runBatchExportWorker({
           cornerMask,
           logoSettings: resolvedLogoPath ? { ...rawLogo, logoPath: resolvedLogoPath } : null,
           sponsorSettings: resolvedSponsorPath ? { ...rawSponsor, sponsorPath: resolvedSponsorPath } : null,
+          youtubeTransform,
+          enableCustomBgm: Boolean(resolvedCustomBgmPath),
+          customBgmPath: resolvedCustomBgmPath,
           allowOriginalAudio: epPlan.useOriginalAudio,
           expectedDurationSec: expectedDur,
           onProgress: ({ percent }) => {
             const epPct = Math.max(1, Math.min(99, Number(percent) || 0));
+            episodeProgressByIdx[i] = epPct;
+            job.currentEpisodeId = epPlan.episodeId;
+            job.currentEpisodeNumber = epPlan.episodeNumber;
+            job.currentEpisodeTitle = epPlan.title;
             job.currentEpisodePercent = epPct;
-            const scaled = epStartPct + Math.round((epPct / 100) * Math.max(1, epEndPct - epStartPct));
-            job.progress = Math.max(job.progress, Math.min(renderWeight, scaled));
+            job.progress = Math.max(job.progress, recomputeOverallRenderProgress());
             job.stage = `ភាគ ${i + 1}/${totalCount} (EP${epPlan.episodeNumber}): កំពុង Encode FFmpeg ${epPct}% (សរុប ${job.progress}%)...`;
             job.updatedAt = Date.now();
           },
         });
-        fs.renameSync(pendingEpisodePath, epOutputPath);
-        pendingEpisodePath = null;
-      }
-
-      job.currentEpisodePercent = 100;
-      const renderedAt = fs.statSync(epOutputPath).mtime.getTime();
-
-      const relVideoPath = `projects/${cleanSeries}/episodes/${epPlan.cleanEpisode}/video/${epOutputFilename}`;
-      const videoUrl = `/uploads/${relVideoPath}`;
-      const downloadUrl = `/api/download-export?file=${encodeURIComponent(relVideoPath)}&name=${encodeURIComponent(epOutputFilename)}`;
-
-      // Update episode metadata in series.json atomically under per-series mutex
-      try {
-        await withSeriesMetadataLock(cleanSeries, () =>
-          updateSeriesMetadata(cleanSeries, (latestSeries) => {
-            if (!latestSeries || !Array.isArray(latestSeries.episodes)) return false;
-            const targetEp = latestSeries.episodes.find((e) => String(e.id) === String(epPlan.episodeId));
-            if (!targetEp) return false;
-            targetEp.renderedVideo = {
-              success: true,
-              videoUrl,
-              outputVideoUrl: videoUrl,
-              outputFilename: epOutputFilename,
-              downloadUrl,
-              renderedAt,
-              burnedSubtitleOptions,
-              batchVisualSignature,
-              usedOriginalAudio: epPlan.useOriginalAudio,
-              aspectRatio: epAspectRatio,
-              verticalStyle,
-              burnedVisualFingerprint: currentVisualFingerprint,
-            };
-            if (epPlan.hasVoice) {
-              targetEp.status = "completed";
-            }
-            targetEp.lastModified = Date.now();
-            return true;
-          })
-        );
-      } catch (metaErr) {
-        console.warn(`[BatchExport] Warning saving episode metadata for ${epPlan.episodeId}:`, metaErr.message);
-      }
-
-      renderedFilePaths.push(epOutputPath);
-
-      let epDownloadsPath = null;
-      if (!isMergeMode && targetDownloadsDir && fs.existsSync(epOutputPath)) {
-        try {
-          epDownloadsPath = path.join(targetDownloadsDir, epOutputFilename);
-          fs.copyFileSync(epOutputPath, epDownloadsPath);
-        } catch (cpErr) {
-          console.warn(`[BatchExport] Could not copy ${epOutputFilename} to Downloads:`, cpErr.message);
-          epDownloadsPath = null;
+        fs.renameSync(slotPendingPath, epOutputPath);
+      } finally {
+        if (slotPendingPath) {
+          pendingTempPaths.delete(slotPendingPath);
         }
       }
-
-      job.outputs.push({
-        episodeId: epPlan.episodeId,
-        episodeNumber: epPlan.episodeNumber,
-        title: epPlan.title,
-        outputFilename: epOutputFilename,
-        renderedAt,
-        burnedSubtitleOptions,
-        videoUrl,
-        outputVideoUrl: videoUrl,
-        downloadUrl,
-        savedToDownloads: Boolean(epDownloadsPath),
-        downloadsPath: epDownloadsPath,
-        usedOriginalAudio: epPlan.useOriginalAudio,
-        renderTimeSeconds: renderRes?.renderTimeSeconds || 0,
-        aspectRatio: epAspectRatio,
-        verticalStyle,
-      });
-
-      job.progress = Math.max(job.progress, epEndPct);
-      job.updatedAt = Date.now();
     }
+
+    episodeProgressByIdx[i] = 100;
+    job.currentEpisodePercent = 100;
+    const renderedAt = fs.statSync(epOutputPath).mtime.getTime();
+
+    const relVideoPath = `projects/${cleanSeries}/episodes/${epPlan.cleanEpisode}/video/${epOutputFilename}`;
+    const videoUrl = `/uploads/${relVideoPath}`;
+    const downloadUrl = `/api/download-export?file=${encodeURIComponent(relVideoPath)}&name=${encodeURIComponent(epOutputFilename)}`;
+
+    const renderedMetaPayload = {
+      success: true,
+      videoUrl,
+      outputVideoUrl: videoUrl,
+      outputFilename: epOutputFilename,
+      downloadUrl,
+      renderedAt,
+      burnedSubtitleOptions,
+      batchVisualSignature,
+      usedOriginalAudio: epPlan.useOriginalAudio,
+      aspectRatio: epAspectRatio,
+      verticalStyle,
+      burnedVisualFingerprint: currentVisualFingerprint,
+    };
+
+    try {
+      fs.writeFileSync(sidecarMetaPath, JSON.stringify(renderedMetaPayload), "utf8");
+    } catch (_) {}
+
+    // Update episode metadata in series.json atomically under per-series mutex
+    try {
+      await withSeriesMetadataLock(cleanSeries, () =>
+        updateSeriesMetadata(cleanSeries, (latestSeries) => {
+          if (!latestSeries || !Array.isArray(latestSeries.episodes)) return false;
+          const targetEp = latestSeries.episodes.find((e) => String(e.id) === String(epPlan.episodeId));
+          if (!targetEp) return false;
+          targetEp.renderedVideo = renderedMetaPayload;
+          if (epPlan.hasVoice) {
+            targetEp.status = "completed";
+          }
+          targetEp.lastModified = Date.now();
+          return true;
+        })
+      );
+    } catch (metaErr) {
+      console.warn(`[BatchExport] Warning saving episode metadata for ${epPlan.episodeId}:`, metaErr.message);
+    }
+
+    renderedFilePathsByIdx[i] = epOutputPath;
+
+    let epDownloadsPath = null;
+    if (!isMergeMode && targetDownloadsDir && fs.existsSync(epOutputPath)) {
+      try {
+        epDownloadsPath = path.join(targetDownloadsDir, epOutputFilename);
+        fs.copyFileSync(epOutputPath, epDownloadsPath);
+      } catch (cpErr) {
+        console.warn(`[BatchExport] Could not copy ${epOutputFilename} to Downloads:`, cpErr.message);
+        epDownloadsPath = null;
+      }
+    }
+
+    outputsByIdx[i] = {
+      episodeId: epPlan.episodeId,
+      episodeNumber: epPlan.episodeNumber,
+      title: epPlan.title,
+      outputFilename: epOutputFilename,
+      renderedAt,
+      burnedSubtitleOptions,
+      videoUrl,
+      outputVideoUrl: videoUrl,
+      downloadUrl,
+      savedToDownloads: Boolean(epDownloadsPath),
+      downloadsPath: epDownloadsPath,
+      usedOriginalAudio: epPlan.useOriginalAudio,
+      renderTimeSeconds: renderRes?.renderTimeSeconds || 0,
+      aspectRatio: epAspectRatio,
+      verticalStyle,
+    };
+
+    // Keep job.outputs strictly ordered by episode index 0..i as episodes finish
+    job.outputs = outputsByIdx.filter(Boolean);
+    job.progress = Math.max(job.progress, recomputeOverallRenderProgress());
+    job.updatedAt = Date.now();
+  };
+
+  try {
+    const BATCH_EXPORT_CONCURRENCY = Math.min(
+      totalCount,
+      Math.max(1, Number(process.env.BATCH_EXPORT_CONCURRENCY) || 2)
+    );
+    let nextSlotIdx = 0;
+    const workers = Array.from({ length: BATCH_EXPORT_CONCURRENCY }, async () => {
+      while (true) {
+        if (signal.aborted) {
+          const abortErr = new Error("Batch export cancelled by user");
+          abortErr.name = "AbortError";
+          throw abortErr;
+        }
+        const slotIdx = nextSlotIdx++;
+        if (slotIdx >= totalCount) break;
+        await renderSingleEpisodeSlot(slotIdx);
+      }
+    });
+    await Promise.all(workers);
+
+    const renderedFilePaths = renderedFilePathsByIdx.filter(Boolean);
+    job.outputs = outputsByIdx.filter(Boolean);
 
     // Mode B: Concatenate all rendered episodes into 1 Full Video
     if (isMergeMode) {
@@ -939,8 +1025,10 @@ async function runBatchExportWorker({
     job.updatedAt = job.completedAt;
     return job;
   } finally {
-    if (pendingEpisodePath && fs.existsSync(pendingEpisodePath)) {
-      try { fs.unlinkSync(pendingEpisodePath); } catch (_) {}
+    for (const tmpP of pendingTempPaths) {
+      if (tmpP && fs.existsSync(tmpP)) {
+        try { fs.unlinkSync(tmpP); } catch (_) {}
+      }
     }
     batchJobControllers.delete(job.jobId);
     if (tempLogoFile && fs.existsSync(tempLogoFile)) {
@@ -990,6 +1078,12 @@ function cancelBatchExportJob(jobId, seriesId = null) {
   };
 }
 
+function cancelAllBatchExportJobs() {
+  for (const jobId of Array.from(batchJobControllers.keys())) {
+    try { cancelBatchExportJob(jobId); } catch (_) {}
+  }
+}
+
 module.exports = {
   inspectEpisodeExportReadiness,
   analyzeBatchExportPlan,
@@ -997,4 +1091,5 @@ module.exports = {
   getBatchExportJob,
   getLatestBatchExportJob,
   cancelBatchExportJob,
+  cancelAllBatchExportJobs,
 };

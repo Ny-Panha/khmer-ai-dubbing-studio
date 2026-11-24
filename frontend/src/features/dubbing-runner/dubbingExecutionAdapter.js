@@ -61,6 +61,12 @@ export function normalizeDubbingOptions(ep, stepType, options = {}, context = {}
   const voiceId = options.voiceId || ep?.voiceSettings?.voiceId || activeSeries?.voiceSettings?.voiceId || 'km-KH-PisethNeural';
   const speed = options.speed || ep?.voiceSettings?.speed || 'normal';
 
+  // Clean BGM separation speed preset: 'turbo' (default 3x-4x multi-core Demucs) | 'ffmpeg_fast' (5s instant) | 'studio'
+  const rawSepPreset = options.separationPreset || ep?.separationPreset || 'turbo';
+  const separationPreset = ['turbo', 'studio', 'ffmpeg_fast'].includes(String(rawSepPreset).toLowerCase())
+    ? String(rawSepPreset).toLowerCase()
+    : 'turbo';
+
   // Build merged speakerMap with strict priority:
   // 1. Explicit options.speakerMap
   // 2. Episode speakerRegistry
@@ -106,6 +112,7 @@ export function normalizeDubbingOptions(ep, stepType, options = {}, context = {}
     voiceId,
     speed,
     speakerMap,
+    separationPreset,
     seriesGlossary: options.seriesGlossary || activeSeries?.glossary,
   };
 }

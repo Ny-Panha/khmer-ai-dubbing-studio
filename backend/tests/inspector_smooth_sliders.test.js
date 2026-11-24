@@ -57,7 +57,7 @@ test('2. Static audit: ALL 16 Inspector/Settings sliders use SmoothRangeSlider (
     assert.ok(smoothMatches.length > 0, `${rel} must use <SmoothRangeSlider>`);
     totalSmoothSliders += smoothMatches.length;
   }
-  assert.equal(totalSmoothSliders, 16, `Expected all 16 Inspector/settings sliders converted, found ${totalSmoothSliders}`);
+  assert.equal(totalSmoothSliders, 20, `Expected all 20 Inspector/settings sliders converted, found ${totalSmoothSliders}`);
 
   // All 5 lightweight preview targets subscribe directly to inspector:draft-preview
   const previewTargets = [

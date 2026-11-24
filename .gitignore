@@ -45,7 +45,10 @@ logs/
 npm-debug.log*
 
 # Sub-projects / standalone bots
-telegram_vip_bot/
+telegram_vip_bot/.env
+telegram_vip_bot/.env.*
+telegram_vip_bot/data/
+telegram_vip_bot/node_modules/
 
 # OS and Editor
 .DS_Store

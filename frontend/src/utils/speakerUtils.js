@@ -8,7 +8,7 @@ const FEMALE_MARKERS = [
   '姐姐', '妹妹', '母亲', '妈妈', '阿姨', '女士', '姑姑', '祖母', '奶奶', '郡主',
   '贵妃', '嫔妃', '女官', '医女', '师妹', '师姐', '姨母', '表妹', '表姐', '岳母',
   '系统', '系统提示',
-  'នារី', 'នារីម្នាក់', 'ស្ត្រី', 'ស្ត្រីម្នាក់', 'ស្រី', 'តួស្រី', 'តួឯកស្រី', 'នាង', 'នាងតូច', 'ម្តាយ', 'ម្ដាយ', 'ម៉ែ', 'បងស្រី', 'ប្អូនស្រី', 'យាយ',
+  'នារី', 'នារីម្នាក់', 'ស្ត្រី', 'ស្ត្រីម្នាក់', 'ស្រី', 'តួស្រី', 'តួឯកស្រី', 'នាង', 'នាងតូច', 'ម្តាយ', 'ម្ដាយ', 'ម៉ែ', 'បងស្រី', 'ប្អូនស្រី', 'យាយ', 'មីង', 'អ្នកមីង',
   'ម្ចាស់ក្សត្រី', 'អ្នកម្នាង', 'ភរិយា', 'កូនស្រី', 'អ្នកស្រី', 'កញ្ញា', 'ជំទាវ', 'មេម៉ាយ', 'កុមារី', 'មាតា', 'ធីតា', 'ម្ចាស់ស្រី', 'ម្ចាស់អូន',
   'ប្រព័ន្ធ', 'ប្រព័ន្ធ ai', 'ប្រព័ន្ធជំនួយ', 'ប្រព័ន្ធណែនាំ', 'ប្រព័ន្ធសំឡេង',
   'female', 'woman', 'girl', 'mother', 'sister', 'queen', 'princess', 'lady', 'maid', 'mrs', 'miss', 'she', 'her', 'system', 'ai system', 'sreymom'
@@ -19,7 +19,7 @@ const MALE_MARKERS = [
   '哥哥', '弟弟', '父亲', '爸爸', '叔叔', '先生', '伯父', '祖父', '太监', '掌柜',
   '刺客', '兄', '弟', '将军', '大人', '世子', '国公', '侯爷', '丞相', '太傅',
   '少主', '师兄', '师弟', '表哥', '表弟', '岳父', '老太爷',
-  'បុរស', 'បុរសម្នាក់', 'បុរសវ័យ', 'ប្រុស', 'តួប្រុស', 'តួឯកប្រុស', 'លោក', 'ឪពុក', 'ប៉ា', 'បងប្រុស', 'ប្អូនប្រុស', 'តា', 'ពូ', 'មា',
+  'បុរស', 'បុរសម្នាក់', 'បុរសវ័យ', 'ប្រុស', 'តួប្រុស', 'តួឯកប្រុស', 'លោក', 'លោកប្រធាន', 'ឪពុក', 'ប៉ា', 'បងប្រុស', 'ប្អូនប្រុស', 'តា', 'ពូ', 'មា',
   'ស្ដេច', 'មេទ័ព', 'ចៅហ្វាយ', 'កូនប្រុស', 'អ្នកប្រុស', 'មន្ត្រី', 'ពេទ្យ', 'ប្តី', 'ប្ដី', 'ស្វាមី', 'កំលោះ', 'យុវជន', 'កុមារា', 'ព្រះអង្គ',
   'male', 'man', 'boy', 'father', 'brother', 'king', 'prince', 'lord', 'guard', 'mr', 'sir', 'master', 'hero', 'he', 'him', 'his', 'piseth'
 ];
@@ -284,4 +284,23 @@ export function applySpeakerVoiceToSegments(segments = [], speakerRegistry = {})
       ttsStatus: seg.ttsStatus || (seg.audioFile ? 'ready' : 'pending'),
     };
   });
+}
+
+/**
+ * Quick Helper: Detect gender (male/female) from speaker name
+ */
+export function detectGender(speakerName = '') {
+  const g = detectSpeakerGender(speakerName);
+  if (g === 'FEMALE') return 'female';
+  if (g === 'MALE') return 'male';
+  return 'male';
+}
+
+/**
+ * Quick Helper: Map gender to Microsoft Edge Neural voice
+ */
+export function getVoiceForGender(gender = 'male') {
+  const norm = String(gender || '').toLowerCase();
+  if (norm === 'female' || norm === 'ស្រី') return 'km-KH-SreymomNeural';
+  return 'km-KH-PisethNeural';
 }

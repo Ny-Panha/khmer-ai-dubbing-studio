@@ -52,7 +52,11 @@ describe('Playback Stall & Boundary Flow Regression Suite (#5 -> Gap / 00:07)', 
   });
 
   it('3. Frontend media loaders stay within HTTP/1.1 6-connection origin budget and handle VOICE 3 overlapping/out-of-order segments', () => {
-    const previewCode = fs.readFileSync(path.join(rootDir, 'frontend/src/components/player/VideoPlayerPreview.jsx'), 'utf8').replace(/\r\n/g, '\n');
+    const previewCode = (
+      fs.readFileSync(path.join(rootDir, 'frontend/src/components/player/VideoPlayerPreview.jsx'), 'utf8') +
+      '\n' +
+      fs.readFileSync(path.join(rootDir, 'frontend/src/components/player/usePlayerAudioSync.js'), 'utf8')
+    ).replace(/\r\n/g, '\n');
     const canvasCode = fs.readFileSync(path.join(rootDir, 'frontend/src/components/timeline/TimelineTracksCanvas.jsx'), 'utf8').replace(/\r\n/g, '\n');
     const thumbCode = fs.readFileSync(path.join(rootDir, 'frontend/src/utils/thumbnailUtils.js'), 'utf8').replace(/\r\n/g, '\n');
 

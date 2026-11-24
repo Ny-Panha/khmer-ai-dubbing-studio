@@ -26,6 +26,101 @@
   box-shadow: var(--shadow-lg);
 }
 
+/* Persistent Full-View Studio Route Shell (/batch, /quota, /jobs, /export)
+   Seated cleanly inside the Top Header (48px) + Left Icon Rail (56px) workstation frame. */
+.studio-route-stage-shell {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-desktop);
+  color: var(--text-primary);
+  overflow: hidden;
+}
+
+.studio-two-col-workspace {
+  display: grid;
+  grid-template-columns: 356px minmax(0, 1fr);
+  gap: var(--space-4);
+  align-items: start;
+  width: 100%;
+  max-width: 1520px;
+  margin: 0 auto;
+}
+
+.studio-two-col-sidebar {
+  position: sticky;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.studio-two-col-main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+/* Batch Dubbing Studio 2-Column Split Body (Slim Controls Left | Spacious Episode Queue Right) */
+.batch-studio-split-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(300px, 348px) minmax(0, 1fr);
+  overflow: hidden;
+  background: var(--bg-desktop);
+}
+
+.batch-studio-controls-col {
+  height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  border-right: 1px solid var(--border-subtle);
+  background: var(--bg-primary-panel);
+  padding: 14px 16px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.batch-studio-queue-col {
+  height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 16px 20px 28px;
+  min-width: 0;
+}
+
+@media (max-width: 1220px) {
+  .batch-studio-split-body {
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+  }
+  .batch-studio-controls-col {
+    height: auto;
+    overflow: visible;
+    border-right: none;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+  .batch-studio-queue-col {
+    height: auto;
+    overflow: visible;
+  }
+}
+
+@media (max-width: 1080px) {
+  .studio-two-col-workspace {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .studio-two-col-sidebar {
+    position: static;
+  }
+}
+
 /* Unified Full-View Studio Modal Shell (/batch, /quota, /jobs, /export) */
 .studio-modal-backdrop {
   position: fixed;

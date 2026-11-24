@@ -276,6 +276,20 @@ export function useVideoRender({
     };
   }, [getLatestVoiceSettings]);
 
+  const buildYoutubeTransformOptions = useCallback(() => {
+    const activeSettings = getLatestVoiceSettings();
+    const rawZoom = Number(activeSettings?.zoomScale);
+    const zoomScale = Number.isFinite(rawZoom)
+      ? Math.max(1.0, Math.min(1.15, Number(rawZoom.toFixed(3))))
+      : 1.0;
+    return {
+      enableMirrorFlip: Boolean(activeSettings?.enableMirrorFlip),
+      zoomScale,
+      enableColorGrade: Boolean(activeSettings?.enableColorGrade),
+      youtubeSafeAudio: Boolean(activeSettings?.youtubeSafeAudio),
+    };
+  }, [getLatestVoiceSettings]);
+
   const handleStartBatchRender = useCallback(async ({
     episodeIds = [],
     mode = 'merge',
@@ -310,10 +324,14 @@ export function useVideoRender({
         duckingVolume: activeSettings?.duckingVolume ?? 0.15,
         khmerVolume: activeSettings?.khmerVolume ?? 1.3,
         enableDemucs: Boolean(activeSettings?.enableDemucs),
+        enableCustomBgm: Boolean(activeSettings?.enableCustomBgm && (activeSettings?.customBgmPath || activeSettings?.customBgmUrl)),
+        customBgmPath: activeSettings?.customBgmPath || null,
+        customBgmUrl: activeSettings?.customBgmUrl || null,
         antiTheft: buildAntiTheftOptions(),
         logoSettings: buildLogoOptions(),
         cornerMask: buildCornerMaskOptions(),
         sponsorSettings: buildSponsorOptions(),
+        youtubeTransform: buildYoutubeTransformOptions(),
       };
 
       const episodeOverrides = {};
@@ -367,6 +385,7 @@ export function useVideoRender({
     buildLogoOptions,
     buildCornerMaskOptions,
     buildSponsorOptions,
+    buildYoutubeTransformOptions,
     startBatchPolling,
   ]);
 
@@ -476,6 +495,7 @@ export function useVideoRender({
       const logoOptions = buildLogoOptions();
       const cornerMaskOptions = buildCornerMaskOptions();
       const sponsorOptions = buildSponsorOptions();
+      const youtubeTransformOptions = buildYoutubeTransformOptions();
 
       // Resolve effective export aspect ratio:
       // 1. User manual select in voiceSettings.aspectRatio takes precedence.
@@ -507,6 +527,9 @@ export function useVideoRender({
         duckingVolume: activeSettings.duckingVolume,
         khmerVolume: activeSettings.khmerVolume,
         enableDemucs: Boolean(activeSettings.enableDemucs),
+        enableCustomBgm: Boolean(activeSettings.enableCustomBgm && (activeSettings.customBgmPath || activeSettings.customBgmUrl)),
+        customBgmPath: activeSettings.customBgmPath || null,
+        customBgmUrl: activeSettings.customBgmUrl || null,
         burnSubtitles: activeSettings.burnSubtitles !== false,
         subtitleColor: activeSettings.subtitleColor,
         subtitleSize: activeSettings.subtitleSize,
@@ -521,6 +544,7 @@ export function useVideoRender({
         logoSettings: logoOptions,
         cornerMask: cornerMaskOptions,
         sponsorSettings: sponsorOptions,
+        youtubeTransform: youtubeTransformOptions,
       });
 
       clearInterval(progressTimer);

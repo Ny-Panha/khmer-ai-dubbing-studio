@@ -4,7 +4,7 @@ import {
   SkipForward, VolumeX, Volume2, Diamond, ChevronLeft, ChevronRight,
   Sparkles, Loader2
 } from 'lucide-react';
-import { formatTimecode } from '../../utils/formatTime';
+import { formatTimecode } from '../../utils/timestampUtils';
 
 /**
  * Formats seconds into precision HH:MM:SS.ms timecode

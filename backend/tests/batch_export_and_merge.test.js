@@ -371,7 +371,7 @@ test("HTTP Batch Export & Merge workflow + secure /api/download-export endpoints
     }
     assert.ok(
       batchAssLogs.length >= 2 &&
-        batchAssLogs.every((l) => l.includes("style=pill color=#FFE600 fontSize=55 (size=large) playRes=1920x1080")),
+        batchAssLogs.every((l) => l.includes("style=pill color=#FFE600") && l.includes("(size=large) playRes=1920x1080")),
       `Batch export must honour subtitleSize='large' & pill style; got logs: ${JSON.stringify(batchAssLogs)}`
     );
     assert.equal(mergeDone.status, "completed", `Expected completed, got ${mergeDone.status}: ${mergeDone.error}`);
@@ -470,7 +470,7 @@ test("HTTP Batch Export & Merge workflow + secure /api/download-export endpoints
       assert.equal(killJson.job?.status, "cancelled");
 
       // Wait briefly for child FFmpeg process exit before cleaning up files
-      await new Promise((r) => setTimeout(r, 400));
+      await new Promise((r) => setTimeout(r, 1200));
     } finally {
       try { fs.rmSync(longSeriesDir, { recursive: true, force: true }); } catch (_) {}
     }

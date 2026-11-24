@@ -15,7 +15,8 @@ describe('60FPS Smooth Video Playback & Zero-Stutter Optimization Suite', () => 
 
   test('2. VideoPlayerPreview disables CPU-heavy decodeAudioData during active video playback', () => {
     const playerFile = path.resolve(__dirname, '../../frontend/src/components/player/VideoPlayerPreview.jsx');
-    const content = fs.readFileSync(playerFile, 'utf8');
+    const audioSyncFile = path.resolve(__dirname, '../../frontend/src/components/player/usePlayerAudioSync.js');
+    const content = fs.readFileSync(playerFile, 'utf8') + '\n' + fs.readFileSync(audioSyncFile, 'utf8');
 
     assert.ok(content.includes('isPlayingRef.current'), 'VideoPlayerPreview must track isPlayingRef');
     assert.ok(content.includes('if (isPlayingRef.current) return;'), 'probeUrlLeadingSilence must return early during active playback');

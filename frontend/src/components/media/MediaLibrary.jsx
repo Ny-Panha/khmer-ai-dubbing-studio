@@ -316,59 +316,82 @@ function MediaLibrary({
     return filterScriptSegments(scriptData.segments, searchQuery);
   }, [scriptData?.segments, searchQuery]);
 
+  const isMediaOrEpisodesTab = activeTab === 'episodes' || activeTab === 'media';
+  const mediaSubTab = activeTab === 'media' ? 'media' : 'episodes';
+
   return (
     <div className="capcut-media-panel">
-      {/* Navigation Tabs: 4 Clean Workflow Steps */}
-      <div className="media-tabs-header">
+      {/* Navigation Tabs: 3 Clean Workflow Steps (Media & EPs | AI Dub | Script) */}
+      <div className="media-tabs-header" role="tablist" aria-label="Studio Workflow Panels">
         <button
-          onClick={() => onTabChange && onTabChange('episodes')}
-          className={`media-tab-btn ${activeTab === 'episodes' ? 'active' : ''}`}
-          title="គ្រប់គ្រងភាគទាំងអស់ / Episodes Manager & Auto-Split"
+          type="button"
+          role="tab"
+          aria-selected={isMediaOrEpisodesTab}
+          onClick={() => onTabChange && onTabChange(isMediaOrEpisodesTab ? (mediaSubTab === 'episodes' ? 'media' : 'episodes') : 'episodes')}
+          className={`media-tab-btn ${isMediaOrEpisodesTab ? 'active' : ''}`}
+          title="គ្រប់គ្រងភាគ និងបង្ហោះវីដេអូ (Episodes & Media)"
         >
-          <Layers size={13} />
-          <span>Episodes</span>
+          <Layers size={14} />
+          <span>ភាគ</span>
           {activeSeries?.episodes?.length > 0 && (
-            <span className="tab-badge" style={{ background: 'rgba(76, 141, 255, 0.2)', color: 'var(--primary-accent)' }}>
-              {activeSeries.episodes.length}
-            </span>
-          )}
-        </button>
-        <button
-          onClick={() => onTabChange && onTabChange('media')}
-          className={`media-tab-btn ${activeTab === 'media' ? 'active' : ''}`}
-          title="1. វីដេអូដើម / Original Video File"
-        >
-          <Film size={13} />
-          <span>1. វីដេអូ</span>
-          {selectedVideo && (
-            <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#34d399', marginLeft: 3 }} />
+            <span className="tab-badge">{activeSeries.episodes.length}</span>
           )}
         </button>
 
         <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === 'script'}
           onClick={() => onTabChange && onTabChange('script')}
           className={`media-tab-btn ${activeTab === 'script' ? 'active' : ''}`}
-          title="2. បញ្ចូលសំឡេង AI / AI Dialogue Translation & Recap Generator"
+          title="បកប្រែ និងផលិតសំឡេង AI (AI Dubbing)"
         >
-          <Sparkles size={13} />
-          <span>2. សំឡេង AI</span>
-          {scriptData?.segments && (
-            <span className="tab-badge">{scriptData.segments.length}</span>
-          )}
+          <Sparkles size={14} />
+          <span>AI ផលិត</span>
         </button>
 
         <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === 'subtitles'}
           onClick={() => onTabChange && onTabChange('subtitles')}
           className={`media-tab-btn ${activeTab === 'subtitles' ? 'active' : ''}`}
-          title="3. កែសម្រួលអត្ថបទ / Khmer Script & Subtitles Editor"
+          title="កែសម្រួលអត្ថបទបកប្រែខ្មែរ (Script Editor)"
         >
-          <Subtitles size={13} />
-          <span>3. អត្ថបទ</span>
-          {scriptData?.segments && (
+          <Subtitles size={14} />
+          <span>អត្ថបទ</span>
+          {scriptData?.segments?.length > 0 && (
             <span className="tab-badge">{scriptData.segments.length}</span>
           )}
         </button>
       </div>
+
+      {/* Sub-Switch inside Tab 1 (Episodes List vs Upload/Split Media) */}
+      {isMediaOrEpisodesTab && (
+        <div className="media-subtab-bar" role="tablist" aria-label="Media and Episodes Subview">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={mediaSubTab === 'episodes'}
+            className={`media-subtab-pill ${mediaSubTab === 'episodes' ? 'active' : ''}`}
+            onClick={() => onTabChange && onTabChange('episodes')}
+          >
+            <Layers size={13} />
+            <span>បញ្ជីភាគ ({activeSeries?.episodes?.length || 0})</span>
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={mediaSubTab === 'media'}
+            className={`media-subtab-pill ${mediaSubTab === 'media' ? 'active' : ''}`}
+            onClick={() => onTabChange && onTabChange('media')}
+          >
+            <Film size={13} />
+            <span>បង្ហោះ / កាត់ភាគ</span>
+            {selectedVideo && <span className="media-ready-dot" aria-hidden="true" />}
+          </button>
+        </div>
+      )}
 
       {activeTab === 'episodes' && (
         <EpisodesTab

@@ -158,16 +158,71 @@ async function drain() {
 }
 
 function request(seriesId, episodeId, snapshot) {
-  const dir = location(seriesId, episodeId);
-  const ep = getSeriesMetadata(seriesId)?.episodes?.find(e => String(e.id) === episodeId);
-  if (!ep?.video || ep.video.videoUrl !== snapshot.videoUrl) throw new Error('Episode media is still loading');
-  const source = mediaPath(ep.sourceVideoPath || ep.video.videoPath || ep.video.videoUrl);
+  let dir;
+  try {
+    dir = location(seriesId, episodeId);
+  } catch (err) {
+    return {
+      state: 'queued',
+      queuedSeconds: 0,
+      revision: null,
+      message: err.message || 'Episode directory initializing',
+    };
+  }
+
+  let ep = getSeriesMetadata(seriesId)?.episodes?.find(e => String(e.id) === episodeId);
+  if (!ep || !ep.video) {
+    ep = getSeriesMetadata(seriesId, { forceDisk: true })?.episodes?.find(e => String(e.id) === episodeId);
+  }
+
+  const normalizeVideoRef = (url) => {
+    if (!url || typeof url !== 'string') return '';
+    return url.replace(/^[a-z]+:\/\/[^/]+/i, '').replace(/\\/g, '/').toLowerCase().trim();
+  };
+
+  const epUrlNorm = normalizeVideoRef(ep?.video?.videoUrl || ep?.videoFile);
+  const snapUrlNorm = normalizeVideoRef(snapshot?.videoUrl);
+  const videoMatches = epUrlNorm && snapUrlNorm && (
+    epUrlNorm === snapUrlNorm ||
+    epUrlNorm.endsWith(path.posix.basename(snapUrlNorm)) ||
+    snapUrlNorm.endsWith(path.posix.basename(epUrlNorm))
+  );
+
+  if (!ep?.video || !videoMatches) {
+    return {
+      state: 'queued',
+      queuedSeconds: 0,
+      revision: null,
+      message: 'Episode media is still loading',
+    };
+  }
+
+  let source = null;
+  try {
+    source = mediaPath(ep.sourceVideoPath || ep.video?.videoPath || ep.video?.videoUrl);
+  } catch (err) {
+    return {
+      state: 'queued',
+      queuedSeconds: 0,
+      revision: null,
+      message: err.message || 'Episode media is still loading',
+    };
+  }
   let stem = null;
-  try { stem = mediaPath(stemReference(ep)); } catch (e) { /* stem missing is non-fatal */ }
-  const { clips, settings, segments } = snapshot;
-  if (!Array.isArray(clips) || !Array.isArray(segments) || !settings ||
-      clips.some(c => !Number.isFinite(c.start) || !Number.isFinite(c.end) || c.start < 0 || c.end <= c.start ||
+  const customBgmRef = (snapshot?.settings?.enableCustomBgm && (snapshot?.settings?.customBgmPath || snapshot?.settings?.customBgmUrl))
+    ? (snapshot.settings.customBgmPath || snapshot.settings.customBgmUrl)
+    : null;
+  if (customBgmRef) {
+    try { stem = mediaPath(customBgmRef); } catch (e) { /* missing custom bgm is non-fatal */ }
+  } else if (!snapshot?.settings?.youtubeSafeAudio) {
+    try { stem = mediaPath(stemReference(ep)); } catch (e) { /* stem missing is non-fatal */ }
+  }
+  const { clips: rawClips, settings, segments } = snapshot;
+  if (!Array.isArray(rawClips) || !Array.isArray(segments) || !settings ||
+      rawClips.some(c => !c || !Number.isFinite(c.start) || !Number.isFinite(c.end) || c.start < 0 || c.end < c.start ||
         (c.sourceStart != null && !(Number.isFinite(c.sourceStart) && c.sourceStart >= 0)))) throw new Error('Invalid proxy timeline');
+  // Filter degenerate zero-duration boundary clips (e.g. start === end === videoDuration) instead of failing with HTTP 400
+  const clips = rawClips.filter(c => c.end > c.start);
   const audible = v => !v.muted && !v.isMuted && (v.audioPath || v.audioUrl || v.audioFile);
   const voices = [];
   for (const v of segments.filter(audible)) {
@@ -181,7 +236,8 @@ function request(seriesId, episodeId, snapshot) {
   if (silentSegments.length) input.silentSegments = silentSegments;
   const files = dependencies(input);
   const signature = fingerprint(files);
-  const id = crypto.createHash('sha256').update('proxy-1').update(JSON.stringify(input)).update(signature).digest('hex');
+  const cacheVersion = settings.youtubeSafeAudio ? 'proxy-2-ytsafe' : 'proxy-2';
+  const id = crypto.createHash('sha256').update(cacheVersion).update(JSON.stringify(input)).update(signature).digest('hex');
   const existing = latest.get(dir);
 
   // If already fresh for this exact id, return status directly

@@ -5,7 +5,7 @@ import {
   ChevronDown, ChevronRight
 } from 'lucide-react';
 import { splitVideoEpisodesApi } from '../../services/api';
-import { formatTimecode } from '../../utils/formatTime';
+import { formatTimecode } from '../../utils/timestampUtils';
 import { isCorruptedOrMojibakeTitle } from '../../utils/projectStorage';
 import { DubbingStepButton } from '../../features/dubbing-runner';
 
@@ -60,6 +60,19 @@ export default function EpisodesTab({
   const [newSeriesTitle, setNewSeriesTitle] = useState('');
   const [isCreatingSeries, setIsCreatingSeries] = useState(false);
   const [createSeriesError, setCreateSeriesError] = useState(null);
+  const [showDeleteSeriesModal, setShowDeleteSeriesModal] = useState(false);
+  const [isDeletingSeries, setIsDeletingSeries] = useState(false);
+
+  const handleConfirmDeleteActiveSeries = async () => {
+    if (!onDeleteSeries || !activeSeries?.id) return;
+    try {
+      setIsDeletingSeries(true);
+      await onDeleteSeries(activeSeries.id);
+      setShowDeleteSeriesModal(false);
+    } finally {
+      setIsDeletingSeries(false);
+    }
+  };
 
   const handleConfirmCreateNewSeries = async () => {
     const cleanTitle = (newSeriesTitle || '').trim();
@@ -320,24 +333,24 @@ export default function EpisodesTab({
               className="capcut-input"
               style={{
                 flex: 1,
-                fontSize: '0.88rem',
+                fontSize: '0.84rem',
                 fontWeight: 700,
-                color: '#F8FAFC',
-                background: 'rgba(15, 23, 42, 0.75)',
-                border: '1px solid rgba(56, 189, 248, 0.35)',
-                borderRadius: 8,
-                padding: '5px 8px',
+                color: 'var(--text-primary)',
+                background: 'var(--bg-workspace-base)',
+                border: '1px solid var(--border-subtle)',
+                borderRadius: 'var(--radius-sm)',
+                padding: '6px 8px',
                 cursor: 'pointer',
                 outline: 'none',
               }}
             >
               {(seriesList && seriesList.length > 0 ? seriesList : [activeSeries]).filter(Boolean).map((s) => (
-                <option key={s.id} value={s.id} style={{ background: '#0F172A', color: '#F8FAFC' }}>
-                  🎬 {(!isCorruptedOrMojibakeTitle(s.title) && s.title) || s.id} ({s.episodes?.length || 0} EPs)
+                <option key={s.id} value={s.id} style={{ background: '#14171D', color: '#F8FAFC' }}>
+                  {(!isCorruptedOrMojibakeTitle(s.title) && s.title) || s.id} ({s.episodes?.length || 0} ភាគ)
                 </option>
               ))}
-              <option value="__NEW__" style={{ background: '#0F172A', color: '#FF8577', fontWeight: 'bold' }}>
-                ➕ + បង្កើត Series ថ្មី (New Drama)...
+              <option value="__NEW__" style={{ background: '#14171D', color: '#38BDF8', fontWeight: 'bold' }}>
+                + បង្កើត Series ថ្មី...
               </option>
             </select>
 
@@ -364,12 +377,7 @@ export default function EpisodesTab({
             {onDeleteSeries && (
               <button
                 type="button"
-                onClick={() => {
-                  const sTitle = activeSeries?.title || activeSeries?.id || 'Series';
-                  if (window.confirm(`តើអ្នកពិតជាចង់លុបរឿងភាគ "${sTitle}" (Delete Series) នេះមែនទេ?`)) {
-                    onDeleteSeries(activeSeries?.id);
-                  }
-                }}
+                onClick={() => setShowDeleteSeriesModal(true)}
                 className="btn-ghost"
                 style={{
                   background: 'transparent',
@@ -395,8 +403,8 @@ export default function EpisodesTab({
       {glossaryChars.length > 0 && (
         <div
           style={{
-            background: 'rgba(56, 189, 248, 0.04)',
-            border: '1px solid rgba(56, 189, 248, 0.18)',
+            background: 'var(--bg-secondary-panel)',
+            border: '1px solid var(--border-subtle)',
             borderRadius: 'var(--radius-sm)',
             padding: '8px 12px',
           }}
@@ -413,24 +421,24 @@ export default function EpisodesTab({
               border: 'none',
               padding: 0,
               cursor: 'pointer',
-              color: 'var(--accent-cyan)',
+              color: 'var(--primary-accent)',
             }}
-            title="ចុចដើម្បីបង្ហាញ ឬលាក់បញ្ជីតួអង្គ (Toggle Glossary)"
+            title="បង្ហាញ ឬលាក់បញ្ជីតួអង្គក្នុងរឿង"
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <BookOpen size={13} color="var(--accent-cyan)" />
-              <span style={{ fontSize: '0.72rem', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.03em' }}>
-                Character Glossary ({glossaryChars.length} តួអង្គ)
+              <BookOpen size={13} color="var(--primary-accent)" />
+              <span style={{ fontSize: '0.72rem', fontWeight: 700, letterSpacing: '0.02em' }}>
+                តួអង្គក្នុងរឿង ({glossaryChars.length})
               </span>
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '0.68rem', color: '#94a3b8' }}>
-              <span>{isGlossaryExpanded ? 'បង្រួម' : 'ពង្រីក'}</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: '0.68rem', color: 'var(--text-dim)' }}>
+              <span>{isGlossaryExpanded ? 'បង្រួម' : 'មើល'}</span>
               {isGlossaryExpanded ? <ChevronDown size={13} /> : <ChevronRight size={13} />}
             </div>
           </button>
 
           {isGlossaryExpanded && (
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8, paddingTop: 8, borderTop: '1px solid rgba(56, 189, 248, 0.12)' }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8, paddingTop: 8, borderTop: '1px solid var(--border-subtle)' }}>
               {glossaryChars.map((ch, idx) => (
                 <span
                   key={ch.name || idx}
@@ -438,9 +446,9 @@ export default function EpisodesTab({
                     fontSize: '0.68rem',
                     padding: '2px 7px',
                     borderRadius: 4,
-                    background: 'rgba(15, 23, 42, 0.8)',
-                    border: '1px solid rgba(56, 189, 248, 0.25)',
-                    color: '#e2e8f0',
+                    background: 'var(--bg-elevated-panel)',
+                    border: '1px solid var(--border-subtle)',
+                    color: 'var(--text-primary)',
                     display: 'inline-flex',
                     alignItems: 'center',
                     gap: 4,
@@ -448,7 +456,7 @@ export default function EpisodesTab({
                 >
                   <strong>{ch.name}</strong>
                   {ch.khmerName && ch.khmerName !== ch.name && (
-                    <span style={{ color: 'var(--accent-cyan)' }}>→ {ch.khmerName}</span>
+                    <span style={{ color: 'var(--primary-accent)' }}>→ {ch.khmerName}</span>
                   )}
                   {(() => {
                     const g = String(ch.gender || '').toLowerCase();
@@ -467,10 +475,10 @@ export default function EpisodesTab({
       )}
 
       {/* 3. Episodes List */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <span style={{ fontSize: '0.74rem', fontWeight: 800, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-            Episodes List ({episodes.length})
+          <span style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--text-secondary)', letterSpacing: '0.02em' }}>
+            បញ្ជីភាគ ({episodes.length})
           </span>
 
           <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
@@ -480,22 +488,19 @@ export default function EpisodesTab({
                 setSplitError(null);
                 setShowSplitModal(true);
               }}
-              className="btn-ghost"
+              className="btn-secondary"
               style={{
-                padding: '4px 8px',
+                minHeight: 28,
+                padding: '3px 9px',
                 fontSize: '0.72rem',
-                display: 'flex',
+                display: 'inline-flex',
                 alignItems: 'center',
                 gap: 4,
-                color: '#38bdf8',
-                border: '1px dashed rgba(56, 189, 248, 0.4)',
-                background: 'rgba(56, 189, 248, 0.08)',
-                borderRadius: 'var(--radius-sm)',
               }}
-              title="កាត់បំបែកវីដេអូជាភាគៗ (Split into Episodes)"
+              title="កាត់បំបែកវីដេអូជាភាគៗ (Auto-Split)"
             >
               <Scissors size={12} />
-              <span>⚡ Auto-Split</span>
+              <span>កាត់ភាគ</span>
             </button>
 
             <button
@@ -503,18 +508,17 @@ export default function EpisodesTab({
               onClick={() => onCreateEpisode && onCreateEpisode()}
               className="btn-primary"
               style={{
-                padding: '4px 10px',
-                fontSize: '0.74rem',
-                display: 'flex',
+                minHeight: 28,
+                padding: '3px 10px',
+                fontSize: '0.72rem',
+                display: 'inline-flex',
                 alignItems: 'center',
                 gap: 4,
-                background: 'linear-gradient(135deg, #0284c7, #0369a1)',
-                borderColor: '#38bdf8',
               }}
-              title="បង្កើតភាគបន្ទាប់ (Create next episode)"
+              title="បង្កើតភាគបន្ទាប់ (Add Episode)"
             >
               <Plus size={13} />
-              <span>Add Episode</span>
+              <span>ថែមភាគ</span>
             </button>
           </div>
         </div>
@@ -1117,6 +1121,103 @@ export default function EpisodesTab({
               >
                 {isCreatingSeries ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
                 <span>បង្កើត Series ថ្មី</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showDeleteSeriesModal && (
+        <div
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(5, 7, 11, 0.78)',
+            backdropFilter: 'blur(5px)',
+            zIndex: 9999,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 20,
+          }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !isDeletingSeries) setShowDeleteSeriesModal(false);
+          }}
+        >
+          <div
+            style={{
+              background: 'var(--bg-primary-panel)',
+              border: '1px solid rgba(239, 68, 68, 0.42)',
+              borderRadius: 'var(--radius-md)',
+              padding: 20,
+              maxWidth: 420,
+              width: '100%',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 14,
+              boxShadow: '0 22px 48px rgba(0, 0, 0, 0.65)',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <div
+                style={{
+                  width: 36,
+                  height: 36,
+                  borderRadius: 8,
+                  background: 'rgba(239, 68, 68, 0.14)',
+                  border: '1px solid rgba(239, 68, 68, 0.4)',
+                  color: '#F87171',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
+                <Trash2 size={17} />
+              </div>
+              <div>
+                <h3 style={{ margin: 0, fontSize: '0.96rem', fontWeight: 700, color: 'var(--text-primary)' }}>
+                  លុប Folder រឿង (Delete Series)
+                </h3>
+                <span style={{ fontSize: '0.72rem', color: '#FCA5A5' }}>
+                  សកម្មភាពនេះមិនអាចត្រឡប់វិញបានទេ
+                </span>
+              </div>
+            </div>
+
+            <p style={{ margin: 0, fontSize: '0.80rem', color: 'var(--text-secondary)', lineHeight: 1.55 }}>
+              តើអ្នកពិតជាចង់លុប Folder រឿង <strong style={{ color: 'var(--text-primary)' }}>&ldquo;{activeSeries?.title || activeSeries?.id || 'Series'}&rdquo;</strong> ({episodes.length} ភាគ) នេះមែនទេ?
+            </p>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, paddingTop: 10, borderTop: '1px solid var(--border-subtle)' }}>
+              <button
+                type="button"
+                onClick={() => setShowDeleteSeriesModal(false)}
+                className="btn-secondary"
+                style={{ padding: '6px 14px', fontSize: '0.78rem' }}
+                disabled={isDeletingSeries}
+              >
+                បោះបង់ (Cancel)
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDeleteActiveSeries}
+                style={{
+                  padding: '6px 14px',
+                  fontSize: '0.78rem',
+                  fontWeight: 700,
+                  borderRadius: 'var(--radius-xs)',
+                  background: 'rgba(220, 38, 38, 0.24)',
+                  border: '1px solid rgba(248, 113, 113, 0.55)',
+                  color: '#FECACA',
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  cursor: isDeletingSeries ? 'not-allowed' : 'pointer',
+                }}
+                disabled={isDeletingSeries}
+              >
+                {isDeletingSeries ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
+                <span>{isDeletingSeries ? 'កំពុងលុប...' : 'លុប Folder ចោល'}</span>
               </button>
             </div>
           </div>

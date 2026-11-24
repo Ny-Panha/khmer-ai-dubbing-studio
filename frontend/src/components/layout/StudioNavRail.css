@@ -1,0 +1,213 @@
+/* ==========================================================================
+   DragonDub AI Studio — Slim Left Icon Rail (52px Desktop / 52px Mobile Dock)
+   Follows DESIGN.md "The Darkroom Console" tokens strictly.
+   ========================================================================== */
+.studio-nav-rail {
+  grid-column: 1;
+  grid-row: 2;
+  width: 56px;
+  min-width: 56px;
+  height: calc(100vh - 48px);
+  background: var(--bg-primary-panel);
+  border-right: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 4px;
+  user-select: none;
+  z-index: 45;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-width: none;
+}
+
+.studio-nav-rail::-webkit-scrollbar {
+  display: none;
+}
+
+.nav-rail-group {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+}
+
+.nav-rail-footer {
+  padding-top: 8px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.nav-rail-item {
+  position: relative;
+  width: 48px;
+  min-height: 48px;
+  padding: 7px 2px 5px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  cursor: pointer;
+  transition: var(--transition-fast);
+  flex-shrink: 0;
+}
+
+.nav-rail-item:hover:not(:disabled) {
+  background: var(--bg-elevated-panel);
+  color: var(--text-primary);
+  border-color: var(--border-subtle);
+}
+
+.nav-rail-item:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+}
+
+.nav-rail-item.active {
+  background: var(--bg-active-card);
+  color: var(--primary-accent);
+  border-color: rgba(56, 189, 248, 0.35);
+}
+
+/* Crisp left 2px Studio Cyan active bar */
+.nav-rail-item.active::before {
+  content: '';
+  position: absolute;
+  left: -4px;
+  top: 8px;
+  bottom: 8px;
+  width: 2.5px;
+  border-radius: 0 var(--radius-full) var(--radius-full) 0;
+  background: var(--primary-accent);
+}
+
+.nav-rail-item.is-running:not(.active) {
+  color: var(--primary-accent);
+  background: rgba(56, 189, 248, 0.1);
+  border-color: rgba(56, 189, 248, 0.28);
+}
+
+.nav-rail-label {
+  font-family: var(--font-sans);
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
+.nav-rail-badge {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  min-width: 16px;
+  height: 14px;
+  padding: 0 4px;
+  border-radius: var(--radius-full);
+  background: var(--bg-elevated-panel);
+  border: 1px solid var(--border-subtle-hover);
+  box-shadow: 0 0 0 2px var(--bg-primary-panel);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 12px;
+  text-align: center;
+  pointer-events: none;
+}
+
+.nav-rail-badge.is-live {
+  background: var(--btn-primary-bg);
+  border-color: var(--primary-accent);
+  color: var(--text-primary);
+}
+
+.nav-rail-badge.is-warn {
+  background: rgba(245, 158, 11, 0.18);
+  border-color: rgba(245, 158, 11, 0.5);
+  color: var(--color-warning-text);
+}
+
+/* Mobile Dock Reflow (<= 960px) */
+@media (max-width: 960px) {
+  .studio-nav-rail {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    top: auto;
+    width: 100%;
+    min-width: 0;
+    height: 54px;
+    flex-direction: row;
+    justify-content: space-around;
+    padding: 4px 6px;
+    border-right: none;
+    border-top: 1px solid var(--border-subtle);
+    z-index: 90;
+  }
+
+  .nav-rail-group {
+    flex-direction: row;
+    justify-content: space-around;
+    width: auto;
+    gap: 4px;
+  }
+
+  .nav-rail-footer {
+    padding-top: 0;
+    padding-left: 6px;
+    border-top: none;
+    border-left: 1px solid var(--border-subtle);
+  }
+
+  .nav-rail-item {
+    width: auto;
+    min-width: 48px;
+    padding: 4px 8px;
+    min-height: 44px;
+  }
+
+  .nav-rail-item.active::before {
+    left: 10px;
+    right: 10px;
+    top: -4px;
+    bottom: auto;
+    width: auto;
+    height: 2.5px;
+    border-radius: 0 0 var(--radius-full) var(--radius-full);
+  }
+
+  .nav-rail-shortcuts-btn {
+    display: none;
+  }
+}
+
+@media (max-width: 520px) {
+  .studio-nav-rail {
+    padding: 4px 2px;
+    gap: 2px;
+  }
+  .nav-rail-group {
+    flex: 1 1 auto;
+    gap: 2px;
+  }
+  .nav-rail-footer {
+    flex: 0 0 auto;
+    padding-left: 2px;
+  }
+  .nav-rail-item {
+    min-width: 44px;
+    padding: 4px 4px;
+  }
+  .nav-rail-label {
+    font-size: 9.5px;
+  }
+}

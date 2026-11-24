@@ -81,7 +81,10 @@ test('Step 3: App.jsx wraps the application tree with DubbingRunnerProvider', ()
 });
 
 test('Step 3b: GeminiRouteModal integrates DubbingStepCardsBar for unified 1-by-1 runner', () => {
-  const modal = read(FRONTEND_SRC, 'components', 'dashboard', 'GeminiRouteModal.jsx');
+  const modal =
+    read(FRONTEND_SRC, 'components', 'dashboard', 'GeminiRouteModal.jsx') +
+    '\n' +
+    read(FRONTEND_SRC, 'components', 'dashboard', 'BatchEpisodeCard.jsx');
   assert.match(modal, /import\s+.*DubbingStepCardsBar.*from\s+['"]\.\.\/\.\.\/features\/dubbing-runner['"]/);
   assert.match(modal, /<DubbingStepCardsBar/);
 });
@@ -110,11 +113,52 @@ test('Step 5: DubbingRunnerContext exports runnerLiveStats and GeminiRouteModal 
   assert.match(ctx, /runnerLiveStats/);
   assert.match(ctx, /queuedEpIds/);
 
-  const modal = read(FRONTEND_SRC, 'components', 'dashboard', 'GeminiRouteModal.jsx');
+  const modal =
+    read(FRONTEND_SRC, 'components', 'dashboard', 'GeminiRouteModal.jsx') +
+    '\n' +
+    read(FRONTEND_SRC, 'components', 'dashboard', 'BatchEpisodeCard.jsx');
   assert.match(modal, /runnerLiveStats/);
   assert.match(modal, /isCurrentDemucsRunnerEp/);
   assert.match(modal, /isCurrentVoiceRunnerEp/);
   assert.match(modal, /isRunnerTranslateActive/);
+});
+
+test('Step 6: Auto Compact step card, modal, and sequential runner integration', () => {
+  const bar = read(FRONTEND_SRC, 'features', 'dubbing-runner', 'DubbingStepCardsBar.jsx');
+  assert.match(bar, /data-testid="step-row-compact"/);
+  assert.match(bar, /data-testid="btn-open-compact-modal"/);
+  assert.match(bar, /data-testid="step-compact-status-badge"/);
+  assert.match(bar, /data-testid="modal-dubbing-compact-confirm"/);
+  assert.match(bar, /data-testid="btn-confirm-compact-now-batch"/);
+  assert.match(bar, /បម្លែងគ្រប់ Script ជា «ខ្លីចំអត្ថន័យ» \(Auto Compact\)/);
+
+  const ctx = read(FRONTEND_SRC, 'features', 'dubbing-runner', 'DubbingRunnerContext.jsx');
+  assert.match(ctx, /runSingleAutoCompact/);
+  assert.match(ctx, /stepType === 'compact'/);
+
+  const runners = read(FRONTEND_SRC, 'features', 'dubbing-runner', 'singleEpisodeRunners.js');
+  assert.match(runners, /export\s+async\s+function\s+runSingleAutoCompact/);
+  assert.match(runners, /retranslateAllSegmentsApi/);
+
+  const focusBar = read(FRONTEND_SRC, 'components', 'dashboard', 'BatchStageFocusBar.jsx');
+  assert.match(focusBar, /data-testid="top-btn-auto-compact"/);
+});
+
+test('Step 6b: EpisodeCompactProgressCard and BatchEpisodeCard stage UI integration', () => {
+  const compactCard = read(FRONTEND_SRC, 'components', 'dashboard', 'route-runners', 'EpisodeCompactProgressCard.jsx');
+  assert.match(compactCard, /export\s+default\s+function\s+EpisodeCompactProgressCard/);
+  assert.match(compactCard, /data-testid=\{`compact-progress-card-\$\{/);
+  assert.match(compactCard, /ខ្លីចំអត្ថន័យ/);
+
+  const epCard = read(FRONTEND_SRC, 'components', 'dashboard', 'BatchEpisodeCard.jsx');
+  assert.match(epCard, /import\s+EpisodeCompactProgressCard\s+from/);
+  assert.match(epCard, /runSingleAutoCompact/);
+  assert.match(epCard, /showStageCompact/);
+  assert.match(epCard, /isCurrentCompactRunnerEp/);
+  assert.match(epCard, /isCompactDone/);
+
+  const modal = read(FRONTEND_SRC, 'components', 'dashboard', 'GeminiRouteModal.jsx');
+  assert.match(modal, /runSingleAutoCompact=\{runSingleAutoCompact\}/);
 });
 
 

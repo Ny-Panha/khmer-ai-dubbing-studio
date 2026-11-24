@@ -267,6 +267,25 @@ function getVoiceProfile(gender = "male", overrideVoiceId = null) {
  * Enforces strict consistency: every segment from the same character receives the SAME voice throughout the episode.
  * Preserves manual user voice overrides permanently.
  */
+function isGenericSpeakerName(str = "") {
+  if (!str) return true;
+  const s = String(str).trim().toLowerCase();
+  return (
+    s === "តួអង្គ" ||
+    s === "តួ" ||
+    s === "unknown" ||
+    s === "speaker" ||
+    s === "default" ||
+    s === "default speaker" ||
+    s === "speaker 1" ||
+    s === "speaker_1" ||
+    s === "មនុស្សម្នាក់" ||
+    s === "សំឡេងអនាមិក" ||
+    /^speaker[\s_-]*\d+$/i.test(s) ||
+    /^spk[\s_-]*\d+$/i.test(s)
+  );
+}
+
 function syncSegmentsWithSpeakerRegistry(segments = [], customSpeakerVoiceMap = {}, seriesSpeakerMap = {}) {
   let customMap = customSpeakerVoiceMap;
   let seriesMap = seriesSpeakerMap;
@@ -284,17 +303,42 @@ function syncSegmentsWithSpeakerRegistry(segments = [], customSpeakerVoiceMap = 
   segments.forEach((seg, idx) => {
     const rawSpeaker = String(seg.speaker || seg.speakerName || "តួអង្គ").trim();
     const explicitId = seg.speakerId || seg.spkId || null;
-    const isGenericRaw = !rawSpeaker || rawSpeaker === "តួអង្គ" || rawSpeaker.toLowerCase() === "speaker";
+    const isGenericRaw = isGenericSpeakerName(rawSpeaker);
+
+    // Resolve per-cue gender from acoustic pitch (F0), visual evidence, or explicit gender
+    const segF0 = Number(seg.pitchHz || seg.acousticF0 || 0);
+    const segVis = String(seg.visualGender || "").toLowerCase();
+    const segExplicitGender = String(seg.voiceGender || seg.gender || seg.speakerGender || "").toLowerCase();
+    let perCueGender = "unknown";
+    if ((seg.acousticGender === "female" || segF0 >= 170) && (segF0 === 0 || (segF0 >= 170 && segF0 <= 320))) {
+      perCueGender = "female";
+    } else if ((seg.acousticGender === "male" || (segF0 > 0 && segF0 <= 155)) && (segF0 === 0 || (segF0 >= 80 && segF0 <= 155))) {
+      perCueGender = "male";
+    } else if (segVis === "female") {
+      perCueGender = "female";
+    } else if (segVis === "male") {
+      perCueGender = "male";
+    } else if (segExplicitGender === "female" || segExplicitGender === "f") {
+      perCueGender = "female";
+    } else if (segExplicitGender === "male" || segExplicitGender === "m") {
+      perCueGender = "male";
+    }
 
     // For generic characters with no distinct speakerId (or generic 'spk_1' / 'spk_តួអង្គ'),
-    // isolate them by segment key so distinct speakers don't cross-contaminate each other.
+    // isolate them by resolved per-cue gender (spk_female vs spk_male vs generic ID) so distinct speakers don't cross-contaminate each other.
     let spkKey;
     if (explicitId && !['spk_1', 'spk_តួអង្គ', 'spk_default', 'spk'].includes(String(explicitId).trim())) {
       spkKey = String(explicitId).trim();
     } else if (!isGenericRaw) {
       spkKey = getSpeakerId(rawSpeaker);
     } else {
-      spkKey = `spk_generic_${seg.id || seg.segmentId || idx + 1}`;
+      if (perCueGender === 'female') {
+        spkKey = 'spk_female';
+      } else if (perCueGender === 'male') {
+        spkKey = 'spk_male';
+      } else {
+        spkKey = `spk_generic_${seg.id || seg.segmentId || idx + 1}`;
+      }
     }
 
     const isSegUserOverridden = Boolean(seg.userOverridden);
@@ -358,7 +402,6 @@ function syncSegmentsWithSpeakerRegistry(segments = [], customSpeakerVoiceMap = 
     }
 
     // 1. Acoustic Evidence (High weight: 2.5 when confident & un-ambiguous)
-    const segF0 = Number(seg.pitchHz || seg.acousticF0 || 0);
     const segConf = Number(seg.acousticConfidence || seg.genderConfidence || 0);
     if ((seg.acousticGender === "female" || segF0 >= 175) && segConf >= 0.58 && (segF0 === 0 || (segF0 >= 175 && segF0 <= 320))) {
       entry.femaleScore += 2.5 * (segConf || 0.8);
@@ -500,7 +543,25 @@ function syncSegmentsWithSpeakerRegistry(segments = [], customSpeakerVoiceMap = 
   const enrichedSegments = segments.map((seg, idx) => {
     const rawSpeaker = String(seg.speaker || seg.speakerName || "តួអង្គ").trim();
     const explicitId = seg.speakerId || seg.spkId || null;
-    const isGenericRaw = !rawSpeaker || rawSpeaker === "តួអង្គ" || rawSpeaker.toLowerCase() === "speaker";
+    const isGenericRaw = isGenericSpeakerName(rawSpeaker);
+
+    const segF0 = Number(seg.pitchHz || seg.acousticF0 || 0);
+    const segVis = String(seg.visualGender || "").toLowerCase();
+    const segExplicitGender = String(seg.voiceGender || seg.gender || seg.speakerGender || "").toLowerCase();
+    let perCueGender = "unknown";
+    if ((seg.acousticGender === "female" || segF0 >= 170) && (segF0 === 0 || (segF0 >= 170 && segF0 <= 320))) {
+      perCueGender = "female";
+    } else if ((seg.acousticGender === "male" || (segF0 > 0 && segF0 <= 155)) && (segF0 === 0 || (segF0 >= 80 && segF0 <= 155))) {
+      perCueGender = "male";
+    } else if (segVis === "female") {
+      perCueGender = "female";
+    } else if (segVis === "male") {
+      perCueGender = "male";
+    } else if (segExplicitGender === "female" || segExplicitGender === "f") {
+      perCueGender = "female";
+    } else if (segExplicitGender === "male" || segExplicitGender === "m") {
+      perCueGender = "male";
+    }
 
     let spkKey;
     if (explicitId && !['spk_1', 'spk_តួអង្គ', 'spk_default', 'spk'].includes(String(explicitId).trim())) {
@@ -508,14 +569,19 @@ function syncSegmentsWithSpeakerRegistry(segments = [], customSpeakerVoiceMap = 
     } else if (!isGenericRaw) {
       spkKey = getSpeakerId(rawSpeaker);
     } else {
-      spkKey = `spk_generic_${seg.id || seg.segmentId || idx + 1}`;
+      if (perCueGender === 'female') {
+        spkKey = 'spk_female';
+      } else if (perCueGender === 'male') {
+        spkKey = 'spk_male';
+      } else {
+        spkKey = `spk_generic_${seg.id || seg.segmentId || idx + 1}`;
+      }
     }
 
     const normSpeaker = normalizeSpeakerName(rawSpeaker);
     const titleKw = detectSpeakerGender(rawSpeaker, "", "");
-    const segF0 = Number(seg.pitchHz || seg.acousticF0 || 0);
-    const fallbackIsFemale = titleKw === "FEMALE" || (titleKw !== "MALE" && (seg.voiceGender === "female" || (segF0 >= 175 && segF0 <= 320)));
-    const fallbackIsMale = titleKw === "MALE" || (titleKw !== "FEMALE" && (seg.voiceGender === "male" || (segF0 > 0 && segF0 <= 152)));
+    const fallbackIsFemale = (isGenericRaw && perCueGender === 'female') || titleKw === "FEMALE" || (titleKw !== "MALE" && (seg.voiceGender === "female" || (segF0 >= 170 && segF0 <= 320)));
+    const fallbackIsMale = (isGenericRaw && perCueGender === 'male') || titleKw === "MALE" || (titleKw !== "FEMALE" && (seg.voiceGender === "male" || (segF0 > 0 && segF0 <= 155)));
     const fallbackGender = fallbackIsFemale ? "female" : (fallbackIsMale ? "male" : "unknown");
     const fallbackVoice = fallbackIsFemale ? "km-KH-SreymomNeural" : "km-KH-PisethNeural";
     const reg = finalizedRegistry[spkKey] ||
@@ -700,6 +766,27 @@ function applySpeakerVoiceToSegments(segments = [], speakerRegistry = {}) {
   return syncSegmentsWithSpeakerRegistry(segments, customVoiceMap, speakerRegistry).segments;
 }
 
+/**
+ * 5. អនុគមន៍ Detect Gender បន្ថែម (detectGender)
+ * ស្រង់ភេទ male/female ពីឈ្មោះតួអង្គ ឬ Keyword (Default: male)
+ */
+function detectGender(speakerName = "") {
+  const g = detectSpeakerGender(speakerName);
+  if (g === "FEMALE") return "female";
+  if (g === "MALE") return "male";
+  return "male";
+}
+
+/**
+ * 6. Map ទៅកាន់សំឡេង (getVoiceForGender)
+ * female -> km-KH-SreymomNeural, male -> km-KH-PisethNeural
+ */
+function getVoiceForGender(gender = "male") {
+  const norm = String(gender || "").toLowerCase();
+  if (norm === "female" || norm === "ស្រី") return "km-KH-SreymomNeural"; // សំឡេងស្រីមុំ
+  return "km-KH-PisethNeural"; // សំឡេងពិសិដ្ឋ
+}
+
 module.exports = {
   FEMALE_KEYWORDS,
   MALE_KEYWORDS,
@@ -709,11 +796,14 @@ module.exports = {
   MALE_MARKERS: MALE_KEYWORDS,
   VOICE_PROFILES,
   detectSpeakerGender,
+  detectGender,
   normalizeSpeakerName,
   getVoiceProfile,
+  getVoiceForGender,
   syncSegmentsWithSpeakerRegistry,
   getSpeakerId,
   getDefaultVoiceForGender,
   buildSpeakerRegistry,
   applySpeakerVoiceToSegments,
+  isGenericSpeakerName,
 };

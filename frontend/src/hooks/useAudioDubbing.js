@@ -11,7 +11,7 @@ import { saveTimelineOperationToLocalStorage, suppressNextBackendSync } from '..
 import { getSpeakerId, detectSpeakerGender } from '../utils/speakerUtils';
 import { formatTimecode, parseTimeToSeconds } from '../utils/timestampUtils';
 import { splitKhmerTextIntoHalves } from '../utils/khmerTextSplitter';
-import { cleanKhmerText } from '../utils/cleanKhmer';
+import { cleanKhmerText } from '../utils/khmerTextSplitter';
 
 const isCustomClipSpeed = (spd) => {
   if (spd === undefined || spd === null || spd === '') return false;
@@ -854,8 +854,30 @@ const FALLBACK_VOICE_CATALOG = {
           ? (regenerated.audioUrl.includes('?t=') ? regenerated.audioUrl : `${regenerated.audioUrl}?t=${Date.now()}`)
           : null;
 
-        let returnedSeg = null;
-        let allUpdatedSegments = null;
+        const currentItem = (scriptData?.segments && scriptData.segments[segIdx]) || targetSeg;
+        const isTextStillCurrent = (currentItem?.khmer || '').trim() === cleanText;
+
+        const merged = {
+          ...currentItem,
+          ...regenerated,
+          audioOffset: 0,
+          audioTrimmed: false,
+          userTrimmed: false,
+          audioUrl: cacheBustedUrl,
+          khmer: newText,
+          khmerText: newText,
+          khmerTranslatedText: newText,
+          audioStartSec: effAudioStart,
+          audioEndSec: effAudioEnd,
+          audioDurationSec: effAudioDur,
+          voiceId: targetVoiceId,
+          speed: activeSpeed,
+          audioOutdated: !isTextStillCurrent,
+          textStatus: isTextStillCurrent ? 'voice_updated' : 'text_updated',
+        };
+        if (isTextStillCurrent) {
+          delete merged.regenError;
+        }
 
         setScriptData((prev) => {
           if (!prev?.segments) return prev;
@@ -864,37 +886,23 @@ const FALLBACK_VOICE_CATALOG = {
             : prev.segments.findIndex((s, i) => s.id === segIdOrIndex || i === segIdOrIndex || String(s.id) === String(segIdOrIndex) || String(i) === String(segIdOrIndex));
           if (idx === -1) return prev;
 
-          const currentItem = prev.segments[idx];
-          const isTextStillCurrent = (currentItem.khmer || '').trim() === cleanText;
-
-          const merged = {
-            ...currentItem,
-            ...regenerated,
-            audioOffset: 0,
-            audioTrimmed: false,
-            userTrimmed: false,
-            audioUrl: cacheBustedUrl,
-            khmer: newText,
-            khmerText: newText,
-            khmerTranslatedText: newText,
-            audioStartSec: effAudioStart,
-            audioEndSec: effAudioEnd,
-            audioDurationSec: effAudioDur,
-            voiceId: targetVoiceId,
-            speed: activeSpeed,
-            audioOutdated: !isTextStillCurrent,
-            textStatus: isTextStillCurrent ? 'voice_updated' : 'text_updated',
-          };
-
           const nextSegs = [...prev.segments];
-          nextSegs[idx] = merged;
-          returnedSeg = merged;
-          allUpdatedSegments = nextSegs;
+          nextSegs[idx] = {
+            ...nextSegs[idx],
+            ...merged,
+          };
           return { ...prev, segments: nextSegs, updatedAt: Date.now() };
         });
 
         setAudioGenerated(true);
         invalidateRendered();
+
+        const allUpdatedSegments = (scriptData?.segments || []).map((s, i) => {
+          if (s.id === segIdOrIndex || i === segIdx || String(s.id) === String(segIdOrIndex)) {
+            return merged;
+          }
+          return s;
+        });
 
         if (allUpdatedSegments && allUpdatedSegments.some((s) => s.audioFile || s.audioPath || s.audioUrl)) {
           // Trigger non-blocking background timeline audio sync to keep UI lightning fast (<1.5s)
@@ -915,7 +923,7 @@ const FALLBACK_VOICE_CATALOG = {
         const stillOutdated = allUpdatedSegments ? allUpdatedSegments.some((s) => s.audioOutdated) : false;
         setAudioOutdated(stillOutdated);
 
-        return returnedSeg;
+        return merged;
       } catch (err) {
         console.warn('Auto-regen text speech error:', err);
         setScriptData((prev) => {
@@ -1393,8 +1401,27 @@ const FALLBACK_VOICE_CATALOG = {
         ? (updatedSeg.audioUrl.includes('?t=') ? updatedSeg.audioUrl : `${updatedSeg.audioUrl}?t=${Date.now()}`)
         : null;
 
-      let returnedSeg = null;
-      let allUpdatedSegments = null;
+      const currentItem = (scriptData?.segments && scriptData.segments[segIdx]) || baseSeg || targetSeg;
+      const merged = {
+        ...currentItem,
+        ...updatedSeg,
+        audioOffset: 0,
+        audioTrimmed: false,
+        userTrimmed: false,
+        khmer: textToUse,
+        khmerText: textToUse,
+        khmerTranslatedText: textToUse,
+        audioUrl: cacheBustedUrl,
+        audioStartSec: effAudioStart,
+        audioEndSec: effAudioEnd,
+        audioDurationSec: effAudioDur,
+        voiceId: targetVoiceId,
+        speed: activeSpeed,
+        userCustomSpeed: overrideSpeed !== null ? isCustomClipSpeed(overrideSpeed) : Boolean(targetSeg.userCustomSpeed),
+        audioOutdated: false,
+        textStatus: 'voice_updated',
+      };
+      delete merged.regenError;
 
       setScriptData((prev) => {
         if (!prev?.segments) return prev;
@@ -1403,36 +1430,23 @@ const FALLBACK_VOICE_CATALOG = {
           : prev.segments.findIndex((s, i) => s.id === segId || i === segId || String(s.id) === String(segId) || String(i) === String(segId));
         if (idx === -1) return prev;
 
-        const currentItem = prev.segments[idx];
-        const merged = {
-          ...currentItem,
-          ...updatedSeg,
-          audioOffset: 0,
-          audioTrimmed: false,
-          userTrimmed: false,
-          khmer: textToUse,
-          khmerText: textToUse,
-          khmerTranslatedText: textToUse,
-          audioUrl: cacheBustedUrl,
-          audioStartSec: effAudioStart,
-          audioEndSec: effAudioEnd,
-          audioDurationSec: effAudioDur,
-          voiceId: targetVoiceId,
-          speed: activeSpeed,
-          userCustomSpeed: overrideSpeed !== null ? isCustomClipSpeed(overrideSpeed) : Boolean(targetSeg.userCustomSpeed),
-          audioOutdated: false,
-          textStatus: 'voice_updated',
-        };
-
         const nextSegs = [...prev.segments];
-        nextSegs[idx] = merged;
-        returnedSeg = merged;
-        allUpdatedSegments = nextSegs;
+        nextSegs[idx] = {
+          ...nextSegs[idx],
+          ...merged,
+        };
         return { ...prev, segments: nextSegs, updatedAt: Date.now() };
       });
 
       setAudioGenerated(true);
       invalidateRendered();
+
+      const allUpdatedSegments = (scriptData?.segments || []).map((s, i) => {
+        if (s.id === segId || i === segIdx || String(s.id) === String(segId)) {
+          return merged;
+        }
+        return s;
+      });
 
       if (allUpdatedSegments && allUpdatedSegments.some((s) => s.audioFile || s.audioPath || s.audioUrl)) {
         // Trigger non-blocking background timeline audio sync to keep UI lightning fast (<1.5s)
@@ -1453,7 +1467,7 @@ const FALLBACK_VOICE_CATALOG = {
       const stillOutdated = allUpdatedSegments ? allUpdatedSegments.some((s) => s.audioOutdated) : false;
       setAudioOutdated(stillOutdated);
 
-      return returnedSeg;
+      return merged;
     } catch (err) {
       console.error('Failed to regenerate single segment:', err);
       setScriptData((prev) => {
@@ -1528,9 +1542,15 @@ const FALLBACK_VOICE_CATALOG = {
 
     try {
       console.log(`[Translate Segment] Retranslating segment #${targetSeg.id || segIdx + 1} ("${textToTranslate}")...`);
+      const rawStart = Number(targetSeg.startSec ?? targetSeg.startTime ?? 0);
+      const rawEnd = Number(targetSeg.endSec ?? targetSeg.endTime ?? 0);
+      const segDurationSec = Number(targetSeg.duration) > 0
+        ? Number(targetSeg.duration)
+        : (rawEnd > rawStart ? Number((rawEnd - rawStart).toFixed(2)) : undefined);
       const res = await retranslateSegmentApi(textToTranslate, {
         speaker: targetSeg.speaker,
         gender: targetSeg.voiceGender || targetSeg.speakerGender || targetSeg.gender,
+        durationSec: segDurationSec,
       });
 
       if (targetEpisodeId && targetEpisodeId !== activeTtsEpisodeRef.current) {
@@ -1538,7 +1558,11 @@ const FALLBACK_VOICE_CATALOG = {
       }
 
       if (res && Array.isArray(res.options) && res.options.length > 0) {
-        const bestText = cleanKhmerText(res.options[0].text);
+        const compactOpt =
+          res.options.find((opt) => opt?.style === 'compact' || String(opt?.label || '').includes('ខ្លីចំអត្ថន័យ')) ||
+          res.options[1] ||
+          res.options[0];
+        const bestText = cleanKhmerText(compactOpt?.text || res.options[0].text);
         if (bestText) {
           const buildUpdatedSegment = (baseSeg) => {
             const nextSeg = {

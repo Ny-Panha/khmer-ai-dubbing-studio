@@ -41,36 +41,12 @@ export default function JobDashboardModal({ isOpen, onClose }) {
   return (
     <div
       data-testid="job-dashboard-modal"
-      onClick={onClose}
-      style={{
-        position: 'fixed',
-        inset: 0,
-        zIndex: 100020,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        padding: 18,
-        background: 'rgba(9, 10, 15, 0.82)',
-        backdropFilter: 'blur(8px)',
-      }}
+      className="studio-route-stage"
     >
       <div
-        role="dialog"
-        aria-modal="true"
+        role="region"
         aria-label="DragonDub Production Job Queue"
-        onClick={(e) => e.stopPropagation()}
-        style={{
-          background: 'var(--bg-primary-panel)',
-          border: '1px solid var(--border-subtle-hover)',
-          borderRadius: 'var(--radius-lg)',
-          width: '100%',
-          maxWidth: 1040,
-          height: '88vh',
-          display: 'flex',
-          flexDirection: 'column',
-          boxShadow: 'var(--shadow-lg)',
-          overflow: 'hidden',
-        }}
+        className="studio-route-stage-shell"
       >
         {/* Modal Header */}
         <div
@@ -332,29 +308,29 @@ export default function JobDashboardModal({ isOpen, onClose }) {
         {/* Modal Footer */}
         <div
           style={{
-            padding: '11px 22px',
-            borderTop: '1px solid rgba(255, 255, 255, 0.08)',
-            background: '#10192C',
+            padding: '10px 20px',
+            borderTop: '1px solid var(--border-subtle)',
+            background: 'var(--bg-secondary-panel)',
             display: 'flex',
             flexWrap: 'wrap',
             alignItems: 'center',
             justifyContent: 'space-between',
-            fontSize: '0.73rem',
-            color: '#64748B',
+            fontSize: 'var(--text-sm)',
+            color: 'var(--text-secondary)',
             gap: 8,
             flexShrink: 0,
           }}
         >
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
             <span>
-              Queue Concurrency: <strong style={{ color: '#CBD5E1' }}>{stats.maxConcurrency || 1} Active Job</strong>
+              Queue Concurrency: <strong style={{ color: 'var(--text-primary)' }}>{stats.maxConcurrency || 1} Active Job</strong>
             </span>
             <span>•</span>
-            <span style={{ color: '#94A3B8' }}>
+            <span>
               ការប្តូរ Episode ឬបិទផ្ទាំងនេះមិនធ្វើឱ្យខូចខាតដំណើរការ Job ក្នុង Background ឡើយ
             </span>
           </div>
-          <div style={{ fontSize: '0.72rem', color: '#94A3B8', fontFamily: 'var(--font-mono), monospace' }}>
+          <div style={{ fontSize: 'var(--text-2xs)', color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)' }}>
             Total Jobs Tracked: {stats.totalJobs || 0}
           </div>
         </div>

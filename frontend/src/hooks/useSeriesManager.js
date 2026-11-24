@@ -23,7 +23,7 @@ import {
 } from '../utils/projectStorage';
 import { stripLogoSettings } from '../utils/logoSettingsStorage';
 import { generateVideoThumbnails } from '../utils/thumbnailUtils';
-import { fetchVideoThumbnails, deleteSeriesApi } from '../services/api';
+import { fetchVideoThumbnails, deleteSeriesApi, renameSeriesApi } from '../services/api';
 import { normalizeClips, sanitizeScriptData } from '../utils/timelineUtils';
 import { loadEpisodeTimelineViewState } from '../utils/timelineViewState';
 import { applySpeakerVoiceToSegments } from '../utils/speakerUtils';
@@ -162,14 +162,24 @@ export function useSeriesManager({
     }
 
     if (cb.setSelectedVideo) {
-      cb.setSelectedVideo(ep.video || null);
+      const resolvedVid = ep.video ? {
+        ...ep.video,
+        videoUrl: ep.video.videoUrl || ep.videoFile || (ep.video.videoId ? (ep.video.videoId.startsWith('/') ? ep.video.videoId : `/uploads/${ep.video.videoId}`) : null),
+      } : (ep.videoFile ? {
+        videoId: ep.id,
+        fileName: ep.originalFilename || ep.title,
+        videoUrl: ep.videoFile,
+        videoPath: ep.sourceVideoPath,
+      } : null);
+      cb.setSelectedVideo(resolvedVid);
     }
     if (cb.setVideoMetadata) {
       cb.setVideoMetadata(ep.metadata || null);
     }
+    const targetSeries = (latestSeriesListRef.current || []).find((s) => s.id === resolvedSeriesId) || activeSeries;
     const seriesSpeakerMap = {};
-    if (Array.isArray(activeSeries?.glossary?.characters)) {
-      activeSeries.glossary.characters.forEach((c) => {
+    if (Array.isArray(targetSeries?.glossary?.characters)) {
+      targetSeries.glossary.characters.forEach((c) => {
         const key = c.id || c.speakerId || c.name;
         if (key && (c.voiceId || c.khmerVoiceId)) {
           const isFemale = (c.gender === 'female' || c.gender === 'FEMALE');
@@ -604,7 +614,7 @@ export function useSeriesManager({
 
       // 5. Server-truth Hydration: always confirm latest episode state from backend series.json
       try {
-        const res = await fetch(`/api/series/${activeSeriesIdState}`);
+        const res = await fetch(`/api/series/${encodeURIComponent(activeSeriesIdState)}`);
         const data = await res.json();
         if (activeEpisodeIdRef.current !== targetEpisodeId) return;
         if (data?.success && data.series) {
@@ -681,7 +691,7 @@ export function useSeriesManager({
       // 3. Find target series from state or disk
       let targetSeries = (latestSeriesListRef.current || []).find((s) => s.id === targetSeriesId);
       try {
-        const res = await fetch(`/api/series/${targetSeriesId}`);
+        const res = await fetch(`/api/series/${encodeURIComponent(targetSeriesId)}`);
         const data = await res.json();
         if (data?.success && data.series) {
           targetSeries = data.series;
@@ -807,10 +817,10 @@ export function useSeriesManager({
 
     // Sync with backend API
     try {
-      await fetch(`/api/series/${activeSeriesIdState}/episodes/${targetEpisodeId}`, {
+      await fetch(`/api/series/${encodeURIComponent(activeSeriesIdState)}/episodes/${encodeURIComponent(targetEpisodeId)}`, {
         method: 'DELETE',
       });
-      const res = await fetch(`/api/series/${activeSeriesIdState}`);
+      const res = await fetch(`/api/series/${encodeURIComponent(activeSeriesIdState)}`);
       const data = await res.json();
       if (data?.success && data.series) {
         setSeriesList((prevList) =>
@@ -850,16 +860,67 @@ export function useSeriesManager({
     );
   }, [activeSeriesIdState]);
 
-  // 5. Rename Series
-  const handleRenameSeries = useCallback((newTitle) => {
-    if (!newTitle) return;
-    updateSeriesTitle(activeSeriesIdState, newTitle);
-    setSeriesList((prevList) =>
-      (prevList || []).map((s) =>
-        s.id === activeSeriesIdState ? { ...s, title: newTitle } : s
-      )
-    );
-  }, [activeSeriesIdState]);
+  // 5. Rename Series (renames physical folder under backend/uploads/projects/<newName> + updates all local/active references)
+  const handleRenameSeries = useCallback(async (newTitle, targetSeriesId = null) => {
+    const clean = typeof newTitle === 'string' ? newTitle.trim() : '';
+    if (!clean) return { success: false, error: 'សូមបញ្ចូលឈ្មោះ Folder រឿងថ្មី!' };
+    const sId = targetSeriesId || activeSeriesIdState;
+    if (!sId) return { success: false, error: 'មិនមាន Series ID' };
+
+    try {
+      const result = await renameSeriesApi(sId, clean);
+      if (result?.success && result.series) {
+        const renamedSeries = result.series;
+        const oldId = result.oldSeriesId || sId;
+        const newId = result.newSeriesId || renamedSeries.id || sId;
+
+        setSeriesList((prevList) => {
+          const base = Array.isArray(prevList) ? prevList : [];
+          const hasOld = base.some((s) => String(s.id) === String(oldId));
+          const updated = hasOld
+            ? base.map((s) => (String(s.id) === String(oldId) ? renamedSeries : s))
+            : [...base, renamedSeries];
+          try { saveSeriesList(updated); } catch (_) {}
+          return updated;
+        });
+
+        if (String(activeSeriesIdState) === String(oldId) || String(activeSeriesIdRef.current) === String(oldId)) {
+          setActiveSeriesId(newId);
+          setActiveSeriesIdState(newId);
+          activeSeriesIdRef.current = newId;
+          if (newId !== oldId) {
+            const targetEp =
+              (renamedSeries.episodes || []).find((e) => String(e.id) === String(activeEpisodeIdRef.current)) ||
+              (renamedSeries.episodes || [])[0] ||
+              null;
+            if (targetEp) {
+              applyEpisodeToWorkspace(targetEp, newId);
+            }
+          }
+        }
+
+        return {
+          success: true,
+          oldSeriesId: oldId,
+          newSeriesId: newId,
+          renamedFolder: Boolean(result.renamedFolder),
+          series: renamedSeries,
+        };
+      }
+      return { success: false, error: result?.error || 'មិនអាចប្តូរឈ្មោះ Folder បានទេ' };
+    } catch (err) {
+      // Only fall back to local title update if series does not exist on backend yet (404)
+      if (err?.status === 404) {
+        updateSeriesTitle(sId, clean);
+        setSeriesList((prevList) =>
+          (prevList || []).map((s) => (s.id === sId ? { ...s, title: clean } : s))
+        );
+        return { success: true, oldSeriesId: sId, newSeriesId: sId };
+      }
+      console.warn('[useSeriesManager] Failed to rename series folder:', err?.message || err);
+      return { success: false, error: err?.message || 'មិនអាចប្តូរឈ្មោះ Folder បានទេ' };
+    }
+  }, [activeSeriesIdState, applyEpisodeToWorkspace]);
 
   // 5b. Delete Series
   const handleDeleteSeries = useCallback(async (targetSeriesId) => {
@@ -947,7 +1008,7 @@ export function useSeriesManager({
   const refreshSeriesFromServer = useCallback(async () => {
     if (!activeSeriesIdState) return;
     try {
-      const res = await fetch(`/api/series/${activeSeriesIdState}`);
+      const res = await fetch(`/api/series/${encodeURIComponent(activeSeriesIdState)}`);
       const data = await res.json();
       if (data?.success && data.series) {
         const [healedSeries] = sanitizeAndHealSeriesList([data.series]) || [data.series];

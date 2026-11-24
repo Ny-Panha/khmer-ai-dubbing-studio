@@ -170,7 +170,10 @@ test('ConCaT Architecture: 4. Static Invariant Audit: Cooperative priority, gest
     'TimelineEditor must pass currentLiveTime to computeVoiceDragPosition for magnetic playhead snap'
   );
 
-  const videoPlayerSrc = fs.readFileSync(path.join(rootDir, 'frontend/src/components/player/VideoPlayerPreview.jsx'), 'utf8');
+  const videoPlayerSrc =
+    fs.readFileSync(path.join(rootDir, 'frontend/src/components/player/VideoPlayerPreview.jsx'), 'utf8') +
+    '\n' +
+    fs.readFileSync(path.join(rootDir, 'frontend/src/components/player/usePlayerAudioSync.js'), 'utf8');
   assert.ok(
     videoPlayerSrc.includes('WebAudioScheduler'),
     'VideoPlayerPreview must integrate WebAudioScheduler'
@@ -196,4 +199,91 @@ test('ConCaT Architecture: 4. Static Invariant Audit: Cooperative priority, gest
     videoPlayerSrc.includes('HTMLAudio Pool'),
     'VideoPlayerPreview must allow runtime toggling between Web Audio and HTMLAudio Pool'
   );
+});
+
+test('ConCaT Architecture: 5. WebAudioScheduler cleans up deleted or moved nodes immediately on sync tick', async () => {
+  const { WebAudioScheduler } = await import('../../frontend/src/utils/webAudioScheduler.js');
+  const scheduler = new WebAudioScheduler({ maxCachedBuffers: 50 });
+
+  // Provide mock context so syncAtTimelineTime runs in Node test environment
+  scheduler.ctx = { currentTime: 0 };
+  scheduler.masterGain = { gain: { value: 1, setValueAtTime: () => {} } };
+
+  let stoppedCount = 0;
+  const mockNode = () => ({
+    sourceNode: {
+      stop: () => { stoppedCount++; },
+      disconnect: () => {},
+      playbackRate: { value: 1, setValueAtTime: () => {} },
+    },
+    gainNode: {
+      disconnect: () => {},
+      gain: { value: 1, setValueAtTime: () => {} },
+    },
+    segStart: 5.0,
+    segEnd: 8.0,
+    url: '/audio/seg1.mp3',
+    startedAtCtx: 0,
+  });
+
+  scheduler.scheduledNodes.set('seg_1', mockNode());
+  assert.equal(scheduler.scheduledNodes.size, 1);
+
+  // Case A: seg_1 was DELETED from segments list -> must be stopped and pruned immediately
+  scheduler.syncAtTimelineTime({
+    timelineNow: 5.2,
+    segments: [], // empty -> seg_1 deleted
+  });
+  assert.equal(scheduler.scheduledNodes.size, 0);
+  assert.equal(stoppedCount, 1, 'Deleted segment must be stopped immediately');
+
+  // Case B: seg_1 was MOVED from 5.0s to 10.0s -> stale node must be stopped and pruned immediately
+  stoppedCount = 0;
+  scheduler.scheduledNodes.set('seg_1', mockNode());
+  scheduler.syncAtTimelineTime({
+    timelineNow: 5.2,
+    segments: [{ id: 'seg_1', audioStartSec: 10.0, audioEndSec: 13.0, audioUrl: '/audio/seg1.mp3' }],
+  });
+  assert.equal(scheduler.scheduledNodes.size, 0, 'Moved segment stale node must be purged');
+  assert.equal(stoppedCount, 1, 'Moved segment stale node must be stopped');
+});
+
+test('ConCaT Architecture: 6. WebAudioScheduler stops same-lane clip when next adjacent clip starts (Zero-Bleed)', async () => {
+  const { WebAudioScheduler } = await import('../../frontend/src/utils/webAudioScheduler.js');
+  const scheduler = new WebAudioScheduler({ maxCachedBuffers: 50 });
+
+  scheduler.ctx = { currentTime: 0 };
+  scheduler.masterGain = { gain: { value: 1, setValueAtTime: () => {} } };
+
+  let stoppedCount = 0;
+  scheduler.scheduledNodes.set('seg_1', {
+    sourceNode: {
+      stop: () => { stoppedCount++; },
+      disconnect: () => {},
+      playbackRate: { value: 1, setValueAtTime: () => {} },
+    },
+    gainNode: {
+      disconnect: () => {},
+      gain: { value: 1, setValueAtTime: () => {} },
+    },
+    segStart: 0.1,
+    segEnd: 1.2, // Seg 1 ends at 1.2s when next starts
+    url: '/audio/seg1.mp3',
+    startedAtCtx: 0,
+  });
+
+  // Seg 1 slot: 0.1s - 1.35s (overflowing). But Seg 2 starts at 1.2s on same lane (trackRow: 0).
+  // When timeline reaches 1.201s, seg_1 must be hard-stopped so it does not bleed into seg_2!
+  const segments = [
+    { id: 'seg_1', audioStartSec: 0.1, audioEndSec: 1.35, trackRow: 0, audioUrl: '/audio/seg1.mp3' },
+    { id: 'seg_2', audioStartSec: 1.2, audioEndSec: 2.5, trackRow: 0, audioUrl: '/audio/seg2.mp3' },
+  ];
+
+  scheduler.syncAtTimelineTime({
+    timelineNow: 1.21,
+    segments,
+  });
+
+  assert.equal(scheduler.scheduledNodes.has('seg_1'), false, 'seg_1 must be removed when timeline reaches seg_2 start');
+  assert.equal(stoppedCount, 1, 'seg_1 must be stopped at seg_2 start to prevent audio collision');
 });

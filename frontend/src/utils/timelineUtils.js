@@ -691,6 +691,9 @@ export function autoSplitVideoBySegments(segments = [], totalDuration = 0, video
       rawClipEnd = Math.max(clipStart + 0.2, nextIt.start);
     }
     const clipEnd = parseFloat(Math.min(totalDuration, Math.max(clipStart + 0.2, rawClipEnd)).toFixed(2));
+    if (clipEnd <= clipStart) {
+      return;
+    }
 
     // Video clip matching this dialogue line (Auto-Cut only cuts — never mutes)
     clips.push({

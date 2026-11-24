@@ -29,6 +29,11 @@ const { detectSpeakerGender } = require("../models/speakerRegistry");
 const { createSynchronizedNarrationAudio, parseTimeToSec, autoStretchTtsAudio, getMediaDuration } = require("../services/ffmpegService");
 const audioSeparationService = require("../services/audioSeparationService");
 const { withSeriesMetadataLock, updateSeriesMetadata } = require("../services/episodeService");
+const { getGeminiClient } = require("../services/geminiService");
+const {
+  findOverflowShortenCandidates,
+  autoShortenOverflowingSegments,
+} = require("../services/pipeline/stages/stage9_generateSegmentTTS");
 
 const router = express.Router();
 
@@ -852,6 +857,33 @@ router.post("/generate-audio", async (req, res) => {
           forceRegen: Boolean(forceRegen),
         });
 
+        // Post-TTS Auto-Shorten Pass: condense only segments still overflowing slot (>0.15s) or containing Hanzi leaks
+        if (autoStretch !== false && req.body.autoShortenOverflow !== false && !batchExplicitCustom) {
+          try {
+            const overflowCandidates = findOverflowShortenCandidates(updatedSegments, { maxOverflowThresholdSec: 0.15 });
+            if (overflowCandidates.length > 0) {
+              const aiClient = getGeminiClient();
+              if (aiClient?.models?.generateContent) {
+                const shortenRes = await autoShortenOverflowingSegments({
+                  segments: updatedSegments,
+                  audioDir,
+                  aiClient,
+                  ttsOptions: {
+                    seriesId: cleanSeries,
+                    episodeId: cleanEpisode,
+                    speakerMap,
+                  },
+                });
+                if (shortenRes.shortenedCount > 0) {
+                  updatedSegments = shortenRes.segments;
+                }
+              }
+            }
+          } catch (shortenErr) {
+            console.warn("[TTS] Post-TTS auto-shorten pass notice:", shortenErr?.message || shortenErr);
+          }
+        }
+
         failedSegments = (updatedSegments || []).filter((s) => {
           if (!isSpokenSegment(s)) return false;
           return s.ttsStatus === "error" || s.status === "tts_error" || Boolean(s.error) || Boolean(s._failed) || !s.audioPath || !fs.existsSync(s.audioPath);
@@ -1066,17 +1098,51 @@ router.post("/generate-audio", async (req, res) => {
  */
 router.post("/audio/separation-status", async (req, res) => {
   try {
-    const { videoPath, videoFileName, videoId } = req.body;
+    const { videoPath, videoFileName, videoId, separationPreset } = req.body;
     const rawVideoRef = videoPath || videoId || videoFileName;
     if (!rawVideoRef) {
       return res.status(400).json({ success: false, error: "Missing video reference" });
     }
-    const inputVideoPath = resolveMediaFile(rawVideoRef);
+    let inputVideoPath = resolveMediaFile(rawVideoRef);
     if (!inputVideoPath || !fs.existsSync(inputVideoPath)) {
-      return res.status(404).json({ success: false, error: "Video file not found" });
+      // Fallback: search episode videoFile or originalFilename across series
+      const projectsDir = path.join(uploadsDir, "projects");
+      if (fs.existsSync(projectsDir)) {
+        try {
+          const sDirs = fs.readdirSync(projectsDir);
+          for (const sDir of sDirs) {
+            const sMetaPath = path.join(projectsDir, sDir, "series.json");
+            if (fs.existsSync(sMetaPath)) {
+              const sData = JSON.parse(fs.readFileSync(sMetaPath, "utf8"));
+              for (const ep of Object.values(sData.episodes || {})) {
+                if (
+                  ep.originalFilename === rawVideoRef ||
+                  ep.videoFile === rawVideoRef ||
+                  ep.sourceVideoPath === rawVideoRef ||
+                  path.basename(ep.sourceVideoPath || "") === rawVideoRef ||
+                  path.basename(ep.videoFile || "") === rawVideoRef
+                ) {
+                  const candidate = ep.sourceVideoPath || (ep.videoFile ? resolveMediaFile(ep.videoFile) : null);
+                  if (candidate && fs.existsSync(candidate)) {
+                    inputVideoPath = candidate;
+                    break;
+                  }
+                }
+              }
+              if (inputVideoPath && fs.existsSync(inputVideoPath)) break;
+            }
+          }
+        } catch (_) {}
+      }
     }
-    const cacheDir = audioSeparationService.getSeparationCacheDir(inputVideoPath);
-    const noVocalsPath = path.join(cacheDir, "no_vocals.wav");
+
+    if (!inputVideoPath || !fs.existsSync(inputVideoPath)) {
+      return res.json({ success: true, available: false, cached: false, inProgress: false });
+    }
+    const found = typeof audioSeparationService.findAnyCachedSeparationDir === "function"
+      ? audioSeparationService.findAnyCachedSeparationDir(inputVideoPath, separationPreset || null)
+      : { cacheDir: audioSeparationService.getSeparationCacheDir(inputVideoPath), modelKey: "htdemucs" };
+    const noVocalsPath = path.join(found.cacheDir, "no_vocals.wav");
     if (fs.existsSync(noVocalsPath)) {
       const relPath = path.relative(uploadsDir, noVocalsPath).replace(/\\/g, "/");
       return res.json({
@@ -1084,6 +1150,7 @@ router.post("/audio/separation-status", async (req, res) => {
         available: true,
         noVocalsUrl: `/uploads/${relPath}`,
         noVocalsPath,
+        model: found.modelKey,
       });
     }
     return res.json({
@@ -1119,7 +1186,14 @@ router.post("/audio/separate", async (req, res) => {
   res.on("close", stopHeartbeat);
 
   try {
-    const { videoPath, videoFileName, videoId } = req.body;
+    const {
+      videoPath,
+      videoFileName,
+      videoId,
+      separationPreset = 'turbo',
+      model,
+      force = false,
+    } = req.body;
     const rawVideoRef = videoPath || videoId || videoFileName;
     const inputVideoPath = resolveMediaFile(rawVideoRef);
     if (!inputVideoPath || !fs.existsSync(inputVideoPath)) {
@@ -1162,10 +1236,19 @@ router.post("/audio/separate", async (req, res) => {
       }
     }, 10000);
 
-    const sepRes = await audioSeparationService.separateAudio({ audioPath: inputVideoPath, model: 'htdemucs' });
+    const sepOptions = {
+      audioPath: inputVideoPath,
+      separationPreset,
+      force: Boolean(force),
+    };
+    if (model) {
+      sepOptions.model = model;
+    }
+    const sepRes = await audioSeparationService.separateAudio(sepOptions);
     stopHeartbeat();
     const relPath = path.relative(uploadsDir, sepRes.noVocalsPath).replace(/\\/g, "/");
     const noVocalsUrl = `/uploads/${relPath}`;
+    const resolvedPreset = sepRes.separationPreset || separationPreset || 'turbo';
 
     // Auto-persist Clean BGM into series.json under per-series mutex for episode tracking
     try {
@@ -1187,7 +1270,8 @@ router.post("/audio/separate", async (req, res) => {
             targetEp.cleanBgmPath = sepRes.noVocalsPath;
             targetEp.isDemucsDone = true;
             targetEp.hasDemucs = true;
-            console.log(`[AudioSeparation] ✅ Auto-persisted clean BGM into series.json for episode ${cleanPEp}`);
+            targetEp.separationPreset = resolvedPreset;
+            console.log(`[AudioSeparation] ✅ Auto-persisted clean BGM (${resolvedPreset}) into series.json for episode ${cleanPEp}`);
             return true;
           });
         });
@@ -1202,6 +1286,9 @@ router.post("/audio/separate", async (req, res) => {
         noVocalsUrl,
         noVocalsPath: sepRes.noVocalsPath,
         isCached: sepRes.isCached,
+        model: sepRes.model,
+        separationPreset: resolvedPreset,
+        processingTimeSec: sepRes.processingTimeSec,
       }));
     }
   } catch (err) {
@@ -1247,6 +1334,7 @@ router.get("/audio/separation-progress", (req, res) => {
       message: progressData ? progressData.message : '',
       error: progressData?.error || null,
       model: progressData?.model || 'htdemucs',
+      separationPreset: progressData?.separationPreset || 'turbo',
       logs: progressData?.logs || [],
       noVocalsUrl,
       noVocalsPath,

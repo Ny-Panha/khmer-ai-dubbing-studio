@@ -224,37 +224,11 @@ export default function GeminiQuotaModal({
   return (
     <div
       data-testid="gemini-quota-modal"
-      style={{
-        position: 'fixed',
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        zIndex: 100010,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        padding: '16px',
-        background: 'rgba(5, 10, 24, 0.84)',
-        backdropFilter: 'blur(24px)',
-        WebkitBackdropFilter: 'blur(24px)',
-      }}
-      onClick={onClose}
+      className="studio-route-stage"
     >
       <div
-        style={{
-          width: 'min(95vw, 1220px)',
-          height: 'min(91vh, 880px)',
-          display: 'flex',
-          flexDirection: 'column',
-          background: 'var(--bg-primary-panel)',
-          border: '1px solid var(--border-subtle-hover)',
-          borderRadius: 'var(--radius-lg)',
-          boxShadow: 'var(--shadow-lg)',
-          overflow: 'hidden',
-          fontFamily: 'var(--font-sans)',
-        }}
-        onClick={(e) => e.stopPropagation()}
+        className="studio-route-stage-shell"
+        style={{ fontFamily: 'var(--font-sans)' }}
       >
         {/* ── MODAL HEADER ── */}
         <div
@@ -367,54 +341,30 @@ export default function GeminiQuotaModal({
                   onClose?.();
                   onOpenBatchModal();
                 }}
-                className="btn-tactile"
+                className="btn-secondary"
                 style={{
-                  padding: '7px 13px',
-                  borderRadius: 9999,
-                  background: 'linear-gradient(135deg, rgba(2, 132, 199, 0.24) 0%, rgba(37, 99, 235, 0.28) 100%)',
-                  border: '1px solid rgba(56, 189, 248, 0.45)',
-                  color: '#E0F2FE',
-                  fontSize: '0.72rem',
-                  fontWeight: 800,
-                  cursor: 'pointer',
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 6,
+                  minHeight: 34,
+                  padding: '6px 12px',
+                  fontSize: 'var(--text-sm)',
+                  borderColor: 'rgba(56, 189, 248, 0.35)',
+                  color: 'var(--primary-accent)',
                 }}
                 title="ប្តូរទៅផ្ទាំង Batch Generate (Translate, Khmer TTS, Demucs & Export)"
               >
-                <Layers size={13} color="#38BDF8" />
+                <Layers size={14} />
                 <span>បើក Batch Generate</span>
-                <ArrowRight size={13} color="#38BDF8" />
+                <ArrowRight size={13} />
               </button>
             )}
 
             <button
               type="button"
               onClick={onClose}
-              className="btn-tactile"
+              className="btn-secondary"
               style={{
                 width: 34,
                 height: 34,
-                borderRadius: 9999,
-                background: 'rgba(255, 255, 255, 0.05)',
-                border: '1px solid rgba(255, 255, 255, 0.1)',
-                color: '#94A3B8',
-                cursor: 'pointer',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                transition: 'all 0.15s cubic-bezier(0.16, 1, 0.3, 1)',
-              }}
-              onMouseEnter={(e) => {
-                e.currentTarget.style.background = 'rgba(255, 133, 119, 0.15)';
-                e.currentTarget.style.borderColor = 'rgba(255, 133, 119, 0.4)';
-                e.currentTarget.style.color = '#FF8577';
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.background = 'rgba(255, 255, 255, 0.05)';
-                e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.1)';
-                e.currentTarget.style.color = '#94A3B8';
+                padding: 0,
               }}
               title="បិទ (ESC)"
             >
@@ -430,7 +380,8 @@ export default function GeminiQuotaModal({
             flex: 1,
             minHeight: 0,
             overflowY: 'auto',
-            padding: '16px 24px',
+            padding: '16px 24px 24px',
+            background: 'var(--bg-desktop)',
             display: 'flex',
             flexDirection: 'column',
             gap: 14,
@@ -503,10 +454,10 @@ export default function GeminiQuotaModal({
           {/* Key Monitor & Real-Time Quota Pacing Card */}
           <div
             style={{
-              background: 'rgba(11, 17, 32, 0.88)',
-              border: '1px solid rgba(255, 255, 255, 0.08)',
-              borderRadius: 14,
-              padding: '14px 16px',
+              background: 'var(--bg-primary-panel)',
+              border: '1px solid var(--border-subtle)',
+              borderRadius: 'var(--radius-lg)',
+              padding: '16px 18px',
               display: 'flex',
               flexDirection: 'column',
               gap: 12,

@@ -418,19 +418,19 @@ test('ASS Subtitle Size Scaling & Distinct Pill vs Banner Styles', async () => {
 
     assert.deepEqual(
       resolveAssSubtitleLayoutDefaults({ aspectRatio: '9:16', verticalStyle: 'crop', sourceDimensions: { width: 1920, height: 1080 } }),
-      { playResX: 1080, playResY: 1920, defaultFontSize: 44 }
+      { playResX: 1080, playResY: 1920, defaultFontSize: 64 }
     );
     assert.deepEqual(
       resolveAssSubtitleLayoutDefaults({ aspectRatio: '9:16', verticalStyle: 'pad', sourceDimensions: { width: 1920, height: 1080 } }),
-      { playResX: 1080, playResY: 1920, defaultFontSize: 48 }
+      { playResX: 1080, playResY: 1920, defaultFontSize: 68 }
     );
     assert.deepEqual(
       resolveAssSubtitleLayoutDefaults({ aspectRatio: '16:9', verticalStyle: 'pad', sourceDimensions: { width: 1920, height: 1080 } }),
-      { playResX: 1920, playResY: 1080, defaultFontSize: 44 }
+      { playResX: 1920, playResY: 1080, defaultFontSize: 64 }
     );
     assert.deepEqual(
       resolveAssSubtitleLayoutDefaults({ aspectRatio: '1:1' }),
-      { playResX: 1080, playResY: 1080, defaultFontSize: 52 }
+      { playResX: 1080, playResY: 1080, defaultFontSize: 64 }
     );
 
     // 2. Distinct Pill vs Banner vs Cinema ASS style definitions
@@ -463,16 +463,16 @@ test('ASS Subtitle Size Scaling & Distinct Pill vs Banner Styles', async () => {
     const cinemaTxt = fs.readFileSync(cinemaAss, 'utf8');
 
     assert.ok(
-      bannerTxt.includes('Style: Default,Khmer OS Battambang,44,&H00FFFFFF,&H000000FF,&H00000000,&H3208080c,-1,0,0,0,100,100,0,0,3,10,0,2,60,60,80,1'),
+      bannerTxt.includes('Style: Default,Khmer OS Battambang,64,&H00FFFFFF,&H000000FF,&H00000000,&H3208080c,-1,0,0,0,100,100,0,0,3,10,0,2,60,60,81,1'),
       'Banner must keep solid BorderStyle 3, outline 10, backBox &H3208080c'
     );
     assert.ok(
-      pillTxt.includes('Style: Default,Khmer OS Battambang,44,&H00FFFFFF,&H000000FF,&H64000000,&H6408080c,-1,0,0,0,100,100,0,0,3,6,0,2,60,60,80,1'),
+      pillTxt.includes('Style: Default,Khmer OS Battambang,64,&H00FFFFFF,&H000000FF,&H64000000,&H6408080c,-1,0,0,0,100,100,0,0,3,6,0,2,60,60,81,1'),
       'Pill must use lighter translucent chip BorderStyle 3, outline 6, backBox &H6408080c'
     );
     assert.ok(
-      cinemaTxt.includes('Style: Default,Khmer OS Battambang,44,&H0000E6FF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,2.5,1.5,2,60,60,80,1'),
-      'Cinema + yellow must keep BorderStyle 1, outline 2.5, shadow 1.5, backBox &H80000000'
+      cinemaTxt.includes('Style: Default,Khmer OS Battambang,64,&H0000E6FF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,3.5,2,2,60,60,81,1'),
+      'Cinema + yellow must keep BorderStyle 1, outline 3.5, shadow 2, backBox &H80000000'
     );
 
     // 3. Render entry logs effective settings & resolves small / medium / large / explicit / null
@@ -514,11 +514,11 @@ test('ASS Subtitle Size Scaling & Distinct Pill vs Banner Styles', async () => {
     }
 
     assert.equal(capturedLogs.length, 5);
-    assert.equal(capturedLogs[0], '🎬 ASS burn: style=banner color=#FFFFFF fontSize=35 (size=small) playRes=1080x1920');
-    assert.equal(capturedLogs[1], '🎬 ASS burn: style=pill color=#FFFFFF fontSize=44 (size=medium) playRes=1080x1920');
-    assert.equal(capturedLogs[2], '🎬 ASS burn: style=cinema color=#FFE600 fontSize=55 (size=large) playRes=1080x1920');
+    assert.equal(capturedLogs[0], '🎬 ASS burn: style=banner color=#FFFFFF fontSize=51 (size=small) playRes=1080x1920');
+    assert.equal(capturedLogs[1], '🎬 ASS burn: style=pill color=#FFFFFF fontSize=64 (size=medium) playRes=1080x1920');
+    assert.equal(capturedLogs[2], '🎬 ASS burn: style=cinema color=#FFE600 fontSize=80 (size=large) playRes=1080x1920');
     assert.equal(capturedLogs[3], '🎬 ASS burn: style=banner color=#FFFFFF fontSize=62 (size=explicit) playRes=1080x1920');
-    assert.equal(capturedLogs[4], '🎬 ASS burn: style=banner color=#FFFFFF fontSize=44 (size=null) playRes=1080x1920');
+    assert.equal(capturedLogs[4], '🎬 ASS burn: style=banner color=#FFFFFF fontSize=64 (size=null) playRes=1080x1920');
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }

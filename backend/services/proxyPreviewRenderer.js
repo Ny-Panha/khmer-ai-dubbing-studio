@@ -46,6 +46,16 @@ function encode(args, jobId) {
 
 async function renderProxy(input, dir, jobId, onProgress = null) {
   const { source, stem, clips, voices, settings } = input;
+  const isCustomBgm = Boolean(settings?.enableCustomBgm && stem);
+  const youtubeSafeAudio = Boolean(settings?.youtubeSafeAudio && !isCustomBgm);
+  const effectiveStem = youtubeSafeAudio ? null : stem;
+  let stemDur = 0;
+  if (isCustomBgm && effectiveStem) {
+    try {
+      const stemInfo = await getMediaInfo(effectiveStem);
+      stemDur = Number(stemInfo?.format?.duration) || 0;
+    } catch (_) {}
+  }
   const info = await getMediaInfo(source);
   const ranges = planRanges(clips, Number(info.format.duration));
   const portrait = settings.aspectRatio === '9:16';
@@ -70,7 +80,15 @@ async function renderProxy(input, dir, jobId, onProgress = null) {
     } else {
       const seek = ['-ss', range.source.toFixed(6)];
       args.push(...seek, '-i', source);
-      if (stem) { args.push(...seek, '-i', stem); audio = '1:a:0'; }
+      if (effectiveStem) {
+        if (isCustomBgm) {
+          const stemSeek = stemDur > 0 ? (range.source % stemDur) : 0;
+          args.push('-stream_loop', '-1', '-ss', stemSeek.toFixed(6), '-i', effectiveStem);
+        } else {
+          args.push(...seek, '-i', effectiveStem);
+        }
+        audio = '1:a:0';
+      }
       else if (!info.streams.some(s => s.codec_type === 'audio')) { args.push(...silence); audio = '1:a:0'; }
     }
     const name = 'part-' + parts.length + '.mkv';
@@ -86,11 +104,14 @@ async function renderProxy(input, dir, jobId, onProgress = null) {
   }
   await fs.promises.writeFile(path.join(dir, 'parts.txt'), parts.join('\n'));
   const args = ['-f', 'concat', '-i', path.join(dir, 'parts.txt')];
-  const level = Math.max(0, Math.min(1, Number(settings.duckingVolume ?? 0.15)));
-  const duck = Math.min(0.2, level);
-  const normal = stem ? (level > 0 ? Math.max(0.3, Math.min(1, level * 2)) : 0) : Math.min(1, level * 1.5);
+  const rawLevel = Number(settings.duckingVolume);
+  const level = Number.isFinite(rawLevel) ? Math.max(0, Math.min(1, rawLevel)) : 0.15;
+  const duck = level <= 0.005 ? 0 : level;
+  const normal = level <= 0.005 ? 0 : Math.min(1, Number((level <= 0.05 ? level : level * 1.4).toFixed(3)));
   const duckSegments = voices.map(v => ({ startSeconds: resolveSegmentStartSec(v), audioDuration: v.audioDurationSec ?? v.duration }));
-  const bg = buildDynamicDuckingFilter(duckSegments, duck, normal, clips);
+  const bg = (youtubeSafeAudio || level <= 0.005)
+    ? 'volume=0.0'
+    : buildDynamicDuckingFilter(duckSegments, duck, normal, clips);
   let graph = '[0:a]' + bg + '[out]';
   if (voices.length) {
     if (typeof onProgress === 'function') {

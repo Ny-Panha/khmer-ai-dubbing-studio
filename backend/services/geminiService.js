@@ -35,6 +35,36 @@ const KHMER_DUBBING_BASE_SYSTEM_PROMPT = `
 `;
 
 /**
+ * កូដ Prompt សម្រាប់រំលងការគិតយូរ (Fast-Execution Multimodal Prompt)
+ * សម្រាប់ Gemini 3.8 Flash វិភាគសាច់រឿងលឿន និងរក្សាពេល Generate ឱ្យនៅក្រោម ៥ នាទី
+ * បញ្ជាឱ្យ AI ឈប់ខ្ជះខ្ជាយពេលវិភាគរូបភាពផ្ទៃខាងក្រោយ ឬរៀបរាប់សកម្មភាពតួអង្គ និងងាកមកផ្តោតតែលើការចាប់យកអក្សរ (OCR) និងបកប្រែសន្ទនាសុទ្ធ
+ */
+const systemPrompt = `
+អ្នកគឺជាអ្នកបកប្រែ និងបញ្ចូលសំឡេងកុនអាជីព។ ភារកិច្ចរបស់អ្នកគឺបកប្រែសន្ទនាពីភាសាចិន ទៅជាភាសាខ្មែរ។
+
+ដើម្បីធានាល្បឿនលឿន និងភាពត្រឹមត្រូវ សូមអនុវត្តតាមច្បាប់ទាំងនេះ៖
+1. ហាមរៀបរាប់ទិដ្ឋភាព (NO DESCRIPTIONS): មិនត្រូវសរសេរពណ៌នាពីសកម្មភាពតួអង្គ ទីតាំង ឬផ្ទៃខាងក្រោយវីដេអូឡើយ។
+2. ផ្តោតលើសន្ទនាសុទ្ធ (DIALOGUE ONLY): ចាប់យកតែអក្សរ Subtitle ចិនលើអេក្រង់ ឬសំឡេងនិយាយ រួចបកប្រែជាភាសាខ្មែរភ្លាមៗ។
+3. ភាពខ្លីខ្លឹម (CONCISENESS): ប្រើប្រាស់ពាក្យសន្ទនាខ្មែរខ្លីៗ ត្រូវសាច់រឿង ដើម្បីងាយស្រួលដល់ការបញ្ចូលសំឡេង TTS កុំឱ្យលើសវិនាទី។
+4. កំណត់អត្តសញ្ញាណតួ (SPEAKER IDENTIFICATION MUST BE GENDER SPECIFIC): 
+   - ប្រសិនបើអ្នកនិយាយជាមនុស្សប្រុស ត្រូវដាក់ឈ្មោះថា "តួប្រុស"។
+   - ប្រសិនបើអ្នកនិយាយជាមនុស្សស្រី ត្រូវដាក់ឈ្មោះថា "តួស្រី"។
+   - ហាមដាក់ឈ្មោះមិនច្បាស់លាស់ (ឧ. "មនុស្សម្នាក់", "សំឡេងអនាមិក")។
+
+ត្រូវផ្តល់លទ្ធផលជាទម្រង់ JSON Array សុទ្ធសាធ:
+[
+  {
+    "start_time": "00:00.00",
+    "end_time": "00:03.00",
+    "speaker": "តួប្រុស",
+    "khmer_dialogue": "ខ្ញុំប្រាប់ហើយថាកុំឱ្យទៅ!"
+  }
+]
+`;
+
+const FAST_EXECUTION_SYSTEM_PROMPT = systemPrompt;
+
+/**
  * បញ្ជីម៉ូដែលផ្លូវការរបស់ Google AI Studio (ប្រើ Shared Catalog គ្រប់ Model ដែលអាច Translate & Dubbing បាន)
  */
 const DEFAULT_MODELS = DUBBING_CASCADE_MODELS;
@@ -309,6 +339,36 @@ const SCRIPT_RESPONSE_SCHEMA = {
   required: ["mode", "detectedGenre", "summary", "castRegistry", "segments"],
 };
 
+/**
+ * Fast-Execution Response Schema សម្រាប់ JSON Array សុទ្ធសាធ (Under 5 Minutes Fast Dubbing)
+ */
+const FAST_SCRIPT_RESPONSE_SCHEMA = {
+  type: Type.ARRAY,
+  description: "បញ្ជីឃ្លាសន្ទនាជាទម្រង់ JSON Array សុទ្ធសាធ",
+  items: {
+    type: Type.OBJECT,
+    properties: {
+      start_time: {
+        type: Type.STRING,
+        description: "ម៉ោងចាប់ផ្តើម MM:SS.ms (ឧ. 00:00.00)",
+      },
+      end_time: {
+        type: Type.STRING,
+        description: "ម៉ោងបញ្ចប់ MM:SS.ms (ឧ. 00:03.00)",
+      },
+      speaker: {
+        type: Type.STRING,
+        description: "ឈ្មោះតួថា 'តួប្រុស' ឬ 'តួស្រី'",
+      },
+      khmer_dialogue: {
+        type: Type.STRING,
+        description: "អត្ថបទបកប្រែជាភាសាខ្មែរខ្លីៗ ត្រូវសាច់រឿង",
+      },
+    },
+    required: ["start_time", "end_time", "speaker", "khmer_dialogue"],
+  },
+};
+
 function buildDialoguePrompt(userDirection = "", durationSec = 0, options = {}) {
   const cleanDirection = String(userDirection || "").trim();
   const rawGenre = options?.genre ? String(options.genre).trim().toLowerCase() : "auto";
@@ -355,7 +415,9 @@ MODE A — FAITHFUL DIALOGUE TRANSLATION
    - បើតួអង្គពីរនិយាយឆ្លើយឆ្លងគ្នា ត្រូវតែចែកជា Segment ដាច់ដោយឡែកពីគ្នា ហាមដាក់ចូលគ្នាក្នុង Segment តែមួយដាច់ខាត!
 5. STRICT GENDER & CONVERSATIONAL TURN-TAKING RULES (ប្រុស vs ស្រី):
    ត្រូវរួមបញ្ចូលសញ្ញាទាំង ៣ (3 Signals) ដើម្បីកំណត់ voiceGender ("male" ឬ "female") ឱ្យត្រឹមត្រូវ ១០០%៖
-   - Signal 1 (Visual Evidence): មើល visualGender និង speakerVisualHint ពីរូបភាពមុខ សក់ សម្លៀកបំពាក់ និងមាត់តួអង្គដែលកំពុងនិយាយ។
+   - Signal 1 (Voice Pitch & Visual Evidence):
+     • Voice Pitch (F0): បើ F0 >= 170Hz (ឬ VOICE_PITCH: FEMALE) ➜ voiceGender: "female", speaker: "តួស្រី" (សំឡេងស្រីមុំ km-KH-SreymomNeural); បើ F0 <= 155Hz (ឬ VOICE_PITCH: MALE) ➜ voiceGender: "male", speaker: "តួប្រុស" (សំឡេងពិសិដ្ឋ km-KH-PisethNeural)។
+     • Visual Evidence: មើល visualGender និង speakerVisualHint ពីរូបភាពមុខ សក់ សម្លៀកបំពាក់ និងមាត់តួអង្គដែលកំពុងនិយាយ។
    - Signal 2 (Conversational Turn-Taking A -> B -> A -> B): បើឃ្លាទី N ហៅឈ្មោះ ឬងារបុរស ("皇上 / 师兄 / 总裁 / 老公 / ព្រះអង្គ / ម្ចាស់បង / លោកប្រធាន") នោះអ្នកនិយាយឃ្លាទី N ច្រើនតែជាស្ត្រី (female) ឬកូនចៅ ហើយឃ្លាឆ្លើយតបបន្ទាប់ N+1 គឺជាបុរស (male) នោះជាអ្នកឆ្លើយ! ផ្ទុយទៅវិញ បើឃ្លាទី N ហៅស្ត្រី ("皇后 / 师妹 / 夫人 / 小姐 / 老婆 / ព្រះមហេសី / សិស្សប្អូនស្រី / អ្នកនាង") អ្នកនិយាយឃ្លាទី N ច្រើនតែជាបុរស (male) ហើយឃ្លាបន្ទាប់ N+1 គឺជាស្ត្រី (female) ឆ្លើយតប។ ហាមដាច់ខាតច្រឡំអ្នកហៅ ទៅជាអ្នកត្រូវគេហៅ!
    - Signal 3 (Self-Pronoun & Kinship Context):
      • ស្ត្រីហៅខ្លួនឯងថា៖ 臣妾, 奴婢, 本宫, 本妃, ខ្ញុំម្ចាស់, នាងខ្ញុំ, អូន ➜ voiceGender: "female", gender: "female" (សំឡេងស្រីមុំ km-KH-SreymomNeural)។
@@ -489,6 +551,9 @@ function safeParseOrRepairJson(raw) {
   try {
     const parsed = JSON.parse(text);
     if (parsed && typeof parsed === "object") {
+      if (Array.isArray(parsed) && !parsed.segments) {
+        parsed.segments = parsed;
+      }
       parsed._meta = { wasTruncated: false };
       return parsed;
     }
@@ -498,6 +563,9 @@ function safeParseOrRepairJson(raw) {
     const trailingCommaFixed = text.replace(/,\s*([\]}])/g, "$1");
     const parsed = JSON.parse(trailingCommaFixed);
     if (parsed && typeof parsed === "object") {
+      if (Array.isArray(parsed) && !parsed.segments) {
+        parsed.segments = parsed;
+      }
       parsed._meta = { wasTruncated: false };
       return parsed;
     }
@@ -510,6 +578,9 @@ function safeParseOrRepairJson(raw) {
     });
     const parsed = JSON.parse(sanitized);
     if (parsed && typeof parsed === "object") {
+      if (Array.isArray(parsed) && !parsed.segments) {
+        parsed.segments = parsed;
+      }
       parsed._meta = { wasTruncated: false };
       return parsed;
     }
@@ -718,9 +789,11 @@ function splitGiantDialogueSegment(seg) {
 function normalizeScriptData(rawData = {}, requestedMode = "dialogue", seriesSpeakerMap = {}) {
   const modeObj = resolveGenerationMode({ mode: rawData.mode || requestedMode });
   const activeMode = modeObj.mode;
-  let rawSegments = (Array.isArray(rawData.segments) ? rawData.segments : []).filter(
+  let rawSegments = (
+    Array.isArray(rawData) ? rawData : (Array.isArray(rawData?.segments) ? rawData.segments : [])
+  ).filter(
     (s) => s && (
-      String(s.khmerText || s.khmer || s.khmerTranslatedText || "").trim().length > 0 ||
+      String(s.khmerText || s.khmer || s.khmerTranslatedText || s.khmer_dialogue || "").trim().length > 0 ||
       String(s.originalText || s.original || s.originalChineseText || s.chineseText || "").trim().length > 0
     )
   );
@@ -749,12 +822,12 @@ function normalizeScriptData(rawData = {}, requestedMode = "dialogue", seriesSpe
   const castRegistry = Array.isArray(rawData.castRegistry) ? rawData.castRegistry : [];
 
   const segments = rawSegments.map((seg, idx) => {
-    const startSec = parseTimeToSec(seg.startSec ?? seg.start ?? seg.startTime, idx * 4);
-    let endSec = parseTimeToSec(seg.endSec ?? seg.end ?? seg.endTime, startSec + 3.0);
+    const startSec = parseTimeToSec(seg.startSec ?? seg.start ?? seg.startTime ?? seg.start_time, idx * 4);
+    let endSec = parseTimeToSec(seg.endSec ?? seg.end ?? seg.endTime ?? seg.end_time, startSec + 3.0);
     const rawDur = endSec - startSec;
     const isMicroDuration = isNaN(rawDur) || rawDur < 0.35;
     if (endSec <= startSec || isMicroDuration) {
-      const textLen = String(seg.khmerTranslatedText || seg.khmerText || seg.khmer || seg.originalChineseText || seg.originalText || "").trim().length || 8;
+      const textLen = String(seg.khmerTranslatedText || seg.khmerText || seg.khmer || seg.khmer_dialogue || seg.originalChineseText || seg.originalText || "").trim().length || 8;
       endSec = parseFloat((startSec + Math.max(1.8, Math.min(8.0, textLen * 0.16))).toFixed(2));
     }
 
@@ -766,7 +839,7 @@ function normalizeScriptData(rawData = {}, requestedMode = "dialogue", seriesSpe
     const genderDetected = detectSpeakerGender(
       { ...seg, speaker: rawSpeaker },
       { castRegistry },
-      seg.khmer || seg.khmerText || ""
+      seg.khmer || seg.khmerText || seg.khmer_dialogue || ""
     );
     const finalGender =
       genderDetected !== "UNKNOWN"
@@ -776,7 +849,7 @@ function normalizeScriptData(rawData = {}, requestedMode = "dialogue", seriesSpe
     const voiceId = seg.voiceId || seg.khmerVoiceId || getDefaultVoiceForGender(finalGender);
 
     const origChinese = String(seg.originalChineseText || seg.originalText || seg.original || seg.chineseText || "").trim();
-    const khmerTrans = String(seg.khmerTranslatedText || seg.khmerText || seg.khmer || "").trim();
+    const khmerTrans = String(seg.khmerTranslatedText || seg.khmerText || seg.khmer || seg.khmer_dialogue || "").trim();
     const segId = seg.segmentId || seg.id || idx + 1;
 
     return {
@@ -809,6 +882,8 @@ function normalizeScriptData(rawData = {}, requestedMode = "dialogue", seriesSpe
       originalChineseText: origChinese,
       khmer: khmerTrans,
       khmerText: khmerTrans,
+      khmerTranslatedText: khmerTrans,
+      khmer_dialogue: khmerTrans,
       translationStatus: seg.translationStatus || (khmerTrans ? "translated" : (origChinese ? "review_needed" : "pending")),
       ttsStatus: seg.ttsStatus || (seg.audioFile ? "ready" : "pending"),
       sourceStartSec: typeof seg.sourceStartSec === "number" ? seg.sourceStartSec : startSec,
@@ -865,6 +940,20 @@ async function generateStorytellingScript(promptText, customApiKey, options = {}
   const ai = getGeminiClient(customApiKey);
   const modeObj = resolveGenerationMode(options);
   const resolvedMode = modeObj.mode;
+  const isFastExecution = Boolean(
+    options.fastExecution ||
+    options.isFast ||
+    options.fastMode ||
+    options.generationMode === "fast_ocr" ||
+    resolvedMode === "fast_ocr" ||
+    String(options.modelName || "").includes("3.8-flash") ||
+    String(options.customPrompt || "").includes("MAXIMUM SPEED") ||
+    String(promptText || "").includes("MAXIMUM SPEED")
+  );
+
+  const activeSystemPrompt = options.systemPrompt || (isFastExecution ? systemPrompt : KHMER_DUBBING_BASE_SYSTEM_PROMPT);
+  const activeSchema = isFastExecution ? FAST_SCRIPT_RESPONSE_SCHEMA : SCRIPT_RESPONSE_SCHEMA;
+
   const cinemaPrompt = buildCinemaPrompt(
     resolvedMode,
     options.customPrompt || promptText,
@@ -873,7 +962,7 @@ async function generateStorytellingScript(promptText, customApiKey, options = {}
     options
   );
   const targetModel = resolveValidModelName(
-    options.modelName || process.env.GEMINI_MODEL
+    options.modelName || (isFastExecution ? "gemini-3.8-flash" : process.env.GEMINI_MODEL)
   );
 
   let response = null;
@@ -888,17 +977,17 @@ async function generateStorytellingScript(promptText, customApiKey, options = {}
   for (const modelToTest of modelsToTry) {
     try {
       console.log(
-        `[GeminiService] 🤖 កំពុងវិភាគអត្ថបទជាមួយ ${modelToTest} (Mode: ${resolvedMode})...`
+        `[GeminiService] 🤖 កំពុងវិភាគអត្ថបទជាមួយ ${modelToTest} (Mode: ${resolvedMode}, FastExecution: ${isFastExecution})...`
       );
       const modelCall = ai.models.generateContent({
         model: modelToTest,
         contents: [`អត្ថបទដើម៖\n${promptText}\n\n${cinemaPrompt}`],
         config: {
-          systemInstruction: KHMER_DUBBING_BASE_SYSTEM_PROMPT,
-          temperature: 0.3,
+          systemInstruction: activeSystemPrompt,
+          temperature: isFastExecution ? 0.2 : 0.3,
           maxOutputTokens: 65536,
           responseMimeType: "application/json",
-          responseSchema: SCRIPT_RESPONSE_SCHEMA,
+          responseSchema: activeSchema,
         },
       });
 
@@ -1004,51 +1093,63 @@ async function retranslateSingleDialogue(chineseText, customApiKey = null, conte
   const previousTranslation = (context.previousTranslation || context.previous_translation || "").trim();
   const surroundingContext = (context.context || context.surroundingContext || "").trim();
   const speakerInfo = context.speaker ? `${context.speaker}${context.gender ? ` (${context.gender})` : ""}` : "";
+  const rawDur = Number(context.durationSec ?? context.duration ?? 0);
+  const effectiveDur = Number.isFinite(rawDur) && rawDur > 0 ? Math.max(0.4, Math.min(rawDur, 4.5)) : null;
+  const maxKhmerWords = effectiveDur
+    ? Math.min(14, Math.max(2, Math.ceil(effectiveDur * 2.5)))
+    : null;
 
-  const systemPrompt = `You are an expert Chinese-to-Khmer subtitle and movie dubbing translator for DragonDub AI.
+  const systemPrompt = `You are an expert Chinese-to-Khmer movie dubbing & subtitle translator for DragonDub AI.
 
-**TASK: RE-TRANSLATE THE ORIGINAL CHINESE TEXT INTO NATURAL, ACCURATE KHMER.**
+**TASK: RE-TRANSLATE THE ORIGINAL CHINESE LINE INTO NATURAL, PUNCHY, ACCURATE SPOKEN KHMER (3 OPTIONS).**
 
-Follow these 10 rules strictly:
-1. Always analyze the full meaning of the Chinese sentence before translating.
-2. Resolve ambiguous Chinese words using context, subject matter, surrounding dialogue, and scene meaning. Never translate word-by-word without understanding the context.
-3. Preserve the original meaning, intention, emotion, tone, and technical terminology (e.g. 质量 = ម៉ាស (mass) ក្នុងបរិបទវិទ្យាសាស្ត្រ ឬរូបវិទ្យា, 能量 = ថាមពល).
-4. Use natural Khmer spoken language suitable for movie dubbing and subtitles.
-5. Keep the translation concise, clear, and easy for Khmer viewers to understand.
-6. Do not add explanations, invented information, or meanings that do not exist in the original.
-7. If the original sentence is incomplete, preserve its incomplete meaning instead of guessing the missing part.
-8. If multiple meanings are possible and context is insufficient, choose the most contextually supported meaning. Do not pretend uncertain meanings are confirmed.
-9. **IMPORTANT: Every re-translation must generate a fresh, accurate translation. Do not blindly reuse or copy the existing/previous Khmer translation.**
-10. Check the final Khmer sentence for grammar, spelling, fluency, and semantic accuracy.
+Follow these strict dubbing translation rules:
+1. Analyze the full Chinese meaning, idiom, tone, urgency, and speaker relationship BEFORE translating. Never translate word-by-word like robotic machine translation.
+2. Resolve ambiguous terms using surrounding dialogue and scene context (e.g., 质量 = ម៉ាស in physics, 能量 = ថាមពល, 愣着 = ឈរភ្លឹក/ស្ទាក់ស្ទើរ).
+3. Use real natural spoken Khmer used in professional Khmer-dubbed Chinese dramas — clear, crisp, natural rhythm for Khmer TTS voice acting.
+4. **OPTION #2 ("compact" / "📝 ខ្លីចំអត្ថន័យ") IS THE PRIMARY AUTO-SELECTED DUBBING LINE**:
+   - Must be the sharpest, shortest, most natural spoken Khmer that preserves 100% of the core meaning, tone, and emotion with ZERO bloated filler words!
+   - Respect lip-sync pacing (<= 5.5 Khmer syllables/sec${maxKhmerWords ? `, HARD LIMIT: <= ${maxKhmerWords} Khmer words for ${effectiveDur.toFixed(2)}s slot` : ''}) so Khmer TTS fits the actor's mouth cleanly without rushing.${maxKhmerWords ? `
+   - **STRICT COMPACT WORD BUDGET: Option #2 text MUST contain at most ${maxKhmerWords} Khmer words (space-separated tokens). Compress filler words first. NEVER drop degree words (បន្តិច/ខ្លាំង/ជាង/ណាស់/កាន់តែ) and NEVER drop the subject when that changes who acts.**` : ''}
+   - Option #2 MUST be the shortest of all 3 options.
+   - Real examples of great Option #2 ("📝 ខ្លីចំអត្ថន័យ"):
+     * "还愣着干什么" ➜ "នៅចាំអីទៀត!" (NOT wordy "តើអ្នកនៅឈរភ្លឹកធ្វើអ្វីទៀត?")
+     * "每种50分" ➜ "មួយប្រភេទ ៥០ពិន្ទុ" (NOT "ប្រភេទនីមួយៗបាន ៥០ពិន្ទុ")
+     * "给本座三" ➜ "យកមកឱ្យយើងទាំង ៣"
+     * "再快一点" ➜ "លឿនឡើង!"
+     * "别管我，快走" ➜ "កុំខ្វល់ពីខ្ញុំ ឆាប់ទៅ!"
+5. Preserve incomplete clauses accurately (if Chinese ends mid-thought or with a comma, translate ONLY that clause — never invent or borrow words from the next line).
+6. Do NOT add invented meanings, explanations, parentheses, or speaker names inside "text".
+7. **Every re-translation must generate a fresh, improved Khmer translation — never blindly copy the previous translation if it is stiff, long, or inaccurate.**
+8. Check every option for fluent Khmer grammar, correct spelling, natural punctuation (! / ?), and 100% semantic accuracy.
 
 CRITICAL LANGUAGE MANDATES:
-- ហាមដាច់ខាតកុំឱ្យសល់តួអក្សរចិន (Chinese Hanzi \\u4E00-\\u9FFF) នៅក្នុងអត្ថបទបកប្រែខ្មែរ "text" (100% Khmer Script Only)! រាល់ពាក្យកម្រិតថាមពល ក្បាច់គុន (ឧ. 金丹 ➜ ជីនតាន, 化神 ➜ ហ្វាស៊ិន, 元神 ➜ យានស៊ិន) ត្រូវតែសរសេរជាសូរសព្ទអក្សរខ្មែរ!
-- ⚠️ ហាមដាច់ខាត ១០០% កុំបញ្ចេញតួអក្សរថៃ (Thai Script \\u0E00-\\u0E7F) ឬឡាវសូម្បីតែ ១ តួអក្សរ! ត្រូវសរសេរជាអក្សរខ្មែរសុទ្ធសាធ ១០០%!
-- ត្រូវគោរពចំនួនលេខ និងបរិបទឱ្យបានត្រឹមត្រូវ ១០០% (ឧ. 三 = ៣ ហាមបកជា ២)!
-- ពាក្យជេរ ឬពាក្យហៅ (ឧ. 臭猴子) ត្រូវបកជាខ្មែរ (អាស្វាស្អុយ, អាស្វាចង្រៃ, អាស្វាខូច) ហាមបកជាថៃ (ไอ้...) ជាដាច់ខាត!
-- ពាក្យបញ្ជា (ឧ. 滚出来) ត្រូវបកជាខ្មែរ (ចេញមក, ឆាប់ចេញមក, ចេញមុខមកភ្លាម) ហាមបកជាថៃ (ออกมา...) ជាដាច់ខាត!
+- ហាមដាច់ខាតកុំឱ្យសល់តួអក្សរចិន (Chinese Hanzi \\u4E00-\\u9FFF) ឬអក្សរអង់គ្លេសនៅក្នុងអត្ថបទបកប្រែខ្មែរ "text" (100% Khmer Script Only)! ពាក្យកម្រិតថាមពល/ក្បាច់គុន (ឧ. 金丹 ➜ ជីនតាន, 化神 ➜ ហ្វាស៊ិន, 元神 ➜ យានស៊ិន) ត្រូវសរសេរជាសូរសព្ទអក្សរខ្មែរ!
+- ហាមដាច់ខាត ១០០% កុំបញ្ចេញតួអក្សរថៃ (Thai Script \\u0E00-\\u0E7F) ឬឡាវសូម្បី ១ តួអក្សរ! ត្រូវប្រើអក្សរខ្មែរសុទ្ធ ១០០%!
+- ត្រូវគោរពចំនួនលេខឱ្យត្រឹមត្រូវ ១០០% (ឧ. 三 = ៣ ហាមបកជា ២)!
+- ពាក្យជេរ/ហៅ (ឧ. 臭猴子) ➜ ខ្មែរសុទ្ធ (អាស្វាស្អុយ, អាស្វាចង្រៃ) និងពាក្យបញ្ជា (ឧ. 滚出来) ➜ ខ្មែរសុទ្ធ (ចេញមក!, ឆាប់ចេញមក!)។
 
-Please provide 3 distinctive stylistic options and a brief terminology note in JSON format:
+Return EXACTLY 3 distinctive options in this exact order + a short 1-sentence note in JSON:
 {
   "chinese": "អត្ថបទចិនដើម",
   "options": [
     {
       "style": "classical",
       "label": "🎭 សម្ដីកុនបុរាណ",
-      "text": "ភាសានិយាយកុនបុរាណ ពិរោះ មានអំណាច ឬស្រទន់តាមឈុតឆាក"
+      "text": "ភាសានិយាយកុនបុរាណ/ផ្លូវការ ពិរោះ មានអំណាច ឬស្រទន់តាមឈុតឆាក"
     },
     {
       "style": "compact",
       "label": "📝 ខ្លីចំអត្ថន័យ",
-      "text": "ភាសា Subtitle ខ្លី ងាយយល់ ចំអត្ថន័យដើម ១០០%"
+      "text": "ជម្រើសចម្បងសម្រាប់បញ្ចូលសំឡេង៖ ខ្លីបំផុត ធម្មជាតិ ងាយយល់ ចំអត្ថន័យដើម ១០០% និងត្រូវចង្វាក់មាត់ (Lip-sync)"
     },
     {
       "style": "dramatic",
       "label": "⚡ អារម្មណ៍តួអង្គ",
-      "text": "សម្ដីតួអង្គបញ្ចេញអារម្មណ៍ ឌឺដង កំហឹង ឬចោទសួរ"
+      "text": "សម្ដីតួអង្គបញ្ចេញអារម្មណ៍ខ្លាំង ឌឺដង កំហឹង បន្ទាន់ ឬចោទសួរ"
     }
   ],
-  "note": "ចំណាំខ្លី ១ ឃ្លាអំពីពាក្យគន្លឹះពិសេស ឬបរិបទវិទ្យាសាស្ត្រ/ក្បាច់គុន (ឧ. 质量 = ម៉ាស ក្នុងបរិបទរូបវិទ្យា E=mc^2)"
+  "note": "ចំណាំខ្លី ១ ឃ្លាអំពីពាក្យគន្លឹះ ឬបរិបទឈុតឆាក"
 }`;
 
   const RETRANSLATE_SCHEMA = {
@@ -1083,6 +1184,9 @@ Please provide 3 distinctive stylistic options and a brief terminology note in J
     if (speakerInfo) {
       promptContent += `\n**Speaker:** ${speakerInfo}`;
     }
+    if (effectiveDur && maxKhmerWords) {
+      promptContent += `\n**Time Slot Budget (for Option #2 compact lip-sync):** ${effectiveDur.toFixed(2)}s (target <= ${maxKhmerWords} Khmer words)`;
+    }
 
     const { response: res, modelUsed } = await generateContentWithModelFallback(
       ai,
@@ -1113,16 +1217,18 @@ Please provide 3 distinctive stylistic options and a brief terminology note in J
       if (parsed.note) {
         parsed.note = sanitizeKhmerDialogue(parsed.note, "");
       }
-      return { ...parsed, modelUsed };
+      return { ...parsed, modelUsed, ...(maxKhmerWords ? { maxKhmerWords } : {}) };
     }
+    const fallbackKhmer = sanitizeKhmerDialogue(rawText.trim() || previousTranslation || cleanChinese, cleanChinese);
     return {
       chinese: cleanChinese,
       options: [
-        { style: "classical", label: "🎭 សម្ដីកុនបុរាណ", text: sanitizeKhmerDialogue(rawText.trim() || cleanChinese, cleanChinese) },
-        { style: "compact", label: "📝 ខ្លីចំអត្ថន័យ", text: cleanChinese },
+        { style: "classical", label: "🎭 សម្ដីកុនបុរាណ", text: fallbackKhmer },
+        { style: "compact", label: "📝 ខ្លីចំអត្ថន័យ", text: fallbackKhmer },
       ],
       note: "",
       modelUsed,
+      ...(maxKhmerWords ? { maxKhmerWords } : {}),
     };
   } catch (err) {
     console.error("[GeminiService] retranslateSingleDialogue error:", err.message);
@@ -1335,7 +1441,11 @@ ${JSON.stringify(inputLines, null, 2)}
 module.exports = {
   DEFAULT_MODELS,
   SCRIPT_RESPONSE_SCHEMA,
+  FAST_SCRIPT_RESPONSE_SCHEMA,
   KHMER_DUBBING_BASE_SYSTEM_PROMPT,
+  systemPrompt,
+  FAST_EXECUTION_SYSTEM_PROMPT,
+  getGeminiClient,
   resolveValidModelName,
    safeParseOrRepairJson,
   parseTimeToSeconds,

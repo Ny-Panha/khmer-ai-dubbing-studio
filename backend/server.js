@@ -36,6 +36,7 @@ const { ensurePipelineWorkerRegistered } = require("./services/pipeline/jobWorke
 // Middlewares & Modular Route Handlers
 const { registerLiveDotenvFiles } = require("./services/geminiKeyManager.js");
 const { killAllProcesses } = require("./utils/processRegistry.js");
+const { cancelAllBatchExportJobs } = require("./services/batchExportService.js");
 const { validateJsonBodyEnvelope } = require("./middleware/validateRequest.js");
 const mediaStreamMiddleware = require("./middleware/mediaStream.js");
 const systemRoutes = require("./routes/systemRoutes.js");
@@ -106,10 +107,15 @@ if (require.main === module) {
     console.warn("[Server Startup] ⚠️ Crash recovery warning:", recErr.message);
   }
 
-  // Startup Demucs Cleanup: Terminate any orphaned Python demucs worker processes left by previous server crash/restart
+  // Startup Demucs Cleanup: Non-blocking sweep for orphaned Python demucs workers left by a previous crash/restart
+  // (runs asynchronously so port 5000 binds immediately without 1-3s ECONNREFUSED/502 startup downtime)
   try {
     const audioSeparationService = require("./services/audioSeparationService");
-    audioSeparationService.killAllDemucsSystemProcesses();
+    if (typeof audioSeparationService.killAllDemucsSystemProcessesAsync === "function") {
+      audioSeparationService.killAllDemucsSystemProcessesAsync().catch(() => {});
+    } else {
+      audioSeparationService.killAllDemucsSystemProcesses();
+    }
   } catch (_) {}
 
   // Register canonical pipeline worker BEFORE listening so queued/recovered jobs start cleanly in worker slots
@@ -145,6 +151,10 @@ if (require.main === module) {
     isShuttingDown = true;
 
     try {
+      cancelAllBatchExportJobs();
+    } catch (_) {}
+
+    try {
       killAllProcesses();
     } catch (_) {}
 
@@ -155,10 +165,7 @@ if (require.main === module) {
     if (server) {
       const forceExitTimer = setTimeout(() => {
         process.exit(0);
-      }, 800);
-      if (typeof forceExitTimer.unref === "function") {
-        forceExitTimer.unref();
-      }
+      }, 300);
 
       server.close(() => {
         clearTimeout(forceExitTimer);

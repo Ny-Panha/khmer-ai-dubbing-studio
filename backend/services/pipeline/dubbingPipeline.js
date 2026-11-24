@@ -6,7 +6,7 @@ const { PIPELINE_STAGES, PIPELINE_STATUS, GENERATION_MODES } = require('./pipeli
 const { ingestEpisode } = require('./stages/stage1_ingestEpisode');
 const { analyzeSourceMedia } = require('./stages/stage2_analyzeSourceMedia');
 const { extractChineseSubtitles, deduplicateFastOcrCues } = require('./stages/stage3_extractChineseSubtitles');
-const { analyzeDialogueAudio } = require('./stages/stage4_analyzeDialogueAudio');
+const { analyzeDialogueAudio, enrichCuesWithAcousticPitch } = require('./stages/stage4_analyzeDialogueAudio');
 const { reconcileTimelineEvidence } = require('./stages/stage5_reconcileTimelineEvidence');
 const { generateModeSpecificScript } = require('./stages/stage6_generateModeSpecificScript');
 const { translateAndValidateKhmer } = require('./stages/stage7_translateAndValidateKhmer');
@@ -166,15 +166,19 @@ async function runDubbingPipeline({
 
   // Stage 3: Extract Chinese Subtitles (Vision OCR across entire video at 1.0s interval)
   report('extractChineseSubtitles', 35, 'កំពុងស្កេនរកអក្សរចិន Subtitles និងចំណងជើងលើវីដេអូទាំងមូល (Visual OCR)...');
+  const isFastOcr = mode === GENERATION_MODES.FAST_OCR;
   const ocrResult = await extractChineseSubtitles({
     videoPath: ingestResult.videoPath,
     durationSec,
     aiClient,
     modelName: chosenModel,
-    baseStepSec: mode === GENERATION_MODES.FAST_OCR ? 0.75 : 1.0, // High coverage without exceeding rate limits
+    baseStepSec: isFastOcr ? 1.0 : 1.0,
     startOffsetSec: 0,
     force: Boolean(force || forceRegen),
     signal,
+    isFastOcrMode: isFastOcr,
+    generationMode: mode,
+    enableLocalOcr: isFastOcr ? false : undefined,
   });
 
   checkAbort();
@@ -203,6 +207,22 @@ async function runDubbingPipeline({
     const detectedCuesCount = Array.isArray(ocrResult?.visualSegments) ? ocrResult.visualSegments.length : 0;
     inputSegmentsForScript = deduplicateFastOcrCues(ocrResult.visualSegments || [], narratorGender);
     const storedSegmentsCount = inputSegmentsForScript.length;
+
+    // Step 1: Enrich Fast OCR cues with Acoustic F0 Pitch (takes ~0.15s)
+    if (ingestResult?.videoPath && inputSegmentsForScript.length > 0) {
+      try {
+        await enrichCuesWithAcousticPitch(ingestResult.videoPath, inputSegmentsForScript, { signal });
+        const maleCount = inputSegmentsForScript.filter((s) => s.acousticGender === 'male').length;
+        const femaleCount = inputSegmentsForScript.filter((s) => s.acousticGender === 'female').length;
+        const voicedCues = inputSegmentsForScript.filter((s) => s.acousticF0 > 0);
+        const avgF0 = voicedCues.length > 0
+          ? Math.round(voicedCues.reduce((acc, c) => acc + c.acousticF0, 0) / voicedCues.length)
+          : 0;
+        console.log(`[Pipeline] 🎙️ Fast OCR Acoustic F0 Pitch: Male=${maleCount} cues, Female=${femaleCount} cues (avg F0: ${avgF0}Hz)`);
+      } catch (pitchErr) {
+        console.warn('[Pipeline] Notice on acoustic pitch:', pitchErr.message);
+      }
+    }
 
     console.log(`[Pipeline] cues detected: ${detectedCuesCount} -> segments stored: ${storedSegmentsCount}`);
     if (detectedCuesCount !== storedSegmentsCount) {
@@ -315,6 +335,8 @@ async function runDubbingPipeline({
       defaultVoiceId: 'km-KH-PisethNeural',
       forceRegen: false,
       signal,
+      aiClient,
+      modelName: chosenModel,
     });
     finalizedSegments = ttsRes.segmentsWithAudio;
   }

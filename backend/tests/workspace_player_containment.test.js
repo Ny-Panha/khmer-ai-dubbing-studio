@@ -247,3 +247,19 @@ test('useAudioDubbing handleTranslateSingleSegment uses setScriptData/setAudioOu
   assert.match(block, /setScriptData\s*\(/, 'Must update scriptData via setScriptData');
   assert.match(block, /setAudioOutdated\s*\(\s*true\s*\)/, 'Must mark audioOutdated true after translating line');
 });
+
+test('Studio workspace stacking context is sealed when route stages (/batch, /export, /quota, /jobs) are open', () => {
+  const appCode = fs.readFileSync(path.resolve(__dirname, '../../frontend/src/App.jsx'), 'utf8');
+  const layoutCss = fs.readFileSync(path.resolve(__dirname, '../../frontend/src/styles/layout.css'), 'utf8');
+
+  assert.match(appCode, /const isRouteStageOpen = Boolean\(/);
+  assert.match(appCode, /isRouteStageOpen \? 'is-route-occluded' : ''/);
+  assert.match(appCode, /aria-hidden=\{isRouteStageOpen \|\| undefined\}/);
+
+  assert.match(
+    layoutCss,
+    /\.capcut-main-workspace\.is-route-occluded\s*\{[\s\S]*?z-index:\s*0;[\s\S]*?isolation:\s*isolate;[\s\S]*?visibility:\s*hidden;[\s\S]*?pointer-events:\s*none;/
+  );
+  assert.match(layoutCss, /\.top-suite-col-center\s*\{[\s\S]*?z-index:\s*1;[\s\S]*?isolation:\s*isolate;/);
+  assert.match(layoutCss, /\.capcut-bottom-timeline\s*\{[\s\S]*?z-index:\s*1;[\s\S]*?isolation:\s*isolate;/);
+});

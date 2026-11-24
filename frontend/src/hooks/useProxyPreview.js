@@ -23,7 +23,9 @@ export function useProxyPreview({ seriesId, episodeId, videoUrl, clips, segments
   const base = active && seriesId && episodeId && videoUrl ?
     '/api/series/' + encodeURIComponent(seriesId) + '/episodes/' + encodeURIComponent(episodeId) + '/proxy-preview' : null;
   const body = useMemo(() => JSON.stringify({
-    videoUrl, clips: (clips || []).map(c => pick(c, ['start', 'end', 'sourceStart', 'sourceEnd', 'isMuted'])),
+    videoUrl, clips: (clips || [])
+      .filter(c => c && Number.isFinite(c.start) && Number.isFinite(c.end) && c.start >= 0 && c.end > c.start)
+      .map(c => pick(c, ['start', 'end', 'sourceStart', 'sourceEnd', 'isMuted'])),
     segments: (segments || []).map(v => {
       const audio = pick(v, audioFields);
       if (!audio.audioPath && !audio.audioUrl && v.audioFile) audio.audioFile = v.audioFile;

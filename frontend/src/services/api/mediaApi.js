@@ -178,6 +178,28 @@ export async function syncSeriesApi(series) {
 }
 
 /**
+ * Rename a series title AND its physical directory under backend/uploads/projects/<newName>
+ * @param {string} seriesId
+ * @param {string} title
+ */
+export async function renameSeriesApi(seriesId, title) {
+  if (!seriesId || !title) return { success: false, error: 'seriesId and title are required' };
+  try {
+    const res = await fetch(`/api/series/${encodeURIComponent(seriesId)}/rename`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title }),
+    });
+    return await parseResponseJson(res, `Failed to rename series ${seriesId}`);
+  } catch (err) {
+    if (/ECONNREFUSED|unreachable|Failed to fetch|NetworkError/i.test(err?.message || '')) {
+      notifyBackendOffline();
+    }
+    throw err;
+  }
+}
+
+/**
  * Delete an entire series from backend
  * @param {string} seriesId
  */
@@ -263,7 +285,9 @@ export async function renderVideoApi({
   speakerMap = {},
   antiTheft = null,
   logoSettings = null,
+  cornerMask = null,
   sponsorSettings = null,
+  youtubeTransform = null,
   videoTitle = null,
 }) {
   let effectiveAspectRatio = aspectRatio;
@@ -309,7 +333,9 @@ export async function renderVideoApi({
       speakerMap,
       antiTheft,
       logoSettings,
+      cornerMask,
       sponsorSettings,
+      youtubeTransform,
     }),
   });
 

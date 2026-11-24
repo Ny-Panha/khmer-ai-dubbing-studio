@@ -89,16 +89,13 @@ export default function EpisodeDemucsProgressCard({ liveStats, ep, onKill, onReq
     <div
       onClick={(e) => e.stopPropagation()}
       style={{
-        background: 'linear-gradient(135deg, rgba(10, 20, 35, 0.98) 0%, rgba(15, 30, 50, 0.92) 100%)',
+        background: 'rgba(16, 185, 129, 0.05)',
         border: `1px solid ${stateBorder}`,
-        boxShadow: `${stateGlow}, inset 0 1px 0 rgba(255, 255, 255, 0.08)`,
-        borderRadius: 10,
-        padding: '11px 13px',
-        marginTop: 6,
+        borderRadius: 6,
+        padding: '8px 9px',
         display: 'flex',
         flexDirection: 'column',
-        gap: 9,
-        transition: 'all 0.25s ease',
+        gap: 7,
       }}
     >
       {/* Header */}
@@ -167,47 +164,35 @@ export default function EpisodeDemucsProgressCard({ liveStats, ep, onKill, onReq
               }}
               title="Kill Demucs Process"
               style={{
-                background: 'rgba(239, 68, 68, 0.22)',
-                border: '1px solid rgba(239, 68, 68, 0.55)',
+                background: 'rgba(239, 68, 68, 0.16)',
+                border: '1px solid rgba(239, 68, 68, 0.42)',
                 color: '#fca5a5',
-                padding: '4px 8px',
-                borderRadius: 6,
-                fontSize: '0.68rem',
-                fontWeight: 800,
+                height: 20,
+                padding: '0 6px',
+                borderRadius: 4,
+                fontSize: '10px',
+                fontWeight: 700,
                 cursor: 'pointer',
-                display: 'flex',
+                display: 'inline-flex',
                 alignItems: 'center',
-                gap: 4,
-                transition: 'all 0.15s ease',
+                gap: 3,
+                whiteSpace: 'nowrap',
               }}
             >
-              🛑 Kill
+              Stop
             </button>
           )}
-          <div style={{
-            display: 'flex',
-            alignItems: 'baseline',
-            justifyContent: 'flex-end',
-            gap: 1,
-            background: 'rgba(0, 0, 0, 0.5)',
-            padding: '2px 8px',
-            borderRadius: 6,
-            border: `1px solid ${stateBorder}`,
+          <span style={{
+            fontSize: '12px',
+            fontWeight: 800,
+            fontFamily: 'var(--font-mono)',
+            fontVariantNumeric: 'tabular-nums',
+            color: stateColor,
+            whiteSpace: 'nowrap',
             flexShrink: 0,
           }}>
-            <span style={{
-              fontSize: '1.25rem',
-              fontWeight: 900,
-              fontFamily: "'JetBrains Mono', 'Fira Code', 'Consolas', monospace",
-              fontVariantNumeric: 'tabular-nums',
-              color: stateColor,
-              textShadow: `0 0 12px ${stateColor}`,
-              letterSpacing: '-0.02em',
-            }}>
-              {smoothProgress}
-            </span>
-            <span style={{ fontSize: '0.72rem', fontWeight: 800, color: stateColor }}>%</span>
-          </div>
+            {smoothProgress}%
+          </span>
         </div>
       </div>
 
@@ -240,105 +225,124 @@ export default function EpisodeDemucsProgressCard({ liveStats, ep, onKill, onReq
         />
       </div>
 
-      {/* 4 Milestones */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 4 }}>
+      {/* 4 Crisp Single-Line Milestones */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 3 }}>
         <div style={{
-          padding: '4px 3px',
-          borderRadius: 5,
-          fontSize: '0.62rem',
+          padding: '3px 2px',
+          borderRadius: 4,
+          fontSize: '10px',
+          lineHeight: 1.2,
           textAlign: 'center',
-          background: smoothProgress >= 20 ? 'rgba(16, 185, 129, 0.15)' : (smoothProgress >= 1 ? 'rgba(56, 189, 248, 0.18)' : 'rgba(255, 255, 255, 0.04)'),
-          color: smoothProgress >= 20 ? '#10b981' : (smoothProgress >= 1 ? '#38bdf8' : '#64748b'),
+          whiteSpace: 'nowrap',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          background: smoothProgress >= 20 ? 'rgba(16, 185, 129, 0.14)' : (smoothProgress >= 1 ? 'rgba(56, 189, 248, 0.18)' : 'rgba(255, 255, 255, 0.04)'),
+          color: smoothProgress >= 20 ? '#34d399' : (smoothProgress >= 1 ? '#38bdf8' : '#64748b'),
           fontWeight: smoothProgress >= 1 ? 700 : 500,
-          border: smoothProgress >= 1 && smoothProgress < 20 ? '1px solid rgba(56, 189, 248, 0.5)' : '1px solid transparent',
-          transition: 'all 0.15s ease',
+          border: smoothProgress >= 1 && smoothProgress < 20 ? '1px solid rgba(56, 189, 248, 0.45)' : '1px solid transparent',
         }}>
-          {smoothProgress >= 20 ? '✓ Ingest' : '1. Ingest'}
+          {smoothProgress >= 20 ? '✓ Ingest' : 'Ingest'}
         </div>
         <div style={{
-          padding: '4px 3px',
-          borderRadius: 5,
-          fontSize: '0.62rem',
+          padding: '3px 2px',
+          borderRadius: 4,
+          fontSize: '10px',
+          lineHeight: 1.2,
           textAlign: 'center',
-          background: smoothProgress >= 50 ? 'rgba(16, 185, 129, 0.15)' : (smoothProgress >= 20 ? 'rgba(56, 189, 248, 0.18)' : 'rgba(255, 255, 255, 0.04)'),
-          color: smoothProgress >= 50 ? '#10b981' : (smoothProgress >= 20 ? '#38bdf8' : '#64748b'),
+          whiteSpace: 'nowrap',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          background: smoothProgress >= 50 ? 'rgba(16, 185, 129, 0.14)' : (smoothProgress >= 20 ? 'rgba(56, 189, 248, 0.18)' : 'rgba(255, 255, 255, 0.04)'),
+          color: smoothProgress >= 50 ? '#34d399' : (smoothProgress >= 20 ? '#38bdf8' : '#64748b'),
           fontWeight: smoothProgress >= 20 ? 700 : 500,
-          border: smoothProgress >= 20 && smoothProgress < 50 ? '1px solid rgba(56, 189, 248, 0.5)' : '1px solid transparent',
-          transition: 'all 0.15s ease',
+          border: smoothProgress >= 20 && smoothProgress < 50 ? '1px solid rgba(56, 189, 248, 0.45)' : '1px solid transparent',
         }}>
-          {smoothProgress >= 50 ? '✓ Demucs AI' : '2. Demucs AI'}
+          {smoothProgress >= 50 ? '✓ Demucs' : 'Demucs'}
         </div>
         <div style={{
-          padding: '4px 3px',
-          borderRadius: 5,
-          fontSize: '0.62rem',
+          padding: '3px 2px',
+          borderRadius: 4,
+          fontSize: '10px',
+          lineHeight: 1.2,
           textAlign: 'center',
-          background: smoothProgress >= 85 ? 'rgba(16, 185, 129, 0.15)' : (smoothProgress >= 50 ? 'rgba(56, 189, 248, 0.18)' : 'rgba(255, 255, 255, 0.04)'),
-          color: smoothProgress >= 85 ? '#10b981' : (smoothProgress >= 50 ? '#38bdf8' : '#64748b'),
+          whiteSpace: 'nowrap',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          background: smoothProgress >= 85 ? 'rgba(16, 185, 129, 0.14)' : (smoothProgress >= 50 ? 'rgba(56, 189, 248, 0.18)' : 'rgba(255, 255, 255, 0.04)'),
+          color: smoothProgress >= 85 ? '#34d399' : (smoothProgress >= 50 ? '#38bdf8' : '#64748b'),
           fontWeight: smoothProgress >= 50 ? 700 : 500,
-          border: smoothProgress >= 50 && smoothProgress < 85 ? '1px solid rgba(56, 189, 248, 0.5)' : '1px solid transparent',
-          transition: 'all 0.15s ease',
+          border: smoothProgress >= 50 && smoothProgress < 85 ? '1px solid rgba(56, 189, 248, 0.45)' : '1px solid transparent',
         }}>
-          {smoothProgress >= 85 ? '✓ Isolate' : '3. Isolate'}
+          {smoothProgress >= 85 ? '✓ Isolate' : 'Isolate'}
         </div>
         <div style={{
-          padding: '4px 3px',
-          borderRadius: 5,
-          fontSize: '0.62rem',
+          padding: '3px 2px',
+          borderRadius: 4,
+          fontSize: '10px',
+          lineHeight: 1.2,
           textAlign: 'center',
-          background: isDone ? 'rgba(16, 185, 129, 0.2)' : (smoothProgress >= 85 ? 'rgba(56, 189, 248, 0.18)' : 'rgba(255, 255, 255, 0.04)'),
-          color: isDone ? '#10b981' : (smoothProgress >= 85 ? '#38bdf8' : '#64748b'),
+          whiteSpace: 'nowrap',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          background: isDone ? 'rgba(16, 185, 129, 0.18)' : (smoothProgress >= 85 ? 'rgba(56, 189, 248, 0.18)' : 'rgba(255, 255, 255, 0.04)'),
+          color: isDone ? '#34d399' : (smoothProgress >= 85 ? '#38bdf8' : '#64748b'),
           fontWeight: smoothProgress >= 85 ? 700 : 500,
-          border: isDone ? '1px solid rgba(16, 185, 129, 0.4)' : (smoothProgress >= 85 ? '1px solid rgba(56, 189, 248, 0.5)' : '1px solid transparent'),
-          transition: 'all 0.15s ease',
+          border: isDone ? '1px solid rgba(16, 185, 129, 0.4)' : (smoothProgress >= 85 ? '1px solid rgba(56, 189, 248, 0.45)' : '1px solid transparent'),
         }}>
-          {isDone ? '✓ Clean BGM' : '4. Clean BGM'}
+          {isDone ? '✓ BGM' : 'BGM'}
         </div>
       </div>
 
       {/* Collapsible Live Console Terminal Drawer */}
       <div className="demucs-console-drawer" style={{
         background: '#07080C',
-        border: `1px solid ${isFailed ? 'rgba(239, 68, 68, 0.35)' : (isDone ? 'rgba(16, 185, 129, 0.35)' : 'rgba(0, 229, 255, 0.35)')}`,
-        borderRadius: 8,
+        border: '1px solid var(--border-subtle)',
+        borderRadius: 6,
         overflow: 'hidden',
-        boxShadow: 'inset 0 2px 10px rgba(0, 0, 0, 0.85)',
       }}>
         {/* Console Header Toggle */}
         <button
           type="button"
           onClick={() => setShowConsole(!showConsole)}
+          title={`CONSOLE LOGS (Demucs AI Model: ${modelName})`}
           style={{
             width: '100%',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
-            padding: '5px 9px',
-            background: 'rgba(255, 255, 255, 0.03)',
+            gap: 6,
+            padding: '4px 8px',
+            background: 'rgba(255, 255, 255, 0.02)',
             border: 'none',
             borderBottom: showConsole ? '1px solid rgba(255, 255, 255, 0.06)' : 'none',
             cursor: 'pointer',
-            transition: 'background 0.15s ease',
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <Terminal size={11} color={isFailed ? '#ef4444' : (isDone ? '#34d399' : '#38bdf8')} />
-            <span style={{ fontSize: '0.64rem', fontWeight: 800, color: '#94a3b8', letterSpacing: '0.04em' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5, minWidth: 0, flex: 1 }}>
+            <Terminal size={10} color={isFailed ? '#ef4444' : (isDone ? '#34d399' : '#38bdf8')} style={{ flexShrink: 0 }} />
+            <span style={{
+              fontSize: '10px',
+              fontWeight: 700,
+              color: '#94a3b8',
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              textAlign: 'left',
+            }}>
               CONSOLE LOGS (Demucs AI Model: {modelName})
             </span>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0, whiteSpace: 'nowrap' }}>
             <span style={{
-              width: 6,
-              height: 6,
+              width: 5,
+              height: 5,
               borderRadius: '50%',
               background: stateColor,
-              boxShadow: `0 0 6px ${stateColor}`,
             }} />
-            <span style={{ fontSize: '0.60rem', color: stateColor, fontWeight: 700 }}>
+            <span style={{ fontSize: '9.5px', color: stateColor, fontWeight: 700 }}>
               {isFailed ? 'FAILED' : (isDone ? 'DONE' : 'LIVE')}
             </span>
-            {showConsole ? <ChevronUp size={12} color="#64748b" /> : <ChevronDown size={12} color="#64748b" />}
+            {showConsole ? <ChevronUp size={11} color="#64748b" /> : <ChevronDown size={11} color="#64748b" />}
           </div>
         </button>
 

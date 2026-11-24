@@ -29,6 +29,9 @@ export const DEFAULT_VOICE_SETTINGS = {
   watermarkText: 'រក្សាសិទ្ធិដោយ ៖ Holiday Kh Drama',
   watermarkPosition: 'above-ticker',
   watermarkColor: '#38BDF8',
+  antiTheftBgStyle: 'dark',
+  antiTheftBlur: 18,
+  antiTheftHeight: null,
   enableCornerMask: false,
   cornerMaskText: '«រឿងប្រឌិតសុទ្ធសាធ • ហាមចម្លង»',
   cornerMaskStyle: 'badge',
@@ -39,6 +42,15 @@ export const DEFAULT_VOICE_SETTINGS = {
   cornerMaskBlur: 18,
   cornerMaskOffsetX: 14,
   cornerMaskOffsetY: 14,
+  enableMirrorFlip: false,
+  zoomScale: 1.0,
+  enableColorGrade: false,
+  youtubeSafeAudio: false,
+  enableCustomBgm: false,
+  customBgmUrl: null,
+  customBgmPath: null,
+  customBgmName: null,
+  customBgmDuration: 0,
 };
 
 // The floating Customize toolbar controls are shared across all episodes.
@@ -49,8 +61,10 @@ export const STICKY_CUSTOMIZE_SETTING_KEYS = Object.freeze([
   'cornerMaskWidth', 'cornerMaskHeight', 'cornerMaskOpacity', 'cornerMaskBlur',
   'cornerMaskOffsetX', 'cornerMaskOffsetY',
   'enableAntiTheft', 'marqueeText', 'marqueeSpeed', 'marqueePosition',
-  'marqueeTextColor', 'antiTheftSize', 'antiTheftBottomPercent',
+  'marqueeTextColor', 'antiTheftSize', 'antiTheftHeight', 'antiTheftBottomPercent', 'antiTheftBgStyle', 'antiTheftBlur',
   'enableWatermark', 'watermarkText', 'watermarkPosition', 'watermarkColor',
+  'enableMirrorFlip', 'zoomScale', 'enableColorGrade', 'youtubeSafeAudio',
+  'enableCustomBgm', 'customBgmUrl', 'customBgmPath', 'customBgmName', 'customBgmDuration',
 ]);
 
 export const VALID_ASPECT_RATIOS = Object.freeze(['16:9', '9:16', '1:1']);
@@ -691,7 +705,12 @@ function createStorageOptimizedSeriesList(seriesList) {
 
   return seriesList.map((series) => {
     return {
-      ...series,
+      id: series.id,
+      title: series.title,
+      createdAt: series.createdAt,
+      glossary: series.glossary || { characters: [], terms: [] },
+      genre: series.genre || 'auto',
+      detectedGenre: series.detectedGenre || 'modern',
       episodes: (series.episodes || []).map((ep) => {
         const hasSegments = Array.isArray(ep.scriptData?.segments) && ep.scriptData.segments.length > 0;
         const totalCount = ep.scriptData?.segments?.length || ep.scriptData?.totalSegments || 0;
@@ -702,13 +721,25 @@ function createStorageOptimizedSeriesList(seriesList) {
         // For the active episode currently open, keep slimmed essential segment data in localStorage
         if (ep.id === activeEpId && hasSegments) {
           return {
-            ...ep,
+            id: ep.id,
+            episodeNumber: ep.episodeNumber,
+            title: ep.title,
+            displayTitle: ep.displayTitle,
+            duration: ep.duration || 0,
+            status: ep.status || 'idle',
+            video: ep.video ? { videoId: ep.video.videoId, fileName: ep.video.fileName, videoPath: ep.video.videoPath, duration: ep.video.duration } : null,
+            videoFile: ep.videoFile || null,
+            sourceVideoPath: ep.sourceVideoPath || null,
+            originalFilename: ep.originalFilename || null,
             audioGenerated: resolvedAudioGenerated,
             hasAudio: resolvedHasAudio,
             audioOutdated: resolvedAudioOutdated,
             fullAudioUrl: ep.fullAudioUrl || null,
             fullAudioPath: ep.fullAudioPath || null,
             renderedVideo: sanitizeRenderedVideo(ep.renderedVideo),
+            generationMode: ep.generationMode || ep.scriptData?.generationMode,
+            lastModified: ep.lastModified,
+            updatedAt: ep.updatedAt,
             scriptData: {
               ...ep.scriptData,
               hasScript: true,
@@ -724,14 +755,25 @@ function createStorageOptimizedSeriesList(seriesList) {
         // For inactive episodes, keep metadata & summary count without the 4MB segment array
         if (hasSegments || (ep.scriptData?.hasScript && totalCount > 0)) {
           return {
-            ...ep,
+            id: ep.id,
+            episodeNumber: ep.episodeNumber,
+            title: ep.title,
+            displayTitle: ep.displayTitle,
+            duration: ep.duration || 0,
             status: (ep.status === 'uploaded' || !ep.status) ? 'translated' : ep.status,
+            video: ep.video ? { videoId: ep.video.videoId, fileName: ep.video.fileName, videoPath: ep.video.videoPath, duration: ep.video.duration } : null,
+            videoFile: ep.videoFile || null,
+            sourceVideoPath: ep.sourceVideoPath || null,
+            originalFilename: ep.originalFilename || null,
             audioGenerated: resolvedAudioGenerated,
             hasAudio: resolvedHasAudio,
             audioOutdated: resolvedAudioOutdated,
             fullAudioUrl: ep.fullAudioUrl || null,
             fullAudioPath: ep.fullAudioPath || null,
             renderedVideo: sanitizeRenderedVideo(ep.renderedVideo),
+            generationMode: ep.generationMode || ep.scriptData?.generationMode,
+            lastModified: ep.lastModified,
+            updatedAt: ep.updatedAt,
             scriptData: {
               mode: ep.scriptData?.mode || 'dialogue',
               generationMode: ep.scriptData?.generationMode || ep.generationMode,
@@ -744,9 +786,19 @@ function createStorageOptimizedSeriesList(seriesList) {
           };
         }
 
-        return ep.renderedVideo
-          ? { ...ep, renderedVideo: sanitizeRenderedVideo(ep.renderedVideo) }
-          : ep;
+        return {
+          id: ep.id,
+          episodeNumber: ep.episodeNumber,
+          title: ep.title,
+          displayTitle: ep.displayTitle,
+          duration: ep.duration || 0,
+          status: ep.status || 'idle',
+          video: ep.video ? { videoId: ep.video.videoId, fileName: ep.video.fileName, videoPath: ep.video.videoPath, duration: ep.video.duration } : null,
+          videoFile: ep.videoFile || null,
+          sourceVideoPath: ep.sourceVideoPath || null,
+          originalFilename: ep.originalFilename || null,
+          renderedVideo: sanitizeRenderedVideo(ep.renderedVideo),
+        };
       }),
     };
   });
@@ -892,47 +944,100 @@ export function extractSeriesName(title) {
 }
 
 /**
- * Helper to sync series state to backend with offline detection
+ * Helper to sync series state to backend with coalescing, single-flight serialization,
+ * transient retry, and visible offline detection toast on persistent failure.
  */
+const pendingSeriesSyncState = new Map();
+
+function surfaceSyncFailureToast(err) {
+  console.warn('[Storage] Failed to sync series to backend:', err?.message || err);
+  const message = '⚠️ បរាជ័យក្នុងការរក្សាទុកទៅ Server — សូមពិនិត្យ Backend ហើយព្យាយាមម្ដងទៀត!';
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('timeline:toast', { detail: { message } }));
+  }
+  if (typeof document !== 'undefined') {
+    let toast = document.getElementById('timeline-split-toast');
+    if (!toast) {
+      toast = document.createElement('div');
+      toast.id = 'timeline-split-toast';
+      toast.setAttribute('role', 'status');
+      toast.setAttribute('aria-live', 'polite');
+      toast.style.position = 'fixed';
+      toast.style.bottom = '32px';
+      toast.style.left = '50%';
+      toast.style.transform = 'translateX(-50%) translateY(0)';
+      toast.style.maxWidth = 'min(92vw, 760px)';
+      toast.style.backgroundColor = 'rgba(127, 29, 29, 0.96)';
+      toast.style.color = '#fef2f2';
+      toast.style.padding = '10px 20px';
+      toast.style.borderRadius = '14px';
+      toast.style.fontSize = '13.5px';
+      toast.style.fontWeight = '500';
+      toast.style.zIndex = '99999';
+      toast.style.pointerEvents = 'none';
+      toast.style.boxShadow = '0 12px 30px -4px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(248, 113, 113, 0.35)';
+      document.body.appendChild(toast);
+    }
+    toast.textContent = message;
+    toast.style.opacity = '1';
+    if (toast._hideTimer) clearTimeout(toast._hideTimer);
+    toast._hideTimer = setTimeout(() => {
+      if (toast) toast.style.opacity = '0';
+    }, 4500);
+  }
+}
+
+async function runCoalescedSeriesSync(seriesId) {
+  const entry = pendingSeriesSyncState.get(seriesId);
+  if (!entry || entry.inFlight || !entry.latestSeries) return;
+  entry.inFlight = true;
+  const snapshot = entry.latestSeries;
+  entry.latestSeries = null;
+
+  try {
+    let lastErr = null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        await syncSeriesApi(snapshot);
+        lastErr = null;
+        break;
+      } catch (err) {
+        lastErr = err;
+        const isTransient = /502|503|ECONNRESET|ECONNREFUSED|temporarily unreachable|Failed to fetch|NetworkError/i.test(String(err?.message || ''));
+        if (attempt === 0 && isTransient) {
+          await new Promise((r) => setTimeout(r, 1500));
+          continue;
+        }
+        break;
+      }
+    }
+    if (lastErr) {
+      surfaceSyncFailureToast(lastErr);
+    }
+  } finally {
+    entry.inFlight = false;
+    if (entry.latestSeries) {
+      runCoalescedSeriesSync(seriesId);
+    } else if (!entry.timer) {
+      pendingSeriesSyncState.delete(seriesId);
+    }
+  }
+}
+
 export function syncSeriesToBackend(series) {
   if (!series?.id) return;
-  syncSeriesApi(series).catch((err) => {
-    console.warn('[Storage] Failed to sync series to backend:', err?.message || err);
-    const message = '⚠️ បរាជ័យក្នុងការរក្សាទុកទៅ Server — សូមពិនិត្យ Backend ហើយព្យាយាមម្ដងទៀត!';
-    if (typeof window !== 'undefined') {
-      window.dispatchEvent(new CustomEvent('timeline:toast', { detail: { message } }));
-    }
-    if (typeof document !== 'undefined') {
-      let toast = document.getElementById('timeline-split-toast');
-      if (!toast) {
-        toast = document.createElement('div');
-        toast.id = 'timeline-split-toast';
-        toast.setAttribute('role', 'status');
-        toast.setAttribute('aria-live', 'polite');
-        toast.style.position = 'fixed';
-        toast.style.bottom = '32px';
-        toast.style.left = '50%';
-        toast.style.transform = 'translateX(-50%) translateY(0)';
-        toast.style.maxWidth = 'min(92vw, 760px)';
-        toast.style.backgroundColor = 'rgba(127, 29, 29, 0.96)';
-        toast.style.color = '#fef2f2';
-        toast.style.padding = '10px 20px';
-        toast.style.borderRadius = '14px';
-        toast.style.fontSize = '13.5px';
-        toast.style.fontWeight = '500';
-        toast.style.zIndex = '99999';
-        toast.style.pointerEvents = 'none';
-        toast.style.boxShadow = '0 12px 30px -4px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(248, 113, 113, 0.35)';
-        document.body.appendChild(toast);
-      }
-      toast.textContent = message;
-      toast.style.opacity = '1';
-      if (toast._hideTimer) clearTimeout(toast._hideTimer);
-      toast._hideTimer = setTimeout(() => {
-        if (toast) toast.style.opacity = '0';
-      }, 4500);
-    }
-  });
+  const sid = String(series.id);
+  let entry = pendingSeriesSyncState.get(sid);
+  if (!entry) {
+    entry = { latestSeries: null, timer: null, inFlight: false };
+    pendingSeriesSyncState.set(sid, entry);
+  }
+  entry.latestSeries = series;
+  if (entry.timer) clearTimeout(entry.timer);
+  entry.timer = setTimeout(() => {
+    entry.timer = null;
+    runCoalescedSeriesSync(sid);
+  }, 300);
 }
 
 function getLocalSegmentIdentityKeys(segment) {
@@ -1557,6 +1662,10 @@ export function updateSeriesTitle(seriesId, newTitle) {
 export function extractGlossaryFromEpisode(scriptData, speakerRegistry) {
   const characters = [];
   const registry = speakerRegistry || {};
+  const segments = scriptData?.segments || [];
+  const segSpeakerNames = new Set(
+    segments.map((seg) => (seg.speaker || seg.speakerName || '').trim()).filter(Boolean)
+  );
 
   const detectGender = (spk, name, fallback) => {
     const rawG = String(spk?.voiceGender || spk?.gender || spk?.speakerGender || '').toLowerCase();
@@ -1567,13 +1676,18 @@ export function extractGlossaryFromEpisode(scriptData, speakerRegistry) {
   };
 
   Object.values(registry).forEach((spk) => {
-    if (spk.name && spk.name !== 'Unknown' && !characters.some((c) => c.name === spk.name)) {
+    const spkName = (spk.name || spk.speakerName || '').trim();
+    if (spkName && spkName !== 'Unknown' && !characters.some((c) => c.name === spkName)) {
+      // If episode has segments, do not include phantom characters from old/other series
+      if (segSpeakerNames.size > 0 && !segSpeakerNames.has(spkName) && !segSpeakerNames.has(spk.id)) {
+        return;
+      }
       const isManual = Boolean(spk.userOverridden || spk.voiceAssignmentSource === 'manual');
       characters.push({
-        id: spk.id || spk.speakerId,
-        name: spk.name,
-        khmerName: spk.khmerName || spk.name,
-        gender: detectGender(spk, spk.name, 'unknown'),
+        id: spk.id || spk.speakerId || spkName,
+        name: spkName,
+        khmerName: spk.khmerName || spkName,
+        gender: detectGender(spk, spkName, 'unknown'),
         voiceId: spk.voiceId || spk.khmerVoiceId || null,
         khmerVoiceId: spk.khmerVoiceId || spk.voiceId || null,
         voiceAssignmentSource: isManual ? 'manual' : (spk.voiceAssignmentSource || 'automatic'),
@@ -1582,11 +1696,12 @@ export function extractGlossaryFromEpisode(scriptData, speakerRegistry) {
     }
   });
 
-  (scriptData?.segments || []).forEach((seg) => {
-    const rawSpeaker = (seg.speaker || '').trim();
+  segments.forEach((seg) => {
+    const rawSpeaker = (seg.speaker || seg.speakerName || '').trim();
     if (rawSpeaker && rawSpeaker !== 'Unknown' && !characters.some((c) => c.name === rawSpeaker)) {
       const isManual = Boolean(seg.userOverridden || seg.voiceAssignmentSource === 'manual' || seg.voiceOverride);
       characters.push({
+        id: seg.speakerId || rawSpeaker,
         name: rawSpeaker,
         khmerName: rawSpeaker,
         gender: detectGender(seg, rawSpeaker, 'unknown'),

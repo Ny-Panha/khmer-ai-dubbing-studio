@@ -11,16 +11,174 @@
   box-shadow: none;
 }
 
-.inspector-header {
+.inspector-header,
+.inspector-tabs-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 6px;
-  padding: 0 14px;
-  height: 42px;
+  gap: 4px;
+  padding: 4px 6px;
+  height: 44px;
   border-bottom: 1px solid var(--border-subtle);
   background: var(--bg-desktop);
   flex-shrink: 0;
+}
+
+.inspector-tab-btn {
+  flex: 1 1 0%;
+  min-width: 0;
+  height: 34px;
+  padding: 0 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  line-height: 1.4;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: var(--transition-fast);
+}
+
+.inspector-tab-btn:hover:not(.active) {
+  background: var(--bg-elevated-panel);
+  color: var(--text-primary);
+}
+
+.inspector-tab-btn.active {
+  background: var(--bg-active-card);
+  border-color: rgba(56, 189, 248, 0.35);
+  color: var(--primary-accent);
+  font-weight: 700;
+}
+
+.inspector-tab-badge {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: var(--radius-xs);
+  background: var(--bg-secondary-panel);
+  border: 1px solid var(--border-subtle);
+  color: var(--primary-accent);
+}
+
+.inspector-accordion-trigger {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+  text-align: left;
+}
+
+.inspector-accordion-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--text-sm);
+  font-weight: 700;
+  line-height: var(--khmer-line-height);
+}
+
+.inspector-accordion-body {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.inspector-speaker-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.inspector-speaker-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-desktop);
+  border: 1px solid var(--border-subtle);
+}
+
+.inspector-speaker-name {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inspector-speaker-name.is-female {
+  color: var(--voice-female);
+}
+
+.inspector-speaker-name.is-male {
+  color: var(--voice-male);
+}
+
+.inspector-speaker-voice-btn {
+  padding: 3px 9px;
+  border-radius: var(--radius-xs);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  border: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: var(--transition-fast);
+}
+
+.inspector-speaker-voice-btn.is-female {
+  background: rgba(236, 72, 153, 0.16);
+  border-color: rgba(236, 72, 153, 0.35);
+}
+
+.inspector-speaker-voice-btn.is-male {
+  background: rgba(59, 130, 246, 0.16);
+  border-color: rgba(59, 130, 246, 0.35);
+}
+
+.inspector-ep-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+}
+
+.inspector-ep-footer-label {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  font-weight: 700;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.inspector-ep-footer-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .panel-title-tag {

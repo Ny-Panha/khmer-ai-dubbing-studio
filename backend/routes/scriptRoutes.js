@@ -59,7 +59,12 @@ router.post("/generate-script", async (req, res) => {
       episodeId,
       seriesGlossary,
       jobId,
+      force = false,
+      forceRegen = false,
+      confirmed = false,
     } = req.body;
+
+    const isForce = Boolean(force || forceRegen || confirmed);
 
     const generationMode = rawGenMode || (rawMode === 'fast_ocr' ? 'fast_ocr' : 'standard');
     const mode = generationMode === 'fast_ocr' ? GENERATION_MODES.FAST_OCR : rawMode;
@@ -194,6 +199,8 @@ router.post("/generate-script", async (req, res) => {
           genre,
           jobId: directJobId,
           signal: directController.signal,
+          force: isForce,
+          forceRegen: isForce,
         });
       } finally {
         req.off('close', onClientClose);
@@ -312,7 +319,13 @@ router.post("/dubbing/retranslate-segment", async (req, res) => {
     if (!chineseText || !String(chineseText).trim()) {
       return res.status(400).json({ success: false, error: "Chinese dialogue text is required" });
     }
-    const result = await retranslateSingleDialogue(chineseText, req.body?.apiKey, context);
+    const mergedContext = {
+      ...context,
+      ...(req.body?.durationSec !== undefined && context.durationSec === undefined
+        ? { durationSec: req.body.durationSec }
+        : {}),
+    };
+    const result = await retranslateSingleDialogue(chineseText, req.body?.apiKey, mergedContext);
     res.json({ success: true, ...result });
   } catch (err) {
     const formatted = formatRetranslateRouteError(err);
@@ -519,6 +532,74 @@ router.post("/dubbing/import-subtitles", async (req, res) => {
       error: `Import Subtitle បរាជ័យ: ${err.message}`,
       validationErrors: [err.message],
     });
+  }
+});
+
+/**
+ * 1-Click Fast Re-scan & Reassign Episode Male/Female Voices via Acoustic F0 Pitch
+ */
+router.post("/rescan-episode-gender", async (req, res) => {
+  try {
+    const { seriesId, episodeId } = req.body;
+    if (!seriesId || !episodeId) {
+      return res.status(400).json({ success: false, error: "seriesId and episodeId are required" });
+    }
+
+    const seriesMeta = getSeriesMetadata(seriesId);
+    if (!seriesMeta) {
+      return res.status(404).json({ success: false, error: `Series not found: ${seriesId}` });
+    }
+
+    const ep = (seriesMeta.episodes || []).find((e) => String(e.id) === String(episodeId));
+    if (!ep) {
+      return res.status(404).json({ success: false, error: `Episode not found: ${episodeId}` });
+    }
+
+    const segments = ep.scriptData?.segments || ep.scriptSegments || [];
+    if (segments.length === 0) {
+      return res.status(400).json({ success: false, error: "Episode has no segments to rescan" });
+    }
+
+    const rawVideoRef = ep.videoPath || ep.videoFile || ep.videoFileName;
+    const resolvedVideoPath = rawVideoRef ? resolveMediaFile(rawVideoRef) : null;
+    const { enrichCuesWithAcousticPitch } = require("../services/pipeline/stages/stage4_analyzeDialogueAudio");
+    const { syncSegmentsWithSpeakerRegistry } = require("../models/speakerRegistry");
+
+    if (resolvedVideoPath && fs.existsSync(resolvedVideoPath)) {
+      await enrichCuesWithAcousticPitch(resolvedVideoPath, segments);
+    }
+
+    const syncRes = syncSegmentsWithSpeakerRegistry(segments, {}, seriesMeta.seriesSpeakerMap || {});
+    const updatedSegments = syncRes.segments || segments;
+
+    const femaleCount = updatedSegments.filter((s) => s.voiceGender === "female" || s.gender === "female" || s.speakerGender === "FEMALE" || String(s.voiceId || s.khmerVoiceId || "").includes("Sreymom")).length;
+    const maleCount = updatedSegments.length - femaleCount;
+
+    await withSeriesMetadataLock(seriesId, () =>
+      updateSeriesMetadata(seriesId, (freshSeries) => {
+        const targetEp = (freshSeries?.episodes || []).find((e) => String(e.id) === String(episodeId));
+        if (targetEp) {
+          if (!targetEp.scriptData) targetEp.scriptData = {};
+          targetEp.scriptData.segments = updatedSegments;
+          targetEp.scriptSegments = updatedSegments;
+          targetEp.speakerRegistry = syncRes.speakerRegistry || targetEp.speakerRegistry || {};
+          targetEp.isAudioOutdated = true;
+          targetEp.updatedAt = Date.now();
+        }
+        return freshSeries;
+      })
+    );
+
+    res.json({
+      success: true,
+      episodeId,
+      maleCueCount: maleCount,
+      femaleCueCount: femaleCount,
+      segments: updatedSegments,
+    });
+  } catch (err) {
+    console.error("[RescanEpisodeGender] Error:", err);
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 

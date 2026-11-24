@@ -16,6 +16,7 @@ const JOB_STATUS = Object.freeze({
   FAILED: 'failed',
   CANCELLED: 'cancelled',
   RECOVERING: 'recovering',
+  REVIEW_NEEDED: 'review_needed',
 });
 
 const ACTIVE_STATUSES = new Set([
@@ -577,11 +578,12 @@ class ProductionJobQueue {
 
     const { _allowFromTerminal, ...cleanUpdates } = updates || {};
 
-    // Prevent stale async pipeline callbacks from overwriting cancelled/completed/partial/paused jobs
+    // Prevent stale async pipeline callbacks from overwriting cancelled/completed/partial/paused/review_needed jobs
     if (
       (job.status === JOB_STATUS.CANCELLED ||
         job.status === JOB_STATUS.COMPLETED ||
-        job.status === JOB_STATUS.PARTIAL) &&
+        job.status === JOB_STATUS.PARTIAL ||
+        job.status === JOB_STATUS.REVIEW_NEEDED) &&
       !_allowFromTerminal
     ) {
       return job;
@@ -608,7 +610,7 @@ class ProductionJobQueue {
       job.startedAt = Date.now();
     }
     if (
-      [JOB_STATUS.COMPLETED, JOB_STATUS.PARTIAL, JOB_STATUS.FAILED, JOB_STATUS.CANCELLED].includes(targetStatus) &&
+      [JOB_STATUS.COMPLETED, JOB_STATUS.PARTIAL, JOB_STATUS.FAILED, JOB_STATUS.CANCELLED, JOB_STATUS.REVIEW_NEEDED].includes(targetStatus) &&
       !job.completedAt
     ) {
       job.completedAt = Date.now();

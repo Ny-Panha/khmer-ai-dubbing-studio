@@ -1,75 +1,79 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   Film,
   Layers,
   Activity,
   Download,
-  Home,
   ArrowRight,
-  CheckCircle2,
+  ArrowLeft,
+  Check,
   Clock,
-  Mic,
-  Music,
+  Zap,
+  Search,
+  LayoutGrid,
+  List,
+  CheckCircle2,
+  AlertTriangle,
+  Folder,
+  FolderOpen,
+  FolderPlus,
+  Edit2,
+  Trash2,
+  X,
 } from 'lucide-react';
 import { isCorruptedOrMojibakeTitle } from '../../utils/projectStorage';
+import { formatTimecode } from '../../utils/timestampUtils';
+import {
+  checkEpisodeHasScript,
+  checkEpisodeHasAudioReady,
+  checkEpisodeHasDemucsReady,
+  checkEpisodeHasAutoFitReady,
+  getEpisodeBrokenSummary,
+  getEpisodeSegmentCount,
+} from '../dashboard/geminiRouteHelpers';
 import './HomeDashboard.css';
 
 const STUDIO_WORKSPACES = [
   {
     path: '/studio',
     title: 'Studio Editor',
-    khmerTitle: 'ផ្ទាំងកាត់ត & Timeline',
-    desc: 'កាត់តវីដេអូ, កែសម្រួលប្រយោគខ្មែរ, សំឡេង AI និង Multi-Track Timeline',
+    khmerSub: 'កាត់តវីដេអូ · Subtitle · Timeline',
     icon: Film,
-    iconColorClass: 'home-icon-cyan',
-    badgeText: 'NLE Studio',
+    accentClass: 'ws-cyan',
   },
   {
     path: '/batch',
     title: 'Batch Studio',
-    khmerTitle: 'ផលិតច្រើនភាគព្រមគ្នា',
-    desc: 'កំណត់ទម្រង់ Script Setup រួម + Translate + សំឡេង AI + Demucs Clean BGM',
+    khmerSub: 'ផលិតច្រើនភាគ · Script · Voice · BGM',
     icon: Layers,
-    iconColorClass: 'home-icon-amber',
-    badgeText: 'Multi-EP Queue',
+    accentClass: 'ws-amber',
   },
   {
     path: '/quota',
     title: 'Keys & Quota',
-    khmerTitle: 'គ្រប់គ្រង API Keys Pool',
-    desc: 'ត្រួតពិនិត្យសុខភាព API Keys ទាំង ៦, RPM/TPM/RPD Quota និង Rate Limits',
+    khmerSub: 'ត្រួតពិនិត្យ API Keys Pool & RPM',
     icon: Activity,
-    iconColorClass: 'home-icon-emerald',
-    badgeText: 'Rate Limits',
+    accentClass: 'ws-emerald',
   },
   {
     path: '/export',
     title: 'Export Studio',
-    khmerTitle: 'បញ្ចេញវីដេអូសម្រេច',
-    desc: 'Render វីដេអូ 16:9 ឬ 9:16 ច្រើនភាគព្រមគ្នា និងបញ្ចូលគ្រប់ភាគជាវីដេអូពេញ ១ រឿង',
+    khmerSub: 'Render MP4 ច្រើនភាគ & បូកជារឿងពេញ',
     icon: Download,
-    iconColorClass: 'home-icon-sky',
-    badgeText: 'FFmpeg Render',
+    accentClass: 'ws-sky',
   },
 ];
 
-function formatSeriesDisplayTitle(rawTitle) {
-  if (!rawTitle || typeof rawTitle !== 'string') return 'DragonDub Drama Series';
+function formatSeriesDisplayTitle(rawTitle, fallbackId = '') {
+  if (!rawTitle || typeof rawTitle !== 'string') return fallbackId || 'DragonDub Drama Series';
   let t = rawTitle.trim();
-  if (isCorruptedOrMojibakeTitle(t)) return 'DragonDub Drama Series';
-  // Strip trailing hash/BV tags like " p01 1 [BV1LuH..."
-  t = t.replace(/\s+p\d+.*$/i, '');
-  t = t.replace(/\s*\[BV[a-zA-Z0-9]+.*$/i, '');
-  // If title is a long Chinese synopsis, cut at first major punctuation
+  if (isCorruptedOrMojibakeTitle(t)) return fallbackId || 'DragonDub Drama Series';
+  t = t.replace(/\s+p\d+.*$/i, '').replace(/\s*\[BV[a-zA-Z0-9]+.*$/i, '');
   if (t.length > 55) {
     const commaIdx = t.indexOf('，');
-    if (commaIdx > 8 && commaIdx < 45) {
-      t = t.slice(0, commaIdx);
-    } else {
-      t = t.slice(0, 50) + '...';
-    }
+    t = commaIdx > 8 && commaIdx < 45 ? t.slice(0, commaIdx) : `${t.slice(0, 50)}...`;
   }
-  return t || 'DragonDub Drama Series';
+  return t || fallbackId || 'DragonDub Drama Series';
 }
 
 function formatEpisodeDisplayTitle(ep, idx) {
@@ -78,307 +82,976 @@ function formatEpisodeDisplayTitle(ep, idx) {
   if (!raw || isCorruptedOrMojibakeTitle(raw)) {
     return `ភាគទី ${epNum}`;
   }
-  // Strip duplicate repetitive prefix: "ភាគទី 1: ភាគទី 1" -> "ភាគទី 1"
-  const cleaned = raw.replace(/^ភាគទី\s*\d+\s*:\s*/i, '');
+  const cleaned = raw.replace(/^ភាគទី\s*(\d+)\s*:\s*(?=ភាគទី\s*\1\b)/i, '').replace(/^ភាគទី\s*\d+\s*:\s*/i, '');
   return cleaned || `ភាគទី ${epNum}`;
 }
 
-export default function HomeDashboard({
-  activeSeries = null,
-  activeEpisode = null,
-  episodeId = null,
-  onNavigateRoute = null,
-  onSwitchEpisode = null,
-  onTabChange = null,
-}) {
-  const [filterTab, setFilterTab] = useState('all'); // 'all' | 'translated' | 'pending'
+function checkEpisodeRendered(ep) {
+  return Boolean(
+    ep?.renderedVideo?.outputVideoUrl ||
+    ep?.renderedVideo?.videoUrl ||
+    ep?.renderedVideo?.url ||
+    ep?.renderedVideoUrl ||
+    ep?.status === 'rendered'
+  );
+}
 
-  const episodes = Array.isArray(activeSeries?.episodes) ? activeSeries.episodes : [];
+function computeSeriesMetrics(seriesObj) {
+  const episodes = Array.isArray(seriesObj?.episodes) ? seriesObj.episodes : [];
   const totalEps = episodes.length;
+  let scripted = 0;
+  let voiced = 0;
+  let autofitted = 0;
+  let cleanBgm = 0;
+  let rendered = 0;
+  let ready124 = 0;
+  let brokenEps = 0;
 
-  const translatedCount = episodes.filter((ep) => {
-    const segs = ep?.scriptData?.segments || [];
-    return segs.length > 0 && segs.some((s) => Boolean((s.khmerText || s.khmer || '').trim()));
-  }).length;
+  const rows = episodes.map((ep, idx) => {
+    const epNum = ep?.episodeNumber || idx + 1;
+    const segCount = getEpisodeSegmentCount(ep);
+    const broken = getEpisodeBrokenSummary(ep);
+    const hasScript = checkEpisodeHasScript(ep) && (broken?.textBrokenCount || 0) === 0;
+    const hasVoice = checkEpisodeHasAudioReady(ep, null, null) && !ep?.audioOutdated;
+    const hasAutoFit = Boolean(hasVoice && checkEpisodeHasAutoFitReady(ep));
+    const hasBgm = checkEpisodeHasDemucsReady(ep, null, null);
+    const hasRender = checkEpisodeRendered(ep);
+    const isCoreReady = Boolean(hasScript && hasVoice && hasBgm);
+    const hasBrokenText = (broken?.textBrokenCount || 0) > 0;
 
-  const ttsCount = episodes.filter((ep) => {
-    const segs = ep?.scriptData?.segments || [];
-    return Boolean(ep?.audioGenerated || ep?.fullAudioUrl || (segs.length > 0 && segs.some((s) => Boolean(s.audioUrl))));
-  }).length;
+    if (hasScript) scripted += 1;
+    if (hasVoice) voiced += 1;
+    if (hasAutoFit) autofitted += 1;
+    if (hasBgm) cleanBgm += 1;
+    if (hasRender) rendered += 1;
+    if (isCoreReady) ready124 += 1;
+    if (hasBrokenText) brokenEps += 1;
 
-  const demucsCount = episodes.filter((ep) => {
-    return Boolean(ep?.hasCleanBgm || ep?.cleanBgmUrl || ep?.instrumentalPath || ep?.cleanBgmPath);
-  }).length;
-
-  const renderedCount = episodes.filter((ep) => {
-    return Boolean(ep?.renderedVideo?.url || ep?.renderedVideoUrl || ep?.status === 'rendered');
-  }).length;
-
-  const overallProgressPct = totalEps > 0 ? Math.round((translatedCount / totalEps) * 100) : 0;
-  const seriesDisplayTitle = formatSeriesDisplayTitle(activeSeries?.title);
-
-  const filteredEpisodes = episodes.filter((ep) => {
-    if (filterTab === 'translated') {
-      const segs = ep?.scriptData?.segments || [];
-      return segs.length > 0 && segs.some((s) => Boolean((s.khmerText || s.khmer || '').trim()));
-    }
-    if (filterTab === 'pending') {
-      const segs = ep?.scriptData?.segments || [];
-      return !segs.length || !segs.some((s) => Boolean((s.khmerText || s.khmer || '').trim()));
-    }
-    return true;
+    return {
+      ep,
+      idx,
+      epNum,
+      segCount,
+      cleanTitle: formatEpisodeDisplayTitle(ep, idx),
+      hasScript,
+      hasVoice,
+      hasAutoFit,
+      hasBgm,
+      hasRender,
+      isCoreReady,
+      brokenTextCount: broken?.textBrokenCount || 0,
+    };
   });
 
+  const readyPct = totalEps > 0 ? Math.round((ready124 / totalEps) * 100) : 0;
+
+  return {
+    rows,
+    totalEps,
+    scripted,
+    voiced,
+    autofitted,
+    cleanBgm,
+    rendered,
+    ready124,
+    readyPct,
+    incomplete124: Math.max(0, totalEps - ready124),
+    autofitTodo: Math.max(0, totalEps - autofitted),
+    brokenEps,
+  };
+}
+
+export default function HomeDashboard({
+  seriesList = [],
+  activeSeries = null,
+  activeEpisode = null,
+  seriesId = null,
+  episodeId = null,
+  onNavigateRoute = null,
+  onSwitchSeries = null,
+  onSwitchEpisode = null,
+  onRenameSeries = null,
+  onDeleteSeries = null,
+  onRefreshSeries = null,
+  onTabChange = null,
+}) {
+  // Default to Folder View (null = show Series Folders; string = opened Series Folder ID showing episodes inside)
+  const [openedFolderId, setOpenedFolderId] = useState(null);
+  const [filterTab, setFilterTab] = useState('all'); // 'all' | 'ready' | 'incomplete' | 'autofit_todo' | 'rendered'
+  const [searchQuery, setSearchQuery] = useState('');
+  const [viewMode, setViewMode] = useState('grid'); // 'grid' | 'list'
+
+  // Inline Create New Folder, Rename Folder & Custom Delete Folder Modal state
+  const [showNewFolderForm, setShowNewFolderForm] = useState(false);
+  const [newFolderName, setNewFolderName] = useState('');
+  const [isCreatingFolder, setIsCreatingFolder] = useState(false);
+  const [createFolderError, setCreateFolderError] = useState(null);
+  const [editingFolderId, setEditingFolderId] = useState(null);
+  const [tempFolderTitle, setTempFolderTitle] = useState('');
+  const [deleteTargetFolder, setDeleteTargetFolder] = useState(null);
+  const [isDeletingFolder, setIsDeletingFolder] = useState(false);
+
+  // Ensure we always have a clean array of series folders
+  const allSeriesFolders = useMemo(() => {
+    const raw = Array.isArray(seriesList) && seriesList.length > 0
+      ? seriesList
+      : (activeSeries ? [activeSeries] : []);
+    return raw.filter(Boolean).map((s) => {
+      const isCurrentActive = String(s.id) === String(activeSeries?.id || seriesId);
+      // Merge activeSeries episodes if this is the active series (ensures freshest in-memory state)
+      const resolvedSeries = isCurrentActive && activeSeries ? activeSeries : s;
+      return {
+        series: resolvedSeries,
+        id: resolvedSeries.id,
+        displayTitle: formatSeriesDisplayTitle(resolvedSeries.title, resolvedSeries.id),
+        isCurrentActive,
+        metrics: computeSeriesMetrics(resolvedSeries),
+      };
+    });
+  }, [seriesList, activeSeries, seriesId]);
+
+  const activeFolderSummary = useMemo(() => {
+    return (
+      allSeriesFolders.find((f) => f.isCurrentActive) ||
+      allSeriesFolders[0] || {
+        series: activeSeries,
+        id: activeSeries?.id || 'default',
+        displayTitle: formatSeriesDisplayTitle(activeSeries?.title),
+        isCurrentActive: true,
+        metrics: computeSeriesMetrics(activeSeries),
+      }
+    );
+  }, [allSeriesFolders, activeSeries]);
+
+  const openedFolderSummary = useMemo(() => {
+    if (!openedFolderId) return null;
+    return allSeriesFolders.find((f) => String(f.id) === String(openedFolderId)) || null;
+  }, [allSeriesFolders, openedFolderId]);
+
+  const activeMetrics = activeFolderSummary.metrics;
+  const totalEps = activeMetrics.totalEps;
+  const overallReadyPct = activeMetrics.readyPct;
+  const seriesDisplayTitle = activeFolderSummary.displayTitle;
+
+  // Filtered Series Folders when in root Folder Explorer view
+  const filteredFolders = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return allSeriesFolders;
+    return allSeriesFolders.filter((f) =>
+      f.displayTitle.toLowerCase().includes(q) || String(f.id).toLowerCase().includes(q)
+    );
+  }, [allSeriesFolders, searchQuery]);
+
+  // Filtered Episodes when inside an opened Series Folder
+  const openedMetrics = openedFolderSummary ? openedFolderSummary.metrics : activeMetrics;
+  const filteredRows = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    return openedMetrics.rows.filter((item) => {
+      if (filterTab === 'ready' && !item.isCoreReady) return false;
+      if (filterTab === 'incomplete' && item.isCoreReady) return false;
+      if (filterTab === 'autofit_todo' && item.hasAutoFit) return false;
+      if (filterTab === 'rendered' && !item.hasRender) return false;
+      if (q) {
+        const matchNum = `ep${item.epNum}`.includes(q) || `ep ${item.epNum}`.includes(q) || String(item.epNum) === q;
+        const matchTitle = item.cleanTitle.toLowerCase().includes(q);
+        if (!matchNum && !matchTitle) return false;
+      }
+      return true;
+    });
+  }, [openedMetrics.rows, filterTab, searchQuery]);
+
   const handleGoToRoute = (routePath, tab = null) => {
-    if (tab && onTabChange) {
-      onTabChange(tab);
-    }
-    if (onNavigateRoute) {
-      onNavigateRoute(routePath);
+    if (tab && onTabChange) onTabChange(tab);
+    if (onNavigateRoute) onNavigateRoute(routePath);
+  };
+
+  const handleOpenFolder = async (folderId) => {
+    if (!folderId) return;
+    setOpenedFolderId(folderId);
+    setSearchQuery('');
+    setFilterTab('all');
+    if (String(folderId) !== String(activeSeries?.id || seriesId) && typeof onSwitchSeries === 'function') {
+      await onSwitchSeries(folderId);
     }
   };
 
-  const handleOpenEpisode = (epId) => {
-    if (epId && onSwitchEpisode) {
-      onSwitchEpisode(epId);
+  const handleBackToFolders = () => {
+    setOpenedFolderId(null);
+    setSearchQuery('');
+    setFilterTab('all');
+  };
+
+  const handleOpenEpisode = async (epId, parentSeriesId = null) => {
+    const targetSeriesId = parentSeriesId || openedFolderSummary?.id || activeSeries?.id;
+    if (targetSeriesId && String(targetSeriesId) !== String(activeSeries?.id || seriesId) && typeof onSwitchSeries === 'function') {
+      await onSwitchSeries(targetSeriesId);
     }
-    if (onNavigateRoute) {
-      onNavigateRoute('/studio');
+    if (epId && onSwitchEpisode) onSwitchEpisode(epId);
+    if (onNavigateRoute) onNavigateRoute('/studio');
+  };
+
+  const handleCreateNewFolder = async (e) => {
+    if (e) e.preventDefault();
+    const cleanTitle = (newFolderName || '').trim();
+    if (!cleanTitle) {
+      setCreateFolderError('សូមបញ្ចូលឈ្មោះ Folder រឿងថ្មី!');
+      return;
+    }
+    const exists = allSeriesFolders.some(
+      (f) =>
+        f.displayTitle.toLowerCase() === cleanTitle.toLowerCase() ||
+        String(f.id).toLowerCase() === cleanTitle.toLowerCase()
+    );
+    if (exists) {
+      setCreateFolderError('Folder រឿងនេះមានរួចហើយ! សូមដាក់ឈ្មោះផ្សេង។');
+      return;
+    }
+
+    try {
+      setIsCreatingFolder(true);
+      setCreateFolderError(null);
+      const res = await fetch('/api/series', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          series: {
+            title: cleanTitle,
+            createdAt: Date.now(),
+            episodes: [],
+            glossary: { characters: [], terms: [] },
+            cast: [],
+          },
+        }),
+      });
+      const data = await res.json();
+      if (!data?.success || !data?.series?.id) {
+        throw new Error(data?.error || 'មិនអាចបង្កើត Folder រឿងបានទេ');
+      }
+
+      const createdSeriesId = data.series.id;
+      setShowNewFolderForm(false);
+      setNewFolderName('');
+
+      if (typeof onSwitchSeries === 'function') {
+        await onSwitchSeries(createdSeriesId);
+      } else if (typeof onRefreshSeries === 'function') {
+        await onRefreshSeries();
+      }
+      setOpenedFolderId(createdSeriesId);
+    } catch (err) {
+      setCreateFolderError(err?.message || 'មិនអាចបង្កើត Folder រឿងបានទេ');
+    } finally {
+      setIsCreatingFolder(false);
+    }
+  };
+
+  const handleStartRenameFolder = (e, folderItem) => {
+    e.stopPropagation();
+    setEditingFolderId(folderItem.id);
+    setTempFolderTitle(folderItem.series?.title || folderItem.displayTitle || '');
+  };
+
+  const handleSaveRenameFolder = async (e, folderId) => {
+    if (e) e.stopPropagation();
+    const clean = tempFolderTitle.trim();
+    if (clean && typeof onRenameSeries === 'function') {
+      const res = await onRenameSeries(clean, folderId);
+      if (res && res.success === false && res.error) {
+        setCreateFolderError(res.error);
+        return;
+      }
+      setCreateFolderError(null);
+      if (res?.newSeriesId && String(openedFolderId) === String(folderId)) {
+        setOpenedFolderId(res.newSeriesId);
+      }
+    }
+    setEditingFolderId(null);
+  };
+
+  const handleDeleteFolder = (e, folderItem) => {
+    e.stopPropagation();
+    if (!onDeleteSeries || !folderItem) return;
+    setDeleteTargetFolder(folderItem);
+  };
+
+  const handleConfirmDeleteFolder = async () => {
+    if (!deleteTargetFolder || !onDeleteSeries) return;
+    try {
+      setIsDeletingFolder(true);
+      const targetId = deleteTargetFolder.id;
+      if (String(openedFolderId) === String(targetId)) {
+        setOpenedFolderId(null);
+      }
+      await onDeleteSeries(targetId);
+      setDeleteTargetFolder(null);
+    } finally {
+      setIsDeletingFolder(false);
     }
   };
 
   return (
     <div data-testid="home-dashboard-view" className="home-dashboard-view">
       <div className="home-dashboard-inner">
-        {/* 1. Project Hero Overview Card */}
-        <section data-testid="home-dashboard-header" className="home-hero-card">
-          <div className="home-hero-top">
-            <div className="home-hero-title-group">
-              <div className="home-hero-badge-icon" title="DragonDub AI Studio">
-                <Home size={22} />
-              </div>
-              <div className="home-hero-headings">
-                <div className="home-hero-eyebrow">
-                  <span>DRAMA PRODUCTION DASHBOARD</span>
-                  <span className="home-hero-eyebrow-sep">•</span>
-                  <span>{totalEps} EPISODES</span>
-                </div>
-                <h1 className="home-hero-series-title" title={activeSeries?.title || ''}>
-                  {seriesDisplayTitle}
-                </h1>
-              </div>
+        {/* 1. Compact Workstation Project Bar */}
+        <section data-testid="home-dashboard-header" className="home-project-bar">
+          <div className="home-project-top">
+            <div className="home-project-identity">
+              <span className="home-project-tag">ACTIVE FOLDER</span>
+              <h1 className="home-project-title" title={activeSeries?.title || ''}>
+                {seriesDisplayTitle}
+              </h1>
+              <span className="home-project-ep-count">{totalEps} ភាគ</span>
+              <span className={`home-project-ready-pill ${overallReadyPct === 100 && totalEps > 0 ? 'is-complete' : ''}`}>
+                {overallReadyPct}% រួចរាល់ (1·2·4)
+              </span>
             </div>
 
-            <button
-              type="button"
-              data-testid="btn-home-open-studio"
-              onClick={() => handleGoToRoute('/studio')}
-              className="home-hero-cta"
-              title="ចូលផ្ទាំងកាត់ត (Open Studio — /studio)"
-            >
-              <Film size={15} />
-              <span>ចូលផ្ទាំងកាត់ត (Open Studio)</span>
-              <ArrowRight size={14} />
-            </button>
+            <div className="home-project-actions">
+              <button
+                type="button"
+                onClick={() => handleGoToRoute('/batch')}
+                className="home-btn-secondary"
+                title="បើក Batch Studio (/batch)"
+              >
+                <Layers size={14} />
+                <span>Batch Studio</span>
+              </button>
+              <button
+                type="button"
+                data-testid="btn-home-open-studio"
+                onClick={() => handleGoToRoute('/studio')}
+                className="home-btn-primary"
+                title="ចូលផ្ទាំងកាត់ត (Open Studio — /studio)"
+              >
+                <Film size={14} />
+                <span>
+                  {activeEpisode?.episodeNumber
+                    ? `បន្តកាត់ត EP ${activeEpisode.episodeNumber}`
+                    : 'ចូល Studio'}
+                </span>
+                <ArrowRight size={13} />
+              </button>
+            </div>
           </div>
 
-          <div className="home-hero-metrics-row">
-            <div className="home-hero-progress-box">
-              <div className="home-hero-progress-labels">
-                <span>វឌ្ឍនភាពបកប្រែ Script សរុប ({translatedCount}/{totalEps} ភាគ)</span>
-                <span className="home-hero-progress-pct">{overallProgressPct}%</span>
-              </div>
-              <div className="home-hero-progress-track">
-                <div
-                  className="home-hero-progress-fill"
-                  style={{ width: `${Math.max(4, overallProgressPct)}%` }}
-                />
-              </div>
+          {/* 5 Accurate Stage Metric Pills */}
+          <div className="home-metrics-strip">
+            <div className="home-metric-pill">
+              <span className="home-metric-dot dot-cyan" />
+              <span className="home-metric-label">1. Script ខ្មែរ</span>
+              <span className="home-metric-val">{activeMetrics.scripted}/{totalEps}</span>
             </div>
-
-            <div className="home-hero-stat-chips">
-              <div className="home-stat-chip">
-                <span>បកប្រែ៖</span>
-                <span className="home-stat-chip-num">{translatedCount}/{totalEps}</span>
-              </div>
-              <div className="home-stat-chip">
-                <span>សំឡេង AI៖</span>
-                <span className="home-stat-chip-num">{ttsCount}/{totalEps}</span>
-              </div>
-              <div className="home-stat-chip">
-                <span>Clean BGM៖</span>
-                <span className="home-stat-chip-num">{demucsCount}/{totalEps}</span>
-              </div>
-              <div className="home-stat-chip">
-                <span>Rendered៖</span>
-                <span className="home-stat-chip-num">{renderedCount}/{totalEps}</span>
-              </div>
+            <div className="home-metric-pill">
+              <span className="home-metric-dot dot-pink" />
+              <span className="home-metric-label">2. សំឡេង AI</span>
+              <span className="home-metric-val">{activeMetrics.voiced}/{totalEps}</span>
+            </div>
+            <div className="home-metric-pill">
+              <span className="home-metric-dot dot-amber" />
+              <span className="home-metric-label">3. Auto-Fit</span>
+              <span className="home-metric-val">{activeMetrics.autofitted}/{totalEps}</span>
+            </div>
+            <div className="home-metric-pill">
+              <span className="home-metric-dot dot-emerald" />
+              <span className="home-metric-label">4. Clean BGM</span>
+              <span className="home-metric-val">{activeMetrics.cleanBgm}/{totalEps}</span>
+            </div>
+            <div className="home-metric-pill">
+              <span className="home-metric-dot dot-sky" />
+              <span className="home-metric-label">Export MP4</span>
+              <span className="home-metric-val">{activeMetrics.rendered}/{totalEps}</span>
             </div>
           </div>
         </section>
 
-        {/* 2. Studio Workspaces (4-Column Clean Studio Cards) */}
+        {/* 2. Slim 4-Tile Workspace Launch Strip */}
         <section
           data-testid="home-route-directory"
-          className="home-workspaces-grid"
+          className="home-quick-routes"
           aria-label="Studio Workspaces"
         >
           {STUDIO_WORKSPACES.map((ws) => {
             const IconComp = ws.icon;
             const routeId = ws.path.replace('/', '');
             return (
-              <div
+              <button
                 key={ws.path}
+                type="button"
                 data-testid={`home-route-row-${routeId}`}
                 onClick={() => handleGoToRoute(ws.path)}
-                className="home-workspace-card"
-                role="button"
-                tabIndex={0}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' || e.key === ' ') {
-                    e.preventDefault();
-                    handleGoToRoute(ws.path);
-                  }
-                }}
+                className={`home-route-tile ${ws.accentClass}`}
               >
-                <div className="home-workspace-card-top">
-                  <div className="home-workspace-header-row">
-                    <div className={`home-workspace-icon-wrap ${ws.iconColorClass}`}>
-                      <IconComp size={18} />
-                    </div>
-                    <span className="home-workspace-route-pill">{ws.path}</span>
-                  </div>
-                  <div>
-                    <h2 className="home-workspace-title">{ws.title}</h2>
-                    <p className="home-workspace-desc">{ws.desc}</p>
-                  </div>
+                <div className="home-route-tile-icon">
+                  <IconComp size={16} />
                 </div>
-
-                <div className="home-workspace-card-footer">
-                  <span>{ws.khmerTitle}</span>
-                  <ArrowRight size={14} className="home-workspace-arrow" />
+                <div className="home-route-tile-text">
+                  <span className="home-route-tile-title">{ws.title}</span>
+                  <span className="home-route-tile-sub">{ws.khmerSub}</span>
                 </div>
-              </div>
+                <ArrowRight size={14} className="home-route-tile-arrow" />
+              </button>
             );
           })}
         </section>
 
-        {/* 3. Production Episodes Table (Linear / NLE Style) */}
-        <section data-testid="home-episodes-list" className="home-table-section">
-          <div className="home-table-header">
-            <div className="home-table-title-group">
-              <Film size={15} className="text-cyan-400" />
-              <span className="home-table-title">បញ្ជីភាគក្នុងរឿង (Episode Pipeline)</span>
-              <span className="home-table-count-badge">{totalEps} ភាគ</span>
-            </div>
+        {/* 3. Series Folder Explorer -> Episodes Inside Folder */}
+        <section data-testid="home-episodes-list" className="home-episodes-section">
+          {!openedFolderSummary ? (
+            <>
+              {/* ROOT VIEW: Series Folders List */}
+              <div className="home-episodes-toolbar">
+                <div className="home-folder-header-left">
+                  <Folder size={16} className="home-folder-header-icon" />
+                  <span className="home-folder-header-title">បញ្ជី Folder រឿងទាំងអស់</span>
+                  <span className="home-folder-count-badge">{allSeriesFolders.length} រឿង</span>
+                  <span className="home-folder-hint">ចុចលើ Folder រឿង ដើម្បីបើកមើលភាគនៅខាងក្នុង</span>
+                </div>
 
-            <div className="home-filter-tabs" role="tablist">
-              <button
-                type="button"
-                onClick={() => setFilterTab('all')}
-                className={`home-filter-btn ${filterTab === 'all' ? 'active' : ''}`}
-              >
-                ទាំងអស់ ({totalEps})
-              </button>
-              <button
-                type="button"
-                onClick={() => setFilterTab('translated')}
-                className={`home-filter-btn ${filterTab === 'translated' ? 'active' : ''}`}
-              >
-                បានបកប្រែ ({translatedCount})
-              </button>
-              <button
-                type="button"
-                onClick={() => setFilterTab('pending')}
-                className={`home-filter-btn ${filterTab === 'pending' ? 'active' : ''}`}
-              >
-                នៅសល់ ({totalEps - translatedCount})
-              </button>
-            </div>
-          </div>
-
-          <div className="home-table-cols-head">
-            <span>ភាគ</span>
-            <span>ចំណងជើង</span>
-            <span className="home-col-segments">ចំនួនឃ្លា</span>
-            <span>ដំណាក់កាល PIPELINE</span>
-            <span style={{ textAlign: 'right' }}>សកម្មភាព</span>
-          </div>
-
-          <div className="home-episodes-table-body">
-            {filteredEpisodes.length === 0 ? (
-              <div className="home-episodes-empty">
-                មិនមានភាគនៅក្នុង Filter នេះទេ
-              </div>
-            ) : (
-              filteredEpisodes.map((ep, idx) => {
-                const segs = ep?.scriptData?.segments || [];
-                const hasScript = segs.length > 0 && segs.some((s) => Boolean((s.khmerText || s.khmer || '').trim()));
-                const hasTts = Boolean(
-                  ep?.audioGenerated || ep?.fullAudioUrl || (segs.length > 0 && segs.some((s) => Boolean(s.audioUrl)))
-                );
-                const hasDemucs = Boolean(
-                  ep?.hasCleanBgm || ep?.cleanBgmUrl || ep?.instrumentalPath || ep?.cleanBgmPath
-                );
-                const isCurrent = ep.id === (activeEpisode?.id || episodeId);
-                const epNum = ep.episodeNumber || idx + 1;
-                const cleanTitle = formatEpisodeDisplayTitle(ep, idx);
-
-                return (
-                  <div
-                    key={ep.id || idx}
-                    onClick={() => handleOpenEpisode(ep.id)}
-                    className={`home-table-row ${isCurrent ? 'is-current' : ''}`}
-                    title="ចុចដើម្បីបើកភាគនេះក្នុង Studio"
-                  >
-                    <div>
-                      <span className="home-ep-pill-badge">EP {String(epNum).padStart(2, '0')}</span>
-                    </div>
-
-                    <div className="home-ep-title-cell">
-                      {cleanTitle}
-                    </div>
-
-                    <div className="home-ep-lines-cell home-col-segments">
-                      {segs.length > 0 ? `${segs.length} ឃ្លា` : '—'}
-                    </div>
-
-                    <div className="home-pipeline-status-cell">
-                      <span className={`home-pipe-indicator ${hasScript ? 'done-script' : 'pending'}`}>
-                        {hasScript ? <CheckCircle2 size={11} /> : <Clock size={11} />}
-                        <span>Script</span>
-                      </span>
-
-                      <span className={`home-pipe-indicator ${hasTts ? 'done-tts' : 'pending'}`}>
-                        <Mic size={11} />
-                        <span>Voice AI</span>
-                      </span>
-
-                      <span className={`home-pipe-indicator ${hasDemucs ? 'done-bgm' : 'pending'}`}>
-                        <Music size={11} />
-                        <span>BGM</span>
-                      </span>
-                    </div>
-
-                    <div className="home-ep-action-cell">
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleOpenEpisode(ep.id);
-                        }}
-                        className="home-open-row-btn"
-                      >
-                        <span>កាត់ត</span>
-                        <ArrowRight size={12} />
-                      </button>
-                    </div>
+                <div className="home-toolbar-right">
+                  <div className="home-search-box">
+                    <Search size={13} className="home-search-icon" />
+                    <input
+                      type="text"
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      placeholder="ស្វែងរក Folder រឿង..."
+                      className="home-search-input"
+                    />
                   </div>
-                );
-              })
-            )}
-          </div>
+
+                  <button
+                    type="button"
+                    data-testid="btn-home-create-folder"
+                    onClick={() => {
+                      setShowNewFolderForm((prev) => !prev);
+                      setCreateFolderError(null);
+                    }}
+                    className="home-btn-new-folder"
+                  >
+                    <FolderPlus size={14} />
+                    <span>+ បង្កើត Folder រឿងថ្មី</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Inline Create New Series Folder Bar */}
+              {showNewFolderForm && (
+                <form onSubmit={handleCreateNewFolder} className="home-new-folder-bar">
+                  <FolderPlus size={15} className="home-folder-header-icon" />
+                  <input
+                    type="text"
+                    value={newFolderName}
+                    onChange={(e) => setNewFolderName(e.target.value)}
+                    placeholder="វាយឈ្មោះ Folder រឿងថ្មី (ឧ. ss3 ឬ រឿងភាគថ្មី)..."
+                    className="home-new-folder-input"
+                    autoFocus
+                  />
+                  <button
+                    type="submit"
+                    disabled={isCreatingFolder}
+                    className="home-btn-primary"
+                  >
+                    {isCreatingFolder ? 'កំពុងបង្កើត...' : 'បង្កើត Folder'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowNewFolderForm(false);
+                      setCreateFolderError(null);
+                    }}
+                    className="home-btn-secondary"
+                  >
+                    <X size={13} />
+                    <span>បោះបង់</span>
+                  </button>
+                  {createFolderError && (
+                    <span className="home-new-folder-error">{createFolderError}</span>
+                  )}
+                </form>
+              )}
+
+              {!showNewFolderForm && createFolderError && (
+                <div
+                  className="home-new-folder-error"
+                  style={{
+                    marginBottom: 10,
+                    padding: '8px 12px',
+                    borderRadius: 8,
+                    background: 'rgba(239, 68, 68, 0.12)',
+                    border: '1px solid rgba(239, 68, 68, 0.35)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 8,
+                  }}
+                >
+                  <span>{createFolderError}</span>
+                  <button
+                    type="button"
+                    onClick={() => setCreateFolderError(null)}
+                    style={{ background: 'none', border: 'none', color: 'inherit', cursor: 'pointer', padding: 2 }}
+                    aria-label="Close error"
+                  >
+                    <X size={13} />
+                  </button>
+                </div>
+              )}
+
+              {/* Series Folders Grid */}
+              {filteredFolders.length === 0 ? (
+                <div className="home-episodes-empty">
+                  មិនមាន Folder រឿងត្រូវនឹងការស្វែងរកទេ
+                </div>
+              ) : (
+                <div data-testid="home-series-folders-grid" className="home-folders-grid">
+                  {filteredFolders.map((folderItem) => {
+                    const { id, displayTitle, isCurrentActive, metrics } = folderItem;
+                    const isEditingThis = String(editingFolderId) === String(id);
+                    return (
+                      <div
+                        key={id}
+                        data-testid={`home-series-folder-${id}`}
+                        onClick={() => {
+                          if (!isEditingThis) handleOpenFolder(id);
+                        }}
+                        className={`home-folder-card ${isCurrentActive ? 'is-active-series' : ''}`}
+                        title={`ចុចដើម្បីបើក Folder "${displayTitle}" និងមើលភាគទាំង ${metrics.totalEps} នៅខាងក្នុង`}
+                      >
+                        <div className="home-folder-card-top">
+                          <div className="home-folder-title-wrap">
+                            <div className={`home-folder-icon-box ${isCurrentActive ? 'is-active' : ''}`}>
+                              {isCurrentActive ? <FolderOpen size={18} /> : <Folder size={18} />}
+                            </div>
+
+                            {isEditingThis ? (
+                              <div
+                                className="home-folder-rename-row"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                <input
+                                  type="text"
+                                  value={tempFolderTitle}
+                                  onChange={(e) => setTempFolderTitle(e.target.value)}
+                                  className="home-folder-rename-input"
+                                  autoFocus
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') handleSaveRenameFolder(e, id);
+                                    if (e.key === 'Escape') setEditingFolderId(null);
+                                  }}
+                                />
+                                <button
+                                  type="button"
+                                  onClick={(e) => handleSaveRenameFolder(e, id)}
+                                  className="home-folder-rename-save"
+                                >
+                                  រក្សាទុក
+                                </button>
+                              </div>
+                            ) : (
+                              <div className="home-folder-title-col">
+                                <div className="home-folder-title-line">
+                                  <span className="home-folder-name">{displayTitle}</span>
+                                  {isCurrentActive && (
+                                    <span className="home-folder-active-pill">កំពុងប្រើ</span>
+                                  )}
+                                </div>
+                                <span className="home-folder-sub">
+                                  {metrics.totalEps} ភាគនៅក្នុង Folder នេះ
+                                </span>
+                              </div>
+                            )}
+                          </div>
+
+                          <div
+                            className="home-folder-actions-top"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <button
+                              type="button"
+                              onClick={(e) => handleStartRenameFolder(e, folderItem)}
+                              className="home-folder-icon-btn"
+                              title="ប្តូរឈ្មោះ Folder រឿង"
+                            >
+                              <Edit2 size={13} />
+                            </button>
+                            {onDeleteSeries && (
+                              <button
+                                type="button"
+                                data-testid={`btn-delete-folder-${id}`}
+                                onClick={(e) => handleDeleteFolder(e, folderItem)}
+                                className="home-folder-icon-btn btn-danger"
+                                title="លុប Folder រឿងនេះ"
+                              >
+                                <Trash2 size={13} />
+                              </button>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Progress Bar inside Folder Card */}
+                        <div className="home-folder-progress-wrap">
+                          <div className="home-folder-progress-labels">
+                            <span>វឌ្ឍនភាពផលិត (1·2·4)</span>
+                            <strong className={metrics.readyPct === 100 && metrics.totalEps > 0 ? 'text-emerald' : ''}>
+                              {metrics.ready124}/{metrics.totalEps} ភាគ ({metrics.readyPct}%)
+                            </strong>
+                          </div>
+                          <div className="home-folder-progress-track">
+                            <div
+                              className="home-folder-progress-fill"
+                              style={{ width: `${metrics.readyPct}%` }}
+                            />
+                          </div>
+                        </div>
+
+                        {/* 5 Stage Summary Chips inside Folder Card */}
+                        <div className="home-folder-stage-chips">
+                          <span className={`home-ep-chip ${metrics.scripted === metrics.totalEps && metrics.totalEps > 0 ? 'chip-script-ok' : 'chip-idle'}`}>
+                            1.Script {metrics.scripted}/{metrics.totalEps}
+                          </span>
+                          <span className={`home-ep-chip ${metrics.voiced === metrics.totalEps && metrics.totalEps > 0 ? 'chip-voice-ok' : 'chip-idle'}`}>
+                            2.Voice {metrics.voiced}/{metrics.totalEps}
+                          </span>
+                          <span className={`home-ep-chip ${metrics.autofitted > 0 ? 'chip-fit-ok' : 'chip-idle'}`}>
+                            3.Fit {metrics.autofitted}/{metrics.totalEps}
+                          </span>
+                          <span className={`home-ep-chip ${metrics.cleanBgm === metrics.totalEps && metrics.totalEps > 0 ? 'chip-bgm-ok' : 'chip-idle'}`}>
+                            4.BGM {metrics.cleanBgm}/{metrics.totalEps}
+                          </span>
+                          <span className={`home-ep-chip ${metrics.rendered > 0 ? 'chip-render-ok' : 'chip-idle'}`}>
+                            MP4 {metrics.rendered}/{metrics.totalEps}
+                          </span>
+                        </div>
+
+                        {/* Folder Card Footer */}
+                        <div className="home-folder-card-footer">
+                          <span className="home-folder-open-cta">
+                            <FolderOpen size={13} />
+                            <span>បើកមើលភាគក្នុង Folder ({metrics.totalEps})</span>
+                            <ArrowRight size={13} />
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </>
+          ) : (
+            <>
+              {/* INSIDE FOLDER VIEW: Breadcrumb + Episodes Inside This Series Folder */}
+              <div className="home-episodes-toolbar">
+                <div className="home-folder-breadcrumb-bar">
+                  <button
+                    type="button"
+                    data-testid="btn-home-back-to-folders"
+                    onClick={handleBackToFolders}
+                    className="home-btn-back-folders"
+                    title="ត្រឡប់ទៅបញ្ជី Folder រឿងទាំងអស់"
+                  >
+                    <ArrowLeft size={13} />
+                    <span>Folder រឿងទាំងអស់</span>
+                  </button>
+
+                  <span className="home-breadcrumb-sep">/</span>
+
+                  <div className="home-opened-folder-pill">
+                    <FolderOpen size={14} className="home-folder-header-icon" />
+                    <span className="home-opened-folder-name">{openedFolderSummary.displayTitle}</span>
+                    <span className="home-folder-count-badge">{openedMetrics.totalEps} ភាគ</span>
+                  </div>
+
+                  <div className="home-filter-tabs" role="tablist">
+                    <button
+                      type="button"
+                      onClick={() => setFilterTab('all')}
+                      className={`home-filter-tab ${filterTab === 'all' ? 'active' : ''}`}
+                    >
+                      ទាំងអស់ ({openedMetrics.totalEps})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setFilterTab('incomplete')}
+                      className={`home-filter-tab tab-warn ${filterTab === 'incomplete' ? 'active' : ''}`}
+                    >
+                      មិនទាន់ចប់ 1·2·4 ({openedMetrics.incomplete124})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setFilterTab('autofit_todo')}
+                      className={`home-filter-tab tab-amber ${filterTab === 'autofit_todo' ? 'active' : ''}`}
+                    >
+                      មិនទាន់ Auto-Fit ({openedMetrics.autofitTodo})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setFilterTab('ready')}
+                      className={`home-filter-tab tab-success ${filterTab === 'ready' ? 'active' : ''}`}
+                    >
+                      រួចរាល់ 1·2·4 ({openedMetrics.ready124})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setFilterTab('rendered')}
+                      className={`home-filter-tab ${filterTab === 'rendered' ? 'active' : ''}`}
+                    >
+                      Export រួច ({openedMetrics.rendered})
+                    </button>
+                  </div>
+                </div>
+
+                <div className="home-toolbar-right">
+                  <div className="home-search-box">
+                    <Search size={13} className="home-search-icon" />
+                    <input
+                      type="text"
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      placeholder="ស្វែងរកភាគក្នុង Folder (ឧ. 12 ឬ EP12)..."
+                      className="home-search-input"
+                    />
+                  </div>
+
+                  <div className="home-view-toggle" role="group" aria-label="View mode">
+                    <button
+                      type="button"
+                      onClick={() => setViewMode('grid')}
+                      className={`home-view-btn ${viewMode === 'grid' ? 'active' : ''}`}
+                      title="Compact Cards Grid"
+                    >
+                      <LayoutGrid size={14} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setViewMode('list')}
+                      className={`home-view-btn ${viewMode === 'list' ? 'active' : ''}`}
+                      title="Table List"
+                    >
+                      <List size={14} />
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {filteredRows.length === 0 ? (
+                <div className="home-episodes-empty">
+                  មិនមានភាគនៅក្នុង Folder នេះទេ
+                </div>
+              ) : viewMode === 'grid' ? (
+                <div className="home-ep-cards-grid">
+                  {filteredRows.map((item) => {
+                    const { ep, epNum, segCount, cleanTitle, hasScript, hasVoice, hasAutoFit, hasBgm, hasRender, isCoreReady, brokenTextCount } = item;
+                    const isCurrent = String(ep.id) === String(activeEpisode?.id || episodeId);
+                    return (
+                      <div
+                        key={ep.id || item.idx}
+                        onClick={() => handleOpenEpisode(ep.id, openedFolderSummary.id)}
+                        className={`home-ep-card ${isCurrent ? 'is-current' : ''} ${isCoreReady ? 'is-ready' : ''}`}
+                        title="ចុចដើម្បីបើកភាគនេះក្នុង Studio"
+                      >
+                        <div className="home-ep-card-top">
+                          <div className="home-ep-card-title-wrap">
+                            <span className={`home-ep-badge ${isCurrent ? 'badge-current' : isCoreReady ? 'badge-ready' : ''}`}>
+                              EP{epNum}
+                            </span>
+                            <span className="home-ep-card-title">{cleanTitle}</span>
+                          </div>
+                          <span className="home-ep-card-meta">
+                            {ep.duration > 0 ? formatTimecode(ep.duration) : segCount > 0 ? `${segCount} ឃ្លា` : '—'}
+                          </span>
+                        </div>
+
+                        <div className="home-ep-card-chips">
+                          <span className={`home-ep-chip ${hasScript ? 'chip-script-ok' : brokenTextCount > 0 ? 'chip-warn' : 'chip-idle'}`}>
+                            {hasScript ? <Check size={10} /> : brokenTextCount > 0 ? <AlertTriangle size={10} /> : <Clock size={10} />}
+                            1.Script
+                          </span>
+                          <span className={`home-ep-chip ${hasVoice ? 'chip-voice-ok' : 'chip-idle'}`}>
+                            {hasVoice ? <Check size={10} /> : <Clock size={10} />}
+                            2.Voice
+                          </span>
+                          <span className={`home-ep-chip ${hasAutoFit ? 'chip-fit-ok' : 'chip-idle'}`}>
+                            {hasAutoFit ? <Check size={10} /> : <Zap size={10} />}
+                            3.Fit
+                          </span>
+                          <span className={`home-ep-chip ${hasBgm ? 'chip-bgm-ok' : 'chip-idle'}`}>
+                            {hasBgm ? <Check size={10} /> : <Clock size={10} />}
+                            4.BGM
+                          </span>
+                          {hasRender && (
+                            <span className="home-ep-chip chip-render-ok">
+                              <CheckCircle2 size={10} />
+                              MP4
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="home-episodes-table-wrap">
+                  <table className="home-episodes-table">
+                    <thead>
+                      <tr>
+                        <th>ភាគ</th>
+                        <th>ចំណងជើង</th>
+                        <th>រយៈពេល / ឃ្លា</th>
+                        <th>ដំណាក់កាលផលិត (1 · 2 · 3 · 4 · MP4)</th>
+                        <th style={{ textAlign: 'right' }}>សកម្មភាព</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredRows.map((item) => {
+                        const { ep, epNum, segCount, cleanTitle, hasScript, hasVoice, hasAutoFit, hasBgm, hasRender } = item;
+                        const isCurrent = String(ep.id) === String(activeEpisode?.id || episodeId);
+                        return (
+                          <tr
+                            key={ep.id || item.idx}
+                            onClick={() => handleOpenEpisode(ep.id, openedFolderSummary.id)}
+                            className={`home-episode-row ${isCurrent ? 'is-current' : ''}`}
+                          >
+                            <td>
+                              <span className={`home-ep-badge ${isCurrent ? 'badge-current' : ''}`}>
+                                EP {String(epNum).padStart(2, '0')}
+                              </span>
+                            </td>
+                            <td className="home-ep-title-cell">{cleanTitle}</td>
+                            <td className="home-ep-seg-cell">
+                              {ep.duration > 0 ? `${formatTimecode(ep.duration)} · ` : ''}
+                              {segCount > 0 ? `${segCount} ឃ្លា` : 'មិនទាន់មាន'}
+                            </td>
+                            <td>
+                              <div className="home-ep-badges-row">
+                                <span className={`home-ep-chip ${hasScript ? 'chip-script-ok' : 'chip-idle'}`}>
+                                  {hasScript ? <Check size={10} /> : <Clock size={10} />}
+                                  1.Script
+                                </span>
+                                <span className={`home-ep-chip ${hasVoice ? 'chip-voice-ok' : 'chip-idle'}`}>
+                                  {hasVoice ? <Check size={10} /> : <Clock size={10} />}
+                                  2.Voice
+                                </span>
+                                <span className={`home-ep-chip ${hasAutoFit ? 'chip-fit-ok' : 'chip-idle'}`}>
+                                  {hasAutoFit ? <Check size={10} /> : <Zap size={10} />}
+                                  3.Auto-Fit
+                                </span>
+                                <span className={`home-ep-chip ${hasBgm ? 'chip-bgm-ok' : 'chip-idle'}`}>
+                                  {hasBgm ? <Check size={10} /> : <Clock size={10} />}
+                                  4.BGM
+                                </span>
+                                {hasRender && (
+                                  <span className="home-ep-chip chip-render-ok">
+                                    <CheckCircle2 size={10} />
+                                    MP4
+                                  </span>
+                                )}
+                              </div>
+                            </td>
+                            <td style={{ textAlign: 'right' }}>
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleOpenEpisode(ep.id, openedFolderSummary.id);
+                                }}
+                                className="home-ep-open-btn"
+                              >
+                                កាត់ត <ArrowRight size={11} />
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </>
+          )}
         </section>
+
+        {/* Custom Darkroom Delete Folder Confirmation Modal */}
+        {deleteTargetFolder && (
+          <div
+            data-testid="home-delete-folder-modal"
+            className="home-delete-modal-backdrop"
+            onClick={(e) => {
+              if (e.target === e.currentTarget && !isDeletingFolder) {
+                setDeleteTargetFolder(null);
+              }
+            }}
+          >
+            <div
+              className="home-delete-modal-card"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="home-delete-modal-title"
+            >
+              <div className="home-delete-modal-header">
+                <div className="home-delete-modal-title-row">
+                  <div className="home-delete-modal-icon">
+                    <Trash2 size={18} />
+                  </div>
+                  <div className="home-delete-modal-heading-col">
+                    <h3 id="home-delete-modal-title" className="home-delete-modal-title">
+                      លុប Folder រឿង (Delete Folder)
+                    </h3>
+                    <span className="home-delete-modal-sub">
+                      សកម្មភាពនេះមិនអាចត្រឡប់វិញបានទេ
+                    </span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => !isDeletingFolder && setDeleteTargetFolder(null)}
+                  className="home-delete-modal-close"
+                  disabled={isDeletingFolder}
+                  aria-label="Close"
+                >
+                  <X size={15} />
+                </button>
+              </div>
+
+              <div className="home-delete-modal-target-box">
+                <div className="home-delete-modal-target-left">
+                  <Folder size={17} className="home-delete-target-folder-icon" />
+                  <span className="home-delete-target-name">
+                    {deleteTargetFolder.displayTitle}
+                  </span>
+                </div>
+                <span className="home-delete-target-count">
+                  {deleteTargetFolder.metrics?.totalEps || 0} ភាគ
+                </span>
+              </div>
+
+              <p className="home-delete-modal-desc">
+                តើអ្នកពិតជាចង់លុប Folder រឿង <strong>&ldquo;{deleteTargetFolder.displayTitle}&rdquo;</strong> នេះមែនទេ? ទិន្នន័យភាគទាំងអស់ និងការកាត់តក្នុង Folder នេះនឹងត្រូវលុបចេញ។
+              </p>
+
+              <div className="home-delete-modal-footer">
+                <button
+                  type="button"
+                  data-testid="btn-cancel-delete-folder"
+                  onClick={() => setDeleteTargetFolder(null)}
+                  disabled={isDeletingFolder}
+                  className="home-btn-secondary"
+                >
+                  បោះបង់ (Cancel)
+                </button>
+                <button
+                  type="button"
+                  data-testid="btn-confirm-delete-folder"
+                  onClick={handleConfirmDeleteFolder}
+                  disabled={isDeletingFolder}
+                  className="home-btn-danger-confirm"
+                >
+                  <Trash2 size={14} />
+                  <span>{isDeletingFolder ? 'កំពុងលុប...' : 'លុប Folder ចោល'}</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

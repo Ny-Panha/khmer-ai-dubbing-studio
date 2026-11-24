@@ -116,16 +116,13 @@ export default function EpisodeTranslateProgressCard({
     <div
       onClick={(e) => e.stopPropagation()}
       style={{
-        background: 'linear-gradient(135deg, rgba(13, 20, 36, 0.98) 0%, rgba(20, 30, 52, 0.92) 100%)',
+        background: 'rgba(56, 189, 248, 0.05)',
         border: `1px solid ${stateBorder}`,
-        boxShadow: `${stateGlow}, inset 0 1px 0 rgba(255, 255, 255, 0.08)`,
-        borderRadius: 10,
-        padding: '11px 13px',
-        marginTop: 6,
+        borderRadius: 6,
+        padding: '8px 9px',
         display: 'flex',
         flexDirection: 'column',
-        gap: 9,
-        transition: 'all 0.25s ease',
+        gap: 7,
       }}
     >
       {/* Header: Stage info + Big Tabular Percentage / Retry button */}
@@ -245,7 +242,11 @@ export default function EpisodeTranslateProgressCard({
                     ? '⚠️ 1. Translate Script បរាជ័យ (Stage Error)'
                     : (isDone
                       ? '🎉 📝 1. Translate Script ជោគជ័យ 100%'
-                      : (isQueued ? `⏳ 📝 1. Translate Script (រង់ចាំ Route Key #${assignedKeyNum})` : '📝 1. កំពុងវិភាគ & បកប្រែ Script...'))))}
+                      : (isQueued
+                        ? `⏳ 📝 1. Translate Script (រង់ចាំ Route Key #${assignedKeyNum})`
+                        : ((activeJob?.mode === 'repair_broken' || activeJob?.type === 'repair_broken')
+                          ? '✍️ 1. កំពុងជួសជុល Script...'
+                          : '📝 1. កំពុងវិភាគ & បកប្រែ...')))))}
             </div>
             <div
               style={{
@@ -347,7 +348,7 @@ export default function EpisodeTranslateProgressCard({
                         title: 'បញ្ឈប់ (Kill) ដំណើរការ Translate នេះ?',
                         subtitle: activeJob?.episodeId ? `Episode: ${activeJob.episodeId}` : '',
                         message: 'តើអ្នកពិតជាចង់បញ្ឈប់ (Kill) ដំណើរការ Translate នេះមែនទេ?',
-                        confirmLabel: '🛑 បញ្ឈប់ (Kill)',
+                        confirmLabel: 'បញ្ឈប់ (Kill)',
                         cancelLabel: 'បន្តដំណើរការ',
                       });
                       if (confirmed) {
@@ -359,61 +360,43 @@ export default function EpisodeTranslateProgressCard({
                   }}
                   title="Kill Translate Process"
                   style={{
-                    background: effectiveStopping ? 'rgba(245, 158, 11, 0.22)' : 'rgba(239, 68, 68, 0.22)',
-                    border: effectiveStopping ? '1px solid rgba(245, 158, 11, 0.55)' : '1px solid rgba(239, 68, 68, 0.55)',
+                    background: effectiveStopping ? 'rgba(245, 158, 11, 0.2)' : 'rgba(239, 68, 68, 0.16)',
+                    border: effectiveStopping ? '1px solid rgba(245, 158, 11, 0.48)' : '1px solid rgba(239, 68, 68, 0.42)',
                     color: effectiveStopping ? '#fde68a' : '#fca5a5',
-                    padding: '4px 8px',
-                    borderRadius: 6,
-                    fontSize: '0.68rem',
-                    fontWeight: 800,
+                    height: 20,
+                    padding: '0 6px',
+                    borderRadius: 4,
+                    fontSize: '10px',
+                    fontWeight: 700,
                     cursor: effectiveStopping ? 'wait' : 'pointer',
-                    display: 'flex',
+                    display: 'inline-flex',
                     alignItems: 'center',
-                    gap: 4,
-                    transition: 'all 0.15s ease',
+                    gap: 3,
+                    whiteSpace: 'nowrap',
                     opacity: effectiveStopping ? 0.75 : 1,
                   }}
                 >
                   {effectiveStopping ? (
                     <>
-                      <Loader2 size={11} className="animate-spin" />
-                      <span>Stopping...</span>
+                      <Loader2 size={10} className="animate-spin" />
+                      <span>Stop...</span>
                     </>
                   ) : (
-                    <span>🛑 Kill</span>
+                    <span>Stop</span>
                   )}
                 </button>
               )}
-              <div style={{
-                display: 'flex',
-                alignItems: 'baseline',
-                justifyContent: 'flex-end',
-                gap: 1,
-                background: 'rgba(0, 0, 0, 0.5)',
-                padding: '2px 8px',
-                borderRadius: 6,
-                border: `1px solid ${stateBorder}`,
+              <span style={{
+                fontSize: '12px',
+                fontWeight: 800,
+                fontFamily: 'var(--font-mono)',
+                fontVariantNumeric: 'tabular-nums',
+                color: stateColor,
+                whiteSpace: 'nowrap',
                 flexShrink: 0,
               }}>
-                <span style={{
-                  fontSize: '1.25rem',
-                  fontWeight: 900,
-                  fontFamily: "'JetBrains Mono', 'Fira Code', 'Consolas', monospace",
-                  fontVariantNumeric: 'tabular-nums',
-                  color: stateColor,
-                  textShadow: `0 0 12px ${stateColor}`,
-                  letterSpacing: '-0.02em',
-                }}>
-                  {smoothProgress}
-                </span>
-                <span style={{
-                  fontSize: '0.72rem',
-                  fontWeight: 800,
-                  color: stateColor,
-                }}>
-                  %
-                </span>
-              </div>
+                {smoothProgress}%
+              </span>
             </>
           )}
         </div>
@@ -458,119 +441,138 @@ export default function EpisodeTranslateProgressCard({
         />
       </div>
 
-      {/* 4 Milestones */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 4 }}>
+      {/* 4 Crisp Single-Line Milestones */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 3 }}>
         <div style={{
-          padding: '4px 3px',
-          borderRadius: 5,
-          fontSize: '0.62rem',
+          padding: '3px 2px',
+          borderRadius: 4,
+          fontSize: '10px',
+          lineHeight: 1.2,
           textAlign: 'center',
-          background: smoothProgress >= 20 ? 'rgba(16, 185, 129, 0.15)' : (smoothProgress >= 1 ? 'rgba(56, 189, 248, 0.18)' : 'rgba(255, 255, 255, 0.04)'),
-          color: smoothProgress >= 20 ? '#10b981' : (smoothProgress >= 1 ? '#38bdf8' : '#64748b'),
+          whiteSpace: 'nowrap',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          background: smoothProgress >= 20 ? 'rgba(16, 185, 129, 0.14)' : (smoothProgress >= 1 ? 'rgba(56, 189, 248, 0.18)' : 'rgba(255, 255, 255, 0.04)'),
+          color: smoothProgress >= 20 ? '#34d399' : (smoothProgress >= 1 ? '#38bdf8' : '#64748b'),
           fontWeight: smoothProgress >= 1 ? 700 : 500,
-          border: smoothProgress >= 1 && smoothProgress < 20 ? '1px solid rgba(56, 189, 248, 0.5)' : '1px solid transparent',
-          transition: 'all 0.15s ease',
+          border: smoothProgress >= 1 && smoothProgress < 20 ? '1px solid rgba(56, 189, 248, 0.45)' : '1px solid transparent',
         }}>
-          {smoothProgress >= 20 ? '✓ Ingest' : '1. Ingest'}
+          {smoothProgress >= 20 ? '✓ Ingest' : 'Ingest'}
         </div>
         <div style={{
-          padding: '4px 3px',
-          borderRadius: 5,
-          fontSize: '0.62rem',
+          padding: '3px 2px',
+          borderRadius: 4,
+          fontSize: '10px',
+          lineHeight: 1.2,
           textAlign: 'center',
-          background: smoothProgress >= 50 ? 'rgba(16, 185, 129, 0.15)' : (smoothProgress >= 20 ? 'rgba(56, 189, 248, 0.18)' : 'rgba(255, 255, 255, 0.04)'),
-          color: smoothProgress >= 50 ? '#10b981' : (smoothProgress >= 20 ? '#38bdf8' : '#64748b'),
+          whiteSpace: 'nowrap',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          background: smoothProgress >= 50 ? 'rgba(16, 185, 129, 0.14)' : (smoothProgress >= 20 ? 'rgba(56, 189, 248, 0.18)' : 'rgba(255, 255, 255, 0.04)'),
+          color: smoothProgress >= 50 ? '#34d399' : (smoothProgress >= 20 ? '#38bdf8' : '#64748b'),
           fontWeight: smoothProgress >= 20 ? 700 : 500,
-          border: smoothProgress >= 20 && smoothProgress < 50 ? '1px solid rgba(56, 189, 248, 0.5)' : '1px solid transparent',
-          transition: 'all 0.15s ease',
+          border: smoothProgress >= 20 && smoothProgress < 50 ? '1px solid rgba(56, 189, 248, 0.45)' : '1px solid transparent',
         }}>
-          {smoothProgress >= 50 ? '✓ OCR' : '2. OCR'}
+          {smoothProgress >= 50 ? '✓ OCR' : 'OCR'}
         </div>
         <div style={{
-          padding: '4px 3px',
-          borderRadius: 5,
-          fontSize: '0.62rem',
+          padding: '3px 2px',
+          borderRadius: 4,
+          fontSize: '10px',
+          lineHeight: 1.2,
           textAlign: 'center',
+          whiteSpace: 'nowrap',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
           background: isFailed && smoothProgress >= 50 && smoothProgress < 100
             ? 'rgba(239, 68, 68, 0.2)'
-            : (smoothProgress >= 75 ? 'rgba(16, 185, 129, 0.15)' : (smoothProgress >= 50 ? 'rgba(56, 189, 248, 0.18)' : 'rgba(255, 255, 255, 0.04)')),
+            : (smoothProgress >= 75 ? 'rgba(16, 185, 129, 0.14)' : (smoothProgress >= 50 ? 'rgba(56, 189, 248, 0.18)' : 'rgba(255, 255, 255, 0.04)')),
           color: isFailed && smoothProgress >= 50 && smoothProgress < 100
             ? '#f87171'
-            : (smoothProgress >= 75 ? '#10b981' : (smoothProgress >= 50 ? '#38bdf8' : '#64748b')),
+            : (smoothProgress >= 75 ? '#34d399' : (smoothProgress >= 50 ? '#38bdf8' : '#64748b')),
           fontWeight: smoothProgress >= 50 ? 700 : 500,
           border: isFailed && smoothProgress >= 50 && smoothProgress < 100
             ? '1px solid rgba(239, 68, 68, 0.6)'
-            : (smoothProgress >= 50 && smoothProgress < 75 ? '1px solid rgba(56, 189, 248, 0.5)' : '1px solid transparent'),
-          transition: 'all 0.15s ease',
+            : (smoothProgress >= 50 && smoothProgress < 75 ? '1px solid rgba(56, 189, 248, 0.45)' : '1px solid transparent'),
         }}>
           {isFailed && smoothProgress >= 50 && smoothProgress < 100
-            ? '⚠️ Gemini'
-            : (smoothProgress >= 75 ? '✓ Gemini' : '3. Gemini')}
+            ? '! Gemini'
+            : (smoothProgress >= 75 ? '✓ Gemini' : 'Gemini')}
         </div>
         <div style={{
-          padding: '4px 3px',
-          borderRadius: 5,
-          fontSize: '0.62rem',
+          padding: '3px 2px',
+          borderRadius: 4,
+          fontSize: '10px',
+          lineHeight: 1.2,
           textAlign: 'center',
+          whiteSpace: 'nowrap',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
           background: isDone
-            ? 'rgba(16, 185, 129, 0.2)'
+            ? 'rgba(16, 185, 129, 0.18)'
             : (smoothProgress >= 75 ? 'rgba(56, 189, 248, 0.18)' : 'rgba(255, 255, 255, 0.04)'),
           color: isDone
-            ? '#10b981'
+            ? '#34d399'
             : (smoothProgress >= 75 ? '#38bdf8' : '#64748b'),
           fontWeight: smoothProgress >= 75 ? 700 : 500,
           border: isDone
             ? '1px solid rgba(16, 185, 129, 0.4)'
-            : (smoothProgress >= 75 ? '1px solid rgba(56, 189, 248, 0.5)' : '1px solid transparent'),
-          transition: 'all 0.15s ease',
+            : (smoothProgress >= 75 ? '1px solid rgba(56, 189, 248, 0.45)' : '1px solid transparent'),
         }}>
-          {isDone ? '✓ Script' : '4. Script'}
+          {isDone ? '✓ Script' : 'Script'}
         </div>
       </div>
 
       {/* Collapsible Live Console Terminal Drawer */}
       <div className="translate-console-drawer" style={{
         background: '#07080C',
-        border: `1px solid ${isFailed ? 'rgba(239, 68, 68, 0.35)' : 'rgba(56, 189, 248, 0.35)'}`,
-        borderRadius: 8,
+        border: '1px solid var(--border-subtle)',
+        borderRadius: 6,
         overflow: 'hidden',
-        boxShadow: 'inset 0 2px 10px rgba(0, 0, 0, 0.85)',
       }}>
         {/* Console Header Toggle */}
         <button
           type="button"
           onClick={() => setShowConsole(!showConsole)}
+          title={`CONSOLE LOGS (Gemini AI Key #${assignedKeyNum})`}
           style={{
             width: '100%',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
-            padding: '5px 9px',
-            background: 'rgba(255, 255, 255, 0.03)',
+            gap: 6,
+            padding: '4px 8px',
+            background: 'rgba(255, 255, 255, 0.02)',
             border: 'none',
             borderBottom: showConsole ? '1px solid rgba(255, 255, 255, 0.06)' : 'none',
             cursor: 'pointer',
-            transition: 'background 0.15s ease',
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <Terminal size={11} color={isFailed ? '#ef4444' : '#38bdf8'} />
-            <span style={{ fontSize: '0.64rem', fontWeight: 800, color: '#94a3b8', letterSpacing: '0.04em' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5, minWidth: 0, flex: 1 }}>
+            <Terminal size={10} color={isFailed ? '#ef4444' : '#38bdf8'} style={{ flexShrink: 0 }} />
+            <span style={{
+              fontSize: '10px',
+              fontWeight: 700,
+              color: '#94a3b8',
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              textAlign: 'left',
+            }}>
               CONSOLE LOGS (Gemini AI Key #{assignedKeyNum})
             </span>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0, whiteSpace: 'nowrap' }}>
             <span style={{
-              width: 6,
-              height: 6,
+              width: 5,
+              height: 5,
               borderRadius: '50%',
               background: stateColor,
-              boxShadow: `0 0 6px ${stateColor}`,
             }} />
-            <span style={{ fontSize: '0.60rem', color: stateColor, fontWeight: 700 }}>
+            <span style={{ fontSize: '9.5px', color: stateColor, fontWeight: 700 }}>
               {isFailed ? 'FAILED' : (isDone ? 'DONE' : (isQueued ? 'QUEUE' : 'LIVE'))}
             </span>
-            {showConsole ? <ChevronUp size={12} color="#64748b" /> : <ChevronDown size={12} color="#64748b" />}
+            {showConsole ? <ChevronUp size={11} color="#64748b" /> : <ChevronDown size={11} color="#64748b" />}
           </div>
         </button>
 

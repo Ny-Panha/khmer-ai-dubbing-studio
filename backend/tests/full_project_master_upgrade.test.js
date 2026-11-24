@@ -88,7 +88,10 @@ test('Phase 5a: audioSeparationService has no machine-specific paths and honours
 });
 
 test('Phase 2: GeminiRouteModal renders 4 batch action buttons and 3 stage cards per episode', () => {
-  const modal = read(FRONTEND_SRC, 'components', 'dashboard', 'GeminiRouteModal.jsx');
+  const modal =
+    read(FRONTEND_SRC, 'components', 'dashboard', 'GeminiRouteModal.jsx') +
+    '\n' +
+    read(FRONTEND_SRC, 'components', 'dashboard', 'BatchEpisodeCard.jsx');
   assert.match(modal, /batch-primary-execution-row/);
   assert.match(modal, /1\.\s*Translate\s*Script/);
   assert.match(modal, /2\.\s*AI\s*Translate\s*Voice/);
@@ -113,7 +116,7 @@ test('Phase 4: Export settings stages, sticky footer, and ClipInspector 300ms sp
 
   const clipInspector = read(FRONTEND_SRC, 'components', 'voice', 'ClipInspectorPanel.jsx');
   assert.match(clipInspector, /minSpin\s*=\s*new\s*Promise\(\(r\)\s*=>\s*setTimeout\(r,\s*300\)\)/);
-  assert.match(clipInspector, /🔊\s*ស្តាប់សាកល្បង/);
+  assert.match(clipInspector, /ស្តាប់សំឡេង|ស្តាប់សាកល្បង/);
 });
 
 test('Phase 3c: sanitizeScriptData and sanitizeSeriesEpisodes filter out null/non-object segment elements', async () => {

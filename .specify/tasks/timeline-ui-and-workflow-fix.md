@@ -1,7 +1,0 @@
-# Tasks: Timeline UI, Features & Workflow Fix
-
-- [x] Task 1: [Step 1] Refactor `frontend/src/components/timeline/TimelineToolbar.jsx` (fix `+ + ឃ្លា` -> `<Plus size={13} /> <span>ថែមឃ្លា</span>`, 3-stage left workflow groups with `Full Video | Auto-Cut` segmented toggle & `Bridge Gaps`, center live timecode readout, right `Snap`/`Subs` pills & `0.5x–3.0x` zoom controls)
-- [x] Task 2: [Step 2] Update `frontend/src/components/timeline/TimelineTrackHeaders.jsx` and `TimelineEditor.jsx` (`148px` track header width, colored `3px` left status bars, `VOICE 1` `👨/គោល` & `VOICE 2` `👩/បន្ទាប់` indicators, `22px x 22px` buttons, two-way Mute binding for `VIDEO 1` and `CLEAN BGM`)
-- [x] Task 3: [Step 3] Update `frontend/src/components/timeline/TimelineTracksCanvas.jsx` and `TimelineEditor.jsx` (smart `VOICE 1` / `VOICE 2` gender & stagger routing, muted track dimming + `MUTED` badge, deep studio blue/rose voice clips with top accent bars, responsive clip labels for `< 48px`, `48–94px`, `>= 95px`, and rich Khmer dialogue tooltip)
-- [x] Task 4: [Step 4] Update `frontend/src/components/timeline/TimelineEditor.css` (CapCut Coral Red `#ff3b5c` playhead stem/handle/timecode pill with `z-index: 60` and glow, keeping `#00e5ff`/`#38BDF8` for `.selected` clips and trim handles)
-- [x] Task 5: [Test & Sync] Run `npm --prefix frontend run lint`, `npm --prefix frontend run build`, existing `backend/tests/timeline_*.test.js`, and new `backend/tests/timeline_ui_workflow_fix.test.js`, then sync `.agents/STATE.md`

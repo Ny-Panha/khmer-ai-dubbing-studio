@@ -3,6 +3,7 @@ import { useProxyPreview } from './hooks/useProxyPreview';
 import { useSourceProxy } from './hooks/useSourceProxy';
 import { AlertTriangle, X } from 'lucide-react';
 import Navbar from './components/layout/Navbar';
+import StudioNavRail from './components/layout/StudioNavRail';
 import HomeDashboard from './components/layout/HomeDashboard';
 import ErrorBoundary from './components/common/ErrorBoundary';
 import JobDashboardModal from './components/dashboard/JobDashboardModal';
@@ -44,7 +45,8 @@ const MemoNavbar = React.memo(Navbar, (prev, next) => (
   prev.isLeftCollapsed === next.isLeftCollapsed &&
   prev.isRightCollapsed === next.isRightCollapsed &&
   prev.isTimelineCollapsed === next.isTimelineCollapsed &&
-  prev.currentRoute === next.currentRoute
+  prev.currentRoute === next.currentRoute &&
+  prev.showShortcutsModal === next.showShortcutsModal
 ));
 
 // Prevent 5Hz playback currentTime ticks from re-rendering MediaLibrary and its heavy ScriptReviewTab
@@ -197,9 +199,21 @@ const VISUAL_SETTING_DEFAULTS = {
   watermarkPosition: 'above-ticker',
   watermarkColor: '#38BDF8',
   antiTheftSize: 'small',
+  antiTheftHeight: null,
+  antiTheftBgStyle: 'dark',
+  antiTheftBlur: 18,
   duckingVolume: 0.15,
   khmerVolume: 1.3,
   enableDemucs: false,
+  enableMirrorFlip: false,
+  zoomScale: 1.0,
+  enableColorGrade: false,
+  youtubeSafeAudio: false,
+  enableCustomBgm: false,
+  customBgmUrl: null,
+  customBgmPath: null,
+  customBgmName: null,
+  customBgmDuration: 0,
 };
 
 const RENDER_INVALIDATING_SETTING_KEYS = Object.keys(VISUAL_SETTING_DEFAULTS);
@@ -309,6 +323,12 @@ export default function App() {
     handleCloseBatchExportStudio,
     isAnyModalOpen,
   } = modalState;
+  const isRouteStageOpen = Boolean(
+    showJobDashboard || showGeminiRouteModal || showGeminiQuotaModal || showBatchExportStudioModal
+  );
+  const [showShortcutsModal, setShowShortcutsModal] = useState(false);
+  const handleOpenShortcutsModal = useCallback(() => setShowShortcutsModal(true), []);
+  const handleCloseShortcutsModal = useCallback(() => setShowShortcutsModal(false), []);
 
   const workspaceState = useStudioWorkspaceState();
   const {
@@ -530,8 +550,12 @@ export default function App() {
       ...(voiceSettings || EMPTY_OBJECT),
       ...(globalLogoSettings || DEFAULT_GLOBAL_CUSTOMIZE_SETTINGS),
     };
+    // Pure CSS-previewed YouTube visual transforms (Mirror/Zoom/ColorGrade) apply instantly in VideoPlayerPreview
+    // without forcing a 45s backend proxy re-encode; youtubeSafeAudio stays included because it changes proxy audio mix.
+    const cssOnlyYoutubeKeys = new Set(['enableMirrorFlip', 'zoomScale', 'enableColorGrade']);
     return Object.fromEntries([
-      ...RENDER_INVALIDATING_SETTING_KEYS, 'videoZoom', 'videoPanX', 'videoPanY', 'verticalBg',
+      ...RENDER_INVALIDATING_SETTING_KEYS.filter((k) => !cssOnlyYoutubeKeys.has(k)),
+      'videoZoom', 'videoPanX', 'videoPanY', 'verticalBg',
     ].map(key => [key, readNormalizedSettingVal(combined, key)]));
   }, [voiceSettings, globalLogoSettings]);
   const proxy = useProxyPreview({
@@ -539,7 +563,9 @@ export default function App() {
     clips: media.videoClips, segments: scriptData?.segments, settings: proxySettings,
     framing: scriptData?.framingOverrides, keyframes: scriptData?.framingKeyframes,
     logo: globalLogoSettings, aspectRatio: currentAspectRatio, active: !isHomeRoute,
-    stem: series.activeEpisode?.cleanBgmPath || series.activeEpisode?.bgmAudioUrl,
+    stem: (voiceSettings?.enableCustomBgm && (voiceSettings?.customBgmUrl || voiceSettings?.customBgmPath))
+      ? (voiceSettings.customBgmUrl || voiceSettings.customBgmPath)
+      : (series.activeEpisode?.cleanBgmPath || series.activeEpisode?.bgmAudioUrl),
   });
   const sourceProxy = useSourceProxy({
     seriesId: series.seriesId,
@@ -1168,6 +1194,25 @@ export default function App() {
           onToggleTimelinePanel={toggleTimelinePanel}
           currentRoute={currentRoute}
           onNavigateRoute={navigateToRoute}
+          showShortcutsModal={showShortcutsModal}
+          onCloseShortcutsModal={handleCloseShortcutsModal}
+        />
+
+        {/* Slim Left Icon Rail (Persistent Across All 6 Studio Routes) */}
+        <StudioNavRail
+          currentRoute={currentRoute}
+          onNavigateRoute={navigateToRoute}
+          onOpenGeminiRoute={handleOpenGeminiRoute}
+          onOpenBatchExportStudio={handleOpenBatchExportStudio}
+          onOpenGeminiQuota={handleOpenGeminiQuota}
+          onOpenJobDashboard={handleOpenJobDashboard}
+          onOpenShortcuts={handleOpenShortcutsModal}
+          isGeminiRouteActive={showGeminiRouteModal}
+          isBatchExportStudioActive={showBatchExportStudioModal}
+          isGeminiQuotaActive={showGeminiQuotaModal}
+          isJobDashboardActive={showJobDashboard}
+          activeSeries={series.activeSeries}
+          batchRender={render.batchRender}
         />
 
         {/* Backend Offline Dismissible Warning Banner / Toast */}
@@ -1215,16 +1260,25 @@ export default function App() {
         {isHomeRoute ? (
           <ErrorBoundary inline name="Home Dashboard">
             <HomeDashboard
+              seriesList={series.seriesList}
               activeSeries={series.activeSeries}
               activeEpisode={series.activeEpisode}
+              seriesId={series.seriesId}
               episodeId={series.episodeId}
               onNavigateRoute={navigateToRoute}
+              onSwitchSeries={series.handleSwitchSeries}
               onSwitchEpisode={handleSwitchEpisode}
+              onRenameSeries={handleRenameSeries}
+              onDeleteSeries={handleDeleteSeries}
+              onRefreshSeries={series.refreshSeriesFromServer}
               onTabChange={setLeftTab}
             />
           </ErrorBoundary>
         ) : (
-        <main className={`capcut-main-workspace ${activeSplitter ? 'is-resizing' : ''}`}>
+        <main
+          className={`capcut-main-workspace ${activeSplitter ? 'is-resizing' : ''} ${isRouteStageOpen ? 'is-route-occluded' : ''}`}
+          aria-hidden={isRouteStageOpen || undefined}
+        >
           {/* Top 3-Column Suite: Left Tools | Video Monitor | Contextual Inspector */}
           <div className="capcut-top-suite" ref={topSuiteRef}>
             {/* 1. Left Panel: Media Library, AI Script, Subtitles */}
@@ -1385,6 +1439,7 @@ export default function App() {
                   batchRender={render.batchRender}
                   duration={playback.duration}
                   currentTime={playback.currentTime}
+                  subscribePlayhead={playback.subscribePlayhead}
                   isPlaying={playback.isPlaying}
                   scriptData={scriptData}
                   onGenerateAudio={handleGenerateAudio}

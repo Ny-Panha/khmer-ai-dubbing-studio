@@ -17,14 +17,14 @@ const {
 } = require('../models/speakerRegistry');
 
 test('Step 1: Center-bottom subtitle ROI, 0.35s short-cue sensitivity, <0.20s merge gap, and multimodal OCR fields', () => {
-  const ffmpegSource = fs.readFileSync(
-    path.join(__dirname, '..', 'services', 'ffmpegService.js'),
-    'utf8'
-  );
-  const stage3Source = fs.readFileSync(
-    path.join(__dirname, '..', 'services', 'pipeline', 'stages', 'stage3_extractChineseSubtitles.js'),
-    'utf8'
-  );
+  const ffmpegSource =
+    fs.readFileSync(path.join(__dirname, '..', 'services', 'ffmpegService.js'), 'utf8') +
+    '\n' +
+    fs.readFileSync(path.join(__dirname, '..', 'services', 'ffmpeg', 'ffmpegProbeAndFrames.js'), 'utf8');
+  const stage3Source =
+    fs.readFileSync(path.join(__dirname, '..', 'services', 'pipeline', 'stages', 'stage3_extractChineseSubtitles.js'), 'utf8') +
+    '\n' +
+    fs.readFileSync(path.join(__dirname, '..', 'services', 'pipeline', 'stages', 'stage3VisionBatchRunner.js'), 'utf8');
 
   // 1. Center-bottom ROI crop (crop=w=0.72*iw:h=0.16*ih:x=0.14*iw:y=0.78*ih)
   assert.match(ffmpegSource, /crop=w=0\.72\*iw:h=0\.16\*ih:x=0\.14\*iw:y=0\.78\*ih/);
@@ -92,10 +92,10 @@ test('Step 2: Gemini & Stage 6 Master Dubbing Prompt (castRegistry, detectedGenr
     path.join(__dirname, '..', 'services', 'geminiService.js'),
     'utf8'
   );
-  const stage6Source = fs.readFileSync(
-    path.join(__dirname, '..', 'services', 'pipeline', 'stages', 'stage6_generateModeSpecificScript.js'),
-    'utf8'
-  );
+  const stage6Source =
+    fs.readFileSync(path.join(__dirname, '..', 'services', 'pipeline', 'stages', 'stage6_generateModeSpecificScript.js'), 'utf8') +
+    '\n' +
+    fs.readFileSync(path.join(__dirname, '..', 'services', 'pipeline', 'stages', 'stage6PromptAndConsistency.js'), 'utf8');
 
   // 1. Pre-Translation Cast Registry & Genre Locking in Schema + Prompt
   assert.match(geminiSource, /detectedGenre:\s*\{/);
@@ -205,10 +205,10 @@ test('Step 4: MediaLibrary top tabs prevent truncation and DubbingModeTab render
   );
 
   // 1. MediaLibrary top tabs anti-truncation CSS & concise Khmer labels
-  assert.match(mediaLibraryCss, /\.media-tab-btn\s*\{[\s\S]*?font-size:\s*11\.5px;[\s\S]*?padding:\s*0 6px;/);
-  assert.match(mediaLibraryJsx, /<span>1\. វីដេអូ<\/span>/);
-  assert.match(mediaLibraryJsx, /<span>2\. សំឡេង AI<\/span>/);
-  assert.match(mediaLibraryJsx, /<span>3\. អត្ថបទ<\/span>/);
+  assert.match(mediaLibraryCss, /\.media-tab-btn\s*\{[\s\S]*?white-space:\s*nowrap;/);
+  assert.match(mediaLibraryJsx, /<span>ភាគ<\/span>/);
+  assert.match(mediaLibraryJsx, /<span>AI ផលិត<\/span>/);
+  assert.match(mediaLibraryJsx, /<span>អត្ថបទ<\/span>/);
 
   // 2. DubbingModeTab 1-Click Smart Prompt Chips & Fast OCR summary pill
   assert.match(dubbingModeTabJsx, /OCR \+ Visual Speaker Gender \+ Direct Translate/);
@@ -219,10 +219,11 @@ test('Step 4: MediaLibrary top tabs prevent truncation and DubbingModeTab render
 });
 
 test('Step 5: Batch Generate Studio (GeminiRouteModal) renders full 4-group Batch Script Setup panel and wires parameters into startGenerationJob', () => {
-  const geminiModalJsx = fs.readFileSync(
-    path.join(__dirname, '..', '..', 'frontend', 'src', 'components', 'dashboard', 'GeminiRouteModal.jsx'),
-    'utf8'
-  );
+  const dashDir = path.join(__dirname, '..', '..', 'frontend', 'src', 'components', 'dashboard');
+  const geminiModalJsx =
+    fs.readFileSync(path.join(dashDir, 'GeminiRouteModal.jsx'), 'utf8') +
+    '\n' +
+    fs.readFileSync(path.join(dashDir, 'BatchScriptSetupPanel.jsx'), 'utf8');
 
   // 1. Collapsible Batch Script Setup section & 4 configuration groups
   assert.match(geminiModalJsx, /កំណត់ទម្រង់បង្កើត Script \(Batch Script Setup\)/);
@@ -246,10 +247,11 @@ test('Step 5: Batch Generate Studio (GeminiRouteModal) renders full 4-group Batc
 });
 
 test('Step 6: Impeccable / Unslop UI cleanup in GeminiRouteModal removes duplicate cascade/footer trackers and renders DubbingStepCardsBar + unified single action row', () => {
-  const geminiModalJsx = fs.readFileSync(
-    path.join(__dirname, '..', '..', 'frontend', 'src', 'components', 'dashboard', 'GeminiRouteModal.jsx'),
-    'utf8'
-  );
+  const dashDir = path.join(__dirname, '..', '..', 'frontend', 'src', 'components', 'dashboard');
+  const geminiModalJsx =
+    fs.readFileSync(path.join(dashDir, 'GeminiRouteModal.jsx'), 'utf8') +
+    '\n' +
+    fs.readFileSync(path.join(dashDir, 'BatchScriptSetupPanel.jsx'), 'utf8');
   const cardsBarPath = path.join(__dirname, '..', '..', 'frontend', 'src', 'features', 'dubbing-runner', 'DubbingStepCardsBar.jsx');
   const cardsBarJsx = fs.existsSync(cardsBarPath) ? fs.readFileSync(cardsBarPath, 'utf8') : '';
   const combinedJsx = geminiModalJsx + '\n' + cardsBarJsx;
@@ -277,7 +279,7 @@ test('Step 7: Direct URL Route System (/home, /studio, /batch, /quota, /export, 
   const rootDir = path.join(__dirname, '..', '..', 'frontend', 'src');
   const modalContextJsx = fs.readFileSync(path.join(rootDir, 'context', 'ModalContext.jsx'), 'utf8');
   const homeDashboardJsx = fs.readFileSync(path.join(rootDir, 'components', 'layout', 'HomeDashboard.jsx'), 'utf8');
-  const navbarJsx = fs.readFileSync(path.join(rootDir, 'components', 'layout', 'Navbar.jsx'), 'utf8');
+  const navRailJsx = fs.readFileSync(path.join(rootDir, 'components', 'layout', 'StudioNavRail.jsx'), 'utf8');
   const appJsx = fs.readFileSync(path.join(rootDir, 'App.jsx'), 'utf8');
 
   assert.match(modalContextJsx, /export function normalizeStudioRoute/);
@@ -286,14 +288,18 @@ test('Step 7: Direct URL Route System (/home, /studio, /batch, /quota, /export, 
   assert.match(homeDashboardJsx, /data-testid="home-dashboard-view"/);
   assert.match(homeDashboardJsx, /data-testid="home-route-directory"/);
   assert.match(homeDashboardJsx, /data-testid="btn-home-open-studio"/);
-  assert.match(navbarJsx, /data-testid="navbar-home-route-btn"/);
-  assert.match(navbarJsx, /data-testid="navbar-studio-route-btn"/);
+  assert.match(navRailJsx, /data-testid="navbar-home-route-btn"/);
+  assert.match(navRailJsx, /data-testid="navbar-studio-route-btn"/);
   assert.match(appJsx, /<HomeDashboard/);
 });
 
 test('Step 8: Batch Studio 3-Step Runners, 2-Row Control Bar, Episode Card Stage Modules, and Duplicate Job Guard', () => {
   const jobRoutesSource = fs.readFileSync(path.join(__dirname, '..', 'routes', 'jobRoutes.js'), 'utf8');
-  const geminiModalJsx = fs.readFileSync(path.join(__dirname, '..', '..', 'frontend', 'src', 'components', 'dashboard', 'GeminiRouteModal.jsx'), 'utf8');
+  const dashDir = path.join(__dirname, '..', '..', 'frontend', 'src', 'components', 'dashboard');
+  const geminiModalJsx =
+    fs.readFileSync(path.join(dashDir, 'GeminiRouteModal.jsx'), 'utf8') +
+    '\n' +
+    fs.readFileSync(path.join(dashDir, 'BatchEpisodeCard.jsx'), 'utf8');
   const demucsJsx = fs.readFileSync(path.join(__dirname, '..', '..', 'frontend', 'src', 'components', 'dashboard', 'route-runners', 'EpisodeDemucsProgressCard.jsx'), 'utf8');
   const ttsJsx = fs.readFileSync(path.join(__dirname, '..', '..', 'frontend', 'src', 'components', 'dashboard', 'route-runners', 'EpisodeTtsProgressCard.jsx'), 'utf8');
   const translateJsx = fs.readFileSync(path.join(__dirname, '..', '..', 'frontend', 'src', 'components', 'dashboard', 'route-runners', 'EpisodeTranslateProgressCard.jsx'), 'utf8');

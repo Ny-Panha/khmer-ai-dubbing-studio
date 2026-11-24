@@ -2,6 +2,7 @@ import {
   scanEpisodeBrokenSegments,
   scanSeriesBrokenSegments,
 } from '../../utils/translationQuality.js';
+import { detectSpeakerGender } from '../../utils/speakerUtils.js';
 
 /**
  * Pure single-source-of-truth helpers for GeminiRouteModal and EpisodesTab.
@@ -16,14 +17,51 @@ export function hasEpisodeVideo(ep) {
 }
 
 export function getStoredEpisodeSegments(ep) {
-  if (!ep || !ep.scriptData || !Array.isArray(ep.scriptData.segments)) {
-    return [];
+  if (!ep) return [];
+  if (ep.scriptData && Array.isArray(ep.scriptData.segments)) {
+    return ep.scriptData.segments;
   }
-  return ep.scriptData.segments;
+  if (Array.isArray(ep.scriptSegments)) {
+    return ep.scriptSegments;
+  }
+  if (Array.isArray(ep.segments)) {
+    return ep.segments;
+  }
+  return [];
 }
 
 export function checkEpisodeHasScript(ep) {
   return getStoredEpisodeSegments(ep).length > 0;
+}
+
+export function getEpisodeGenderCounts(ep) {
+  const segments = getStoredEpisodeSegments(ep);
+  let maleCueCount = 0;
+  let femaleCueCount = 0;
+
+  for (const seg of segments) {
+    const voiceId = String(seg.voiceId || seg.khmerVoiceId || '').toLowerCase();
+    const explicitGender = String(seg.gender || seg.voiceGender || seg.speakerGender || seg.acousticGender || '').toLowerCase();
+
+    if (explicitGender === 'female' || explicitGender === 'f' || voiceId.includes('sreymom')) {
+      femaleCueCount++;
+    } else if (explicitGender === 'male' || explicitGender === 'm' || voiceId.includes('piseth')) {
+      maleCueCount++;
+    } else {
+      const detected = detectSpeakerGender(
+        seg.speaker || seg.speakerName,
+        seg.gender || seg.voiceGender,
+        seg.text || seg.khmerText || seg.khmerDialogue
+      );
+      if (detected === 'FEMALE') {
+        femaleCueCount++;
+      } else {
+        maleCueCount++;
+      }
+    }
+  }
+
+  return { maleCueCount, femaleCueCount, total: segments.length };
 }
 
 export function getEpisodeBrokenSummary(ep) {

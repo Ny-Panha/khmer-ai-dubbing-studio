@@ -140,7 +140,7 @@ function TimelineToolbar({
                 type="button"
                 onClick={onResetFullVideo}
                 className={`timeline-pill-tool timeline-segment-option ${!isAutoCutMode && selectedVideo ? 'is-active-mode' : ''}`}
-                title="🎞️ Full Video: រក្សាវីដេអូពេញដើម (Restore Full Uncut Video)"
+                title="Full Video: រក្សាវីដេអូពេញដើម (Restore Full Uncut Video)"
                 disabled={!selectedVideo}
               >
                 <Film size={12} />
@@ -152,7 +152,7 @@ function TimelineToolbar({
                 type="button"
                 onClick={onAutoSplitVideo}
                 className={`timeline-pill-tool timeline-segment-option ${isAutoCutMode ? 'is-active-mode' : ''}`}
-                title="✂️ Auto-Cut by Subs: កាត់ Video ជាកំណាត់ៗតាម Subtitle"
+                title="Auto-Cut by Subs: កាត់ Video ជាកំណាត់ៗតាម Subtitle"
                 disabled={!scriptSegments || scriptSegments.length === 0}
               >
                 <Scissors size={12} />
@@ -169,7 +169,7 @@ function TimelineToolbar({
               type="button"
               onClick={() => onAutoAlignNoOverlap && onAutoAlignNoOverlap()}
               className="timeline-pill-tool tool-purple"
-              title="✨ Auto-Align Voice: តម្រៀបសំឡេងតាម Track រៀងៗខ្លួនមិនឱ្យជាន់គ្នា"
+              title="Auto-Align Voice: តម្រៀបសំឡេងតាម Track រៀងៗខ្លួនមិនឱ្យជាន់គ្នា"
               disabled={!scriptSegments || scriptSegments.length <= 1}
             >
               <Sparkles size={12} />
@@ -195,7 +195,7 @@ function TimelineToolbar({
               type="button"
               onClick={() => setSnappingEnabled((prev) => !prev)}
               className={`timeline-pill-tool ${snappingEnabled ? 'tool-magnet active' : 'tool-magnet'}`}
-              title={snappingEnabled ? '🧲 ដែកឆក់ (Magnet Snap): ON' : '🧲 ដែកឆក់ (Magnet Snap): OFF'}
+              title={snappingEnabled ? 'ដែកឆក់ (Magnet Snap): ON' : 'ដែកឆក់ (Magnet Snap): OFF'}
             >
               <Magnet size={12} />
               <span>{snappingEnabled ? 'Snap ON' : 'Snap OFF'}</span>

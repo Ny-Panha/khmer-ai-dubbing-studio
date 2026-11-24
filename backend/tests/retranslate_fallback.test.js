@@ -233,4 +233,54 @@ test('Retranslate Model Fallback & Route Error Mapping Suite', async (t) => {
     assert.equal(updated[1].translationStyle, 'compact');
     assert.equal(updated[1].audioOutdated, true);
   });
+
+  await t.test('8. Single-segment retranslate prioritizes Option #2 (compact / ខ្លីចំអត្ថន័យ) in prompt & auto-selects it in UI', async () => {
+    let capturedSystem = '';
+    let capturedContent = '';
+    const mockAiClient = {
+      models: {
+        generateContent: async ({ contents, config }) => {
+          capturedContent = String(contents?.[0] || '');
+          capturedSystem = String(config?.systemInstruction || '');
+          return {
+            text: JSON.stringify({
+              chinese: '还愣着干什么',
+              options: [
+                { style: 'classical', label: '🎭 សម្ដីកុនបុរាណ', text: 'ហេតុអ្វីនៅស្ទាក់ស្ទើរទៀត?' },
+                { style: 'compact', label: '📝 ខ្លីចំអត្ថន័យ', text: 'នៅចាំអីទៀត!' },
+                { style: 'dramatic', label: '⚡ អារម្មណ៍តួអង្គ', text: 'នៅឈរភ្លឹកដល់ណាទៀត! ឆាប់ទៅ!' },
+              ],
+              note: '愣着 = ឈរភ្លឹក',
+            }),
+          };
+        },
+      },
+    };
+
+    const res = await retranslateSingleDialogue('还愣着干什么', null, {
+      aiClient: mockAiClient,
+      durationSec: 1.5,
+      timeoutMs: 2000,
+    });
+
+    assert.ok(capturedSystem.includes('OPTION #2'), 'System prompt must highlight Option #2 compact style');
+    assert.ok(capturedSystem.includes('ខ្លីចំអត្ថន័យ'), 'System prompt must define ខ្លីចំអត្ថន័យ');
+    assert.ok(capturedContent.includes('1.50s'), 'Prompt content must include durationSec lip-sync budget');
+    assert.equal(res.options[1].style, 'compact');
+    assert.equal(res.options[1].text, 'នៅចាំអីទៀត!');
+
+    const fs = require('fs');
+    const path = require('path');
+    const clipSrc = fs.readFileSync(
+      path.resolve(__dirname, '../../frontend/src/components/voice/ClipInspectorPanel.jsx'),
+      'utf8'
+    );
+    const dubbingHookSrc = fs.readFileSync(
+      path.resolve(__dirname, '../../frontend/src/hooks/useAudioDubbing.js'),
+      'utf8'
+    );
+    assert.match(clipSrc, /pickPreferredCompactOption/);
+    assert.match(clipSrc, /handleApplyOption\(preferredOpt\.text\)/);
+    assert.match(dubbingHookSrc, /opt\?\.style === 'compact'/);
+  });
 });

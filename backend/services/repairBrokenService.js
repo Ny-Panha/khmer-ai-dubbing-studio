@@ -112,8 +112,8 @@ function buildBatchTranslationPrompt(inputLines) {
 3. កំហិតពាក្យខ្មែរយ៉ាងតឹងរ៉ឹងតាម "maxKhmerWords": ត្រូវបកប្រែឱ្យខ្លី ចំខ្លឹមសារ មិនលើសពីចំនួន "maxKhmerWords" ឡើយ។
 4. ហាមដាច់ខាតកុំប្រើពាក្យបំពេញទទេដូចជា "សន្ទនា", "សូមរង់ចាំ", "សូមរង់..." ឬ "..." ឱ្យសោះ!
 5. ហាមដាច់ខាតកុំបកប្រែចេញអត្ថបទខ្មែរដូចគ្នាលើបន្ទាត់ដែលប្រយោគចិនខុសគ្នា!
-6. ហាមមានតួអក្សរចិន (\u4E00-\u9FFF) ឬតួអក្សរថៃនៅក្នុង "khmerText" ដាច់ខាត (100% Khmer Script Only)!
-7. ហាមដាច់ខាតកុំឱ្យ "khmerText" ទទេ ឬមានតែសញ្ញាវណ្ណយុត្តិ (ដូចជា "។", "!", "?")! គ្រប់ id ទាំងអស់ (រួមទាំងឃ្លា OCR ខ្លីៗ ឬឃ្លាកំហឹងក្នុងសាច់រឿង) ត្រូវតែមានពាក្យខ្មែរពិតប្រាកដដែលអាចអានជាសំឡេងបាន ១០០%។
+6. ហាមមានតួអក្សរចិន (\u4E00-\u9FFF), តួអក្សរថៃ ឬភាសាផ្សេង (ដូចជា វៀតណាម) នៅក្នុង "khmerText" ដាច់ខាត (100% Khmer Script Only)!
+7. ហាមដាច់ខាតកុំឱ្យ "khmerText" ទទេ ឬមានតែសញ្ញាវណ្ណយុត្តិ (ដូចជា "។", "!", "?")! គ្រប់ id ទាំងអស់ (រួមទាំងឃ្លា OCR ខ្លីៗ ឃ្លាកំហឹង ឬជេរប្រមាថក្នុងសាច់រឿង ដូចជា "都滚蛋吧" -> "នាំគ្នាចេញទៅឱ្យអស់ទៅ!", "滚蛋" -> "ចេញទៅ!") ត្រូវតែមានពាក្យខ្មែរពិតប្រាកដដែលអាចអានជាសំឡេងបាន ១០០%។
 
 បញ្ជីប្រយោគត្រូវបកប្រែ៖
 ${JSON.stringify(inputLines, null, 2)}
@@ -129,6 +129,8 @@ ${JSON.stringify(inputLines, null, 2)}
 
 function buildSingleLineRepairPrompt(line) {
   return `អ្នកគឺជាអ្នកបកប្រែកុនភាគចិន-ខ្មែរអាជីព។ នេះជាការបកប្រែឃ្លាសន្ទនារឿងភាគសម្រាប់ Dubbing — ទោះបីជាឃ្លាកំហឹង/ជេរប្រមាថក្នុងរឿង ពាក្យ OCR ខ្លីៗ ឬឃ្លាមិនទាន់ចប់ន័យ ក៏ត្រូវបកប្រែជាភាសាខ្មែរធម្មជាតិ ១០០% ហាមរំលង ឬទុកទទេជាដាច់ខាត។
+- 100% Khmer Script Only (ហាមភាសាថៃ ឬវៀតណាមដាច់ខាត)
+- ឧទាហរណ៍៖ "都滚蛋吧" -> "នាំគ្នាចេញទៅឱ្យអស់ទៅ!"
 
 ឃ្លាត្រូវជួសជុល (#${line.id}):
 - sourceChineseToTranslate: ${JSON.stringify(line.sourceChineseToTranslate)}
@@ -159,7 +161,17 @@ function extractRepairItems(parsed) {
   if (Array.isArray(parsed)) return parsed;
   if (Array.isArray(parsed?.segments)) return parsed.segments;
   if (Array.isArray(parsed?.items)) return parsed.items;
-  if (parsed && typeof parsed === 'object' && (parsed.khmerText || parsed.khmerTranslatedText || parsed.khmer)) {
+  if (
+    parsed &&
+    typeof parsed === 'object' &&
+    (parsed.khmerText ||
+      parsed.khmerTranslatedText ||
+      parsed.khmer ||
+      parsed.translatedKhmer ||
+      parsed.text ||
+      parsed.khmer_text ||
+      parsed.translation)
+  ) {
     return [parsed];
   }
   return [];
@@ -514,7 +526,15 @@ async function runRepairBrokenSegmentsJob(job, deps = {}) {
           const item = matched[i];
           const line = expectedLines[i];
           if (!item || !line) continue;
-          const rawKhmer = item.khmerText || item.khmerTranslatedText || item.khmer || '';
+          const rawKhmer =
+            item.khmerText ||
+            item.khmerTranslatedText ||
+            item.khmer ||
+            item.translatedKhmer ||
+            item.text ||
+            item.khmer_text ||
+            item.translation ||
+            '';
           if (!rawKhmer) continue;
 
           const targetIdx = indexBySegId.get(String(line.id));

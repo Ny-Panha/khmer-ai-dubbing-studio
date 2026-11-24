@@ -145,7 +145,8 @@ test('Playback State & Deferred Source Invariant Verification Suite', async (t) 
 
   await t.test('5. Audio synchronization invariants: cold seek avoidance, startup grace, and rate nudge deadzone', () => {
     const playerFile = path.resolve(__dirname, '../../frontend/src/components/player/VideoPlayerPreview.jsx');
-    const content = fs.readFileSync(playerFile, 'utf8');
+    const audioSyncFile = path.resolve(__dirname, '../../frontend/src/components/player/usePlayerAudioSync.js');
+    const content = fs.readFileSync(playerFile, 'utf8') + '\n' + fs.readFileSync(audioSyncFile, 'utf8');
 
     // Cold seek avoidance on natural start (from beginning of segment)
     assert.ok(content.includes('isNaturalStart = Math.abs(expectedOffset) <= 0.055'), 'Must check natural start to avoid cold seek latency');

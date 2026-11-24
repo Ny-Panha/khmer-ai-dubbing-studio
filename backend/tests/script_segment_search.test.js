@@ -58,7 +58,7 @@ test('Script search UI wiring uses filterScriptSegments and stable line numbers'
   assert.ok(scriptReviewCode.includes('s === seg ||'));
   assert.ok(scriptReviewCode.includes('const segmentNumber = seg.segmentId ?? seg.id ?? idx + 1;'));
   assert.ok(scriptReviewCode.includes('#{segmentNumber}'));
-  assert.ok(scriptReviewCode.includes('Search #37, dialogue, or speaker...'));
+  assert.ok(scriptReviewCode.includes('ស្វែងរក #37, អត្ថបទ ឬឈ្មោះតួអង្គ...'));
   assert.ok(scriptReviewCode.includes('aria-label="Clear search"'));
 });
 

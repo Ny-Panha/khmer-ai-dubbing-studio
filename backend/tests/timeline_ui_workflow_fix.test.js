@@ -52,9 +52,8 @@ test('Step 2: Track Headers widen to 148px, prevent CLEAN BGM truncation, add co
   assert.match(cssSource, /\.track-header\.clean-bgm-track-hdr\s*\{[\s\S]*?border-left:\s*3px solid #10b981;/);
   assert.match(cssSource, /\.track-ctrl-mini-btn\s*\{[\s\S]*?width:\s*22px;[\s\S]*?height:\s*22px;/);
 
-  // 3. VOICE 1 (👨/គោល) and VOICE 2 (👩/បន្ទាប់) sub-badges + CLEAN BGM full label
-  assert.match(headersSource, /👨\/គោល/);
-  assert.match(headersSource, /👩\/បន្ទាប់/);
+  // 3. VOICE 1 (A1) and VOICE 2 (A2) crisp sub-badges (zero clipped emoji) + CLEAN BGM full label
+  assert.match(headersSource, /voiceSubBadge = `A\$\{rIdx \+ 1\}`/);
   assert.match(headersSource, /CLEAN BGM/);
 
   // 4. Track-level Mute on VIDEO 1 and CLEAN BGM + Muted lane dimming & badge (no Mute-Voice-Cuts coupling)

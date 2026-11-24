@@ -1,10 +1,10 @@
-/* Bottom Section - Functional Multi-Track Timeline (Pro Studio Palette) */
+/* Bottom Section - Functional Multi-Track Timeline (Darkroom Console) */
 .capcut-bottom-timeline {
   height: 38%;
   min-height: 275px;
   max-height: 45%;
-  background: #090d16;
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  background: var(--bg-desktop);
+  border-top: 1px solid var(--border-subtle);
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -16,17 +16,15 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  background: #090d16;
+  background: var(--bg-desktop);
 }
 
 /* Modern Clean Workstation Toolbar */
 .capcut-timeline-toolbar {
   height: 38px;
   min-height: 38px;
-  background: rgba(12, 17, 29, 0.96);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  background: var(--bg-primary-panel);
+  border-bottom: 1px solid var(--border-subtle);
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -48,6 +46,15 @@
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-desktop);
+  border: 1px solid var(--border-subtle);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
 }
 
 .timeline-timecode-pill {
@@ -55,27 +62,27 @@
   align-items: center;
   gap: 4px;
   padding: 3px 10px;
-  border-radius: 6px;
-  background: rgba(9, 13, 22, 0.78);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  font-family: 'JetBrains Mono', var(--font-mono, monospace);
-  font-size: 11px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-desktop);
+  border: 1px solid var(--border-subtle);
+  font-family: var(--font-mono);
+  font-size: 12px;
   font-variant-numeric: tabular-nums;
   line-height: 1;
 }
 
 .timeline-timecode-current {
-  color: #f8fafc;
+  color: var(--text-primary);
   font-weight: 700;
 }
 
 .timeline-timecode-sep {
-  color: #475569;
+  color: var(--text-dim);
   font-weight: 500;
 }
 
 .timeline-timecode-total {
-  color: #64748b;
+  color: var(--text-secondary);
   font-weight: 500;
 }
 
@@ -86,40 +93,40 @@
   flex-wrap: nowrap;
 }
 
-/* Glass Capsule Grouping for Related Tools */
+/* Flat Tonal Grouping for Related Tools */
 .timeline-tool-group {
   display: flex;
   align-items: center;
   gap: 3px;
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  border-radius: 8px;
+  background: var(--bg-secondary-panel);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
   padding: 2px 4px;
 }
 
 .timeline-tool-group.timeline-segmented-group {
   gap: 2px;
   padding: 2px;
-  background: rgba(9, 13, 22, 0.65);
+  background: var(--bg-desktop);
 }
 
 .timeline-segment-option {
   border-color: transparent;
   background: transparent;
-  color: #94a3b8;
+  color: var(--text-secondary);
   height: 24px;
   padding: 0 9px;
 }
 
 .timeline-segment-option.is-active-mode {
-  background: rgba(56, 189, 248, 0.15);
+  background: rgba(56, 189, 248, 0.14);
   border-color: rgba(56, 189, 248, 0.42);
-  color: #38BDF8;
-  box-shadow: 0 0 8px rgba(56, 189, 248, 0.16);
+  color: var(--primary-accent);
+  box-shadow: none;
 }
 
 .timeline-tool-group.zoom-group {
-  background: rgba(255, 255, 255, 0.025);
+  background: var(--bg-secondary-panel);
   padding: 2px 6px;
   gap: 4px;
 }

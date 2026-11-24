@@ -18,6 +18,9 @@ test('Step 1: Top selection pills show accurate counts and include incompleteEpi
   assert.match(modal, /២ ភាគដំបូង \(2 EPs\)/);
   assert.match(modal, /៤ ភាគដំបូង \(4 EPs\)/);
   assert.match(modal, /ដកជ្រើសរើស/);
+  assert.match(modal, /episodeFilterMode/);
+  assert.match(modal, /visibleEpisodeEntries\.map/);
+  assert.match(modal, /!isEpisodeFullyDone\(ep\)/);
 });
 
 test('Step 1b: Elimination of blocking warning modal when selectedEpIds is empty', () => {
@@ -58,7 +61,10 @@ test('Step 4: Route runner console drawers default collapsed to preserve screen 
 });
 
 test('Step 5: Selection locking and accurate queued status during active batch runs', () => {
-  const modal = read(FRONTEND_SRC, 'components', 'dashboard', 'GeminiRouteModal.jsx');
+  const modal =
+    read(FRONTEND_SRC, 'components', 'dashboard', 'GeminiRouteModal.jsx') +
+    '\n' +
+    read(FRONTEND_SRC, 'components', 'dashboard', 'BatchEpisodeCard.jsx');
   assert.match(modal, /const\s+isBatchExecutionActive\s*=\s*Boolean\(/);
   assert.match(modal, /hasActiveTranslateQueue/);
   assert.match(modal, /if\s*\(isBatchExecutionActive\)\s*return;/);
@@ -67,4 +73,34 @@ test('Step 5: Selection locking and accurate queued status during active batch r
   assert.match(modal, /!isBatchExecutionActive\s*&&\s*!isRunning\s*&&\s*!isQueued\s*&&\s*toggleSelect\(ep\.id\)/);
   assert.match(modal, /disabled=\{!hasVideo\s*\|\|\s*isRunning\s*\|\|\s*isQueued\s*\|\|\s*isBatchExecutionActive\}/);
   assert.match(modal, /⏳ រង់ចាំក្នុង Queue/);
+});
+
+test('Step 6: Sidebar step cards (1-4) filter right episode queue with [All | Todo | Done] tabs and compact cards', () => {
+  const stepBar = read(FRONTEND_SRC, 'features', 'dubbing-runner', 'DubbingStepCardsBar.jsx');
+  const modal = read(FRONTEND_SRC, 'components', 'dashboard', 'GeminiRouteModal.jsx');
+  const focusBar = read(FRONTEND_SRC, 'components', 'dashboard', 'BatchStageFocusBar.jsx');
+  const epCard = read(FRONTEND_SRC, 'components', 'dashboard', 'BatchEpisodeCard.jsx');
+
+  assert.match(stepBar, /onSelectStageView/);
+  assert.match(stepBar, /handleCardStageSelect\('translate'\)/);
+  assert.match(stepBar, /handleCardStageSelect\('tts'\)/);
+  assert.match(stepBar, /handleCardStageSelect\('autofit'\)/);
+  assert.match(stepBar, /handleCardStageSelect\('demucs'\)/);
+  assert.match(stepBar, /e\.stopPropagation\(\)/);
+
+  assert.match(modal, /<BatchStageFocusBar\b/);
+  assert.match(modal, /onSelectStageView=\{handleToggleSidebarStageView\}/);
+  assert.match(modal, /navOnly=\{true\}/);
+  assert.match(focusBar, /data-testid="stage-overview-nav-bar"/);
+  assert.match(focusBar, /data-testid="stage-focus-toolbar"/);
+  assert.match(focusBar, /data-testid="top-stage-actions"/);
+  assert.match(focusBar, /data-testid="stage-filter-all"/);
+  assert.match(focusBar, /data-testid="stage-filter-todo"/);
+  assert.match(focusBar, /data-testid="stage-filter-done"/);
+  assert.match(focusBar, /data-testid="btn-exit-stage-focus"/);
+
+  assert.match(epCard, /checkEpisodeHasAutoFitReady/);
+  assert.match(epCard, /isCompactStageMode/);
+  assert.match(epCard, /data-compact-stage=/);
+  assert.match(epCard, /ep-stage-status-/);
 });

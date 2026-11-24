@@ -594,7 +594,7 @@ export default function DubbingModeTab({
               marginTop: 4,
             }}
           >
-            <span>+ បញ្ចូលវីដេអូ (Import Video ➔)</span>
+            <span>បង្ហោះវីដេអូ (Import Video)</span>
           </button>
         </div>
       ) : (
@@ -605,23 +605,21 @@ export default function DubbingModeTab({
           {/* 1. Script Ready Hero Card */}
           <div
             style={{
-              background: '#111827',
-              border: '1px solid rgba(16, 185, 129, 0.3)',
-              borderRadius: 8,
-              padding: '14px',
-              boxShadow: '0 4px 14px rgba(0, 0, 0, 0.35)',
-              transition: 'all 0.15s ease',
+              background: 'var(--bg-secondary-panel)',
+              border: '1px solid rgba(16, 185, 129, 0.28)',
+              borderRadius: 'var(--radius-md)',
+              padding: '12px 14px',
             }}
           >
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                 <div
                   style={{
-                    width: 32,
-                    height: 32,
+                    width: 30,
+                    height: 30,
                     borderRadius: 6,
-                    background: 'rgba(16, 185, 129, 0.15)',
-                    border: '1px solid rgba(16, 185, 129, 0.3)',
+                    background: 'rgba(16, 185, 129, 0.14)',
+                    border: '1px solid rgba(16, 185, 129, 0.28)',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
@@ -629,13 +627,13 @@ export default function DubbingModeTab({
                     flexShrink: 0,
                   }}
                 >
-                  <CheckCircle2 size={16} />
+                  <CheckCircle2 size={15} />
                 </div>
                 <div>
-                  <div style={{ fontSize: '13px', fontWeight: 700, color: '#f8fafc' }}>
-                    សេណារីយ៉ូភាសាខ្មែរ រួចរាល់
+                  <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>
+                    Script ខ្មែររួចរាល់
                   </div>
-                  <div style={{ fontSize: '11px', color: '#10b981', fontWeight: 600 }}>
+                  <div style={{ fontSize: '11px', color: '#34d399', fontWeight: 600 }}>
                     AI Script Complete
                   </div>
                 </div>
@@ -645,71 +643,69 @@ export default function DubbingModeTab({
                 style={{
                   fontSize: '11px',
                   fontWeight: 700,
+                  fontFamily: 'var(--font-mono)',
                   background: 'rgba(16, 185, 129, 0.12)',
                   color: '#34d399',
-                  border: '1px solid rgba(16, 185, 129, 0.3)',
+                  border: '1px solid rgba(16, 185, 129, 0.28)',
                   padding: '2px 8px',
                   borderRadius: 4,
                 }}
               >
-                {scriptData.segments.length} ឃ្លា (Lines)
+                {scriptData.segments.length} ឃ្លា
               </span>
             </div>
 
             {/* Badges */}
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 12 }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 10 }}>
               {generationMode === 'fast_ocr' ? (
-                <span style={{ fontSize: '11px', fontWeight: 600, background: 'rgba(234, 179, 8, 0.12)', color: '#eab308', padding: '2px 8px', borderRadius: 4, border: '1px solid rgba(234, 179, 8, 0.3)', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                <span style={{ fontSize: '11px', fontWeight: 600, background: 'rgba(234, 179, 8, 0.12)', color: '#eab308', padding: '2px 8px', borderRadius: 4, border: '1px solid rgba(234, 179, 8, 0.28)', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                   <Zap size={11} />
                   <span>Fast OCR</span>
                 </span>
               ) : (
-                <span style={{ fontSize: '11px', fontWeight: 600, background: 'rgba(147, 51, 234, 0.12)', color: '#c084fc', padding: '2px 8px', borderRadius: 4, border: '1px solid rgba(147, 51, 234, 0.3)', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                <span style={{ fontSize: '11px', fontWeight: 600, background: 'var(--bg-elevated-panel)', color: 'var(--text-secondary)', padding: '2px 8px', borderRadius: 4, border: '1px solid var(--border-subtle)', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                   <Layers size={11} />
                   <span>Standard</span>
                 </span>
               )}
-              <span style={{ fontSize: '11px', background: 'rgba(255, 255, 255, 0.04)', color: '#cbd5e1', padding: '2px 8px', borderRadius: 4, border: '1px solid rgba(255, 255, 255, 0.08)', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+              <span style={{ fontSize: '11px', background: 'var(--bg-elevated-panel)', color: 'var(--text-secondary)', padding: '2px 8px', borderRadius: 4, border: '1px solid var(--border-subtle)', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                 <MessageSquare size={11} />
                 <span>{dubbingMode === 'dialogue' ? 'សន្ទនាតួអង្គ' : 'សម្រាយរឿង'}</span>
               </span>
-              <span style={{ fontSize: '11px', background: 'rgba(56, 189, 248, 0.1)', color: '#38bdf8', padding: '2px 8px', borderRadius: 4, border: '1px solid rgba(56, 189, 248, 0.25)', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+              <span style={{ fontSize: '11px', background: 'rgba(56, 189, 248, 0.1)', color: 'var(--primary-accent)', padding: '2px 8px', borderRadius: 4, border: '1px solid rgba(56, 189, 248, 0.25)', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                 <Sparkles size={11} />
                 <span>{selectedGenre === 'ancient' ? 'បុរាណចិន' : (selectedGenre === 'modern' ? 'សម័យទំនើប' : (selectedGenre === 'action' ? 'Action' : (selectedGenre === 'comedy' ? 'កំប្លែង' : selectedGenre)))}</span>
               </span>
             </div>
 
-            {/* Big Primary Action: Go to Tab 3 for Line-by-Line Subtitle Review */}
+            {/* Primary Action: Go to Tab 3 for Line-by-Line Subtitle Review */}
             <button
               type="button"
               onClick={() => onTabChange && onTabChange('subtitles')}
+              className="btn-secondary"
               style={{
                 width: '100%',
-                padding: '8px 12px',
-                borderRadius: 6,
-                border: '1px solid rgba(255, 255, 255, 0.08)',
-                background: 'rgba(255, 255, 255, 0.03)',
-                color: '#f8fafc',
+                minHeight: 34,
+                padding: '7px 12px',
                 fontSize: '12px',
                 fontWeight: 600,
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'space-between',
                 cursor: 'pointer',
-                transition: 'all 0.15s ease',
               }}
-              title="ពិនិត្យ និងកែសម្រួលអត្ថបទសេណារីយ៉ូខ្មែរតាមឃ្លានីមួយៗ"
+              title="ពិនិត្យ និងកែសម្រួលអត្ថបទខ្មែរតាមឃ្លានីមួយៗ"
             >
               <span style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-                <FileText size={14} color="#38bdf8" style={{ flexShrink: 0 }} />
+                <FileText size={14} color="var(--primary-accent)" style={{ flexShrink: 0 }} />
                 <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  ពិនិត្យ & កែអត្ថបទ ({scriptData.segments.length} ឃ្លា)
+                  កែអត្ថបទ ({scriptData.segments.length} ឃ្លា)
                 </span>
               </span>
-              <ArrowRight size={14} color="#94a3b8" style={{ flexShrink: 0 }} />
+              <ArrowRight size={14} color="var(--text-dim)" style={{ flexShrink: 0 }} />
             </button>
 
-            {/* ⚡ 1-Click Auto Compact "📝 ខ្លីចំអត្ថន័យ" Action */}
+            {/* 1-Click Auto Compact Action (Flat Darkroom Console — Zero Purple Slop) */}
             <button
               type="button"
               data-testid="btn-dubbing-auto-compact"
@@ -717,46 +713,46 @@ export default function DubbingModeTab({
               disabled={isAutoCompacting || !scriptData?.segments?.length}
               style={{
                 width: '100%',
+                minHeight: 34,
                 marginTop: 6,
-                padding: '8px 12px',
+                padding: '7px 12px',
                 borderRadius: 6,
-                border: '1px solid rgba(168, 85, 247, 0.45)',
-                background: isAutoCompacting
-                  ? 'rgba(168, 85, 247, 0.16)'
-                  : 'linear-gradient(135deg, rgba(168, 85, 247, 0.22) 0%, rgba(139, 92, 246, 0.16) 100%)',
-                color: '#d8b4fe',
+                border: '1px solid var(--border-subtle)',
+                background: 'var(--bg-elevated-panel)',
+                color: 'var(--text-primary)',
                 fontSize: '11.5px',
-                fontWeight: 700,
+                fontWeight: 600,
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'space-between',
+                gap: 8,
                 cursor: isAutoCompacting ? 'not-allowed' : 'pointer',
-                transition: 'all 0.15s ease',
               }}
-              title="បម្លែងគ្រប់ឃ្លាទាំងអស់ (1..259) ទៅជា «📝 ខ្លីចំអត្ថន័យ» ដោយស្វ័យប្រវត្ត"
+              title="បំព្រួញគ្រប់ឃ្លាទាំងអស់ឱ្យខ្លីចំអត្ថន័យ និងត្រូវចង្វាក់មាត់"
             >
-              <span style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+              <span style={{ display: 'flex', alignItems: 'center', gap: 7, minWidth: 0 }}>
                 {isAutoCompacting ? (
-                  <Loader2 size={14} className="animate-spin" color="#c084fc" style={{ flexShrink: 0 }} />
+                  <Loader2 size={13} className="animate-spin" color="var(--primary-accent)" style={{ flexShrink: 0 }} />
                 ) : (
-                  <Sparkles size={14} color="#c084fc" style={{ flexShrink: 0 }} />
+                  <Sparkles size={13} color="var(--primary-accent)" style={{ flexShrink: 0 }} />
                 )}
                 <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                   {isAutoCompacting
-                    ? `កំពុងបម្លែងជា «ខ្លីចំអត្ថន័យ» (${compactProgress.current}/${compactProgress.total})...`
-                    : `📝 បម្លែងគ្រប់ Script ជា «ខ្លីចំអត្ថន័យ» (Auto 1..${scriptData.segments.length})`}
+                    ? `កំពុងបំព្រួញឃ្លា (${compactProgress.current}/${compactProgress.total})...`
+                    : `បំព្រួញឃ្លាទាំងអស់ឱ្យខ្លីស្អាត (1..${scriptData.segments.length})`}
                 </span>
               </span>
               <span style={{
-                fontSize: '9.5px',
-                background: 'rgba(168, 85, 247, 0.25)',
-                color: '#f3e8ff',
-                padding: '1px 6px',
+                fontSize: '10px',
+                fontFamily: 'var(--font-mono)',
+                background: 'rgba(56, 189, 248, 0.14)',
+                color: 'var(--primary-accent)',
+                padding: '2px 6px',
                 borderRadius: 4,
-                fontWeight: 800,
+                fontWeight: 700,
                 flexShrink: 0,
               }}>
-                COMPACT
+                Compact
               </span>
             </button>
 
@@ -773,17 +769,17 @@ export default function DubbingModeTab({
                   justifyContent: 'space-between',
                   gap: 6,
                   background: compactBanner.type === 'success'
-                    ? 'rgba(168, 85, 247, 0.16)'
+                    ? 'rgba(16, 185, 129, 0.14)'
                     : compactBanner.type === 'partial'
-                    ? 'rgba(245, 158, 11, 0.16)'
-                    : 'rgba(239, 68, 68, 0.15)',
+                    ? 'rgba(245, 158, 11, 0.14)'
+                    : 'rgba(239, 68, 68, 0.14)',
                   border: compactBanner.type === 'success'
-                    ? '1px solid rgba(168, 85, 247, 0.45)'
+                    ? '1px solid rgba(16, 185, 129, 0.35)'
                     : compactBanner.type === 'partial'
-                    ? '1px solid rgba(245, 158, 11, 0.45)'
-                    : '1px solid rgba(239, 68, 68, 0.45)',
+                    ? '1px solid rgba(245, 158, 11, 0.35)'
+                    : '1px solid rgba(239, 68, 68, 0.35)',
                   color: compactBanner.type === 'success'
-                    ? '#d8b4fe'
+                    ? '#6EE7B7'
                     : compactBanner.type === 'partial'
                     ? '#FDE68A'
                     : '#FCA5A5',
@@ -801,25 +797,24 @@ export default function DubbingModeTab({
             )}
           </div>
 
-          {/* 2. Step 3 Voice Studio Card */}
+          {/* 2. Voice & BGM Production Card */}
           <div
             style={{
-              background: '#111827',
-              border: '1px solid rgba(255, 255, 255, 0.08)',
-              borderRadius: 8,
-              padding: '16px',
-              transition: 'all 0.2s cubic-bezier(0.16, 1, 0.3, 1)',
+              background: 'var(--bg-secondary-panel)',
+              border: '1px solid var(--border-subtle)',
+              borderRadius: 'var(--radius-md)',
+              padding: '14px',
             }}
           >
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12, gap: 6, flexWrap: 'wrap' }}>
-              <div style={{ fontSize: '11px', color: '#94A3B8', fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.4px', display: 'flex', alignItems: 'center', gap: 6 }}>
-                <Mic size={14} color="#38bdf8" />
-                <span>ជំហានទី ៣ ៖ បង្កើតសំឡេងខ្មែរ AI (Voice Studio)</span>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, gap: 6, flexWrap: 'wrap' }}>
+              <div style={{ fontSize: '11px', color: 'var(--text-secondary)', fontWeight: 700, letterSpacing: '0.02em', display: 'flex', alignItems: 'center', gap: 6 }}>
+                <Mic size={14} color="var(--primary-accent)" />
+                <span>ផលិតសំឡេង AI &amp; ភ្លេង BGM</span>
               </div>
               {hasExistingAudio && !isThisEpisodeGeneratingAudio && (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <span style={{ fontSize: '10px', background: pendingOrOutdatedCount > 0 ? 'rgba(251, 191, 36, 0.15)' : 'rgba(52, 211, 153, 0.15)', color: pendingOrOutdatedCount > 0 ? '#fbbf24' : '#34D399', padding: '2px 8px', borderRadius: 4, fontWeight: 700, border: pendingOrOutdatedCount > 0 ? '1px solid rgba(251, 191, 36, 0.35)' : '1px solid rgba(52, 211, 153, 0.3)' }}>
-                    {pendingOrOutdatedCount > 0 ? `ខ្វះ / កែប្រែ ${pendingOrOutdatedCount} ឃ្លា` : 'សំឡេង AI រួចរាល់'}
+                  <span style={{ fontSize: '10px', background: pendingOrOutdatedCount > 0 ? 'rgba(251, 191, 36, 0.14)' : 'rgba(16, 185, 129, 0.14)', color: pendingOrOutdatedCount > 0 ? '#fbbf24' : '#34D399', padding: '2px 7px', borderRadius: 4, fontWeight: 700, border: pendingOrOutdatedCount > 0 ? '1px solid rgba(251, 191, 36, 0.3)' : '1px solid rgba(16, 185, 129, 0.28)' }}>
+                    {pendingOrOutdatedCount > 0 ? `ខ្វះ/កែ ${pendingOrOutdatedCount} ឃ្លា` : 'សំឡេងរួចរាល់'}
                   </span>
                   {pendingOrOutdatedCount > 0 && onNavigateToVoice && (
                     <button
@@ -831,9 +826,9 @@ export default function DubbingModeTab({
                       title="បង្កើតសំឡេង AI ឡើងវិញទាំងអស់"
                       style={{
                         fontSize: '10px',
-                        background: 'rgba(255, 255, 255, 0.05)',
-                        color: '#cbd5e1',
-                        border: '1px solid rgba(255, 255, 255, 0.12)',
+                        background: 'var(--bg-elevated-panel)',
+                        color: 'var(--text-secondary)',
+                        border: '1px solid var(--border-subtle)',
                         borderRadius: 4,
                         padding: '2px 7px',
                         cursor: 'pointer',
@@ -859,32 +854,23 @@ export default function DubbingModeTab({
                   }
                 }}
                 disabled={isThisEpisodeGeneratingAudio}
-                className="btn-tactile"
+                className="btn-primary"
                 style={{
                   width: '100%',
-                  padding: '10px 14px',
-                  borderRadius: 6,
-                  border: '1px solid rgba(56, 189, 248, 0.35)',
-                  background: isThisEpisodeGeneratingAudio
-                    ? 'rgba(15, 23, 42, 0.8)'
-                    : (pendingOrOutdatedCount > 0
-                      ? 'linear-gradient(135deg, #0284c7 0%, #0369a1 100%)'
-                      : 'linear-gradient(135deg, #0284c7 0%, #2563eb 100%)'),
-                  color: isThisEpisodeGeneratingAudio ? '#64748B' : '#ffffff',
+                  minHeight: 38,
+                  padding: '8px 12px',
                   fontSize: '12px',
                   fontWeight: 700,
                   cursor: isThisEpisodeGeneratingAudio ? 'not-allowed' : 'pointer',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'space-between',
-                  boxShadow: isThisEpisodeGeneratingAudio ? 'none' : '0 2px 10px rgba(2, 132, 199, 0.25)',
-                  transition: 'all 0.18s cubic-bezier(0.16, 1, 0.3, 1)',
                 }}
               >
                 {isThisEpisodeGeneratingAudio ? (
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <Loader2 size={14} className="animate-spin" color="#38bdf8" />
-                    <span>កំពុងបង្កើតសំឡេងខ្មែរ AI... {displayAudioProgress}%</span>
+                    <Loader2 size={14} className="animate-spin" />
+                    <span>កំពុងបង្កើតសំឡេង AI... {displayAudioProgress}%</span>
                   </div>
                 ) : (
                   <>
@@ -892,7 +878,7 @@ export default function DubbingModeTab({
                       <Mic size={14} style={{ flexShrink: 0 }} />
                       <span style={{ whiteSpace: 'nowrap' }}>
                         {!hasExistingAudio
-                          ? 'បង្កើតសំឡេងខ្មែរ AI (Generate TTS)'
+                          ? 'បង្កើតសំឡេងខ្មែរ AI (TTS)'
                           : pendingOrOutdatedCount > 0
                             ? `បង្កើតសំឡេងខ្វះ / កែប្រែ (${pendingOrOutdatedCount} ឃ្លា)`
                             : 'បង្កើតសំឡេង AI ឡើងវិញ (Re-TTS)'}
@@ -909,7 +895,7 @@ export default function DubbingModeTab({
             )}
 
             {/* Step 3: Auto-Fit Speed (1.05x - 1.50x) */}
-            <div style={{ marginTop: 10 }}>
+            <div style={{ marginTop: 8 }}>
               <DubbingStepButton
                 step="autofit"
                 episodes={activeEpisode ? [activeEpisode] : []}
@@ -917,59 +903,54 @@ export default function DubbingModeTab({
                 setupOptions={{
                   maxSpeed: 1.50,
                 }}
-                style={{ width: '100%', padding: '10px 14px', borderRadius: 6, justifyContent: 'space-between' }}
+                style={{ width: '100%', minHeight: 36, padding: '8px 12px', borderRadius: 6, justifyContent: 'space-between' }}
               />
             </div>
 
             {/* Step 4 / AI Vocal Separation (Demucs AI): 1-Click Button */}
-            <div style={{ marginTop: 10 }}>
+            <div style={{ marginTop: 8 }}>
               <button
                 type="button"
                 onClick={handleStartDemucsSeparation}
                 disabled={isSeparatingAudio || !selectedVideo}
-                className="btn-tactile"
+                className="btn-secondary"
                 style={{
                   width: '100%',
-                  padding: '10px 14px',
+                  minHeight: 36,
+                  padding: '8px 12px',
                   borderRadius: 6,
-                  border: isCleanBgReady ? '1px solid rgba(52, 211, 153, 0.35)' : '1px solid rgba(255, 255, 255, 0.1)',
+                  borderColor: isCleanBgReady ? 'rgba(52, 211, 153, 0.35)' : 'var(--border-subtle)',
                   background: isSeparatingAudio
-                    ? 'rgba(15, 23, 42, 0.8)'
-                    : (isCleanBgReady
-                      ? 'rgba(52, 211, 153, 0.08)'
-                      : 'rgba(255, 255, 255, 0.03)'),
+                    ? 'var(--bg-workspace-base)'
+                    : (isCleanBgReady ? 'rgba(16, 185, 129, 0.1)' : 'var(--bg-elevated-panel)'),
                   color: isSeparatingAudio
-                    ? '#94A3B8'
-                    : (isCleanBgReady ? '#34D399' : '#94A3B8'),
+                    ? 'var(--text-dim)'
+                    : (isCleanBgReady ? '#34D399' : 'var(--text-secondary)'),
                   fontSize: '12px',
                   fontWeight: 600,
                   cursor: (isSeparatingAudio || !selectedVideo) ? 'not-allowed' : 'pointer',
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'space-between',
-                  boxShadow: isCleanBgReady
-                    ? '0 0 8px rgba(52, 211, 153, 0.15)'
-                    : 'none',
-                  transition: 'all 0.18s cubic-bezier(0.16, 1, 0.3, 1)',
                 }}
-                title="បំបែកកាត់សំឡេងចិន ចម្រាញ់យកតែ BGM & SFX (Demucs AI)"
+                title="បំបែកកាត់សំឡេងចិន ចម្រាញ់យកតែភ្លេង BGM ដើម (Demucs AI)"
               >
                 {isSeparatingAudio ? (
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-                      <Loader2 size={14} className="animate-spin" color="#38BDF8" style={{ flexShrink: 0 }} />
+                      <Loader2 size={14} className="animate-spin" color="var(--primary-accent)" style={{ flexShrink: 0 }} />
                       <span style={{ whiteSpace: 'nowrap' }}>
-                        កំពុងបំបែកសំឡេងដើម (Demucs AI)...
+                        កំពុងបំបែកភ្លេង BGM...
                       </span>
                     </div>
                     <span style={{
                       fontSize: '11px',
-                      background: 'rgba(56, 189, 248, 0.25)',
-                      color: '#38BDF8',
-                      padding: '2px 8px',
+                      fontFamily: 'var(--font-mono)',
+                      background: 'rgba(56, 189, 248, 0.18)',
+                      color: 'var(--primary-accent)',
+                      padding: '2px 7px',
                       borderRadius: 4,
-                      fontWeight: 800,
-                      letterSpacing: '0.5px'
+                      fontWeight: 700,
                     }}>
                       {separationProgress}%
                     </span>
@@ -980,19 +961,20 @@ export default function DubbingModeTab({
                       <Volume2 size={14} style={{ flexShrink: 0 }} />
                       <span style={{ whiteSpace: 'nowrap' }}>
                         {isCleanBgReady
-                          ? 'Clean BGM (Demucs AI)'
-                          : 'បំបែកសំឡេងដើម (Demucs AI)'}
+                          ? 'ភ្លេង BGM ស្អាត (Demucs AI)'
+                          : 'បំបែកភ្លេង BGM (Demucs AI)'}
                       </span>
                     </div>
                     <span style={{
                       fontSize: '10px',
-                      background: isCleanBgReady ? 'rgba(74, 222, 128, 0.15)' : 'rgba(255, 255, 255, 0.08)',
-                      color: isCleanBgReady ? '#4ade80' : '#94a3b8',
+                      fontFamily: 'var(--font-mono)',
+                      background: isCleanBgReady ? 'rgba(16, 185, 129, 0.15)' : 'var(--bg-workspace-base)',
+                      color: isCleanBgReady ? '#34d399' : 'var(--text-dim)',
                       padding: '2px 6px',
                       borderRadius: 4,
-                      fontWeight: 800,
+                      fontWeight: 700,
                     }}>
-                      {isCleanBgReady ? '100% READY' : 'SEPARATE'}
+                      {isCleanBgReady ? 'READY' : 'RUN'}
                     </span>
                   </>
                 )}
@@ -1001,19 +983,17 @@ export default function DubbingModeTab({
                 <div style={{
                   width: '100%',
                   height: 5,
-                  background: 'rgba(255, 255, 255, 0.08)',
-                  borderRadius: 3,
+                  background: 'var(--bg-elevated-panel)',
+                  borderRadius: 999,
                   marginTop: 6,
                   overflow: 'hidden',
-                  position: 'relative'
                 }}>
                   <div style={{
                     width: `${Math.max(3, separationProgress)}%`,
                     height: '100%',
-                    background: 'linear-gradient(90deg, #38BDF8, #4ade80)',
+                    background: 'var(--primary-accent)',
                     transition: 'width 0.4s ease-out',
-                    borderRadius: 3,
-                    boxShadow: '0 0 8px rgba(56, 189, 248, 0.5)'
+                    borderRadius: 999,
                   }} />
                 </div>
               )}
@@ -1030,16 +1010,16 @@ export default function DubbingModeTab({
               <div style={{ marginTop: 12 }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: '#34d399', fontWeight: 600, marginBottom: 6 }}>
                   <span>{currentAudioStageText}</span>
-                  <span>{displayAudioProgress}%</span>
+                  <span style={{ fontFamily: 'var(--font-mono)' }}>{displayAudioProgress}%</span>
                 </div>
-                <div style={{ width: '100%', height: 7, borderRadius: 4, background: 'rgba(255, 255, 255, 0.08)', overflow: 'hidden', marginBottom: 8 }}>
-                  <div style={{ width: `${displayAudioProgress}%`, height: '100%', background: 'linear-gradient(90deg, #059669 0%, #10b981 100%)', transition: 'width 0.28s ease' }} />
+                <div style={{ width: '100%', height: 6, borderRadius: 999, background: 'var(--bg-elevated-panel)', overflow: 'hidden', marginBottom: 8 }}>
+                  <div style={{ width: `${displayAudioProgress}%`, height: '100%', background: '#10b981', transition: 'width 0.28s ease' }} />
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 4 }}>
-                  <div style={{ padding: '3px 4px', borderRadius: 4, fontSize: '0.62rem', textAlign: 'center', background: displayAudioProgress >= 5 ? 'rgba(52, 211, 153, 0.15)' : 'rgba(255, 255, 255, 0.04)', color: displayAudioProgress >= 5 ? '#34d399' : '#64748b', fontWeight: 600 }}>1. Mapping</div>
-                  <div style={{ padding: '3px 4px', borderRadius: 4, fontSize: '0.62rem', textAlign: 'center', background: displayAudioProgress >= 25 ? 'rgba(52, 211, 153, 0.15)' : 'rgba(255, 255, 255, 0.04)', color: displayAudioProgress >= 25 ? '#34d399' : '#64748b', fontWeight: 600 }}>2. Edge TTS</div>
-                  <div style={{ padding: '3px 4px', borderRadius: 4, fontSize: '0.62rem', textAlign: 'center', background: displayAudioProgress >= 65 ? 'rgba(52, 211, 153, 0.15)' : 'rgba(255, 255, 255, 0.04)', color: displayAudioProgress >= 65 ? '#34d399' : '#64748b', fontWeight: 600 }}>3. Stretch</div>
-                  <div style={{ padding: '3px 4px', borderRadius: 4, fontSize: '0.62rem', textAlign: 'center', background: displayAudioProgress >= 85 ? 'rgba(52, 211, 153, 0.15)' : 'rgba(255, 255, 255, 0.04)', color: displayAudioProgress >= 85 ? '#34d399' : '#64748b', fontWeight: 600 }}>4. Sync</div>
+                  <div style={{ padding: '3px 4px', borderRadius: 4, fontSize: '0.62rem', textAlign: 'center', background: displayAudioProgress >= 5 ? 'rgba(52, 211, 153, 0.14)' : 'var(--bg-elevated-panel)', color: displayAudioProgress >= 5 ? '#34d399' : 'var(--text-dim)', fontWeight: 600 }}>1. Map</div>
+                  <div style={{ padding: '3px 4px', borderRadius: 4, fontSize: '0.62rem', textAlign: 'center', background: displayAudioProgress >= 25 ? 'rgba(52, 211, 153, 0.14)' : 'var(--bg-elevated-panel)', color: displayAudioProgress >= 25 ? '#34d399' : 'var(--text-dim)', fontWeight: 600 }}>2. TTS</div>
+                  <div style={{ padding: '3px 4px', borderRadius: 4, fontSize: '0.62rem', textAlign: 'center', background: displayAudioProgress >= 65 ? 'rgba(52, 211, 153, 0.14)' : 'var(--bg-elevated-panel)', color: displayAudioProgress >= 65 ? '#34d399' : 'var(--text-dim)', fontWeight: 600 }}>3. Fit</div>
+                  <div style={{ padding: '3px 4px', borderRadius: 4, fontSize: '0.62rem', textAlign: 'center', background: displayAudioProgress >= 85 ? 'rgba(52, 211, 153, 0.14)' : 'var(--bg-elevated-panel)', color: displayAudioProgress >= 85 ? '#34d399' : 'var(--text-dim)', fontWeight: 600 }}>4. Sync</div>
                 </div>
               </div>
             )}
@@ -1050,25 +1030,22 @@ export default function DubbingModeTab({
             <button
               type="button"
               onClick={() => setShowRegenerateForm(true)}
+              className="btn-secondary"
               style={{
                 width: '100%',
-                padding: '9px 12px',
-                borderRadius: 8,
-                border: '1px solid rgba(255, 255, 255, 0.08)',
-                background: 'rgba(15, 23, 42, 0.65)',
-                color: '#94a3b8',
-                fontSize: '11px',
+                minHeight: 34,
+                padding: '7px 12px',
+                fontSize: '11.5px',
                 fontWeight: 600,
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'space-between',
                 cursor: 'pointer',
-                transition: 'all 0.15s ease',
               }}
             >
               <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <Settings2 size={13} color="#94a3b8" />
-                <span>បង្កើត Script ឡើងវិញ ឬ កែការកំណត់ (Re-generate / Settings)</span>
+                <Settings2 size={13} color="var(--text-dim)" />
+                <span>កំណត់ការបកប្រែ / បង្កើត Script ឡើងវិញ</span>
               </span>
               <ChevronDown size={14} />
             </button>
@@ -1076,7 +1053,7 @@ export default function DubbingModeTab({
         </div>
       ) : (
         /* ── State B: Creation / Re-generation Form ── */
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '12px 14px', background: 'linear-gradient(180deg, #121622 0%, #0d1017 100%)', borderRadius: 8, border: '1px solid rgba(255, 255, 255, 0.08)', boxShadow: '0 4px 20px rgba(0, 0, 0, 0.4)', marginBottom: 12 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, padding: '12px 14px', background: 'var(--bg-secondary-panel)', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-subtle)', marginBottom: 12 }}>
           {hasExistingScript && (
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid rgba(255, 255, 255, 0.06)', paddingBottom: 8, marginBottom: 2 }}>
               <span style={{ fontSize: '11.5px', color: '#f8fafc', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -1826,47 +1803,31 @@ export default function DubbingModeTab({
             }
           }}
           disabled={isThisEpisodeGeneratingScript || !selectedVideo}
+          className="btn-primary"
           style={{
             width: '100%',
-            padding: '12px 14px',
-            borderRadius: 9,
-            border: 'none',
-            background: isThisEpisodeGeneratingScript
-              ? '#1e293b'
-              : !selectedVideo
-                ? 'rgba(255, 255, 255, 0.08)'
-                : dubbingMode === 'dialogue'
-                  ? 'linear-gradient(135deg, #0284c7 0%, #2563eb 100%)'
-                  : 'linear-gradient(135deg, #7c3aed 0%, #9333ea 100%)',
-            color: '#ffffff',
+            minHeight: 40,
+            padding: '10px 14px',
+            borderRadius: 'var(--radius-sm)',
             fontWeight: 700,
             fontSize: '12.5px',
-            fontFamily: "'Kantumruy Pro', 'Inter', sans-serif",
             cursor: isThisEpisodeGeneratingScript || !selectedVideo ? 'not-allowed' : 'pointer',
-            boxShadow: !selectedVideo || isThisEpisodeGeneratingScript 
-              ? 'none' 
-              : dubbingMode === 'dialogue'
-                ? '0 4px 18px rgba(37, 99, 235, 0.4)'
-                : '0 4px 18px rgba(147, 51, 234, 0.4)',
-            position: 'relative',
-            overflow: 'hidden',
             opacity: !selectedVideo ? 0.5 : 1,
-            transition: 'all 0.2s cubic-bezier(0.4, 0, 0.2, 1)',
           }}
         >
-          <div style={{ position: 'relative', zIndex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7 }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7 }}>
             {isThisEpisodeGeneratingScript ? (
               <>
-                <Loader2 size={15} className="animate-spin" />
-                <span>⏳ [{smoothProgress}%] {currentStageText || 'Gemini AI កំពុងវិភាគ & បកប្រែ...'}</span>
+                <Loader2 size={14} className="animate-spin" />
+                <span>[{smoothProgress}%] {currentStageText || 'កំពុងបកប្រែ Script...'}</span>
               </>
             ) : (
               <>
-                <Sparkles size={15} />
+                <Sparkles size={14} />
                 <span>
                   {dubbingMode === 'dialogue'
-                    ? 'បង្កើតសេណារីយ៉ូសន្ទនា (Generate Dialogue)'
-                    : 'បង្កើតអត្ថបទសម្រាយរឿង (Generate Recap)'}
+                    ? 'បកប្រែ Script សន្ទនា (Generate)'
+                    : 'បង្កើត Script សម្រាយរឿង (Generate)'}
                 </span>
               </>
             )}

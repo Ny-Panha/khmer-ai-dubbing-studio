@@ -172,15 +172,20 @@ function TimelineEditor({
         : (rawStart + audioDur);
 
       // CapCut single-lane style: all auto-placed voice clips live sequentially on VOICE 1 (Lane 0).
-      // Only userShifted clips (or clips explicitly placed on a secondary lane) stay on their stored trackRow.
+      // Only userShifted clips keep their stored trackRow, and genuinely colliding overflow clips
+      // automatically stagger onto the first free sub-lane so no clip is ever buried/hidden behind another.
       if (typeof seg.trackRow === 'number' && (seg.userShifted || seg.trackRow > 0)) {
         const userR = Math.max(0, seg.trackRow);
         rowEndTimes[userR] = Math.max(rowEndTimes[userR] || 0, rawEnd);
         return userR;
       }
 
-      rowEndTimes[0] = Math.max(rowEndTimes[0] || 0, rawEnd);
-      return 0;
+      let targetLane = 0;
+      while (rowEndTimes[targetLane] !== undefined && rawStart < rowEndTimes[targetLane] - 0.08 && targetLane < 3) {
+        targetLane++;
+      }
+      rowEndTimes[targetLane] = Math.max(rowEndTimes[targetLane] || 0, rawEnd);
+      return targetLane;
     });
 
     const maxSegmentTrackRow = (scriptSegments || []).reduce((max, s) => {
@@ -770,17 +775,80 @@ function TimelineEditor({
     // In gaps, preserve current selection so Inspector never disappears unexpectedly
   }, [currentTime, scriptSegments, dragState, isScrubbing, isPlaying, onSelectSegment, isEditingInspectorText]);
 
+  const selectedClipKindRef = useRef(selectedClipKind);
+  selectedClipKindRef.current = selectedClipKind;
+  const onSelectClipRef = useRef(onSelectClip);
+  onSelectClipRef.current = onSelectClip;
+  const liveFollowBoundsRef = useRef(null);
+
+  // Live 60fps playhead auto-follow: React.memo skips 5Hz currentTime prop ticks during playback
+  // for 60fps smoothness, so subscribePlayhead drives edge-triggered clip highlights at segment boundaries.
+  useEffect(() => {
+    liveFollowBoundsRef.current = null;
+    if (!isPlaying || typeof subscribePlayhead !== 'function') return undefined;
+
+    return subscribePlayhead((liveTime) => {
+      if (!isPlayingRef.current || !Number.isFinite(liveTime)) return;
+      currentTimeRef.current = liveTime;
+      if (isScrubbingRef.current || dragStateRef.current) return;
+
+      const segs = scriptSegmentsRef.current;
+      if (!segs || segs.length === 0) return;
+
+      const cached = liveFollowBoundsRef.current;
+      if (cached && liveTime >= cached.start && liveTime < cached.end) {
+        return;
+      }
+
+      const activeSeg = resolveSegmentAtTime(segs, liveTime);
+      if (activeSeg) {
+        const sStart = (typeof activeSeg.startSec === 'number' && !isNaN(activeSeg.startSec))
+          ? activeSeg.startSec
+          : (typeof activeSeg.audioStartSec === 'number' && !isNaN(activeSeg.audioStartSec) ? activeSeg.audioStartSec : 0);
+        const sEnd = (typeof activeSeg.endSec === 'number' && !isNaN(activeSeg.endSec))
+          ? activeSeg.endSec
+          : (typeof activeSeg.audioEndSec === 'number' && !isNaN(activeSeg.audioEndSec) ? activeSeg.audioEndSec : sStart + 1.0);
+        const segKey = activeSeg._uid || (activeSeg.id !== undefined && activeSeg.id !== null ? activeSeg.id : segs.indexOf(activeSeg));
+        liveFollowBoundsRef.current = { start: sStart, end: sEnd, segKey };
+
+        if (String(segKey) !== String(lastPlayheadSegKeyRef.current)) {
+          if (isEditingInspectorText()) {
+            followSyncSkippedDueToEditingRef.current = true;
+            return;
+          }
+          lastPlayheadSegKeyRef.current = segKey;
+          if (String(selectedSegmentIdRef.current) !== String(segKey)) {
+            selectedSegmentIdRef.current = segKey;
+            setSelectedAudioId(segKey);
+            setSelectedSubId(segKey);
+          }
+          if (selectedClipKindRef.current === 'video' && onSelectClipRef.current && videoClipsRef.current?.length > 0) {
+            const matchClip = videoClipsRef.current.find((c) => doesClipMatchSegment(c, activeSeg));
+            if (matchClip) {
+              onSelectClipRef.current(matchClip.id, false);
+            }
+          }
+        }
+      } else {
+        liveFollowBoundsRef.current = null;
+        lastPlayheadSegKeyRef.current = null;
+      }
+    });
+  }, [isPlaying, subscribePlayhead, isEditingInspectorText]);
+
   // Synchronize paused playhead segment to onSelectSegment when transitioning from playing to paused
   const wasPlayingSyncRef = useRef(false);
   useEffect(() => {
     if (wasPlayingSyncRef.current && !isPlaying && !dragState && !isScrubbing) {
       const curT = Number.isFinite(currentTimeRef.current) ? currentTimeRef.current : 0;
       const activeSeg = resolveSegmentAtTime(scriptSegments, curT);
-      if (activeSeg) {
-        const segKey = activeSeg._uid || (activeSeg.id !== undefined && activeSeg.id !== null ? activeSeg.id : scriptSegments.indexOf(activeSeg));
-        if (String(lastSyncedInspectorIdRef.current) !== String(segKey)) {
-          lastSyncedInspectorIdRef.current = segKey;
-          onSelectSegment?.(segKey);
+      const resolvedKey = activeSeg
+        ? (activeSeg._uid || (activeSeg.id !== undefined && activeSeg.id !== null ? activeSeg.id : scriptSegments.indexOf(activeSeg)))
+        : selectedSegmentIdRef.current;
+      if (resolvedKey !== null && resolvedKey !== undefined) {
+        if (String(lastSyncedInspectorIdRef.current) !== String(resolvedKey)) {
+          lastSyncedInspectorIdRef.current = resolvedKey;
+          onSelectSegment?.(resolvedKey);
         }
       }
     }

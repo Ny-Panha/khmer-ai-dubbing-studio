@@ -1,6 +1,8 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Sliders, ChevronDown, ChevronRight, Users } from 'lucide-react';
+import React, { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import { ChevronDown, ChevronRight, Users, Scissors, Volume2, Sparkles } from 'lucide-react';
 import { parseTimeToSeconds } from '../../utils/timestampUtils';
+import { resolveSegmentAtTime } from '../../utils/timelineUtils';
+import { subscribeDraftPreview } from '../../utils/sliderDraftPreview';
 
 import ClipInspectorPanel from './ClipInspectorPanel';
 import AudioDuckingPanel from './AudioDuckingPanel';
@@ -60,6 +62,7 @@ export default function VoiceSettings({
   onSplitClip,
   onDeleteClip,
   currentTime = 0,
+  subscribePlayhead = null,
   isPlaying = false,
   scriptData = null,
   onGenerateAudio,
@@ -91,6 +94,67 @@ export default function VoiceSettings({
   const [playingSegmentId, setPlayingSegmentId] = useState(null);
   const [regeneratingId, setRegeneratingId] = useState(null);
   const [copiedCaption, setCopiedCaption] = useState(false);
+  const [livePlaybackSegId, setLivePlaybackSegId] = useState(null);
+  const segmentsRef = useRef(scriptData?.segments || []);
+  segmentsRef.current = scriptData?.segments || [];
+  const liveFollowBoundsRef = useRef(null);
+  const lastLiveSegIdRef = useRef(null);
+
+  // If user explicitly clicks a different segment, sync live follow state immediately
+  useEffect(() => {
+    if (isPlaying) {
+      lastLiveSegIdRef.current = selectedSegmentId;
+      setLivePlaybackSegId(selectedSegmentId);
+    } else {
+      liveFollowBoundsRef.current = null;
+      lastLiveSegIdRef.current = null;
+      setLivePlaybackSegId(null);
+    }
+  }, [selectedSegmentId, isPlaying]);
+
+  // Real-time edge-triggered Inspector auto-follow during active playback (zero App/MediaLibrary re-renders)
+  useEffect(() => {
+    liveFollowBoundsRef.current = null;
+    if (!isPlaying || typeof subscribePlayhead !== 'function') return undefined;
+
+    return subscribePlayhead((liveTime) => {
+      if (!Number.isFinite(liveTime)) return;
+      const segs = segmentsRef.current;
+      if (!segs || segs.length === 0) return;
+
+      const cached = liveFollowBoundsRef.current;
+      if (cached && liveTime >= cached.start && liveTime < cached.end) {
+        return;
+      }
+
+      const activeSeg = resolveSegmentAtTime(segs, liveTime);
+      if (activeSeg) {
+        const sStart = (typeof activeSeg.startSec === 'number' && !isNaN(activeSeg.startSec))
+          ? activeSeg.startSec
+          : (typeof activeSeg.audioStartSec === 'number' && !isNaN(activeSeg.audioStartSec) ? activeSeg.audioStartSec : 0);
+        const sEnd = (typeof activeSeg.endSec === 'number' && !isNaN(activeSeg.endSec))
+          ? activeSeg.endSec
+          : (typeof activeSeg.audioEndSec === 'number' && !isNaN(activeSeg.audioEndSec) ? activeSeg.audioEndSec : sStart + 1.0);
+        const segKey = activeSeg._uid || (activeSeg.id !== undefined && activeSeg.id !== null ? activeSeg.id : segs.indexOf(activeSeg));
+        liveFollowBoundsRef.current = { start: sStart, end: sEnd, segKey };
+
+        if (String(segKey) !== String(lastLiveSegIdRef.current)) {
+          const activeEl = typeof document !== 'undefined' ? document.activeElement : null;
+          const typingInInspector = Boolean(
+            activeEl &&
+            (activeEl.tagName === 'TEXTAREA' || activeEl.tagName === 'INPUT') &&
+            (activeEl.closest?.('.top-suite-col-right') || activeEl.closest?.('.inspector-card-group') || activeEl.closest?.('.clip-inspector-panel'))
+          );
+          if (typingInInspector) return;
+
+          lastLiveSegIdRef.current = segKey;
+          setLivePlaybackSegId(segKey);
+        }
+      } else {
+        liveFollowBoundsRef.current = null;
+      }
+    });
+  }, [isPlaying, subscribePlayhead]);
 
   const getSegTimeBounds = (seg) => {
     const start = (typeof seg.audioStartSec === 'number' && !isNaN(seg.audioStartSec))
@@ -105,6 +169,19 @@ export default function VoiceSettings({
     return { start, end, dur };
   };
 
+  // Check if user is currently typing in textarea to prevent jarring cursor shifts
+  const isEditingTextarea = Boolean(
+    typeof document !== 'undefined' &&
+    document.activeElement &&
+    document.activeElement.tagName === 'TEXTAREA' &&
+    document.activeElement.closest('.inspector-card-group')
+  );
+
+  // During active playback, use real-time playhead segment unless user is typing in Inspector
+  const effectiveSelectedSegmentId = (isPlaying && livePlaybackSegId !== null && livePlaybackSegId !== undefined && !isEditingTextarea)
+    ? livePlaybackSegId
+    : selectedSegmentId;
+
   // Find dialogue segment directly under playhead line | (currentTime)
   // PERF: Skip 666-segment linear scan during active playback — only compute when paused/seeking
   const playheadSegmentIndex = (scriptData?.segments && Number.isFinite(currentTime) && !isPlaying)
@@ -116,26 +193,18 @@ export default function VoiceSettings({
 
   const explicitSegmentIndex = scriptData?.segments
     ? scriptData.segments.findIndex((s, idx) => {
-        if (selectedSegmentId === null || selectedSegmentId === undefined) return false;
-        if (s._uid && String(s._uid) === String(selectedSegmentId)) return true;
-        if (s.id !== undefined && s.id !== null && String(s.id) === String(selectedSegmentId)) return true;
-        if (s.segmentId !== undefined && s.segmentId !== null && String(s.segmentId) === String(selectedSegmentId)) return true;
-        if (typeof selectedSegmentId === 'number' && (idx === selectedSegmentId || idx + 1 === selectedSegmentId)) return true;
-        if (/^\d+$/.test(String(selectedSegmentId))) {
-          const num = parseInt(selectedSegmentId, 10);
+        if (effectiveSelectedSegmentId === null || effectiveSelectedSegmentId === undefined) return false;
+        if (s._uid && String(s._uid) === String(effectiveSelectedSegmentId)) return true;
+        if (s.id !== undefined && s.id !== null && String(s.id) === String(effectiveSelectedSegmentId)) return true;
+        if (s.segmentId !== undefined && s.segmentId !== null && String(s.segmentId) === String(effectiveSelectedSegmentId)) return true;
+        if (typeof effectiveSelectedSegmentId === 'number' && (idx === effectiveSelectedSegmentId || idx + 1 === effectiveSelectedSegmentId)) return true;
+        if (/^\d+$/.test(String(effectiveSelectedSegmentId))) {
+          const num = parseInt(effectiveSelectedSegmentId, 10);
           if (idx === num || idx + 1 === num) return true;
         }
         return false;
       })
     : -1;
-
-  // Check if user is currently typing in textarea to prevent jarring cursor shifts
-  const isEditingTextarea = Boolean(
-    typeof document !== 'undefined' &&
-    document.activeElement &&
-    document.activeElement.tagName === 'TEXTAREA' &&
-    document.activeElement.closest('.inspector-card-group')
-  );
 
   // When user manually selects a segment, preserve that selection when paused so editing and typing are 100% stable.
   // Fall back to playhead segment if no explicit segment is selected
@@ -153,6 +222,59 @@ export default function VoiceSettings({
   const [regenStatusMap, setRegenStatusMap] = useState({}); // { [segKey]: 'text_updated' | 'generating' | 'voice_updated' | 'error' | 'ready' }
   const [autoplayBlockedId, setAutoplayBlockedId] = useState(null);
   const [playbackErrorMap, setPlaybackErrorMap] = useState({});
+
+  // Active characters that actually speak in the current episode script
+  const activeEpisodeSpeakers = useMemo(() => {
+    const segments = scriptData?.segments || [];
+    if (!segments.length) {
+      if (Array.isArray(activeSeries?.glossary?.characters) && activeSeries.glossary.characters.length > 0) {
+        return activeSeries.glossary.characters.map((ch) => {
+          const currentVoice = ch.voiceId || ch.khmerVoiceId || settings?.voiceId || 'km-KH-PisethNeural';
+          const isFemale = (ch.gender === 'female' || ch.gender === 'FEMALE') || String(currentVoice).toLowerCase().includes('sreymom');
+          return {
+            key: ch.id || ch.name,
+            name: ch.khmerName || ch.name,
+            count: 0,
+            voiceId: currentVoice,
+            isFemale,
+          };
+        });
+      }
+      return [];
+    }
+
+    const speakerCounts = new Map();
+    segments.forEach((seg) => {
+      const name = (seg.speaker || seg.speakerName || 'តួអង្គ').trim();
+      if (name && name !== 'Unknown') {
+        speakerCounts.set(name, (speakerCounts.get(name) || 0) + 1);
+      }
+    });
+
+    const list = [];
+    for (const [name, count] of speakerCounts.entries()) {
+      const reg = (speakerRegistry && (
+        speakerRegistry[name] ||
+        Object.values(speakerRegistry).find((r) => r && (r.name === name || r.speakerName === name || r.id === name))
+      )) || {};
+
+      const currentVoice = reg.voiceId || reg.khmerVoiceId || settings?.voiceId || 'km-KH-PisethNeural';
+      const isFemale = String(reg.voiceGender || reg.gender || '').toLowerCase() === 'female' ||
+        String(currentVoice).toLowerCase().includes('sreymom');
+
+      list.push({
+        key: reg.id || name,
+        name,
+        count,
+        voiceId: currentVoice,
+        isFemale,
+        userOverridden: Boolean(reg.userOverridden || reg.voiceAssignmentSource === 'manual'),
+      });
+    }
+
+    // Sort by line count descending so main speakers appear first
+    return list.sort((a, b) => b.count - a.count);
+  }, [scriptData?.segments, speakerRegistry, settings?.voiceId, activeSeries?.glossary?.characters]);
 
   // Clean up timers on unmount
   useEffect(() => {
@@ -300,10 +422,14 @@ export default function VoiceSettings({
   const currentVoice = allVoices.find((v) => v.id.toLowerCase() === (settings.voiceId || '').toLowerCase()) ||
     allVoices[0];
 
-  // Collapsible Accordion sections
+  // Context-Aware 3-Tab Right Inspector ('clip' | 'audio' | 'visual')
+  const [inspectorTab, setInspectorTab] = useState('clip');
+  const prevSelectionKeyRef = useRef(null);
+
+  // Collapsible Accordion sections (kept for smooth sub-section toggles)
   const [openSections, setOpenSections] = useState({
     clip: true,
-    characters: false,
+    characters: true,
     mixing: true,
     export: true,
   });
@@ -312,23 +438,78 @@ export default function VoiceSettings({
     setOpenSections((prev) => ({ ...prev, [key]: !prev[key] }));
   };
 
-  // Auto open clip inspector when a segment or clip is selected
+  // Auto-focus Clip tab ONLY when user explicitly selects a different segment/clip on Timeline
   useEffect(() => {
-    if (selectedSegmentId !== null || selectedClip !== null || selectedSegment !== null) {
+    const selKey = selectedSegmentId !== null && selectedSegmentId !== undefined
+      ? `seg:${selectedSegmentId}`
+      : (selectedClip?.id ? `clip:${selectedClip.id}` : null);
+    if (selKey && selKey !== prevSelectionKeyRef.current) {
+      setInspectorTab('clip');
       setOpenSections((prev) => ({ ...prev, clip: true }));
     }
-  }, [selectedSegmentId, selectedClip, selectedSegment]);
+    prevSelectionKeyRef.current = selKey;
+  }, [selectedSegmentId, selectedClip?.id]);
 
   const voiceAudioRef = useRef(null);
   const bgAudioRef = useRef(null);
+  const testAudioCtxRef = useRef(null);
   const voiceGainNodeRef = useRef(null);
   const bgGainNodeRef = useRef(null);
   const segmentAudioRef = useRef(null);
+  const liveTestDuckRef = useRef(null);
+  const liveTestKhmerRef = useRef(null);
 
   const voiceUrl = previewAudioUrl;
-  const bgUrl = selectedVideo ? selectedVideo.videoUrl : null;
+  const customBgmCandidate = (settings?.enableCustomBgm && settings?.customBgmUrl) ? settings.customBgmUrl : null;
+  const cleanBgmCandidate = activeEpisode?.bgmAudioUrl || activeEpisode?.cleanBgmUrl || null;
+  const bgUrl = customBgmCandidate || cleanBgmCandidate || (selectedVideo ? selectedVideo.videoUrl : null);
   const latestSettingsRef = useRef(settings);
   latestSettingsRef.current = settings;
+
+  const applyLiveTestVolumes = useCallback((duckOverride = null, khmerOverride = null) => {
+    const cur = latestSettingsRef.current || {};
+    const hasCustomLoop = Boolean(cur.enableCustomBgm && cur.customBgmUrl);
+    const isYtSafe = Boolean(cur.youtubeSafeAudio && !hasCustomLoop);
+    const duckVal = duckOverride !== null && Number.isFinite(Number(duckOverride))
+      ? Math.max(0, Math.min(1, Number(duckOverride)))
+      : (liveTestDuckRef.current !== null ? liveTestDuckRef.current : (cur.duckingVolume !== undefined ? Number(cur.duckingVolume) : 0.15));
+    const khmerVal = khmerOverride !== null && Number.isFinite(Number(khmerOverride))
+      ? Math.max(0, Math.min(2.0, Number(khmerOverride)))
+      : (liveTestKhmerRef.current !== null ? liveTestKhmerRef.current : (cur.khmerVolume !== undefined ? Number(cur.khmerVolume) : 1.0));
+
+    if (voiceGainNodeRef.current) {
+      try {
+        const ctx = testAudioCtxRef.current;
+        if (ctx) voiceGainNodeRef.current.gain.setValueAtTime(khmerVal <= 0.01 ? 0 : khmerVal, ctx.currentTime);
+        else voiceGainNodeRef.current.gain.value = khmerVal <= 0.01 ? 0 : khmerVal;
+      } catch (_) {}
+    } else if (voiceAudioRef.current) {
+      voiceAudioRef.current.muted = khmerVal <= 0.01;
+      voiceAudioRef.current.volume = Math.min(1.0, Math.max(0, khmerVal));
+    }
+
+    if (bgAudioRef.current) {
+      const effectiveDuck = isYtSafe ? 0 : duckVal;
+      bgAudioRef.current.muted = effectiveDuck <= 0.001;
+      bgAudioRef.current.volume = Math.min(1.0, Math.max(0, effectiveDuck));
+    }
+    if (bgGainNodeRef.current) {
+      bgGainNodeRef.current.gain.value = isYtSafe ? 0 : duckVal;
+    }
+  }, []);
+
+  // Real-time 60fps volume update while dragging Audio Mix sliders during "ស្តាប់សាកល្បង (Mix)"
+  useEffect(() => {
+    return subscribeDraftPreview(['duckingVolume', 'khmerVolume'], ({ key, value, cleared }) => {
+      if (key === 'duckingVolume') {
+        liveTestDuckRef.current = cleared ? null : (Number.isFinite(Number(value)) ? Number(value) : null);
+        applyLiveTestVolumes(liveTestDuckRef.current, null);
+      } else if (key === 'khmerVolume') {
+        liveTestKhmerRef.current = cleared ? null : (Number.isFinite(Number(value)) ? Number(value) : null);
+        applyLiveTestVolumes(null, liveTestKhmerRef.current);
+      }
+    });
+  }, [applyLiveTestVolumes]);
 
   const handleChange = (field, value) => {
     const patch = (field && typeof field === 'object' && !Array.isArray(field))
@@ -341,21 +522,19 @@ export default function VoiceSettings({
     latestSettingsRef.current = nextSettings;
     onUpdateSettings(nextSettings);
 
-    if (Object.prototype.hasOwnProperty.call(patch, 'khmerVolume') && voiceGainNodeRef.current) {
-      voiceGainNodeRef.current.gain.value = patch.khmerVolume;
+    if (Object.prototype.hasOwnProperty.call(patch, 'khmerVolume')) {
+      liveTestKhmerRef.current = null;
+      applyLiveTestVolumes(null, patch.khmerVolume);
     }
-    if (Object.prototype.hasOwnProperty.call(patch, 'duckingVolume')) {
-      const duckVal = patch.duckingVolume;
-      if (bgGainNodeRef.current) bgGainNodeRef.current.gain.value = duckVal;
-      if (bgAudioRef.current) {
-        bgAudioRef.current.volume = Math.min(1.0, Math.max(0, duckVal));
-        bgAudioRef.current.muted = duckVal <= 0;
-      }
+    if (Object.prototype.hasOwnProperty.call(patch, 'duckingVolume') || Object.prototype.hasOwnProperty.call(patch, 'youtubeSafeAudio')) {
+      liveTestDuckRef.current = null;
+      applyLiveTestVolumes(nextSettings.duckingVolume, null);
     }
   };
 
   const stopTestAudio = () => {
     if (voiceAudioRef.current) {
+      voiceAudioRef.current.ontimeupdate = null;
       voiceAudioRef.current.pause();
       voiceAudioRef.current.removeAttribute('src');
       voiceAudioRef.current = null;
@@ -372,6 +551,10 @@ export default function VoiceSettings({
     if (bgGainNodeRef.current) {
       try { bgGainNodeRef.current.disconnect(); } catch {}
       bgGainNodeRef.current = null;
+    }
+    if (testAudioCtxRef.current) {
+      try { testAudioCtxRef.current.close(); } catch {}
+      testAudioCtxRef.current = null;
     }
     setIsPlayingTest(false);
   };
@@ -403,38 +586,91 @@ export default function VoiceSettings({
 
     try {
       const vAudio = new Audio(voiceUrl);
+      vAudio.crossOrigin = 'anonymous';
       voiceAudioRef.current = vAudio;
 
-      const khmerBoost = settings.khmerVolume !== undefined ? Number(settings.khmerVolume) : 1.0;
-      vAudio.volume = Math.min(1.0, Math.max(0, khmerBoost >= 1.0 ? 1.0 : khmerBoost));
+      const curSettings = latestSettingsRef.current || settings || {};
+      const khmerBoost = curSettings.khmerVolume !== undefined ? Number(curSettings.khmerVolume) : 1.0;
 
-      const duckVal = settings.duckingVolume !== undefined ? Number(settings.duckingVolume) : 0.15;
-      let bAudio = null;
+      // Wire Web Audio GainNode so 20%–200% boost & real-time slider dragging actually work!
+      try {
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        if (AudioCtx) {
+          const ctx = new AudioCtx();
+          const source = ctx.createMediaElementSource(vAudio);
+          const gainNode = ctx.createGain();
+          gainNode.gain.setValueAtTime(khmerBoost <= 0.01 ? 0 : Math.min(2.0, Math.max(0, khmerBoost)), ctx.currentTime);
+          source.connect(gainNode);
+          gainNode.connect(ctx.destination);
+          testAudioCtxRef.current = ctx;
+          voiceGainNodeRef.current = gainNode;
+          vAudio.volume = 1.0;
+        } else {
+          vAudio.volume = Math.min(1.0, Math.max(0, khmerBoost));
+        }
+      } catch (_) {
+        vAudio.volume = Math.min(1.0, Math.max(0, khmerBoost));
+      }
 
-      if (bgUrl && duckVal > 0) {
+      // If previewAudioUrl is a single segment MP3 (fallback when monolithic fullAudioUrl is absent),
+      // align BGM start offset to that segment's actual timeline start time.
+      const matchedSeg = Array.isArray(scriptData?.segments)
+        ? scriptData.segments.find((s) => s?.audioUrl && s.audioUrl === voiceUrl)
+        : null;
+      const bgStartSec = matchedSeg
+        ? (typeof matchedSeg.audioStartSec === 'number' ? matchedSeg.audioStartSec : (typeof matchedSeg.startSec === 'number' ? matchedSeg.startSec : 0))
+        : 0;
+
+      const hasCustomLoop = Boolean(curSettings.enableCustomBgm && curSettings.customBgmUrl);
+      const initialDuck = (curSettings.youtubeSafeAudio && !hasCustomLoop)
+        ? 0
+        : (curSettings.duckingVolume !== undefined ? Number(curSettings.duckingVolume) : 0.15);
+
+      if (bgUrl) {
         try {
-          bAudio = document.createElement('video');
-          bAudio.src = bgUrl;
-          bAudio.muted = false;
-          bAudio.volume = Math.min(1.0, Math.max(0, duckVal));
+          const isAudioOnlyBg = /\.(wav|mp3|m4a|ogg|aac|flac)(\?|$)/i.test(bgUrl);
+          const bAudio = isAudioOnlyBg ? new Audio(bgUrl) : document.createElement('video');
+          if (!isAudioOnlyBg) bAudio.src = bgUrl;
+          bAudio.loop = Boolean(hasCustomLoop);
+          bAudio.muted = initialDuck <= 0.001;
+          bAudio.volume = Math.min(1.0, Math.max(0, initialDuck));
           bgAudioRef.current = bAudio;
 
           vAudio.ontimeupdate = () => {
-            const t = vAudio.currentTime;
-            const isSpeaking = scriptData?.segments?.some((s) => {
-              const start = typeof s.audioStartSec === 'number' ? s.audioStartSec : (s.startSec !== undefined ? s.startSec : parseTimeToSeconds(s.start, 0));
-              const end = typeof s.audioEndSec === 'number' ? s.audioEndSec : (s.endSec !== undefined ? s.endSec : parseTimeToSeconds(s.end, start + 3.0));
-              return t >= start && t <= end;
-            });
+            if (!bgAudioRef.current) return;
+            const liveCur = latestSettingsRef.current || {};
+            const liveHasCustomLoop = Boolean(liveCur.enableCustomBgm && liveCur.customBgmUrl);
+            if (liveCur.youtubeSafeAudio && !liveHasCustomLoop) {
+              bgAudioRef.current.muted = true;
+              bgAudioRef.current.volume = 0;
+              return;
+            }
+            const liveDuck = liveTestDuckRef.current !== null
+              ? liveTestDuckRef.current
+              : (liveCur.duckingVolume !== undefined ? Number(liveCur.duckingVolume) : 0.15);
+            if (liveDuck <= 0.001) {
+              bgAudioRef.current.muted = true;
+              bgAudioRef.current.volume = 0;
+              return;
+            }
+            const t = bgStartSec + vAudio.currentTime;
+            const isSpeaking = matchedSeg
+              ? true
+              : Boolean(scriptData?.segments?.some((s) => {
+                  const start = typeof s.audioStartSec === 'number' ? s.audioStartSec : (s.startSec !== undefined ? s.startSec : parseTimeToSeconds(s.start, 0));
+                  const end = typeof s.audioEndSec === 'number' ? s.audioEndSec : (s.endSec !== undefined ? s.endSec : parseTimeToSeconds(s.end, start + 3.0));
+                  return t >= start && t <= end;
+                }));
             const targetVol = isSpeaking
-              ? Math.min(1.0, Math.max(0, duckVal))
-              : Math.min(1.0, Math.max(0, duckVal <= 0.05 ? duckVal : duckVal * 1.4));
-            if (bgAudioRef.current && Math.abs(bgAudioRef.current.volume - targetVol) > 0.001) {
+              ? Math.min(1.0, Math.max(0, liveDuck))
+              : Math.min(1.0, Math.max(0, liveDuck <= 0.05 ? liveDuck : liveDuck * 1.4));
+            bgAudioRef.current.muted = targetVol <= 0.001;
+            if (Math.abs(bgAudioRef.current.volume - targetVol) > 0.002) {
               bgAudioRef.current.volume = targetVol;
             }
           };
 
-          bAudio.currentTime = 0;
+          bAudio.currentTime = Math.max(0, bgStartSec);
           bAudio.play().catch(e => { if (e.name !== 'AbortError') console.warn('Background preview play:', e.message); });
         } catch (e) {
           console.warn('Background preview setup:', e);
@@ -538,22 +774,32 @@ export default function VoiceSettings({
           : (seg?.khmer || seg?.khmerText || '');
         res = await onUpdateSegmentText(segId, text, true, effectiveIndex);
       }
-      if (res && res.audioUrl) {
+      if (res && (res.audioUrl || res.audioPath || res.audioFile)) {
         setRegenStatusMap((prev) => ({ ...prev, [segKey]: 'voice_updated' }));
         if (selectedSegment && (String(selectedSegment.id) === segKey || selectedSegmentIndex === effectiveIndex)) {
           selectedSegment.textStatus = 'voice_updated';
           delete selectedSegment.regenError;
         }
-        playSegmentAudio(res.audioUrl, segId);
+        if (res.audioUrl) {
+          playSegmentAudio(res.audioUrl, segId);
+        }
         setTimeout(() => {
           setRegenStatusMap((prev) => prev[segKey] === 'voice_updated' ? { ...prev, [segKey]: 'ready' } : prev);
         }, 4000);
       } else {
         setRegenStatusMap((prev) => ({ ...prev, [segKey]: 'error' }));
+        if (selectedSegment && (String(selectedSegment.id) === segKey || selectedSegmentIndex === effectiveIndex)) {
+          if (!selectedSegment.regenError) {
+            selectedSegment.regenError = 'បង្កើតសំឡេងបរាជ័យ';
+          }
+        }
       }
     } catch (err) {
       console.error('Manual regenerate error:', err);
       setRegenStatusMap((prev) => ({ ...prev, [segKey]: 'error' }));
+      if (selectedSegment && (String(selectedSegment.id) === segKey || selectedSegmentIndex === effectiveIndex)) {
+        selectedSegment.regenError = err?.message || 'បង្កើតសំឡេងបរាជ័យ';
+      }
     } finally {
       setRegeneratingId(null);
     }
@@ -590,197 +836,220 @@ export default function VoiceSettings({
     </>
   );
 
+  const activeSegBadge = selectedSegment
+    ? `#${selectedSegment.id ?? (selectedSegmentIndex >= 0 ? selectedSegmentIndex + 1 : '')}`
+    : null;
+
   return (
     <div className="capcut-inspector-panel">
-      {/* Inspector Header */}
-      <div className="inspector-header">
-        <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-          <Sliders size={14} color="var(--primary-accent)" />
-          <span className="panel-title-tag">
-            ការកំណត់សំឡេង & Export (Inspector)
-          </span>
-        </div>
+      {/* Context-Aware 3-Tab Inspector Header (Clip | Audio | Visual & Export) */}
+      <div className="inspector-tabs-header" role="tablist" aria-label="Inspector Tabs">
+        <button
+          type="button"
+          role="tab"
+          data-testid="inspector-tab-clip"
+          aria-selected={inspectorTab === 'clip'}
+          className={`inspector-tab-btn ${inspectorTab === 'clip' ? 'active' : ''}`}
+          onClick={() => setInspectorTab('clip')}
+          title="កែសម្រួល Clip & ប្រយោគខ្មែរដែលកំពុងជ្រើស (Clip Inspector)"
+        >
+          <Scissors size={13} />
+          <span>Clip</span>
+          {activeSegBadge && <span className="inspector-tab-badge">{activeSegBadge}</span>}
+        </button>
+
+        <button
+          type="button"
+          role="tab"
+          data-testid="inspector-tab-audio"
+          aria-selected={inspectorTab === 'audio'}
+          className={`inspector-tab-btn ${inspectorTab === 'audio' ? 'active' : ''}`}
+          onClick={() => setInspectorTab('audio')}
+          title="កំណត់សំឡេងតួអង្គ & លាយសំឡេង BGM/Ducking (Audio & Cast)"
+        >
+          <Volume2 size={13} />
+          <span>សំឡេង</span>
+        </button>
+
+        <button
+          type="button"
+          role="tab"
+          data-testid="inspector-tab-visual"
+          aria-selected={inspectorTab === 'visual'}
+          className={`inspector-tab-btn ${inspectorTab === 'visual' ? 'active' : ''}`}
+          onClick={() => setInspectorTab('visual')}
+          title="កំណត់ Subtitle, Blur, Logo, Sponsor & Export (Visual & Export)"
+        >
+          <Sparkles size={13} />
+          <span>រូប &amp; Export</span>
+        </button>
       </div>
 
       <div className="inspector-content">
-        {/* Section 0: Selected Clip & Dialogue Inspector */}
-        <ClipInspectorPanel
-          isOpen={openSections.clip}
-          onToggle={() => toggleSection('clip')}
-          selectedSegment={selectedSegment}
-          selectedSegmentIndex={selectedSegmentIndex}
-          selectedClip={selectedClip}
-          selectedClipKind={selectedClipKind}
-          onSegmentTextChange={handleSegmentTextChange}
-          onSegmentTextBlur={handleSegmentTextBlur}
-          onSegmentChineseChange={handleSegmentChineseChange}
-          onSingleRegen={handleSingleRegen}
-          onTranslateSegment={onTranslateSegment}
-          regeneratingId={regeneratingId}
-          regenStatus={regenStatusMap[String(selectedSegment?.id ?? selectedSegmentIndex)] || selectedSegment?.textStatus}
-          onSplitSegment={onSplitSegment}
-          onClipVoiceChange={handleClipVoiceChange}
-          onClipSpeedChange={handleClipSpeedChange}
-          settings={settings}
-          playingSegmentId={playingSegmentId}
-          onPlaySegmentAudio={playSegmentAudio}
-          onDeleteSegment={onDeleteSegment}
-          currentTime={currentTime}
-          onSplitClip={onSplitClip}
-          onDeleteClip={onDeleteClip}
-          scriptData={scriptData}
-          onSelectSegment={onSelectSegment}
-          onToggleMuteSegment={onToggleMuteSegment}
-          onToggleMuteVideoClip={onToggleMuteVideoClip}
-          onReleaseSegmentToAutoAlign={onReleaseSegmentToAutoAlign}
-          videoClips={videoClips}
-          autoplayBlocked={autoplayBlockedId === String(selectedSegment?.id ?? selectedSegmentIndex)}
-          playbackError={playbackErrorMap[String(selectedSegment?.id ?? selectedSegmentIndex)]}
-          onUpdateSpeakerVoice={onUpdateSpeakerVoice}
-          onAutoSplitSegment={onAutoSplitSegment}
-          onToggleDeliveryType={onToggleDeliveryType}
-        />
+        {/* TAB 1: Selected Clip & Dialogue Inspector */}
+        {inspectorTab === 'clip' && (
+          <ClipInspectorPanel
+            isOpen={openSections.clip}
+            onToggle={() => toggleSection('clip')}
+            selectedSegment={selectedSegment}
+            selectedSegmentIndex={selectedSegmentIndex}
+            selectedClip={selectedClip}
+            selectedClipKind={selectedClipKind}
+            onSegmentTextChange={handleSegmentTextChange}
+            onSegmentTextBlur={handleSegmentTextBlur}
+            onSegmentChineseChange={handleSegmentChineseChange}
+            onSingleRegen={handleSingleRegen}
+            onTranslateSegment={onTranslateSegment}
+            regeneratingId={regeneratingId}
+            regenStatus={regenStatusMap[String(selectedSegment?.id ?? selectedSegmentIndex)] || selectedSegment?.textStatus}
+            onSplitSegment={onSplitSegment}
+            onClipVoiceChange={handleClipVoiceChange}
+            onClipSpeedChange={handleClipSpeedChange}
+            settings={settings}
+            playingSegmentId={playingSegmentId}
+            onPlaySegmentAudio={playSegmentAudio}
+            onDeleteSegment={onDeleteSegment}
+            currentTime={currentTime}
+            onSplitClip={onSplitClip}
+            onDeleteClip={onDeleteClip}
+            scriptData={scriptData}
+            onSelectSegment={onSelectSegment}
+            onToggleMuteSegment={onToggleMuteSegment}
+            onToggleMuteVideoClip={onToggleMuteVideoClip}
+            onReleaseSegmentToAutoAlign={onReleaseSegmentToAutoAlign}
+            videoClips={videoClips}
+            autoplayBlocked={autoplayBlockedId === String(selectedSegment?.id ?? selectedSegmentIndex)}
+            playbackError={playbackErrorMap[String(selectedSegment?.id ?? selectedSegmentIndex)]}
+            onUpdateSpeakerVoice={onUpdateSpeakerVoice}
+            onAutoSplitSegment={onAutoSplitSegment}
+            onToggleDeliveryType={onToggleDeliveryType}
+          />
+        )}
 
-        {/* Section 0.5: Character Voice Mapping Accordion Card */}
-        <div className="inspector-card-group" data-testid="inspector-character-mapping-card">
-          <div
-            onClick={() => toggleSection('characters')}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              cursor: 'pointer',
-              userSelect: 'none',
-              paddingBottom: openSections.characters ? 8 : 0,
-              borderBottom: openSections.characters ? '1px solid var(--line)' : 'none',
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <Users size={14} color="var(--primary-accent)" />
-              <span style={{ fontSize: '0.8125rem', fontWeight: 700, color: 'var(--text-primary)', lineHeight: 'var(--khmer-line-height, 1.68)' }}>
-                កំណត់សំឡេងតួអង្គ (Character Voice Mapping)
-              </span>
-            </div>
-            {openSections.characters ? <ChevronDown size={14} color="var(--text-dim)" /> : <ChevronRight size={14} color="var(--text-dim)" />}
-          </div>
-          {openSections.characters && (
-            <div style={{ paddingTop: 10, display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <span style={{ fontSize: '0.8125rem', color: 'var(--text-secondary)', lineHeight: 'var(--khmer-line-height, 1.68)' }}>
-                សំឡេងគោល (Default Narrator / Primary Voice):
-              </span>
-              <select
-                value={settings?.voiceId || currentVoice?.id || 'km-KH-PisethNeural'}
-                onChange={(e) => handleChange('voiceId', e.target.value)}
-                className="inspector-select"
+        {/* TAB 2: Character Voice Mapping + Audio Mixing / Ducking */}
+        {inspectorTab === 'audio' && (
+          <>
+            <div className="inspector-card-group" data-testid="inspector-character-mapping-card">
+              <button
+                type="button"
+                className="inspector-accordion-trigger"
+                onClick={() => toggleSection('characters')}
+                aria-expanded={openSections.characters}
               >
-                {renderVoiceOptions()}
-              </select>
-              {Object.keys(speakerRegistry || {}).length > 0 && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 4 }}>
-                  {Object.entries(speakerRegistry).map(([spkKey, spkInfo]) => {
-                    const currentSpkVoice = spkInfo?.voiceId || 'km-KH-PisethNeural';
-                    const isFemale = currentSpkVoice.toLowerCase().includes('sreymom');
-                    return (
-                      <div
-                        key={spkKey}
-                        style={{
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'space-between',
-                          gap: 8,
-                          padding: '6px 8px',
-                          borderRadius: 6,
-                          background: 'rgba(9, 10, 15, 0.55)',
-                          border: '1px solid var(--line)',
-                        }}
-                      >
-                        <span style={{ fontSize: '0.8125rem', fontWeight: 600, color: isFemale ? 'var(--voice-female)' : 'var(--voice-male)' }}>
-                          {spkInfo?.name || spkKey}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            onUpdateSpeakerVoice?.(
-                              spkKey,
-                              isFemale ? 'km-KH-PisethNeural' : 'km-KH-SreymomNeural'
-                            )
-                          }
-                          style={{
-                            padding: '3px 8px',
-                            borderRadius: 5,
-                            fontSize: '0.8125rem',
-                            fontWeight: 600,
-                            border: '1px solid var(--line)',
-                            background: isFemale ? 'rgba(236, 72, 153, 0.16)' : 'rgba(59, 130, 246, 0.16)',
-                            color: '#fff',
-                            cursor: 'pointer',
-                          }}
-                        >
-                          {isFemale ? 'ស្រី (ស្រីមុំ)' : 'ប្រុស (ពិសិដ្ឋ)'}
-                        </button>
-                      </div>
-                    );
-                  })}
+                <span className="inspector-accordion-title">
+                  <Users size={14} color="var(--primary-accent)" />
+                  <span>តួសំឡេង (Cast Voices)</span>
+                  {activeEpisodeSpeakers.length > 0 && (
+                    <span style={{ fontSize: '0.72rem', opacity: 0.7, marginLeft: 4 }}>
+                      ({activeEpisodeSpeakers.length})
+                    </span>
+                  )}
+                </span>
+                {openSections.characters ? <ChevronDown size={14} color="var(--text-dim)" /> : <ChevronRight size={14} color="var(--text-dim)" />}
+              </button>
+              {openSections.characters && (
+                <div className="inspector-accordion-body">
+                  <span className="section-label">
+                    សំឡេងគោល (Default Voice)
+                  </span>
+                  <select
+                    value={settings?.voiceId || currentVoice?.id || 'km-KH-PisethNeural'}
+                    onChange={(e) => handleChange('voiceId', e.target.value)}
+                    className="inspector-select"
+                  >
+                    {renderVoiceOptions()}
+                  </select>
+                  {activeEpisodeSpeakers.length > 0 ? (
+                    <div className="inspector-speaker-list">
+                      {activeEpisodeSpeakers.map((spk) => {
+                        return (
+                          <div key={spk.key || spk.name} className="inspector-speaker-row">
+                            <span className={`inspector-speaker-name ${spk.isFemale ? 'is-female' : 'is-male'}`}>
+                              {spk.name} {spk.count > 0 && <span style={{ fontSize: '0.68rem', opacity: 0.6 }}>({spk.count} ឃ្លា)</span>}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                onUpdateSpeakerVoice?.(
+                                  spk.key || spk.name,
+                                  spk.isFemale ? 'km-KH-PisethNeural' : 'km-KH-SreymomNeural'
+                                )
+                              }
+                              className={`inspector-speaker-voice-btn ${spk.isFemale ? 'is-female' : 'is-male'}`}
+                            >
+                              {spk.isFemale ? 'ស្រី (ស្រីមុំ)' : 'ប្រុស (ពិសិដ្ឋ)'}
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div style={{ padding: '8px 4px', fontSize: '0.75rem', color: 'var(--text-dim)' }}>
+                      មិនទាន់មានតួអង្គក្នុងភាគនេះទេ (សូមបកប្រែ Script ជាមុនសិន)
+                    </div>
+                  )}
                 </div>
               )}
             </div>
-          )}
-        </div>
 
-        {/* Section 1: Audio Mixing */}
-        <AudioDuckingPanel
-          isOpen={openSections.mixing}
-          onToggle={() => toggleSection('mixing')}
-          settings={settings}
-          onSettingChange={handleChange}
-          isPlayingTest={isPlayingTest}
-          onToggleTest={handleToggleTest}
-          previewAudioUrl={previewAudioUrl}
-        />
-
-        {/* Section 2: Subtitle & Export Settings */}
-        <ExportSettingsPanel
-          isOpen={openSections.export}
-          onToggle={() => toggleSection('export')}
-          settings={settings}
-          onSettingChange={handleChange}
-          onRenderVideo={onRenderVideo}
-          isRendering={isRendering}
-          renderProgress={renderProgress}
-          renderStage={renderStage}
-          selectedVideo={selectedVideo}
-          videoMetadata={videoMetadata}
-          activeEpisode={activeEpisode}
-          batchRender={batchRender}
-          audioGenerated={audioGenerated}
-          previewAudioUrl={previewAudioUrl}
-          renderedVideo={renderedVideo}
-          onCopyCaption={handleCopyCaption}
-          copiedCaption={copiedCaption}
-        />
-        {activeEpisode && (
-          <div style={{ padding: '8px 12px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6, background: 'rgba(15, 23, 42, 0.65)', borderTop: '1px solid rgba(255, 255, 255, 0.06)' }}>
-            <span style={{ fontSize: '0.72rem', color: '#94A3B8', fontWeight: 600 }}>
-              EP{activeEpisode.episodeNumber || activeEpisode.id} AI Audio:
-            </span>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <DubbingStepButton
-                step="voice"
-                episodes={[activeEpisode]}
-                variant="pill"
-                setupOptions={{ voiceId: settings?.voiceId }}
-              />
-              <DubbingStepButton
-                step="all3"
-                episodes={[activeEpisode]}
-                variant="pill"
-                setupOptions={{ voiceId: settings?.voiceId }}
-              />
-            </div>
-          </div>
+            <AudioDuckingPanel
+              isOpen={openSections.mixing}
+              onToggle={() => toggleSection('mixing')}
+              settings={settings}
+              onSettingChange={handleChange}
+              isPlayingTest={isPlayingTest}
+              onToggleTest={handleToggleTest}
+              previewAudioUrl={previewAudioUrl}
+            />
+          </>
         )}
 
+        {/* TAB 3: Visual Frame, Anti-Theft Blur, Subtitles, Logo & Export */}
+        {inspectorTab === 'visual' && (
+          <ExportSettingsPanel
+            isOpen={openSections.export}
+            onToggle={() => toggleSection('export')}
+            settings={settings}
+            onSettingChange={handleChange}
+            onRenderVideo={onRenderVideo}
+            isRendering={isRendering}
+            renderProgress={renderProgress}
+            renderStage={renderStage}
+            selectedVideo={selectedVideo}
+            videoMetadata={videoMetadata}
+            activeEpisode={activeEpisode}
+            batchRender={batchRender}
+            audioGenerated={audioGenerated}
+            previewAudioUrl={previewAudioUrl}
+            renderedVideo={renderedVideo}
+            onCopyCaption={handleCopyCaption}
+            copiedCaption={copiedCaption}
+          />
+        )}
       </div>
+
+      {/* Pinned Compact Episode AI Audio Strip */}
+      {activeEpisode && (
+        <div className="inspector-sticky-footer inspector-ep-footer">
+          <span className="inspector-ep-footer-label">
+            EP{activeEpisode.episodeNumber || activeEpisode.id}:
+          </span>
+          <div className="inspector-ep-footer-actions">
+            <DubbingStepButton
+              step="voice"
+              episodes={[activeEpisode]}
+              variant="pill"
+              setupOptions={{ voiceId: settings?.voiceId }}
+            />
+            <DubbingStepButton
+              step="all3"
+              episodes={[activeEpisode]}
+              variant="pill"
+              setupOptions={{ voiceId: settings?.voiceId }}
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

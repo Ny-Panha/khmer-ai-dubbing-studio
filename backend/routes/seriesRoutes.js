@@ -1,7 +1,7 @@
 const express = require("express");
 const fs = require("fs");
 const path = require("path");
-const { uploadsDir } = require("../utils/pathUtils");
+const { uploadsDir, sanitizeProjectName } = require("../utils/pathUtils");
 const {
   getSeriesMetadata,
   withSeriesMetadataLock,
@@ -10,6 +10,8 @@ const {
   createNewEpisode,
   deleteEpisode,
   deleteSeries,
+  renameSeries,
+  resolveUniqueSeriesFolderId,
   resetEpisodeState,
 } = require("../services/episodeService");
 
@@ -79,9 +81,50 @@ router.get("/", (req, res) => {
 router.post("/", async (req, res) => {
   try {
     const { series } = req.body;
-    if (!series || !series.id) return res.status(400).json({ error: "series with id is required" });
-    const saved = await syncSeriesMetadataSafely(series.id, series);
+    if (!series || (!series.id && !series.title)) {
+      return res.status(400).json({ error: "series with id or title is required" });
+    }
+    const projectsDir = path.join(uploadsDir, "projects");
+    const rawId = typeof series.id === "string" ? series.id.trim() : "";
+    const rawTitle = typeof series.title === "string" ? series.title.trim() : "";
+    const existingDirForRawId = rawId
+      ? fs.existsSync(path.join(projectsDir, sanitizeProjectName(rawId)))
+      : false;
+
+    let targetId = rawId;
+    if (
+      rawTitle &&
+      (!rawId || (/^series_\d+$/i.test(rawId) && !existingDirForRawId))
+    ) {
+      targetId = resolveUniqueSeriesFolderId(rawTitle, { projectsDir });
+    }
+    if (!targetId) {
+      targetId = `series_${Date.now()}`;
+    }
+
+    const saved = await syncSeriesMetadataSafely(targetId, {
+      ...series,
+      id: targetId,
+      title: rawTitle || targetId,
+    });
     res.json({ success: true, series: saved });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.patch("/:seriesId/rename", async (req, res) => {
+  try {
+    const { seriesId } = req.params;
+    const { title } = req.body || {};
+    if (!title || typeof title !== "string" || !title.trim()) {
+      return res.status(400).json({ success: false, error: "សូមបញ្ចូលឈ្មោះ Folder រឿងថ្មី!" });
+    }
+    const result = await renameSeries(seriesId, title.trim());
+    if (!result.success) {
+      return res.status(result.statusCode || 400).json(result);
+    }
+    res.json(result);
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }

@@ -1,17 +1,45 @@
-import React, { useState, useContext, useEffect } from 'react';
-import { 
-  Key, HelpCircle, Download, Loader2, RotateCcw, Film, Cpu, Layers, Activity,
-  PanelLeft, PanelRight, PanelBottom, Home
+import React, { useState, useEffect, useRef } from 'react';
+import {
+  Download,
+  Loader2,
+  RotateCcw,
+  Layers,
+  ChevronLeft,
+  ChevronRight,
+  ChevronDown,
+  PanelLeft,
+  PanelRight,
+  PanelBottom,
 } from 'lucide-react';
 import { useGeminiQuotaMonitor, runQuotaCheck } from '../../hooks/useGeminiQuotaMonitor';
-import { JobQueueContext } from '../../context/jobQueueStore';
-import { useDubbingRunnerContext } from '../../features/dubbing-runner/DubbingRunnerContext';
+import { isCorruptedOrMojibakeTitle } from '../../utils/projectStorage';
 import ShortcutsModal from './ShortcutsModal';
 import './Navbar.css';
 
+function cleanSeriesTitle(rawTitle) {
+  if (!rawTitle || typeof rawTitle !== 'string') return 'DragonDub Studio';
+  let t = rawTitle.trim();
+  if (isCorruptedOrMojibakeTitle(t)) return 'DragonDub Studio';
+  t = t.replace(/\s+p\d+.*$/i, '').replace(/\s*\[BV[a-zA-Z0-9]+.*$/i, '').trim();
+  if (t.length > 36) {
+    t = `${t.slice(0, 35)}…`;
+  }
+  return t || 'DragonDub Studio';
+}
+
+function formatShortEpLabel(ep, idx) {
+  const num = ep?.episodeNumber || idx + 1;
+  const raw = String(ep?.title || ep?.displayTitle || '').trim();
+  if (!raw || isCorruptedOrMojibakeTitle(raw)) return `EP ${num}`;
+  const stripped = raw
+    .replace(/^ភាគទី\s*\d+\s*:\s*/i, '')
+    .replace(/^ភាគទី\s*\d+\s*/i, '')
+    .replace(/^\(EP\d+\)$/i, '')
+    .trim();
+  return stripped && stripped !== `ភាគទី ${num}` ? `EP ${num} — ${stripped.slice(0, 22)}` : `EP ${num}`;
+}
+
 export default function Navbar({
-  apiKey,
-  onSaveApiKey,
   isBackendOnline,
   selectedVideo,
   onRenderVideo,
@@ -20,26 +48,10 @@ export default function Navbar({
   renderedVideo,
   activeSeries = null,
   activeEpisode = null,
-  seriesId = null,
   episodeId = null,
-  generatingEpisodeId = null,
-  generatingAudioEpisodeId = null,
   onSwitchEpisode = null,
-  onCreateEpisode = null,
-  onDeleteEpisode = null,
-  onResetAllEpisodes = null,
-  activeTab = 'media',
-  onTabChange = null,
-  onOpenJobDashboard = null,
-  onOpenGeminiRoute = null,
-  onOpenGeminiQuota = null,
   onOpenBatchExportStudio = null,
-  isGeminiRouteActive = false,
-  isGeminiQuotaActive = false,
-  isBatchExportStudioActive = false,
-  isJobDashboardActive = false,
   batchRender = null,
-  activeJobCount = 0,
   currentAspectRatio = '16:9',
   onAspectRatioChange = null,
   isLeftCollapsed = false,
@@ -50,49 +62,73 @@ export default function Navbar({
   onToggleTimelinePanel = null,
   currentRoute = '/studio',
   onNavigateRoute = null,
+  showShortcutsModal: externalShowShortcuts = false,
+  onCloseShortcutsModal = null,
 }) {
-  const [showKeyModal, setShowKeyModal] = useState(false);
-  const [showShortcutsModal, setShowShortcutsModal] = useState(false);
-  const [tempKey, setTempKey] = useState(apiKey || '');
+  const [internalShowShortcuts, setInternalShowShortcuts] = useState(false);
+  const [showExportMenu, setShowExportMenu] = useState(false);
+  const exportMenuRef = useRef(null);
+
+  const showShortcuts = Boolean(externalShowShortcuts || internalShowShortcuts);
+  const handleCloseShortcuts = () => {
+    setInternalShowShortcuts(false);
+    if (onCloseShortcutsModal) onCloseShortcutsModal();
+  };
+
+  // Warm quota stats quietly once backend is online so NavRail Keys badge stays accurate
   const { keysHealth } = useGeminiQuotaMonitor({ enabled: false });
   useEffect(() => {
     if (isBackendOnline && !keysHealth) {
       runQuotaCheck('stats');
     }
   }, [isBackendOnline, keysHealth]);
-  const jobQueue = useContext(JobQueueContext);
-  const queueStats = jobQueue?.stats || null;
-  const effectiveActiveJobCount = activeJobCount || ((queueStats?.runningCount || 0) + (queueStats?.queuedCount || 0));
 
-  const handleSave = (e) => {
-    e.preventDefault();
-    onSaveApiKey(tempKey);
-    setShowKeyModal(false);
-  };
+  // Close Export dropdown on outside click or Escape
+  useEffect(() => {
+    if (!showExportMenu) return undefined;
+    const onDown = (e) => {
+      if (exportMenuRef.current && !exportMenuRef.current.contains(e.target)) {
+        setShowExportMenu(false);
+      }
+    };
+    const onKey = (e) => {
+      if (e.key === 'Escape') setShowExportMenu(false);
+    };
+    window.addEventListener('mousedown', onDown);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('mousedown', onDown);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [showExportMenu]);
 
-  const episodesCount = Array.isArray(activeSeries?.episodes) ? activeSeries.episodes.length : 0;
+  const episodes = Array.isArray(activeSeries?.episodes) ? activeSeries.episodes : [];
+  const episodesCount = episodes.length;
+  const activeEpIdx = episodes.findIndex((e) => String(e.id) === String(episodeId || activeEpisode?.id));
+  const safeEpIdx = activeEpIdx >= 0 ? activeEpIdx : 0;
+  const canPrevEp = episodesCount > 1 && safeEpIdx > 0;
+  const canNextEp = episodesCount > 1 && safeEpIdx < episodesCount - 1;
+
   const batchJob = batchRender?.job || null;
   const isBatchRunning = Boolean(batchRender?.isRunning || batchJob?.status === 'running');
-  const quotaSummary = keysHealth?.quotaSummary || null;
-  const keysChipText = quotaSummary && (quotaSummary.totalKeys || 0) > 0
-    ? `${quotaSummary.readyKeys}/${quotaSummary.totalKeys} Keys`
-    : 'Keys';
+  const isStudioView = currentRoute === '/studio';
 
-  const runnerContext = useDubbingRunnerContext();
-  const runnerStates = runnerContext?.runnerStates || {};
-  const activeRunnerStep = ['clean_bgm', 'voice', 'translate', 'repair', 'all3'].find(
-    (step) => runnerStates[step]?.status === 'running'
-  );
-  const activeRunnerState = activeRunnerStep ? runnerStates[activeRunnerStep] : null;
+  const downloadFilename =
+    renderedVideo?.outputFilename ||
+    (selectedVideo?.displayTitle || selectedVideo?.originalFilename || selectedVideo?.fileName
+      ? `${(selectedVideo.displayTitle || selectedVideo.originalFilename || selectedVideo.fileName)
+          .replace(/\.[^/.]+$/, '')
+          .trim()}_Khmer_Dubbed.mp4`
+      : 'Dubbed_Video_Khmer.mp4');
 
   return (
     <>
       <header className="capcut-navbar">
-        {/* Left: Brand Mark, Home, Studio, Batch Generate, Keys & Quota, and Jobs */}
-        <nav className="navbar-left-nav" aria-label="Primary Studio Navigation">
+        {/* Left: Brand Mark + Active Series Breadcrumb + Inline Episode Switcher */}
+        <div className="navbar-left-context">
           <button
             type="button"
-            onClick={() => onNavigateRoute && onNavigateRoute('/home')}
+            onClick={() => onNavigateRoute?.('/home')}
             className="concat-app-mark"
             aria-label="DragonDub AI Studio Home"
             title="DragonDub AI Studio — Go to Home (/home)"
@@ -100,113 +136,60 @@ export default function Navbar({
             <span>D</span>
           </button>
 
-          {onNavigateRoute && (
-            <>
+          <span className="navbar-brand-title" title={activeSeries?.title || 'DragonDub AI Studio'}>
+            {cleanSeriesTitle(activeSeries?.title)}
+          </span>
+
+          {episodesCount > 0 && onSwitchEpisode && (
+            <div className="navbar-ep-switcher" role="group" aria-label="Episode Switcher">
+              <span className="navbar-crumb-sep" aria-hidden="true">/</span>
               <button
                 type="button"
-                data-testid="navbar-home-route-btn"
-                onClick={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  onNavigateRoute('/home');
-                }}
-                className={`navbar-gemini-route-btn ${currentRoute === '/home' ? 'active' : ''}`}
-                title="Home & Route Launchpad (/home)"
+                className="navbar-ep-step-btn"
+                disabled={!canPrevEp}
+                onClick={() => canPrevEp && onSwitchEpisode(episodes[safeEpIdx - 1].id)}
+                aria-label="Previous Episode"
+                title="ភាគមុន (Previous Episode)"
               >
-                <Home size={14} />
-                <span>Home</span>
+                <ChevronLeft size={14} />
               </button>
+
+              <select
+                data-testid="navbar-episode-select"
+                className="navbar-ep-select"
+                aria-label="Select Episode"
+                value={String(episodeId || activeEpisode?.id || episodes[0]?.id || '')}
+                onChange={(e) => onSwitchEpisode(e.target.value)}
+              >
+                {episodes.map((ep, idx) => (
+                  <option key={ep.id} value={String(ep.id)}>
+                    {formatShortEpLabel(ep, idx)} ({idx + 1}/{episodesCount})
+                  </option>
+                ))}
+              </select>
 
               <button
                 type="button"
-                data-testid="navbar-studio-route-btn"
-                onClick={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  onNavigateRoute('/studio');
-                }}
-                className={`navbar-gemini-route-btn ${currentRoute === '/studio' ? 'active' : ''}`}
-                title="Main Dubbing Studio Workspace (/studio)"
+                className="navbar-ep-step-btn"
+                disabled={!canNextEp}
+                onClick={() => canNextEp && onSwitchEpisode(episodes[safeEpIdx + 1].id)}
+                aria-label="Next Episode"
+                title="ភាគបន្ទាប់ (Next Episode)"
               >
-                <Film size={14} />
-                <span>Studio</span>
+                <ChevronRight size={14} />
               </button>
-            </>
+            </div>
           )}
+        </div>
 
-          <button
-            type="button"
-            data-testid="navbar-batch-generate-btn"
-            onClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              if (onOpenGeminiRoute) onOpenGeminiRoute();
-            }}
-            className={`navbar-gemini-route-btn ${isGeminiRouteActive ? 'active' : ''}`}
-            title="Batch Generate Studio (Translate, Khmer AI Voice, Demucs & Batch Export)"
-            style={activeRunnerStep ? { borderColor: '#38BDF8', background: 'rgba(56, 189, 248, 0.15)' } : undefined}
-          >
-            <Layers size={14} className={activeRunnerStep ? 'animate-pulse' : ''} />
-            <span>Batch Generate</span>
-            {activeRunnerStep ? (
-              <span className="gemini-badge-chip" style={{ background: 'var(--btn-primary-bg)', color: '#FFFFFF', fontWeight: 700 }}>
-                {activeRunnerStep === 'clean_bgm' ? 'Demucs' : (activeRunnerStep === 'voice' ? 'Voice' : (activeRunnerStep === 'repair' ? 'Repair' : 'Script'))}: {activeRunnerState?.progress || 0}%
-              </span>
-            ) : (
-              <span className="gemini-badge-chip navbar-route-chip">{episodesCount > 0 ? `${episodesCount} EPs` : 'Batch'}</span>
-            )}
-          </button>
-
-          {onOpenGeminiQuota && (
-            <button
-              type="button"
-              data-testid="navbar-keys-quota-btn"
-              onClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                onOpenGeminiQuota();
-              }}
-              className={`navbar-gemini-route-btn ${isGeminiQuotaActive ? 'active' : ''}`}
-              title="Gemini API Keys Pool & Model Rate Limits (RPM / TPM / RPD & Pin Primary Model)"
-            >
-              <Activity size={14} />
-              <span>Keys &amp; Quota</span>
-              <span className="gemini-badge-chip navbar-route-chip">{keysChipText}</span>
-            </button>
-          )}
-
-          {onOpenJobDashboard && (
-            <button
-              type="button"
-              data-testid="navbar-jobs-btn"
-              onClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                onOpenJobDashboard();
-              }}
-              className={`navbar-gemini-route-btn ${isJobDashboardActive ? 'active' : ''}`}
-              title="Job Queue Dashboard (Production Pipeline Monitor)"
-            >
-              <Cpu size={14} />
-              <span>Jobs</span>
-              {effectiveActiveJobCount > 0 && (
-                <span className="gemini-badge-chip">
-                  {effectiveActiveJobCount}
-                </span>
-              )}
-            </button>
-          )}
-        </nav>
-
-        {/* Right: Actions, Shortcuts, Key & Export CTA */}
+        {/* Right: Focused Studio Controls (Panels, Aspect Ratio, Status, Unified Export) */}
         <div className="navbar-right-actions">
-          {/* Workspace Panel Collapse / Expand Toggles (Laptop 1366x768 & 1440x900) */}
-          {(onToggleLeftPanel || onToggleTimelinePanel || onToggleRightPanel) && (
+          {isStudioView && (onToggleLeftPanel || onToggleTimelinePanel || onToggleRightPanel) && (
             <div
               className="navbar-aspect-toggle navbar-panel-toggles"
               role="group"
               aria-label="Workspace Panel Toggles"
-              title="បិទ/បើកផ្ទាំងការងារ (Left Media | Bottom Timeline | Right Inspector)"
+              title="បិទ/បើកផ្ទាំងការងារ (Left | Bottom | Right)"
             >
               {onToggleLeftPanel && (
                 <button
@@ -214,11 +197,11 @@ export default function Navbar({
                   data-testid="toggle-left-panel-btn"
                   onClick={onToggleLeftPanel}
                   aria-pressed={!isLeftCollapsed}
-                  aria-label={isLeftCollapsed ? 'Show Left Media Library' : 'Collapse Left Panel'}
+                  aria-label={isLeftCollapsed ? 'Show Left Panel' : 'Collapse Left Panel'}
                   className={`navbar-aspect-btn ${!isLeftCollapsed ? 'active' : ''}`}
-                  title={isLeftCollapsed ? 'បើកផ្ទាំងឆ្វេង (Show Left Media Library)' : 'បង្រួមផ្ទាំងឆ្វេង (Collapse Left Panel)'}
+                  title={isLeftCollapsed ? 'បើកផ្ទាំងឆ្វេង' : 'បង្រួមផ្ទាំងឆ្វេង'}
                 >
-                  <PanelLeft size={13} />
+                  <PanelLeft size={14} />
                 </button>
               )}
               {onToggleTimelinePanel && (
@@ -229,9 +212,9 @@ export default function Navbar({
                   aria-pressed={!isTimelineCollapsed}
                   aria-label={isTimelineCollapsed ? 'Show Timeline' : 'Collapse Timeline'}
                   className={`navbar-aspect-btn ${!isTimelineCollapsed ? 'active' : ''}`}
-                  title={isTimelineCollapsed ? 'បើកផ្ទាំង Timeline ខាងក្រោម (Show Timeline)' : 'បង្រួមផ្ទាំង Timeline (Collapse Timeline)'}
+                  title={isTimelineCollapsed ? 'បើក Timeline ខាងក្រោម' : 'បង្រួម Timeline'}
                 >
-                  <PanelBottom size={13} />
+                  <PanelBottom size={14} />
                 </button>
               )}
               {onToggleRightPanel && (
@@ -242,20 +225,20 @@ export default function Navbar({
                   aria-pressed={!isRightCollapsed}
                   aria-label={isRightCollapsed ? 'Show Right Inspector' : 'Collapse Right Inspector'}
                   className={`navbar-aspect-btn ${!isRightCollapsed ? 'active' : ''}`}
-                  title={isRightCollapsed ? 'បើកផ្ទាំងស្តាំ (Show Right Inspector)' : 'បង្រួមផ្ទាំងស្តាំ (Collapse Right Inspector)'}
+                  title={isRightCollapsed ? 'បើកផ្ទាំងស្តាំ' : 'បង្រួមផ្ទាំងស្តាំ'}
                 >
-                  <PanelRight size={13} />
+                  <PanelRight size={14} />
                 </button>
               )}
             </div>
           )}
 
-          {/* Quick Aspect Ratio Switcher (16:9 Landscape / 9:16 Portrait) — Syncs Preview & Auto Export */}
+          {/* Quick Aspect Ratio Switcher (16:9 / 9:16) */}
           <div
             className="navbar-aspect-toggle"
             role="group"
             aria-label="Preview and Export Aspect Ratio"
-            title={`ទម្រង់វីដេអូ (Preview & Auto Export): ${currentAspectRatio}`}
+            title={`ទម្រង់វីដេអូ: ${currentAspectRatio}`}
           >
             <button
               type="button"
@@ -263,7 +246,7 @@ export default function Navbar({
               disabled={isRendering}
               aria-pressed={currentAspectRatio === '16:9'}
               className={`navbar-aspect-btn ${currentAspectRatio === '16:9' ? 'active' : ''}`}
-              title="16:9 Landscape (ផ្ដេក — YouTube / Facebook)"
+              title="16:9 Landscape (YouTube / Facebook)"
             >
               <span className="aspect-icon aspect-icon-16-9" aria-hidden="true" />
               <span>16:9</span>
@@ -274,184 +257,137 @@ export default function Navbar({
               disabled={isRendering}
               aria-pressed={currentAspectRatio === '9:16'}
               className={`navbar-aspect-btn ${currentAspectRatio === '9:16' ? 'active' : ''}`}
-              title="9:16 Portrait (បញ្ឈរ — TikTok / Reels / Shorts)"
+              title="9:16 Portrait (TikTok / Reels / Shorts)"
             >
               <span className="aspect-icon aspect-icon-9-16" aria-hidden="true" />
               <span>9:16</span>
             </button>
           </div>
 
-          {/* Backend Online status chip */}
-          <div className={`status-chip ${isBackendOnline ? 'online' : 'offline'}`} title={isBackendOnline ? 'FFmpeg backend is running' : 'Backend server offline'}>
+          {/* Compact Backend Status Chip */}
+          <div
+            className={`status-chip ${isBackendOnline ? 'online' : 'offline'}`}
+            title={isBackendOnline ? 'FFmpeg Backend Online' : 'Backend Server Offline'}
+          >
             <span className="status-dot" />
-            <span className="navbar-status-text">{isBackendOnline ? 'FFmpeg Online' : 'Backend Offline'}</span>
+            <span className="navbar-status-text">{isBackendOnline ? 'Online' : 'Offline'}</span>
           </div>
 
-          {/* Gemini API Key Configuration */}
-          <button
-            type="button"
-            onClick={() => setShowKeyModal(true)}
-            className={`api-key-btn ${apiKey ? 'configured' : 'missing'}`}
-            aria-label={apiKey ? 'API Key Configured' : 'Set Gemini Key'}
-            title="Configure Gemini AI API Key"
-          >
-            <Key size={13} />
-            <span className="navbar-key-text">{apiKey ? 'API Key' : 'Set Key'}</span>
-          </button>
-
-          {/* Keyboard Shortcuts */}
-          <button
-            type="button"
-            onClick={() => setShowShortcutsModal(true)}
-            className="navbar-icon-btn navbar-shortcuts-btn"
-            aria-label="Keyboard Shortcuts"
-            title="Keyboard Shortcuts (Ctrl+/)"
-          >
-            <HelpCircle size={14} />
-          </button>
-
-          {/* Header Export / Download Action */}
-          {isRendering ? (
-            <button
-              disabled
-              className="navbar-export-btn"
-              style={{
-                opacity: 0.95,
-                cursor: 'wait',
-                position: 'relative',
-                overflow: 'hidden',
-                background: 'rgba(30, 41, 59, 0.9)',
-                border: '1px solid rgba(56, 189, 248, 0.4)',
-              }}
-              title="Rendering Final Video with FFmpeg..."
-            >
-              <div
-                style={{
-                  position: 'absolute',
-                  top: 0,
-                  left: 0,
-                  bottom: 0,
-                  width: `${renderProgress || 5}%`,
-                  background: 'linear-gradient(90deg, rgba(59, 130, 246, 0.35), rgba(6, 182, 212, 0.45))',
-                  transition: 'width 0.25s ease-out',
-                }}
-              />
-              <div style={{ position: 'relative', zIndex: 1, display: 'flex', alignItems: 'center', gap: 6 }}>
-                <Loader2 size={13} className="animate-spin" style={{ color: '#38bdf8' }} />
-                <span>Rendering {renderProgress ? `${renderProgress}%` : '...'}</span>
-              </div>
-            </button>
-          ) : renderedVideo ? (
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <a
-                href={typeof renderedVideo === 'string' ? renderedVideo : (renderedVideo.downloadUrl || renderedVideo.outputVideoUrl)}
-                download={
-                  renderedVideo?.outputFilename ||
-                  (selectedVideo?.displayTitle || selectedVideo?.originalFilename || selectedVideo?.fileName
-                    ? `${(selectedVideo.displayTitle || selectedVideo.originalFilename || selectedVideo.fileName).replace(/\.[^/.]+$/, '').trim()}_Khmer_Dubbed.mp4`
-                    : 'Dubbed_Video_Khmer.mp4')
-                }
-                className="navbar-export-btn download-ready"
-                title={`Download Rendered Video: ${selectedVideo?.displayTitle || selectedVideo?.originalFilename || selectedVideo?.fileName ? (selectedVideo.displayTitle || selectedVideo.originalFilename || selectedVideo.fileName).replace(/\.[^/.]+$/, '').trim() + '_Khmer_Dubbed.mp4' : 'Dubbed Video'}`}
+          {/* Unified Export Split Control (Current EP + Batch Export dropdown) */}
+          <div className="navbar-export-split" ref={exportMenuRef}>
+            {isRendering ? (
+              <button
+                type="button"
+                disabled
+                className="navbar-export-btn is-rendering"
+                title="Rendering Final Video with FFmpeg..."
               >
-                <Download size={14} />
-                <span>Download MP4</span>
-              </a>
+                <div
+                  className="navbar-export-progress-fill"
+                  style={{ width: `${renderProgress || 5}%` }}
+                />
+                <span className="navbar-export-btn-inner">
+                  <Loader2 size={14} className="animate-spin" />
+                  <span>{renderProgress ? `${renderProgress}%` : 'Rendering…'}</span>
+                </span>
+              </button>
+            ) : renderedVideo ? (
+              <div className="navbar-export-ready-group">
+                <a
+                  href={
+                    typeof renderedVideo === 'string'
+                      ? renderedVideo
+                      : renderedVideo.downloadUrl || renderedVideo.outputVideoUrl
+                  }
+                  download={downloadFilename}
+                  className="navbar-export-btn download-ready"
+                  title={`Download Rendered Video: ${downloadFilename}`}
+                >
+                  <Download size={14} />
+                  <span>Download MP4</span>
+                </a>
+                <button
+                  type="button"
+                  onClick={onRenderVideo}
+                  disabled={!selectedVideo}
+                  className="navbar-icon-btn navbar-reexport-btn"
+                  aria-label="Re-Export Current Episode"
+                  title="Render ភាគនេះម្តងទៀត (Re-Export)"
+                >
+                  <RotateCcw size={13} />
+                </button>
+              </div>
+            ) : (
               <button
                 type="button"
                 onClick={onRenderVideo}
                 disabled={!selectedVideo}
-                className="navbar-icon-btn"
-                title="Re-Export Video"
-                style={{ height: 28, padding: '0 8px', borderRadius: 'var(--radius-xs)', border: '1px solid #334155' }}
+                className="navbar-export-btn"
+                title="Render & Export ភាគបច្ចុប្បន្ន"
               >
-                <RotateCcw size={13} />
+                <Download size={14} />
+                <span>Export</span>
               </button>
-            </div>
-          ) : (
-            <button
-              type="button"
-              onClick={onRenderVideo}
-              disabled={!selectedVideo}
-              className="navbar-export-btn"
-              title="Render and Export Video with Audio Ducking & Subtitles"
-            >
-              <Download size={14} />
-              <span>Export</span>
-            </button>
-          )}
+            )}
 
-          {onOpenBatchExportStudio && (
-            <button
-              type="button"
-              data-testid="open-batch-export-studio-btn"
-              onClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                onOpenBatchExportStudio();
-              }}
-              disabled={episodesCount === 0}
-              className={`navbar-gemini-route-btn navbar-batch-export-btn ${isBatchExportStudioActive ? 'active' : ''}`}
-              title="Export Studio — Batch Export & Merge គ្រប់ភាគ"
-            >
-              <Layers size={14} />
-              <span>Batch Export</span>
-              <span className="gemini-badge-chip navbar-route-chip">
-                {isBatchRunning ? `${batchJob?.progress || 0}%` : `${episodesCount} ភាគ`}
-              </span>
-            </button>
-          )}
+            {onOpenBatchExportStudio && (
+              <button
+                type="button"
+                className={`navbar-export-caret-btn ${showExportMenu ? 'active' : ''}`}
+                onClick={() => setShowExportMenu((v) => !v)}
+                aria-haspopup="menu"
+                aria-expanded={showExportMenu}
+                aria-label="More Export Options"
+                title="ជម្រើស Export បន្ថែម (Single / Batch Export)"
+              >
+                <ChevronDown size={14} />
+              </button>
+            )}
+
+            {showExportMenu && (
+              <div className="navbar-export-popover" role="menu">
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="navbar-export-menu-item"
+                  disabled={!selectedVideo || isRendering}
+                  onClick={() => {
+                    setShowExportMenu(false);
+                    onRenderVideo?.();
+                  }}
+                >
+                  <Download size={14} />
+                  <div className="navbar-export-menu-copy">
+                    <span className="navbar-export-menu-title">Export ភាគនេះ (Single MP4)</span>
+                    <span className="navbar-export-menu-sub">Render តែភាគកំពុងបើក ({currentAspectRatio})</span>
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="navbar-export-menu-item"
+                  disabled={episodesCount === 0}
+                  onClick={() => {
+                    setShowExportMenu(false);
+                    onOpenBatchExportStudio?.();
+                  }}
+                >
+                  <Layers size={14} />
+                  <div className="navbar-export-menu-copy">
+                    <span className="navbar-export-menu-title">
+                      Batch Export &amp; Merge ({isBatchRunning ? `${batchJob?.progress || 0}%` : `${episodesCount} ភាគ`})
+                    </span>
+                    <span className="navbar-export-menu-sub">បញ្ចេញច្រើនភាគព្រមគ្នា ឬបូកជារឿងពេញ</span>
+                  </div>
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </header>
 
-      {/* Shortcuts Modal */}
-      <ShortcutsModal
-        isOpen={showShortcutsModal}
-        onClose={() => setShowShortcutsModal(false)}
-      />
-
-      {/* API Key Modal */}
-      {showKeyModal && (
-        <div className="modal-backdrop" onClick={() => setShowKeyModal(false)}>
-          <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-              <Key size={18} color="var(--accent-cyan)" />
-              <h3 style={{ margin: 0, fontSize: '0.98rem', fontWeight: 700, color: '#fff' }}>
-                Gemini AI API Key
-              </h3>
-            </div>
-            <p style={{ margin: '0 0 14px', fontSize: '0.78rem', color: 'var(--text-muted)', lineHeight: 1.4 }}>
-              ប្រើប្រាស់ Google Gemini 3.8 Flash សម្រាប់វិភាគសំឡេងវីដេអូដើម និងសរសេរអត្ថបទសម្រាយរឿងខ្មែរ។
-            </p>
-            <input
-              type="password"
-              value={tempKey}
-              onChange={(e) => setTempKey(e.target.value)}
-              placeholder="AIzaSy..."
-              className="capcut-input"
-              style={{ marginBottom: 16 }}
-            />
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-              <button
-                type="button"
-                onClick={() => setShowKeyModal(false)}
-                className="btn-secondary"
-                style={{ fontSize: '0.78rem' }}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleSave}
-                className="btn-primary"
-                style={{ fontSize: '0.78rem' }}
-              >
-                Save Key
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <ShortcutsModal isOpen={showShortcuts} onClose={handleCloseShortcuts} />
     </>
   );
 }

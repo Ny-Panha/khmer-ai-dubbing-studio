@@ -51,10 +51,11 @@ foreach ($arg in $args) {
     }
 }
 
-$EnableWatchBackend = $true
+$EnableWatchBackend = $false
+if ($WatchBackend) {
+    $EnableWatchBackend = $true
+}
 if ($NoWatch) {
-    $EnableWatchBackend = $false
-} elseif ($PSBoundParameters.ContainsKey("WatchBackend") -and -not $WatchBackend) {
     $EnableWatchBackend = $false
 }
 
@@ -69,8 +70,8 @@ if ($Help) {
     Write-Host "  -NewWindow, --new-window         Launch services in separate terminal windows"
     Write-Host "  -SkipInstall, -Fast, --fast      Skip dependency checks"
     Write-Host "  -NoBrowser, --no-browser         Do not auto-open default browser"
-    Write-Host "  -WatchBackend, --watch           Auto-reload backend JS on edit (ON by default)"
-    Write-Host "  -NoWatch, --no-watch             Run plain node server.js without auto-reload"
+    Write-Host "  -WatchBackend, --watch           Auto-reload backend JS on real file edit via safeWatch.js (OFF by default for pipeline stability)"
+    Write-Host "  -NoWatch, --no-watch             Run plain node server.js without auto-reload (DEFAULT)"
     Write-Host "  -Help, -h, --help                Show this help message"
     exit 0
 }
@@ -247,10 +248,10 @@ try {
     Write-Host "`n[2/3] Starting Backend API (Port 5000)..." -ForegroundColor White
     $backendDir = Join-Path $RootDir "backend"
     Ensure-Dependencies -WorkingDir $backendDir -Name "Backend"
-    # Watch ONLY pure JS code paths by default (excluding models/sense-voice/*.onnx, uploads/, workers/, and tests/).
-    # Pass -NoWatch / --no-watch if you want plain `node server.js` without auto-reload.
+    # Default to stable `node server.js` so long-running Demucs/FFmpeg/TTS jobs are NEVER killed by Windows NTFS LastAccessTime watch events.
+    # Pass -WatchBackend / --watch when developing backend code to enable mtime+size-verified auto-reload (scripts/safeWatch.js).
     if ($EnableWatchBackend) {
-        $backendCmd = "node --watch-path=server.js --watch-path=routes --watch-path=services --watch-path=utils --watch-path=middleware --watch-path=models/episodeModel.js --watch-path=models/segmentModel.js --watch-path=models/speakerRegistry.js --watch-path=models/timestampUtils.js server.js"
+        $backendCmd = "node scripts/safeWatch.js"
     } else {
         $backendCmd = "node server.js"
     }
@@ -279,9 +280,9 @@ try {
     Write-Host "  - Backend API:     http://localhost:5000" -ForegroundColor Cyan
     Write-Host "  - Health Check:    http://localhost:5000/api/health" -ForegroundColor Cyan
     if ($EnableWatchBackend) {
-        Write-Host "  - Backend Watch:   ON (auto-reload JS code on edit; --no-watch to disable)" -ForegroundColor Cyan
+        Write-Host "  - Backend Watch:   ON (mtime-verified safeWatch.js; --no-watch to disable)" -ForegroundColor Cyan
     } else {
-        Write-Host "  - Backend Watch:   OFF (plain node server.js)" -ForegroundColor Yellow
+        Write-Host "  - Backend Watch:   OFF (stable node server.js; --watch to enable)" -ForegroundColor Green
     }
     Write-Host "------------------------------------------------------"
     Write-Host "  [*] Press [Ctrl + C] anytime to stop all services." -ForegroundColor Yellow

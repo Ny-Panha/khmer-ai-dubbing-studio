@@ -548,7 +548,7 @@ async function reconcileTimelineEvidence({
     const minDur = Math.min(prev.duration, seg.duration);
     const overlapRatio = minDur > 0 ? parseFloat((overlapDuration / minDur).toFixed(2)) : 0;
     const hasTrueIntersection = overlapDuration >= 0.25 || overlapRatio >= 0.40;
-    const timeGap = Math.max(0, seg.startSec - prev.endSec);
+    const timeGap = parseFloat(Math.max(0, seg.startSec - prev.endSec).toFixed(2));
 
     // Check 3: Text equivalence & Substring overlap (supporting conservative fuzzy matching)
     const isEquivalent = areChineseTextsEquivalent(seg.originalChineseText, prev.originalChineseText) ||
@@ -576,7 +576,7 @@ async function reconcileTimelineEvidence({
         isEquivalent ||
         (isSub && (sNorm.length >= 2 || pNorm.length >= 2))
       )) ||
-      (isEquivalent && (hasTrueIntersection || timeGap <= 0.6))
+      (isEquivalent && (hasTrueIntersection || timeGap <= 0.45))
     );
 
     if (shouldMerge) {

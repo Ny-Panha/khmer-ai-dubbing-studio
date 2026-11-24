@@ -3,6 +3,15 @@ import { ChevronUp, ChevronDown, RotateCcw, X, MoveVertical } from 'lucide-react
 import './AntiTheftOverlay.css';
 import { subscribeDraftPreview } from '../../utils/sliderDraftPreview';
 
+const ANTITHEFT_DRAFT_KEYS = ['antiTheftBottomPercent', 'antiTheftBlur', 'antiTheftHeight'];
+const ANTITHEFT_SIZE_PRESET_HEIGHT = {
+  small: 22,
+  medium: 28,
+  large: 36,
+  xlarge: 48,
+  xxlarge: 64,
+};
+
 export default function AntiTheftOverlay({
   voiceSettings = {},
   renderedVideo = null,
@@ -19,10 +28,18 @@ export default function AntiTheftOverlay({
   const [isDragging, setIsDragging] = useState(false);
   const [dragDeltaY, setDragDeltaY] = useState(0);
   const [draftBottomPercent, setDraftBottomPercent] = useState(null);
+  const [draftBlur, setDraftBlur] = useState(null);
+  const [draftHeight, setDraftHeight] = useState(null);
 
   useEffect(() => {
-    return subscribeDraftPreview('antiTheftBottomPercent', ({ value, cleared }) => {
-      setDraftBottomPercent(cleared ? null : value);
+    return subscribeDraftPreview(ANTITHEFT_DRAFT_KEYS, ({ key, value, cleared }) => {
+      if (key === 'antiTheftBottomPercent') {
+        setDraftBottomPercent(cleared ? null : value);
+      } else if (key === 'antiTheftBlur') {
+        setDraftBlur(cleared ? null : value);
+      } else if (key === 'antiTheftHeight') {
+        setDraftHeight(cleared ? null : value);
+      }
     });
   }, []);
 
@@ -40,14 +57,51 @@ export default function AntiTheftOverlay({
     watermarkPosition = 'above-ticker',
     watermarkColor = '#38BDF8',
     antiTheftSize = 'small',
+    antiTheftHeight = null,
     antiTheftBottomPercent = 2, // Default 2% from bottom
+    antiTheftBgStyle = 'dark', // 'dark' | 'blur' | 'solid'
+    antiTheftBlur = 18,
   } = voiceSettings;
+
+  const resolvedBgStyle = ['dark', 'blur', 'solid'].includes(String(antiTheftBgStyle).toLowerCase())
+    ? String(antiTheftBgStyle).toLowerCase()
+    : 'dark';
+  const rawBlurVal = typeof draftBlur === 'number'
+    ? draftBlur
+    : (Number.isFinite(Number(antiTheftBlur)) ? Number(antiTheftBlur) : 18);
+  const blurPx = Math.max(4, Math.min(40, Math.round(rawBlurVal)));
+  const presetHeightPx = ANTITHEFT_SIZE_PRESET_HEIGHT[antiTheftSize] || 22;
+  const rawHeightVal = typeof draftHeight === 'number'
+    ? draftHeight
+    : (antiTheftHeight !== null && antiTheftHeight !== undefined && Number(antiTheftHeight) > 0
+      ? Number(antiTheftHeight)
+      : presetHeightPx);
+  const clampedHeightPx = Math.max(18, Math.min(120, Math.round(rawHeightVal)));
+  const displayRibbonHeightPx = aspectRatio === '9:16'
+    ? Math.max(18, Math.round(clampedHeightPx * 0.7))
+    : clampedHeightPx;
+  const ribbonInlineStyle = {
+    height: `${displayRibbonHeightPx}px`,
+    minHeight: `${displayRibbonHeightPx}px`,
+    padding: 0,
+    boxSizing: 'border-box',
+    ...(typeof draftHeight === 'number' ? { transition: 'none' } : null),
+    ...(resolvedBgStyle === 'blur'
+      ? {
+          backdropFilter: `blur(${blurPx}px)`,
+          WebkitBackdropFilter: `blur(${blurPx}px)`,
+        }
+      : null),
+  };
 
   const parsedSpeed = parseFloat(marqueeSpeed);
   const durationSec = (!isNaN(parsedSpeed) && parsedSpeed > 0)
     ? parsedSpeed
     : (marqueeSpeed === 'fast' ? 9 : (marqueeSpeed === 'slow' ? 20 : 13));
-  const repeatedText = `${marqueeText}       ❖       ${marqueeText}       ❖       ${marqueeText}`;
+  const trimmedMarqueeText = String(marqueeText ?? '').trim();
+  const repeatedText = trimmedMarqueeText
+    ? `${trimmedMarqueeText}       ❖       ${trimmedMarqueeText}       ❖       ${trimmedMarqueeText}`
+    : '';
 
   const isLandscapeInVertical = aspectRatio === '9:16' && verticalStyle !== 'crop' && (!videoMeta?.ratio || videoMeta.ratio > 1.2);
   const aspectClass = isLandscapeInVertical
@@ -55,9 +109,14 @@ export default function AntiTheftOverlay({
     : (aspectRatio === '9:16' ? 'aspect-9-16-vertical' : 'aspect-16-9');
 
   const posClass = marqueePosition === 'top' ? 'pos-top' : 'pos-bottom';
-  const sizeClass = antiTheftSize === 'large'
-    ? 'size-large'
-    : (antiTheftSize === 'medium' ? 'size-medium' : 'size-small');
+  const sizeClass =
+    antiTheftSize === 'xxlarge'
+      ? 'size-xxlarge'
+      : antiTheftSize === 'xlarge'
+        ? 'size-xlarge'
+        : antiTheftSize === 'large'
+          ? 'size-large'
+          : (antiTheftSize === 'medium' ? 'size-medium' : 'size-small');
 
   // Compute effective bottom percent (prefer live draft while dragging slider)
   const defaultBottom = isLandscapeInVertical ? 34.2 : (aspectRatio === '9:16' ? 16.5 : 2);
@@ -97,7 +156,7 @@ export default function AntiTheftOverlay({
         const containerH = container.getBoundingClientRect()?.height || 500;
         // Moving mouse UP (-deltaY) increases bottom percentage
         const percentChange = -(totalDeltaY / containerH) * 100;
-        const newBottom = Math.max(1, Math.min(80, Math.round((initialOffsetRef.current + percentChange) * 10) / 10));
+        const newBottom = Math.max(0, Math.min(80, Math.round((initialOffsetRef.current + percentChange) * 10) / 10));
 
         onUpdateVoiceSettings({
           ...voiceSettings,
@@ -113,7 +172,7 @@ export default function AntiTheftOverlay({
 
   const handleNudgeOffset = (deltaPercent) => {
     if (onUpdateVoiceSettings) {
-      const nextBottom = Math.max(1, Math.min(80, Math.round((effectiveBottom + deltaPercent) * 10) / 10));
+      const nextBottom = Math.max(0, Math.min(80, Math.round((effectiveBottom + deltaPercent) * 10) / 10));
       onUpdateVoiceSettings({
         ...voiceSettings,
         antiTheftBottomPercent: nextBottom,
@@ -170,21 +229,25 @@ export default function AntiTheftOverlay({
         </div>
       )}
 
-      {/* 2. Semi-transparent Running Marquee Ribbon */}
+      {/* 2. Running Marquee Ribbon (Dark / Real Blur / Solid Black) */}
       <div
-        className={`anti-theft-marquee-ribbon ${isDragging ? 'is-dragging-ribbon' : ''}`}
+        className={`anti-theft-marquee-ribbon bg-${resolvedBgStyle} ${isDragging ? 'is-dragging-ribbon' : ''}`}
+        data-testid="anti-theft-marquee-ribbon"
+        style={ribbonInlineStyle}
         onMouseDown={handleRibbonMouseDown}
         title="ចុចសង្កត់ Mouse អូសឡើងលើ ឬចុះក្រោមដើម្បីផ្លាស់ប្តូរទីតាំងរបារនេះ (Drag Up/Down to Move)"
       >
-        <div
-          className="anti-theft-marquee-track"
-          style={{
-            animationDuration: `${durationSec}s`,
-            color: marqueeTextColor,
-          }}
-        >
-          <span>{repeatedText}</span>
-        </div>
+        {trimmedMarqueeText && (
+          <div
+            className="anti-theft-marquee-track"
+            style={{
+              animationDuration: `${durationSec}s`,
+              color: marqueeTextColor,
+            }}
+          >
+            <span>{repeatedText}</span>
+          </div>
+        )}
 
         {/* Center Drag Indicator on Hover */}
         {(isHovered || isDragging) && (

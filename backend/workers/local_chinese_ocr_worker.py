@@ -96,6 +96,71 @@ def check_engine():
         }
 
 
+def filter_dialogue_ocr_results(ocr_res, roi_w: int, roi_h: int):
+    """
+    Filter out off-center side/corner time-cards (e.g. '几个月前'), vertical nameplates,
+    and floating location banners when a centered bottom dialogue subtitle is present.
+    Preserves single-box results and legitimate stacked 2-line centered dialogue subtitles.
+    """
+    if not ocr_res:
+        return []
+
+    safe_w = max(1.0, float(roi_w or 1))
+    safe_h = max(1.0, float(roi_h or 1))
+
+    items = []
+    for box, raw_text, conf in ocr_res:
+        cleaned = clean_chinese_text(raw_text)
+        if not cleaned or float(conf) < 0.40:
+            continue
+        xs = [pt[0] for pt in box] if box else [0.0]
+        ys = [pt[1] for pt in box] if box else [0.0]
+        x_min = min(xs) / safe_w
+        x_max = max(xs) / safe_w
+        y_min = min(ys) / safe_h
+        y_max = max(ys) / safe_h
+        x_center = (x_min + x_max) / 2.0
+        y_center = (y_min + y_max) / 2.0
+        box_w_px = max(1.0, max(xs) - min(xs))
+        box_h_px = max(1.0, max(ys) - min(ys))
+        is_vertical = (box_h_px > box_w_px * 1.55) and (len(cleaned) >= 2)
+        is_centered = (0.30 <= x_center <= 0.70) or (x_min <= 0.46 and x_max >= 0.54)
+        items.append({
+            "box": box,
+            "text": cleaned,
+            "conf": float(conf),
+            "x_min": x_min,
+            "x_max": x_max,
+            "y_min": y_min,
+            "y_max": y_max,
+            "x_center": x_center,
+            "y_center": y_center,
+            "is_vertical": is_vertical,
+            "is_centered": is_centered,
+        })
+
+    if len(items) >= 2:
+        centered_horiz = [it for it in items if it["is_centered"] and not it["is_vertical"]]
+        if centered_horiz:
+            anchor = max(centered_horiz, key=lambda it: it["y_center"])
+            kept = []
+            for it in items:
+                if it["is_vertical"]:
+                    continue
+                if not it["is_centered"]:
+                    continue
+                # Drop upper floating badge/time-card separated vertically & shifted off anchor center
+                if (anchor["y_min"] - it["y_max"]) > 0.22 and abs(it["x_center"] - anchor["x_center"]) > 0.18:
+                    continue
+                kept.append(it)
+            if kept:
+                items = kept
+
+    # Sort lines top-to-bottom, then left-to-right
+    items.sort(key=lambda it: (round(it["y_min"], 2), it["x_min"]))
+    return items
+
+
 def read_ocr_result(roi, ocr_res):
     import cv2
     if not ocr_res:
@@ -120,19 +185,12 @@ def read_ocr_result(roi, ocr_res):
             "bboxes": []
         }
 
-    valid_lines = []
-    confidences = []
-    bboxes = []
+    roi_h, roi_w = roi.shape[:2] if roi is not None and hasattr(roi, "shape") else (1, 1)
+    filtered_items = filter_dialogue_ocr_results(ocr_res, roi_w, roi_h)
 
-    # Sort lines by y coordinate (supports multi-line subtitles)
-    sorted_res = sorted(ocr_res, key=lambda r: min(pt[1] for pt in r[0]) if r[0] else 0)
-
-    for box, raw_text, conf in sorted_res:
-        cleaned = clean_chinese_text(raw_text)
-        if cleaned and float(conf) >= 0.40:
-            valid_lines.append(cleaned)
-            confidences.append(float(conf))
-            bboxes.append(box)
+    valid_lines = [it["text"] for it in filtered_items]
+    confidences = [it["conf"] for it in filtered_items]
+    bboxes = [it["box"] for it in filtered_items]
 
     if valid_lines:
         combined_text = "\n".join(valid_lines) if len(valid_lines) > 1 else valid_lines[0]

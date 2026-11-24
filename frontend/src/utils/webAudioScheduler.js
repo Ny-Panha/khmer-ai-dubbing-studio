@@ -116,6 +116,12 @@ export class WebAudioScheduler {
   }
 
   ensureContext() {
+    if (this.ctx && this.ctx.state !== 'closed') {
+      if (this.ctx.state === 'suspended') {
+        this.ctx.resume?.()?.catch?.(() => {});
+      }
+      return this.ctx;
+    }
     if (!this.isSupported()) return null;
     if (!this.ctx || this.ctx.state === 'closed') {
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
@@ -131,7 +137,8 @@ export class WebAudioScheduler {
 
   setMasterVolume(volume, isMuted = false) {
     if (!this.masterGain || !this.ctx) return;
-    const target = isMuted ? 0 : Math.min(1.0, Math.max(0, Number(volume) || 0));
+    // Allow true 0%–200% Khmer voice gain boost (matching Audio Mix slider 0.2x–2.0x)
+    const target = isMuted ? 0 : Math.min(2.0, Math.max(0, Number(volume) || 0));
     try {
       this.masterGain.gain.setValueAtTime(target, this.ctx.currentTime);
     } catch (_) {}
@@ -195,12 +202,45 @@ export class WebAudioScheduler {
     this.lastPlaybackRate = effectiveRate;
 
     this.setMasterVolume(khmerVolume, isKhmerMuted);
-    const targetVol = isKhmerMuted ? 0 : Math.min(1.0, Math.max(0, khmerVolume));
+    // masterGain already applies khmerVolume (0..2.0); per-segment gainNode handles ONLY overlap ducking (0.5x vs 1.0x)
+    const targetVol = isKhmerMuted ? 0 : 1.0;
 
-    // Cleanup finished segments
+    // Build lookup of currently active segments to immediately prune deleted or moved items
+    const activeKeyMap = new Map();
+    if (Array.isArray(segments)) {
+      for (let idx = 0; idx < segments.length; idx++) {
+        const seg = segments[idx];
+        if (seg.muted || seg.isMuted) continue;
+        const key = String(seg._uid || (seg.id !== undefined && seg.id !== null ? seg.id : idx));
+        const sStart = (typeof seg.audioStartSec === 'number' && !isNaN(seg.audioStartSec))
+          ? seg.audioStartSec
+          : (typeof seg.startSec === 'number' && !isNaN(seg.startSec) ? seg.startSec : 0);
+        const sDur = (typeof seg.finalAudioDuration === 'number' && seg.finalAudioDuration > 0)
+          ? seg.finalAudioDuration
+          : ((typeof seg.audioDurationSec === 'number' && !isNaN(seg.audioDurationSec))
+            ? seg.audioDurationSec
+            : ((typeof seg.audioDuration === 'number' && seg.audioDuration > 0) ? seg.audioDuration : 2.5));
+        const sTrimmed = Boolean(seg.audioTrimmed || seg.userTrimmed);
+        const sEnd = (sTrimmed && typeof seg.audioEndSec === 'number' && !isNaN(seg.audioEndSec))
+          ? seg.audioEndSec
+          : (sStart + sDur);
+        const sUrl = seg.audioUrl || (seg.audioPath ? `/uploads/${seg.audioPath.replace(/\\/g, '/').replace(/^.*uploads\//, '')}` : null);
+        activeKeyMap.set(key, { segStart: sStart, segEnd: sEnd, url: sUrl });
+      }
+    }
+
+    // Cleanup finished, deleted, or moved segments
     for (const [key, item] of this.scheduledNodes.entries()) {
-      // If timeline moved past segment end or backwards before segment start by > 0.3s (seeked)
-      if (timelineNow > (item.segEnd + 0.15) || timelineNow < (item.segStart - 0.5)) {
+      const activeSeg = activeKeyMap.get(key);
+      const isDeletedOrMuted = !activeSeg || !activeSeg.url;
+      const isMovedOrModified = activeSeg && (
+        Math.abs(activeSeg.segStart - item.segStart) > 0.025 ||
+        Math.abs(activeSeg.segEnd - item.segEnd) > 0.060 ||
+        activeSeg.url !== item.url
+      );
+      const isPastOrSeeked = timelineNow > (item.segEnd + 0.15) || timelineNow < (item.segStart - 0.5);
+
+      if (isDeletedOrMuted || isMovedOrModified || isPastOrSeeked) {
         try {
           item.sourceNode.stop();
           item.sourceNode.disconnect();
@@ -254,21 +294,47 @@ export class WebAudioScheduler {
 
       const segKey = String(seg._uid || (seg.id !== undefined && seg.id !== null ? seg.id : idx));
 
-      // Overlap ducking detection (50% ducking if overlapped by next segment)
+      // Overlap detection: Hard-clamp same-lane dialogues so two clips on the same track never clash;
+      // apply gentle 50% auto-ducking on intentional multi-lane dialogue overlaps.
       let isOverlapped = false;
+      let nextSameLaneStart = Infinity;
+      const curTrackRow = typeof seg.trackRow === 'number' ? seg.trackRow : 0;
       const scanLimit = Math.min(segments.length, idx + 4);
       for (let nextIdx = idx + 1; nextIdx < scanLimit; nextIdx++) {
         const nextSeg = segments[nextIdx];
         if (nextSeg.muted || nextSeg.isMuted) continue;
+        const nextTrackRow = typeof nextSeg.trackRow === 'number' ? nextSeg.trackRow : 0;
         const nextStart = (typeof nextSeg.audioStartSec === 'number' && !isNaN(nextSeg.audioStartSec))
           ? nextSeg.audioStartSec
           : (nextSeg.startSec || 0);
         if (nextStart > effectiveSegEnd) break;
-        if (nextStart > segStart && nextStart < effectiveSegEnd && timelineNow >= (nextStart - 0.04)) {
-          isOverlapped = true;
-          break;
+        if (nextStart > segStart && nextStart < effectiveSegEnd) {
+          if (curTrackRow === nextTrackRow) {
+            nextSameLaneStart = Math.min(nextSameLaneStart, nextStart);
+          } else if (timelineNow >= (nextStart - 0.04)) {
+            isOverlapped = true;
+          }
         }
       }
+
+      const hardCappedEnd = nextSameLaneStart < Infinity
+        ? Math.min(effectiveSegEnd, nextSameLaneStart)
+        : effectiveSegEnd;
+
+      // If playback already reached or passed next same-lane start, silence current segment
+      if (timelineNow >= hardCappedEnd) {
+        if (this.scheduledNodes.has(segKey)) {
+          const item = this.scheduledNodes.get(segKey);
+          try {
+            item.sourceNode.stop();
+            item.sourceNode.disconnect();
+            item.gainNode.disconnect();
+          } catch (_) {}
+          this.scheduledNodes.delete(segKey);
+        }
+        continue;
+      }
+
       const effectiveVol = isOverlapped ? targetVol * 0.5 : targetVol;
 
       const cachedEntry = this.lruCache.get(rawUrl);
@@ -285,34 +351,46 @@ export class WebAudioScheduler {
       // If already scheduled, adjust volume/rate if needed and check drift
       if (this.scheduledNodes.has(segKey)) {
         const item = this.scheduledNodes.get(segKey);
-        if (item.gainNode.gain.value !== effectiveVol) {
-          item.gainNode.gain.setValueAtTime(effectiveVol, ctx.currentTime);
-        }
-        if (item.sourceNode.playbackRate.value !== effectiveRate) {
-          item.sourceNode.playbackRate.setValueAtTime(effectiveRate, ctx.currentTime);
-        }
 
-        // Measure audio drift relative to video playhead
-        if (timelineNow >= segStart && timelineNow < effectiveSegEnd) {
-          const expectedPlayedSec = (timelineNow - segStart);
-          const actualPlayedAudioSec = (ctx.currentTime - item.startedAtCtx) * effectiveRate;
-          const driftSec = expectedPlayedSec - actualPlayedAudioSec;
-          this.lastAudioDriftMs = Math.round(driftSec * 1000);
+        // If segment moved, trimmed, or URL changed, cancel old node and reschedule cleanly
+        if (Math.abs(item.segStart - segStart) > 0.025 || Math.abs(item.segEnd - effectiveSegEnd) > 0.060 || item.url !== rawUrl) {
+          try {
+            item.sourceNode.stop();
+            item.sourceNode.disconnect();
+            item.gainNode.disconnect();
+          } catch (_) {}
+          this.scheduledNodes.delete(segKey);
+          // Fall through to schedule new BufferSourceNode below
+        } else {
+          if (item.gainNode.gain.value !== effectiveVol) {
+            item.gainNode.gain.setValueAtTime(effectiveVol, ctx.currentTime);
+          }
+          if (item.sourceNode.playbackRate.value !== effectiveRate) {
+            item.sourceNode.playbackRate.setValueAtTime(effectiveRate, ctx.currentTime);
+          }
 
-          // If drift exceeds 90ms (e.g. video decoder stalled or seeked), re-align smoothly
-          if (Math.abs(driftSec) > 0.090) {
-            try {
-              item.sourceNode.stop();
-              item.sourceNode.disconnect();
-              item.gainNode.disconnect();
-            } catch (_) {}
-            this.scheduledNodes.delete(segKey);
-            // Will re-schedule in the block below
+          // Measure audio drift relative to video playhead
+          if (timelineNow >= segStart && timelineNow < hardCappedEnd) {
+            const expectedPlayedSec = (timelineNow - segStart);
+            const actualPlayedAudioSec = (ctx.currentTime - item.startedAtCtx) * effectiveRate;
+            const driftSec = expectedPlayedSec - actualPlayedAudioSec;
+            this.lastAudioDriftMs = Math.round(driftSec * 1000);
+
+            // If drift exceeds 90ms (e.g. video decoder stalled or seeked), re-align smoothly
+            if (Math.abs(driftSec) > 0.090) {
+              try {
+                item.sourceNode.stop();
+                item.sourceNode.disconnect();
+                item.gainNode.disconnect();
+              } catch (_) {}
+              this.scheduledNodes.delete(segKey);
+              // Will re-schedule in the block below
+            } else {
+              continue;
+            }
           } else {
             continue;
           }
-        } else {
-          continue;
         }
       }
 
@@ -333,14 +411,14 @@ export class WebAudioScheduler {
         if (timeDelta > 0) {
           // Starts in the near future
           const startAtCtx = ctx.currentTime + (timeDelta / effectiveRate);
-          const durationLimit = Math.min(audioBuffer.duration - baseOffset, effectiveSegEnd - segStart);
+          const durationLimit = Math.min(audioBuffer.duration - baseOffset, hardCappedEnd - segStart);
           if (durationLimit > 0.02) {
             sourceNode.start(startAtCtx, baseOffset, durationLimit);
             this.scheduledNodes.set(segKey, {
               sourceNode,
               gainNode,
               segStart,
-              segEnd: effectiveSegEnd,
+              segEnd: hardCappedEnd,
               startedAtCtx: startAtCtx,
               url: rawUrl,
             });
@@ -349,7 +427,7 @@ export class WebAudioScheduler {
           // Segment should be actively playing right now
           const elapsedSec = (timelineNow - segStart);
           const playOffset = baseOffset + elapsedSec;
-          const remainingSec = Math.min(audioBuffer.duration - playOffset, effectiveSegEnd - timelineNow);
+          const remainingSec = Math.min(audioBuffer.duration - playOffset, hardCappedEnd - timelineNow);
 
           if (playOffset < audioBuffer.duration && remainingSec > 0.02) {
             sourceNode.start(ctx.currentTime, playOffset, remainingSec);
@@ -357,7 +435,7 @@ export class WebAudioScheduler {
               sourceNode,
               gainNode,
               segStart,
-              segEnd: effectiveSegEnd,
+              segEnd: hardCappedEnd,
               startedAtCtx: ctx.currentTime - (elapsedSec / effectiveRate),
               url: rawUrl,
             });

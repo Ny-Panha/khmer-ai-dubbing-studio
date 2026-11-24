@@ -784,6 +784,9 @@ export function useClipOperations({
 
     pushUndoSnapshot(videoClips, scriptData.segments);
     invalidateRendered();
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('timeline:segments-changed'));
+    }
     const updated = opResult.state.segments;
 
     const localSave = saveTimelineOperationToLocalStorage({
@@ -1080,6 +1083,9 @@ export function useClipOperations({
 
     pushUndoSnapshot(videoClips, scriptData.segments);
     invalidateRendered();
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('timeline:segments-changed'));
+    }
 
     const updated = scriptData.segments.map((seg, idx) => {
       const isTarget = isSegmentMatch(seg, targetKey, idx);

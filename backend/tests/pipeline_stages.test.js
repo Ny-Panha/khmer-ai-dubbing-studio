@@ -7,7 +7,8 @@ const { previewAndExport } = require('../services/pipeline/stages/stage10_previe
 
 test('Stage 3: getOcrCachePath resolves correctly to ../../../uploads/cache', () => {
   const stage3Path = path.resolve(__dirname, '../services/pipeline/stages/stage3_extractChineseSubtitles.js');
-  const stage3Content = fs.readFileSync(stage3Path, 'utf8');
+  const stage3RunnerPath = path.resolve(__dirname, '../services/pipeline/stages/stage3VisionBatchRunner.js');
+  const stage3Content = fs.readFileSync(stage3Path, 'utf8') + '\n' + fs.readFileSync(stage3RunnerPath, 'utf8');
   assert.ok(
     stage3Content.includes("path.resolve(__dirname, '../../../uploads/cache')"),
     'Stage 3 must use 3 levels up (../../../uploads/cache)'

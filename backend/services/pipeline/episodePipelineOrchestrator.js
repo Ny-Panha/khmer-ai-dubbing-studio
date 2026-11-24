@@ -299,6 +299,8 @@ async function runEpisodePipeline({
     episodeId: safeEpisodeId,
     baseUploadsDir,
     signal,
+    aiClient,
+    modelName,
     onSegmentCompleted: (seg, idx, completedCount) => {
       const total = preTtsTiming.timedSegments.length || 1;
       const subPercent = Math.min(92, Math.round(80 + (completedCount / total) * 12));

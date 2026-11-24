@@ -16,8 +16,13 @@ test('Voice Clip Drag Freeze Regression Suite', () => {
   assert.ok(fs.existsSync(timelineEditorPath), 'TimelineEditor.jsx must exist');
   assert.ok(fs.existsSync(videoPlaybackPath), 'useVideoPlayback.js must exist');
 
+  const playerAudioSyncPath = path.resolve(rootDir, 'frontend/src/components/player/usePlayerAudioSync.js');
   const proxyCode = fs.readFileSync(proxyHookPath, 'utf8').replace(/\r\n/g, '\n');
-  const playerCode = fs.readFileSync(playerPreviewPath, 'utf8').replace(/\r\n/g, '\n');
+  const playerCode = (
+    fs.readFileSync(playerPreviewPath, 'utf8') +
+    '\n' +
+    fs.readFileSync(playerAudioSyncPath, 'utf8')
+  ).replace(/\r\n/g, '\n');
   const editorCode = fs.readFileSync(timelineEditorPath, 'utf8').replace(/\r\n/g, '\n');
   const playbackCode = fs.readFileSync(videoPlaybackPath, 'utf8').replace(/\r\n/g, '\n');
 

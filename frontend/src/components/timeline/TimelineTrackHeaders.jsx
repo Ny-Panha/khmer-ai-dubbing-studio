@@ -113,7 +113,7 @@ function TimelineTrackHeaders({
       {Array.from({ length: effectiveVoiceRowCount }).map((_, rIdx) => {
         const trackKey = `voice_${rIdx}`;
         const trackLabel = `VOICE ${rIdx + 1}`;
-        const voiceSubBadge = rIdx === 0 ? '👨/គោល' : (rIdx === 1 ? '👩/បន្ទាប់' : `A${rIdx + 1}`);
+        const voiceSubBadge = `A${rIdx + 1}`;
         const isLocked = Boolean(lockedTracks[trackKey] || (rIdx === 0 && lockedTracks.voice));
         const isMuted = Boolean(mutedTracks[trackKey] || (rIdx === 0 && mutedTracks.voice));
         const isSolo = Boolean(soloTracks[trackKey] || (rIdx === 0 && soloTracks.voice));

@@ -1,6 +1,6 @@
 import React from 'react';
 import { getLivePagedSubtitle } from '../../utils/khmerTextSplitter';
-import { parseTimeToSeconds } from '../../utils/formatTime';
+import { parseTimeToSeconds } from '../../utils/timestampUtils';
 
 export default function LiveSubtitleOverlay({
   activeSegment,

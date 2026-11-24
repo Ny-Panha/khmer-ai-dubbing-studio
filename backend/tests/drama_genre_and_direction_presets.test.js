@@ -500,10 +500,11 @@ test('11. Existing script and episode metadata with legacy keys remain 100% comp
 // REQUIREMENT 12: Narrow-screen UI displays controls without clipping
 // ─────────────────────────────────────────────────────────────────────────────
 test('12. Static audit verifies narrow-screen flex wrapping and accessibility aria attributes', () => {
-  const geminiJsx = fs.readFileSync(
-    path.join(__dirname, '..', '..', 'frontend', 'src', 'components', 'dashboard', 'GeminiRouteModal.jsx'),
-    'utf8'
-  );
+  const dashDir = path.join(__dirname, '..', '..', 'frontend', 'src', 'components', 'dashboard');
+  const geminiJsx =
+    fs.readFileSync(path.join(dashDir, 'GeminiRouteModal.jsx'), 'utf8') +
+    '\n' +
+    fs.readFileSync(path.join(dashDir, 'BatchScriptSetupPanel.jsx'), 'utf8');
   const dubbingJsx = fs.readFileSync(
     path.join(__dirname, '..', '..', 'frontend', 'src', 'components', 'media', 'DubbingModeTab.jsx'),
     'utf8'

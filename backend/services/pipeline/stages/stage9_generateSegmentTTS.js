@@ -15,6 +15,243 @@ const {
   verifySegmentAudioIntegrity,
 } = require('../segmentLedger');
 const { detectSpeakerGender } = require('../../../models/speakerRegistry');
+const { containsChineseHanzi } = require('../../../utils/translationQuality');
+const { DUBBING_CASCADE_MODELS } = require('../../geminiModelCatalog');
+const {
+  isPlaceholderTranslationText,
+  cleanKhmerSpokenText,
+  parseJsonResponseText,
+  extractSegmentsFromParsedResponse,
+} = require('./stage6PromptAndConsistency');
+
+/**
+ * Identify TTS-synthesized segments that STILL overflow their subtitle slot even after
+ * auto-stretch, excluding user-overridden or custom-speed clips.
+ */
+function findOverflowShortenCandidates(segments = [], {
+  maxOverflowThresholdSec = 0.15,
+  maxSegments = 20,
+} = {}) {
+  if (!Array.isArray(segments) || segments.length === 0) return [];
+  const candidates = [];
+
+  for (let idx = 0; idx < segments.length; idx++) {
+    const seg = segments[idx];
+    if (!seg || seg.userOverridden || seg.userCustomSpeed) continue;
+    if (seg.ttsStatus === 'empty_text' || seg.ttsStatus === 'error' || seg.ttsStatus === 'failed') continue;
+
+    const currentKhmer = String(seg.khmerTranslatedText || seg.khmerText || seg.khmer || '').trim();
+    const hasHanzi = containsChineseHanzi(currentKhmer);
+    if (!currentKhmer || (!hasHanzi && currentKhmer.length < 10)) continue;
+
+    const segStart = typeof seg.audioStartSec === 'number' && !isNaN(seg.audioStartSec)
+      ? seg.audioStartSec
+      : (typeof seg.startSec === 'number' && !isNaN(seg.startSec) ? seg.startSec : 0);
+    const nextSeg = segments[idx + 1];
+    const nextStart = nextSeg
+      ? (typeof nextSeg.audioStartSec === 'number' && !isNaN(nextSeg.audioStartSec)
+        ? nextSeg.audioStartSec
+        : (typeof nextSeg.startSec === 'number' && !isNaN(nextSeg.startSec) ? nextSeg.startSec : null))
+      : null;
+
+    let slotSec = Number(seg.availableSlotDuration || seg.slotDuration || seg.duration || 0);
+    if (nextStart !== null && nextStart > segStart) {
+      const gapSlot = parseFloat((nextStart - segStart).toFixed(3));
+      slotSec = slotSec > 0 ? Math.min(slotSec, gapSlot) : gapSlot;
+    }
+    if (!Number.isFinite(slotSec) || slotSec < 0.35) continue;
+
+    const actualDur = Number(seg.finalAudioDuration || seg.audioDurationSec || seg.audioDuration || 0);
+    const computedOverflow = actualDur > slotSec ? parseFloat((actualDur - slotSec).toFixed(3)) : 0;
+    const overflowSec = Math.max(Number(seg.overflowSec || 0), computedOverflow);
+
+    if (overflowSec > maxOverflowThresholdSec || hasHanzi) {
+      candidates.push({
+        idx,
+        seg,
+        currentKhmer,
+        hasHanzi,
+        slotSec: parseFloat(slotSec.toFixed(2)),
+        actualDur: parseFloat(actualDur.toFixed(2)),
+        overflowSec: parseFloat(overflowSec.toFixed(3)),
+        maxKhmerChars: Math.max(6, Math.min(70, Math.floor(slotSec * 15))),
+      });
+    }
+  }
+
+  // Prioritize largest overlaps / Hanzi leaks first
+  candidates.sort((a, b) => (Number(b.hasHanzi) - Number(a.hasHanzi)) || (b.overflowSec - a.overflowSec));
+  return candidates.slice(0, maxSegments);
+}
+
+/**
+ * Post-TTS Auto-Shorten Pass:
+ * Sends ONLY overflowing segments (typically 3-10 lines/episode) in one tiny Gemini call
+ * to condense verbose Khmer lines so they fit naturally inside their subtitle slot without
+ * audio collisions, then re-synthesizes only those shortened clips.
+ * Non-fatal: if AI client is unavailable or fails, returns original segments safely.
+ */
+async function autoShortenOverflowingSegments({
+  segments = [],
+  audioDir,
+  aiClient = null,
+  modelName = null,
+  generateSingleFn = null,
+  maxOverflowThresholdSec = 0.15,
+  maxSegments = 20,
+  signal = null,
+  ttsOptions = {},
+} = {}) {
+  if (!Array.isArray(segments) || segments.length === 0 || !audioDir) {
+    return { segments, shortenedCount: 0, shortenedIds: [] };
+  }
+  if (!aiClient?.models?.generateContent || signal?.aborted) {
+    return { segments, shortenedCount: 0, shortenedIds: [] };
+  }
+
+  const candidates = findOverflowShortenCandidates(segments, {
+    maxOverflowThresholdSec,
+    maxSegments,
+  });
+  if (candidates.length === 0) {
+    return { segments, shortenedCount: 0, shortenedIds: [] };
+  }
+
+  const payload = candidates.map((c) => ({
+    index: c.idx + 1,
+    segmentId: c.seg.segmentId || c.seg.id || (c.idx + 1),
+    chinese: String(c.seg.originalChineseText || c.seg.chineseText || c.seg.originalText || '').trim(),
+    currentKhmer: c.currentKhmer,
+    currentAudioSec: c.actualDur,
+    targetSlotSec: c.slotSec,
+    maxKhmerChars: c.maxKhmerChars,
+  }));
+
+  const shortenPrompt = `អ្នកគឺជាអ្នកកែសម្រួល Script Dubbing កុនភាគខ្មែរអាជីព។ ឃ្លាខាងក្រោមមានសំឡេងអានខ្មែរវែងហួសប្រវែង slot វីដេអូ (overflow) ធ្វើឱ្យសំឡេងជាន់ឃ្លាបន្ទាប់។
+សូមសង្ខេបឃ្លាខ្មែរនីមួយៗឱ្យ «ខ្លីជាងមុន ៣០%–៥០%» ដោយគោរព "maxKhmerChars" យ៉ាងតឹងរ៉ឹង ប៉ុន្តែរក្សាអត្ថន័យស្នូល អារម្មណ៍ និងភាសានិយាយធម្មជាតិដដែល!
+
+ច្បាប់តឹងរ៉ឹង៖
+- ហាមមានតួអក្សរចិន (汉字) ឬតួអក្សរថៃ នៅក្នុង "khmerText" ដាច់ខាត (100% Khmer Script Only)!
+- ត្រូវខ្លីជាង "currentKhmer" ជានិច្ច (ឧ. slot 0.6s "再快一点" ➜ "លឿនឡើង!", slot 1.2s "再晚就没座位了" ➜ "យឺតអស់កន្លែងហើយ!")។
+- រក្សា index និង segmentId ដូច Input ទាំងអស់។
+
+OVERFLOWING SEGMENTS TO CONDENSE:
+${JSON.stringify(payload, null, 2)}
+
+Return JSON ONLY matching this schema:
+{
+  "segments": [
+    {
+      "index": ${payload[0].index},
+      "segmentId": ${payload[0].segmentId},
+      "khmerText": "ប្រយោគខ្មែរខ្លីចំខ្លឹមសារ"
+    }
+  ]
+}`;
+
+  const modelsToTry = Array.from(
+    new Set([modelName, ...(DUBBING_CASCADE_MODELS || [])].filter(Boolean))
+  ).slice(0, 5);
+
+  let parsedItems = [];
+  for (const candidateModel of modelsToTry) {
+    if (signal?.aborted) break;
+    try {
+      const resp = await aiClient.models.generateContent({
+        model: candidateModel,
+        contents: [shortenPrompt],
+        config: {
+          temperature: 0.2,
+          responseMimeType: 'application/json',
+        },
+      });
+      const parsed = parseJsonResponseText(resp);
+      parsedItems = extractSegmentsFromParsedResponse(parsed);
+      if (parsedItems.length > 0) break;
+    } catch (err) {
+      console.warn(`[Stage 9 Auto-Shorten] Model '${candidateModel}' failed: ${err?.message || err}`);
+    }
+  }
+
+  if (parsedItems.length === 0) {
+    return { segments, shortenedCount: 0, shortenedIds: [] };
+  }
+
+  const byKey = new Map();
+  for (const item of parsedItems) {
+    if (!item || typeof item !== 'object') continue;
+    const rawKh = item.khmerText || item.khmer || item.khmerTranslatedText || '';
+    const cleaned = cleanKhmerSpokenText(rawKh);
+    if (!cleaned || isPlaceholderTranslationText(cleaned)) continue;
+    if (item.segmentId !== undefined && item.segmentId !== null) byKey.set(`sid:${item.segmentId}`, cleaned);
+    if (item.index !== undefined && item.index !== null) byKey.set(`idx:${item.index}`, cleaned);
+  }
+
+  const synthFn = generateSingleFn || generateSingleSegmentSpeech;
+  const updated = [...segments];
+  const shortenedIds = [];
+  let shortenedCount = 0;
+
+  for (const c of candidates) {
+    if (signal?.aborted) break;
+    const segId = c.seg.segmentId || c.seg.id || (c.idx + 1);
+    const rewritten = byKey.get(`idx:${c.idx + 1}`) || byKey.get(`sid:${segId}`);
+    if (!rewritten) continue;
+    if (!c.hasHanzi && rewritten.length >= c.currentKhmer.length) continue;
+
+    const draftSeg = {
+      ...updated[c.idx],
+      khmer: rewritten,
+      khmerText: rewritten,
+      khmerTranslatedText: rewritten,
+      availableSlotDuration: c.slotSec,
+      slotDuration: c.slotSec,
+    };
+
+    try {
+      const voiceId = draftSeg.voiceId || draftSeg.khmerVoiceId || draftSeg.voice || 'km-KH-PisethNeural';
+      const reTts = await synthFn(draftSeg, audioDir, {
+        ...ttsOptions,
+        voiceId,
+        targetDurationSec: c.slotSec,
+        autoStretch: true,
+        maxSpeed: 1.50,
+        forceRegen: true,
+        userCustomSpeed: false,
+      });
+
+      const newDur = Number(reTts?.finalAudioDuration || reTts?.audioDurationSec || reTts?.audioDuration || 0);
+      if (reTts && (c.hasHanzi || (newDur > 0 && newDur < c.actualDur))) {
+        const newSig = computeSegmentAudioSignature(rewritten, voiceId, draftSeg.speed ?? draftSeg.rate, draftSeg.pitch);
+        updated[c.idx] = {
+          ...draftSeg,
+          ...reTts,
+          khmer: rewritten,
+          khmerText: rewritten,
+          khmerTranslatedText: rewritten,
+          autoShortenedFrom: c.currentKhmer,
+          audioSignature: newSig,
+          ttsStatus: 'ready',
+          audioOutdated: false,
+        };
+        shortenedCount++;
+        shortenedIds.push(segId);
+      }
+    } catch (reTtsErr) {
+      console.warn(`[Stage 9 Auto-Shorten] Re-TTS failed for segment #${segId}: ${reTtsErr?.message || reTtsErr}`);
+    }
+  }
+
+  if (shortenedCount > 0) {
+    console.log(`[Stage 9 Auto-Shorten] ✂️ Condensed & re-synthesized ${shortenedCount}/${candidates.length} overflowing segment(s): [${shortenedIds.join(', ')}]`);
+  }
+
+  return {
+    segments: updated,
+    shortenedCount,
+    shortenedIds,
+  };
+}
 
 function getTtsAudioCacheKey(text, voiceId, durationSec) {
   return crypto.createHash('md5')
@@ -55,6 +292,9 @@ async function generateSegmentTTS({
   baseUploadsDir = null,
   signal = null,
   onSegmentCompleted = null,
+  aiClient = null,
+  modelName = null,
+  autoShortenOverflow = true,
 }) {
   if (signal?.aborted) {
     const abortErr = new Error('TTS generation interrupted by signal');
@@ -468,18 +708,42 @@ async function generateSegmentTTS({
     throw abortErr;
   }
 
+  let finalSegments = results;
+  let autoShortenedCount = 0;
+  let autoShortenedIds = [];
+  if (autoShortenOverflow !== false && aiClient?.models?.generateContent && !signal?.aborted) {
+    try {
+      const shortenRes = await autoShortenOverflowingSegments({
+        segments: results,
+        audioDir,
+        aiClient,
+        modelName,
+        signal,
+      });
+      finalSegments = shortenRes.segments;
+      autoShortenedCount = shortenRes.shortenedCount;
+      autoShortenedIds = shortenRes.shortenedIds;
+    } catch (shortenErr) {
+      console.warn(`[Stage 9 TTS] Auto-shorten pass skipped: ${shortenErr?.message || shortenErr}`);
+    }
+  }
+
   return {
-    segmentsWithAudio: results,
+    segmentsWithAudio: finalSegments,
     ttsReport: {
       totalSegments: segments.length,
       generatedCount,
       reusedCount,
       failedCount,
       skippedEmptyCount,
+      autoShortenedCount,
+      autoShortenedIds,
     },
   };
 }
 
 module.exports = {
   generateSegmentTTS,
+  findOverflowShortenCandidates,
+  autoShortenOverflowingSegments,
 };

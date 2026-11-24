@@ -55,6 +55,7 @@ export async function generateAudioApi(params) {
   const data = await parseResponseJson(res, 'Failed to generate audio speech with TTS');
 
   return {
+    success: data.success !== false,
     alreadyCompleted: Boolean(data.alreadyCompleted),
     summaryMessage: data.summaryMessage,
     projectName: data.projectName,
@@ -65,6 +66,11 @@ export async function generateAudioApi(params) {
     fullAudioPath: data.fullAudioPath,
     fullAudioUrl: data.fullAudioUrl,
     segments: data.segments,
+    failedCount: Number(data.failedCount || 0),
+    skippedEmptyCount: Number(data.skippedEmptyCount || 0),
+    validCount: Number(data.validCount || 0),
+    telemetry: data.telemetry,
+    error: data.error,
   };
 }
 
@@ -164,13 +170,17 @@ export async function generateSingleSegmentAudio(segment, options = {}) {
 }
 
 /**
- * Trigger AI Vocal Separation (Demucs Clean BGM) for a single episode or video
+ * Trigger AI Vocal Separation (Demucs Turbo / Studio / FFmpeg Instant Clean BGM) for a single episode or video
  */
-export async function separateAudioApi({ videoPath, seriesId = null, episodeId = null, twoStems = 'vocals', model = 'htdemucs', signal } = {}) {
+export async function separateAudioApi({ videoPath, seriesId = null, episodeId = null, twoStems = 'vocals', model, separationPreset = 'turbo', force = false, signal } = {}) {
+  const payload = { videoPath, seriesId, episodeId, twoStems, separationPreset, force: Boolean(force) };
+  if (model) {
+    payload.model = model;
+  }
   const res = await fetch('/api/audio/separate', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ videoPath, seriesId, episodeId, twoStems, model }),
+    body: JSON.stringify(payload),
     signal,
   });
   return await parseResponseJson(res, 'Failed to trigger audio separation');

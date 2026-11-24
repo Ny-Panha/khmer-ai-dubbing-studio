@@ -4,7 +4,7 @@ import {
   Check, Trash2, Clock, Monitor, HardDrive, RefreshCw, Scissors
 } from 'lucide-react';
 import { splitVideoEpisodesApi, uploadVideoFile } from '../../services/api';
-import { formatTimecode } from '../../utils/formatTime';
+import { formatTimecode } from '../../utils/timestampUtils';
 
 export default function MediaUploadTab({
   isUploading,
@@ -284,7 +284,7 @@ export default function MediaUploadTab({
       >
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
           <span style={{ fontSize: 'var(--text-sm)', fontWeight: 600, color: 'var(--text-secondary)' }}>
-            គោលដៅ Upload:
+            ដាក់ចូល Series:
           </span>
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
             <button
@@ -352,72 +352,59 @@ export default function MediaUploadTab({
       </div>
 
       {hasVideo ? (
-        /* 1. Active Video Card (Clean, Single Card, Zero-Duplicate) */
+        /* 1. Active Video Card (Flat Darkroom Console) */
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          {/* Card Container */}
-          <div 
-            className="motion-lift"
+          <div
             style={{
-              background: 'rgba(25, 39, 68, 0.7)',
-              border: '1px solid rgba(255, 255, 255, 0.08)',
-              borderRadius: 14,
-              padding: '16px',
+              background: 'var(--bg-secondary-panel)',
+              border: '1px solid var(--border-subtle)',
+              borderRadius: 'var(--radius-md)',
+              padding: '14px',
               display: 'flex',
               flexDirection: 'column',
               gap: 12,
-              boxShadow: '0 6px 20px rgba(0, 0, 0, 0.25)',
-              transition: 'all 0.2s cubic-bezier(0.16, 1, 0.3, 1)',
             }}
           >
             {/* Top row: Status Badge & Delete */}
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <div 
-                style={{ 
-                  display: 'inline-flex', 
-                  alignItems: 'center', 
-                  gap: 5, 
-                  background: 'rgba(52, 211, 153, 0.12)', 
-                  border: '1px solid rgba(52, 211, 153, 0.3)',
-                  padding: '3px 10px',
-                  borderRadius: 9999,
-                  fontSize: '0.72rem',
-                  fontWeight: 700,
+              <div
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 5,
+                  background: 'rgba(16, 185, 129, 0.12)',
+                  border: '1px solid rgba(16, 185, 129, 0.3)',
+                  padding: '2px 8px',
+                  borderRadius: 'var(--radius-xs)',
+                  fontSize: '0.7rem',
+                  fontWeight: 600,
                   color: '#34D399',
                 }}
               >
-                <Check size={12} strokeWidth={3} />
-                <span>វីដេអូសកម្មលើ VIDEO 1</span>
+                <Check size={11} strokeWidth={3} />
+                <span>VIDEO 1 សកម្ម</span>
               </div>
 
               {onRemoveVideo && (
                 <button
                   type="button"
                   onClick={onRemoveVideo}
-                  className="btn-tactile"
+                  className="btn-ghost"
                   style={{
                     background: 'transparent',
                     border: 'none',
-                    color: '#94A3B8',
+                    color: 'var(--text-dim)',
                     cursor: 'pointer',
                     padding: '3px 8px',
-                    borderRadius: 9999,
+                    borderRadius: 4,
                     display: 'flex',
                     alignItems: 'center',
                     gap: 4,
                     fontSize: '0.72rem',
-                    transition: 'all 0.15s ease',
                   }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.color = '#F87171';
-                    e.currentTarget.style.background = 'rgba(248, 113, 113, 0.1)';
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.color = '#94A3B8';
-                    e.currentTarget.style.background = 'transparent';
-                  }}
-                  title="ដកវីដេអូចេញពីគម្រោង (Remove video)"
+                  title="ដកវីដេអូចេញពីភាគនេះ"
                 >
-                  <Trash2 size={13} />
+                  <Trash2 size={12} />
                   <span>ដកចេញ</span>
                 </button>
               )}
@@ -425,28 +412,28 @@ export default function MediaUploadTab({
 
             {/* Video Title */}
             <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
-              <div 
-                style={{ 
-                  width: 40, 
-                  height: 40, 
-                  borderRadius: 8, 
-                  background: 'rgba(56, 189, 248, 0.12)', 
-                  border: '1px solid rgba(56, 189, 248, 0.25)',
-                  display: 'flex', 
-                  alignItems: 'center', 
+              <div
+                style={{
+                  width: 38,
+                  height: 38,
+                  borderRadius: 'var(--radius-sm)',
+                  background: 'rgba(56, 189, 248, 0.12)',
+                  border: '1px solid rgba(56, 189, 248, 0.28)',
+                  display: 'flex',
+                  alignItems: 'center',
                   justifyContent: 'center',
-                  flexShrink: 0
+                  flexShrink: 0,
                 }}
               >
-                <Film size={20} color="#38bdf8" />
+                <Film size={18} color="var(--primary-accent)" />
               </div>
 
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div 
-                  style={{ 
-                    fontSize: '0.86rem', 
-                    fontWeight: 700, 
-                    color: '#f8fafc', 
+                <div
+                  style={{
+                    fontSize: '0.84rem',
+                    fontWeight: 600,
+                    color: 'var(--text-primary)',
                     lineHeight: 1.35,
                     wordBreak: 'break-word',
                   }}
@@ -458,76 +445,63 @@ export default function MediaUploadTab({
             </div>
 
             {/* Video Specs Grid (Duration, Resolution, File Size) */}
-            <div 
-              style={{ 
-                display: 'grid', 
-                gridTemplateColumns: 'repeat(3, 1fr)', 
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(3, 1fr)',
                 gap: 6,
-                background: 'rgba(0, 0, 0, 0.25)',
+                background: 'var(--bg-workspace-base)',
                 padding: '8px 10px',
                 borderRadius: 6,
-                border: '1px solid rgba(255, 255, 255, 0.05)',
+                border: '1px solid var(--border-subtle)',
               }}
             >
               <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                <span style={{ fontSize: '0.64rem', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                <span style={{ fontSize: '0.64rem', color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
                   Duration
                 </span>
-                <span style={{ fontSize: '0.76rem', fontWeight: 700, color: '#38bdf8', display: 'flex', alignItems: 'center', gap: 4 }}>
+                <span style={{ fontSize: '0.76rem', fontWeight: 700, color: 'var(--primary-accent)', display: 'flex', alignItems: 'center', gap: 4, fontFamily: 'var(--font-mono)' }}>
                   <Clock size={11} />
                   {activeDuration > 0 ? formatTimecode(activeDuration) : '--:--'}
                 </span>
               </div>
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                <span style={{ fontSize: '0.64rem', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                <span style={{ fontSize: '0.64rem', color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
                   Resolution
                 </span>
-                <span style={{ fontSize: '0.76rem', fontWeight: 600, color: '#cbd5e1', display: 'flex', alignItems: 'center', gap: 4 }}>
+                <span style={{ fontSize: '0.76rem', fontWeight: 600, color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 4, fontFamily: 'var(--font-mono)' }}>
                   <Monitor size={11} />
                   {videoMetadata?.resolution || '1080p'}
                 </span>
               </div>
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-                <span style={{ fontSize: '0.64rem', color: '#94a3b8', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                <span style={{ fontSize: '0.64rem', color: 'var(--text-dim)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
                   Size
                 </span>
-                <span style={{ fontSize: '0.76rem', fontWeight: 600, color: '#cbd5e1', display: 'flex', alignItems: 'center', gap: 4 }}>
+                <span style={{ fontSize: '0.76rem', fontWeight: 600, color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 4, fontFamily: 'var(--font-mono)' }}>
                   <HardDrive size={11} />
                   {selectedVideo?.size || videoMetadata?.size || '44 MB'}
                 </span>
               </div>
             </div>
 
-            {/* Action Row: Replace Video + Auto-Split 20 Min */}
+            {/* Action Row: Replace Video + Auto-Split */}
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-              {/* Replace Video Button */}
-              <label 
-                className="btn-tactile"
+              <label
+                className="btn-secondary"
                 style={{
+                  minHeight: 34,
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
                   gap: 6,
-                  padding: '9px 12px',
-                  background: 'rgba(255, 255, 255, 0.05)',
-                  border: '1px solid rgba(255, 255, 255, 0.1)',
-                  borderRadius: 9999,
+                  padding: '6px 10px',
                   fontSize: '0.74rem',
                   fontWeight: 600,
-                  color: '#CBD5E1',
                   cursor: isUploading ? 'not-allowed' : 'pointer',
-                  transition: 'all 0.15s cubic-bezier(0.16, 1, 0.3, 1)',
                   textAlign: 'center',
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.borderColor = 'rgba(56, 189, 248, 0.4)';
-                  e.currentTarget.style.background = 'rgba(255, 255, 255, 0.08)';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.borderColor = 'rgba(255, 255, 255, 0.1)';
-                  e.currentTarget.style.background = 'rgba(255, 255, 255, 0.05)';
                 }}
               >
                 <input
@@ -540,17 +514,16 @@ export default function MediaUploadTab({
                 {(isUploading || isCustomUploading) ? (
                   <>
                     <Loader2 size={13} className="animate-spin" />
-                    <span>កំពុង{uploadTarget === 'new' ? 'បង្កើត & Upload' : 'ប្តូរវីដេអូ'}...</span>
+                    <span>កំពុង{uploadTarget === 'new' ? 'បង្ហោះ' : 'ប្តូរ'}...</span>
                   </>
                 ) : (
                   <>
                     <RefreshCw size={13} />
-                    <span>{uploadTarget === 'new' ? '+ Upload ចូល Series ថ្មី' : 'ប្តូរវីដេអូ (Replace)'}</span>
+                    <span>{uploadTarget === 'new' ? 'បង្ហោះចូល Series ថ្មី' : 'ប្តូរវីដេអូ'}</span>
                   </>
                 )}
               </label>
 
-              {/* Auto-Split Button */}
               <button
                 type="button"
                 onClick={() => {
@@ -558,41 +531,32 @@ export default function MediaUploadTab({
                   setShowSplitModal(true);
                 }}
                 disabled={isSplitting || isUploading}
-                className="btn-tactile"
+                className="btn-secondary"
                 style={{
+                  minHeight: 34,
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
                   gap: 6,
-                  padding: '9px 12px',
+                  padding: '6px 10px',
                   background: 'rgba(56, 189, 248, 0.12)',
-                  border: '1px solid rgba(56, 189, 248, 0.4)',
-                  borderRadius: 9999,
+                  borderColor: 'rgba(56, 189, 248, 0.35)',
+                  color: 'var(--primary-accent)',
                   fontSize: '0.74rem',
-                  fontWeight: 700,
-                  color: '#38BDF8',
+                  fontWeight: 600,
                   cursor: (isSplitting || isUploading) ? 'not-allowed' : 'pointer',
-                  transition: 'all 0.15s cubic-bezier(0.16, 1, 0.3, 1)',
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.borderColor = '#38BDF8';
-                  e.currentTarget.style.background = 'rgba(56, 189, 248, 0.22)';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.borderColor = 'rgba(56, 189, 248, 0.4)';
-                  e.currentTarget.style.background = 'rgba(56, 189, 248, 0.12)';
                 }}
                 title="កាត់បំបែកវីដេអូជាភាគៗ (Split into Episodes)"
               >
                 {isSplitting ? (
                   <>
                     <Loader2 size={13} className="animate-spin" />
-                    <span>កំពុងកាត់ចែក...</span>
+                    <span>កំពុងកាត់ភាគ...</span>
                   </>
                 ) : (
                   <>
                     <Scissors size={13} />
-                    <span>កាត់បំបែកភាគ (Split Video)</span>
+                    <span>កាត់ជាភាគ (Split)</span>
                   </>
                 )}
               </button>
@@ -600,10 +564,10 @@ export default function MediaUploadTab({
 
             {/* Smart Long-Video Banner if Video > 15 Minutes */}
             {activeDuration >= 900 && (
-              <div 
+              <div
                 style={{
-                  background: 'linear-gradient(135deg, rgba(2, 132, 199, 0.12), rgba(15, 23, 42, 0.7))',
-                  border: '1px solid rgba(56, 189, 248, 0.35)',
+                  background: 'var(--bg-workspace-base)',
+                  border: '1px solid rgba(56, 189, 248, 0.3)',
                   borderRadius: 6,
                   padding: '10px 12px',
                   display: 'flex',
@@ -611,18 +575,16 @@ export default function MediaUploadTab({
                   gap: 8,
                 }}
               >
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: '#38bdf8' }}>
-                    <Scissors size={14} />
-                    <span style={{ fontSize: '0.74rem', fontWeight: 800 }}>
-                      ⚡ វីដេអូវែង ({formatTimecode(activeDuration)})
-                    </span>
-                  </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, color: 'var(--primary-accent)' }}>
+                  <Scissors size={13} />
+                  <span style={{ fontSize: '0.74rem', fontWeight: 700 }}>
+                    វីដេអូវែង ({formatTimecode(activeDuration)})
+                  </span>
                 </div>
 
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-                  <span style={{ fontSize: '0.72rem', color: '#94a3b8' }}>
-                    វីដេអូនេះមានប្រវែងវែង។ អ្នកអាចកាត់បំបែកជាភាគៗតាមចំនួនភាគ ឬនាទីដែលអ្នកចង់បាន។
+                  <span style={{ fontSize: '0.71rem', color: 'var(--text-dim)' }}>
+                    អាចកាត់ចែកជាភាគៗតាមនាទី ឬចំនួនភាគបានរហ័ស។
                   </span>
                   <button
                     type="button"
@@ -631,24 +593,16 @@ export default function MediaUploadTab({
                       setShowSplitModal(true);
                     }}
                     disabled={isSplitting}
+                    className="btn-primary"
                     style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      gap: 6,
-                      padding: '7px 12px',
-                      background: 'linear-gradient(135deg, #0284c7, #0369a1)',
-                      border: '1px solid #38bdf8',
-                      borderRadius: 5,
-                      color: '#ffffff',
-                      fontSize: '0.74rem',
-                      fontWeight: 700,
-                      cursor: isSplitting ? 'not-allowed' : 'pointer',
+                      minHeight: 30,
+                      padding: '4px 10px',
+                      fontSize: '0.72rem',
                       whiteSpace: 'nowrap',
                     }}
                   >
-                    <Scissors size={13} />
-                    <span>✂️ កាត់បំបែកជាភាគ (Split)</span>
+                    <Scissors size={12} />
+                    <span>កាត់ជាភាគ</span>
                   </button>
                 </div>
               </div>
@@ -659,37 +613,23 @@ export default function MediaUploadTab({
           <button
             type="button"
             onClick={() => onTabChange && onTabChange('script')}
-            className="btn-tactile"
-            style={{ 
-              width: '100%', 
+            className="btn-primary"
+            style={{
+              width: '100%',
+              minHeight: 40,
               display: 'flex',
               alignItems: 'center',
-              justifyContent: 'space-between', 
-              fontSize: '0.82rem',
+              justifyContent: 'space-between',
+              fontSize: '0.8rem',
               fontWeight: 700,
-              padding: '13px 16px',
-              background: 'linear-gradient(135deg, rgba(255, 133, 119, 0.16) 0%, rgba(56, 189, 248, 0.16) 100%)',
-              border: '1px solid rgba(255, 133, 119, 0.35)',
-              borderRadius: 14,
-              color: '#F8FAFC',
-              cursor: 'pointer',
-              boxShadow: '0 4px 14px rgba(0, 0, 0, 0.25)',
-              transition: 'all 0.18s cubic-bezier(0.16, 1, 0.3, 1)',
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.background = 'linear-gradient(135deg, rgba(255, 133, 119, 0.25) 0%, rgba(56, 189, 248, 0.25) 100%)';
-              e.currentTarget.style.borderColor = '#FF8577';
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.background = 'linear-gradient(135deg, rgba(255, 133, 119, 0.16) 0%, rgba(56, 189, 248, 0.16) 100%)';
-              e.currentTarget.style.borderColor = 'rgba(255, 133, 119, 0.35)';
+              padding: '8px 14px',
             }}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <Sparkles size={16} color="#FF8577" />
-              <span>ជំហានបន្ទាប់៖ AI Dubbing & Script</span>
+              <Sparkles size={15} />
+              <span>បន្តទៅ AI ផលិត (Script &amp; Voice)</span>
             </div>
-            <ArrowRight size={15} color="#FF8577" />
+            <ArrowRight size={15} />
           </button>
         </div>
       ) : (

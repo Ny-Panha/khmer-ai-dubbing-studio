@@ -99,6 +99,7 @@ test('Stage 6 Cascade: Rescues across full 10-model cascade (down to gemini-flas
     aiClient: mockAiClient,
     modelName: 'gemini-3.5-flash-lite',
     retryDelayMs: 0,
+    batchSize: 20,
   });
 
   assert.equal(STAGE6_CASCADE_MODELS.length, 10, 'Stage 6 cascade must expose all 10 dubbing models');
@@ -131,6 +132,8 @@ test('Stage 6 Auth Fail-Fast: 401/403 throws INVALID_API_KEY immediately without
         aiClient: mockAiClient,
         modelName: 'gemini-3.5-flash-lite',
         retryDelayMs: 0,
+        batchSize: 20,
+        concurrency: 1,
       }),
     (err) => {
       assert.equal(err.code, 'INVALID_API_KEY');
@@ -185,6 +188,8 @@ test('Stage 6 Quota Exhaustion Fail-Fast: Aborts multi-batch run after 2 consecu
         aiClient: mockAiClient,
         modelName: 'gemini-3.5-flash-lite',
         retryDelayMs: 0,
+        batchSize: 20,
+        concurrency: 1,
       }),
     (err) => {
       assert.equal(err.code, 'QUOTA_EXCEEDED');
@@ -248,6 +253,7 @@ test('Stage 6 Isolated Batch Failure + Partial Omission: Never writes literal áž
     aiClient: mockAiClient,
     modelName: 'gemini-3.5-flash-lite',
     retryDelayMs: 0,
+    batchSize: 20,
   });
 
   assert.equal(result.scriptSegments.length, 100);
@@ -511,6 +517,7 @@ test('Stage 6 Mode A bounded auto-retry rescues omitted & punctuation-only lines
     aiClient: mockAiClient,
     modelName: 'gemini-3.5-flash-lite',
     retryDelayMs: 0,
+    batchSize: 20,
   });
 
   assert.equal(seenRetryPrompt, true, 'Stage 6 Mode A must run bounded recovery retry for missing/broken lines');
@@ -603,6 +610,7 @@ test('Stage 6 Mode A tolerant matching + cascade + single-line rescue leaves ZER
     aiClient: mockAiClient,
     modelName: 'gemini-3.5-flash-lite',
     retryDelayMs: 0,
+    batchSize: 20,
   });
 
   assert.equal(result.translationReport.totalSegments, 8);

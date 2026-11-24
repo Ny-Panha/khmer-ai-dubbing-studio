@@ -1,6 +1,6 @@
 import React from 'react';
 import { Upload, Volume2, VolumeX, Film } from 'lucide-react';
-import { formatTimecode, parseTimeToSeconds, formatMinSec } from '../../utils/formatTime';
+import { formatTimecode, parseTimeToSeconds, formatMinSec } from '../../utils/timestampUtils';
 import { findAssociatedSegmentIndices, resolveSegmentIsFemale, doesClipMatchSegment } from '../../utils/timelineUtils';
 import { isGapClip } from '../../utils/timelineOps';
 import { uploadVideoFile } from '../../services/api';
@@ -390,15 +390,19 @@ function TimelineTracksCanvas({
       const rawEnd = rawStart + renderedDuration;
 
       // CapCut single-lane style: all auto-placed voice clips live sequentially on VOICE 1 (Lane 0).
-      // Only userShifted clips (and clips re-laned around fixed anchors) keep their explicitly assigned trackRow.
+      // Colliding overflow clips auto-stagger onto the first free lane so no clip is buried behind another.
       if (typeof seg.trackRow === 'number' && (seg.userShifted || seg.trackRow > 0)) {
         const r = Math.max(0, seg.trackRow);
         endTimes[r] = Math.max(endTimes[r] || 0, rawEnd);
         return r;
       }
 
-      endTimes[0] = Math.max(endTimes[0] || 0, rawEnd);
-      return 0;
+      let targetLane = 0;
+      while (endTimes[targetLane] !== undefined && rawStart < endTimes[targetLane] - 0.08 && targetLane < 3) {
+        targetLane++;
+      }
+      endTimes[targetLane] = Math.max(endTimes[targetLane] || 0, rawEnd);
+      return targetLane;
     });
   }, [scriptSegments, probedDurationTick]);
 
@@ -505,13 +509,14 @@ function TimelineTracksCanvas({
     const audioWidth = Math.max(2, (endSec - startSec) * pps - 2);
     const segKey = seg._uid || (seg.id !== undefined && seg.id !== null ? seg.id : idx);
     const segmentNumber = seg.segmentId ?? seg.id ?? idx + 1;
+    const activeVoiceSelId = (selectedAudioId !== null && selectedAudioId !== undefined)
+      ? selectedAudioId
+      : selectedSegmentId;
     const isDirectSegMatch = Boolean(
-      (selectedSegmentId !== null && selectedSegmentId !== undefined && (
-        (seg._uid && String(selectedSegmentId) === String(seg._uid)) || (seg.id !== undefined && seg.id !== null ? String(selectedSegmentId) === String(seg.id) : Number(selectedSegmentId) === idx)
-      )) ||
-      (selectedAudioId !== null && selectedAudioId !== undefined && (
-        (seg._uid && String(selectedAudioId) === String(seg._uid)) || (seg.id !== undefined && seg.id !== null ? String(selectedAudioId) === String(seg.id) : Number(selectedAudioId) === idx)
-      ))
+      activeVoiceSelId !== null && activeVoiceSelId !== undefined && (
+        (seg._uid && String(activeVoiceSelId) === String(seg._uid)) ||
+        (seg.id !== undefined && seg.id !== null ? String(activeVoiceSelId) === String(seg.id) : Number(activeVoiceSelId) === idx)
+      )
     );
     const isAssociatedWithClip = Boolean(
       activeClipId && videoClips?.some((c) => c.id === activeClipId && !isGapClip(c) && doesClipMatchSegment(c, seg, segmentNumber))

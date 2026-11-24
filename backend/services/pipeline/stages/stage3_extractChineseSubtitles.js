@@ -9,604 +9,38 @@ const {
 } = require('../../ffmpegService');
 const { formatSecondsToTimecode } = require('../pipelineTypes');
 const { createAbortError } = require('../../../utils/asyncSemaphore');
-const { VISION_CASCADE_MODELS } = require('../../geminiModelCatalog');
 const { geminiQuotaTracker } = require('../../geminiQuotaTracker');
 const {
   checkLocalChineseOcrStatus,
   isLocalChineseOcrAvailable,
   runLocalChineseOcr,
 } = require('../../ocr/localChineseOcrService');
+const {
+  sleepOrAbort,
+  defaultCacheDir,
+  getOcrCachePath,
+  getOcrCheckpointPath,
+  saveOcrCheckpoint,
+  loadOcrCheckpoint,
+  needsIndependentRead,
+  normalizeChineseChars,
+  stripDecorativeSubtitleNoise,
+  stripRepeatedLeadingTimeCardPrefix,
+  sameSubtitleText,
+  areChineseTextsEquivalent,
+  CASCADE_VISION_MODELS,
+  visionModelCooldownMap,
+  classifyVisionError,
+  extractRetryDelayMs,
+  isRetryableVisionError,
+  isTimeoutOrOverloadError,
+  callGeminiVisionWithRetry,
+  parseVisionResponseFrames,
+  buildVisionBatchContents,
+  executeSingleVisionBatch: runSingleVisionBatch,
+  deduplicateFastOcrCues,
+} = require('./stage3VisionBatchRunner');
 
-function sleepOrAbort(ms, signal) {
-  if (!signal) {
-    return new Promise((r) => setTimeout(r, ms));
-  }
-  if (signal.aborted) {
-    return Promise.reject(createAbortError('Stage 3 OCR aborted'));
-  }
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      signal.removeEventListener('abort', onAbort);
-      resolve();
-    }, ms);
-    const onAbort = () => {
-      clearTimeout(timer);
-      reject(createAbortError('Stage 3 OCR aborted'));
-    };
-    signal.addEventListener('abort', onAbort, { once: true });
-  });
-}
-
-const defaultCacheDir = path.resolve(__dirname, '../../../uploads/cache');
-
-function getOcrCachePath(videoPath, startOffsetSec = 0, durationSec = 0, modelName = '', cacheDir = defaultCacheDir) {
-  try {
-    // កែពី ../../../../uploads/cache មកជា ../../../uploads/cache ឱ្យត្រូវជាមួយ Stage 1, 4 និង 9
-    if (!fs.existsSync(cacheDir)) {
-      fs.mkdirSync(cacheDir, { recursive: true });
-    }
-    const stat = fs.statSync(videoPath);
-    const safeBase = path.basename(videoPath).replace(/[^a-zA-Z0-9_-]/g, '_');
-    const signature = `${stat.size}_${Math.round(stat.mtimeMs)}`;
-    return path.join(cacheDir, `ocr_${safeBase}_${signature}_${Math.round(startOffsetSec)}_${Math.round(durationSec)}_${modelName}.json`);
-  } catch (_) {
-    return null;
-  }
-}
-
-function getOcrCheckpointPath(videoPath, startOffsetSec = 0, durationSec = 0, cacheDir = defaultCacheDir) {
-  try {
-    const checkpointDir = path.join(cacheDir, 'ocr_checkpoints');
-    if (!fs.existsSync(checkpointDir)) {
-      fs.mkdirSync(checkpointDir, { recursive: true });
-    }
-    const stat = fs.statSync(videoPath);
-    const safeBase = path.basename(videoPath).replace(/[^a-zA-Z0-9_-]/g, '_');
-    const signature = `${stat.size}_${Math.round(stat.mtimeMs)}`;
-    return path.join(checkpointDir, `ocr_ckpt_${safeBase}_${signature}_${Math.round(startOffsetSec)}_${Math.round(durationSec)}.json`);
-  } catch (_) {
-    return null;
-  }
-}
-
-function saveOcrCheckpoint(checkpointPath, data) {
-  if (!checkpointPath || !data) return false;
-  const tempPath = `${checkpointPath}.tmp.${Date.now()}_${process.pid}`;
-  try {
-    const dir = path.dirname(checkpointPath);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(tempPath, JSON.stringify(data, null, 2), 'utf8');
-    fs.renameSync(tempPath, checkpointPath);
-    return true;
-  } catch (err) {
-    try { if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath); } catch (_) {}
-    console.warn('[Stage 3 OCR] Failed to persist OCR checkpoint atomically:', err.message);
-    return false;
-  }
-}
-
-function loadOcrCheckpoint(checkpointPath) {
-  if (!checkpointPath || !fs.existsSync(checkpointPath)) return null;
-  try {
-    const content = fs.readFileSync(checkpointPath, 'utf8');
-    const parsed = JSON.parse(content);
-    if (parsed && Array.isArray(parsed.rawObservations)) {
-      return parsed;
-    }
-  } catch (err) {
-    console.warn('[Stage 3 OCR] Failed to load checkpoint:', err.message);
-  }
-  return null;
-}
-
-function needsIndependentRead(obs) {
-  return !obs.userOverridden && (obs.isDeduped || obs.ocrEngine === 'rapidocr-local');
-}
-
-function normalizeChineseChars(str = '') {
-  return String(str)
-    .replace(/[\s\r\n\t,，.。!！?？:：;；"'"'《》\(\)（）—\-_·、]/g, '')
-    .trim();
-}
-
-/**
- * Strip decorative brackets, music notes (♪/♫), and watermark noise from raw OCR subtitle text.
- */
-function stripDecorativeSubtitleNoise(str = '') {
-  const cleaned = String(str || '')
-    .replace(/[♪♫♬♩]+/g, '')
-    .trim()
-    .replace(/^《第[0-9一二三四五六七八九十百千万]+[集话章]》$/, '')
-    .replace(/^[【〖『\[]([^】〗』\]]+)[】〗』\]]$/, '$1')
-    .trim();
-  return cleaned;
-}
-
-function sameSubtitleText(a, b) {
-  const left = normalizeChineseChars(a);
-  return left.length > 0 && left === normalizeChineseChars(b);
-}
-
-function areChineseTextsEquivalent(a = '', b = '') {
-  const normA = normalizeChineseChars(a);
-  const normB = normalizeChineseChars(b);
-  if (!normA || !normB) return false;
-  if (normA === normB) return true;
-  if (normA.length >= 2 && normB.length >= 2) {
-    if (normA.includes(normB) || normB.includes(normA)) return true;
-    const minL = Math.min(normA.length, normB.length);
-    let common = 0;
-    for (const ch of normA) {
-      if (normB.includes(ch)) common++;
-    }
-    if (common / minL >= 0.75) return true;
-  }
-  return false;
-}
-
-const CASCADE_VISION_MODELS = VISION_CASCADE_MODELS;
-const visionModelCooldownMap = new Map();
-
-/**
- * Distinguishes HTTP 429, 503, 504, network failures, true client timeouts, and auth errors.
- */
-function classifyVisionError(err) {
-  if (!err) return { type: 'UNKNOWN', isRetryable: false, status: 0, message: '' };
-  if (err.name === 'AbortError' || err.code === 'ABORT_ERR') {
-    return { type: 'ABORT', isRetryable: false, status: 0, message: err.message || 'Aborted' };
-  }
-  const status = Number(err.status || err.statusCode || err.code) || 0;
-  const rawMsg = String(err.message || err.toString() || '');
-  const msgUpper = rawMsg.toUpperCase();
-
-  // True client-side deadline or timeout
-  if (
-    msgUpper.includes('TIMEOUT: GEMINI VISION OCR') ||
-    err.name === 'TimeoutError' ||
-    err.code === 'ETIMEDOUT'
-  ) {
-    return { type: 'CLIENT_TIMEOUT', isRetryable: true, status: 504, message: rawMsg };
-  }
-  // Server-side gateway timeout
-  if (status === 504 || msgUpper.includes('504') || msgUpper.includes('GATEWAY TIMEOUT') || msgUpper.includes('DEADLINE_EXCEEDED')) {
-    return { type: 'SERVER_TIMEOUT', isRetryable: true, status: 504, message: rawMsg };
-  }
-  // Service Unavailable / High demand / Overloaded
-  if (status === 503 || msgUpper.includes('503') || msgUpper.includes('UNAVAILABLE') || msgUpper.includes('HIGH DEMAND') || msgUpper.includes('OVERLOADED')) {
-    return { type: 'SERVICE_UNAVAILABLE', isRetryable: true, status: 503, message: rawMsg };
-  }
-  // Rate limit / Resource exhausted
-  if (
-    status === 429 ||
-    msgUpper.includes('429') ||
-    msgUpper.includes('RESOURCE_EXHAUSTED') ||
-    msgUpper.includes('RESOURCE HAS BEEN EXHAUSTED') ||
-    msgUpper.includes('RATE LIMIT') ||
-    msgUpper.includes('TOO MANY REQUESTS') ||
-    msgUpper.includes('CHECK QUOTA')
-  ) {
-    return { type: 'RATE_LIMIT', isRetryable: true, status: 429, message: rawMsg };
-  }
-  // Network / Socket errors
-  if (
-    msgUpper.includes('ECONNRESET') ||
-    msgUpper.includes('ENOTFOUND') ||
-    msgUpper.includes('EAI_AGAIN') ||
-    msgUpper.includes('FETCH FAILED') ||
-    msgUpper.includes('NETWORK')
-  ) {
-    return { type: 'NETWORK_ERROR', isRetryable: true, status: 0, message: rawMsg };
-  }
-  // Auth errors
-  if (status === 401 || status === 403 || msgUpper.includes('UNAUTHENTICATED') || msgUpper.includes('PERMISSION_DENIED')) {
-    return { type: 'AUTH_ERROR', isRetryable: false, status, message: rawMsg };
-  }
-
-  return { type: 'OTHER', isRetryable: false, status, message: rawMsg };
-}
-
-/**
- * Respect server-provided Retry-After / RetryInfo when available.
- */
-function extractRetryDelayMs(err, fallbackMs = 1500) {
-  if (!err) return fallbackMs;
-  const headerVal = err.response?.headers?.get?.('retry-after') || err.headers?.['retry-after'];
-  if (headerVal) {
-    const parsed = Number(headerVal);
-    if (!isNaN(parsed) && parsed > 0) {
-      return Math.min(30000, Math.max(1000, Math.ceil(parsed * 1000)));
-    }
-  }
-  const details = err.statusDetails || err.details;
-  if (Array.isArray(details)) {
-    for (const d of details) {
-      if (d && (d['@type']?.includes('RetryInfo') || d.retryDelay)) {
-        const sec = typeof d.retryDelay === 'string' ? parseFloat(d.retryDelay) : Number(d.retryDelay?.seconds || 0);
-        if (!isNaN(sec) && sec > 0) {
-          return Math.min(30000, Math.max(1000, Math.ceil(sec * 1000)));
-        }
-      }
-    }
-  }
-  const match = String(err.message || '').match(/retry\s+(?:in\s+)?(\d+(?:\.\d+)?)\s*s/i) ||
-    String(err.message || '').match(/"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"/i);
-  if (match) {
-    const sec = parseFloat(match[1]);
-    if (!isNaN(sec) && sec > 0) {
-      return Math.min(30000, Math.max(1000, Math.ceil(sec * 1000)));
-    }
-  }
-  return fallbackMs;
-}
-
-/**
- * Checks if an OCR vision error is retryable / temporary (429, 503, 504 Deadline Exceeded, timeouts).
- */
-function isRetryableVisionError(err) {
-  const classified = classifyVisionError(err);
-  return classified.isRetryable;
-}
-
-function isTimeoutOrOverloadError(err) {
-  const classified = classifyVisionError(err);
-  return classified.type === 'SERVICE_UNAVAILABLE' ||
-    classified.type === 'SERVER_TIMEOUT' ||
-    classified.type === 'CLIENT_TIMEOUT' ||
-    classified.type === 'NETWORK_ERROR';
-}
-
-let lastSuccessfulVisionModel = null;
-
-/**
- * Helper: Call Gemini Vision with bounded retry/backoff, model cooldown handling,
- * and cancellation support for client timeouts and user aborts.
- * Point 1 & Point 2: Uses last successful model first, fast-splits large batches on timeout (<=16s),
- * and limits retries on cascade fallback models.
- */
-async function callGeminiVisionWithRetry(
-  aiClient,
-  modelName,
-  contents,
-  maxRetries = 2,
-  signal = null,
-  onModelSuccess = null,
-  batchMeta = {}
-) {
-  const isLastHealthy = lastSuccessfulVisionModel && (visionModelCooldownMap.get(lastSuccessfulVisionModel) || 0) <= Date.now();
-  const preferred = isLastHealthy
-    ? lastSuccessfulVisionModel
-    : (modelName || geminiQuotaTracker.getPreferredPrimaryModel(CASCADE_VISION_MODELS[0]));
-  const otherModels = CASCADE_VISION_MODELS.filter((m) => m !== preferred);
-  const poolKeys = Array.isArray(aiClient?.pool?.keys) ? aiClient.pool.keys : [];
-  const allCandidateModels = [preferred, ...otherModels];
-  const now = Date.now();
-
-  const prioritized = poolKeys.length > 0
-    ? geminiQuotaTracker.prioritizeAvailableModels(allCandidateModels, poolKeys, now)
-    : allCandidateModels;
-
-  const topCandidates = prioritized.slice(0, 4);
-  // Filter models not currently in cooldown
-  let candidateList = topCandidates.filter((m) => (visionModelCooldownMap.get(m) || 0) <= Date.now());
-
-  const telemetry = batchMeta?.telemetry || null;
-
-  // If all models are in temporary cooldown, wait for shortest cooldown (Requirement 14)
-  if (candidateList.length === 0 && topCandidates.length > 0) {
-    const earliestExpiry = Math.min(...topCandidates.map((m) => visionModelCooldownMap.get(m) || 0));
-    const waitMs = Math.min(10000, Math.max(1000, earliestExpiry - Date.now()));
-    console.warn(`[Stage 3 OCR] ⏳ All cascade models in temporary cooldown. Waiting ${waitMs}ms before retrying...`);
-    if (telemetry) telemetry.retrySleepMs = (telemetry.retrySleepMs || 0) + waitMs;
-    await sleepOrAbort(waitMs, signal);
-    visionModelCooldownMap.delete(preferred);
-    candidateList = topCandidates.filter((m) => (visionModelCooldownMap.get(m) || 0) <= Date.now());
-    if (candidateList.length === 0) candidateList = [preferred];
-  }
-
-  let lastErr = null;
-  let classifiedLastErr = null;
-
-  const explicitSize = Number(batchMeta?.batchSize);
-  const batchSize = !isNaN(explicitSize) && explicitSize > 0
-    ? explicitSize
-    : (Array.isArray(contents)
-        ? Math.max(1, contents.filter((c) => c && c.inlineData).length || contents.length)
-        : 1);
-  const fastSplitOnTimeout = Boolean(batchMeta?.fastSplitOnTimeout);
-
-  // Point 1: 16s deadline for normal batches, 12s for sub-batches <= 4 (prevents 25s hangs)
-  const timeoutMs = batchSize <= 4 ? 12000 : 16000;
-
-  for (const currentModel of candidateList) {
-    let attempt = 0;
-    // For fallback models in cascade, limit to 1 attempt to fail fast and trigger batch split
-    const modelMaxAttempts = (currentModel === candidateList[0]) ? maxRetries : 1;
-
-    while (attempt < modelMaxAttempts) {
-      if (signal?.aborted) {
-        throw createAbortError('Stage 3 OCR aborted');
-      }
-
-      const abortController = new AbortController();
-      let timeoutId = null;
-
-      const onSignalAbort = () => {
-        abortController.abort(signal?.reason || createAbortError('Stage 3 OCR aborted'));
-      };
-      if (signal) {
-        signal.addEventListener('abort', onSignalAbort, { once: true });
-      }
-
-      timeoutId = setTimeout(() => {
-        const tErr = new Error(`Timeout: Gemini Vision OCR on ${currentModel} exceeded ${timeoutMs}ms deadline`);
-        tErr.name = 'TimeoutError';
-        tErr.code = 'ETIMEDOUT';
-        abortController.abort(tErr);
-      }, timeoutMs);
-
-      let abortReject;
-      const abortPromise = new Promise((_, reject) => { abortReject = reject; });
-      const onAbortEvent = () => {
-        abortReject(abortController.signal.reason || createAbortError('Stage 3 OCR aborted'));
-      };
-      abortController.signal.addEventListener('abort', onAbortEvent, { once: true });
-
-      const callStart = Date.now();
-      try {
-        if (telemetry) telemetry.attempts = (telemetry.attempts || 0) + 1;
-        const callPromise = aiClient.models.generateContent({
-          model: currentModel,
-          contents,
-          config: {
-            temperature: 0.1,
-            responseMimeType: 'application/json',
-            abortSignal: abortController.signal,
-          },
-        });
-
-        const resp = await Promise.race([callPromise, abortPromise]);
-        if (telemetry) telemetry.apiTotalMs = (telemetry.apiTotalMs || 0) + (Date.now() - callStart);
-        clearTimeout(timeoutId);
-        abortController.signal.removeEventListener('abort', onAbortEvent);
-        if (signal) signal.removeEventListener('abort', onSignalAbort);
-
-        // Success: record model as lastSuccessfulVisionModel & clear cooldown
-        lastSuccessfulVisionModel = currentModel;
-        visionModelCooldownMap.delete(currentModel);
-        try {
-          geminiQuotaTracker.recordModelProbeStatus(currentModel, { statusCode: 200, latencyMs: 1000 });
-        } catch (_) {}
-
-        if (typeof onModelSuccess === 'function') {
-          onModelSuccess(currentModel);
-        }
-        return resp;
-      } catch (err) {
-        if (telemetry) telemetry.apiTotalMs = (telemetry.apiTotalMs || 0) + (Date.now() - callStart);
-        if (timeoutId) clearTimeout(timeoutId);
-        abortController.signal.removeEventListener('abort', onAbortEvent);
-        if (signal) signal.removeEventListener('abort', onSignalAbort);
-
-        if (signal?.aborted || err?.name === 'AbortError' || abortController.signal?.reason?.name === 'AbortError') {
-          throw createAbortError('Stage 3 OCR aborted');
-        }
-
-        lastErr = err;
-        attempt++;
-        const classified = classifyVisionError(err);
-        classifiedLastErr = classified;
-
-        if (!classified.isRetryable) {
-          throw err;
-        }
-
-        // Point 2: Fast Batch Splitting on Timeout:
-        // If a multi-frame batch (> 4 frames) times out, don't waste 200s cascading through all models!
-        // Immediately throw so the scheduler fast-splits the batch into smaller halves (8+7).
-        if (fastSplitOnTimeout && batchSize > 4 && (classified.type === 'CLIENT_TIMEOUT' || classified.type === 'SERVER_TIMEOUT')) {
-          console.warn(`[Stage 3 OCR] ⚡ Batch of ${batchSize} frames timed out on ${currentModel} (${timeoutMs}ms). Fast-splitting batch into smaller halves...`);
-          const splitErr = new Error(`Batch timeout on ${currentModel} (${batchSize} frames). Fast-splitting batch.`);
-          splitErr.name = 'TimeoutError';
-          splitErr.code = 'ERR_BATCH_TIMEOUT';
-          splitErr.fastSplit = true;
-          splitErr.status = 504;
-          throw splitErr;
-        }
-
-        const serverRetryDelay = extractRetryDelayMs(err, Math.min(2500, 1000 * Math.pow(1.5, attempt)));
-
-        if (attempt < modelMaxAttempts) {
-          console.warn(`[Stage 3 OCR] Model ${currentModel} hit ${classified.type} (${err.message}). Retrying in ${serverRetryDelay}ms (attempt ${attempt}/${modelMaxAttempts})...`);
-          if (telemetry) telemetry.retrySleepMs = (telemetry.retrySleepMs || 0) + serverRetryDelay;
-          await sleepOrAbort(serverRetryDelay, signal);
-        } else {
-          // Model exhausted its attempts -> set cooldown (15s) and cascade to next model
-          const modelCdMs = Math.max(15000, serverRetryDelay);
-          visionModelCooldownMap.set(currentModel, Date.now() + modelCdMs);
-          try {
-            geminiQuotaTracker.recordModelProbeStatus(currentModel, {
-              statusCode: classified.status || 503,
-              message: err.message,
-              latencyMs: 15000,
-            });
-          } catch (_) {}
-          console.warn(`[Stage 3 OCR] Model ${currentModel} failed after ${modelMaxAttempts} attempt(s) (${err.message}). Cascading to next candidate model...`);
-          break;
-        }
-      }
-    }
-  }
-
-  const finalErr = new Error(`All cascade Gemini models exceeded quota/rate limits or timed out (429/503/504): ${lastErr?.message || 'unknown error'}`);
-  if (classifiedLastErr) {
-    finalErr.classification = classifiedLastErr.type;
-    finalErr.statusCode = classifiedLastErr.status;
-  }
-  throw finalErr;
-}
-
-/**
- * Helper: Parse Gemini Vision JSON response and return frame observations.
- * Distinguishes verified empty subtitle frames from failed or missing OCR responses.
- * Never classifies OCR failure or missing frame responses as verified completed frames.
- */
-function parseVisionResponseFrames(resp, batchFrames = []) {
-  const rawText = typeof resp?.text === 'function' ? resp.text() : resp?.text;
-  const clean = String(rawText || '').replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
-  let parsed = {};
-  try {
-    parsed = JSON.parse(clean);
-  } catch (jsonErr) {
-    parsed = { frames: [] };
-  }
-  const returnedFrames = Array.isArray(parsed?.frames) ? parsed.frames : [];
-  const claimedIndices = new Set();
-
-  const batchObservations = [];
-  for (let fIdx = 0; fIdx < batchFrames.length; fIdx++) {
-    const batchFrame = batchFrames[fIdx];
-    const targetTime = parseFloat(Number(batchFrame.timestampSec).toFixed(2));
-
-    // 1. First try matching by timestamp within 0.20s tolerance
-    let matchedIdx = -1;
-    for (let rIdx = 0; rIdx < returnedFrames.length; rIdx++) {
-      if (claimedIndices.has(rIdx)) continue;
-      const rf = returnedFrames[rIdx];
-      if (rf && typeof rf.timestampSec === 'number' && !isNaN(rf.timestampSec)) {
-        if (Math.abs(rf.timestampSec - targetTime) <= 0.20) {
-          matchedIdx = rIdx;
-          break;
-        }
-      }
-    }
-
-    // 2. Fallback to positional index if not matched by timestamp
-    if (matchedIdx === -1 && fIdx < returnedFrames.length && !claimedIndices.has(fIdx)) {
-      const cand = returnedFrames[fIdx];
-      if (!cand || typeof cand.timestampSec !== 'number' || isNaN(cand.timestampSec) || Math.abs(cand.timestampSec - targetTime) <= 0.50) {
-        matchedIdx = fIdx;
-      }
-    }
-
-    if (matchedIdx !== -1) {
-      claimedIndices.add(matchedIdx);
-      const f = returnedFrames[matchedIdx] || {};
-
-      const hasExplicitHasText = typeof f.hasText === 'boolean';
-      const rawChinese = String(f.textZh || f.chineseText || '').trim();
-      const cText = stripDecorativeSubtitleNoise(rawChinese);
-      const cleanChineseLen = normalizeChineseChars(cText).length;
-
-      // If entry is empty object or missing explicit boolean / text, treat as missing response
-      if (!hasExplicitHasText && cleanChineseLen === 0 && !f.position && !f.visualGender && !f.speakerGender) {
-        batchObservations.push({
-          timestampSec: targetTime,
-          reportedSec: targetTime,
-          hasText: false,
-          textZh: '',
-          chineseText: '',
-          position: 'bottom_subtitle',
-          isSharp: false,
-          visualGender: 'unknown',
-          speakerGender: 'UNKNOWN',
-          speakerVisualHint: '',
-          deliveryType: 'dialogue',
-          genderConfidence: 0.5,
-          ocrStatus: 'missing',
-          ocrFailed: true,
-          isVerified: false,
-          isVerifiedEmpty: false,
-          reviewNeeded: true,
-          uncertainOcr: true,
-          failureReason: 'Model response omitted evaluation for this frame',
-        });
-        continue;
-      }
-
-      const hasCleanText = Boolean(cleanChineseLen > 0 && f.hasText !== false);
-      const isVerifiedEmpty = Boolean(f.hasText === false && cleanChineseLen === 0);
-      const tSec = typeof f.timestampSec === 'number' && !isNaN(f.timestampSec)
-        ? parseFloat(f.timestampSec.toFixed(2))
-        : targetTime;
-
-      const rawGender = String(f.visualGender || f.speakerGender || 'unknown').toLowerCase();
-      const validGender = rawGender === 'female' ? 'female' : (rawGender === 'male' ? 'male' : 'unknown');
-      const conf = typeof f.genderConfidence === 'number' && !isNaN(f.genderConfidence)
-        ? Math.min(1.0, Math.max(0.0, f.genderConfidence))
-        : (validGender === 'unknown' ? 0.5 : 0.85);
-      const speakerVisualHint = String(f.speakerVisualHint || '').trim();
-      const rawDelivery = String(f.deliveryType || 'dialogue').toLowerCase();
-      const validDelivery = ['dialogue', 'inner_thought', 'narration'].includes(rawDelivery)
-        ? rawDelivery
-        : 'dialogue';
-
-      const ocrStatus = hasCleanText ? 'verified_text' : (isVerifiedEmpty ? 'verified_empty' : (hasExplicitHasText ? 'verified_empty' : 'missing'));
-      const isVerified = ocrStatus === 'verified_text' || ocrStatus === 'verified_empty';
-
-      batchObservations.push({
-        timestampSec: targetTime,
-        reportedSec: tSec,
-        hasText: hasCleanText,
-        textZh: hasCleanText ? cText : '',
-        chineseText: hasCleanText ? cText : '',
-        position: f.position || 'bottom_subtitle',
-        isSharp: f.isSharp !== false,
-        visualGender: validGender,
-        speakerGender: validGender,
-        speakerVisualHint,
-        deliveryType: validDelivery,
-        genderConfidence: conf,
-        ocrStatus,
-        isVerified,
-        isVerifiedEmpty: ocrStatus === 'verified_empty',
-        ocrFailed: !isVerified,
-        reviewNeeded: !isVerified || f.isSharp === false,
-        uncertainOcr: !isVerified || f.isSharp === false,
-        failureReason: isVerified ? null : 'Uncertain or unverified OCR frame',
-      });
-    } else {
-      // Frame omitted by Gemini
-      batchObservations.push({
-        timestampSec: targetTime,
-        reportedSec: targetTime,
-        hasText: false,
-        textZh: '',
-        chineseText: '',
-        position: 'bottom_subtitle',
-        isSharp: false,
-        visualGender: 'unknown',
-        speakerGender: 'UNKNOWN',
-        speakerVisualHint: '',
-        deliveryType: 'dialogue',
-        genderConfidence: 0.5,
-        ocrStatus: 'missing',
-        ocrFailed: true,
-        isVerified: false,
-        isVerifiedEmpty: false,
-        reviewNeeded: true,
-        uncertainOcr: true,
-        failureReason: 'Missing frame entry in Gemini response array',
-      });
-    }
-  }
-  return batchObservations;
-}
-
-/**
- * Stage 3: Extract Chinese Subtitles
- * Inspects candidate frames across the video or chunk using high-coverage sampling,
- * fast FFmpeg streaming frame extraction, and batched Gemini Vision OCR.
- * 
- * @param {object} params
- * @param {string} params.videoPath
- * @param {number} params.durationSec
- * @param {object} params.aiClient - Google Gen AI instance
- * @param {string} [params.modelName='gemini-3.5-flash-lite']
- * @param {number} [params.baseStepSec=0.75] - Default ~0.75s between frames
- * @param {number} [params.startOffsetSec=0] - Offset for chunk processing
- * @param {AbortSignal} [params.signal=null] - Cancellation signal
- * @returns {Promise<{ rawObservations: Array, visualSegments: Array, ocrMeta: object }>}
- */
 async function extractChineseSubtitles({
   videoPath,
   durationSec,
@@ -619,7 +53,16 @@ async function extractChineseSubtitles({
   onProgress = null,
   enableLocalOcr = true,
   cacheDir = defaultCacheDir,
+  isFastOcrMode = false,
+  generationMode = null,
+  strictOcrReviewGate = false,
 }) {
+  const fastOcrActive = Boolean(
+    isFastOcrMode ||
+    generationMode === 'fast_ocr' ||
+    process.env.FAST_OCR_MODE === 'true'
+  );
+  const isFastOcr = fastOcrActive;
   let activeWorkingModel = modelName || geminiQuotaTracker.getPreferredPrimaryModel(CASCADE_VISION_MODELS[0]);
   const effectiveModel = activeWorkingModel;
   const checkAbort = () => {
@@ -745,7 +188,11 @@ async function extractChineseSubtitles({
       startOffsetSec,
       durationSec,
       5.0,
-      { signal }
+      {
+        signal,
+        minPeakDist: fastOcrActive ? 0.40 : 0.35,
+        minCueDurationSec: fastOcrActive ? 0.35 : 0.35,
+      }
     ).catch((preErr) => {
       if (preErr?.name === 'AbortError' || signal?.aborted) {
         throw preErr?.name === 'AbortError' ? preErr : createAbortError('Stage 3 OCR aborted');
@@ -792,7 +239,21 @@ async function extractChineseSubtitles({
     }
 
     // (a) Change-point frames & mid-cue frames
-    if (cueStates.length > 0) {
+    if (fastOcrActive && cueStates.length > 0) {
+      for (const cs of cueStates) {
+        // Fast OCR: Extract sharp mid-point of cue (true center to avoid boundary fade-in/out)
+        const midSec = Number(((cs.startSec + cs.endSec) / 2).toFixed(2));
+        trySchedule(midSec, `cue_${cs.cueIndex}_mid`, 0.20);
+        cueSamples.set(midSec, cs);
+
+        // For longer dialogues (>= 1.2s), sample second anchor at 75% to catch rapid subtitle transitions
+        if (cs.duration >= 1.2) {
+          const secondSec = Number((cs.startSec + cs.duration * 0.75).toFixed(2));
+          trySchedule(secondSec, `cue_${cs.cueIndex}_sampleB`, 0.20);
+          cueSamples.set(secondSec, cs);
+        }
+      }
+    } else if (cueStates.length > 0) {
       for (const cs of cueStates) {
         trySchedule(cs.sampleASec, `cue_${cs.cueIndex}_sampleA`, 0.12);
 
@@ -810,17 +271,19 @@ async function extractChineseSubtitles({
       }
     }
 
-    // (b) Baseline safety net (0.75s grid deduplicated)
-    const effectiveStep = Math.max(0.5, Number(baseStepSec) || 0.75);
-    // Align chunk boundary: start immediately at safeStartSec when safeStartSec > 0 to eliminate boundary dead-zones
-    let curTime = safeStartSec === 0 ? 0.5 : safeStartSec;
     const stepDiff = 0.2; // 5 fps pre-pass step
+
+    // (b) Baseline safety net (0.75s grid deduplicated)
+    // Fill unmonitored visual activity gaps (where subtitle diff >= 8.0) even in Fast OCR
+    const effectiveStep = fastOcrActive ? 1.0 : Math.max(0.5, Number(baseStepSec) || 0.75);
+    let curTime = safeStartSec === 0 ? 0.5 : safeStartSec;
 
     while (curTime < endSec) {
       const rounded = parseFloat(curTime.toFixed(2));
       let isCovered = false;
+      const coverageThreshold = fastOcrActive ? 0.60 : 0.40;
       for (const ex of scheduled) {
-        if (Math.abs(ex - rounded) <= 0.40) {
+        if (Math.abs(ex - rounded) <= coverageThreshold) {
           isCovered = true;
           break;
         }
@@ -852,7 +315,7 @@ async function extractChineseSubtitles({
 
         if (maxNearDiff >= 8.0 || frameDiffs.length === 0) {
           trySchedule(rounded, 'baseline_active', 0.20);
-        } else {
+        } else if (!fastOcrActive) {
           // Static scene: drop frame count! Sparse anchor only if gap >= 4.0s
           let hasRecentAnchor = false;
           for (const ex of scheduled) {
@@ -869,8 +332,10 @@ async function extractChineseSubtitles({
       curTime += effectiveStep;
     }
 
-    for (const t of [...cueSamples.keys(), ...additionalSamples]) {
-      if (!scheduled.has(t)) trySchedule(t, 'independent_sample', 0);
+    if (!fastOcrActive) {
+      for (const t of [...cueSamples.keys(), ...additionalSamples]) {
+        if (!scheduled.has(t)) trySchedule(t, 'independent_sample', 0);
+      }
     }
 
     // Sort candidate frame timestamps chronologically
@@ -905,95 +370,25 @@ async function extractChineseSubtitles({
     const framesToAnalyze = extractedFrames || [];
     console.log(`[Stage 3 Extract Subtitles] Detected ${changePoints.length} change points (${cueStates.length} candidate cue states). Prioritized ${framesToAnalyze.length} pending frames for Vision OCR (${completedMap.size} already verified in checkpoint)`);
 
-    // Helper: Build Vision OCR prompt contents
-    function buildVisionBatchContents(batch) {
-      const contents = [];
-      for (const item of batch) {
-        if (fs.existsSync(item.filePath)) {
-          const imgBuffer = fs.readFileSync(item.filePath);
-          contents.push({
-            text: `[FRAME_TIMESTAMP: ${item.timestampSec.toFixed(2)}s | Timecode: ${formatSecondsToTimecode(item.timestampSec)}]`,
-          });
-          contents.push({
-            inlineData: {
-              mimeType: 'image/jpeg',
-              data: imgBuffer.toString('base64'),
-            },
-          });
-        }
-      }
-      if (contents.length === 0) return null;
 
-      contents.push({
-        text: `You are an expert Chinese Video & Drama Multimodal OCR + Visual Speaker Analysis engine.
-Analyze these ${batch.length} sequential video frames at the specified timestamps.
-
-TASK:
-Detect all burned-in Chinese dialogue subtitles in the center-bottom safe zone of each frame AND inspect the visible speaking character on screen.
-
-RULES:
-1. Examine the center-bottom subtitle area of each frame for burned-in Chinese dialogue text.
-2. If dialogue subtitle text is clearly present, set "hasText": true and return the exact Chinese characters in both "textZh" and "chineseText" (strip decorative brackets like 【...】, music notes ♪, or watermarks).
-3. If no dialogue subtitle text is present (e.g. background scenery, action without speaking, character reaction with no text), set "hasText": false, "textZh": "", and "chineseText": "".
-4. "position": "bottom_subtitle" (for actor dialogue) or "title_card" (for on-screen titles).
-5. "isSharp": true if readable, false if blurry or motion-faded.
-6. "visualGender" (and "speakerGender"): Inspect the visible speaking character's face, hair, costume, and open mouth to determine gender: "male", "female", or "unknown" if offscreen/ambiguous.
-7. "speakerVisualHint": Short visual archetype tag for the speaker on screen (e.g. "male_lead_ancient", "female_lead_white_robe", "emperor", "maid", "ceo_suit", "offscreen_narrator").
-8. "deliveryType": "dialogue" (speaking out loud with mouth moving), "inner_thought" (mouth closed with echoing/internal monologue or parenthetical subtitle), or "narration" (offscreen narrator / story recap).
-9. "genderConfidence": Number between 0.0 and 1.0 indicating confidence in visualGender.
-10. EXCLUDE WATERMARKS: Do NOT output creator watermarks, channel handles, or anti-theft stamps (e.g. '偷了...的视频', '抖音', '快手', account IDs). Only output genuine actor dialogue lines and scene titles.
-11. Preserve exact recognized Chinese characters across all video genres (Ancient/Xianxia, Modern CEO, Romance, Action, Comedy). Do NOT invent or summarize dialogue.
-
-Return JSON ONLY matching this schema:
-{
-  "frames": [
-    {
-      "timestampSec": 39.5,
-      "hasText": true,
-      "textZh": "我们今天必须完成这项工作",
-      "chineseText": "我们今天必须完成这项工作",
-      "position": "bottom_subtitle",
-      "isSharp": true,
-      "visualGender": "female",
-      "speakerGender": "female",
-      "speakerVisualHint": "female_lead_white_robe",
-      "deliveryType": "dialogue",
-      "genderConfidence": 0.9
-    }
-  ]
-}`,
-      });
-      return contents;
-    }
-
-    // Helper: Execute a single batch with model auto-cascade and cancellation
-    async function executeSingleVisionBatch(batchFrames) {
-      checkAbort();
-      const contents = buildVisionBatchContents(batchFrames);
-      if (!contents) return [];
-
-      for (const frame of batchFrames) geminiRequestedTimes.add(frame.timestampSec);
-      apiCallsCount++;
-      const resp = await callGeminiVisionWithRetry(
+    // Delegate single-batch execution to stage3VisionBatchRunner.js
+    const executeSingleVisionBatch = (batchFrames) =>
+      runSingleVisionBatch(batchFrames, {
+        checkAbort,
+        geminiRequestedTimes,
+        onApiCall: () => { apiCallsCount++; },
         aiClient,
-        activeWorkingModel,
-        contents,
-        2,
+        getActiveWorkingModel: () => activeWorkingModel,
+        setActiveWorkingModel: (m) => { activeWorkingModel = m; },
         signal,
-        (winningModel) => {
-          if (winningModel && winningModel !== activeWorkingModel) {
-            console.log(`[Stage 3 OCR] ⚡ Auto-Cascade switched active model: ${activeWorkingModel} -> ${winningModel}`);
-            activeWorkingModel = winningModel;
-          }
-        },
-        { batchSize: batchFrames.length, fastSplitOnTimeout: true, telemetry }
-      );
-      return parseVisionResponseFrames(resp, batchFrames);
-    }
+        telemetry,
+        fastOcrActive,
+      });
 
     // 2.5 HYBRID LOCAL CHINESE OCR & VERIFICATION ROUTER
     const availabilityStart = Date.now();
-    const effectiveEnableLocalOcr = (enableLocalOcr !== false) && (process.env.ENABLE_LOCAL_CHINESE_OCR !== 'false');
+    const skipLocalOcr = fastOcrActive || (process.env.SKIP_LOCAL_OCR === 'true');
+    const effectiveEnableLocalOcr = Boolean(!fastOcrActive && (enableLocalOcr !== false) && (process.env.ENABLE_LOCAL_CHINESE_OCR !== 'false'));
     if (effectiveEnableLocalOcr && framesToAnalyze.length) {
       try {
         isLocalOcrActive = await isLocalChineseOcrAvailable();
@@ -1317,7 +712,7 @@ Return JSON ONLY matching this schema:
 
     // 3. Adaptive Batch Scheduler with Per-Batch Checkpointing & Concurrency Backoff
     console.log(`[Stage 3 Extract Subtitles] Running Gemini Vision OCR on ${framesToAnalyze.length} pending candidate frames (${completedMap.size} already verified)...`);
-    const INITIAL_BATCH_SIZE = 15;
+    const INITIAL_BATCH_SIZE = fastOcrActive ? 10 : 15;
 
     // Filter candidate frames against completed observations from checkpoint
     const pendingFrames = framesToAnalyze.filter((f) => {
@@ -1339,7 +734,9 @@ Return JSON ONLY matching this schema:
 
     let completedBatchesCount = Math.floor(completedMap.size / INITIAL_BATCH_SIZE);
     let totalBatchesEstimated = completedBatchesCount + batchQueue.length;
-    let adaptiveConcurrency = 2; // starts at 2, reduces to 1 on overload
+    const poolKeys = Array.isArray(aiClient?.pool?.keys) ? aiClient.pool.keys : [];
+    const healthyKeyCount = poolKeys.length > 0 ? poolKeys.length : 4;
+    let adaptiveConcurrency = fastOcrActive ? Math.min(4, Math.max(2, healthyKeyCount)) : 2;
     let consecutiveSuccesses = 0;
     let failedBatchesCount = 0;
     let recoveredBatchesCount = 0;
@@ -1436,10 +833,11 @@ Return JSON ONLY matching this schema:
             geminiBatchCount++;
             consecutiveSuccesses++;
 
-            // Conservative recovery: recover to concurrency 2 after 3 consecutive successes
-            if (consecutiveSuccesses >= 3 && adaptiveConcurrency < 2) {
-              adaptiveConcurrency = 2;
-              console.log('[Stage 3 OCR] ⚡ Concurrency recovered to 2 after demonstrated successes');
+            // Fast OCR / standard recovery: restore concurrency when demonstrated successes
+            const maxAllowedConcurrency = fastOcrActive ? Math.min(4, Math.max(2, healthyKeyCount)) : 2;
+            if (consecutiveSuccesses >= 2 && adaptiveConcurrency < maxAllowedConcurrency) {
+              adaptiveConcurrency = Math.min(maxAllowedConcurrency, adaptiveConcurrency + 1);
+              console.log(`[Stage 3 OCR] ⚡ Concurrency restored to ${adaptiveConcurrency} after consecutive successes`);
             }
           }
 
@@ -1473,9 +871,23 @@ Return JSON ONLY matching this schema:
           consecutiveSuccesses = 0;
 
           // Adaptive concurrency reduction (Requirement 5)
-          if (adaptiveConcurrency > 1) {
-            console.warn(`[Stage 3 OCR] ⚠️ Overload detected on batch at ${originalBatch.frames[0]?.timestampSec}s. Reducing concurrency to 1.`);
-            adaptiveConcurrency = 1;
+          const is429QuotaErr = Boolean(
+            batchErr?.status === 429 ||
+            String(batchErr?.message || '').includes('429') ||
+            String(batchErr?.message || '').includes('RESOURCE_EXHAUSTED')
+          );
+          if (fastOcrActive) {
+            if (is429QuotaErr && adaptiveConcurrency > 2) {
+              adaptiveConcurrency = Math.max(2, adaptiveConcurrency - 1);
+              console.warn(`[Stage 3 OCR] ⚠️ 429 Quota rate limit detected on batch at ${originalBatch.frames[0]?.timestampSec}s. Adjusted concurrency to ${adaptiveConcurrency}.`);
+            } else if (!is429QuotaErr && adaptiveConcurrency > 3) {
+              adaptiveConcurrency = Math.max(3, adaptiveConcurrency - 1);
+            }
+          } else {
+            if (adaptiveConcurrency > 1) {
+              console.warn(`[Stage 3 OCR] ⚠️ Overload detected on batch at ${originalBatch.frames[0]?.timestampSec}s. Reducing concurrency to 1.`);
+              adaptiveConcurrency = 1;
+            }
           }
 
           // Adaptive batch splitting without discarding source frames (Requirement 6)
@@ -1548,7 +960,7 @@ Return JSON ONLY matching this schema:
         }
       }
 
-      const pacingMs = adaptiveConcurrency === 1 ? 750 : 350;
+      const pacingMs = fastOcrActive ? 100 : (adaptiveConcurrency === 1 ? 750 : 350);
       if (batchQueue.length > 0) {
         await sleepOrAbort(pacingMs, signal);
       }
@@ -1597,7 +1009,31 @@ Return JSON ONLY matching this schema:
     evaluatedCueStates.length = 0;
     const statesNeedingTieBreak = [];
 
-    if (cueStates.length > 0) {
+    if (isFastOcr && cueStates.length > 0) {
+      for (const cs of cueStates) {
+        const midSec = Number(((cs.startSec + cs.endSec) / 2).toFixed(2));
+        const secondSec = cs.duration >= 1.2 ? Number((cs.startSec + cs.duration * 0.75).toFixed(2)) : null;
+        const obs = getObservation(midSec) || getObservation(cs.sampleASec) || (secondSec ? getObservation(secondSec) : null);
+        if (obs && obs.hasText && obs.chineseText) {
+          evaluatedCueStates.push({
+            ...cs,
+            textZh: obs.chineseText,
+            originalChineseText: obs.chineseText,
+            chineseText: obs.chineseText,
+            ocrConfidence: 'high',
+            reviewNeeded: false,
+            ocrDisagreement: false,
+            uncertainOcr: false,
+            visualGender: obs.visualGender || obs.speakerGender || 'unknown',
+            speakerVisualHint: obs.speakerVisualHint || '',
+            deliveryType: obs.deliveryType || 'dialogue',
+            genderVotes: {
+              [obs.visualGender || obs.speakerGender || 'unknown']: 1,
+            },
+          });
+        }
+      }
+    } else if (cueStates.length > 0) {
       for (const cs of cueStates) {
         const obsA = getObservation(cs.sampleASec);
         const obsB = getObservation(cs.sampleBSec);
@@ -1767,7 +1203,7 @@ Return JSON ONLY matching this schema:
       }
 
       // Execute tie-break read if any disagreements occurred
-      if (statesNeedingTieBreak.length > 0) {
+      if (!isFastOcr && statesNeedingTieBreak.length > 0) {
         checkAbort();
         const tieBreakStart = Date.now();
         console.log(`[Stage 3 OCR] Executing tie-break verification for ${statesNeedingTieBreak.length} candidate cue states...`);
@@ -1894,6 +1330,48 @@ Return JSON ONLY matching this schema:
       }
     }
 
+    // Auto-resolve remaining uncertain/empty frames in unresolvedMap for Fast OCR mode (Step 1)
+    if (isFastOcr && !strictOcrReviewGate && unresolvedMap.size > 0) {
+      console.warn(`[Stage 3 Extract Subtitles] ⚠️ Auto-resolving ${unresolvedMap.size} remaining uncertain/empty frame(s) as non-text frames so downstream translation never stalls.`);
+      for (const [t, unres] of unresolvedMap.entries()) {
+        const rawText = String(unres?.textZh || unres?.chineseText || '').trim();
+        const cleanLen = normalizeChineseChars(stripDecorativeSubtitleNoise(rawText)).length;
+        if (cleanLen > 0) {
+          completedMap.set(t, {
+            ...unres,
+            hasText: true,
+            isVerified: true,
+            reviewNeeded: false,
+            uncertainOcr: false,
+            ocrFailed: false,
+          });
+        } else {
+          completedMap.set(t, {
+            timestampSec: t,
+            reportedSec: t,
+            hasText: false,
+            textZh: '',
+            chineseText: '',
+            position: 'bottom_subtitle',
+            isSharp: true,
+            visualGender: unres?.visualGender || 'unknown',
+            speakerGender: unres?.speakerGender || 'unknown',
+            speakerVisualHint: '',
+            deliveryType: 'dialogue',
+            genderConfidence: 0.5,
+            ocrStatus: 'verified_empty',
+            ocrFailed: false,
+            isVerified: true,
+            isVerifiedEmpty: true,
+            reviewNeeded: false,
+            uncertainOcr: false,
+            failureReason: null,
+          });
+        }
+      }
+      unresolvedMap.clear();
+    }
+
     rawObservations.length = 0;
     rawObservations.push(...Array.from(completedMap.values()), ...Array.from(unresolvedMap.values()));
     rawObservations.sort((a, b) => a.timestampSec - b.timestampSec);
@@ -2005,15 +1483,16 @@ Return JSON ONLY matching this schema:
   if (evaluatedCueStates && evaluatedCueStates.length > 0) {
     evaluatedCueStates.sort((a, b) => a.startSec - b.startSec);
 
-    // Pass 2: Merge adjacent states ONLY when Chinese text is equivalent AND gap < 0.20s
+    // Pass 2: Merge adjacent states ONLY when Chinese text is equivalent AND gap <= 0.45s
     for (const cue of evaluatedCueStates) {
       if (visualSegments.length === 0) {
         visualSegments.push({ ...cue });
         continue;
       }
       const prev = visualSegments[visualSegments.length - 1];
-      const isAdjacent = (cue.startSec - prev.endSec) < 0.20;
-      const isEquivalent = sameSubtitleText(prev.originalChineseText, cue.originalChineseText);
+      const gap = parseFloat((cue.startSec - prev.endSec).toFixed(2));
+      const isAdjacent = gap <= 0.45;
+      const isEquivalent = areChineseTextsEquivalent(prev.originalChineseText, cue.originalChineseText);
 
       if (isAdjacent && isEquivalent) {
         prev.endSec = Math.max(prev.endSec, cue.endSec);
@@ -2174,7 +1653,7 @@ Return JSON ONLY matching this schema:
   }
 
   // Finalize segments with valid timecodes, gender resolution, and minimum duration 0.35s (supports rapid short cues)
-  const finalizedVisualSegments = visualSegments.map((s, idx) => {
+  const finalizedVisualSegments = stripRepeatedLeadingTimeCardPrefix(visualSegments.map((s, idx) => {
     const rawDur = parseFloat((s.endSec - s.startSec).toFixed(2));
     const dur = Math.max(0.35, rawDur);
     const endSec = parseFloat((s.startSec + dur).toFixed(2));
@@ -2200,7 +1679,7 @@ Return JSON ONLY matching this schema:
       source: 'visual_ocr',
       ...genderData,
     };
-  });
+  }));
 
   ocrWallTimeMs = Date.now() - stage3StartTime;
 
@@ -2329,217 +1808,13 @@ Return JSON ONLY matching this schema:
  * @param {string} [defaultGender='male']
  * @returns {Array<object>}
  */
-function deduplicateFastOcrCues(rawCues = [], defaultGender = 'male') {
-  if (!Array.isArray(rawCues) || rawCues.length === 0) return [];
-
-  const sorted = [...rawCues].sort((a, b) => (a.startSec || 0) - (b.startSec || 0));
-  const deduped = [];
-
-  const defGen = (defaultGender || 'male').toLowerCase() === 'female' ? 'female' : 'male';
-  const buildVoiceMeta = (gender) => {
-    const isFemale = String(gender || '').toLowerCase() === 'female';
-    return isFemale
-      ? {
-          voiceGender: 'female',
-          voiceId: 'km-KH-SreymomNeural',
-          voiceLabel: 'ស្រីមុំ (Sreymom)',
-          avatar: '👩',
-          badgeColor: '#ec4899',
-        }
-      : {
-          voiceGender: 'male',
-          voiceId: 'km-KH-PisethNeural',
-          voiceLabel: 'ពិសិដ្ឋ (Piseth)',
-          avatar: '👨',
-          badgeColor: '#3b82f6',
-        };
-  };
-
-  for (const cue of sorted) {
-    const rawCueText = String(cue.originalChineseText || cue.chineseText || cue.textZh || cue.text || '').trim();
-    const cueText = stripDecorativeSubtitleNoise(rawCueText);
-    if (!cueText) continue;
-
-    const cStart = parseFloat(Number(cue.startSec || 0).toFixed(2));
-    const cEnd = parseFloat(Number(cue.endSec || cStart + 1.25).toFixed(2));
-
-    if (deduped.length === 0) {
-      deduped.push({
-        ...cue,
-        startSec: cStart,
-        endSec: cEnd,
-        duration: parseFloat(Math.max(0.35, cEnd - cStart).toFixed(2)),
-        textZh: cueText,
-        originalChineseText: cueText,
-        chineseText: cueText,
-        visualGender: cue.visualGender || 'unknown',
-        speakerVisualHint: cue.speakerVisualHint || '',
-        deliveryType: cue.deliveryType || 'dialogue',
-        source: 'visual_ocr',
-        evidenceSource: 'visual_ocr',
-        evidenceType: 'visual_only',
-      });
-      continue;
-    }
-
-    const prev = deduped[deduped.length - 1];
-    const prevText = String(prev.originalChineseText || prev.chineseText || prev.textZh || '').trim();
-    const isEq = areChineseTextsEquivalent(prevText, cueText);
-
-    if (isEq) {
-      const timeDiff = cStart - prev.startSec;
-      const isChunkBoundaryRepeat = (Math.abs(timeDiff) <= 0.3) || (cStart < prev.endSec);
-      const isContinuous = (cStart - prev.endSec) < 0.20;
-
-      if (isContinuous || isChunkBoundaryRepeat) {
-        if (cEnd > prev.endSec) {
-          prev.endSec = parseFloat(Number(cEnd).toFixed(2));
-          prev.duration = parseFloat(Math.max(0.35, prev.endSec - prev.startSec).toFixed(2));
-        }
-        if (cue.ocrConfidence === 'low') {
-          prev.ocrConfidence = 'low';
-          prev.reviewNeeded = true;
-          prev.ocrDisagreement = true;
-          prev.uncertainOcr = true;
-        }
-        if (prev.visualGender === 'unknown' && cue.visualGender && cue.visualGender !== 'unknown') {
-          prev.visualGender = cue.visualGender;
-        }
-        if (!prev.speakerVisualHint && cue.speakerVisualHint) {
-          prev.speakerVisualHint = cue.speakerVisualHint;
-        }
-        if ((!prev.deliveryType || prev.deliveryType === 'dialogue') && cue.deliveryType && cue.deliveryType !== 'dialogue') {
-          prev.deliveryType = cue.deliveryType;
-        }
-        continue;
-      }
-    }
-
-    // Prevent overlaps between adjacent cues with different text
-    if (cStart < prev.endSec) {
-      prev.endSec = parseFloat(Math.max(prev.startSec + 0.35, cStart).toFixed(2));
-      prev.duration = parseFloat(Math.max(0.35, prev.endSec - prev.startSec).toFixed(2));
-    }
-
-    deduped.push({
-      ...cue,
-      startSec: cStart,
-      endSec: cEnd,
-      duration: parseFloat(Math.max(0.35, cEnd - cStart).toFixed(2)),
-      textZh: cueText,
-      originalChineseText: cueText,
-      chineseText: cueText,
-      visualGender: cue.visualGender || 'unknown',
-      speakerVisualHint: cue.speakerVisualHint || '',
-      deliveryType: cue.deliveryType || 'dialogue',
-      source: 'visual_ocr',
-      evidenceSource: 'visual_ocr',
-      evidenceType: 'visual_only',
-    });
-  }
-
-  return deduped.map((seg, idx) => {
-    const isUserOverridden = Boolean(seg.userOverridden);
-    let resolvedGender;
-    let resolvedVoice;
-    let voiceMeta;
-
-    if (isUserOverridden) {
-      const existingVoice = seg.voiceId || seg.khmerVoiceId || seg.voice || '';
-      const rawGender = String(seg.voiceGender || '').toLowerCase();
-      if (rawGender === 'female' || rawGender === 'male') {
-        resolvedGender = rawGender;
-      } else if (existingVoice.includes('Sreymom')) {
-        resolvedGender = 'female';
-      } else if (existingVoice.includes('Piseth')) {
-        resolvedGender = 'male';
-      } else {
-        resolvedGender = defGen;
-      }
-      voiceMeta = buildVoiceMeta(resolvedGender);
-      resolvedVoice = existingVoice || voiceMeta.voiceId;
-      if (resolvedVoice.includes('Sreymom')) {
-        voiceMeta = buildVoiceMeta('female');
-      } else if (resolvedVoice.includes('Piseth')) {
-        voiceMeta = buildVoiceMeta('male');
-      }
-    } else {
-      // Rule 1: Non-overridden Fast OCR defaults ALWAYS re-derive voiceId/khmerVoiceId/voice from final voiceGender
-      const rawVisual = String(seg.visualGender || seg.voiceGender || '').toLowerCase();
-      if (rawVisual === 'female' || rawVisual === 'male') {
-        resolvedGender = rawVisual;
-      } else {
-        resolvedGender = defGen;
-      }
-      voiceMeta = buildVoiceMeta(resolvedGender);
-      resolvedVoice = voiceMeta.voiceId;
-    }
-
-    const resolvedSpeaker = isUserOverridden ? (seg.speaker || seg.speakerName || 'តួអង្គ') : 'តួអង្គ';
-    const resolvedSpeakerId = isUserOverridden ? (seg.speakerId || `spk_ocr_${idx + 1}`) : `spk_ocr_${idx + 1}`;
-    const resolvedUnverified = isUserOverridden
-      ? (seg.unverifiedSpeaker !== undefined ? Boolean(seg.unverifiedSpeaker) : (resolvedSpeaker === 'តួអង្គ'))
-      : true;
-
-    return {
-      ...seg,
-      id: idx + 1,
-      segmentId: idx + 1,
-      start: formatSecondsToTimecode(seg.startSec).substring(0, 5),
-      end: formatSecondsToTimecode(seg.endSec).substring(0, 5),
-      startTime: formatSecondsToTimecode(seg.startSec).substring(0, 5),
-      endTime: formatSecondsToTimecode(seg.endSec).substring(0, 5),
-      sourceStartSec: seg.startSec,
-      sourceEndSec: seg.endSec,
-      speechStartSec: seg.startSec,
-      speechEndSec: seg.endSec,
-      speechDuration: seg.duration,
-      availableSlotDuration: seg.duration,
-      slotDuration: seg.duration,
-
-      visualGender: seg.visualGender || 'unknown',
-      speakerVisualHint: seg.speakerVisualHint || '',
-      deliveryType: seg.deliveryType || 'dialogue',
-
-      ocrConfidence: seg.ocrConfidence || 'high',
-      reviewNeeded: Boolean(seg.reviewNeeded),
-      ocrDisagreement: Boolean(seg.ocrDisagreement),
-      uncertainOcr: Boolean(seg.uncertainOcr || seg.ocrConfidence === 'low'),
-
-      // STEP 3: Speaker/gender WITHOUT ASR
-      speakerSource: 'ocr_only',
-      unverifiedSpeaker: resolvedUnverified,
-      genderConfidence: isUserOverridden ? (seg.genderConfidence ?? null) : null,
-      voiceGender: resolvedGender,
-      gender: resolvedGender,
-      speakerGender: resolvedGender.toUpperCase(),
-      speaker: resolvedSpeaker,
-      speakerName: resolvedSpeaker,
-      speakerId: resolvedSpeakerId,
-      voiceId: resolvedVoice,
-      khmerVoiceId: resolvedVoice,
-      voice: resolvedVoice,
-      voiceLabel: voiceMeta.voiceLabel,
-      avatar: voiceMeta.avatar,
-      badgeColor: voiceMeta.badgeColor,
-
-      audioUrl: null,
-      audioFile: null,
-      audioFileName: null,
-      audioPath: null,
-      audioDurationSec: 0,
-      rawAudioDur: 0,
-      ttsStatus: 'pending',
-      status: 'needs_translation',
-    };
-  });
-}
 
 module.exports = {
   extractChineseSubtitles,
   parseVisionResponseFrames,
   normalizeChineseChars,
   stripDecorativeSubtitleNoise,
+  stripRepeatedLeadingTimeCardPrefix,
   areChineseTextsEquivalent,
   deduplicateFastOcrCues,
   isRetryableVisionError,
@@ -2547,6 +1822,7 @@ module.exports = {
   classifyVisionError,
   extractRetryDelayMs,
   callGeminiVisionWithRetry,
+  buildVisionBatchContents,
   getOcrCachePath,
   getOcrCheckpointPath,
   saveOcrCheckpoint,

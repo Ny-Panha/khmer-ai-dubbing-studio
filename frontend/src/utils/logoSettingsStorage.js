@@ -37,7 +37,10 @@ export const BANNER_SETTING_KEYS = Object.freeze([
   'watermarkPosition',
   'watermarkColor',
   'antiTheftSize',
+  'antiTheftHeight',
   'antiTheftBottomPercent',
+  'antiTheftBgStyle',
+  'antiTheftBlur',
 ]);
 
 export const CUSTOMIZE_SETTING_KEYS = Object.freeze([
@@ -68,7 +71,8 @@ const VALID_MASK_POSITIONS = new Set([
 const VALID_MASK_STYLES = new Set(['badge', 'blur', 'solid']);
 
 const VALID_BANNER_POSITIONS = new Set(['bottom', 'top']);
-const VALID_BANNER_SIZES = new Set(['small', 'medium', 'large']);
+const VALID_BANNER_SIZES = new Set(['small', 'medium', 'large', 'xlarge', 'xxlarge']);
+const VALID_BANNER_BG_STYLES = new Set(['dark', 'blur', 'solid']);
 
 export const DEFAULT_GLOBAL_LOGO_SETTINGS = Object.freeze({
   enableLogo: true,
@@ -106,7 +110,10 @@ export const DEFAULT_GLOBAL_BANNER_SETTINGS = Object.freeze({
   watermarkPosition: 'above-ticker',
   watermarkColor: '#38BDF8',
   antiTheftSize: 'small',
+  antiTheftHeight: null,
   antiTheftBottomPercent: 2,
+  antiTheftBgStyle: 'dark',
+  antiTheftBlur: 18,
 });
 
 export const DEFAULT_GLOBAL_CUSTOMIZE_SETTINGS = Object.freeze({
@@ -382,6 +389,17 @@ export function normalizeGlobalBannerSettings(input, fallback = DEFAULT_GLOBAL_B
         ? base.antiTheftSize
         : DEFAULT_GLOBAL_BANNER_SETTINGS.antiTheftSize;
 
+  const rawHeight = src.antiTheftHeight !== undefined ? src.antiTheftHeight : src.ribbonHeight;
+  let antiTheftHeight = null;
+  if (rawHeight === null || rawHeight === '' || rawHeight === 0) {
+    antiTheftHeight = null;
+  } else if (rawHeight !== undefined) {
+    const numH = Number(rawHeight);
+    antiTheftHeight = Number.isFinite(numH) && numH > 0 ? Math.round(Math.max(18, Math.min(120, numH))) : null;
+  } else if (base.antiTheftHeight !== null && base.antiTheftHeight !== undefined && Number(base.antiTheftHeight) > 0) {
+    antiTheftHeight = Math.round(Math.max(18, Math.min(120, Number(base.antiTheftHeight))));
+  }
+
   const antiTheftBottomPercent = Math.round(
     clampNumber(
       src.antiTheftBottomPercent !== undefined ? src.antiTheftBottomPercent : src.bottomPercent,
@@ -392,6 +410,25 @@ export function normalizeGlobalBannerSettings(input, fallback = DEFAULT_GLOBAL_B
         : DEFAULT_GLOBAL_BANNER_SETTINGS.antiTheftBottomPercent
     ) * 10
   ) / 10;
+
+  const rawBgStyle = src.antiTheftBgStyle !== undefined ? src.antiTheftBgStyle : src.bgStyle;
+  const antiTheftBgStyle =
+    typeof rawBgStyle === 'string' && VALID_BANNER_BG_STYLES.has(rawBgStyle.toLowerCase())
+      ? rawBgStyle.toLowerCase()
+      : VALID_BANNER_BG_STYLES.has(base.antiTheftBgStyle)
+        ? base.antiTheftBgStyle
+        : DEFAULT_GLOBAL_BANNER_SETTINGS.antiTheftBgStyle;
+
+  const antiTheftBlur = Math.round(
+    clampNumber(
+      src.antiTheftBlur !== undefined ? src.antiTheftBlur : src.blurStrength,
+      0,
+      40,
+      Number.isFinite(Number(base.antiTheftBlur))
+        ? Number(base.antiTheftBlur)
+        : DEFAULT_GLOBAL_BANNER_SETTINGS.antiTheftBlur
+    )
+  );
 
   return {
     enableAntiTheft,
@@ -404,7 +441,10 @@ export function normalizeGlobalBannerSettings(input, fallback = DEFAULT_GLOBAL_B
     watermarkPosition,
     watermarkColor,
     antiTheftSize,
+    antiTheftHeight,
     antiTheftBottomPercent,
+    antiTheftBgStyle,
+    antiTheftBlur,
   };
 }
 
@@ -814,15 +854,21 @@ export function buildAntiTheftExportPayload(bannerSettings = null) {
   const normalized = normalizeGlobalBannerSettings(bannerSettings || loadGlobalCustomizeSettings());
   return {
     enabled: Boolean(normalized.enableAntiTheft),
-    marqueeText: normalized.marqueeText || '«ហាមផុសបន្ត • សូមឱ្យតម្លៃលើការខិតខំរបស់ម្ចាស់ដើម»',
+    marqueeText: normalized.marqueeText ?? '«ហាមផុសបន្ត • សូមឱ្យតម្លៃលើការខិតខំរបស់ម្ចាស់ដើម»',
     marqueeSpeed: normalized.marqueeSpeed || 'normal',
     marqueePosition: normalized.marqueePosition || 'bottom',
     marqueeTextColor: normalized.marqueeTextColor || '#FFE600',
     enableWatermark: normalized.enableWatermark !== false,
-    watermarkText: normalized.watermarkText || 'រក្សាសិទ្ធិដោយ ៖ Holiday Kh Drama',
+    watermarkText: normalized.watermarkText ?? 'រក្សាសិទ្ធិដោយ ៖ Holiday Kh Drama',
     watermarkPosition: normalized.watermarkPosition || 'above-ticker',
     watermarkColor: normalized.watermarkColor || '#38BDF8',
     antiTheftSize: normalized.antiTheftSize || 'small',
+    antiTheftHeight: normalized.antiTheftHeight ?? null,
+    ribbonHeight: normalized.antiTheftHeight ?? null,
     antiTheftBottomPercent: normalized.antiTheftBottomPercent ?? 2,
+    antiTheftBgStyle: normalized.antiTheftBgStyle || 'dark',
+    bgStyle: normalized.antiTheftBgStyle || 'dark',
+    antiTheftBlur: Number.isFinite(Number(normalized.antiTheftBlur)) ? Number(normalized.antiTheftBlur) : 18,
+    blurStrength: Number.isFinite(Number(normalized.antiTheftBlur)) ? Number(normalized.antiTheftBlur) : 18,
   };
 }

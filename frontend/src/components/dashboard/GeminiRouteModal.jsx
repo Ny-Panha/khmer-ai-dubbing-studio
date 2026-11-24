@@ -14,13 +14,14 @@ import {
 } from '../../services/api';
 import { useGeminiQuotaMonitor } from '../../hooks/useGeminiQuotaMonitor';
 import { useSharedJobQueue } from '../../context/jobQueueStore';
-import { formatTimecode } from '../../utils/formatTime';
+import { formatTimecode } from '../../utils/timestampUtils';
 import { resolveDefaultAspectRatio, sanitizeAspectRatio } from '../../utils/projectStorage';
 import {
   checkEpisodeHasScript,
   checkEpisodeHasAudioReady,
   checkEpisodeHasDemucsReady,
   getEpisodeSegmentCount,
+  getEpisodeGenderCounts,
   getEpisodeBrokenSummary,
   getEpisodesBrokenSummary,
   isJobCompletedSegmentsMissing,
@@ -38,6 +39,9 @@ import EpisodeTtsProgressCard from './route-runners/EpisodeTtsProgressCard';
 import EpisodeAutoFitProgressCard from './route-runners/EpisodeAutoFitProgressCard';
 import EpisodeDemucsProgressCard from './route-runners/EpisodeDemucsProgressCard';
 import StudioConfirmDialog from '../common/StudioConfirmDialog';
+import BatchScriptSetupPanel from './BatchScriptSetupPanel';
+import BatchEpisodeCard from './BatchEpisodeCard';
+import BatchStageFocusBar, { STAGE_FOCUS_META, checkEpisodeDoneForStage } from './BatchStageFocusBar';
 import { DubbingStepCardsBar, useDubbingFeature } from '../../features/dubbing-runner';
 import { useEpisodeSelection } from '../../features/gemini-route/hooks/useEpisodeSelection';
 import {
@@ -93,7 +97,7 @@ export default function GeminiRouteModal({
   const episodes = (activeSeries && Array.isArray(activeSeries.episodes)) ? activeSeries.episodes : EMPTY_EPISODES;
 
   // Dubbing sequential runner feature state
-  const { runnerStates, activeEpisodeIds: runnerActiveEpIds, runnerLiveStats, stopStep: runnerStopStep, runSingleAutoFitSpeed } = useDubbingFeature(episodes);
+  const { runnerStates, activeEpisodeIds: runnerActiveEpIds, runnerLiveStats, stopStep: runnerStopStep, runSingleAutoFitSpeed, runSingleAutoCompact } = useDubbingFeature(episodes);
 
   // Selection & Batch Script Setup configuration state
   const [cardStageView, setCardStageView] = useState('all'); // 'all' | 'translate' | 'tts' | 'demucs'
@@ -112,6 +116,14 @@ export default function GeminiRouteModal({
   const genre = dramaGenre;
   const setGenre = setDramaGenre;
   const [narratorGender, setNarratorGender] = useState('male');
+  const [separationPreset, setSeparationPreset] = useState(() => {
+    try {
+      const saved = typeof window !== 'undefined' ? window.localStorage?.getItem('dragondub_separation_preset') : null;
+      return ['turbo', 'studio', 'ffmpeg_fast'].includes(saved) ? saved : 'turbo';
+    } catch (_) {
+      return 'turbo';
+    }
+  });
 
   const [presetIds, setPresetIds] = useState(() => {
     const raw = activeEpisode?.scriptData?.customPrompt || activeSeries?.customPrompt || DEFAULT_BATCH_DIRECTION;
@@ -146,6 +158,7 @@ export default function GeminiRouteModal({
   const [batchError, setBatchError] = useState(null);
   const [batchSuccess, setBatchSuccess] = useState(null);
   const [batchInfo, setBatchInfo] = useState(null);
+  const [rescanningEpisodeIds, setRescanningEpisodeIds] = useState(() => new Set());
 
   // Batch TTS State (Step 2: Generate TTS for 2, 5, or ALL selected episodes simultaneously)
   const [isGeneratingBatchTTS, setIsGeneratingBatchTTS] = useState(false);
@@ -476,6 +489,46 @@ export default function GeminiRouteModal({
     }
   };
 
+  const handleRescanEpisodeGender = async (targetEp) => {
+    if (!targetEp?.id) return;
+    const epId = targetEp.id;
+    const sId = targetEp.seriesId || activeSeries?.id || seriesId;
+    if (!sId) {
+      setBatchError('⚠️ មិនស្គាល់ Series ID សម្រាប់ស្កេនឡើងវិញទេ។');
+      return;
+    }
+
+    try {
+      setRescanningEpisodeIds((prev) => new Set(prev).add(epId));
+      setBatchSuccess(null);
+      setBatchError(null);
+
+      const res = await fetch('/api/rescan-episode-gender', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ seriesId: sId, episodeId: epId }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'បរាជ័យក្នុងការស្កេនបែងចែកសំឡេង');
+      }
+
+      setBatchSuccess(`🎉 ស្កេនបែងចែកសំឡេងជោគជ័យ ភាគ ${targetEp.episodeNumber || epId}: 👨 ប្រុស ${data.maleCueCount} ឃ្លា • 👩 ស្រី ${data.femaleCueCount} ឃ្លា!`);
+      if (typeof onRefreshSeries === 'function') {
+        try { await onRefreshSeries(); } catch (_) {}
+      }
+    } catch (err) {
+      console.error('[Rescan Gender] Error:', err);
+      setBatchError(`🛑 មិនអាចស្កេនសំឡេងឡើងវិញបានទេ: ${err.message}`);
+    } finally {
+      setRescanningEpisodeIds((prev) => {
+        const next = new Set(prev);
+        next.delete(epId);
+        return next;
+      });
+    }
+  };
+
   // Single-source-of-truth job queue from JobQueueContext (Zero duplicate polling)
   const { jobs: activeJobs = [], isLoading: isJobsLoading = false } = useSharedJobQueue();
 
@@ -550,6 +603,18 @@ export default function GeminiRouteModal({
   const hasActiveTranslateQueue = activeSeriesTranslateJobs.length > 0;
   const wasTranslateQueueActiveRef = useRef(false);
 
+  const activeSeriesRepairJobs = useMemo(() => {
+    return activeJobs.filter(
+      (j) =>
+        j &&
+        (j.mode === 'repair_broken' || j.config?.isRepairBroken === true) &&
+        (!currentSeriesId || !j.seriesId || String(j.seriesId) === String(currentSeriesId)) &&
+        (j.status === 'running' || j.status === 'queued')
+    );
+  }, [activeJobs, currentSeriesId]);
+
+  const isRepairBusy = isRepairingBroken || activeSeriesRepairJobs.length > 0;
+
   // Unified batch execution active flag: locks episode selection & prevents race conditions
   const isBatchExecutionActive = Boolean(
     selectIsBatchExecutionActive({
@@ -561,7 +626,7 @@ export default function GeminiRouteModal({
       runningPipelineEpIds,
       runnerStates,
       runnerActiveEpIds,
-    })
+    }) || isRepairBusy
   );
 
   // Episode Multi-Selection & Quick-Select Workflow Hook (Phase 2 Module 2)
@@ -595,6 +660,103 @@ export default function GeminiRouteModal({
     if (isBatchExecutionActive) return;
     rawToggleSelect(id);
   };
+
+  // Episode queue visibility filter:
+  // - cardStageView ('all' | 'translate' | 'tts' | 'autofit' | 'demucs'): clicked Sidebar step card 1..4
+  // - stageStatusFilter ('all' | 'todo' | 'done'): status filter tabs when focused on a single step
+  // - episodeFilterMode ('all' | 'incomplete'): top pill filter hiding episodes complete on steps 1, 2, 4
+  const [episodeFilterMode, setEpisodeFilterMode] = useState('all');
+  const [stageStatusFilter, setStageStatusFilter] = useState('all');
+  const queueColRef = useRef(null);
+
+  useEffect(() => {
+    setEpisodeFilterMode('all');
+    setCardStageView('all');
+    setStageStatusFilter('all');
+  }, [currentSeriesId]);
+
+  const scrollQueueToTop = useCallback(() => {
+    if (queueColRef.current) {
+      queueColRef.current.scrollTop = 0;
+    }
+  }, []);
+
+  const isEpisodeDoneForStage = useCallback((ep, stageKey) => (
+    checkEpisodeDoneForStage(ep, stageKey, {
+      completedTtsEpIds,
+      ttsLiveStats,
+      completedDemucsEpIds,
+      demucsLiveStats,
+      isEpisodeFullyDone,
+    })
+  ), [completedTtsEpIds, ttsLiveStats, completedDemucsEpIds, demucsLiveStats, isEpisodeFullyDone]);
+
+  const handleToggleSidebarStageView = useCallback((stageKey) => {
+    setCardStageView((prev) => (prev === stageKey ? 'all' : stageKey));
+    setStageStatusFilter('all');
+    setEpisodeFilterMode('all');
+    scrollQueueToTop();
+  }, [scrollQueueToTop]);
+
+  const handleExitStageFocus = useCallback(() => {
+    setCardStageView('all');
+    setStageStatusFilter('all');
+    scrollQueueToTop();
+  }, [scrollQueueToTop]);
+
+  const handleSelectAndShowAllEpisodes = useCallback(() => {
+    setCardStageView('all');
+    setStageStatusFilter('all');
+    setEpisodeFilterMode('all');
+    handleSelectAllEpisodes();
+    scrollQueueToTop();
+  }, [handleSelectAllEpisodes, scrollQueueToTop]);
+
+  const handleSelectAndShowIncompleteEpisodes = useCallback(() => {
+    setCardStageView('all');
+    setStageStatusFilter('all');
+    setEpisodeFilterMode('incomplete');
+    handleSelectIncompleteEpisodes();
+    scrollQueueToTop();
+  }, [handleSelectIncompleteEpisodes, scrollQueueToTop]);
+
+  const stageSummary = useMemo(() => {
+    if (cardStageView === 'all') {
+      return { total: episodes.length, done: 0, todo: 0, todoIds: [] };
+    }
+    let done = 0;
+    const todoIds = [];
+    for (const ep of episodes) {
+      if (isEpisodeDoneForStage(ep, cardStageView)) {
+        done += 1;
+      } else {
+        todoIds.push(ep.id);
+      }
+    }
+    return { total: episodes.length, done, todo: todoIds.length, todoIds };
+  }, [episodes, cardStageView, isEpisodeDoneForStage]);
+
+  const handleSelectStageTodoEpisodes = useCallback(() => {
+    if (isBatchExecutionActive || stageSummary.todoIds.length === 0) return;
+    setSelectedEpIds(new Set(stageSummary.todoIds));
+    setStageStatusFilter('todo');
+    scrollQueueToTop();
+  }, [isBatchExecutionActive, stageSummary.todoIds, setSelectedEpIds, scrollQueueToTop]);
+
+  const visibleEpisodeEntries = useMemo(() => {
+    const allEntries = episodes.map((ep, origIdx) => ({ ep, origIdx }));
+    if (cardStageView !== 'all') {
+      if (stageStatusFilter === 'todo') {
+        return allEntries.filter(({ ep }) => !isEpisodeDoneForStage(ep, cardStageView));
+      }
+      if (stageStatusFilter === 'done') {
+        return allEntries.filter(({ ep }) => isEpisodeDoneForStage(ep, cardStageView));
+      }
+      return allEntries;
+    }
+    if (episodeFilterMode !== 'incomplete') return allEntries;
+    return allEntries.filter(({ ep }) => !isEpisodeFullyDone(ep));
+  }, [episodes, cardStageView, stageStatusFilter, episodeFilterMode, isEpisodeDoneForStage, isEpisodeFullyDone]);
 
   // Trigger series refresh automatically whenever a queued/running translate job finishes via SSE
   const seenCompletedJobsRef = useRef(new Set());
@@ -871,18 +1033,6 @@ export default function GeminiRouteModal({
   const isStep3TrulyDone = selectedEpIds.size > 0
     ? allSelectedAudioCompleted
     : isAudioAllDone;
-
-  const activeSeriesRepairJobs = useMemo(() => {
-    return activeJobs.filter(
-      (j) =>
-        j &&
-        (j.mode === 'repair_broken' || j.config?.isRepairBroken === true) &&
-        (!currentSeriesId || !j.seriesId || String(j.seriesId) === String(currentSeriesId)) &&
-        (j.status === 'running' || j.status === 'queued')
-    );
-  }, [activeJobs, currentSeriesId]);
-
-  const isRepairBusy = isRepairingBroken || activeSeriesRepairJobs.length > 0;
 
   // Track submitted repair-broken queued jobs to report exact completed vs partial (quota) outcome
   useEffect(() => {
@@ -1783,6 +1933,8 @@ export default function GeminiRouteModal({
                 videoPath: videoRef,
                 seriesId: activeSeries?.id || seriesId,
                 episodeId: ep.id,
+                separationPreset,
+                force: Boolean(force),
               }),
             });
             if (isDemucsCancelledRef.current) {
@@ -2020,44 +2172,15 @@ export default function GeminiRouteModal({
   const poolTotalKeys = Math.max(1, Number(keysHealth?.quotaSummary?.totalKeys ?? keysHealth?.totalKeys ?? 4) || 4);
 
   return (
-    <div 
+    <div
       data-testid="gemini-route-modal"
-      style={{
-        position: 'fixed',
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        zIndex: 99999,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        padding: '16px',
-        background: 'rgba(9, 10, 15, 0.82)',
-        backdropFilter: 'blur(8px)',
-        WebkitBackdropFilter: 'blur(8px)',
-      }}
-      onClick={onClose}
+      className="studio-route-stage"
     >
       <div
-        role="dialog"
-        aria-modal="true"
+        role="region"
         aria-label="Batch Generate Studio"
-        style={{
-          width: 'min(1280px, 96vw)',
-          maxWidth: '1280px',
-          height: '92vh',
-          maxHeight: '92vh',
-          display: 'flex',
-          flexDirection: 'column',
-          background: 'var(--bg-primary-panel)',
-          border: '1px solid var(--border-subtle-hover)',
-          borderRadius: 'var(--radius-lg)',
-          boxShadow: 'var(--shadow-lg)',
-          overflow: 'hidden',
-          fontFamily: 'var(--font-sans)',
-        }}
-        onClick={(e) => e.stopPropagation()}
+        className="studio-route-stage-shell"
+        style={{ fontFamily: 'var(--font-sans)' }}
       >
         {/* ── 1. MODAL HEADER (Batch Generate Studio — Title + 1 Key Pool Pill + Close) ── */}
         <div
@@ -2094,10 +2217,9 @@ export default function GeminiRouteModal({
               fontSize: 'var(--text-lg)',
               fontWeight: 700,
               color: 'var(--text-primary)',
-              letterSpacing: '0.02em',
-              textTransform: 'uppercase',
+              letterSpacing: '0.01em',
             }}>
-              BATCH GENERATE STUDIO
+              Batch Studio · ផលិតច្រើនភាគ
             </h1>
             {(() => {
               const hdrView = applyElapsedCountdownToKeysHealth(keysHealth, quotaNowMs);
@@ -2190,26 +2312,13 @@ export default function GeminiRouteModal({
           </button>
         </div>
 
-        {/* ── UNIFIED SCROLLABLE BODY (Prevents Top Monitor from squishing Episode Grid) ── */}
+        {/* ── UNIFIED 2-COLUMN DARKROOM SPLIT BODY (Controls Left | Episode Queue Right) ── */}
         <div
           data-testid="modal-scroll-body"
-          style={{
-            flex: 1,
-            minHeight: 0,
-            overflowY: 'auto',
-            display: 'flex',
-            flexDirection: 'column',
-          }}
+          className="batch-studio-split-body"
         >
-        {/* ── 2. TOP CONTROL CENTER (GetLayers 4-Tier Depth) ── */}
-        <div style={{
-          padding: '14px 24px',
-          borderBottom: '1px solid rgba(255, 255, 255, 0.06)',
-          background: 'rgba(16, 25, 44, 0.85)',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: 12,
-        }}>
+        {/* ── 2. LEFT STICKY CONTROL COLUMN ── */}
+        <aside className="batch-studio-controls-col">
           {/* Compact Quota Exhaustion Strip (Full Monitor lives in separate Keys & Quota Modal) */}
           {(() => {
             const liveView = applyElapsedCountdownToKeysHealth(keysHealth, quotaNowMs);
@@ -2335,7 +2444,7 @@ export default function GeminiRouteModal({
             <button
               type="button"
               data-testid="pill-select-all"
-              onClick={handleSelectAllEpisodes}
+              onClick={handleSelectAndShowAllEpisodes}
               disabled={isBatchExecutionActive}
               className="btn-tactile"
               style={{
@@ -2346,14 +2455,14 @@ export default function GeminiRouteModal({
                 display: 'inline-flex',
                 alignItems: 'center',
                 gap: 5,
-                background: (selectedEpIds.size === episodes.length && episodes.length > 0) ? 'rgba(56, 189, 248, 0.16)' : 'rgba(255, 255, 255, 0.04)',
-                border: (selectedEpIds.size === episodes.length && episodes.length > 0) ? '1px solid rgba(56, 189, 248, 0.55)' : '1px solid rgba(255, 255, 255, 0.08)',
-                color: (selectedEpIds.size === episodes.length && episodes.length > 0) ? '#38BDF8' : '#CBD5E1',
+                background: (episodeFilterMode === 'all' && selectedEpIds.size === episodes.length && episodes.length > 0) ? 'rgba(56, 189, 248, 0.16)' : 'rgba(255, 255, 255, 0.04)',
+                border: (episodeFilterMode === 'all' && selectedEpIds.size === episodes.length && episodes.length > 0) ? '1px solid rgba(56, 189, 248, 0.55)' : '1px solid rgba(255, 255, 255, 0.08)',
+                color: (episodeFilterMode === 'all' && selectedEpIds.size === episodes.length && episodes.length > 0) ? '#38BDF8' : '#CBD5E1',
                 transition: 'all 0.15s ease',
                 cursor: isBatchExecutionActive ? 'not-allowed' : 'pointer',
                 opacity: isBatchExecutionActive ? 0.45 : 1,
               }}
-              title={isBatchExecutionActive ? 'កំពុងដំណើរការ មិនអាចផ្លាស់ប្តូរការជ្រើសរើសបានទេ' : 'ជ្រើសរើសគ្រប់ភាគទាំងអស់ក្នុង Series'}
+              title={isBatchExecutionActive ? 'កំពុងដំណើរការ មិនអាចផ្លាស់ប្តូរការជ្រើសរើសបានទេ' : 'បង្ហាញ និងជ្រើសរើសគ្រប់ភាគទាំងអស់ក្នុង Series'}
             >
               <span>ទាំងអស់ ({episodes.length} ភាគ)</span>
             </button>
@@ -2362,7 +2471,7 @@ export default function GeminiRouteModal({
             <button
               type="button"
               data-testid="pill-select-incomplete"
-              onClick={handleSelectIncompleteEpisodes}
+              onClick={handleSelectAndShowIncompleteEpisodes}
               disabled={isBatchExecutionActive || incompleteEpisodes.length === 0}
               className="btn-tactile"
               style={{
@@ -2373,14 +2482,14 @@ export default function GeminiRouteModal({
                 display: 'inline-flex',
                 alignItems: 'center',
                 gap: 5,
-                background: (selectedEpIds.size === incompleteEpisodes.length && incompleteEpisodes.length > 0) ? 'rgba(245, 158, 11, 0.16)' : 'rgba(255, 255, 255, 0.04)',
-                border: (selectedEpIds.size === incompleteEpisodes.length && incompleteEpisodes.length > 0) ? '1px solid rgba(245, 158, 11, 0.55)' : '1px solid rgba(255, 255, 255, 0.08)',
-                color: (selectedEpIds.size === incompleteEpisodes.length && incompleteEpisodes.length > 0) ? '#FBBF24' : '#CBD5E1',
+                background: (episodeFilterMode === 'incomplete' && incompleteEpisodes.length > 0) ? 'rgba(245, 158, 11, 0.18)' : 'rgba(255, 255, 255, 0.04)',
+                border: (episodeFilterMode === 'incomplete' && incompleteEpisodes.length > 0) ? '1px solid rgba(245, 158, 11, 0.6)' : '1px solid rgba(255, 255, 255, 0.08)',
+                color: (episodeFilterMode === 'incomplete' && incompleteEpisodes.length > 0) ? '#FBBF24' : '#CBD5E1',
                 transition: 'all 0.15s ease',
                 cursor: (isBatchExecutionActive || incompleteEpisodes.length === 0) ? 'not-allowed' : 'pointer',
                 opacity: (isBatchExecutionActive || incompleteEpisodes.length === 0) ? 0.45 : 1,
               }}
-              title={isBatchExecutionActive ? 'កំពុងដំណើរការ មិនអាចផ្លាស់ប្តូរការជ្រើសរើសបានទេ' : (incompleteEpisodes.length === 0 ? 'គ្រប់ភាគទាំងអស់រួចរាល់ 100% ហើយ' : 'ជ្រើសរើសភាគដែលមិនទាន់ចប់')}
+              title={isBatchExecutionActive ? 'កំពុងដំណើរការ មិនអាចផ្លាស់ប្តូរការជ្រើសរើសបានទេ' : (incompleteEpisodes.length === 0 ? 'គ្រប់ភាគទាំងអស់រួចរាល់ 100% ហើយ' : 'បង្ហាញតែភាគដែលមិនទាន់ចប់ជំហាន 1, 2, ឬ 4 (លាក់ភាគដែលធ្វើរួច)')}
             >
               <span>{incompleteEpisodes.length === 0 ? '✓ គ្រប់ភាគរួចរាល់ 100%' : `ភាគមិនទាន់ចប់ (${incompleteEpisodes.length} ភាគ)`}</span>
             </button>
@@ -2463,556 +2572,46 @@ export default function GeminiRouteModal({
           </div>
 
           {/* ── 3. UNIFIED COLLAPSIBLE SCRIPT SETUP BAR (Max 1 Border Level, Flat Horizontal Rows) ── */}
-          <div
-            data-testid="batch-script-setup-section"
-            style={{
-              background: 'rgba(15, 23, 42, 0.55)',
-              borderRadius: 10,
-              border: '1px solid rgba(255, 255, 255, 0.08)',
-              overflow: 'hidden',
-            }}
-          >
-            {/* Single Summary Line Collapsible Trigger */}
-            {(() => {
-              const selectedGenreObj = GENRE_OPTIONS.find((g) => g.id === dramaGenre) || GENRE_OPTIONS[0];
-              const activeChipLabels = SMART_PROMPT_CHIPS
-                .filter((c) => String(customDirection || '').includes(c.promptText) || String(customDirection || '').includes(c.label))
-                .map((c) => c.label.replace(/^[^\s]+\s*/, ''));
-              const directionSummary = activeChipLabels.length > 0
-                ? activeChipLabels.join(', ')
-                : (String(customDirection || '').trim() ? 'Custom Direction' : 'Default Direction');
-              const summaryLine = `${pipelineMode === 'fast_ocr' ? '⚡ Fast OCR' : '🎯 Standard Mode'} • ${dubbingMode === 'dialogue' ? 'Mode A: សន្ទនាតួអង្គ' : 'Mode B: សម្រាយរឿង'} • ${selectedGenreObj.label} • ${directionSummary}`;
-              return (
-                <button
-                  type="button"
-                  data-testid="batch-script-setup-toggle"
-                  onClick={() => setIsScriptSetupExpanded((prev) => !prev)}
-                  style={{
-                    width: '100%',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    gap: 10,
-                    padding: '8px 12px',
-                    background: 'transparent',
-                    border: 'none',
-                    borderBottom: isScriptSetupExpanded ? '1px solid rgba(255, 255, 255, 0.06)' : 'none',
-                    color: '#E2E8F0',
-                    cursor: 'pointer',
-                    textAlign: 'left',
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flex: 1, overflow: 'hidden' }}>
-                    <Settings2 size={13} color="var(--primary-accent)" style={{ flexShrink: 0 }} />
-                    <span style={{ fontSize: 'var(--text-sm)', fontWeight: 700, color: 'var(--text-primary)', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                      កំណត់ទម្រង់បង្កើត Script (Batch Script Setup):
-                    </span>
-                    <span
-                      className="truncate"
-                      style={{
-                        fontSize: '0.72rem',
-                        fontWeight: 600,
-                        color: '#38BDF8',
-                        whiteSpace: 'nowrap',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        minWidth: 0,
-                      }}
-                    >
-                      {summaryLine}
-                    </span>
-                  </div>
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: '#94A3B8', fontSize: '0.70rem', fontWeight: 700, flexShrink: 0 }}>
-                    <span>{isScriptSetupExpanded ? 'បង្រួម' : 'ពង្រីក'}</span>
-                    {isScriptSetupExpanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
-                  </span>
-                </button>
-              );
-            })()}
+          <BatchScriptSetupPanel
+            dramaGenre={dramaGenre}
+            setDramaGenre={setDramaGenre}
+            activeEpisode={activeEpisode}
+            customDirection={customDirection}
+            pipelineMode={pipelineMode}
+            setPipelineMode={setPipelineMode}
+            dubbingMode={dubbingMode}
+            setDubbingMode={setDubbingMode}
+            narratorGender={narratorGender}
+            setNarratorGender={setNarratorGender}
+            recapStyle={recapStyle}
+            setRecapStyle={setRecapStyle}
+            isScriptSetupExpanded={isScriptSetupExpanded}
+            setIsScriptSetupExpanded={setIsScriptSetupExpanded}
+            isDirectionExpanded={isDirectionExpanded}
+            setIsDirectionExpanded={setIsDirectionExpanded}
+            presetIds={presetIds}
+            setPresetIds={setPresetIds}
+            togglePreset={togglePreset}
+            customText={customText}
+            setCustomText={setCustomText}
+            handleGenreChange={handleGenreChange}
+            subtitleFileInputRef={subtitleFileInputRef}
+            isImportingSubtitles={isImportingSubtitles}
+            importSuccess={importSuccess}
+            importErrors={importErrors}
+            handleImportBatchSubtitleFile={handleImportBatchSubtitleFile}
+          />
 
-            {isScriptSetupExpanded && (
-              <div style={{ display: 'flex', flexDirection: 'column' }}>
-                {/* ── FLAT ROW 1: ល្បឿន & របៀប PIPELINE (GENERATION MODE) + Import .srt/.json ── */}
-                <div
-                  data-testid="batch-setup-group-pipeline"
-                  style={{
-                    padding: '8px 12px',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    flexWrap: 'wrap',
-                    gap: 10,
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                    <span style={{ fontSize: '0.70rem', color: '#94A3B8', fontWeight: 700, minWidth: 118, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-                      <Zap size={11} color="#38BDF8" />
-                      <span>ល្បឿន &amp; PIPELINE:</span>
-                    </span>
-                    <button
-                      type="button"
-                      data-testid="batch-pipeline-standard"
-                      onClick={() => setPipelineMode('standard')}
-                      style={{
-                        padding: '4px 10px',
-                        borderRadius: 6,
-                        fontSize: '0.72rem',
-                        fontWeight: pipelineMode === 'standard' ? 800 : 600,
-                        background: pipelineMode === 'standard' ? 'rgba(168, 85, 247, 0.16)' : 'rgba(255, 255, 255, 0.03)',
-                        color: pipelineMode === 'standard' ? '#C084FC' : '#CBD5E1',
-                        border: pipelineMode === 'standard' ? '1px solid rgba(168, 85, 247, 0.5)' : '1px solid transparent',
-                        cursor: 'pointer',
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: 6,
-                        transition: 'all 0.15s ease',
-                      }}
-                      title="Full 10-Stage (OCR + ASR Diarization + Reconcile)"
-                    >
-                      <Layers size={12} />
-                      <span>Standard Mode</span>
-                      {pipelineMode === 'standard' && <Check size={11} />}
-                    </button>
-                    <button
-                      type="button"
-                      data-testid="batch-pipeline-fast-ocr"
-                      onClick={() => setPipelineMode('fast_ocr')}
-                      style={{
-                        padding: '4px 10px',
-                        borderRadius: 6,
-                        fontSize: '0.72rem',
-                        fontWeight: pipelineMode === 'fast_ocr' ? 800 : 600,
-                        background: pipelineMode === 'fast_ocr' ? 'rgba(234, 179, 8, 0.16)' : 'rgba(255, 255, 255, 0.03)',
-                        color: pipelineMode === 'fast_ocr' ? '#FACC15' : '#CBD5E1',
-                        border: pipelineMode === 'fast_ocr' ? '1px solid rgba(234, 179, 8, 0.5)' : '1px solid transparent',
-                        cursor: 'pointer',
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: 6,
-                        transition: 'all 0.15s ease',
-                      }}
-                      title="Direct Subtitles (OCR ➡️ Translate, 1 Cue = 1 Segment)"
-                    >
-                      <Zap size={12} />
-                      <span>Fast OCR Mode</span>
-                      <span
-                        data-testid="batch-fast-ocr-summary-pill"
-                        style={{
-                          fontSize: '0.64rem',
-                          opacity: 0.9,
-                          fontWeight: 600,
-                          padding: '1px 5px',
-                          borderRadius: 3,
-                          background: pipelineMode === 'fast_ocr' ? 'rgba(234, 179, 8, 0.2)' : 'rgba(255, 255, 255, 0.06)',
-                        }}
-                      >
-                        (OCR + Visual Speaker Gender + Direct Translate)
-                      </span>
-                      {pipelineMode === 'fast_ocr' && <Check size={11} />}
-                    </button>
-                  </div>
-
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                    <input
-                      ref={subtitleFileInputRef}
-                      type="file"
-                      accept=".srt,.json"
-                      style={{ display: 'none' }}
-                      onChange={(e) => {
-                        const file = e.target.files?.[0];
-                        if (file) handleImportBatchSubtitleFile(file);
-                        e.target.value = '';
-                      }}
-                    />
-                    <button
-                      type="button"
-                      disabled={isImportingSubtitles}
-                      onClick={() => subtitleFileInputRef.current?.click()}
-                      title="📄 Import .srt / .json"
-                      style={{
-                        padding: '4px 10px',
-                        borderRadius: 6,
-                        fontSize: '0.70rem',
-                        fontWeight: 700,
-                        background: 'rgba(56, 189, 248, 0.10)',
-                        color: '#38BDF8',
-                        border: '1px solid rgba(56, 189, 248, 0.28)',
-                        cursor: isImportingSubtitles ? 'not-allowed' : 'pointer',
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: 5,
-                      }}
-                    >
-                      {isImportingSubtitles ? <Loader2 size={12} className="animate-spin" /> : <FileText size={12} />}
-                      <span>📄 Import .srt / .json</span>
-                    </button>
-                    {importSuccess && (
-                      <span style={{ color: '#34D399', fontSize: '0.68rem', fontWeight: 700 }}>
-                        ✓ {importSuccess}
-                      </span>
-                    )}
-                    {importErrors.length > 0 && (
-                      <span style={{ color: '#F87171', fontSize: '0.68rem', fontWeight: 700 }}>
-                        ⚠️ {importErrors[0]}
-                      </span>
-                    )}
-                  </div>
-                </div>
-
-                {/* ── FLAT ROW 2: ជ្រើសរើសទម្រង់បញ្ចូលសំឡេង AI (DUBBING MODE) ── */}
-                <div
-                  data-testid="batch-setup-group-dubbing-mode"
-                  style={{
-                    padding: '8px 12px',
-                    borderTop: '1px solid rgba(255, 255, 255, 0.06)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    flexWrap: 'wrap',
-                    gap: 10,
-                  }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                    <span style={{ fontSize: '0.70rem', color: '#94A3B8', fontWeight: 700, minWidth: 118, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-                      <MessageSquare size={11} color="#38BDF8" />
-                      <span>ទម្រង់សំឡេង AI:</span>
-                    </span>
-                    <button
-                      type="button"
-                      data-testid="batch-dubbing-mode-dialogue"
-                      onClick={() => setDubbingMode('dialogue')}
-                      style={{
-                        padding: '4px 10px',
-                        borderRadius: 6,
-                        fontSize: '0.72rem',
-                        fontWeight: dubbingMode === 'dialogue' ? 800 : 600,
-                        background: dubbingMode === 'dialogue' ? 'rgba(56, 189, 248, 0.16)' : 'rgba(255, 255, 255, 0.03)',
-                        color: dubbingMode === 'dialogue' ? '#38BDF8' : '#CBD5E1',
-                        border: dubbingMode === 'dialogue' ? '1px solid rgba(56, 189, 248, 0.5)' : '1px solid transparent',
-                        cursor: 'pointer',
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: 6,
-                        transition: 'all 0.15s ease',
-                      }}
-                      title="បកប្រែសន្ទនា ១-ទល់-១ ត្រូវតាមមាត់ និងសំឡេងតួអង្គ"
-                    >
-                      <MessageSquare size={12} />
-                      <span>Mode A: សន្ទនាតួអង្គ</span>
-                      {dubbingMode === 'dialogue' && <Check size={11} />}
-                    </button>
-                    <button
-                      type="button"
-                      data-testid="batch-dubbing-mode-recap"
-                      onClick={() => {
-                        setDubbingMode('recap');
-                        if (recapStyle !== 'story_recap' && recapStyle !== 'fast_recap') setRecapStyle('story_recap');
-                      }}
-                      style={{
-                        padding: '4px 10px',
-                        borderRadius: 6,
-                        fontSize: '0.72rem',
-                        fontWeight: dubbingMode === 'recap' ? 800 : 600,
-                        background: dubbingMode === 'recap' ? 'rgba(168, 85, 247, 0.16)' : 'rgba(255, 255, 255, 0.03)',
-                        color: dubbingMode === 'recap' ? '#C084FC' : '#CBD5E1',
-                        border: dubbingMode === 'recap' ? '1px solid rgba(168, 85, 247, 0.5)' : '1px solid transparent',
-                        cursor: 'pointer',
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: 6,
-                        transition: 'all 0.15s ease',
-                      }}
-                      title="និទានដំណើររឿងបែប TikTok/Reels រស់រវើក"
-                    >
-                      <Film size={12} />
-                      <span>Mode B: សម្រាយរឿង</span>
-                      {dubbingMode === 'recap' && <Check size={11} />}
-                    </button>
-                  </div>
-
-                  {dubbingMode === 'recap' && (
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-                      <label style={{ display: 'inline-flex', alignItems: 'center', gap: 4, cursor: 'pointer', fontSize: '0.68rem', color: '#E2E8F0' }}>
-                        <input
-                          type="radio"
-                          name="batchRecapStyle"
-                          value="story_recap"
-                          checked={recapStyle === 'story_recap'}
-                          onChange={(e) => setRecapStyle(e.target.value)}
-                          style={{ accentColor: '#38BDF8' }}
-                        />
-                        <span>Story Recap</span>
-                      </label>
-                      <label style={{ display: 'inline-flex', alignItems: 'center', gap: 4, cursor: 'pointer', fontSize: '0.68rem', color: '#E2E8F0' }}>
-                        <input
-                          type="radio"
-                          name="batchRecapStyle"
-                          value="fast_recap"
-                          checked={recapStyle === 'fast_recap'}
-                          onChange={(e) => setRecapStyle(e.target.value)}
-                          style={{ accentColor: '#38BDF8' }}
-                        />
-                        <span>Fast Recap</span>
-                      </label>
-                      <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                        <button
-                          type="button"
-                          onClick={() => setNarratorGender('male')}
-                          style={{
-                            padding: '2px 8px',
-                            fontSize: '0.68rem',
-                            borderRadius: 5,
-                            border: 'none',
-                            background: narratorGender === 'male' ? '#2563EB' : 'rgba(255, 255, 255, 0.06)',
-                            color: '#FFF',
-                            cursor: 'pointer',
-                            fontWeight: narratorGender === 'male' ? 700 : 500,
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: 4,
-                          }}
-                        >
-                          <Mic size={10} /> ពិសិដ្ឋ
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setNarratorGender('female')}
-                          style={{
-                            padding: '2px 8px',
-                            fontSize: '0.68rem',
-                            borderRadius: 5,
-                            border: 'none',
-                            background: narratorGender === 'female' ? '#DB2777' : 'rgba(255, 255, 255, 0.06)',
-                            color: '#FFF',
-                            cursor: 'pointer',
-                            fontWeight: narratorGender === 'female' ? 700 : 500,
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: 4,
-                          }}
-                        >
-                          <Mic size={10} /> ស្រីមុំ
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-
-                {/* ── FLAT ROW 3: ប្រភេទរឿង (DRAMA GENRE) ── */}
-                <div
-                  data-testid="batch-setup-group-genre"
-                  style={{
-                    padding: '8px 12px',
-                    borderTop: '1px solid rgba(255, 255, 255, 0.06)',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: 6,
-                  }}
-                >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <label style={{ fontSize: '10.5px', color: '#94a3b8', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.4px', display: 'flex', alignItems: 'center', gap: 6 }}>
-                      <BookOpen size={12} color="#38bdf8" />
-                      <span>ប្រភេទរឿង (DRAMA GENRE)</span>
-                    </label>
-                    {activeEpisode?.scriptData?.detectedGenre && (
-                      <span style={{
-                        fontSize: '9.5px',
-                        background: 'rgba(56, 189, 248, 0.12)',
-                        color: '#38bdf8',
-                        border: '1px solid rgba(56, 189, 248, 0.3)',
-                        padding: '1.5px 6px',
-                        borderRadius: 4,
-                        fontWeight: 600,
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 4,
-                      }}>
-                        <Sparkles size={10} /> AI: {activeEpisode.scriptData.detectedGenre}
-                      </span>
-                    )}
-                  </div>
-
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
-                    {GENRE_OPTIONS.map((g) => {
-                      const isSelected = dramaGenre === g.id;
-                      const GenreIcon = g.icon || Sparkles;
-                      return (
-                        <button
-                          key={g.id}
-                          type="button"
-                          data-testid={`batch-genre-${g.id}`}
-                          aria-pressed={isSelected}
-                          aria-label={`ជ្រើសរើសប្រភេទរឿង ${g.shortLabel || g.label}`}
-                          onClick={() => {
-                            const res = handleGenreChange({ presetIds, newGenre: g.id });
-                            setDramaGenre(res.nextGenre);
-                            setPresetIds(res.nextPresetIds);
-                          }}
-                          title={g.hint}
-                          style={{
-                            padding: '4px 9px',
-                            fontSize: '11px',
-                            borderRadius: 6,
-                            border: isSelected ? '1.5px solid #38bdf8' : '1px solid rgba(255, 255, 255, 0.08)',
-                            background: isSelected
-                              ? 'linear-gradient(135deg, rgba(14, 165, 233, 0.25) 0%, rgba(56, 189, 248, 0.15) 100%)'
-                              : '#0b0f19',
-                            color: isSelected ? '#38bdf8' : '#cbd5e1',
-                            cursor: 'pointer',
-                            fontWeight: isSelected ? 700 : 500,
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: 5,
-                            transition: 'all 0.15s ease',
-                            boxShadow: isSelected ? '0 0 10px rgba(56, 189, 248, 0.25)' : 'none',
-                          }}
-                        >
-                          <GenreIcon size={12} />
-                          <span>{g.shortLabel || g.label}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                {/* ── FLAT ROW 4: ឈ្មោះតួអង្គ / DIRECTION (1-Click Smart Prompt Chips + Textarea) ── */}
-                <div
-                  data-testid="batch-setup-group-direction"
-                  style={{
-                    padding: '8px 12px',
-                    borderTop: '1px solid rgba(255, 255, 255, 0.06)',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: 6,
-                  }}
-                >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <label style={{ fontSize: '10.5px', color: '#94a3b8', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.4px', display: 'flex', alignItems: 'center', gap: 5 }}>
-                      <span>{dubbingMode === 'dialogue' ? 'ឈ្មោះតួអង្គ / DIRECTION' : 'ទិសដៅសម្រាយបន្ថែម (DIRECTION)'}</span>
-                      <span style={{ fontSize: '9px', color: '#64748b', background: 'rgba(255, 255, 255, 0.06)', padding: '1px 5px', borderRadius: 3, fontWeight: 500, textTransform: 'none' }}>
-                        ស្រេចចិត្ត
-                      </span>
-                    </label>
-
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      {(customText || presetIds.length > 0) && (
-                        <button
-                          type="button"
-                          data-testid="batch-direction-clear"
-                          aria-label="សម្អាតទិសដៅបន្ថែម"
-                          onClick={() => {
-                            setCustomText('');
-                            setPresetIds([]);
-                          }}
-                          style={{ background: 'none', border: 'none', color: '#94a3b8', fontSize: '10px', cursor: 'pointer', fontWeight: 600 }}
-                          title="សម្អាតទិសដៅបន្ថែម (Clear custom text)"
-                        >
-                          ✕ សម្អាត
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        data-testid="batch-direction-more-toggle"
-                        onClick={() => setIsDirectionExpanded((prev) => !prev)}
-                        style={{ display: 'none' }}
-                        aria-hidden="true"
-                      >
-                        {isDirectionExpanded ? 'បង្រួម ▴' : 'more ▾'}
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* 1-Click Smart Prompt Chips */}
-                  <div
-                    data-testid="batch-smart-prompt-chips"
-                    style={{
-                      display: 'flex',
-                      flexWrap: 'wrap',
-                      gap: 5,
-                    }}
-                  >
-                    {SMART_PROMPT_CHIPS.map((chip) => {
-                      const isChipActive = presetIds.includes(chip.id);
-                      const ChipIcon = chip.icon || Sparkles;
-                      return (
-                        <button
-                          key={chip.id}
-                          type="button"
-                          data-testid={`batch-smart-prompt-chip-${chip.id}`}
-                          aria-pressed={isChipActive}
-                          aria-label={`ទិសដៅ ${chip.shortLabel || chip.label}`}
-                          title={chip.promptText}
-                          onClick={() => {
-                            const res = togglePreset({ presetIds, targetId: chip.id, currentGenre: dramaGenre });
-                            setPresetIds(res.nextPresetIds);
-                            if (res.nextGenre !== dramaGenre) {
-                              setDramaGenre(res.nextGenre);
-                            }
-                          }}
-                          style={{
-                            padding: '3.5px 8px',
-                            borderRadius: 6,
-                            fontSize: '10.5px',
-                            fontWeight: isChipActive ? 700 : 500,
-                            fontFamily: "'Kantumruy Pro', 'Battambang', system-ui, sans-serif",
-                            background: isChipActive
-                              ? 'rgba(56, 189, 248, 0.2)'
-                              : 'rgba(15, 23, 42, 0.75)',
-                            color: isChipActive ? '#38bdf8' : '#cbd5e1',
-                            border: isChipActive
-                              ? '1px solid rgba(56, 189, 248, 0.55)'
-                              : '1px solid rgba(255, 255, 255, 0.09)',
-                            cursor: 'pointer',
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: 5,
-                            transition: 'all 0.15s ease',
-                          }}
-                        >
-                          <ChipIcon size={12} color={isChipActive ? '#38bdf8' : '#94a3b8'} />
-                          <span>{chip.shortLabel || chip.label}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-
-                  {/* Direct Textarea exactly matching Image 2 */}
-                  <textarea
-                    rows={2}
-                    data-testid="batch-direction-textarea"
-                    value={customText}
-                    onChange={(e) => setCustomText(e.target.value)}
-                    placeholder={dubbingMode === 'dialogue'
-                      ? 'ឧ. រឿងភាគបុរាណចិន, តួប្រុសឈ្មោះ: លីនហ្វេង...'
-                      : 'ឧ. សម្រាយបែបរន្ធត់ ជក់ចិត្ត ផ្តោតលើប្រយុទ្ធ...'}
-                    style={{
-                      width: '100%',
-                      padding: '9px 12px',
-                      borderRadius: 8,
-                      background: '#0a0d15',
-                      border: '1px solid #1e2536',
-                      color: '#f1f5f9',
-                      fontSize: '11px',
-                      resize: 'vertical',
-                      fontFamily: "'Kantumruy Pro', 'Battambang', system-ui, sans-serif",
-                      lineHeight: 1.5,
-                      boxSizing: 'border-box',
-                      outline: 'none',
-                      transition: 'all 0.15s ease',
-                    }}
-                    onFocus={(e) => e.target.style.borderColor = dubbingMode === 'dialogue' ? '#38bdf8' : '#c084fc'}
-                    onBlur={(e) => e.target.style.borderColor = '#1e2536'}
-                  />
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* ── 4. STEP STATUS & 1-BY-1 CONTROLS (Reusable DubbingStepCardsBar) ── */}
+          {/* ── 4. STEP STATUS & 1-BY-1 CONTROLS (Slim Sidebar Step Nav 1–4; Actions in Top Bar) ── */}
           <DubbingStepCardsBar
             episodes={episodes}
             selectedEpIds={selectedEpIds}
-            setupOptions={{ pipelineMode, dubbingMode, genre, narratorGender, customDirection }}
+            setupOptions={{ pipelineMode, dubbingMode, genre, narratorGender, customDirection, separationPreset }}
+            separationPreset={separationPreset}
+            onSeparationPresetChange={setSeparationPreset}
+            activeStageView={cardStageView}
+            onSelectStageView={handleToggleSidebarStageView}
+            navOnly={true}
           />
 
           {/* ── 5. SINGLE UNIFIED ACTIONS & CONTROLS TOOLBAR (Wrapping, Never Overflowing) ── */}
@@ -3127,7 +2726,7 @@ export default function GeminiRouteModal({
                           <span>Stopping...</span>
                         </>
                       ) : (
-                        <span>🛑 Kill</span>
+                        <span>បញ្ឈប់ (Kill)</span>
                       )}
                     </button>
                   )}
@@ -3242,37 +2841,155 @@ export default function GeminiRouteModal({
               </div>
             );
           })()}
-        </div>
+        </aside>
 
-        {/* ── 3. BATCH NOTIFICATIONS ── */}
+        {/* ── 3. RIGHT EPISODE QUEUE WORKSPACE ── */}
+        <section className="batch-studio-queue-col" ref={queueColRef}>
+          {/* Compact Queue Header */}
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: 8,
+            marginBottom: 12,
+            paddingBottom: 10,
+            borderBottom: '1px solid var(--border-subtle)',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 'var(--text-md)', fontWeight: 700, color: 'var(--text-primary)' }}>
+                បញ្ជីភាគសម្រាប់ផលិត (Episode Queue)
+              </span>
+              <span style={{
+                padding: '2px 8px',
+                borderRadius: 'var(--radius-xs)',
+                background: 'var(--bg-secondary-panel)',
+                border: '1px solid var(--border-subtle)',
+                color: 'var(--primary-accent)',
+                fontFamily: 'var(--font-mono)',
+                fontSize: 'var(--text-2xs)',
+                fontWeight: 700,
+              }}>
+                {selectedEpIds.size}/{episodes.length} selected
+              </span>
+              {episodeFilterMode === 'incomplete' && (
+                <>
+                  <span
+                    data-testid="incomplete-filter-active-badge"
+                    style={{
+                      padding: '2px 8px',
+                      borderRadius: 'var(--radius-xs)',
+                      background: 'rgba(245, 158, 11, 0.14)',
+                      border: '1px solid rgba(245, 158, 11, 0.4)',
+                      color: '#FBBF24',
+                      fontSize: 'var(--text-2xs)',
+                      fontWeight: 700,
+                    }}
+                  >
+                    បង្ហាញតែមិនទាន់ចប់ (1, 2, 4): {visibleEpisodeEntries.length} ភាគ
+                  </span>
+                  <button
+                    type="button"
+                    data-testid="btn-show-all-episodes"
+                    onClick={() => setEpisodeFilterMode('all')}
+                    style={{
+                      padding: '2px 8px',
+                      borderRadius: 'var(--radius-xs)',
+                      background: 'var(--bg-elevated-panel)',
+                      border: '1px solid var(--border-subtle)',
+                      color: 'var(--text-secondary)',
+                      fontSize: 'var(--text-2xs)',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                    }}
+                  >
+                    បង្ហាញទាំងអស់ ({episodes.length})
+                  </button>
+                </>
+              )}
+            </div>
+            <span style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)' }}>
+              {overallStagePercent}% Ready
+            </span>
+          </div>
+
+          {/* ── STAGE FOCUS FILTER & ACTION TOP BAR (Steps 1–4 Controls + Status Tabs) ── */}
+          <BatchStageFocusBar
+            episodes={episodes}
+            selectedEpIds={selectedEpIds}
+            setupOptions={{ pipelineMode, dubbingMode, genre, narratorGender, customDirection, separationPreset }}
+            separationPreset={separationPreset}
+            onSeparationPresetChange={setSeparationPreset}
+            cardStageView={cardStageView}
+            stageStatusFilter={stageStatusFilter}
+            onChangeStageStatusFilter={(nextFilter) => {
+              setStageStatusFilter(nextFilter);
+              scrollQueueToTop();
+            }}
+            stageSummary={stageSummary}
+            isBatchExecutionActive={isBatchExecutionActive}
+            onSelectStageTodoEpisodes={handleSelectStageTodoEpisodes}
+            onSelectStageView={handleToggleSidebarStageView}
+            onExitStageFocus={handleExitStageFocus}
+          />
+
+        {/* Active Backend Repair / Production Banner */}
+        {activeSeriesRepairJobs.length > 0 && (
+          <div
+            role="status"
+            data-testid="batch-repair-running-banner"
+            style={{
+              marginBottom: 12,
+              padding: '9px 14px',
+              borderRadius: 'var(--radius-sm)',
+              background: 'rgba(245, 158, 11, 0.14)',
+              border: '1px solid rgba(245, 158, 11, 0.45)',
+              color: '#FDE68A',
+              fontSize: 'var(--text-sm)',
+              fontWeight: 600,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 10,
+            }}
+          >
+            <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <Loader2 size={15} className="animate-spin" color="#FBBF24" />
+              <span>
+                ⚡ Backend កំពុងដំណើរការជួសជុល Script & សំឡេង AI ({activeSeriesRepairJobs.filter((j) => j.status === 'running').length} កំពុងរត់, {activeSeriesRepairJobs.filter((j) => j.status === 'queued').length} ក្នុង Queue)...
+              </span>
+            </span>
+          </div>
+        )}
+
+        {/* Batch Notifications */}
         {batchInfo && (
           <div
             role="status"
             data-testid="batch-info-banner"
             style={{
-              margin: '12px 22px 0 22px',
+              marginBottom: 12,
               padding: '9px 14px',
-              borderRadius: 8,
-              background: 'rgba(56, 189, 248, 0.14)',
-              border: '1px solid rgba(56, 189, 248, 0.4)',
-              color: '#bae6fd',
-              fontSize: '0.76rem',
-              fontWeight: 700,
+              borderRadius: 'var(--radius-sm)',
+              background: 'rgba(56, 189, 248, 0.12)',
+              border: '1px solid rgba(56, 189, 248, 0.35)',
+              color: '#BAE6FD',
+              fontSize: 'var(--text-sm)',
+              fontWeight: 600,
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'space-between',
-              backdropFilter: 'blur(8px)',
-              boxShadow: '0 4px 14px rgba(56, 189, 248, 0.15)',
+              gap: 10,
             }}
           >
             <span style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-              <AlertCircle size={15} color="#38bdf8" />
+              <AlertCircle size={15} color="#38BDF8" />
               <span>{batchInfo}</span>
             </span>
             <button
               type="button"
               onClick={() => setBatchInfo(null)}
-              style={{ background: 'none', border: 'none', color: '#bae6fd', cursor: 'pointer', padding: 2 }}
+              style={{ background: 'none', border: 'none', color: '#BAE6FD', cursor: 'pointer', padding: 2 }}
             >
               <X size={14} />
             </button>
@@ -3282,28 +2999,28 @@ export default function GeminiRouteModal({
           <div
             data-testid="batch-success-banner"
             style={{
-              margin: '12px 22px 0 22px',
+              marginBottom: 12,
               padding: '9px 14px',
-              borderRadius: 8,
-              background: 'rgba(16, 185, 129, 0.15)',
-              border: '1px solid rgba(16, 185, 129, 0.4)',
-              color: '#6ee7b7',
-              fontSize: '0.76rem',
+              borderRadius: 'var(--radius-sm)',
+              background: 'rgba(16, 185, 129, 0.14)',
+              border: '1px solid rgba(16, 185, 129, 0.35)',
+              color: '#6EE7B7',
+              fontSize: 'var(--text-sm)',
+              fontWeight: 600,
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'space-between',
-              backdropFilter: 'blur(8px)',
-              boxShadow: '0 4px 14px rgba(16, 185, 129, 0.15)',
+              gap: 10,
             }}
           >
             <span style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
               <CheckCircle2 size={15} />
               <span>{batchSuccess}</span>
             </span>
-            <button 
-              type="button" 
-              onClick={() => setBatchSuccess(null)} 
-              style={{ background: 'none', border: 'none', color: '#6ee7b7', cursor: 'pointer', padding: 2 }}
+            <button
+              type="button"
+              onClick={() => setBatchSuccess(null)}
+              style={{ background: 'none', border: 'none', color: '#6EE7B7', cursor: 'pointer', padding: 2 }}
             >
               <X size={14} />
             </button>
@@ -3313,1354 +3030,171 @@ export default function GeminiRouteModal({
           <div
             data-testid="batch-error-banner"
             style={{
-              margin: '12px 22px 0 22px',
+              marginBottom: 12,
               padding: '9px 14px',
-              borderRadius: 8,
-              background: 'rgba(239, 68, 68, 0.15)',
-              border: '1px solid rgba(239, 68, 68, 0.4)',
-              color: '#fca5a5',
-              fontSize: '0.76rem',
+              borderRadius: 'var(--radius-sm)',
+              background: 'rgba(239, 68, 68, 0.14)',
+              border: '1px solid rgba(239, 68, 68, 0.35)',
+              color: '#FCA5A5',
+              fontSize: 'var(--text-sm)',
+              fontWeight: 600,
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'space-between',
-              backdropFilter: 'blur(8px)',
-              boxShadow: '0 4px 14px rgba(239, 68, 68, 0.15)',
+              gap: 10,
             }}
           >
             <span style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
               <AlertCircle size={15} />
               <span>{batchError}</span>
             </span>
-            <button 
-              type="button" 
-              onClick={() => setBatchError(null)} 
-              style={{ background: 'none', border: 'none', color: '#fca5a5', cursor: 'pointer', padding: 2 }}
+            <button
+              type="button"
+              onClick={() => setBatchError(null)}
+              style={{ background: 'none', border: 'none', color: '#FCA5A5', cursor: 'pointer', padding: 2 }}
             >
               <X size={14} />
             </button>
           </div>
         )}
 
-        {/* ── 4. SPACIOUS EPISODE GRID (Clean UI) ── */}
-        <div style={{
-          padding: '16px 22px 24px 22px',
-        }}>
-
+        {/* ── 4. SPACIOUS EPISODE GRID (Darkroom Console) ── */}
+        <div>
           {episodes.length === 0 ? (
             <div style={{
               display: 'flex',
               flexDirection: 'column',
               alignItems: 'center',
               justifyContent: 'center',
-              minHeight: 190,
+              minHeight: 220,
               padding: '28px 16px',
-              color: '#94a3b8',
+              color: 'var(--text-secondary)',
               gap: 12,
+              background: 'var(--bg-primary-panel)',
+              border: '1px solid var(--border-subtle)',
+              borderRadius: 'var(--radius-md)',
             }}>
-              <AlertCircle size={36} color="#38bdf8" />
-              <div style={{ fontSize: '0.95rem', fontWeight: 800, color: '#f8fafc' }}>មិនទាន់មានភាគវីដេអូទេ</div>
-              <div style={{ fontSize: '0.78rem' }}>សូម Upload វីដេអូរឿងភាគក្នុង Tab "1. Video" ជាមុនសិន។</div>
+              <AlertCircle size={36} color="var(--primary-accent)" />
+              <div style={{ fontSize: 'var(--text-lg)', fontWeight: 700, color: 'var(--text-primary)' }}>មិនទាន់មានភាគវីដេអូទេ</div>
+              <div style={{ fontSize: 'var(--text-sm)' }}>សូមបង្ហោះវីដេអូរឿងភាគក្នុង Tab "ភាគ" ជាមុនសិន។</div>
+            </div>
+          ) : visibleEpisodeEntries.length === 0 ? (
+            <div style={{
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              minHeight: 220,
+              padding: '28px 16px',
+              color: 'var(--text-secondary)',
+              gap: 10,
+              background: 'var(--bg-primary-panel)',
+              border: '1px solid rgba(16, 185, 129, 0.35)',
+              borderRadius: 'var(--radius-md)',
+            }}>
+              <CheckCircle2 size={34} color="var(--color-success)" />
+              <div style={{ fontSize: 'var(--text-md)', fontWeight: 700, color: 'var(--text-primary)', textAlign: 'center' }}>
+                {cardStageView !== 'all'
+                  ? (stageStatusFilter === 'todo'
+                    ? `គ្រប់ភាគទាំងអស់ (${episodes.length}/${episodes.length}) បានធ្វើ ${STAGE_FOCUS_META[cardStageView]?.label || ''} រួចរាល់ 100% ហើយ!`
+                    : `មិនទាន់មានភាគណាធ្វើ ${STAGE_FOCUS_META[cardStageView]?.label || ''} រួចនៅឡើយទេ`)
+                  : `គ្រប់ភាគទាំងអស់ (${episodes.length}/${episodes.length}) បានបញ្ចប់ជំហាន 1, 2, និង 4 រួចរាល់ 100% ហើយ!`}
+              </div>
+              <button
+                type="button"
+                onClick={cardStageView !== 'all' ? () => setStageStatusFilter('all') : handleSelectAndShowAllEpisodes}
+                style={{
+                  marginTop: 4,
+                  padding: '6px 14px',
+                  borderRadius: 'var(--radius-sm)',
+                  background: 'rgba(56, 189, 248, 0.14)',
+                  border: '1px solid rgba(56, 189, 248, 0.4)',
+                  color: '#38BDF8',
+                  fontSize: 'var(--text-sm)',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                }}
+              >
+                បង្ហាញភាគទាំងអស់ ({episodes.length} ភាគ)
+              </button>
             </div>
           ) : (
             <div style={{
               display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 330px), 1fr))',
-              gap: 14,
+              gridTemplateColumns: cardStageView !== 'all'
+                ? 'repeat(auto-fill, minmax(min(100%, 260px), 1fr))'
+                : 'repeat(auto-fill, minmax(min(100%, 330px), 1fr))',
+              alignItems: 'start',
+              gap: cardStageView !== 'all' ? 9 : 12,
             }}>
-              {episodes.map((ep, idx) => {
-                const activeJob = jobsByEpisodeId.get(ep.id);
-                const hasScript = checkEpisodeHasScript(ep);
-                const hasVideo = Boolean(ep.video || ep.videoFile || ep.sourceVideoPath);
-                const isSelected = selectedEpIds.has(ep.id);
-                const isRunnerTranslateActive = (runnerStates?.translate?.status === 'running' || runnerStates?.repair?.status === 'running' || runnerStates?.all3?.status === 'running') &&
-                  (runnerStates?.translate?.currentEpId === ep.id || runnerStates?.repair?.currentEpId === ep.id || (runnerStates?.all3?.status === 'running' && runnerStates?.all3?.currentEpId === ep.id));
-                const isRunnerTranslateQueued = (runnerStates?.translate?.status === 'running' || runnerStates?.repair?.status === 'running' || runnerStates?.all3?.status === 'running') &&
-                  ((runnerStates?.translate?.queuedEpIds?.includes(ep.id) || runnerStates?.repair?.queuedEpIds?.includes(ep.id) || runnerStates?.all3?.queuedEpIds?.includes(ep.id)) && !isRunnerTranslateActive);
-
-                const isRunning = Boolean((activeJob && activeJob.status === 'running') || isRunnerTranslateActive);
-                const isQueued = Boolean((activeJob && activeJob.status === 'queued') || isRunnerTranslateQueued);
-                const isFailed = Boolean(activeJob && activeJob.status === 'failed' && !hasScript);
-                const isCancelled = Boolean(activeJob && activeJob.status === 'cancelled');
-                const effectiveActiveJob = activeJob || runnerLiveStats?.translate?.[ep.id] || (isRunnerTranslateActive ? {
-                  jobId: `runner-${ep.id}`,
-                  episodeId: ep.id,
-                  status: 'running',
-                  progress: runnerStates?.translate?.progress || runnerStates?.repair?.progress || 10,
-                  stageMessage: runnerStates?.translate?.message || runnerStates?.repair?.message || 'កំពុងវិភាគ & បកប្រែ Script...',
-                  message: runnerStates?.translate?.message || runnerStates?.repair?.message || 'កំពុងវិភាគ & បកប្រែ Script...',
-                  logs: runnerLiveStats?.translate?.[ep.id]?.logs || [{
-                    time: new Date().toLocaleTimeString(),
-                    progress: runnerStates?.translate?.progress || runnerStates?.repair?.progress || 10,
-                    message: runnerStates?.translate?.message || '📝 កំពុងវិភាគ & បកប្រែ Script...',
-                  }],
-                } : null);
-                const segmentsMissingAfterJob = Boolean(!isRunning && !isQueued && !isFailed && isJobCompletedSegmentsMissing(ep, activeJob));
-                const assignedKeyNum = (idx % poolTotalKeys) + 1;
-                const keyTheme = KEY_THEMES[((assignedKeyNum - 1) % keyThemeCount) + 1] || KEY_THEMES[1];
-                const segmentCount = getEpisodeSegmentCount(ep);
-                const epBrokenScan = getEpisodeBrokenSummary(ep);
-                const isFullyDone = isEpisodeFullyDone(ep);
-                const isAudioReady = checkEpisodeHasAudioReady(ep, completedTtsEpIds, ttsLiveStats);
-                const isDemucsReady = checkEpisodeHasDemucsReady(ep, completedDemucsEpIds, demucsLiveStats);
-                const isAudioOutdated = Boolean(ep.audioOutdated && !isAudioReady);
-                const missingAudioCount = epBrokenScan.voiceBrokenCount > 0
-                  ? epBrokenScan.voiceBrokenCount
-                  : (isAudioReady ? 0 : (segmentCount || 0));
-
-                return (
-                  <div
-                    key={ep.id}
-                    data-testid={`ep-card-${ep.id}`}
-                    onClick={() => hasVideo && !isBatchExecutionActive && !isRunning && !isQueued && toggleSelect(ep.id)}
-                    className={hasVideo ? 'motion-lift' : ''}
-                    style={{
-                      borderRadius: 16,
-                      border: isRunning
-                        ? '1px solid #38BDF8'
-                        : isFailed
-                        ? '1px solid rgba(248, 113, 113, 0.65)'
-                        : segmentsMissingAfterJob
-                        ? '1px solid rgba(245, 158, 11, 0.6)'
-                        : isSelected
-                        ? '1px solid #FF8577'
-                        : isFullyDone
-                        ? '1px solid rgba(52, 211, 153, 0.45)'
-                        : hasScript
-                        ? '1px solid rgba(52, 211, 153, 0.35)'
-                        : '1px solid rgba(255, 255, 255, 0.07)',
-                      background: isRunning
-                        ? 'rgba(56, 189, 248, 0.12)'
-                        : isFailed
-                        ? 'rgba(248, 113, 113, 0.08)'
-                        : segmentsMissingAfterJob
-                        ? 'rgba(245, 158, 11, 0.08)'
-                        : isFullyDone
-                        ? 'linear-gradient(135deg, rgba(16, 185, 129, 0.10) 0%, rgba(20, 32, 54, 0.75) 100%)'
-                        : isSelected
-                        ? 'rgba(39, 61, 107, 0.75)'
-                        : 'rgba(25, 39, 68, 0.55)',
-                      padding: '14px 16px',
-                      display: 'flex',
-                      flexDirection: 'column',
-                      justifyContent: 'space-between',
-                      gap: 12,
-                      cursor: isBatchExecutionActive ? 'default' : (hasVideo ? 'pointer' : 'not-allowed'),
-                      opacity: hasVideo ? 1 : 0.6,
-                      transition: 'all 0.2s cubic-bezier(0.16, 1, 0.3, 1)',
-                      boxShadow: isRunning 
-                        ? '0 0 25px rgba(56, 189, 248, 0.25)' 
-                        : isFailed
-                        ? '0 0 20px rgba(248, 113, 113, 0.2)'
-                        : isSelected
-                        ? '0 10px 28px rgba(0, 0, 0, 0.45), 0 0 16px rgba(255, 133, 119, 0.22)'
-                        : isFullyDone
-                        ? '0 4px 14px rgba(16, 185, 129, 0.12)'
-                        : '0 4px 14px rgba(0, 0, 0, 0.25)',
-                    }}
-                  >
-                    {/* Card Header */}
-                    <div>
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 8 }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flex: 1 }}>
-                          <input
-                            type="checkbox"
-                            checked={isSelected}
-                            disabled={!hasVideo || isRunning || isQueued || isBatchExecutionActive}
-                            onChange={() => !isBatchExecutionActive && toggleSelect(ep.id)}
-                            onClick={(e) => e.stopPropagation()}
-                            style={{
-                              width: 17,
-                              height: 17,
-                              cursor: (!hasVideo || isRunning || isQueued || isBatchExecutionActive) ? 'not-allowed' : 'pointer',
-                              accentColor: isFullyDone ? '#10B981' : '#FF8577',
-                              flexShrink: 0,
-                            }}
-                          />
-                          <span style={{
-                            fontSize: '0.74rem',
-                            fontWeight: 900,
-                            padding: '3px 9px',
-                            borderRadius: 9999,
-                            background: isRunning ? '#38BDF8' : isFullyDone ? 'rgba(52, 211, 153, 0.2)' : isSelected ? 'rgba(255, 133, 119, 0.2)' : 'rgba(255, 255, 255, 0.08)',
-                            color: isRunning ? '#0B132B' : isFullyDone ? '#34D399' : isSelected ? '#FF8577' : '#E2E8F0',
-                            border: isFullyDone ? '1px solid rgba(52, 211, 153, 0.45)' : isSelected ? '1px solid rgba(255, 133, 119, 0.4)' : '1px solid rgba(255, 255, 255, 0.08)',
-                          }}>
-                            EP{ep.episodeNumber || idx + 1}
-                          </span>
-                          {(ep.scriptData?.generationMode === 'fast_ocr' || ep.scriptData?.source?.startsWith('imported_')) && (
-                            <span style={{
-                              fontSize: '0.62rem',
-                              fontWeight: 800,
-                              padding: '2px 7px',
-                              borderRadius: 9999,
-                              background: 'rgba(251, 191, 36, 0.2)',
-                              color: '#FBBF24',
-                              border: '1px solid rgba(251, 191, 36, 0.45)',
-                              letterSpacing: '0.03em',
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              gap: 3,
-                            }}>
-                              ⚡ Fast OCR
-                            </span>
-                          )}
-                          {isFullyDone && (
-                            <span style={{
-                              fontSize: '0.62rem',
-                              fontWeight: 800,
-                              padding: '2px 7px',
-                              borderRadius: 9999,
-                              background: 'rgba(52, 211, 153, 0.2)',
-                              color: '#34D399',
-                              border: '1px solid rgba(52, 211, 153, 0.4)',
-                              letterSpacing: '0.03em',
-                            }}>
-                              ✓ ALL DONE
-                            </span>
-                          )}
-                          {hasScript && epBrokenScan.textBrokenCount > 0 && (
-                            <span
-                              data-testid={`ep-broken-badge-${ep.id}`}
-                              style={{
-                                fontSize: '0.62rem',
-                                fontWeight: 800,
-                                padding: '2px 7px',
-                                borderRadius: 9999,
-                                background: 'rgba(239, 68, 68, 0.2)',
-                                color: '#F87171',
-                                border: '1px solid rgba(239, 68, 68, 0.45)',
-                                letterSpacing: '0.02em',
-                              }}
-                              title={`អត្ថបទខូច: ${epBrokenScan.textBrokenCount} ឃ្លា`}
-                            >
-                              ⚠️ ខូច {epBrokenScan.textBrokenCount} ឃ្លា
-                            </span>
-                          )}
-                          {(ep.renderedVideo?.videoUrl || ep.renderedVideo?.outputVideoUrl) && (
-                            <span style={{
-                              fontSize: '0.6rem',
-                              fontWeight: 800,
-                              padding: '2px 7px',
-                              borderRadius: 9999,
-                              background: 'rgba(56, 189, 248, 0.18)',
-                              color: '#38BDF8',
-                              border: '1px solid rgba(56, 189, 248, 0.4)',
-                            }}>
-                              MP4 EXPORTED
-                            </span>
-                          )}
-                          <h2 style={{
-                            margin: 0,
-                            fontSize: 'var(--text-body)',
-                            fontWeight: 700,
-                            color: 'var(--text-primary)',
-                            overflow: 'hidden',
-                            textOverflow: 'ellipsis',
-                            whiteSpace: 'nowrap',
-                          }} title={ep.title}>
-                            {ep.title}
-                          </h2>
-                        </div>
-
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-                          {ep.duration > 0 && (
-                            <span style={{ fontSize: '0.68rem', color: '#94A3B8', display: 'flex', alignItems: 'center', gap: 3 }}>
-                              <Clock size={11} />
-                              {formatTimecode(ep.duration)}
-                            </span>
-                          )}
-                          <span style={{
-                            fontSize: '0.66rem',
-                            fontWeight: 800,
-                            padding: '2px 9px',
-                            borderRadius: 9999,
-                            background: keyTheme.bg,
-                            color: keyTheme.color,
-                            border: `1px solid ${keyTheme.border}`,
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: 4,
-                          }}>
-                            <span style={{ width: 5, height: 5, borderRadius: '50%', background: keyTheme.dot }} />
-                            Key #{assignedKeyNum}
-                          </span>
-                        </div>
-                      </div>
-
-                      {/* ── 3 AI STAGES CONTAINER (Rendered based on cardStageView filter: 'all' | 'translate' | 'tts' | 'demucs') ── */}
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: 7, marginTop: 4 }}>
-                        {/* ── STAGE 1: 📝 1. Translate Script ── */}
-                        {(cardStageView === 'all' || cardStageView === 'translate') && (
-                          (isRunning || isFailed || isCancelled) ? (
-                            <EpisodeTranslateProgressCard
-                              activeJob={effectiveActiveJob}
-                              assignedKeyNum={assignedKeyNum}
-                              isQueued={false}
-                              isFailed={isFailed}
-                              isCancelled={isCancelled}
-                              onRetry={() => handleRetryEpisode(ep)}
-                              onRepair={() => handleRepairBrokenSegments([ep])}
-                              onKill={async () => {
-                                if (isRunnerTranslateActive) {
-                                  runnerStopStep(runnerStates?.repair?.status === 'running' ? 'repair' : 'translate');
-                                }
-                                return await handleKillTranslate(activeJob || ep);
-                              }}
-                              onRequestConfirm={openStudioDialog}
-                            />
-                          ) : isQueued ? (
-                            <div style={{
-                              padding: '7px 11px',
-                              borderRadius: 8,
-                              background: 'rgba(15, 23, 42, 0.75)',
-                              border: '1px dashed rgba(56, 189, 248, 0.35)',
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'space-between',
-                              gap: 8,
-                            }}>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                                <Clock size={13} color="#94A3B8" />
-                                <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#94A3B8' }}>
-                                  ⏳ 📝 1. Translate Script — រង់ចាំក្នុង Queue
-                                </span>
-                              </div>
-                              <span style={{ fontSize: '0.64rem', color: '#64748B' }}>
-                                ដំណើរការម្ដង ១ ភាគ
-                              </span>
-                            </div>
-                          ) : segmentsMissingAfterJob ? (
-                            <div style={{
-                              padding: '8px 12px',
-                              borderRadius: 10,
-                              background: 'rgba(245, 158, 11, 0.12)',
-                              border: '1px solid rgba(245, 158, 11, 0.45)',
-                              display: 'flex',
-                              alignItems: 'center',
-                              justifyContent: 'space-between',
-                              gap: 10,
-                              color: '#FBBF24',
-                            }}>
-                              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                                <AlertTriangle size={14} color="#FBBF24" />
-                                <span style={{ fontSize: '0.72rem', fontWeight: 800, color: '#FCD34D' }}>
-                                  ⚠️ Segments not saved (ចុច Refresh)
-                                </span>
-                              </div>
-                              {typeof onRefreshSeries === 'function' && (
-                                <button
-                                  type="button"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    onRefreshSeries();
-                                  }}
-                                  style={{
-                                    padding: '3px 8px',
-                                    borderRadius: 6,
-                                    background: 'rgba(245, 158, 11, 0.2)',
-                                    border: '1px solid rgba(245, 158, 11, 0.5)',
-                                    color: '#FCD34D',
-                                    fontSize: '0.66rem',
-                                    fontWeight: 700,
-                                    cursor: 'pointer',
-                                    display: 'inline-flex',
-                                    alignItems: 'center',
-                                    gap: 3,
-                                  }}
-                                >
-                                  <RefreshCw size={10} />
-                                  <span>Refresh</span>
-                                </button>
-                              )}
-                            </div>
-                          ) : (
-                            <div
-                              style={{
-                                padding: '8px 12px',
-                                borderRadius: 10,
-                                background: hasScript ? 'rgba(56, 189, 248, 0.08)' : 'rgba(255, 255, 255, 0.03)',
-                                border: `1px solid ${hasScript ? 'rgba(56, 189, 248, 0.28)' : 'rgba(255, 255, 255, 0.08)'}`,
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'space-between',
-                                gap: 8,
-                              }}
-                            >
-                              <div style={{ minWidth: 0, flex: 1 }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                                  <span style={{ fontSize: '0.74rem', fontWeight: 800, color: hasScript ? '#38BDF8' : '#CBD5E1' }}>
-                                    📝 1. Translate Script
-                                  </span>
-                                  {hasScript && (
-                                    <span style={{
-                                      fontSize: '0.62rem',
-                                      fontWeight: 800,
-                                      padding: '1px 6px',
-                                      borderRadius: 9999,
-                                      background: 'rgba(56, 189, 248, 0.2)',
-                                      color: '#38BDF8',
-                                      border: '1px solid rgba(56, 189, 248, 0.4)',
-                                    }}>
-                                      {segmentCount > 0 ? `${segmentCount} ឃ្លា` : 'Script រួចរាល់'}
-                                    </span>
-                                  )}
-                                  {ep.scriptData?.generationMode === 'fast_ocr' && (
-                                    <span style={{
-                                      fontSize: '0.60rem',
-                                      fontWeight: 800,
-                                      padding: '1px 5px',
-                                      borderRadius: 4,
-                                      background: 'rgba(251, 191, 36, 0.15)',
-                                      color: '#FBBF24',
-                                      border: '1px solid rgba(251, 191, 36, 0.35)',
-                                    }}>
-                                      ⚡ Fast OCR
-                                    </span>
-                                  )}
-                                </div>
-                                <div style={{ fontSize: '0.66rem', color: hasScript ? '#94A3B8' : '#64748B', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                  {hasScript
-                                    ? (epBrokenScan.textBrokenCount > 0 ? `⚠️ ខូច ${epBrokenScan.textBrokenCount} ឃ្លា` : '✅ បកប្រែ Script ខ្មែររួចរាល់ 100%')
-                                    : (hasVideo ? 'វីដេអូរួចរាល់ — មិនទាន់មាន Script' : 'មិនទាន់មានវីដេអូ')}
-                                </div>
-                              </div>
-
-                              <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0 }}>
-                                {!hasScript ? (
-                                  <button
-                                    type="button"
-                                    disabled={!hasVideo || isStartingBatch}
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      executeBatchTranslateEnqueue([ep], { force: false });
-                                    }}
-                                    style={{
-                                      padding: '4px 9px',
-                                      borderRadius: 6,
-                                      background: '#0284C7',
-                                      border: '1px solid #38BDF8',
-                                      color: '#FFFFFF',
-                                      fontSize: '0.68rem',
-                                      fontWeight: 700,
-                                      cursor: (!hasVideo || isStartingBatch) ? 'not-allowed' : 'pointer',
-                                    }}
-                                  >
-                                    📝 បកប្រែ Script
-                                  </button>
-                                ) : (
-                                  <>
-                                    {epBrokenScan.textBrokenCount > 0 && (
-                                      <button
-                                        type="button"
-                                        disabled={isRepairBusy || isStartingBatch}
-                                        onClick={(e) => {
-                                          e.stopPropagation();
-                                          handleRepairBrokenSegments([ep]);
-                                        }}
-                                        title="ជួសជុលតែឃ្លាដែលខូច"
-                                        style={{
-                                          padding: '3px 8px',
-                                          borderRadius: 6,
-                                          background: 'rgba(239, 68, 68, 0.2)',
-                                          border: '1px solid rgba(239, 68, 68, 0.45)',
-                                          color: '#F87171',
-                                          fontSize: '0.66rem',
-                                          fontWeight: 700,
-                                          cursor: isRepairBusy ? 'not-allowed' : 'pointer',
-                                        }}
-                                      >
-                                        🔧 ជួសជុល ({epBrokenScan.textBrokenCount})
-                                      </button>
-                                    )}
-                                    <button
-                                      type="button"
-                                      disabled={isStartingBatch}
-                                      onClick={async (e) => {
-                                        e.stopPropagation();
-                                        const confirmed = await openStudioDialog({
-                                          variant: 'warning',
-                                          badge: 'RE-TRANSLATE SCRIPT',
-                                          title: `បញ្ជាក់ការបកប្រែ Script ឡើងវិញ (ភាគ ${ep.episodeNumber || ep.id})`,
-                                          message: `តើអ្នកពិតជាចង់បកប្រែ Script ភាគ ${ep.episodeNumber || ep.id} ឡើងវិញមែនទេ? Script ចាស់ និងសំឡេងដែលបានបង្កើតនឹងត្រូវលុបចេញ ដើម្បីវិភាគវីដេអូ និងបកប្រែថ្មីពីដើម។`,
-                                          confirmText: 'យល់ព្រមបកប្រែឡើងវិញ',
-                                          cancelText: 'បោះបង់',
-                                        });
-                                        if (confirmed) {
-                                          executeBatchTranslateEnqueue([ep], { force: true });
-                                        }
-                                      }}
-                                      title="បកប្រែឡើងវិញ (FORCE)"
-                                      style={{
-                                        padding: '3px 7px',
-                                        borderRadius: 6,
-                                        background: 'transparent',
-                                        border: '1px solid rgba(255, 255, 255, 0.12)',
-                                        color: '#94A3B8',
-                                        fontSize: '0.66rem',
-                                        fontWeight: 600,
-                                        cursor: 'pointer',
-                                        display: 'inline-flex',
-                                        alignItems: 'center',
-                                        gap: 3,
-                                      }}
-                                    >
-                                      <RotateCcw size={10} />
-                                      <span>បកប្រែឡើងវិញ</span>
-                                    </button>
-                                  </>
-                                )}
-                              </div>
-                            </div>
-                          )
-                        )}
-
-                        {/* ── STAGE 2: 🎙️ 2. AI Translate Voice ── */}
-                        {(cardStageView === 'all' || cardStageView === 'tts') && (() => {
-                          const isRunnerVoice = runnerStates?.voice?.status === 'running';
-                          const isRunnerAll3 = runnerStates?.all3?.status === 'running';
-                          const isCurrentVoiceRunnerEp = (isRunnerVoice && runnerStates?.voice?.currentEpId === ep.id) ||
-                            (isRunnerAll3 && runnerStates?.all3?.currentEpId === ep.id);
-                          const isQueuedVoiceRunnerEp = (isRunnerVoice && runnerStates?.voice?.queuedEpIds?.includes(ep.id) && !isCurrentVoiceRunnerEp) ||
-                            (isRunnerAll3 && runnerStates?.all3?.queuedEpIds?.includes(ep.id) && !isCurrentVoiceRunnerEp);
-
-                          const isCurrentRunning = (isGeneratingBatchTTS && activeTtsEpisodeId === ep.id) || isCurrentVoiceRunnerEp;
-                          const isQueued = (isGeneratingBatchTTS && activeTtsEpisodeIds.has(ep.id) && activeTtsEpisodeId !== ep.id) || isQueuedVoiceRunnerEp;
-
-                          const effectiveLiveStats = ttsLiveStats[ep.id] || runnerLiveStats?.tts?.[ep.id] || (isCurrentRunning ? {
-                            percent: runnerStates?.voice?.progress || 15,
-                            message: runnerStates?.voice?.message || 'កំពុងបង្កើតសំឡេងខ្មែរ AI...',
-                            logs: [{
-                              time: new Date().toLocaleTimeString(),
-                              progress: runnerStates?.voice?.progress || 15,
-                              message: runnerStates?.voice?.message || '🎙️ កំពុងបង្កើតសំឡេងខ្មែរ AI...',
-                            }],
-                          } : null);
-
-                          const handleStopOrKillTTS = async (targetEp) => {
-                            if (isCurrentVoiceRunnerEp) {
-                              await runnerStopStep(isRunnerAll3 ? 'all3' : 'voice');
-                            }
-                            await handleKillTTS(targetEp);
-                          };
-
-                          if (isCurrentRunning) {
-                            return (
-                              <EpisodeTtsProgressCard
-                                liveStats={effectiveLiveStats}
-                                ep={ep}
-                                onKill={handleStopOrKillTTS}
-                                onRequestConfirm={openStudioDialog}
-                              />
-                            );
-                          }
-
-                          if (isQueued) {
-                            return (
-                              <div style={{
-                                padding: '7px 11px',
-                                borderRadius: 8,
-                                background: 'rgba(15, 23, 42, 0.75)',
-                                border: '1px dashed rgba(244, 114, 182, 0.35)',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'space-between',
-                                gap: 8,
-                              }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                                  <Clock size={13} color="#94A3B8" />
-                                  <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#94A3B8' }}>
-                                    ⏳ 🎙️ 2. សំឡេងខ្មែរ AI — រង់ចាំក្នុង Queue
-                                  </span>
-                                </div>
-                                <span style={{ fontSize: '0.64rem', color: '#64748B' }}>
-                                  ដំណើរការម្ដង ១ ភាគ
-                                </span>
-                              </div>
-                            );
-                          }
-
-                          return (
-                            <div
-                              style={{
-                                padding: '8px 12px',
-                                borderRadius: 10,
-                                background: isAudioReady ? 'rgba(236, 72, 153, 0.08)' : 'rgba(255, 255, 255, 0.03)',
-                                border: `1px solid ${isAudioReady ? 'rgba(236, 72, 153, 0.28)' : 'rgba(255, 255, 255, 0.08)'}`,
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'space-between',
-                                gap: 8,
-                              }}
-                            >
-                              <div style={{ minWidth: 0, flex: 1 }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                                  <span style={{ fontSize: '0.74rem', fontWeight: 800, color: isAudioReady ? '#F472B6' : '#CBD5E1' }}>
-                                    🎙️ 2. AI Translate Voice
-                                  </span>
-                                  {isAudioReady && (
-                                    <span style={{
-                                      fontSize: '0.62rem',
-                                      fontWeight: 800,
-                                      padding: '1px 6px',
-                                      borderRadius: 9999,
-                                      background: 'rgba(236, 72, 153, 0.2)',
-                                      color: '#F472B6',
-                                      border: '1px solid rgba(236, 72, 153, 0.4)',
-                                    }}>
-                                      ✓ AUDIO READY
-                                    </span>
-                                  )}
-                                  {isAudioOutdated && (
-                                    <span style={{
-                                      fontSize: '0.60rem',
-                                      fontWeight: 800,
-                                      padding: '1px 5px',
-                                      borderRadius: 4,
-                                      background: 'rgba(245, 158, 11, 0.2)',
-                                      color: '#FBBF24',
-                                      border: '1px solid rgba(245, 158, 11, 0.4)',
-                                    }}>
-                                      ⚠️ សំឡេងចាស់
-                                    </span>
-                                  )}
-                                </div>
-                                <div style={{ fontSize: '0.66rem', color: isAudioReady ? '#94A3B8' : '#64748B', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                  {isAudioReady
-                                    ? (isAudioOutdated ? '⚠️ សំឡេងចាស់ហួសសម័យ — សូមបង្កើតឡើងវិញ' : `✅ សំឡេងខ្មែរ AI (${segmentCount || '100%'} ឃ្លា) រួចរាល់`)
-                                    : (hasScript ? `សំឡេង: 0/${segmentCount || 0} ឃ្លា (នៅខ្វះ ${missingAudioCount})` : 'រង់ចាំ Translate Script ជាមុនសិន')}
-                                </div>
-                              </div>
-
-                              <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0 }}>
-                                {!isAudioReady ? (
-                                  <button
-                                    type="button"
-                                    disabled={!hasScript || isGeneratingBatchTTS}
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      handleBatchGenerateTTS([ep]);
-                                    }}
-                                    style={{
-                                      padding: '4px 9px',
-                                      borderRadius: 6,
-                                      background: hasScript ? '#BE185D' : 'rgba(255, 255, 255, 0.05)',
-                                      border: hasScript ? '1px solid #F472B6' : '1px solid rgba(255, 255, 255, 0.1)',
-                                      color: hasScript ? '#FFFFFF' : '#64748B',
-                                      fontSize: '0.68rem',
-                                      fontWeight: 700,
-                                      cursor: (!hasScript || isGeneratingBatchTTS) ? 'not-allowed' : 'pointer',
-                                    }}
-                                  >
-                                    🎙️ បង្កើតសំឡេងខ្មែរ AI
-                                  </button>
-                                ) : (
-                                  <button
-                                    type="button"
-                                    disabled={isGeneratingBatchTTS}
-                                    onClick={async (e) => {
-                                      e.stopPropagation();
-                                      const confirmed = await openStudioDialog({
-                                        variant: 'warning',
-                                        badge: 'RE-GENERATE VOICE',
-                                        title: `បញ្ជាក់ការបង្កើតសំឡេងឡើងវិញ (ភាគ ${ep.episodeNumber || ep.id})`,
-                                        message: `តើអ្នកពិតជាចង់បង្កើតសំឡេងភាគ ${ep.episodeNumber || ep.id} ឡើងវិញមែនទេ? សំឡេងចាស់នឹងត្រូវលុបចេញ ដើម្បីបង្កើតសំឡេងថ្មី ដោយរក្សាទុក Script ដដែល។`,
-                                        confirmText: 'យល់ព្រមបង្កើតសំឡេងឡើងវិញ',
-                                        cancelText: 'បោះបង់',
-                                      });
-                                      if (confirmed) {
-                                        handleBatchGenerateTTS([ep], { force: true });
-                                      }
-                                    }}
-                                    title="បង្កើតសំឡេងឡើងវិញ"
-                                    style={{
-                                      padding: '3px 8px',
-                                      borderRadius: 6,
-                                      background: 'transparent',
-                                      border: '1px solid rgba(236, 72, 153, 0.35)',
-                                      color: '#F472B6',
-                                      fontSize: '0.66rem',
-                                      fontWeight: 600,
-                                      cursor: 'pointer',
-                                      display: 'inline-flex',
-                                      alignItems: 'center',
-                                      gap: 3,
-                                    }}
-                                  >
-                                    <RotateCcw size={10} />
-                                    <span>បង្កើតឡើងវិញ</span>
-                                  </button>
-                                )}
-                              </div>
-                            </div>
-                          );
-                        })()}
-
-                        {/* ── STAGE 3: ⚡ 3. Auto-Fit Speed (WSOLA + Atempo Fit Subtitles) ── */}
-                        {(cardStageView === 'all' || cardStageView === 'autofit') && (() => {
-                          const isRunnerAutoFit = runnerStates?.autofit?.status === 'running';
-                          const isCurrentAutoFitRunnerEp = isRunnerAutoFit && runnerStates?.autofit?.currentEpId === ep.id;
-                          const isQueuedAutoFitRunnerEp = isRunnerAutoFit && runnerStates?.autofit?.queuedEpIds?.includes(ep.id) && !isCurrentAutoFitRunnerEp;
-
-                          const isCurrentRunning = isCurrentAutoFitRunnerEp;
-                          const isQueued = isQueuedAutoFitRunnerEp;
-
-                          const effectiveLiveStats = runnerLiveStats?.autofit?.[ep.id] || (isCurrentRunning ? {
-                            percent: runnerStates?.autofit?.progress || 10,
-                            message: runnerStates?.autofit?.message || 'កំពុង Auto-Fit Speed...',
-                            logs: [{
-                              time: new Date().toLocaleTimeString(),
-                              progress: runnerStates?.autofit?.progress || 10,
-                              message: runnerStates?.autofit?.message || '⚡ កំពុង Auto-Fit Speed...',
-                            }],
-                          } : null);
-
-                          const handleStopAutoFit = async () => {
-                            if (isCurrentAutoFitRunnerEp) {
-                              await runnerStopStep('autofit');
-                            }
-                          };
-
-                          if (isCurrentRunning) {
-                            return (
-                              <EpisodeAutoFitProgressCard
-                                liveStats={effectiveLiveStats}
-                                ep={ep}
-                                isCurrentRunning={true}
-                                onKill={handleStopAutoFit}
-                                onRequestConfirm={openStudioDialog}
-                              />
-                            );
-                          }
-
-                          if (isQueued) {
-                            return (
-                              <div style={{
-                                padding: '7px 11px',
-                                borderRadius: 8,
-                                background: 'rgba(15, 23, 42, 0.75)',
-                                border: '1px dashed rgba(251, 191, 36, 0.35)',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'space-between',
-                                gap: 8,
-                              }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                                  <Clock size={13} color="#94A3B8" />
-                                  <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#94A3B8' }}>
-                                    ⏳ ⚡ 3. Auto-Fit Speed — រង់ចាំក្នុង Queue
-                                  </span>
-                                </div>
-                                <span style={{ fontSize: '0.64rem', color: '#64748B' }}>
-                                  ដំណើរការម្ដង ១ ភាគ
-                                </span>
-                              </div>
-                            );
-                          }
-
-                          const isAutoFitted = Boolean(ep.autoFitted || ep.scriptData?.autoFitted);
-                          const storedSegs = Array.isArray(ep.scriptData?.segments) ? ep.scriptData.segments : [];
-                          let measuredFitCount = 0;
-                          let fittedSegCount = 0;
-                          for (const seg of storedSegs) {
-                            const sStart = Number(seg?.startSec);
-                            const sEnd = Number(seg?.endSec);
-                            const slotDur = (Number.isFinite(sStart) && Number.isFinite(sEnd) && sEnd > sStart)
-                              ? (sEnd - sStart)
-                              : Number(seg?.slotDuration || seg?.availableSlotDuration || seg?.duration || 0);
-                            const audioDur = Number(
-                              seg?.audioDurationSec
-                              ?? seg?.finalAudioDuration
-                              ?? seg?.audioDuration
-                              ?? ((Number.isFinite(Number(seg?.audioStartSec)) && Number.isFinite(Number(seg?.audioEndSec)))
-                                ? (Number(seg.audioEndSec) - Number(seg.audioStartSec))
-                                : 0)
-                            );
-                            if (slotDur > 0 && audioDur > 0) {
-                              measuredFitCount++;
-                              if ((audioDur - slotDur) < 0.10 && !seg?.audioTrimmed) {
-                                fittedSegCount++;
-                              }
-                            }
-                          }
-                          const storedFitPctText = measuredFitCount > 0
-                            ? `${((fittedSegCount / measuredFitCount) * 100).toFixed(1)}%`
-                            : null;
-
-                          return (
-                            <div
-                              style={{
-                                padding: '8px 12px',
-                                borderRadius: 10,
-                                background: isAutoFitted ? 'rgba(251, 191, 36, 0.08)' : 'rgba(255, 255, 255, 0.03)',
-                                border: `1px solid ${isAutoFitted ? 'rgba(251, 191, 36, 0.28)' : 'rgba(255, 255, 255, 0.08)'}`,
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'space-between',
-                                gap: 8,
-                              }}
-                            >
-                              <div style={{ minWidth: 0, flex: 1 }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                                  <span style={{ fontSize: '0.74rem', fontWeight: 800, color: isAutoFitted ? '#FBBF24' : '#CBD5E1' }}>
-                                    ⚡ 3. Auto-Fit Speed
-                                  </span>
-                                  {isAutoFitted && (
-                                    <span style={{
-                                      fontSize: '0.62rem',
-                                      fontWeight: 800,
-                                      padding: '1px 6px',
-                                      borderRadius: 9999,
-                                      background: 'rgba(251, 191, 36, 0.2)',
-                                      color: '#FBBF24',
-                                      border: '1px solid rgba(251, 191, 36, 0.4)',
-                                    }}>
-                                      ✓ FITTED
-                                    </span>
-                                  )}
-                                </div>
-                                <div style={{ fontSize: '0.66rem', color: isAutoFitted ? '#94A3B8' : '#64748B', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                  {isAutoFitted
-                                    ? (storedFitPctText
-                                      ? `✅ សំឡេងខ្មែរ Fit ល្មមស្មើនឹង Subtitle ${storedFitPctText}`
-                                      : '✅ សំឡេងខ្មែរ Fit ល្មមស្មើនឹង Subtitle')
-                                    : (isAudioReady ? 'ពន្លឿនឃ្លាក្រហមឱ្យ Fit ស្មើនឹង Subtitle' : 'រង់ចាំបង្កើតសំឡេង AI ជាមុនសិន')}
-                                </div>
-                              </div>
-
-                              <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0 }}>
-                                <button
-                                  type="button"
-                                  disabled={!isAudioReady || isRunnerAutoFit}
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    if (runSingleAutoFitSpeed) {
-                                      runSingleAutoFitSpeed(ep);
-                                    }
-                                  }}
-                                  style={{
-                                    padding: '3px 8px',
-                                    borderRadius: 6,
-                                    background: isAutoFitted ? 'transparent' : 'rgba(251, 191, 36, 0.15)',
-                                    border: `1px solid ${isAutoFitted ? 'rgba(251, 191, 36, 0.35)' : 'rgba(251, 191, 36, 0.45)'}`,
-                                    color: '#FBBF24',
-                                    fontSize: '0.66rem',
-                                    fontWeight: 700,
-                                    cursor: (!isAudioReady || isRunnerAutoFit) ? 'not-allowed' : 'pointer',
-                                    display: 'inline-flex',
-                                    alignItems: 'center',
-                                    gap: 3,
-                                  }}
-                                  title={isAutoFitted ? 'ពន្លឿន Auto-Fit Speed ឡើងវិញ' : 'ពន្លឿន Auto-Fit Speed'}
-                                >
-                                  {isAutoFitted ? <RotateCcw size={10} /> : <Zap size={10} />}
-                                  <span>{isAutoFitted ? 'ធ្វើឡើងវិញ' : 'Auto-Fit'}</span>
-                                </button>
-                              </div>
-                            </div>
-                          );
-                        })()}
-
-                        {/* ── STAGE 4: 🔇 4. AI បិទសំឡេងចិន (រក្សាភ្លេង BGM ដើម) ── */}
-                        {(cardStageView === 'all' || cardStageView === 'demucs') && (() => {
-                          const isRunnerCleanBgm = runnerStates?.clean_bgm?.status === 'running';
-                          const isRunnerAll3 = runnerStates?.all3?.status === 'running';
-                          const isCurrentDemucsRunnerEp = (isRunnerCleanBgm && runnerStates?.clean_bgm?.currentEpId === ep.id) ||
-                            (isRunnerAll3 && runnerStates?.all3?.currentEpId === ep.id);
-
-                          const isCurrentRunning = (isSeparatingBatchDemucs && activeDemucsEpisodeId === ep.id) || isCurrentDemucsRunnerEp;
-
-                          const localWaitingIds = isSeparatingBatchDemucs
-                            ? Array.from(activeDemucsEpisodeIds).filter((id) => id !== activeDemucsEpisodeId)
-                            : [];
-                          const cleanBgmQueue = isRunnerCleanBgm && Array.isArray(runnerStates?.clean_bgm?.queuedEpIds)
-                            ? runnerStates.clean_bgm.queuedEpIds
-                            : [];
-                          const cleanBgmCurIdx = cleanBgmQueue.indexOf(runnerStates?.clean_bgm?.currentEpId);
-                          const runnerCleanBgmWaitingIds = isRunnerCleanBgm
-                            ? (cleanBgmCurIdx >= 0
-                              ? cleanBgmQueue.slice(cleanBgmCurIdx + 1)
-                              : cleanBgmQueue.filter((id) => id !== runnerStates?.clean_bgm?.currentEpId))
-                            : [];
-                          const all3Queue = isRunnerAll3 && Array.isArray(runnerStates?.all3?.queuedEpIds)
-                            ? runnerStates.all3.queuedEpIds
-                            : [];
-                          const all3CurIdx = all3Queue.indexOf(runnerStates?.all3?.currentEpId);
-                          const runnerAll3WaitingIds = isRunnerAll3
-                            ? (all3CurIdx >= 0
-                              ? all3Queue.slice(all3CurIdx + 1)
-                              : all3Queue.filter((id) => id !== runnerStates?.all3?.currentEpId))
-                            : [];
-
-                          const activeDemucsWaitingIds = localWaitingIds.length > 0
-                            ? localWaitingIds
-                            : (runnerCleanBgmWaitingIds.length > 0 ? runnerCleanBgmWaitingIds : runnerAll3WaitingIds);
-                          const demucsQueueIdx = !isCurrentRunning ? activeDemucsWaitingIds.indexOf(ep.id) : -1;
-                          const isQueued = demucsQueueIdx >= 0;
-                          const demucsQueuePos = demucsQueueIdx + 1;
-                          const demucsQueueTotal = activeDemucsWaitingIds.length;
-
-                          const effectiveLiveStats = demucsLiveStats[ep.id] || runnerLiveStats?.demucs?.[ep.id] || (isCurrentRunning ? {
-                            percent: runnerStates?.clean_bgm?.progress || 5,
-                            message: runnerStates?.clean_bgm?.message || 'កំពុងបំបែកសំឡេង Demucs...',
-                            logs: [{
-                              time: new Date().toLocaleTimeString(),
-                              progress: runnerStates?.clean_bgm?.progress || 5,
-                              message: runnerStates?.clean_bgm?.message || `⏳ Demucs Progress: ${runnerStates?.clean_bgm?.progress || 5}%`,
-                            }],
-                            model: 'htdemucs',
-                          } : null);
-
-                          const handleStopOrKillDemucs = async (targetEp) => {
-                            if (isCurrentDemucsRunnerEp) {
-                              await runnerStopStep(isRunnerAll3 ? 'all3' : 'clean_bgm');
-                            }
-                            await handleKillDemucs(targetEp);
-                          };
-
-                          if (isCurrentRunning) {
-                            return (
-                              <EpisodeDemucsProgressCard
-                                liveStats={effectiveLiveStats}
-                                ep={ep}
-                                isCurrentRunning={true}
-                                onKill={handleStopOrKillDemucs}
-                                onRequestConfirm={openStudioDialog}
-                              />
-                            );
-                          }
-
-                          if (isQueued) {
-                            return (
-                              <div
-                                data-testid={`demucs-queued-row-${ep.id}`}
-                                style={{
-                                  padding: '5px 10px',
-                                  borderRadius: 8,
-                                  background: 'rgba(15, 23, 42, 0.55)',
-                                  border: '1px solid rgba(56, 189, 248, 0.22)',
-                                  display: 'flex',
-                                  alignItems: 'center',
-                                  justifyContent: 'space-between',
-                                  gap: 8,
-                                }}
-                              >
-                                <span style={{
-                                  display: 'inline-flex',
-                                  alignItems: 'center',
-                                  gap: 6,
-                                  fontSize: '0.72rem',
-                                  fontWeight: 700,
-                                  color: '#94A3B8',
-                                  minWidth: 0,
-                                  overflow: 'hidden',
-                                  textOverflow: 'ellipsis',
-                                  whiteSpace: 'nowrap',
-                                }}>
-                                  <Clock size={12} color="#38BDF8" style={{ flexShrink: 0 }} />
-                                  <span>🔇 4. AI បិទសំឡេងចិន</span>
-                                </span>
-                                <span
-                                  data-testid={`demucs-queue-pos-${ep.id}`}
-                                  style={{
-                                    fontSize: '0.68rem',
-                                    fontWeight: 700,
-                                    color: '#38BDF8',
-                                    whiteSpace: 'nowrap',
-                                    flexShrink: 0,
-                                  }}
-                                >
-                                  Queue លេខ {demucsQueuePos} / {demucsQueueTotal}
-                                </span>
-                              </div>
-                            );
-                          }
-
-                          return (
-                            <div
-                              style={{
-                                padding: '8px 12px',
-                                borderRadius: 10,
-                                background: isDemucsReady ? 'rgba(16, 185, 129, 0.08)' : 'rgba(255, 255, 255, 0.03)',
-                                border: `1px solid ${isDemucsReady ? 'rgba(16, 185, 129, 0.28)' : 'rgba(255, 255, 255, 0.08)'}`,
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'space-between',
-                                gap: 8,
-                              }}
-                            >
-                              <div style={{ minWidth: 0, flex: 1 }}>
-                                <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                                  <span style={{ fontSize: '0.74rem', fontWeight: 800, color: isDemucsReady ? '#34D399' : '#CBD5E1' }}>
-                                    🔇 4. AI បិទសំឡេងចិន (រក្សាភ្លេង BGM ដើម)
-                                  </span>
-                                  {isDemucsReady && (
-                                    <span style={{
-                                      fontSize: '0.62rem',
-                                      fontWeight: 800,
-                                      padding: '1px 6px',
-                                      borderRadius: 9999,
-                                      background: 'rgba(52, 211, 153, 0.2)',
-                                      color: '#34D399',
-                                      border: '1px solid rgba(52, 211, 153, 0.4)',
-                                    }}>
-                                      ✓ BGM READY
-                                    </span>
-                                  )}
-                                </div>
-                                <div style={{ fontSize: '0.66rem', color: isDemucsReady ? '#94A3B8' : '#64748B', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                  {isDemucsReady
-                                    ? '✅ បានបិទសំឡេងចិន & រក្សាភ្លេង BGM ដើម'
-                                    : (hasVideo ? 'មិនទាន់បំបែក (នៅមានសំឡេងដើមចិន)' : 'មិនទាន់មានវីដេអូ')}
-                                </div>
-                              </div>
-
-                              <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0 }}>
-                                {!isDemucsReady ? (
-                                  <button
-                                    type="button"
-                                    disabled={!hasVideo || isSeparatingBatchDemucs}
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      handleBatchDemucsSeparation([ep]);
-                                    }}
-                                    style={{
-                                      padding: '4px 9px',
-                                      borderRadius: 6,
-                                      background: hasVideo ? '#059669' : 'rgba(255, 255, 255, 0.05)',
-                                      border: hasVideo ? '1px solid #34D399' : '1px solid rgba(255, 255, 255, 0.1)',
-                                      color: hasVideo ? '#FFFFFF' : '#64748B',
-                                      fontSize: '0.68rem',
-                                      fontWeight: 700,
-                                      cursor: (!hasVideo || isSeparatingBatchDemucs) ? 'not-allowed' : 'pointer',
-                                    }}
-                                  >
-                                    🔇 បិទសំឡេងចិន
-                                  </button>
-                                ) : (
-                                  <button
-                                    type="button"
-                                    disabled={isSeparatingBatchDemucs}
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      handleBatchDemucsSeparation([ep], { force: true });
-                                    }}
-                                    title="បំបែកសំឡេងម្ដងទៀត"
-                                    style={{
-                                      padding: '3px 8px',
-                                      borderRadius: 6,
-                                      background: 'transparent',
-                                      border: '1px solid rgba(52, 211, 153, 0.35)',
-                                      color: '#34D399',
-                                      fontSize: '0.66rem',
-                                      fontWeight: 600,
-                                      cursor: 'pointer',
-                                      display: 'inline-flex',
-                                      alignItems: 'center',
-                                      gap: 3,
-                                    }}
-                                  >
-                                    <RotateCcw size={10} />
-                                    <span>ធ្វើម្ដងទៀត</span>
-                                  </button>
-                                )}
-                              </div>
-                            </div>
-                          );
-                        })()}
-                      </div>
-                    </div>
-
-                    {/* Card Footer */}
-                    {!isRunning && !isQueued && (
-                      <div style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'space-between',
-                        fontSize: '0.70rem',
-                        paddingTop: 8,
-                        borderTop: '1px solid rgba(255, 255, 255, 0.06)',
-                      }}>
-                        <div>
-                          {(isGeneratingBatchTTS && activeTtsEpisodeId === ep.id) ? (
-                            <span style={{
-                              color: '#FF8577',
-                              fontWeight: 700,
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: 5,
-                              background: 'rgba(255, 133, 119, 0.15)',
-                              padding: '2px 8px',
-                              borderRadius: 9999,
-                              border: '1px solid rgba(255, 133, 119, 0.4)',
-                            }}>
-                              <Loader2 size={12} className="animate-spin" color="#FF8577" />
-                              <span>កំពុង Render សំឡេង... ({ttsLiveStats[ep.id]?.current || 0}/{ttsLiveStats[ep.id]?.total || segmentCount || '...'})</span>
-                            </span>
-                          ) : (isGeneratingBatchTTS && activeTtsEpisodeIds.has(ep.id)) ? (
-                            <span style={{
-                              color: '#FBBF24',
-                              fontWeight: 600,
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: 5,
-                              background: 'rgba(245, 158, 11, 0.12)',
-                              padding: '2px 8px',
-                              borderRadius: 9999,
-                              border: '1px solid rgba(245, 158, 11, 0.35)',
-                            }}>
-                              <span style={{ display: 'inline-block', width: 6, height: 6, borderRadius: '50%', background: '#FBBF24' }}></span>
-                              <span>⏳ រង់ចាំក្នុង Queue</span>
-                            </span>
-                          ) : (isSeparatingBatchDemucs && activeDemucsEpisodeId === ep.id) ? (
-                            <span style={{
-                              color: '#38bdf8',
-                              fontWeight: 700,
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: 5,
-                              background: 'rgba(56, 189, 248, 0.15)',
-                              padding: '2px 8px',
-                              borderRadius: 9999,
-                              border: '1px solid rgba(56, 189, 248, 0.4)',
-                            }}>
-                              <Loader2 size={12} className="animate-spin" color="#38bdf8" />
-                              <span>កំពុងបំបែកសំឡេង Demucs... ({demucsLiveStats[ep.id]?.percent || 0}%)</span>
-                            </span>
-                          ) : (isSeparatingBatchDemucs && activeDemucsEpisodeIds.has(ep.id)) ? (
-                            <span style={{
-                              color: '#94A3B8',
-                              fontWeight: 600,
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: 5,
-                              background: 'rgba(148, 163, 184, 0.12)',
-                              padding: '2px 8px',
-                              borderRadius: 9999,
-                              border: '1px solid rgba(148, 163, 184, 0.3)',
-                            }}>
-                              <span style={{ display: 'inline-block', width: 6, height: 6, borderRadius: '50%', background: '#94A3B8' }}></span>
-                              <span>⏳ រង់ចាំ Demucs Queue</span>
-                            </span>
-                          ) : (runningPipelineEpIds && runningPipelineEpIds.has(ep.id)) ? (
-                            <span style={{
-                              color: '#818CF8',
-                              fontWeight: 700,
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: 5,
-                              background: 'rgba(99, 102, 241, 0.15)',
-                              padding: '2px 8px',
-                              borderRadius: 9999,
-                              border: '1px solid rgba(129, 140, 248, 0.4)',
-                            }}>
-                              <Loader2 size={12} className="animate-spin" color="#818CF8" />
-                              <span>កំពុងដំណើរការ Auto-Pipeline...</span>
-                            </span>
-                          ) : segmentsMissingAfterJob ? (
-                            <span style={{
-                              color: '#FBBF24',
-                              fontWeight: 700,
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: 4,
-                              background: 'rgba(245, 158, 11, 0.14)',
-                              padding: '2px 9px',
-                              borderRadius: 9999,
-                              border: '1px solid rgba(245, 158, 11, 0.4)',
-                            }}>
-                              <span>⚠️ Job done — segments not saved</span>
-                            </span>
-                          ) : (checkEpisodeHasAudioReady(ep, completedTtsEpIds, ttsLiveStats) || checkEpisodeHasDemucsReady(ep, completedDemucsEpIds, demucsLiveStats)) ? (
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                              {checkEpisodeHasAudioReady(ep, completedTtsEpIds, ttsLiveStats) && (
-                                <span style={{
-                                  color: '#34D399',
-                                  fontWeight: 700,
-                                  display: 'inline-flex',
-                                  alignItems: 'center',
-                                  gap: 4,
-                                  background: 'rgba(52, 211, 153, 0.15)',
-                                  padding: '2px 8px',
-                                  borderRadius: 9999,
-                                  border: '1px solid rgba(52, 211, 153, 0.4)',
-                                  boxShadow: '0 0 8px rgba(52, 211, 153, 0.18)',
-                                }}>
-                                  <Volume2 size={11} strokeWidth={2.5} />
-                                  <span>សំឡេង AI</span>
-                                </span>
-                              )}
-                              {ep.audioOutdated && !checkEpisodeHasAudioReady(ep, completedTtsEpIds, ttsLiveStats) && hasScript && (
-                                <span style={{
-                                  color: '#FBBF24',
-                                  fontWeight: 700,
-                                  display: 'inline-flex',
-                                  alignItems: 'center',
-                                  gap: 4,
-                                  background: 'rgba(245, 158, 11, 0.14)',
-                                  padding: '2px 8px',
-                                  borderRadius: 9999,
-                                  border: '1px solid rgba(245, 158, 11, 0.4)',
-                                }}>
-                                  <span>ត្រូវបង្កើតសំឡេងថ្មី</span>
-                                </span>
-                              )}
-                              {checkEpisodeHasDemucsReady(ep, completedDemucsEpIds, demucsLiveStats) && (
-                                <span style={{
-                                  color: '#38BDF8',
-                                  fontWeight: 700,
-                                  display: 'inline-flex',
-                                  alignItems: 'center',
-                                  gap: 4,
-                                  background: 'rgba(56, 189, 248, 0.15)',
-                                  padding: '2px 8px',
-                                  borderRadius: 9999,
-                                  border: '1px solid rgba(56, 189, 248, 0.4)',
-                                  boxShadow: '0 0 8px rgba(56, 189, 248, 0.18)',
-                                }}>
-                                  <Volume2 size={11} strokeWidth={2.5} />
-                                  <span>Clean BGM</span>
-                                </span>
-                              )}
-                            </div>
-                          ) : (hasScript && epBrokenScan.textBrokenCount > 0) ? (
-                            <span style={{
-                              color: '#EF4444',
-                              fontWeight: 700,
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: 5,
-                              background: 'rgba(239, 68, 68, 0.14)',
-                              padding: '2px 9px',
-                              borderRadius: 9999,
-                              border: '1px solid rgba(239, 68, 68, 0.45)',
-                            }}>
-                              <span>⚠️ ខូច {epBrokenScan.textBrokenCount} ឃ្លា</span>
-                            </span>
-                          ) : (hasScript && (epBrokenScan.missingVoiceCount > 0 || !checkEpisodeHasAudioReady(ep, completedTtsEpIds, ttsLiveStats))) ? (
-                            <span style={{
-                              color: '#FBBF24',
-                              fontWeight: 700,
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: 5,
-                              background: 'rgba(245, 158, 11, 0.14)',
-                              padding: '2px 9px',
-                              borderRadius: 9999,
-                              border: '1px solid rgba(245, 158, 11, 0.4)',
-                            }}>
-                              <span>⚠️ ខ្វះសំឡេង {epBrokenScan.missingVoiceCount || segmentCount} ឃ្លា</span>
-                            </span>
-                          ) : (hasScript && ep.audioOutdated) ? (
-                            <span style={{
-                              color: '#FBBF24',
-                              fontWeight: 700,
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: 5,
-                              background: 'rgba(245, 158, 11, 0.14)',
-                              padding: '2px 9px',
-                              borderRadius: 9999,
-                              border: '1px solid rgba(245, 158, 11, 0.4)',
-                            }}>
-                              <span>⚠️ {segmentCount > 0 ? `${segmentCount} ឃ្លា • ` : ''}ត្រូវបង្កើតសំឡេងថ្មី</span>
-                            </span>
-                          ) : hasScript ? (
-                            <span style={{
-                              color: '#38BDF8',
-                              fontWeight: 700,
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: 5,
-                              background: 'rgba(56, 189, 248, 0.12)',
-                              padding: '2px 9px',
-                              borderRadius: 9999,
-                              border: '1px solid rgba(56, 189, 248, 0.3)',
-                            }}>
-                              <Check size={12} strokeWidth={3} />
-                              <span>{segmentCount > 0 ? `${segmentCount} ឃ្លាខ្មែរ` : 'Script រួចរាល់'}</span>
-                            </span>
-                          ) : isFailed ? (
-                            <span style={{
-                              color: '#F87171',
-                              fontWeight: 700,
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: 4,
-                              background: 'rgba(248, 113, 113, 0.12)',
-                              padding: '2px 9px',
-                              borderRadius: 9999,
-                              border: '1px solid rgba(248, 113, 113, 0.3)',
-                            }}>
-                              <span>❌ ត្រូវ Retry ឡើងវិញ</span>
-                            </span>
-                          ) : (
-                            <span style={{
-                              color: '#94A3B8',
-                              display: 'flex',
-                              alignItems: 'center',
-                              gap: 4,
-                              background: 'rgba(255, 255, 255, 0.04)',
-                              padding: '2px 9px',
-                              borderRadius: 9999,
-                            }}>
-                              <span>⏳ មិនទាន់មាន Script</span>
-                            </span>
-                          )}
-                        </div>
-
-                        {/* Right: Clean Action Button (បើកក្នុង Studio) */}
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-                          {hasScript && onSwitchEpisode && (
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                onSwitchEpisode(ep.id);
-                                if (onTabChange) onTabChange('subtitles');
-                                onClose();
-                              }}
-                              className="btn-tactile"
-                              style={{
-                                background: 'rgba(56, 189, 248, 0.12)',
-                                border: '1px solid rgba(56, 189, 248, 0.4)',
-                                color: '#38BDF8',
-                                fontSize: '0.68rem',
-                                fontWeight: 800,
-                                borderRadius: 6,
-                                padding: '4px 10px',
-                                cursor: 'pointer',
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                gap: 4,
-                                boxShadow: '0 2px 10px rgba(56, 189, 248, 0.15)',
-                                transition: 'all 0.15s cubic-bezier(0.16, 1, 0.3, 1)',
-                              }}
-                            >
-                              <span>បើកក្នុង Studio</span>
-                              <ArrowRight size={11} />
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
+              {visibleEpisodeEntries.map(({ ep, origIdx }) => (
+                <BatchEpisodeCard
+                  key={ep.id}
+                  ep={ep}
+                  idx={origIdx}
+                  keyThemes={KEY_THEMES}
+                  activeSeries={activeSeries}
+                  selectedEpIds={selectedEpIds}
+                  toggleSelect={toggleSelect}
+                  jobsByEpisodeId={jobsByEpisodeId}
+                  poolTotalKeys={poolTotalKeys}
+                  keyThemeCount={keyThemeCount}
+                  cardStageView={cardStageView}
+                  runnerStates={runnerStates}
+                  runnerLiveStats={runnerLiveStats}
+                  runnerStopStep={runnerStopStep}
+                  runSingleAutoFitSpeed={runSingleAutoFitSpeed}
+                  runSingleAutoCompact={runSingleAutoCompact}
+                  ttsLiveStats={ttsLiveStats}
+                  demucsLiveStats={demucsLiveStats}
+                  activeTtsEpisodeId={activeTtsEpisodeId}
+                  activeTtsEpisodeIds={activeTtsEpisodeIds}
+                  activeDemucsEpisodeId={activeDemucsEpisodeId}
+                  activeDemucsEpisodeIds={activeDemucsEpisodeIds}
+                  completedTtsEpIds={completedTtsEpIds}
+                  completedDemucsEpIds={completedDemucsEpIds}
+                  runningPipelineEpIds={runningPipelineEpIds}
+                  rescanningEpisodeIds={rescanningEpisodeIds}
+                  isBatchExecutionActive={isBatchExecutionActive}
+                  isEpisodeFullyDone={isEpisodeFullyDone}
+                  isGeneratingBatchTTS={isGeneratingBatchTTS}
+                  isSeparatingBatchDemucs={isSeparatingBatchDemucs}
+                  isRepairBusy={isRepairBusy}
+                  isStartingBatch={isStartingBatch}
+                  executeBatchTranslateEnqueue={executeBatchTranslateEnqueue}
+                  handleKillTranslate={handleKillTranslate}
+                  handleKillTTS={handleKillTTS}
+                  handleKillDemucs={handleKillDemucs}
+                  handleRetryEpisode={handleRetryEpisode}
+                  handleRepairBrokenSegments={handleRepairBrokenSegments}
+                  handleRescanEpisodeGender={handleRescanEpisodeGender}
+                  handleBatchGenerateTTS={handleBatchGenerateTTS}
+                  handleBatchDemucsSeparation={handleBatchDemucsSeparation}
+                  openStudioDialog={openStudioDialog}
+                  onSwitchEpisode={onSwitchEpisode}
+                  onTabChange={onTabChange}
+                  onRefreshSeries={onRefreshSeries}
+                  onClose={onClose}
+                />
+              ))}
             </div>
           )}
         </div>
+        </section>
         </div>
 
-        {/* ── 5. MODAL FOOTER (Quiet — Duplicate Status Tracker Removed) ── */}
+        {/* ── 5. FOOTER STRIP (Darkroom Console) ── */}
         <div style={{
-          padding: '10px 20px',
-          borderTop: '1px solid rgba(255, 255, 255, 0.06)',
-          background: 'rgba(15, 23, 42, 0.96)',
+          padding: '10px 18px',
+          borderTop: '1px solid var(--border-subtle)',
+          background: 'var(--bg-secondary-panel)',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
-          fontSize: '0.72rem',
-          color: '#64748B',
+          gap: 12,
+          flexWrap: 'wrap',
+          fontSize: 'var(--text-sm)',
+          color: 'var(--text-secondary)',
           flexShrink: 0,
         }}>
           <span>
@@ -4669,20 +3203,14 @@ export default function GeminiRouteModal({
           <button
             type="button"
             onClick={onClose}
-            className="btn-tactile"
+            className="btn-secondary"
             style={{
+              minHeight: 32,
               padding: '5px 14px',
-              borderRadius: 6,
-              background: 'rgba(255, 255, 255, 0.05)',
-              border: '1px solid rgba(255, 255, 255, 0.10)',
-              color: '#E2E8F0',
-              fontSize: '0.72rem',
-              fontWeight: 700,
-              cursor: 'pointer',
-              transition: 'all 0.15s ease',
+              fontSize: 'var(--text-sm)',
             }}
           >
-            បិទផ្ទាំង (Close)
+            ត្រឡប់ទៅ Studio
           </button>
         </div>
       </div>

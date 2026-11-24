@@ -490,6 +490,44 @@ function getSeriesMetadata(seriesId, options = {}) {
       const sanitized = sanitizeSeriesEpisodes(data);
 
       let needsSave = false;
+      if (!Array.isArray(sanitized.episodes)) {
+        sanitized.episodes = [];
+      }
+
+      // Safe episode discovery: if episode directories exist on disk but are missing from series.json
+      const epBaseDir = path.join(seriesDir, 'episodes');
+      if (fs.existsSync(epBaseDir)) {
+        try {
+          const entries = fs.readdirSync(epBaseDir, { withFileTypes: true })
+            .filter((ent) => ent.isDirectory())
+            .sort((a, b) => {
+              const matchA = a.name.match(/^ep_(\d+)/i);
+              const matchB = b.name.match(/^ep_(\d+)/i);
+              const numA = matchA ? parseInt(matchA[1], 10) : Number.MAX_SAFE_INTEGER;
+              const numB = matchB ? parseInt(matchB[1], 10) : Number.MAX_SAFE_INTEGER;
+              if (numA !== numB) return numA - numB;
+              return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+            });
+
+          for (const ent of entries) {
+            const alreadyExists = sanitized.episodes.some(
+              (e) => String(e.id).toLowerCase() === ent.name.toLowerCase()
+            );
+            if (!alreadyExists) {
+              const epNumMatch = ent.name.match(/^ep_(\d+)/i);
+              const epNum = epNumMatch ? parseInt(epNumMatch[1], 10) : sanitized.episodes.length + 1;
+              const discoveredEp = createEpisode({
+                id: ent.name,
+                episodeNumber: epNum,
+                title: `ភាគទី ${epNum} (EP${epNum})`,
+              });
+              sanitized.episodes.push(discoveredEp);
+              needsSave = true;
+            }
+          }
+        } catch (_) { }
+      }
+
       if (Array.isArray(sanitized.episodes)) {
         for (let i = 0; i < sanitized.episodes.length; i++) {
           const ep = sanitized.episodes[i];
@@ -763,6 +801,8 @@ async function persistEpisodeScriptData({
       updatedAt: Date.now(),
     };
     targetEp.generationMode = resolvedGenMode;
+    // Reset obsolete deletion tombstones from previous scripts when saving a fresh full episode script
+    targetEp.deletedSegmentKeys = [];
     if (incomingSegments.length > 0) {
       targetEp.status = status || 'translated';
       if (!hasAnyVoicedSegment && hadPriorAudio) {
@@ -1277,6 +1317,318 @@ function safeRemoveDirectorySync(dirPath, maxRetries = 10, retryDelay = 100) {
   }
 }
 
+const WINDOWS_RESERVED_NAMES = /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/i;
+
+function sanitizeSeriesFolderBaseName(name) {
+  let clean = sanitizeProjectName(name)
+    .replace(/^\.+|\.+$/g, '')
+    .trim();
+  if (!clean || clean === '.' || clean === '..') {
+    clean = `series_${Date.now()}`;
+  }
+  if (WINDOWS_RESERVED_NAMES.test(clean)) {
+    clean = `${clean}_series`;
+  }
+  return clean.slice(0, 80);
+}
+
+function listExistingSeriesDirNames(projectsDir = PROJECTS_DIR) {
+  if (!fs.existsSync(projectsDir)) return [];
+  try {
+    return fs
+      .readdirSync(projectsDir, { withFileTypes: true })
+      .filter((ent) => ent.isDirectory())
+      .map((ent) => ent.name);
+  } catch (_) {
+    return [];
+  }
+}
+
+function isSeriesFolderNameTaken(candidate, existingNames, excludeCurrentId = null) {
+  const isWin = process.platform === 'win32';
+  const normCand = isWin ? candidate.toLowerCase() : candidate;
+  const normExcl = excludeCurrentId ? (isWin ? String(excludeCurrentId).toLowerCase() : String(excludeCurrentId)) : null;
+  return existingNames.some((name) => {
+    const normName = isWin ? name.toLowerCase() : name;
+    if (normExcl && normName === normExcl) return false;
+    return normName === normCand;
+  });
+}
+
+function resolveUniqueSeriesFolderId(desiredTitle, options = {}) {
+  const projectsDir = options.projectsDir || PROJECTS_DIR;
+  const excludeCurrentId = options.excludeCurrentId || null;
+  const base = sanitizeSeriesFolderBaseName(desiredTitle);
+  const existing = listExistingSeriesDirNames(projectsDir);
+
+  if (!isSeriesFolderNameTaken(base, existing, excludeCurrentId)) {
+    return base;
+  }
+  for (let suffix = 2; suffix <= 999; suffix++) {
+    const next = `${base}_${suffix}`;
+    if (!isSeriesFolderNameTaken(next, existing, excludeCurrentId)) {
+      return next;
+    }
+  }
+  return `${base}_${Date.now()}`;
+}
+
+function escapeRegExp(str) {
+  return String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function rewriteSeriesIdInString(str, oldId, newId) {
+  if (typeof str !== 'string' || !str || oldId === newId) return str;
+  const encOld = encodeURIComponent(oldId);
+  const encNew = encodeURIComponent(newId);
+  let out = str;
+
+  // Replace forward/backslash project directory segments without touching filename prefixes
+  const reDir = new RegExp(`((?:^|[\\/\\\\])projects[\\/\\\\])${escapeRegExp(oldId)}(?=[\\/\\\\]|$)`, 'g');
+  out = out.replace(reDir, `$1${newId}`);
+
+  // Replace URL-encoded folder segment in /uploads/projects/<encOld>/
+  if (encOld !== oldId) {
+    const reEncDir = new RegExp(`((?:^|/)projects/)${escapeRegExp(encOld)}(?=/|$)`, 'g');
+    out = out.replace(reEncDir, `$1${encNew}`);
+  }
+
+  // Replace query-encoded download-export refs: projects%2F<oldId>%2F
+  const reQueryEnc = new RegExp(`(projects%2[fF])${escapeRegExp(encOld)}(%2[fF]|$|&)`, 'g');
+  out = out.replace(reQueryEnc, `$1${encNew}$2`);
+
+  return out;
+}
+
+function rewriteSeriesIdReferences(value, oldId, newId) {
+  if (!value || oldId === newId) return value;
+  if (typeof value === 'string') {
+    return rewriteSeriesIdInString(value, oldId, newId);
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => rewriteSeriesIdReferences(item, oldId, newId));
+  }
+  if (typeof value === 'object') {
+    const out = {};
+    for (const [k, v] of Object.entries(value)) {
+      out[k] = rewriteSeriesIdReferences(v, oldId, newId);
+    }
+    return out;
+  }
+  return value;
+}
+
+function safeRenameDirectorySync(oldDir, newDir, maxRetries = 8, retryDelay = 80) {
+  const isCaseOnlyRename =
+    process.platform === 'win32' &&
+    oldDir.toLowerCase() === newDir.toLowerCase() &&
+    oldDir !== newDir;
+
+  const attemptRename = (src, dst) => {
+    let lastErr = null;
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        fs.renameSync(src, dst);
+        return;
+      } catch (err) {
+        lastErr = err;
+        if (err && (err.code === 'EPERM' || err.code === 'EBUSY' || err.code === 'EACCES') && attempt < maxRetries - 1) {
+          const until = Date.now() + retryDelay;
+          while (Date.now() < until) { /* brief sync backoff for Windows file handle release */ }
+          continue;
+        }
+        throw err;
+      }
+    }
+    if (lastErr) throw lastErr;
+  };
+
+  if (isCaseOnlyRename) {
+    const tempDir = `${oldDir}.__rename_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    attemptRename(oldDir, tempDir);
+    try {
+      attemptRename(tempDir, newDir);
+    } catch (err) {
+      try { attemptRename(tempDir, oldDir); } catch (_) {}
+      throw err;
+    }
+    return;
+  }
+
+  attemptRename(oldDir, newDir);
+}
+
+let batchExportModuleRef = null;
+function getBatchExportModuleSafe() {
+  if (!batchExportModuleRef) {
+    try { batchExportModuleRef = require('./batchExportService'); } catch (_) {}
+  }
+  return batchExportModuleRef;
+}
+
+/**
+ * Rename a series title AND its physical directory under backend/uploads/projects/<newName>
+ * atomically, rewriting internal project directory references in series.json and audio sidecars.
+ */
+async function renameSeries(oldSeriesId, newTitle, options = {}) {
+  const cleanTitle = typeof newTitle === 'string' ? newTitle.trim() : '';
+  if (!oldSeriesId || !cleanTitle) {
+    return { success: false, statusCode: 400, error: 'seriesId និងឈ្មោះថ្មីត្រូវបានទាមទារ' };
+  }
+
+  const projectsDir = options.projectsDir || PROJECTS_DIR;
+  const cleanOld = sanitizeProjectName(oldSeriesId);
+  const targetId = sanitizeSeriesFolderBaseName(cleanTitle);
+
+  return await withSeriesMetadataLock(cleanOld, () => {
+    const oldDir = path.join(projectsDir, cleanOld);
+    const newDir = path.join(projectsDir, targetId);
+
+    // 1. Refuse folder rename while active pipeline or batch export jobs are running on this series
+    if (cleanOld !== targetId) {
+      const q = getProductionJobQueueSafe();
+      if (q && q.inMemoryJobs) {
+        for (const job of q.inMemoryJobs.values()) {
+          if (job?.seriesId === cleanOld && (job.status === 'running' || job.status === 'queued')) {
+            return {
+              success: false,
+              statusCode: 409,
+              error: 'កំពុងមាន Job ដំណើរការលើរឿងនេះ! សូមផ្អាក ឬរង់ចាំ Job ចប់សិន មុននឹងប្តូរឈ្មោះ Folder។',
+            };
+          }
+        }
+      }
+      const batchMod = getBatchExportModuleSafe();
+      if (batchMod && typeof batchMod.getLatestBatchExportJob === 'function') {
+        const activeBatch = batchMod.getLatestBatchExportJob(cleanOld);
+        if (activeBatch && activeBatch.status === 'running') {
+          return {
+            success: false,
+            statusCode: 409,
+            error: 'កំពុង Export/Merge រឿងនេះ! សូមផ្អាក ឬរង់ចាំ Export ចប់សិន មុននឹងប្តូរឈ្មោះ Folder។',
+          };
+        }
+      }
+    }
+
+    // 2. Check target folder name collision against OTHER series folders
+    const existingNames = listExistingSeriesDirNames(projectsDir);
+    if (cleanOld !== targetId && isSeriesFolderNameTaken(targetId, existingNames, cleanOld)) {
+      return {
+        success: false,
+        statusCode: 409,
+        error: `Folder រឿងឈ្មោះ "${targetId}" មានរួចហើយ! សូមដាក់ឈ្មោះផ្សេង។`,
+      };
+    }
+
+    // 3. Load current series metadata before renaming
+    const existingSeries = fs.existsSync(oldDir)
+      ? getSeriesMetadata(cleanOld, { forceDisk: true, projectsDir })
+      : null;
+
+    if (!existingSeries && !fs.existsSync(oldDir)) {
+      return {
+        success: false,
+        statusCode: 404,
+        error: `រកមិនឃើញ Folder រឿង (${cleanOld}) ទេ`,
+      };
+    }
+
+    // 4. If folder slug is unchanged, just update display title cleanly
+    if (cleanOld === targetId) {
+      const updatedSame = {
+        ...existingSeries,
+        id: cleanOld,
+        title: cleanTitle,
+        updatedAt: Date.now(),
+      };
+      const savedSame = saveSeriesMetadata(updatedSame, { projectsDir });
+      return {
+        success: true,
+        renamedFolder: false,
+        oldSeriesId: cleanOld,
+        newSeriesId: cleanOld,
+        series: savedSame,
+      };
+    }
+
+    // 5. Rename physical folder on disk
+    try {
+      if (fs.existsSync(oldDir)) {
+        safeRenameDirectorySync(oldDir, newDir);
+      } else {
+        fs.mkdirSync(newDir, { recursive: true });
+      }
+    } catch (renameErr) {
+      console.error(`[EpisodeService] Failed to rename folder ${cleanOld} -> ${targetId}:`, renameErr.message);
+      return {
+        success: false,
+        statusCode: 423,
+        error: `មិនអាចប្តូរឈ្មោះ Folder លើ Disk បានទេ (${renameErr.code || renameErr.message}) — សូមបិទ File វីដេអូ ឬកម្មវិធីដែលកំពុងបើក Folder នេះសិន!`,
+      };
+    }
+
+    // 6. Evict old cache entry and rewrite all internal project directory paths cleanly
+    seriesMetadataCache.delete(buildSeriesCacheKey(cleanOld, projectsDir));
+    const rewritten = rewriteSeriesIdReferences(existingSeries, cleanOld, targetId);
+    rewritten.id = targetId;
+    rewritten.title = cleanTitle;
+    rewritten.updatedAt = Date.now();
+
+    const savedRenamed = saveSeriesMetadata(rewritten, { projectsDir });
+
+    // 7. Update episode audio sidecars (*.meta.json) & job manifests so seriesId checks stay valid
+    const episodesRoot = path.join(newDir, 'episodes');
+    if (fs.existsSync(episodesRoot)) {
+      try {
+        const epEntries = fs.readdirSync(episodesRoot, { withFileTypes: true });
+        for (const epEnt of epEntries) {
+          if (!epEnt.isDirectory()) continue;
+          const epAudioDir = path.join(episodesRoot, epEnt.name, 'audio');
+          if (fs.existsSync(epAudioDir)) {
+            for (const f of fs.readdirSync(epAudioDir)) {
+              if (!f.endsWith('.meta.json')) continue;
+              const p = path.join(epAudioDir, f);
+              try {
+                const raw = JSON.parse(fs.readFileSync(p, 'utf8'));
+                if (raw && typeof raw === 'object') {
+                  const nextSidecar = rewriteSeriesIdReferences(raw, cleanOld, targetId);
+                  if (nextSidecar.seriesId === cleanOld) nextSidecar.seriesId = targetId;
+                  fs.writeFileSync(p, JSON.stringify(nextSidecar, null, 2), 'utf8');
+                }
+              } catch (_) {}
+            }
+          }
+          const epJobsDir = path.join(episodesRoot, epEnt.name, 'jobs');
+          if (fs.existsSync(epJobsDir)) {
+            for (const f of fs.readdirSync(epJobsDir)) {
+              if (!f.endsWith('.json')) continue;
+              const p = path.join(epJobsDir, f);
+              try {
+                const raw = JSON.parse(fs.readFileSync(p, 'utf8'));
+                if (raw && typeof raw === 'object') {
+                  const nextJob = rewriteSeriesIdReferences(raw, cleanOld, targetId);
+                  if (nextJob.seriesId === cleanOld) nextJob.seriesId = targetId;
+                  fs.writeFileSync(p, JSON.stringify(nextJob), 'utf8');
+                }
+              } catch (_) {}
+            }
+          }
+        }
+      } catch (_) {}
+    }
+
+    console.log(`[EpisodeService] 📁 Renamed series folder on disk: "${cleanOld}" ➜ "${targetId}" (title: "${cleanTitle}")`);
+    return {
+      success: true,
+      renamedFolder: true,
+      oldSeriesId: cleanOld,
+      newSeriesId: targetId,
+      series: savedRenamed,
+    };
+  }, { projectsDir });
+}
+
 /**
  * Delete an entire series and remove its directory from disk atomically
  */
@@ -1590,5 +1942,9 @@ module.exports = {
   createNewEpisode,
   deleteEpisode,
   deleteSeries,
+  renameSeries,
+  resolveUniqueSeriesFolderId,
+  sanitizeSeriesFolderBaseName,
+  rewriteSeriesIdReferences,
   resetEpisodeState,
 };

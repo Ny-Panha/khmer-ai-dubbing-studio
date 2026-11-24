@@ -39,7 +39,10 @@ const BANNER_SETTING_KEYS = Object.freeze([
   "watermarkPosition",
   "watermarkColor",
   "antiTheftSize",
+  "antiTheftHeight",
   "antiTheftBottomPercent",
+  "antiTheftBgStyle",
+  "antiTheftBlur",
 ]);
 
 const CUSTOMIZE_SETTING_KEYS = Object.freeze([
@@ -70,7 +73,8 @@ const VALID_MASK_POSITIONS = new Set([
 const VALID_MASK_STYLES = new Set(["badge", "blur", "solid"]);
 
 const VALID_BANNER_POSITIONS = new Set(["bottom", "top"]);
-const VALID_BANNER_SIZES = new Set(["small", "medium", "large"]);
+const VALID_BANNER_SIZES = new Set(["small", "medium", "large", "xlarge", "xxlarge"]);
+const VALID_BANNER_BG_STYLES = new Set(["dark", "blur", "solid"]);
 
 const DEFAULT_GLOBAL_LOGO_SETTINGS = Object.freeze({
   enableLogo: true,
@@ -108,7 +112,10 @@ const DEFAULT_GLOBAL_BANNER_SETTINGS = Object.freeze({
   watermarkPosition: "above-ticker",
   watermarkColor: "#38BDF8",
   antiTheftSize: "small",
+  antiTheftHeight: null,
   antiTheftBottomPercent: 2,
+  antiTheftBgStyle: "dark",
+  antiTheftBlur: 18,
 });
 
 const DEFAULT_GLOBAL_CUSTOMIZE_SETTINGS = Object.freeze({
@@ -388,6 +395,17 @@ function normalizeGlobalBannerSettings(input, fallback = DEFAULT_GLOBAL_BANNER_S
         ? base.antiTheftSize
         : DEFAULT_GLOBAL_BANNER_SETTINGS.antiTheftSize;
 
+  const rawHeight = src.antiTheftHeight !== undefined ? src.antiTheftHeight : src.ribbonHeight;
+  let antiTheftHeight = null;
+  if (rawHeight === null || rawHeight === "" || rawHeight === 0) {
+    antiTheftHeight = null;
+  } else if (rawHeight !== undefined) {
+    const numH = Number(rawHeight);
+    antiTheftHeight = Number.isFinite(numH) && numH > 0 ? Math.round(Math.max(18, Math.min(120, numH))) : null;
+  } else if (base.antiTheftHeight !== null && base.antiTheftHeight !== undefined && Number(base.antiTheftHeight) > 0) {
+    antiTheftHeight = Math.round(Math.max(18, Math.min(120, Number(base.antiTheftHeight))));
+  }
+
   const antiTheftBottomPercent = Math.round(
     clampNumber(
       src.antiTheftBottomPercent !== undefined ? src.antiTheftBottomPercent : src.bottomPercent,
@@ -398,6 +416,25 @@ function normalizeGlobalBannerSettings(input, fallback = DEFAULT_GLOBAL_BANNER_S
         : DEFAULT_GLOBAL_BANNER_SETTINGS.antiTheftBottomPercent
     ) * 10
   ) / 10;
+
+  const rawBgStyle = src.antiTheftBgStyle !== undefined ? src.antiTheftBgStyle : src.bgStyle;
+  const antiTheftBgStyle =
+    typeof rawBgStyle === "string" && VALID_BANNER_BG_STYLES.has(rawBgStyle.toLowerCase())
+      ? rawBgStyle.toLowerCase()
+      : VALID_BANNER_BG_STYLES.has(base.antiTheftBgStyle)
+        ? base.antiTheftBgStyle
+        : DEFAULT_GLOBAL_BANNER_SETTINGS.antiTheftBgStyle;
+
+  const antiTheftBlur = Math.round(
+    clampNumber(
+      src.antiTheftBlur !== undefined ? src.antiTheftBlur : src.blurStrength,
+      0,
+      40,
+      Number.isFinite(Number(base.antiTheftBlur))
+        ? Number(base.antiTheftBlur)
+        : DEFAULT_GLOBAL_BANNER_SETTINGS.antiTheftBlur
+    )
+  );
 
   return {
     enableAntiTheft,
@@ -410,7 +447,10 @@ function normalizeGlobalBannerSettings(input, fallback = DEFAULT_GLOBAL_BANNER_S
     watermarkPosition,
     watermarkColor,
     antiTheftSize,
+    antiTheftHeight,
     antiTheftBottomPercent,
+    antiTheftBgStyle,
+    antiTheftBlur,
   };
 }
 
@@ -598,9 +638,9 @@ function formatGlobalCornerMaskForExport(cornerMask) {
     width: Number(norm.cornerMaskWidth) || 220,
     height: Number(norm.cornerMaskHeight) || 54,
     opacity: Number(norm.cornerMaskOpacity) || 0.95,
-    blurStrength: Number(norm.cornerMaskBlur) || 18,
-    offsetX: Number(norm.cornerMaskOffsetX) || 14,
-    offsetY: Number(norm.cornerMaskOffsetY) || 14,
+    blurStrength: Number.isFinite(Number(norm.cornerMaskBlur)) ? Number(norm.cornerMaskBlur) : 18,
+    offsetX: Number.isFinite(Number(norm.cornerMaskOffsetX)) ? Number(norm.cornerMaskOffsetX) : 14,
+    offsetY: Number.isFinite(Number(norm.cornerMaskOffsetY)) ? Number(norm.cornerMaskOffsetY) : 14,
   };
 }
 
@@ -608,16 +648,22 @@ function formatGlobalAntiTheftForExport(antiTheft) {
   const norm = normalizeGlobalBannerSettings(antiTheft);
   return {
     enabled: Boolean(norm.enableAntiTheft),
-    marqueeText: norm.marqueeText || "«ហាមផុសបន្ត • សូមឱ្យតម្លៃលើការខិតខំរបស់ម្ចាស់ដើម»",
+    marqueeText: norm.marqueeText ?? "«ហាមផុសបន្ត • សូមឱ្យតម្លៃលើការខិតខំរបស់ម្ចាស់ដើម»",
     marqueeSpeed: norm.marqueeSpeed || "normal",
     marqueePosition: norm.marqueePosition || "bottom",
     marqueeTextColor: norm.marqueeTextColor || "#FFE600",
     enableWatermark: norm.enableWatermark !== false,
-    watermarkText: norm.watermarkText || "រក្សាសិទ្ធិដោយ ៖ Holiday Kh Drama",
+    watermarkText: norm.watermarkText ?? "រក្សាសិទ្ធិដោយ ៖ Holiday Kh Drama",
     watermarkPosition: norm.watermarkPosition || "above-ticker",
     watermarkColor: norm.watermarkColor || "#38BDF8",
     antiTheftSize: norm.antiTheftSize || "small",
+    antiTheftHeight: norm.antiTheftHeight ?? null,
+    ribbonHeight: norm.antiTheftHeight ?? null,
     antiTheftBottomPercent: norm.antiTheftBottomPercent ?? 2,
+    antiTheftBgStyle: norm.antiTheftBgStyle || "dark",
+    bgStyle: norm.antiTheftBgStyle || "dark",
+    antiTheftBlur: Number.isFinite(Number(norm.antiTheftBlur)) ? Number(norm.antiTheftBlur) : 18,
+    blurStrength: Number.isFinite(Number(norm.antiTheftBlur)) ? Number(norm.antiTheftBlur) : 18,
   };
 }
 
@@ -656,9 +702,10 @@ function computeVisualFingerprint(options = {}) {
   const banner = formatGlobalAntiTheftForExport(options.banner || options.antiTheft);
   const ratio = options.aspectRatio || null;
   const vStyle = options.verticalStyle || null;
+  const renderParityVersion = "v3_font64_margin81_parity";
   return crypto
     .createHash("sha256")
-    .update(JSON.stringify({ logo, mask, banner, ratio, vStyle }))
+    .update(JSON.stringify({ renderParityVersion, logo, mask, banner, ratio, vStyle }))
     .digest("hex")
     .slice(0, 16);
 }

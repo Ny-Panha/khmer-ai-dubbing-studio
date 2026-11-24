@@ -52,7 +52,7 @@ export default function EpisodeAutoFitProgressCard({ liveStats, ep, onKill = nul
   const isQueued = !isCurrentRunning && !isDone && !isFailed;
   const targetPercent = isQueued ? 0 : Math.min(100, Math.max(0, currentLive?.percent ?? currentLive?.progress ?? 10));
   const [smoothProgress, setSmoothProgress] = useState(targetPercent || 5);
-  const [showConsole, setShowConsole] = useState(true);
+  const [showConsole, setShowConsole] = useState(false);
   const [showKillConfirm, setShowKillConfirm] = useState(false);
   const consoleBottomRef = useRef(null);
 
@@ -81,81 +81,52 @@ export default function EpisodeAutoFitProgressCard({ liveStats, ep, onKill = nul
     }
   }, [logs.length, smoothProgress, showConsole]);
 
-  const stateColor = isFailed ? '#ef4444' : (isDone ? '#10b981' : '#FBBF24');
-  const stateBorder = isFailed ? 'rgba(239, 68, 68, 0.55)' : (isDone ? 'rgba(16, 185, 129, 0.5)' : 'rgba(251, 191, 36, 0.55)');
-  const stateGlow = isFailed ? '0 4px 20px rgba(239, 68, 68, 0.22)' : (isDone ? '0 4px 20px rgba(16, 185, 129, 0.22)' : '0 4px 20px rgba(251, 191, 36, 0.25)');
+  const stateColor = isFailed ? '#f87171' : (isDone ? '#34d399' : '#FBBF24');
+  const stateBorder = isFailed ? 'rgba(239, 68, 68, 0.45)' : (isDone ? 'rgba(16, 185, 129, 0.45)' : 'rgba(245, 158, 11, 0.45)');
+
+  const milestones = [
+    { key: 'scan', label: 'Scan', done: smoothProgress >= 25, active: smoothProgress >= 1 && smoothProgress < 25 },
+    { key: 'stretch', label: 'Stretch', done: smoothProgress >= 60, active: smoothProgress >= 25 && smoothProgress < 60 },
+    { key: 'align', label: 'Align', done: smoothProgress >= 85, active: smoothProgress >= 60 && smoothProgress < 85 },
+    { key: 'sync', label: 'Sync', done: isDone, active: !isDone && smoothProgress >= 85 },
+  ];
 
   return (
     <div
       onClick={(e) => e.stopPropagation()}
       style={{
-        background: 'linear-gradient(135deg, rgba(25, 20, 10, 0.98) 0%, rgba(35, 28, 15, 0.92) 100%)',
+        background: 'rgba(245, 158, 11, 0.06)',
         border: `1px solid ${stateBorder}`,
-        boxShadow: `${stateGlow}, inset 0 1px 0 rgba(255, 255, 255, 0.08)`,
-        borderRadius: 10,
-        padding: '11px 13px',
-        marginTop: 6,
+        borderRadius: 6,
+        padding: '8px 9px',
         display: 'flex',
         flexDirection: 'column',
-        gap: 9,
-        transition: 'all 0.25s ease',
+        gap: 7,
       }}
     >
-      {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flex: 1 }}>
-          <div style={{
-            width: 26,
-            height: 26,
-            borderRadius: '50%',
-            background: isFailed ? 'rgba(239, 68, 68, 0.2)' : (isDone ? 'rgba(16, 185, 129, 0.2)' : 'rgba(251, 191, 36, 0.2)'),
-            border: `1px solid ${isFailed ? 'rgba(239, 68, 68, 0.4)' : (isDone ? 'rgba(16, 185, 129, 0.4)' : 'rgba(251, 191, 36, 0.4)')}`,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            color: stateColor,
-            flexShrink: 0,
+      {/* Row 1: Single-Line Title + Stop + Tabular % (Zero Wrapping) */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6, minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 5, minWidth: 0, flex: 1 }}>
+          {isFailed ? (
+            <AlertCircle size={13} color="#f87171" style={{ flexShrink: 0 }} />
+          ) : isDone ? (
+            <CheckCircle2 size={13} color="#34d399" style={{ flexShrink: 0 }} />
+          ) : (
+            <Zap size={13} color="#FBBF24" style={{ flexShrink: 0 }} />
+          )}
+          <span style={{
+            fontSize: '11.5px',
+            fontWeight: 700,
+            color: 'var(--text-primary)',
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
           }}>
-            {isFailed ? (
-              <AlertCircle size={14} color="#ef4444" />
-            ) : isDone ? (
-              <CheckCircle2 size={14} color="#10b981" />
-            ) : (
-              <Zap size={14} className="animate-pulse" color="#FBBF24" />
-            )}
-          </div>
-          <div style={{ minWidth: 0, flex: 1 }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span style={{ fontSize: '0.78rem', fontWeight: 800, color: '#f8fafc', letterSpacing: '-0.01em' }}>
-                ⚡ 3. Auto-Fit Speed
-              </span>
-              <span style={{
-                fontSize: '0.62rem',
-                fontWeight: 700,
-                padding: '1px 6px',
-                borderRadius: 4,
-                background: 'rgba(251, 191, 36, 0.15)',
-                color: '#FBBF24',
-                border: '1px solid rgba(251, 191, 36, 0.35)',
-              }}>
-                WSOLA + Atempo
-              </span>
-            </div>
-            <div style={{
-              fontSize: '0.68rem',
-              color: isFailed ? '#fca5a5' : '#94a3b8',
-              marginTop: 1,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }}>
-              {currentLive?.message || (isDone ? '✅ បានពន្លឿនឃ្លាក្រហមឱ្យ Fit ស្មើនឹង Subtitle ១០០%' : 'កំពុងវិភាគ និងពន្លឿនសំឡេង...')}
-            </div>
-          </div>
+            3. Auto-Fit Speed
+          </span>
         </div>
 
-        {/* Action Controls & Percentage */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
           {isCurrentRunning && onKill && (
             <button
               type="button"
@@ -176,159 +147,143 @@ export default function EpisodeAutoFitProgressCard({ liveStats, ep, onKill = nul
               style={{
                 display: 'inline-flex',
                 alignItems: 'center',
-                gap: 4,
-                padding: '3px 8px',
-                borderRadius: 6,
-                background: 'rgba(239, 68, 68, 0.15)',
-                border: '1px solid rgba(239, 68, 68, 0.4)',
-                color: '#f87171',
-                fontSize: '0.64rem',
+                gap: 3,
+                height: 20,
+                padding: '0 6px',
+                borderRadius: 4,
+                background: 'rgba(239, 68, 68, 0.16)',
+                border: '1px solid rgba(239, 68, 68, 0.42)',
+                color: '#fca5a5',
+                fontSize: '10px',
                 fontWeight: 700,
                 cursor: 'pointer',
+                whiteSpace: 'nowrap',
               }}
               title="បញ្ឈប់ Auto-Fit Speed"
             >
-              <Square size={9} fill="currentColor" />
+              <Square size={8} fill="currentColor" />
               <span>Stop</span>
             </button>
           )}
 
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: 2 }}>
-            <span style={{
-              fontSize: '1.05rem',
-              fontWeight: 900,
-              fontFamily: "'JetBrains Mono', 'Fira Code', 'Consolas', monospace",
-              fontVariantNumeric: 'tabular-nums',
-              color: stateColor,
-              textShadow: `0 0 12px ${stateColor}`,
-              letterSpacing: '-0.02em',
-            }}>
-              {smoothProgress}
-            </span>
-            <span style={{ fontSize: '0.72rem', fontWeight: 800, color: stateColor }}>%</span>
-          </div>
+          <span style={{
+            fontSize: '12px',
+            fontWeight: 800,
+            fontFamily: 'var(--font-mono)',
+            fontVariantNumeric: 'tabular-nums',
+            color: stateColor,
+            whiteSpace: 'nowrap',
+          }}>
+            {smoothProgress}%
+          </span>
         </div>
       </div>
 
-      {/* Glowing Progress Bar Track */}
+      {/* Row 2: Full-Width Live Status Line */}
+      <div
+        title={currentLive?.message || ''}
+        style={{
+          fontSize: '10.5px',
+          color: isFailed ? '#fca5a5' : 'var(--text-secondary)',
+          overflow: 'hidden',
+          textOverflow: 'ellipsis',
+          whiteSpace: 'nowrap',
+          lineHeight: 1.3,
+        }}
+      >
+        {currentLive?.message || (isDone ? 'ពន្លឿនឃ្លា Fit ស្មើ Subtitle 100%' : 'កំពុងវិភាគ និងពន្លឿនសំឡេង...')}
+      </div>
+
+      {/* Progress Bar Track */}
       <div style={{
         width: '100%',
-        height: 6,
+        height: 4,
         background: 'rgba(255, 255, 255, 0.08)',
         borderRadius: 9999,
         overflow: 'hidden',
-        position: 'relative',
       }}>
         <div
           style={{
             height: '100%',
-            width: `${Math.max(3, Math.min(100, smoothProgress))}%`,
+            width: `${Math.max(4, Math.min(100, smoothProgress))}%`,
             transition: 'width 0.22s ease-out',
-            background: isFailed
-              ? 'linear-gradient(90deg, #f87171, #ef4444)'
-              : (isDone
-                ? 'linear-gradient(90deg, #10b981, #34d399)'
-                : 'linear-gradient(90deg, #F59E0B, #FBBF24)'),
+            background: isFailed ? '#ef4444' : (isDone ? '#10b981' : '#F59E0B'),
             borderRadius: 9999,
-            boxShadow: isFailed
-              ? '0 0 12px rgba(239, 68, 68, 0.7)'
-              : (isDone
-                ? '0 0 12px rgba(16, 185, 129, 0.7)'
-                : '0 0 12px rgba(251, 191, 36, 0.7)'),
           }}
         />
       </div>
 
-      {/* 4 Milestones */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 4 }}>
-        <div style={{
-          padding: '4px 3px',
-          borderRadius: 5,
-          fontSize: '0.62rem',
-          textAlign: 'center',
-          background: smoothProgress >= 25 ? 'rgba(16, 185, 129, 0.15)' : (smoothProgress >= 1 ? 'rgba(251, 191, 36, 0.2)' : 'rgba(255, 255, 255, 0.04)'),
-          color: smoothProgress >= 25 ? '#10b981' : (smoothProgress >= 1 ? '#FBBF24' : '#64748b'),
-          fontWeight: smoothProgress >= 1 ? 700 : 500,
-          border: smoothProgress >= 1 && smoothProgress < 25 ? '1px solid rgba(251, 191, 36, 0.5)' : '1px solid transparent',
-          transition: 'all 0.15s ease',
-        }}>
-          {smoothProgress >= 25 ? '✓ 1. Scan' : '1. Scan'}
-        </div>
-        <div style={{
-          padding: '4px 3px',
-          borderRadius: 5,
-          fontSize: '0.62rem',
-          textAlign: 'center',
-          background: smoothProgress >= 60 ? 'rgba(16, 185, 129, 0.15)' : (smoothProgress >= 25 ? 'rgba(251, 191, 36, 0.2)' : 'rgba(255, 255, 255, 0.04)'),
-          color: smoothProgress >= 60 ? '#10b981' : (smoothProgress >= 25 ? '#FBBF24' : '#64748b'),
-          fontWeight: smoothProgress >= 25 ? 700 : 500,
-          border: smoothProgress >= 25 && smoothProgress < 60 ? '1px solid rgba(251, 191, 36, 0.5)' : '1px solid transparent',
-          transition: 'all 0.15s ease',
-        }}>
-          {smoothProgress >= 60 ? '✓ 2. Stretch' : '2. Stretch'}
-        </div>
-        <div style={{
-          padding: '4px 3px',
-          borderRadius: 5,
-          fontSize: '0.62rem',
-          textAlign: 'center',
-          background: smoothProgress >= 85 ? 'rgba(16, 185, 129, 0.15)' : (smoothProgress >= 60 ? 'rgba(251, 191, 36, 0.2)' : 'rgba(255, 255, 255, 0.04)'),
-          color: smoothProgress >= 85 ? '#10b981' : (smoothProgress >= 60 ? '#FBBF24' : '#64748b'),
-          fontWeight: smoothProgress >= 60 ? 700 : 500,
-          border: smoothProgress >= 60 && smoothProgress < 85 ? '1px solid rgba(251, 191, 36, 0.5)' : '1px solid transparent',
-          transition: 'all 0.15s ease',
-        }}>
-          {smoothProgress >= 85 ? '✓ 3. Re-Align' : '3. Re-Align'}
-        </div>
-        <div style={{
-          padding: '4px 3px',
-          borderRadius: 5,
-          fontSize: '0.62rem',
-          textAlign: 'center',
-          background: isDone ? 'rgba(16, 185, 129, 0.2)' : (smoothProgress >= 85 ? 'rgba(251, 191, 36, 0.2)' : 'rgba(255, 255, 255, 0.04)'),
-          color: isDone ? '#10b981' : (smoothProgress >= 85 ? '#FBBF24' : '#64748b'),
-          fontWeight: smoothProgress >= 85 ? 700 : 500,
-          border: isDone ? '1px solid rgba(16, 185, 129, 0.4)' : (smoothProgress >= 85 ? '1px solid rgba(251, 191, 36, 0.5)' : '1px solid transparent'),
-          transition: 'all 0.15s ease',
-        }}>
-          {isDone ? '✓ 4. Re-Sync' : '4. Re-Sync'}
-        </div>
+      {/* 4 Crisp Single-Line Milestones (Never Wraps to 2 Lines) */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 3 }}>
+        {milestones.map((m) => (
+          <div
+            key={m.key}
+            style={{
+              padding: '3px 2px',
+              borderRadius: 4,
+              fontSize: '10px',
+              lineHeight: 1.2,
+              textAlign: 'center',
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              background: m.done
+                ? 'rgba(16, 185, 129, 0.14)'
+                : m.active
+                  ? 'rgba(245, 158, 11, 0.18)'
+                  : 'rgba(255, 255, 255, 0.04)',
+              color: m.done ? '#34d399' : m.active ? '#FBBF24' : '#64748b',
+              fontWeight: (m.done || m.active) ? 700 : 500,
+              border: m.active ? '1px solid rgba(245, 158, 11, 0.45)' : '1px solid transparent',
+            }}
+          >
+            {m.done ? `✓ ${m.label}` : m.label}
+          </div>
+        ))}
       </div>
 
       {/* Collapsible Live Console Terminal Drawer */}
       <div className="autofit-console-drawer" style={{
         background: '#07080C',
-        border: `1px solid ${isFailed ? 'rgba(239, 68, 68, 0.35)' : (isDone ? 'rgba(16, 185, 129, 0.35)' : 'rgba(251, 191, 36, 0.35)')}`,
-        borderRadius: 8,
+        border: '1px solid var(--border-subtle)',
+        borderRadius: 6,
         overflow: 'hidden',
-        boxShadow: 'inset 0 2px 10px rgba(0, 0, 0, 0.85)',
       }}>
-        {/* Console Header Toggle */}
+        {/* Single-Line Console Header Toggle */}
         <button
           type="button"
           onClick={() => setShowConsole(!showConsole)}
+          title="CONSOLE LOGS (Auto-Fit Speech Speed Engine)"
           style={{
             width: '100%',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
-            padding: '5px 9px',
-            background: 'rgba(255, 255, 255, 0.03)',
+            gap: 6,
+            padding: '4px 8px',
+            background: 'rgba(255, 255, 255, 0.02)',
             border: 'none',
             borderBottom: showConsole ? '1px solid rgba(255, 255, 255, 0.06)' : 'none',
             cursor: 'pointer',
-            transition: 'background 0.15s ease',
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <Terminal size={11} color={isFailed ? '#ef4444' : (isDone ? '#34d399' : '#FBBF24')} />
-            <span style={{ fontSize: '0.64rem', fontWeight: 800, color: '#94a3b8', letterSpacing: '0.04em' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5, minWidth: 0, flex: 1 }}>
+            <Terminal size={10} color={isFailed ? '#f87171' : (isDone ? '#34d399' : '#FBBF24')} style={{ flexShrink: 0 }} />
+            <span style={{
+              fontSize: '10px',
+              fontWeight: 700,
+              color: '#94a3b8',
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              textAlign: 'left',
+            }}>
               CONSOLE LOGS (Auto-Fit Speech Speed Engine)
             </span>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <span style={{ fontSize: '0.58rem', color: '#64748b' }}>
-              {logs.length} lines
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0, whiteSpace: 'nowrap' }}>
+            <span style={{ fontSize: '10px', fontFamily: 'var(--font-mono)', color: '#64748b' }}>
+              {logs.length}
             </span>
             {showConsole ? <ChevronUp size={11} color="#64748b" /> : <ChevronDown size={11} color="#64748b" />}
           </div>

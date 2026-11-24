@@ -77,7 +77,8 @@ test('Timeline Feature: Auto-Cut by Subs cuts only (never mutes) and Mute Voice 
 
   // 4. Verify per-clip mute (clip.isMuted) and track mute remain intact
   const previewPath = path.resolve(__dirname, '../../frontend/src/components/player/VideoPlayerPreview.jsx');
-  const previewContent = fs.readFileSync(previewPath, 'utf8');
+  const audioSyncPath = path.resolve(__dirname, '../../frontend/src/components/player/usePlayerAudioSync.js');
+  const previewContent = fs.readFileSync(previewPath, 'utf8') + '\n' + fs.readFileSync(audioSyncPath, 'utf8');
   assert.match(previewContent, /isCurrentVideoClipMuted/, 'VideoPlayerPreview must preserve per-clip mute');
   assert.match(previewContent, /!seg\.muted && !seg\.isMuted && hasAudio/, 'speakingIntervals must check segment audio');
   assert.match(previewContent, /duckVal === 0/, 'VideoPlayerPreview must preserve 0% ducking');

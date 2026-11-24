@@ -1,6 +1,7 @@
 const {
   stripPunctuationForSpeech,
   isExplicitFillerKhmer,
+  containsChineseHanzi,
 } = require('../../../utils/translationQuality');
 
 /**
@@ -46,7 +47,9 @@ async function translateAndValidateKhmer({ scriptSegments = [], mode = 'dialogue
     const rawKhmerBeforeFilter = khmerText;
     const isPlaceholderKhmer = isExplicitFillerKhmer(khmerText);
     const isPunctuationOnlyKhmer = Boolean(khmerText) && !stripPunctuationForSpeech(khmerText);
-    if (isPlaceholderKhmer || isPunctuationOnlyKhmer) {
+    const hasChineseLeak = Boolean(khmerText) && containsChineseHanzi(khmerText);
+    const hasAnyKhmerChar = /[\u1780-\u17FF]/.test(khmerText);
+    if (isPlaceholderKhmer || isPunctuationOnlyKhmer || (hasChineseLeak && !hasAnyKhmerChar)) {
       khmerText = '';
     }
 
@@ -67,10 +70,17 @@ async function translateAndValidateKhmer({ scriptSegments = [], mode = 'dialogue
       errors.push(
         isPlaceholderKhmer
           ? `រកឃើញអត្ថបទជំនួស "${rawKhmerBeforeFilter}" ដែលមិនទាន់បកប្រែពិតប្រាកដ (ត្រូវការ Review ឬបកប្រែឡើងវិញ)`
-          : isPunctuationOnlyKhmer
-            ? 'រកឃើញអត្ថបទមានតែសញ្ញាវណ្ណយុត្តិ (គ្មានពាក្យអានជាសំឡេង — ត្រូវការ Review ឬបកប្រែឡើងវិញ)'
-            : 'មិនទាន់មានអត្ថបទបកប្រែជាភាសាខ្មែរឡើយ (ត្រូវការ Review)'
+          : hasChineseLeak
+            ? `រកឃើញតួអក្សរចិននៅសល់ "${rawKhmerBeforeFilter}" ដោយមិនទាន់បកប្រែជាខ្មែរ (Chinese Hanzi Leak — ត្រូវបកប្រែឡើងវិញ)`
+            : isPunctuationOnlyKhmer
+              ? 'រកឃើញអត្ថបទមានតែសញ្ញាវណ្ណយុត្តិ (គ្មានពាក្យអានជាសំឡេង — ត្រូវការ Review ឬបកប្រែឡើងវិញ)'
+              : 'មិនទាន់មានអត្ថបទបកប្រែជាភាសាខ្មែរឡើយ (ត្រូវការ Review)'
       );
+    } else if (hasChineseLeak) {
+      missingTranslationCount++;
+      seg.translationStatus = 'review_needed';
+      seg.reviewNeeded = true;
+      errors.push(`រកឃើញតួអក្សរចិនលាយក្នុងអត្ថបទខ្មែរ "${khmerText}" (Chinese Hanzi Leak — ត្រូវបកប្រែជាខ្មែរ ១០០%)`);
     } else {
       translatedCount++;
       seg.translationStatus = seg.translationStatus || 'translated';

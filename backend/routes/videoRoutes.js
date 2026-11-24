@@ -134,6 +134,7 @@ router.post("/render-video", async (req, res) => {
       bgVolume = null,
       khmerVolume = 1.3,
       enableDemucs = false,
+      separationPreset = "turbo",
       burnSubtitles = true,
       subtitleColor = "white",
       subtitleSize = "medium",
@@ -143,6 +144,7 @@ router.post("/render-video", async (req, res) => {
       logoSettings = null,
       cornerMask = null,
       sponsorSettings = null,
+      youtubeTransform = null,
     } = req.body;
 
     const rawVideoRef = videoPath || videoId || (videoFileName ? path.join(uploadsDir, videoFileName) : null);
@@ -326,6 +328,42 @@ router.post("/render-video", async (req, res) => {
       }
     }
 
+    // Resolve Custom Loop BGM Music (.mp3 / .wav / .m4a / .ogg / .aac)
+    let resolvedCustomBgmPath = null;
+    const rawEnableCustomBgm = Boolean(
+      req.body?.enableCustomBgm ?? req.body?.voiceSettings?.enableCustomBgm
+    );
+    const rawCustomBgmRef =
+      req.body?.customBgmPath ||
+      req.body?.customBgmUrl ||
+      req.body?.voiceSettings?.customBgmPath ||
+      req.body?.voiceSettings?.customBgmUrl ||
+      null;
+    if (rawEnableCustomBgm && typeof rawCustomBgmRef === "string" && rawCustomBgmRef.trim()) {
+      const candidate1 = path.join(uploadsDir, "bgm", path.basename(rawCustomBgmRef));
+      const candidate2 = path.join(uploadsDir, path.basename(rawCustomBgmRef));
+      const candidate3 = resolveMediaFile(rawCustomBgmRef);
+      if (fs.existsSync(candidate1) && isSafeUploadPath(candidate1, uploadsDir)) resolvedCustomBgmPath = candidate1;
+      else if (fs.existsSync(candidate2) && isSafeUploadPath(candidate2, uploadsDir)) resolvedCustomBgmPath = candidate2;
+      else if (candidate3 && fs.existsSync(candidate3) && isSafeUploadPath(candidate3, uploadsDir)) resolvedCustomBgmPath = candidate3;
+    }
+
+    const effectiveYoutubeTransform = youtubeTransform || req.body?.voiceSettings?.youtubeTransform || (
+      req.body?.voiceSettings && (
+        req.body.voiceSettings.enableMirrorFlip !== undefined ||
+        req.body.voiceSettings.zoomScale !== undefined ||
+        req.body.voiceSettings.enableColorGrade !== undefined ||
+        req.body.voiceSettings.youtubeSafeAudio !== undefined
+      )
+        ? {
+            enableMirrorFlip: Boolean(req.body.voiceSettings.enableMirrorFlip),
+            zoomScale: Number(req.body.voiceSettings.zoomScale) || 1.0,
+            enableColorGrade: Boolean(req.body.voiceSettings.enableColorGrade),
+            youtubeSafeAudio: Boolean(req.body.voiceSettings.youtubeSafeAudio),
+          }
+        : null
+    );
+
     let renderResult;
     try {
       renderResult = await renderDubbedVideoWithDucking({
@@ -336,6 +374,7 @@ router.post("/render-video", async (req, res) => {
         outputVideoPath,
         soundMode,
         enableDemucs: Boolean(enableDemucs),
+        separationPreset,
         bgVolume: effectiveBgVolume,
         khmerVolume: effectiveKhmerVolume,
         burnSubtitles: Boolean(burnSubtitles),
@@ -355,6 +394,9 @@ router.post("/render-video", async (req, res) => {
           ...rawSponsor,
           sponsorPath: resolvedSponsorPath,
         } : null,
+        youtubeTransform: effectiveYoutubeTransform,
+        enableCustomBgm: Boolean(resolvedCustomBgmPath),
+        customBgmPath: resolvedCustomBgmPath,
       });
     } finally {
       if (tempLogoFile && fs.existsSync(tempLogoFile)) {

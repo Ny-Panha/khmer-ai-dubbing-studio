@@ -41,16 +41,19 @@ export function useDubbingFeature(episodes = [], activeSeries = null) {
     const voicedCount = epList.filter((ep) => checkEpisodeHasAudioReady(ep, null, null) && !ep.audioOutdated).length;
     const autofitCount = epList.filter((ep) => checkEpisodeHasAudioReady(ep, null, null) && checkEpisodeHasAutoFitReady(ep)).length;
     const cleanBgmCount = epList.filter((ep) => checkEpisodeHasDemucsReady(ep, null, null)).length;
+    const compactCount = epList.filter((ep) => ep.scriptData?.autoCompacted || (ep.scriptData?.segments && ep.scriptData.segments.length > 0 && ep.scriptData.segments.every((s) => s.translationStyle === 'compact'))).length;
     const allDoneCount = epList.filter(isEpisodeDone).length;
 
     return {
       total,
       scriptedCount,
+      compactCount,
       voicedCount,
       autofitCount,
       cleanBgmCount,
       allDoneCount,
       translatePercent: total > 0 ? Math.round((scriptedCount / total) * 100) : 0,
+      compactPercent: total > 0 ? Math.min(100, Math.round((compactCount / total) * 100)) : 0,
       voicePercent: total > 0 ? Math.round((voicedCount / total) * 100) : 0,
       autofitPercent: voicedCount > 0 ? Math.round((autofitCount / voicedCount) * 100) : (total > 0 && voicedCount === 0 ? 0 : 100),
       cleanBgmPercent: total > 0 ? Math.round((cleanBgmCount / total) * 100) : 0,
@@ -62,6 +65,7 @@ export function useDubbingFeature(episodes = [], activeSeries = null) {
     runnerStates = DEFAULT_RUNNER_STATES,
     activeEpisodeIds = new Set(),
     runSingleTranslate = async () => ({ success: false, skipped: true }),
+    runSingleAutoCompact = async () => ({ success: false, skipped: true }),
     runSingleTextRepair = async () => ({ success: false, skipped: true }),
     runSingleVoice = async () => ({ success: false, skipped: true }),
     runSingleCleanBgm = async () => ({ success: false, skipped: true }),
@@ -76,6 +80,7 @@ export function useDubbingFeature(episodes = [], activeSeries = null) {
     runnerStates,
     activeEpisodeIds,
     runSingleTranslate,
+    runSingleAutoCompact,
     runSingleTextRepair,
     runSingleVoice,
     runSingleCleanBgm,

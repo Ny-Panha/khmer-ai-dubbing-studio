@@ -763,8 +763,184 @@ Return JSON ONLY matching this schema:
   return result;
 }
 
+/**
+ * Standalone Fast Acoustic F0 Pitch Analyzer
+ * Extracts raw 16kHz s16le mono PCM with a human-voice bandpass filter (75Hz–420Hz),
+ * and analyzes median voiced F0 pitch across sub-frames for each cue [startSec, endSec].
+ *
+ * @param {string} audioFilePath - Media file path (video or audio)
+ * @param {Array} cues - Subtitle cue segments [startSec, endSec]
+ * @param {object} [options] - Options ({ startOffsetSec, durationSec, signal })
+ * @returns {Promise<Array>} Cues enriched with acousticF0, pitchHz, acousticGender, acousticConfidence
+ */
+async function enrichCuesWithAcousticPitch(audioFilePath, cues = [], options = {}) {
+  if (!Array.isArray(cues) || cues.length === 0) return cues || [];
+  if (!audioFilePath || !fs.existsSync(audioFilePath)) {
+    console.warn(`[AcousticPitch] Media file not found: ${audioFilePath}`);
+    return cues;
+  }
+
+  const { startOffsetSec = 0, durationSec = 0, signal = null } = options;
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dragondub_f0_'));
+  const pcmPath = path.join(tempDir, 'voice_bandpass_16k.pcm');
+
+  try {
+    const ffmpegInstaller = require('@ffmpeg-installer/ffmpeg');
+    const ffmpegBin = ffmpegInstaller.path;
+
+    const ffmpegArgs = ['-y', '-threads', '2'];
+    if (startOffsetSec > 0) {
+      ffmpegArgs.push('-ss', String(startOffsetSec));
+    }
+    ffmpegArgs.push('-i', audioFilePath);
+    if (durationSec > 0) {
+      ffmpegArgs.push('-t', String(durationSec));
+    }
+    ffmpegArgs.push(
+      '-af', 'highpass=f=75,lowpass=f=420',
+      '-f', 's16le',
+      '-ac', '1',
+      '-ar', '16000',
+      pcmPath
+    );
+
+    await new Promise((resolvePcm, rejectPcm) => {
+      if (signal?.aborted) return rejectPcm(createAbortError('enrichCuesWithAcousticPitch aborted'));
+      let settled = false;
+      const proc = spawn(ffmpegBin, ffmpegArgs, { windowsHide: true, stdio: ['ignore', 'ignore', 'ignore'] });
+
+      const onAbort = () => {
+        killChildTree(proc);
+        if (!settled) {
+          settled = true;
+          rejectPcm(createAbortError('enrichCuesWithAcousticPitch aborted'));
+        }
+      };
+      if (signal) signal.addEventListener('abort', onAbort, { once: true });
+      const detach = () => {
+        if (signal) {
+          try { signal.removeEventListener('abort', onAbort); } catch (_) {}
+        }
+      };
+
+      proc.on('close', () => {
+        detach();
+        if (settled) return;
+        settled = true;
+        if (signal?.aborted) return rejectPcm(createAbortError('enrichCuesWithAcousticPitch aborted'));
+        resolvePcm();
+      });
+      proc.on('error', (err) => {
+        detach();
+        if (settled) return;
+        settled = true;
+        rejectPcm(err);
+      });
+    });
+
+    if (!fs.existsSync(pcmPath) || fs.statSync(pcmPath).size < 1024) {
+      return cues;
+    }
+
+    const pcmBuf = fs.readFileSync(pcmPath);
+    const pcmData = new Int16Array(pcmBuf.buffer, pcmBuf.byteOffset, Math.floor(pcmBuf.length / 2));
+
+    const FRAME_SAMPLES = 2400; // 150ms at 16kHz
+    const HOP_SAMPLES = 1200;   // 75ms hop (50% overlap)
+
+    for (const cue of cues) {
+      const cueStart = Number(cue.startSec ?? cue.start ?? 0);
+      const cueEnd = Number(cue.endSec ?? cue.end ?? (cueStart + 2.0));
+      const localStart = Math.max(0, cueStart - startOffsetSec);
+      const localEnd = Math.max(localStart, cueEnd - startOffsetSec);
+
+      const startSample = Math.floor(localStart * 16000);
+      const endSample = Math.min(pcmData.length, Math.floor(localEnd * 16000));
+      const cueSamples = endSample - startSample;
+
+      if (cueSamples < 1024) {
+        continue;
+      }
+
+      const cuePcm = pcmData.subarray(startSample, endSample);
+      const f0Estimates = [];
+      const confEstimates = [];
+
+      // Sub-frame analysis: 150ms window with 75ms hop
+      if (cueSamples <= FRAME_SAMPLES) {
+        const est = computeYinPitch(cuePcm, 16000);
+        if (est && est.f0 >= 75 && est.f0 <= 350 && est.confidence >= 0.45) {
+          f0Estimates.push(est.f0);
+          confEstimates.push(est.confidence);
+        }
+      } else {
+        for (let offset = 0; offset + FRAME_SAMPLES <= cueSamples; offset += HOP_SAMPLES) {
+          const subSlice = cuePcm.subarray(offset, offset + FRAME_SAMPLES);
+          const est = computeYinPitch(subSlice, 16000);
+          if (est && est.f0 >= 75 && est.f0 <= 350 && est.confidence >= 0.45) {
+            f0Estimates.push(est.f0);
+            confEstimates.push(est.confidence);
+          }
+        }
+      }
+
+      if (f0Estimates.length > 0) {
+        f0Estimates.sort((a, b) => a - b);
+        const midIdx = Math.floor(f0Estimates.length / 2);
+        const medianF0 = f0Estimates[midIdx];
+        const p75Idx = Math.min(f0Estimates.length - 1, Math.floor(f0Estimates.length * 0.75));
+        const p75F0 = f0Estimates[p75Idx];
+        const avgConf = parseFloat((confEstimates.reduce((acc, c) => acc + c, 0) / confEstimates.length).toFixed(2));
+
+        let acousticGender = 'unknown';
+        let acousticConfidence = avgConf;
+
+        if (medianF0 >= 170 && medianF0 <= 320) {
+          acousticGender = 'female';
+        } else if (medianF0 >= 80 && medianF0 <= 155) {
+          acousticGender = 'male';
+        } else if (medianF0 > 155 && medianF0 < 170) {
+          // Ambiguous overlap zone: check 75th percentile
+          if (p75F0 >= 185) {
+            acousticGender = 'female';
+            acousticConfidence = Math.max(0.60, avgConf);
+          } else {
+            acousticGender = 'male';
+            acousticConfidence = 0.55;
+          }
+        }
+
+        const roundedF0 = Math.round(medianF0);
+        cue.acousticF0 = roundedF0;
+        cue.pitchHz = roundedF0;
+        cue.acousticGender = acousticGender;
+        cue.acousticConfidence = acousticConfidence;
+
+        if (!cue.voiceGender || cue.voiceGender === 'unknown') {
+          cue.voiceGender = acousticGender;
+        }
+        if (!cue.audioGender || cue.audioGender === 'unknown') {
+          cue.audioGender = acousticGender;
+        }
+      }
+    }
+  } catch (err) {
+    if (err?.name === 'AbortError' || signal?.aborted) throw err;
+    console.warn('[enrichCuesWithAcousticPitch] Notice:', err.message);
+  } finally {
+    try {
+      if (fs.existsSync(tempDir)) {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+      }
+    } catch (_) {}
+  }
+
+  return cues;
+}
+
 module.exports = {
   analyzeDialogueAudio,
+  enrichCuesWithAcousticPitch,
   safelyParseSpeechSegments,
   containsChineseCharacters,
   filterValidChineseAsrSegments,

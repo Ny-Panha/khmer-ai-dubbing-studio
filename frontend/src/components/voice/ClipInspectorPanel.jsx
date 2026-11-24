@@ -1,4 +1,4 @@
-import { cleanKhmerText } from '../../utils/cleanKhmer';
+import { cleanKhmerText } from '../../utils/khmerTextSplitter';
 import React, { useState } from 'react';
 import SmoothRangeSlider from '../common/SmoothRangeSlider';
 import {
@@ -166,81 +166,67 @@ export default function ClipInspectorPanel({
     const durSec = Math.max(0, endSec - startSec);
 
     return (
-      <div className="clip-inspector-section" style={{ marginBottom: 12, border: '1px solid rgba(0, 229, 255, 0.25)', borderRadius: 8, background: 'rgba(15, 23, 42, 0.7)', overflow: 'hidden' }}>
+      <div className="clip-inspector-section" style={{ marginBottom: 12, border: '1px solid var(--border-subtle)', borderRadius: 'var(--radius-md)', background: 'var(--bg-secondary-panel)', overflow: 'hidden' }}>
         <div
           onClick={onToggle}
           style={{
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'space-between',
-            padding: '10px 14px',
-            background: 'linear-gradient(90deg, rgba(13, 56, 68, 0.8) 0%, rgba(6, 34, 43, 0.6) 100%)',
+            padding: '10px 12px',
+            background: 'var(--bg-elevated-panel)',
             cursor: 'pointer',
-            borderBottom: '1px solid rgba(0, 229, 255, 0.15)',
+            borderBottom: isOpen ? '1px solid var(--border-subtle)' : 'none',
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <Film size={14} color="#38bdf8" />
-            <span style={{ fontSize: '0.85rem', fontWeight: 700, color: '#e0f2fe' }}>
-              Video Clip: {targetVideoClip.name || 'Clip'}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+            <Film size={14} color="var(--primary-accent)" />
+            <span style={{ fontSize: 'var(--text-body)', fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              Video: {targetVideoClip.name || 'Clip'}
             </span>
-            <span style={{ fontSize: '0.72rem', color: 'var(--accent-cyan)', background: 'rgba(0, 229, 255, 0.12)', padding: '2px 6px', borderRadius: 4 }}>
+            <span style={{ fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--primary-accent)', background: 'rgba(56, 189, 248, 0.12)', padding: '1px 6px', borderRadius: 'var(--radius-xs)' }}>
               {durSec.toFixed(2)}s
             </span>
           </div>
-          <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>{isOpen ? '▲ បង្រួម' : '▼ ពង្រីក'}</span>
+          <span style={{ fontSize: '11px', color: 'var(--text-secondary)', flexShrink: 0 }}>{isOpen ? 'បង្រួម' : 'ពង្រីក'}</span>
         </div>
 
         {isOpen && (
-          <div style={{ padding: '14px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
-              <span style={{ fontSize: '0.75rem', color: 'var(--text-secondary)' }}>
-                ចន្លោះម៉ោង៖ {startSec.toFixed(2)}s - {endSec.toFixed(2)}s
+          <div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: '12px', color: 'var(--text-secondary)' }}>
+                {startSec.toFixed(2)}s – {endSec.toFixed(2)}s
               </span>
               {onToggleMuteVideoClip && (
                 <button
                   type="button"
                   onClick={() => onToggleMuteVideoClip(targetVideoClip.id)}
-                  title={isClipMuted ? "បានបិទសំឡេងដើម (Muted) - ចុចដើម្បីបើកវិញ" : "ចុចដើម្បីបិទសំឡេងវីដេអូដើម (Mute Original Audio)"}
+                  className="btn-secondary"
                   style={{
-                    padding: '6px 14px',
-                    fontSize: '0.75rem',
-                    fontWeight: 700,
-                    borderRadius: 5,
-                    cursor: 'pointer',
-                    display: 'inline-flex',
-                    alignItems: 'center',
-                    gap: 6,
-                    border: `1px solid ${isClipMuted ? '#ef4444' : 'var(--accent-cyan)'}`,
-                    background: isClipMuted ? 'rgba(239, 68, 68, 0.25)' : 'rgba(0, 229, 255, 0.12)',
-                    color: isClipMuted ? '#f87171' : 'var(--accent-cyan)',
-                    transition: 'all 0.15s ease',
+                    minHeight: 30,
+                    padding: '4px 10px',
+                    fontSize: 'var(--text-sm)',
+                    borderColor: isClipMuted ? 'rgba(239, 68, 68, 0.5)' : 'var(--border-subtle)',
+                    background: isClipMuted ? 'rgba(239, 68, 68, 0.16)' : 'var(--bg-elevated-panel)',
+                    color: isClipMuted ? '#FCA5A5' : 'var(--text-primary)',
                   }}
                 >
-                  {isClipMuted ? (
-                    <>
-                      <VolumeX size={14} color="#f87171" />
-                      <span>បានបិទសំឡេង (Muted)</span>
-                    </>
-                  ) : (
-                    <>
-                      <Volume2 size={14} color="var(--accent-cyan)" />
-                      <span>បិទសំឡេងដើម</span>
-                    </>
-                  )}
+                  {isClipMuted ? <VolumeX size={13} /> : <Volume2 size={13} />}
+                  <span>{isClipMuted ? 'បានបិទសំឡេង' : 'បិទសំឡេងដើម'}</span>
                 </button>
               )}
             </div>
 
-            <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
               {onSplitClip && (
                 <button
                   type="button"
                   onClick={() => onSplitClip(currentTime)}
                   className="btn-secondary"
-                  style={{ padding: '6px 12px', fontSize: '0.75rem', display: 'inline-flex', alignItems: 'center', gap: 5 }}
+                  style={{ minHeight: 32, fontSize: 'var(--text-sm)', justifyContent: 'center' }}
                 >
-                  <Scissors size={13} /> កាត់ត្រង់ Playhead
+                  <Scissors size={13} />
+                  <span>កាត់ Clip</span>
                 </button>
               )}
               {onDeleteClip && (
@@ -248,9 +234,10 @@ export default function ClipInspectorPanel({
                   type="button"
                   onClick={() => onDeleteClip(targetVideoClip.id)}
                   className="btn-danger"
-                  style={{ padding: '6px 12px', fontSize: '0.75rem', display: 'inline-flex', alignItems: 'center', gap: 5 }}
+                  style={{ minHeight: 32, fontSize: 'var(--text-sm)', justifyContent: 'center' }}
                 >
-                  <Trash2 size={13} /> លុប Clip នេះ
+                  <Trash2 size={13} />
+                  <span>លុប Clip</span>
                 </button>
               )}
             </div>
@@ -273,6 +260,12 @@ export default function ClipInspectorPanel({
   const commitTextChange = (textToCommit) => {
     if (textToCommit === lastCommittedTextRef.current) return;
     lastCommittedTextRef.current = textToCommit;
+    if (selectedSegment) {
+      delete selectedSegment.regenError;
+      if (selectedSegment.textStatus === 'error') {
+        selectedSegment.textStatus = 'text_updated';
+      }
+    }
     if (onSegmentTextChange) {
       onSegmentTextChange(selectedSegmentIndex, textToCommit);
     }
@@ -344,14 +337,23 @@ export default function ClipInspectorPanel({
     return rawMsg;
   };
 
-  // ✨ AI In-App Re-Translation handler (1-Click classical drama options)
+  const pickPreferredCompactOption = (options = []) => {
+    if (!Array.isArray(options) || options.length === 0) return null;
+    return (
+      options.find((opt) => opt?.style === 'compact' || String(opt?.label || '').includes('ខ្លីចំអត្ថន័យ')) ||
+      options[1] ||
+      options[0]
+    );
+  };
+
+  // ✨ AI In-App Re-Translation handler (generates 3 options & auto-applies Option #2 "📝 ខ្លីចំអត្ថន័យ")
   const handleAiRetranslate = async () => {
     const textToTranslate = (localChineseText || originalChinese || '').trim();
     if (!textToTranslate || isRetranslating) return;
     setIsRetranslating(true);
     setRetranslateError(null);
     try {
-      // Context enrichment: previous translation + surrounding dialogue context
+      // Context enrichment: previous translation + surrounding dialogue context + time slot duration
       const previousTranslation = (localKhmerText || selectedSegment?.khmerText || selectedSegment?.khmerTranslatedText || selectedSegment?.khmer || '').trim();
       const allSegs = scriptData?.segments || [];
       const segIdx = allSegs.findIndex(s => s.id === selectedSegment?.id || s._uid === selectedSegment?._uid);
@@ -373,11 +375,18 @@ export default function ClipInspectorPanel({
         surroundingContext = parts.join(' | ');
       }
 
+      const rawStart = Number(selectedSegment?.startSec ?? selectedSegment?.startTime ?? 0);
+      const rawEnd = Number(selectedSegment?.endSec ?? selectedSegment?.endTime ?? 0);
+      const segDurationSec = Number(selectedSegment?.duration) > 0
+        ? Number(selectedSegment.duration)
+        : (rawEnd > rawStart ? Number((rawEnd - rawStart).toFixed(2)) : undefined);
+
       const res = await retranslateSegmentApi(textToTranslate, {
         speaker: selectedSegment?.speaker,
         gender: selectedSegment?.gender || selectedSegment?.speakerGender,
         previousTranslation,
         context: surroundingContext,
+        durationSec: segDurationSec,
       });
       if (res && Array.isArray(res.options) && res.options.length > 0) {
         const sanitizedRes = {
@@ -387,6 +396,7 @@ export default function ClipInspectorPanel({
         };
         setRetranslateData(sanitizedRes);
         retranslateCacheRef.current[currentSegKey] = sanitizedRes;
+        // Display only — do not auto-pick for the user so user can review word count vs slot budget
       } else {
         setRetranslateError('AI មិនបានបញ្ជូនជម្រើសបកប្រែត្រឡប់មកវិញទេ។ សូមសាកល្បងម្ដងទៀត។');
       }
@@ -421,14 +431,24 @@ export default function ClipInspectorPanel({
       }
 
       if (!bestText) {
+        const rawStart = Number(selectedSegment?.startSec ?? selectedSegment?.startTime ?? 0);
+        const rawEnd = Number(selectedSegment?.endSec ?? selectedSegment?.endTime ?? 0);
+        const segDurationSec = Number(selectedSegment?.duration) > 0
+          ? Number(selectedSegment.duration)
+          : (rawEnd > rawStart ? Number((rawEnd - rawStart).toFixed(2)) : undefined);
         const previousTranslation = (localKhmerText || selectedSegment?.khmerText || selectedSegment?.khmerTranslatedText || selectedSegment?.khmer || '').trim();
         const res = await retranslateSegmentApi(textToTranslate, {
           speaker: selectedSegment?.speaker,
           gender: selectedSegment?.gender || selectedSegment?.speakerGender,
           previousTranslation,
+          durationSec: segDurationSec,
         });
         if (res && Array.isArray(res.options) && res.options.length > 0) {
-          bestText = cleanKhmerText(res.options[0].text);
+          const preferredOpt = pickPreferredCompactOption(res.options);
+          bestText = cleanKhmerText(preferredOpt?.text || res.options[0].text);
+          if (preferredOpt?.text) {
+            handleApplyOption(preferredOpt.text);
+          }
           resOptions = res;
         }
       }
@@ -533,20 +553,22 @@ export default function ClipInspectorPanel({
   const effectiveVoiceId = isSreymomActive ? 'km-KH-SreymomNeural' : 'km-KH-PisethNeural';
 
   return (
-    <div className="inspector-card-group" style={{ padding: '8px' }}>
-      {/* Dialogue & Translation Card (Chinese Source + Khmer Target) */}
+    <div className="inspector-card-group" style={{ padding: '10px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+      {/* 1. Chinese Source + Khmer Translation Card */}
       <div style={{
-        marginBottom: 10,
-        padding: '8px',
-        background: 'rgba(20, 20, 30, 0.65)',
-        borderRadius: 6,
-        border: '1px solid rgba(255, 255, 255, 0.08)'
+        padding: '10px',
+        background: 'var(--bg-secondary-panel)',
+        borderRadius: 'var(--radius-sm)',
+        border: '1px solid var(--border-subtle)',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 8,
       }}>
-        {/* 1. Chinese Original Header */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6, gap: 8, flexWrap: 'wrap' }}>
-          <label style={{ fontSize: '0.72rem', color: '#38bdf8', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 5 }}>
-            <span style={{ background: 'rgba(56, 189, 248, 0.15)', border: '1px solid rgba(56, 189, 248, 0.3)', padding: '1px 5px', borderRadius: 3, fontSize: '0.62rem', fontWeight: 800 }}>CN</span>
-            <span>អត្ថបទដើមចិន (Original):</span>
+        {/* Chinese Original Header */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+          <label style={{ fontSize: '12px', color: 'var(--text-secondary)', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+            <span style={{ fontFamily: 'var(--font-mono)', background: 'var(--bg-elevated-panel)', border: '1px solid var(--border-subtle)', color: 'var(--primary-accent)', padding: '1px 5px', borderRadius: 'var(--radius-xs)', fontSize: '10.5px', fontWeight: 700 }}>CN</span>
+            <span>អត្ថបទចិន</span>
           </label>
           {(localChineseText || originalChinese) && (
             <div style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
@@ -555,48 +577,35 @@ export default function ClipInspectorPanel({
                 data-testid="btn-ai-retranslate"
                 onClick={handleAiRetranslate}
                 disabled={isRetranslating}
+                className="btn-secondary"
                 style={{
-                  background: 'linear-gradient(135deg, rgba(168, 85, 247, 0.28), rgba(139, 92, 246, 0.18))',
-                  border: '1px solid rgba(168, 85, 247, 0.55)',
-                  borderRadius: 4,
-                  color: '#d8b4fe',
-                  cursor: isRetranslating ? 'wait' : 'pointer',
-                  fontSize: '0.66rem',
-                  fontWeight: 700,
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 3,
-                  padding: '2px 7px',
-                  whiteSpace: 'nowrap',
-                  transition: 'all 0.15s ease',
+                  minHeight: 26,
+                  padding: '2px 8px',
+                  fontSize: '11.5px',
+                  borderColor: 'rgba(56, 189, 248, 0.35)',
+                  color: 'var(--primary-accent)',
+                  background: 'rgba(56, 189, 248, 0.1)',
                 }}
-                title="AI Re-Translate: ឱ្យ AI បកប្រែជាភាសាកុនបុរាណ ៣ ជម្រើសភ្លាមៗ"
+                title="ឱ្យ AI បកប្រែឡើងវិញ ៣ ជម្រើស"
               >
-                {isRetranslating ? <Loader2 size={11} className="spin animate-spin" /> : <Sparkles size={11} color="#d8b4fe" />}
-                <span>{isRetranslating ? 'កំពុងគិត...' : 'AI កែប្រែ'}</span>
+                {isRetranslating ? <Loader2 size={11} className="animate-spin" /> : <Sparkles size={11} />}
+                <span>{isRetranslating ? 'កំពុងគិត...' : 'បកប្រែ AI'}</span>
               </button>
 
               <button
                 type="button"
                 onClick={handleCopyChinese}
+                className="btn-secondary"
                 style={{
-                  background: 'rgba(255, 255, 255, 0.05)',
-                  border: '1px solid rgba(255, 255, 255, 0.1)',
-                  borderRadius: 4,
-                  color: copiedChinese ? '#4ade80' : 'var(--text-dim)',
-                  cursor: 'pointer',
-                  fontSize: '0.66rem',
-                  fontWeight: 600,
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 3,
-                  padding: '2px 6px',
-                  transition: 'all 0.15s ease',
+                  minHeight: 26,
+                  padding: '2px 7px',
+                  fontSize: '11.5px',
+                  color: copiedChinese ? '#6EE7B7' : 'var(--text-secondary)',
                 }}
-                title="Copy Chinese dialogue text"
+                title="ចម្លងអត្ថបទចិន"
               >
                 {copiedChinese ? <Check size={11} /> : <Copy size={11} />}
-                <span>{copiedChinese ? 'Copied' : 'Copy'}</span>
+                <span>{copiedChinese ? 'បានចម្លង' : 'Copy'}</span>
               </button>
             </div>
           )}
@@ -606,63 +615,47 @@ export default function ClipInspectorPanel({
           value={localChineseText}
           onChange={handleChineseTextChange}
           onBlur={handleChineseTextBlur}
-          placeholder="បញ្ចូល ឬកែសម្រួលអត្ថបទដើមចិននៅទីនេះ..."
+          placeholder="អត្ថបទដើមភាសាចិន..."
+          className="capcut-input"
           style={{
             width: '100%',
             boxSizing: 'border-box',
-            fontSize: '0.86rem',
-            color: '#f3f4f6',
+            fontSize: '13px',
+            color: 'var(--text-primary)',
             lineHeight: 1.5,
-            background: 'rgba(0, 0, 0, 0.25)',
-            padding: '6px 8px',
-            borderRadius: 4,
-            border: '1px solid rgba(255, 255, 255, 0.08)',
-            outline: 'none',
+            background: 'var(--bg-desktop)',
+            padding: '7px 9px',
+            borderRadius: 'var(--radius-xs)',
+            border: '1px solid var(--border-subtle)',
             resize: 'vertical',
-            fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Microsoft YaHei", sans-serif',
-            transition: 'all 0.2s ease',
           }}
         />
 
-        {/* Retranslate Error Banner if failed */}
+        {/* Retranslate Error Banner */}
         {retranslateError && (
           <div
             data-testid="retranslate-error-banner"
             style={{
-              marginTop: 6,
               padding: '6px 8px',
               background: 'rgba(239, 68, 68, 0.14)',
-              border: '1px solid rgba(239, 68, 68, 0.45)',
-              borderRadius: 5,
+              border: '1px solid rgba(239, 68, 68, 0.4)',
+              borderRadius: 'var(--radius-xs)',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'space-between',
               gap: 8,
             }}
           >
-            <span style={{ fontSize: '0.7rem', color: '#fca5a5', display: 'flex', alignItems: 'center', gap: 5, lineHeight: 1.4 }}>
-              <AlertCircle size={12} color="#ef4444" style={{ flexShrink: 0 }} />
+            <span style={{ fontSize: '11.5px', color: '#FCA5A5', display: 'flex', alignItems: 'center', gap: 5, lineHeight: 1.4 }}>
+              <AlertCircle size={12} color="#F87171" style={{ flexShrink: 0 }} />
               <span>{retranslateError}</span>
             </span>
             <button
               type="button"
               onClick={handleAiRetranslate}
               disabled={isRetranslating}
-              style={{
-                padding: '2px 7px',
-                fontSize: '0.66rem',
-                background: 'rgba(239, 68, 68, 0.85)',
-                color: '#ffffff',
-                border: 'none',
-                borderRadius: 4,
-                cursor: isRetranslating ? 'wait' : 'pointer',
-                fontWeight: 700,
-                whiteSpace: 'nowrap',
-                flexShrink: 0,
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 3,
-              }}
+              className="btn-danger"
+              style={{ minHeight: 24, padding: '2px 8px', fontSize: '11px', flexShrink: 0 }}
             >
               <RefreshCw size={10} />
               <span>សាកម្ដងទៀត</span>
@@ -670,961 +663,729 @@ export default function ClipInspectorPanel({
           </div>
         )}
 
-            {/* Subtle Gradient Divider between Chinese Source & Khmer Target */}
+        <div style={{ height: 1, background: 'var(--border-subtle)' }} />
+
+        {/* Khmer Translation Header */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6 }}>
+          <label style={{ fontSize: '12px', color: 'var(--text-secondary)', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+            <span style={{ fontFamily: 'var(--font-mono)', background: 'rgba(56, 189, 248, 0.14)', border: '1px solid rgba(56, 189, 248, 0.3)', color: 'var(--primary-accent)', padding: '1px 5px', borderRadius: 'var(--radius-xs)', fontSize: '10.5px', fontWeight: 700 }}>KH</span>
+            <span>អត្ថបទខ្មែរ</span>
+          </label>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            {isGenerating && (
+              <span style={{ fontSize: '11px', color: '#7DD3FC', background: 'rgba(56, 189, 248, 0.14)', border: '1px solid rgba(56, 189, 248, 0.35)', padding: '1px 7px', borderRadius: 'var(--radius-xs)', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                <Loader2 size={11} className="animate-spin" />
+                <span>កំពុងបង្កើត...</span>
+              </span>
+            )}
+            {isVoiceUpdated && (
+              <span style={{ fontSize: '11px', color: '#6EE7B7', background: 'rgba(16, 185, 129, 0.14)', border: '1px solid rgba(52, 211, 153, 0.35)', padding: '1px 7px', borderRadius: 'var(--radius-xs)', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                <CheckCircle2 size={11} />
+                <span>រួចរាល់</span>
+              </span>
+            )}
+            {isError && (
+              <span style={{ fontSize: '11px', color: '#FCA5A5', background: 'rgba(239, 68, 68, 0.14)', border: '1px solid rgba(239, 68, 68, 0.35)', padding: '1px 7px', borderRadius: 'var(--radius-xs)', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                <AlertCircle size={11} />
+                <span>មានបញ្ហា</span>
+              </span>
+            )}
+            {isTextUpdated && (
+              <span style={{ fontSize: '11px', color: '#FDE68A', background: 'rgba(245, 158, 11, 0.14)', border: '1px solid rgba(245, 158, 11, 0.35)', padding: '1px 7px', borderRadius: 'var(--radius-xs)', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                <Edit3 size={10} />
+                <span>បានកែអត្ថបទ</span>
+              </span>
+            )}
+          </div>
+        </div>
+
+        <textarea
+          id="inspector-khmer-textarea"
+          rows={3}
+          value={localKhmerText}
+          onChange={handleKhmerTextChange}
+          onBlur={handleKhmerTextBlur}
+          placeholder="វាយ ឬកែសម្រួលអត្ថបទភាសាខ្មែរ..."
+          style={{
+            width: '100%',
+            boxSizing: 'border-box',
+            fontSize: 'var(--text-body)',
+            color: 'var(--text-primary)',
+            background: 'var(--bg-desktop)',
+            border: isGenerating
+              ? '1px solid var(--primary-accent)'
+              : (isError ? '1px solid var(--color-error)' : (isVoiceUpdated ? '1px solid var(--color-success)' : (isTextUpdated ? '1px solid rgba(245, 158, 11, 0.55)' : '1px solid var(--border-subtle)'))),
+            borderRadius: 'var(--radius-xs)',
+            padding: '7px 9px',
+            lineHeight: 1.6,
+            outline: 'none',
+            resize: 'vertical',
+            fontFamily: 'var(--font-sans)',
+          }}
+        />
+
+        {/* AI Re-Translation Suggestion Options (Clean Flat Darkroom Cards) */}
+        {retranslateData?.options && retranslateData.options.length > 0 && (() => {
+          const rawSegStart = Number(selectedSegment?.startSec ?? selectedSegment?.startTime ?? 0);
+          const rawSegEnd = Number(selectedSegment?.endSec ?? selectedSegment?.endTime ?? 0);
+          const currentSegDuration = Number(selectedSegment?.duration) > 0
+            ? Number(selectedSegment.duration)
+            : (rawSegEnd > rawSegStart ? Number((rawSegEnd - rawSegStart).toFixed(2)) : 0);
+          const slotWordBudget = retranslateData?.maxKhmerWords || (currentSegDuration > 0
+            ? Math.min(14, Math.max(2, Math.ceil(Math.min(currentSegDuration, 4.5) * 2.5)))
+            : null);
+
+          return (
             <div style={{
-              height: 1,
-              background: 'linear-gradient(90deg, rgba(56, 189, 248, 0.25) 0%, rgba(255, 255, 255, 0.08) 50%, rgba(56, 189, 248, 0.25) 100%)',
-              margin: '10px 0'
-            }} />
-
-            {/* 2. Khmer Translation Header */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-              <label style={{ fontSize: '0.72rem', color: '#38bdf8', fontWeight: 700, display: 'flex', alignItems: 'center', gap: 5 }}>
-                <span style={{ background: 'rgba(56, 189, 248, 0.15)', border: '1px solid rgba(56, 189, 248, 0.3)', padding: '1px 5px', borderRadius: 3, fontSize: '0.62rem', fontWeight: 800 }}>KH</span>
-                <span>អត្ថបទបកប្រែខ្មែរ (Translation):</span>
-              </label>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                {isGenerating && (
-                  <span style={{ fontSize: '0.66rem', color: '#38bdf8', background: 'rgba(56, 189, 248, 0.18)', border: '1px solid rgba(56, 189, 248, 0.45)', padding: '2px 7px', borderRadius: 4, fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                    <Loader2 size={11} className="animate-spin" />
-                    <span>Generating Khmer Voice...</span>
+              padding: '8px',
+              background: 'var(--bg-elevated-panel)',
+              border: '1px solid rgba(56, 189, 248, 0.35)',
+              borderRadius: 'var(--radius-sm)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 6,
+            }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6 }}>
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: '12px', color: 'var(--primary-accent)', fontWeight: 700, whiteSpace: 'nowrap' }}>
+                    <Sparkles size={12} />
+                    <span>ជម្រើសបកប្រែ AI</span>
                   </span>
-                )}
-
-                {isVoiceUpdated && (
-                  <span style={{ fontSize: '0.66rem', color: '#4ade80', background: 'rgba(34, 197, 94, 0.18)', border: '1px solid rgba(34, 197, 94, 0.45)', padding: '2px 7px', borderRadius: 4, fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                    <CheckCircle2 size={11} />
-                    <span>Voice Updated</span>
+                  <span style={{
+                    fontSize: '10px',
+                    fontWeight: 700,
+                    padding: '1px 6px',
+                    borderRadius: 4,
+                    background: slotWordBudget ? 'rgba(56, 189, 248, 0.14)' : 'rgba(16, 185, 129, 0.14)',
+                    border: slotWordBudget ? '1px solid rgba(56, 189, 248, 0.35)' : '1px solid rgba(16, 185, 129, 0.35)',
+                    color: slotWordBudget ? 'var(--primary-accent)' : '#6EE7B7',
+                    whiteSpace: 'nowrap',
+                  }}>
+                    {slotWordBudget ? `Budget: <= ${slotWordBudget} ពាក្យ` : 'ជ្រើសរើសជម្រើសសមស្រប'}
                   </span>
+                </div>
+                {retranslateData.note && (
+                  <span style={{ fontSize: '11px', color: 'var(--text-secondary)', lineHeight: 1.45 }}>{retranslateData.note}</span>
                 )}
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                {retranslateData.options.map((opt, i) => {
+                  const isCompactOpt = opt.style === 'compact' || String(opt.label || '').includes('ខ្លីចំអត្ថន័យ');
+                  const cleanOptText = cleanKhmerText(opt.text);
+                  const isAppliedOpt = Boolean(cleanOptText && cleanKhmerText(localKhmerText) === cleanOptText);
+                  const optWords = cleanOptText ? cleanOptText.trim().split(/\s+/).filter(Boolean).length : 0;
+                  const isFit = slotWordBudget ? optWords <= slotWordBudget : true;
 
-                {isError && (
-                  <span style={{ fontSize: '0.66rem', color: '#f87171', background: 'rgba(239, 68, 68, 0.18)', border: '1px solid rgba(239, 68, 68, 0.45)', padding: '2px 7px', borderRadius: 4, fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                    <AlertCircle size={11} />
-                    <span>Error</span>
-                  </span>
-                )}
-
-                {isTextUpdated && (
-                  <span style={{ fontSize: '0.66rem', color: '#fbbf24', background: 'rgba(245, 158, 11, 0.18)', border: '1px solid rgba(245, 158, 11, 0.45)', padding: '2px 7px', borderRadius: 4, fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                    <Edit3 size={11} />
-                    <span>Text Updated</span>
-                  </span>
-                )}
+                  return (
+                    <button
+                      key={i}
+                      type="button"
+                      data-testid={`retranslate-opt-${opt.style || i}`}
+                      onClick={() => handleApplyOption(opt.text)}
+                      style={{
+                        display: 'flex',
+                        flexDirection: 'column',
+                        alignItems: 'stretch',
+                        gap: 3,
+                        padding: '7px 8px',
+                        background: isAppliedOpt
+                          ? 'rgba(56, 189, 248, 0.16)'
+                          : (isCompactOpt ? 'rgba(56, 189, 248, 0.08)' : 'var(--bg-secondary-panel)'),
+                        border: isAppliedOpt
+                          ? '1px solid var(--primary-accent)'
+                          : (isCompactOpt ? '1px solid rgba(56, 189, 248, 0.4)' : '1px solid var(--border-subtle)'),
+                        borderRadius: 'var(--radius-xs)',
+                        color: 'var(--text-primary)',
+                        fontSize: 'var(--text-sm)',
+                        textAlign: 'left',
+                        cursor: 'pointer',
+                        lineHeight: 1.5,
+                      }}
+                      title="ចុចដើម្បីជ្រើសរើសជម្រើសនេះ"
+                    >
+                      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 7, width: '100%' }}>
+                        <span style={{
+                          flexShrink: 0,
+                          fontSize: '10.5px',
+                          padding: '1px 6px',
+                          borderRadius: 'var(--radius-xs)',
+                          background: isAppliedOpt || isCompactOpt ? 'var(--btn-primary-bg)' : 'var(--bg-elevated-panel)',
+                          color: isAppliedOpt || isCompactOpt ? '#FFFFFF' : 'var(--text-secondary)',
+                          fontWeight: 700,
+                          whiteSpace: 'nowrap',
+                        }}>
+                          {opt.label}
+                        </span>
+                        <span style={{ flex: 1, fontWeight: isAppliedOpt || isCompactOpt ? 600 : 400 }}>{cleanOptText}</span>
+                        {isAppliedOpt && (
+                          <CheckCircle2 size={13} color="#34D399" style={{ flexShrink: 0, marginTop: 2 }} />
+                        )}
+                      </div>
+                      {slotWordBudget && (
+                        <div style={{ paddingLeft: '2px', display: 'flex', alignItems: 'center', gap: 4 }}>
+                          <span style={{
+                            fontSize: '11px',
+                            fontWeight: 600,
+                            color: isFit ? '#34D399' : '#F87171',
+                          }}>
+                            {isFit
+                              ? `${optWords}/${slotWordBudget} ពាក្យ ✓ ចូល slot`
+                              : `${optWords}/${slotWordBudget} ពាក្យ ⚠ លើស`}
+                          </span>
+                        </div>
+                      )}
+                    </button>
+                  );
+                })}
               </div>
             </div>
-                <textarea
-                  id="inspector-khmer-textarea"
-                  rows={3}
-                  value={localKhmerText}
-                  onChange={handleKhmerTextChange}
-                  onBlur={handleKhmerTextBlur}
-                  placeholder="បញ្ចូល ឬកែសម្រួលអត្ថបទភាសាខ្មែរនៅទីនេះ..."
-                  style={{
-                    width: '100%',
-                    boxSizing: 'border-box',
-                    fontSize: '0.84rem',
-                    color: '#ffffff',
-                    background: 'rgba(0, 0, 0, 0.25)',
-                    border: isGenerating
-                      ? '1px solid #38bdf8'
-                      : (isError ? '1px solid #ef4444' : (isVoiceUpdated ? '1px solid #22c55e' : (isTextUpdated ? '1px solid rgba(245, 158, 11, 0.65)' : '1px solid rgba(255, 255, 255, 0.08)'))),
-                    boxShadow: isGenerating
-                      ? '0 0 10px rgba(56, 189, 248, 0.25)'
-                      : (isVoiceUpdated ? '0 0 8px rgba(34, 197, 94, 0.25)' : 'none'),
-                    borderRadius: 4,
-                    padding: '6px 8px',
-                    lineHeight: 1.5,
-                    outline: 'none',
-                    resize: 'vertical',
-                    fontFamily: 'var(--font-khmer), -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-                    transition: 'all 0.2s ease',
-                  }}
-                />
+          );
+        })()}
 
-                {/* ✨ AI Re-Translation Suggestion Chips (Classical Cinema Options) */}
-                {retranslateData?.options && retranslateData.options.length > 0 && (
-                  <div style={{
-                    marginTop: 8,
-                    marginBottom: 6,
-                    padding: '8px 10px',
-                    background: 'rgba(24, 20, 36, 0.95)',
-                    border: '1px solid rgba(168, 85, 247, 0.45)',
-                    borderRadius: 6,
-                    boxShadow: '0 4px 14px rgba(0, 0, 0, 0.4)',
-                  }}>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: '0.72rem', color: '#d8b4fe', fontWeight: 700 }}>
-                        <Sparkles size={12} color="#c084fc" />
-                        <span>ជម្រើសបកប្រែដោយ AI៖</span>
-                      </div>
-                      {retranslateData.note && (
-                        <span style={{ fontSize: '0.66rem', color: '#cbd5e1', background: 'rgba(255,255,255,0.06)', padding: '1px 6px', borderRadius: 4 }}>
-                          {retranslateData.note}
-                        </span>
-                      )}
-                    </div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-                      {retranslateData.options.map((opt, i) => {
-                        const isCompactOpt = opt.style === 'compact' || String(opt.label || '').includes('ខ្លីចំអត្ថន័យ');
-                        return (
-                          <button
-                            key={i}
-                            type="button"
-                            onClick={() => handleApplyOption(opt.text)}
-                            style={{
-                              display: 'flex',
-                              alignItems: 'flex-start',
-                              gap: 8,
-                              padding: isCompactOpt ? '7px 9px' : '6px 8px',
-                              background: isCompactOpt ? 'rgba(168, 85, 247, 0.18)' : 'rgba(30, 26, 46, 0.85)',
-                              border: isCompactOpt ? '1.5px solid rgba(168, 85, 247, 0.65)' : '1px solid rgba(168, 85, 247, 0.25)',
-                              borderRadius: 4,
-                              color: '#f1f5f9',
-                              fontSize: '0.78rem',
-                              textAlign: 'left',
-                              cursor: 'pointer',
-                              lineHeight: 1.5,
-                              boxShadow: isCompactOpt ? '0 0 10px rgba(168, 85, 247, 0.2)' : 'none',
-                              transition: 'all 0.15s ease',
-                            }}
-                            onMouseEnter={(e) => {
-                              e.currentTarget.style.background = isCompactOpt ? 'rgba(168, 85, 247, 0.32)' : 'rgba(168, 85, 247, 0.25)';
-                              e.currentTarget.style.borderColor = '#c084fc';
-                              e.currentTarget.style.transform = 'translateX(2px)';
-                            }}
-                            onMouseLeave={(e) => {
-                              e.currentTarget.style.background = isCompactOpt ? 'rgba(168, 85, 247, 0.18)' : 'rgba(30, 26, 46, 0.85)';
-                              e.currentTarget.style.borderColor = isCompactOpt ? 'rgba(168, 85, 247, 0.65)' : 'rgba(168, 85, 247, 0.25)';
-                              e.currentTarget.style.transform = 'none';
-                            }}
-                            title="ចុចដើម្បីជ្រើសរើសឃ្លានេះ និងបង្កើតសំឡេងថ្មីដោយស្វ័យប្រវត្តិ"
-                          >
-                            <span style={{
-                              flexShrink: 0,
-                              fontSize: '0.66rem',
-                              padding: '1px 6px',
-                              borderRadius: 4,
-                              background: opt.style === 'classical' ? 'rgba(59, 130, 246, 0.3)' : (opt.style === 'dramatic' ? 'rgba(239, 68, 68, 0.3)' : 'rgba(168, 85, 247, 0.35)'),
-                              color: opt.style === 'classical' ? '#93c5fd' : (opt.style === 'dramatic' ? '#fca5a5' : '#e9d5ff'),
-                              border: isCompactOpt ? '1px solid rgba(168, 85, 247, 0.6)' : '1px solid rgba(255, 255, 255, 0.12)',
-                              fontWeight: 700,
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              gap: 4,
-                            }}>
-                              <span>{opt.label}</span>
-                              {isCompactOpt && (
-                                <span style={{
-                                  fontSize: '0.58rem',
-                                  background: '#9333ea',
-                                  color: '#ffffff',
-                                  padding: '0 4px',
-                                  borderRadius: 3,
-                                  fontWeight: 800,
-                                }}>
-                                  ណែនាំ
-                                </span>
-                              )}
-                            </span>
-                            <span style={{ flex: 1, fontWeight: isCompactOpt ? 600 : 400 }}>{cleanKhmerText(opt.text)}</span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
+        {/* Missing Text Remedy */}
+        {isKhmerEmpty && (
+          <div style={{
+            padding: '8px 10px',
+            background: 'rgba(239, 68, 68, 0.12)',
+            border: '1px solid rgba(239, 68, 68, 0.35)',
+            borderRadius: 'var(--radius-xs)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 8,
+          }}>
+            <span style={{ fontSize: '12px', color: '#FCA5A5', display: 'flex', alignItems: 'center', gap: 5 }}>
+              <AlertCircle size={13} color="#F87171" style={{ flexShrink: 0 }} />
+              <span>គ្មានអត្ថបទខ្មែរទេ</span>
+            </span>
+            <button
+              type="button"
+              disabled={isRetranslating}
+              onClick={handleTranslateThisLine}
+              className="btn-primary"
+              style={{ minHeight: 28, padding: '3px 10px', fontSize: '12px' }}
+            >
+              {isRetranslating ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
+              <span>{isRetranslating ? 'កំពុងបកប្រែ...' : 'បកប្រែ AI'}</span>
+            </button>
+          </div>
+        )}
 
+        {/* Audio Regen Error Banner */}
+        {isError && !isKhmerEmpty && (
+          <div style={{
+            padding: '6px 9px',
+            background: 'rgba(239, 68, 68, 0.14)',
+            border: '1px solid rgba(239, 68, 68, 0.4)',
+            borderRadius: 'var(--radius-xs)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: 6,
+          }}>
+            <span style={{ fontSize: '11.5px', color: '#FCA5A5', display: 'flex', alignItems: 'center', gap: 4 }}>
+              <AlertCircle size={12} color="#F87171" />
+              <span>{selectedSegment.regenError ? selectedSegment.regenError : 'បង្កើតសំឡេងបរាជ័យ'}</span>
+            </span>
+            <button
+              type="button"
+              onClick={() => onSingleRegen(selectedSegment.id || selectedSegmentIndex, selectedSegmentIndex, localKhmerText)}
+              className="btn-danger"
+              style={{ minHeight: 24, padding: '2px 8px', fontSize: '11px' }}
+            >
+              <RefreshCw size={10} />
+              <span>សាកម្ដងទៀត</span>
+            </button>
+          </div>
+        )}
 
-                {/* One-Click Missing Text Remedy */}
-                {isKhmerEmpty && (
-                  <div style={{
-                    marginTop: 8,
-                    marginBottom: 4,
-                    padding: '8px 10px',
-                    background: 'rgba(239, 68, 68, 0.12)',
-                    border: '1px solid rgba(239, 68, 68, 0.4)',
-                    borderRadius: 6,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    gap: 8,
-                  }}>
-                    <span style={{ fontSize: '0.72rem', color: '#fca5a5', display: 'flex', alignItems: 'center', gap: 5 }}>
-                      <AlertCircle size={13} color="#ef4444" style={{ flexShrink: 0 }} />
-                      <span>គ្មានអត្ថបទខ្មែរទេ — សូមបកប្រែឃ្លានេះ</span>
-                    </span>
-                    <button
-                      type="button"
-                      disabled={isRetranslating}
-                      onClick={handleTranslateThisLine}
-                      style={{
-                        padding: '4px 10px',
-                        fontSize: '0.72rem',
-                        background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
-                        color: '#ffffff',
-                        border: 'none',
-                        borderRadius: 4,
-                        cursor: isRetranslating ? 'not-allowed' : 'pointer',
-                        fontWeight: 700,
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: 4,
-                        whiteSpace: 'nowrap',
-                        boxShadow: '0 2px 6px rgba(99, 102, 241, 0.35)',
-                      }}
-                      title="បកប្រែឃ្លានេះតាមរយៈ AI (Translate this line)"
-                    >
-                      {isRetranslating ? (
-                        <>
-                          <Loader2 size={12} className="animate-spin" />
-                          <span>កំពុងបកប្រែ...</span>
-                        </>
-                      ) : (
-                        <>
-                          <Sparkles size={12} />
-                          <span>បកប្រែឃ្លានេះ</span>
-                        </>
-                      )}
-                    </button>
-                  </div>
-                )}
+        {/* Primary 1-Click Regen Button when text edited */}
+        {(selectedSegment.audioOutdated || isTextUpdated) && !isError && !isKhmerEmpty && (
+          <button
+            type="button"
+            onClick={() => onSingleRegen(selectedSegment.id || selectedSegmentIndex, selectedSegmentIndex, localKhmerText)}
+            disabled={isGenerating}
+            className="btn-primary"
+            style={{ width: '100%', minHeight: 34, fontSize: 'var(--text-sm)' }}
+          >
+            {isGenerating ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
+            <span>{isGenerating ? 'កំពុងបង្កើតសំឡេង...' : 'បង្កើតសំឡេងតាមអត្ថបទថ្មី'}</span>
+          </button>
+        )}
+      </div>
 
-                {/* Error Banner with Retry Button (Only when text is present) */}
-                {isError && !isKhmerEmpty && (
-                  <div style={{
-                    marginTop: 6,
-                    padding: '6px 10px',
-                    background: 'rgba(239, 68, 68, 0.14)',
-                    border: '1px solid rgba(239, 68, 68, 0.4)',
-                    borderRadius: 5,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    gap: 6
-                  }}>
-                    <span style={{ fontSize: '0.72rem', color: '#fca5a5', display: 'flex', alignItems: 'center', gap: 4 }}>
-                      <AlertCircle size={12} color="#ef4444" />
-                      <span>{selectedSegment.regenError ? `បរាជ័យ: ${selectedSegment.regenError}` : 'បរាជ័យក្នុងការបង្កើតសំឡេង!'}</span>
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => onSingleRegen(selectedSegment.id || selectedSegmentIndex, selectedSegmentIndex, localKhmerText)}
-                      style={{
-                        padding: '3px 8px',
-                        fontSize: '0.7rem',
-                        background: '#ef4444',
-                        color: '#ffffff',
-                        border: 'none',
-                        borderRadius: 4,
-                        cursor: 'pointer',
-                        fontWeight: 700,
-                        whiteSpace: 'nowrap',
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: 4,
-                      }}
-                    >
-                      <RefreshCw size={11} />
-                      <span>សាកល្បងម្ដងទៀត</span>
-                    </button>
-                  </div>
-                )}
+      {/* 2. Delivery Style (Normal vs Inner Thought — Zero Debug Noise) */}
+      <div style={{
+        padding: '9px 10px',
+        background: 'var(--bg-secondary-panel)',
+        borderRadius: 'var(--radius-sm)',
+        border: '1px solid var(--border-subtle)',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 6,
+      }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <span style={{ fontSize: '12px', color: 'var(--text-secondary)', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+            {isThought ? <MessageSquare size={12} color="var(--primary-accent)" /> : <Mic size={12} color="var(--primary-accent)" />}
+            <span>សំឡេងនិយាយ</span>
+          </span>
+          {isThought && (
+            <span style={{ fontFamily: 'var(--font-mono)', fontSize: '10.5px', color: 'var(--primary-accent)', background: 'rgba(56, 189, 248, 0.12)', border: '1px solid rgba(56, 189, 248, 0.3)', padding: '1px 6px', borderRadius: 'var(--radius-xs)', fontWeight: 600 }}>
+              Reverb ON
+            </span>
+          )}
+        </div>
 
-                {/* Manual 1-click Regen Button when outdated or text edited */}
-                {(selectedSegment.audioOutdated || isTextUpdated) && !isError && !isKhmerEmpty && (
-                  <button
-                    type="button"
-                    onClick={() => onSingleRegen(selectedSegment.id || selectedSegmentIndex, selectedSegmentIndex, localKhmerText)}
-                    disabled={isGenerating}
-                    style={{
-                      marginTop: 6,
-                      width: '100%',
-                      padding: '6px 8px',
-                      fontSize: '0.72rem',
-                      background: 'linear-gradient(135deg, #0284c7, #2563eb)',
-                      border: 'none',
-                      borderRadius: 4,
-                      color: '#ffffff',
-                      cursor: 'pointer',
-                      fontWeight: 600,
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      gap: 6,
-                      boxShadow: '0 2px 6px rgba(2, 132, 199, 0.3)'
-                    }}
-                  >
-                    {isGenerating ? (
-                      <>
-                        <Loader2 size={12} className="pulse-glow" />
-                        <span>Generating Khmer Voice...</span>
-                      </>
-                    ) : (
-                      <>
-                        <Sparkles size={12} />
-                        <span>Generate សំឡេងតាមអត្ថបទថ្មី</span>
-                      </>
-                    )}
-                  </button>
-                )}
-              </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4, background: 'var(--bg-desktop)', padding: 3, borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }}>
+          <button
+            type="button"
+            onClick={() => onToggleDeliveryType && onToggleDeliveryType(selectedSegment.id || selectedSegmentIndex, 'out_loud', true, selectedSegmentIndex)}
+            disabled={isGenerating}
+            style={{
+              height: 30,
+              fontSize: 'var(--text-sm)',
+              borderRadius: 'var(--radius-xs)',
+              cursor: 'pointer',
+              fontWeight: !isThought ? 700 : 500,
+              border: !isThought ? '1px solid rgba(56, 189, 248, 0.45)' : '1px solid transparent',
+              background: !isThought ? 'var(--bg-active-card)' : 'transparent',
+              color: !isThought ? 'var(--primary-accent)' : 'var(--text-secondary)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 5,
+            }}
+            title="និយាយសន្ទនាធម្មតា"
+          >
+            <Volume2 size={12} />
+            <span>ធម្មតា</span>
+          </button>
 
-              
-              {/* Delivery Mode & Inner-Thought Toggle */}
-              <div style={{
-                marginBottom: 10,
-                padding: '7px 9px',
-                background: 'rgba(0, 0, 0, 0.25)',
-                borderRadius: 6,
-                border: '1px solid rgba(255, 255, 255, 0.07)',
-                transition: 'all 0.2s ease',
-              }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-                  <span style={{ fontSize: '0.70rem', color: '#94a3b8', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-                    {isThought ? <MessageSquare size={12} color="#d8b4fe" /> : <Mic size={12} color="#38bdf8" />}
-                    <span>ទម្រង់នៃការនិយាយ (Delivery):</span>
-                  </span>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                    {selectedSegment.deliveryOverride && (
-                      <span style={{ fontSize: '0.60rem', color: '#38bdf8', background: 'rgba(56, 189, 248, 0.12)', border: '1px solid rgba(56, 189, 248, 0.3)', padding: '1px 4px', borderRadius: 3, fontWeight: 600 }}>
-                        Manual
-                      </span>
-                    )}
-                  </div>
-                </div>
+          <button
+            type="button"
+            onClick={() => onToggleDeliveryType && onToggleDeliveryType(selectedSegment.id || selectedSegmentIndex, 'inner_thought', true, selectedSegmentIndex)}
+            disabled={isGenerating}
+            style={{
+              height: 30,
+              fontSize: 'var(--text-sm)',
+              borderRadius: 'var(--radius-xs)',
+              cursor: 'pointer',
+              fontWeight: isThought ? 700 : 500,
+              border: isThought ? '1px solid rgba(56, 189, 248, 0.45)' : '1px solid transparent',
+              background: isThought ? 'var(--bg-active-card)' : 'transparent',
+              color: isThought ? 'var(--primary-accent)' : 'var(--text-secondary)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 5,
+            }}
+            title="និយាយក្នុងចិត្ត (បន្ថែម Reverb)"
+          >
+            <MessageSquare size={12} />
+            <span>ក្នុងចិត្ត</span>
+          </button>
+        </div>
+      </div>
 
-                {/* Sleek Segmented Switcher */}
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4, background: 'rgba(255, 255, 255, 0.03)', padding: '2px', borderRadius: 6, border: '1px solid rgba(255, 255, 255, 0.05)', marginBottom: 6 }}>
-                  <button
-                    type="button"
-                    onClick={() => onToggleDeliveryType && onToggleDeliveryType(selectedSegment.id || selectedSegmentIndex, 'out_loud', true, selectedSegmentIndex)}
-                    disabled={isGenerating}
-                    style={{
-                      padding: '5px 8px',
-                      fontSize: '0.70rem',
-                      borderRadius: 4,
-                      cursor: 'pointer',
-                      fontWeight: !isThought ? 600 : 400,
-                      border: !isThought ? '1px solid rgba(56, 189, 248, 0.35)' : '1px solid transparent',
-                      background: !isThought ? 'rgba(56, 189, 248, 0.15)' : 'transparent',
-                      color: !isThought ? '#38bdf8' : '#94a3b8',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      gap: 4,
-                      transition: 'all 0.15s ease',
-                    }}
-                    title="ប្តូរទៅជាការនិយាយសន្ទនាធម្មតា (Normal Speech without Reverb)"
-                  >
-                    <Volume2 size={12} />
-                    <span>និយាយធម្មតា</span>
-                  </button>
+      {/* 3. Voice Selector & Audio Status */}
+      <div style={{
+        padding: '9px 10px',
+        background: 'var(--bg-secondary-panel)',
+        borderRadius: 'var(--radius-sm)',
+        border: '1px solid var(--border-subtle)',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 8,
+      }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 6 }}>
+          <span style={{ fontSize: '12px', color: 'var(--text-secondary)', fontWeight: 600 }}>
+            តួសំឡេង (Voice)
+          </span>
+          {(isGenerating || switchingVoiceTarget !== null) ? (
+            <span data-testid="segment-audio-status-badge" style={{ fontSize: '11px', color: 'var(--primary-accent)', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+              <Loader2 size={11} className="animate-spin" /> កំពុងបង្កើតសំឡេង... (Generating)
+            </span>
+          ) : selectedSegment.audioUrl ? (
+            <span data-testid="segment-audio-status-badge" style={{ fontSize: '11px', color: selectedSegment.audioOutdated ? '#FDE68A' : '#6EE7B7', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+              <CheckCircle2 size={11} /> {selectedSegment.audioOutdated ? 'ត្រូវ Update' : 'រួចរាល់'}
+            </span>
+          ) : (
+            <span data-testid="segment-audio-status-badge" style={{ fontSize: '11px', color: 'var(--text-dim)' }}>
+              មិនទាន់មាន
+            </span>
+          )}
+        </div>
 
-                  <button
-                    type="button"
-                    onClick={() => onToggleDeliveryType && onToggleDeliveryType(selectedSegment.id || selectedSegmentIndex, 'inner_thought', true, selectedSegmentIndex)}
-                    disabled={isGenerating}
-                    style={{
-                      padding: '5px 8px',
-                      fontSize: '0.70rem',
-                      borderRadius: 4,
-                      cursor: 'pointer',
-                      fontWeight: isThought ? 600 : 400,
-                      border: isThought ? '1px solid rgba(168, 85, 247, 0.4)' : '1px solid transparent',
-                      background: isThought ? 'rgba(168, 85, 247, 0.18)' : 'transparent',
-                      color: isThought ? '#d8b4fe' : '#94a3b8',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      gap: 4,
-                      transition: 'all 0.15s ease',
-                    }}
-                    title="ប្តូរទៅជាការនិយាយក្នុងចិត្ត ដោយបន្ថែម Reverb Effect (Inner Thought Monologue)"
-                  >
-                    <MessageSquare size={12} />
-                    <span>និយាយក្នុងចិត្ត</span>
-                  </button>
-                </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+          <button
+            type="button"
+            data-testid="voice-switch-male-btn"
+            onClick={async () => {
+              setSwitchingVoiceTarget('MALE');
+              const minSpin = new Promise((r) => setTimeout(r, 300));
+              try {
+                await Promise.all([
+                  Promise.resolve(onClipVoiceChange(selectedSegment.id || selectedSegmentIndex, 'km-KH-PisethNeural', selectedSegmentIndex)),
+                  minSpin,
+                ]);
+              } finally {
+                setSwitchingVoiceTarget(null);
+              }
+            }}
+            disabled={regeneratingId === (selectedSegment.id || selectedSegmentIndex) || switchingVoiceTarget !== null}
+            style={{
+              height: 36,
+              padding: '0 8px',
+              fontSize: 'var(--text-sm)',
+              borderRadius: 'var(--radius-sm)',
+              border: `1px solid ${isPisethActive ? 'rgba(56, 189, 248, 0.55)' : 'var(--border-subtle)'}`,
+              background: isPisethActive ? 'rgba(56, 189, 248, 0.16)' : 'var(--bg-desktop)',
+              color: isPisethActive ? '#FFFFFF' : 'var(--text-secondary)',
+              cursor: 'pointer',
+              fontWeight: isPisethActive ? 700 : 500,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 5,
+            }}
+            title="ប្តូរទៅសំឡេងប្រុស (ពិសិដ្ឋ)"
+          >
+            {switchingVoiceTarget === 'MALE' ? <Loader2 size={13} className="animate-spin" color="#38BDF8" /> : <User size={13} color={isPisethActive ? '#38BDF8' : 'currentColor'} />}
+            <span>ប្រុស · ពិសិដ្ឋ</span>
+          </button>
 
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', fontSize: '0.64rem', color: isThought ? '#d8b4fe' : '#64748b' }}>
-                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                    <Sparkles size={10} color={isThought ? '#d8b4fe' : '#64748b'} />
-                    <span>{isThought ? 'Reverb Active (aecho)' : 'Direct Voice Output'}</span>
-                  </span>
-                  {selectedSegment.deliveryConfidence !== null && typeof selectedSegment.deliveryConfidence === 'number' && (
-                    <span>Confidence: {Math.round(selectedSegment.deliveryConfidence * 100)}%</span>
-                  )}
-                </div>
-              </div>
+          <button
+            type="button"
+            data-testid="voice-switch-female-btn"
+            onClick={async () => {
+              setSwitchingVoiceTarget('FEMALE');
+              const minSpin = new Promise((r) => setTimeout(r, 300));
+              try {
+                await Promise.all([
+                  Promise.resolve(onClipVoiceChange(selectedSegment.id || selectedSegmentIndex, 'km-KH-SreymomNeural', selectedSegmentIndex)),
+                  minSpin,
+                ]);
+              } finally {
+                setSwitchingVoiceTarget(null);
+              }
+            }}
+            disabled={regeneratingId === (selectedSegment.id || selectedSegmentIndex) || switchingVoiceTarget !== null}
+            style={{
+              height: 36,
+              padding: '0 8px',
+              fontSize: 'var(--text-sm)',
+              borderRadius: 'var(--radius-sm)',
+              border: `1px solid ${isSreymomActive ? 'rgba(244, 114, 182, 0.6)' : 'var(--border-subtle)'}`,
+              background: isSreymomActive ? 'rgba(244, 114, 182, 0.16)' : 'var(--bg-desktop)',
+              color: isSreymomActive ? '#FFFFFF' : 'var(--text-secondary)',
+              cursor: 'pointer',
+              fontWeight: isSreymomActive ? 700 : 500,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 5,
+            }}
+            title="ប្តូរទៅសំឡេងស្រី (ស្រីមុំ)"
+          >
+            {switchingVoiceTarget === 'FEMALE' ? <Loader2 size={13} className="animate-spin" color="#F472B6" /> : <UserCheck size={13} color={isSreymomActive ? '#F472B6' : 'currentColor'} />}
+            <span>ស្រី · ស្រីមុំ</span>
+          </button>
+        </div>
 
-              {/* 4. Manual Voice Selection & Speaker Association */}
-              <div style={{ marginBottom: 10 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-                  <span style={{ fontSize: '0.72rem', color: 'var(--text-dim)', fontWeight: 600 }}>
-                    ជ្រើសរើសសំឡេង Khmer Neural Voice:
-                  </span>
-                  {selectedSegment.voiceAssignmentSource === 'manual' && (
-                    <span style={{ fontSize: '0.64rem', color: '#4ade80', fontWeight: 600 }}>
-                      ✓ Manual Assigned
-                    </span>
-                  )}
-                </div>
+        {/* Clean 2-Column Mute Toggles (Video Original | Khmer AI) */}
+        {((onToggleMuteVideoClip && (associatedClip || selectedClip)) || onToggleMuteSegment) && (
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+            {onToggleMuteVideoClip && (associatedClip || selectedClip) && (
+              <button
+                type="button"
+                onClick={() => onToggleMuteVideoClip((associatedClip || selectedClip).id)}
+                className="btn-secondary"
+                style={{
+                  minHeight: 30,
+                  padding: '0 8px',
+                  fontSize: '12px',
+                  justifyContent: 'center',
+                  borderColor: (associatedClip || selectedClip).isMuted ? 'rgba(239, 68, 68, 0.5)' : 'var(--border-subtle)',
+                  background: (associatedClip || selectedClip).isMuted ? 'rgba(239, 68, 68, 0.14)' : 'var(--bg-desktop)',
+                  color: (associatedClip || selectedClip).isMuted ? '#FCA5A5' : 'var(--text-secondary)',
+                }}
+                title="បិទ/បើកសំឡេងវីដេអូដើមលើឃ្លានេះ"
+              >
+                {(associatedClip || selectedClip).isMuted ? <VolumeX size={12} /> : <Film size={12} />}
+                <span>{(associatedClip || selectedClip).isMuted ? 'វីដេអូ Muted' : 'សំឡេងវីដេអូ'}</span>
+              </button>
+            )}
+            {onToggleMuteSegment && (
+              <button
+                type="button"
+                onClick={() => onToggleMuteSegment(selectedSegment.id || selectedSegmentIndex)}
+                className="btn-secondary"
+                style={{
+                  minHeight: 30,
+                  padding: '0 8px',
+                  fontSize: '12px',
+                  justifyContent: 'center',
+                  borderColor: selectedSegment.muted ? 'rgba(239, 68, 68, 0.5)' : 'var(--border-subtle)',
+                  background: selectedSegment.muted ? 'rgba(239, 68, 68, 0.14)' : 'var(--bg-desktop)',
+                  color: selectedSegment.muted ? '#FCA5A5' : 'var(--text-secondary)',
+                }}
+                title="បិទ/បើកសំឡេងខ្មែរ AI លើឃ្លានេះ"
+              >
+                {selectedSegment.muted ? <VolumeX size={12} /> : <Volume2 size={12} />}
+                <span>{selectedSegment.muted ? 'AI Muted' : 'សំឡេង AI'}</span>
+              </button>
+            )}
+          </div>
+        )}
+      </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginBottom: 6 }}>
-                  <button
-                    type="button"
-                    data-testid="voice-switch-male-btn"
-                    onClick={async () => {
-                      setSwitchingVoiceTarget('MALE');
-                      const minSpin = new Promise((r) => setTimeout(r, 300));
-                      try {
-                        await Promise.all([
-                          Promise.resolve(onClipVoiceChange(selectedSegment.id || selectedSegmentIndex, 'km-KH-PisethNeural', selectedSegmentIndex)),
-                          minSpin,
-                        ]);
-                      } finally {
-                        setSwitchingVoiceTarget(null);
-                      }
-                    }}
-                    disabled={regeneratingId === (selectedSegment.id || selectedSegmentIndex) || switchingVoiceTarget !== null}
-                    style={{
-                      padding: '8px 6px',
-                      fontSize: '0.8125rem',
-                      lineHeight: 'var(--khmer-line-height, 1.68)',
-                      borderRadius: 6,
-                      border: `1.5px solid ${isPisethActive ? 'rgba(56, 189, 248, 0.7)' : 'rgba(255,255,255,0.08)'}`,
-                      background: isPisethActive ? 'linear-gradient(135deg, rgba(2, 132, 199, 0.35), rgba(14, 165, 233, 0.2))' : 'rgba(255, 255, 255, 0.03)',
-                      color: isPisethActive ? '#ffffff' : 'var(--text-secondary)',
-                      cursor: 'pointer',
-                      fontWeight: isPisethActive ? 700 : 500,
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      gap: 5,
-                      transition: 'all 0.15s ease',
-                      boxShadow: isPisethActive ? '0 2px 8px rgba(56, 189, 248, 0.25)' : 'none'
-                    }}
-                    title="ប្តូរទៅសំឡេងប្រុស (Piseth Neural)"
-                  >
-                    {switchingVoiceTarget === 'MALE' ? (
-                      <Loader2 size={13} className="animate-spin" style={{ color: '#38bdf8' }} />
-                    ) : (
-                      <User size={13} />
-                    )}
-                    <span>ប្រុស (Piseth)</span>
-                  </button>
-                  <button
-                    type="button"
-                    data-testid="voice-switch-female-btn"
-                    onClick={async () => {
-                      setSwitchingVoiceTarget('FEMALE');
-                      const minSpin = new Promise((r) => setTimeout(r, 300));
-                      try {
-                        await Promise.all([
-                          Promise.resolve(onClipVoiceChange(selectedSegment.id || selectedSegmentIndex, 'km-KH-SreymomNeural', selectedSegmentIndex)),
-                          minSpin,
-                        ]);
-                      } finally {
-                        setSwitchingVoiceTarget(null);
-                      }
-                    }}
-                    disabled={regeneratingId === (selectedSegment.id || selectedSegmentIndex) || switchingVoiceTarget !== null}
-                    style={{
-                      padding: '8px 6px',
-                      fontSize: '0.8125rem',
-                      lineHeight: 'var(--khmer-line-height, 1.68)',
-                      borderRadius: 6,
-                      border: `1.5px solid ${isSreymomActive ? 'rgba(244, 114, 182, 0.8)' : 'rgba(255,255,255,0.08)'}`,
-                      background: isSreymomActive ? 'linear-gradient(135deg, rgba(219, 39, 119, 0.38), rgba(244, 114, 182, 0.25))' : 'rgba(255, 255, 255, 0.03)',
-                      color: isSreymomActive ? '#ffffff' : 'var(--text-secondary)',
-                      cursor: 'pointer',
-                      fontWeight: isSreymomActive ? 700 : 500,
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      gap: 5,
-                      transition: 'all 0.15s ease',
-                      boxShadow: isSreymomActive ? '0 2px 8px rgba(244, 114, 182, 0.3)' : 'none'
-                    }}
-                    title="ប្តូរទៅសំឡេងស្រី (Sreymom Neural)"
-                  >
-                    {switchingVoiceTarget === 'FEMALE' ? (
-                      <Loader2 size={13} className="animate-spin" style={{ color: '#f472b6' }} />
-                    ) : (
-                      <UserCheck size={13} />
-                    )}
-                    <span>ស្រី (Sreymom)</span>
-                  </button>
-                </div>
-              </div>
+      {/* 4. Clip Speed Control */}
+      {(() => {
+        const hasAutoFitSpeed = Boolean(
+          !selectedSegment.userCustomSpeed &&
+          typeof selectedSegment.appliedSpeed === 'number' &&
+          Number.isFinite(selectedSegment.appliedSpeed) &&
+          Math.abs(selectedSegment.appliedSpeed - 1.0) > 0.01
+        );
+        const segSpeedNum = (() => {
+          if (selectedSegment.userCustomSpeed) {
+            if (typeof selectedSegment.speed === 'number' && Number.isFinite(selectedSegment.speed)) return selectedSegment.speed;
+            const parsedManual = parseFloat(selectedSegment.speed);
+            if (!isNaN(parsedManual) && parsedManual > 0) return parsedManual;
+          }
+          if (hasAutoFitSpeed) return Number(selectedSegment.appliedSpeed);
+          if (typeof selectedSegment.speed === 'number' && Number.isFinite(selectedSegment.speed)) return selectedSegment.speed;
+          if (selectedSegment.speed === 'slow') return 0.75;
+          if (selectedSegment.speed === 'fast') return 1.25;
+          const parsed = parseFloat(selectedSegment.speed);
+          if (!isNaN(parsed) && parsed > 0) return parsed;
+          if (typeof settings?.speed === 'number') return settings.speed;
+          if (settings?.speed === 'slow') return 0.75;
+          if (settings?.speed === 'fast') return 1.25;
+          return 1.0;
+        })();
 
-              {/* Speaker & Audio Status */}
-              {(() => {
+        const getClipSpeedLabel = (spd) => {
+          if (spd <= 0.6) return 'យឺតខ្លាំង';
+          if (spd <= 0.85) return 'យឺត';
+          if (spd <= 1.15) return 'ធម្មតា';
+          if (spd <= 1.4) return 'លឿន';
+          return 'ញាប់';
+        };
+
+        const clipPresets = [
+          { label: '0.75x', val: 0.75 },
+          { label: '1.0x', val: 1.0 },
+          { label: '1.25x', val: 1.25 },
+          { label: '1.5x', val: 1.5 },
+        ];
+
+        const displaySpeedNum = draftClipSpeed !== null ? draftClipSpeed : segSpeedNum;
+        return (
+          <div style={{ padding: '9px 10px', background: 'var(--bg-secondary-panel)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-subtle)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+              <span style={{ fontSize: '12px', color: 'var(--text-secondary)', fontWeight: 600 }}>
+                ល្បឿន (Speed)
+              </span>
+              <span
+                data-testid="clip-speed-badge"
+                style={{
+                  fontFamily: 'var(--font-mono)',
+                  fontSize: '11.5px',
+                  color: 'var(--primary-accent)',
+                  background: 'rgba(56, 189, 248, 0.12)',
+                  border: '1px solid rgba(56, 189, 248, 0.25)',
+                  padding: '1px 7px',
+                  borderRadius: 'var(--radius-xs)',
+                  fontWeight: 700,
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {displaySpeedNum.toFixed(2)}x · {hasAutoFitSpeed && draftClipSpeed === null ? 'Auto-Fit' : getClipSpeedLabel(displaySpeedNum)}
+              </span>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 7 }}>
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: '10.5px', color: 'var(--text-dim)' }}>0.5x</span>
+              <SmoothRangeSlider
+                min={0.5}
+                max={2.0}
+                step={0.05}
+                value={segSpeedNum}
+                disabled={regeneratingId === (selectedSegment.id || selectedSegmentIndex)}
+                onDraftChange={setDraftClipSpeed}
+                onCommit={(val) => {
+                  onClipSpeedChange(selectedSegment.id || selectedSegmentIndex, val, selectedSegmentIndex);
+                }}
+                data-testid="slider-clip-speed"
+                style={{ flex: 1, cursor: 'pointer', accentColor: 'var(--primary-accent)', height: 4 }}
+                title={`ល្បឿនឃ្លានេះ: ${displaySpeedNum.toFixed(2)}x`}
+              />
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: '10.5px', color: 'var(--text-dim)' }}>2.0x</span>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 4 }}>
+              {clipPresets.map((p) => {
+                const isMatch = Math.abs(displaySpeedNum - p.val) < 0.03;
                 return (
-                  <>
-                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6, fontSize: '0.74rem' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                        {(isGenerating || switchingVoiceTarget !== null) ? (
-                          <span
-                            data-testid="segment-audio-status-badge"
-                            style={{ fontSize: '0.66rem', color: '#38bdf8', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4 }}
-                          >
-                            <Loader2 size={11} className="animate-spin" /> កំពុងបង្កើតសំឡេង... (Generating)
-                          </span>
-                        ) : selectedSegment.audioUrl ? (
-                          <span
-                            data-testid="segment-audio-status-badge"
-                            style={{ fontSize: '0.66rem', color: selectedSegment.audioOutdated ? 'var(--color-warning)' : 'var(--color-success)', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4 }}
-                          >
-                            <CheckCircle2 size={11} /> {selectedSegment.audioOutdated ? 'អត្ថបទកែ (Outdated)' : 'Audio Ready'}
-                          </span>
-                        ) : (
-                          <span
-                            data-testid="segment-audio-status-badge"
-                            style={{ fontSize: '0.66rem', color: 'var(--text-dim)' }}
-                          >
-                            Audio Pending
-                          </span>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Dual Mute / Unmute Controls: Video Original Audio & Khmer AI Voice */}
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 5, marginBottom: 8 }}>
-                      {/* 1. Mute Original Video Audio Button */}
-                      {onToggleMuteVideoClip && (associatedClip || selectedClip) && (
-                        <button
-                          type="button"
-                          onClick={() => onToggleMuteVideoClip((associatedClip || selectedClip).id)}
-                          title={(associatedClip || selectedClip).isMuted ? "បានបិទសំឡេងវីដេអូដើម (Muted) - ចុចដើម្បីបើកវិញ" : "ចុចដើម្បីបិទសំឡេងដើមនៃ Video Clip នេះ (Mute Original Audio)"}
-                          style={{
-                            padding: '4px 6px',
-                            fontSize: '0.68rem',
-                            fontWeight: 600,
-                            borderRadius: 4,
-                            cursor: 'pointer',
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            gap: 4,
-                            border: `1px solid ${(associatedClip || selectedClip).isMuted ? 'rgba(239, 68, 68, 0.7)' : 'rgba(0, 229, 255, 0.4)'}`,
-                            background: (associatedClip || selectedClip).isMuted ? 'rgba(239, 68, 68, 0.25)' : 'rgba(0, 229, 255, 0.1)',
-                            color: (associatedClip || selectedClip).isMuted ? '#f87171' : 'var(--accent-cyan)',
-                            transition: 'all 0.15s ease',
-                          }}
-                        >
-                          {(associatedClip || selectedClip).isMuted ? (
-                            <>
-                              <VolumeX size={11} color="#f87171" />
-                              <span style={{ whiteSpace: 'nowrap' }}>វីដេអូ Muted</span>
-                            </>
-                          ) : (
-                            <>
-                              <Film size={11} color="var(--accent-cyan)" />
-                              <span style={{ whiteSpace: 'nowrap' }}>វីដេអូដើម</span>
-                            </>
-                          )}
-                        </button>
-                      )}
-
-                      {/* 2. Single Clip Mute / Unmute Toggle (Khmer AI Voice) */}
-                      {onToggleMuteSegment && (
-                        <button
-                          type="button"
-                          onClick={() => onToggleMuteSegment(selectedSegment.id || selectedSegmentIndex)}
-                          title={selectedSegment.muted ? "ចុចដើម្បីបើកសំឡេង AI ខ្មែរឡើងវិញ (Unmute Voice)" : "ចុចដើម្បីបិទសំឡេង AI ខ្មែរតែឃ្លានេះ (Mute Voice)"}
-                          style={{
-                            padding: '4px 6px',
-                            fontSize: '0.68rem',
-                            fontWeight: 600,
-                            borderRadius: 4,
-                            cursor: 'pointer',
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            gap: 4,
-                            border: `1px solid ${selectedSegment.muted ? 'rgba(239, 68, 68, 0.7)' : 'rgba(255, 255, 255, 0.2)'}`,
-                            background: selectedSegment.muted ? 'rgba(239, 68, 68, 0.25)' : 'rgba(255, 255, 255, 0.08)',
-                            color: selectedSegment.muted ? '#f87171' : 'var(--text-secondary)',
-                            transition: 'all 0.15s ease',
-                          }}
-                        >
-                          {selectedSegment.muted ? (
-                            <>
-                              <VolumeX size={11} color="#f87171" />
-                              <span style={{ whiteSpace: 'nowrap' }}>AI Muted</span>
-                            </>
-                          ) : (
-                            <>
-                              <Volume2 size={11} color="#38bdf8" />
-                              <span style={{ whiteSpace: 'nowrap' }}>សំឡេង AI</span>
-                            </>
-                          )}
-                        </button>
-                      )}
-                    </div>
-
-                    {/* Speaking Rate for this selected segment */}
-                    {(() => {
-                      const hasAutoFitSpeed = Boolean(
-                        !selectedSegment.userCustomSpeed &&
-                        typeof selectedSegment.appliedSpeed === 'number' &&
-                        Number.isFinite(selectedSegment.appliedSpeed) &&
-                        Math.abs(selectedSegment.appliedSpeed - 1.0) > 0.01
-                      );
-                      const segSpeedNum = (() => {
-                        // Precedence: manual userCustomSpeed wins; otherwise reflect real Auto-Fit appliedSpeed if active
-                        if (selectedSegment.userCustomSpeed) {
-                          if (typeof selectedSegment.speed === 'number' && Number.isFinite(selectedSegment.speed)) return selectedSegment.speed;
-                          const parsedManual = parseFloat(selectedSegment.speed);
-                          if (!isNaN(parsedManual) && parsedManual > 0) return parsedManual;
-                        }
-                        if (hasAutoFitSpeed) return Number(selectedSegment.appliedSpeed);
-                        if (typeof selectedSegment.speed === 'number' && Number.isFinite(selectedSegment.speed)) return selectedSegment.speed;
-                        if (selectedSegment.speed === 'slow') return 0.75;
-                        if (selectedSegment.speed === 'fast') return 1.25;
-                        const parsed = parseFloat(selectedSegment.speed);
-                        if (!isNaN(parsed) && parsed > 0) return parsed;
-                        if (typeof settings?.speed === 'number') return settings.speed;
-                        if (settings?.speed === 'slow') return 0.75;
-                        if (settings?.speed === 'fast') return 1.25;
-                        return 1.0;
-                      })();
-
-                      const getClipSpeedLabel = (spd) => {
-                        if (spd <= 0.6) return 'យឺតខ្លាំង';
-                        if (spd <= 0.85) return 'យឺត';
-                        if (spd <= 1.15) return 'ធម្មតា';
-                        if (spd <= 1.4) return 'លឿន';
-                        return 'ញាប់';
-                      };
-
-                      const clipPresets = [
-                        { label: '0.75x', val: 0.75 },
-                        { label: '1.0x', val: 1.0 },
-                        { label: '1.25x', val: 1.25 },
-                        { label: '1.5x', val: 1.5 },
-                      ];
-
-                      const displaySpeedNum = draftClipSpeed !== null ? draftClipSpeed : segSpeedNum;
-                      return (
-                        <div style={{ marginBottom: 10, padding: '7px 9px', background: 'rgba(255,255,255,0.02)', borderRadius: 6, border: '1px solid rgba(255,255,255,0.06)' }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 5 }}>
-                            <span style={{ fontSize: '0.70rem', color: 'var(--text-dim)', fontWeight: 600 }}>
-                              ល្បឿន (Clip Speed):
-                            </span>
-                            <span
-                              data-testid="clip-speed-badge"
-                              style={{
-                                fontSize: '0.68rem',
-                                color: 'var(--accent-cyan, #38bdf8)',
-                                background: 'rgba(56, 189, 248, 0.12)',
-                                padding: '1px 7px',
-                                borderRadius: 4,
-                                fontWeight: 700,
-                                whiteSpace: 'nowrap'
-                              }}
-                            >
-                              {displaySpeedNum.toFixed(2)}x • {hasAutoFitSpeed && draftClipSpeed === null ? 'Auto-Fit' : getClipSpeedLabel(displaySpeedNum)}
-                            </span>
-                          </div>
-
-                          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
-                            <span style={{ fontSize: '0.64rem', color: 'var(--text-dim)' }}>0.5x</span>
-                            <SmoothRangeSlider
-                              min={0.5}
-                              max={2.0}
-                              step={0.05}
-                              value={segSpeedNum}
-                              disabled={regeneratingId === (selectedSegment.id || selectedSegmentIndex)}
-                              onDraftChange={setDraftClipSpeed}
-                              onCommit={(val) => {
-                                onClipSpeedChange(selectedSegment.id || selectedSegmentIndex, val, selectedSegmentIndex);
-                              }}
-                              data-testid="slider-clip-speed"
-                              style={{
-                                flex: 1,
-                                cursor: 'pointer',
-                                accentColor: 'var(--accent-cyan, #38bdf8)',
-                                height: 4,
-                              }}
-                              title={`កែសម្រួលល្បឿនឃ្លានេះ: ${displaySpeedNum.toFixed(2)}x`}
-                            />
-                            <span style={{ fontSize: '0.64rem', color: 'var(--text-dim)' }}>2.0x</span>
-                          </div>
-
-                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 4 }}>
-                            {clipPresets.map((p) => {
-                              const isMatch = Math.abs(displaySpeedNum - p.val) < 0.03;
-                              return (
-                                <button
-                                  key={p.val}
-                                  type="button"
-                                  disabled={regeneratingId === (selectedSegment.id || selectedSegmentIndex)}
-                                  onClick={() => onClipSpeedChange(selectedSegment.id || selectedSegmentIndex, p.val, selectedSegmentIndex)}
-                                  style={{
-                                    padding: '3px 2px',
-                                    fontSize: '0.65rem',
-                                    borderRadius: 4,
-                                    border: '1px solid',
-                                    borderColor: isMatch ? 'var(--accent-cyan, #38bdf8)' : 'rgba(255,255,255,0.08)',
-                                    background: isMatch ? 'rgba(56, 189, 248, 0.22)' : 'rgba(255,255,255,0.03)',
-                                    color: isMatch ? '#fff' : 'var(--text-muted)',
-                                    cursor: 'pointer',
-                                    fontWeight: isMatch ? 700 : 500,
-                                    textAlign: 'center',
-                                  }}
-                                >
-                                  {p.label}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        </div>
-                      );
-                    })()}
-                  </>
-                );
-              })()}
-
-              {/* Action Buttons: Listen, Regenerate & Tools */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
-                  {/* 1. Manual Play/Listen Button */}
                   <button
+                    key={p.val}
                     type="button"
-                    onClick={() => {
-                      if (selectedSegment.audioUrl && onPlaySegmentAudio) {
-                        onPlaySegmentAudio(selectedSegment.audioUrl, selectedSegment.id || selectedSegmentIndex, true);
-                      }
-                    }}
-                    disabled={!selectedSegment.audioUrl || isGenerating}
-                    className={String(playingSegmentId) === String(selectedSegment.id || selectedSegmentIndex) ? "btn-accent" : "btn-secondary"}
+                    disabled={regeneratingId === (selectedSegment.id || selectedSegmentIndex)}
+                    onClick={() => onClipSpeedChange(selectedSegment.id || selectedSegmentIndex, p.val, selectedSegmentIndex)}
                     style={{
-                      padding: '7px 8px',
-                      fontSize: '0.74rem',
-                      justifyContent: 'center',
-                      background: String(playingSegmentId) === String(selectedSegment.id || selectedSegmentIndex)
-                        ? 'linear-gradient(135deg, #10b981 0%, #059669 100%)'
-                        : (autoplayBlocked ? 'rgba(234, 179, 8, 0.18)' : undefined),
-                      borderColor: String(playingSegmentId) === String(selectedSegment.id || selectedSegmentIndex)
-                        ? '#34d399'
-                        : (autoplayBlocked ? '#eab308' : undefined),
-                      color: String(playingSegmentId) === String(selectedSegment.id || selectedSegmentIndex)
-                        ? '#ffffff'
-                        : (autoplayBlocked ? '#fef08a' : undefined),
-                      fontWeight: 600,
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: 5,
-                    }}
-                    title="🔊 ស្តាប់សាកល្បង (Play audio)"
-                  >
-                    {String(playingSegmentId) === String(selectedSegment.id || selectedSegmentIndex) ? (
-                      <>
-                        <Pause size={13} />
-                        <span>កំពុងចាក់...</span>
-                      </>
-                    ) : (
-                      <>
-                        <Play size={13} fill="currentColor" color={autoplayBlocked ? "#facc15" : undefined} />
-                        <span>ស្តាប់សាកល្បង</span>
-                      </>
-                    )}
-                  </button>
-
-                  {/* 2. Regenerate Button or One-Click Translate Remedy */}
-                  {isKhmerEmpty ? (
-                    <button
-                      type="button"
-                      onClick={handleTranslateThisLine}
-                      disabled={isRetranslating}
-                      className="btn-primary"
-                      style={{
-                        padding: '7px 8px',
-                        fontSize: '0.74rem',
-                        justifyContent: 'center',
-                        background: 'linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)',
-                        color: '#ffffff',
-                        border: 'none',
-                        cursor: isRetranslating ? 'not-allowed' : 'pointer',
-                        fontWeight: 700,
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: 5,
-                        boxShadow: '0 2px 8px rgba(99, 102, 241, 0.35)',
-                      }}
-                      title="បកប្រែឃ្លានេះជាភាសាខ្មែរតាមរយៈ AI (Translate this line)"
-                    >
-                      {isRetranslating ? (
-                        <>
-                          <Loader2 size={13} className="pulse-glow" />
-                          <span>កំពុងបកប្រែ...</span>
-                        </>
-                      ) : (
-                        <>
-                          <Sparkles size={13} />
-                          <span>បកប្រែឃ្លានេះ</span>
-                        </>
-                      )}
-                    </button>
-                  ) : (() => {
-                    const isRegenerating = regeneratingId === (selectedSegment.id || selectedSegmentIndex);
-                    return (
-                      <button
-                        type="button"
-                        onClick={() => onSingleRegen(selectedSegment.id || selectedSegmentIndex, selectedSegmentIndex, localKhmerText)}
-                        disabled={isRegenerating}
-                        className={selectedSegment.audioUrl ? "btn-secondary" : "btn-primary"}
-                        style={{
-                          padding: '7px 8px',
-                          fontSize: '0.74rem',
-                          justifyContent: 'center',
-                          cursor: 'pointer',
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: 5,
-                        }}
-                        title="Regenerate speech for this segment"
-                      >
-                        {isRegenerating ? (
-                          <>
-                            <Loader2 size={13} className="pulse-glow" />
-                            <span>កំពុងបង្កើត...</span>
-                          </>
-                        ) : (
-                          <>
-                            <RefreshCw size={13} />
-                            <span>{selectedSegment.audioUrl ? 'Generate ឡើងវិញ' : 'Generate'}</span>
-                          </>
-                        )}
-                      </button>
-                    );
-                  })()}
-                </div>
-
-                {/* Secondary Row: Split & Delete */}
-                {(onSplitClip || onDeleteSegment) && (
-                  <div style={{ display: 'flex', gap: 6 }}>
-                    {onSplitClip && (
-                      <button
-                        type="button"
-                        onClick={() => onSplitClip(currentTime, selectedSegment.id || selectedSegmentIndex)}
-                        className="btn-secondary"
-                        style={{
-                          flex: 1,
-                          padding: '6px 10px',
-                          fontSize: '0.72rem',
-                          justifyContent: 'center',
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: 5,
-                          color: 'var(--accent-cyan, #38bdf8)',
-                          borderColor: 'rgba(56, 189, 248, 0.35)',
-                          background: 'rgba(56, 189, 248, 0.08)',
-                        }}
-                        title="កាត់ឃ្លានេះជាពីរត្រង់ Playhead (Split Segment at Playhead - Ctrl+B)"
-                      >
-                        <Scissors size={13} color="var(--accent-cyan)" />
-                        <span>កាត់ឃ្លា (Split)</span>
-                      </button>
-                    )}
-
-                    {onDeleteSegment && (
-                      <button
-                        type="button"
-                        onClick={() => onDeleteSegment(selectedSegment._uid || (selectedSegment.id !== undefined && selectedSegment.id !== null ? selectedSegment.id : selectedSegmentIndex))}
-                        className="btn-secondary"
-                        style={{
-                          width: onSplitClip ? '75px' : '100%',
-                          padding: '6px 10px',
-                          fontSize: '0.72rem',
-                          justifyContent: 'center',
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: 5,
-                          color: '#f87171',
-                          borderColor: 'rgba(239, 68, 68, 0.3)',
-                          background: 'rgba(239, 68, 68, 0.08)'
-                        }}
-                        title="លុបឃ្លានេះចោល (Delete Segment)"
-                      >
-                        <Trash2 size={13} color="#f87171" />
-                        <span>លុប</span>
-                      </button>
-                    )}
-                  </div>
-                )}
-
-                {/* Compact Contextual Action: Release to Auto-Align (Neutral non-warning control for manual position) */}
-                {Boolean(selectedSegment?.userShifted) && onReleaseSegmentToAutoAlign && (
-                  <button
-                    type="button"
-                    data-testid="btn-release-auto-align"
-                    onClick={() => onReleaseSegmentToAutoAlign(selectedSegment._uid || (selectedSegment.id !== undefined && selectedSegment.id !== null ? selectedSegment.id : selectedSegmentIndex))}
-                    className="btn-secondary"
-                    style={{
-                      width: '100%',
-                      padding: '6px 10px',
-                      fontSize: '0.72rem',
-                      fontWeight: 600,
-                      borderRadius: 4,
+                      height: 26,
+                      fontFamily: 'var(--font-mono)',
+                      fontSize: '11px',
+                      borderRadius: 'var(--radius-xs)',
+                      border: '1px solid',
+                      borderColor: isMatch ? 'rgba(56, 189, 248, 0.5)' : 'var(--border-subtle)',
+                      background: isMatch ? 'rgba(56, 189, 248, 0.16)' : 'var(--bg-desktop)',
+                      color: isMatch ? 'var(--primary-accent)' : 'var(--text-secondary)',
                       cursor: 'pointer',
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      gap: 6,
-                      color: 'var(--accent-cyan, #38bdf8)',
-                      borderColor: 'rgba(56, 189, 248, 0.35)',
-                      background: 'rgba(56, 189, 248, 0.08)',
-                      transition: 'all 0.15s ease',
+                      fontWeight: isMatch ? 700 : 500,
                     }}
-                    title="Release to Auto-Align — លុបទីតាំងដៃ ដើម្បីឲ្យ Auto-Align រៀបឃ្លានេះឡើងវិញ"
                   >
-                    <RefreshCw size={12} color="var(--accent-cyan, #38bdf8)" />
-                    <span>ឲ្យ Auto-Align គ្រប់គ្រងវិញ</span>
+                    {p.label}
                   </button>
-                )}
-              </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
 
-              {/* Autoplay Blocked Notification Banner */}
-              {autoplayBlocked && (
-                <div style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 6,
-                  padding: '6px 8px',
-                  borderRadius: 4,
-                  background: 'rgba(234, 179, 8, 0.12)',
-                  border: '1px solid rgba(234, 179, 8, 0.4)',
-                  color: '#fef08a',
-                  fontSize: '0.72rem',
-                  marginTop: 6
-                }}>
-                  <AlertCircle size={13} color="#facc15" style={{ flexShrink: 0 }} />
-                  <span>Browser រារាំង Auto-play — សូមចុចប៊ូតុង <strong>"ស្តាប់សំឡេង"</strong> ខាងលើដើម្បីចាក់!</span>
-                </div>
-              )}
+      {/* 5. Clean Click Actions Row (Listen | Regenerate | Split | Delete) */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6 }}>
+          <button
+            type="button"
+            onClick={() => {
+              if (selectedSegment.audioUrl && onPlaySegmentAudio) {
+                onPlaySegmentAudio(selectedSegment.audioUrl, selectedSegment.id || selectedSegmentIndex, true);
+              }
+            }}
+            disabled={!selectedSegment.audioUrl || isGenerating}
+            className="btn-secondary"
+            style={{
+              minHeight: 34,
+              fontSize: 'var(--text-sm)',
+              justifyContent: 'center',
+              background: String(playingSegmentId) === String(selectedSegment.id || selectedSegmentIndex)
+                ? 'var(--btn-success-bg)'
+                : (autoplayBlocked ? 'rgba(245, 158, 11, 0.16)' : undefined),
+              borderColor: String(playingSegmentId) === String(selectedSegment.id || selectedSegmentIndex)
+                ? 'rgba(52, 211, 153, 0.5)'
+                : (autoplayBlocked ? 'rgba(245, 158, 11, 0.5)' : undefined),
+              color: String(playingSegmentId) === String(selectedSegment.id || selectedSegmentIndex)
+                ? '#FFFFFF'
+                : (autoplayBlocked ? '#FDE68A' : undefined),
+            }}
+            title="ស្តាប់សំឡេងឃ្លានេះ"
+          >
+            {String(playingSegmentId) === String(selectedSegment.id || selectedSegmentIndex) ? (
+              <>
+                <Pause size={13} />
+                <span>កំពុងចាក់</span>
+              </>
+            ) : (
+              <>
+                <Play size={13} fill="currentColor" />
+                <span>ស្តាប់សំឡេង</span>
+              </>
+            )}
+          </button>
 
-              {/* Audio Playback Error Notification Banner */}
-              {playbackError && (
-                <div style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 6,
-                  padding: '6px 8px',
-                  borderRadius: 4,
-                  background: 'rgba(239, 68, 68, 0.12)',
-                  border: '1px solid rgba(239, 68, 68, 0.4)',
-                  color: '#fca5a5',
-                  fontSize: '0.72rem',
-                  marginTop: 6
-                }}>
-                  <AlertCircle size={13} color="#f87171" style={{ flexShrink: 0 }} />
-                  <span>Audio Error: {playbackError}</span>
-                </div>
-              )}
+          {isKhmerEmpty ? (
+            <button
+              type="button"
+              onClick={handleTranslateThisLine}
+              disabled={isRetranslating}
+              className="btn-primary"
+              style={{ minHeight: 34, fontSize: 'var(--text-sm)', justifyContent: 'center' }}
+            >
+              {isRetranslating ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
+              <span>{isRetranslating ? 'កំពុងបកប្រែ...' : 'បកប្រែឃ្លានេះ'}</span>
+            </button>
+          ) : (() => {
+            const isRegenerating = regeneratingId === (selectedSegment.id || selectedSegmentIndex);
+            return (
+              <button
+                type="button"
+                onClick={() => onSingleRegen(selectedSegment.id || selectedSegmentIndex, selectedSegmentIndex, localKhmerText)}
+                disabled={isRegenerating}
+                className={selectedSegment.audioUrl ? 'btn-secondary' : 'btn-primary'}
+                style={{ minHeight: 34, fontSize: 'var(--text-sm)', justifyContent: 'center' }}
+                title="បង្កើតសំឡេង AI សម្រាប់ឃ្លានេះឡើងវិញ"
+              >
+                {isRegenerating ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
+                <span>{isRegenerating ? 'កំពុងបង្កើត...' : (selectedSegment.audioUrl ? 'បង្កើតសំឡេងវិញ' : 'បង្កើតសំឡេង')}</span>
+              </button>
+            );
+          })()}
+        </div>
+
+        {(onSplitClip || onDeleteSegment) && (
+          <div style={{ display: 'grid', gridTemplateColumns: onSplitClip && onDeleteSegment ? '1fr auto' : '1fr', gap: 6 }}>
+            {onSplitClip && (
+              <button
+                type="button"
+                onClick={() => onSplitClip(currentTime, selectedSegment.id || selectedSegmentIndex)}
+                className="btn-secondary"
+                style={{ minHeight: 32, fontSize: 'var(--text-sm)', justifyContent: 'center', color: 'var(--primary-accent)' }}
+                title="កាត់ឃ្លានេះត្រង់ Playhead (Ctrl+B)"
+              >
+                <Scissors size={13} />
+                <span>កាត់ឃ្លា (Split)</span>
+              </button>
+            )}
+
+            {onDeleteSegment && (
+              <button
+                type="button"
+                onClick={() => onDeleteSegment(selectedSegment._uid || (selectedSegment.id !== undefined && selectedSegment.id !== null ? selectedSegment.id : selectedSegmentIndex))}
+                className="btn-danger"
+                style={{ minHeight: 32, minWidth: 76, fontSize: 'var(--text-sm)', justifyContent: 'center' }}
+                title="លុបឃ្លានេះ"
+              >
+                <Trash2 size={13} />
+                <span>លុប</span>
+              </button>
+            )}
+          </div>
+        )}
+
+        {/* Contextual Action: Release to Auto-Align */}
+        {Boolean(selectedSegment?.userShifted) && onReleaseSegmentToAutoAlign && (
+          <button
+            type="button"
+            data-testid="btn-release-auto-align"
+            onClick={() => onReleaseSegmentToAutoAlign(selectedSegment._uid || (selectedSegment.id !== undefined && selectedSegment.id !== null ? selectedSegment.id : selectedSegmentIndex))}
+            className="btn-secondary"
+            style={{ width: '100%', minHeight: 32, fontSize: 'var(--text-sm)', justifyContent: 'center', color: 'var(--primary-accent)', borderColor: 'rgba(56, 189, 248, 0.35)' }}
+            title="Release to Auto-Align — លុបទីតាំងដៃ ដើម្បីឲ្យ Auto-Align រៀបឃ្លានេះឡើងវិញ"
+          >
+            <RefreshCw size={12} />
+            <span>ឲ្យ Auto-Align គ្រប់គ្រងវិញ</span>
+          </button>
+        )}
+      </div>
+
+      {/* Autoplay Blocked Notice */}
+      {autoplayBlocked && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '7px 9px', borderRadius: 'var(--radius-xs)', background: 'rgba(245, 158, 11, 0.12)', border: '1px solid rgba(245, 158, 11, 0.35)', color: '#FDE68A', fontSize: '12px' }}>
+          <AlertCircle size={13} style={{ flexShrink: 0 }} />
+          <span>ចុចប៊ូតុង <strong>«ស្តាប់សំឡេង»</strong> ខាងលើដើម្បីចាក់!</span>
+        </div>
+      )}
+
+      {/* Playback Error Notice */}
+      {playbackError && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '7px 9px', borderRadius: 'var(--radius-xs)', background: 'rgba(239, 68, 68, 0.12)', border: '1px solid rgba(239, 68, 68, 0.35)', color: '#FCA5A5', fontSize: '12px' }}>
+          <AlertCircle size={13} style={{ flexShrink: 0 }} />
+          <span>Audio Error: {playbackError}</span>
+        </div>
+      )}
     </div>
   );
 }

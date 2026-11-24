@@ -579,5 +579,73 @@ router.post(["/upload-sponsor-video", "/sponsor/upload"], (req, res) => {
   });
 });
 
+// Multer uploader for Custom BGM Music (.mp3, .wav, .m4a, .ogg, .aac, .flac, .mp4)
+const bgmUpload = multer({
+  storage,
+  fileFilter: (req, file, cb) => {
+    const allowedAudioExts = [".mp3", ".wav", ".m4a", ".ogg", ".aac", ".flac", ".mp4", ".webm"];
+    const ext = path.extname(file.originalname || "").toLowerCase();
+    const mime = String(file.mimetype || "").toLowerCase();
+    if (mime.startsWith("audio/") || mime.startsWith("video/") || allowedAudioExts.includes(ext)) {
+      cb(null, true);
+    } else {
+      cb(new Error("សូមជ្រើសរើសឯកសារភ្លេង (.mp3, .wav, .m4a, .ogg, .aac, .flac)"));
+    }
+  },
+  limits: { fileSize: 500 * 1024 * 1024 }, // 500MB max
+});
+
+/**
+ * Custom Loop BGM Music Upload (Anti-Copyright Background Music)
+ */
+router.post(["/upload-custom-bgm", "/bgm/upload"], (req, res) => {
+  bgmUpload.single("file")(req, res, async (err) => {
+    if (err) {
+      return res.status(400).json({ success: false, error: err.message });
+    }
+    if (!req.file) {
+      return res.status(400).json({ success: false, error: "មិនមានឯកសារភ្លេងសម្រាប់ Upload ទេ" });
+    }
+
+    try {
+      const bgmDir = path.join(uploadsDir, "bgm");
+      if (!fs.existsSync(bgmDir)) {
+        fs.mkdirSync(bgmDir, { recursive: true });
+      }
+
+      const rawOriginalName = decodeMultipartFilename(req.file.originalname || "Custom_BGM.mp3").trim();
+      const ext = path.extname(rawOriginalName).toLowerCase() || ".mp3";
+      const targetFileName = `custom_bgm_${Date.now()}_${uuidv4().substring(0, 8)}${ext}`;
+      const targetFilePath = path.join(bgmDir, targetFileName);
+
+      try {
+        fs.renameSync(req.file.path, targetFilePath);
+      } catch {
+        fs.copyFileSync(req.file.path, targetFilePath);
+        try { fs.unlinkSync(req.file.path); } catch {}
+      }
+
+      let durationSec = 0;
+      try {
+        const { getMediaDuration } = require("../services/ffmpegService");
+        durationSec = Number(await getMediaDuration(targetFilePath)) || 0;
+      } catch (_) {}
+
+      const bgmUrl = `/uploads/bgm/${targetFileName}`;
+      res.json({
+        success: true,
+        bgmUrl,
+        bgmPath: targetFilePath,
+        filename: targetFileName,
+        originalName: rawOriginalName,
+        durationSec,
+        size: req.file.size,
+      });
+    } catch (saveErr) {
+      res.status(500).json({ success: false, error: saveErr.message });
+    }
+  });
+});
+
 module.exports = router;
 

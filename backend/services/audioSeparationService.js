@@ -4,10 +4,117 @@
  */
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
-const { spawn } = require('child_process');
+const { spawn, execSync } = require('child_process');
+const ffmpegInstaller = require('@ffmpeg-installer/ffmpeg');
 const { registerProcess, unregisterProcess } = require('../utils/processRegistry');
+
+function resolveFfmpegBinary() {
+  try {
+    const cmd = process.platform === 'win32' ? 'where ffmpeg' : 'which ffmpeg';
+    const sysPath = execSync(cmd, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).split(/\r?\n/)[0].trim();
+    if (sysPath && fs.existsSync(sysPath)) return sysPath;
+  } catch (_) {}
+  return ffmpegInstaller?.path || 'ffmpeg';
+}
+
+/**
+ * Dynamically compute multi-core CPU worker count and per-worker BLAS/OMP thread count
+ * while reserving OS/UI headroom cores so Windows & Browser scrolling stay 60fps smooth.
+ * Default reserve: 2 cores on >=8-core CPUs, 1 core on 4-7-core CPUs (override via DEMUCS_CPU_RESERVE_CORES=0).
+ * Default jobs: max(2, min(4, floor(usableCores / 3))), threadsPerJob: max(1, floor(usableCores / jobs)).
+ */
+function computeDefaultCpuConfig(cpuCount = os.cpus().length, env = process.env, requestedJobs = undefined) {
+  const totalCores = Math.max(1, Number(cpuCount) || 4);
+  const rawReserve = env?.DEMUCS_CPU_RESERVE_CORES;
+  const defaultReserve = totalCores >= 8 ? 2 : totalCores >= 4 ? 1 : 0;
+  const reserveCores = rawReserve !== undefined && rawReserve !== '' && Number.isFinite(Number(rawReserve)) && Number(rawReserve) >= 0
+    ? Math.min(Math.max(0, totalCores - 1), Math.floor(Number(rawReserve)))
+    : defaultReserve;
+  const usableCores = Math.max(1, totalCores - reserveCores);
+
+  const parsedRequested = requestedJobs !== undefined && requestedJobs !== null && Number.isFinite(Number(requestedJobs)) && Number(requestedJobs) > 0
+    ? Math.floor(Number(requestedJobs))
+    : null;
+  const parsedEnv = env?.DEMUCS_CPU_JOBS !== undefined && env.DEMUCS_CPU_JOBS !== '' && Number.isFinite(Number(env.DEMUCS_CPU_JOBS)) && Number(env.DEMUCS_CPU_JOBS) > 0
+    ? Math.floor(Number(env.DEMUCS_CPU_JOBS))
+    : null;
+
+  const autoJobs = usableCores >= 2 ? Math.max(2, Math.min(4, Math.floor(usableCores / 3))) : 1;
+  const cpuJobs = parsedRequested || parsedEnv || autoJobs;
+  const threadsPerJob = Math.max(1, Math.floor(usableCores / cpuJobs));
+  return { totalCores, reserveCores, usableCores, cpuJobs, threadsPerJob };
+}
+
+/**
+ * Resolve separation speed/quality preset into concrete engine + Demucs/FFmpeg parameters.
+ * Presets:
+ * - 'turbo' (default): Multi-core Demucs (htdemucs or DEMUCS_FAST_MODEL=mdx_extra_q), overlap=0.1, shifts=0 (~3x-4x faster on CPU)
+ * - 'studio': Max-quality Demucs (htdemucs, overlap=0.25, shifts=1, multi-core)
+ * - 'ffmpeg_fast': Instant (~3-5s) stereo-bass-preserved center-vocal suppression via FFmpeg
+ */
+function resolveSeparationPresetConfig(preset = 'turbo', options = {}, env = process.env) {
+  const rawPreset = String(preset || options?.separationPreset || 'turbo').trim().toLowerCase();
+  const separationPreset = ['turbo', 'studio', 'ffmpeg_fast'].includes(rawPreset) ? rawPreset : 'turbo';
+  const cpuConfig = computeDefaultCpuConfig(os.cpus().length, env, options?.jobs);
+
+  if (separationPreset === 'ffmpeg_fast') {
+    return {
+      separationPreset: 'ffmpeg_fast',
+      engine: 'ffmpeg_fast',
+      model: 'ffmpeg_fast',
+      cacheModelKey: 'ffmpeg_fast',
+      overlap: null,
+      shifts: null,
+      segment: null,
+      jobs: cpuConfig.cpuJobs,
+      threadsPerJob: cpuConfig.threadsPerJob,
+      usableCores: cpuConfig.usableCores,
+      totalCores: cpuConfig.totalCores,
+    };
+  }
+
+  if (separationPreset === 'studio') {
+    const model = options?.model || 'htdemucs';
+    return {
+      separationPreset: 'studio',
+      engine: 'demucs',
+      model,
+      cacheModelKey: `${model}_studio`,
+      overlap: options?.overlap !== undefined && options?.overlap !== null ? Number(options.overlap) : 0.25,
+      shifts: options?.shifts !== undefined && options?.shifts !== null ? Number(options.shifts) : 1,
+      segment: options?.segment !== undefined && options?.segment !== null ? Number(options.segment) : undefined,
+      jobs: cpuConfig.cpuJobs,
+      threadsPerJob: cpuConfig.threadsPerJob,
+      usableCores: cpuConfig.usableCores,
+      totalCores: cpuConfig.totalCores,
+    };
+  }
+
+  // Default: 'turbo'
+  const allowedFastModels = ['htdemucs', 'mdx_extra_q', 'mdx_extra', 'htdemucs_ft'];
+  const envFastModel = env?.DEMUCS_FAST_MODEL && allowedFastModels.includes(String(env.DEMUCS_FAST_MODEL).trim())
+    ? String(env.DEMUCS_FAST_MODEL).trim()
+    : 'htdemucs';
+  const model = options?.model || envFastModel;
+  const defaultSegment = model.toLowerCase().includes('htdemucs') ? undefined : 10;
+
+  return {
+    separationPreset: 'turbo',
+    engine: 'demucs',
+    model,
+    cacheModelKey: model,
+    overlap: options?.overlap !== undefined && options?.overlap !== null ? Number(options.overlap) : 0.1,
+    shifts: options?.shifts !== undefined && options?.shifts !== null ? Number(options.shifts) : 0,
+    segment: options?.segment !== undefined && options?.segment !== null ? Number(options.segment) : defaultSegment,
+    jobs: cpuConfig.cpuJobs,
+    threadsPerJob: cpuConfig.threadsPerJob,
+    usableCores: cpuConfig.usableCores,
+    totalCores: cpuConfig.totalCores,
+  };
+}
 
 function probeMediaDuration(filePath) {
   const { getMediaDuration } = require('./ffmpegService');
@@ -17,6 +124,14 @@ function probeMediaDuration(filePath) {
 const activeSeparationJobs = new Map();
 const activeSeparationProgress = new Map();
 const separationQueue = [];
+
+function scheduleUnrefTimeout(fn, delayMs) {
+  const timer = setTimeout(fn, delayMs);
+  if (typeof timer.unref === 'function') {
+    timer.unref();
+  }
+  return timer;
+}
 
 function normalizeSeparationKey(mediaRef) {
   if (!mediaRef) return '';
@@ -155,6 +270,29 @@ function getSeparationCacheDir(audioPath, model = 'htdemucs') {
 }
 
 /**
+ * Find any existing valid Clean BGM separation cache directory across presets
+ * (checks preferred preset first, then htdemucs, htdemucs_studio, mdx_extra_q, ffmpeg_fast).
+ */
+function findAnyCachedSeparationDir(audioPath, preferredPreset = null) {
+  const candidates = [];
+  if (preferredPreset) {
+    const cfg = resolveSeparationPresetConfig(preferredPreset);
+    candidates.push(cfg.cacheModelKey);
+  }
+  for (const key of ['htdemucs', 'htdemucs_studio', 'mdx_extra_q', 'ffmpeg_fast']) {
+    if (!candidates.includes(key)) candidates.push(key);
+  }
+  for (const modelKey of candidates) {
+    const dir = getSeparationCacheDir(audioPath, modelKey);
+    if (fs.existsSync(path.join(dir, 'no_vocals.wav'))) {
+      return { cacheDir: dir, modelKey };
+    }
+  }
+  const fallbackKey = candidates[0] || 'htdemucs';
+  return { cacheDir: getSeparationCacheDir(audioPath, fallbackKey), modelKey: fallbackKey };
+}
+
+/**
  * Validate Demucs separated stems for existence, size (>=100KB), decodability, and non-zero duration
  */
 function validateDemucsStems(vocalsPath, noVocalsPath, sourceDuration = null) {
@@ -238,6 +376,7 @@ function validateDemucsStems(vocalsPath, noVocalsPath, sourceDuration = null) {
  */
 let isDemucsRunning = false;
 let currentDemucsMedia = null;
+let pendingStartupCleanupPromise = null;
 
 function finishDemucsWorkerAndProcessQueue() {
   isDemucsRunning = false;
@@ -256,7 +395,8 @@ function finishDemucsWorkerAndProcessQueue() {
     // Check if dequeued job already has valid cache on disk (e.g. earlier identical run)
     const cachedVocals = path.join(nextJob.targetDir, 'vocals.wav');
     const cachedNoVocals = path.join(nextJob.targetDir, 'no_vocals.wav');
-    if (fs.existsSync(cachedVocals) && fs.existsSync(cachedNoVocals)) {
+    const nextPreset = resolveSeparationPresetConfig(nextJob.options?.separationPreset, nextJob.options);
+    if (!nextJob.options?.force && fs.existsSync(cachedVocals) && fs.existsSync(cachedNoVocals)) {
       const vSize = fs.statSync(cachedVocals).size;
       const nvSize = fs.statSync(cachedNoVocals).size;
       if (vSize >= 100 * 1024 && nvSize >= 100 * 1024) {
@@ -265,11 +405,15 @@ function finishDemucsWorkerAndProcessQueue() {
           progress: 100,
           status: 'completed',
           message: 'Clean BGM រួចរាល់ 100%',
+          model: nextPreset.model,
+          separationPreset: nextPreset.separationPreset,
+          noVocalsPath: cachedNoVocals,
         });
         nextJob.resolve({
           status: 'success',
           isCached: true,
-          model: nextJob.options?.model || 'htdemucs',
+          model: nextPreset.model,
+          separationPreset: nextPreset.separationPreset,
           vocalsPath: cachedVocals,
           noVocalsPath: cachedNoVocals,
           vocalsSizeBytes: vSize,
@@ -281,35 +425,307 @@ function finishDemucsWorkerAndProcessQueue() {
 
     isDemucsRunning = true;
     currentDemucsMedia = path.basename(nextJob.options.audioPath);
-    console.log(`[AudioSeparation] 🚀 Dequeued next separation for: ${nextJob.cleanKey}`);
+    console.log(`[AudioSeparation] 🚀 Dequeued next separation for: ${nextJob.cleanKey} (Preset: ${nextPreset.separationPreset})`);
     executeDemucsWorker(nextJob.options, nextJob.targetDir, nextJob.cleanKey)
       .then(nextJob.resolve, nextJob.reject);
     break;
   }
 }
 
+/**
+ * Instant (~3-5s) Clean BGM via FFmpeg stereo-bass-preserved center-vocal suppression.
+ * Attenuates center-panned Chinese dialogue while keeping full stereo bass (<160Hz) and wide BGM intact.
+ * Produces validated vocals.wav + no_vocals.wav in a single fast FFmpeg pass.
+ */
+function executeFfmpegFastSeparation(options, targetDir, cleanKey, presetConfig) {
+  return new Promise(async (resolve, reject) => {
+    const {
+      audioPath,
+      jobId = `sep_ff_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      onProgress = null,
+    } = options;
+
+    const startTime = Date.now();
+    let sourceDuration = null;
+    if (typeof options.sourceDuration === 'number' && options.sourceDuration > 0) {
+      sourceDuration = options.sourceDuration;
+    } else {
+      try { sourceDuration = await probeMediaDuration(audioPath); } catch (_) {}
+    }
+
+    const initialLogs = [
+      {
+        time: new Date().toLocaleTimeString(),
+        progress: 5,
+        message: '⚡ Starting FFmpeg Instant Clean BGM (Center-Vocal Cut + Stereo Bass Preservation)...',
+      },
+    ];
+    activeSeparationProgress.set(cleanKey, {
+      progress: 5,
+      status: 'separating',
+      message: '⚡ FFmpeg Instant Clean BGM (5s)...',
+      model: 'ffmpeg_fast',
+      separationPreset: 'ffmpeg_fast',
+      logs: initialLogs,
+    });
+
+    if (onProgress) {
+      onProgress({ phase: 'starting', progress: 5, message: '⚡ Launching FFmpeg Instant Clean BGM...' });
+    }
+
+    const ffmpegBin = resolveFfmpegBinary();
+    const tmpSuffix = `${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+    const tmpNoVocals = path.join(targetDir, `.tmp_no_vocals_${tmpSuffix}.wav`);
+    const tmpVocals = path.join(targetDir, `.tmp_vocals_${tmpSuffix}.wav`);
+    const destNoVocals = path.join(targetDir, 'no_vocals.wav');
+    const destVocals = path.join(targetDir, 'vocals.wav');
+
+    // Center-channel vocal attenuation + bandpass music preservation blended with original stereo bass (< 160Hz)
+    const filterComplex = [
+      '[0:a]aformat=sample_rates=44100:channel_layouts=stereo,asplit=3[s_side][s_bass][s_voc]',
+      '[s_side]pan=stereo|c0=c0-0.65*c1|c1=c1-0.65*c0,highpass=f=45,lowpass=f=14000[bgm_side]',
+      '[s_bass]highpass=f=35,lowpass=f=160,volume=0.65[bgm_bass]',
+      '[bgm_side][bgm_bass]amix=inputs=2:duration=first:normalize=0,alimiter=limit=0.95[no_vocals]',
+      '[s_voc]pan=stereo|c0=0.5*c0+0.5*c1|c1=0.5*c0+0.5*c1,highpass=f=180,lowpass=f=4500[vocals]',
+    ].join(';');
+
+    const args = [
+      '-hide_banner',
+      '-y',
+      '-i', audioPath,
+      '-vn',
+      '-filter_complex', filterComplex,
+      '-map', '[no_vocals]',
+      '-c:a', 'pcm_s16le',
+      '-ar', '44100',
+      '-ac', '2',
+      tmpNoVocals,
+      '-map', '[vocals]',
+      '-c:a', 'pcm_s16le',
+      '-ar', '44100',
+      '-ac', '2',
+      tmpVocals,
+    ];
+
+    console.log(`[AudioSeparation] ⚡ Launching FFmpeg Instant Clean BGM for: ${path.basename(audioPath)} (Preset: ffmpeg_fast)`);
+
+    let child;
+    try {
+      child = spawn(ffmpegBin, args, {
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+    } catch (spawnErr) {
+      finishDemucsWorkerAndProcessQueue();
+      return reject(spawnErr);
+    }
+
+    let workerFinished = false;
+    const completeWorkerOnce = () => {
+      if (workerFinished) return;
+      workerFinished = true;
+      unregisterProcess(child);
+      activeSeparationJobs.delete(jobId);
+      activeSeparationJobs.delete(cleanKey);
+      finishDemucsWorkerAndProcessQueue();
+    };
+    child.__completeWorker = completeWorkerOnce;
+
+    registerProcess(child, { type: 'demucs', jobId, label: cleanKey });
+    activeSeparationJobs.set(jobId, child);
+    activeSeparationJobs.set(cleanKey, child);
+
+    let stderrData = '';
+    child.stderr.on('data', (d) => {
+      const chunk = d.toString('utf8');
+      stderrData += chunk;
+      const timeMatch = chunk.match(/time=(\d+):(\d+):(\d+(?:\.\d+)?)/);
+      if (timeMatch && sourceDuration && sourceDuration > 0.5) {
+        const curSec = parseInt(timeMatch[1], 10) * 3600 + parseInt(timeMatch[2], 10) * 60 + parseFloat(timeMatch[3]);
+        const pct = Math.min(98, Math.max(10, Math.round((curSec / sourceDuration) * 100)));
+        const existing = activeSeparationProgress.get(cleanKey);
+        const curLogs = Array.isArray(existing?.logs) ? [...existing.logs] : [];
+        const lastLog = curLogs[curLogs.length - 1];
+        if (!lastLog || lastLog.progress !== pct) {
+          curLogs.push({
+            time: new Date().toLocaleTimeString(),
+            progress: pct,
+            message: `⚡ FFmpeg Instant BGM: ${pct}%`,
+          });
+        }
+        activeSeparationProgress.set(cleanKey, {
+          progress: pct,
+          status: 'separating',
+          message: `⚡ FFmpeg Instant BGM: ${pct}%`,
+          model: 'ffmpeg_fast',
+          separationPreset: 'ffmpeg_fast',
+          logs: curLogs.slice(-60),
+        });
+        if (onProgress) onProgress({ phase: 'separating', progress: pct, message: `FFmpeg Instant BGM: ${pct}%` });
+      }
+    });
+
+    const cleanupTemps = () => {
+      try { if (fs.existsSync(tmpNoVocals)) fs.unlinkSync(tmpNoVocals); } catch (_) {}
+      try { if (fs.existsSync(tmpVocals)) fs.unlinkSync(tmpVocals); } catch (_) {}
+    };
+
+    const atomicSwap = (src, dest) => {
+      try {
+        if (fs.existsSync(dest)) {
+          try { fs.unlinkSync(dest); } catch (_) {}
+        }
+        fs.renameSync(src, dest);
+      } catch (_) {
+        fs.copyFileSync(src, dest);
+        try { fs.unlinkSync(src); } catch (_) {}
+      }
+    };
+
+    child.on('error', (err) => {
+      cleanupTemps();
+      activeSeparationProgress.set(cleanKey, {
+        progress: 0,
+        status: 'error',
+        error: err.message,
+        message: err.message,
+        model: 'ffmpeg_fast',
+        separationPreset: 'ffmpeg_fast',
+      });
+      scheduleUnrefTimeout(() => {
+        if (activeSeparationProgress.get(cleanKey)?.status === 'error') {
+          activeSeparationProgress.delete(cleanKey);
+        }
+      }, 60000);
+      completeWorkerOnce();
+      reject(err);
+    });
+
+    child.on('close', async (code) => {
+      completeWorkerOnce();
+      if (code !== 0) {
+        cleanupTemps();
+        const tailLines = stderrData.trim().split(/\r?\n/).filter(Boolean).slice(-4).join(' ');
+        const errMsg = `FFmpeg Instant Clean BGM exited with code ${code}${tailLines ? `: ${tailLines}` : ''}`;
+        activeSeparationProgress.set(cleanKey, {
+          progress: 0,
+          status: 'error',
+          error: errMsg,
+          message: errMsg,
+          model: 'ffmpeg_fast',
+          separationPreset: 'ffmpeg_fast',
+        });
+        scheduleUnrefTimeout(() => {
+          if (activeSeparationProgress.get(cleanKey)?.status === 'error') {
+            activeSeparationProgress.delete(cleanKey);
+          }
+        }, 60000);
+        return reject(new Error(errMsg));
+      }
+
+      try {
+        atomicSwap(tmpNoVocals, destNoVocals);
+        atomicSwap(tmpVocals, destVocals);
+
+        const validation = await validateDemucsStems(destVocals, destNoVocals, sourceDuration);
+        if (!validation.valid) {
+          try { if (fs.existsSync(destVocals)) fs.unlinkSync(destVocals); } catch (_) {}
+          try { if (fs.existsSync(destNoVocals)) fs.unlinkSync(destNoVocals); } catch (_) {}
+          const stemErr = `FFmpeg Instant Clean BGM stems failed validation: ${validation.reason}`;
+          activeSeparationProgress.set(cleanKey, {
+            progress: 0,
+            status: 'error',
+            error: stemErr,
+            message: stemErr,
+            model: 'ffmpeg_fast',
+            separationPreset: 'ffmpeg_fast',
+          });
+          return reject(new Error(stemErr));
+        }
+
+        const processingTimeSec = Number(((Date.now() - startTime) / 1000).toFixed(2));
+        const existing = activeSeparationProgress.get(cleanKey);
+        const curLogs = Array.isArray(existing?.logs) ? [...existing.logs] : [];
+        curLogs.push({
+          time: new Date().toLocaleTimeString(),
+          progress: 100,
+          message: `🎉 FFmpeg Instant Clean BGM 100% Complete in ${processingTimeSec}s!`,
+        });
+        activeSeparationProgress.set(cleanKey, {
+          progress: 100,
+          status: 'completed',
+          message: `⚡ FFmpeg Instant BGM រួចរាល់ (${processingTimeSec}s)`,
+          model: 'ffmpeg_fast',
+          separationPreset: 'ffmpeg_fast',
+          noVocalsPath: destNoVocals,
+          processingTimeSec,
+          logs: curLogs.slice(-60),
+        });
+        scheduleUnrefTimeout(() => activeSeparationProgress.delete(cleanKey), 300000);
+        console.log(`[AudioSeparation] ⚡ FFmpeg Instant Clean BGM successful in ${processingTimeSec}s (No-Vocals: ${(validation.noVocalsSizeBytes / 1024 / 1024).toFixed(1)}MB)`);
+
+        resolve({
+          status: 'success',
+          model: 'ffmpeg_fast',
+          separationPreset: 'ffmpeg_fast',
+          device: 'cpu',
+          jobs: presetConfig.jobs,
+          processingTimeSec,
+          durationSec: sourceDuration ? Number(sourceDuration.toFixed(2)) : validation.noVocalsDuration,
+          vocalsPath: destVocals,
+          noVocalsPath: destNoVocals,
+          vocalsSizeBytes: validation.vocalsSizeBytes,
+          noVocalsSizeBytes: validation.noVocalsSizeBytes,
+          vocalsDuration: validation.vocalsDuration,
+          noVocalsDuration: validation.noVocalsDuration,
+          isCached: false,
+        });
+      } catch (err) {
+        cleanupTemps();
+        activeSeparationProgress.set(cleanKey, {
+          progress: 0,
+          status: 'error',
+          error: err.message,
+          message: err.message,
+          model: 'ffmpeg_fast',
+          separationPreset: 'ffmpeg_fast',
+        });
+        reject(err);
+      }
+    });
+  });
+}
+
 function executeDemucsWorker(options, targetDir, cleanKey) {
+  const presetConfig = resolveSeparationPresetConfig(options.separationPreset, options);
+  if (presetConfig.engine === 'ffmpeg_fast') {
+    return executeFfmpegFastSeparation(options, targetDir, cleanKey, presetConfig);
+  }
+
   return new Promise((resolve, reject) => {
     const {
       audioPath,
-      model = 'htdemucs',
       device = 'auto',
       jobId = `sep_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
       onProgress = null,
     } = options;
+    const model = presetConfig.model;
+    const separationPreset = presetConfig.separationPreset;
+    const presetLabel = separationPreset === 'studio' ? 'Studio Quality' : 'Demucs Turbo';
 
     const initialLogs = [
       {
         time: new Date().toLocaleTimeString(),
         progress: 1,
-        message: '🎧 Starting Demucs AI separation (Loading PyTorch AI model)...',
+        message: `🎧 Starting ${presetLabel} separation (Model: ${model}, Multi-Core: ${presetConfig.jobs} jobs × ${presetConfig.threadsPerJob} threads)...`,
       },
     ];
     activeSeparationProgress.set(cleanKey, {
       progress: 1,
       status: 'separating',
-      message: 'Starting Demucs AI separation...',
+      message: `Starting ${presetLabel} separation...`,
       model,
+      separationPreset,
       logs: initialLogs,
     });
 
@@ -329,35 +745,52 @@ function executeDemucsWorker(options, targetDir, cleanKey) {
     ];
     if (options.shifts !== undefined && options.shifts !== null) {
       args.push('--shifts', String(options.shifts));
+    } else if (presetConfig.shifts !== undefined && presetConfig.shifts !== null) {
+      args.push('--shifts', String(presetConfig.shifts));
     }
     if (options.overlap !== undefined && options.overlap !== null) {
       args.push('--overlap', String(options.overlap));
+    } else if (presetConfig.overlap !== undefined && presetConfig.overlap !== null) {
+      args.push('--overlap', String(presetConfig.overlap));
     }
     if (options.segment !== undefined && options.segment !== null) {
       args.push('--segment', String(options.segment));
+    } else if (presetConfig.segment !== undefined && presetConfig.segment !== null) {
+      args.push('--segment', String(presetConfig.segment));
     }
-    const cpuJobs = options.jobs !== undefined && options.jobs !== null ? String(options.jobs) : '1';
+    const cpuJobs = options.jobs !== undefined && options.jobs !== null
+      ? String(options.jobs)
+      : String(presetConfig.jobs);
     args.push('--jobs', cpuJobs);
     if (options.suppressResiduals !== false) {
       args.push('--suppress_residuals');
     }
 
+    const effectiveJobs = Math.max(1, Number(cpuJobs) || 1);
+    const effectiveUsableCores = Math.max(1, presetConfig.usableCores || presetConfig.totalCores);
+    const effectiveThreadsPerJob = Math.max(1, Math.floor(effectiveUsableCores / effectiveJobs));
+    const usedCores = effectiveJobs * effectiveThreadsPerJob;
+
     const optSummary = [
-      options.shifts !== undefined ? `Shifts: ${options.shifts}` : null,
-      options.overlap !== undefined ? `Overlap: ${options.overlap}` : null,
-      options.segment !== undefined ? `Segment: ${options.segment}` : null,
-      `Jobs: ${cpuJobs} (Eco CPU)`,
+      `Preset: ${separationPreset}`,
+      `Shifts: ${presetConfig.shifts}`,
+      `Overlap: ${presetConfig.overlap}`,
+      presetConfig.segment !== undefined ? `Segment: ${presetConfig.segment}` : null,
+      `Jobs: ${cpuJobs} × ${effectiveThreadsPerJob}T (${usedCores}/${presetConfig.totalCores} cores, BelowNormal)`,
     ].filter(Boolean).join(', ');
 
-    console.log(`[AudioSeparation] 🎧 Launching Demucs separation for: ${path.basename(audioPath)} (Model: ${model}, Device: ${device}, ${optSummary})`);
-    if (onProgress) onProgress({ phase: 'starting', progress: 5, message: 'Launching Demucs Audio Separation AI...' });
+    console.log(`[AudioSeparation] 🎧 Launching ${presetLabel} separation for: ${path.basename(audioPath)} (Model: ${model}, Device: ${device}, ${optSummary})`);
+    if (onProgress) onProgress({ phase: 'starting', progress: 5, message: `Launching ${presetLabel} AI...` });
 
+    const threadsStr = String(effectiveThreadsPerJob);
     const spawnEnv = {
       ...process.env,
-      OMP_NUM_THREADS: '4',
-      MKL_NUM_THREADS: '4',
-      OPENBLAS_NUM_THREADS: '4',
-      NUMEXPR_NUM_THREADS: '4',
+      OMP_NUM_THREADS: threadsStr,
+      MKL_NUM_THREADS: threadsStr,
+      OPENBLAS_NUM_THREADS: threadsStr,
+      NUMEXPR_NUM_THREADS: threadsStr,
+      OMP_WAIT_POLICY: 'PASSIVE',
+      KMP_BLOCKTIME: '0',
     };
 
     let child;
@@ -367,6 +800,13 @@ function executeDemucsWorker(options, targetDir, cleanKey) {
         stdio: ['ignore', 'pipe', 'pipe'],
         env: spawnEnv,
       });
+      // Lower OS scheduling priority so Windows DWM & Browser scrolling remain 60fps smooth
+      // while Demucs still uses full background CPU speed when idle.
+      try {
+        if (child?.pid && typeof os.setPriority === 'function' && os.constants?.priority?.PRIORITY_BELOW_NORMAL !== undefined) {
+          os.setPriority(child.pid, os.constants.priority.PRIORITY_BELOW_NORMAL);
+        }
+      } catch (_) {}
     } catch (spawnErr) {
       finishDemucsWorkerAndProcessQueue();
       return reject(spawnErr);
@@ -435,7 +875,7 @@ function executeDemucsWorker(options, targetDir, cleanKey) {
         message: err.message,
         model,
       });
-      setTimeout(() => {
+      scheduleUnrefTimeout(() => {
         if (activeSeparationProgress.get(cleanKey)?.status === 'error') {
           activeSeparationProgress.delete(cleanKey);
         }
@@ -469,7 +909,7 @@ function executeDemucsWorker(options, targetDir, cleanKey) {
           message: errMsg,
           model,
         });
-        setTimeout(() => {
+        scheduleUnrefTimeout(() => {
           if (activeSeparationProgress.get(cleanKey)?.status === 'error') {
             activeSeparationProgress.delete(cleanKey);
           }
@@ -518,14 +958,16 @@ function executeDemucsWorker(options, targetDir, cleanKey) {
             status: 'completed',
             message: 'Separation Completed 100%',
             model,
+            separationPreset,
             noVocalsPath: parsed.noVocalsPath,
             processingTimeSec: parsed.processingTimeSec,
             logs: curLogs.slice(-60),
           });
-          setTimeout(() => activeSeparationProgress.delete(cleanKey), 300000);
-          console.log(`[AudioSeparation] ✅ Separation successful in ${parsed.processingTimeSec}s (Vocals: ${(parsed.vocalsSizeBytes / 1024 / 1024).toFixed(1)}MB, No-Vocals: ${(parsed.noVocalsSizeBytes / 1024 / 1024).toFixed(1)}MB)`);
+          scheduleUnrefTimeout(() => activeSeparationProgress.delete(cleanKey), 300000);
+          console.log(`[AudioSeparation] ✅ Separation successful in ${parsed.processingTimeSec}s (Preset: ${separationPreset}, Model: ${model}, Vocals: ${(parsed.vocalsSizeBytes / 1024 / 1024).toFixed(1)}MB, No-Vocals: ${(parsed.noVocalsSizeBytes / 1024 / 1024).toFixed(1)}MB)`);
           resolve({
             ...parsed,
+            separationPreset,
             vocalsDuration: validation.vocalsDuration,
             noVocalsDuration: validation.noVocalsDuration,
             isCached: false,
@@ -538,6 +980,7 @@ function executeDemucsWorker(options, targetDir, cleanKey) {
             error: msg,
             message: msg,
             model,
+            separationPreset,
           });
           reject(new Error(msg));
         }
@@ -549,6 +992,7 @@ function executeDemucsWorker(options, targetDir, cleanKey) {
           error: msg,
           message: msg,
           model,
+          separationPreset,
         });
         reject(new Error(msg));
       }
@@ -557,12 +1001,19 @@ function executeDemucsWorker(options, targetDir, cleanKey) {
 }
 
 async function separateAudio(options = {}) {
-  const { audioPath, model = 'htdemucs' } = options;
+  if (pendingStartupCleanupPromise) {
+    try { await pendingStartupCleanupPromise; } catch (_) {}
+  }
+  const { audioPath } = options;
   if (!audioPath || !fs.existsSync(audioPath)) {
     throw new Error(`Input audio file not found: ${audioPath}`);
   }
 
-  const targetDir = options.outputDir || getSeparationCacheDir(audioPath, model);
+  const presetConfig = resolveSeparationPresetConfig(options.separationPreset, options);
+  const model = presetConfig.model;
+  const separationPreset = presetConfig.separationPreset;
+  const force = Boolean(options.force);
+  const targetDir = options.outputDir || getSeparationCacheDir(audioPath, presetConfig.cacheModelKey);
   os_mkdir_p(targetDir);
 
   const cachedVocals = path.join(targetDir, 'vocals.wav');
@@ -570,7 +1021,7 @@ async function separateAudio(options = {}) {
   const cleanKey = path.basename(audioPath).toLowerCase();
 
   // 1. Instant Cache Hit Check (Strict validation: both stems must exist, be decodable & duration > 0.1s)
-  if (fs.existsSync(cachedVocals) && fs.existsSync(cachedNoVocals)) {
+  if (!force && fs.existsSync(cachedVocals) && fs.existsSync(cachedNoVocals)) {
     let sourceDuration = null;
     if (typeof options.sourceDuration === 'number' && options.sourceDuration > 0) {
       sourceDuration = options.sourceDuration;
@@ -580,12 +1031,20 @@ async function separateAudio(options = {}) {
 
     const validation = await validateDemucsStems(cachedVocals, cachedNoVocals, sourceDuration);
     if (validation.valid) {
-      console.log(`[AudioSeparation] ⚡ Using cached Demucs separation: ${targetDir}`);
-      activeSeparationProgress.set(cleanKey, { progress: 100, status: 'completed', message: 'Clean BGM រួចរាល់ 100%' });
+      console.log(`[AudioSeparation] ⚡ Using cached ${separationPreset} separation: ${targetDir}`);
+      activeSeparationProgress.set(cleanKey, {
+        progress: 100,
+        status: 'completed',
+        message: 'Clean BGM រួចរាល់ 100%',
+        model,
+        separationPreset,
+        noVocalsPath: cachedNoVocals,
+      });
       return {
         status: 'success',
         isCached: true,
         model,
+        separationPreset,
         vocalsPath: cachedVocals,
         noVocalsPath: cachedNoVocals,
         vocalsSizeBytes: validation.vocalsSizeBytes,
@@ -617,8 +1076,9 @@ async function separateAudio(options = {}) {
         message: `រង់ចាំក្នុងជួរ (Queued: លេខរៀងទី ${separationQueue.length})...`,
         queuePosition: separationQueue.length,
         model,
+        separationPreset,
       });
-      console.log(`[AudioSeparation] ⏳ Queued Demucs separation for ${cleanKey} (Position: ${separationQueue.length})`);
+      console.log(`[AudioSeparation] ⏳ Queued ${separationPreset} separation for ${cleanKey} (Position: ${separationQueue.length})`);
     });
   }
 
@@ -638,6 +1098,48 @@ function killAllDemucsSystemProcesses() {
     } catch (_) {}
   }
   return killed;
+}
+
+/**
+ * Non-blocking startup cleanup for orphaned Python Demucs workers.
+ * Avoids stalling Express app.listen() for 1-3s on Windows while guaranteeing
+ * any subsequent separateAudio() call awaits completion before spawning new workers.
+ */
+function killAllDemucsSystemProcessesAsync() {
+  if (process.platform !== 'win32') {
+    return Promise.resolve(0);
+  }
+  const p = new Promise((resolve) => {
+    try {
+      const child = spawn(
+        'powershell',
+        [
+          '-NoProfile',
+          '-Command',
+          "Get-CimInstance Win32_Process -Filter \"Name = 'python.exe'\" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -like '*demucs*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }",
+        ],
+        { windowsHide: true, stdio: 'ignore' }
+      );
+      if (typeof child.unref === 'function') child.unref();
+      let settled = false;
+      const done = (count) => {
+        if (settled) return;
+        settled = true;
+        resolve(count);
+      };
+      child.once('close', () => done(1));
+      child.once('error', () => done(0));
+      scheduleUnrefTimeout(() => done(0), 5000);
+    } catch (_) {
+      resolve(0);
+    }
+  });
+  pendingStartupCleanupPromise = p.finally(() => {
+    if (pendingStartupCleanupPromise === p) {
+      pendingStartupCleanupPromise = null;
+    }
+  });
+  return pendingStartupCleanupPromise;
 }
 
 function killSeparationJob(identifier = 'all') {
@@ -757,11 +1259,15 @@ module.exports = {
   validateDemucsStems,
   killSeparationJob,
   killAllDemucsSystemProcesses,
+  killAllDemucsSystemProcessesAsync,
   getSeparationCacheDir,
+  findAnyCachedSeparationDir,
   getSeparationProgress,
   isSeparationBusy,
   getSeparationQueueLength,
   getCurrentSeparationMedia,
   resolvePythonBinary,
+  computeDefaultCpuConfig,
+  resolveSeparationPresetConfig,
 };
 

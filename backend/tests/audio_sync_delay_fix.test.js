@@ -147,7 +147,8 @@ test('Backend TTS generation strips Edge TTS ~200ms leading silence for both nor
 
 test('VideoPlayerPreview sync hardening static audit: WebAudio silence trim, 60Hz RAF loop, pool eviction, cold metadata seek, and tight catch-up', () => {
   const previewPath = path.resolve(__dirname, '../../frontend/src/components/player/VideoPlayerPreview.jsx');
-  const code = fs.readFileSync(previewPath, 'utf8');
+  const audioSyncPath = path.resolve(__dirname, '../../frontend/src/components/player/usePlayerAudioSync.js');
+  const code = fs.readFileSync(previewPath, 'utf8') + '\n' + fs.readFileSync(audioSyncPath, 'utf8');
 
   assert.ok(code.includes('computeSegmentAudioSyncTarget'), 'VideoPlayerPreview must use computeSegmentAudioSyncTarget');
   assert.ok(code.includes('findLeadingSilenceFromChannels'), 'VideoPlayerPreview must probe leading silence via findLeadingSilenceFromChannels');

@@ -5,9 +5,9 @@ import {
   User, UserCheck, Volume2, Sparkles, Languages, Check, CheckCircle2,
   Loader2, MessageSquare, Wrench
 } from 'lucide-react';
-import { parseTimeToSeconds } from '../../utils/formatTime';
+import { parseTimeToSeconds } from '../../utils/timestampUtils';
 import { formatMinSec } from '../../utils/timestampUtils';
-import { cleanKhmerText } from '../../utils/cleanKhmer';
+import { cleanKhmerText } from '../../utils/khmerTextSplitter';
 import {
   retranslateSegmentApi,
   retranslateAllSegmentsApi,
@@ -120,9 +120,15 @@ const CaptionItemCard = React.memo(function CaptionItemCard({
       if (onTranslateSegment) {
         await onTranslateSegment(seg.id ?? idx, idx);
       } else {
+        const rawStart = Number(seg.startSec ?? seg.startTime ?? 0);
+        const rawEnd = Number(seg.endSec ?? seg.endTime ?? 0);
+        const segDurationSec = Number(seg.duration) > 0
+          ? Number(seg.duration)
+          : (rawEnd > rawStart ? Number((rawEnd - rawStart).toFixed(2)) : undefined);
         const res = await retranslateSegmentApi(textToTranslate, {
           speaker: seg.speaker,
           gender: seg.voiceGender || seg.speakerGender || seg.gender,
+          durationSec: segDurationSec,
         });
         if (res && Array.isArray(res.options) && res.options.length > 0) {
           const best = cleanKhmerText(res.options[0].text);
@@ -142,6 +148,10 @@ const CaptionItemCard = React.memo(function CaptionItemCard({
     }
   };
 
+  const voiceMeta = resolveVoiceMeta(seg);
+  const isFemaleVoice = voiceMeta.gender === 'FEMALE';
+  const speakerDisplayName = cleanKhmerText(seg.speakerName || seg.speaker || '');
+
   return (
     <div
       onClick={() => {
@@ -151,132 +161,86 @@ const CaptionItemCard = React.memo(function CaptionItemCard({
       }}
       className={`caption-item-card ${isSelected ? 'selected' : ''}`}
       style={{
-        padding: '8px 10px',
+        padding: '9px 10px',
         cursor: 'pointer',
         borderLeft: isTextEmpty
-          ? '3px solid #ef4444'
-          : (isReviewNeeded ? '3px solid #f59e0b' : undefined),
+          ? '3px solid var(--color-error)'
+          : (isVoiceBroken ? '3px solid var(--color-warning)' : undefined),
       }}
     >
-      {/* Clean Card Header */}
-      <div className="caption-header" style={{ marginBottom: 6, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6 }}>
-        {/* Left: Index, Timing & Essential Speaker Badge */}
+      {/* Clean 2-Zone Card Header: Left Metadata | Right Uniform Click Actions */}
+      <div className="caption-header" style={{ marginBottom: 7, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6 }}>
         <div style={{ display: 'flex', gap: 5, alignItems: 'center', flexWrap: 'wrap', flex: 1, minWidth: 0 }}>
-          <span style={{ fontSize: '0.72rem', fontWeight: 800, color: 'var(--primary-accent)', minWidth: 20 }}>
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: '12px', fontWeight: 700, color: 'var(--primary-accent)', minWidth: 22 }}>
             #{segmentNumber}
           </span>
 
           {/* Time Range Pill */}
-          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 2, background: 'rgba(255, 255, 255, 0.04)', padding: '1px 4px', borderRadius: 4, border: '1px solid rgba(255, 255, 255, 0.06)' }}>
+          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 1, background: 'var(--bg-desktop)', padding: '2px 5px', borderRadius: 'var(--radius-xs)', border: '1px solid var(--border-subtle)' }}>
             <input
               type="text"
               value={seg.start || (typeof seg.startSec === 'number' ? formatMinSec(seg.startSec) : '00:00')}
+              onClick={(e) => e.stopPropagation()}
               onChange={(e) => handleSegmentChange(idx, 'start', e.target.value)}
-              style={{ width: 44, padding: '1px 2px', fontSize: '0.70rem', textAlign: 'center', background: 'transparent', color: '#cbd5e1', border: 'none', outline: 'none' }}
-              title="Start time (mm:ss)"
+              style={{ width: 42, padding: 0, fontSize: '11px', fontFamily: 'var(--font-mono)', textAlign: 'center', background: 'transparent', color: 'var(--text-secondary)', border: 'none', outline: 'none' }}
+              title="ម៉ោងចាប់ផ្តើម (Start)"
             />
-            <span style={{ fontSize: '0.65rem', color: '#64748b' }}>-</span>
+            <span style={{ fontSize: '10px', color: 'var(--text-dim)' }}>–</span>
             <input
               type="text"
               value={seg.end || (typeof seg.endSec === 'number' ? formatMinSec(seg.endSec) : '00:00')}
+              onClick={(e) => e.stopPropagation()}
               onChange={(e) => handleSegmentChange(idx, 'end', e.target.value)}
-              style={{ width: 44, padding: '1px 2px', fontSize: '0.70rem', textAlign: 'center', background: 'transparent', color: '#cbd5e1', border: 'none', outline: 'none' }}
-              title="End time (mm:ss)"
+              style={{ width: 42, padding: 0, fontSize: '11px', fontFamily: 'var(--font-mono)', textAlign: 'center', background: 'transparent', color: 'var(--text-secondary)', border: 'none', outline: 'none' }}
+              title="ម៉ោងបញ្ចប់ (End)"
             />
           </div>
 
-          {/* Clean Speaker Badge */}
-          {(seg.speaker || seg.speakerName || seg.speakerId) && (
-            <span style={{
-              fontSize: '0.66rem',
-              background: (seg.voiceGender === 'female' || seg.speakerGender === 'FEMALE') ? 'rgba(244, 114, 182, 0.12)' : 'rgba(56, 189, 248, 0.12)',
-              color: (seg.voiceGender === 'female' || seg.speakerGender === 'FEMALE') ? '#f472b6' : '#38bdf8',
-              border: `1px solid ${(seg.voiceGender === 'female' || seg.speakerGender === 'FEMALE') ? 'rgba(244, 114, 182, 0.25)' : 'rgba(56, 189, 248, 0.25)'}`,
-              padding: '1px 6px',
-              borderRadius: 4,
+          {/* Single Clean Voice & Speaker Chip */}
+          <span
+            data-testid="segment-voice-chip"
+            style={{
+              fontSize: '11.5px',
+              padding: '2px 7px',
+              borderRadius: 'var(--radius-xs)',
+              background: isFemaleVoice ? 'rgba(244, 114, 182, 0.12)' : 'rgba(56, 189, 248, 0.12)',
+              color: isFemaleVoice ? '#F472B6' : '#7DD3FC',
+              border: `1px solid ${isFemaleVoice ? 'rgba(244, 114, 182, 0.28)' : 'rgba(56, 189, 248, 0.28)'}`,
               fontWeight: 600,
               display: 'inline-flex',
               alignItems: 'center',
-              gap: 3
-            }}>
-              <User size={10} strokeWidth={2.4} />
-              <span>{cleanKhmerText(seg.speakerName || seg.speaker || seg.speakerId)}</span>
+              gap: 4,
+              maxWidth: 135,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+            title={`${speakerDisplayName ? `${speakerDisplayName} • ` : ''}${voiceMeta.label} (${voiceMeta.id})`}
+          >
+            {isFemaleVoice ? <UserCheck size={10} strokeWidth={2.4} /> : <User size={10} strokeWidth={2.4} />}
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              {voiceMeta.label}
             </span>
-          )}
+          </span>
 
-          {/* Unverified Fast OCR Speaker Warning */}
-          {(seg.speakerSource === 'ocr_only' || seg.unverifiedSpeaker) && (
-            <span
-              style={{
-                fontSize: '0.62rem',
-                fontWeight: 700,
-                color: '#f59e0b',
-                background: 'rgba(245, 158, 11, 0.15)',
-                border: '1px solid rgba(245, 158, 11, 0.35)',
-                padding: '1px 5px',
-                borderRadius: 4,
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 2,
-              }}
-              title="Speaker unverified (Fast OCR mode without ASR diarization)"
-            >
-              speaker?
-            </span>
-          )}
-
-          {/* Voice Actor Chip (resolved from voice catalog) */}
-          {(() => {
-            const voiceMeta = resolveVoiceMeta(seg);
-            const isFemale = voiceMeta.gender === 'FEMALE';
-            return (
-              <span
-                data-testid="segment-voice-chip"
-                style={{
-                  fontSize: '0.62rem',
-                  padding: '1px 5px',
-                  borderRadius: 4,
-                  background: isFemale ? 'rgba(244, 114, 182, 0.12)' : 'rgba(56, 189, 248, 0.12)',
-                  color: isFemale ? '#f472b6' : '#38bdf8',
-                  border: `1px solid ${isFemale ? 'rgba(244, 114, 182, 0.25)' : 'rgba(56, 189, 248, 0.25)'}`,
-                  fontWeight: 600,
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 3
-                }}
-                title={voiceMeta.id}
-              >
-                {isFemale ? <UserCheck size={9} strokeWidth={2.4} /> : <User size={9} strokeWidth={2.4} />}
-                <span>{voiceMeta.label}</span>
-              </span>
-            );
-          })()}
-
-          {/* Single Consolidated Status Pill */}
+          {/* Essential Status Indicator Only (Broken / Generating / Outdated / Ready Dot) */}
           {seg.textStatus === 'generating' ? (
-            <span style={{ fontSize: '0.62rem', color: '#38bdf8', display: 'inline-flex', alignItems: 'center', gap: 3 }}>
-              <Loader2 size={10} className="animate-spin" />
-            </span>
-          ) : seg.deliveryType === 'inner_thought' ? (
-            <span style={{ fontSize: '0.62rem', color: '#d8b4fe', background: 'rgba(168, 85, 247, 0.15)', border: '1px dashed #c084fc', padding: '1px 5px', borderRadius: 4, fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 3 }} title="និយាយក្នុងចិត្ត">
-              <MessageSquare size={9} />
-              <span>ក្នុងចិត្ត</span>
-            </span>
+            <Loader2 size={11} className="animate-spin" color="var(--primary-accent)" />
           ) : isTextEmpty ? (
             <span
               style={{
-                fontSize: '0.62rem',
-                color: '#ef4444',
-                background: 'rgba(239, 68, 68, 0.15)',
-                border: '1px solid rgba(239, 68, 68, 0.4)',
+                fontSize: '11px',
+                color: '#FCA5A5',
+                background: 'rgba(239, 68, 68, 0.14)',
+                border: '1px solid rgba(239, 68, 68, 0.35)',
                 padding: '1px 6px',
-                borderRadius: 4,
-                fontWeight: 700,
+                borderRadius: 'var(--radius-xs)',
+                fontWeight: 600,
                 display: 'inline-flex',
                 alignItems: 'center',
                 gap: 3,
               }}
-              title="ខ្វះអត្ថបទខ្មែរ — សូមបកប្រែ ឬវាយអត្ថបទ (Missing Khmer text)"
+              title="ខ្វះអត្ថបទខ្មែរ"
             >
               <AlertCircle size={10} />
               <span>ខ្វះអត្ថបទ</span>
@@ -284,54 +248,31 @@ const CaptionItemCard = React.memo(function CaptionItemCard({
           ) : isVoiceBroken ? (
             <span
               style={{
-                fontSize: '0.62rem',
-                color: '#fb923c',
-                background: 'rgba(249, 115, 22, 0.15)',
-                border: '1px solid rgba(249, 115, 22, 0.4)',
+                fontSize: '11px',
+                color: '#FDE68A',
+                background: 'rgba(245, 158, 11, 0.14)',
+                border: '1px solid rgba(245, 158, 11, 0.35)',
                 padding: '1px 6px',
-                borderRadius: 4,
-                fontWeight: 700,
+                borderRadius: 'var(--radius-xs)',
+                fontWeight: 600,
                 display: 'inline-flex',
                 alignItems: 'center',
                 gap: 3,
               }}
-              title="ខ្វះសំឡេង AI (Missing or failed TTS audio)"
+              title="ខ្វះសំឡេង AI"
             >
               <AlertCircle size={10} />
               <span>ខ្វះសំឡេង</span>
             </span>
-          ) : isReviewNeeded ? (
-            <span
-              style={{
-                fontSize: '0.62rem',
-                color: '#f59e0b',
-                background: 'rgba(245, 158, 11, 0.15)',
-                border: '1px solid rgba(245, 158, 11, 0.4)',
-                padding: '1px 6px',
-                borderRadius: 4,
-                fontWeight: 700,
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 3,
-              }}
-              title="ត្រូវពិនិត្យឡើងវិញ (Review needed)"
-            >
-              <AlertTriangle size={10} />
-              <span>Review</span>
-            </span>
           ) : seg.audioOutdated ? (
-            <span style={{ fontSize: '0.62rem', color: '#fbbf24', display: 'inline-flex', alignItems: 'center', gap: 2 }} title="Text updated, needs audio regen">
-              <span style={{ width: 5, height: 5, borderRadius: '50%', background: '#fbbf24' }} />
-            </span>
-          ) : seg.ttsStatus === 'ready' || seg.audioUrl ? (
-            <span style={{ fontSize: '0.62rem', color: '#10b981', display: 'inline-flex', alignItems: 'center', gap: 2 }} title="TTS Audio Synced">
-              <span style={{ width: 5, height: 5, borderRadius: '50%', background: '#10b981' }} />
-            </span>
+            <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#F59E0B', flexShrink: 0 }} title="អត្ថបទបានកែ — ចុច ↻ ដើម្បីបង្កើតសំឡេងថ្មី" />
+          ) : (seg.ttsStatus === 'ready' || seg.audioUrl) ? (
+            <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#10B981', flexShrink: 0 }} title="សំឡេង AI រួចរាល់" />
           ) : null}
         </div>
 
-        {/* Right: Quick Action Controls */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 3, flexShrink: 0 }}>
+        {/* Right: Clean Click Controls (26px uniform height) */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
           {onToggleDeliveryType && (
             <button
               type="button"
@@ -341,33 +282,25 @@ const CaptionItemCard = React.memo(function CaptionItemCard({
                 onToggleDeliveryType(segTarget, seg.deliveryType === 'inner_thought' ? 'out_loud' : 'inner_thought', true, idx);
               }}
               style={{
-                fontSize: '0.62rem',
-                padding: '2px 6px',
+                height: 24,
+                fontSize: '11px',
+                padding: '0 7px',
                 fontWeight: 600,
-                borderRadius: 4,
+                borderRadius: 'var(--radius-xs)',
                 cursor: 'pointer',
                 display: 'inline-flex',
                 alignItems: 'center',
                 gap: 4,
-                border: seg.deliveryType === 'inner_thought' ? '1px dashed #c084fc' : '1px solid rgba(255, 255, 255, 0.08)',
-                background: seg.deliveryType === 'inner_thought' ? 'rgba(168, 85, 247, 0.18)' : 'rgba(255, 255, 255, 0.03)',
-                color: seg.deliveryType === 'inner_thought' ? '#d8b4fe' : '#94a3b8',
+                border: seg.deliveryType === 'inner_thought' ? '1px solid rgba(56, 189, 248, 0.45)' : '1px solid var(--border-subtle)',
+                background: seg.deliveryType === 'inner_thought' ? 'rgba(56, 189, 248, 0.14)' : 'var(--bg-secondary-panel)',
+                color: seg.deliveryType === 'inner_thought' ? 'var(--primary-accent)' : 'var(--text-secondary)',
                 whiteSpace: 'nowrap',
-                transition: 'all 0.15s ease',
+                transition: 'var(--transition-fast)',
               }}
-              title={seg.deliveryType === 'inner_thought' ? "ប្តូរទៅជា និយាយធម្មតា" : "ប្តូរទៅជា និយាយក្នុងចិត្ត (Inner Thought)"}
+              title={seg.deliveryType === 'inner_thought' ? 'ប្តូរទៅ និយាយធម្មតា' : 'ប្តូរទៅ និយាយក្នុងចិត្ត'}
             >
-              {seg.deliveryType === 'inner_thought' ? (
-                <>
-                  <MessageSquare size={10} />
-                  <span>ក្នុងចិត្ត</span>
-                </>
-              ) : (
-                <>
-                  <Volume2 size={10} />
-                  <span>ធម្មតា</span>
-                </>
-              )}
+              {seg.deliveryType === 'inner_thought' ? <MessageSquare size={10} /> : <Volume2 size={10} />}
+              <span>{seg.deliveryType === 'inner_thought' ? 'ក្នុងចិត្ត' : 'ធម្មតា'}</span>
             </button>
           )}
 
@@ -379,46 +312,24 @@ const CaptionItemCard = React.memo(function CaptionItemCard({
                 handlePlayLine(seg.audioUrl, seg.id || idx);
               }}
               className="icon-action-btn"
-              style={{ color: isPlaying ? '#10b981' : '#94a3b8' }}
-              title="Preview audio line"
+              style={{ width: 24, height: 24, color: isPlaying ? '#10B981' : 'var(--text-secondary)' }}
+              title="ស្តាប់សំឡេងឃ្លានេះ"
             >
-              {isPlaying ? <Pause size={11} /> : <Play size={11} fill="currentColor" />}
+              {isPlaying ? <Pause size={12} /> : <Play size={12} fill="currentColor" />}
             </button>
           )}
 
-          {/* One-Click Remedy: Translate this line */}
           {isTextEmpty && (
             <button
               type="button"
               disabled={isTranslating}
               onClick={handleTranslateLine}
-              style={{
-                padding: '2px 8px',
-                fontSize: '0.68rem',
-                borderRadius: 4,
-                border: 'none',
-                background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
-                color: '#ffffff',
-                fontWeight: 700,
-                cursor: isTranslating ? 'not-allowed' : 'pointer',
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 4,
-                boxShadow: '0 1px 4px rgba(99, 102, 241, 0.35)',
-              }}
-              title="បកប្រែឃ្លានេះតាមរយៈ AI (Translate this line)"
+              className="btn-primary"
+              style={{ height: 24, minHeight: 24, padding: '0 8px', fontSize: '11px', borderRadius: 'var(--radius-xs)' }}
+              title="បកប្រែឃ្លានេះដោយ AI"
             >
-              {isTranslating ? (
-                <>
-                  <Loader2 size={10} className="animate-spin" />
-                  <span>កំពុងបកប្រែ...</span>
-                </>
-              ) : (
-                <>
-                  <Sparkles size={10} />
-                  <span>បកប្រែឃ្លានេះ</span>
-                </>
-              )}
+              {isTranslating ? <Loader2 size={11} className="animate-spin" /> : <Sparkles size={11} />}
+              <span>{isTranslating ? 'កំពុងបកប្រែ...' : 'បកប្រែ'}</span>
             </button>
           )}
 
@@ -433,17 +344,15 @@ const CaptionItemCard = React.memo(function CaptionItemCard({
               }}
               className={`icon-action-btn ${isTextEmpty ? 'disabled' : ''}`}
               style={{
-                color: isTextEmpty ? 'rgba(255, 255, 255, 0.2)' : (seg.audioOutdated ? '#fbbf24' : '#64748b'),
+                width: 24,
+                height: 24,
+                color: isTextEmpty ? 'var(--text-muted)' : (seg.audioOutdated ? '#F59E0B' : 'var(--text-secondary)'),
                 cursor: isTextEmpty ? 'not-allowed' : 'pointer',
                 opacity: isTextEmpty ? 0.35 : 1,
               }}
-              title={
-                isTextEmpty
-                  ? "មិនអាចបង្កើតសំឡេងបានទេ — គ្មានអត្ថបទខ្មែរ (Missing text)"
-                  : "Regenerate single line audio"
-              }
+              title={isTextEmpty ? 'គ្មានអត្ថបទខ្មែរ' : 'បង្កើតសំឡេងឃ្លានេះឡើងវិញ'}
             >
-              <RefreshCw size={11} />
+              <RefreshCw size={12} />
             </button>
           )}
 
@@ -454,52 +363,50 @@ const CaptionItemCard = React.memo(function CaptionItemCard({
               handleDeleteSegment(seg._uid || (seg.id !== undefined && seg.id !== null ? seg.id : idx));
             }}
             className="icon-action-btn danger"
-            title="Delete line"
+            style={{ width: 24, height: 24 }}
+            title="លុបឃ្លានេះ"
           >
-            <Trash2 size={11} />
+            <Trash2 size={12} />
           </button>
         </div>
       </div>
 
-      {/* Original Chinese dialogue line if present */}
+      {/* Original Chinese Line (Clean Flat Row) */}
       {(seg.chineseText || seg.originalChineseText || seg.originalText || seg.original || seg.chinese) && (
-        <div style={{ fontSize: '0.74rem', color: '#93c5fd', marginBottom: 6, display: 'flex', alignItems: 'center', gap: 6 }}>
+        <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: 6, display: 'flex', alignItems: 'baseline', gap: 6 }}>
           <span style={{
-            fontSize: '0.62rem',
-            background: 'rgba(59, 130, 246, 0.15)',
-            color: '#60a5fa',
-            border: '1px solid rgba(59, 130, 246, 0.3)',
-            padding: '1px 5px',
-            borderRadius: 4,
+            fontSize: '10px',
+            fontFamily: 'var(--font-mono)',
+            background: 'var(--bg-secondary-panel)',
+            color: 'var(--text-dim)',
+            border: '1px solid var(--border-subtle)',
+            padding: '0px 4px',
+            borderRadius: 'var(--radius-xs)',
             fontWeight: 700,
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 3,
-            flexShrink: 0
+            flexShrink: 0,
           }}>
-            <Languages size={10} />
-            <span>CN</span>
+            CN
           </span>
-          <span style={{ opacity: 0.9, lineHeight: 1.35 }}>{seg.chineseText || seg.originalChineseText || seg.originalText || seg.original || seg.chinese}</span>
+          <span style={{ lineHeight: 1.4 }}>{seg.chineseText || seg.originalChineseText || seg.originalText || seg.original || seg.chinese}</span>
         </div>
       )}
 
-      {/* Khmer Translation Textarea with debouncing */}
+      {/* Khmer Translation Textarea */}
       <DebouncedScriptTextarea
         rows={2}
         value={seg.khmerTranslatedText || seg.khmer || seg.khmerText || ''}
         onChange={(val) => handleSegmentChange(idx, 'khmer', val)}
         onBlur={(e) => handleSegmentBlur && handleSegmentBlur(idx, e.target.value)}
-        placeholder="អត្ថបទសម្រាយ ឬបកប្រែជាភាសាខ្មែរ..."
+        placeholder="វាយអត្ថបទបកប្រែភាសាខ្មែរ..."
         className="caption-textarea"
-        style={{ width: '100%', fontSize: '0.82rem', lineHeight: 1.55, padding: '6px 8px', boxSizing: 'border-box' }}
+        style={{ width: '100%', fontSize: 'var(--text-sm)', lineHeight: 1.6, padding: '6px 8px', boxSizing: 'border-box' }}
       />
 
       {/* Duration Overflow Alert */}
       {isOverflow && (
-        <div style={{ fontSize: '0.68rem', color: 'var(--color-warning)', marginTop: 4, display: 'flex', alignItems: 'center', gap: 4 }}>
+        <div style={{ fontSize: '11.5px', color: 'var(--color-warning-text)', marginTop: 4, display: 'flex', alignItems: 'center', gap: 4 }}>
           <AlertCircle size={11} />
-          <span>Speech duration ({(naturalAudioDur || seg.audioDurationSec || 0).toFixed(1)}s) exceeds slot ({segDuration.toFixed(1)}s){seg.audioTrimmed ? ' (Trimmed ✂)' : ''}</span>
+          <span>សំឡេងវែងជាងចន្លោះ ({(naturalAudioDur || seg.audioDurationSec || 0).toFixed(1)}s / {segDuration.toFixed(1)}s){seg.audioTrimmed ? ' • Trimmed' : ''}</span>
         </div>
       )}
     </div>
@@ -823,8 +730,8 @@ function ScriptReviewTab({
               )}
               <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                 {isRepairingEpisode
-                  ? 'កំពុងជួសជុលឃ្លាខូច & Generate សំឡេង...'
-                  : `🔧 ជួសជុលឃ្លាខូច & Generate ឡើងវិញ (${brokenScan.totalBrokenCount})`}
+                  ? 'កំពុងជួសជុលឃ្លាខូច & បង្កើតសំឡេង...'
+                  : `ជួសជុលឃ្លាខូច & បង្កើតឡើងវិញ (${brokenScan.totalBrokenCount})`}
               </span>
             </span>
             <span style={{
@@ -898,24 +805,24 @@ function ScriptReviewTab({
             gap: 6,
             flexShrink: 0,
             background: compactBanner.type === 'success'
-              ? 'rgba(168, 85, 247, 0.16)'
+              ? 'rgba(16, 185, 129, 0.14)'
               : compactBanner.type === 'partial'
-              ? 'rgba(245, 158, 11, 0.16)'
-              : 'rgba(239, 68, 68, 0.15)',
+              ? 'rgba(245, 158, 11, 0.14)'
+              : 'rgba(239, 68, 68, 0.14)',
             border: compactBanner.type === 'success'
-              ? '1px solid rgba(168, 85, 247, 0.55)'
+              ? '1px solid rgba(16, 185, 129, 0.4)'
               : compactBanner.type === 'partial'
-              ? '1px solid rgba(245, 158, 11, 0.45)'
-              : '1px solid rgba(239, 68, 68, 0.45)',
+              ? '1px solid rgba(245, 158, 11, 0.4)'
+              : '1px solid rgba(239, 68, 68, 0.4)',
             color: compactBanner.type === 'success'
-              ? '#d8b4fe'
+              ? '#6EE7B7'
               : compactBanner.type === 'partial'
               ? '#FDE68A'
               : '#FCA5A5',
           }}
         >
           <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-            <Sparkles size={12} color="#c084fc" />
+            <Sparkles size={12} color="var(--primary-accent)" />
             <span>{compactBanner.text}</span>
           </span>
           <button
@@ -928,108 +835,94 @@ function ScriptReviewTab({
         </div>
       )}
 
-      {/* ── Row 1: Segments Count & Filter Chips ── */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6, gap: 8, flexWrap: 'wrap', flexShrink: 0 }}>
-        <span style={{ fontSize: '0.82rem', fontWeight: 800, color: '#f1f5f9', letterSpacing: '0.3px' }}>
-          Segments ({scriptData?.segments?.length || 0})
-        </span>
+      {/* ── Row 1: Filter Pills (Clean Single-Row Darkroom Bar) ── */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap', marginBottom: 8, flexShrink: 0 }}>
+        <button
+          type="button"
+          onClick={() => setFilterMode('all')}
+          style={{
+            height: 28,
+            padding: '0 9px',
+            fontSize: '12px',
+            borderRadius: 'var(--radius-sm)',
+            border: '1px solid',
+            borderColor: filterMode === 'all' ? 'rgba(56, 189, 248, 0.45)' : 'var(--border-subtle)',
+            background: filterMode === 'all' ? 'var(--bg-active-card)' : 'var(--bg-secondary-panel)',
+            color: filterMode === 'all' ? 'var(--primary-accent)' : 'var(--text-secondary)',
+            cursor: 'pointer',
+            fontWeight: 600,
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 4,
+          }}
+        >
+          <span>ទាំងអស់</span>
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: '11px', opacity: 0.8 }}>{filteredSegments.length}</span>
+        </button>
 
-        {/* Filter Chips: ទាំងអស់ / ប្រុស / ស្រី / ឃ្លាខូច */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-          <button
-            type="button"
-            onClick={() => setFilterMode('all')}
-            style={{
-              padding: '2px 8px',
-              fontSize: '0.70rem',
-              borderRadius: 4,
-              border: '1px solid',
-              borderColor: filterMode === 'all' ? 'var(--primary-accent, #6366f1)' : 'rgba(255, 255, 255, 0.12)',
-              background: filterMode === 'all' ? 'rgba(99, 102, 241, 0.2)' : 'transparent',
-              color: filterMode === 'all' ? '#fff' : 'var(--text-dim)',
-              cursor: 'pointer',
-              fontWeight: filterMode === 'all' ? 700 : 500,
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 4,
-            }}
-          >
-            <span>ទាំងអស់</span>
-            <span style={{ opacity: 0.75, fontSize: '0.64rem' }}>({filteredSegments.length})</span>
-          </button>
-
-          {[
-            { mode: 'male', icon: <User size={11} strokeWidth={2.4} />, label: 'ប្រុស', count: voiceGenderCounts.male, tone: '56, 189, 248', text: '#7dd3fc' },
-            { mode: 'female', icon: <UserCheck size={11} strokeWidth={2.4} />, label: 'ស្រី', count: voiceGenderCounts.female, tone: '244, 114, 182', text: '#f9a8d4' },
-          ].map((pill) => {
-            const active = filterMode === pill.mode;
-            return (
-              <button
-                key={pill.mode}
-                type="button"
-                data-testid={`script-filter-${pill.mode}`}
-                aria-pressed={active}
-                onClick={() => setFilterMode(active ? 'all' : pill.mode)}
-                style={{
-                  padding: '2px 8px',
-                  fontSize: '0.70rem',
-                  borderRadius: 4,
-                  border: '1px solid',
-                  borderColor: active ? `rgba(${pill.tone}, 0.7)` : 'rgba(255, 255, 255, 0.12)',
-                  background: active ? `rgba(${pill.tone}, 0.18)` : 'transparent',
-                  color: active ? pill.text : 'var(--text-dim)',
-                  cursor: 'pointer',
-                  fontWeight: active ? 700 : 500,
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 4,
-                }}
-                title={`បង្ហាញតែឃ្លាសំឡេង${pill.label}`}
-              >
-                <span aria-hidden="true" style={{ display: 'inline-flex', alignItems: 'center' }}>{pill.icon}</span>
-                <span>{pill.label}</span>
-                <span style={{ opacity: 0.75, fontSize: '0.64rem', fontVariantNumeric: 'tabular-nums' }}>({pill.count})</span>
-              </button>
-            );
-          })}
-
-          <button
-            type="button"
-            onClick={() => setFilterMode('missing')}
-            style={{
-              padding: '2px 8px',
-              fontSize: '0.70rem',
-              borderRadius: 4,
-              border: '1px solid',
-              borderColor: filterMode === 'missing' ? '#ef4444' : (missingTextCount > 0 ? 'rgba(239, 68, 68, 0.4)' : 'rgba(255, 255, 255, 0.12)'),
-              background: filterMode === 'missing' ? 'rgba(239, 68, 68, 0.25)' : (missingTextCount > 0 ? 'rgba(239, 68, 68, 0.08)' : 'transparent'),
-              color: filterMode === 'missing' ? '#fca5a5' : (missingTextCount > 0 ? '#ef4444' : 'var(--text-dim)'),
-              cursor: 'pointer',
-              fontWeight: filterMode === 'missing' ? 700 : 500,
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 4,
-            }}
-            title="បង្ហាញតែឃ្លាខូច ឬខ្វះសំឡេង (Broken text / missing voice)"
-          >
-            <AlertCircle size={10} />
-            <span>ឃ្លាខូច/ខ្វះសំឡេង</span>
-            <span
+        {[
+          { mode: 'male', icon: <User size={11} strokeWidth={2.4} />, label: 'ប្រុស', count: voiceGenderCounts.male, tone: '56, 189, 248', text: '#7DD3FC' },
+          { mode: 'female', icon: <UserCheck size={11} strokeWidth={2.4} />, label: 'ស្រី', count: voiceGenderCounts.female, tone: '244, 114, 182', text: '#F472B6' },
+        ].map((pill) => {
+          const active = filterMode === pill.mode;
+          return (
+            <button
+              key={pill.mode}
+              type="button"
+              data-testid={`script-filter-${pill.mode}`}
+              aria-pressed={active}
+              onClick={() => setFilterMode(active ? 'all' : pill.mode)}
               style={{
-                fontSize: '0.64rem',
-                background: missingTextCount > 0 ? 'rgba(239, 68, 68, 0.35)' : 'rgba(255, 255, 255, 0.1)',
-                padding: '0 4px',
-                borderRadius: 8,
-                fontWeight: 700,
+                height: 28,
+                padding: '0 9px',
+                fontSize: '12px',
+                borderRadius: 'var(--radius-sm)',
+                border: '1px solid',
+                borderColor: active ? `rgba(${pill.tone}, 0.55)` : 'var(--border-subtle)',
+                background: active ? `rgba(${pill.tone}, 0.14)` : 'var(--bg-secondary-panel)',
+                color: active ? pill.text : 'var(--text-secondary)',
+                cursor: 'pointer',
+                fontWeight: 600,
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 4,
               }}
+              title={`បង្ហាញតែឃ្លាសំឡេង${pill.label}`}
             >
-              {missingTextCount}
-            </span>
-          </button>
-        </div>
+              <span aria-hidden="true" style={{ display: 'inline-flex', alignItems: 'center' }}>{pill.icon}</span>
+              <span>{pill.label}</span>
+              <span style={{ fontFamily: 'var(--font-mono)', fontSize: '11px', opacity: 0.8 }}>{pill.count}</span>
+            </button>
+          );
+        })}
+
+        <button
+          type="button"
+          onClick={() => setFilterMode(filterMode === 'missing' ? 'all' : 'missing')}
+          style={{
+            height: 28,
+            padding: '0 9px',
+            fontSize: '12px',
+            borderRadius: 'var(--radius-sm)',
+            border: '1px solid',
+            borderColor: filterMode === 'missing' ? 'rgba(239, 68, 68, 0.6)' : (missingTextCount > 0 ? 'rgba(239, 68, 68, 0.35)' : 'var(--border-subtle)'),
+            background: filterMode === 'missing' ? 'rgba(239, 68, 68, 0.2)' : (missingTextCount > 0 ? 'rgba(239, 68, 68, 0.08)' : 'var(--bg-secondary-panel)'),
+            color: filterMode === 'missing' || missingTextCount > 0 ? '#FCA5A5' : 'var(--text-secondary)',
+            cursor: 'pointer',
+            fontWeight: 600,
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 4,
+          }}
+          title="ឃ្លាខូច/ខ្វះសំឡេង"
+        >
+          <AlertCircle size={11} />
+          <span>ខូច/ខ្វះ</span>
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: '11px', fontWeight: 700 }}>{missingTextCount}</span>
+        </button>
       </div>
 
-      {/* ── Row 2: 1-Click Auto Compact "📝 ខ្លីចំអត្ថន័យ" Action Bar ── */}
+      {/* ── Row 2: Flat Darkroom Auto-Compact Action Button (Zero Purple Slop / Zero Truncation) ── */}
       {totalSegments.length > 0 && (
         <div style={{ marginBottom: 8, flexShrink: 0 }}>
           <button
@@ -1037,49 +930,44 @@ function ScriptReviewTab({
             data-testid="btn-script-auto-compact"
             onClick={handleAutoCompactAllSegments}
             disabled={isAutoCompacting}
+            className="btn-secondary"
             style={{
               width: '100%',
-              padding: '7px 11px',
-              borderRadius: 7,
-              border: '1px solid rgba(168, 85, 247, 0.45)',
-              background: isAutoCompacting
-                ? 'rgba(168, 85, 247, 0.16)'
-                : 'linear-gradient(135deg, rgba(147, 51, 234, 0.25) 0%, rgba(99, 102, 241, 0.18) 100%)',
-              color: isAutoCompacting ? '#c084fc' : '#e9d5ff',
-              cursor: isAutoCompacting ? 'not-allowed' : 'pointer',
-              fontSize: '0.73rem',
-              fontWeight: 700,
-              display: 'flex',
-              alignItems: 'center',
+              minHeight: 32,
+              padding: '5px 10px',
               justifyContent: 'space-between',
-              gap: 6,
-              boxShadow: isAutoCompacting ? 'none' : '0 2px 10px rgba(168, 85, 247, 0.16)',
-              transition: 'all 0.18s ease',
+              borderColor: isAutoCompacting ? 'rgba(56, 189, 248, 0.45)' : 'var(--border-subtle)',
+              background: isAutoCompacting ? 'rgba(56, 189, 248, 0.12)' : 'var(--bg-secondary-panel)',
+              color: isAutoCompacting ? 'var(--primary-accent)' : 'var(--text-primary)',
+              fontSize: 'var(--text-sm)',
+              fontWeight: 600,
             }}
-            title="បម្លែងគ្រប់ឃ្លាទាំងអស់ (1..259) ទៅជា «📝 ខ្លីចំអត្ថន័យ» ដោយស្វ័យប្រវត្ត"
+            title={`បំព្រួញឃ្លាទាំង ${totalSegments.length} ឱ្យខ្លីចំអត្ថន័យ និងត្រូវមាត់តួអង្គ`}
           >
-            <span style={{ display: 'flex', alignItems: 'center', gap: 7, minWidth: 0 }}>
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, minWidth: 0 }}>
               {isAutoCompacting ? (
-                <Loader2 size={13} className="animate-spin" color="#c084fc" style={{ flexShrink: 0 }} />
+                <Loader2 size={13} className="animate-spin" color="var(--primary-accent)" />
               ) : (
-                <Sparkles size={13} color="#c084fc" style={{ flexShrink: 0 }} />
+                <Sparkles size={13} color="var(--primary-accent)" />
               )}
-              <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              <span>
                 {isAutoCompacting
-                  ? `កំពុងបម្លែងជា «ខ្លីចំអត្ថន័យ» (${compactProgress.current}/${compactProgress.total})...`
-                  : `📝 AI បម្លែងគ្រប់ Script ទៅជា «ខ្លីចំអត្ថន័យ» (Auto 1..${totalSegments.length})`}
+                  ? `កំពុងបំព្រួញឃ្លា (${compactProgress.current}/${compactProgress.total})...`
+                  : 'បំព្រួញឃ្លាទាំងអស់ឱ្យខ្លីស្អាត'}
               </span>
             </span>
             <span style={{
-              fontSize: '0.62rem',
-              fontWeight: 800,
-              background: 'rgba(168, 85, 247, 0.3)',
-              color: '#f3e8ff',
-              padding: '2px 7px',
-              borderRadius: 4,
+              fontFamily: 'var(--font-mono)',
+              fontSize: '10.5px',
+              fontWeight: 700,
+              color: 'var(--primary-accent)',
+              background: 'rgba(56, 189, 248, 0.12)',
+              border: '1px solid rgba(56, 189, 248, 0.3)',
+              padding: '1px 6px',
+              borderRadius: 'var(--radius-xs)',
               flexShrink: 0,
             }}>
-              {isAutoCompacting ? `${Math.round((compactProgress.current / (compactProgress.total || 1)) * 100)}%` : 'COMPACT ALL'}
+              {isAutoCompacting ? `${Math.round((compactProgress.current / (compactProgress.total || 1)) * 100)}%` : 'Compact'}
             </span>
           </button>
         </div>
@@ -1087,12 +975,12 @@ function ScriptReviewTab({
 
       {/* Search Bar */}
       {scriptData?.segments && scriptData.segments.length > 3 && (
-        <div style={{ position: 'relative', marginBottom: 10, flexShrink: 0 }}>
-          <Search size={13} color="var(--text-dim)" style={{ position: 'absolute', left: 8, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }} />
+        <div style={{ position: 'relative', marginBottom: 8, flexShrink: 0 }}>
+          <Search size={13} color="var(--text-dim)" style={{ position: 'absolute', left: 9, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }} />
           <input
             type="text"
             aria-label="Search segments by number, dialogue, or speaker"
-            placeholder="Search #37, dialogue, or speaker..."
+            placeholder="ស្វែងរក #37, អត្ថបទ ឬឈ្មោះតួអង្គ..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             onKeyDown={(e) => {
@@ -1105,7 +993,7 @@ function ScriptReviewTab({
               }
             }}
             className="capcut-input"
-            style={{ paddingLeft: 26, paddingRight: searchQuery ? 26 : 10, fontSize: '0.76rem', height: 28 }}
+            style={{ paddingLeft: 28, paddingRight: searchQuery ? 28 : 10, fontSize: 'var(--text-sm)', height: 32 }}
           />
           {searchQuery && (
             <button

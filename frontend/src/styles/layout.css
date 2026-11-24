@@ -32,11 +32,11 @@ body {
   font-size: var(--text-body);
 }
 
-/* Main App Container: 48px Top Navbar | 1fr Workspace (minmax(0,1fr) prevents horizontal grid expansion) */
+/* Main App Container: 48px Top Header + 56px Left Icon Rail | 1fr Workspace */
 .capcut-app-root,
 .capcut-app-container {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: 56px minmax(0, 1fr);
   grid-template-rows: 48px minmax(0, 1fr);
   width: 100%;
   max-width: 100vw;
@@ -47,8 +47,10 @@ body {
   color: var(--text-primary);
 }
 
-/* Main Workspace Wrapper (Center 3-Col + Horizontal Resizer + Bottom Timeline) */
+/* Main Workspace Wrapper (Row 2 Col 2: Center 3-Col + Horizontal Resizer + Bottom Timeline) */
 .capcut-main-workspace {
+  grid-column: 2;
+  grid-row: 2;
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -59,6 +61,32 @@ body {
   min-height: 0;
   overflow: hidden;
   background: var(--bg-desktop);
+}
+
+/* Seal & hide the mounted Studio Editor workspace whenever a full-view route stage
+   (/batch, /export, /quota, /jobs) covers it so internal high z-index elements
+   (.proxy-preview-controls: 45, .timeline-playhead: 60, popovers: 70,
+   selected logo/sponsor boxes: 999) can never bleed through onto the active route. */
+.capcut-main-workspace.is-route-occluded {
+  position: relative;
+  z-index: 0;
+  isolation: isolate;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/* Persistent Full-View Route Stage (/home, /batch, /export, /quota, /jobs)
+   Always keeps the 48px Top Header and 56px Left Icon Rail visible & interactive. */
+.studio-route-stage {
+  position: fixed;
+  top: 48px;
+  left: 56px;
+  right: 0;
+  bottom: 0;
+  z-index: 42;
+  background: var(--bg-desktop);
+  overflow-y: auto;
+  overflow-x: hidden;
 }
 
 /* Center 3-Column Workspace (Left Media | Center Player | Right Inspector) */
@@ -100,6 +128,9 @@ body {
   min-width: 280px;
   display: flex;
   flex-direction: column;
+  position: relative;
+  z-index: 1;
+  isolation: isolate;
 }
 
 .top-suite-col-right {
@@ -113,12 +144,16 @@ body {
   transition: none !important;
 }
 
-/* Bottom Timeline Container */
+/* Bottom Timeline Container (isolated stacking context so playhead z-index: 60
+   and dragged clips z-index: 100 never escape above Navbar, dialogs, or route stages) */
 .capcut-bottom-timeline {
   flex-shrink: 0;
   min-height: 0;
   min-width: 0;
   width: 100%;
+  position: relative;
+  z-index: 1;
+  isolation: isolate;
   transition: height 0.14s var(--spring-ease);
 }
 
@@ -238,20 +273,28 @@ body {
 
   .capcut-app-root,
   .capcut-app-container {
+    grid-template-columns: minmax(0, 1fr);
     height: auto;
     min-height: 100vh;
     max-height: none;
     overflow-x: hidden;
     overflow-y: visible;
     grid-template-rows: auto 1fr;
+    padding-bottom: 58px;
   }
 
   .capcut-main-workspace {
+    grid-column: 1;
     height: auto;
     min-height: calc(100vh - 48px);
     overflow: visible;
     gap: 8px;
     padding: 8px;
+  }
+
+  .studio-route-stage {
+    left: 0;
+    bottom: 54px;
   }
 
   .capcut-top-suite {
