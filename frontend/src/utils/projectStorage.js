@@ -883,7 +883,7 @@ export function setActiveSeriesId(id) {
 }
 
 /**
- * Active Episode ID
+ * Active Episode ID (Global & Per-Series)
  */
 export function getActiveEpisodeId() {
   return localStorage.getItem(STORAGE_ACTIVE_EPISODE_ID_KEY) || null;
@@ -892,6 +892,20 @@ export function getActiveEpisodeId() {
 export function setActiveEpisodeId(id) {
   if (id) localStorage.setItem(STORAGE_ACTIVE_EPISODE_ID_KEY, String(id));
   else localStorage.removeItem(STORAGE_ACTIVE_EPISODE_ID_KEY);
+}
+
+export function getActiveEpisodeIdForSeries(seriesId) {
+  if (!seriesId) return null;
+  return localStorage.getItem(`capcut_active_episode_id_${seriesId}`) || null;
+}
+
+export function setActiveEpisodeIdForSeries(seriesId, episodeId) {
+  if (!seriesId) return;
+  if (episodeId) {
+    localStorage.setItem(`capcut_active_episode_id_${seriesId}`, String(episodeId));
+  } else {
+    localStorage.removeItem(`capcut_active_episode_id_${seriesId}`);
+  }
 }
 
 /**
@@ -908,8 +922,8 @@ export function loadActiveSeriesAndEpisode() {
     saveSeriesList(seriesList);
   }
 
-  let episodeId = getActiveEpisodeId();
-  let episode = (series.episodes || []).find((e) => e.id === episodeId) || series.episodes?.[0];
+  let episodeId = getActiveEpisodeIdForSeries(series.id) || getActiveEpisodeId();
+  let episode = (series.episodes || []).find((e) => String(e.id) === String(episodeId)) || series.episodes?.[0];
 
   if (!episode) {
     episode = createDefaultEpisode(1);
@@ -917,12 +931,12 @@ export function loadActiveSeriesAndEpisode() {
     saveSeriesList(seriesList);
   }
 
-  if (!seriesId || series.id === seriesId) {
+  // Only set active series ID if seriesId was empty, preserving valid target IDs like "ss2"
+  if (!seriesId) {
     setActiveSeriesId(series.id);
-    if (!episodeId || episode.id === episodeId) {
-      setActiveEpisodeId(episode.id);
-    }
   }
+  setActiveEpisodeId(episode.id);
+  setActiveEpisodeIdForSeries(series.id, episode.id);
 
   return {
     seriesList,

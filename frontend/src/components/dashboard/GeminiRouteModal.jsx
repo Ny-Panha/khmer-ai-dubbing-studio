@@ -648,6 +648,7 @@ export default function GeminiRouteModal({
     handleSelectAllWithVideo,
   } = useEpisodeSelection({
     episodes,
+    seriesId: activeSeries?.id || seriesId,
     isOpen,
     isBatchExecutionActive,
     completedTtsEpIds,
@@ -2612,6 +2613,7 @@ export default function GeminiRouteModal({
             activeStageView={cardStageView}
             onSelectStageView={handleToggleSidebarStageView}
             navOnly={true}
+            openStudioDialog={openStudioDialog}
           />
 
           {/* ── 5. SINGLE UNIFIED ACTIONS & CONTROLS TOOLBAR (Wrapping, Never Overflowing) ── */}
@@ -2931,6 +2933,7 @@ export default function GeminiRouteModal({
             onSelectStageTodoEpisodes={handleSelectStageTodoEpisodes}
             onSelectStageView={handleToggleSidebarStageView}
             onExitStageFocus={handleExitStageFocus}
+            openStudioDialog={openStudioDialog}
           />
 
         {/* Active Backend Repair / Production Banner */}

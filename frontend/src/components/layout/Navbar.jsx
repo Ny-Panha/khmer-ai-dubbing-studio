@@ -10,6 +10,7 @@ import {
   PanelLeft,
   PanelRight,
   PanelBottom,
+  Folder,
 } from 'lucide-react';
 import { useGeminiQuotaMonitor, runQuotaCheck } from '../../hooks/useGeminiQuotaMonitor';
 import { isCorruptedOrMojibakeTitle } from '../../utils/projectStorage';
@@ -46,6 +47,9 @@ export default function Navbar({
   isRendering,
   renderProgress = 0,
   renderedVideo,
+  seriesList = [],
+  seriesId = null,
+  onSwitchSeries = null,
   activeSeries = null,
   activeEpisode = null,
   episodeId = null,
@@ -124,7 +128,7 @@ export default function Navbar({
   return (
     <>
       <header className="capcut-navbar">
-        {/* Left: Brand Mark + Active Series Breadcrumb + Inline Episode Switcher */}
+        {/* Left: Brand Mark + Active Series Folder Selector + Inline Episode Switcher */}
         <div className="navbar-left-context">
           <button
             type="button"
@@ -136,9 +140,33 @@ export default function Navbar({
             <span>D</span>
           </button>
 
-          <span className="navbar-brand-title" title={activeSeries?.title || 'DragonDub AI Studio'}>
-            {cleanSeriesTitle(activeSeries?.title)}
-          </span>
+          {Array.isArray(seriesList) && seriesList.length > 0 && onSwitchSeries ? (
+            <div className="navbar-series-switcher" title="ប្តូរ Series (Switch Series)">
+              <Folder size={14} className="navbar-series-icon" aria-hidden="true" />
+              <select
+                data-testid="navbar-series-select"
+                className="navbar-series-select"
+                aria-label="Select Series"
+                value={String(activeSeries?.id || seriesId || '')}
+                onChange={(e) => onSwitchSeries(e.target.value)}
+              >
+                {seriesList.map((s) => {
+                  const sEpCount = Array.isArray(s.episodes) ? s.episodes.length : (s.episodesCount || 0);
+                  const sTitle = cleanSeriesTitle(s.title || s.name || s.id);
+                  const isSelected = String(s.id) === String(activeSeries?.id || seriesId);
+                  return (
+                    <option key={s.id} value={String(s.id)}>
+                      {isSelected ? `✓ ${sTitle}` : sTitle} ({sEpCount} ភាគ)
+                    </option>
+                  );
+                })}
+              </select>
+            </div>
+          ) : (
+            <span className="navbar-brand-title" title={activeSeries?.title || 'DragonDub AI Studio'}>
+              {cleanSeriesTitle(activeSeries?.title)}
+            </span>
+          )}
 
           {episodesCount > 0 && onSwitchEpisode && (
             <div className="navbar-ep-switcher" role="group" aria-label="Episode Switcher">

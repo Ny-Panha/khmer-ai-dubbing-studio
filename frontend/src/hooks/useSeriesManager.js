@@ -6,6 +6,8 @@ import {
   setActiveSeriesId,
   getActiveEpisodeId,
   setActiveEpisodeId,
+  getActiveEpisodeIdForSeries,
+  setActiveEpisodeIdForSeries,
   loadActiveSeriesAndEpisode,
   saveEpisodeState,
   addNewEpisodeToSeries,
@@ -92,6 +94,7 @@ export function useSeriesManager({
   latestSeriesListRef.current = seriesList;
   const latestScriptDataRef = useRef(scriptData);
   latestScriptDataRef.current = scriptData;
+  const switchSeriesSeqRef = useRef(0);
 
   // Stable reference to external setters to prevent applyEpisodeToWorkspace from recreating on every render
   const callbacksRef = useRef({});
@@ -416,7 +419,8 @@ export function useSeriesManager({
             applyEpisodeToWorkspace(freshSeries.episodes[0], freshSeries.id);
           } else {
             const serverList = sanitizeAndHealSeriesList(data.series);
-            const resolvedSeriesId = storedSeriesId || series?.id;
+            const currentStoredId = getActiveSeriesId();
+            const resolvedSeriesId = currentStoredId || storedSeriesId || series?.id;
             const targetSeries = serverList.find((s) => s.id === resolvedSeriesId) || serverList[0];
             const userMovedOffInitial = activeEpisodeIdRef.current && activeEpisodeIdRef.current !== episode?.id;
             const preferredEpId = userMovedOffInitial
@@ -583,6 +587,9 @@ export function useSeriesManager({
       setActiveEpisodeId(targetEpisodeId);
       setActiveEpisodeIdState(targetEpisodeId);
       activeEpisodeIdRef.current = targetEpisodeId;
+      if (activeSeriesIdState) {
+        setActiveEpisodeIdForSeries(activeSeriesIdState, targetEpisodeId);
+      }
 
       // 2. Allow active in-flight AI requests to complete in background
       if (activeRequestRef?.current) {
@@ -676,23 +683,30 @@ export function useSeriesManager({
   // 1b. Switch to another series
   const handleSwitchSeries = useCallback(async (targetSeriesId) => {
     if (!targetSeriesId || targetSeriesId === activeSeriesIdState) return;
-    isTransitioningRef.current = true;
-    try {
-      // 1. Save current workspace snapshot to current series/episode
-      if (activeSeriesIdState && activeEpisodeIdRef.current) {
-        const snapshot = getCurrentWorkspaceSnapshot();
-        saveEpisodeState(activeSeriesIdState, activeEpisodeIdRef.current, snapshot);
-      }
 
+    // 1. Save current workspace snapshot to current series/episode before switching
+    if (activeSeriesIdState && activeEpisodeIdRef.current) {
+      const snapshot = getCurrentWorkspaceSnapshot();
+      saveEpisodeState(activeSeriesIdState, activeEpisodeIdRef.current, snapshot);
+      setActiveEpisodeIdForSeries(activeSeriesIdState, activeEpisodeIdRef.current);
+    }
+
+    switchSeriesSeqRef.current += 1;
+    const currentSeq = switchSeriesSeqRef.current;
+    isTransitioningRef.current = true;
+
+    try {
       // 2. Set active series pointer
       setActiveSeriesId(targetSeriesId);
       setActiveSeriesIdState(targetSeriesId);
+      activeSeriesIdRef.current = targetSeriesId;
 
       // 3. Find target series from state or disk
       let targetSeries = (latestSeriesListRef.current || []).find((s) => s.id === targetSeriesId);
       try {
         const res = await fetch(`/api/series/${encodeURIComponent(targetSeriesId)}`);
         const data = await res.json();
+        if (switchSeriesSeqRef.current !== currentSeq) return;
         if (data?.success && data.series) {
           targetSeries = data.series;
           setSeriesList((prev) => {
@@ -706,24 +720,33 @@ export function useSeriesManager({
         }
       } catch (_) {}
 
+      if (switchSeriesSeqRef.current !== currentSeq) return;
+
       // Refresh full list from server
       try {
         const allRes = await fetch('/api/series');
         const allData = await allRes.json();
-        if (allData?.success && Array.isArray(allData.series)) {
+        if (switchSeriesSeqRef.current === currentSeq && allData?.success && Array.isArray(allData.series)) {
           const healed = sanitizeAndHealSeriesList(allData.series);
           setSeriesList(healed);
           try { saveSeriesList(healed); } catch (_) {}
         }
       } catch (_) {}
 
-      const firstEp = (targetSeries?.episodes || [])[0] || null;
-      if (firstEp) {
-        setActiveEpisodeId(firstEp.id);
-        setActiveEpisodeIdState(firstEp.id);
-        activeEpisodeIdRef.current = firstEp.id;
+      if (switchSeriesSeqRef.current !== currentSeq) return;
+
+      // 4. Remember and restore the last selected episode for target series (not just index 0)
+      const targetEpisodes = Array.isArray(targetSeries?.episodes) ? targetSeries.episodes : [];
+      const rememberedEpId = getActiveEpisodeIdForSeries(targetSeriesId);
+      const targetEp = (rememberedEpId && targetEpisodes.find((e) => String(e.id) === String(rememberedEpId))) || targetEpisodes[0] || null;
+
+      if (targetEp) {
+        setActiveEpisodeId(targetEp.id);
+        setActiveEpisodeIdState(targetEp.id);
+        activeEpisodeIdRef.current = targetEp.id;
         activeSeriesIdRef.current = targetSeries.id;
-        applyEpisodeToWorkspace(firstEp, targetSeries.id);
+        setActiveEpisodeIdForSeries(targetSeries.id, targetEp.id);
+        applyEpisodeToWorkspace(targetEp, targetSeries.id);
       } else {
         setActiveEpisodeId(null);
         setActiveEpisodeIdState(null);
@@ -747,7 +770,9 @@ export function useSeriesManager({
       }
     } finally {
       setTimeout(() => {
-        isTransitioningRef.current = false;
+        if (switchSeriesSeqRef.current === currentSeq) {
+          isTransitioningRef.current = false;
+        }
       }, 100);
     }
   }, [activeSeriesIdState, getCurrentWorkspaceSnapshot, applyEpisodeToWorkspace]);
@@ -1004,8 +1029,34 @@ export function useSeriesManager({
     applyEpisodeToWorkspace(freshSeries.episodes[0]);
   }, [applyEpisodeToWorkspace]);
 
+  // 8a. Server-truth sync: refresh full series list from backend disk
+  const fetchAllSeriesFromServer = async (explicitList = null) => {
+    if (Array.isArray(explicitList)) {
+      const healed = sanitizeAndHealSeriesList(explicitList);
+      setSeriesList(healed);
+      try { saveSeriesList(healed); } catch (_) {}
+      return healed;
+    }
+    try {
+      const res = await fetch('/api/series');
+      const data = await res.json();
+      if (data?.success && Array.isArray(data.series)) {
+        const healed = sanitizeAndHealSeriesList(data.series);
+        setSeriesList(healed);
+        try { saveSeriesList(healed); } catch (_) {}
+        return healed;
+      }
+    } catch (err) {
+      console.warn('[useSeriesManager] fetchAllSeriesFromServer error:', err);
+    }
+    return null;
+  };
+
   // 8. Server-truth sync: manual or triggered refresh from backend disk
   const refreshSeriesFromServer = useCallback(async () => {
+    // 1. Refresh full series list from disk so newly created series like ss2 are available
+    await fetchAllSeriesFromServer();
+
     if (!activeSeriesIdState) return;
     try {
       const res = await fetch(`/api/series/${encodeURIComponent(activeSeriesIdState)}`);
@@ -1084,6 +1135,7 @@ export function useSeriesManager({
     episodeId: activeEpisodeIdState,
     seriesGlossary,
     refreshSeriesFromServer,
+    fetchAllSeriesFromServer,
     handleSwitchSeries,
     handleSwitchEpisode,
     handleCreateEpisode,

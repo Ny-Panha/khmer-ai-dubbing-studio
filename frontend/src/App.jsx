@@ -29,6 +29,8 @@ const MemoNavbar = React.memo(Navbar, (prev, next) => (
   prev.selectedVideo === next.selectedVideo &&
   prev.videoMetadata === next.videoMetadata &&
   prev.renderedVideo === next.renderedVideo &&
+  prev.seriesList === next.seriesList &&
+  prev.onSwitchSeries === next.onSwitchSeries &&
   prev.activeSeries === next.activeSeries &&
   prev.activeEpisode === next.activeEpisode &&
   prev.seriesId === next.seriesId &&
@@ -1163,6 +1165,8 @@ export default function App() {
           selectedVideo={media.selectedVideo}
           videoMetadata={media.videoMetadata}
           renderedVideo={effectiveRenderedVideo}
+          seriesList={series.seriesList}
+          onSwitchSeries={series.handleSwitchSeries}
           activeSeries={series.activeSeries}
           activeEpisode={series.activeEpisode}
           seriesId={series.seriesId}
@@ -1271,6 +1275,7 @@ export default function App() {
               onRenameSeries={handleRenameSeries}
               onDeleteSeries={handleDeleteSeries}
               onRefreshSeries={series.refreshSeriesFromServer}
+              onRefreshAllSeries={series.fetchAllSeriesFromServer}
               onTabChange={setLeftTab}
             />
           </ErrorBoundary>

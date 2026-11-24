@@ -14,6 +14,7 @@ import {
 
 export function useEpisodeSelection({
   episodes = [],
+  seriesId = null,
   isOpen = false,
   isBatchExecutionActive = false,
   completedTtsEpIds = null,
@@ -22,6 +23,7 @@ export function useEpisodeSelection({
   demucsLiveStats = null,
 } = {}) {
   const [selectedEpIds, setSelectedEpIds] = useState(new Set());
+  const prevSeriesIdRef = useRef(seriesId);
 
   // Check if an episode is 100% completed across all 3 steps (Translate + Audio TTS + Clean BGM)
   // Truly ready only when hasScript && brokenSegmentCount === 0 && hasAudio && !audioOutdated && hasDemucs
@@ -65,6 +67,18 @@ export function useEpisodeSelection({
       }
     }
   }, [isOpen, episodes.length, incompleteEpisodes, allSelectableEpisodes, isBatchExecutionActive]);
+
+  // Isolate selection per series: re-sync selection when seriesId changes
+  useEffect(() => {
+    if (seriesId && prevSeriesIdRef.current && prevSeriesIdRef.current !== seriesId) {
+      if (allSelectableEpisodes.length > 0) {
+        setSelectedEpIds(new Set(allSelectableEpisodes.map((ep) => ep.id)));
+      } else {
+        setSelectedEpIds(new Set());
+      }
+    }
+    prevSeriesIdRef.current = seriesId;
+  }, [seriesId, allSelectableEpisodes]);
 
   const toggleSelect = useCallback((id) => {
     if (isBatchExecutionActive) return;

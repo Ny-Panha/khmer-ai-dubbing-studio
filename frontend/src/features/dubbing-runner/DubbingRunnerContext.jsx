@@ -500,78 +500,139 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries, o
 
     // Smart Auto-Targeting: If episodesList is empty, auto-target episodes needing this step
     let queue = Array.isArray(episodesList) && episodesList.length > 0 ? [...episodesList] : [];
+    const candidates = queue.length > 0 ? queue : allEpisodes;
+
     if (stepType === 'repair') {
-      const candidates = queue.length > 0 ? queue : allEpisodes;
       queue = candidates.filter((ep) => {
         const scan = getEpisodeBrokenSummary(ep);
         return (scan?.textBrokenCount > 0 || scan?.totalBrokenCount > 0 || ep.status === 'failed');
       });
       if (queue.length === 0) {
-        updateRunnerState('repair', { message: '✅ គ្រប់ភាគទាំងអស់មានអត្ថបទត្រឹមត្រូវ (គ្មានឃ្លាខូចទេ)' });
-        return createStepResult({ status: STEP_STATUS.COMPLETED, count: 0 });
+        updateRunnerState('repair', { status: 'idle', message: '✅ គ្រប់ភាគទាំងអស់មានអត្ថបទត្រឹមត្រូវ (គ្មានឃ្លាខូចទេ)' });
+        return createStepResult({ status: STEP_STATUS.COMPLETED, count: 0, reason: 'no_broken_segments' });
       }
     } else if (stepType === 'autofit') {
-      const candidates = queue.length > 0 ? queue : allEpisodes;
-      let unfitted = candidates.filter((ep) => checkEpisodeHasScript(ep) && checkEpisodeHasAudioReady(ep, null, null) && !checkEpisodeHasAutoFitReady(ep));
-
-      // If the passed selection is already all fitted, fall back to any remaining unfitted episodes in allEpisodes!
-      if (unfitted.length === 0 && !options.force) {
-        unfitted = allEpisodes.filter((ep) => checkEpisodeHasScript(ep) && checkEpisodeHasAudioReady(ep, null, null) && !checkEpisodeHasAutoFitReady(ep));
+      if (options.force) {
+        queue = candidates.filter((ep) => checkEpisodeHasScript(ep) && checkEpisodeHasAudioReady(ep, null, null));
+      } else {
+        queue = candidates.filter((ep) => checkEpisodeHasScript(ep) && checkEpisodeHasAudioReady(ep, null, null) && !checkEpisodeHasAutoFitReady(ep));
       }
 
-      queue = options.force
-        ? candidates.filter((ep) => checkEpisodeHasScript(ep) && checkEpisodeHasAudioReady(ep, null, null))
-        : unfitted;
-
       if (queue.length === 0) {
-        const remainingUnfitted = allEpisodes.filter((ep) => checkEpisodeHasScript(ep) && checkEpisodeHasAudioReady(ep, null, null) && !checkEpisodeHasAutoFitReady(ep));
-        if (remainingUnfitted.length > 0 && !options.force) {
-          queue = remainingUnfitted;
-        } else {
-          const voiced = (queue.length > 0 ? queue : allEpisodes).filter((ep) => checkEpisodeHasScript(ep) && checkEpisodeHasAudioReady(ep, null, null));
-          if (voiced.length > 0) {
-            queue = voiced;
-          } else {
-            updateRunnerState('autofit', { message: 'មិនទាន់មានភាគដែលមានសំឡេងសម្រាប់ Auto-Fit ទេ' });
-            return createStepResult({ status: STEP_STATUS.COMPLETED, count: 0 });
-          }
-        }
+        const hasVoiced = candidates.some((ep) => checkEpisodeHasScript(ep) && checkEpisodeHasAudioReady(ep, null, null));
+        updateRunnerState('autofit', {
+          status: 'idle',
+          message: !hasVoiced
+            ? 'មិនទាន់មានភាគដែលមានសំឡេងសម្រាប់ Auto-Fit ទេ'
+            : 'គ្រប់ភាគទាំងអស់បាន Auto-Fit Speed រួចរាល់ 100% ហើយ (បើចង់ធ្វើឡើងវិញ សូមប្រើ "ធ្វើឡើងវិញ")',
+        });
+        return createStepResult({ status: STEP_STATUS.COMPLETED, count: 0, reason: 'already_autofitted' });
       }
     } else if (stepType === 'compact') {
-      const candidates = queue.length > 0 ? queue : allEpisodes;
-      queue = candidates.filter((ep) => checkEpisodeHasScript(ep));
-      if (queue.length === 0) {
-        updateRunnerState('compact', { message: 'មិនទាន់មានភាគដែលមាន Script សម្រាប់បម្លែងទេ' });
-        return createStepResult({ status: STEP_STATUS.COMPLETED, count: 0 });
+      if (options.force) {
+        queue = candidates.filter((ep) => checkEpisodeHasScript(ep));
+      } else {
+        queue = candidates.filter((ep) => checkEpisodeHasScript(ep) && !ep.scriptData?.autoCompacted && !(ep.scriptData?.segments && ep.scriptData.segments.length > 0 && ep.scriptData.segments.every((s) => s.translationStyle === 'compact')));
       }
-    } else if (options.force) {
+
       if (queue.length === 0) {
-        queue = (stepType === 'voice')
-          ? allEpisodes.filter((ep) => checkEpisodeHasScript(ep))
-          : allEpisodes;
+        const hasScript = candidates.some((ep) => checkEpisodeHasScript(ep));
+        updateRunnerState('compact', {
+          status: 'idle',
+          message: !hasScript
+            ? 'មិនទាន់មានភាគដែលមាន Script សម្រាប់បម្លែងទេ'
+            : 'គ្រប់ភាគទាំងអស់បានបម្លែង Script ខ្លីរួចរាល់ 100% ហើយ (បើចង់ធ្វើឡើងវិញ សូមប្រើ "ធ្វើឡើងវិញ")',
+        });
+        return createStepResult({ status: STEP_STATUS.COMPLETED, count: 0, reason: 'already_compacted' });
       }
-    } else if (queue.length === 0) {
-      if (stepType === 'translate') {
-        queue = allEpisodes.filter((ep) => !checkEpisodeHasScript(ep));
-      } else if (stepType === 'voice') {
-        queue = allEpisodes.filter((ep) => checkEpisodeHasScript(ep) && (!checkEpisodeHasAudioReady(ep, null, null) || ep.audioOutdated));
-      } else if (stepType === 'clean_bgm') {
-        queue = allEpisodes.filter((ep) => !checkEpisodeHasDemucsReady(ep, null, null));
-      } else if (stepType === 'all3') {
-        queue = allEpisodes.filter((ep) => !checkEpisodeHasScript(ep) || !checkEpisodeHasAudioReady(ep, null, null) || !checkEpisodeHasDemucsReady(ep, null, null));
+    } else if (stepType === 'translate') {
+      if (options.force) {
+        if (options.todoOnly) {
+          queue = candidates.filter((ep) => !checkEpisodeHasScript(ep) || (getEpisodeBrokenSummary(ep)?.textBrokenCount || 0) > 0);
+        } else {
+          queue = candidates;
+        }
+      } else {
+        const unscripted = candidates.filter((ep) => !checkEpisodeHasScript(ep));
+        if (unscripted.length > 0) {
+          queue = unscripted;
+        } else {
+          // If all episodes have scripts but some have broken sentences, seamlessly repair them
+          const brokenTarget = candidates.filter((ep) => (getEpisodeBrokenSummary(ep)?.textBrokenCount || 0) > 0);
+          if (brokenTarget.length > 0) {
+            return runSequentialStep('repair', brokenTarget, options);
+          }
+          queue = [];
+        }
+      }
+
+      if (queue.length === 0) {
+        updateRunnerState('translate', {
+          status: 'idle',
+          message: 'គ្រប់ភាគទាំងអស់មាន Script រួចរាល់ 100% ហើយ — បើចង់ធ្វើឡើងវិញ សូមប្រើ "ធ្វើឡើងវិញ"',
+        });
+        return createStepResult({ status: STEP_STATUS.COMPLETED, count: 0, reason: 'already_has_script' });
+      }
+    } else if (stepType === 'voice') {
+      if (options.force) {
+        queue = candidates.filter((ep) => checkEpisodeHasScript(ep));
+      } else {
+        queue = candidates.filter((ep) => checkEpisodeHasScript(ep) && (!checkEpisodeHasAudioReady(ep, null, null) || ep.audioOutdated));
+      }
+
+      if (queue.length === 0) {
+        const hasScript = candidates.some((ep) => checkEpisodeHasScript(ep));
+        updateRunnerState('voice', {
+          status: 'idle',
+          message: !hasScript
+            ? 'មិនទាន់មានភាគដែលមាន Script សម្រាប់បង្កើតសំឡេង AI ទេ'
+            : 'គ្រប់ភាគទាំងអស់មានសំឡេង AI រួចរាល់ 100% ហើយ (បើចង់ធ្វើឡើងវិញ សូមប្រើ "ធ្វើឡើងវិញ")',
+        });
+        return createStepResult({ status: STEP_STATUS.COMPLETED, count: 0, reason: 'already_voiced' });
+      }
+    } else if (stepType === 'clean_bgm') {
+      if (options.force) {
+        queue = candidates;
+      } else {
+        queue = candidates.filter((ep) => !checkEpisodeHasDemucsReady(ep, null, null));
+      }
+
+      if (queue.length === 0) {
+        updateRunnerState('clean_bgm', {
+          status: 'idle',
+          message: 'គ្រប់ភាគទាំងអស់មាន Clean BGM រួចរាល់ 100% ហើយ — បើចង់ធ្វើឡើងវិញ សូមប្រើ "ធ្វើឡើងវិញ"',
+        });
+        return createStepResult({ status: STEP_STATUS.COMPLETED, count: 0, reason: 'already_clean_bgm' });
+      }
+    } else if (stepType === 'all3') {
+      if (options.force) {
+        queue = candidates;
+      } else {
+        queue = candidates.filter((ep) => !checkEpisodeHasScript(ep) || !checkEpisodeHasAudioReady(ep, null, null) || !checkEpisodeHasDemucsReady(ep, null, null));
+      }
+
+      if (queue.length === 0) {
+        updateRunnerState('all3', {
+          status: 'idle',
+          message: 'គ្រប់ភាគទាំងអស់បានបញ្ចប់គ្រប់ដំណាក់កាលរួចរាល់ 100% ហើយ',
+        });
+        return createStepResult({ status: STEP_STATUS.COMPLETED, count: 0, reason: 'all_already_done' });
       }
     }
 
     if (queue.length === 0) {
-      updateRunnerState(stepType, { message: 'គ្រប់ភាគទាំងអស់រួចរាល់ហើយ' });
+      updateRunnerState(stepType, { status: 'idle', message: 'គ្រប់ភាគទាំងអស់រួចរាល់ហើយ' });
       return createStepResult({ status: STEP_STATUS.COMPLETED, count: 0 });
     }
+
+    const targetSeriesId = activeSeries?.id || 'drama_project';
 
     // Set up AbortController for clean cancellation
     const controller = new AbortController();
     abortControllersRef.current[stepType] = controller;
 
     updateRunnerState(stepType, {
+      seriesId: targetSeriesId,
       status: 'running',
       currentEpIndex: 1,
       totalEps: queue.length,
@@ -592,6 +653,7 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries, o
 
         markEpisodeActive(currentEp.id);
         updateRunnerState(stepType, {
+          seriesId: targetSeriesId,
           status: 'running',
           currentEpIndex: idx + 1,
           totalEps: queue.length,
@@ -704,7 +766,7 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries, o
     }
 
     const currentEpId = runnerStates[stepType]?.currentEpId;
-    const targetSeriesId = activeSeries?.id || 'drama_project';
+    const targetSeriesId = runnerStates[stepType]?.seriesId || activeSeries?.id || 'drama_project';
     const allEpisodes = Array.isArray(activeSeries?.episodes) ? activeSeries.episodes : [];
     const activeEp = allEpisodes.find((e) => e.id === currentEpId);
     const videoRef = activeEp?.videoPath || activeEp?.sourceVideoPath || activeEp?.videoFile || '';

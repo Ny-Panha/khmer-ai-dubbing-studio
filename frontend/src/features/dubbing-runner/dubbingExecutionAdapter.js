@@ -24,7 +24,7 @@ export const STEP_STATUS = {
  */
 export function normalizeDubbingOptions(ep, stepType, options = {}, context = {}) {
   const activeSeries = context.activeSeries || null;
-  const seriesId = activeSeries?.id || ep?.seriesId || context.seriesId || 'drama_project';
+  const seriesId = context.seriesId || ep?.seriesId || activeSeries?.id || 'drama_project';
   const episodeId = ep?.id || 'ep_1';
 
   const videoRef = ep?.videoPath || ep?.sourceVideoPath || ep?.videoFile ||
