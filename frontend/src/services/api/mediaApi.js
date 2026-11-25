@@ -24,9 +24,10 @@ export async function fetchVideoMetadata(videoId) {
  * @param {string} videoId
  * @param {number} duration
  */
-export async function fetchVideoThumbnails(videoId, duration = 30) {
+export async function fetchVideoThumbnails(videoId, duration = 30, signal) {
   try {
     const res = await fetch('/api/video-thumbnails', {
+      signal,
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ videoId, duration }),
@@ -37,6 +38,7 @@ export async function fetchVideoThumbnails(videoId, duration = 30) {
       return data.thumbnails.map(t => (typeof t === 'string' ? t : t.url));
     }
   } catch (err) {
+    if (signal?.aborted) return null;
     console.warn('Backend video thumbnails fetch notice:', err.message);
   }
   return null;
@@ -160,7 +162,7 @@ export async function syncSeriesApi(series) {
   try {
     const res = await fetch(`/api/series/${series.id}/sync`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', Prefer: 'return=minimal' },
       body: JSON.stringify({ series }),
     });
     if (res.status === 502 || !res.ok) {

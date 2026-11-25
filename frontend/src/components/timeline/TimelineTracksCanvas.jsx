@@ -4,6 +4,7 @@ import { formatTimecode, parseTimeToSeconds, formatMinSec } from '../../utils/ti
 import { findAssociatedSegmentIndices, resolveSegmentIsFemale, doesClipMatchSegment } from '../../utils/timelineUtils';
 import { isGapClip } from '../../utils/timelineOps';
 import { uploadVideoFile } from '../../services/api';
+import { decodedPeaks, waveformKey, storedPeaks, ensureWaveformPeaks } from '../../utils/waveformCache';
 
 // In-memory UI-only cache for audio file durations probed from segment audioUrl
 // (used for legacy episodes whose segments lack stored duration metadata; never persisted).
@@ -79,43 +80,23 @@ function resolveVoiceAudioExtent(seg, appliedSpeed, probedDuration) {
   return rawAudioExtent;
 }
 
-const FALLBACK_WAVEFORM_PATTERN = [30, 65, 90, 45, 80, 100, 55, 35, 75, 85, 40, 70, 25, 60, 80, 95, 50, 65, 35, 85];
-
 const MemoizedVoiceWaveformBars = React.memo(function MemoizedVoiceWaveformBars({
   waveformWidthPx,
   peaksArray,
 }) {
-  // Each .waveform-bar is 2px wide + 2px gap (4px pitch) inside 10px horizontal box inset (1px border + 4px padding per side)
-  const waveformBarCount = Math.min(400, Math.max(4, Math.floor((waveformWidthPx - 8) / 4)));
+  if (!peaksArray?.length) return null;
+  const count = Math.min(400, Math.max(4, Math.floor((waveformWidthPx - 8) / 4)));
+  const bars = [];
+  for (let i = 0; i < count; i++) {
+    const peak = Number(peaksArray[Math.floor(i * peaksArray.length / count)]) || 0;
+    const height = Math.min(100, Math.max(0, peak <= 1 ? peak * 100 : peak));
+    if (height) bars.push(`M${4 * i},${(100 - height) / 2}h2v${height}h-2z`);
+  }
   return (
-    <div
-      className="voice-waveform-bars"
-      style={{
-        width: `${waveformWidthPx}px`,
-        maxWidth: '100%',
-      }}
-    >
-      {Array.from({ length: waveformBarCount }).map((_, wIdx) => {
-        let hPercent;
-        if (peaksArray) {
-          const sampleIdx = Math.min(peaksArray.length - 1, Math.floor((wIdx / waveformBarCount) * peaksArray.length));
-          const rawPeak = Number(peaksArray[sampleIdx]);
-          const normalized = Number.isFinite(rawPeak) ? (rawPeak <= 1 ? rawPeak * 100 : rawPeak) : 40;
-          hPercent = Math.max(15, Math.min(100, Math.round(normalized)));
-        } else {
-          hPercent = FALLBACK_WAVEFORM_PATTERN[wIdx % FALLBACK_WAVEFORM_PATTERN.length];
-        }
-        return (
-          <span
-            key={wIdx}
-            className="waveform-bar"
-            style={{
-              height: `${hPercent}%`,
-            }}
-          />
-        );
-      })}
-    </div>
+    <svg className="voice-waveform-bars" aria-hidden="true" width={waveformWidthPx}
+      viewBox={`0 0 ${waveformWidthPx} 100`} preserveAspectRatio="none">
+      <path className="waveform-bar" d={bars.join(' ')} />
+    </svg>
   );
 });
 
@@ -229,6 +210,42 @@ function TimelineTracksCanvas({
     };
   }, []);
 
+  const [, refreshPeaks] = React.useReducer(tick => tick + 1, 0);
+  React.useEffect(() => {
+    if (isPlaying || !seriesId || !episodeId || !scriptSegments?.length) return;
+    const controller = new AbortController();
+    const { signal } = controller;
+    const rafId = typeof requestAnimationFrame !== 'undefined'
+      ? requestAnimationFrame(() => {
+          void ensureWaveformPeaks({
+            seriesId,
+            episodeId,
+            segments: scriptSegments,
+            visibleRange,
+            signal,
+            onBatchReady: refreshPeaks,
+          });
+        })
+      : null;
+    const timer = rafId === null
+      ? setTimeout(() => {
+          void ensureWaveformPeaks({
+            seriesId,
+            episodeId,
+            segments: scriptSegments,
+            visibleRange,
+            signal,
+            onBatchReady: refreshPeaks,
+          });
+        }, 0)
+      : null;
+    return () => {
+      controller.abort();
+      if (rafId !== null && typeof cancelAnimationFrame !== 'undefined') cancelAnimationFrame(rafId);
+      if (timer !== null) clearTimeout(timer);
+    };
+  }, [episodeId, seriesId, scriptSegments, isPlaying, visibleRange]);
+
   React.useEffect(() => {
     if (!scriptSegments || scriptSegments.length === 0 || typeof Audio === 'undefined') return;
     let cancelled = false;
@@ -264,6 +281,7 @@ function TimelineTracksCanvas({
     const MAX_CONCURRENT = 3;
     let cursor = 0;
     let activeCount = 0;
+    const active = new Map();
 
     const pump = () => {
       while (!cancelled && activeCount < MAX_CONCURRENT && cursor < urlsToProbe.length) {
@@ -273,6 +291,7 @@ function TimelineTracksCanvas({
         activeCount++;
 
         const audio = new Audio();
+        active.set(url, audio);
         audio.preload = 'metadata';
 
         const finalize = (dur) => {
@@ -282,6 +301,7 @@ function TimelineTracksCanvas({
             audio.src = '';
             audio.removeAttribute('src');
           } catch {}
+          active.delete(url);
           PROBED_AUDIO_PENDING.delete(url);
           PROBED_AUDIO_DURATION_CACHE.set(url, (typeof dur === 'number' && Number.isFinite(dur) && dur > 0) ? dur : null);
           activeCount--;
@@ -299,6 +319,12 @@ function TimelineTracksCanvas({
 
     return () => {
       cancelled = true;
+      for (const [url, audio] of active) {
+        audio.onloadedmetadata = audio.onerror = null;
+        audio.removeAttribute('src');
+        audio.load();
+        PROBED_AUDIO_PENDING.delete(url);
+      }
     };
   }, [scriptSegments, visibleRange.start, visibleRange.end]);
 
@@ -345,7 +371,7 @@ function TimelineTracksCanvas({
 
   // Smart Multi-Track Layer Allocation (VOICE 1 Male / VOICE 2 Female & Stagger Routing)
   const internalSegmentRows = React.useMemo(() => {
-    if (!scriptSegments || scriptSegments.length === 0) return [];
+    if (externalSegmentRows || !scriptSegments || scriptSegments.length === 0) return [];
     const endTimes = [0, 0];
 
     const resolveIsFemale = (seg) => resolveSegmentIsFemale(seg, speakerRegistry, voiceSettings?.voiceId);
@@ -404,7 +430,7 @@ function TimelineTracksCanvas({
       endTimes[targetLane] = Math.max(endTimes[targetLane] || 0, rawEnd);
       return targetLane;
     });
-  }, [scriptSegments, probedDurationTick]);
+  }, [externalSegmentRows, scriptSegments, probedDurationTick]);
 
   const activeSegmentRows = externalSegmentRows || internalSegmentRows;
 
@@ -434,6 +460,26 @@ function TimelineTracksCanvas({
       (typeof seg.id === 'string' && seg.id.startsWith('seg_'))
     );
   }, [hasAnyVoiceAudio]);
+
+  const { highestUsedVoiceRow, voiceLaneIndices } = React.useMemo(() => {
+    let highest = 0;
+    const byLane = new Map();
+    const segs = scriptSegments || [];
+    for (let idx = 0; idx < segs.length; idx++) {
+      const seg = segs[idx];
+      const explicitRow = (typeof seg.trackRow === 'number' && seg.trackRow >= 0) ? seg.trackRow : 0;
+      if (explicitRow > highest) highest = explicitRow;
+      if (!shouldRenderOnVoiceTrack(seg)) continue;
+      const lane = activeSegmentRows[idx] ?? explicitRow;
+      let list = byLane.get(lane);
+      if (!list) {
+        list = [];
+        byLane.set(lane, list);
+      }
+      list.push(idx);
+    }
+    return { highestUsedVoiceRow: highest, voiceLaneIndices: byLane };
+  }, [scriptSegments, activeSegmentRows, shouldRenderOnVoiceTrack]);
 
   const renderVoiceSegment = (seg, idx) => {
     const hasAudio = Boolean(seg.audioUrl || seg.audioPath || seg.audioFile);
@@ -641,11 +687,7 @@ function TimelineTracksCanvas({
                   {hasAudio ? (
                     audioWidth >= 20 && (() => {
                       const waveformWidthPx = Math.min(audioWidth, Math.max(16, (renderedDuration * pps) - 2));
-                      const peaksArray = Array.isArray(seg.peaks) && seg.peaks.length > 0
-                        ? seg.peaks
-                        : (Array.isArray(seg.waveform) && seg.waveform.length > 0
-                          ? seg.waveform
-                          : (Array.isArray(seg.waveform?.peaks) && seg.waveform.peaks.length > 0 ? seg.waveform.peaks : null));
+                      const peaksArray = storedPeaks(seg) || decodedPeaks.get(waveformKey(seriesId, episodeId, seg));
                       return (
                         <MemoizedVoiceWaveformBars
                           waveformWidthPx={waveformWidthPx}
@@ -1321,19 +1363,17 @@ function TimelineTracksCanvas({
               </div>
             ) : (
               videoClips && videoClips
-                .filter((clip) => (clip.trackRow || 0) === rIdx)
-                .filter((clip, idx) => {
-                  const isDragging = dragState?.itemType === 'video' && (dragState?.id === clip.id || dragState?.index === idx);
+                .map((clip, realIdx) => ({ clip, realIdx }))
+                .filter(({ clip }) => (clip.trackRow || 0) === rIdx)
+                .filter(({ clip, realIdx }) => {
+                  const isDragging = dragState?.itemType === 'video' && (dragState?.id === clip.id || dragState?.index === realIdx);
                   const isSelected = activeClipId === clip.id || (!isGapClip(clip) && selectedSegmentId !== null && doesClipMatchSegment(clip, selectedSegmentId));
                   if (isDragging || isSelected) return true;
                   const cStart = clip.start || 0;
                   const cEnd = clip.end || (cStart + 1);
                   return cEnd >= visibleRange.start && cStart <= visibleRange.end;
                 })
-                .map((clip, idx) => {
-                  const realIdx = videoClips.findIndex(c => c.id === clip.id);
-                  return renderVideoClip(clip, realIdx >= 0 ? realIdx : idx, trackKey, rIdx);
-                })
+                .map(({ clip, realIdx }) => renderVideoClip(clip, realIdx, trackKey, rIdx))
             )}
           </div>
         );
@@ -1345,15 +1385,8 @@ function TimelineTracksCanvas({
         const isHidden = Boolean(hiddenTracks[trackKey] || (rIdx === 0 && hiddenTracks.voice));
         const isMuted = Boolean(mutedTracks?.[trackKey] || (rIdx === 0 && mutedTracks?.voice));
         const isDragOver = dragOverTrack === trackKey;
-        const highestUsedVoiceRow = (scriptSegments || []).reduce((max, s) => {
-          const r = (typeof s.trackRow === 'number' && s.trackRow >= 0) ? s.trackRow : 0;
-          return Math.max(max, r);
-        }, 0);
         const isNewLane = rIdx > highestUsedVoiceRow;
-        const laneVoiceSegments = (scriptSegments || []).filter((seg, idx) => {
-          if (activeSegmentRows[idx] !== rIdx) return false;
-          return shouldRenderOnVoiceTrack(seg);
-        });
+        const laneIndices = voiceLaneIndices.get(rIdx) || [];
 
         return (
           <div 
@@ -1411,13 +1444,11 @@ function TimelineTracksCanvas({
                 <span>{isNewLane ? `Drop to create VOICE ${rIdx + 1}` : `Drop to place on VOICE ${rIdx + 1} (A${rIdx + 1})`}</span>
               </div>
             )}
-            {(laneVoiceSegments.length === 0) ? (
+            {(laneIndices.length === 0) ? (
               <span className="empty-lane-placeholder-text">VOICE {rIdx + 1} (Khmer AI Voice Track)</span>
             ) : (
-              scriptSegments.map((seg, idx) => {
-                if (activeSegmentRows[idx] !== rIdx) return null;
-                if (!shouldRenderOnVoiceTrack(seg)) return null;
-
+              laneIndices.map((idx) => {
+                const seg = scriptSegments[idx];
                 const isDragging = (dragState?.itemType === 'audio' || dragState?.itemType === 'subtitle') && dragState?.index === idx;
                 const isSelected = Boolean(
                   (activeClipId && videoClips?.some((c) => c.id === activeClipId && doesClipMatchSegment(c, seg, seg.segmentId ?? seg.id ?? idx + 1))) ||

@@ -9,7 +9,8 @@ export class AudioBufferLRUCache {
   constructor(maxBuffers = 50) {
     this.maxBuffers = maxBuffers;
     this.cache = new Map(); // url -> { buffer, lastUsedMs, leadSkipSec }
-    this.inflight = new Map(); // url -> Promise<AudioBuffer>
+    this.inflight = new Map();
+    this.controller = new AbortController();
   }
 
   has(url) {
@@ -56,14 +57,17 @@ export class AudioBufferLRUCache {
       return this.inflight.get(url);
     }
 
+    const { signal } = this.controller;
     const promise = (async () => {
       try {
-        const response = await fetch(url, { cache: 'force-cache' });
+        const response = await fetch(url, { cache: 'force-cache', signal });
         if (!response.ok) {
           throw new Error(`HTTP ${response.status} loading ${url}`);
         }
         const arrayBuffer = await response.arrayBuffer();
+        if (signal.aborted) return null;
         const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+        if (signal.aborted) return null;
 
         // Compute leading silence from decoded PCM channels
         const channels = [];
@@ -77,7 +81,7 @@ export class AudioBufferLRUCache {
       } catch (err) {
         return null;
       } finally {
-        this.inflight.delete(url);
+        if (!signal.aborted) this.inflight.delete(url);
       }
     })();
 
@@ -85,9 +89,15 @@ export class AudioBufferLRUCache {
     return promise;
   }
 
-  clear() {
-    this.cache.clear();
+  cancelPending() {
+    this.controller.abort();
+    this.controller = new AbortController();
     this.inflight.clear();
+  }
+
+  clear() {
+    this.cancelPending();
+    this.cache.clear();
   }
 
   size() {
@@ -172,31 +182,12 @@ export class WebAudioScheduler {
         const rawUrl = seg.audioUrl || (seg.audioPath ? `/uploads/${seg.audioPath.replace(/\\/g, '/').replace(/^.*uploads\//, '')}` : null);
         return { seg, s, rawUrl };
       })
-      .filter(({ s, rawUrl }) => rawUrl && s >= (now - 1) && s <= (now + lookaheadSec))
-      .slice(0, 8);
+      .filter(({ seg, s, rawUrl }) => !seg.muted && !seg.isMuted && rawUrl && s >= (now - 1) && s <= (now + lookaheadSec))
+      .sort((a, b) => a.s - b.s);
 
-    for (const item of upcoming) {
-      if (item.rawUrl && !this.lruCache.has(item.rawUrl)) {
-        this.lruCache.loadAndDecode(item.rawUrl, ctx);
-      }
-      // Pre-warm male & female voice variants (Piseth & Sreymom) so voice switching is instant with 0ms decode latency
-      if (item.seg?.voiceAudioVariants && typeof item.seg.voiceAudioVariants === 'object') {
-        for (const vKey of Object.keys(item.seg.voiceAudioVariants)) {
-          const variantUrl = item.seg.voiceAudioVariants[vKey]?.audioUrl;
-          if (variantUrl && !this.lruCache.has(variantUrl)) {
-            this.lruCache.loadAndDecode(variantUrl, ctx);
-          }
-        }
-      }
-      // Pre-warm delivery variants (out_loud & inner_thought) so style switching is instant
-      if (item.seg?.deliveryVariants && typeof item.seg.deliveryVariants === 'object') {
-        for (const dKey of Object.keys(item.seg.deliveryVariants)) {
-          const variantUrl = item.seg.deliveryVariants[dKey]?.audioUrl;
-          if (variantUrl && !this.lruCache.has(variantUrl)) {
-            this.lruCache.loadAndDecode(variantUrl, ctx);
-          }
-        }
-      }
+    for (const { rawUrl } of upcoming) {
+      if (this.lruCache.inflight.size >= 2) break;
+      if (!this.lruCache.has(rawUrl)) this.lruCache.loadAndDecode(rawUrl, ctx);
     }
   }
 

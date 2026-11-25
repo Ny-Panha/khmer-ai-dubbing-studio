@@ -1,7 +1,7 @@
 const express = require("express");
 const fs = require("fs");
 const path = require("path");
-const { uploadsDir, sanitizeProjectName } = require("../utils/pathUtils");
+const { uploadsDir, sanitizeProjectName, sanitizeEpisodeId, isSafeUploadPath } = require("../utils/pathUtils");
 const {
   getSeriesMetadata,
   withSeriesMetadataLock,
@@ -158,6 +158,70 @@ router.get("/:seriesId/episodes/:episodeId", (req, res) => {
     res.status(500).json({ success: false, error: err.message });
   }
 });
+
+router.route("/:seriesId/episodes/:episodeId/waveform-peaks")
+  .get((req, res) => {
+    try {
+      const cleanSeries = sanitizeProjectName(req.params.seriesId);
+      const cleanEp = sanitizeEpisodeId(req.params.episodeId);
+      const epDir = path.join(uploadsDir, "projects", cleanSeries, "episodes", cleanEp);
+      if (!isSafeUploadPath(epDir, uploadsDir) || !fs.existsSync(epDir)) {
+        return res.json({ success: true, peaks: {} });
+      }
+      const peaksPath = path.join(epDir, "waveform-peaks.json");
+      if (!fs.existsSync(peaksPath)) {
+        return res.json({ success: true, peaks: {} });
+      }
+      const raw = JSON.parse(fs.readFileSync(peaksPath, "utf8"));
+      return res.json({ success: true, peaks: raw && typeof raw === "object" ? raw : {} });
+    } catch (err) {
+      return res.json({ success: true, peaks: {} });
+    }
+  })
+  .post((req, res) => {
+    try {
+      const cleanSeries = sanitizeProjectName(req.params.seriesId);
+      const cleanEp = sanitizeEpisodeId(req.params.episodeId);
+      const epDir = path.join(uploadsDir, "projects", cleanSeries, "episodes", cleanEp);
+      if (!isSafeUploadPath(epDir, uploadsDir) || !fs.existsSync(epDir)) {
+        return res.status(404).json({ success: false, error: "Episode directory missing" });
+      }
+      const incoming = req.body?.peaks;
+      if (!incoming || typeof incoming !== "object" || Array.isArray(incoming)) {
+        return res.status(400).json({ success: false, error: "peaks map required" });
+      }
+      const peaksPath = path.join(epDir, "waveform-peaks.json");
+      let merged = {};
+      if (fs.existsSync(peaksPath)) {
+        try {
+          const existing = JSON.parse(fs.readFileSync(peaksPath, "utf8"));
+          if (existing && typeof existing === "object" && !Array.isArray(existing)) {
+            merged = existing;
+          }
+        } catch (_) {}
+      }
+      let added = 0;
+      for (const [k, vals] of Object.entries(incoming)) {
+        if (typeof k !== "string" || k.length > 400 || !Array.isArray(vals) || vals.length === 0) continue;
+        merged[k] = vals.slice(0, 256).map((n) => Math.max(0, Math.min(100, Math.round(Number(n) || 0))));
+        added++;
+      }
+      const keys = Object.keys(merged);
+      if (keys.length > 400) {
+        for (const oldKey of keys.slice(0, keys.length - 400)) {
+          delete merged[oldKey];
+        }
+      }
+      if (added > 0) {
+        const tmpPath = `${peaksPath}.tmp_${process.pid}_${Date.now()}`;
+        fs.writeFileSync(tmpPath, JSON.stringify(merged), "utf8");
+        fs.renameSync(tmpPath, peaksPath);
+      }
+      return res.json({ success: true, saved: added });
+    } catch (err) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
 
 router.post("/:seriesId/episodes", async (req, res) => {
   try {

@@ -103,8 +103,17 @@ function status(seriesId, episodeId, id) {
 async function drain() {
   if (busy) return;
   busy = true;
+  let yieldWaitMs = 0;
   try {
     while (pending.size) {
+      // Yield briefly while a foreground source-proxy encode is active so two FFmpeg processes don't saturate disk/CPU.
+      const { activeJobs: spActiveJobs } = require('./sourceProxyService');
+      if (spActiveJobs && spActiveJobs.size > 0 && yieldWaitMs < 5000) {
+        yieldWaitMs += 500;
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        continue;
+      }
+      yieldWaitMs = 0;
       const [dir, job] = pending.entries().next().value;
       pending.delete(dir);
       job.state = 'rendering';

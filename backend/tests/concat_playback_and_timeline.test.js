@@ -38,6 +38,32 @@ test('ConCaT Architecture: 1. AudioBufferLRUCache maintains bounded memory and L
   assert.equal(cache.size(), 0);
 });
 
+test('Episode switch cancels old decodes and playback preloads only two selected audio URLs', async t => {
+  const { WebAudioScheduler } = await import('../../frontend/src/utils/webAudioScheduler.js');
+  const scheduler = new WebAudioScheduler();
+  const calls = [];
+  t.mock.method(globalThis, 'fetch', (url, { signal }) => {
+    calls.push({ url, signal });
+    return new Promise((resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason)));
+  });
+  scheduler.ensureContext = () => ({});
+  const segments = [2, 0, 1, 3].map(startSec => ({
+    startSec,
+    audioUrl: '/clip-' + startSec,
+    voiceAudioVariants: { other: { audioUrl: '/unselected' } },
+  }));
+  scheduler.preloadUpcoming(segments, 0);
+  scheduler.preloadUpcoming(segments, 0);
+  assert.deepEqual(calls.map(call => call.url), ['/clip-0', '/clip-1']);
+  const old = [...scheduler.lruCache.inflight.values()];
+  scheduler.lruCache.cancelPending();
+  scheduler.preloadUpcoming(segments, 0);
+  await Promise.all(old);
+  assert.ok(calls[0].signal.aborted);
+  assert.equal(scheduler.lruCache.inflight.size, 2);
+  scheduler.destroy();
+});
+
 test('ConCaT Architecture: 2. WebAudioScheduler fallback & state lifecycle', async () => {
   const { WebAudioScheduler } = await import('../../frontend/src/utils/webAudioScheduler.js');
   const scheduler = new WebAudioScheduler({ maxCachedBuffers: 50 });

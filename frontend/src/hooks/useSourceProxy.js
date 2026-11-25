@@ -1,141 +1,69 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 
-/**
- * Hook to manage Source Video Proxy for fast, smooth LIVE multi-clip playback.
- * 
- * - When an episode opens, requests/checks Source Proxy with immediate=true.
- * - Polls progress while transcoding.
- * - When ready, provides url for LIVE playback.
- * - While transcoding or on error, provides clean status and leaves LIVE playback on raw source.
- */
+const idle = { status: 'idle', url: null, progress: 0, elapsedSeconds: 0, duration: 0, bytes: 0, error: null };
+const readyCache = new Map();
+
+export async function prefetchSourceProxyStatus(seriesId, episodeId, videoUrl, signal) {
+  if (!seriesId || !episodeId || !videoUrl || signal?.aborted) return;
+  const key = JSON.stringify([seriesId, episodeId, videoUrl]);
+  if (readyCache.has(key)) return;
+  try {
+    const query = new URLSearchParams({ videoUrl });
+    const res = await fetch(`/api/series/${encodeURIComponent(seriesId)}/episodes/${encodeURIComponent(episodeId)}/source-proxy?${query}`, { signal });
+    if (!res.ok || signal?.aborted) return;
+    const data = await res.json();
+    if (!signal?.aborted && data?.status === 'ready' && data?.url) {
+      const value = { ...idle, ...data, progress: 100, elapsedSeconds: data.renderSeconds || data.elapsedSeconds || 0 };
+      readyCache.delete(key);
+      readyCache.set(key, value);
+      if (readyCache.size > 12) readyCache.delete(readyCache.keys().next().value);
+    }
+  } catch (_) {}
+}
+
 export function useSourceProxy({ seriesId, episodeId, videoUrl, active = true }) {
-  const [proxyData, setProxyData] = useState({
-    status: 'idle',
-    url: null,
-    progress: 0,
-    elapsedSeconds: 0,
-    duration: 0,
-    bytes: 0,
-    error: null,
-  });
-
-  const pollTimerRef = useRef(null);
-  const isMountedRef = useRef(true);
+  const key = active && seriesId && episodeId && videoUrl ? JSON.stringify([seriesId, episodeId, videoUrl]) : null;
+  const [result, setResult] = useState(null);
 
   useEffect(() => {
-    isMountedRef.current = true;
-    return () => {
-      isMountedRef.current = false;
-      if (pollTimerRef.current) {
-        clearTimeout(pollTimerRef.current);
-        pollTimerRef.current = null;
-      }
-    };
-  }, []);
-
-  useEffect(() => {
-    if (pollTimerRef.current) {
-      clearTimeout(pollTimerRef.current);
-      pollTimerRef.current = null;
-    }
-
-    if (!active || !seriesId || !episodeId || !videoUrl) {
-      setProxyData({
-        status: 'idle',
-        url: null,
-        progress: 0,
-        elapsedSeconds: 0,
-        duration: 0,
-        bytes: 0,
-        error: null,
-      });
-      return;
-    }
-
-    let isCancelled = false;
-
-    const checkSourceProxy = async (immediate = false) => {
+    if (!key || readyCache.has(key)) return;
+    const controller = new AbortController();
+    let timer;
+    let firstCheck = true;
+    const check = async (immediate = false) => {
       try {
-        const query = new URLSearchParams();
+        const query = new URLSearchParams({ videoUrl });
         if (immediate) query.set('immediate', 'true');
-        if (videoUrl) query.set('videoUrl', videoUrl);
-
-        const res = await fetch(`/api/series/${encodeURIComponent(seriesId)}/episodes/${encodeURIComponent(episodeId)}/source-proxy?${query.toString()}`);
-        if (!res.ok) {
-          throw new Error(`HTTP ${res.status}`);
-        }
+        const res = await fetch(`/api/series/${encodeURIComponent(seriesId)}/episodes/${encodeURIComponent(episodeId)}/source-proxy?${query}`, { signal: controller.signal });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
-        if (isCancelled || !isMountedRef.current) return;
+        if (controller.signal.aborted) return;
 
+        const value = { ...idle, ...data, elapsedSeconds: data.renderSeconds || data.elapsedSeconds || 0 };
+        readyCache.delete(key);
         if (data.status === 'ready') {
-          setProxyData({
-            status: 'ready',
-            url: data.url,
-            progress: 100,
-            elapsedSeconds: data.renderSeconds || 0,
-            duration: data.duration || 0,
-            bytes: data.bytes || 0,
-            error: null,
-          });
-        } else if (data.status === 'transcoding') {
-          setProxyData(prev => ({
-            ...prev,
-            status: 'transcoding',
-            progress: data.progress || 0,
-            elapsedSeconds: data.elapsedSeconds || 0,
-            error: null,
-          }));
-
-          // Poll every 1s while transcoding (back off during active live playback)
-          const isPlaying = typeof window !== 'undefined' && Boolean(window.__timelineIsPlaying);
-          pollTimerRef.current = setTimeout(() => {
-            if (!isCancelled && isMountedRef.current) {
-              checkSourceProxy(false);
-            }
-          }, isPlaying ? 5000 : 1000);
-        } else if (data.status === 'error') {
-          setProxyData(prev => ({
-            ...prev,
-            status: 'error',
-            error: data.error || 'Source proxy transcode failed',
-          }));
-        } else {
-          setProxyData(prev => ({
-            ...prev,
-            status: data.status || 'idle',
-          }));
+          value.progress = 100;
+          readyCache.set(key, value);
+          if (readyCache.size > 12) readyCache.delete(readyCache.keys().next().value);
+        } else if (data.status === 'missing' || (firstCheck && data.status === 'error')) {
+          // Don't start an encode while playing, or for episodes the user only passed through.
+          timer = setTimeout(() => check(!window.__timelineIsPlaying), window.__timelineIsPlaying ? 5000 : 800);
+        } else if (data.status === 'queued' || data.status === 'transcoding') {
+          timer = setTimeout(() => check(), window.__timelineIsPlaying ? 5000 : 1000);
         }
+        firstCheck = false;
+        setResult({ key, value });
       } catch (err) {
-        if (!isCancelled && isMountedRef.current) {
-          setProxyData(prev => ({
-            ...prev,
-            status: 'error',
-            error: err.message,
-          }));
-        }
+        if (!controller.signal.aborted) setResult({ key, value: { ...idle, status: 'error', error: err.message } });
       }
     };
-
-    // Trigger initial check with immediate=true on episode open
-    checkSourceProxy(true);
-
+    timer = setTimeout(check, 80);
     return () => {
-      isCancelled = true;
-      if (pollTimerRef.current) {
-        clearTimeout(pollTimerRef.current);
-        pollTimerRef.current = null;
-      }
+      controller.abort();
+      clearTimeout(timer);
     };
-  }, [seriesId, episodeId, videoUrl, active]);
+  }, [key, seriesId, episodeId, videoUrl]);
 
-  return {
-    url: proxyData.url,
-    status: proxyData.status,
-    isReady: proxyData.status === 'ready' && Boolean(proxyData.url),
-    progress: proxyData.progress,
-    elapsedSeconds: proxyData.elapsedSeconds,
-    duration: proxyData.duration,
-    bytes: proxyData.bytes,
-    error: proxyData.error,
-  };
+  const data = readyCache.get(key) || (result?.key === key ? result.value : idle);
+  return { ...data, isReady: data.status === 'ready' && Boolean(data.url) };
 }

@@ -19,6 +19,7 @@ export function useVideoPlayback({
   setVideoClips,
   renderedVideo,
   selectedVideo,
+  episodeKey = null,
 }) {
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -40,6 +41,28 @@ export function useVideoPlayback({
   const pausedSeekingSinceMsRef = useRef(0);
   const isSeekInFlightRef = useRef(false);
   const [playRequestTick, setPlayRequestTick] = useState(0);
+  const prevEpisodeKeyRef = useRef(episodeKey);
+
+  // Cleanly reset playback state on episode change so active playback or seek state never leaks across episodes
+  useEffect(() => {
+    if (prevEpisodeKeyRef.current === episodeKey) return;
+    prevEpisodeKeyRef.current = episodeKey;
+    intendedPlayingRef.current = false;
+    hasSeekedRef.current = false;
+    pendingSeekTargetRef.current = null;
+    nextSeekTargetRef.current = null;
+    isSeekInFlightRef.current = false;
+    lastMappedTimelineTimeRef.current = 0;
+    activeClipIdxRef.current = 0;
+    stallRecoveryCountRef.current = 0;
+    pausedRecoveryCountRef.current = 0;
+    pausedSeekingSinceMsRef.current = 0;
+    const v = videoRef?.current;
+    if (v && !v.paused) {
+      try { v.pause(); } catch (_) {}
+    }
+    setIsPlaying(false);
+  }, [episodeKey, videoRef]);
 
   // Duration follows the timeline (R7): when videoClips has been edited, duration equals the end of the last video clip
   const timelineDuration = useMemo(() => {

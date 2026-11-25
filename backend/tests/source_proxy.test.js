@@ -28,16 +28,16 @@ test('Source Proxy Suite: Validation, Cache Hits, Deduplication, and Keyframe De
     } catch (_) {}
   });
 
-  await t.test('1. Source Content Hash and Stat Cache', () => {
-    const hash1 = sourceProxy.getSourceContentHash(dummySrc);
+  await t.test('1. Source Content Hash and Stat Cache', async () => {
+    const hash1 = await sourceProxy.getSourceContentHash(dummySrc);
     assert.ok(hash1 && hash1.length === 64, 'Should compute valid 64-char SHA256');
 
-    const hash2 = sourceProxy.getSourceContentHash(dummySrc);
+    const hash2 = await sourceProxy.getSourceContentHash(dummySrc);
     assert.equal(hash1, hash2, 'Subsequent hash calls should return identical cached hash');
   });
 
   await t.test('2. Transcode Job Execution and Target Encoding Settings', async () => {
-    const sourceHash = sourceProxy.getSourceContentHash(dummySrc);
+    const sourceHash = await sourceProxy.getSourceContentHash(dummySrc);
     const info = await getMediaInfo(dummySrc);
     const sourceDuration = Number(info.format.duration);
 
@@ -107,7 +107,7 @@ test('Source Proxy Suite: Validation, Cache Hits, Deduplication, and Keyframe De
   });
 
   await t.test('3. Cache Hit Re-use with Zero Transcoding', async () => {
-    const sourceHash = sourceProxy.getSourceContentHash(dummySrc);
+    const sourceHash = await sourceProxy.getSourceContentHash(dummySrc);
     const cached = sourceProxy.getValidCachedProxy(sourceHash);
     assert.ok(cached, 'getValidCachedProxy must return cached proxy');
     assert.equal(cached.status, 'ready');
@@ -132,5 +132,23 @@ test('Source Proxy Suite: Validation, Cache Hits, Deduplication, and Keyframe De
     assert.equal(sourceProxy.activeJobs.size >= 1, true);
 
     sourceProxy.activeJobs.delete(sourceHash);
+  });
+  await t.test('5. Only the latest waiting source runs after the active encode', async () => {
+    const hashes = ['first', 'middle', 'last'].map(name => path.basename(tmpDir) + '_' + name);
+    t.after(() => {
+      for (const hash of hashes) fs.rmSync(path.join(uploadsDir, 'source_proxies', hash), { recursive: true, force: true });
+    });
+    const [first, middle, last] = hashes.map(hash => sourceProxy.startTranscodeJob(dummySrc, hash, 2));
+    assert.equal(first.status, 'transcoding');
+    assert.equal(middle.status, 'queued');
+    assert.equal(last.status, 'queued');
+    assert.equal(sourceProxy.activeJobs.size, 1);
+    for (let i = 0; i < 100 && last.status !== 'ready'; i++) {
+      await new Promise(resolve => setTimeout(resolve, 200));
+      assert.ok(sourceProxy.activeJobs.size <= 1);
+    }
+    assert.equal(first.status, 'ready');
+    assert.equal(last.status, 'ready');
+    assert.equal(fs.existsSync(path.join(uploadsDir, 'source_proxies', hashes[1])), false);
   });
 });

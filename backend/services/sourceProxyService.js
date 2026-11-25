@@ -1,7 +1,9 @@
 const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
-const { uploadsDir, isSafeUploadPath, getFileSha256 } = require('../utils/pathUtils');
+const crypto = require('node:crypto');
+const os = require('node:os');
+const { uploadsDir, isSafeUploadPath } = require('../utils/pathUtils');
 const { registerProcess } = require('../utils/processRegistry');
 const { FFMPEG_PATH, getMediaInfo } = require('./ffmpegService');
 const { getSeriesMetadata } = require('./episodeService');
@@ -11,9 +13,11 @@ if (!fs.existsSync(sourceProxiesDir)) {
   fs.mkdirSync(sourceProxiesDir, { recursive: true });
 }
 
-// In-memory active jobs map: sourceHash -> Job
-// Guarantees strictly ONE concurrent transcode per source hash
+// The process-wide queue allows one active encode and one waiting episode.
 const activeJobs = new Map();
+let latestWaitingJob = null;
+let latestRequest = 0;
+const failures = new Map();
 
 // Fast cache of file stat to source hash: "size:mtimeMs" -> sha256
 const statToHashCache = new Map();
@@ -68,17 +72,20 @@ function resolveSourceVideoPath(seriesId, episodeId, explicitUrl = null) {
 /**
  * Calculates or retrieves the cached SHA-256 content hash of the source video
  */
-function getSourceContentHash(filePath) {
-  const stat = fs.statSync(filePath);
-  const key = `${filePath}:${stat.size}:${Math.round(stat.mtimeMs)}`;
-  if (statToHashCache.has(key)) {
-    return statToHashCache.get(key);
+async function getSourceContentHash(filePath) {
+  const stat = await fs.promises.stat(filePath);
+  const key = `${filePath}:${stat.size}:${stat.mtimeMs}`;
+  if (!statToHashCache.has(key)) {
+    // Stream once per revision without blocking media range responses.
+    const digest = (async () => {
+      const hash = crypto.createHash('sha256');
+      for await (const chunk of fs.createReadStream(filePath)) hash.update(chunk);
+      return hash.digest('hex');
+    })();
+    statToHashCache.set(key, digest);
+    digest.catch(() => statToHashCache.delete(key));
   }
-  const hash = getFileSha256(filePath);
-  if (hash) {
-    statToHashCache.set(key, hash);
-  }
-  return hash;
+  return statToHashCache.get(key);
 }
 
 /**
@@ -127,12 +134,47 @@ function getValidCachedProxy(sourceHash, sourceDuration = null) {
  * Target encoding: H.264, 480p-class (aspect ratio preserved), veryfast preset,
  * CRF 27, GOP 15, -bf 0, +faststart, AAC 96k.
  */
-async function startTranscodeJob(sourcePath, sourceHash, sourceDuration) {
-  // Prevent duplicate concurrent transcodes for the same source hash
-  if (activeJobs.has(sourceHash)) {
-    return activeJobs.get(sourceHash);
-  }
+function startTranscodeJob(sourcePath, sourceHash, sourceDuration) {
+  if (activeJobs.has(sourceHash)) return activeJobs.get(sourceHash);
+  if (latestWaitingJob?.sourceHash === sourceHash) return latestWaitingJob;
+  const job = { sourcePath, sourceHash, sourceDuration, status: 'queued', progress: 0 };
+  // Finish the running encode, keeping only the latest episode waiting behind it.
+  latestWaitingJob = job;
+  runNextJob();
+  return job;
+}
 
+function runNextJob() {
+  if (activeJobs.size || !latestWaitingJob) return;
+  const job = latestWaitingJob;
+  latestWaitingJob = null;
+  job.status = 'transcoding';
+  job.startTime = Date.now();
+  activeJobs.set(job.sourceHash, job);
+  transcode(job).catch(err => {
+    job.status = 'error';
+    job.error = err.message;
+    finishJob(job);
+  });
+}
+
+function finishJob(job) {
+  if (activeJobs.get(job.sourceHash) !== job) return;
+  if (job.status === 'error') {
+    failures.set(job.sourceHash, job.error);
+    if (failures.size > 8) failures.delete(failures.keys().next().value);
+  }
+  activeJobs.delete(job.sourceHash);
+  runNextJob();
+}
+
+async function transcode(job) {
+  const { sourcePath, sourceHash } = job;
+  let { sourceDuration } = job;
+  if (sourceDuration == null) {
+    const info = await getMediaInfo(sourcePath);
+    sourceDuration = Number(info.format?.duration || 0);
+  }
   const proxyDir = path.join(sourceProxiesDir, sourceHash);
   if (!fs.existsSync(proxyDir)) {
     fs.mkdirSync(proxyDir, { recursive: true });
@@ -142,28 +184,18 @@ async function startTranscodeJob(sourcePath, sourceHash, sourceDuration) {
   const manifestPath = path.join(proxyDir, 'source-proxy.json');
   const tempVideoPath = path.join(proxyDir, `temp_source-proxy_${Date.now()}_${process.pid}.mp4`);
 
-  const job = {
-    sourceHash,
-    sourcePath,
-    sourceDuration,
-    status: 'transcoding',
-    progress: 0,
-    startTime: Date.now(),
-    elapsedSeconds: 0,
-    error: null,
-  };
-
-  activeJobs.set(sourceHash, job);
-
   const ffmpegArgs = [
     '-nostdin',
     '-hide_banner',
     '-loglevel', 'error',
     '-progress', 'pipe:1',
     '-y',
+    '-threads', '1',
+    '-filter_threads', '1',
     '-i', sourcePath,
     '-vf', "scale='if(gte(iw,ih),-2,480)':'if(gte(iw,ih),480,-2)'",
     '-c:v', 'libx264',
+    '-threads:v', '2',
     '-preset', 'veryfast',
     '-crf', '27',
     '-g', '15',
@@ -179,16 +211,10 @@ async function startTranscodeJob(sourcePath, sourceHash, sourceDuration) {
 
   console.log(`[SourceProxy] 🚀 Starting background transcode for hash ${sourceHash.slice(0, 12)} (${sourcePath})`);
 
-  let child;
-  try {
-    child = spawn(FFMPEG_PATH, ffmpegArgs, { windowsHide: true });
-  } catch (err) {
-    activeJobs.delete(sourceHash);
-    job.status = 'error';
-    job.error = err.message;
-    return job;
+  const child = spawn(FFMPEG_PATH, ffmpegArgs, { windowsHide: true });
+  if (child.pid) {
+    try { os.setPriority(child.pid, os.constants.priority.PRIORITY_BELOW_NORMAL); } catch (_) {}
   }
-
   registerProcess(child, { type: 'source-proxy', jobId: sourceHash });
 
   let lineBuffer = '';
@@ -271,7 +297,7 @@ async function startTranscodeJob(sourcePath, sourceHash, sourceDuration) {
       try { if (fs.existsSync(tempVideoPath)) fs.unlinkSync(tempVideoPath); } catch (_) {}
     }
 
-    activeJobs.delete(sourceHash);
+    finishJob(job);
   });
 
   child.once('error', (err) => {
@@ -279,10 +305,9 @@ async function startTranscodeJob(sourcePath, sourceHash, sourceDuration) {
     job.status = 'error';
     job.error = err.message;
     try { if (fs.existsSync(tempVideoPath)) fs.unlinkSync(tempVideoPath); } catch (_) {}
-    activeJobs.delete(sourceHash);
+    finishJob(job);
   });
 
-  return job;
 }
 
 /**
@@ -296,10 +321,8 @@ async function getStatus(seriesId, episodeId, options = {}) {
     return { status: 'no_source', message: 'No source video found for this episode' };
   }
 
-  const sourceHash = getSourceContentHash(sourcePath);
-  if (!sourceHash) {
-    return { status: 'error', error: 'Failed to compute source content hash' };
-  }
+  const request = immediate ? ++latestRequest : null;
+  const sourceHash = await getSourceContentHash(sourcePath);
 
   // 1. Check existing valid cache
   const cached = getValidCachedProxy(sourceHash);
@@ -307,27 +330,12 @@ async function getStatus(seriesId, episodeId, options = {}) {
     return cached;
   }
 
-  // 2. Check in-flight transcode job
-  if (activeJobs.has(sourceHash)) {
-    const job = activeJobs.get(sourceHash);
-    return {
-      status: 'transcoding',
-      sourceHash,
-      progress: job.progress,
-      elapsedSeconds: Math.round((Date.now() - job.startTime) / 1000),
-      url: null,
-    };
-  }
-
-  // 3. If immediate, trigger transcode
-  if (immediate) {
-    let sourceDuration = 0;
-    try {
-      const info = await getMediaInfo(sourcePath);
-      sourceDuration = Number(info.format?.duration || 0);
-    } catch (_) {}
-
-    const job = await startTranscodeJob(sourcePath, sourceHash, sourceDuration);
+  if (immediate) failures.delete(sourceHash);
+  if (failures.has(sourceHash)) return { status: 'error', error: failures.get(sourceHash) };
+  let job = activeJobs.get(sourceHash);
+  if (!job && latestWaitingJob?.sourceHash === sourceHash) job = latestWaitingJob;
+  if (!job && immediate && request === latestRequest) job = startTranscodeJob(sourcePath, sourceHash);
+  if (job) {
     return {
       status: job.status,
       sourceHash,

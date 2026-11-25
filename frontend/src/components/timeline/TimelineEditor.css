@@ -1148,30 +1148,15 @@
 }
 
 .voice-waveform-bars {
-  display: flex;
-  align-items: center;
+  display: block;
   height: 100%;
-  width: 100%;
-  gap: 2px;
-  overflow: hidden;
+  max-width: 100%;
+  fill: #60a5fa;
 }
 
-.waveform-bar {
-  display: inline-block;
-  width: 2px;
-  background: #60a5fa;
-  border-radius: 1px;
-  flex-shrink: 0;
-}
-
-.voice-male .waveform-bar,
-.male-voice .waveform-bar {
-  background: #60a5fa;
-}
-
-.voice-female .waveform-bar,
-.female-voice .waveform-bar {
-  background: #f472b6;
+.voice-female .voice-waveform-bars,
+.female-voice .voice-waveform-bars {
+  fill: #f472b6;
 }
 
 /* Subtitle flat content row */

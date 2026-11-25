@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 const { spawn } = require('child_process');
 const { registerProcess } = require('../utils/processRegistry');
 const {
@@ -34,7 +35,11 @@ function planRanges(clips, sourceDuration) {
 
 function encode(args, jobId) {
   return new Promise((resolve, reject) => {
-    const child = spawn(FFMPEG_PATH, ['-nostdin', '-hide_banner', '-loglevel', 'error', '-y', ...args], { windowsHide: true });
+    const child = spawn(FFMPEG_PATH, ['-nostdin', '-hide_banner', '-loglevel', 'error',
+      '-threads', '2', '-filter_threads', '1', '-filter_complex_threads', '1', '-y', ...args], { windowsHide: true });
+    if (child.pid) {
+      try { os.setPriority(child.pid, os.constants.priority.PRIORITY_BELOW_NORMAL); } catch { /* OS may restrict priority changes. */ }
+    }
     registerProcess(child, { type: 'proxy-preview', jobId });
     let stderr = '';
     child.stdout.resume();
@@ -94,7 +99,7 @@ async function renderProxy(input, dir, jobId, onProgress = null) {
     const name = 'part-' + parts.length + '.mkv';
     await encode([...args, '-map', '0:v:0', '-map', audio, '-t', length,
       '-vf', fit + ',setsar=1,fps=30,tpad=stop_mode=clone:stop_duration=1', '-af', 'apad',
-      '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '28', '-g', '30', '-threads', '4',
+      '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '28', '-g', '30', '-threads', '2',
       '-pix_fmt', 'yuv420p', '-c:a', 'pcm_s16le', '-ar', '44100', '-ac', '2', path.join(dir, name)], jobId);
     parts.push("file '" + name + "'\nduration " + length);
     if (typeof onProgress === 'function') {

@@ -64,7 +64,7 @@ describe('Playback Stall & Boundary Flow Regression Suite (#5 -> Gap / 00:07)', 
     assert.ok(previewCode.includes('maxNewPerTick = 3'), 'Segment audio preloading must throttle newly created Audio elements per tick');
     assert.ok(!previewCode.includes('if (s > (now + 5)) break;'), 'Segment audio matcher must not break early on out-of-order userShifted segments');
     assert.ok(previewCode.includes('const merged = [];'), 'speakingIntervals must sort and merge overlapping multi-lane intervals (e.g. VOICE 3 overlapping VOICE 1)');
-    assert.ok(previewCode.includes('ref={cleanBgAudioRef}\n                  src={cleanBgAudioUrl}\n                  preload="metadata"'), '100MB Demucs BGM audio must use preload="metadata" instead of preload="auto"');
+    assert.ok(/ref=\{cleanBgAudioRef\}[^>]*preload="metadata"/.test(previewCode), '100MB Demucs BGM audio must use preload="metadata" instead of preload="auto"');
     assert.ok(canvasCode.includes('const MAX_CONCURRENT = 3;'), 'TimelineTracksCanvas duration probe concurrency must stay <= 3');
     assert.ok(thumbCode.includes("v.preload = 'metadata'") && thumbCode.includes('isMainPlayerBusy'), 'Thumbnail extractor must use preload="metadata" and yield while main video is seeking/buffering');
   });

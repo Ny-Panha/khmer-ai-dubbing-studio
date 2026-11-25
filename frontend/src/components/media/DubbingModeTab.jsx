@@ -407,7 +407,7 @@ export default function DubbingModeTab({
         setSeparationProgress(100);
         setIsCleanBgReady(true);
         window.dispatchEvent(new CustomEvent('demucs-separation-ready', {
-          detail: { noVocalsUrl: resultData.noVocalsUrl }
+          detail: { noVocalsUrl: resultData.noVocalsUrl, videoPath: videoRefName }
         }));
       }
     } catch (err) {

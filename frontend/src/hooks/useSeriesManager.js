@@ -30,6 +30,8 @@ import { fetchVideoThumbnails, deleteSeriesApi, renameSeriesApi } from '../servi
 import { normalizeClips, sanitizeScriptData } from '../utils/timelineUtils';
 import { loadEpisodeTimelineViewState } from '../utils/timelineViewState';
 import { applySpeakerVoiceToSegments } from '../utils/speakerUtils';
+import { prefetchEpisodeWaveformPeaks } from '../utils/waveformCache';
+import { prefetchSourceProxyStatus } from './useSourceProxy';
 
 function prepareEpisode(ep, targetSeries) {
   const seriesSpeakerMap = {};
@@ -62,7 +64,45 @@ function prepareEpisode(ep, targetSeries) {
   if (script?.segments && Object.keys(activeRegistry).length) {
     script.segments = applySpeakerVoiceToSegments(script.segments, activeRegistry);
   }
-  return { episode: ep, script, registry: activeRegistry };
+  const scriptMaxEnd = (ep.scriptData?.segments || []).reduce((max, s) => {
+    const end = Number(s.audioEndSec) || Number(s.endSec) || (Number(s.startSec) || 0) + (Number(s.audioDurationSec) || 3.0);
+    return Math.max(max, end);
+  }, 0);
+  const epDur = Math.max(
+    ep.duration || 0,
+    ep.metadata?.durationSec || 0,
+    ep.video?.durationSec || 0,
+    ep.video?.duration || 0,
+    scriptMaxEnd
+  );
+  const existingClips = Array.isArray(ep.videoClips) ? ep.videoClips : [];
+  let preparedClips;
+  if (existingClips.length === 0 && ep.video && epDur > 0) {
+    preparedClips = [
+      {
+        id: `clip-${ep.id || 'ep'}-full`,
+        trackId: 'video-1',
+        trackRow: 0,
+        start: 0,
+        end: epDur,
+        sourceStart: 0,
+        sourceEnd: epDur,
+        duration: epDur,
+        name: ep.video.originalFilename || ep.video.fileName || 'Full Video',
+        videoUrl: ep.video.videoUrl || ep.videoFile || null,
+        videoId: ep.video.videoId,
+      },
+    ];
+  } else {
+    const normalized = normalizeClips(existingClips, epDur);
+    if (normalized.length === 1 && normalized[0].start === 0 && epDur > 15 && normalized[0].end < epDur - 2) {
+      normalized[0].end = epDur;
+      normalized[0].sourceEnd = epDur;
+      normalized[0].duration = epDur;
+    }
+    preparedClips = normalized;
+  }
+  return { episode: ep, script, registry: activeRegistry, epDur, clips: preparedClips };
 }
 
 const episodeEtags = new WeakMap();
@@ -282,17 +322,7 @@ export function useSeriesManager({
     if (cb.setFullAudioUrl) {
       cb.setFullAudioUrl(isMatchingEpAudio(ep.fullAudioUrl) ? ep.fullAudioUrl : null);
     }
-    const scriptMaxEnd = (ep.scriptData?.segments || []).reduce((max, s) => {
-      const end = Number(s.audioEndSec) || Number(s.endSec) || (Number(s.startSec) || 0) + (Number(s.audioDurationSec) || 3.0);
-      return Math.max(max, end);
-    }, 0);
-    const epDur = Math.max(
-      ep.duration || 0,
-      ep.metadata?.durationSec || 0,
-      ep.video?.durationSec || 0,
-      ep.video?.duration || 0,
-      scriptMaxEnd
-    );
+    const epDur = workspace.epDur ?? (ep.duration || 0);
 
     if (cb.setDuration) {
       cb.setDuration(epDur || ep.duration || 0);
@@ -307,38 +337,10 @@ export function useSeriesManager({
       cb.setCurrentTime(parseFloat(restoredTime.toFixed(2)));
     }
     if (cb.setVideoClips) {
-      const existingClips = Array.isArray(ep.videoClips) ? ep.videoClips : [];
-      if (existingClips.length === 0 && ep.video && epDur > 0) {
-        cb.setVideoClips([
-          {
-            id: `clip-${ep.id || 'ep'}-${Date.now()}`,
-            trackId: 'video-1',
-            trackRow: 0,
-            start: 0,
-            end: epDur,
-            sourceStart: 0,
-            sourceEnd: epDur,
-            duration: epDur,
-            name: ep.video.originalFilename || ep.video.fileName || 'Full Video',
-            videoUrl: ep.video.videoUrl,
-            videoId: ep.video.videoId,
-          }
-        ]);
-      } else {
-        const normalized = normalizeClips(existingClips, epDur);
-        // Auto-heal single truncated video clip: if there is only 1 uncut clip starting at 0,
-        // but its end is way shorter than the episode duration (e.g. truncated at 20s-30s instead of 1200s),
-        // stretch it to cover the full episode duration so the video track never runs out!
-        if (normalized.length === 1 && normalized[0].start === 0 && epDur > 15 && normalized[0].end < epDur - 2) {
-          normalized[0].end = epDur;
-          normalized[0].sourceEnd = epDur;
-          normalized[0].duration = epDur;
-        }
-        cb.setVideoClips(normalized);
-      }
+      cb.setVideoClips(workspace.clips || []);
     }
     if (cb.setVideoClipsUpdatedAt) {
-      cb.setVideoClipsUpdatedAt(Number(ep.videoClipsUpdatedAt || Date.now()));
+      cb.setVideoClipsUpdatedAt(Number(ep.videoClipsUpdatedAt || 0));
     }
     if (cb.setActiveClipId) {
       cb.setActiveClipId(ep.activeClipId || null);
@@ -362,9 +364,9 @@ export function useSeriesManager({
       if (ep.video) {
         cb.setMediaAssets([
           {
-            id: `asset-${ep.id}-${Date.now()}`,
+            id: `asset-${ep.id}`,
             videoId: ep.video.videoId,
-            videoUrl: ep.video.videoUrl,
+            videoUrl: ep.video.videoUrl || ep.videoFile || null,
             fileName: ep.video.originalFilename || ep.video.fileName,
             originalFilename: ep.video.originalFilename || ep.video.fileName,
             displayTitle: ep.video.displayTitle || ep.displayTitle || (ep.video.fileName ? ep.video.fileName.replace(/\.[^/.]+$/, '').trim() : ''),
@@ -378,17 +380,18 @@ export function useSeriesManager({
       }
     }
     if (cb.setVideoThumbnails) {
-      const vidRef = ep.video.videoId || ep.video.videoUrl;
+      const resolvedVidUrl = ep.video.videoUrl || ep.videoFile || (ep.video.videoId ? (ep.video.videoId.startsWith('/') ? ep.video.videoId : `/uploads/${ep.video.videoId}`) : null);
+      const vidRef = ep.video.videoId || resolvedVidUrl;
       const dur = ep.duration || 30;
-      const key = JSON.stringify([resolvedSeriesId, ep.id, vidRef, ep.video.videoUrl, dur]);
+      const key = JSON.stringify([resolvedSeriesId, ep.id, vidRef, resolvedVidUrl, dur]);
       const cached = thumbnails.current.get(key);
       cb.setVideoThumbnails(cached || []);
       if (vidRef && !cached) {
         const timer = setTimeout(async () => {
           let result = await fetchVideoThumbnails(vidRef, dur, controller.signal);
           if (controller.signal.aborted) return;
-          if (!result?.length && ep.video.videoUrl) {
-            result = await generateVideoThumbnails(ep.video.videoUrl, dur, null, controller.signal);
+          if (!result?.length && resolvedVidUrl) {
+            result = await generateVideoThumbnails(resolvedVidUrl, dur, null, controller.signal);
           }
           if (!controller.signal.aborted && result?.length) {
             thumbnails.current.set(key, result);
@@ -659,7 +662,8 @@ export function useSeriesManager({
     const prepared = readWorkspace(series, target);
     applyEpisodeToWorkspace(prepared.episode, series.id, { preserveTab: true, prepared });
     const validate = async () => {
-      const edited = () => workspaceBaseline.current && workspaceBaseline.current !== currentSnapshot.current;
+      const edited = () => workspaceBaseline.current && workspaceBaseline.current !== currentSnapshot.current &&
+        (prepared.complete || Number(latestScriptDataRef.current?.updatedAt || 0) > Number(prepared.episode?.scriptData?.updatedAt || 0));
       if (!stillCurrent() || edited()) return;
       try {
         const ep = await fetchEpisode(series.id, target.id, controller.signal, prepared.complete ? 'low' : 'high', prepared.episode);
@@ -697,11 +701,24 @@ export function useSeriesManager({
     const timer = setTimeout(async () => {
       for (const ep of neighbors) {
         if (controller.signal.aborted) return;
-        if (readWorkspace(activeSeries, ep).complete) continue;
-        try {
-          const full = await fetchEpisode(activeSeries.id, ep.id, controller.signal, 'low');
-          if (!controller.signal.aborted && full) readWorkspace(activeSeries, ep, full);
-        } catch { /* Active load can retry a failed background request. */ }
+        let targetEp = ep;
+        if (!readWorkspace(activeSeries, ep).complete) {
+          try {
+            const full = await fetchEpisode(activeSeries.id, ep.id, controller.signal, 'low');
+            if (!controller.signal.aborted && full) {
+              readWorkspace(activeSeries, ep, full);
+              targetEp = full;
+            }
+          } catch { /* Active load can retry a failed background request. */ }
+        }
+        if (controller.signal.aborted) return;
+        const vidUrl = targetEp.video?.videoUrl || targetEp.videoFile || (targetEp.video?.videoId ? (targetEp.video.videoId.startsWith('/') ? targetEp.video.videoId : `/uploads/${targetEp.video.videoId}`) : null);
+        if (vidUrl) {
+          void prefetchSourceProxyStatus(activeSeries.id, targetEp.id, vidUrl, controller.signal);
+        }
+        if (Array.isArray(targetEp.scriptData?.segments) && targetEp.scriptData.segments.length > 0) {
+          void prefetchEpisodeWaveformPeaks(activeSeries.id, targetEp.id, targetEp.scriptData.segments, controller.signal);
+        }
       }
     }, 350);
     return () => { clearTimeout(timer); controller.abort(); };

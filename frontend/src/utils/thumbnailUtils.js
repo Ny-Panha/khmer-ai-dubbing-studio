@@ -3,9 +3,9 @@
  * Extracts lightweight keyframe snapshots from video using HTML5 Video + Canvas
  */
 
-export function generateVideoThumbnails(videoUrl, duration = 30, count = null) {
+export function generateVideoThumbnails(videoUrl, duration = 30, count = null, signal) {
   return new Promise((resolve) => {
-    if (!videoUrl) {
+    if (!videoUrl || signal?.aborted) {
       resolve([]);
       return;
     }
@@ -40,6 +40,8 @@ export function generateVideoThumbnails(videoUrl, duration = 30, count = null) {
     const finish = () => {
       if (finished) return;
       finished = true;
+      clearTimeout(overallTimeout);
+      signal?.removeEventListener('abort', finish);
       if (seekTimer) clearTimeout(seekTimer);
       if (startDelayTimer) clearTimeout(startDelayTimer);
       if (deferTimer) clearTimeout(deferTimer);
@@ -53,6 +55,7 @@ export function generateVideoThumbnails(videoUrl, duration = 30, count = null) {
     };
 
     const overallTimeout = setTimeout(finish, 12000);
+    signal?.addEventListener('abort', finish, { once: true });
 
     const isMainPlayerBusy = () => {
       if (typeof document === 'undefined') return false;

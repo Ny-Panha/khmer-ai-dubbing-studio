@@ -323,9 +323,10 @@ function VideoPlayerPreview({
   const isActivelyPlaying = Boolean(isPlayingRef.current || (videoRef?.current && !videoRef.current.paused));
 
   // Safety Condition 1: Defer background proxy src hot-swapping during active playback to prevent buffer drops
-  if (isActivelyPlaying && !isExplicitModeSwitch && prevVideoSrcRef.current && prevVideoSrcRef.current !== targetVideoSrc) {
+  const episodeChanged = prevEpisodeSourceKeyRef.current !== episodeSourceKey;
+  if (!episodeChanged && isActivelyPlaying && !isExplicitModeSwitch && prevVideoSrcRef.current && prevVideoSrcRef.current !== targetVideoSrc) {
     deferredVideoSrcRef.current = targetVideoSrc;
-  } else if (!isActivelyPlaying || isExplicitModeSwitch) {
+  } else if (episodeChanged || !isActivelyPlaying || isExplicitModeSwitch) {
     deferredVideoSrcRef.current = null;
   }
 

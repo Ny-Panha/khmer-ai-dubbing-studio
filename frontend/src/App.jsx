@@ -642,6 +642,7 @@ export default function App() {
     setVideoClips: playingProxy ? undefined : media.setVideoClips,
     renderedVideo: previewMode === 'proxy' ? proxy.media : previewMode === 'live' ? null : playbackEffectiveRenderedVideo,
     selectedVideo: media.selectedVideo,
+    episodeKey: `${series.seriesId || ''}::${series.episodeId || ''}`,
     selectedClip: media.selectedClip,
     activeClipId: media.activeClipId,
     setActiveClipId: media.setActiveClipId,

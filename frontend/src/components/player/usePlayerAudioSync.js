@@ -101,7 +101,9 @@ export function usePlayerAudioSync({
 
   const narrationAudioRef = useRef(null);
   const cleanBgAudioRef = useRef(null);
-  const [cleanBgAudioUrl, setCleanBgAudioUrl] = useState(null);
+  const videoRefName = selectedVideo?.videoUrl || selectedVideo?.filePath || selectedVideo?.fileName || selectedVideo?.name;
+  const [cleanBgAudio, setCleanBgAudio] = useState(null);
+  const cleanBgAudioUrl = cleanBgAudio?.videoPath === videoRefName ? cleanBgAudio?.url : null;
 
   const activeSegmentAudiosRef = useRef({});
   const segmentAudioPoolRef = useRef({});
@@ -227,19 +229,23 @@ export function usePlayerAudioSync({
       });
     };
 
-    const task = (async () => {
+    const controller = new AbortController();
+    leadingSilenceInflightRef.current.set(url, controller);
+    (async () => {
       try {
         if (!audioProbeCtxRef.current || audioProbeCtxRef.current.state === 'closed') {
           audioProbeCtxRef.current = AudioCtx ? new AudioCtx() : new OfflineCtx(1, 24000, 24000);
         }
         const ctx = audioProbeCtxRef.current;
-        const res = await fetch(url, { cache: 'force-cache' });
+        const res = await fetch(url, { cache: 'force-cache', signal: controller.signal });
         if (!res.ok) {
           recordFailure(res.status === 404 || res.status === 403 || res.status === 410);
           return;
         }
         const arrayBuf = await res.arrayBuffer();
+        if (controller.signal.aborted) return;
         const audioBuf = await ctx.decodeAudioData(arrayBuf);
+        if (controller.signal.aborted) return;
         const channels = [];
         for (let c = 0; c < audioBuf.numberOfChannels; c++) {
           channels.push(audioBuf.getChannelData(c));
@@ -252,13 +258,12 @@ export function usePlayerAudioSync({
         leadingSilenceCacheRef.current.set(url, skipSec);
         leadingSilenceFailureRef.current.delete(url);
       } catch (_) {
-        recordFailure(false);
+        if (!controller.signal.aborted) recordFailure(false);
       } finally {
-        leadingSilenceInflightRef.current.delete(url);
+        if (!controller.signal.aborted) leadingSilenceInflightRef.current.delete(url);
       }
     })();
 
-    leadingSilenceInflightRef.current.set(url, task);
   }, [videoRef]);
 
   const evictDistantSegmentAudios = useCallback((centerTime) => {
@@ -313,16 +318,17 @@ export function usePlayerAudioSync({
 
     // Keep preload window compact & bounded so segment audio fetches never saturate the 6-connection HTTP/1.1 pool
     const activeVideo = videoRef?.current;
-    if (activeVideo && activeVideo.seeking) return;
+    if (activeVideo && (activeVideo.seeking || activeVideo.readyState < 3)) return;
 
-    const lookAheadSec = isPlayingRef.current ? 18 : 22;
-    const maxClips = isPlayingRef.current ? 6 : 6;
+    const lookAheadSec = 6;
+    const maxClips = 6;
     const maxNewPerTick = 3;
 
     // ConCaT-inspired Web Audio lookahead preloading
     const scheduler = webAudioSchedulerRef.current;
     if (effectiveUseWebAudioRef.current && scheduler?.isSupported()) {
       scheduler.preloadUpcoming(sd.segments, now, lookAheadSec);
+      return;
     }
 
     const upcoming = sd.segments
@@ -379,6 +385,7 @@ export function usePlayerAudioSync({
   useEffect(() => {
     isPlayPendingRef.current = false;
     stopAllSegmentAudios();
+    webAudioSchedulerRef.current?.lruCache.cancelPending();
     // Clear segment audio pool and pause cached audio elements cleanly
     Object.values(segmentAudioPoolRef.current).forEach((audio) => {
       try {
@@ -392,6 +399,7 @@ export function usePlayerAudioSync({
     segmentAudioPoolRef.current = {};
     segmentAudioMetaRef.current.clear();
     leadingSilenceCacheRef.current.clear();
+    for (const probe of leadingSilenceInflightRef.current.values()) probe.abort();
     leadingSilenceInflightRef.current.clear();
     lastPreloadCenterRef.current = -Infinity;
     if (recoveryManagerRef.current) {
@@ -413,6 +421,7 @@ export function usePlayerAudioSync({
       if (recoveryManagerRef.current) {
         recoveryManagerRef.current.cancelPending();
       }
+      for (const probe of leadingSilenceInflightRef.current.values()) probe.abort();
       if (audioProbeCtxRef.current && typeof audioProbeCtxRef.current.close === 'function' && audioProbeCtxRef.current.state !== 'closed') {
         audioProbeCtxRef.current.close().catch(() => {});
       }
@@ -422,12 +431,10 @@ export function usePlayerAudioSync({
 
   // 🎧 AI Vocal Separation (Demucs): Fetch separated clean BGM (no_vocals.wav) when Demucs is enabled
   useEffect(() => {
-    if (!voiceSettings?.enableDemucs || !selectedVideo) {
-      setCleanBgAudioUrl(null);
+    if (!voiceSettings?.enableDemucs || !videoRefName) {
+      setCleanBgAudio(null);
       return;
     }
-    const videoRefName = selectedVideo?.videoUrl || selectedVideo?.filePath || selectedVideo?.fileName || selectedVideo?.name;
-    if (!videoRefName) return;
 
     const controller = new AbortController();
 
@@ -442,36 +449,37 @@ export function usePlayerAudioSync({
         return res.json().catch(() => null);
       })
       .then((data) => {
+        if (controller.signal.aborted) return;
         if (data?.success && data?.available && data?.noVocalsUrl) {
           const fullUrl = data.noVocalsUrl;
           console.log('[VideoPlayerPreview] 🎧 Found separated clean BGM:', fullUrl);
-          setCleanBgAudioUrl(fullUrl);
+          setCleanBgAudio({ videoPath: videoRefName, url: fullUrl });
         } else {
-          setCleanBgAudioUrl(null);
+          setCleanBgAudio(null);
         }
       })
       .catch((err) => {
         if (err.name === 'AbortError') return;
-        setCleanBgAudioUrl(null);
+        setCleanBgAudio(null);
       });
 
     return () => {
       controller.abort();
     };
-  }, [selectedVideo, voiceSettings?.enableDemucs]);
+  }, [videoRefName, voiceSettings?.enableDemucs]);
 
   // Listen for instant Demucs separation completed event from DubbingModeTab
   useEffect(() => {
     const handleSepReady = (e) => {
-      if (e.detail?.noVocalsUrl) {
+      if (e.detail?.videoPath === videoRefName && e.detail?.noVocalsUrl) {
         const fullUrl = e.detail.noVocalsUrl;
         console.log('[VideoPlayerPreview] 🎧 Instant event received clean BGM:', fullUrl);
-        setCleanBgAudioUrl(fullUrl);
+        setCleanBgAudio({ videoPath: videoRefName, url: fullUrl });
       }
     };
     window.addEventListener('demucs-separation-ready', handleSepReady);
     return () => window.removeEventListener('demucs-separation-ready', handleSepReady);
-  }, []);
+  }, [videoRefName]);
 
   // Instantly purge stale scheduled audio nodes when clips are moved, trimmed, or deleted
   useEffect(() => {
