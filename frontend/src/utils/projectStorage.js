@@ -963,6 +963,26 @@ export function extractSeriesName(title) {
  */
 const pendingSeriesSyncState = new Map();
 
+const pendingEpisodePrefix = 'KHMER_PENDING_EPISODE_SYNC:';
+
+// Other episodes in localStorage contain compact summaries. Retain each edited episode
+// until its own full snapshot is acknowledged, including across a reload in this tab.
+export async function restorePendingEpisodeSyncs() {
+  if (typeof sessionStorage === 'undefined') return;
+  const keys = Object.keys(sessionStorage).filter((key) => key.startsWith(pendingEpisodePrefix));
+  for (const key of keys) {
+    const raw = sessionStorage.getItem(key);
+    if (!raw) continue;
+    try {
+      const payload = JSON.parse(raw);
+      await syncSeriesApi(payload);
+      if (sessionStorage.getItem(key) === raw) sessionStorage.removeItem(key);
+    } catch (err) {
+      surfaceSyncFailureToast(err);
+    }
+  }
+}
+
 function surfaceSyncFailureToast(err) {
   console.warn('[Storage] Failed to sync series to backend:', err?.message || err);
   const message = '⚠️ បរាជ័យក្នុងការរក្សាទុកទៅ Server — សូមពិនិត្យ Backend ហើយព្យាយាមម្ដងទៀត!';
@@ -1006,6 +1026,8 @@ async function runCoalescedSeriesSync(seriesId) {
   if (!entry || entry.inFlight || !entry.latestSeries) return;
   entry.inFlight = true;
   const snapshot = entry.latestSeries;
+  const savedEpisodes = entry.changedEpisodes;
+  entry.changedEpisodes = new Map();
   entry.latestSeries = null;
 
   try {
@@ -1013,6 +1035,10 @@ async function runCoalescedSeriesSync(seriesId) {
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         await syncSeriesApi(snapshot);
+        for (const [id, saved] of savedEpisodes) {
+          if (entry.changedEpisodes.has(id) || !saved.raw) continue;
+          if (sessionStorage.getItem(saved.key) === saved.raw) sessionStorage.removeItem(saved.key);
+        }
         lastErr = null;
         break;
       } catch (err) {
@@ -1038,15 +1064,34 @@ async function runCoalescedSeriesSync(seriesId) {
   }
 }
 
-export function syncSeriesToBackend(series) {
+export function syncSeriesToBackend(series, changedEpisode = null) {
   if (!series?.id) return;
   const sid = String(series.id);
   let entry = pendingSeriesSyncState.get(sid);
   if (!entry) {
-    entry = { latestSeries: null, timer: null, inFlight: false };
+    entry = { latestSeries: null, timer: null, inFlight: false, changedEpisodes: new Map() };
     pendingSeriesSyncState.set(sid, entry);
   }
-  entry.latestSeries = series;
+  if (changedEpisode) {
+    const key = pendingEpisodePrefix + JSON.stringify([sid, changedEpisode.id]);
+    const { id, title, glossary, genre, detectedGenre } = series;
+    const payload = { id, title, glossary, genre, detectedGenre, episodes: [changedEpisode] };
+    let raw;
+    try {
+      raw = JSON.stringify(payload);
+      sessionStorage.setItem(key, raw);
+    } catch { raw = null; }
+    entry.changedEpisodes.set(changedEpisode.id, { episode: changedEpisode, key, raw });
+    if (!entry.latestSeries || entry.partial) {
+      entry.partial = true;
+      entry.latestSeries = { ...payload, episodes: [...entry.changedEpisodes.values()].map((edit) => edit.episode) };
+    } else {
+      entry.latestSeries = { ...series, episodes: series.episodes.map((ep) => entry.changedEpisodes.get(ep.id)?.episode || ep) };
+    }
+  } else {
+    entry.partial = false;
+    entry.latestSeries = { ...series, episodes: series.episodes.map((ep) => entry.changedEpisodes.get(ep.id)?.episode || ep) };
+  }
   if (entry.timer) clearTimeout(entry.timer);
   entry.timer = setTimeout(() => {
     entry.timer = null;
@@ -1274,10 +1319,21 @@ export async function flushAllPendingTimelinePersists() {
   const all = getPendingTimelineWrites();
   const keys = Object.keys(all);
   if (keys.length === 0) return [];
+
+  // Filter out pending writes for series that no longer exist in localStorage
+  const currentList = loadSeriesList();
+  const knownSeriesIds = new Set((currentList || []).map((s) => String(s.id)));
+
   const results = [];
   for (const key of keys) {
     const item = all[key];
     if (item && item.seriesId && item.episodeId && Array.isArray(item.segments)) {
+      // Skip and clear pending writes for series that have been deleted locally
+      if (!knownSeriesIds.has(String(item.seriesId))) {
+        clearPendingTimelinePersist(item.seriesId, item.episodeId, item.updatedAt);
+        results.push({ key, success: false, error: 'Series deleted — pending write cleared' });
+        continue;
+      }
       try {
         const res = await persistTimelineOperationApi({
           seriesId: item.seriesId,
@@ -1288,8 +1344,14 @@ export async function flushAllPendingTimelinePersists() {
         clearPendingTimelinePersist(item.seriesId, item.episodeId, item.updatedAt);
         results.push({ key, success: true, res });
       } catch (err) {
-        console.warn(`[projectStorage] Failed to flush pending timeline write for ${key}:`, err?.message || err);
-        results.push({ key, success: false, error: err?.message || err });
+        // If backend returns 410 Gone (series deleted), clear the pending write permanently
+        if (err?.status === 410 || /deleted|gone/i.test(err?.message || '')) {
+          clearPendingTimelinePersist(item.seriesId, item.episodeId, item.updatedAt);
+          results.push({ key, success: false, error: 'Series deleted on backend — pending write cleared' });
+        } else {
+          console.warn(`[projectStorage] Failed to flush pending timeline write for ${key}:`, err?.message || err);
+          results.push({ key, success: false, error: err?.message || err });
+        }
       }
     }
   }
@@ -1544,7 +1606,7 @@ export function saveEpisodeState(seriesId, episodeId, stateData, options = {}) {
     const isSuppressed = isBackendSyncSuppressed(episodeKey);
     if (!options?.skipBackendSync && (options?.forceBackendSync || !isSuppressed)) {
       try {
-        syncSeriesToBackend(series);
+        syncSeriesToBackend(series, updatedEp);
       } catch (_) {}
     }
 

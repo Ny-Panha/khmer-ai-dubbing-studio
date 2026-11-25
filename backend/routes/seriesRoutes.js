@@ -16,6 +16,8 @@ const {
 } = require("../services/episodeService");
 
 const router = express.Router();
+const episodeEtags = new WeakMap();
+const { createHash } = require("node:crypto");
 const proxyPreview = require("../services/proxyPreviewService");
 const sourceProxy = require("../services/sourceProxyService");
 
@@ -66,7 +68,7 @@ router.get("/", (req, res) => {
       if (ent.isDirectory()) {
         try {
           const meta = getSeriesMetadata(ent.name);
-          if (meta) {
+          if (meta && meta.id) {
             seriesList.push(meta);
           }
         } catch (_) {}
@@ -140,6 +142,23 @@ router.get("/:seriesId", (req, res) => {
   }
 });
 
+router.get("/:seriesId/episodes/:episodeId", (req, res) => {
+  try {
+    const episode = getSeriesMetadata(req.params.seriesId)?.episodes?.find((ep) => ep.id === req.params.episodeId);
+    if (!episode) return res.status(404).json({ success: false, error: "Episode not found" });
+    let etag = episodeEtags.get(episode);
+    if (!etag) {
+      etag = '"' + createHash("sha256").update(JSON.stringify(episode)).digest("base64url") + '"';
+      episodeEtags.set(episode, etag);
+    }
+    res.set("ETag", etag);
+    if (req.get("If-None-Match") === etag) return res.status(304).end();
+    res.json({ success: true, episode });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 router.post("/:seriesId/episodes", async (req, res) => {
   try {
     const { seriesId } = req.params;
@@ -191,6 +210,12 @@ router.post("/:seriesId/episodes/:episodeId/reset", async (req, res) => {
 router.patch("/:seriesId/episodes/:episodeId/timeline", async (req, res) => {
   try {
     const { seriesId, episodeId } = req.params;
+    // Reject timeline operations for series whose directory no longer exists
+    const cleanId = sanitizeProjectName(seriesId);
+    const seriesDir = path.join(uploadsDir, "projects", cleanId);
+    if (!fs.existsSync(seriesDir)) {
+      return res.status(410).json({ success: false, error: `Series "${cleanId}" has been deleted`, gone: true });
+    }
     const result = await persistEpisodeTimelineOperation({
       seriesId,
       episodeId,
@@ -208,8 +233,15 @@ router.post("/:seriesId/sync", async (req, res) => {
     const { seriesId } = req.params;
     const { series } = req.body || {};
     if (!series) return res.status(400).json({ error: "series payload required" });
+    // Reject sync requests for series whose directory no longer exists on disk
+    // to prevent stale frontend state from resurrecting deleted folders.
+    const cleanId = sanitizeProjectName(seriesId);
+    const seriesDir = path.join(uploadsDir, "projects", cleanId);
+    if (!fs.existsSync(seriesDir)) {
+      return res.status(410).json({ success: false, error: `Series "${cleanId}" has been deleted`, gone: true });
+    }
     const saved = await syncSeriesMetadataSafely(seriesId, series);
-    res.json({ success: true, series: saved });
+    res.json(req.get("Prefer") === "return=minimal" ? { success: true } : { success: true, series: saved });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }

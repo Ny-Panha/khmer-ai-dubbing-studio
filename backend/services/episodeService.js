@@ -577,9 +577,36 @@ function getSeriesMetadata(seriesId, options = {}) {
     } catch (_) { }
   }
 
-  // Fallback: discover existing episode directories on disk (numerically sorted 1..N)
-  const discoveredEpisodes = [];
+  // Fallback: directory exists but has no valid series.json.
+  // Only return fallback metadata if the directory contains real media content
+  // (video or audio files). Empty/test directories without media are ghosts
+  // that should NOT be surfaced as valid series.
   const epBaseDir = path.join(seriesDir, 'episodes');
+  let hasRealMedia = false;
+  if (fs.existsSync(epBaseDir)) {
+    try {
+      const epEntries = fs.readdirSync(epBaseDir, { withFileTypes: true }).filter((e) => e.isDirectory());
+      for (const ent of epEntries) {
+        const vidDir = path.join(epBaseDir, ent.name, 'video');
+        const audioDir = path.join(epBaseDir, ent.name, 'audio');
+        if (
+          (fs.existsSync(vidDir) && fs.readdirSync(vidDir).some((f) => /\.(mp4|mkv|avi|webm|mov)$/i.test(f))) ||
+          (fs.existsSync(audioDir) && fs.readdirSync(audioDir).some((f) => /\.(mp3|wav|m4a|ogg)$/i.test(f)))
+        ) {
+          hasRealMedia = true;
+          break;
+        }
+      }
+    } catch (_) {}
+  }
+
+  if (!hasRealMedia) {
+    // Ghost directory: no series.json and no real media — do not fabricate metadata
+    return null;
+  }
+
+  // Real orphaned media found: discover episodes for recovery
+  const discoveredEpisodes = [];
   if (fs.existsSync(epBaseDir)) {
     try {
       const entries = fs.readdirSync(epBaseDir, { withFileTypes: true })
@@ -709,6 +736,7 @@ async function persistEpisodeScriptData({
   status = 'translated',
   seriesGenre = null,
   seriesDetectedGenre = null,
+  seriesSpeakerMap = null,
   jobId = null,
   projectsDir = PROJECTS_DIR,
   _afterWriteHook = null,
@@ -813,6 +841,61 @@ async function persistEpisodeScriptData({
 
     if (seriesGenre) freshSeries.genre = seriesGenre;
     if (seriesDetectedGenre) freshSeries.detectedGenre = seriesDetectedGenre;
+
+    // Cross-episode character voice persistence: merge verified speakers into seriesSpeakerMap
+    try {
+      const { buildVerifiedSeriesSpeakerMapPatch } = require('./pipeline/speakerIdentificationService');
+      const incomingMap = (seriesSpeakerMap && typeof seriesSpeakerMap === 'object')
+        ? seriesSpeakerMap
+        : (restScriptData.seriesSpeakerMap && typeof restScriptData.seriesSpeakerMap === 'object' ? restScriptData.seriesSpeakerMap : {});
+      const mergedSpeakerMap = buildVerifiedSeriesSpeakerMapPatch(
+        incomingSegments,
+        restScriptData.speakerRegistry || {},
+        { ...(freshSeries.seriesSpeakerMap || {}), ...incomingMap }
+      );
+      if (Object.keys(mergedSpeakerMap).length > 0) {
+        freshSeries.seriesSpeakerMap = mergedSpeakerMap;
+        const existingChars = Array.isArray(freshSeries.glossary?.characters) ? [...freshSeries.glossary.characters] : [];
+        const uniqueVerified = new Map();
+        for (const entry of Object.values(mergedSpeakerMap)) {
+          if (entry && entry.speakerId && entry.name && !uniqueVerified.has(entry.speakerId)) {
+            uniqueVerified.set(entry.speakerId, entry);
+          }
+        }
+        for (const entry of uniqueVerified.values()) {
+          const idx = existingChars.findIndex(
+            (c) => c && (c.id === entry.speakerId || String(c.name || '').trim() === entry.name)
+          );
+          if (idx === -1) {
+            existingChars.push({
+              id: entry.speakerId,
+              name: entry.name,
+              khmerName: entry.name,
+              gender: entry.gender,
+              voiceId: entry.voiceId,
+              khmerVoiceId: entry.khmerVoiceId,
+              voiceAssignmentSource: entry.voiceAssignmentSource,
+              userOverridden: Boolean(entry.userOverridden),
+            });
+          } else if (!existingChars[idx].userOverridden) {
+            existingChars[idx] = {
+              ...existingChars[idx],
+              id: entry.speakerId,
+              gender: entry.gender,
+              voiceId: entry.voiceId,
+              khmerVoiceId: entry.khmerVoiceId,
+              voiceAssignmentSource: entry.voiceAssignmentSource,
+            };
+          }
+        }
+        freshSeries.glossary = {
+          ...(freshSeries.glossary || {}),
+          characters: existingChars,
+        };
+      }
+    } catch (memErr) {
+      console.warn('[Persist] Non-fatal seriesSpeakerMap merge warning:', memErr.message);
+    }
 
     const saved = saveSeriesMetadata(freshSeries, { projectsDir });
     if (!saved) {

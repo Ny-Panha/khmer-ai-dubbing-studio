@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useLayoutEffect, useCallback, useRef } from 'react';
 import {
   loadSeriesList,
   saveSeriesList,
@@ -22,6 +22,7 @@ import {
   sanitizeRenderedVideo,
   sanitizeAndHealSeriesList,
   flushAllPendingTimelinePersists,
+  restorePendingEpisodeSyncs,
 } from '../utils/projectStorage';
 import { stripLogoSettings } from '../utils/logoSettingsStorage';
 import { generateVideoThumbnails } from '../utils/thumbnailUtils';
@@ -29,6 +30,56 @@ import { fetchVideoThumbnails, deleteSeriesApi, renameSeriesApi } from '../servi
 import { normalizeClips, sanitizeScriptData } from '../utils/timelineUtils';
 import { loadEpisodeTimelineViewState } from '../utils/timelineViewState';
 import { applySpeakerVoiceToSegments } from '../utils/speakerUtils';
+
+function prepareEpisode(ep, targetSeries) {
+  const seriesSpeakerMap = {};
+  if (Array.isArray(targetSeries?.glossary?.characters)) {
+    targetSeries.glossary.characters.forEach((c) => {
+      const key = c.id || c.speakerId || c.name;
+      if (key && (c.voiceId || c.khmerVoiceId)) {
+        const isFemale = (c.gender === 'female' || c.gender === 'FEMALE');
+        const isMale = (c.gender === 'male' || c.gender === 'MALE');
+        seriesSpeakerMap[key] = {
+          id: key,
+          speakerId: key,
+          speakerName: c.khmerName || c.name || key,
+          name: c.khmerName || c.name || key,
+          gender: isFemale ? 'FEMALE' : (isMale ? 'MALE' : 'UNKNOWN'),
+          voiceGender: isFemale ? 'female' : (isMale ? 'male' : 'unknown'),
+          voiceId: c.voiceId || c.khmerVoiceId,
+          khmerVoiceId: c.khmerVoiceId || c.voiceId,
+          voiceAssignmentSource: c.voiceAssignmentSource || 'series_glossary',
+          userOverridden: Boolean(c.userOverridden),
+        };
+      }
+    });
+  }
+  const activeRegistry = {
+    ...seriesSpeakerMap,
+    ...(ep.speakerRegistry || {}),
+  };
+  const script = sanitizeScriptData(ep.scriptData);
+  if (script?.segments && Object.keys(activeRegistry).length) {
+    script.segments = applySpeakerVoiceToSegments(script.segments, activeRegistry);
+  }
+  return { episode: ep, script, registry: activeRegistry };
+}
+
+const episodeEtags = new WeakMap();
+
+async function fetchEpisode(seriesId, episodeId, signal, priority, previous) {
+  const url = `/api/series/${encodeURIComponent(seriesId)}/episodes/${encodeURIComponent(episodeId)}`;
+  const etag = previous && episodeEtags.get(previous);
+  const res = await fetch(url, {
+    signal, priority, cache: 'no-store',
+    headers: etag ? { 'If-None-Match': etag } : undefined,
+  });
+  if (res.status === 304) return null;
+  if (!res.ok) throw new Error(`Failed to load episode (${res.status})`);
+  const { episode } = await res.json();
+  if (episode && res.headers.get('ETag')) episodeEtags.set(episode, res.headers.get('ETag'));
+  return episode;
+}
 
 /**
  * Custom Hook for Series & Multi-Episode Management
@@ -96,6 +147,29 @@ export function useSeriesManager({
   latestScriptDataRef.current = scriptData;
   const switchSeriesSeqRef = useRef(0);
 
+  const episodeRequest = useRef(null);
+  const compactEpisodes = useRef(new WeakSet());
+  const workspaces = useRef(new Map());
+  const thumbnails = useRef(new Map());
+  const thumbnailRequest = useRef(null);
+  const workspaceBaseline = useRef(null);
+  const lastSavedSnapshot = useRef(null);
+  const currentSnapshot = useRef(null);
+  const readWorkspace = useCallback((series, record, fullEpisode = null) => {
+    const revision = [record.lastModified, record.scriptData?.updatedAt, record.videoClipsUpdatedAt];
+    const key = JSON.stringify([series?.id, record.id, ...revision]);
+    const cache = workspaces.current;
+    let entry = cache.get(key);
+    if (!entry || entry.record !== record || entry.glossary !== series?.glossary || fullEpisode) {
+      entry = { ...prepareEpisode(fullEpisode || record, series), record, glossary: series?.glossary,
+        complete: Boolean(fullEpisode || (!compactEpisodes.current.has(record) && !(record.scriptData?.totalSegments > (record.scriptData?.segments?.length || 0)))) };
+    }
+    cache.delete(key);
+    cache.set(key, entry);
+    if (cache.size > 6) cache.delete(cache.keys().next().value);
+    return entry;
+  }, []);
+
   // Stable reference to external setters to prevent applyEpisodeToWorkspace from recreating on every render
   const callbacksRef = useRef({});
   callbacksRef.current = {
@@ -125,6 +199,10 @@ export function useSeriesManager({
   // Helper to apply an episode state to the React workspace (stable reference)
   const applyEpisodeToWorkspace = useCallback((ep, explicitSeriesId = null, options = {}) => {
     if (!ep) return;
+    workspaceBaseline.current = null;
+    thumbnailRequest.current?.abort();
+    const controller = new AbortController();
+    thumbnailRequest.current = controller;
     const cb = callbacksRef.current;
     const resolvedSeriesId = explicitSeriesId || activeSeriesIdRef.current || getActiveSeriesId();
 
@@ -179,47 +257,10 @@ export function useSeriesManager({
     if (cb.setVideoMetadata) {
       cb.setVideoMetadata(ep.metadata || null);
     }
-    const targetSeries = (latestSeriesListRef.current || []).find((s) => s.id === resolvedSeriesId) || activeSeries;
-    const seriesSpeakerMap = {};
-    if (Array.isArray(targetSeries?.glossary?.characters)) {
-      targetSeries.glossary.characters.forEach((c) => {
-        const key = c.id || c.speakerId || c.name;
-        if (key && (c.voiceId || c.khmerVoiceId)) {
-          const isFemale = (c.gender === 'female' || c.gender === 'FEMALE');
-          const isMale = (c.gender === 'male' || c.gender === 'MALE');
-          seriesSpeakerMap[key] = {
-            id: key,
-            speakerId: key,
-            speakerName: c.khmerName || c.name || key,
-            name: c.khmerName || c.name || key,
-            gender: isFemale ? 'FEMALE' : (isMale ? 'MALE' : 'UNKNOWN'),
-            voiceGender: isFemale ? 'female' : (isMale ? 'male' : 'unknown'),
-            voiceId: c.voiceId || c.khmerVoiceId,
-            khmerVoiceId: c.khmerVoiceId || c.voiceId,
-            voiceAssignmentSource: c.voiceAssignmentSource || 'series_glossary',
-            userOverridden: Boolean(c.userOverridden),
-          };
-        }
-      });
-    }
-    const activeRegistry = {
-      ...seriesSpeakerMap,
-      ...(ep.speakerRegistry || {}),
-    };
-    if (cb.setSpeakerRegistry) {
-      cb.setSpeakerRegistry(activeRegistry);
-    }
-    if (cb.setScriptData) {
-      if (ep.scriptData) {
-        const sanitized = sanitizeScriptData(ep.scriptData);
-        if (sanitized?.segments && Object.keys(activeRegistry).length > 0) {
-          sanitized.segments = applySpeakerVoiceToSegments(sanitized.segments, activeRegistry);
-        }
-        cb.setScriptData(sanitized);
-      } else {
-        cb.setScriptData(null);
-      }
-    }
+    const series = latestSeriesListRef.current.find((s) => s.id === resolvedSeriesId);
+    const workspace = options.prepared || readWorkspace(series, ep);
+    cb.setSpeakerRegistry?.(workspace.registry);
+    cb.setScriptData?.(workspace.script || null);
     if (cb.setAudioGenerated) {
       cb.setAudioGenerated(Boolean(ep.audioGenerated));
     }
@@ -337,18 +378,25 @@ export function useSeriesManager({
       }
     }
     if (cb.setVideoThumbnails) {
-      if (ep.video?.videoId || ep.video?.videoUrl) {
-        const vidRef = ep.video.videoId || ep.video.videoUrl;
-        const dur = ep.duration || 30;
-        fetchVideoThumbnails(vidRef, dur).then((serverThumbs) => {
-          if (Array.isArray(serverThumbs) && serverThumbs.length > 0) {
-            cb.setVideoThumbnails(serverThumbs);
-          } else if (ep.video?.videoUrl) {
-            generateVideoThumbnails(ep.video.videoUrl, dur).then(cb.setVideoThumbnails);
+      const vidRef = ep.video.videoId || ep.video.videoUrl;
+      const dur = ep.duration || 30;
+      const key = JSON.stringify([resolvedSeriesId, ep.id, vidRef, ep.video.videoUrl, dur]);
+      const cached = thumbnails.current.get(key);
+      cb.setVideoThumbnails(cached || []);
+      if (vidRef && !cached) {
+        const timer = setTimeout(async () => {
+          let result = await fetchVideoThumbnails(vidRef, dur, controller.signal);
+          if (controller.signal.aborted) return;
+          if (!result?.length && ep.video.videoUrl) {
+            result = await generateVideoThumbnails(ep.video.videoUrl, dur, null, controller.signal);
           }
-        });
-      } else {
-        cb.setVideoThumbnails([]);
+          if (!controller.signal.aborted && result?.length) {
+            thumbnails.current.set(key, result);
+            if (thumbnails.current.size > 6) thumbnails.current.delete(thumbnails.current.keys().next().value);
+            cb.setVideoThumbnails(result);
+          }
+        }, 350);
+        controller.signal.addEventListener('abort', () => clearTimeout(timer), { once: true });
       }
     }
     if (cb.clearHistory) {
@@ -365,7 +413,7 @@ export function useSeriesManager({
         cb.setLeftTab('script');
       }
     }
-  }, []);
+  }, [readWorkspace]);
 
   // Sync state on initial mount (runs once on mount)
   useEffect(() => {
@@ -373,6 +421,10 @@ export function useSeriesManager({
     const storedSeriesId = getActiveSeriesId();
     const storedEpisodeId = getActiveEpisodeId();
     const { seriesList: sList, series, episode } = loadActiveSeriesAndEpisode();
+    for (const local of sList) {
+      for (const ep of local.episodes || []) compactEpisodes.current.add(ep);
+    }
+    const initialSequence = switchSeriesSeqRef.current;
     setSeriesList(sList);
     setActiveSeriesIdState(series.id);
     setActiveEpisodeIdState(episode.id);
@@ -394,13 +446,13 @@ export function useSeriesManager({
     const fallbackTimer = setTimeout(markInitialized, 1500);
 
     // Flush any pending recovered timeline writes from a previous session or sudden reload
-    flushAllPendingTimelinePersists().catch(() => {});
-
-    // Server-truth hydration: sync latest series and episodes from server
-    fetch('/api/series')
+    // Recover captured edits before the initial server read so reload displays the persisted version.
+    restorePendingEpisodeSyncs()
+      .then(() => flushAllPendingTimelinePersists())
+      .then(() => fetch('/api/series'))
       .then((res) => res.json())
       .then((data) => {
-        if (cancelled) return;
+        if (cancelled || initialSequence !== switchSeriesSeqRef.current) return;
         if (data?.success && Array.isArray(data.series)) {
           if (data.series.length === 0) {
             // When server returns 0 series (e.g. uploads/projects folder was wiped or deleted on disk),
@@ -462,6 +514,8 @@ export function useSeriesManager({
 
     return () => {
       cancelled = true;
+      episodeRequest.current?.abort();
+      thumbnailRequest.current?.abort();
       clearTimeout(fallbackTimer);
     };
   }, [applyEpisodeToWorkspace]);
@@ -525,18 +579,24 @@ export function useSeriesManager({
     voiceSettings,
   ]);
 
+  useLayoutEffect(() => {
+    currentSnapshot.current = getCurrentWorkspaceSnapshot;
+    if (!workspaceBaseline.current) workspaceBaseline.current = getCurrentWorkspaceSnapshot;
+  });
+
   // Auto-persist active episode state to localStorage whenever data changes occur (debounced).
   // Excludes ephemeral UI selection pointers (activeClipId, selectedSegmentId) so playback auto-follow
   // across clip/Gap boundaries never triggers full-series JSON serialization or /sync during playback.
   useEffect(() => {
     // Guard against running auto-persist before initial workspace restore is complete
     if (!isInitializedRef.current) return;
-    if (isTransitioningRef.current) return;
+    if (isTransitioningRef.current || workspaceBaseline.current === getCurrentWorkspaceSnapshot) return;
     if (!activeSeriesIdState || !activeEpisodeIdState) return;
     const timer = setTimeout(() => {
       if (isTransitioningRef.current) return;
       const snapshot = getCurrentWorkspaceSnapshot();
       saveEpisodeState(activeSeriesIdState, activeEpisodeIdState, snapshot);
+      lastSavedSnapshot.current = getCurrentWorkspaceSnapshot;
     }, 400);
     return () => clearTimeout(timer);
   }, [
@@ -560,125 +620,92 @@ export function useSeriesManager({
 
   // 1. Switch to another episode safely (Auto-save current episode first)
   const handleSwitchEpisode = useCallback(async (targetEpisodeId) => {
-    if (!targetEpisodeId) return;
+    const series = latestSeriesListRef.current.find((s) => s.id === activeSeriesIdState);
+    const target = series?.episodes?.find((ep) => ep.id === targetEpisodeId);
+    const previous = activeEpisodeIdRef.current;
+    if (!target || targetEpisodeId === previous) return;
 
-    const currentSeriesInMem = seriesList.find((s) => s.id === activeSeriesIdState);
-    const targetInMem = (currentSeriesInMem?.episodes || []).find((e) => e.id === targetEpisodeId);
-    const targetMemSegCount = Array.isArray(targetInMem?.scriptData?.segments) ? targetInMem.scriptData.segments.length : 0;
-    const activeWorkspaceSegCount = Array.isArray(scriptData?.segments) ? scriptData.segments.length : 0;
-    const targetMemUpdatedAt = Number(targetInMem?.scriptData?.updatedAt || 0);
-    const activeWorkspaceUpdatedAt = Number(scriptData?.updatedAt || 0);
-
-    if (
-      targetEpisodeId === activeEpisodeIdRef.current &&
-      targetMemSegCount === activeWorkspaceSegCount &&
-      targetMemUpdatedAt === activeWorkspaceUpdatedAt &&
-      (targetMemSegCount > 0 || activeWorkspaceSegCount > 0)
-    ) {
-      return;
-    }
-
-    isTransitioningRef.current = true;
-    try {
-      const prevEpisodeId = activeEpisodeIdRef.current;
+    episodeRequest.current?.abort();
+    const controller = new AbortController();
+    episodeRequest.current = controller;
+    const seq = ++switchSeriesSeqRef.current;
+    const stillCurrent = () => !controller.signal.aborted && seq === switchSeriesSeqRef.current &&
+      activeEpisodeIdRef.current === targetEpisodeId && activeSeriesIdRef.current === series.id;
+    const snapshotChanged = previous === activeEpisodeIdState && workspaceBaseline.current &&
+      workspaceBaseline.current !== getCurrentWorkspaceSnapshot;
+    if (snapshotChanged) {
       const snapshot = getCurrentWorkspaceSnapshot();
-
-      // 1. Update active episode pointer IMMEDIATELY for instant UI response (<16ms)
-      setActiveEpisodeId(targetEpisodeId);
-      setActiveEpisodeIdState(targetEpisodeId);
-      activeEpisodeIdRef.current = targetEpisodeId;
-      if (activeSeriesIdState) {
-        setActiveEpisodeIdForSeries(activeSeriesIdState, targetEpisodeId);
+      setSeriesList((list) => list.map((s) => s.id === series.id ? {
+        ...s, episodes: s.episodes.map((ep) => ep.id === previous ? { ...ep, ...snapshot, lastModified: Date.now() } : ep),
+      } : s));
+      if (getCurrentWorkspaceSnapshot !== lastSavedSnapshot.current) {
+        // Run after the new workspace can paint. Retain the captured episode identity and values.
+        const persist = () => {
+          window.removeEventListener('pagehide', persist);
+          clearTimeout(timer);
+          saveEpisodeState(series.id, previous, snapshot);
+        };
+        const timer = setTimeout(persist, 32);
+        window.addEventListener('pagehide', persist, { once: true });
       }
-
-      // 2. Allow active in-flight AI requests to complete in background
-      if (activeRequestRef?.current) {
-        activeRequestRef.current.activeEpisodeId = targetEpisodeId;
-      }
-
-      // 3. Find target episode from current memory state or storage
-      let currentSeries = currentSeriesInMem;
-      if (!currentSeries) {
-        const currentList = loadSeriesList();
-        currentSeries = currentList.find((s) => s.id === activeSeriesIdState) || currentList[0];
-      }
-      const targetEp = (currentSeries?.episodes || []).find((e) => e.id === targetEpisodeId);
-
-      // 4. Apply immediate local state first for instant responsiveness
-      if (targetEp) {
-        applyEpisodeToWorkspace(targetEp, null, { preserveTab: true });
-      }
-
-      // 5. Defer saving previous episode & flushing timeline to background microtask (never blocks UI thread)
-      if (prevEpisodeId && prevEpisodeId !== targetEpisodeId) {
-        Promise.resolve().then(async () => {
-          try {
-            saveEpisodeState(activeSeriesIdState, prevEpisodeId, snapshot);
-            await flushAllPendingTimelinePersists();
-          } catch (_) {}
-        });
-      }
-
-      // 5. Server-truth Hydration: always confirm latest episode state from backend series.json
-      try {
-        const res = await fetch(`/api/series/${encodeURIComponent(activeSeriesIdState)}`);
-        const data = await res.json();
-        if (activeEpisodeIdRef.current !== targetEpisodeId) return;
-        if (data?.success && data.series) {
-          setSeriesList((prevList) => {
-            const exists = (prevList || []).some((s) => s.id === data.series.id);
-            const updated = exists
-              ? (prevList || []).map((s) => (s.id === data.series.id ? data.series : s))
-              : [...(prevList || []), data.series];
-            try {
-              saveSeriesList(updated);
-            } catch (_) {}
-            return updated;
-          });
-          const hydratedEp = (data.series.episodes || []).find((e) => e.id === targetEpisodeId);
-          const hydratedSegLen = Array.isArray(hydratedEp?.scriptData?.segments) ? hydratedEp.scriptData.segments.length : 0;
-          const localSegLen = Array.isArray(targetEp?.scriptData?.segments) ? targetEp.scriptData.segments.length : 0;
-          const hydratedUpdatedAt = Number(hydratedEp?.scriptData?.updatedAt || 0);
-          const localUpdatedAt = Number(targetEp?.scriptData?.updatedAt || 0);
-          const localHasNewerScript =
-            localSegLen > 0 && localUpdatedAt > hydratedUpdatedAt && hydratedUpdatedAt > 0;
-          const hydratedRv = sanitizeRenderedVideo(hydratedEp?.renderedVideo);
-          const localRv = sanitizeRenderedVideo(targetEp?.renderedVideo);
-          const hydratedRvUrl = typeof hydratedRv === 'string' ? hydratedRv : (hydratedRv?.outputVideoUrl || hydratedRv?.videoUrl || null);
-          const localRvUrl = typeof localRv === 'string' ? localRv : (localRv?.outputVideoUrl || localRv?.videoUrl || null);
-          const audioOrBgmChanged = Boolean(
-            Boolean(hydratedEp?.audioGenerated) !== Boolean(targetEp?.audioGenerated) ||
-            Boolean(hydratedEp?.audioOutdated) !== Boolean(targetEp?.audioOutdated) ||
-            (hydratedEp?.fullAudioUrl || null) !== (targetEp?.fullAudioUrl || null) ||
-            hydratedRvUrl !== localRvUrl ||
-            (hydratedEp?.bgmAudioUrl && hydratedEp.bgmAudioUrl !== targetEp?.bgmAudioUrl)
-          );
-          if (
-            hydratedEp &&
-            !localHasNewerScript &&
-            (hydratedSegLen > 0 || localSegLen === 0 || audioOrBgmChanged) &&
-            (hydratedSegLen !== localSegLen || hydratedUpdatedAt !== localUpdatedAt || localSegLen === 0 || audioOrBgmChanged)
-          ) {
-            applyEpisodeToWorkspace(hydratedEp, null, { preserveTab: true });
-          }
-        }
-      } catch (_) {}
-      console.log(`[SeriesManager] Switched from ${snapshot.video?.fileName || 'empty'} to ${targetEp?.title || targetEpisodeId} (${targetEpisodeId})`);
-    } finally {
-      setTimeout(() => {
-        if (activeEpisodeIdRef.current === targetEpisodeId) {
-          isTransitioningRef.current = false;
-        }
-      }, 100);
     }
-  }, [
-    activeSeriesIdState,
-    seriesList,
-    scriptData,
-    getCurrentWorkspaceSnapshot,
-    activeRequestRef,
-    applyEpisodeToWorkspace,
-  ]);
+
+    setActiveEpisodeId(targetEpisodeId);
+    setActiveEpisodeIdForSeries(series.id, targetEpisodeId);
+    activeEpisodeIdRef.current = targetEpisodeId;
+    setActiveEpisodeIdState(targetEpisodeId);
+    if (activeRequestRef?.current) activeRequestRef.current.activeEpisodeId = targetEpisodeId;
+    isTransitioningRef.current = false;
+    const prepared = readWorkspace(series, target);
+    applyEpisodeToWorkspace(prepared.episode, series.id, { preserveTab: true, prepared });
+    const validate = async () => {
+      const edited = () => workspaceBaseline.current && workspaceBaseline.current !== currentSnapshot.current;
+      if (!stillCurrent() || edited()) return;
+      try {
+        const ep = await fetchEpisode(series.id, target.id, controller.signal, prepared.complete ? 'low' : 'high', prepared.episode);
+        if (!stillCurrent() || !ep || edited()) return;
+        const cached = prepared.episode;
+        if (prepared.complete && (Number(cached.lastModified || 0) > Number(ep.lastModified || 0) ||
+            Number(cached.scriptData?.updatedAt || 0) > Number(ep.scriptData?.updatedAt || 0))) return;
+        // Initial series hydration already supplied full data. Only compare fields used by the workspace.
+        const fields = ['scriptData', 'video', 'metadata', 'duration', 'videoClips', 'videoClipsUpdatedAt',
+          'fullAudioUrl', 'fullAudioPath', 'audioGenerated', 'audioOutdated', 'speakerRegistry',
+          'voiceSettings', 'renderedVideo', 'bgmAudioUrl', 'videoFile', 'sourceVideoPath'];
+        if (prepared.complete && fields.every((key) => JSON.stringify(ep[key]) === JSON.stringify(cached[key]))) {
+          if (episodeEtags.has(ep)) episodeEtags.set(cached, episodeEtags.get(ep));
+          return;
+        }
+        const full = readWorkspace(series, target, ep);
+        applyEpisodeToWorkspace(ep, series.id, { preserveTab: true, prepared: full });
+        setSeriesList((list) => list.map((s) => s.id === series.id ? {
+          ...s, episodes: s.episodes.map((item) => item === target ? ep : item),
+        } : s));
+      } catch (err) {
+        if (!controller.signal.aborted) console.warn('[SeriesManager] Episode load failed:', err.message);
+      }
+    };
+    if (!prepared.complete) return validate();
+    const timer = setTimeout(validate, 1000);
+    controller.signal.addEventListener('abort', () => clearTimeout(timer), { once: true });
+  }, [activeSeriesIdState, activeEpisodeIdState, getCurrentWorkspaceSnapshot, activeRequestRef, readWorkspace, applyEpisodeToWorkspace]);
+
+  useEffect(() => {
+    if (!activeSeries || !activeEpisode) return;
+    const controller = new AbortController();
+    const idx = activeSeries.episodes.indexOf(activeEpisode);
+    const neighbors = [activeSeries.episodes[idx - 1], activeSeries.episodes[idx + 1]].filter(Boolean);
+    const timer = setTimeout(async () => {
+      for (const ep of neighbors) {
+        if (controller.signal.aborted) return;
+        if (readWorkspace(activeSeries, ep).complete) continue;
+        try {
+          const full = await fetchEpisode(activeSeries.id, ep.id, controller.signal, 'low');
+          if (!controller.signal.aborted && full) readWorkspace(activeSeries, ep, full);
+        } catch { /* Active load can retry a failed background request. */ }
+      }
+    }, 350);
+    return () => { clearTimeout(timer); controller.abort(); };
+  }, [activeEpisode, activeSeries, readWorkspace]);
 
   // 1b. Switch to another series
   const handleSwitchSeries = useCallback(async (targetSeriesId) => {
@@ -691,6 +718,7 @@ export function useSeriesManager({
       setActiveEpisodeIdForSeries(activeSeriesIdState, activeEpisodeIdRef.current);
     }
 
+    episodeRequest.current?.abort();
     switchSeriesSeqRef.current += 1;
     const currentSeq = switchSeriesSeqRef.current;
     isTransitioningRef.current = true;
@@ -949,13 +977,38 @@ export function useSeriesManager({
 
   // 5b. Delete Series
   const handleDeleteSeries = useCallback(async (targetSeriesId) => {
-    if (!targetSeriesId) return;
+    if (!targetSeriesId) return { success: false, error: 'No series ID' };
     try {
-      await deleteSeriesApi(targetSeriesId);
+      const result = await deleteSeriesApi(targetSeriesId);
+      if (!result?.success) {
+        const errMsg = result?.error || 'Backend deletion failed';
+        console.error('[useSeriesManager] ❌ Series deletion failed on backend:', errMsg);
+        return { success: false, error: errMsg };
+      }
     } catch (err) {
-      console.warn('[useSeriesManager] Failed to delete series on backend:', err?.message || err);
+      const errMsg = err?.message || 'Network error during deletion';
+      console.error('[useSeriesManager] ❌ Series deletion failed:', errMsg);
+      return { success: false, error: errMsg };
     }
+    // Backend confirmed deletion — now safe to remove from UI + localStorage
     const updated = deleteSeriesFromList(targetSeriesId);
+    // Clear any pending timeline writes for the deleted series so they cannot resurrect it
+    try {
+      const pendingRaw = localStorage.getItem('KHMER_AI_PENDING_TIMELINE_WRITES');
+      if (pendingRaw) {
+        const pending = JSON.parse(pendingRaw);
+        let changed = false;
+        for (const key of Object.keys(pending)) {
+          if (pending[key]?.seriesId === targetSeriesId) {
+            delete pending[key];
+            changed = true;
+          }
+        }
+        if (changed) {
+          localStorage.setItem('KHMER_AI_PENDING_TIMELINE_WRITES', JSON.stringify(pending));
+        }
+      }
+    } catch (_) {}
     setSeriesList(updated);
     if (activeSeriesIdState === targetSeriesId) {
       const nextSeries = updated[0];
@@ -970,6 +1023,7 @@ export function useSeriesManager({
         applyEpisodeToWorkspace(targetEp, nextSeries.id);
       }
     }
+    return { success: true };
   }, [activeSeriesIdState, applyEpisodeToWorkspace]);
 
   // 6. Save background results (e.g. if user switched to EP2 while EP1 was generating)
@@ -1054,14 +1108,17 @@ export function useSeriesManager({
 
   // 8. Server-truth sync: manual or triggered refresh from backend disk
   const refreshSeriesFromServer = useCallback(async () => {
-    // 1. Refresh full series list from disk so newly created series like ss2 are available
+    const seq = switchSeriesSeqRef.current;
+    // Refresh full series list from disk so newly created series are available.
     await fetchAllSeriesFromServer();
+    if (seq !== switchSeriesSeqRef.current || activeSeriesIdRef.current !== activeSeriesIdState) return;
 
     if (!activeSeriesIdState) return;
     try {
       const res = await fetch(`/api/series/${encodeURIComponent(activeSeriesIdState)}`);
       const data = await res.json();
       if (data?.success && data.series) {
+        if (seq !== switchSeriesSeqRef.current || activeSeriesIdRef.current !== activeSeriesIdState) return;
         const [healedSeries] = sanitizeAndHealSeriesList([data.series]) || [data.series];
         const prevSeries = (latestSeriesListRef.current || []).find((s) => s.id === healedSeries.id);
         const prevActiveEp = (prevSeries?.episodes || []).find((e) => e.id === activeEpisodeIdRef.current);
