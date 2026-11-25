@@ -4,7 +4,12 @@ const os = require('os');
 const crypto = require('crypto');
 const { spawn, spawnSync } = require('child_process');
 const { extractAudio } = require('../../ffmpegService');
-const { classifySegmentAcousticGender, computeYinPitch } = require('../../audioClassifierService');
+const {
+  classifySegmentAcousticGender,
+  computeYinPitch,
+  computeAcousticCueFeatures,
+  clusterCueSpeakers,
+} = require('../../audioClassifierService');
 const { senseVoiceSemaphore, createAbortError } = require('../../../utils/asyncSemaphore');
 const { resolvePythonBinary } = require('../../audioSeparationService');
 
@@ -797,7 +802,7 @@ async function enrichCuesWithAcousticPitch(audioFilePath, cues = [], options = {
       ffmpegArgs.push('-t', String(durationSec));
     }
     ffmpegArgs.push(
-      '-af', 'highpass=f=75,lowpass=f=420',
+      '-af', 'highpass=f=80,lowpass=f=3400',
       '-f', 's16le',
       '-ac', '1',
       '-ar', '16000',
@@ -863,67 +868,36 @@ async function enrichCuesWithAcousticPitch(audioFilePath, cues = [], options = {
       }
 
       const cuePcm = pcmData.subarray(startSample, endSample);
-      const f0Estimates = [];
-      const confEstimates = [];
+      const feat = computeAcousticCueFeatures(cuePcm, 16000);
+      if (feat && feat.f0 > 0) {
+        cue.acousticF0 = feat.f0;
+        cue.pitchHz = feat.f0;
+        cue.pitchP25 = feat.p25F0;
+        cue.pitchP75 = feat.p75F0;
+        cue.pitchIqr = feat.pitchIqr;
+        cue.voicedRatio = feat.voicedRatio;
+        cue.spectralCentroidHz = feat.spectralCentroidHz;
+        cue.highMidRatio = feat.highMidRatio;
+        cue.zcr = feat.zcr;
+        cue.bgmSuspected = Boolean(feat.bgmSuspected);
+        cue.acousticAmbiguous = feat.gender === 'unknown';
+        cue.acousticGender = feat.gender;
+        cue.acousticConfidence = feat.confidence;
 
-      // Sub-frame analysis: 150ms window with 75ms hop
-      if (cueSamples <= FRAME_SAMPLES) {
-        const est = computeYinPitch(cuePcm, 16000);
-        if (est && est.f0 >= 75 && est.f0 <= 350 && est.confidence >= 0.45) {
-          f0Estimates.push(est.f0);
-          confEstimates.push(est.confidence);
+        if ((!cue.voiceGender || cue.voiceGender === 'unknown') && feat.gender !== 'unknown') {
+          cue.voiceGender = feat.gender;
+        }
+        if ((!cue.audioGender || cue.audioGender === 'unknown') && feat.gender !== 'unknown') {
+          cue.audioGender = feat.gender;
         }
       } else {
-        for (let offset = 0; offset + FRAME_SAMPLES <= cueSamples; offset += HOP_SAMPLES) {
-          const subSlice = cuePcm.subarray(offset, offset + FRAME_SAMPLES);
-          const est = computeYinPitch(subSlice, 16000);
-          if (est && est.f0 >= 75 && est.f0 <= 350 && est.confidence >= 0.45) {
-            f0Estimates.push(est.f0);
-            confEstimates.push(est.confidence);
-          }
-        }
-      }
-
-      if (f0Estimates.length > 0) {
-        f0Estimates.sort((a, b) => a - b);
-        const midIdx = Math.floor(f0Estimates.length / 2);
-        const medianF0 = f0Estimates[midIdx];
-        const p75Idx = Math.min(f0Estimates.length - 1, Math.floor(f0Estimates.length * 0.75));
-        const p75F0 = f0Estimates[p75Idx];
-        const avgConf = parseFloat((confEstimates.reduce((acc, c) => acc + c, 0) / confEstimates.length).toFixed(2));
-
-        let acousticGender = 'unknown';
-        let acousticConfidence = avgConf;
-
-        if (medianF0 >= 170 && medianF0 <= 320) {
-          acousticGender = 'female';
-        } else if (medianF0 >= 80 && medianF0 <= 155) {
-          acousticGender = 'male';
-        } else if (medianF0 > 155 && medianF0 < 170) {
-          // Ambiguous overlap zone: check 75th percentile
-          if (p75F0 >= 185) {
-            acousticGender = 'female';
-            acousticConfidence = Math.max(0.60, avgConf);
-          } else {
-            acousticGender = 'male';
-            acousticConfidence = 0.55;
-          }
-        }
-
-        const roundedF0 = Math.round(medianF0);
-        cue.acousticF0 = roundedF0;
-        cue.pitchHz = roundedF0;
-        cue.acousticGender = acousticGender;
-        cue.acousticConfidence = acousticConfidence;
-
-        if (!cue.voiceGender || cue.voiceGender === 'unknown') {
-          cue.voiceGender = acousticGender;
-        }
-        if (!cue.audioGender || cue.audioGender === 'unknown') {
-          cue.audioGender = acousticGender;
-        }
+        cue.acousticGender = cue.acousticGender || 'unknown';
+        cue.acousticAmbiguous = true;
+        cue.bgmSuspected = Boolean(feat?.bgmSuspected ?? true);
       }
     }
+
+    clusterCueSpeakers(cues);
   } catch (err) {
     if (err?.name === 'AbortError' || signal?.aborted) throw err;
     console.warn('[enrichCuesWithAcousticPitch] Notice:', err.message);

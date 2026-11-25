@@ -1,5 +1,11 @@
+const fs = require('fs');
+const path = require('path');
 const crypto = require('crypto');
-const { GENERATION_MODES, formatSecondsToTimecode } = require('../pipelineTypes');
+const {
+  GENERATION_MODES,
+  formatSecondsToTimecode,
+  validateStrictSourceCueMapping,
+} = require('../pipelineTypes');
 const { detectSpeakerGender } = require('../../../models/speakerRegistry');
 const { isAuthOrInvalidKeyError, isQuotaOrRateLimitError } = require('../../geminiKeyManager');
 const { geminiQuotaTracker } = require('../../geminiQuotaTracker');
@@ -86,6 +92,28 @@ async function generateModeSpecificScript({
     ? GENERATION_MODES.MODE_B_RECAP
     : GENERATION_MODES.MODE_A_DIALOGUE;
 
+  const usageStats = {
+    requests: 0,
+    attempts: 0,
+    retryRequests: 0,
+    rescueRequests: 0,
+    promptTokens: 0,
+    outputTokens: 0,
+    totalTokens: 0,
+  };
+  const recordGeminiUsage = (resp, kind = 'batch') => {
+    usageStats.requests += 1;
+    usageStats.attempts += 1;
+    if (kind === 'retry') usageStats.retryRequests += 1;
+    if (kind === 'rescue') usageStats.rescueRequests += 1;
+    const um = resp?.usageMetadata || resp?.response?.usageMetadata || null;
+    if (um) {
+      usageStats.promptTokens += Number(um.promptTokenCount ?? um.inputTokens ?? 0) || 0;
+      usageStats.outputTokens += Number(um.candidatesTokenCount ?? um.outputTokens ?? 0) || 0;
+      usageStats.totalTokens += Number(um.totalTokenCount ?? 0) || 0;
+    }
+  };
+
   if (normMode === GENERATION_MODES.MODE_A_DIALOGUE) {
     // ==========================================
     // MODE A: FAITHFUL LINE-BY-LINE DIALOGUE
@@ -136,12 +164,78 @@ async function generateModeSpecificScript({
     console.log(`[Stage 6 Mode A] 🌐 ចាប់ផ្តើមបកប្រែពាក្យសន្ទនាចិនទៅជាខ្មែរសរុប ${dialogueList.length} បន្ទាត់ (ចែកជា ${totalBatches} Batches)...`);
 
     const effectiveSeriesId = seriesId ? String(seriesId).trim() : '';
+    const effectiveEpisodeId = episodeId ? String(episodeId).trim() : '';
     const canUseCache = Boolean(useTranslationCache && !isForce && effectiveSeriesId);
 
     const glossaryHash = crypto.createHash('md5')
       .update(JSON.stringify(seriesGlossary || {}))
       .digest('hex')
       .substring(0, 8);
+
+    // Resumable episode-level Stage 6 translation checkpoint keyed by ordered (sourceCueId + chineseText)
+    let episodeCheckpointPath = null;
+    const getCueIdentityKey = (seg, idx) => {
+      const cn = String(seg?.originalChineseText || seg?.chineseText || seg?.originalText || '').trim();
+      const cid = String(seg?.sourceCueId || `idx_${idx + 1}`).trim();
+      return `${cid}::${cn}`;
+    };
+    if (effectiveEpisodeId) {
+      try {
+        const ckptDir = path.join(__dirname, '..', '..', '..', 'uploads', 'cache', 'translation_checkpoints');
+        const sigRaw = dialogueList.map((s, idx) => getCueIdentityKey(s, idx)).join('\n') + `|${normMode}|${glossaryHash}`;
+        const sigHash = crypto.createHash('md5').update(sigRaw).digest('hex').slice(0, 12);
+        const safeSeries = (effectiveSeriesId || 'standalone').replace(/[^a-zA-Z0-9_-]/g, '_');
+        const safeEp = effectiveEpisodeId.replace(/[^a-zA-Z0-9_-]/g, '_');
+        episodeCheckpointPath = path.join(ckptDir, `tr_ckpt_${safeSeries}_${safeEp}_${sigHash}.json`);
+        if (isForce && fs.existsSync(episodeCheckpointPath)) {
+          fs.unlinkSync(episodeCheckpointPath);
+        } else if (!isForce && useTranslationCache && fs.existsSync(episodeCheckpointPath)) {
+          const epCkpt = JSON.parse(fs.readFileSync(episodeCheckpointPath, 'utf8'));
+          if (epCkpt && epCkpt.entries && typeof epCkpt.entries === 'object') {
+            let epResumedCount = 0;
+            dialogueList.forEach((s, idx) => {
+              if (s.userOverridden || s.translationSource === 'manual') return;
+              if (s.khmerTranslatedText && !isPlaceholderTranslationText(s.khmerTranslatedText)) return;
+              const entry = epCkpt.entries[getCueIdentityKey(s, idx)];
+              if (entry && entry.khmerText && !isPlaceholderTranslationText(entry.khmerText)) {
+                s.khmerTranslatedText = entry.khmerText;
+                s.khmerText = entry.khmerText;
+                s.khmer = entry.khmerText;
+                if (entry.speaker && (!s.speaker || s.speaker === 'តួអង្គ')) s.speaker = entry.speaker;
+                if (entry.voiceGender && (!s.voiceGender || s.voiceGender === 'unknown')) s.voiceGender = entry.voiceGender;
+                s.translationStatus = 'translated';
+                s.isTranslationCached = true;
+                epResumedCount++;
+              }
+            });
+            if (epResumedCount > 0) {
+              console.log(`[Stage 6 Checkpoint] ⚡ Resumed ${epResumedCount}/${dialogueList.length} verified translations from ${path.basename(episodeCheckpointPath)}.`);
+            }
+          }
+        }
+      } catch (_) {
+        episodeCheckpointPath = null;
+      }
+    }
+    const saveEpisodeTranslationCheckpoint = () => {
+      if (!episodeCheckpointPath || !useTranslationCache) return;
+      try {
+        const dir = path.dirname(episodeCheckpointPath);
+        if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+        const entries = {};
+        dialogueList.forEach((s, idx) => {
+          const kh = String(s?.khmerTranslatedText || '').trim();
+          if (kh && !isPlaceholderTranslationText(kh) && s?.translationStatus !== 'review_needed') {
+            entries[getCueIdentityKey(s, idx)] = {
+              khmerText: kh,
+              speaker: s.speaker || 'តួអង្គ',
+              voiceGender: s.voiceGender || s.visualGender || 'unknown',
+            };
+          }
+        });
+        fs.writeFileSync(episodeCheckpointPath, JSON.stringify({ updatedAt: Date.now(), count: Object.keys(entries).length, entries }, null, 2), 'utf8');
+      } catch (_) {}
+    };
 
     // Smart Translation Cache: reuse verified translations for unchanged Chinese dialogue
     let cachedHitsCount = 0;
@@ -212,7 +306,7 @@ async function generateModeSpecificScript({
       const batchNeedsTranslation = batchSlice.some((s) =>
         !s.userOverridden && (!s.khmerTranslatedText || isPlaceholderTranslationText(s.khmerTranslatedText))
       );
-      if (canUseCache && !batchNeedsTranslation) {
+      if (!batchNeedsTranslation) {
         console.log(`[Stage 6 Mode A] ⚡ Batch ${batchNum}/${totalBatches} already 100% translated (Reusing verified cache).`);
         return true;
       }
@@ -272,8 +366,19 @@ async function generateModeSpecificScript({
           originalChineseText: s.originalChineseText || '',
           visualGender: s.visualGender || 'unknown',
           speakerVisualHint: s.speakerVisualHint || '',
-          deliveryType: s.deliveryType || 'dialogue',
-          detectedGender: hasRealAcousticPitch ? resolvedAcousticGender : fallbackGender,
+          deliveryType: s.deliveryType || 'out_loud',
+          ...(s.speakerStatus === 'verified' ? {
+            verifiedSpeakerLocked: true,
+            verifiedSpeakerName: s.speakerName || s.speaker || '',
+            verifiedSpeakerGender: s.speakerGender || 'UNKNOWN',
+            verifiedSpeakerId: s.speakerId || '',
+            speakerStatus: s.speakerStatus,
+          } : {
+            speakerStatus: s.speakerStatus || 'unverified',
+          }),
+          detectedGender: s.speakerStatus === 'verified' && s.voiceGender && s.voiceGender !== 'unknown'
+            ? s.voiceGender
+            : (hasRealAcousticPitch ? resolvedAcousticGender : fallbackGender),
           acousticGenderHint: hasRealAcousticPitch ? resolvedAcousticGender : fallbackGender,
           acousticPitchHz: pitchVal ? Math.round(pitchVal) : null,
           acousticConfidence: pitchVal ? pitchConf : null,
@@ -415,6 +520,7 @@ Return JSON ONLY matching this schema:
   "segments": [
     {
       "index": ${b + 1},
+      "segmentId": ${dialoguePayload[0]?.segmentId || (b + 1)},${dialoguePayload[0]?.sourceCueId ? `\n      "sourceCueId": ${JSON.stringify(dialoguePayload[0].sourceCueId)},` : ''}
       "speakerId": "spk_male_lead",
       "speaker": "តួឯកប្រុស",
       "gender": "male",
@@ -453,6 +559,7 @@ Return JSON ONLY matching this schema:
                 responseMimeType: 'application/json',
               },
             });
+            recordGeminiUsage(resp, 'batch');
 
             const parsed = parseJsonResponseText(resp);
             const { appliedCount, missingLocalIndices } = applyBatchTranslations({
@@ -513,6 +620,7 @@ Return JSON ONLY matching this schema:
             activePrimaryModel = candidateModel;
             quotaDemotedModels.delete(candidateModel);
             recovered = true;
+            saveEpisodeTranslationCheckpoint();
             if (mIdx > 0) {
               console.log(`[Stage 6 Mode A] ✅ Batch ${batchNum} rescued with '${candidateModel}'!`);
             }
@@ -721,7 +829,7 @@ Return JSON ONLY matching this schema:
   "segments": [
     {
       "index": ${retryPayload[0]?.index || 1},
-      "segmentId": ${retryPayload[0]?.segmentId || 1},
+      "segmentId": ${retryPayload[0]?.segmentId || 1},${retryPayload[0]?.sourceCueId ? `\n      "sourceCueId": ${JSON.stringify(retryPayload[0].sourceCueId)},` : ''}
       "speaker": "តួឯកប្រុស",
       "gender": "male",
       "khmerText": "ប្រយោគបកប្រែជាភាសាខ្មែរពេញលេញ"
@@ -738,6 +846,7 @@ Return JSON ONLY matching this schema:
                 responseMimeType: 'application/json',
               },
             });
+            recordGeminiUsage(resp, 'retry');
             const parsed = parseJsonResponseText(resp);
             const translations = extractSegmentsFromParsedResponse(parsed);
             const matchedTranslations = resolveBatchTranslationMatches(translations, retryPayload);
@@ -866,6 +975,7 @@ Return ONE JSON object ONLY (no array, no extra commentary):
                   responseMimeType: 'application/json',
                 },
               });
+              recordGeminiUsage(resp, 'rescue');
               const parsed = parseJsonResponseText(resp);
               const candidate = extractSingleLineRescueCandidate(parsed, payloadItem);
               const targetSeg = dialogueList[globalIdx];
@@ -921,6 +1031,7 @@ Return ONE JSON object ONLY (no array, no extra commentary):
           console.log(`[Stage 6 Mode A] ✅ Single-line rescue recovered ${singleRescuedCount}/${singleLineTargets.length} stubborn segment(s)!`);
         }
       }
+      saveEpisodeTranslationCheckpoint();
     }
 
     // Phase 1: Non-destructive duplicate detection pass (flags warnings, never auto-deletes)
@@ -935,15 +1046,29 @@ Return ONE JSON object ONLY (no array, no extra commentary):
     const consistencySummary = consistencyRes.stats;
 
     const scriptSegments = dialogueList.map((s, idx) => createCanonicalSegment(s, idx, normMode));
-    const finalTranslatedCount = scriptSegments.filter((s) => !isPlaceholderTranslationText(s.khmerTranslatedText)).length;
+    const finalTranslatedCount = scriptSegments.filter((s) => !isPlaceholderTranslationText(s.khmerTranslatedText) && s.translationStatus !== 'review_needed').length;
     const finalUntranslatedCount = scriptSegments.length - finalTranslatedCount;
-    const missingCueIds = scriptSegments
-      .filter((s) => isPlaceholderTranslationText(s.khmerTranslatedText))
-      .map((s) => s.sourceCueId || s.segmentId);
     const verifiedSourceCuesCount = reconciledSegments.length;
+    const mappingBaseline = (reconciledSegments.every((s) => Boolean(s?.sourceCueId)) && (isFastOcrMode || dialogueList.length === reconciledSegments.length))
+      ? reconciledSegments
+      : dialogueList;
+    const hasBaselineCueIds = mappingBaseline.some((s) => Boolean(s?.sourceCueId));
+    const strictMapping = hasBaselineCueIds
+      ? validateStrictSourceCueMapping(mappingBaseline, scriptSegments)
+      : null;
+
+    const missingCueIds = strictMapping
+      ? [...new Set([...strictMapping.missingSourceCueIds, ...strictMapping.invalidTranslationCueIds])]
+      : scriptSegments
+          .filter((s) => isPlaceholderTranslationText(s.khmerTranslatedText) || s.translationStatus === 'review_needed')
+          .map((s) => s.sourceCueId || s.segmentId);
+
     const translationCompletenessPct = verifiedSourceCuesCount > 0
-      ? parseFloat(((finalTranslatedCount / verifiedSourceCuesCount) * 100).toFixed(2))
+      ? parseFloat(((Math.min(finalTranslatedCount, verifiedSourceCuesCount) / verifiedSourceCuesCount) * 100).toFixed(2))
       : 0;
+    const oneToOneMappingValid = strictMapping
+      ? Boolean(strictMapping.valid && finalUntranslatedCount === 0 && scriptSegments.length === verifiedSourceCuesCount)
+      : Boolean(scriptSegments.length === verifiedSourceCuesCount && finalUntranslatedCount === 0);
 
     return {
       mode: normMode,
@@ -951,17 +1076,24 @@ Return ONE JSON object ONLY (no array, no extra commentary):
       detectedGenre: effectiveGenre,
       summary: overallSummary,
       ...(consistencySummary ? { consistencySummary } : {}),
+      usage: usageStats,
       translationReport: {
         totalSegments: scriptSegments.length,
         verifiedSourceCuesCount,
         translatedCount: finalTranslatedCount,
         untranslatedCount: finalUntranslatedCount,
         missingCueIds,
+        duplicateCueIds: strictMapping ? strictMapping.duplicateSourceCueIds : [],
+        unexpectedCueIds: strictMapping ? strictMapping.unexpectedSourceCueIds : [],
+        mismatchedCueIds: strictMapping ? strictMapping.mismatchedOrderCueIds : [],
+        invalidTranslationCueIds: strictMapping ? strictMapping.invalidTranslationCueIds : [],
+        exactCueIdSetMatch: strictMapping ? strictMapping.exactCueIdSetMatch : null,
         translationCompletenessPct,
-        oneToOneMappingValid: scriptSegments.length === verifiedSourceCuesCount && finalUntranslatedCount === 0,
+        oneToOneMappingValid,
         totalBatches,
         failedBatches: batchFailures.length,
-        isPartial: finalUntranslatedCount > 0,
+        isPartial: !oneToOneMappingValid || finalUntranslatedCount > 0,
+        usage: usageStats,
       },
       scriptSegments,
     };
@@ -1033,6 +1165,7 @@ Return JSON ONLY:
             responseMimeType: 'application/json',
           },
         });
+        recordGeminiUsage(resp, 'batch');
 
         const parsed = parseJsonResponseText(resp);
         if (parsed.summary) summary = parsed.summary;
@@ -1089,6 +1222,7 @@ Return JSON ONLY:
       genre: normRequestedGenre,
       detectedGenre: modeBEffectiveGenre,
       summary,
+      usage: usageStats,
       scriptSegments,
     };
   }

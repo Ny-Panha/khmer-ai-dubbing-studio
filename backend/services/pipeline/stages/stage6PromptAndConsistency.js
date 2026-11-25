@@ -425,6 +425,13 @@ function createCanonicalSegment(raw = {}, index = 0, mode = 'dialogue') {
   const isOcrOnly = raw.speakerSource === 'ocr_only';
   const isUserOverridden = Boolean(raw.userOverridden);
   const isGenericSpeaker = cleanSpk === 'តួអង្គ' || cleanSpk.toLowerCase() === 'speaker';
+  const hasLockedStep1 = Boolean(
+    raw.speakerStatus === 'verified' ||
+    raw.speakerVerified === true ||
+    raw.voiceAssignmentSource === 'multimodal_verified' ||
+    raw.voiceAssignmentSource === 'series_glossary'
+  );
+  const isStep1ReviewNeeded = Boolean(raw.speakerStatus === 'review_needed' || raw.speakerReviewNeeded === true);
 
   const hasFemalePitch = typeof raw.pitchHz === 'number' && raw.pitchHz >= 175;
   const hasMalePitch = typeof raw.pitchHz === 'number' && raw.pitchHz > 0 && raw.pitchHz <= 152;
@@ -438,6 +445,10 @@ function createCanonicalSegment(raw = {}, index = 0, mode = 'dialogue') {
       else if (explicitVoice.includes('Piseth')) resolvedGender = 'male';
       else resolvedGender = mode === 'recap' ? 'male' : 'unknown';
     }
+  } else if (hasLockedStep1 && (resolvedGender === 'female' || resolvedGender === 'male')) {
+    // Preserve Step 1 multimodal / glossary verified gender unconditionally (never override via noisy raw pitch)
+  } else if (isStep1ReviewNeeded) {
+    resolvedGender = 'unknown';
   } else if (isGenericSpeaker && (hasFemalePitch || hasMalePitch)) {
     // Generic placeholder characters without manual override follow verified acoustic pitch
     resolvedGender = hasFemalePitch ? 'female' : 'male';
@@ -488,6 +499,8 @@ function createCanonicalSegment(raw = {}, index = 0, mode = 'dialogue') {
   if (mode === 'recap') {
     safeSpeakerId = 'narrator';
   } else if (isUserOverridden && raw.speakerId) {
+    safeSpeakerId = raw.speakerId;
+  } else if (hasLockedStep1 && raw.speakerId && !['spk_1', 'spk_default', 'spk'].includes(String(raw.speakerId).trim())) {
     safeSpeakerId = raw.speakerId;
   } else if (isOcrOnly) {
     safeSpeakerId = raw.speakerId || buildSafeSpeakerId(cleanSpk, resolvedGender, index);
@@ -543,9 +556,21 @@ function createCanonicalSegment(raw = {}, index = 0, mode = 'dialogue') {
     ...(isUserOverridden ? { userOverridden: true } : {}),
     ...(raw.voiceOverride ? { voiceOverride: raw.voiceOverride } : {}),
     ...(typeof raw.pitchHz === 'number' ? { pitchHz: raw.pitchHz } : {}),
+    ...(typeof raw.pitchIqr === 'number' ? { pitchIqr: raw.pitchIqr } : {}),
     ...(raw.acousticGender ? { acousticGender: raw.acousticGender } : {}),
     ...(typeof raw.acousticConfidence === 'number' ? { acousticConfidence: raw.acousticConfidence } : {}),
+    ...(raw.acousticClusterId ? { acousticClusterId: raw.acousticClusterId } : {}),
+    ...(raw.bgmSuspected !== undefined ? { bgmSuspected: Boolean(raw.bgmSuspected) } : {}),
     ...(raw.genderConfidence !== undefined ? { genderConfidence: raw.genderConfidence } : {}),
+    ...(raw.speakerStatus ? { speakerStatus: raw.speakerStatus } : {}),
+    ...(raw.speakerVerified !== undefined ? { speakerVerified: Boolean(raw.speakerVerified) } : {}),
+    ...(typeof raw.speakerConfidence === 'number' ? { speakerConfidence: raw.speakerConfidence } : {}),
+    ...(raw.speakerReviewNeeded !== undefined ? { speakerReviewNeeded: Boolean(raw.speakerReviewNeeded) } : {}),
+    ...(raw.unverifiedSpeaker !== undefined ? { unverifiedSpeaker: Boolean(raw.unverifiedSpeaker) } : {}),
+    ...(raw.speakerEvidence ? { speakerEvidence: raw.speakerEvidence } : {}),
+    ...(Array.isArray(raw.internalSpeakerTurns) && raw.internalSpeakerTurns.length > 0 ? { internalSpeakerTurns: raw.internalSpeakerTurns } : {}),
+    ...(raw.hasMultipleSpeakers ? { hasMultipleSpeakers: true } : {}),
+    ...(raw.speakerLocation ? { speakerLocation: raw.speakerLocation } : {}),
     evidenceType: evidenceSrc,
     evidenceSource: evidenceSrc,
     confidence: typeof raw.confidence === 'number' ? raw.confidence : 0.9,
@@ -571,7 +596,7 @@ function createCanonicalSegment(raw = {}, index = 0, mode = 'dialogue') {
     uncertainOcr: Boolean(raw.uncertainOcr || raw.ocrConfidence === 'low'),
     ocrConfidence: raw.ocrConfidence || 'high',
     ocrDisagreement: Boolean(raw.ocrDisagreement),
-    reviewNeeded: Boolean(raw.reviewNeeded || raw.uncertainOcr || raw.ocrDisagreement || !khmerText || raw.translationWarning === 'POTENTIAL_DUPLICATE_TRANSLATION'),
+    reviewNeeded: Boolean(raw.reviewNeeded || raw.speakerReviewNeeded || raw.uncertainOcr || raw.ocrDisagreement || !khmerText || raw.translationWarning === 'POTENTIAL_DUPLICATE_TRANSLATION'),
     uncertainTiming: Boolean(raw.uncertainTiming),
     audioGenerated: false,
     audioOutdated: true,
@@ -613,7 +638,19 @@ function applyTranslatedSegmentResult(targetSeg, t, maxWords, segIdx, { isFastOc
   } else {
     targetSeg.translationStatus = 'translated';
   }
-  const cleanSpk = cleanKhmerSpokenText(t.speaker) || cleanKhmerSpokenText(targetSeg.speaker) || 'តួអង្គ';
+  const hasLockedStep1Speaker = Boolean(
+    targetSeg.speakerStatus === 'verified' ||
+    targetSeg.speakerVerified === true ||
+    targetSeg.voiceAssignmentSource === 'multimodal_verified' ||
+    targetSeg.voiceAssignmentSource === 'series_glossary'
+  );
+  const isStep1ReviewNeeded = Boolean(
+    targetSeg.speakerStatus === 'review_needed' ||
+    targetSeg.speakerReviewNeeded === true
+  );
+  const cleanSpk = ((hasLockedStep1Speaker || isStep1ReviewNeeded) && targetSeg.speaker)
+    ? cleanKhmerSpokenText(targetSeg.speaker)
+    : (cleanKhmerSpokenText(t.speaker) || cleanKhmerSpokenText(targetSeg.speaker) || 'តួអង្គ');
   targetSeg.speaker = cleanSpk;
   targetSeg.speakerName = cleanSpk;
 
@@ -630,6 +667,29 @@ function applyTranslatedSegmentResult(targetSeg, t, maxWords, segIdx, { isFastOc
   const visGender = String(targetSeg.visualGender || '').toLowerCase();
 
   if (!isOcrSeg) {
+    if (isStep1ReviewNeeded) {
+      targetSeg.voiceGender = 'unknown';
+      targetSeg.speakerGender = 'UNKNOWN';
+      targetSeg.reviewNeeded = true;
+      targetSeg.speakerReviewNeeded = true;
+      targetSeg.unverifiedSpeaker = true;
+      const vMetaRev = deriveVoiceFromGender('unknown');
+      targetSeg.voiceId = targetSeg.voiceId || vMetaRev.voiceId;
+      targetSeg.khmerVoiceId = targetSeg.khmerVoiceId || vMetaRev.khmerVoiceId;
+      targetSeg.voice = targetSeg.voice || vMetaRev.voice;
+      targetSeg.speakerId = targetSeg.speakerId || buildSafeSpeakerId(cleanSpk, 'unknown', segIdx);
+      return !isPlaceholderTranslationText(targetSeg.khmerTranslatedText);
+    }
+    if (hasLockedStep1Speaker && (targetSeg.voiceGender === 'female' || targetSeg.voiceGender === 'male')) {
+      const vMetaLocked = deriveVoiceFromGender(targetSeg.voiceGender);
+      targetSeg.speakerGender = vMetaLocked.speakerGender;
+      targetSeg.gender = vMetaLocked.gender;
+      targetSeg.voiceId = targetSeg.voiceId || vMetaLocked.voiceId;
+      targetSeg.khmerVoiceId = targetSeg.khmerVoiceId || vMetaLocked.khmerVoiceId;
+      targetSeg.voice = targetSeg.voice || vMetaLocked.voice;
+      targetSeg.speakerId = targetSeg.speakerId || buildSafeSpeakerId(cleanSpk, targetSeg.voiceGender, segIdx);
+      return !isPlaceholderTranslationText(targetSeg.khmerTranslatedText);
+    }
     // Standard Mode: explicit unambiguous speaker title beats noisy un-isolated YIN pitch;
     // generic/neutral characters still follow real acoustic pitch, visual gender, or AI dialogue context.
     const hasFemalePitch = typeof targetSeg.pitchHz === 'number' && targetSeg.pitchHz >= 175;
@@ -670,15 +730,36 @@ function applyTranslatedSegmentResult(targetSeg, t, maxWords, segIdx, { isFastOc
     return !isPlaceholderTranslationText(targetSeg.khmerTranslatedText);
   }
 
-  // Fast OCR ('ocr_only') Mode: assign from visualGender, AI castRegistry/dialogue context, or speaker name/self-pronoun keywords, then re-derive voice
-  targetSeg.speakerSource = 'ocr_only';
-  if (visGender === 'female' || visGender === 'male') {
+  // Fast OCR ('ocr_only') Mode: prioritize Step 1 Multimodal verified speaker -> visual+acoustic evidence -> explicit role title (NEVER translate-text guess over verified Step 1 speakers!)
+  const hasVerifiedStep1 = Boolean(
+    targetSeg.speakerStatus === 'verified' ||
+    targetSeg.speakerVerified === true ||
+    targetSeg.voiceAssignmentSource === 'multimodal_verified' ||
+    targetSeg.voiceAssignmentSource === 'series_glossary' ||
+    targetSeg.voiceAssignmentSource === 'manual' ||
+    targetSeg.userOverridden === true
+  );
+  targetSeg.speakerSource = hasVerifiedStep1 ? (targetSeg.voiceAssignmentSource || 'multimodal_verified') : 'ocr_only';
+  if (hasVerifiedStep1 && (targetSeg.voiceGender === 'female' || targetSeg.voiceGender === 'male')) {
+    // Keep verified Step 1 assignment strictly locked against Khmer translation drift
+    targetSeg.speakerGender = targetSeg.voiceGender.toUpperCase();
+    targetSeg.speaker = targetSeg.speaker || targetSeg.speakerName || cleanSpk;
+    targetSeg.speakerName = targetSeg.speakerName || targetSeg.speaker || cleanSpk;
+  } else if (targetSeg.speakerStatus === 'review_needed' && targetSeg.voiceGender === 'unknown') {
+    targetSeg.voiceGender = 'unknown';
+    targetSeg.speakerGender = 'UNKNOWN';
+    targetSeg.reviewNeeded = true;
+    targetSeg.speakerReviewNeeded = true;
+    targetSeg.unverifiedSpeaker = true;
+  } else if (visGender === 'female' || visGender === 'male') {
     targetSeg.voiceGender = visGender;
+  } else if ((targetSeg.acousticGender === 'female' || targetSeg.acousticGender === 'male') && Number(targetSeg.acousticConfidence || 0) >= 0.7 && !targetSeg.acousticAmbiguous) {
+    targetSeg.voiceGender = targetSeg.acousticGender;
   } else if (aiGender === 'female' || aiGender === 'male') {
     targetSeg.voiceGender = aiGender;
   } else {
     const kwGender = detectSpeakerGender(
-      { ...targetSeg, speaker: cleanSpk, khmerText: finalTranslated },
+      { ...targetSeg, speaker: cleanSpk },
       { castRegistry }
     );
     if (kwGender === 'FEMALE') {
@@ -693,22 +774,31 @@ function applyTranslatedSegmentResult(targetSeg, t, maxWords, segIdx, { isFastOc
   }
 
   const vMeta = deriveVoiceFromGender(targetSeg.voiceGender);
-  targetSeg.voiceId = vMeta.voiceId;
-  targetSeg.khmerVoiceId = vMeta.khmerVoiceId;
-  targetSeg.voice = vMeta.voice;
-  targetSeg.voiceLabel = vMeta.voiceLabel;
-  targetSeg.avatar = vMeta.avatar;
-  targetSeg.badgeColor = vMeta.badgeColor;
-  targetSeg.gender = vMeta.gender;
-  targetSeg.speakerGender = vMeta.speakerGender;
-  targetSeg.unverifiedSpeaker = cleanSpk === 'តួអង្គ' || cleanSpk.toLowerCase() === 'speaker';
-  targetSeg.speakerId = buildSafeSpeakerId(cleanSpk, targetSeg.voiceGender, segIdx);
+  if (!hasVerifiedStep1 && !isStep1ReviewNeeded) {
+    targetSeg.voiceId = vMeta.voiceId;
+    targetSeg.khmerVoiceId = vMeta.khmerVoiceId;
+    targetSeg.voice = vMeta.voice;
+    targetSeg.voiceLabel = vMeta.voiceLabel;
+    targetSeg.avatar = vMeta.avatar;
+    targetSeg.badgeColor = vMeta.badgeColor;
+    targetSeg.gender = vMeta.gender;
+    targetSeg.speakerGender = vMeta.speakerGender;
+    targetSeg.unverifiedSpeaker = cleanSpk === 'តួអង្គ' || cleanSpk.toLowerCase() === 'speaker' || targetSeg.voiceGender === 'unknown';
+    targetSeg.speakerId = buildSafeSpeakerId(cleanSpk, targetSeg.voiceGender, segIdx);
+  } else {
+    targetSeg.voiceLabel = targetSeg.voiceLabel || vMeta.voiceLabel;
+    targetSeg.avatar = targetSeg.avatar || vMeta.avatar;
+    targetSeg.badgeColor = targetSeg.badgeColor || vMeta.badgeColor;
+    targetSeg.gender = targetSeg.voiceGender === 'female' ? 'female' : (targetSeg.voiceGender === 'male' ? 'male' : vMeta.gender);
+    targetSeg.speakerGender = targetSeg.gender === 'female' ? 'FEMALE' : (targetSeg.gender === 'male' ? 'MALE' : 'UNKNOWN');
+    targetSeg.speakerId = targetSeg.speakerId || buildSafeSpeakerId(cleanSpk, targetSeg.voiceGender, segIdx);
+  }
   return !isPlaceholderTranslationText(targetSeg.khmerTranslatedText);
 }
 
 /**
  * Whole-episode character consistency pass (Fast OCR + Standard Dialogue):
- * - Ignores userOverridden / manual segments (untouched by both voting and mutation)
+ * - Ignores userOverridden / manual / multimodal-verified segments (untouched by text voting)
  * - Keeps generic 'តួអង្គ' per-line gender judgement (and unverifiedSpeaker: true on OCR) while re-deriving voice
  * - Groups named characters by cleanSpk across the full episode; majority gender wins and minority lines are corrected + voice re-derived
  * - Logs episode character & correction stats
@@ -723,9 +813,22 @@ function enforceEpisodeCharacterConsistency(segments = [], { defaultGender = 'ma
 
   for (let idx = 0; idx < updated.length; idx++) {
     const seg = updated[idx];
-    const isOcrSeg = isFastOcrMode || seg.speakerSource === 'ocr_only';
+    const hasVerifiedStep1 = Boolean(
+      seg.speakerStatus === 'verified' ||
+      seg.speakerVerified === true ||
+      seg.voiceAssignmentSource === 'multimodal_verified' ||
+      seg.voiceAssignmentSource === 'series_glossary'
+    );
+    const isStep1ReviewNeeded = Boolean(seg.speakerStatus === 'review_needed' || seg.speakerReviewNeeded === true);
+    const isOcrSeg = !hasVerifiedStep1 && (isFastOcrMode || seg.speakerSource === 'ocr_only');
 
-    if (seg.userOverridden || seg.voiceAssignmentSource === 'manual' || seg.voiceOverride) {
+    if (
+      seg.userOverridden ||
+      seg.voiceAssignmentSource === 'manual' ||
+      seg.voiceOverride ||
+      isStep1ReviewNeeded ||
+      (hasVerifiedStep1 && (seg.voiceGender === 'female' || seg.voiceGender === 'male'))
+    ) {
       overriddenCount++;
       continue;
     }
@@ -778,10 +881,12 @@ function enforceEpisodeCharacterConsistency(segments = [], { defaultGender = 'ma
     seg.voiceLabel = vMeta.voiceLabel;
     seg.avatar = vMeta.avatar;
     seg.badgeColor = vMeta.badgeColor;
-    if (isOcrSeg) {
+    if (isOcrSeg || g === 'unknown') {
       seg.unverifiedSpeaker = true;
     }
-    seg.speakerId = buildSafeSpeakerId('តួអង្គ', g, idx);
+    seg.speakerId = seg.speakerId && !['spk_1', 'spk_តួអង្គ'].includes(seg.speakerId)
+      ? seg.speakerId
+      : (seg.acousticClusterId ? `spk_${g}_${seg.acousticClusterId}` : buildSafeSpeakerId('តួអង្គ', g, idx));
   }
 
   // Named characters: majority gender (or explicit unambiguous role title like ប្រព័ន្ធ / តួឯកប្រុស) wins across the entire episode
@@ -819,12 +924,23 @@ function enforceEpisodeCharacterConsistency(segments = [], { defaultGender = 'ma
     }
 
     const vMeta = deriveVoiceFromGender(winnerGender);
-    const canonicalSpeakerId = buildSafeSpeakerId(charName, winnerGender, entry.indices[0]);
+    const existingEntryId = entry.indices
+      .map((i) => updated[i]?.speakerId)
+      .find((id) => id && !['spk_1', 'spk_តួអង្គ'].includes(id));
+    const canonicalSpeakerId = existingEntryId || buildSafeSpeakerId(charName, winnerGender, entry.indices[0]);
     let charCorrected = 0;
     let charStaleVoiceFixed = 0;
 
     for (const idx of entry.indices) {
       const seg = updated[idx];
+      if (seg.speakerStatus === 'review_needed' && seg.speakerReviewNeeded === true && seg.voiceGender === 'unknown' && winnerGender === 'unknown') {
+        seg.speaker = charName;
+        seg.speakerName = charName;
+        seg.speakerId = canonicalSpeakerId;
+        seg.reviewNeeded = true;
+        seg.unverifiedSpeaker = true;
+        continue;
+      }
       const isOcrSeg = isFastOcrMode || seg.speakerSource === 'ocr_only';
       const prevGender = String(seg.voiceGender || '').toLowerCase();
       const prevVoice = seg.voiceId || seg.khmerVoiceId || seg.voice || '';

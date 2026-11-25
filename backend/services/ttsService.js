@@ -847,6 +847,12 @@ async function generateSingleSegmentAudio(segment, uploadsDir, options = {}) {
   const regIsManual = Boolean(regEntry?.userOverridden) || regEntry?.voiceAssignmentSource === "manual";
   const isManualSegment = Boolean(segment.userOverridden || segment.voiceAssignmentSource === "manual" || segment.voiceOverride) || regIsManual;
 
+  const hasVerifiedStep1 = Boolean(
+    segment.speakerStatus === "verified" ||
+    segment.speakerVerified === true ||
+    segment.voiceAssignmentSource === "multimodal_verified" ||
+    segment.voiceAssignmentSource === "series_glossary"
+  );
   const knownSegGender = regIsManual
     ? (normalizeKnownGender(regEntry?.voiceGender || regEntry?.gender) || normalizeKnownGender(segment.voiceGender))
     : (
@@ -854,7 +860,7 @@ async function generateSingleSegmentAudio(segment, uploadsDir, options = {}) {
         normalizeKnownGender(segment.gender) ||
         normalizeKnownGender(segment.speakerGender) ||
         normalizeKnownGender(regEntry?.voiceGender || regEntry?.gender) ||
-        normalizeKnownGender(detectSpeakerGender(speakerKeyName, "", textToSpeak))
+        (hasVerifiedStep1 ? "" : normalizeKnownGender(detectSpeakerGender(speakerKeyName, "", "")))
       );
 
   const segGender = knownSegGender || "unknown";

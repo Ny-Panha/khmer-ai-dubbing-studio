@@ -1,11 +1,23 @@
+const fs = require('fs');
+const path = require('path');
 const { GoogleGenAI } = require('@google/genai');
 const { createSmartGenAIClient, extractAllGeminiKeys } = require('../geminiKeyManager');
 const { DUBBING_CASCADE_MODELS, isUsableDubbingModel } = require('../geminiModelCatalog');
 const { geminiQuotaTracker } = require('../geminiQuotaTracker');
-const { PIPELINE_STAGES, PIPELINE_STATUS, GENERATION_MODES, computePipelineCompletenessReport } = require('./pipelineTypes');
+const {
+  PIPELINE_STAGES,
+  PIPELINE_STATUS,
+  GENERATION_MODES,
+  computePipelineCompletenessReport,
+  resolveOcrEngineMode,
+} = require('./pipelineTypes');
 const { ingestEpisode } = require('./stages/stage1_ingestEpisode');
 const { analyzeSourceMedia } = require('./stages/stage2_analyzeSourceMedia');
-const { extractChineseSubtitles, deduplicateFastOcrCues } = require('./stages/stage3_extractChineseSubtitles');
+const {
+  extractChineseSubtitles,
+  saveVerifiedChineseSrt,
+  deduplicateFastOcrCues,
+} = require('./stages/stage3_extractChineseSubtitles');
 const { analyzeDialogueAudio, enrichCuesWithAcousticPitch } = require('./stages/stage4_analyzeDialogueAudio');
 const { reconcileTimelineEvidence } = require('./stages/stage5_reconcileTimelineEvidence');
 const { generateModeSpecificScript } = require('./stages/stage6_generateModeSpecificScript');
@@ -18,6 +30,7 @@ const { createJob, updateJob } = require('./jobManager');
 const { saveCheckpoint, generateVideoFingerprint } = require('./checkpointManager');
 const { isNonChineseAsrHallucination } = require('../../utils/translationQuality');
 const { buildSpeakerRegistry, syncSegmentsWithSpeakerRegistry } = require('../../models/speakerRegistry');
+const { identifySpeakersForCues, buildVerifiedSeriesSpeakerMapPatch } = require('./speakerIdentificationService');
 
 const CASCADE_MODELS = DUBBING_CASCADE_MODELS;
 
@@ -64,6 +77,7 @@ async function runDubbingPipeline({
   forceChunking = false,
   force = false,
   forceRegen = false,
+  ocrMode = null,
   signal = null,
   onProgress = null,
 }) {
@@ -108,6 +122,8 @@ async function runDubbingPipeline({
       : (prioritizedPool[0] || geminiQuotaTracker.getPreferredPrimaryModel(CASCADE_MODELS[0]));
   const aiClient = getAiClient(apiKey);
   const startTime = Date.now();
+  let speakerIdentificationCalls = 0;
+  let speakerIdentificationStats = null;
 
   // Stage 1: Ingest Episode
   report('ingestEpisode', 10, 'កំពុងផ្ទៀងផ្ទាត់ទិន្នន័យវីដេអូ និងបង្កើត Folder សម្គាល់ភាគ...');
@@ -156,6 +172,7 @@ async function runDubbingPipeline({
       overlapSec: 2,
       force: Boolean(force || forceRegen),
       forceRegen: Boolean(forceRegen),
+      ocrMode,
     });
   }
 
@@ -164,9 +181,10 @@ async function runDubbingPipeline({
   // With high-density 1.0s sampling to capture all dialogue
   // ==========================================
 
-  // Stage 3: Extract Chinese Subtitles (Vision OCR across entire video at 1.0s interval)
+  // Stage 3: Extract Chinese Subtitles (Hybrid RapidOCR-first + Gemini Vision verification)
   report('extractChineseSubtitles', 35, 'កំពុងស្កេនរកអក្សរចិន Subtitles និងចំណងជើងលើវីដេអូទាំងមូល (Visual OCR)...');
   const isFastOcr = mode === GENERATION_MODES.FAST_OCR;
+  const resolvedOcrMode = resolveOcrEngineMode({ ocrMode });
   const ocrResult = await extractChineseSubtitles({
     videoPath: ingestResult.videoPath,
     durationSec,
@@ -178,7 +196,7 @@ async function runDubbingPipeline({
     signal,
     isFastOcrMode: isFastOcr,
     generationMode: mode,
-    enableLocalOcr: isFastOcr ? false : undefined,
+    ocrMode: resolvedOcrMode,
   });
 
   checkAbort();
@@ -212,6 +230,26 @@ async function runDubbingPipeline({
     if (ingestResult?.videoPath && inputSegmentsForScript.length > 0) {
       try {
         await enrichCuesWithAcousticPitch(ingestResult.videoPath, inputSegmentsForScript, { signal });
+        if (inputSegmentsForScript.length > 0 && mode !== GENERATION_MODES.MODE_B_RECAP) {
+          const spkRes = await identifySpeakersForCues({
+            cues: inputSegmentsForScript,
+            videoPath: ingestResult.videoPath,
+            apiKey,
+            aiClient,
+            modelName: chosenModel,
+            mode,
+            seriesSpeakerMap: seriesGlossary?.seriesSpeakerMap || {},
+            castRegistry: seriesGlossary?.characters || [],
+            narratorGender,
+            signal,
+            onLog: (msg) => report('analyzeDialogueAudio', 54, `[SpeakerID] ${msg}`),
+          });
+          if (Array.isArray(spkRes?.cues) && spkRes.cues.length === inputSegmentsForScript.length) {
+            inputSegmentsForScript = spkRes.cues;
+            speakerIdentificationCalls += Number(spkRes.geminiCallsCount || 0);
+            speakerIdentificationStats = spkRes.stats || null;
+          }
+        }
         const maleCount = inputSegmentsForScript.filter((s) => s.acousticGender === 'male').length;
         const femaleCount = inputSegmentsForScript.filter((s) => s.acousticGender === 'female').length;
         const voicedCues = inputSegmentsForScript.filter((s) => s.acousticF0 > 0);
@@ -262,10 +300,61 @@ async function runDubbingPipeline({
     inputSegmentsForScript = (reconciliation.reconciledSegments || []).filter(
       (seg) => !isNonChineseAsrHallucination(seg)
     );
+    if (inputSegmentsForScript.length > 0 && mode !== GENERATION_MODES.MODE_B_RECAP) {
+      try {
+        await enrichCuesWithAcousticPitch(ingestResult.videoPath, inputSegmentsForScript, { signal });
+        const spkRes = await identifySpeakersForCues({
+          cues: inputSegmentsForScript,
+          videoPath: ingestResult.videoPath,
+          apiKey,
+          aiClient,
+          modelName: chosenModel,
+          mode,
+          seriesSpeakerMap: seriesGlossary?.seriesSpeakerMap || {},
+          castRegistry: seriesGlossary?.characters || [],
+          narratorGender,
+          signal,
+          onLog: (msg) => report('reconcileTimelineEvidence', 68, `[SpeakerID] ${msg}`),
+        });
+        if (Array.isArray(spkRes?.cues) && spkRes.cues.length === inputSegmentsForScript.length) {
+          inputSegmentsForScript = spkRes.cues;
+          speakerIdentificationCalls += Number(spkRes.geminiCallsCount || 0);
+          speakerIdentificationStats = spkRes.stats || null;
+        }
+      } catch (spkErr) {
+        if (spkErr?.name === 'AbortError' || signal?.aborted) throw spkErr;
+        console.warn('[Pipeline] Standard-mode speaker ID notice:', spkErr.message);
+      }
+    }
     console.log(`[Pipeline] cues detected: ${ocrResult.visualSegments?.length || 0} -> segments stored: ${inputSegmentsForScript.length} (Standard mode)`);
   }
 
   checkAbort();
+
+  // Save verified Chinese subtitle checkpoint (.srt + .json) BEFORE Stage 6 translation
+  let verifiedChineseSrtPath = null;
+  if (ingestResult?.episodeDir && Array.isArray(inputSegmentsForScript) && inputSegmentsForScript.length > 0) {
+    try {
+      verifiedChineseSrtPath = saveVerifiedChineseSrt(
+        inputSegmentsForScript,
+        path.join(ingestResult.episodeDir, 'verified_chinese.srt')
+      );
+      fs.writeFileSync(
+        path.join(ingestResult.episodeDir, 'verified_chinese_cues.json'),
+        JSON.stringify({
+          updatedAt: Date.now(),
+          count: inputSegmentsForScript.length,
+          cues: inputSegmentsForScript.map((c) => ({
+            sourceCueId: c.sourceCueId || null,
+            startSec: c.startSec,
+            endSec: c.endSec,
+            originalChineseText: c.originalChineseText || c.chineseText || c.textZh || '',
+          })),
+        }, null, 2),
+        'utf8'
+      );
+    } catch (_) {}
+  }
 
   // Stage 6: Generate Mode Specific Script (Mode A vs Mode B vs Fast OCR)
   report(
@@ -301,6 +390,7 @@ async function runDubbingPipeline({
   report('translateAndValidateKhmer', 85, 'កំពុងផ្ទៀងផ្ទាត់ភាសាខ្មែរ រក្សាអក្សរចិនដើម និងសម្គាល់ Review Needed...');
   const validationRes = await translateAndValidateKhmer({
     scriptSegments: scriptResult.scriptSegments,
+    sourceCues: mode === GENERATION_MODES.MODE_B_RECAP ? null : inputSegmentsForScript,
     mode: scriptResult.mode,
   });
 
@@ -310,6 +400,7 @@ async function runDubbingPipeline({
   report('validateSubtitleTiming', 92, 'កំពុងផ្ទៀងផ្ទាត់ Subtitle Timing (ទប់ស្កាត់ 0.01s និងចៀសវាង Overlap)...');
   const timingRes = await validateSubtitleTiming({
     segments: validationRes.validatedSegments,
+    sourceCues: mode === GENERATION_MODES.MODE_B_RECAP ? null : inputSegmentsForScript,
     durationSec,
   });
 
@@ -323,6 +414,11 @@ async function runDubbingPipeline({
   finalizedSegments = syncResult.segments || finalizedSegments;
   const speakerRegistry = syncResult.speakerRegistry || initialRegistry;
   const speakers = syncResult.speakers || [];
+  const updatedSeriesSpeakerMap = buildVerifiedSeriesSpeakerMapPatch(
+    finalizedSegments,
+    speakerRegistry,
+    seriesGlossary?.seriesSpeakerMap || {}
+  );
 
   checkAbort();
 
@@ -354,6 +450,25 @@ async function runDubbingPipeline({
 
   const totalTimeMs = Date.now() - startTime;
 
+  const ocrUsage = ocrResult?.ocrMeta?.usage || { requests: 0, promptTokens: 0, outputTokens: 0, totalTokens: 0 };
+  const transUsage = scriptResult?.usage || { requests: 0, promptTokens: 0, outputTokens: 0, totalTokens: 0 };
+  const combinedUsage = {
+    ocrRequests: ocrUsage.requests || 0,
+    ocrPromptTokens: ocrUsage.promptTokens || 0,
+    ocrOutputTokens: ocrUsage.outputTokens || 0,
+    ocrTotalTokens: ocrUsage.totalTokens || 0,
+    translationRequests: transUsage.requests || 0,
+    translationPromptTokens: transUsage.promptTokens || 0,
+    translationOutputTokens: transUsage.outputTokens || 0,
+    translationTotalTokens: transUsage.totalTokens || 0,
+    speakerIdentificationRequests: speakerIdentificationCalls,
+    totalRequests: (ocrUsage.requests || 0) + (transUsage.requests || 0) + speakerIdentificationCalls,
+    totalPromptTokens: (ocrUsage.promptTokens || 0) + (transUsage.promptTokens || 0),
+    totalOutputTokens: (ocrUsage.outputTokens || 0) + (transUsage.outputTokens || 0),
+    totalTokens: (ocrUsage.totalTokens || 0) + (transUsage.totalTokens || 0),
+  };
+
+  const sourceCuesForCheck = mode === GENERATION_MODES.MODE_B_RECAP ? null : inputSegmentsForScript;
   const coverageReport = computePipelineCompletenessReport({
     durationSec,
     verifiedSourceCuesCount: inputSegmentsForScript.length,
@@ -361,10 +476,19 @@ async function runDubbingPipeline({
     ocrVerifiedFrames: ocrResult?.ocrMeta?.verifiedFramesCount || 0,
     ocrUnresolvedFrames: ocrResult?.ocrMeta?.unresolvedFramesCount || 0,
     finalizedSegments,
+    sourceCues: sourceCuesForCheck,
+    ocrEngineMode: ocrResult?.ocrMeta?.ocrEngineMode || resolvedOcrMode,
+    usage: combinedUsage,
   });
 
+  const isPipelineComplete = mode === GENERATION_MODES.MODE_B_RECAP
+    ? ((coverageReport.ocrUnresolvedFramesCount || 0) === 0 && finalizedSegments.length > 0)
+    : Boolean(coverageReport.oneToOneMappingValid);
+  const pipelineFinalStatus = isPipelineComplete ? 'completed' : 'review_needed';
+
   const resultPayload = {
-    success: true,
+    success: isPipelineComplete,
+    status: pipelineFinalStatus,
     mode: scriptResult.mode,
     generationMode: mode,
     genre: scriptResult.genre || genre,
@@ -375,9 +499,11 @@ async function runDubbingPipeline({
     script: finalizedSegments,
     speakers,
     speakerRegistry,
+    seriesSpeakerMap: updatedSeriesSpeakerMap,
+    ...(speakerIdentificationStats ? { speakerIdentificationStats } : {}),
     coverage: coverageReport,
     recoveryReport: {
-      status: coverageReport.oneToOneMappingValid ? 'completed' : 'review_needed',
+      status: pipelineFinalStatus,
       recoveredSegmentsCount: reconciliation?.reconciliationMeta?.fusedSegmentsCount || 0,
       visualObservationsCount: ocrResult?.ocrMeta?.totalObservations || 0,
     },
@@ -386,6 +512,9 @@ async function runDubbingPipeline({
       seriesId: ingestResult.seriesId,
       episodeId: ingestResult.episodeId,
       modelUsed: chosenModel,
+      ocrEngineMode: ocrResult?.ocrMeta?.ocrEngineMode || resolvedOcrMode,
+      usage: combinedUsage,
+      verifiedChineseSrtPath,
       fileHash: ingestResult.fileHash,
       durationSec,
       totalTimeMs,
@@ -409,19 +538,22 @@ async function runDubbingPipeline({
     expectedEpisodeId: jobEpisodeId,
     scriptData: resultPayload,
     generationMode: mode,
-    status: coverageReport.oneToOneMappingValid ? 'translated' : 'review_needed',
+    status: isPipelineComplete ? 'translated' : 'review_needed',
     seriesGenre: scriptResult.genre || genre,
     seriesDetectedGenre: scriptResult.detectedGenre || scriptResult.genre || genre,
+    seriesSpeakerMap: updatedSeriesSpeakerMap,
     jobId: jobId || ingestResult?.jobId,
   });
-  console.log(`[Pipeline] ✅ Persisted ${persistRes.savedCount} script segments atomically to series.json for ${persistRes.episodeId}`);
+  console.log(`[Pipeline] ✅ Persisted ${persistRes.savedCount} script segments atomically to series.json for ${persistRes.episodeId} (status=${pipelineFinalStatus})`);
 
   if (jobId) {
     updateJob(jobId, {
-      status: 'completed',
-      progress: 100,
-      currentStage: 'completed',
-      stageMessage: `Pipeline completed with ${finalizedSegments.length} segments.`,
+      status: pipelineFinalStatus,
+      progress: isPipelineComplete ? 100 : 99,
+      currentStage: pipelineFinalStatus,
+      stageMessage: isPipelineComplete
+        ? `Pipeline completed with ${finalizedSegments.length} segments.`
+        : `Review needed: ${coverageReport.missingTranslationsCount || 0} missing/untranslated cue(s), ${coverageReport.ocrUnresolvedFramesCount || 0} unresolved OCR frame(s).`,
       finalResult: resultPayload,
     });
   }

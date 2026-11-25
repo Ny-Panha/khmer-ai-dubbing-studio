@@ -7,7 +7,11 @@ const {
   extractSubtitleDifferenceGrid,
   detectSubtitleChangePoints,
 } = require('../../ffmpegService');
-const { formatSecondsToTimecode } = require('../pipelineTypes');
+const {
+  formatSecondsToTimecode,
+  OCR_ENGINE_MODES,
+  resolveOcrEngineMode,
+} = require('../pipelineTypes');
 const { createAbortError } = require('../../../utils/asyncSemaphore');
 const { geminiQuotaTracker } = require('../../geminiQuotaTracker');
 const {
@@ -23,6 +27,7 @@ const {
   saveOcrCheckpoint,
   loadOcrCheckpoint,
   needsIndependentRead,
+  hasChineseHanzi,
   normalizeChineseChars,
   stripDecorativeSubtitleNoise,
   stripRepeatedLeadingTimeCardPrefix,
@@ -42,6 +47,61 @@ const {
   deduplicateFastOcrCues,
 } = require('./stage3VisionBatchRunner');
 
+function computeNormalizedTextSimilarity(a = '', b = '') {
+  const s1 = normalizeChineseChars(stripDecorativeSubtitleNoise(a));
+  const s2 = normalizeChineseChars(stripDecorativeSubtitleNoise(b));
+  if (!s1 && !s2) return 1;
+  if (!s1 || !s2) return 0;
+  if (s1 === s2) return 1;
+  if (s1.length === 1 || s2.length === 1) {
+    return (s1.includes(s2) || s2.includes(s1)) ? 0.5 : 0;
+  }
+  const bigrams = (str) => {
+    const counts = new Map();
+    for (let i = 0; i < str.length - 1; i++) {
+      const bg = str.slice(i, i + 2);
+      counts.set(bg, (counts.get(bg) || 0) + 1);
+    }
+    return counts;
+  };
+  const m1 = bigrams(s1);
+  const m2 = bigrams(s2);
+  let shared = 0;
+  for (const [bg, c1] of m1.entries()) {
+    const c2 = m2.get(bg) || 0;
+    if (c2 > 0) shared += Math.min(c1, c2);
+  }
+  return (2 * shared) / Math.max(1, (s1.length - 1) + (s2.length - 1));
+}
+
+function formatSrtTimestamp(sec = 0) {
+  const totalMs = Math.max(0, Math.round((Number(sec) || 0) * 1000));
+  const ms = totalMs % 1000;
+  const totalSec = Math.floor(totalMs / 1000);
+  const s = totalSec % 60;
+  const totalMin = Math.floor(totalSec / 60);
+  const m = totalMin % 60;
+  const h = Math.floor(totalMin / 60);
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')},${String(ms).padStart(3, '0')}`;
+}
+
+function saveVerifiedChineseSrt(cues = [], outputPath) {
+  if (!outputPath || !Array.isArray(cues)) return null;
+  const dir = path.dirname(outputPath);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  const lines = [];
+  cues.forEach((cue, idx) => {
+    const txt = String(cue?.originalChineseText || cue?.chineseText || cue?.textZh || '').trim();
+    if (!txt) return;
+    const startSec = Number(cue.sourceStartSec ?? cue.startSec ?? 0) || 0;
+    const endSec = Math.max(startSec + 0.35, Number(cue.sourceEndSec ?? cue.endSec ?? startSec + 1.2) || (startSec + 1.2));
+    lines.push(`${idx + 1}\n${formatSrtTimestamp(startSec)} --> ${formatSrtTimestamp(endSec)}\n${txt}`);
+  });
+  const content = lines.join('\n\n') + (lines.length ? '\n' : '');
+  fs.writeFileSync(outputPath, content, 'utf8');
+  return outputPath;
+}
+
 async function extractChineseSubtitles({
   videoPath,
   durationSec,
@@ -53,6 +113,7 @@ async function extractChineseSubtitles({
   signal = null,
   onProgress = null,
   enableLocalOcr = true,
+  ocrMode = null,
   cacheDir = defaultCacheDir,
   isFastOcrMode = false,
   generationMode = null,
@@ -64,6 +125,8 @@ async function extractChineseSubtitles({
     process.env.FAST_OCR_MODE === 'true'
   );
   const isFastOcr = fastOcrActive;
+  const ocrEngineMode = resolveOcrEngineMode({ ocrMode, enableLocalOcr });
+  const effectiveEnableLocalOcr = ocrEngineMode === OCR_ENGINE_MODES.HYBRID;
   let activeWorkingModel = modelName || geminiQuotaTracker.getPreferredPrimaryModel(CASCADE_VISION_MODELS[0]);
   const effectiveModel = activeWorkingModel;
   const checkAbort = () => {
@@ -177,6 +240,11 @@ async function extractChineseSubtitles({
   const telemetry = {
     apiTotalMs: 0,
     retrySleepMs: 0,
+    attempts: 0,
+    successfulCalls: 0,
+    promptTokens: 0,
+    outputTokens: 0,
+    totalTokens: 0,
   };
 
   const stage3StartTime = Date.now();
@@ -239,15 +307,14 @@ async function extractChineseSubtitles({
       return true;
     }
 
-    // (a) Change-point frames & mid-cue frames
-    if (fastOcrActive && cueStates.length > 0) {
+    // (a) Change-point frames & dual-read frames (use full dual-read when Hybrid local OCR is active)
+    const scheduleMidpointOnly = fastOcrActive && !effectiveEnableLocalOcr;
+    if (scheduleMidpointOnly && cueStates.length > 0) {
       for (const cs of cueStates) {
-        // Fast OCR: Extract sharp mid-point of cue (true center to avoid boundary fade-in/out)
         const midSec = Number(((cs.startSec + cs.endSec) / 2).toFixed(2));
         trySchedule(midSec, `cue_${cs.cueIndex}_mid`, 0.20);
         cueSamples.set(midSec, cs);
 
-        // For longer dialogues (>= 1.2s), sample second anchor at 75% to catch rapid subtitle transitions
         if (cs.duration >= 1.2) {
           const secondSec = Number((cs.startSec + cs.duration * 0.75).toFixed(2));
           trySchedule(secondSec, `cue_${cs.cueIndex}_sampleB`, 0.20);
@@ -260,7 +327,6 @@ async function extractChineseSubtitles({
 
         cueSamples.set(cs.sampleASec, cs);
         cueSamples.set(cs.sampleBSec, cs);
-        // Low grid difference affects anchor spacing only. It cannot prove text equality.
         if (getMaxSubtitleDiffBetween(cs.sampleASec, cs.sampleBSec) >= 2.5) {
           trySchedule(cs.sampleBSec, `cue_${cs.cueIndex}_sampleB`, 0.12);
         }
@@ -274,15 +340,14 @@ async function extractChineseSubtitles({
 
     const stepDiff = 0.2; // 5 fps pre-pass step
 
-    // (b) Baseline safety net (0.75s grid deduplicated)
-    // Fill unmonitored visual activity gaps (where subtitle diff >= 8.0) even in Fast OCR
-    const effectiveStep = fastOcrActive ? 1.0 : Math.max(0.5, Number(baseStepSec) || 0.75);
+    // (b) Baseline safety net (0.75s grid deduplicated) + adaptive <=0.5s subtle-change scan
+    const effectiveStep = scheduleMidpointOnly ? 1.0 : Math.max(0.5, Number(baseStepSec) || 0.75);
     let curTime = safeStartSec === 0 ? 0.5 : safeStartSec;
 
     while (curTime < endSec) {
       const rounded = parseFloat(curTime.toFixed(2));
       let isCovered = false;
-      const coverageThreshold = fastOcrActive ? 0.60 : 0.40;
+      const coverageThreshold = scheduleMidpointOnly ? 0.60 : 0.40;
       for (const ex of scheduled) {
         if (Math.abs(ex - rounded) <= coverageThreshold) {
           isCovered = true;
@@ -304,7 +369,14 @@ async function extractChineseSubtitles({
 
         if (maxNearDiff >= 8.0 || frameDiffs.length === 0) {
           trySchedule(rounded, 'baseline_active', 0.20);
-        } else if (!fastOcrActive) {
+        } else if (maxNearDiff >= 4.0) {
+          // Adaptive local rescan for faint/low-contrast subtitles at <= 0.45s resolution
+          const peakDiff = nearDiffs.reduce((best, d) => {
+            const val = typeof d?.subDiff === 'number' ? d.subDiff : 0;
+            return val > (best?.val || 0) ? { val, timestampSec: d.timestampSec } : best;
+          }, null);
+          trySchedule(peakDiff?.timestampSec ?? rounded, 'baseline_subtle_rescan', 0.20);
+        } else if (!scheduleMidpointOnly) {
           // Static scene: drop frame count! Sparse anchor only if gap >= 4.0s
           let hasRecentAnchor = false;
           for (const ex of scheduled) {
@@ -321,7 +393,7 @@ async function extractChineseSubtitles({
       curTime += effectiveStep;
     }
 
-    if (!fastOcrActive) {
+    if (!scheduleMidpointOnly) {
       for (const t of cueSamples.keys()) {
         if (!scheduled.has(t)) trySchedule(t, 'independent_sample', 0);
       }
@@ -376,8 +448,6 @@ async function extractChineseSubtitles({
 
     // 2.5 HYBRID LOCAL CHINESE OCR & VERIFICATION ROUTER
     const availabilityStart = Date.now();
-    const skipLocalOcr = fastOcrActive || (process.env.SKIP_LOCAL_OCR === 'true');
-    const effectiveEnableLocalOcr = Boolean(!fastOcrActive && (enableLocalOcr !== false) && (process.env.ENABLE_LOCAL_CHINESE_OCR !== 'false'));
     if (effectiveEnableLocalOcr && framesToAnalyze.length) {
       try {
         isLocalOcrActive = await isLocalChineseOcrAvailable();
@@ -477,9 +547,12 @@ async function extractChineseSubtitles({
 
         if (localMap.size) {
           // HYBRID VERIFICATION ROUTER (Section 5):
+          // Track cue-state sampleA/sampleB text disagreements so baseline loop never self-certifies them
+          const disagreedTimestamps = new Set();
+
           // A. LOCAL VERIFIED:
           // 1. Both sampleA and sampleB empty with confidence >= 0.70
-          // 2. Both sampleA and sampleB have text, are equivalent, and confidence >= 0.70
+          // 2. Both sampleA and sampleB have Chinese text, are equivalent, and confidence >= 0.70 (1-char requires >= 0.85)
           if (cueStates.length > 0) {
             for (const cs of cueStates) {
               const tA = parseFloat(cs.sampleASec.toFixed(2));
@@ -491,10 +564,14 @@ async function extractChineseSubtitles({
 
               const confA = rA.confidence || 0;
               const confB = rB.confidence || 0;
-              const textA = rA.hasText ? (rA.chineseText || rA.textZh || '') : '';
-              const textB = rB.hasText ? (rB.chineseText || rB.textZh || '') : '';
+              const rawTextA = rA.hasText ? stripDecorativeSubtitleNoise(rA.chineseText || rA.textZh || '') : '';
+              const rawTextB = rB.hasText ? stripDecorativeSubtitleNoise(rB.chineseText || rB.textZh || '') : '';
+              const hasHanziA = Boolean(rawTextA && hasChineseHanzi(rawTextA));
+              const hasHanziB = Boolean(rawTextB && hasChineseHanzi(rawTextB));
+              const textA = hasHanziA ? rawTextA : '';
+              const textB = hasHanziB ? rawTextB : '';
 
-              if (!rA.hasText && !rB.hasText && confA >= 0.70 && confB >= 0.70) {
+              if (!hasHanziA && !hasHanziB && !rA.hasText && !rB.hasText && confA >= 0.70 && confB >= 0.70) {
                 if (!completedMap.has(tA)) {
                   completedMap.set(tA, {
                     timestampSec: tA,
@@ -545,8 +622,14 @@ async function extractChineseSubtitles({
                   });
                   localVerifiedCount++;
                 }
-              } else if (rA.hasText && rB.hasText && sameSubtitleText(textA, textB) && confA >= 0.70 && confB >= 0.70) {
+              } else if (hasHanziA && hasHanziB && sameSubtitleText(textA, textB) && confA >= 0.70 && confB >= 0.70) {
                 const resolvedText = textA.length >= textB.length ? textA : textB;
+                const normResolvedLen = normalizeChineseChars(resolvedText).length;
+                if (normResolvedLen <= 1 && (confA < 0.85 || confB < 0.85)) {
+                  disagreedTimestamps.add(tA);
+                  disagreedTimestamps.add(tB);
+                  continue;
+                }
                 if (!completedMap.has(tA)) {
                   completedMap.set(tA, {
                     timestampSec: tA,
@@ -597,26 +680,37 @@ async function extractChineseSubtitles({
                   });
                   localVerifiedCount++;
                 }
+              } else if (hasHanziA && hasHanziB && !sameSubtitleText(textA, textB)) {
+                // Conflicting RapidOCR reads within one cue: block local self-certification so Gemini settles it cleanly
+                disagreedTimestamps.add(tA);
+                disagreedTimestamps.add(tB);
               }
             }
           }
 
-          // Baseline frames: high-confidence local text continues without Gemini;
-          // Empty frames require independent supporting evidence before marking verified_empty
+          // Baseline frames: high-confidence local Chinese text continues without Gemini;
+          // Reject pure-ASCII/non-Hanzi prop text and require neighbor confirmation or >= 0.94 conf for isolated 1-char hits.
           for (const cand of candidateTimestamps) {
             const t = cand.timestampSec;
-            if (completedMap.has(t)) continue;
+            if (completedMap.has(t) || disagreedTimestamps.has(t)) continue;
             const loc = localMap.get(t);
             if (!loc) continue;
 
-            if (loc.hasText && (loc.confidence || 0) >= 0.85) {
+            const rawLocText = loc.hasText ? stripDecorativeSubtitleNoise(loc.chineseText || loc.textZh || '') : '';
+            const locHasHanzi = Boolean(rawLocText && hasChineseHanzi(rawLocText));
+            const normLocLen = locHasHanzi ? normalizeChineseChars(rawLocText).length : 0;
+            const isSingleCharConfirmed = normLocLen > 1 || Array.from(localMap.values()).some(
+              (other) => other !== loc && other.hasText && Math.abs((other.timestampSec || 0) - t) <= 1.1 && sameSubtitleText(rawLocText, other.chineseText || other.textZh || '')
+            );
+
+            if (locHasHanzi && isSingleCharConfirmed && (loc.confidence || 0) >= 0.85) {
               // High-confidence local text continues without Gemini
               completedMap.set(t, {
                 timestampSec: t,
                 reportedSec: t,
                 hasText: true,
-                textZh: loc.chineseText || loc.textZh || '',
-                chineseText: loc.chineseText || loc.textZh || '',
+                textZh: rawLocText,
+                chineseText: rawLocText,
                 confidence: loc.confidence,
                 isSharp: loc.confidence >= 0.70,
                 position: loc.position || 'bottom_subtitle',
@@ -634,7 +728,7 @@ async function extractChineseSubtitles({
                 ocrEngine: 'rapidocr-local',
               });
               localVerifiedCount++;
-            } else if (!loc.hasText && (loc.confidence || 0) >= 0.70) {
+            } else if ((!loc.hasText || !locHasHanzi) && (loc.confidence || 0) >= 0.70) {
               // Independent supporting evidence: verify empty ONLY if surrounded by verified empty frames
               // within a static window where max subtitle difference is < 1.0 (subDiff < 1.0)
               const prevVerified = Array.from(completedMap.values())
@@ -998,22 +1092,30 @@ async function extractChineseSubtitles({
     evaluatedCueStates.length = 0;
     const statesNeedingTieBreak = [];
 
-    if (isFastOcr && cueStates.length > 0) {
+    const hasSampleObservation = (targetT) => {
+      const roundedT = parseFloat(Number(targetT).toFixed(2));
+      return completedMap.has(roundedT) || unresolvedMap.has(roundedT);
+    };
+    const useMidpointOnlyEvaluation = isFastOcr && !effectiveEnableLocalOcr && cueStates.length > 0 && cueStates.every(
+      (cs) => !hasSampleObservation(cs.sampleASec) && !hasSampleObservation(cs.sampleBSec)
+    );
+
+    if (useMidpointOnlyEvaluation) {
       for (const cs of cueStates) {
         const midSec = Number(((cs.startSec + cs.endSec) / 2).toFixed(2));
         const secondSec = cs.duration >= 1.2 ? Number((cs.startSec + cs.duration * 0.75).toFixed(2)) : null;
         const obs = getObservation(midSec) || getObservation(cs.sampleASec) || (secondSec ? getObservation(secondSec) : null);
-        if (obs && obs.hasText && obs.chineseText) {
+        if (obs && obs.hasText && obs.chineseText && hasChineseHanzi(obs.chineseText)) {
           evaluatedCueStates.push({
             ...cs,
             textZh: obs.chineseText,
             originalChineseText: obs.chineseText,
             chineseText: obs.chineseText,
             position: obs.position || 'bottom_subtitle',
-            ocrConfidence: 'high',
-            reviewNeeded: false,
+            ocrConfidence: obs.reviewNeeded ? 'medium' : 'high',
+            reviewNeeded: Boolean(obs.reviewNeeded),
             ocrDisagreement: false,
-            uncertainOcr: false,
+            uncertainOcr: Boolean(obs.uncertainOcr),
             visualGender: obs.visualGender || obs.speakerGender || 'unknown',
             speakerVisualHint: obs.speakerVisualHint || '',
             deliveryType: obs.deliveryType || 'dialogue',
@@ -1028,10 +1130,10 @@ async function extractChineseSubtitles({
         const obsA = getObservation(cs.sampleASec);
         const obsB = getObservation(cs.sampleBSec);
 
-        const hasA = Boolean(obsA && obsA.hasText && obsA.chineseText);
-        const hasB = Boolean(obsB && obsB.hasText && obsB.chineseText);
-        const textA = hasA ? obsA.chineseText : '';
-        const textB = hasB ? obsB.chineseText : '';
+        const textA = (obsA && obsA.hasText && obsA.chineseText && hasChineseHanzi(obsA.chineseText)) ? obsA.chineseText : '';
+        const textB = (obsB && obsB.hasText && obsB.chineseText && hasChineseHanzi(obsB.chineseText)) ? obsB.chineseText : '';
+        const hasA = Boolean(textA);
+        const hasB = Boolean(textB);
 
         // If neither frame contained text, this state is non-dialogue (motion or silence)
         if (!hasA && !hasB) {
@@ -1067,8 +1169,24 @@ async function extractChineseSubtitles({
             },
           });
         } else if (hasA && hasB && !sameSubtitleText(textA, textB)) {
-          // Both frames have valid distinct Chinese dialogue text!
-          // Split at transition peak in frameDiffs or midpoint so neither line is dropped
+          // Guard against splitting 1-2 char OCR typo variants (e.g. 占卜一下 vs 占下一下) into 2 corrupt cues!
+          const normA = normalizeChineseChars(textA);
+          const normB = normalizeChineseChars(textB);
+          const simRatio = computeNormalizedTextSimilarity(textA, textB);
+          const subDiffAB = getMaxSubtitleDiffBetween(cs.sampleASec, cs.sampleBSec);
+          const isSubstringOrPrefix = (normA.length >= 2 && normB.length >= 2) && (normA.includes(normB) || normB.includes(normA));
+          const looksLikeGenuineRapidSplit = subDiffAB >= 8.0 && simRatio < 0.45 && !isSubstringOrPrefix;
+
+          if (!looksLikeGenuineRapidSplit) {
+            statesNeedingTieBreak.push({
+              cueState: cs,
+              obsA,
+              obsB,
+            });
+            continue;
+          }
+
+          // Both frames have genuinely distinct sequential Chinese dialogue text across a strong visual transition!
           let splitT = parseFloat(((cs.sampleASec + cs.sampleBSec) / 2).toFixed(2));
           const idxA = Math.round((cs.sampleASec - safeStartSec) / stepDiff);
           const idxB = Math.round((cs.sampleBSec - safeStartSec) / stepDiff);
@@ -1198,7 +1316,7 @@ async function extractChineseSubtitles({
       }
 
       // Execute tie-break read if any disagreements occurred
-      if (!isFastOcr && statesNeedingTieBreak.length > 0) {
+      if (statesNeedingTieBreak.length > 0) {
         checkAbort();
         const tieBreakStart = Date.now();
         console.log(`[Stage 3 OCR] Executing tie-break verification for ${statesNeedingTieBreak.length} candidate cue states...`);
@@ -1261,9 +1379,9 @@ async function extractChineseSubtitles({
           const { cueState: cs, obsA, obsB } = item;
           const obsTie = getObservation(cs.sampleTieSec);
 
-          const textA = (obsA && obsA.hasText) ? obsA.chineseText : '';
-          const textB = (obsB && obsB.hasText) ? obsB.chineseText : '';
-          const textTie = (obsTie && obsTie.hasText) ? obsTie.chineseText : '';
+          const textA = (obsA && obsA.hasText && hasChineseHanzi(obsA.chineseText)) ? obsA.chineseText : '';
+          const textB = (obsB && obsB.hasText && hasChineseHanzi(obsB.chineseText)) ? obsB.chineseText : '';
+          const textTie = (obsTie && obsTie.hasText && hasChineseHanzi(obsTie.chineseText)) ? obsTie.chineseText : '';
 
           let resolvedText = '';
           let ocrConfidence = 'high';
@@ -1280,9 +1398,17 @@ async function extractChineseSubtitles({
             resolvedText = textA.length >= textTie.length ? textA : textTie;
           } else if (textA && textB && sameSubtitleText(textA, textB)) {
             resolvedText = textA.length >= textB.length ? textA : textB;
+          } else if (textTie && obsTie?.ocrEngine === 'gemini-vision' && obsTie?.isSharp !== false) {
+            // Gemini Vision tie-break settles conflicting local OCR reads cleanly
+            resolvedText = textTie;
+            ocrConfidence = 'medium';
+            reviewNeeded = false;
+            ocrDisagreement = true;
+            uncertainOcr = false;
           } else {
-            // Still unresolved! Keep majority / first non-empty read BUT flag as low confidence
-            resolvedText = textA || textB || textTie;
+            // Still unresolved! Keep Gemini-verified read first if available, else first non-empty read, and flag review
+            const geminiPick = [obsA, obsB, obsTie].find((o) => o?.ocrEngine === 'gemini-vision' && o?.hasText && hasChineseHanzi(o?.chineseText));
+            resolvedText = (geminiPick?.chineseText) || textTie || textA || textB;
             ocrConfidence = 'low';
             reviewNeeded = true;
             ocrDisagreement = true;
@@ -1361,8 +1487,8 @@ async function extractChineseSubtitles({
       resolvedConfidence = 0.85;
     }
 
-    const voiceGender = resolvedGender === 'female' ? 'female' : 'male';
-    const khmerVoiceId = voiceGender === 'female' ? 'km-KH-SreymomNeural' : 'km-KH-PisethNeural';
+    const voiceGender = resolvedGender === 'female' ? 'female' : (resolvedGender === 'male' ? 'male' : 'unknown');
+    const khmerVoiceId = voiceGender === 'female' ? 'km-KH-SreymomNeural' : (voiceGender === 'male' ? 'km-KH-PisethNeural' : 'km-KH-PisethNeural');
 
     return {
       visualGender: resolvedGender,
@@ -1378,7 +1504,7 @@ async function extractChineseSubtitles({
   // STEP 2B: Recover valid rawObservations with text that were not covered in evaluatedCueStates
   if (Array.isArray(rawObservations) && rawObservations.length > 0) {
     const uncapturedObservations = rawObservations.filter((obs) => {
-      if (!obs.hasText || !obs.chineseText || normalizeChineseChars(obs.chineseText).length === 0) {
+      if (!obs.hasText || !obs.chineseText || !hasChineseHanzi(obs.chineseText) || normalizeChineseChars(obs.chineseText).length === 0) {
         return false;
       }
       const isCovered = evaluatedCueStates.some((c) => {
@@ -1696,11 +1822,20 @@ async function extractChineseSubtitles({
     rapidOcrInitMs,
     avgMsPerFrame,
     peakMemoryMb: parseFloat((process.resourceUsage().maxRSS / 1024).toFixed(1)),
+    ocrEngineMode,
+    geminiUsage: {
+      requests: apiCallsCount,
+      attempts: telemetry.attempts || 0,
+      successfulCalls: telemetry.successfulCalls || 0,
+      promptTokens: telemetry.promptTokens || 0,
+      outputTokens: telemetry.outputTokens || 0,
+      totalTokens: telemetry.totalTokens || 0,
+    },
   };
 
   const ocrEngineLabel = isLocalOcrActive ? (geminiRequestedTimes.size > 0 ? 'hybrid-rapidocr-gemini' : 'rapidocr-local') : 'gemini-vision';
   const ocrWallTimeSec = (ocrWallTimeMs / 1000).toFixed(1);
-  console.log(`[Stage 3 Extract Subtitles] OCR engine: ${ocrEngineLabel} (${activeWorkingModel}, wall time: ${ocrWallTimeSec}s, local OCR: ${(localOcrMs / 1000).toFixed(1)}s, api: ${(telemetry.apiTotalMs / 1000).toFixed(1)}s, prepass: ${(ffmpegPrepassMs / 1000).toFixed(1)}s, calls: ${apiCallsCount}, localVerified: ${localVerifiedCount}, geminiVerified: ${geminiVerifiedCount}, deduped: ${dedupedFramesCount}, ${finalizedVisualSegments.length} cues)`);
+  console.log(`[Stage 3 Extract Subtitles] OCR engine: ${ocrEngineLabel} [mode=${ocrEngineMode}] (${activeWorkingModel}, wall time: ${ocrWallTimeSec}s, local OCR: ${(localOcrMs / 1000).toFixed(1)}s, api: ${(telemetry.apiTotalMs / 1000).toFixed(1)}s, prepass: ${(ffmpegPrepassMs / 1000).toFixed(1)}s, calls: ${apiCallsCount}, localVerified: ${localVerifiedCount}, geminiVerified: ${geminiVerifiedCount}, deduped: ${dedupedFramesCount}, ${finalizedVisualSegments.length} cues)`);
   console.log(`[Stage 3 Extract Subtitles] Completed with ${finalizedVisualSegments.length} deduplicated visual segments detected from ${rawObservations.length} observations.`);
 
   const result = {
@@ -1711,6 +1846,8 @@ async function extractChineseSubtitles({
     unresolvedFrames: Array.from(unresolvedMap.values()),
     ocrMeta: {
       independentSamples: true,
+      ocrEngineMode,
+      usage: performance.geminiUsage,
       totalFramesSampled: rawObservations.length,
       totalObservations: rawObservations.length,
       detectedSegmentsCount: finalizedVisualSegments.length,
@@ -1796,6 +1933,7 @@ async function extractChineseSubtitles({
 
 module.exports = {
   extractChineseSubtitles,
+  saveVerifiedChineseSrt,
   parseVisionResponseFrames,
   normalizeChineseChars,
   stripDecorativeSubtitleNoise,

@@ -295,8 +295,247 @@ function classifySegmentAcousticGender(mediaFilePathOrPcm, startSecOrSampleRate 
   });
 }
 
+const BAND_CENTER_FREQS = [180, 380, 700, 1200, 1950, 2900];
+
+function computeBandEnergy(samples, offset, len, freq, sampleRate) {
+  const omega = (2 * Math.PI * freq) / sampleRate;
+  const coeff = 2 * Math.cos(omega);
+  let q1 = 0;
+  let q2 = 0;
+  for (let i = 0; i < len; i++) {
+    const x = samples[offset + i] / 32768.0;
+    const q0 = coeff * q1 - q2 + x;
+    q2 = q1;
+    q1 = q0;
+  }
+  return Math.max(0, q1 * q1 + q2 * q2 - q1 * q2 * coeff);
+}
+
+/**
+ * Compute detailed multi-feature acoustic profile for a cue PCM slice
+ * (pitch median/IQR, voiced ratio, spectral centroid, high-mid formant brightness, BGM spread flag).
+ */
+function computeAcousticCueFeatures(pcmData, sampleRate = 16000) {
+  if (!pcmData || pcmData.length < 1024) {
+    return {
+      f0: 0,
+      p25F0: 0,
+      p75F0: 0,
+      pitchIqr: 0,
+      confidence: 0,
+      voicedFrames: 0,
+      voicedRatio: 0,
+      spectralCentroidHz: 0,
+      highMidRatio: 0,
+      zcr: 0,
+      bgmSuspected: true,
+      gender: "unknown",
+    };
+  }
+
+  const FRAME_SAMPLES = Math.min(pcmData.length, Math.round(sampleRate * 0.15)); // 150ms
+  const HOP_SAMPLES = Math.max(512, Math.floor(FRAME_SAMPLES / 2));             // 75ms hop
+  const totalWindows = pcmData.length <= FRAME_SAMPLES
+    ? 1
+    : Math.floor((pcmData.length - FRAME_SAMPLES) / HOP_SAMPLES) + 1;
+
+  const f0Estimates = [];
+  const confEstimates = [];
+  const centroids = [];
+  const brightnessRatios = [];
+  const zcrVals = [];
+  let speechWindows = 0;
+
+  for (let w = 0; w < totalWindows; w++) {
+    const off = Math.min(pcmData.length - FRAME_SAMPLES, w * HOP_SAMPLES);
+    const slice = pcmData.subarray(off, off + FRAME_SAMPLES);
+
+    let energy = 0;
+    let zeroCrossings = 0;
+    for (let i = 0; i < slice.length; i++) {
+      const s = slice[i] / 32768.0;
+      energy += s * s;
+      if (i > 0 && ((slice[i] >= 0 && slice[i - 1] < 0) || (slice[i] < 0 && slice[i - 1] >= 0))) {
+        zeroCrossings++;
+      }
+    }
+    const rms = Math.sqrt(energy / slice.length);
+    if (rms < 0.018) continue;
+    speechWindows++;
+
+    const est = computeYinPitch(slice, sampleRate);
+    const bandLen = Math.min(slice.length, 512);
+    const bandEnergies = BAND_CENTER_FREQS.map((freq) => computeBandEnergy(slice, 0, bandLen, freq, sampleRate));
+    const totalBand = bandEnergies.reduce((a, b) => a + b, 0) + 1e-9;
+    const centroid = bandEnergies.reduce((acc, val, idx) => acc + val * BAND_CENTER_FREQS[idx], 0) / totalBand;
+    const lowBand = bandEnergies[0] + bandEnergies[1] + 1e-9;
+    const highBand = bandEnergies[3] + bandEnergies[4] + bandEnergies[5];
+    centroids.push(centroid);
+    brightnessRatios.push(highBand / lowBand);
+    zcrVals.push(zeroCrossings / slice.length);
+
+    if (est && est.f0 >= 78 && est.f0 <= 340 && est.confidence >= 0.45) {
+      f0Estimates.push(est.f0);
+      confEstimates.push(est.confidence);
+    }
+  }
+
+  const voicedRatio = totalWindows > 0 ? Number((f0Estimates.length / totalWindows).toFixed(2)) : 0;
+  const meanOf = (arr) => (arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0);
+  const spectralCentroidHz = Math.round(meanOf(centroids));
+  const highMidRatio = Number(meanOf(brightnessRatios).toFixed(2));
+  const zcr = Number(meanOf(zcrVals).toFixed(4));
+
+  if (f0Estimates.length === 0) {
+    return {
+      f0: 0,
+      p25F0: 0,
+      p75F0: 0,
+      pitchIqr: 0,
+      confidence: 0,
+      voicedFrames: 0,
+      voicedRatio,
+      spectralCentroidHz,
+      highMidRatio,
+      zcr,
+      bgmSuspected: true,
+      gender: "unknown",
+    };
+  }
+
+  f0Estimates.sort((a, b) => a - b);
+  const medianF0 = f0Estimates[Math.floor(f0Estimates.length / 2)];
+  const p25F0 = f0Estimates[Math.floor(f0Estimates.length * 0.25)];
+  const p75F0 = f0Estimates[Math.min(f0Estimates.length - 1, Math.floor(f0Estimates.length * 0.75))];
+  const pitchIqr = Math.round(p75F0 - p25F0);
+  const avgConf = Number((meanOf(confEstimates)).toFixed(2));
+  const bgmSuspected = pitchIqr >= 72 || voicedRatio < 0.22 || speechWindows === 0;
+
+  let gender = "unknown";
+  let outConf = avgConf;
+  if (!bgmSuspected) {
+    if (medianF0 >= 182 && medianF0 <= 325 && p25F0 >= 156) {
+      gender = "female";
+    } else if (medianF0 >= 80 && medianF0 <= 150 && p75F0 <= 174) {
+      gender = "male";
+    } else {
+      gender = "unknown";
+      outConf = Math.min(0.55, avgConf || 0.5);
+    }
+  } else {
+    outConf = Math.min(0.5, avgConf || 0.45);
+  }
+
+  return {
+    f0: Math.round(medianF0),
+    p25F0: Math.round(p25F0),
+    p75F0: Math.round(p75F0),
+    pitchIqr,
+    confidence: outConf,
+    voicedFrames: f0Estimates.length,
+    voicedRatio,
+    spectralCentroidHz,
+    highMidRatio,
+    zcr,
+    bgmSuspected,
+    gender,
+  };
+}
+
+/**
+ * Unsupervised local acoustic speaker diarization clustering across cues.
+ * Groups cues sharing compatible timbre/F0 vectors into stable cluster IDs (ac_spk_1, ac_spk_2, ...)
+ * without crossing verified opposing male/female vocal bounds.
+ */
+function clusterCueSpeakers(cues = [], maxDist = 0.78) {
+  if (!Array.isArray(cues) || cues.length === 0) return cues;
+  const clusters = [];
+
+  for (let i = 0; i < cues.length; i++) {
+    const cue = cues[i];
+    const f0 = Number(cue?.pitchHz || cue?.acousticF0 || 0);
+    const centroid = Number(cue?.spectralCentroidHz || 900);
+    const bright = Math.max(0.15, Number(cue?.highMidRatio || 1.0));
+    const voicedRatio = Number(cue?.voicedRatio ?? 0.5);
+    const gender = String(cue?.acousticGender || "unknown").toLowerCase();
+    const ambiguous = Boolean(cue?.acousticAmbiguous || cue?.bgmSuspected || f0 <= 0 || voicedRatio < 0.2);
+
+    if (ambiguous) {
+      cue.acousticClusterId = cue.acousticClusterId || null;
+      continue;
+    }
+
+    const f0Log = Math.log2(Math.max(60, f0) / 140);
+    const centLog = Math.log2(Math.max(150, centroid) / 900);
+    const brightLog = Math.log2(bright);
+
+    let bestCluster = null;
+    let bestDist = Infinity;
+
+    for (const cl of clusters) {
+      if (
+        (gender === "male" && cl.gender === "female") ||
+        (gender === "female" && cl.gender === "male")
+      ) {
+        continue;
+      }
+      if (Math.abs(f0 - cl.medianF0) > 52 && gender !== cl.gender) {
+        continue;
+      }
+      const dF0 = (f0Log - cl.f0Log) * 1.4;
+      const dCent = (centLog - cl.centLog) * 0.7;
+      const dBright = (brightLog - cl.brightLog) * 0.5;
+      const dist = Math.sqrt(dF0 * dF0 + dCent * dCent + dBright * dBright);
+      if (dist <= maxDist && dist < bestDist) {
+        bestDist = dist;
+        bestCluster = cl;
+      }
+    }
+
+    if (bestCluster) {
+      bestCluster.members.push(cue);
+      const n = bestCluster.members.length;
+      bestCluster.f0Log = ((bestCluster.f0Log * (n - 1)) + f0Log) / n;
+      bestCluster.centLog = ((bestCluster.centLog * (n - 1)) + centLog) / n;
+      bestCluster.brightLog = ((bestCluster.brightLog * (n - 1)) + brightLog) / n;
+      bestCluster.medianF0 = Math.round(
+        bestCluster.members.reduce((acc, m) => acc + Number(m.pitchHz || m.acousticF0 || 0), 0) / n
+      );
+      if (bestCluster.gender === "unknown" && (gender === "male" || gender === "female")) {
+        bestCluster.gender = gender;
+      }
+      cue.acousticClusterId = bestCluster.id;
+    } else {
+      const id = `ac_spk_${clusters.length + 1}`;
+      const newCluster = {
+        id,
+        gender: gender === "male" || gender === "female" ? gender : "unknown",
+        f0Log,
+        centLog,
+        brightLog,
+        medianF0: Math.round(f0),
+        members: [cue],
+      };
+      clusters.push(newCluster);
+      cue.acousticClusterId = id;
+    }
+  }
+
+  for (const cl of clusters) {
+    for (const m of cl.members) {
+      m.acousticClusterId = cl.id;
+      m.acousticClusterSize = cl.members.length;
+      m.acousticClusterMedianHz = cl.medianF0;
+      m.acousticClusterGender = cl.gender;
+    }
+  }
+  return cues;
+}
+
 module.exports = {
   computeYinPitch,
+  computeAcousticCueFeatures,
+  clusterCueSpeakers,
   classifySegmentAcousticGender,
   aggregateSpeakerAcoustics,
 };

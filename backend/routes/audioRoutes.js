@@ -431,11 +431,17 @@ router.post("/generate-audio", async (req, res) => {
         return "";
       };
       const segSpeakerName = String(segment.speaker || segment.speakerName || "").trim();
+      const isStep1VerifiedAudio = Boolean(
+        segment.speakerStatus === "verified" ||
+        segment.speakerVerified === true ||
+        segment.voiceAssignmentSource === "multimodal_verified" ||
+        segment.voiceAssignmentSource === "series_glossary"
+      );
       const segGender =
         normKnownGender(segment.voiceGender) ||
-        normKnownGender(detectSpeakerGender(segSpeakerName, "", segment.khmer || segment.khmerText)) ||
         normKnownGender(segment.gender) ||
         normKnownGender(segment.speakerGender) ||
+        (isStep1VerifiedAudio ? "" : normKnownGender(detectSpeakerGender(segSpeakerName, "", ""))) ||
         "unknown";
       const requestedVoice = rawBodyVoiceId || null;
       const isSegManual = Boolean(segment.userOverridden || segment.voiceAssignmentSource === "manual" || segment.voiceOverride);

@@ -164,6 +164,7 @@ router.post("/generate", async (req, res) => {
       seriesGlossary,
       apiKey,
       modelName,
+      ocrMode = null,
       chunkSizeSec = 300,
       overlapSec = 2,
     } = req.body;
@@ -288,6 +289,31 @@ router.post("/generate", async (req, res) => {
       console.log(`[Job Dispatch] 🔄 Force Re-Run: Cancelled previous active job for ${seriesId}/${episodeId}`);
     }
 
+    const mergedSeriesSpeakerMap = {};
+    if (seriesMeta?.seriesSpeakerMap && typeof seriesMeta.seriesSpeakerMap === "object") {
+      Object.assign(mergedSeriesSpeakerMap, seriesMeta.seriesSpeakerMap);
+    }
+    if (Array.isArray(seriesMeta?.glossary?.characters)) {
+      for (const ch of seriesMeta.glossary.characters) {
+        if (!ch || !ch.name) continue;
+        const k = String(ch.name).trim();
+        if (!mergedSeriesSpeakerMap[k] && (ch.voiceId || ch.khmerVoiceId)) {
+          mergedSeriesSpeakerMap[k] = {
+            ...ch,
+            speakerId: ch.speakerId || ch.id,
+            khmerVoiceId: ch.khmerVoiceId || ch.voiceId,
+          };
+        }
+      }
+    }
+    if (seriesGlossary?.seriesSpeakerMap && typeof seriesGlossary.seriesSpeakerMap === "object") {
+      Object.assign(mergedSeriesSpeakerMap, seriesGlossary.seriesSpeakerMap);
+    }
+    const hydratedSeriesGlossary = {
+      ...(seriesGlossary && typeof seriesGlossary === "object" ? seriesGlossary : {}),
+      seriesSpeakerMap: mergedSeriesSpeakerMap,
+    };
+
     const { jobData } = createJob({
       seriesId,
       episodeId,
@@ -302,8 +328,9 @@ router.post("/generate", async (req, res) => {
         modelName: modelName || process.env.GEMINI_MODEL || null,
         customPrompt,
         narratorGender,
-        seriesGlossary,
+        seriesGlossary: hydratedSeriesGlossary,
         genre,
+        ocrMode,
         force: Boolean(req.body.force || req.body.confirmed),
         forceRegen: Boolean(req.body.force || req.body.confirmed || req.body.forceRegen),
       },

@@ -1,8 +1,19 @@
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { GENERATION_MODES, computePipelineCompletenessReport } = require('./pipelineTypes');
-const { extractChineseSubtitles, isExactChineseSubtitleMatch, areChineseTextsEquivalent, deduplicateFastOcrCues } = require('./stages/stage3_extractChineseSubtitles');
+const {
+  GENERATION_MODES,
+  computePipelineCompletenessReport,
+  resolveOcrEngineMode,
+} = require('./pipelineTypes');
+const {
+  extractChineseSubtitles,
+  saveVerifiedChineseSrt,
+  isExactChineseSubtitleMatch,
+  areChineseTextsEquivalent,
+  deduplicateFastOcrCues,
+} = require('./stages/stage3_extractChineseSubtitles');
+const { isCrossChunkOriginPair } = require('./stages/stage3VisionBatchRunner');
 const { analyzeDialogueAudio, enrichCuesWithAcousticPitch } = require('./stages/stage4_analyzeDialogueAudio');
 const { reconcileTimelineEvidence } = require('./stages/stage5_reconcileTimelineEvidence');
 const { generateModeSpecificScript } = require('./stages/stage6_generateModeSpecificScript');
@@ -11,6 +22,7 @@ const { validateSubtitleTiming } = require('./stages/stage8_validateSubtitleTimi
 const { generateSegmentTTS } = require('./stages/stage9_generateSegmentTTS');
 const { previewAndExport } = require('./stages/stage10_previewAndExport');
 const { buildSpeakerRegistry, syncSegmentsWithSpeakerRegistry } = require('../../models/speakerRegistry');
+const { identifySpeakersForCues, buildVerifiedSeriesSpeakerMapPatch } = require('./speakerIdentificationService');
 const { updateChunk, updateJob, productionJobQueue } = require('./jobManager');
 const { createAbortError } = require('../../utils/asyncSemaphore');
 const { isNonChineseAsrHallucination } = require('../../utils/translationQuality');
@@ -90,7 +102,7 @@ function stitchAndDeduplicateSegments(allChunkSegments = []) {
     const textA = seg.originalChineseText || seg.chineseText || '';
     const textB = prev.originalChineseText || prev.chineseText || '';
     const isTextMatch = isExactChineseSubtitleMatch(textA, textB);
-    const sameChunkSourceIds = Boolean(prev.sourceCueId && seg.sourceCueId && prev.sourceCueId !== seg.sourceCueId && prev.sourceCueId.split('_')[1] === seg.sourceCueId.split('_')[1]);
+    const sameChunkSourceIds = Boolean(prev.sourceCueId && seg.sourceCueId && prev.sourceCueId !== seg.sourceCueId && !isCrossChunkOriginPair(prev, seg));
 
     if (!sameChunkSourceIds && isTimeAdjacent && isTextMatch) {
       // Merge boundary segment without creating duplicate
@@ -160,7 +172,9 @@ async function runChunkedDubbingPipeline({
   overlapSec = 2,
   force = false,
   forceRegen = false,
+  ocrMode = null,
 }) {
+  const resolvedOcrMode = resolveOcrEngineMode({ ocrMode });
   const cleanRequestedModel = String(modelName || '').trim();
   const effectiveModelName = (cleanRequestedModel && cleanRequestedModel !== 'auto' && isUsableDubbingModel(cleanRequestedModel))
     ? cleanRequestedModel
@@ -206,6 +220,9 @@ async function runChunkedDubbingPipeline({
   }
 
   const allChunkSegments = [];
+  let runningSeriesSpeakerMap = { ...(seriesGlossary?.seriesSpeakerMap || {}) };
+  let speakerIdentificationCalls = 0;
+  let speakerIdentificationStats = null;
   const pipelineStartTime = Date.now();
   const pipelineStageDurations = {
     ocrMs: 0,
@@ -317,7 +334,7 @@ async function runChunkedDubbingPipeline({
           signal,
           isFastOcrMode: isFastOcr,
           generationMode: mode,
-          enableLocalOcr: isFastOcr ? false : undefined,
+          ocrMode: resolvedOcrMode,
           onProgress: (p) => {
             const batchPercent = p.totalBatches > 0
               ? Math.round(chunkPercent + (p.completedBatches / p.totalBatches) * ((1 / chunks.length) * 15))
@@ -389,6 +406,7 @@ async function runChunkedDubbingPipeline({
         }
 
         const ocrCuesCount = Array.isArray(ocrResult?.visualSegments) ? ocrResult.visualSegments.length : 0;
+        const chunkHasUnresolvedOcr = hasUnresolvedOcr;
 
         if (mode === GENERATION_MODES.FAST_OCR) {
           console.log(`[ChunkOrchestrator] ⚡ Fast OCR Mode: Skipping Stage 4 (ASR) & Stage 5 (Reconcile) for Chunk ${cIdx + 1}`);
@@ -405,6 +423,34 @@ async function runChunkedDubbingPipeline({
                 durationSec: chunk.durationSec,
                 signal,
               });
+              if (chunkSegments.length > 0 && mode !== GENERATION_MODES.MODE_B_RECAP) {
+                const spkRes = await identifySpeakersForCues({
+                  cues: chunkSegments,
+                  videoPath,
+                  startOffsetSec: chunk.startSec,
+                  durationSec: chunk.durationSec,
+                  aiClient,
+                  modelName: effectiveModelName,
+                  mode,
+                  seriesSpeakerMap: {
+                    ...(seriesGlossary?.seriesSpeakerMap || {}),
+                    ...runningSeriesSpeakerMap,
+                  },
+                  castRegistry: seriesGlossary?.characters || [],
+                  narratorGender,
+                  signal,
+                });
+                if (Array.isArray(spkRes?.cues) && spkRes.cues.length === chunkSegments.length) {
+                  chunkSegments = spkRes.cues;
+                  speakerIdentificationCalls += Number(spkRes.geminiCallsCount || 0);
+                  speakerIdentificationStats = spkRes.stats || null;
+                  runningSeriesSpeakerMap = buildVerifiedSeriesSpeakerMapPatch(
+                    chunkSegments,
+                    null,
+                    runningSeriesSpeakerMap
+                  );
+                }
+              }
               chunkF0DurationMs = Date.now() - f0Start;
               const maleCount = chunkSegments.filter((s) => s.acousticGender === 'male').length;
               const femaleCount = chunkSegments.filter((s) => s.acousticGender === 'female').length;
@@ -471,6 +517,44 @@ async function runChunkedDubbingPipeline({
           }
           visualOnlyCount = chunkReconciliation.reconciliationMeta?.visualOnlyCount || 0;
           fusedCount = chunkReconciliation.reconciliationMeta?.fusedSegmentsCount || 0;
+          if (videoPath && chunkSegments.length > 0 && mode !== GENERATION_MODES.MODE_B_RECAP) {
+            try {
+              await enrichCuesWithAcousticPitch(videoPath, chunkSegments, {
+                startOffsetSec: chunk.startSec,
+                durationSec: chunk.durationSec,
+                signal,
+              });
+              const spkRes = await identifySpeakersForCues({
+                cues: chunkSegments,
+                videoPath,
+                startOffsetSec: chunk.startSec,
+                durationSec: chunk.durationSec,
+                aiClient,
+                modelName: effectiveModelName,
+                mode,
+                seriesSpeakerMap: {
+                  ...(seriesGlossary?.seriesSpeakerMap || {}),
+                  ...runningSeriesSpeakerMap,
+                },
+                castRegistry: seriesGlossary?.characters || [],
+                narratorGender,
+                signal,
+              });
+              if (Array.isArray(spkRes?.cues) && spkRes.cues.length === chunkSegments.length) {
+                chunkSegments = spkRes.cues;
+                speakerIdentificationCalls += Number(spkRes.geminiCallsCount || 0);
+                speakerIdentificationStats = spkRes.stats || null;
+                runningSeriesSpeakerMap = buildVerifiedSeriesSpeakerMapPatch(
+                  chunkSegments,
+                  null,
+                  runningSeriesSpeakerMap
+                );
+              }
+            } catch (spkErr) {
+              if (spkErr?.name === 'AbortError' || signal?.aborted) throw spkErr;
+              console.warn(`[ChunkOrchestrator] Standard-mode speaker ID notice (Chunk ${cIdx + 1}):`, spkErr.message);
+            }
+          }
           console.log(`[ChunkOrchestrator] Chunk ${cIdx + 1} cues detected: ${ocrCuesCount} -> segments stored: ${chunkSegments.length} (Standard mode)`);
         }
 
@@ -485,9 +569,9 @@ async function runChunkedDubbingPipeline({
             fusedCount,
             ocrPerformance: ocrPerf,
             videoSignature,
-            isComplete: true,
-            hasUnresolvedFrames: false,
-            status: 'completed',
+            isComplete: !chunkHasUnresolvedOcr,
+            hasUnresolvedFrames: chunkHasUnresolvedOcr,
+            status: chunkHasUnresolvedOcr ? 'review_needed' : 'completed',
             savedAt: Date.now(),
           }, null, 2), 'utf8');
         } catch (_) {}
@@ -584,6 +668,31 @@ async function runChunkedDubbingPipeline({
     : stitchAndDeduplicateSegments(allChunkSegments);
   console.log(`[ChunkOrchestrator] Global stitching complete: ${stitchedSegments.length} total unified segments.`);
 
+  // Save verified Chinese subtitle checkpoint (.srt + .json) BEFORE Stage 6 translation
+  let verifiedChineseSrtPath = null;
+  if (ingestResult?.episodeDir && Array.isArray(stitchedSegments) && stitchedSegments.length > 0) {
+    try {
+      verifiedChineseSrtPath = saveVerifiedChineseSrt(
+        stitchedSegments,
+        path.join(ingestResult.episodeDir, 'verified_chinese.srt')
+      );
+      fs.writeFileSync(
+        path.join(ingestResult.episodeDir, 'verified_chinese_cues.json'),
+        JSON.stringify({
+          updatedAt: Date.now(),
+          count: stitchedSegments.length,
+          cues: stitchedSegments.map((c) => ({
+            sourceCueId: c.sourceCueId || null,
+            startSec: c.startSec,
+            endSec: c.endSec,
+            originalChineseText: c.originalChineseText || c.chineseText || c.textZh || '',
+          })),
+        }, null, 2),
+        'utf8'
+      );
+    } catch (_) {}
+  }
+
   // 5. Stage 6: Mode-Specific Script Generation
   report(
     'generateModeSpecificScript',
@@ -636,6 +745,7 @@ async function runChunkedDubbingPipeline({
   const stage7Start = Date.now();
   const validationRes = await translateAndValidateKhmer({
     scriptSegments: scriptResult.scriptSegments,
+    sourceCues: mode === GENERATION_MODES.MODE_B_RECAP ? null : stitchedSegments,
     mode: scriptResult.mode,
   });
   pipelineStageDurations.stage7ValidationMs = Date.now() - stage7Start;
@@ -647,6 +757,7 @@ async function runChunkedDubbingPipeline({
   const stage8Start = Date.now();
   const timingRes = await validateSubtitleTiming({
     segments: validationRes.validatedSegments,
+    sourceCues: mode === GENERATION_MODES.MODE_B_RECAP ? null : stitchedSegments,
     durationSec,
   });
   pipelineStageDurations.stage8TimingMs = Date.now() - stage8Start;
@@ -661,6 +772,11 @@ async function runChunkedDubbingPipeline({
   finalizedSegments = syncResult.segments || finalizedSegments;
   const speakerRegistry = syncResult.speakerRegistry || initialRegistry;
   const speakers = syncResult.speakers || [];
+  const updatedSeriesSpeakerMap = buildVerifiedSeriesSpeakerMapPatch(
+    finalizedSegments,
+    speakerRegistry,
+    seriesGlossary?.seriesSpeakerMap || {}
+  );
 
   checkAbort();
 
@@ -714,6 +830,28 @@ async function runChunkedDubbingPipeline({
   const totalOcrFrames = chunkResults.reduce((sum, r) => sum + (r?.ocrPerf?.candidateFramesCount || 0), 0);
   const totalOcrVerifiedFrames = chunkResults.reduce((sum, r) => sum + (r?.ocrPerf?.verifiedFramesCount ?? ((r?.ocrPerf?.localVerifiedCount || 0) + (r?.ocrPerf?.geminiVerifiedCount || 0))), 0);
   const totalOcrUnresolvedFrames = chunkResults.reduce((sum, r) => sum + (r?.ocrPerf?.unresolvedFramesCount || 0), 0);
+  const ocrRequests = chunkResults.reduce((sum, r) => sum + (r?.ocrPerf?.geminiUsage?.requests ?? r?.ocrPerf?.apiCallsCount ?? 0), 0);
+  const ocrPromptTokens = chunkResults.reduce((sum, r) => sum + (r?.ocrPerf?.geminiUsage?.promptTokens || 0), 0);
+  const ocrOutputTokens = chunkResults.reduce((sum, r) => sum + (r?.ocrPerf?.geminiUsage?.outputTokens || 0), 0);
+  const ocrTotalTokens = chunkResults.reduce((sum, r) => sum + (r?.ocrPerf?.geminiUsage?.totalTokens || 0), 0);
+  const transUsage = scriptResult?.usage || { requests: 0, promptTokens: 0, outputTokens: 0, totalTokens: 0 };
+  const combinedUsage = {
+    ocrRequests,
+    ocrPromptTokens,
+    ocrOutputTokens,
+    ocrTotalTokens,
+    translationRequests: transUsage.requests || 0,
+    translationPromptTokens: transUsage.promptTokens || 0,
+    translationOutputTokens: transUsage.outputTokens || 0,
+    translationTotalTokens: transUsage.totalTokens || 0,
+    speakerIdentificationRequests: speakerIdentificationCalls,
+    totalRequests: ocrRequests + (transUsage.requests || 0) + speakerIdentificationCalls,
+    totalPromptTokens: ocrPromptTokens + (transUsage.promptTokens || 0),
+    totalOutputTokens: ocrOutputTokens + (transUsage.outputTokens || 0),
+    totalTokens: ocrTotalTokens + (transUsage.totalTokens || 0),
+  };
+
+  const sourceCuesForCheck = mode === GENERATION_MODES.MODE_B_RECAP ? null : stitchedSegments;
   const coverageReport = computePipelineCompletenessReport({
     durationSec,
     verifiedSourceCuesCount: stitchedSegments.length,
@@ -721,10 +859,19 @@ async function runChunkedDubbingPipeline({
     ocrVerifiedFrames: totalOcrVerifiedFrames,
     ocrUnresolvedFrames: totalOcrUnresolvedFrames,
     finalizedSegments,
+    sourceCues: sourceCuesForCheck,
+    ocrEngineMode: resolvedOcrMode,
+    usage: combinedUsage,
   });
 
+  const isPipelineComplete = mode === GENERATION_MODES.MODE_B_RECAP
+    ? ((coverageReport.ocrUnresolvedFramesCount || 0) === 0 && finalizedSegments.length > 0)
+    : Boolean(coverageReport.oneToOneMappingValid);
+  const pipelineFinalStatus = isPipelineComplete ? 'completed' : 'review_needed';
+
   const finalOutput = {
-    success: true,
+    success: isPipelineComplete,
+    status: pipelineFinalStatus,
     mode: scriptResult.mode,
     generationMode: mode,
     genre: scriptResult.genre || genre,
@@ -735,9 +882,11 @@ async function runChunkedDubbingPipeline({
     script: finalizedSegments,
     speakers,
     speakerRegistry,
+    seriesSpeakerMap: updatedSeriesSpeakerMap,
+    ...(speakerIdentificationStats ? { speakerIdentificationStats } : {}),
     coverage: coverageReport,
     recoveryReport: {
-      status: coverageReport.oneToOneMappingValid ? 'completed' : 'review_needed',
+      status: pipelineFinalStatus,
       recoveredSegmentsCount: finalizedSegments.length,
       totalChunksProcessed: chunks.length,
     },
@@ -746,6 +895,9 @@ async function runChunkedDubbingPipeline({
       seriesId: ingestResult.seriesId,
       episodeId: ingestResult.episodeId,
       modelUsed: effectiveModelName,
+      ocrEngineMode: resolvedOcrMode,
+      usage: combinedUsage,
+      verifiedChineseSrtPath,
       fileHash: ingestResult.fileHash,
       durationSec,
       totalChunks: chunks.length,
@@ -787,22 +939,27 @@ async function runChunkedDubbingPipeline({
       hasScript: finalizedSegments.length > 0,
       totalSegments: finalizedSegments.length,
       segments: finalizedSegments,
+      coverage: coverageReport,
+      recoveryReport: finalOutput.recoveryReport,
+      pipelineMeta: finalOutput.pipelineMeta,
       updatedAt: Date.now(),
     },
     generationMode: mode,
-    status: coverageReport.oneToOneMappingValid ? 'translated' : 'review_needed',
+    status: isPipelineComplete ? 'translated' : 'review_needed',
     seriesGenre: scriptResult.genre || genre,
     seriesDetectedGenre: scriptResult.detectedGenre || scriptResult.genre || genre,
     jobId: jobId || ingestResult?.jobId,
   });
-  console.log(`[ChunkOrchestrator] ✅ Persisted ${persistRes.savedCount} script segments atomically to series.json for ${persistRes.episodeId}`);
+  console.log(`[ChunkOrchestrator] ✅ Persisted ${persistRes.savedCount} script segments atomically to series.json for ${persistRes.episodeId} (status=${pipelineFinalStatus})`);
 
   if (jobId) {
     updateJob(jobId, {
-      status: 'completed',
-      progress: 100,
-      currentStage: 'completed',
-      stageMessage: `Successfully processed ${finalizedSegments.length} segments across ${chunks.length} chunks.`,
+      status: pipelineFinalStatus,
+      progress: isPipelineComplete ? 100 : 99,
+      currentStage: pipelineFinalStatus,
+      stageMessage: isPipelineComplete
+        ? `Successfully processed ${finalizedSegments.length} segments across ${chunks.length} chunks.`
+        : `Review needed: ${coverageReport.missingTranslationsCount || 0} missing/untranslated cue(s), ${coverageReport.ocrUnresolvedFramesCount || 0} unresolved OCR frame(s).`,
       finalResult: finalOutput,
     });
   }

@@ -8,7 +8,7 @@ const FEMALE_MARKERS = [
   '姐姐', '妹妹', '母亲', '妈妈', '阿姨', '女士', '姑姑', '祖母', '奶奶', '郡主',
   '贵妃', '嫔妃', '女官', '医女', '师妹', '师姐', '姨母', '表妹', '表姐', '岳母',
   '系统', '系统提示',
-  'នារី', 'នារីម្នាក់', 'ស្ត្រី', 'ស្ត្រីម្នាក់', 'ស្រី', 'តួស្រី', 'តួឯកស្រី', 'នាង', 'នាងតូច', 'ម្តាយ', 'ម្ដាយ', 'ម៉ែ', 'បងស្រី', 'ប្អូនស្រី', 'យាយ', 'មីង', 'អ្នកមីង',
+  'នារី', 'នារីម្នាក់', 'ស្ត្រី', 'ស្ត្រីម្នាក់', 'ស្រី', 'តួស្រី', 'តួឯកស្រី', 'នាង', 'នាងតូច', 'ម្តាយ', 'ម្ដាយ', 'ម៉ែ', 'បងស្រី', 'ប្អូនស្រី', 'យាយ', 'អ្នកមីង', 'លោកមីង',
   'ម្ចាស់ក្សត្រី', 'អ្នកម្នាង', 'ភរិយា', 'កូនស្រី', 'អ្នកស្រី', 'កញ្ញា', 'ជំទាវ', 'មេម៉ាយ', 'កុមារី', 'មាតា', 'ធីតា', 'ម្ចាស់ស្រី', 'ម្ចាស់អូន',
   'ប្រព័ន្ធ', 'ប្រព័ន្ធ ai', 'ប្រព័ន្ធជំនួយ', 'ប្រព័ន្ធណែនាំ', 'ប្រព័ន្ធសំឡេង',
   'female', 'woman', 'girl', 'mother', 'sister', 'queen', 'princess', 'lady', 'maid', 'mrs', 'miss', 'she', 'her', 'system', 'ai system', 'sreymom'
@@ -125,15 +125,23 @@ export function getDefaultVoiceForGender(gender) {
 export function buildSpeakerRegistry(segments = [], existingRegistry = {}) {
   const registry = { ...existingRegistry };
 
-  (segments || []).forEach((seg) => {
+  (segments || []).forEach((seg, idx) => {
     const rawName = (seg.speaker || seg.speakerName || 'តួអង្គ').trim();
-    const spkId = seg.speakerId || getSpeakerId(rawName);
+    const isGeneric = !rawName || rawName === 'តួអង្គ' || rawName === 'តួអង្គទីទៃ' || rawName === 'តួអង្គផ្សេងៗ' || rawName.toLowerCase() === 'speaker' || rawName.toLowerCase() === 'unknown';
+    const spkId = seg.speakerId || (isGeneric ? `spk_generic_${idx + 1}` : getSpeakerId(rawName));
     const knownSpkGender = (seg.speakerGender === 'FEMALE' || seg.speakerGender === 'MALE') ? seg.speakerGender : '';
     const isManual = seg.voiceAssignmentSource === 'manual' || Boolean(seg.userOverridden) || Boolean(seg.voiceOverride) || Boolean(registry[spkId]?.userOverridden);
-    const titleGender = !isManual ? detectSpeakerGender(rawName, '', seg.khmerText || seg.khmer || '') : 'UNKNOWN';
-    const gender = titleGender !== 'UNKNOWN'
-      ? titleGender
-      : (knownSpkGender || detectSpeakerGender(rawName, seg.gender || seg.voiceGender, seg.khmerText || seg.khmer || ''));
+    const hasStep1Verified = Boolean(
+      seg.speakerStatus === 'verified' ||
+      seg.voiceAssignmentSource === 'multimodal_verified' ||
+      seg.voiceAssignmentSource === 'series_glossary'
+    );
+    const titleGender = (!isManual && !hasStep1Verified) ? detectSpeakerGender(rawName, '', '') : 'UNKNOWN';
+    const gender = (isManual || hasStep1Verified) && knownSpkGender
+      ? knownSpkGender
+      : (titleGender !== 'UNKNOWN'
+          ? titleGender
+          : (knownSpkGender || detectSpeakerGender(rawName, seg.gender || seg.voiceGender, '')));
     const voiceGender = gender === 'FEMALE' ? 'female' : (gender === 'MALE' ? 'male' : (seg.voiceGender || 'unknown'));
 
     if (!registry[spkId]) {
@@ -213,13 +221,20 @@ export function applySpeakerVoiceToSegments(segments = [], speakerRegistry = {})
     const segIsManual = Boolean(seg.userOverridden) || seg.voiceAssignmentSource === 'manual' || Boolean(seg.voiceOverride);
     const isManual = segIsManual || regIsManual;
 
-    // Detect character gender identity independently from voice assignment
+    // Detect character gender identity independently from voice assignment (never override with Khmer dialogue text!)
     const regKnownGender = (reg?.gender === 'FEMALE' || reg?.gender === 'MALE') ? reg.gender : '';
     const segKnownGender = (seg.speakerGender === 'FEMALE' || seg.speakerGender === 'MALE') ? seg.speakerGender : '';
-    const titleGender = detectSpeakerGender(rawName, '', seg.khmerText || seg.khmer || '');
-    const resolvedSpeakerGender = titleGender !== 'UNKNOWN'
-      ? titleGender
-      : (regKnownGender || segKnownGender || detectSpeakerGender(rawName, seg.gender || seg.voiceGender, seg.khmerText || seg.khmer || ''));
+    const hasStep1Verified = Boolean(
+      seg.speakerStatus === 'verified' ||
+      seg.voiceAssignmentSource === 'multimodal_verified' ||
+      seg.voiceAssignmentSource === 'series_glossary'
+    );
+    const titleGender = (isManual || hasStep1Verified) ? 'UNKNOWN' : detectSpeakerGender(rawName, '', '');
+    const resolvedSpeakerGender = (isManual || hasStep1Verified) && segKnownGender
+      ? segKnownGender
+      : (titleGender !== 'UNKNOWN'
+          ? titleGender
+          : (regKnownGender || segKnownGender || detectSpeakerGender(rawName, seg.gender || seg.voiceGender, '')));
     const resolvedVoiceGender = resolvedSpeakerGender === 'FEMALE' ? 'female' : (resolvedSpeakerGender === 'MALE' ? 'male' : (reg?.voiceGender || 'unknown'));
 
     // Consistent voice selection priority:

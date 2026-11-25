@@ -91,6 +91,26 @@ function needsIndependentRead(obs) {
   return !obs.userOverridden && (obs.isDeduped || obs.ocrEngine === 'rapidocr-local');
 }
 
+const HANZI_CHAR_REGEX = /[\u3400-\u4dbf\u4e00-\u9fa5]/;
+
+function hasChineseHanzi(str = '') {
+  return HANZI_CHAR_REGEX.test(String(str || ''));
+}
+
+function extractCueChunkOrigin(sourceCueId = '') {
+  const m = String(sourceCueId || '').trim().match(/^cue_(\d+)_\d+_\d+$/);
+  return m ? m[1] : null;
+}
+
+function isCrossChunkOriginPair(cueA, cueB) {
+  const idA = String(cueA?.sourceCueId || '').trim();
+  const idB = String(cueB?.sourceCueId || '').trim();
+  if (!idA || !idB || idA === idB) return false;
+  const originA = extractCueChunkOrigin(idA);
+  const originB = extractCueChunkOrigin(idB);
+  return Boolean(originA !== null && originB !== null && originA !== originB);
+}
+
 function normalizeChineseChars(str = '') {
   return String(str)
     .replace(/[\s\r\n\t,，.。!！?？:：;；"'"'《》\(\)（）—\-_·、]/g, '')
@@ -461,7 +481,16 @@ async function callGeminiVisionWithRetry(
         });
 
         const resp = await Promise.race([callPromise, abortPromise]);
-        if (telemetry) telemetry.apiTotalMs = (telemetry.apiTotalMs || 0) + (Date.now() - callStart);
+        if (telemetry) {
+          telemetry.apiTotalMs = (telemetry.apiTotalMs || 0) + (Date.now() - callStart);
+          telemetry.successfulCalls = (telemetry.successfulCalls || 0) + 1;
+          const um = resp?.usageMetadata || resp?.response?.usageMetadata || null;
+          if (um) {
+            telemetry.promptTokens = (telemetry.promptTokens || 0) + (Number(um.promptTokenCount ?? um.inputTokens ?? 0) || 0);
+            telemetry.outputTokens = (telemetry.outputTokens || 0) + (Number(um.candidatesTokenCount ?? um.outputTokens ?? 0) || 0);
+            telemetry.totalTokens = (telemetry.totalTokens || 0) + (Number(um.totalTokenCount ?? 0) || 0);
+          }
+        }
         clearTimeout(timeoutId);
         abortController.signal.removeEventListener('abort', onAbortEvent);
         if (signal) signal.removeEventListener('abort', onSignalAbort);
@@ -593,7 +622,7 @@ function parseVisionResponseFrames(resp, batchFrames = [], _options = {}) {
       const hasExplicitHasText = typeof f.hasText === 'boolean';
       const rawChinese = String(f.textZh || f.chineseText || '').trim();
       const cText = stripDecorativeSubtitleNoise(rawChinese);
-      const cleanChineseLen = normalizeChineseChars(cText).length;
+      const cleanChineseLen = hasChineseHanzi(cText) ? normalizeChineseChars(cText).length : 0;
 
       // If entry is empty object or missing explicit boolean / text, treat as missing response (or completed_empty in auto-verify mode)
       if (!hasExplicitHasText && cleanChineseLen === 0 && !f.position && !f.visualGender && !f.speakerGender) {
@@ -921,6 +950,7 @@ function deduplicateFastOcrCues(rawCues = [], defaultGender = 'male') {
     const prevText = String(prev.originalChineseText || prev.chineseText || prev.textZh || '').trim();
     const isExactText = isExactChineseSubtitleMatch(prevText, cueText);
     const hasDistinctSourceIds = Boolean(prev.sourceCueId && cue.sourceCueId && prev.sourceCueId !== cue.sourceCueId);
+    const allowCrossChunkMerge = !hasDistinctSourceIds || isCrossChunkOriginPair(prev, cue);
 
     if (isExactText) {
       const timeDiff = cStart - prev.startSec;
@@ -928,7 +958,7 @@ function deduplicateFastOcrCues(rawCues = [], defaultGender = 'male') {
       const gap = parseFloat((cStart - prev.endSec).toFixed(2));
       const isContinuous = gap <= 0.25;
 
-      if ((!hasDistinctSourceIds && isContinuous) || isChunkBoundaryRepeat) {
+      if ((!hasDistinctSourceIds && isContinuous) || (allowCrossChunkMerge && isChunkBoundaryRepeat)) {
         if (cEnd > prev.endSec) {
           prev.endSec = parseFloat(Number(cEnd).toFixed(2));
           prev.duration = parseFloat(Math.max(0.35, prev.endSec - prev.startSec).toFixed(2));
@@ -1022,7 +1052,7 @@ function deduplicateFastOcrCues(rawCues = [], defaultGender = 'male') {
       if (rawVisual === 'female' || rawVisual === 'male') {
         resolvedGender = rawVisual;
       } else {
-        resolvedGender = defGen;
+        resolvedGender = 'unknown';
       }
       voiceMeta = buildVoiceMeta(resolvedGender);
       resolvedVoice = voiceMeta.voiceId;
@@ -1101,6 +1131,9 @@ module.exports = {
   saveOcrCheckpoint,
   loadOcrCheckpoint,
   needsIndependentRead,
+  hasChineseHanzi,
+  extractCueChunkOrigin,
+  isCrossChunkOriginPair,
   normalizeChineseChars,
   stripDecorativeSubtitleNoise,
   stripRepeatedLeadingTimeCardPrefix,

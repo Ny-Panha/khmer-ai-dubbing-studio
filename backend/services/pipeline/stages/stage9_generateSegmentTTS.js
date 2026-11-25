@@ -381,12 +381,19 @@ async function generateSegmentTTS({
       const regIsManual = Boolean(regEntry?.userOverridden) || regEntry?.voiceAssignmentSource === 'manual';
       const segHasManual = Boolean(seg.userOverridden || seg.voiceAssignmentSource === 'manual' || seg.voiceOverride);
 
-      const rawSegGender = String(regEntry?.voiceGender || seg.voiceGender || '').trim().toLowerCase();
+      const rawSegGender = String(regEntry?.voiceGender || seg.voiceGender || seg.speakerGender || '').trim().toLowerCase();
       let knownSegGender = (rawSegGender === 'female' || rawSegGender === 'f' || rawSegGender === 'girl')
         ? 'female'
         : ((rawSegGender === 'male' || rawSegGender === 'm' || rawSegGender === 'boy') ? 'male' : '');
-      if (!knownSegGender) {
-        const kwG = detectSpeakerGender(segSpkName, '', khmerText);
+      const hasVerifiedStep1 = Boolean(
+        seg.speakerStatus === 'verified' ||
+        seg.speakerVerified === true ||
+        seg.voiceAssignmentSource === 'multimodal_verified' ||
+        seg.voiceAssignmentSource === 'series_glossary'
+      );
+      if (!knownSegGender && !hasVerifiedStep1 && !segHasManual && !regIsManual) {
+        // Step 2 never guesses gender from translated Khmer text
+        const kwG = detectSpeakerGender(segSpkName, '', '');
         if (kwG === 'FEMALE') knownSegGender = 'female';
         else if (kwG === 'MALE') knownSegGender = 'male';
       }
@@ -399,6 +406,8 @@ async function generateSegmentTTS({
         chosenVoiceId = seg.voiceOverride || seg.khmerVoiceId || seg.voiceId || seg.voice;
       } else if (regIsManual && registryVoice) {
         chosenVoiceId = registryVoice;
+      } else if (hasVerifiedStep1 && (seg.khmerVoiceId || seg.voiceId || seg.voice)) {
+        chosenVoiceId = seg.khmerVoiceId || seg.voiceId || seg.voice;
       } else if (regEntry?.voiceAssignmentSource === 'series_glossary' && registryVoice) {
         chosenVoiceId = registryVoice;
       } else if (genderDerivedVoice) {
@@ -561,47 +570,54 @@ async function generateSegmentTTS({
 
       if (!forceRegen && !hasCustomSegSpeed && fs.existsSync(cachedAudioPath) && fs.statSync(cachedAudioPath).size > 500) {
         try {
-          const destFile = `seg_${seg.id || idx + 1}_${cacheKey.substring(0, 8)}.mp3`;
-          const destPath = path.join(audioDir, destFile);
-          fs.copyFileSync(cachedAudioPath, destPath);
-
           let cachedDuration = seg.duration;
+          let cacheVoiceValid = true;
           if (fs.existsSync(cachedMetaPath)) {
             const meta = JSON.parse(fs.readFileSync(cachedMetaPath, 'utf8'));
             if (meta?.audioDurationSec) cachedDuration = meta.audioDurationSec;
+            const recordedVoice = meta?.actualVoiceId || meta?.voiceId;
+            if (recordedVoice && recordedVoice !== chosenVoiceId) {
+              cacheVoiceValid = false;
+            }
           }
+          if (cacheVoiceValid) {
+            const destFile = `seg_${seg.id || idx + 1}_${cacheKey.substring(0, 8)}.mp3`;
+            const destPath = path.join(audioDir, destFile);
+            fs.copyFileSync(cachedAudioPath, destPath);
 
-          reusedCount++;
-          seg.audioFile = destFile;
-          seg.audioPath = destPath;
-          seg.audioUrl = toPublicAudioUrl(destPath);
-          seg.audioDurationSec = cachedDuration;
-          seg.audioSignature = audioSignature;
-          seg.ttsStatus = 'ready';
-          seg.audioOutdated = false;
-          results[idx] = seg;
+            reusedCount++;
+            seg.audioFile = destFile;
+            seg.audioPath = destPath;
+            seg.audioUrl = toPublicAudioUrl(destPath);
+            seg.audioDurationSec = cachedDuration;
+            seg.audioSignature = audioSignature;
+            seg.actualVoiceId = chosenVoiceId;
+            seg.ttsStatus = 'ready';
+            seg.audioOutdated = false;
+            results[idx] = seg;
 
-          if (jobId) {
-            recordSegmentCompletion({
-              jobId,
-              seriesId,
-              episodeId,
-              segmentId: segKey,
-              segmentIndex: idx,
-              text: khmerText,
-              voiceId: chosenVoiceId,
-              targetDurationSec: effectiveTargetDuration,
-              audioPath: destPath,
-              fileSize: fs.statSync(destPath).size,
-              durationSec: cachedDuration,
-              baseUploadsDir,
-            });
+            if (jobId) {
+              recordSegmentCompletion({
+                jobId,
+                seriesId,
+                episodeId,
+                segmentId: segKey,
+                segmentIndex: idx,
+                text: khmerText,
+                voiceId: chosenVoiceId,
+                targetDurationSec: effectiveTargetDuration,
+                audioPath: destPath,
+                fileSize: fs.statSync(destPath).size,
+                durationSec: cachedDuration,
+                baseUploadsDir,
+              });
+            }
+
+            if (typeof onSegmentCompleted === 'function') {
+              onSegmentCompleted(seg, idx, reusedCount + generatedCount);
+            }
+            continue;
           }
-
-          if (typeof onSegmentCompleted === 'function') {
-            onSegmentCompleted(seg, idx, reusedCount + generatedCount);
-          }
-          continue;
         } catch (_) {}
       }
 
@@ -638,6 +654,7 @@ async function generateSegmentTTS({
         seg.ttsStatus = 'ready';
         seg.audioOutdated = false;
         seg.audioSignature = audioSignature;
+        seg.actualVoiceId = result.actualVoiceId || chosenVoiceId;
 
         // Persist sidecar metadata next to audio file
         if (result.audioPath && fs.existsSync(result.audioPath)) {
@@ -646,6 +663,7 @@ async function generateSegmentTTS({
             fs.writeFileSync(sidecarMeta, JSON.stringify({
               text: khmerText,
               voiceId: chosenVoiceId,
+              actualVoiceId: seg.actualVoiceId,
               audioSignature,
               audioDurationSec: result.audioDurationSec,
               timestamp: Date.now(),

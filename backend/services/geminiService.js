@@ -842,16 +842,37 @@ function normalizeScriptData(rawData = {}, requestedMode = "dialogue", seriesSpe
         ? "អ្នកសម្រាយរឿង"
         : String(seg.speaker || seg.speakerName || "តួអង្គ").trim();
 
-    const genderDetected = detectSpeakerGender(
-      { ...seg, speaker: rawSpeaker },
-      { castRegistry },
-      seg.khmer || seg.khmerText || seg.khmer_dialogue || ""
+    const hasVerifiedStep1Speaker = Boolean(
+      seg.speakerStatus === "verified" ||
+      seg.speakerVerified === true ||
+      seg.voiceAssignmentSource === "multimodal_verified" ||
+      seg.voiceAssignmentSource === "series_glossary" ||
+      seg.voiceAssignmentSource === "manual" ||
+      seg.userOverridden === true
     );
+    const explicitRawGender = String(seg.voiceGender || seg.speakerGender || seg.gender || "").toLowerCase().trim();
+    const explicitUpper = explicitRawGender === "female" ? "FEMALE" : (explicitRawGender === "male" ? "MALE" : "UNKNOWN");
+
+    // Never infer speaker gender from translated Khmer text when Step 1 verified/evaluated speaker exists or ever as primary source
+    const genderDetected = hasVerifiedStep1Speaker && explicitUpper !== "UNKNOWN"
+      ? explicitUpper
+      : detectSpeakerGender(
+          { ...seg, speaker: rawSpeaker },
+          { castRegistry },
+          ""
+        );
     const finalGender =
-      genderDetected !== "UNKNOWN"
-        ? genderDetected
-        : seg.speakerGender || (String(seg.gender || "").toLowerCase() === "female" ? "FEMALE" : (String(seg.gender || "").toLowerCase() === "male" ? "MALE" : "UNKNOWN"));
-    const voiceGender = seg.voiceGender || (finalGender === "FEMALE" ? "female" : (finalGender === "MALE" ? "male" : "unknown"));
+      explicitUpper !== "UNKNOWN" && (hasVerifiedStep1Speaker || genderDetected === "UNKNOWN")
+        ? explicitUpper
+        : (genderDetected !== "UNKNOWN" ? genderDetected : "UNKNOWN");
+    const voiceGender = seg.voiceGender === "female" || seg.voiceGender === "male"
+      ? seg.voiceGender
+      : (finalGender === "FEMALE" ? "female" : (finalGender === "MALE" ? "male" : "unknown"));
+    const isAmbiguousSpeaker = Boolean(
+      seg.speakerReviewNeeded ||
+      seg.speakerStatus === "review_needed" ||
+      voiceGender === "unknown"
+    );
     const voiceId = seg.voiceId || seg.khmerVoiceId || getDefaultVoiceForGender(finalGender);
 
     const origChinese = String(seg.originalChineseText || seg.originalText || seg.original || seg.chineseText || "").trim();
@@ -861,6 +882,7 @@ function normalizeScriptData(rawData = {}, requestedMode = "dialogue", seriesSpe
     return {
       id: segId,
       segmentId: segId,
+      ...(seg.sourceCueId ? { sourceCueId: seg.sourceCueId } : {}),
       start: formatSecondsToTimecode(startSec),
       end: formatSecondsToTimecode(endSec),
       startTime: formatSecondsToTimecode(startSec),
@@ -876,10 +898,17 @@ function normalizeScriptData(rawData = {}, requestedMode = "dialogue", seriesSpe
       speakerGender: finalGender,
       gender: voiceGender === "female" ? "female" : (voiceGender === "male" ? "male" : "unknown"),
       voiceGender,
-      genderConfidence: typeof seg.genderConfidence === "number" ? seg.genderConfidence : (typeof seg.acousticConfidence === "number" ? seg.acousticConfidence : (voiceGender === "unknown" ? 0.5 : 0.85)),
+      speakerConfidence: typeof seg.speakerConfidence === "number" ? seg.speakerConfidence : (typeof seg.genderConfidence === "number" ? seg.genderConfidence : (voiceGender === "unknown" ? 0.45 : 0.85)),
+      genderConfidence: typeof seg.genderConfidence === "number" ? seg.genderConfidence : (typeof seg.acousticConfidence === "number" ? seg.acousticConfidence : (voiceGender === "unknown" ? 0.45 : 0.85)),
       voiceId,
       khmerVoiceId: seg.khmerVoiceId || voiceId,
-      voiceAssignmentSource: seg.voiceAssignmentSource || "automatic",
+      voiceAssignmentSource: seg.voiceAssignmentSource || (voiceGender === "unknown" ? "fallback" : "automatic"),
+      deliveryType: seg.deliveryType || "out_loud",
+      speakerStatus: seg.speakerStatus || (isAmbiguousSpeaker ? "review_needed" : "verified"),
+      speakerReviewNeeded: Boolean(seg.speakerReviewNeeded || voiceGender === "unknown"),
+      unverifiedSpeaker: Boolean(seg.unverifiedSpeaker || isAmbiguousSpeaker),
+      ...(seg.speakerEvidence ? { speakerEvidence: seg.speakerEvidence } : {}),
+      ...(Array.isArray(seg.internalSpeakerTurns) && seg.internalSpeakerTurns.length > 0 ? { internalSpeakerTurns: seg.internalSpeakerTurns } : {}),
       acousticGender: seg.acousticGender || null,
       acousticConfidence: seg.acousticConfidence || null,
       pitchHz: seg.pitchHz || null,

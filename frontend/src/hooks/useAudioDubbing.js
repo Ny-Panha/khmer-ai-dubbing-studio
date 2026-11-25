@@ -1980,17 +1980,27 @@ const FALLBACK_VOICE_CATALOG = {
         const explicitKnown = (rawGender === 'FEMALE' || rawGender === 'GIRL' || rawGender === 'WOMAN')
           ? 'FEMALE'
           : ((rawGender === 'MALE' || rawGender === 'BOY' || rawGender === 'MAN') ? 'MALE' : '');
-        const titleGender = detectSpeakerGender(seg.speaker, '', '');
-        const detectedGender = (!isManualOverride && titleGender !== 'UNKNOWN')
-          ? titleGender
-          : (explicitKnown || detectSpeakerGender(seg.speaker, '', seg.khmer || seg.khmerText || seg.original));
+        const hasVerifiedStep1Voice = Boolean(
+          seg.speakerStatus === 'verified' ||
+          seg.voiceAssignmentSource === 'multimodal_verified' ||
+          seg.voiceAssignmentSource === 'series_glossary' ||
+          (explicitKnown && !seg.unverifiedSpeaker)
+        );
+        // Never reassign verified Step 1 voices using translated Khmer dialogue text or transliterated name substrings
+        const titleGender = hasVerifiedStep1Voice ? explicitKnown : detectSpeakerGender(seg.speaker, '', '');
+        const detectedGender = isManualOverride
+          ? (explicitKnown || titleGender || 'UNKNOWN')
+          : (hasVerifiedStep1Voice
+              ? explicitKnown
+              : (titleGender !== 'UNKNOWN' ? titleGender : (explicitKnown || 'UNKNOWN')));
+        const existingVoice = seg.voiceOverride || seg.khmerVoiceId || seg.voiceId || seg.voice;
         const resolvedVoice = isManualOverride
-          ? (seg.voiceOverride || seg.voiceId || seg.khmerVoiceId || (detectedGender === 'FEMALE' ? 'km-KH-SreymomNeural' : 'km-KH-PisethNeural'))
+          ? (existingVoice || (detectedGender === 'FEMALE' ? 'km-KH-SreymomNeural' : 'km-KH-PisethNeural'))
           : (detectedGender === 'FEMALE'
               ? 'km-KH-SreymomNeural'
               : (detectedGender === 'MALE'
                   ? 'km-KH-PisethNeural'
-                  : (seg.voiceId || seg.khmerVoiceId || 'km-KH-PisethNeural')));
+                  : (existingVoice || 'km-KH-PisethNeural')));
 
         const base = !seg.userShifted ? { ...seg, userShifted: false } : { ...seg };
         delete base.autoShifted;

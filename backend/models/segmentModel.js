@@ -50,11 +50,23 @@ function createSegment(raw = {}, index = 0, defaultMode = 'dialogue') {
   const speakerId = raw.speakerId || getSpeakerId(speaker);
   const explicitRawGender = String(raw.speakerGender || raw.gender || raw.voiceGender || '').trim().toLowerCase();
   const hasExplicitGender = explicitRawGender === 'female' || explicitRawGender === 'male' || explicitRawGender === 'f' || explicitRawGender === 'm';
+  const explicitGenderUpper = (explicitRawGender === 'female' || explicitRawGender === 'f') ? 'FEMALE' : ((explicitRawGender === 'male' || explicitRawGender === 'm') ? 'MALE' : 'UNKNOWN');
   const isManual = Boolean(raw.userOverridden || raw.voiceAssignmentSource === 'manual' || raw.voiceOverride);
-  const titleGender = detectSpeakerGender(speaker, '', raw.khmerTranslatedText || raw.khmer || raw.khmerText || '');
-  const speakerGender = (!isManual && titleGender !== 'UNKNOWN')
-    ? titleGender
-    : detectSpeakerGender(speaker, hasExplicitGender ? explicitRawGender : '');
+  const isStep1Verified = Boolean(
+    raw.speakerStatus === 'verified' ||
+    raw.speakerVerified === true ||
+    raw.voiceAssignmentSource === 'multimodal_verified' ||
+    raw.voiceAssignmentSource === 'series_glossary'
+  );
+  // Never infer speaker gender from translated Khmer text when Step 1 verified/evaluated speaker exists or over explicit verified gender
+  const titleGender = isStep1Verified && hasExplicitGender
+    ? explicitGenderUpper
+    : detectSpeakerGender(speaker, '', '');
+  const speakerGender = (isManual || isStep1Verified) && hasExplicitGender
+    ? explicitGenderUpper
+    : ((!isManual && titleGender !== 'UNKNOWN')
+        ? titleGender
+        : (hasExplicitGender ? explicitGenderUpper : detectSpeakerGender(speaker, '', '')));
   const derivedVoice = (speakerGender === 'FEMALE' || speakerGender === 'MALE')
     ? getDefaultVoiceForGender(speakerGender)
     : null;
@@ -120,6 +132,7 @@ function createSegment(raw = {}, index = 0, defaultMode = 'dialogue') {
   const segment = {
     id,
     segmentId,
+    ...(raw.sourceCueId ? { sourceCueId: raw.sourceCueId } : {}),
     mode,
     startSec: parseFloat(rawStartSec.toFixed(2)),
     endSec: parseFloat(rawEndSec.toFixed(2)),
@@ -140,11 +153,18 @@ function createSegment(raw = {}, index = 0, defaultMode = 'dialogue') {
     speakerGender,
     gender: voiceGender === 'female' ? 'female' : (voiceGender === 'male' ? 'male' : 'unknown'),
     voiceGender,
+    speakerConfidence: typeof raw.speakerConfidence === 'number' ? raw.speakerConfidence : (genderConfidence ?? (voiceGender === 'unknown' ? 0.45 : 0.85)),
     genderConfidence,
+    speakerStatus: raw.speakerStatus || (voiceGender === 'unknown' ? 'review_needed' : 'verified'),
+    speakerReviewNeeded: Boolean(raw.speakerReviewNeeded || (voiceGender === 'unknown' && !isManual)),
+    unverifiedSpeaker: Boolean(raw.unverifiedSpeaker || (voiceGender === 'unknown' && !isManual)),
+    ...(raw.speakerEvidence ? { speakerEvidence: raw.speakerEvidence } : {}),
+    ...(Array.isArray(raw.internalSpeakerTurns) && raw.internalSpeakerTurns.length > 0 ? { internalSpeakerTurns: raw.internalSpeakerTurns } : {}),
     khmerVoiceId,
     voiceId: khmerVoiceId,
     voice: khmerVoiceId,
     voiceAssignmentSource,
+    userOverridden: isManual,
     voiceProvider,
     deliveryType,
     deliveryOverride,
