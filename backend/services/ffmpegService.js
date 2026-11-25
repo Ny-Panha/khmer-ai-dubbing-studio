@@ -34,6 +34,8 @@ const {
   extractAudio,
   extractValidTimestamp,
   resolveSegmentStartSec,
+  computeAdaptiveCrossfadeDuration,
+  computeOverlapCrossfadePlan,
   buildSegmentMixFilterChain,
   createSynchronizedNarrationAudio,
 } = require("./ffmpeg/ffmpegAudioMixAndDucking");
@@ -398,19 +400,14 @@ function renderDubbedVideoWithDucking(options = {}) {
         }
       }
     } else {
-      // Fallback Path: Multi-segment adelay + amix with steady normalization guard
+      // Fallback Path: Multi-segment adelay + smooth half-sine crossfade + amix with steady normalization guard
       validSegments.forEach((seg) => {
         args.push("-i", getSafeCliPath(seg.audioPath));
       });
 
-      const delayedVoiceLabels = [];
-      validSegments.forEach((seg, index) => {
-        const inputIndex = index + 1;
+      const preparedFallbackSegs = await Promise.all(validSegments.map(async (seg) => {
         const segStart = Number(seg.startSeconds ?? seg.startSec ?? seg.audioStartSec ?? 0);
-        const delayMs = Math.max(0, Math.round(segStart * 1000));
-        const label = `v${inputIndex}`;
-
-        let segDur = Number(seg.duration || seg.audioDurationSec || 2.5);
+        let segDur = Number(seg.finalAudioDuration || seg.audioDurationSec || seg.duration || 2.5);
         let trimDur = null;
         if (seg.audioTrimmed && typeof seg.audioEndSec === "number" && typeof seg.audioStartSec === "number" && seg.audioEndSec > seg.audioStartSec) {
           trimDur = Math.max(0.1, parseFloat((seg.audioEndSec - seg.audioStartSec).toFixed(3)));
@@ -418,21 +415,46 @@ function renderDubbedVideoWithDucking(options = {}) {
         } else if ((seg.audioTrimmed || seg.userTrimmed) && typeof seg.audioDurationSec === "number" && seg.audioDurationSec > 0) {
           trimDur = seg.audioDurationSec;
           segDur = trimDur;
+        } else if (seg.audioPath && fs.existsSync(seg.audioPath)) {
+          try {
+            const probed = await getMediaDuration(seg.audioPath);
+            if (Number.isFinite(probed) && probed > 0.05) {
+              const rawOff = typeof seg.audioOffset === "number" && !isNaN(seg.audioOffset) ? seg.audioOffset : 0;
+              const effOff = rawOff >= probed ? 0 : Math.max(0, rawOff);
+              segDur = Math.max(0.05, parseFloat((probed - effOff).toFixed(3)));
+            }
+          } catch (_) {}
         }
         const rawOffset = typeof seg.audioOffset === "number" && !isNaN(seg.audioOffset) ? seg.audioOffset : 0;
         const audioOffset = (trimDur && rawOffset >= trimDur) ? 0 : Math.max(0, rawOffset);
+        return { seg, segStart, segDur, trimDur, audioOffset };
+      }));
 
-        const segEnd = segStart + segDur;
-        const nextOverlap = validSegments.slice(index + 1).find((next) => {
-          const nStart = Number(next.startSeconds ?? next.startSec ?? next.audioStartSec ?? 0);
-          return nStart > segStart && nStart < segEnd;
-        });
+      const fallbackCrossfadePlans = computeOverlapCrossfadePlan(
+        preparedFallbackSegs.map((item) => ({
+          startSec: item.segStart,
+          durSec: item.segDur,
+          endSec: item.segStart + item.segDur,
+        }))
+      );
 
-        let volFilter = `volume=${khmerVolume.toFixed(2)}`;
-        if (nextOverlap) {
-          const duckRelSec = Math.max(0.15, parseFloat((Number(nextOverlap.startSeconds ?? nextOverlap.startSec ?? nextOverlap.audioStartSec ?? 0) - segStart).toFixed(2)));
-          volFilter = `volume=eval=frame:volume='if(gte(t,${duckRelSec}),${(khmerVolume * 0.5).toFixed(2)},${khmerVolume.toFixed(2)})'`;
+      const delayedVoiceLabels = [];
+      preparedFallbackSegs.forEach((item, index) => {
+        const { segStart, trimDur, audioOffset } = item;
+        const inputIndex = index + 1;
+        const delayMs = Math.max(0, Math.round(segStart * 1000));
+        const label = `v${inputIndex}`;
+        const cfPlan = fallbackCrossfadePlans[index] || { fadeIn: null, fadeOut: null };
+
+        const fadeFilters = [];
+        if (cfPlan.fadeIn && cfPlan.fadeIn.durSec >= 0.015) {
+          fadeFilters.push(`afade=t=in:st=0:d=${cfPlan.fadeIn.durSec.toFixed(3)}:curve=hsin`);
         }
+        if (cfPlan.fadeOut && cfPlan.fadeOut.durSec >= 0.015) {
+          fadeFilters.push(`afade=t=out:st=${cfPlan.fadeOut.relStartSec.toFixed(3)}:d=${cfPlan.fadeOut.durSec.toFixed(3)}:curve=hsin`);
+        }
+        const fadeChain = fadeFilters.length > 0 ? `${fadeFilters.join(",")},` : "";
+        const volFilter = `volume=${khmerVolume.toFixed(2)}`;
 
         let trimFilter = "";
         if (trimDur && trimDur > 0) {
@@ -442,7 +464,7 @@ function renderDubbedVideoWithDucking(options = {}) {
         }
 
         filterComplexParts.push(
-          `[${inputIndex}:a]${trimFilter}aformat=sample_rates=44100:channel_layouts=stereo,${volFilter},adelay=${delayMs}|${delayMs}[${label}]`
+          `[${inputIndex}:a]${trimFilter}aformat=sample_rates=44100:channel_layouts=stereo,${fadeChain}${volFilter},adelay=${delayMs}|${delayMs}[${label}]`
         );
         delayedVoiceLabels.push(`[${label}]`);
       });
@@ -1497,6 +1519,8 @@ module.exports = {
   parseTimeToSec,
   extractValidTimestamp,
   resolveSegmentStartSec,
+  computeAdaptiveCrossfadeDuration,
+  computeOverlapCrossfadePlan,
   buildSegmentMixFilterChain,
   generateSrtFile,
   createSynchronizedNarrationAudio,

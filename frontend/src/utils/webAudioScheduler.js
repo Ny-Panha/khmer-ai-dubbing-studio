@@ -1,5 +1,294 @@
 import { findLeadingSilenceFromChannels, computeSegmentAudioSyncTarget } from './audioSyncUtils.js';
 
+export const CROSSFADE_MIN_OVERLAP_SEC = 0.015;
+export const CROSSFADE_MAX_DURATION_SEC = 0.35;
+export const CROSSFADE_MAX_CLIP_RATIO = 0.35;
+export const CROSSFADE_MIN_START_SEPARATION_SEC = 0.02;
+
+function roundSec3(val) {
+  return Math.round(val * 1000) / 1000;
+}
+
+function clamp01(val) {
+  if (!Number.isFinite(val)) return 0;
+  return val <= 0 ? 0 : (val >= 1 ? 1 : val);
+}
+
+/**
+ * Half-sine (raised-cosine / FFmpeg curve=hsin) fade-in gain in [0, 1].
+ * Complementary to evalHalfSineFadeOut: fadeIn(u) + fadeOut(u) === 1.0 for all u in [0, 1].
+ */
+export function evalHalfSineFadeIn(u) {
+  const t = clamp01(u);
+  return 0.5 * (1 - Math.cos(Math.PI * t));
+}
+
+/**
+ * Half-sine (raised-cosine / FFmpeg curve=hsin) fade-out gain in [0, 1].
+ */
+export function evalHalfSineFadeOut(u) {
+  const t = clamp01(u);
+  return 0.5 * (1 + Math.cos(Math.PI * t));
+}
+
+/**
+ * Build a Float32Array gain curve for Web Audio GainNode.gain.setValueCurveAtTime().
+ */
+export function buildHalfSineCurve(type, startU = 0, endU = 1, targetGain = 1.0, steps = 64) {
+  const count = Math.max(2, Math.floor(steps));
+  const curve = new Float32Array(count);
+  const u0 = clamp01(startU);
+  const u1 = clamp01(endU);
+  const evalFn = type === 'in' ? evalHalfSineFadeIn : evalHalfSineFadeOut;
+  for (let i = 0; i < count; i++) {
+    const frac = i / (count - 1);
+    const u = u0 + (u1 - u0) * frac;
+    curve[i] = evalFn(u) * targetGain;
+  }
+  return curve;
+}
+
+/**
+ * Compute adaptive crossfade fade duration strictly inside the overlap boundary,
+ * matching backend ffmpegAudioMixAndDucking.js identically.
+ */
+export function computeAdaptiveCrossfadeDuration(overlapSec, prevDurSec, nextDurSec) {
+  if (!Number.isFinite(overlapSec) || overlapSec < CROSSFADE_MIN_OVERLAP_SEC) {
+    return 0;
+  }
+  const caps = [overlapSec, CROSSFADE_MAX_DURATION_SEC];
+  if (Number.isFinite(prevDurSec) && prevDurSec > 0) {
+    caps.push(prevDurSec * CROSSFADE_MAX_CLIP_RATIO);
+  }
+  if (Number.isFinite(nextDurSec) && nextDurSec > 0) {
+    caps.push(nextDurSec * CROSSFADE_MAX_CLIP_RATIO);
+  }
+  const dur = Math.min(...caps);
+  if (!Number.isFinite(dur) || dur < CROSSFADE_MIN_OVERLAP_SEC) {
+    return 0;
+  }
+  return roundSec3(dur);
+}
+
+/**
+ * Two-pass chronological overlap detector matching backend computeOverlapCrossfadePlan().
+ * Expects items of shape { key, startSec, endSec, durSec } (order-independent).
+ * Returns a Map<key, { fadeIn, fadeOut }>.
+ */
+export function computeOverlapCrossfadePlan(entries = []) {
+  const planMap = new Map();
+  if (!Array.isArray(entries) || entries.length === 0) return planMap;
+
+  const items = entries.map((entry, idx) => {
+    const startSec = Number.isFinite(entry.startSec) ? entry.startSec : 0;
+    const durSec = Number.isFinite(entry.durSec) && entry.durSec > 0
+      ? entry.durSec
+      : (Number.isFinite(entry.endSec) && entry.endSec > startSec ? (entry.endSec - startSec) : 0);
+    const endSec = Number.isFinite(entry.endSec) && entry.endSec > startSec
+      ? entry.endSec
+      : (startSec + durSec);
+    return {
+      key: entry.key !== undefined ? entry.key : String(idx),
+      origIdx: idx,
+      startSec,
+      durSec: Math.max(0, endSec - startSec),
+      endSec,
+      fadeIn: null,
+      fadeOut: null,
+      audibleEndSec: endSec,
+    };
+  });
+
+  const sorted = [...items].sort((a, b) => (a.startSec - b.startSec) || (a.origIdx - b.origIdx));
+
+  // Pass 1: Outgoing fade-out for each clip overlapping an upcoming clip (same-lane OR multi-lane)
+  for (let i = 0; i < sorted.length; i++) {
+    const cur = sorted[i];
+    if (cur.durSec <= CROSSFADE_MIN_OVERLAP_SEC) continue;
+
+    for (let j = i + 1; j < sorted.length; j++) {
+      const next = sorted[j];
+      if (next.startSec >= cur.endSec - CROSSFADE_MIN_OVERLAP_SEC) break;
+      if (next.startSec - cur.startSec < CROSSFADE_MIN_START_SEPARATION_SEC) continue;
+      if (next.durSec <= CROSSFADE_MIN_OVERLAP_SEC) continue;
+
+      const overlapEnd = Math.min(cur.endSec, next.endSec);
+      const overlapSec = overlapEnd - next.startSec;
+      const fadeDur = computeAdaptiveCrossfadeDuration(overlapSec, cur.durSec, next.durSec);
+      if (fadeDur >= CROSSFADE_MIN_OVERLAP_SEC) {
+        const relStartSec = roundSec3(Math.max(0, next.startSec - cur.startSec));
+        const endSec = roundSec3(next.startSec + fadeDur);
+        cur.fadeOut = {
+          startSec: roundSec3(next.startSec),
+          endSec,
+          durSec: fadeDur,
+          relStartSec,
+          targetKey: next.key,
+        };
+        cur.audibleEndSec = Math.min(cur.endSec, endSec);
+        break;
+      }
+    }
+  }
+
+  // Pass 2: Incoming fade-in matching any preceding clip still audible at cur.startSec
+  for (let i = 0; i < sorted.length; i++) {
+    const cur = sorted[i];
+    if (cur.durSec <= CROSSFADE_MIN_OVERLAP_SEC) continue;
+
+    let bestFadeInDur = 0;
+    for (let p = i - 1; p >= 0; p--) {
+      const prev = sorted[p];
+      if (cur.startSec - prev.startSec < CROSSFADE_MIN_START_SEPARATION_SEC) continue;
+      if (prev.audibleEndSec <= cur.startSec + CROSSFADE_MIN_OVERLAP_SEC) continue;
+
+      let candidateDur = 0;
+      if (prev.fadeOut && prev.fadeOut.targetKey === cur.key) {
+        candidateDur = prev.fadeOut.durSec;
+      } else {
+        const overlapEnd = Math.min(prev.audibleEndSec, cur.endSec);
+        const overlapSec = overlapEnd - cur.startSec;
+        candidateDur = computeAdaptiveCrossfadeDuration(overlapSec, prev.durSec, cur.durSec);
+      }
+      if (candidateDur > bestFadeInDur) {
+        bestFadeInDur = candidateDur;
+      }
+    }
+
+    if (bestFadeInDur >= CROSSFADE_MIN_OVERLAP_SEC) {
+      if (cur.fadeOut && bestFadeInDur > cur.fadeOut.relStartSec - 0.005) {
+        bestFadeInDur = roundSec3(Math.max(0, cur.fadeOut.relStartSec - 0.005));
+      }
+      if (bestFadeInDur >= CROSSFADE_MIN_OVERLAP_SEC) {
+        cur.fadeIn = {
+          startSec: roundSec3(cur.startSec),
+          endSec: roundSec3(cur.startSec + bestFadeInDur),
+          durSec: bestFadeInDur,
+        };
+      }
+    }
+  }
+
+  for (const item of items) {
+    planMap.set(item.key, {
+      fadeIn: item.fadeIn,
+      fadeOut: item.fadeOut,
+    });
+  }
+  return planMap;
+}
+
+/**
+ * Evaluate exact instantaneous crossfade gain at a given timeline time (seconds).
+ */
+export function evalSegmentCrossfadeGainAtTime(timelineSec, plan, baseGain = 1.0) {
+  if (!Number.isFinite(baseGain) || baseGain <= 0) return 0;
+  if (!plan) return baseGain;
+
+  let mult = 1.0;
+  const { fadeIn, fadeOut } = plan;
+  if (fadeIn && fadeIn.durSec > 0 && timelineSec < fadeIn.endSec) {
+    if (timelineSec <= fadeIn.startSec) {
+      mult *= 0;
+    } else {
+      mult *= evalHalfSineFadeIn((timelineSec - fadeIn.startSec) / fadeIn.durSec);
+    }
+  }
+  if (fadeOut && fadeOut.durSec > 0 && timelineSec >= fadeOut.startSec) {
+    if (timelineSec >= fadeOut.endSec) {
+      mult = 0;
+    } else {
+      mult *= evalHalfSineFadeOut((timelineSec - fadeOut.startSec) / fadeOut.durSec);
+    }
+  }
+  return mult * baseGain;
+}
+
+/**
+ * Schedule sample-accurate Web Audio GainNode automation for smooth half-sine crossfades.
+ * Guarantees strictly monotonic AudioParam events (never throws NotSupportedError on curve overlap).
+ */
+export function scheduleCrossfadeGainEnvelope(
+  gainParam,
+  {
+    ctxNow = 0,
+    timelineNow = 0,
+    segStart = 0,
+    playbackRate = 1.0,
+    plan = null,
+    targetGain = 1.0,
+  } = {}
+) {
+  if (!gainParam) return;
+  const rate = Number.isFinite(playbackRate) && playbackRate > 0 ? playbackRate : 1.0;
+  const safeTarget = Number.isFinite(targetGain) && targetGain > 0 ? targetGain : 0;
+
+  if (typeof gainParam.cancelScheduledValues === 'function') {
+    try { gainParam.cancelScheduledValues(ctxNow); } catch (_) {}
+  }
+
+  if (safeTarget <= 0) {
+    try { gainParam.setValueAtTime(0, ctxNow); } catch (_) {}
+    return;
+  }
+
+  const effectiveStartTl = Math.max(timelineNow, segStart);
+  const startAtCtx = timelineNow < segStart
+    ? ctxNow + ((segStart - timelineNow) / rate)
+    : ctxNow;
+
+  const fadeIn = plan?.fadeIn || null;
+  const fadeOut = plan?.fadeOut || null;
+  const hasCurveApi = typeof gainParam.setValueCurveAtTime === 'function';
+
+  const applyCurve = (type, u0, u1, tStart, durCtx) => {
+    const safeDur = Math.max(0.005, durCtx);
+    if (hasCurveApi) {
+      const curve = buildHalfSineCurve(type, u0, u1, safeTarget, 64);
+      gainParam.setValueCurveAtTime(curve, tStart, safeDur);
+    } else {
+      const evalFn = type === 'in' ? evalHalfSineFadeIn : evalHalfSineFadeOut;
+      gainParam.setValueAtTime(evalFn(u0) * safeTarget, tStart);
+      if (typeof gainParam.linearRampToValueAtTime === 'function') {
+        gainParam.linearRampToValueAtTime(evalFn(u1) * safeTarget, tStart + safeDur);
+      }
+    }
+  };
+
+  let minNextEventCtx = startAtCtx;
+
+  if (fadeIn && fadeIn.durSec >= CROSSFADE_MIN_OVERLAP_SEC && effectiveStartTl < fadeIn.endSec - 0.002) {
+    // Keep silent prior to future clip start if scheduled ahead
+    if (startAtCtx > ctxNow + 0.002) {
+      gainParam.setValueAtTime(0, ctxNow);
+    }
+    const uStart = clamp01((effectiveStartTl - fadeIn.startSec) / fadeIn.durSec);
+    const remDurCtx = Math.max(0.005, (fadeIn.endSec - effectiveStartTl) / rate);
+    applyCurve('in', uStart, 1.0, startAtCtx, remDurCtx);
+    minNextEventCtx = startAtCtx + remDurCtx + 0.001;
+  } else if (fadeOut && fadeOut.durSec >= CROSSFADE_MIN_OVERLAP_SEC && effectiveStartTl >= fadeOut.startSec) {
+    if (effectiveStartTl >= fadeOut.endSec - 0.002) {
+      gainParam.setValueAtTime(0, startAtCtx);
+    } else {
+      const uStart = clamp01((effectiveStartTl - fadeOut.startSec) / fadeOut.durSec);
+      const remDurCtx = Math.max(0.005, (fadeOut.endSec - effectiveStartTl) / rate);
+      applyCurve('out', uStart, 1.0, startAtCtx, remDurCtx);
+    }
+    return;
+  } else {
+    gainParam.setValueAtTime(safeTarget, startAtCtx);
+    minNextEventCtx = startAtCtx + 0.001;
+  }
+
+  // Schedule upcoming fade-out curve if clip transitions into an overlapping next clip
+  if (fadeOut && fadeOut.durSec >= CROSSFADE_MIN_OVERLAP_SEC && fadeOut.startSec > effectiveStartTl) {
+    const rawFadeOutCtx = ctxNow + ((fadeOut.startSec - timelineNow) / rate);
+    const fadeOutAtCtx = Math.max(rawFadeOutCtx, minNextEventCtx);
+    const fadeOutDurCtx = Math.max(0.005, fadeOut.durSec / rate);
+    applyCurve('out', 0.0, 1.0, fadeOutAtCtx, fadeOutDurCtx);
+  }
+}
+
 /**
  * ConCaT-Inspired Bounded AudioBuffer LRU Cache
  * Keeps at most `maxBuffers` decoded AudioBuffer instances in memory (~12MB for 50 clips).
@@ -239,11 +528,13 @@ export class WebAudioScheduler {
     this.lastPlaybackRate = effectiveRate;
 
     this.setMasterVolume(khmerVolume, isKhmerMuted);
-    // masterGain already applies khmerVolume (0..2.0); per-segment gainNode handles ONLY overlap ducking (0.5x vs 1.0x)
+    // masterGain already applies khmerVolume (0..2.0); per-segment gainNode applies smooth crossfade envelopes (0.0..1.0)
     const targetVol = isKhmerMuted ? 0 : 1.0;
 
-    // Build lookup of currently active segments to immediately prune deleted or moved items
+    // Resolve active segments & actual audio durations (preferring decoded PCM buffer duration when cached)
     const activeKeyMap = new Map();
+    const nearbyCrossfadeEntries = [];
+    const segMetaByIdx = new Map();
     if (Array.isArray(segments)) {
       for (let idx = 0; idx < segments.length; idx++) {
         const seg = segments[idx];
@@ -252,30 +543,56 @@ export class WebAudioScheduler {
         const sStart = (typeof seg.audioStartSec === 'number' && !isNaN(seg.audioStartSec))
           ? seg.audioStartSec
           : (typeof seg.startSec === 'number' && !isNaN(seg.startSec) ? seg.startSec : 0);
-        const sDur = (typeof seg.finalAudioDuration === 'number' && seg.finalAudioDuration > 0)
+        const sUrl = seg.audioUrl || (seg.audioPath ? `/uploads/${seg.audioPath.replace(/\\/g, '/').replace(/^.*uploads\//, '')}` : null);
+        const rawDur = (typeof seg.finalAudioDuration === 'number' && seg.finalAudioDuration > 0)
           ? seg.finalAudioDuration
           : ((typeof seg.audioDurationSec === 'number' && !isNaN(seg.audioDurationSec))
             ? seg.audioDurationSec
             : ((typeof seg.audioDuration === 'number' && seg.audioDuration > 0) ? seg.audioDuration : 2.5));
         const sTrimmed = Boolean(seg.audioTrimmed || seg.userTrimmed);
-        const sEnd = (sTrimmed && typeof seg.audioEndSec === 'number' && !isNaN(seg.audioEndSec))
-          ? seg.audioEndSec
-          : (sStart + sDur);
-        const sUrl = seg.audioUrl || (seg.audioPath ? `/uploads/${seg.audioPath.replace(/\\/g, '/').replace(/^.*uploads\//, '')}` : null);
+        const rawOffset = typeof seg.audioOffset === 'number' && !isNaN(seg.audioOffset) ? seg.audioOffset : 0;
+        const cachedEntry = sUrl ? this.lruCache.get(sUrl) : null;
+        const leadSkipSec = (cachedEntry && rawOffset === 0 && !seg.userTrimmed) ? (cachedEntry.leadSkipSec || 0) : 0;
+        const baseOffset = rawOffset + leadSkipSec;
+
+        let effectiveDur = rawDur;
+        let sEnd = sStart + rawDur;
+        if (sTrimmed && typeof seg.audioEndSec === 'number' && !isNaN(seg.audioEndSec) && seg.audioEndSec > sStart) {
+          sEnd = seg.audioEndSec;
+          effectiveDur = Math.max(0.05, sEnd - sStart);
+        } else if (cachedEntry && cachedEntry.buffer && Number.isFinite(cachedEntry.buffer.duration) && cachedEntry.buffer.duration > baseOffset + 0.02) {
+          effectiveDur = Math.max(0.05, cachedEntry.buffer.duration - baseOffset);
+          sEnd = sStart + effectiveDur;
+        }
+
         activeKeyMap.set(key, { segStart: sStart, segEnd: sEnd, url: sUrl });
+        segMetaByIdx.set(idx, { key, segStart: sStart, segEnd: sEnd, durSec: effectiveDur, url: sUrl, cachedEntry, baseOffset });
+
+        // Include nearby clips for O(1) chronological crossfade plan calculation
+        if (sStart <= (timelineNow + lookaheadSec + 4.0) && sEnd >= (timelineNow - 6.0)) {
+          nearbyCrossfadeEntries.push({
+            key,
+            startSec: sStart,
+            endSec: sEnd,
+            durSec: effectiveDur,
+          });
+        }
       }
     }
+
+    const crossfadePlanMap = computeOverlapCrossfadePlan(nearbyCrossfadeEntries);
 
     // Cleanup finished, deleted, or moved segments
     for (const [key, item] of this.scheduledNodes.entries()) {
       const activeSeg = activeKeyMap.get(key);
       const isDeletedOrMuted = !activeSeg || !activeSeg.url;
+      const itemRawEnd = item.rawSegEnd !== undefined ? item.rawSegEnd : item.segEnd;
       const isMovedOrModified = activeSeg && (
         Math.abs(activeSeg.segStart - item.segStart) > 0.025 ||
-        Math.abs(activeSeg.segEnd - item.segEnd) > 0.060 ||
+        Math.abs(activeSeg.segEnd - itemRawEnd) > 0.060 ||
         activeSeg.url !== item.url
       );
-      const isPastOrSeeked = timelineNow > (item.segEnd + 0.15) || timelineNow < (item.segStart - 0.5);
+      const isPastOrSeeked = timelineNow > (item.segEnd + 0.15) || timelineNow < (item.segStart - (lookaheadSec + 0.5));
 
       if (isDeletedOrMuted || isMovedOrModified || isPastOrSeeked) {
         try {
@@ -306,60 +623,24 @@ export class WebAudioScheduler {
         continue;
       }
 
-      const rawUrl = seg.audioUrl || (seg.audioPath ? `/uploads/${seg.audioPath.replace(/\\/g, '/').replace(/^.*uploads\//, '')}` : null);
-      if (!rawUrl) continue;
+      const meta = segMetaByIdx.get(idx);
+      if (!meta || !meta.url) continue;
 
-      const segStart = (typeof seg.audioStartSec === 'number' && !isNaN(seg.audioStartSec))
-        ? seg.audioStartSec
-        : (typeof seg.startSec === 'number' && !isNaN(seg.startSec) ? seg.startSec : 0);
-
-      const rawDur = (typeof seg.finalAudioDuration === 'number' && seg.finalAudioDuration > 0)
-        ? seg.finalAudioDuration
-        : ((typeof seg.audioDurationSec === 'number' && !isNaN(seg.audioDurationSec))
-          ? seg.audioDurationSec
-          : ((typeof seg.audioDuration === 'number' && seg.audioDuration > 0) ? seg.audioDuration : 2.5));
-
-      const isTrimmed = Boolean(seg.audioTrimmed || seg.userTrimmed);
-      const effectiveSegEnd = (isTrimmed && typeof seg.audioEndSec === 'number' && !isNaN(seg.audioEndSec))
-        ? seg.audioEndSec
-        : (segStart + rawDur);
+      const { key: segKey, segStart, segEnd: effectiveSegEnd, url: rawUrl, cachedEntry, baseOffset } = meta;
 
       // Outside current lookahead window
       if (segStart > (timelineNow + lookaheadSec) || effectiveSegEnd <= (timelineNow - 0.05)) {
         continue;
       }
 
-      const segKey = String(seg._uid || (seg.id !== undefined && seg.id !== null ? seg.id : idx));
-
-      // Overlap detection: Hard-clamp same-lane dialogues so two clips on the same track never clash;
-      // apply gentle 50% auto-ducking on intentional multi-lane dialogue overlaps.
-      let isOverlapped = false;
-      let nextSameLaneStart = Infinity;
-      const curTrackRow = typeof seg.trackRow === 'number' ? seg.trackRow : 0;
-      const scanLimit = Math.min(segments.length, idx + 4);
-      for (let nextIdx = idx + 1; nextIdx < scanLimit; nextIdx++) {
-        const nextSeg = segments[nextIdx];
-        if (nextSeg.muted || nextSeg.isMuted) continue;
-        const nextTrackRow = typeof nextSeg.trackRow === 'number' ? nextSeg.trackRow : 0;
-        const nextStart = (typeof nextSeg.audioStartSec === 'number' && !isNaN(nextSeg.audioStartSec))
-          ? nextSeg.audioStartSec
-          : (nextSeg.startSec || 0);
-        if (nextStart > effectiveSegEnd) break;
-        if (nextStart > segStart && nextStart < effectiveSegEnd) {
-          if (curTrackRow === nextTrackRow) {
-            nextSameLaneStart = Math.min(nextSameLaneStart, nextStart);
-          } else if (timelineNow >= (nextStart - 0.04)) {
-            isOverlapped = true;
-          }
-        }
-      }
-
-      const hardCappedEnd = nextSameLaneStart < Infinity
-        ? Math.min(effectiveSegEnd, nextSameLaneStart)
+      const crossfadePlan = crossfadePlanMap.get(segKey) || { fadeIn: null, fadeOut: null };
+      // Allow clip to play smoothly through its crossfade fade-out end (never abruptly cut before overlap)
+      const playbackEnd = crossfadePlan.fadeOut
+        ? Math.min(effectiveSegEnd, crossfadePlan.fadeOut.endSec)
         : effectiveSegEnd;
 
-      // If playback already reached or passed next same-lane start, silence current segment
-      if (timelineNow >= hardCappedEnd) {
+      // Once clip has faded completely to 0% or finished playing, stop cleanly
+      if (timelineNow >= playbackEnd) {
         if (this.scheduledNodes.has(segKey)) {
           const item = this.scheduledNodes.get(segKey);
           try {
@@ -372,9 +653,6 @@ export class WebAudioScheduler {
         continue;
       }
 
-      const effectiveVol = isOverlapped ? targetVol * 0.5 : targetVol;
-
-      const cachedEntry = this.lruCache.get(rawUrl);
       if (!cachedEntry) {
         // Trigger pre-decode if not yet in cache
         this.lruCache.loadAndDecode(rawUrl, ctx);
@@ -382,15 +660,20 @@ export class WebAudioScheduler {
       }
 
       const audioBuffer = cachedEntry.buffer;
-      const leadSkipSec = (seg.audioOffset === 0 && !seg.userTrimmed) ? (cachedEntry.leadSkipSec || 0) : 0;
-      const baseOffset = (typeof seg.audioOffset === 'number' && !isNaN(seg.audioOffset) ? seg.audioOffset : 0) + leadSkipSec;
+      const crossfadeSig = [
+        crossfadePlan.fadeIn ? `${crossfadePlan.fadeIn.startSec.toFixed(3)}:${crossfadePlan.fadeIn.durSec.toFixed(3)}` : 'none',
+        crossfadePlan.fadeOut ? `${crossfadePlan.fadeOut.startSec.toFixed(3)}:${crossfadePlan.fadeOut.durSec.toFixed(3)}` : 'none',
+        effectiveRate.toFixed(3),
+        targetVol.toFixed(3),
+      ].join('|');
 
-      // If already scheduled, adjust volume/rate if needed and check drift
+      // If already scheduled, preserve running GainNode automation unless envelope/rate changed, and check drift
       if (this.scheduledNodes.has(segKey)) {
         const item = this.scheduledNodes.get(segKey);
+        const itemRawEnd = item.rawSegEnd !== undefined ? item.rawSegEnd : item.segEnd;
 
         // If segment moved, trimmed, or URL changed, cancel old node and reschedule cleanly
-        if (Math.abs(item.segStart - segStart) > 0.025 || Math.abs(item.segEnd - effectiveSegEnd) > 0.060 || item.url !== rawUrl) {
+        if (Math.abs(item.segStart - segStart) > 0.025 || Math.abs(itemRawEnd - effectiveSegEnd) > 0.060 || item.url !== rawUrl) {
           try {
             item.sourceNode.stop();
             item.sourceNode.disconnect();
@@ -399,15 +682,26 @@ export class WebAudioScheduler {
           this.scheduledNodes.delete(segKey);
           // Fall through to schedule new BufferSourceNode below
         } else {
-          if (item.gainNode.gain.value !== effectiveVol) {
-            item.gainNode.gain.setValueAtTime(effectiveVol, ctx.currentTime);
-          }
           if (item.sourceNode.playbackRate.value !== effectiveRate) {
             item.sourceNode.playbackRate.setValueAtTime(effectiveRate, ctx.currentTime);
           }
+          if (item.crossfadeSig !== crossfadeSig) {
+            try {
+              scheduleCrossfadeGainEnvelope(item.gainNode.gain, {
+                ctxNow: ctx.currentTime,
+                timelineNow,
+                segStart,
+                playbackRate: effectiveRate,
+                plan: crossfadePlan,
+                targetGain: targetVol,
+              });
+              item.crossfadeSig = crossfadeSig;
+              item.segEnd = playbackEnd;
+            } catch (_) {}
+          }
 
           // Measure audio drift relative to video playhead
-          if (timelineNow >= segStart && timelineNow < hardCappedEnd) {
+          if (timelineNow >= segStart && timelineNow < playbackEnd) {
             const expectedPlayedSec = (timelineNow - segStart);
             const actualPlayedAudioSec = (ctx.currentTime - item.startedAtCtx) * effectiveRate;
             const driftSec = expectedPlayedSec - actualPlayedAudioSec;
@@ -431,14 +725,21 @@ export class WebAudioScheduler {
         }
       }
 
-      // Schedule new BufferSourceNode
+      // Schedule new BufferSourceNode with sample-accurate GainNode crossfade automation
       try {
         const sourceNode = ctx.createBufferSource();
         sourceNode.buffer = audioBuffer;
         sourceNode.playbackRate.setValueAtTime(effectiveRate, ctx.currentTime);
 
         const gainNode = ctx.createGain();
-        gainNode.gain.setValueAtTime(effectiveVol, ctx.currentTime);
+        scheduleCrossfadeGainEnvelope(gainNode.gain, {
+          ctxNow: ctx.currentTime,
+          timelineNow,
+          segStart,
+          playbackRate: effectiveRate,
+          plan: crossfadePlan,
+          targetGain: targetVol,
+        });
 
         sourceNode.connect(gainNode);
         gainNode.connect(this.masterGain);
@@ -448,15 +749,17 @@ export class WebAudioScheduler {
         if (timeDelta > 0) {
           // Starts in the near future
           const startAtCtx = ctx.currentTime + (timeDelta / effectiveRate);
-          const durationLimit = Math.min(audioBuffer.duration - baseOffset, hardCappedEnd - segStart);
+          const durationLimit = Math.min(audioBuffer.duration - baseOffset, playbackEnd - segStart);
           if (durationLimit > 0.02) {
             sourceNode.start(startAtCtx, baseOffset, durationLimit);
             this.scheduledNodes.set(segKey, {
               sourceNode,
               gainNode,
               segStart,
-              segEnd: hardCappedEnd,
+              segEnd: playbackEnd,
+              rawSegEnd: effectiveSegEnd,
               startedAtCtx: startAtCtx,
+              crossfadeSig,
               url: rawUrl,
             });
           }
@@ -464,7 +767,7 @@ export class WebAudioScheduler {
           // Segment should be actively playing right now
           const elapsedSec = (timelineNow - segStart);
           const playOffset = baseOffset + elapsedSec;
-          const remainingSec = Math.min(audioBuffer.duration - playOffset, hardCappedEnd - timelineNow);
+          const remainingSec = Math.min(audioBuffer.duration - playOffset, playbackEnd - timelineNow);
 
           if (playOffset < audioBuffer.duration && remainingSec > 0.02) {
             sourceNode.start(ctx.currentTime, playOffset, remainingSec);
@@ -472,8 +775,10 @@ export class WebAudioScheduler {
               sourceNode,
               gainNode,
               segStart,
-              segEnd: hardCappedEnd,
+              segEnd: playbackEnd,
+              rawSegEnd: effectiveSegEnd,
               startedAtCtx: ctx.currentTime - (elapsedSec / effectiveRate),
+              crossfadeSig,
               url: rawUrl,
             });
             this.lastAudioDriftMs = 0;

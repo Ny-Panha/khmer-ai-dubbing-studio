@@ -729,53 +729,239 @@ function resolveSegmentStartSec(seg, fallback = 0) {
   return fallback;
 }
 
+const CROSSFADE_MIN_OVERLAP_SEC = 0.015;
+const CROSSFADE_MAX_DURATION_SEC = 0.35;
+const CROSSFADE_MAX_CLIP_RATIO = 0.35;
+const CROSSFADE_MIN_START_SEPARATION_SEC = 0.02;
+const CROSSFADE_CURVE = "hsin";
+
+function roundSec3(val) {
+  return Math.round(val * 1000) / 1000;
+}
+
+/**
+ * Compute adaptive crossfade fade duration strictly inside the overlap boundary,
+ * capped to protect short spoken words and preserve intelligibility.
+ */
+function computeAdaptiveCrossfadeDuration(overlapSec, prevDurSec, nextDurSec) {
+  if (!Number.isFinite(overlapSec) || overlapSec < CROSSFADE_MIN_OVERLAP_SEC) {
+    return 0;
+  }
+  const caps = [overlapSec, CROSSFADE_MAX_DURATION_SEC];
+  if (Number.isFinite(prevDurSec) && prevDurSec > 0) {
+    caps.push(prevDurSec * CROSSFADE_MAX_CLIP_RATIO);
+  }
+  if (Number.isFinite(nextDurSec) && nextDurSec > 0) {
+    caps.push(nextDurSec * CROSSFADE_MAX_CLIP_RATIO);
+  }
+  const dur = Math.min(...caps);
+  if (!Number.isFinite(dur) || dur < CROSSFADE_MIN_OVERLAP_SEC) {
+    return 0;
+  }
+  return roundSec3(dur);
+}
+
+/**
+ * Two-pass chronological overlap detector for smooth automatic dialogue crossfades.
+ * Works identically across same-lane and multi-lane dialogue transitions without
+ * changing audio files, speed, pitch, or timeline positions.
+ *
+ * Returns an array aligned 1:1 with `segments`, where each entry is:
+ * { fadeIn: { startSec, endSec, durSec } | null, fadeOut: { startSec, endSec, durSec, relStartSec } | null }
+ */
+function computeOverlapCrossfadePlan(segments = []) {
+  if (!Array.isArray(segments) || segments.length === 0) return [];
+
+  const items = segments.map((seg, origIdx) => {
+    const startSec = Number.isFinite(Number(seg.startSec))
+      ? Number(seg.startSec)
+      : resolveSegmentStartSec(seg, origIdx * 4);
+    const durSec = Number.isFinite(Number(seg.durSec)) && Number(seg.durSec) > 0
+      ? Number(seg.durSec)
+      : (Number.isFinite(Number(seg.finalAudioDuration)) && Number(seg.finalAudioDuration) > 0
+        ? Number(seg.finalAudioDuration)
+        : (Number.isFinite(Number(seg.audioDurationSec)) && Number(seg.audioDurationSec) > 0
+          ? Number(seg.audioDurationSec)
+          : (Number.isFinite(Number(seg.duration)) && Number(seg.duration) > 0 ? Number(seg.duration) : 0)));
+    const endSec = Number.isFinite(Number(seg.endSec)) && Number(seg.endSec) > startSec
+      ? Number(seg.endSec)
+      : (startSec + durSec);
+    return {
+      origIdx,
+      startSec,
+      durSec: Math.max(0, endSec - startSec),
+      endSec,
+      fadeOut: null,
+      fadeIn: null,
+      audibleEndSec: endSec,
+    };
+  });
+
+  const sorted = [...items].sort((a, b) => (a.startSec - b.startSec) || (a.origIdx - b.origIdx));
+
+  // Pass 1: Outgoing fade-out for each clip overlapping an upcoming clip
+  for (let i = 0; i < sorted.length; i++) {
+    const cur = sorted[i];
+    if (cur.durSec <= CROSSFADE_MIN_OVERLAP_SEC) continue;
+
+    for (let j = i + 1; j < sorted.length; j++) {
+      const next = sorted[j];
+      if (next.startSec >= cur.endSec - CROSSFADE_MIN_OVERLAP_SEC) break;
+      if (next.startSec - cur.startSec < CROSSFADE_MIN_START_SEPARATION_SEC) continue;
+      if (next.durSec <= CROSSFADE_MIN_OVERLAP_SEC) continue;
+
+      const overlapEnd = Math.min(cur.endSec, next.endSec);
+      const overlapSec = overlapEnd - next.startSec;
+      const fadeDur = computeAdaptiveCrossfadeDuration(overlapSec, cur.durSec, next.durSec);
+      if (fadeDur >= CROSSFADE_MIN_OVERLAP_SEC) {
+        const relStartSec = roundSec3(Math.max(0, next.startSec - cur.startSec));
+        const endSec = roundSec3(next.startSec + fadeDur);
+        cur.fadeOut = {
+          startSec: roundSec3(next.startSec),
+          endSec,
+          durSec: fadeDur,
+          relStartSec,
+          targetOrigIdx: next.origIdx,
+        };
+        cur.audibleEndSec = Math.min(cur.endSec, endSec);
+        break;
+      }
+    }
+  }
+
+  // Pass 2: Incoming fade-in matching any preceding clip still audible at cur.startSec
+  for (let i = 0; i < sorted.length; i++) {
+    const cur = sorted[i];
+    if (cur.durSec <= CROSSFADE_MIN_OVERLAP_SEC) continue;
+
+    let bestFadeInDur = 0;
+    for (let p = i - 1; p >= 0; p--) {
+      const prev = sorted[p];
+      if (cur.startSec - prev.startSec < CROSSFADE_MIN_START_SEPARATION_SEC) continue;
+      if (prev.audibleEndSec <= cur.startSec + CROSSFADE_MIN_OVERLAP_SEC) continue;
+
+      let candidateDur = 0;
+      if (prev.fadeOut && prev.fadeOut.targetOrigIdx === cur.origIdx) {
+        candidateDur = prev.fadeOut.durSec;
+      } else {
+        const overlapEnd = Math.min(prev.audibleEndSec, cur.endSec);
+        const overlapSec = overlapEnd - cur.startSec;
+        candidateDur = computeAdaptiveCrossfadeDuration(overlapSec, prev.durSec, cur.durSec);
+      }
+      if (candidateDur > bestFadeInDur) {
+        bestFadeInDur = candidateDur;
+      }
+    }
+
+    if (bestFadeInDur >= CROSSFADE_MIN_OVERLAP_SEC) {
+      // Ensure fade-in completes strictly before any outgoing fade-out starts on chained clips
+      if (cur.fadeOut && bestFadeInDur > cur.fadeOut.relStartSec - 0.005) {
+        bestFadeInDur = roundSec3(Math.max(0, cur.fadeOut.relStartSec - 0.005));
+      }
+      if (bestFadeInDur >= CROSSFADE_MIN_OVERLAP_SEC) {
+        cur.fadeIn = {
+          startSec: roundSec3(cur.startSec),
+          endSec: roundSec3(cur.startSec + bestFadeInDur),
+          durSec: bestFadeInDur,
+        };
+      }
+    }
+  }
+
+  const plan = new Array(segments.length);
+  for (const item of items) {
+    plan[item.origIdx] = {
+      fadeIn: item.fadeIn,
+      fadeOut: item.fadeOut,
+    };
+  }
+  return plan;
+}
+
 /**
  * Build FFmpeg audio filter chain for a single narration segment in the master mix.
- * - Preserves intentional multi-lane overlaps (user placed clip on a different voice trackRow) with 40% ducking.
- * - Eliminates unintentional same-lane dialogue collisions:
- *   * Mild/moderate overrun (<= 1.35x): gentle atempo compression + 25ms soft fade + hard stop before next speaker.
- *   * Extreme overrun (> 1.35x): 1.30x atempo + smooth 60ms fade-out + hard stop 30ms before next speaker.
+ * - Applies smooth adaptive half-sine (curve=hsin) crossfade (afade=t=in / afade=t=out)
+ *   strictly within overlapping dialogue boundaries across both same-lane and multi-lane clips.
+ * - Preserves original audio files, timing, speed, pitch, and voice identity (zero atempo / zero hard cuts).
  */
-function buildSegmentMixFilterChain(seg, nextOverlap = null, startMs = 0) {
+function buildSegmentMixFilterChain(seg, nextOverlap = null, startMs = 0, prevOverlap = null) {
   const rawOffset = typeof seg.audioOffset === "number" && !isNaN(seg.audioOffset) ? seg.audioOffset : 0;
   const dur = typeof seg.durSec === "number" && !isNaN(seg.durSec) ? seg.durSec : null;
   const audioOffset = (dur && rawOffset >= dur) ? 0 : Math.max(0, rawOffset);
 
-  let trimPrefix = "";
+  const filters = [];
   if (dur > 0 && (seg.audioTrimmed || seg.userTrimmed || audioOffset > 0)) {
-    trimPrefix = `atrim=start=${audioOffset}:duration=${dur},asetpts=PTS-STARTPTS,`;
+    filters.push(`atrim=start=${audioOffset}:duration=${dur}`, "asetpts=PTS-STARTPTS");
   }
 
-  if (!nextOverlap) {
-    return `${trimPrefix}adelay=${startMs}|${startMs}`;
-  }
+  // Use precomputed crossfade plan when provided, or derive directly from prevOverlap/nextOverlap
+  let fadeIn = seg.crossfadePlan?.fadeIn || null;
+  let fadeOut = seg.crossfadePlan?.fadeOut || null;
 
-  const segRow = typeof seg.trackRow === "number" ? seg.trackRow : 0;
-  const nextRow = typeof nextOverlap.trackRow === "number" ? nextOverlap.trackRow : 0;
-  const isIntentionalMultiLane = segRow !== nextRow && Boolean(seg.userShifted || nextOverlap.userShifted || segRow > 0 || nextRow > 0);
+  if (!seg.crossfadePlan) {
+    const segStart = Number.isFinite(Number(seg.startSec)) ? Number(seg.startSec) : 0;
+    const segDur = dur && dur > 0 ? dur : 0;
+    const segEnd = segStart + segDur;
 
-  if (isIntentionalMultiLane) {
-    const duckRelSec = Math.max(0.15, parseFloat((nextOverlap.startSec - seg.startSec).toFixed(2)));
-    return `${trimPrefix}volume=eval=frame:volume='if(gte(t,${duckRelSec}),0.40,1.0)',adelay=${startMs}|${startMs}`;
-  }
-
-  // Same-lane dialogue collision guard: finish cleanly before next speaker onset (zero talking over each other)
-  const slotAvailSec = Math.max(0.18, parseFloat((nextOverlap.startSec - seg.startSec - 0.03).toFixed(3)));
-  if (dur && dur > slotAvailSec + 0.01) {
-    const ratio = dur / slotAvailSec;
-    if (ratio <= 1.35 && slotAvailSec >= 0.30) {
-      const fitTempo = parseFloat(Math.max(1.01, Math.min(1.35, ratio)).toFixed(3));
-      const fadeDur = Math.min(0.025, slotAvailSec * 0.15);
-      const fadeStart = Math.max(0, parseFloat((slotAvailSec - fadeDur).toFixed(3)));
-      return `${trimPrefix}atempo=${fitTempo},atrim=0:${slotAvailSec},afade=t=out:st=${fadeStart}:d=${fadeDur.toFixed(3)},asetpts=PTS-STARTPTS,adelay=${startMs}|${startMs}`;
+    if (nextOverlap && segDur > CROSSFADE_MIN_OVERLAP_SEC) {
+      const nextStart = Number.isFinite(Number(nextOverlap.startSec))
+        ? Number(nextOverlap.startSec)
+        : resolveSegmentStartSec(nextOverlap, segStart);
+      if (nextStart - segStart >= CROSSFADE_MIN_START_SEPARATION_SEC && nextStart < segEnd - CROSSFADE_MIN_OVERLAP_SEC) {
+        const nextDur = Number.isFinite(Number(nextOverlap.durSec)) && Number(nextOverlap.durSec) > 0
+          ? Number(nextOverlap.durSec)
+          : (Number.isFinite(Number(nextOverlap.finalAudioDuration)) && Number(nextOverlap.finalAudioDuration) > 0
+            ? Number(nextOverlap.finalAudioDuration)
+            : (Number.isFinite(Number(nextOverlap.audioDurationSec)) && Number(nextOverlap.audioDurationSec) > 0
+              ? Number(nextOverlap.audioDurationSec)
+              : null));
+        const overlapEnd = nextDur ? Math.min(segEnd, nextStart + nextDur) : segEnd;
+        const overlapSec = overlapEnd - nextStart;
+        const fadeDur = computeAdaptiveCrossfadeDuration(overlapSec, segDur, nextDur);
+        if (fadeDur >= CROSSFADE_MIN_OVERLAP_SEC) {
+          fadeOut = {
+            relStartSec: roundSec3(Math.max(0, nextStart - segStart)),
+            durSec: fadeDur,
+          };
+        }
+      }
     }
-    const fitTempo = 1.30;
-    const fadeDur = Math.min(0.06, slotAvailSec * 0.25);
-    const fadeStart = Math.max(0, parseFloat((slotAvailSec - fadeDur).toFixed(3)));
-    return `${trimPrefix}atempo=${fitTempo},atrim=0:${slotAvailSec},afade=t=out:st=${fadeStart}:d=${fadeDur.toFixed(3)},asetpts=PTS-STARTPTS,adelay=${startMs}|${startMs}`;
+
+    if (prevOverlap && segDur > CROSSFADE_MIN_OVERLAP_SEC) {
+      const prevStart = Number.isFinite(Number(prevOverlap.startSec))
+        ? Number(prevOverlap.startSec)
+        : resolveSegmentStartSec(prevOverlap, 0);
+      const prevDur = Number.isFinite(Number(prevOverlap.durSec)) && Number(prevOverlap.durSec) > 0
+        ? Number(prevOverlap.durSec)
+        : (Number.isFinite(Number(prevOverlap.finalAudioDuration)) && Number(prevOverlap.finalAudioDuration) > 0
+          ? Number(prevOverlap.finalAudioDuration)
+          : (Number.isFinite(Number(prevOverlap.audioDurationSec)) && Number(prevOverlap.audioDurationSec) > 0
+            ? Number(prevOverlap.audioDurationSec)
+            : 0));
+      const prevEnd = Number.isFinite(Number(prevOverlap.endSec)) ? Number(prevOverlap.endSec) : (prevStart + prevDur);
+      if (segStart - prevStart >= CROSSFADE_MIN_START_SEPARATION_SEC && prevEnd > segStart + CROSSFADE_MIN_OVERLAP_SEC) {
+        const overlapEnd = Math.min(prevEnd, segEnd);
+        const overlapSec = overlapEnd - segStart;
+        let fadeDur = computeAdaptiveCrossfadeDuration(overlapSec, prevDur, segDur);
+        if (fadeOut && fadeDur > fadeOut.relStartSec - 0.005) {
+          fadeDur = roundSec3(Math.max(0, fadeOut.relStartSec - 0.005));
+        }
+        if (fadeDur >= CROSSFADE_MIN_OVERLAP_SEC) {
+          fadeIn = { durSec: fadeDur };
+        }
+      }
+    }
   }
 
-  return `${trimPrefix}adelay=${startMs}|${startMs}`;
+  if (fadeIn && fadeIn.durSec >= CROSSFADE_MIN_OVERLAP_SEC) {
+    filters.push(`afade=t=in:st=0:d=${fadeIn.durSec.toFixed(3)}:curve=${CROSSFADE_CURVE}`);
+  }
+  if (fadeOut && fadeOut.durSec >= CROSSFADE_MIN_OVERLAP_SEC) {
+    filters.push(`afade=t=out:st=${fadeOut.relStartSec.toFixed(3)}:d=${fadeOut.durSec.toFixed(3)}:curve=${CROSSFADE_CURVE}`);
+  }
+
+  filters.push(`adelay=${startMs}|${startMs}`);
+  return filters.join(",");
 }
 
 function createSynchronizedNarrationAudio(segments, outputAudioPath, options = {}) {
@@ -879,8 +1065,86 @@ function createSynchronizedNarrationAudio(segments, outputAudioPath, options = {
       return null;
     };
 
+    // Helper: Resolve actual segment audio durations & precompute smooth overlap crossfade plan across ALL segments
+    // (including across batch boundaries) so export audio matches Web Audio Live Preview seamlessly.
+    const prepareSegmentsWithCrossfade = async (segs) => {
+      const prepared = segs.map((seg, idx) => {
+        const secVal = resolveSegmentStartSec(seg, idx * 4);
+        const isTrimmed = Boolean(seg.audioTrimmed || seg.userTrimmed);
+        let dur = null;
+        if (seg.audioTrimmed && typeof seg.audioEndSec === "number" && typeof seg.audioStartSec === "number" && seg.audioEndSec > seg.audioStartSec) {
+          dur = Math.max(0.1, parseFloat((seg.audioEndSec - seg.audioStartSec).toFixed(3)));
+        } else if (typeof seg.finalAudioDuration === "number" && Number.isFinite(seg.finalAudioDuration) && seg.finalAudioDuration > 0) {
+          dur = seg.finalAudioDuration;
+        } else if (typeof seg.audioDurationSec === "number" && Number.isFinite(seg.audioDurationSec) && seg.audioDurationSec > 0) {
+          dur = seg.audioDurationSec;
+        } else if (typeof seg.audioDuration === "number" && Number.isFinite(seg.audioDuration) && seg.audioDuration > 0) {
+          dur = seg.audioDuration;
+        } else if (typeof seg.duration === "number" && Number.isFinite(seg.duration) && seg.duration > 0) {
+          dur = seg.duration;
+        }
+        return {
+          ...seg,
+          startSec: secVal,
+          durSec: dur || 3.0,
+          _hasMetaDur: dur !== null,
+          _isTrimmed: isTrimmed,
+        };
+      });
+
+      // Probe real media duration ONLY for untrimmed segments missing duration or within 0.6s of a neighbor
+      // (detects exact audio overlap duration without unnecessary ffprobe overhead on isolated clips).
+      const byStart = prepared
+        .map((item, idx) => ({ item, idx }))
+        .sort((a, b) => (a.item.startSec - b.item.startSec) || (a.idx - b.idx));
+      const probeIndices = new Set();
+      for (let i = 0; i < byStart.length; i++) {
+        const cur = byStart[i];
+        if (cur.item._isTrimmed) continue;
+        if (!cur.item._hasMetaDur) {
+          probeIndices.add(cur.idx);
+        }
+        if (i + 1 < byStart.length) {
+          const next = byStart[i + 1];
+          if (cur.item.startSec + cur.item.durSec + 0.6 > next.item.startSec) {
+            probeIndices.add(cur.idx);
+            if (!next.item._isTrimmed) probeIndices.add(next.idx);
+          }
+        }
+      }
+
+      const toProbe = Array.from(probeIndices);
+      const PROBE_CONCURRENCY = 6;
+      for (let p = 0; p < toProbe.length; p += PROBE_CONCURRENCY) {
+        const slice = toProbe.slice(p, p + PROBE_CONCURRENCY);
+        await Promise.all(slice.map(async (segIdx) => {
+          const item = prepared[segIdx];
+          const livePath = resolveLiveSegmentAudioPath(item);
+          if (!livePath) return;
+          try {
+            const probed = await getMediaDuration(livePath);
+            if (Number.isFinite(probed) && probed > 0.05) {
+              const rawOffset = typeof item.audioOffset === "number" && !isNaN(item.audioOffset) ? item.audioOffset : 0;
+              const effectiveOffset = rawOffset >= probed ? 0 : Math.max(0, rawOffset);
+              item.durSec = roundSec3(Math.max(0.05, probed - effectiveOffset));
+            }
+          } catch (_) {}
+        }));
+      }
+
+      prepared.forEach((item) => {
+        item.endSec = roundSec3(item.startSec + item.durSec);
+      });
+
+      const crossfadePlans = computeOverlapCrossfadePlan(prepared);
+      prepared.forEach((item, idx) => {
+        item.crossfadePlan = crossfadePlans[idx] || { fadeIn: null, fadeOut: null };
+      });
+      return prepared;
+    };
+
     // Helper: Mix a single batch of up to 40 segments safely (resilient to concurrent voice-switch file swaps)
-    const mixBatch = (segs, outPath, isWav = false, allowRetry = true, nextBatchBoundarySeg = null) => {
+    const mixBatch = (segs, outPath, isWav = false, allowRetry = true) => {
       return new Promise((resBatch, rejBatch) => {
         try {
           const liveSegs = [];
@@ -898,37 +1162,10 @@ function createSynchronizedNarrationAudio(segments, outputAudioPath, options = {
           const filterParts = [];
           const mixInputs = [];
 
-          const preparedSegs = liveSegs.map((seg, idx) => {
-            const secVal = resolveSegmentStartSec(seg, idx * 4);
-            let dur = typeof seg.audioDurationSec === "number" && !isNaN(seg.audioDurationSec) && seg.audioDurationSec > 0
-              ? seg.audioDurationSec
-              : 3.0;
-            if (seg.audioTrimmed && typeof seg.audioEndSec === "number" && typeof seg.audioStartSec === "number" && seg.audioEndSec > seg.audioStartSec) {
-              dur = Math.max(0.1, parseFloat((seg.audioEndSec - seg.audioStartSec).toFixed(3)));
-            }
-            return {
-              ...seg,
-              startSec: secVal,
-              durSec: dur,
-              endSec: secVal + dur,
-            };
-          });
-
-          const preparedBoundaryNext = nextBatchBoundarySeg
-            ? {
-                ...nextBatchBoundarySeg,
-                startSec: resolveSegmentStartSec(nextBatchBoundarySeg, preparedSegs.length * 4),
-              }
-            : null;
-
-          preparedSegs.forEach((seg, idx) => {
+          liveSegs.forEach((seg, idx) => {
             command.input(getSafeCliPath(seg.audioPath));
             const startMs = Math.max(0, Math.round(seg.startSec * 1000));
-            const futureSegs = preparedBoundaryNext
-              ? [...preparedSegs.slice(idx + 1), preparedBoundaryNext]
-              : preparedSegs.slice(idx + 1);
-            const nextOverlap = futureSegs.find((next) => next.startSec > seg.startSec && next.startSec < seg.endSec) || null;
-            const filterChain = buildSegmentMixFilterChain(seg, nextOverlap, startMs);
+            const filterChain = buildSegmentMixFilterChain(seg, null, startMs, null);
             filterParts.push(`[${idx}:a]${filterChain}[a${idx}]`);
             mixInputs.push(`[a${idx}]`);
           });
@@ -963,27 +1200,28 @@ function createSynchronizedNarrationAudio(segments, outputAudioPath, options = {
 
     const BATCH_SIZE = 40;
     try {
-      if (validSegs.length <= BATCH_SIZE) {
+      const preparedAllSegs = await prepareSegmentsWithCrossfade(validSegs);
+
+      if (preparedAllSegs.length <= BATCH_SIZE) {
         // Direct Single Pass
-        const singleOut = await mixBatch(validSegs, tempOutputPath, false);
+        const singleOut = await mixBatch(preparedAllSegs, tempOutputPath, false);
         if (!singleOut) {
           return reject(new Error("No valid audio files remained during synchronization"));
         }
         finalizeAtomicSwap();
-        console.log(`[FFmpegService] 🎙️ Master Narration បាន Sync រួចរាល់ (${validSegs.length} segments | Steady Loudness Guard active)`);
+        console.log(`[FFmpegService] 🎙️ Master Narration បាន Sync រួចរាល់ (${preparedAllSegs.length} segments | Smooth Crossfade active)`);
         return resolve(outputAudioPath);
       }
 
       // Hierarchical Batching (Prevents Windows ENAMETOOLONG CLI Limit for hundreds of clips)
-      console.log(`[FFmpegService] 🎙️ Hierarchical Audio Sync: Dividing ${validSegs.length} segments into batches of ${BATCH_SIZE}...`);
+      console.log(`[FFmpegService] 🎙️ Hierarchical Audio Sync: Dividing ${preparedAllSegs.length} segments into batches of ${BATCH_SIZE}...`);
       const intermediateChunkPaths = [];
 
-      for (let b = 0; b < validSegs.length; b += BATCH_SIZE) {
+      for (let b = 0; b < preparedAllSegs.length; b += BATCH_SIZE) {
         const batchNum = Math.floor(b / BATCH_SIZE) + 1;
-        const batchSegs = validSegs.slice(b, b + BATCH_SIZE);
-        const nextBoundarySeg = validSegs[b + BATCH_SIZE] || null;
+        const batchSegs = preparedAllSegs.slice(b, b + BATCH_SIZE);
         const batchWavPath = path.join(outDir, `.tmp_sync_batch_${Date.now()}_${batchNum}.wav`);
-        const builtChunk = await mixBatch(batchSegs, batchWavPath, true, true, nextBoundarySeg);
+        const builtChunk = await mixBatch(batchSegs, batchWavPath, true, true);
         if (builtChunk) {
           intermediateChunkPaths.push(builtChunk);
         }
@@ -1165,6 +1403,8 @@ module.exports = {
   extractAudio,
   extractValidTimestamp,
   resolveSegmentStartSec,
+  computeAdaptiveCrossfadeDuration,
+  computeOverlapCrossfadePlan,
   buildSegmentMixFilterChain,
   createSynchronizedNarrationAudio,
 };

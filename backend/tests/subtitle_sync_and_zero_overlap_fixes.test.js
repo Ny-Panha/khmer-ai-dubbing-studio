@@ -261,43 +261,44 @@ print(json.dumps({"mixed": res_mixed, "two_line": res_two_line, "single": res_si
     assert.equal(shortenRes.segments[2].khmerText, 'យឺតជាងនេះគ្មានកន្លែងអង្គុយទេ', 'User-overridden segment must remain untouched');
   });
 
-  it('Fix 4: Zero-Overlap Audio Mixer compresses/fades same-lane collisions while preserving intentional multi-lane ducking', () => {
+  it('Fix 4: Smooth Automatic Crossfade Mixer applies adaptive half-sine afade without speed-up or abrupt step ducking', () => {
     // 1. No overlap -> plain adelay
     const plain = buildSegmentMixFilterChain({ startSec: 62.8, durSec: 0.64 }, null, 62800);
     assert.equal(plain, 'adelay=62800|62800');
 
-    // 2. Mild same-lane overlap (#29: 1.33s in 1.20s slot) -> gentle atempo fit + atrim + afade, NO 0.40 double-voice
+    // 2. Mild same-lane overlap (#29: 1.33s in 1.20s slot -> 0.13s overlap) -> smooth afade=t=out:curve=hsin, NO atempo, NO abrupt 0.40 step
     const mild = buildSegmentMixFilterChain(
       { startSec: 61.6, durSec: 1.33, trackRow: 0 },
-      { startSec: 62.8, trackRow: 0 },
+      { startSec: 62.8, durSec: 0.64, trackRow: 0 },
       61600
     );
-    assert.match(mild, /atempo=1\./, 'Mild same-lane collision must compress cleanly via atempo');
-    assert.match(mild, /atrim=0:1\.17/, 'Must hard-stop 30ms before next speaker onset (1.20 - 0.03 = 1.17)');
-    assert.match(mild, /afade=t=out:/, 'Must apply smooth fade-out');
-    assert.doesNotMatch(mild, /0\.40/, 'Same-lane collision must NEVER leave 40% double-voice overlap');
+    assert.doesNotMatch(mild, /atempo=/, 'Crossfade must NOT speed up dialogue via atempo');
+    assert.doesNotMatch(mild, /atrim=/, 'Crossfade must NOT truncate untrimmed clips via atrim');
+    assert.match(mild, /afade=t=out:st=1\.200:d=0\.130:curve=hsin/, 'Must apply smooth 0.13s half-sine fade-out within overlap boundary');
+    assert.doesNotMatch(mild, /0\.40/, 'Must NOT use abrupt 40% volume step');
 
-    // 3. Extreme same-lane overlap (#27: 2.15s in 0.60s slot) -> capped atempo=1.3 + fade + hard stop at 0.57s
+    // 3. Large same-lane overlap (#27: 2.15s in 0.60s slot -> 1.55s overlap) -> short adaptive fade capped at 0.35s, NO atempo
     const extreme = buildSegmentMixFilterChain(
       { startSec: 59.6, durSec: 2.15, trackRow: 0 },
-      { startSec: 60.2, trackRow: 0 },
+      { startSec: 60.2, durSec: 1.40, trackRow: 0 },
       59600
     );
-    assert.match(extreme, /atempo=1\.3,/);
-    assert.match(extreme, /atrim=0:0\.57/);
-    assert.match(extreme, /afade=t=out:/);
+    assert.doesNotMatch(extreme, /atempo=/, 'Must preserve original speed and pitch');
+    assert.match(extreme, /afade=t=out:st=0\.600:d=0\.350:curve=hsin/, 'Must cap fade duration adaptively to preserve intelligibility');
 
-    // 4. Intentional multi-lane user-shifted overlap -> preserves 0.40 ducking
+    // 4. Multi-lane overlap -> smooth half-sine crossfade (no abrupt 0.40 volume jump)
     const multiLane = buildSegmentMixFilterChain(
       { startSec: 10.0, durSec: 3.0, trackRow: 0 },
-      { startSec: 11.5, trackRow: 1, userShifted: true },
+      { startSec: 11.5, durSec: 2.0, trackRow: 1, userShifted: true },
       10000
     );
-    assert.match(multiLane, /volume=eval=frame:volume='if\(gte\(t,1\.5\),0\.40,1\.0\)'/);
+    assert.match(multiLane, /afade=t=out:st=1\.500:d=0\.350:curve=hsin/);
+    assert.doesNotMatch(multiLane, /0\.40/);
 
-    // 5. Static audit of live preview zero-overlap & timeline collision sub-lane visibility
+    // 5. Static audit of live preview crossfade & timeline collision sub-lane visibility
     const playerSyncSrc = fs.readFileSync(path.join(REPO_ROOT, 'frontend/src/components/player/usePlayerAudioSync.js'), 'utf8');
-    assert.ok(playerSyncSrc.includes('isBlockedBySameLaneNext'), 'Live preview must silence overflowing same-lane tail');
+    assert.ok(playerSyncSrc.includes('computeOverlapCrossfadePlan'), 'Live preview must compute smooth overlap crossfade plan');
+    assert.ok(playerSyncSrc.includes('evalSegmentCrossfadeGainAtTime'), 'Live preview must evaluate smooth crossfade gain envelope');
     const editorSrc = fs.readFileSync(path.join(REPO_ROOT, 'frontend/src/components/timeline/TimelineEditor.jsx'), 'utf8');
     assert.ok(editorSrc.includes('let targetLane = 0;') && editorSrc.includes('rawStart < rowEndTimes[targetLane] - 0.08'), 'TimelineEditor must auto-stagger colliding overflow clips onto free lane');
     const canvasSrc = fs.readFileSync(path.join(REPO_ROOT, 'frontend/src/components/timeline/TimelineTracksCanvas.jsx'), 'utf8');

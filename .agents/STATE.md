@@ -1,8 +1,28 @@
 # Project State (.agents/STATE.md)
-Last Session: Antigravity IDE - 2026-11-25T16:23:00+07:00
+Last Session: Antigravity IDE - 2026-11-25T17:32:00+07:00
 
 ## Summary
-- **P0: Accurate Speaker Identification (Step 1) & Character Voice Consistency (Step 1 → Step 2 + Cross-Episode Memory) (`PASS`):**
+- **Smooth Automatic Audio Crossfade Between Overlapping Dialogue Clips (`PASS`):**
+  1. **Root Cause Replaced:**
+     - Removed abrupt `50%`/`40%` volume step jumps, same-lane hard cuts, and unintended `atempo` speed-ups / `atrim` truncation on overlapping dialogue clips across live playback and export.
+  2. **Implementation (Half-Sine / Raised-Cosine `hsin` Unity-Sum Crossfade: `g_out(u) + g_in(u) = cos² + sin² = 1.0`):**
+     - **Backend Export (`backend/services/ffmpeg/ffmpegAudioMixAndDucking.js`, `backend/services/ffmpegService.js`):**
+       - Added `computeAdaptiveCrossfadeDuration` and `computeOverlapCrossfadePlan` (2-pass chronological overlap detector across same-lane & multi-lane clips; `MIN_OVERLAP_SEC=0.015s`, `MAX_CROSSFADE_SEC=0.35s`, `MAX_CLIP_FADE_RATIO=0.35`, `MIN_START_SEPARATION_SEC=0.02s`).
+       - Updated `buildSegmentMixFilterChain` to emit `afade=t=in:st=0:d=...:curve=hsin` and `afade=t=out:st=...:d=...:curve=hsin` strictly inside the overlap boundary while preserving original audio files, speed, pitch, voice identity, and timeline positions.
+       - Updated `createSynchronizedNarrationAudio` to probe actual MP3 duration (bounded concurrency, only for untrimmed clips missing duration or within `0.6s` of a neighbor) and precompute crossfade plans across batch boundaries; aligned `ffmpegService.js` fallback multi-segment render path identically.
+     - **Frontend Live Playback (`frontend/src/utils/webAudioScheduler.js`, `frontend/src/components/player/usePlayerAudioSync.js`):**
+       - Exported matching `computeOverlapCrossfadePlan`, `evalHalfSineFadeIn`, `evalHalfSineFadeOut`, `buildHalfSineCurve`, `evalSegmentCrossfadeGainAtTime`, and `scheduleCrossfadeGainEnvelope` using Web Audio API `GainNode.gain.setValueCurveAtTime` (monotonic event scheduling with mid-fade seek support and `crossfadeSig` caching).
+       - Fixed pre-existing lookahead teardown bug (`item.segStart - (lookaheadSec + 0.5)`) and `rawSegEnd` comparison so scheduled nodes never thrash at 60Hz.
+       - Updated `usePlayerAudioSync.js` HTMLAudio fallback to apply the exact same adaptive half-sine crossfade envelope.
+  3. **Verification Results (Real Clip #12 → #13 Audio & Automated Suites):**
+     - **Automated Tests (`node --test`):** **16/16 passed** (`audio_crossfade_overlap.test.js` 4/4, `subtitle_sync_and_zero_overlap_fixes.test.js` 7/7, `playback_sync_and_deferred_source_regression.test.js` 5/5).
+     - **Frontend Production Build:** `npm --prefix frontend run build` passed (`0` errors, `2053` modules, `11.54s`).
+     - **Real FFmpeg Export (`Solo_Summoning` `ep_18` & `ep_22` Clip #12 → #13 + `probe.py`):**
+       - `ep_18` (`0.162s` actual overlap → `0.162s` `hsin` crossfade): `duration 2.553s` (expected `2.531s`), `peak 0.5453` (zero clipping), original MP3s untouched.
+       - `ep_22` (`0.407s` actual overlap → adaptive `0.350s` `hsin` crossfade): `duration 1.826s` (expected `1.804s`), `peak 0.4266` (zero clipping).
+     - **Real Chromium Web Audio Playback (`OfflineAudioContext` + `WebAudioScheduler` on `http://localhost:5173`):**
+       - `0` console/page errors, real decoded Clip #12 (`1.962s`) → Clip #13 (`0.731s`) at `0.20s` overlap rendered with `peak 0.5179`, both clips active simultaneously across boundary (`activeCount=2`, `midSeekActiveCount=2`), smooth RMS transition matching FFmpeg export.
+- **Previous P0: Accurate Speaker Identification (Step 1) & Character Voice Consistency (Step 1 → Step 2 + Cross-Episode Memory) (`PASS`):**
   1. **Root Causes Fixed:**
      - **Keyword & Text-Bias Removal (`backend/models/speakerRegistry.js`, `backend/models/segmentModel.js`, `backend/services/geminiService.js`, `frontend/src/utils/speakerUtils.js`, `frontend/src/hooks/useAudioDubbing.js`):**
        - Removed bare `"មីង"` from `FEMALE_KEYWORDS` (stopped poisoning male protagonist `"ស៊ូ មីង"` into female).

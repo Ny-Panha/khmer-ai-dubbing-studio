@@ -3,7 +3,11 @@ import { parseTimeToSeconds } from '../../utils/timestampUtils';
 import { mapSourceToTimelineTime } from '../../utils/timelineUtils';
 import { findLeadingSilenceFromChannels, computeSegmentAudioSyncTarget } from '../../utils/audioSyncUtils';
 import { createAudioRecoveryManager } from '../../utils/audioAutoRecovery';
-import { WebAudioScheduler } from '../../utils/webAudioScheduler';
+import {
+  WebAudioScheduler,
+  computeOverlapCrossfadePlan,
+  evalSegmentCrossfadeGainAtTime,
+} from '../../utils/webAudioScheduler';
 
 /**
  * Compute sorted and merged speaking intervals once per script change
@@ -579,6 +583,38 @@ export function usePlayerAudioSync({
       }
     });
 
+    // Build smooth adaptive crossfade plan for nearby overlapping clips (same-lane & multi-lane)
+    const crossfadeEntries = [];
+    for (let idx = 0; idx < segments.length; idx++) {
+      const sItem = segments[idx];
+      if (sItem.muted || sItem.isMuted) continue;
+      const sKey = String(sItem._uid || (sItem.id !== undefined && sItem.id !== null ? sItem.id : idx));
+      const sStart = (typeof sItem.audioStartSec === 'number' && !isNaN(sItem.audioStartSec))
+        ? sItem.audioStartSec
+        : (typeof sItem.startSec === 'number' && !isNaN(sItem.startSec)
+          ? sItem.startSec
+          : parseTimeToSeconds(sItem.audioStart ?? sItem.start, 0));
+      if (sStart > (now + 4.0)) continue;
+      const sUrl = sItem.audioUrl || (sItem.audioPath ? `/uploads/${sItem.audioPath.replace(/\\/g, '/').replace(/^.*uploads\//, '')}` : null);
+      const pooled = sUrl ? segmentAudioPoolRef.current[sUrl] : null;
+      const loadedDur = (pooled && Number.isFinite(pooled.duration) && pooled.duration > 0.2) ? pooled.duration : null;
+      const fallbackDur = (typeof sItem.finalAudioDuration === 'number' && sItem.finalAudioDuration > 0)
+        ? sItem.finalAudioDuration
+        : ((typeof sItem.audioDurationSec === 'number' && !isNaN(sItem.audioDurationSec))
+          ? sItem.audioDurationSec
+          : ((typeof sItem.audioDuration === 'number' && sItem.audioDuration > 0) ? sItem.audioDuration : 2.5));
+      const sTrimmed = Boolean(sItem.audioTrimmed || sItem.userTrimmed);
+      const rawOff = (typeof sItem.audioOffset === 'number' && !isNaN(sItem.audioOffset)) ? sItem.audioOffset : 0;
+      const leadSkip = (sUrl && rawOff === 0 && !sItem.userTrimmed) ? (leadingSilenceCacheRef.current.get(sUrl) ?? 0) : 0;
+      const effectiveDur = (sTrimmed && typeof sItem.audioEndSec === 'number' && sItem.audioEndSec > sStart)
+        ? Math.max(0.05, sItem.audioEndSec - sStart)
+        : (loadedDur ? Math.max(0.05, loadedDur - Math.max(0, rawOff + leadSkip)) : fallbackDur);
+      const sEnd = sStart + effectiveDur;
+      if (sEnd < (now - 4.0)) continue;
+      crossfadeEntries.push({ key: sKey, startSec: sStart, endSec: sEnd, durSec: effectiveDur });
+    }
+    const crossfadePlanMap = computeOverlapCrossfadePlan(crossfadeEntries);
+
     nearbySegs.forEach(({ seg, idx }) => {
       const segKey = seg._uid || (seg.id !== undefined && seg.id !== null ? seg.id : idx);
       if (seg.muted || seg.isMuted) {
@@ -632,38 +668,14 @@ export function usePlayerAudioSync({
         probeUrlLeadingSilence(rawUrl);
       }
 
-      // Zero-Overlap Guard on Same-Lane Dialogues & Smart Auto-Ducking on Intentional Multi-Lane:
-      // Only check the next 3 adjacent dialogues instead of scanning the entire array
-      let isOverlappedByNext = false;
-      let isBlockedBySameLaneNext = false;
-      const curTrackRow = typeof seg.trackRow === 'number' ? seg.trackRow : 0;
-      const scanLimit = Math.min(segments.length, idx + 4);
-      for (let nextIdx = idx + 1; nextIdx < scanLimit; nextIdx++) {
-        const nextSeg = segments[nextIdx];
-        if (nextSeg.muted || nextSeg.isMuted) continue;
-        const nextStart = (typeof nextSeg.audioStartSec === 'number' && !isNaN(nextSeg.audioStartSec))
-          ? nextSeg.audioStartSec
-          : (typeof nextSeg.startSec === 'number' && !isNaN(nextSeg.startSec)
-            ? nextSeg.startSec
-            : parseTimeToSeconds(nextSeg.audioStart ?? nextSeg.start, 0));
-        if (nextStart > effectiveSegEnd) break;
-        if (nextStart > segStart && nextStart < effectiveSegEnd && now >= (nextStart - 0.03)) {
-          const nextTrackRow = typeof nextSeg.trackRow === 'number' ? nextSeg.trackRow : 0;
-          const isIntentionalMultiLane = curTrackRow !== nextTrackRow && Boolean(seg.userShifted || nextSeg.userShifted || curTrackRow > 0 || nextTrackRow > 0);
-          if (isIntentionalMultiLane) {
-            isOverlappedByNext = true;
-          } else {
-            isBlockedBySameLaneNext = true;
-          }
-          break;
-        }
-      }
-
-      const effectiveVol = isBlockedBySameLaneNext
+      // Smooth adaptive half-sine crossfade across overlapping same-lane & multi-lane clips
+      const crossfadePlan = crossfadePlanMap.get(String(segKey)) || { fadeIn: null, fadeOut: null };
+      const isCrossfadeFadedOut = Boolean(crossfadePlan.fadeOut && now >= crossfadePlan.fadeOut.endSec);
+      const effectiveVol = isCrossfadeFadedOut
         ? 0
-        : (isOverlappedByNext ? parseFloat((targetVol * 0.50).toFixed(2)) : targetVol);
+        : Math.min(1.0, Math.max(0, evalSegmentCrossfadeGainAtTime(now, crossfadePlan, targetVol)));
 
-      if (inRange && !isBlockedBySameLaneNext) {
+      if (inRange && !isCrossfadeFadedOut) {
         if (!activeItem) {
           const audio = getSegmentAudio(rawUrl, segStart);
           if (audio) {
