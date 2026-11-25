@@ -29,9 +29,9 @@ import {
  * Skips immediately if episode already has script and options.force is not set (NO repair, NO TTS here).
  */
 export async function runSingleTranslate(ep, options = {}, signal = null, ctx = {}) {
-  const { activeSeries, updateRunnerState, setRunnerLiveStats, markEpisodeActive, markEpisodeInactive } = ctx;
+  const { activeSeries, seriesId: originSeriesId, updateRunnerState, setRunnerLiveStats, markEpisodeActive, markEpisodeInactive } = ctx;
   if (!ep) return createStepResult({ status: STEP_STATUS.FAILED, error: 'No episode provided' });
-  const norm = normalizeDubbingOptions(ep, 'translate', options, { activeSeries });
+  const norm = normalizeDubbingOptions(ep, 'translate', options, { activeSeries, seriesId: originSeriesId });
   const seriesId = norm.seriesId;
   const videoRef = norm.videoPath;
   const videoId = norm.videoId;
@@ -236,9 +236,9 @@ export async function runSingleTranslate(ep, options = {}, signal = null, ctx = 
  * 1B. Repair Broken Text for a Single Episode (Only repairs segments with Chinese/Thai/empty text)
  */
 export async function runSingleTextRepair(ep, options = {}, signal = null, ctx = {}) {
-  const { activeSeries, updateRunnerState } = ctx;
+  const { activeSeries, seriesId: originSeriesId, updateRunnerState } = ctx;
   if (!ep) return createStepResult({ status: STEP_STATUS.FAILED, error: 'No episode provided' });
-  const norm = normalizeDubbingOptions(ep, 'repair', options, { activeSeries });
+  const norm = normalizeDubbingOptions(ep, 'repair', options, { activeSeries, seriesId: originSeriesId });
   const seriesId = norm.seriesId;
   const brokenScan = getEpisodeBrokenSummary(ep);
   const textBrokenCount = brokenScan?.textBrokenCount || 0;
@@ -293,6 +293,7 @@ export async function runSingleTextRepair(ep, options = {}, signal = null, ctx =
 export async function runSingleVoice(ep, options = {}, signal = null, ctx = {}) {
   const {
     activeSeries,
+    seriesId: originSeriesId,
     refreshSeries,
     onInvalidateRenderedPreviewRef,
     updateRunnerState,
@@ -301,7 +302,7 @@ export async function runSingleVoice(ep, options = {}, signal = null, ctx = {}) 
     markEpisodeInactive,
   } = ctx;
   if (!ep) return createStepResult({ status: STEP_STATUS.FAILED, error: 'No episode provided' });
-  const norm = normalizeDubbingOptions(ep, 'voice', options, { activeSeries });
+  const norm = normalizeDubbingOptions(ep, 'voice', options, { activeSeries, seriesId: originSeriesId });
   const seriesId = norm.seriesId;
   const videoId = norm.videoId;
 
@@ -555,9 +556,9 @@ export async function runSingleVoice(ep, options = {}, signal = null, ctx = {}) 
  * 3. Clean BGM (Demucs AI Vocal Separation) for a Single Episode
  */
 export async function runSingleCleanBgm(ep, options = {}, signal = null, ctx = {}) {
-  const { activeSeries, updateRunnerState, setRunnerLiveStats, markEpisodeActive, markEpisodeInactive } = ctx;
+  const { activeSeries, seriesId: originSeriesId, updateRunnerState, setRunnerLiveStats, markEpisodeActive, markEpisodeInactive } = ctx;
   if (!ep) return createStepResult({ status: STEP_STATUS.FAILED, error: 'No episode provided' });
-  const norm = normalizeDubbingOptions(ep, 'clean_bgm', options, { activeSeries });
+  const norm = normalizeDubbingOptions(ep, 'clean_bgm', options, { activeSeries, seriesId: originSeriesId });
   const seriesId = norm.seriesId;
   const videoRef = norm.videoPath;
 
@@ -612,7 +613,7 @@ export async function runSingleCleanBgm(ep, options = {}, signal = null, ctx = {
 
   const pollDemucs = async () => {
     try {
-      const prog = await getSeparationProgressApi(videoRef, { signal }).catch(() => null);
+      const prog = await getSeparationProgressApi(videoRef, { seriesId, episodeId: ep.id, signal }).catch(() => null);
       if (prog) {
         const pct = Math.min(100, Math.max(0, Number(prog.progress || prog.percent || 0)));
         if (pct > 0) {
@@ -705,7 +706,7 @@ export async function runSingleCleanBgm(ep, options = {}, signal = null, ctx = {
 
     const tryRecoverCompletedStemFromDisk = async () => {
       if (norm.force && !hadProgress) return null;
-      const diskStatus = await getSeparationStatusApi(videoRef, { signal }).catch(() => null);
+      const diskStatus = await getSeparationStatusApi(videoRef, { seriesId, episodeId: ep.id, signal }).catch(() => null);
       if (diskStatus?.available && diskStatus?.noVocalsUrl) {
         return {
           success: true,
@@ -720,11 +721,11 @@ export async function runSingleCleanBgm(ep, options = {}, signal = null, ctx = {
     while (!signal?.aborted) {
       await new Promise((r) => setTimeout(r, 1500));
       if (signal?.aborted) {
-        await killSeparationApi({ videoPath: videoRef, jobId: videoRef }).catch(() => {});
+        await killSeparationApi({ videoPath: videoRef, jobId: videoRef, seriesId, episodeId: ep.id }).catch(() => {});
         throw new Error('Demucs separation aborted by user');
       }
 
-      const prog = await getSeparationProgressApi(videoRef, { signal }).catch(() => null);
+      const prog = await getSeparationProgressApi(videoRef, { seriesId, episodeId: ep.id, signal }).catch(() => null);
       if (prog) {
         unreachableCount = 0;
         const pct = Math.min(100, Math.max(0, Number(prog.progress || prog.percent || 0)));
@@ -810,9 +811,9 @@ export async function runSingleCleanBgm(ep, options = {}, signal = null, ctx = {
  * Speeds up any red/overflowing/trimmed segments so they fit subtitle slots without cutting off speech
  */
 export async function runSingleAutoFitSpeed(ep, options = {}, signal = null, ctx = {}) {
-  const { activeSeries, refreshSeries, updateRunnerState, setRunnerLiveStats, markEpisodeActive, markEpisodeInactive } = ctx;
+  const { activeSeries, seriesId: originSeriesId, refreshSeries, updateRunnerState, setRunnerLiveStats, markEpisodeActive, markEpisodeInactive } = ctx;
   if (!ep) return createStepResult({ status: STEP_STATUS.FAILED, error: 'No episode provided' });
-  const seriesId = activeSeries?.id || ep.seriesId || 'drama_project';
+  const seriesId = originSeriesId || activeSeries?.id || ep.seriesId || 'drama_project';
   const epId = ep.id;
 
   // Guard: Verify episode has audio ready before attempting speed fitting
@@ -934,9 +935,9 @@ export async function runSingleAutoFitSpeed(ep, options = {}, signal = null, ctx
  * Calls /api/dubbing/retranslate-all in chunks of 25 segments with style='compact'.
  */
 export async function runSingleAutoCompact(ep, options = {}, signal = null, ctx = {}) {
-  const { activeSeries, updateRunnerState, setRunnerLiveStats, markEpisodeActive, markEpisodeInactive, refreshSeries } = ctx;
+  const { activeSeries, seriesId: originSeriesId, updateRunnerState, setRunnerLiveStats, markEpisodeActive, markEpisodeInactive, refreshSeries } = ctx;
   if (!ep) return createStepResult({ status: STEP_STATUS.FAILED, error: 'No episode provided' });
-  const norm = normalizeDubbingOptions(ep, 'translate', options, { activeSeries });
+  const norm = normalizeDubbingOptions(ep, 'translate', options, { activeSeries, seriesId: originSeriesId });
   const seriesId = norm.seriesId;
   const epId = ep.id;
 

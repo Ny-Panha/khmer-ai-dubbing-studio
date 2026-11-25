@@ -4,13 +4,15 @@
  * DragonDub AI Studio - Frontend Features
  */
 
-import { useState, useMemo, useEffect, useCallback, useRef } from 'react';
+import { useState, useMemo, useEffect, useCallback } from 'react';
 import {
   checkEpisodeHasScript,
   checkEpisodeHasAudioReady,
   checkEpisodeHasDemucsReady,
   getEpisodeBrokenSummary,
 } from '../../../components/dashboard/geminiRouteHelpers.js';
+
+const EMPTY_EPISODE_SELECTION = new Set();
 
 export function useEpisodeSelection({
   episodes = [],
@@ -22,8 +24,18 @@ export function useEpisodeSelection({
   completedDemucsEpIds = null,
   demucsLiveStats = null,
 } = {}) {
-  const [selectedEpIds, setSelectedEpIds] = useState(new Set());
-  const prevSeriesIdRef = useRef(seriesId);
+  const selectionKey = String(seriesId || '__default__');
+  const [selectedEpIdsBySeries, setSelectedEpIdsBySeries] = useState({});
+  const selectedEpIds = selectedEpIdsBySeries[selectionKey] || EMPTY_EPISODE_SELECTION;
+  const hasSelectionForSeries = Object.prototype.hasOwnProperty.call(selectedEpIdsBySeries, selectionKey);
+  const setSelectedEpIds = useCallback((updater) => {
+    setSelectedEpIdsBySeries((prev) => {
+      const current = prev[selectionKey] || EMPTY_EPISODE_SELECTION;
+      const next = typeof updater === 'function' ? updater(current) : updater;
+      if (Object.is(next, current)) return prev;
+      return { ...prev, [selectionKey]: next };
+    });
+  }, [selectionKey]);
 
   // Check if an episode is 100% completed across all 3 steps (Translate + Audio TTS + Clean BGM)
   // Truly ready only when hasScript && brokenSegmentCount === 0 && hasAudio && !audioOutdated && hasDemucs
@@ -57,28 +69,12 @@ export function useEpisodeSelection({
 
   const incompleteEpisodes = pendingEpisodes;
 
-  // Auto-select episodes by default on open (all selectable episodes by default)
+  // Initialize each folder's selection once; clearing it must not select everything again.
   useEffect(() => {
-    if (isOpen && episodes.length > 0 && selectedEpIds.size === 0 && !isBatchExecutionActive) {
-      if (allSelectableEpisodes.length > 0) {
-        setSelectedEpIds(new Set(allSelectableEpisodes.map((ep) => ep.id)));
-      } else if (incompleteEpisodes.length > 0) {
-        setSelectedEpIds(new Set(incompleteEpisodes.map((ep) => ep.id)));
-      }
+    if (isOpen && episodes.length > 0 && !hasSelectionForSeries && !isBatchExecutionActive) {
+      setSelectedEpIds(new Set(allSelectableEpisodes.map((ep) => ep.id)));
     }
-  }, [isOpen, episodes.length, incompleteEpisodes, allSelectableEpisodes, isBatchExecutionActive]);
-
-  // Isolate selection per series: re-sync selection when seriesId changes
-  useEffect(() => {
-    if (seriesId && prevSeriesIdRef.current && prevSeriesIdRef.current !== seriesId) {
-      if (allSelectableEpisodes.length > 0) {
-        setSelectedEpIds(new Set(allSelectableEpisodes.map((ep) => ep.id)));
-      } else {
-        setSelectedEpIds(new Set());
-      }
-    }
-    prevSeriesIdRef.current = seriesId;
-  }, [seriesId, allSelectableEpisodes]);
+  }, [isOpen, episodes.length, allSelectableEpisodes, isBatchExecutionActive, hasSelectionForSeries, setSelectedEpIds]);
 
   const toggleSelect = useCallback((id) => {
     if (isBatchExecutionActive) return;
@@ -88,35 +84,35 @@ export function useEpisodeSelection({
       else next.add(id);
       return next;
     });
-  }, [isBatchExecutionActive]);
+  }, [isBatchExecutionActive, setSelectedEpIds]);
 
   const handleSelectCount = useCallback((count) => {
     if (isBatchExecutionActive) return;
     const pool = incompleteEpisodes.length > 0 ? incompleteEpisodes : allSelectableEpisodes;
     const picked = pool.slice(0, count);
     setSelectedEpIds(new Set(picked.map((ep) => ep.id)));
-  }, [isBatchExecutionActive, incompleteEpisodes, allSelectableEpisodes]);
+  }, [isBatchExecutionActive, incompleteEpisodes, allSelectableEpisodes, setSelectedEpIds]);
 
   const handleSelectAllEpisodes = useCallback(() => {
     if (isBatchExecutionActive) return;
     setSelectedEpIds(new Set(allSelectableEpisodes.map((ep) => ep.id)));
-  }, [isBatchExecutionActive, allSelectableEpisodes]);
+  }, [isBatchExecutionActive, allSelectableEpisodes, setSelectedEpIds]);
 
   const handleSelectIncompleteEpisodes = useCallback(() => {
     if (isBatchExecutionActive) return;
     setSelectedEpIds(new Set(incompleteEpisodes.map((ep) => ep.id)));
-  }, [isBatchExecutionActive, incompleteEpisodes]);
+  }, [isBatchExecutionActive, incompleteEpisodes, setSelectedEpIds]);
 
   const handleClearSelection = useCallback(() => {
     if (isBatchExecutionActive) return;
     setSelectedEpIds(new Set());
-  }, [isBatchExecutionActive]);
+  }, [isBatchExecutionActive, setSelectedEpIds]);
 
   const handleSelectAllUnscripted = useCallback(() => {
     if (isBatchExecutionActive) return;
     const unscripted = allSelectableEpisodes.filter((ep) => !checkEpisodeHasScript(ep));
     setSelectedEpIds(new Set(unscripted.map((ep) => ep.id)));
-  }, [isBatchExecutionActive, allSelectableEpisodes]);
+  }, [isBatchExecutionActive, allSelectableEpisodes, setSelectedEpIds]);
 
   const handleSelectAll = handleSelectIncompleteEpisodes;
   const handleSelectAllWithVideo = handleSelectAllEpisodes;

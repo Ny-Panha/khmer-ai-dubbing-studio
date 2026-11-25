@@ -229,19 +229,22 @@ export async function separateAudioApi({ videoPath, seriesId = null, episodeId =
 /**
  * Poll AI Vocal Separation progress for a given videoPath
  */
-export async function getSeparationProgressApi(videoPath, { signal } = {}) {
-  const res = await fetch(`/api/audio/separation-progress?videoPath=${encodeURIComponent(videoPath || '')}`, { signal });
+export async function getSeparationProgressApi(videoPath, { seriesId = null, episodeId = null, signal } = {}) {
+  const params = new URLSearchParams({ videoPath: videoPath || '' });
+  if (seriesId) params.set('seriesId', seriesId);
+  if (episodeId) params.set('episodeId', episodeId);
+  const res = await fetch(`/api/audio/separation-progress?${params.toString()}`, { signal });
   return await parseResponseJson(res, 'Failed to get separation progress');
 }
 
 /**
  * Check AI Vocal Separation final status for a given videoPath
  */
-export async function getSeparationStatusApi(videoPath, { signal } = {}) {
+export async function getSeparationStatusApi(videoPath, { seriesId = null, episodeId = null, signal } = {}) {
   const res = await fetch('/api/audio/separation-status', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ videoPath }),
+    body: JSON.stringify({ videoPath, seriesId, episodeId }),
     signal,
   });
   return await parseResponseJson(res, 'Failed to check separation status');
@@ -250,11 +253,11 @@ export async function getSeparationStatusApi(videoPath, { signal } = {}) {
 /**
  * Kill active AI Vocal Separation process
  */
-export async function killSeparationApi({ videoPath = '', jobId = 'all' } = {}) {
+export async function killSeparationApi({ videoPath = '', jobId = '', seriesId = null, episodeId = null } = {}) {
   const res = await fetch('/api/audio/separate-kill', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ videoPath, jobId }),
+    body: JSON.stringify({ videoPath, jobId, seriesId, episodeId }),
   });
   return await parseResponseJson(res, 'Failed to kill separation');
 }

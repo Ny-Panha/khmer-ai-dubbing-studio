@@ -1,30 +1,68 @@
-# .agents/STATE.md — DragonDub AI Dubbing Studio
+# .agents/STATE.md
 
 ## Last Session
-IDE — 2026-11-25T19:50 +07:00
+IDE (P0 Cross-Series Isolation Final Verification) — 2026-11-25T21:25:00+07:00
 
-## Summary of Changes
+## Summary
+P0 Cross-Series Isolation Final Verification PASSED (33/33 Playwright + OS PID + restart checks, 185/185 affected backend tests, frontend build 0 errors) and task-owned changes committed & pushed.
 
-### P0 — Effect Reliability Fixes
-- **`usePlayerAudioSync.js`**: Added `isAudioBaked`/`isVisualBaked` props; computed `effectiveAudioBaked = Boolean(renderedVideo && (!renderedVideo.isProxyPreview || isFreshProxy))`; replaced all stale `renderedVideo` closure checks in `handleSync`, `handlePlay`, `handleSeeked`, `handleVisibilityChange`, Smart Ducking effect, RAF syncLoop, and isPlaying effect with `ab` from `segAudioConfigRef.current.isAudioBaked` or `effectiveAudioBaked`; updated all dep arrays.
-- **`VideoPlayerPreview.jsx`**: `subscribeDraftPreview` now uses `cfg.isVisualBaked` (not `cfg.renderedVideo`) to guard zoom preview; `cfg.isAudioBaked` for volume preview; fixed CustomBGM-active guard to prevent muting `cleanBgAudioRef` when `enableCustomBgm` is active; passes `isVisualBaked` and `isAudioBaked` into `usePlayerAudioSync`.
-- **`ExportSettingsPanel.jsx`**: Fixed `btn-youtube-safe-preset` OFF path — no longer resets `enableMirrorFlip`; ON path preserves user's existing zoom if already ≥ 1.055.
-- **`DubbingRunnerContext.jsx`**: Fixed `runSingleVoice` dep array to `[activeSeries, refreshSeries, onInvalidateRenderedPreview, executeSingleScoped]` (inline, comma+space before `[`) to satisfy `timeline_render_invalidation.test.js` test #274 regex.
+### P0 Isolation Changes Committed (17 task-owned files):
+- `backend/services/audioSeparationService.js` — scoped separation keys (`seriesId::episodeId::media`), scoped progress/kill matching, removed temporary `DEBUG` console/tasklist logs
+- `backend/routes/audioRoutes.js` — `seriesId`/`episodeId` scoping on `/audio/separate`, `/audio/separation-progress`, `/audio/separate-kill`, `/tts/kill` (rejects empty cancellation scope with HTTP 400)
+- `backend/services/ttsService.js` — strict `cancelTtsJob` prefix/exact key matching
+- `frontend/src/features/dubbing-runner/DubbingRunnerContext.jsx` — per-series `runnerStatesBySeries`, `runnerLiveStatsBySeries`, `activeEpisodeKeys`, immutable origin `jobRegistryRef`/`singleJobRegistryRef`
+- `frontend/src/features/dubbing-runner/singleEpisodeRunners.js` & `DubbingStepButton.jsx` — origin `seriesId`/`episodeId` passed to runner & kill APIs
+- `frontend/src/features/gemini-route/hooks/useEpisodeSelection.js` — per-series `selectedEpIdsBySeries` map
+- `frontend/src/components/dashboard/GeminiRouteModal.jsx`, `BatchEpisodeCard.jsx`, `geminiRouteHelpers.js`, `StudioNavRail.jsx` — per-series batch state buckets & active runner folder indicator
+- `frontend/src/hooks/useSeriesManager.js` — resolves target series before publishing active workspace state
+- `frontend/src/services/api/audioApi.js` — `seriesId`/`episodeId` params on separation progress/status/kill
+- `backend/tests/demucs_worker_defaults.test.js` & `backend/tests/series_folder_selector_workspace.test.js` — isolation assertions updated for per-series maps & job registry
+- `scripts/verify-cross-series-isolation.cjs` — real-browser Playwright + Windows OS PID + concurrent TTS/Clean BGM + 20x `/studio` switching + reload & restart persistence verification
 
-### P1 — Apply Settings To UI
-- **`ExportSettingsPanel.jsx`**: Added new props `activeSeries`, `videoEditScope`, `onChangeVideoEditScope`, `onApplyVideoEditSettings`; `applyStatus` state; "Apply Settings To" section with 3-scope radio (`episode`, `folder` [Default], `global`) + async "Copy Settings" button with `applying`/`done` feedback; shown only when props provided.
-- **`VoiceSettings.jsx`**: Added `videoEditScope`, `onChangeVideoEditScope`, `onApplyVideoEditSettings` props; passes `activeSeries` + 3 new props through to `<ExportSettingsPanel>`.
-- **`BatchExportStudioModal.jsx`**: Added read-only "Video Edit Settings snapshot" pill row (`Mirror Flip`, `Zoom X%`, `Color Grade`, `Mute OST`) shown above Export actions when any effect is ON.
+### Verification Results:
+- `node scripts/verify-cross-series-isolation.cjs`: **33/33 PASS** ✅
+  - `killed: 0` root cause: sandboxed shell blocks `taskkill` with exit `255`, whereas authorized local Windows backend (`localhost:5000`) terminates exact OS PID (`killed: 1`).
+  - Long `turbo` Clean BGM on `ss2/ep_6` (`pid=33700`, `jobId=sep_1795616579653_wzqaa`) cancelled via `Stop` (`killed: 1`), zero further output writes, zero stems in cache.
+  - Concurrent `ss1` Edge TTS (`ep_verify_tts`, cleaned up after Phase 8) + `ss2` Clean BGM active simultaneously; stopping `ss2` left `ss1` TTS unaffected to completion.
+  - 20x rapid switches (`ss1` <-> `ss2` on `ep_4` in `/studio`): `0 failures` across video, script, audio, waveform, timeline, selected episode, and progress.
+  - Reload & backend restart persistence (`PORT=5099` boot 1 -> boot 2): `237` jobs, `237` unique IDs, `0` running/duplicate jobs, `ss1=28`, `ss2=25`.
+- Affected regression tests (27 suites: playback, crossfade, voice switching, scoped settings, export, isolation, cancellation): **185/185 PASS** ✅
+- Frontend build (`cd frontend && npm run build`): **2053 modules, 0 errors** ✅
+- Pre-existing unrelated test drift observed in earlier broad run (not modified): `smart_pipeline_all3.test.js` (Test 10D legacy v2 provenance) and `workspace_player_containment.test.js` (`handleClipVoiceChange` regex).
 
-### Build & Tests
-- Frontend build: ✓ 2053 modules, 0 errors
-- Backend tests: 21/22 pass (1 test on `timeline_render_invalidation` regex fix awaiting verification)
+---
+
+## Previous Session
+IDE (Final Verification) — 2026-11-25T20:55:00+07:00
+
+## Summary
+Final Verification completed on baseline `97b657ebbd4425d14204cc895d7815bc802b2df0` across Playwright + FFmpeg (`ffmpeg-skill`) + HTTP integration tests.
+
+### Real Defects Reproduced & Fixed During Verification (Uncommitted in working tree):
+1. `backend/routes/videoRoutes.js` — Fixed Single Export (`POST /api/render-video`) self-delete bug: when an episode's `displayTitle` ended with `_source` (e.g. `ss1_ep_28_source`), `outputVideoPath` collided with `inputVideoPath` and `fs.unlinkSync(outputVideoPath)` deleted the source file before rendering (`500`). Excluded `/_source$/i` from `hasMeaningfulTitle` and added `path.resolve(outputVideoPath) === path.resolve(inputVideoPath)` guard. *(Note: `ss1_ep_28_source.mp4` was overwritten by that pre-fix bug during reproduction; `ss1_EP28_Khmer_Dubbed.mp4` and `ep_28` audio/scripts remain intact; `ep_27` Single Export verified afterward with `ss1_ep_27_source.mp4` preserved.)*
+2. `frontend/src/features/gemini-route/hooks/useEpisodeSelection.js` — Added `setSelectedEpIds` to dependency arrays of `toggleSelect`, `handleSelectCount`, `handleSelectAllEpisodes`, `handleSelectIncompleteEpisodes`, `handleClearSelection`, `handleSelectAllUnscripted` to prevent stale `selectionKey` closures after switching folders (`ss1` <-> `ss2`).
+
+### Final Verification Matrix:
+- **Scenario 1 (Apply 4 settings to all 28 `ss1` eps):** PASS — `POST /api/series/ss1/video-edit-settings` 200; 28/28 updated, scripts/audio/BGM intact.
+- **Scenario 2 (`ss2` unchanged):** PASS — all 25 `ss2` episodes byte-identical; `folderVideoEdit: null`.
+- **Scenario 3 (Episode switch, reload, server restart persistence):** PASS — verified across `ep_2/ep_10/ep_28/ep_1`, live CSS preview (`scaleX(-1) scale(1.15)`, `contrast(1.05) brightness(1.015) saturate(1.08)`, `muted: true`), browser reload (`F5`), and backend restart with fresh browser context.
+- **Scenario 4 & 5 (`ss2` Clean BGM + `ss1` edit + isolation/lock/completion/cancel):** PASS — `ss2/ep_5` completed (`bgmAudioUrl` saved); `ss2/ep_6` spawned OS Demucs, locked `ss2`; `ss1` stayed idle/unlocked (`28->27`) and editable (`zoom 1.12->1.15`).
+- **Scenario 6 (`ss1` TTS while `ss2` runs):** PASS — `ss1/ep_28` TTS ran while `ss2` stayed `separating` and `ss2` audio untouched (`ep_28` original audio restored afterward).
+- **Scenario 7 (Stop terminates backend OS job):** PASS — Stop sent `POST /api/audio/separate-kill` (`200`), killed OS Demucs PIDs `[30464, 33972] -> []`.
+- **Scenario 8 (Single, Batch Separate, Merged Export):** PASS (after `videoRoutes.js` fix) — `ss1_ep_27_Khmer_Dubbed.mp4`, Batch `ss1_EP27_Khmer_Dubbed.mp4` + `ss1_EP28_Khmer_Dubbed.mp4`, Merged `ss1_Full_EP27-EP28_Khmer_Dubbed.mp4`.
+- **Scenario 9 (FFmpeg / `ffmpeg-skill` verification):** PASS — `probe.py`, `look.py` (`ep27_look.png`), SSIM (`0.726` raw vs `0.9905` transformed `hflip+zoom1.15+eq`), `volumedetect` (`-91.0 dB` muted gap vs `-15.2 dB` source gap; `-17.5 dB` Khmer dialogue; `-17.7 dB` merged EP28 dialogue; `-22.7 dB` Clean BGM).
+- **Scenario 10 (Full HTTP Integration Tests):** 164/165 PASS across 26 suites (`frontend run build` 0 errors); 1 pre-existing unrelated failure in `backend/tests/male_female_speaker_detection_batch.test.js` (`POST /api/rescan-episode-gender` returned `404` vs expected `400`).
 
 ## Active Environment
-- Backend API: http://localhost:5000 (PID 32500 — restart needed after backend edits)
-- Frontend Dev: http://localhost:5173 (PID 29376)
+- Backend: `http://localhost:5000` (daemon running)
+- Frontend: `http://localhost:5173` (Vite daemon running)
+- Production build: `npm --prefix frontend run build` — 0 errors (`1.34s`)
 
-## Unrelated Working-Tree Files (DO NOT STAGE/REVERT)
+## Next Steps
+- Review & commit the 2 defect fixes (`backend/routes/videoRoutes.js`, `frontend/src/features/gemini-route/hooks/useEpisodeSelection.js`) along with `.agents/STATE.md` when ready.
+- Investigate pre-existing `POST /api/rescan-episode-gender` 404 vs 400 assertion in `backend/tests/male_female_speaker_detection_batch.test.js`.
+
+## Unrelated Working-Tree Changes (DO NOT COMMIT without review)
 - `backend/services/ocr/localChineseOcrService.js`
 - `backend/services/pipeline/stages/stage7_translateAndValidateKhmer.js`
 - `backend/services/pipeline/stages/stage8_validateSubtitleTiming.js`
@@ -32,17 +70,42 @@ IDE — 2026-11-25T19:50 +07:00
 - `backend/workers/local_chinese_ocr_worker.py`
 - `frontend/src/components/dashboard/GeminiRouteModal.jsx`
 - `frontend/src/components/layout/StudioNavRail.jsx`
-- `frontend/src/features/dubbing-runner/DubbingRunnerContext.jsx` (large refactor — now also has our runSingleVoice dep fix)
 - `frontend/src/features/dubbing-runner/singleEpisodeRunners.js`
 - `frontend/src/hooks/useScriptWorkflow.js`
+- `frontend/src/features/dubbing-runner/DubbingStepButton.jsx`
+- `frontend/src/services/api/audioApi.js`
+- `frontend/src/components/dashboard/BatchEpisodeCard.jsx`
+- `backend/models/speakerRegistry.js`
+- `backend/routes/audioRoutes.js`
+- `backend/services/audioSeparationService.js`
+- `backend/services/ttsService.js`
+- `backend/services/pipeline/jobWorker.js`
+- `backend/services/pipeline/pipelineTypes.js`
+- `backend/services/pipeline/productionJobQueue.js`
 
-## Next Steps
-1. Restart backend server (PID 32500), open http://localhost:5173
-2. Apply Mirror Flip + Zoom 115% + Color Grade + Mute OST to ss1 EP1
-3. Test "All Episodes in ss1 (28)" scope → verify all 28 eps have settings
-4. Rapid switch episodes → verify settings persist
-5. Reload browser + restart start.bat → verify persistence
-6. Single export EP1, check FFprobe output for hflip/zoom/color, Khmer TTS audible, OST muted
-7. Batch export ss1, verify same
-8. Confirm ss2 / Solo_Summoning settings NOT changed
-9. git add & commit only our scoped changes after verification passes
+
+---
+
+## Current Session Update - 2025-01-18
+
+**Speaker Assignment Accuracy Fix Implementation (`IN PROGRESS`):**
+
+**Completed Tasks (3.1-3.3):**
+1. ✅ Created 15 bug condition exploration tests
+2. ✅ Created 15 preservation tests - **ALL PASSING (15/15)**
+3. ✅ **Task 3.1:** Added `isGenericSpeakerName()` helper function
+4. ✅ **Task 3.2:** Reordered `detectSpeakerGender` priority - Voice Timbre (Priority 1) → Visual Gender (Priority 2)
+5. ✅ **Task 3.2:** Added voice-character mismatch detection flags (`voiceActorTimbre`, `characterGender`, `voiceCharacterMismatch`)
+6. ✅ **Task 3.3:** Exempted generic identities from series map inheritance in `syncSegmentsWithSpeakerRegistry`
+7. ✅ **Task 3.3:** Added speaker change detection metadata (`speakerChangeDetected`, `speakerChangedFrom`, `genderChangedFrom`)
+
+**Remaining:** Tasks 3.4-5 (speakerIdentificationService.js enhancements, full verification)
+
+**Files Modified:**
+- `backend/models/speakerRegistry.js` (Tasks 3.1, 3.2, 3.3)
+- `backend/tests/bugfix_speaker_assignment_exploration.test.js` (Task 1)
+- `backend/tests/bugfix_speaker_assignment_preservation.test.js` (Task 2, 15/15 passing)
+- `.kiro/specs/speaker-assignment-accuracy/tasks.md`
+- `.agents/IMPLEMENTATION-STATUS.md` (detailed progress tracking)
+
+**Next:** Continue with Tasks 3.4-3.13 (speaker identification service enhancements)

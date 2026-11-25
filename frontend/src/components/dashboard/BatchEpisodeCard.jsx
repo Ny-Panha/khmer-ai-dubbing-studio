@@ -432,7 +432,7 @@ function BatchEpisodeCard({
                   onRepair={() => handleRepairBrokenSegments([ep])}
                   onKill={async () => {
                     if (isRunnerTranslateActive) {
-                      runnerStopStep(runnerStates?.repair?.status === 'running' ? 'repair' : 'translate');
+                      runnerStopStep(runnerStates?.repair?.status === 'running' ? 'repair' : 'translate', { episodeId: ep.id });
                     }
                     return await handleKillTranslate(activeJob || ep);
                   }}
@@ -631,7 +631,7 @@ function BatchEpisodeCard({
 
           const handleStopCompact = async () => {
             if (isCurrentCompactRunnerEp && typeof runnerStopStep === 'function') {
-              await runnerStopStep('compact');
+              await runnerStopStep('compact', { episodeId: ep.id });
             }
           };
 
@@ -739,7 +739,7 @@ function BatchEpisodeCard({
 
           const handleStopOrKillTTS = async (targetEp) => {
             if (isCurrentVoiceRunnerEp) {
-              await runnerStopStep(isRunnerAll3 ? 'all3' : 'voice');
+              await runnerStopStep(isRunnerAll3 ? 'all3' : 'voice', { episodeId: ep.id });
             }
             await handleKillTTS(targetEp);
           };
@@ -860,7 +860,7 @@ function BatchEpisodeCard({
 
           const handleStopAutoFit = async () => {
             if (isCurrentAutoFitRunnerEp) {
-              await runnerStopStep('autofit');
+              await runnerStopStep('autofit', { episodeId: ep.id });
             }
           };
 
@@ -1012,7 +1012,7 @@ function BatchEpisodeCard({
 
           const handleStopOrKillDemucs = async (targetEp) => {
             if (isCurrentDemucsRunnerEp) {
-              await runnerStopStep(isRunnerAll3 ? 'all3' : 'clean_bgm');
+              await runnerStopStep(isRunnerAll3 ? 'all3' : 'clean_bgm', { episodeId: ep.id });
             }
             await handleKillDemucs(targetEp);
           };

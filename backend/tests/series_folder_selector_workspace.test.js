@@ -98,13 +98,16 @@ describe('Global Series Folder Selector with isolated multi-series workspaces', 
     const src = fs.readFileSync(path.join(rootDir, 'frontend/src/features/dubbing-runner/DubbingRunnerContext.jsx'), 'utf8');
 
     assert.ok(
-      src.includes('const targetSeriesId = activeSeries?.id || \'drama_project\';') &&
+      src.includes('runnerStatesBySeries') &&
+      src.includes('updateRunnerStateForSeries(originSeriesId, step') &&
       src.includes('seriesId: targetSeriesId'),
-      'Runner must record seriesId in runnerState at start of execution'
+      'Runner must isolate runnerStates per seriesId and record origin seriesId'
     );
     assert.ok(
-      src.includes('runnerStates[stepType]?.seriesId || activeSeries?.id || \'drama_project\''),
-      'StopStep must target the runnerState seriesId, not whatever series is currently active'
+      src.includes('jobRegistryRef') &&
+      src.includes('seriesId: targetSeriesId') &&
+      src.includes('episodeId: currentEpId'),
+      'StopStep must target the immutable origin job registry entry, not whatever series is currently active'
     );
   });
 
@@ -121,12 +124,12 @@ describe('Global Series Folder Selector with isolated multi-series workspaces', 
     const src = fs.readFileSync(path.join(rootDir, 'frontend/src/features/gemini-route/hooks/useEpisodeSelection.js'), 'utf8');
 
     assert.ok(
-      src.includes('useRef') && src.includes("import { useState, useMemo, useEffect, useCallback, useRef } from 'react';"),
-      'Must import useRef from react in useEpisodeSelection'
+      src.includes('selectedEpIdsBySeries') && src.includes('const selectionKey = String(seriesId || \'__default__\');'),
+      'Must store selectedEpIds in a per-series map keyed by seriesId'
     );
     assert.ok(
-      src.includes('prevSeriesIdRef') && src.includes('prevSeriesIdRef.current !== seriesId'),
-      'Must listen for seriesId changes and reset/scope selectedEpIds for the new series'
+      src.includes('hasSelectionForSeries') && src.includes('setSelectedEpIdsBySeries'),
+      'Must isolate selection state per series without overwriting another folder selection'
     );
   });
 });

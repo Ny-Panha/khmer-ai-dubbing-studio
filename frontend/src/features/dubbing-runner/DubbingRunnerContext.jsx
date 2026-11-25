@@ -1009,6 +1009,22 @@ export function DubbingRunnerProvider({ children, activeSeries, refreshSeries, o
             }
           }
         }
+        if (stepType === 'voice' || stepType === 'all3') {
+          const res = await fetch('/api/tts/kill', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              seriesId: targetSeriesId,
+              episodeId: currentEpId,
+              all: false,
+            }),
+          });
+          const result = await res.json().catch(() => ({}));
+          if (!res.ok || result.success === false) {
+            stopFailed = true;
+            stopErrorMessage = result.error || `TTS cancellation failed (HTTP ${res.status})`;
+          }
+        }
         if (stepType === 'translate' || stepType === 'repair' || stepType === 'all3') {
           const res = await fetch('/api/jobs/kill', {
             method: 'POST',

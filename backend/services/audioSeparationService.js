@@ -124,6 +124,9 @@ function probeMediaDuration(filePath) {
 const activeSeparationJobs = new Map();
 const activeSeparationProgress = new Map();
 const separationQueue = [];
+// cleanKey (lowercased video basename) -> { jobId, seriesId, episodeId, mediaBase } for exact job attribution
+const separationJobScope = new Map();
+let lastProgressMismatchKey = '';
 
 function scheduleUnrefTimeout(fn, delayMs) {
   const timer = setTimeout(fn, delayMs);
@@ -138,24 +141,141 @@ function normalizeSeparationKey(mediaRef) {
   return path.basename(String(mediaRef).split('?')[0].split('#')[0]).toLowerCase();
 }
 
-function getSeparationProgress(mediaRef) {
-  if (mediaRef) {
-    const cleanBase = normalizeSeparationKey(mediaRef);
-    for (const [key, val] of activeSeparationProgress.entries()) {
-      if (key.includes(cleanBase) || cleanBase.includes(key)) {
-        return val;
-      }
-    }
+function deriveSeparationScope(mediaRef) {
+  const raw = String(mediaRef || '');
+  const match = raw.match(/projects[/\\]([^/\\]+)[/\\]episodes[/\\]([^/\\]+)/);
+  return {
+    seriesId: (match && match[1]) || null,
+    episodeId: (match && match[2]) || null,
+    mediaBase: raw ? path.basename(raw.split('?')[0].split('#')[0]) : null,
+  };
+}
+
+function getScopedSeparationKey(mediaRef, scope = {}) {
+  const mediaKey = normalizeSeparationKey(mediaRef);
+  if (!mediaKey) return '';
+  const derivedScope = deriveSeparationScope(mediaRef);
+  const seriesId = scope.seriesId || derivedScope.seriesId;
+  const episodeId = scope.episodeId || derivedScope.episodeId;
+  return seriesId && episodeId
+    ? `${seriesId}::${episodeId}::${mediaKey}`
+    : mediaKey;
+}
+
+function findSeparationKey(identifier, scope = {}) {
+  for (const [key, jobScope] of separationJobScope.entries()) {
+    if (jobScope?.jobId === identifier) return key;
   }
-  // Resilient Fallback: If Demucs is running or active entries exist, return the active/latest separation
+  const scopedKey = getScopedSeparationKey(identifier, scope);
+  if (scopedKey && separationJobScope.has(scopedKey)) return scopedKey;
+  const hasScope = Boolean(scope.seriesId || scope.episodeId || deriveSeparationScope(identifier).seriesId || deriveSeparationScope(identifier).episodeId);
+  const mediaKey = normalizeSeparationKey(identifier);
+  return !hasScope && mediaKey && separationJobScope.has(mediaKey) ? mediaKey : null;
+}
+
+function getSeparationJobScope(cleanKey) {
+  if (!cleanKey) return null;
+  return separationJobScope.get(cleanKey) || null;
+}
+
+function findSeparationJobScope(identifier) {
+  const cleanKey = findSeparationKey(identifier);
+  return cleanKey ? getSeparationJobScope(cleanKey) : null;
+}
+
+function formatSeparationLog(event, jobScope = null, extra = {}) {
+  return `[AudioSeparation] ${event} ${JSON.stringify({
+    jobId: (jobScope && jobScope.jobId) || null,
+    seriesId: (jobScope && jobScope.seriesId) || null,
+    episodeId: (jobScope && jobScope.episodeId) || null,
+    media: (jobScope && jobScope.mediaBase) || null,
+    ...extra,
+  })}`;
+}
+
+function logSeparationProgressMismatch(mismatchKey, jobScope, extra = {}) {
+  if (mismatchKey === lastProgressMismatchKey) return;
+  lastProgressMismatchKey = mismatchKey;
+  console.log(formatSeparationLog('⚠️ progress-mismatch', jobScope, extra));
+}
+
+function getSeparationProgress(mediaRef, scope = {}) {
+  const requestedSeriesId = scope && scope.seriesId ? String(scope.seriesId) : null;
+  const requestedEpisodeId = scope && scope.episodeId ? String(scope.episodeId) : null;
+  const scopeMatches = (cleanKey) => {
+    const jobScope = getSeparationJobScope(cleanKey);
+    if (!jobScope) return true;
+    if (requestedSeriesId && jobScope.seriesId && jobScope.seriesId !== requestedSeriesId) return false;
+    if (requestedEpisodeId && jobScope.episodeId && jobScope.episodeId !== requestedEpisodeId) return false;
+    return true;
+  };
+  const withJobScope = (cleanKey, progress) => {
+    const jobScope = getSeparationJobScope(cleanKey);
+    return jobScope ? { ...progress, ...jobScope } : progress;
+  };
+
+  const cleanBase = normalizeSeparationKey(mediaRef);
+  if (cleanBase) {
+    const scopedKey = getScopedSeparationKey(mediaRef, {
+      seriesId: requestedSeriesId,
+      episodeId: requestedEpisodeId,
+    });
+    const cleanKey = activeSeparationProgress.has(scopedKey)
+      ? scopedKey
+      : (!requestedSeriesId && !requestedEpisodeId && activeSeparationProgress.has(cleanBase))
+        ? cleanBase
+        : (activeSeparationProgress.has(cleanBase) && scopeMatches(cleanBase) ? cleanBase : null);
+    const exact = cleanKey ? activeSeparationProgress.get(cleanKey) : null;
+    if (!exact) {
+      const activeKey = normalizeSeparationKey(currentDemucsMedia);
+      if (activeKey && activeKey !== cleanBase) {
+        logSeparationProgressMismatch(`media:${cleanBase}->${activeKey}`, getSeparationJobScope(activeKey), {
+          requestedMedia: cleanBase,
+          reason: 'media-not-the-active-job',
+        });
+      }
+      return null;
+    }
+    if (!scopeMatches(cleanKey)) {
+      logSeparationProgressMismatch(`scope:${requestedSeriesId}:${requestedEpisodeId}->${cleanKey}`, getSeparationJobScope(cleanKey), {
+        requestedSeriesId,
+        requestedEpisodeId,
+        reason: 'active-job-in-other-scope',
+      });
+      return null;
+    }
+    lastProgressMismatchKey = '';
+    return withJobScope(cleanKey, exact);
+  }
+
+  // Global view (no mediaRef): keeps the modal auto-reconnect "any active" behavior, optionally narrowed to a series/episode.
   if (activeSeparationProgress.size > 0) {
-    for (const val of activeSeparationProgress.values()) {
-      if (val && (val.status === 'separating' || val.status === 'completed')) {
-        return val;
+    const entries = Array.from(activeSeparationProgress.entries()).filter(([key]) => scopeMatches(key));
+    if (entries.length === 0) {
+      if (requestedSeriesId || requestedEpisodeId) {
+        logSeparationProgressMismatch(`active-scope:${requestedSeriesId}:${requestedEpisodeId}`, getSeparationJobScope(normalizeSeparationKey(currentDemucsMedia)), {
+          requestedSeriesId,
+          requestedEpisodeId,
+          reason: 'active-job-in-other-scope',
+        });
+      }
+      return null;
+    }
+    for (const [key, val] of entries) {
+      if (val && val.status === 'separating') {
+        lastProgressMismatchKey = '';
+        return withJobScope(key, val);
       }
     }
-    const all = Array.from(activeSeparationProgress.values());
-    return all[all.length - 1] || null;
+    for (const [key, val] of entries) {
+      if (val && val.status === 'completed') {
+        lastProgressMismatchKey = '';
+        return withJobScope(key, val);
+      }
+    }
+    const [key, val] = entries[entries.length - 1];
+    lastProgressMismatchKey = '';
+    return withJobScope(key, val);
   }
   return null;
 }
@@ -400,7 +520,10 @@ function finishDemucsWorkerAndProcessQueue() {
       const vSize = fs.statSync(cachedVocals).size;
       const nvSize = fs.statSync(cachedNoVocals).size;
       if (vSize >= 100 * 1024 && nvSize >= 100 * 1024) {
-        console.log(`[AudioSeparation] ⚡ Dequeued separation for ${nextJob.cleanKey} resolved from cache!`);
+        console.log(formatSeparationLog('✅ separation-completed', getSeparationJobScope(nextJob.cleanKey), {
+          preset: nextPreset.separationPreset,
+          isCached: true,
+        }));
         activeSeparationProgress.set(nextJob.cleanKey, {
           progress: 100,
           status: 'completed',
@@ -425,7 +548,9 @@ function finishDemucsWorkerAndProcessQueue() {
 
     isDemucsRunning = true;
     currentDemucsMedia = path.basename(nextJob.options.audioPath);
-    console.log(`[AudioSeparation] 🚀 Dequeued next separation for: ${nextJob.cleanKey} (Preset: ${nextPreset.separationPreset})`);
+    console.log(formatSeparationLog('▶️ separation-start', getSeparationJobScope(nextJob.cleanKey), {
+      preset: nextPreset.separationPreset,
+    }));
     executeDemucsWorker(nextJob.options, nextJob.targetDir, nextJob.cleanKey)
       .then(nextJob.resolve, nextJob.reject);
     break;
@@ -662,7 +787,11 @@ function executeFfmpegFastSeparation(options, targetDir, cleanKey, presetConfig)
           logs: curLogs.slice(-60),
         });
         scheduleUnrefTimeout(() => activeSeparationProgress.delete(cleanKey), 300000);
-        console.log(`[AudioSeparation] ⚡ FFmpeg Instant Clean BGM successful in ${processingTimeSec}s (No-Vocals: ${(validation.noVocalsSizeBytes / 1024 / 1024).toFixed(1)}MB)`);
+        console.log(formatSeparationLog('✅ separation-completed', getSeparationJobScope(cleanKey), {
+          preset: 'ffmpeg_fast',
+          processingTimeSec,
+          isCached: false,
+        }));
 
         resolve({
           status: 'success',
@@ -964,7 +1093,12 @@ function executeDemucsWorker(options, targetDir, cleanKey) {
             logs: curLogs.slice(-60),
           });
           scheduleUnrefTimeout(() => activeSeparationProgress.delete(cleanKey), 300000);
-          console.log(`[AudioSeparation] ✅ Separation successful in ${parsed.processingTimeSec}s (Preset: ${separationPreset}, Model: ${model}, Vocals: ${(parsed.vocalsSizeBytes / 1024 / 1024).toFixed(1)}MB, No-Vocals: ${(parsed.noVocalsSizeBytes / 1024 / 1024).toFixed(1)}MB)`);
+          console.log(formatSeparationLog('✅ separation-completed', getSeparationJobScope(cleanKey), {
+            preset: separationPreset,
+            model,
+            processingTimeSec: parsed.processingTimeSec,
+            isCached: false,
+          }));
           resolve({
             ...parsed,
             separationPreset,
@@ -1018,7 +1152,18 @@ async function separateAudio(options = {}) {
 
   const cachedVocals = path.join(targetDir, 'vocals.wav');
   const cachedNoVocals = path.join(targetDir, 'no_vocals.wav');
-  const cleanKey = path.basename(audioPath).toLowerCase();
+  const derivedScope = deriveSeparationScope(audioPath);
+  const cleanKey = getScopedSeparationKey(audioPath, options);
+  const jobId = options.jobId || `sep_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+  const jobScope = {
+    jobId,
+    ...derivedScope,
+    seriesId: options.seriesId || derivedScope.seriesId,
+    episodeId: options.episodeId || derivedScope.episodeId,
+  };
+  jobScope.mediaBase = derivedScope.mediaBase;
+  separationJobScope.set(cleanKey, jobScope);
+  console.log(formatSeparationLog('▶️ separation-request', jobScope, { preset: separationPreset, force }));
 
   // 1. Instant Cache Hit Check (Strict validation: both stems must exist, be decodable & duration > 0.1s)
   if (!force && fs.existsSync(cachedVocals) && fs.existsSync(cachedNoVocals)) {
@@ -1031,7 +1176,7 @@ async function separateAudio(options = {}) {
 
     const validation = await validateDemucsStems(cachedVocals, cachedNoVocals, sourceDuration);
     if (validation.valid) {
-      console.log(`[AudioSeparation] ⚡ Using cached ${separationPreset} separation: ${targetDir}`);
+      console.log(formatSeparationLog('✅ separation-completed', jobScope, { preset: separationPreset, isCached: true }));
       activeSeparationProgress.set(cleanKey, {
         progress: 100,
         status: 'completed',
@@ -1063,7 +1208,7 @@ async function separateAudio(options = {}) {
   if (isDemucsRunning) {
     return new Promise((resolve, reject) => {
       separationQueue.push({
-        options,
+        options: { ...options, jobId },
         targetDir,
         cleanKey,
         resolve,
@@ -1078,14 +1223,18 @@ async function separateAudio(options = {}) {
         model,
         separationPreset,
       });
-      console.log(`[AudioSeparation] ⏳ Queued ${separationPreset} separation for ${cleanKey} (Position: ${separationQueue.length})`);
+      console.log(formatSeparationLog('⏳ separation-queued', jobScope, {
+        preset: separationPreset,
+        queuePosition: separationQueue.length,
+      }));
     });
   }
 
   isDemucsRunning = true;
   currentDemucsMedia = path.basename(audioPath);
+  console.log(formatSeparationLog('▶️ separation-start', jobScope, { preset: separationPreset }));
 
-  return executeDemucsWorker(options, targetDir, cleanKey);
+  return executeDemucsWorker({ ...options, jobId }, targetDir, cleanKey);
 }
 
 function killAllDemucsSystemProcesses() {
@@ -1142,9 +1291,23 @@ function killAllDemucsSystemProcessesAsync() {
   return pendingStartupCleanupPromise;
 }
 
-function killSeparationJob(identifier = 'all') {
+function killSeparationJob(identifier, scope = {}) {
   let killed = 0;
-  console.log(`[AudioSeparation] 🛑 Kill Demucs command received for: ${identifier}`);
+
+  // Never treat a missing/empty identifier as "kill all": require an exact target or the explicit literal 'all'.
+  if (!identifier) {
+    console.log(formatSeparationLog('🛑 separation-kill-rejected', null, { reason: 'missing-identifier' }));
+    return { success: false, killed: 0, error: 'Missing separation kill identifier' };
+  }
+  const scopedSeriesId = scope.seriesId || deriveSeparationScope(identifier).seriesId;
+  const scopedEpisodeId = scope.episodeId || deriveSeparationScope(identifier).episodeId;
+  const hasScopedTarget = Boolean(scopedSeriesId || scopedEpisodeId);
+  const targetClean = identifier === 'all'
+    ? 'all'
+    : (findSeparationKey(identifier, { seriesId: scopedSeriesId, episodeId: scopedEpisodeId }) ||
+      getScopedSeparationKey(identifier, { seriesId: scopedSeriesId, episodeId: scopedEpisodeId }));
+  const targetBase = normalizeSeparationKey(identifier);
+  const killTarget = identifier === 'all' ? 'all' : targetClean;
 
   const terminateProcess = (proc) => {
     if (!proc || !proc.pid) return;
@@ -1159,7 +1322,7 @@ function killSeparationJob(identifier = 'all') {
     } catch (_) {}
   };
 
-  if (!identifier || identifier === 'all') {
+  if (identifier === 'all') {
     // 1. Drain & cancel all queued jobs
     while (separationQueue.length > 0) {
       const qJob = separationQueue.shift();
@@ -1179,22 +1342,18 @@ function killSeparationJob(identifier = 'all') {
     }
     activeSeparationJobs.clear();
     activeSeparationProgress.clear();
+    separationJobScope.clear();
     // System-wide sweep on Windows to eliminate orphaned/detached Python demucs workers
     killAllDemucsSystemProcesses();
 
     isDemucsRunning = false;
     currentDemucsMedia = null;
   } else {
-    const cleanId = normalizeSeparationKey(identifier);
-    const targetClean = cleanId;
-    const targetBase = path.basename(identifier).toLowerCase();
-
     // 1. Check if job is in the waiting queue first (Scoped Queue Cancellation - Exact Match Only)
     const qIdx = separationQueue.findIndex(j =>
       j.cleanKey === targetClean ||
-      j.cleanKey === targetBase ||
       j.options?.jobId === identifier ||
-      j.options?.audioPath === identifier
+      (!hasScopedTarget && (j.cleanKey === targetBase || j.options?.audioPath === identifier))
     );
     if (qIdx !== -1) {
       const removed = separationQueue.splice(qIdx, 1)[0];
@@ -1210,11 +1369,18 @@ function killSeparationJob(identifier = 'all') {
           p.message = `រង់ចាំក្នុងជួរ (Queued: លេខរៀងទី ${idx + 1})...`;
         }
       });
+      console.log(formatSeparationLog('🛑 separation-kill', getSeparationJobScope(removed.cleanKey), {
+        target: killTarget,
+        killed: 0,
+        cancelledFromQueue: true,
+      }));
       return { success: true, killed: 0, cancelledFromQueue: true };
     }
 
     // 2. If it's the currently running job, terminate only this specific process
-    const proc = activeSeparationJobs.get(identifier) || activeSeparationJobs.get(targetClean) || activeSeparationJobs.get(targetBase);
+    const proc = activeSeparationJobs.get(identifier) ||
+      activeSeparationJobs.get(targetClean) ||
+      (!hasScopedTarget ? activeSeparationJobs.get(targetBase) : null);
     if (proc) {
       terminateProcess(proc);
       // Let proc's 'close' event trigger completeWorkerOnce() so OS process exits before advancing queue
@@ -1228,13 +1394,15 @@ function killSeparationJob(identifier = 'all') {
       });
       activeSeparationJobs.delete(identifier);
       activeSeparationJobs.delete(targetClean);
-      activeSeparationJobs.delete(targetBase);
     }
     activeSeparationProgress.delete(identifier);
     activeSeparationProgress.delete(targetClean);
-    activeSeparationProgress.delete(targetBase);
   }
 
+  const killLogScope = identifier === 'all'
+    ? null
+    : (getSeparationJobScope(targetClean) || findSeparationJobScope(identifier) || deriveSeparationScope(identifier));
+  console.log(formatSeparationLog('🛑 separation-kill', killLogScope, { target: killTarget, killed }));
   return { success: true, killed };
 }
 
@@ -1263,6 +1431,7 @@ module.exports = {
   getSeparationCacheDir,
   findAnyCachedSeparationDir,
   getSeparationProgress,
+  getScopedSeparationKey,
   isSeparationBusy,
   getSeparationQueueLength,
   getCurrentSeparationMedia,

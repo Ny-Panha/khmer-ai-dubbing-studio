@@ -1833,18 +1833,18 @@ function getTtsJobProgress(seriesId = '', episodeId = '') {
   return null;
 }
 
-function cancelTtsJob(targetKey = 'all') {
+function cancelTtsJob(targetKey = null) {
   let count = 0;
   console.log(`[TTSService] 🛑 Kill TTS command received for: ${targetKey}`);
-  if (!targetKey || targetKey === 'all') {
+  if (targetKey === 'all') {
     for (const [key, state] of activeTtsJobs.entries()) {
       state.aborted = true;
       count++;
     }
     activeTtsJobs.clear();
-  } else {
+  } else if (targetKey) {
     for (const [key, state] of activeTtsJobs.entries()) {
-      if (key === targetKey || key.includes(targetKey)) {
+      if (key === targetKey || key.startsWith(`${targetKey}:`)) {
         state.aborted = true;
         activeTtsJobs.delete(key);
         count++;

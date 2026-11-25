@@ -775,12 +775,7 @@ export function useSeriesManager({
     isTransitioningRef.current = true;
 
     try {
-      // 2. Set active series pointer
-      setActiveSeriesId(targetSeriesId);
-      setActiveSeriesIdState(targetSeriesId);
-      activeSeriesIdRef.current = targetSeriesId;
-
-      // 3. Find target series from state or disk
+      // 2. Resolve and load the target before publishing it as the active workspace.
       let targetSeries = (latestSeriesListRef.current || []).find((s) => s.id === targetSeriesId);
       try {
         const res = await fetch(`/api/series/${encodeURIComponent(targetSeriesId)}`);
@@ -809,12 +804,21 @@ export function useSeriesManager({
           const healed = sanitizeAndHealSeriesList(allData.series);
           setSeriesList(healed);
           try { saveSeriesList(healed); } catch (_) {}
+          targetSeries = healed.find((s) => s.id === targetSeriesId) || targetSeries;
         }
       } catch (_) {}
 
       if (switchSeriesSeqRef.current !== currentSeq) return;
+      if (!targetSeries) {
+        console.error(`[Series Switch] Cannot load target series: ${targetSeriesId}`);
+        return;
+      }
 
-      // 4. Remember and restore the last selected episode for target series (not just index 0)
+      setActiveSeriesId(targetSeriesId);
+      setActiveSeriesIdState(targetSeriesId);
+      activeSeriesIdRef.current = targetSeriesId;
+
+      // 3. Remember and restore the last selected episode for target series (not just index 0)
       const targetEpisodes = Array.isArray(targetSeries?.episodes) ? targetSeries.episodes : [];
       const rememberedEpId = getActiveEpisodeIdForSeries(targetSeriesId);
       const targetEp = (rememberedEpId && targetEpisodes.find((e) => String(e.id) === String(rememberedEpId))) || targetEpisodes[0] || null;

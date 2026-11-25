@@ -37,10 +37,29 @@ function StudioNavRail({
 
   const runnerContext = useDubbingRunnerContext();
   const runnerStates = runnerContext?.runnerStates || {};
-  const activeRunnerStep = ['clean_bgm', 'voice', 'translate', 'repair', 'all3'].find(
-    (step) => runnerStates[step]?.status === 'running'
+  const contextActiveSeriesId = runnerContext?.activeSeriesId || activeSeries?.id || null;
+  // Show a running runner even when it belongs to another folder, but label that folder in the title.
+  const runningRunnerJob = (() => {
+    const stepOrder = ['clean_bgm', 'voice', 'translate', 'repair', 'all3'];
+    const activeStep = stepOrder.find((step) => runnerStates[step]?.status === 'running');
+    if (activeStep) {
+      return { stepType: activeStep, state: runnerStates[activeStep], seriesId: contextActiveSeriesId };
+    }
+    const allRunnerStates = runnerContext?.allRunnerStates;
+    if (!allRunnerStates || typeof allRunnerStates !== 'object') return null;
+    for (const [seriesId, steps] of Object.entries(allRunnerStates)) {
+      const otherStep = stepOrder.find((step) => steps?.[step]?.status === 'running');
+      if (otherStep) return { stepType: otherStep, state: steps[otherStep], seriesId };
+    }
+    return null;
+  })();
+  const activeRunnerStep = runningRunnerJob?.stepType || null;
+  const activeRunnerState = runningRunnerJob?.state || null;
+  const isRunnerFromInactiveFolder = Boolean(
+    runningRunnerJob?.seriesId &&
+    contextActiveSeriesId &&
+    String(runningRunnerJob.seriesId) !== String(contextActiveSeriesId)
   );
-  const activeRunnerState = activeRunnerStep ? runnerStates[activeRunnerStep] : null;
 
   const episodesCount = Array.isArray(activeSeries?.episodes) ? activeSeries.episodes.length : 0;
   const batchJob = batchRender?.job || null;
@@ -99,7 +118,7 @@ function StudioNavRail({
           onClick={(e) => handleRouteClick(e, onOpenGeminiRoute, '/batch')}
           title={
             activeRunnerStep
-              ? `Batch Studio — កំពុងដំណើរការ ${activeRunnerStep} (${activeRunnerState?.progress || 0}%)`
+              ? `Batch Studio — កំពុងដំណើរការ ${activeRunnerStep} (${activeRunnerState?.progress || 0}%)${isRunnerFromInactiveFolder ? ` • Folder: ${runningRunnerJob.seriesId}` : ''}`
               : `Batch Dubbing Studio (${episodesCount} ភាគ)`
           }
         >

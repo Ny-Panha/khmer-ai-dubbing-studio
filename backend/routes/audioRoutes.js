@@ -324,7 +324,14 @@ router.get("/tts/progress", async (req, res) => {
 router.post("/tts/kill", (req, res) => {
   try {
     const { seriesId, episodeId, all } = req.body || {};
-    const key = (all || (!seriesId && !episodeId)) ? 'all' : (episodeId ? `${seriesId || ''}:${episodeId}` : (seriesId || 'all'));
+    const key = all
+      ? 'all'
+      : (seriesId && episodeId)
+        ? `${seriesId}:${episodeId}`
+        : seriesId || null;
+    if (!key) {
+      return res.status(400).json({ success: false, error: "Missing TTS cancellation scope" });
+    }
     const result = cancelTtsJob(key);
     return res.json({ success: true, result });
   } catch (err) {
@@ -1306,6 +1313,8 @@ router.post("/audio/separate", async (req, res) => {
       videoPath,
       videoFileName,
       videoId,
+      seriesId,
+      episodeId,
       separationPreset = 'turbo',
       model,
       force = false,
@@ -1354,6 +1363,8 @@ router.post("/audio/separate", async (req, res) => {
 
     const sepOptions = {
       audioPath: inputVideoPath,
+      seriesId,
+      episodeId,
       separationPreset,
       force: Boolean(force),
     };
@@ -1429,12 +1440,15 @@ router.post("/audio/separate", async (req, res) => {
 
 router.get("/audio/separation-progress", (req, res) => {
   try {
-    const { videoPath, videoFileName, videoId } = req.query;
+    const { videoPath, videoFileName, videoId, seriesId, episodeId } = req.query;
     const rawVideoRef = videoPath || videoId || videoFileName;
-    const progressData = audioSeparationService.getSeparationProgress(rawVideoRef);
-    const activeMedia = typeof audioSeparationService.getCurrentSeparationMedia === 'function'
-      ? audioSeparationService.getCurrentSeparationMedia()
-      : null;
+    const progressData = audioSeparationService.getSeparationProgress(rawVideoRef, { seriesId, episodeId });
+    const scopedView = Boolean(rawVideoRef || seriesId || episodeId);
+    const activeMedia = scopedView
+      ? (progressData?.mediaBase || null)
+      : (typeof audioSeparationService.getCurrentSeparationMedia === 'function'
+        ? audioSeparationService.getCurrentSeparationMedia()
+        : null);
     let noVocalsUrl = null;
     const noVocalsPath = progressData?.noVocalsPath || null;
     if (noVocalsPath && fs.existsSync(noVocalsPath)) {
@@ -1455,6 +1469,9 @@ router.get("/audio/separation-progress", (req, res) => {
       noVocalsUrl,
       noVocalsPath,
       activeMedia,
+      seriesId: progressData?.seriesId || null,
+      episodeId: progressData?.episodeId || null,
+      jobId: progressData?.jobId || null,
     });
   } catch (err) {
     return res.json({ success: true, progress: 0, status: 'idle', model: 'htdemucs' });
@@ -1463,9 +1480,14 @@ router.get("/audio/separation-progress", (req, res) => {
 
 router.post("/audio/separate-kill", (req, res) => {
   try {
-    const { videoPath, jobId } = req.body || {};
-    const result = audioSeparationService.killSeparationJob(jobId || videoPath || 'all');
-    return res.json({ success: true, result });
+    const { videoPath, jobId, seriesId, episodeId } = req.body || {};
+    const identifier = String(jobId || videoPath || '').trim();
+    if (!identifier) {
+      console.warn("[AudioSeparation] 🛑 Refusing empty separation-kill request: videoPath and jobId are both missing/empty");
+      return res.status(400).json({ success: false, error: "Missing videoPath or jobId: refusing to kill separation without an exact identifier" });
+    }
+    const result = audioSeparationService.killSeparationJob(identifier, { seriesId, episodeId });
+    return res.json({ success: result.success !== false, result });
   } catch (err) {
     console.error("[AudioSeparation] Failed to kill separation process:", err);
     return res.status(500).json({ success: false, error: err.message });

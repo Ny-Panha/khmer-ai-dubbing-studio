@@ -75,6 +75,77 @@ import {
 
 const EMPTY_EPISODES = [];
 
+const EMPTY_SERIES_BATCH_BUCKET = Object.freeze({});
+const EMPTY_SCOPED_ID_SET = new Set();
+const EMPTY_SCOPED_LIST = [];
+const EMPTY_SCOPED_MAP = {};
+
+// Batch execution state (TTS, Demucs, repair, Run-All-3) is owned per folder: episode ids such
+// as ep_1/ep_3 exist in several series folders, so every field below lives in the bucket of the
+// seriesId that started the work instead of being global to the modal.
+const SERIES_SCOPED_BATCH_DEFAULTS = Object.freeze({
+  isStartingBatch: false,
+  batchError: null,
+  batchSuccess: null,
+  batchInfo: null,
+  rescanningEpisodeIds: EMPTY_SCOPED_ID_SET,
+  isGeneratingBatchTTS: false,
+  activeTtsEpisodeId: null,
+  activeTtsEpisodeIds: EMPTY_SCOPED_ID_SET,
+  ttsCurrentEpTitle: '',
+  ttsProgressPercent: 0,
+  ttsLiveStats: EMPTY_SCOPED_MAP,
+  completedTtsEpIds: EMPTY_SCOPED_ID_SET,
+  completedDemucsEpIds: EMPTY_SCOPED_ID_SET,
+  isSeparatingBatchDemucs: false,
+  activeDemucsEpisodeId: null,
+  activeDemucsEpisodeIds: EMPTY_SCOPED_ID_SET,
+  demucsLiveStats: EMPTY_SCOPED_MAP,
+  demucsCurrentEpTitle: '',
+  demucsProgressPercent: 0,
+  isRepairingBroken: false,
+  trackedRepairJobIds: EMPTY_SCOPED_LIST,
+  repairProgressSummary: null,
+  runningPipelineEpIds: EMPTY_SCOPED_ID_SET,
+});
+
+function useSeriesScopedBatchState(seriesKey) {
+  const [stateBySeries, setStateBySeries] = useState({});
+  const bucket = stateBySeries[seriesKey] || EMPTY_SERIES_BATCH_BUCKET;
+
+  const values = useMemo(() => {
+    const next = {};
+    for (const field of Object.keys(SERIES_SCOPED_BATCH_DEFAULTS)) {
+      next[field] = Object.prototype.hasOwnProperty.call(bucket, field)
+        ? bucket[field]
+        : SERIES_SCOPED_BATCH_DEFAULTS[field];
+    }
+    return next;
+  }, [bucket]);
+
+  // Setters are bound to the seriesKey of the render that created them: a background loop keeps
+  // writing its origin folder bucket even after the user switches the active folder.
+  const setters = useMemo(() => {
+    const next = {};
+    for (const field of Object.keys(SERIES_SCOPED_BATCH_DEFAULTS)) {
+      next[`set${field.charAt(0).toUpperCase()}${field.slice(1)}`] = (updater) => {
+        setStateBySeries((prev) => {
+          const prevBucket = prev[seriesKey] || EMPTY_SERIES_BATCH_BUCKET;
+          const prevValue = Object.prototype.hasOwnProperty.call(prevBucket, field)
+            ? prevBucket[field]
+            : SERIES_SCOPED_BATCH_DEFAULTS[field];
+          const nextValue = typeof updater === 'function' ? updater(prevValue) : updater;
+          if (Object.is(nextValue, prevValue)) return prev;
+          return { ...prev, [seriesKey]: { ...prevBucket, [field]: nextValue } };
+        });
+      };
+    }
+    return next;
+  }, [seriesKey, setStateBySeries]);
+
+  return [values, setters];
+}
+
 export default function GeminiRouteModal({
   isOpen,
   onClose,
@@ -154,37 +225,26 @@ export default function GeminiRouteModal({
   const [importErrors, setImportErrors] = useState([]);
   const [importSuccess, setImportSuccess] = useState(null);
   const subtitleFileInputRef = useRef(null);
-  const [isStartingBatch, setIsStartingBatch] = useState(false);
-  const [batchError, setBatchError] = useState(null);
-  const [batchSuccess, setBatchSuccess] = useState(null);
-  const [batchInfo, setBatchInfo] = useState(null);
-  const [rescanningEpisodeIds, setRescanningEpisodeIds] = useState(() => new Set());
 
-  // Batch TTS State (Step 2: Generate TTS for 2, 5, or ALL selected episodes simultaneously)
-  const [isGeneratingBatchTTS, setIsGeneratingBatchTTS] = useState(false);
-  const [activeTtsEpisodeId, setActiveTtsEpisodeId] = useState(null);
-  const [activeTtsEpisodeIds, setActiveTtsEpisodeIds] = useState(new Set());
-  const [ttsCurrentEpTitle, setTtsCurrentEpTitle] = useState('');
-  const [ttsProgressPercent, setTtsProgressPercent] = useState(0);
-  const [ttsLiveStats, setTtsLiveStats] = useState({});
-  const [completedTtsEpIds, setCompletedTtsEpIds] = useState(new Set());
-  const [completedDemucsEpIds, setCompletedDemucsEpIds] = useState(new Set());
-
-  // Batch Demucs State (Step 3: AI Vocal Separation for 2, 5, or ALL selected episodes simultaneously)
-  const [isSeparatingBatchDemucs, setIsSeparatingBatchDemucs] = useState(false);
-  const [activeDemucsEpisodeId, setActiveDemucsEpisodeId] = useState(null);
-  const [activeDemucsEpisodeIds, setActiveDemucsEpisodeIds] = useState(new Set());
-  const [demucsLiveStats, setDemucsLiveStats] = useState({});
-  const [demucsCurrentEpTitle, setDemucsCurrentEpTitle] = useState('');
-  const [demucsProgressPercent, setDemucsProgressPercent] = useState(0);
-
-  // Repair Broken Segments State (ONE button sweeping text-broken + voice-broken subsets)
-  const [isRepairingBroken, setIsRepairingBroken] = useState(false);
-  const [trackedRepairJobIds, setTrackedRepairJobIds] = useState([]);
-  const [repairProgressSummary, setRepairProgressSummary] = useState(null);
-
-  // Auto-Pipeline Run All 3 Steps State
-  const [runningPipelineEpIds, setRunningPipelineEpIds] = useState(new Set());
+  // Batch TTS / Demucs / Repair / Run-All-3 state, isolated per series folder:
+  // the active folder only ever reads its own bucket; in-flight loops keep writing their origin bucket.
+  const batchSeriesScopeKey = activeSeries?.id || seriesId || null;
+  const [batchFields, batchSetters] = useSeriesScopedBatchState(batchSeriesScopeKey);
+  const {
+    isStartingBatch, batchError, batchSuccess, batchInfo, rescanningEpisodeIds,
+    isGeneratingBatchTTS, activeTtsEpisodeId, activeTtsEpisodeIds,
+    ttsLiveStats, completedTtsEpIds, completedDemucsEpIds,
+    isSeparatingBatchDemucs, activeDemucsEpisodeId, activeDemucsEpisodeIds, demucsLiveStats,
+    isRepairingBroken, trackedRepairJobIds, runningPipelineEpIds,
+  } = batchFields;
+  const {
+    setIsStartingBatch, setBatchError, setBatchSuccess, setBatchInfo, setRescanningEpisodeIds,
+    setIsGeneratingBatchTTS, setActiveTtsEpisodeId, setActiveTtsEpisodeIds, setTtsCurrentEpTitle,
+    setTtsProgressPercent, setTtsLiveStats, setCompletedTtsEpIds, setCompletedDemucsEpIds,
+    setIsSeparatingBatchDemucs, setActiveDemucsEpisodeId, setActiveDemucsEpisodeIds, setDemucsLiveStats,
+    setDemucsCurrentEpTitle, setDemucsProgressPercent, setIsRepairingBroken, setTrackedRepairJobIds,
+    setRepairProgressSummary,
+  } = batchSetters;
 
   const isGeneratingBatchTtsRef = useRef(false);
   const isSeparatingBatchDemucsRef = useRef(false);
@@ -222,46 +282,52 @@ export default function GeminiRouteModal({
       setDemucsLiveStats({});
     }
 
-    // Proactively check if backend has an active in-progress Demucs job (auto-reconnect on open/refresh)
+    const targetSeriesId = activeSeries?.id || seriesId;
+
+    // Proactively check if backend has an active in-progress Demucs job (auto-reconnect on open/refresh).
+    // Only attribute it to the ACTIVE folder when the response proves ownership; another folder's job
+    // must never be shown as the active folder's running episode.
     fetch('/api/audio/separation-progress')
       .then((res) => res.json())
       .then((pData) => {
         if (cancelled) return;
-        if (pData?.success && pData.status === 'separating' && Array.isArray(episodes)) {
-          const actMedia = String(pData.activeMedia || '').toLowerCase();
-          const targetEp = episodes.find((ep) => {
-            const vRef = String(ep.video?.videoPath || ep.video?.videoUrl || ep.videoFile || ep.sourceVideoPath || '').toLowerCase();
-            const baseName = vRef.split(/[/\\]/).pop().split('?')[0];
-            return (actMedia && baseName && (actMedia.includes(baseName) || baseName.includes(actMedia))) ||
-                   (actMedia && actMedia.includes(`ep_${ep.episodeNumber || ep.id}`)) ||
-                   (pData.message && pData.message.includes(`ep_${ep.episodeNumber || ep.id}`));
-          }) || episodes.find((ep) => !checkEpisodeHasDemucsReady(ep, null, null));
+        if (!pData?.success || pData.status !== 'separating' || !Array.isArray(episodes)) return;
+        if (!targetSeriesId) return;
+        const responseSeriesId = pData.seriesId != null && pData.seriesId !== '' ? String(pData.seriesId) : '';
+        // A differing seriesId is decisive: the job belongs to another folder, so ignore it.
+        if (responseSeriesId && responseSeriesId !== String(targetSeriesId)) return;
+        const actMedia = String(pData.activeMedia || '').toLowerCase();
+        const responseEpisodeId = pData.episodeId != null && pData.episodeId !== '' ? String(pData.episodeId) : '';
+        const videoBasename = (ep) => String(
+          ep.video?.videoPath || ep.video?.videoUrl || ep.videoFile || ep.sourceVideoPath || ''
+        ).toLowerCase().split(/[/\\]/).pop().split('?')[0];
+        const targetEp = (responseSeriesId && responseEpisodeId)
+          ? episodes.find((ep) => String(ep.id) === responseEpisodeId)
+          : episodes.find((ep) => actMedia && videoBasename(ep) && actMedia === videoBasename(ep));
 
-          if (targetEp) {
-            setIsSeparatingBatchDemucs(true);
-            setActiveDemucsEpisodeId(targetEp.id);
-            setActiveDemucsEpisodeIds(new Set([targetEp.id]));
-            const dPct = Math.min(100, Math.max(5, pData.progress || 5));
-            setDemucsLiveStats((prev) => ({
-              ...prev,
-              [targetEp.id]: {
-                percent: dPct,
-                isDone: false,
-                logs: Array.isArray(pData.logs) && pData.logs.length > 0 ? pData.logs : [{
-                  time: new Date().toLocaleTimeString(),
-                  progress: dPct,
-                  message: pData.message || `⏳ Demucs Progress: ${dPct}%`,
-                }],
-                message: pData.message || `Demucs AI Stem Separation... (${dPct}%)`,
-                model: pData.model || 'htdemucs',
-              },
-            }));
-          }
+        if (targetEp) {
+          setIsSeparatingBatchDemucs(true);
+          setActiveDemucsEpisodeId(targetEp.id);
+          setActiveDemucsEpisodeIds(new Set([targetEp.id]));
+          const dPct = Math.min(100, Math.max(5, pData.progress || 5));
+          setDemucsLiveStats((prev) => ({
+            ...prev,
+            [targetEp.id]: {
+              percent: dPct,
+              isDone: false,
+              logs: Array.isArray(pData.logs) && pData.logs.length > 0 ? pData.logs : [{
+                time: new Date().toLocaleTimeString(),
+                progress: dPct,
+                message: pData.message || `⏳ Demucs Progress: ${dPct}%`,
+              }],
+              message: pData.message || `Demucs AI Stem Separation... (${dPct}%)`,
+              model: pData.model || 'htdemucs',
+            },
+          }));
         }
       })
       .catch(() => {});
 
-    const targetSeriesId = activeSeries?.id || seriesId;
     if (targetSeriesId) {
       fetch(`/api/series/${targetSeriesId}`)
         .then((res) => res.json())
@@ -294,11 +360,17 @@ export default function GeminiRouteModal({
     };
   }, [isOpen, activeSeries?.id, seriesId, onRefreshSeries]);
 
-  const isDemucsCancelledRef = useRef(false);
-  const isTranslateCancelledRef = useRef(false);
-  const isTtsCancelledRef = useRef(false);
+  const demucsCancelledBySeriesRef = useRef(new Map());
   const [isStoppingAllTranslate, setIsStoppingAllTranslate] = useState(false);
-  const activeTimersRef = useRef(new Set());
+  const activeTimersRef = useRef(new Map());
+  const getDemucsCancellationRef = (targetSeriesId) => {
+    let cancellationRef = demucsCancelledBySeriesRef.current.get(targetSeriesId);
+    if (!cancellationRef) {
+      cancellationRef = { current: false };
+      demucsCancelledBySeriesRef.current.set(targetSeriesId, cancellationRef);
+    }
+    return cancellationRef;
+  };
   const [confirmDialog, setConfirmDialog] = useState(null);
   const confirmResolverRef = useRef(null);
 
@@ -337,7 +409,7 @@ export default function GeminiRouteModal({
   // Clean up timers ONLY on true unmount (e.g. app teardown or page navigation)
   useEffect(() => {
     return () => {
-      activeTimersRef.current.forEach((t) => clearInterval(t));
+      activeTimersRef.current.forEach((_, timer) => clearInterval(timer));
       activeTimersRef.current.clear();
       if (confirmResolverRef.current) {
         try { confirmResolverRef.current(false); } catch (_) {}
@@ -401,14 +473,11 @@ export default function GeminiRouteModal({
       }
 
       // ONLY mark cancelled after authoritative backend confirmation!
-      isTranslateCancelledRef.current = true;
       setIsStartingBatch(false);
       setBatchInfo(null);
       setBatchSuccess((prev) => (isTranslateQueueEnqueueBanner(prev) ? null : prev));
       setBatchError('🛑 បានបញ្ឈប់ (Kill) ដំណើរការ Translate ដោយជោគជ័យ!');
-      if (typeof onRefreshSeries === 'function') {
-        try { await onRefreshSeries(); } catch (_) {}
-      }
+      await refreshSeriesIfOriginActive(targetSeriesId);
       return { success: true, ...data };
     } catch (err) {
       console.error('[Kill Translate] Error:', err);
@@ -420,17 +489,27 @@ export default function GeminiRouteModal({
 
   const handleKillTTS = async (targetEp = null) => {
     try {
-      isTtsCancelledRef.current = true;
-      const targetSeriesId = activeSeries?.id || seriesId;
-      await fetch('/api/tts/kill', {
+      const targetSeriesId = targetEp?.seriesId || currentSeriesId;
+      const targetEpisodeId = targetEp?.id || null;
+      const response = await fetch('/api/tts/kill', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           seriesId: targetSeriesId,
-          episodeId: targetEp?.id || undefined,
-          all: !targetEp,
+          episodeId: targetEpisodeId || undefined,
+          all: false,
         }),
       });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || result.success === false) {
+        throw new Error(result.error || `TTS cancellation failed (HTTP ${response.status})`);
+      }
+      for (const [timer, scope] of activeTimersRef.current) {
+        if (scope.seriesId === targetSeriesId && (!targetEpisodeId || scope.episodeId === targetEpisodeId)) {
+          clearInterval(timer);
+          activeTimersRef.current.delete(timer);
+        }
+      }
       if (targetEp) {
         setActiveTtsEpisodeIds((prev) => {
           const next = new Set(prev);
@@ -453,39 +532,52 @@ export default function GeminiRouteModal({
           },
         }));
       } else {
-        activeTimersRef.current.forEach((t) => clearInterval(t));
-        activeTimersRef.current.clear();
         setIsGeneratingBatchTTS(false);
         setActiveTtsEpisodeId(null);
         setActiveTtsEpisodeIds(new Set());
         setBatchError('🛑 បានបញ្ឈប់ (Kill) ដំណើរការបង្កើតសំឡេង TTS ដោយជោគជ័យ!');
       }
-      if (typeof onRefreshSeries === 'function') {
-        try { await onRefreshSeries(); } catch (_) {}
-      }
+      await refreshSeriesIfOriginActive(targetSeriesId);
     } catch (err) {
       console.error('[Kill TTS] Error:', err);
+      setBatchError(`⚠️ ${err.message || 'Error stopping TTS job'}`);
     }
   };
 
   const handleKillDemucs = async (targetEp = null) => {
     try {
-      isDemucsCancelledRef.current = true;
-      const videoRef = targetEp ? (targetEp.video?.videoPath || targetEp.video?.videoUrl || targetEp.videoFile || targetEp.sourceVideoPath) : null;
-      await fetch('/api/audio/separate-kill', {
+      const targetSeriesId = targetEp?.seriesId || currentSeriesId;
+      const activeEp = targetEp || episodes.find((ep) => ep.id === activeDemucsEpisodeId);
+      if (!targetSeriesId || !activeEp) {
+        throw new Error('Cannot identify the active folder and episode for Demucs cancellation');
+      }
+      const videoRef = activeEp.video?.videoPath || activeEp.video?.videoUrl || activeEp.videoFile || activeEp.sourceVideoPath;
+      if (!videoRef) {
+        throw new Error('Cannot identify the originating video for Demucs cancellation');
+      }
+      const response = await fetch('/api/audio/separate-kill', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ videoPath: videoRef, jobId: 'all' }),
+        body: JSON.stringify({
+          videoPath: videoRef,
+          jobId: videoRef,
+          seriesId: targetSeriesId,
+          episodeId: activeEp.id,
+        }),
       });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || result.success === false) {
+        throw new Error(result.error || `Demucs cancellation failed (HTTP ${response.status})`);
+      }
+      getDemucsCancellationRef(targetSeriesId).current = true;
       setIsSeparatingBatchDemucs(false);
       setActiveDemucsEpisodeId(null);
       setActiveDemucsEpisodeIds(new Set());
       setBatchError('🛑 បានបញ្ឈប់ (Kill) ដំណើរការបំបែកសំឡេង Demucs ដោយជោគជ័យ!');
-      if (typeof onRefreshSeries === 'function') {
-        try { await onRefreshSeries(); } catch (_) {}
-      }
+      await refreshSeriesIfOriginActive(targetSeriesId);
     } catch (err) {
       console.error('[Kill Demucs] Error:', err);
+      setBatchError(`⚠️ ${err.message || 'Error stopping Demucs job'}`);
     }
   };
 
@@ -514,9 +606,7 @@ export default function GeminiRouteModal({
       }
 
       setBatchSuccess(`🎉 ស្កេនបែងចែកសំឡេងជោគជ័យ ភាគ ${targetEp.episodeNumber || epId}: 👨 ប្រុស ${data.maleCueCount} ឃ្លា • 👩 ស្រី ${data.femaleCueCount} ឃ្លា!`);
-      if (typeof onRefreshSeries === 'function') {
-        try { await onRefreshSeries(); } catch (_) {}
-      }
+      await refreshSeriesIfOriginActive(sId);
     } catch (err) {
       console.error('[Rescan Gender] Error:', err);
       setBatchError(`🛑 មិនអាចស្កេនសំឡេងឡើងវិញបានទេ: ${err.message}`);
@@ -580,13 +670,23 @@ export default function GeminiRouteModal({
 
 
   const currentSeriesId = activeSeries?.id || seriesId;
+  const activeSeriesIdRef = useRef(currentSeriesId);
+  activeSeriesIdRef.current = currentSeriesId;
+
+  // Background batch loops are bound to the folder that started them: once the user switches folders,
+  // their completion must not refresh (and re-apply server state to) the now-active workspace.
+  const refreshSeriesIfOriginActive = useCallback(async (originSeriesId) => {
+    if (typeof onRefreshSeries !== 'function') return;
+    if (String(originSeriesId || '') !== String(activeSeriesIdRef.current || '')) return;
+    try { await onRefreshSeries(); } catch (_) {}
+  }, [onRefreshSeries]);
 
   // Map of latest job per episodeId for current series (tracks running, queued, completed, and failed states)
   const jobsByEpisodeId = useMemo(() => {
     const map = new Map();
     const sorted = [...activeJobs].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
     for (const job of sorted) {
-      if (currentSeriesId && job.seriesId && String(job.seriesId) !== String(currentSeriesId)) {
+      if (currentSeriesId && String(job.seriesId || '') !== String(currentSeriesId)) {
         continue;
       }
       if (job.episodeId && !map.has(job.episodeId)) {
@@ -608,7 +708,7 @@ export default function GeminiRouteModal({
       (j) =>
         j &&
         (j.mode === 'repair_broken' || j.config?.isRepairBroken === true) &&
-        (!currentSeriesId || !j.seriesId || String(j.seriesId) === String(currentSeriesId)) &&
+        (!currentSeriesId || String(j.seriesId || '') === String(currentSeriesId)) &&
         (j.status === 'running' || j.status === 'queued')
     );
   }, [activeJobs, currentSeriesId]);
@@ -1075,11 +1175,7 @@ export default function GeminiRouteModal({
       setIsRepairingBroken(false);
       setRepairProgressSummary(null);
 
-      if (typeof onRefreshSeries === 'function') {
-        try {
-          await onRefreshSeries();
-        } catch (_) {}
-      }
+      await refreshSeriesIfOriginActive(currentSeriesId);
 
       if (cancelled) return;
 
@@ -1145,7 +1241,7 @@ export default function GeminiRouteModal({
       cancelled = true;
       clearInterval(pollTimer);
     };
-  }, [trackedRepairJobIds, activeJobs, onRefreshSeries]);
+  }, [trackedRepairJobIds, activeJobs, refreshSeriesIfOriginActive]);
 
   const executeBatchTranslateEnqueue = async (episodesToTranslate, { force = false, skippedScriptedCount = 0 } = {}) => {
     try {
@@ -1264,11 +1360,7 @@ export default function GeminiRouteModal({
           setBatchError(`⚠️ មាន ${failedReasons.length} ភាគមិនអាចចាប់ផ្ដើមបាន: ${failedReasons[0]}`);
         }
       }
-      if (typeof onRefreshSeries === 'function') {
-        try {
-          await onRefreshSeries();
-        } catch (_) {}
-      }
+      await refreshSeriesIfOriginActive(currentSeriesId);
     } catch (err) {
       console.error(err);
       if (String(err?.message || '').includes('Duplicate Active Job')) {
@@ -1402,9 +1494,7 @@ export default function GeminiRouteModal({
 
       if (allJobIds.length === 0) {
         setIsRepairingBroken(false);
-        if (typeof onRefreshSeries === 'function') {
-          try { await onRefreshSeries(); } catch (_) {}
-        }
+        await refreshSeriesIfOriginActive(currentSeriesId);
         setBatchSuccess('✅ គ្រប់ឃ្លារួចរាល់ 100% — គ្មានឃ្លាខូចទេ!');
         return;
       }
@@ -1658,7 +1748,7 @@ export default function GeminiRouteModal({
             }
           } catch (_) {}
         }, 1200);
-        activeTimersRef.current.add(pollTimer);
+        activeTimersRef.current.set(pollTimer, { seriesId: targetSeriesId, episodeId: ep.id });
 
         // Build speakerMap if available (skip generic 'តួអង្គ'/'Speaker' collisions, prefer server registry when up-to-date)
         const speakerMap = {};
@@ -1759,9 +1849,7 @@ export default function GeminiRouteModal({
       setActiveTtsEpisodeId(null);
       setActiveTtsEpisodeIds(new Set());
       setBatchSuccess(`🎉 បានបង្កើតសំឡេងខ្មែរ AI (TTS) សម្រេចជោគជ័យចំនួន ${newlyCompletedCount} ភាគបន្ថែម!`);
-      if (typeof onRefreshSeries === 'function') {
-        try { await onRefreshSeries(); } catch (_) {}
-      }
+      await refreshSeriesIfOriginActive(targetSeriesId);
     } catch (err) {
       console.error('[Batch TTS] Error:', err);
       setBatchError(err.message || 'ការបង្កើតសំឡេង AI ជួបបញ្ហា');
@@ -1826,13 +1914,16 @@ export default function GeminiRouteModal({
       return;
     }
 
+    const targetSeriesId = activeSeries?.id || seriesId;
+    const cancellationRef = getDemucsCancellationRef(targetSeriesId);
+
     try {
       setIsSeparatingBatchDemucs(true);
       setBatchError(null);
       setBatchSuccess(null);
       setBatchInfo(null);
       setDemucsProgressPercent(5);
-      isDemucsCancelledRef.current = false;
+      cancellationRef.current = false;
 
       let separatedCount = 0;
       const allDemucsPendingIds = new Set(episodesWithVideo.map((e) => e.id));
@@ -1844,7 +1935,7 @@ export default function GeminiRouteModal({
       // Prevents Chrome socket exhaustion (net::ERR_INSUFFICIENT_RESOURCES),
       // keeps connection pool free, and prevents CPU memory overflow
       for (let i = 0; i < episodesWithVideo.length; i++) {
-        if (isDemucsCancelledRef.current) {
+        if (cancellationRef.current) {
           console.log('[Batch Demucs] Cancelled by user before ep:', episodesWithVideo[i].id);
           break;
         }
@@ -1868,7 +1959,7 @@ export default function GeminiRouteModal({
         // Controlled polling loop at 1200ms with in-flight request lock for real-time Terminal parity
         let isPolling = false;
         const demucsPollTimer = setInterval(async () => {
-          if (isDemucsCancelledRef.current) {
+          if (cancellationRef.current) {
             clearInterval(demucsPollTimer);
             activeTimersRef.current.delete(demucsPollTimer);
             return;
@@ -1876,7 +1967,7 @@ export default function GeminiRouteModal({
           if (isPolling) return;
           isPolling = true;
           try {
-            const dpRes = await fetch(`/api/audio/separation-progress?videoPath=${encodeURIComponent(videoRef)}`);
+            const dpRes = await fetch(`/api/audio/separation-progress?videoPath=${encodeURIComponent(videoRef)}&seriesId=${encodeURIComponent(targetSeriesId)}&episodeId=${encodeURIComponent(ep.id)}`);
             if (!dpRes.ok) return;
             const dpData = await dpRes.json();
             if (dpData && dpData.success && typeof dpData.progress === 'number') {
@@ -1925,7 +2016,7 @@ export default function GeminiRouteModal({
             isPolling = false;
           }
         }, 1200);
-        activeTimersRef.current.add(demucsPollTimer);
+        activeTimersRef.current.set(demucsPollTimer, { seriesId: targetSeriesId, episodeId: ep.id });
 
         try {
           let sepResult = null;
@@ -1937,13 +2028,13 @@ export default function GeminiRouteModal({
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({
                 videoPath: videoRef,
-                seriesId: activeSeries?.id || seriesId,
+                seriesId: targetSeriesId,
                 episodeId: ep.id,
                 separationPreset,
                 force: Boolean(force),
               }),
             });
-            if (isDemucsCancelledRef.current) {
+            if (cancellationRef.current) {
               clearInterval(demucsPollTimer);
               break;
             }
@@ -1968,13 +2059,13 @@ export default function GeminiRouteModal({
           }
 
           // Recover seamlessly if browser connection dropped transiently while backend Demucs continues running
-          if (!sepResult && !postErrorMsg && !isDemucsCancelledRef.current) {
+          if (!sepResult && !postErrorMsg && !cancellationRef.current) {
             let consecutiveErrors = 0;
-            while (!sepResult && !postErrorMsg && !isDemucsCancelledRef.current) {
+            while (!sepResult && !postErrorMsg && !cancellationRef.current) {
               await new Promise((r) => setTimeout(r, 2000));
-              if (isDemucsCancelledRef.current) break;
+              if (cancellationRef.current) break;
               try {
-                const dpRes = await fetch(`/api/audio/separation-progress?videoPath=${encodeURIComponent(videoRef)}`);
+                const dpRes = await fetch(`/api/audio/separation-progress?videoPath=${encodeURIComponent(videoRef)}&seriesId=${encodeURIComponent(targetSeriesId)}&episodeId=${encodeURIComponent(ep.id)}`);
                 const dpData = await dpRes.json().catch(() => ({}));
                 consecutiveErrors = 0;
                 if (dpData.status === 'separating') continue;
@@ -1989,7 +2080,7 @@ export default function GeminiRouteModal({
                 const stRes = await fetch('/api/audio/separation-status', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ videoPath: videoRef }),
+                  body: JSON.stringify({ videoPath: videoRef, seriesId: targetSeriesId, episodeId: ep.id }),
                 });
                 const stData = await stRes.json().catch(() => ({}));
                 if (stRes.ok && stData.success && stData.available && stData.noVocalsUrl) {
@@ -2009,7 +2100,7 @@ export default function GeminiRouteModal({
           }
 
           clearInterval(demucsPollTimer);
-          if (isDemucsCancelledRef.current) {
+          if (cancellationRef.current) {
             break;
           }
           if (sepResult && sepResult.success) {
@@ -2094,7 +2185,7 @@ export default function GeminiRouteModal({
         }
       }
 
-      if (isDemucsCancelledRef.current) {
+      if (cancellationRef.current) {
         return;
       }
 
@@ -2106,9 +2197,7 @@ export default function GeminiRouteModal({
       } else {
         setBatchError(`❌ មិនទាន់អាចបំបែកសំឡេង Demucs បាននៅឡើយទេ សូមពិនិត្យមើល Console ឬដំណើរការម្ដងទៀត`);
       }
-      if (typeof onRefreshSeries === 'function') {
-        try { await onRefreshSeries(); } catch (_) {}
-      }
+      await refreshSeriesIfOriginActive(targetSeriesId);
     } catch (err) {
       console.error('[Batch Demucs] Error:', err);
       setBatchError(err.message || 'ការបំបែកសំឡេង Demucs ជួបបញ្ហា');

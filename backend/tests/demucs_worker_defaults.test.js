@@ -8,6 +8,7 @@ const {
   killSeparationJob,
   isSeparationBusy,
   getSeparationProgress,
+  getScopedSeparationKey,
 } = require('../services/audioSeparationService');
 
 test('Demucs Worker Defaults & Service Inheritance', async (t) => {
@@ -70,7 +71,19 @@ test('Demucs Worker Defaults & Service Inheritance', async (t) => {
     assert.strictEqual(getSeparationProgress('series_test_ep_1_source.mp4'), null);
   });
 
-  await t.test('4. audioRoutes.js streams keep-alive headers & heartbeat on /audio/separate', () => {
+  await t.test('4. identical episode IDs and media basenames remain isolated by series', () => {
+    const ss1Key = getScopedSeparationKey(
+      'projects/ss1/episodes/ep_3/video/source.mp4',
+      { seriesId: 'ss1', episodeId: 'ep_3' }
+    );
+    const ss2Key = getScopedSeparationKey(
+      'projects/ss2/episodes/ep_3/video/source.mp4',
+      { seriesId: 'ss2', episodeId: 'ep_3' }
+    );
+    assert.notStrictEqual(ss1Key, ss2Key);
+  });
+
+  await t.test('5. audioRoutes.js streams keep-alive headers & heartbeat on /audio/separate', () => {
     const routeSrc = fs.readFileSync(path.join(__dirname, '../routes/audioRoutes.js'), 'utf8');
     assert.strictEqual(routeSrc.includes('res.flushHeaders'), true, 'must flush headers early to avoid net::ERR_EMPTY_RESPONSE');
     assert.strictEqual(routeSrc.includes('heartbeatTimer'), true, 'must keep HTTP socket alive during long CPU runs');

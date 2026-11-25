@@ -33,6 +33,7 @@ export default function DubbingStepButton({
     runSingleEpisodeAll3,
     runSequentialStep,
     stopStep,
+    activeSeriesId,
   } = useDubbingFeature(episodes);
 
   const isBatch = Array.isArray(episodes) && episodes.length > 1;
@@ -77,7 +78,9 @@ export default function DubbingStepButton({
   const handleClick = async (e) => {
     e?.stopPropagation?.();
     if (isThisEpisodeRunning && !isSubmitting) {
-      stopStep(step);
+      stopStep(step, singleEp
+        ? { seriesId: singleEp.seriesId || activeSeriesId, episodeId: singleEp.id }
+        : { seriesId: activeSeriesId });
       return;
     }
     if (isSubmitting) return;

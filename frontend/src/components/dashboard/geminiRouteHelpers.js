@@ -459,7 +459,7 @@ export function getActiveSeriesTranslateJobs(activeJobs = [], currentSeriesId = 
       j &&
       j.mode !== 'repair_broken' &&
       j.config?.isRepairBroken !== true &&
-      (!currentSeriesId || !j.seriesId || String(j.seriesId) === String(currentSeriesId)) &&
+      (!currentSeriesId || String(j.seriesId || '') === String(currentSeriesId)) &&
       (j.status === 'running' || j.status === 'queued')
   );
 }
