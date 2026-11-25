@@ -234,6 +234,7 @@ router.post("/render-video", async (req, res) => {
       safeExportTitle &&
       !/^series_\d+/i.test(safeExportTitle) &&
       !/^ep_\d+/i.test(safeExportTitle) &&
+      !/_source$/i.test(safeExportTitle) &&
       safeExportTitle.toLowerCase() !== "drama_recap" &&
       safeExportTitle.toLowerCase() !== "drama_project"
     );
@@ -263,8 +264,12 @@ router.post("/render-video", async (req, res) => {
       ? `${safeExportTitle}${ratioSuffix}`
       : (isEpisode ? `${cleanSeries}_${cleanEpisode}_Khmer_Dubbed${ratioSuffix}` : `${cleanName}_Khmer_Dubbed${ratioSuffix}`);
 
-    const outputFilename = `${exportBaseName}.mp4`;
-    const outputVideoPath = path.join(videoDir, outputFilename);
+    let outputFilename = `${exportBaseName}.mp4`;
+    let outputVideoPath = path.join(videoDir, outputFilename);
+    if (path.resolve(outputVideoPath).toLowerCase() === path.resolve(inputVideoPath).toLowerCase()) {
+      outputFilename = `${exportBaseName}_Khmer_Dubbed.mp4`;
+      outputVideoPath = path.join(videoDir, outputFilename);
+    }
 
     // Direct destination in Windows Downloads folder
     const userDownloadsDir = path.join(os.homedir(), "Downloads");
@@ -272,8 +277,11 @@ router.post("/render-video", async (req, res) => {
       ? path.join(userDownloadsDir, outputFilename)
       : null;
 
-    // Clean up previous output in project directory
-    if (fs.existsSync(outputVideoPath)) {
+    // Clean up previous output in project directory (never delete inputVideoPath!)
+    if (
+      fs.existsSync(outputVideoPath) &&
+      path.resolve(outputVideoPath).toLowerCase() !== path.resolve(inputVideoPath).toLowerCase()
+    ) {
       try {
         fs.unlinkSync(outputVideoPath);
       } catch {}

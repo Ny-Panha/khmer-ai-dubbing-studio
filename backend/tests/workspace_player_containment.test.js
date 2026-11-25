@@ -222,7 +222,7 @@ test('Voice gender switch (handleClipVoiceChange) does not auto-play segment aud
     'utf8'
   );
   const voiceChangeBlockMatch = voiceSettingsCode.match(
-    /const handleClipVoiceChange = useCallback\(async[\s\S]*?\}, \[onUpdateSegmentVoice, selectedSegmentIndex\]\);/
+    /const handleClipVoiceChange = useCallback\(async[\s\S]*?\}, \[onUpdateSegmentVoice, selectedSegmentIndex[^\]]*\]\);/
   );
   assert.ok(voiceChangeBlockMatch, 'handleClipVoiceChange block must exist in VoiceSettings.jsx');
   assert.doesNotMatch(

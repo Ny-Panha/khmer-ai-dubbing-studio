@@ -1,6 +1,33 @@
 # .agents/STATE.md
 
 ## Last Session
+IDE (Final Data Integrity & Release Audit) — 2026-11-25T21:40:00+07:00
+
+## Summary
+Final Data Integrity & Release Audit completed on verified isolation baseline `a0c161f` (`chore/full-project-cleanup`).
+
+### Task-Owned Changes Committed (5 files):
+- `backend/routes/videoRoutes.js` — verified input/output collision protection (`!/_source$/i` exclusion from `hasMeaningfulTitle`, `path.resolve(outputVideoPath) === path.resolve(inputVideoPath)` rename to `*_Khmer_Dubbed.mp4`, and unlink guard preventing deletion of `inputVideoPath`)
+- `backend/tests/render_source_collision_guard.test.js` — new HTTP integration regression test proving `_source` titles and exact-filename collisions never overwrite or delete source MP4s
+- `backend/tests/smart_pipeline_all3.test.js` — updated Test 10D for TTS v2 provenance (`c3f418dd`): asserts legacy v1 sidecar without `provenanceVersion` triggers re-synthesis (`true`) while verified `writeAudioProvenance` v2 sidecar is reused (`false`)
+- `backend/tests/workspace_player_containment.test.js` — updated `handleClipVoiceChange` regex to allow `scriptData?.segments` in `useCallback` dep array while preserving `playSegmentAudio(` prohibition
+- `.agents/STATE.md` — audit results & remaining blockers documented
+
+### Audit & Verification Results:
+- **Cross-series isolation baseline (`a0c161f`):** preserved untouched.
+- **Combined backend regression tests (30 suites):** **219/219 PASS** ✅ (0 failures, `27.86s`).
+- **Frontend production build (`cd frontend && npm run build`):** **2053 modules, 0 errors** ✅ (`1.68s`).
+- **Outdated test vs defect classification:**
+  - `smart_pipeline_all3.test.js` (Test 10D): outdated assertion (v1 vs v2 provenance policy) → updated & passing.
+  - `workspace_player_containment.test.js` (`handleClipVoiceChange`): outdated dep-array regex → updated & passing.
+  - `male_female_speaker_detection_batch.test.js` (Test 4, line 102): outdated assertion (sends `non_existent_series_xyz`, expects `400` instead of `scriptRoutes.js`'s intentional `404 Series not found`). File left untouched to preserve another agent's uncommitted changes (`FAIL 1/4` when run standalone).
+
+### Remaining Data Integrity Blocker:
+- `ss1_ep_28_source.mp4` is **NOT restored** on disk (`backend/uploads/projects/ss1/episodes/ep_28/video/` contains only `ss1_EP28_Khmer_Dubbed.mp4` and `.render-meta.json`; no backup found under `backend/uploads/` or `~/Downloads`). `ss1/series.json` `ep_28` still references `ss1_EP28_Khmer_Dubbed.mp4`. Dubbed export was NOT substituted for the original source.
+
+---
+
+## Previous Session
 IDE (P0 Cross-Series Isolation Final Verification) — 2026-11-25T21:25:00+07:00
 
 ## Summary

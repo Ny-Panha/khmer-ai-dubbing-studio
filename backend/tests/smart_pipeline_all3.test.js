@@ -20,6 +20,7 @@ const {
   cleanTextForTts,
   isPlaceholderOrEmptyTtsText,
   speedToEdgeRate,
+  writeAudioProvenance,
 } = require('../services/ttsService');
 
 const {
@@ -371,20 +372,38 @@ test('Smart 3-Step Pipeline Suite', async (t) => {
     const needsTtsEdited = doesSegmentNeedTts(editedTextSeg, testAudioDir);
     assert.equal(needsTtsEdited, true, 'Edited text must invalidate audio and trigger synthesis');
 
-    // 10D: Legacy segment with sidecar metadata proving exact match:
-    // Adopts signature and returns false!
+    // 10D: Legacy v1 sidecar without provenanceVersion v2 is rejected (true);
+    // only verified v2 provenance sidecar can be reused when seg.audioSignature is missing (false)!
     const sidecarJson = dummyAudio.replace(/\.[^.]+$/, '.json');
     fs.writeFileSync(sidecarJson, JSON.stringify({
       text: khmerText,
       voiceId,
       audioSignature: validSig,
     }));
-    const legacyWithSidecar = {
+    const legacyWithV1Sidecar = {
       ...legacySeg,
       audioSignature: null,
     };
-    const needsTtsSidecar = doesSegmentNeedTts(legacyWithSidecar, testAudioDir);
-    assert.equal(needsTtsSidecar, false, 'Legacy segment with verified sidecar metadata can be reused');
+    assert.equal(
+      doesSegmentNeedTts(legacyWithV1Sidecar, testAudioDir),
+      true,
+      'Legacy v1 sidecar without provenanceVersion v2 must trigger re-synthesis'
+    );
+
+    writeAudioProvenance(dummyAudio, {
+      voiceId,
+      text: khmerText,
+      audioSignature: validSig,
+    });
+    const segWithV2Provenance = {
+      ...legacySeg,
+      audioSignature: null,
+    };
+    assert.equal(
+      doesSegmentNeedTts(segWithV2Provenance, testAudioDir),
+      false,
+      'Segment with verified v2 provenance sidecar can be reused'
+    );
 
     // Clean up
     try {
