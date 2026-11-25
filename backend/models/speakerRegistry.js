@@ -77,6 +77,84 @@ const VOICE_PROFILES = {
 
 const AMBIGUOUS_SHORT_KHMER_MALE_TOKENS = new Set(["មា", "តា", "ពូ"]);
 
+/**
+ * Detect if a speaker name is a generic/broadcast identity that should NOT
+ * inherit gender from series map. These are transient identities that change
+ * voice actors between episodes or scenes.
+ * 
+ * Generic identities: system announcements, narrators, world broadcasts
+ * Non-generic: recurring character names (ស៊ូ មីង, នាង្ ស៊ូ, etc.)
+ * 
+ * @param {string} speakerName - The speaker name to check
+ * @returns {boolean} - True if generic identity, false if recurring character
+ */
+function isGenericSpeakerName(speakerName = "") {
+  if (!speakerName || typeof speakerName !== "string") return false;
+  
+  const cleanName = speakerName.toLowerCase().trim();
+  
+  // Generic system/broadcast identities (Khmer)
+  const genericKhmerKeywords = [
+    "ប្រព័ន្ធ",
+    "ប្រព័ន្ធ ai",
+    "ប្រព័ន្ធជំនួយ",
+    "ប្រព័ន្ធណែនាំ",
+    "ប្រព័ន្ធសំឡេង",
+    "ឧទ្ទេសក",
+    "អ្នកសម្រាយរឿង",
+    "អ្នកនិទាន",
+    "ពិធីករ",
+  ];
+  
+  // Generic system/broadcast identities (Chinese)
+  const genericChineseKeywords = [
+    "system",
+    "ai system",
+    "系统",
+    "系统提示",
+    "旁白",
+    "解说",
+    "播音",
+    "主持人",
+    "恭喜玩家",
+    "规则",
+    "规则警告",
+    "世界公告",
+    "公告",
+    "提示",
+  ];
+  
+  // Check if speaker name contains any generic keywords
+  for (const kw of genericKhmerKeywords) {
+    if (cleanName.includes(kw.toLowerCase())) {
+      return true;
+    }
+  }
+  
+  for (const kw of genericChineseKeywords) {
+    if (cleanName.includes(kw.toLowerCase())) {
+      return true;
+    }
+  }
+  
+  // Check for narrator patterns (but not character names)
+  const narratorPatterns = [
+    /^narrator/i,
+    /^system/i,
+    /^announcer/i,
+    /^voice\s*over/i,
+    /^v\.o\./i,
+  ];
+  
+  for (const pattern of narratorPatterns) {
+    if (pattern.test(cleanName)) {
+      return true;
+    }
+  }
+  
+  return false;
+}
+
 function matchesSpeakerKeyword(lowerName = "", kw = "") {
   const k = String(kw || "").toLowerCase().trim();
   if (!lowerName || !k) return false;
@@ -106,17 +184,8 @@ function detectSpeakerGender(speakerName = "", explicitGender = "", khmerText = 
     const seg = speakerName;
     const ctx = (explicitGender && typeof explicitGender === "object") ? explicitGender : {};
 
-    // Priority 1: Explicit segment.visualGender ("male" / "female") when confidence is high
-    const visGender = String(seg.visualGender || ctx.visualGender || "").trim().toLowerCase();
-    const visConf = typeof seg.genderConfidence === "number" ? seg.genderConfidence : 0.85;
-    if ((visGender === "female" || visGender === "f") && visConf >= 0.6) {
-      return "FEMALE";
-    }
-    if ((visGender === "male" || visGender === "m") && visConf >= 0.6) {
-      return "MALE";
-    }
-
-    // Priority 2: Explicit voiceGender / gender from Gemini's castRegistry or segment
+    // Priority 1: Explicit voiceGender / castGender from Gemini's castRegistry or segment
+    // THIS IS THE VOICE ACTOR TIMBRE - takes priority over visual character gender
     const castList = Array.isArray(ctx.castRegistry)
       ? ctx.castRegistry
       : (Array.isArray(seg.castRegistry) ? seg.castRegistry : []);
@@ -137,11 +206,45 @@ function detectSpeakerGender(speakerName = "", explicitGender = "", khmerText = 
       ""
     ).trim().toLowerCase();
 
+    // Voice actor timbre detection with mismatch tracking
+    let voiceActorTimbre = null;
     if (explicitCastGender === "female" || explicitCastGender === "f" || explicitCastGender === "ស្រី" || explicitCastGender === "girl" || explicitCastGender === "woman") {
-      return "FEMALE";
+      voiceActorTimbre = "FEMALE";
     }
     if (explicitCastGender === "male" || explicitCastGender === "m" || explicitCastGender === "ប្រុស" || explicitCastGender === "boy" || explicitCastGender === "man") {
-      return "MALE";
+      voiceActorTimbre = "MALE";
+    }
+
+    // Priority 2: Visual character gender (only used when no explicit voice timbre)
+    const visGender = String(seg.visualGender || ctx.visualGender || "").trim().toLowerCase();
+    const visConf = typeof seg.genderConfidence === "number" ? seg.genderConfidence : 0.85;
+    let characterGender = null;
+    if ((visGender === "female" || visGender === "f") && visConf >= 0.6) {
+      characterGender = "FEMALE";
+    }
+    if ((visGender === "male" || visGender === "m") && visConf >= 0.6) {
+      characterGender = "MALE";
+    }
+
+    // Detect voice-character mismatch and set metadata flags
+    if (voiceActorTimbre && characterGender && voiceActorTimbre !== characterGender) {
+      // Voice-character mismatch detected (e.g., female actress voicing male child)
+      // Store both for metadata tracking
+      if (seg) {
+        seg.voiceActorTimbre = voiceActorTimbre;
+        seg.characterGender = characterGender;
+        seg.voiceCharacterMismatch = true;
+      }
+    }
+
+    // Return voice actor timbre if available (Priority 1)
+    if (voiceActorTimbre) {
+      return voiceActorTimbre;
+    }
+
+    // Fall back to character visual gender if no voice timbre (Priority 2)
+    if (characterGender) {
+      return characterGender;
     }
 
     // Priority 3: Speaker title/name keywords & explicit original Chinese self-reference ONLY (never override with translated Khmer dialogue!)
@@ -270,8 +373,12 @@ function getVoiceProfile(gender = "male", overrideVoiceId = null) {
  * 4. Sync Segments ជាមួយ Speaker Registry ដោយប្រើ Majority Vote & Acoustic Evidence
  * Enforces strict consistency: every segment from the same character receives the SAME voice throughout the episode.
  * Preserves manual user voice overrides permanently.
+ * 
+ * NOTE: This legacy placeholder detection has been replaced by the isGenericSpeakerName
+ * function defined earlier (line 91) which handles Bug Condition 1 generic broadcast identities.
+ * This function is kept for backward compatibility but is now an alias to isPlaceholderSpeakerName.
  */
-function isGenericSpeakerName(str = "") {
+function isPlaceholderSpeakerName(str = "") {
   if (!str) return true;
   const s = String(str).trim().toLowerCase();
   return (
@@ -320,6 +427,10 @@ function syncSegmentsWithSpeakerRegistry(segments = [], customSpeakerVoiceMap = 
   }
 
   const speakerStatsMap = new Map();
+  
+  // Track previous segment for speaker change detection
+  let prevSegmentSpeaker = null;
+  let prevSegmentGender = null;
 
   segments.forEach((seg, idx) => {
     const rawSpeaker = String(seg.speaker || seg.speakerName || "តួអង្គ").trim();
@@ -387,8 +498,14 @@ function syncSegmentsWithSpeakerRegistry(segments = [], customSpeakerVoiceMap = 
     const speakerName = normalizeSpeakerName(rawSpeaker, displayGender);
 
     if (!speakerStatsMap.has(spkKey)) {
-      // Check existing manual assignment or series-level persistence (never inherit character-wide manual override from a single userOverridden segment, and never auto-map generic 'តួអង្គ' from seriesMap)
-      const isGenericName = !speakerName || speakerName === "តួអង្គ" || speakerName.toLowerCase() === "speaker" || isGenericSpeakerName(speakerName);
+      // Check existing manual assignment or series-level persistence
+      // isPlaceholderSpeakerName: "Speaker 1", "Unknown", etc. - generic placeholder names
+      // isGenericSpeakerName: "ប្រព័ន្ធ", "系统", "旁白" - transient broadcast identities
+      const isGenericName = !speakerName || isPlaceholderSpeakerName(speakerName) || isGenericSpeakerName(speakerName);
+      
+      // BUGFIX: Generic identities (ប្រព័ន្ធ, narrators, system announcements) should NOT inherit from series map
+      // They are transient broadcast identities that change voice actors between episodes/scenes
+      // Only recurring character names should use series map for consistency
       const compactSpeakerName = speakerName.replace(/\s+/g, "").toLowerCase();
       const compactRawName = rawSpeaker.replace(/\s+/g, "").toLowerCase();
       const seriesAliasMatch = !isGenericName
@@ -400,7 +517,12 @@ function syncSegmentsWithSpeakerRegistry(segments = [], customSpeakerVoiceMap = 
             return candidates.includes(compactSpeakerName) || candidates.includes(compactRawName);
           })
         : null;
-      const seriesEntry = seriesMap[spkKey] || (!isGenericName ? (seriesMap[speakerName] || seriesMap[rawSpeaker] || seriesAliasMatch) : null);
+      
+      // For generic identities, skip series map lookup entirely - classify per-scene instead
+      const seriesEntry = isGenericName 
+        ? null 
+        : (seriesMap[spkKey] || seriesMap[speakerName] || seriesMap[rawSpeaker] || seriesAliasMatch);
+      
       const isSeriesSource = Boolean(seriesEntry && (seriesEntry.khmerVoiceId || seriesEntry.voiceId));
       const customVoice =
         customMap[spkKey] ||
@@ -411,12 +533,15 @@ function syncSegmentsWithSpeakerRegistry(segments = [], customSpeakerVoiceMap = 
 
       const isManual = Boolean((!isSegUserOverridden && (seg.voiceAssignmentSource === "manual" || seg.voiceOverride)) || customMap[spkKey] || (!isGenericName && customMap[speakerName]));
       const assignmentSource = isManual ? "manual" : (isSeriesSource ? (seriesEntry.voiceAssignmentSource || "series_glossary") : "automatic");
-      const seriesGenderRaw = isSeriesSource
+      
+      // BUGFIX: Generic identities should NOT inherit seriesGender - must be classified per-scene
+      const seriesGenderRaw = (isSeriesSource && !isGenericName)
         ? String(seriesEntry.voiceGender || seriesEntry.gender || seriesEntry.speakerGender || "").toLowerCase()
         : "";
       const seriesGender = (seriesGenderRaw === "female" || seriesGenderRaw === "male")
         ? seriesGenderRaw
-        : (isSeriesSource && customVoice ? (String(customVoice).toLowerCase().includes("sreymom") ? "female" : "male") : "");
+        : (isSeriesSource && !isGenericName && customVoice ? (String(customVoice).toLowerCase().includes("sreymom") ? "female" : "male") : "");
+      
       const resolvedStatId = (isSeriesSource && seriesEntry.speakerId && !isGenericName) ? seriesEntry.speakerId : spkKey;
       const resolvedStatName = (isSeriesSource && seriesEntry.name && !isGenericName) ? seriesEntry.name : speakerName;
 
@@ -506,6 +631,29 @@ function syncSegmentsWithSpeakerRegistry(segments = [], customSpeakerVoiceMap = 
     } else {
       entry.unknownCount += 1;
     }
+    
+    // BUGFIX: Speaker change detection metadata
+    // Track if speaker or gender changed from previous segment
+    const currentSpeaker = spkKey;
+    const currentGender = perCueGender;
+    
+    if (prevSegmentSpeaker !== null) {
+      const speakerChanged = currentSpeaker !== prevSegmentSpeaker;
+      const genderChanged = currentGender !== prevSegmentGender && 
+                           currentGender !== 'unknown' && 
+                           prevSegmentGender !== 'unknown';
+      
+      if (speakerChanged || genderChanged) {
+        // Store change detection metadata on segment for downstream validation
+        seg.speakerChangeDetected = true;
+        seg.speakerChangedFrom = prevSegmentSpeaker;
+        seg.genderChangedFrom = prevSegmentGender;
+      }
+    }
+    
+    // Update previous tracking for next iteration
+    prevSegmentSpeaker = currentSpeaker;
+    prevSegmentGender = currentGender;
   });
 
   // Unify non-manual votes across split speakerIds sharing the same non-generic named character
@@ -612,6 +760,8 @@ function syncSegmentsWithSpeakerRegistry(segments = [], customSpeakerVoiceMap = 
     const rawSpeaker = String(seg.speaker || seg.speakerName || "តួអង្គ").trim();
     const explicitId = seg.speakerId || seg.spkId || null;
     const isGenericRaw = isGenericSpeakerName(rawSpeaker);
+    const isPlaceholderRaw = isPlaceholderSpeakerName(rawSpeaker);
+    const isGenericOrPlaceholder = isGenericRaw || isPlaceholderRaw;
 
     const segF0 = Number(seg.pitchHz || seg.acousticF0 || 0);
     const segVis = String(seg.visualGender || "").toLowerCase();
@@ -643,10 +793,10 @@ function syncSegmentsWithSpeakerRegistry(segments = [], customSpeakerVoiceMap = 
     let spkKey;
     if (explicitId && !['spk_1', 'spk_តួអង្គ', 'spk_default', 'spk'].includes(String(explicitId).trim())) {
       spkKey = String(explicitId).trim();
-    } else if (!isGenericRaw && isEpisodicRoleSpeakerName(rawSpeaker) && (perCueGender === 'female' || perCueGender === 'male')) {
+    } else if (!isGenericOrPlaceholder && isEpisodicRoleSpeakerName(rawSpeaker) && (perCueGender === 'female' || perCueGender === 'male')) {
       const baseRoleId = getSpeakerId(rawSpeaker).replace(/^spk_/, '');
       spkKey = `spk_${perCueGender}_${baseRoleId}`;
-    } else if (!isGenericRaw) {
+    } else if (!isGenericOrPlaceholder) {
       spkKey = getSpeakerId(rawSpeaker);
     } else {
       if (perCueGender === 'female') {
@@ -660,15 +810,15 @@ function syncSegmentsWithSpeakerRegistry(segments = [], customSpeakerVoiceMap = 
 
     const normSpeaker = normalizeSpeakerName(rawSpeaker);
     const titleKw = detectSpeakerGender(rawSpeaker, "", "");
-    const fallbackIsFemale = (isGenericRaw && perCueGender === 'female') || titleKw === "FEMALE" || (titleKw !== "MALE" && (seg.voiceGender === "female" || (segF0 >= 170 && segF0 <= 320)));
-    const fallbackIsMale = (isGenericRaw && perCueGender === 'male') || titleKw === "MALE" || (titleKw !== "FEMALE" && (seg.voiceGender === "male" || (segF0 > 0 && segF0 <= 155)));
+    const fallbackIsFemale = (isGenericOrPlaceholder && perCueGender === 'female') || titleKw === "FEMALE" || (titleKw !== "MALE" && (seg.voiceGender === "female" || (segF0 >= 170 && segF0 <= 320)));
+    const fallbackIsMale = (isGenericOrPlaceholder && perCueGender === 'male') || titleKw === "MALE" || (titleKw !== "FEMALE" && (seg.voiceGender === "male" || (segF0 > 0 && segF0 <= 155)));
     const fallbackGender = fallbackIsFemale ? "female" : (fallbackIsMale ? "male" : "unknown");
     const fallbackVoice = fallbackIsFemale ? "km-KH-SreymomNeural" : "km-KH-PisethNeural";
     const reg = finalizedRegistry[spkKey] ||
-      (!isGenericRaw ? finalizedRegistry[normSpeaker] : null) ||
+      (!isGenericOrPlaceholder ? finalizedRegistry[normSpeaker] : null) ||
       Object.values(finalizedRegistry).find((r) => r && (
         (r.speakerId && (r.speakerId === spkKey || r.speakerId === explicitId)) ||
-        (!isGenericRaw && (r.speaker === rawSpeaker || r.name === rawSpeaker || r.speakerName === rawSpeaker))
+        (!isGenericOrPlaceholder && (r.speaker === rawSpeaker || r.name === rawSpeaker || r.speakerName === rawSpeaker))
       )) || {
       speakerId: spkKey,
       speaker: rawSpeaker,
@@ -881,6 +1031,7 @@ module.exports = {
   FEMALE_MARKERS: FEMALE_KEYWORDS,
   MALE_MARKERS: MALE_KEYWORDS,
   VOICE_PROFILES,
+  isGenericSpeakerName,
   detectSpeakerGender,
   detectGender,
   normalizeSpeakerName,
@@ -891,6 +1042,5 @@ module.exports = {
   getDefaultVoiceForGender,
   buildSpeakerRegistry,
   applySpeakerVoiceToSegments,
-  isGenericSpeakerName,
   isEpisodicRoleSpeakerName,
 };

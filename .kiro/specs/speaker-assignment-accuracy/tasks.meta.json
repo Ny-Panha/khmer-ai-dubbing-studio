@@ -1,0 +1,245 @@
+{
+  "pbtResults": {
+    "1. Write bug condition exploration tests (BEFORE implementing fix)": {
+      "status": "unexpected_pass",
+      "failingExample": "All 15 bug condition exploration tests PASSED on unfixed code when they should FAIL. Tests use mock functions (mockVisualProbe, mockGeminiFn) that bypass actual bug logic and return \"expected correct\" results directly, preventing detection of bugs in the real code paths.",
+      "lastRunTimestamp": 1795612453748
+    }
+  },
+  "executionHistory": {
+    "1. Write bug condition exploration tests (BEFORE implementing fix)": [
+      {
+        "executionId": "9186286b-ab82-4590-9c80-b133abcc2508",
+        "chatSessionId": "sess_8be457a9-54dd-402f-8fbe-954655e42866",
+        "timestamp": 1795611740172
+      },
+      {
+        "executionId": "9186286b-ab82-4590-9c80-b133abcc2508",
+        "chatSessionId": "sess_8be457a9-54dd-402f-8fbe-954655e42866",
+        "timestamp": 1795611759393
+      },
+      {
+        "executionId": "9186286b-ab82-4590-9c80-b133abcc2508",
+        "chatSessionId": "sess_8be457a9-54dd-402f-8fbe-954655e42866",
+        "timestamp": 1795612572535
+      }
+    ],
+    "2. Write preservation property tests (BEFORE implementing fix)": [
+      {
+        "executionId": "9186286b-ab82-4590-9c80-b133abcc2508",
+        "chatSessionId": "sess_8be457a9-54dd-402f-8fbe-954655e42866",
+        "timestamp": 1795611740368
+      },
+      {
+        "executionId": "9186286b-ab82-4590-9c80-b133abcc2508",
+        "chatSessionId": "sess_8be457a9-54dd-402f-8fbe-954655e42866",
+        "timestamp": 1795612577600
+      },
+      {
+        "executionId": "9186286b-ab82-4590-9c80-b133abcc2508",
+        "chatSessionId": "sess_8be457a9-54dd-402f-8fbe-954655e42866",
+        "timestamp": 1795612772934
+      }
+    ],
+    "3.1 Add generic identity detection helper function": [
+      {
+        "executionId": "9186286b-ab82-4590-9c80-b133abcc2508",
+        "chatSessionId": "sess_8be457a9-54dd-402f-8fbe-954655e42866",
+        "timestamp": 1795611740612
+      },
+      {
+        "executionId": "9186286b-ab82-4590-9c80-b133abcc2508",
+        "chatSessionId": "sess_8be457a9-54dd-402f-8fbe-954655e42866",
+        "timestamp": 1795612785161
+      },
+      {
+        "executionId": "9186286b-ab82-4590-9c80-b133abcc2508",
+        "chatSessionId": "sess_8be457a9-54dd-402f-8fbe-954655e42866",
+        "timestamp": 1795614579589
+      }
+    ],
+    "3.2 Reorder priority: voice actor timbre BEFORE visual gender": [
+      {
+        "executionId": "9186286b-ab82-4590-9c80-b133abcc2508",
+        "chatSessionId": "sess_8be457a9-54dd-402f-8fbe-954655e42866",
+        "timestamp": 1795611740769
+      },
+      {
+        "executionId": "9186286b-ab82-4590-9c80-b133abcc2508",
+        "chatSessionId": "sess_8be457a9-54dd-402f-8fbe-954655e42866",
+        "timestamp": 1795614584091
+      },
+      {
+        "executionId": "9186286b-ab82-4590-9c80-b133abcc2508",
+        "chatSessionId": "sess_8be457a9-54dd-402f-8fbe-954655e42866",
+        "timestamp": 1795614846392
+      }
+    ],
+    "3.3 Exempt generic identities from series map inheritance": [
+      {
+        "executionId": "9186286b-ab82-4590-9c80-b133abcc2508",
+        "chatSessionId": "sess_8be457a9-54dd-402f-8fbe-954655e42866",
+        "timestamp": 1795611740915
+      },
+      {
+        "executionId": "9186286b-ab82-4590-9c80-b133abcc2508",
+        "chatSessionId": "sess_8be457a9-54dd-402f-8fbe-954655e42866",
+        "timestamp": 1795614851931
+      }
+    ],
+    "3.4 Enhance voice actor timbre instructions in verification prompt": [
+      {
+        "executionId": "9186286b-ab82-4590-9c80-b133abcc2508",
+        "chatSessionId": "sess_8be457a9-54dd-402f-8fbe-954655e42866",
+        "timestamp": 1795611741038
+      },
+      {
+        "executionId": "9186286b-ab82-4590-9c80-b133abcc2508",
+        "chatSessionId": "sess_8be457a9-54dd-402f-8fbe-954655e42866",
+        "timestamp": 1795615768674
+      },
+      {
+        "executionId": "90619c68-3b35-48ab-81fe-1941fc24610c",
+        "chatSessionId": "sess_8be457a9-54dd-402f-8fbe-954655e42866",
+        "timestamp": 1795616863366
+      }
+    ],
+    "3.5 Add generic identity classification rule to prompt": [
+      {
+        "executionId": "9186286b-ab82-4590-9c80-b133abcc2508",
+        "chatSessionId": "sess_8be457a9-54dd-402f-8fbe-954655e42866",
+        "timestamp": 1795611741175
+      },
+      {
+        "executionId": "90619c68-3b35-48ab-81fe-1941fc24610c",
+        "chatSessionId": "sess_8be457a9-54dd-402f-8fbe-954655e42866",
+        "timestamp": 1795616868922
+      }
+    ],
+    "3.6 Add speaker change detection instructions to prompt": [
+      {
+        "executionId": "9186286b-ab82-4590-9c80-b133abcc2508",
+        "chatSessionId": "sess_8be457a9-54dd-402f-8fbe-954655e42866",
+        "timestamp": 1795611741321
+      },
+      {
+        "executionId": "90619c68-3b35-48ab-81fe-1941fc24610c",
+        "chatSessionId": "sess_8be457a9-54dd-402f-8fbe-954655e42866",
+        "timestamp": 1795616874936
+      }
+    ],
+    "3.7 Add specialized voice handling guidance to prompt": [
+      {
+        "executionId": "9186286b-ab82-4590-9c80-b133abcc2508",
+        "chatSessionId": "sess_8be457a9-54dd-402f-8fbe-954655e42866",
+        "timestamp": 1795611741486
+      },
+      {
+        "executionId": "90619c68-3b35-48ab-81fe-1941fc24610c",
+        "chatSessionId": "sess_8be457a9-54dd-402f-8fbe-954655e42866",
+        "timestamp": 1795616880286
+      }
+    ],
+    "3.8 Add specialized audio characteristics annotation": [
+      {
+        "executionId": "9186286b-ab82-4590-9c80-b133abcc2508",
+        "chatSessionId": "sess_8be457a9-54dd-402f-8fbe-954655e42866",
+        "timestamp": 1795611741661
+      },
+      {
+        "executionId": "5bdebded-8b86-4b76-b1e9-4a8fba1b89ac",
+        "chatSessionId": "sess_8be457a9-54dd-402f-8fbe-954655e42866",
+        "timestamp": 1795617098550
+      },
+      {
+        "executionId": "5bdebded-8b86-4b76-b1e9-4a8fba1b89ac",
+        "chatSessionId": "sess_8be457a9-54dd-402f-8fbe-954655e42866",
+        "timestamp": 1795619010370
+      }
+    ],
+    "3.9 Add ground truth dispute flagging to focused recheck": [
+      {
+        "executionId": "9186286b-ab82-4590-9c80-b133abcc2508",
+        "chatSessionId": "sess_8be457a9-54dd-402f-8fbe-954655e42866",
+        "timestamp": 1795611741822
+      }
+    ],
+    "3.10 Add generic identity suspect detection": [
+      {
+        "executionId": "9186286b-ab82-4590-9c80-b133abcc2508",
+        "chatSessionId": "sess_8be457a9-54dd-402f-8fbe-954655e42866",
+        "timestamp": 1795611741969
+      }
+    ],
+    "3.11 Add speaker change conflict detection to suspect logic": [
+      {
+        "executionId": "9186286b-ab82-4590-9c80-b133abcc2508",
+        "chatSessionId": "sess_8be457a9-54dd-402f-8fbe-954655e42866",
+        "timestamp": 1795611742127
+      }
+    ],
+    "3.12 Exempt generic identities from series map patches": [
+      {
+        "executionId": "9186286b-ab82-4590-9c80-b133abcc2508",
+        "chatSessionId": "sess_8be457a9-54dd-402f-8fbe-954655e42866",
+        "timestamp": 1795611742345
+      }
+    ],
+    "3.13 Add specialized audio feature detection": [
+      {
+        "executionId": "9186286b-ab82-4590-9c80-b133abcc2508",
+        "chatSessionId": "sess_8be457a9-54dd-402f-8fbe-954655e42866",
+        "timestamp": 1795611742503
+      }
+    ],
+    "3.14 Verify bug condition exploration tests now pass": [
+      {
+        "executionId": "9186286b-ab82-4590-9c80-b133abcc2508",
+        "chatSessionId": "sess_8be457a9-54dd-402f-8fbe-954655e42866",
+        "timestamp": 1795611742646
+      }
+    ],
+    "3.15 Verify preservation tests still pass": [
+      {
+        "executionId": "9186286b-ab82-4590-9c80-b133abcc2508",
+        "chatSessionId": "sess_8be457a9-54dd-402f-8fbe-954655e42866",
+        "timestamp": 1795611742801
+      }
+    ],
+    "4.1 Process all four benchmark episodes through updated pipeline": [
+      {
+        "executionId": "9186286b-ab82-4590-9c80-b133abcc2508",
+        "chatSessionId": "sess_8be457a9-54dd-402f-8fbe-954655e42866",
+        "timestamp": 1795611743000
+      }
+    ],
+    "4.2 Run existing test suite (regression protection)": [
+      {
+        "executionId": "9186286b-ab82-4590-9c80-b133abcc2508",
+        "chatSessionId": "sess_8be457a9-54dd-402f-8fbe-954655e42866",
+        "timestamp": 1795611743189
+      }
+    ],
+    "4.3 Real browser verification with Playwright": [
+      {
+        "executionId": "9186286b-ab82-4590-9c80-b133abcc2508",
+        "chatSessionId": "sess_8be457a9-54dd-402f-8fbe-954655e42866",
+        "timestamp": 1795611743363
+      }
+    ],
+    "4.4 Generate final accuracy report": [
+      {
+        "executionId": "9186286b-ab82-4590-9c80-b133abcc2508",
+        "chatSessionId": "sess_8be457a9-54dd-402f-8fbe-954655e42866",
+        "timestamp": 1795611743556
+      }
+    ],
+    "5. Checkpoint - Ensure all tests pass and accuracy targets met": [
+      {
+        "executionId": "9186286b-ab82-4590-9c80-b133abcc2508",
+        "chatSessionId": "sess_8be457a9-54dd-402f-8fbe-954655e42866",
+        "timestamp": 1795611743696
+      }
+    ]
+  }
+}

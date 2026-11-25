@@ -20,15 +20,23 @@ test('Step 1 (DSP): enrichCuesWithAcousticPitch is exported and safely handles e
   assert.equal(cues[0].startSec, 1.0);
 });
 
-test('Step 3 (Anti-Crushing): isGenericSpeakerName identifies generic and non-generic character names', () => {
-  assert.equal(isGenericSpeakerName('តួអង្គ'), true);
-  assert.equal(isGenericSpeakerName('Speaker 1'), true);
-  assert.equal(isGenericSpeakerName('Speaker 2'), true);
-  assert.equal(isGenericSpeakerName('Unknown'), true);
-  assert.equal(isGenericSpeakerName('spk_1'), true);
-  assert.equal(isGenericSpeakerName('Default Speaker'), true);
+test('Step 3 (Anti-Crushing): isGenericSpeakerName identifies broadcast identities (Bug Condition 1)', () => {
+  // NEW BEHAVIOR (Task 3.1): isGenericSpeakerName detects BROADCAST identities (ប្រព័ន្ធ, 系统, narrator)
+  // NOT placeholder names like "Speaker 1" - those are handled separately by isPlaceholderSpeakerName
+  
+  // Broadcast identities - should return TRUE
+  assert.equal(isGenericSpeakerName('ប្រព័ន្ធ'), true, 'Should detect broadcast identity "ប្រព័ន្ធ"');
+  assert.equal(isGenericSpeakerName('系统'), true, 'Should detect broadcast identity "系统"');
+  assert.equal(isGenericSpeakerName('Narrator'), true, 'Should detect broadcast identity "Narrator"');
+  assert.equal(isGenericSpeakerName('恭喜玩家'), true, 'Should detect broadcast identity "恭喜玩家"');
+  assert.equal(isGenericSpeakerName('旁白'), true, 'Should detect broadcast identity "旁白"');
+  
+  // Placeholder names - should return FALSE (not broadcast identities)
+  assert.equal(isGenericSpeakerName('តួអង្គ'), false, 'Placeholder "តួអង្គ" is NOT a broadcast identity');
+  assert.equal(isGenericSpeakerName('Speaker 1'), false, 'Placeholder "Speaker 1" is NOT a broadcast identity');
+  assert.equal(isGenericSpeakerName('Unknown'), false, 'Placeholder "Unknown" is NOT a broadcast identity');
 
-  // Non-generic names
+  // Character names - should return FALSE
   assert.equal(isGenericSpeakerName('តួឯកប្រុស'), false);
   assert.equal(isGenericSpeakerName('តួឯកស្រី'), false);
   assert.equal(isGenericSpeakerName('លោកប្រធាន'), false);
