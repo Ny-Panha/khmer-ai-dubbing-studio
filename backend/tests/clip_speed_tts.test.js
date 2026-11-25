@@ -255,8 +255,9 @@ test('Live /api/generate-audio E2E: 1.5x, 0.75x, 1.0x normal fit, segment payloa
     assert.equal(fastSeg.userCustomSpeed, true);
     assert.equal(fastSeg.appliedSpeed, 1.5);
     assert.ok(Math.abs(fastSeg.audioDurationSec - fastProbed) < 0.02, 'audioDurationSec must match real probed duration');
-    assert.ok(Math.abs(fastSeg.originalAudioDuration - fastProbed) < 0.02, 'originalAudioDuration must match real probed duration');
+    assert.ok(Math.abs(fastSeg.originalAudioDuration - fastProbed) < 0.02, 'originalAudioDuration must match real probed processed MP3 duration');
     assert.ok(Math.abs(fastSeg.rawAudioDur - fastProbed) < 0.02, 'rawAudioDur must match real probed duration');
+    assert.ok(Math.abs(fastSeg.naturalAudioDuration - naturalDur) < 0.25, `naturalAudioDuration (${fastSeg.naturalAudioDuration}) must preserve unscaled 1.0x duration (~${naturalDur}) distinct from fastProbed (${fastProbed})`);
     assert.equal(fastSeg.audioEndSec, parseFloat((0 + fastProbed).toFixed(2)));
 
     // 4. Set Clip Speed 0.75x -> ~4/3 of naturalDur, skips slot-fit, OVER updates

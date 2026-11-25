@@ -10,15 +10,28 @@ describe('Single-Segment Voice Switch Fast Path & Honest Generating Status', () 
     const hookSrc = fs.readFileSync(path.join(rootDir, 'frontend/src/hooks/useAudioDubbing.js'), 'utf8').replace(/\r\n/g, '\n');
     const fnStart = hookSrc.indexOf('const handleUpdateSegmentVoice = async');
     assert.ok(fnStart > 0, 'handleUpdateSegmentVoice must exist');
-    const fnEnd = hookSrc.indexOf('// 1-Click Toggle Inner-Thought Mode', fnStart);
+    const fnEnd = hookSrc.indexOf('// 1-Click', fnStart);
+    assert.ok(fnEnd > fnStart, 'handleUpdateSegmentVoice end marker must exist');
     const fnBody = hookSrc.slice(fnStart, fnEnd);
 
     assert.ok(fnBody.includes('suppressNextBackendSync('), 'Must suppress redundant full-series /sync during single-segment voice switch');
-    assert.ok(fnBody.includes("textStatus: 'generating'") && fnBody.includes('audioUrl: null'), 'Must clear old audioUrl and mark textStatus=generating during wait so old voice is never shown as Ready');
+    assert.ok(
+      fnBody.includes("textStatus: 'generating'") &&
+      fnBody.includes('isVoiceSwitching: true') &&
+      fnBody.includes('audioOutdated: true') &&
+      fnBody.includes('previousAudioUrl'),
+      'Must preserve previous audioUrl for waveform safety while marking textStatus=generating, isVoiceSwitching=true, and audioOutdated=true'
+    );
     assert.ok(fnBody.includes("textStatus: 'ready'"), 'Must mark textStatus=ready only when new voice audio resolves');
     assert.ok(fnBody.includes('skipPeerDiskScan: true'), 'Must pass skipPeerDiskScan to avoid pre-TTS 17MB series.json disk read');
     assert.ok(fnBody.includes('speakerUpdate:'), 'Must forward speakerUpdate so backend persists manual assignment atomically');
     assert.ok(!fnBody.includes('syncTimelineAudioApi('), 'Must NOT fire 7-10s full-episode syncTimelineAudioApi on single-segment voice switch');
+  });
+
+  it('1b. TimelineTracksCanvas renders honest generating status indicator while keeping waveform visible', () => {
+    const canvasSrc = fs.readFileSync(path.join(rootDir, 'frontend/src/components/timeline/TimelineTracksCanvas.jsx'), 'utf8').replace(/\r\n/g, '\n');
+    assert.ok(canvasSrc.includes("const isGeneratingVoice = seg.textStatus === 'generating'"), 'Timeline clip must read generating state from seg.textStatus');
+    assert.ok(canvasSrc.includes("កំពុងបង្កើត...") && canvasSrc.includes('data-voice-generating'), 'Timeline clip must expose honest generating indicator while waveform stays rendered');
   });
 
   it('2. Backend /api/generate-audio honors skipPeerDiskScan, persists speakerUpdate, and unlinks stale master narration', () => {

@@ -98,6 +98,181 @@ function computeSegmentAudioSignature(text, voiceId, speed = 'normal', pitch = 0
     .substring(0, 16);
 }
 
+const PROVENANCE_VERSION = 2;
+const KNOWN_VOICE_IDS = ["km-KH-PisethNeural", "km-KH-SreymomNeural", "google-km-standard"];
+
+function computeTextSha256(text = "") {
+  return crypto.createHash("sha256").update(cleanTextForTts(text || "")).digest("hex");
+}
+
+function computeFileSha256(filePath) {
+  const data = fs.readFileSync(filePath);
+  return crypto.createHash("sha256").update(data).digest("hex");
+}
+
+function buildEffectConfigKey(deliveryType = "out_loud", audioEffect = "none", effectConfig = null) {
+  if (deliveryType !== "inner_thought") return "clean";
+  const eff = audioEffect || "inner_thought_reverb";
+  const cfg = effectConfig && typeof effectConfig === "object" ? effectConfig : {};
+  const inGain = cfg.inGain ?? 0.85;
+  const outGain = cfg.outGain ?? 0.75;
+  const delays = cfg.delays || "40|90";
+  const decays = cfg.decays || "0.3|0.15";
+  return `${eff}_${inGain}_${outGain}_${delays}_${decays}`;
+}
+
+function getProvenanceSidecarPath(audioFilePath) {
+  return String(audioFilePath || "").replace(/\.[^.]+$/, ".json");
+}
+
+function hasDifferentVoiceInFilename(filePath, targetVoiceId) {
+  if (!filePath || !targetVoiceId) return false;
+  const base = path.basename(String(filePath));
+  for (const knownVoice of KNOWN_VOICE_IDS) {
+    if (knownVoice !== targetVoiceId && base.includes(knownVoice)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function invalidateContaminatedCacheFile(filePath, reason = "") {
+  if (!filePath) return;
+  cleanupTempFile(filePath);
+  cleanupTempFile(getProvenanceSidecarPath(filePath));
+  if (reason) {
+    console.warn(`[TTSService] 🧹 Invalidated unverified/contaminated cache entry (${reason}): ${path.basename(filePath)}`);
+  }
+}
+
+function writeAudioProvenance(audioFilePath, meta = {}) {
+  if (!audioFilePath || !fs.existsSync(audioFilePath)) return null;
+  const sidecarPath = getProvenanceSidecarPath(audioFilePath);
+  const contentSha256 = computeFileSha256(audioFilePath);
+  const payload = {
+    provenanceVersion: PROVENANCE_VERSION,
+    voiceId: meta.voiceId,
+    actualVoiceId: meta.actualVoiceId || meta.voiceId,
+    rawVoiceId: meta.rawVoiceId || meta.actualVoiceId || meta.voiceId,
+    textHash: meta.textHash || computeTextSha256(meta.text || ""),
+    text: cleanTextForTts(meta.text || ""),
+    pitch: String(meta.pitch || "+0Hz"),
+    rate: String(meta.rate || "+0%"),
+    originalSpeed: Number(meta.originalSpeed ?? 1.0),
+    appliedSpeed: Number(meta.appliedSpeed ?? 1.0),
+    speedCacheMode: String(meta.speedCacheMode || "raw"),
+    deliveryType: String(meta.deliveryType || "out_loud"),
+    audioEffect: String(meta.audioEffect || "none"),
+    effectConfigKey: String(meta.effectConfigKey || buildEffectConfigKey(meta.deliveryType, meta.audioEffect, meta.effectConfig)),
+    audioSignature: meta.audioSignature || null,
+    audioDurationSec: typeof meta.audioDurationSec === "number" ? meta.audioDurationSec : null,
+    contentSha256,
+    timestamp: Date.now(),
+  };
+  const tmpSidecar = `${sidecarPath}.tmp_${Date.now()}_${crypto.randomBytes(3).toString("hex")}`;
+  fs.writeFileSync(tmpSidecar, JSON.stringify(payload, null, 2), "utf8");
+  atomicCommitFile(tmpSidecar, sidecarPath);
+  return payload;
+}
+
+function verifyAudioFileProvenance(filePath, expected = {}, options = {}) {
+  if (!filePath || typeof filePath !== "string") {
+    return { valid: false, reason: "missing_path" };
+  }
+  const resolved = path.resolve(filePath);
+  if (options.uploadsDir) {
+    const resolvedBase = path.resolve(options.uploadsDir);
+    if (!resolved.startsWith(resolvedBase + path.sep) && resolved !== resolvedBase) {
+      return { valid: false, reason: "outside_uploads_dir" };
+    }
+  }
+  if (!fs.existsSync(resolved)) {
+    return { valid: false, reason: "file_missing" };
+  }
+  let stat;
+  try {
+    stat = fs.statSync(resolved);
+  } catch (_) {
+    return { valid: false, reason: "stat_failed" };
+  }
+  if (!stat || stat.size < 250) {
+    return { valid: false, reason: "file_too_small" };
+  }
+  if (expected.voiceId && hasDifferentVoiceInFilename(resolved, expected.voiceId)) {
+    return { valid: false, reason: "filename_voice_mismatch" };
+  }
+
+  const sidecarPath = getProvenanceSidecarPath(resolved);
+  if (!fs.existsSync(sidecarPath)) {
+    return { valid: false, reason: "missing_provenance_sidecar", isLegacy: true };
+  }
+
+  let meta;
+  try {
+    meta = JSON.parse(fs.readFileSync(sidecarPath, "utf8"));
+  } catch (_) {
+    return { valid: false, reason: "corrupt_provenance_sidecar", isLegacy: true };
+  }
+
+  if (!meta || Number(meta.provenanceVersion || 0) < PROVENANCE_VERSION) {
+    return { valid: false, reason: "legacy_provenance_version", isLegacy: true, meta };
+  }
+  if (expected.voiceId) {
+    if (meta.voiceId !== expected.voiceId || meta.actualVoiceId !== expected.voiceId) {
+      return { valid: false, reason: "voice_id_mismatch", meta };
+    }
+  }
+  if (expected.textHash && meta.textHash !== expected.textHash) {
+    return { valid: false, reason: "text_hash_mismatch", meta };
+  }
+  if (expected.pitch !== undefined && String(meta.pitch || "+0Hz") !== String(expected.pitch || "+0Hz")) {
+    return { valid: false, reason: "pitch_mismatch", meta };
+  }
+
+  if (expected.requireUnscaledBase) {
+    if (
+      Math.abs(Number(meta.originalSpeed ?? 0) - 1.0) > 0.005 ||
+      Math.abs(Number(meta.appliedSpeed ?? 0) - 1.0) > 0.005 ||
+      String(meta.rate || "+0%") !== "+0%" ||
+      meta.deliveryType !== "out_loud" ||
+      meta.effectConfigKey !== "clean"
+    ) {
+      return { valid: false, reason: "not_unscaled_clean_base", meta };
+    }
+  } else {
+    if (expected.deliveryType && meta.deliveryType !== expected.deliveryType) {
+      return { valid: false, reason: "delivery_type_mismatch", meta };
+    }
+    if (expected.effectConfigKey && meta.effectConfigKey !== expected.effectConfigKey) {
+      return { valid: false, reason: "effect_config_mismatch", meta };
+    }
+    if (expected.rate && String(meta.rate || "+0%") !== String(expected.rate || "+0%")) {
+      return { valid: false, reason: "rate_mismatch", meta };
+    }
+    if (expected.speedCacheMode && meta.speedCacheMode !== expected.speedCacheMode) {
+      return { valid: false, reason: "speed_mode_mismatch", meta };
+    }
+    if (expected.originalSpeed !== undefined) {
+      const metaOrig = Number(meta.originalSpeed ?? 1.0);
+      const expOrig = Number(expected.originalSpeed ?? 1.0);
+      if (!Number.isFinite(metaOrig) || !Number.isFinite(expOrig) || Math.abs(metaOrig - expOrig) > 0.01) {
+        return { valid: false, reason: "original_speed_mismatch", meta };
+      }
+    }
+  }
+
+  try {
+    const actualSha = computeFileSha256(resolved);
+    if (!meta.contentSha256 || meta.contentSha256 !== actualSha) {
+      return { valid: false, reason: "content_sha256_mismatch", meta };
+    }
+  } catch (_) {
+    return { valid: false, reason: "hash_read_failed", meta };
+  }
+
+  return { valid: true, meta };
+}
+
 /**
  * Compute unique content signature for the master narration track (Master Audio Content Signature).
  * Strictly incorporates segment IDs, ordering, audio files, startSec, audioOffset, and individual audio signatures.
@@ -407,6 +582,9 @@ async function synthesizeWithEdgeNeural(text, voiceId, outputPath, rate = "+0%",
       await tts.ttsPromise(cleanText, tempPath);
       await validateTtsAudioFile(tempPath);
       atomicCommitFile(tempPath, outputPath);
+      if (options._synthesisMeta && typeof options._synthesisMeta === "object") {
+        options._synthesisMeta.actualVoiceId = voiceId;
+      }
       succeeded = true;
       return outputPath;
     } catch (err1) {
@@ -434,6 +612,9 @@ async function synthesizeWithEdgeNeural(text, voiceId, outputPath, rate = "+0%",
 
         await validateTtsAudioFile(tempPath);
         atomicCommitFile(tempPath, outputPath);
+        if (options._synthesisMeta && typeof options._synthesisMeta === "object") {
+          options._synthesisMeta.actualVoiceId = voiceId;
+        }
         succeeded = true;
         return outputPath;
       } catch (err2) {
@@ -470,6 +651,9 @@ async function synthesizeWithEdgeNeural(text, voiceId, outputPath, rate = "+0%",
 
         await validateTtsAudioFile(tempPath);
         atomicCommitFile(tempPath, outputPath);
+        if (options._synthesisMeta && typeof options._synthesisMeta === "object") {
+          options._synthesisMeta.actualVoiceId = voiceId;
+        }
         succeeded = true;
         return outputPath;
       } catch (err3) {
@@ -506,6 +690,10 @@ async function synthesizeWithEdgeNeural(text, voiceId, outputPath, rate = "+0%",
     console.warn(`[TTS] ⚠️ Requested rate ${rate} (speed=${options.requestedSpeed ?? rate}) cannot be applied on Google Translate TTS Fallback`);
   }
   console.warn(`[TTSService] ⚠️ Edge TTS attempts exhausted (${lastError?.message}), using Google Translate TTS Fallback...`);
+  if (options._synthesisMeta && typeof options._synthesisMeta === "object") {
+    options._synthesisMeta.actualVoiceId = "google-km-standard";
+    options._synthesisMeta.usedGoogleFallback = true;
+  }
   return await synthesizeWithGoogleFallback(cleanText, outputPath, options);
 }
 
@@ -513,6 +701,9 @@ async function synthesizeWithEdgeNeural(text, voiceId, outputPath, rate = "+0%",
  * 2. បង្កើតសំឡេងតាមរយៈ Google Translate TTS Khmer (Fallback)
  */
 function synthesizeWithGoogleFallback(text, outputPath, options = {}) {
+  if (options._synthesisMeta && typeof options._synthesisMeta === "object" && !options._synthesisMeta.actualVoiceId) {
+    options._synthesisMeta.actualVoiceId = "google-km-standard";
+  }
   return new Promise((resolve, reject) => {
     const cleanText = cleanTextForTts(text).slice(0, 200);
     if (!cleanText) {
@@ -695,10 +886,23 @@ async function generateSingleSegmentAudio(segment, uploadsDir, options = {}) {
   const effectConfig = options.effectConfig || segment.effectConfig || { inGain: 0.85, outGain: 0.75, delays: "40|90", decays: "0.3|0.15" };
   const deliveryOverride = Boolean(options.deliveryOverride !== undefined ? options.deliveryOverride : segment.deliveryOverride);
 
-  // Compute exact cache key incorporating text, voiceId, deliveryType, effect settings, rate, and stretch mode
-  const effectKey = isThought ? `${audioEffect}_${effectConfig.delays || "40|90"}_${effectConfig.decays || "0.3|0.15"}` : "clean";
+  // Compute exact cache key & provenance incorporating text, voiceId, pitch, deliveryType, effectConfig, rate, and speed mode
+  const pitchStr = String(pitch || "+0Hz");
+  const textHash = computeTextSha256(textToSpeak);
+  const requestedOrigSpeed = Number(speedInfo.numericSpeed ?? 1.0);
+  const effectConfigKey = buildEffectConfigKey(deliveryType, audioEffect, effectConfig);
+  const effectKey = effectConfigKey;
   const speedCacheMode = hasExplicitUserSpeed ? "custom" : (effectiveAutoStretch ? "fit" : "raw");
-  const cacheKey = `${textToSpeak}__${voiceId}__${deliveryType}__${effectKey}__${rate}__${speedCacheMode}__lt1`;
+  const resolvedSpeedValueForSig = (sInfo, seg) => (
+    (sInfo.valid && sInfo.provided)
+      ? (typeof sInfo.requested === "string" && sInfo.requested.trim().toLowerCase() === "normal"
+        ? "normal"
+        : (sInfo.numericSpeed ?? 1.0))
+      : (seg.speed ?? "normal")
+  );
+  const resolvedSpeedValue = resolvedSpeedValueForSig(speedInfo, segment);
+  const pitchCacheTag = pitchStr !== "+0Hz" ? `__${pitchStr}` : "";
+  const cacheKey = `${textToSpeak}__${voiceId}__${deliveryType}__${effectKey}__${rate}__${speedCacheMode}__lt1${pitchCacheTag}`;
   const cacheHash = crypto.createHash("md5").update(cacheKey).digest("hex").substring(0, 8);
   const legacyRateHash = crypto.createHash("md5").update(`${textToSpeak}__${voiceId}__${deliveryType}__${effectKey}__${rate}__${speedCacheMode}`).digest("hex").substring(0, 8);
   const legacyBaseHash = crypto.createHash("md5").update(`${textToSpeak}__${voiceId}__${deliveryType}__${effectKey}`).digest("hex").substring(0, 8);
@@ -706,7 +910,17 @@ async function generateSingleSegmentAudio(segment, uploadsDir, options = {}) {
   let fileName = `${epPrefix}seg_${cleanId}_${voiceId}_${typeTag}_${cacheHash}.mp3`;
   let outputPath = path.join(uploadsDir, fileName);
 
-  const startSec = Number(segment.startSeconds ?? segment.startSec ?? parseTimeToSec(segment.start, 0));
+  const rawStartSec = Number(segment.startSeconds ?? segment.startSec ?? parseTimeToSec(segment.start, 0));
+  const preserveTrimFields = options.preserveTrim === true || (!options.forceRegen && options.preserveTrim !== false);
+  const preservedShiftedStart = (
+    preserveTrimFields &&
+    (segment.userShifted || segment.audioTrimmed || segment.userTrimmed) &&
+    typeof segment.audioStartSec === "number" &&
+    Number.isFinite(segment.audioStartSec)
+  )
+    ? segment.audioStartSec
+    : rawStartSec;
+  const startSec = rawStartSec;
   const endSec = Number(segment.endSeconds ?? segment.endSec ?? parseTimeToSec(segment.end, startSec + 2.5));
 
   // Explicit Three-Duration Model:
@@ -728,20 +942,53 @@ async function generateSingleSegmentAudio(segment, uploadsDir, options = {}) {
 
   let finalDuration = targetDuration;
   let originalDuration = targetDuration;
+  let naturalSpeechDuration = targetDuration;
   let appliedSpeed = hasExplicitUserSpeed ? (speedInfo.numericSpeed || 1.0) : 1.0;
   let usedCache = false;
-  let rawFilePath = segment.rawAudioPath && fs.existsSync(segment.rawAudioPath) ? segment.rawAudioPath : null;
+  let actualVoiceId = voiceId;
+  let voiceMatchesRequested = true;
+  let cacheProvMeta = null;
+
+  // Never trust segment.rawAudioPath without verifying matching voiceId, textHash, pitch, and unscaled 1.0x provenance
+  const rawPathProv = (
+    segment.rawAudioPath &&
+    (!segment.rawVoiceId || segment.rawVoiceId === voiceId)
+  )
+    ? verifyAudioFileProvenance(
+        segment.rawAudioPath,
+        { voiceId, textHash, pitch: pitchStr, requireUnscaledBase: true },
+        { uploadsDir }
+      )
+    : { valid: false, reason: "no_or_mismatch_raw_voice" };
+  let rawFilePath = rawPathProv.valid ? path.resolve(segment.rawAudioPath) : null;
   let rawFileName = rawFilePath ? path.basename(rawFilePath) : null;
 
-  // 1. Check if an exact cached version of this audio already exists and is valid
+  // 1. Check if an exact provenance-verified cached version of this audio already exists
   let cacheCandidatePath = null;
-  if (!options.forceRegen && fs.existsSync(outputPath) && fs.statSync(outputPath).size > 200) {
-    cacheCandidatePath = outputPath;
-  } else if (
-    !options.forceRegen &&
+  const outputProvExpected = {
+    voiceId,
+    textHash,
+    pitch: pitchStr,
+    rate,
+    originalSpeed: requestedOrigSpeed,
+    speedCacheMode,
+    deliveryType,
+    effectConfigKey,
+  };
+  if (!options.forceRegen && fs.existsSync(outputPath)) {
+    const outProv = verifyAudioFileProvenance(outputPath, outputProvExpected, { uploadsDir });
+    if (outProv.valid) {
+      cacheCandidatePath = outputPath;
+      cacheProvMeta = outProv.meta;
+    } else {
+      invalidateContaminatedCacheFile(outputPath, outProv.reason);
+    }
+  }
+  if (!cacheCandidatePath && !options.forceRegen &&
     !segment.audioOutdated &&
     segment.ttsStatus !== "pending" &&
     segment.ttsStatus !== "error" &&
+    segment.ttsStatus !== "voice_mismatch" &&
     segment.ttsStatus !== "generating" &&
     (!segment.ttsRate || segment.ttsRate === rate)
   ) {
@@ -749,94 +996,175 @@ async function generateSingleSegmentAudio(segment, uploadsDir, options = {}) {
     if (existingPrior) {
       const priorBase = path.basename(existingPrior);
       if (priorBase.includes(legacyRateHash) || priorBase.includes(legacyBaseHash)) {
-        cacheCandidatePath = existingPrior;
+        const priorProv = verifyAudioFileProvenance(existingPrior, outputProvExpected, { uploadsDir });
+        if (priorProv.valid) {
+          cacheCandidatePath = existingPrior;
+          cacheProvMeta = priorProv.meta;
+        }
       }
     }
   }
 
   if (cacheCandidatePath) {
     try {
-      const knownDur = (typeof segment.audioDuration === 'number' && segment.audioDuration > 0)
-        ? segment.audioDuration
-        : ((typeof segment.audioDurationSec === 'number' && segment.audioDurationSec > 0)
-          ? segment.audioDurationSec
-          : null);
-      const cachedDur = knownDur || (await getMediaDuration(cacheCandidatePath));
+      const cachedDur = (typeof cacheProvMeta?.audioDurationSec === "number" && cacheProvMeta.audioDurationSec > 0)
+        ? cacheProvMeta.audioDurationSec
+        : (await getMediaDuration(cacheCandidatePath));
       if (cachedDur && cachedDur > 0) {
         outputPath = cacheCandidatePath;
         fileName = path.basename(cacheCandidatePath);
         finalDuration = cachedDur;
         originalDuration = cachedDur;
+        naturalSpeechDuration = (typeof cacheProvMeta?.naturalAudioDuration === "number" && cacheProvMeta.naturalAudioDuration > 0)
+          ? cacheProvMeta.naturalAudioDuration
+          : cachedDur;
+        appliedSpeed = Number(cacheProvMeta?.appliedSpeed ?? appliedSpeed);
+        actualVoiceId = cacheProvMeta?.actualVoiceId || voiceId;
+        voiceMatchesRequested = actualVoiceId === voiceId;
         usedCache = true;
-        console.log(`[TTSService] ⚡ Reusing verified cached audio for segment #${segment.id || 'N/A'} (${deliveryType}, rate=${rate}): ${fileName}`);
+        console.log(`[TTSService] ⚡ Reusing provenance-verified cached audio for segment #${segment.id || 'N/A'} (${deliveryType}, voice=${actualVoiceId}, rate=${rate}): ${fileName}`);
       }
     } catch (_) { }
   }
 
   // 2. If not cached, synthesize and apply appropriate effect
-  if (!usedCache) {
-    // Immutable 1.0x natural base speech path for zero-TTS atempo scaling
-    const natural1xHash = crypto.createHash("md5").update(`${textToSpeak}__${voiceId}__natural1x`).digest("hex").substring(0, 8);
-    const natural1xFileName = `${epPrefix}seg_${cleanId}_${voiceId}_base1x_${natural1xHash}.mp3`;
-    const natural1xPath = path.join(uploadsDir, natural1xFileName);
+  const natural1xHash = crypto.createHash("md5").update(`${textToSpeak}__${voiceId}__natural1x${pitchCacheTag}`).digest("hex").substring(0, 8);
+  const natural1xFileName = `${epPrefix}seg_${cleanId}_${voiceId}_base1x_${natural1xHash}.mp3`;
+  const natural1xPath = path.join(uploadsDir, natural1xFileName);
+  const natural1xExpected = { voiceId, textHash, pitch: pitchStr, requireUnscaledBase: true };
 
-    // Pre-populate natural1xPath from existing unscaled 1.0x clean speech on disk if available
-    if (!fs.existsSync(natural1xPath) || fs.statSync(natural1xPath).size < 200) {
-      if (segment.rawAudioPath && fs.existsSync(segment.rawAudioPath) && fs.statSync(segment.rawAudioPath).size > 200) {
-        try { fs.copyFileSync(segment.rawAudioPath, natural1xPath); } catch (_) {}
+  // Validate existing natural1xPath against strict provenance; invalidate if contaminated/legacy
+  if (fs.existsSync(natural1xPath)) {
+    const natCheck = verifyAudioFileProvenance(natural1xPath, natural1xExpected, { uploadsDir });
+    if (!natCheck.valid) {
+      invalidateContaminatedCacheFile(natural1xPath, `base1x:${natCheck.reason}`);
+    }
+  }
+
+  if (!usedCache) {
+    // Pre-populate natural1xPath ONLY from provenance-verified 1.0x clean speech of the EXACT same voiceId/text/pitch
+    if (!fs.existsSync(natural1xPath)) {
+      let verifiedSource1x = null;
+      let verifiedSourceDur = null;
+      if (rawFilePath && rawPathProv.valid) {
+        verifiedSource1x = rawFilePath;
+        verifiedSourceDur = rawPathProv.meta?.audioDurationSec ?? null;
       } else {
-        const clean1xHash = crypto.createHash("md5").update(`${textToSpeak}__${voiceId}__out_loud__clean__+0%__raw__lt1`).digest("hex").substring(0, 8);
+        const clean1xHash = crypto.createHash("md5").update(`${textToSpeak}__${voiceId}__out_loud__clean__+0%__raw__lt1${pitchCacheTag}`).digest("hex").substring(0, 8);
         const clean1xCandidate = path.join(uploadsDir, `${epPrefix}seg_${cleanId}_${voiceId}_voice_${clean1xHash}.mp3`);
-        if (fs.existsSync(clean1xCandidate) && fs.statSync(clean1xCandidate).size > 200) {
-          try { fs.copyFileSync(clean1xCandidate, natural1xPath); } catch (_) {}
+        if (fs.existsSync(clean1xCandidate)) {
+          const cleanCheck = verifyAudioFileProvenance(clean1xCandidate, natural1xExpected, { uploadsDir });
+          if (cleanCheck.valid) {
+            verifiedSource1x = clean1xCandidate;
+            verifiedSourceDur = cleanCheck.meta?.audioDurationSec ?? null;
+          } else {
+            invalidateContaminatedCacheFile(clean1xCandidate, `clean1x:${cleanCheck.reason}`);
+          }
+        }
+      }
+      if (verifiedSource1x) {
+        try {
+          fs.copyFileSync(verifiedSource1x, natural1xPath);
+          writeAudioProvenance(natural1xPath, {
+            voiceId,
+            actualVoiceId: voiceId,
+            rawVoiceId: voiceId,
+            text: textToSpeak,
+            textHash,
+            pitch: pitchStr,
+            rate: "+0%",
+            originalSpeed: 1.0,
+            appliedSpeed: 1.0,
+            speedCacheMode: "raw",
+            deliveryType: "out_loud",
+            audioEffect: "none",
+            effectConfigKey: "clean",
+            audioDurationSec: verifiedSourceDur,
+          });
+        } catch (_) {
+          invalidateContaminatedCacheFile(natural1xPath);
         }
       }
     }
 
     if (isThought) {
       // Step A: Ensure valid clean speech base exists
-      const rawHash = crypto.createHash("md5").update(`${textToSpeak}__${voiceId}__raw__${rate}__${speedCacheMode}__lt1`).digest("hex").substring(0, 8);
+      const rawHash = crypto.createHash("md5").update(`${textToSpeak}__${voiceId}__raw__${rate}__${speedCacheMode}__lt1${pitchCacheTag}`).digest("hex").substring(0, 8);
       rawFileName = `${epPrefix}seg_${cleanId}_${voiceId}_raw_${rawHash}.mp3`;
       rawFilePath = path.join(uploadsDir, rawFileName);
 
       // Deterministic clean out_loud file name for this exact text and voice
-      const cleanCacheKey = `${textToSpeak}__${voiceId}__out_loud__clean__${rate}__${speedCacheMode}__lt1`;
+      const cleanCacheKey = `${textToSpeak}__${voiceId}__out_loud__clean__${rate}__${speedCacheMode}__lt1${pitchCacheTag}`;
       const cleanHash = crypto.createHash("md5").update(cleanCacheKey).digest("hex").substring(0, 8);
       const cleanVoiceFileName = `${epPrefix}seg_${cleanId}_${voiceId}_voice_${cleanHash}.mp3`;
       const cleanVoiceFilePath = path.join(uploadsDir, cleanVoiceFileName);
 
-      // Re-use existing clean speech audio if already available on disk (0 new Edge TTS synthesis)
-      if (!options.forceRegen && (!fs.existsSync(rawFilePath) || fs.statSync(rawFilePath).size < 200)) {
-        if (fs.existsSync(natural1xPath) && fs.statSync(natural1xPath).size > 200) {
+      // Invalidate any unverified/legacy rawFilePath before checking reuse
+      if (fs.existsSync(rawFilePath)) {
+        const rawCheck = verifyAudioFileProvenance(rawFilePath, natural1xExpected, { uploadsDir });
+        if (!rawCheck.valid) {
+          invalidateContaminatedCacheFile(rawFilePath, `thought_raw:${rawCheck.reason}`);
+        }
+      }
+
+      // Re-use existing verified 1.0x clean speech audio of the SAME voiceId if available on disk
+      let hasVerifiedThoughtBase = Boolean(
+        !options.forceRegen &&
+        fs.existsSync(rawFilePath) &&
+        verifyAudioFileProvenance(rawFilePath, natural1xExpected, { uploadsDir }).valid
+      );
+
+      if (!options.forceRegen && !hasVerifiedThoughtBase) {
+        const natCheck = fs.existsSync(natural1xPath)
+          ? verifyAudioFileProvenance(natural1xPath, natural1xExpected, { uploadsDir })
+          : { valid: false };
+        if (natCheck.valid) {
           try {
             fs.copyFileSync(natural1xPath, rawFilePath);
-            console.log(`[TTSService] ⚡ Reused natural 1.0x base audio for thought effect: ${natural1xFileName}`);
+            writeAudioProvenance(rawFilePath, { ...natCheck.meta, voiceId, actualVoiceId: voiceId, rawVoiceId: voiceId });
+            hasVerifiedThoughtBase = true;
+            console.log(`[TTSService] ⚡ Reused verified natural 1.0x base audio for thought effect: ${natural1xFileName}`);
           } catch (_) {}
-        } else if (fs.existsSync(cleanVoiceFilePath) && fs.statSync(cleanVoiceFilePath).size > 200) {
-          try {
-            fs.copyFileSync(cleanVoiceFilePath, rawFilePath);
-            console.log(`[TTSService] ⚡ Reused existing clean voice audio as raw base for thought effect: ${cleanVoiceFileName}`);
-          } catch (_) {}
-        } else if (segment.rawAudioPath && fs.existsSync(segment.rawAudioPath) && fs.statSync(segment.rawAudioPath).size > 200) {
+        } else if (fs.existsSync(cleanVoiceFilePath)) {
+          const cleanCheck = verifyAudioFileProvenance(cleanVoiceFilePath, natural1xExpected, { uploadsDir });
+          if (cleanCheck.valid) {
+            try {
+              fs.copyFileSync(cleanVoiceFilePath, rawFilePath);
+              writeAudioProvenance(rawFilePath, { ...cleanCheck.meta, voiceId, actualVoiceId: voiceId, rawVoiceId: voiceId });
+              hasVerifiedThoughtBase = true;
+              console.log(`[TTSService] ⚡ Reused verified clean voice audio as raw base for thought effect: ${cleanVoiceFileName}`);
+            } catch (_) {}
+          }
+        } else if (rawPathProv.valid && segment.rawAudioPath) {
           try {
             fs.copyFileSync(segment.rawAudioPath, rawFilePath);
-            console.log(`[TTSService] ⚡ Reused segment.rawAudioPath as raw base for thought effect`);
+            writeAudioProvenance(rawFilePath, { ...rawPathProv.meta, voiceId, actualVoiceId: voiceId, rawVoiceId: voiceId });
+            hasVerifiedThoughtBase = true;
+            console.log(`[TTSService] ⚡ Reused verified segment.rawAudioPath as raw base for thought effect`);
           } catch (_) {}
         }
       }
 
-      if (options.forceRegen || !fs.existsSync(rawFilePath) || fs.statSync(rawFilePath).size < 200) {
+      if (options.forceRegen || !hasVerifiedThoughtBase) {
         // Always synthesize natural 1.0x speech (+0%) so exact speed is applied once via FFmpeg atempo (zero stacking/prosody drift)
+        const synthMeta = {};
         try {
           if (voiceId === "google-km-standard") {
-            await synthesizeWithGoogleFallback(textToSpeak, rawFilePath);
+            await synthesizeWithGoogleFallback(textToSpeak, rawFilePath, { _synthesisMeta: synthMeta });
+            actualVoiceId = "google-km-standard";
           } else {
-            await synthesizeWithEdgeNeural(textToSpeak, voiceId, rawFilePath, "+0%", pitch, { requestedSpeed: speedInfo.requested });
+            await synthesizeWithEdgeNeural(textToSpeak, voiceId, rawFilePath, "+0%", pitchStr, {
+              requestedSpeed: speedInfo.requested,
+              _synthesisMeta: synthMeta,
+            });
+            actualVoiceId = synthMeta.actualVoiceId || voiceId;
           }
         } catch (edgeErr) {
           console.warn(`[TTSService] ⚠️ Edge TTS failed for raw thought base #${segment.id}, using Google TTS: ${edgeErr.message}`);
-          await synthesizeWithGoogleFallback(textToSpeak, rawFilePath);
+          await synthesizeWithGoogleFallback(textToSpeak, rawFilePath, { _synthesisMeta: synthMeta });
+          actualVoiceId = "google-km-standard";
         }
+        voiceMatchesRequested = actualVoiceId === voiceId;
 
         // Strip Edge TTS ~200ms leading & ~800ms trailing dead silence immediately after synthesis
         if (fs.existsSync(rawFilePath)) {
@@ -847,9 +1175,27 @@ async function generateSingleSegmentAudio(segment, uploadsDir, options = {}) {
           }
         }
 
-        // Save a clean copy of trimmed 1.0x speech to natural1xPath
-        if (fs.existsSync(rawFilePath) && (!fs.existsSync(natural1xPath) || fs.statSync(natural1xPath).size < 200)) {
-          try { fs.copyFileSync(rawFilePath, natural1xPath); } catch (_) {}
+        const natThoughtDur = fs.existsSync(rawFilePath) ? (await getMediaDuration(rawFilePath)) : null;
+        if (voiceMatchesRequested && fs.existsSync(rawFilePath) && fs.statSync(rawFilePath).size >= 250) {
+          try {
+            fs.copyFileSync(rawFilePath, natural1xPath);
+            writeAudioProvenance(natural1xPath, {
+              voiceId,
+              actualVoiceId,
+              rawVoiceId: actualVoiceId,
+              text: textToSpeak,
+              textHash,
+              pitch: pitchStr,
+              rate: "+0%",
+              originalSpeed: 1.0,
+              appliedSpeed: 1.0,
+              speedCacheMode: "raw",
+              deliveryType: "out_loud",
+              audioEffect: "none",
+              effectConfigKey: "clean",
+              audioDurationSec: natThoughtDur,
+            });
+          } catch (_) {}
         }
       }
 
@@ -885,38 +1231,82 @@ async function generateSingleSegmentAudio(segment, uploadsDir, options = {}) {
       });
 
       finalDuration = effectRes.duration;
-      originalDuration = await getMediaDuration(rawFilePath) || finalDuration;
+      originalDuration = finalDuration;
+      naturalSpeechDuration = (fs.existsSync(natural1xPath) ? await getMediaDuration(natural1xPath) : null)
+        || (fs.existsSync(rawFilePath) ? await getMediaDuration(rawFilePath) : null)
+        || finalDuration;
+      if (voiceMatchesRequested && fs.existsSync(outputPath)) {
+        writeAudioProvenance(outputPath, {
+          voiceId,
+          actualVoiceId,
+          rawVoiceId: actualVoiceId,
+          text: textToSpeak,
+          textHash,
+          pitch: pitchStr,
+          rate,
+          originalSpeed: requestedOrigSpeed,
+          appliedSpeed,
+          speedCacheMode,
+          deliveryType,
+          audioEffect,
+          effectConfigKey,
+          effectConfig,
+          audioSignature: computeSegmentAudioSignature(textToSpeak, voiceId, resolvedSpeedValueForSig(speedInfo, segment), pitchStr),
+          audioDurationSec: finalDuration,
+          naturalAudioDuration: naturalSpeechDuration,
+        });
+      } else if (!voiceMatchesRequested) {
+        invalidateContaminatedCacheFile(outputPath, `voice_mismatch_requested_${voiceId}_got_${actualVoiceId}`);
+        invalidateContaminatedCacheFile(rawFilePath);
+      }
+      rawFilePath = (voiceMatchesRequested && fs.existsSync(natural1xPath)) ? natural1xPath : null;
+      rawFileName = rawFilePath ? path.basename(rawFilePath) : null;
     } else {
-      // Normal spoken dialogue — check if clean 1.0x speech already exists in natural1xPath
+      // Normal spoken dialogue — check if clean 1.0x speech already exists in provenance-verified natural1xPath
       let reusedNatural1x = false;
       if (!options.forceRegen) {
-        if (fs.existsSync(natural1xPath) && fs.statSync(natural1xPath).size > 200) {
+        const natCheck = fs.existsSync(natural1xPath)
+          ? verifyAudioFileProvenance(natural1xPath, natural1xExpected, { uploadsDir })
+          : { valid: false };
+        if (natCheck.valid) {
           try {
             fs.copyFileSync(natural1xPath, outputPath);
             reusedNatural1x = true;
+            actualVoiceId = natCheck.meta.actualVoiceId || voiceId;
+            voiceMatchesRequested = actualVoiceId === voiceId;
             console.log(`[TTSService] ⚡ Reused verified natural 1.0x base speech for segment #${segment.id} (${fileName})`);
           } catch (_) {}
-        } else if (segment.rawAudioPath && fs.existsSync(segment.rawAudioPath) && fs.statSync(segment.rawAudioPath).size > 200) {
+        } else if (rawPathProv.valid && segment.rawAudioPath) {
           try {
             fs.copyFileSync(segment.rawAudioPath, outputPath);
             reusedNatural1x = true;
-            console.log(`[TTSService] ⚡ Reused segment.rawAudioPath for out_loud dialogue`);
+            actualVoiceId = rawPathProv.meta.actualVoiceId || voiceId;
+            voiceMatchesRequested = actualVoiceId === voiceId;
+            console.log(`[TTSService] ⚡ Reused verified segment.rawAudioPath for out_loud dialogue`);
           } catch (_) {}
         }
       }
 
       if (!reusedNatural1x) {
         // Synthesize natural 1.0x speech (+0%) via Edge TTS
+        const synthMeta = {};
         try {
           if (voiceId === "google-km-standard") {
-            await synthesizeWithGoogleFallback(textToSpeak, outputPath);
+            await synthesizeWithGoogleFallback(textToSpeak, outputPath, { _synthesisMeta: synthMeta });
+            actualVoiceId = "google-km-standard";
           } else {
-            await synthesizeWithEdgeNeural(textToSpeak, voiceId, outputPath, "+0%", pitch, { requestedSpeed: speedInfo.requested });
+            await synthesizeWithEdgeNeural(textToSpeak, voiceId, outputPath, "+0%", pitchStr, {
+              requestedSpeed: speedInfo.requested,
+              _synthesisMeta: synthMeta,
+            });
+            actualVoiceId = synthMeta.actualVoiceId || voiceId;
           }
         } catch (edgeErr) {
           console.warn(`[TTSService] ⚠️ Edge TTS failed for segment #${segment.id}, using Google TTS: ${edgeErr.message}`);
-          await synthesizeWithGoogleFallback(textToSpeak, outputPath);
+          await synthesizeWithGoogleFallback(textToSpeak, outputPath, { _synthesisMeta: synthMeta });
+          actualVoiceId = "google-km-standard";
         }
+        voiceMatchesRequested = actualVoiceId === voiceId;
 
         // Verify generated audio file existence and non-zero size
         if (!fs.existsSync(outputPath) || fs.statSync(outputPath).size < 200) {
@@ -927,39 +1317,62 @@ async function generateSingleSegmentAudio(segment, uploadsDir, options = {}) {
         }
 
         // Always trim Edge TTS dead ~200ms leading & ~800ms trailing padding before duration measurement / slot fit
-        let trimRes = null;
         try {
-          trimRes = await trimTtsSilence(outputPath, { leadInCushionSec: 0.025, leadOutCushionSec: 0.060, microFadeMs: 8 });
+          await trimTtsSilence(outputPath, { leadInCushionSec: 0.025, leadOutCushionSec: 0.060, microFadeMs: 8 });
         } catch (trimErr) {
           console.warn(`[TTSService] ⚠️ trimTtsSilence warning: ${trimErr.message}`);
         }
 
-        // Save a clean copy of trimmed 1.0x natural speech as immutable natural1xPath
-        if (fs.existsSync(outputPath) && (!fs.existsSync(natural1xPath) || fs.statSync(natural1xPath).size < 200)) {
+        const natOutDur = await getMediaDuration(outputPath);
+        // Save a clean copy of trimmed 1.0x natural speech as immutable natural1xPath ONLY when voice matches requested voiceId
+        if (voiceMatchesRequested && fs.existsSync(outputPath)) {
           try {
             fs.copyFileSync(outputPath, natural1xPath);
+            writeAudioProvenance(natural1xPath, {
+              voiceId,
+              actualVoiceId,
+              rawVoiceId: actualVoiceId,
+              text: textToSpeak,
+              textHash,
+              pitch: pitchStr,
+              rate: "+0%",
+              originalSpeed: 1.0,
+              appliedSpeed: 1.0,
+              speedCacheMode: "raw",
+              deliveryType: "out_loud",
+              audioEffect: "none",
+              effectConfigKey: "clean",
+              audioDurationSec: natOutDur || null,
+            });
           } catch (_) {}
         }
       }
 
+      if (!voiceMatchesRequested) {
+        invalidateContaminatedCacheFile(outputPath, `voice_mismatch_requested_${voiceId}_got_${actualVoiceId}`);
+      }
+
       // outputPath now contains unscaled 1.0x natural speech; apply exact user speed or autoStretch
-      const naturalDuration = (await getMediaDuration(outputPath)) || targetDuration;
+      const naturalDuration = voiceMatchesRequested ? ((await getMediaDuration(outputPath)) || targetDuration) : 0;
+      naturalSpeechDuration = naturalDuration;
       originalDuration = naturalDuration;
       finalDuration = naturalDuration;
 
-      if (hasExplicitUserSpeed && fs.existsSync(outputPath)) {
+      if (voiceMatchesRequested && hasExplicitUserSpeed && fs.existsSync(outputPath)) {
         // Explicit User Speed: ALWAYS apply FFmpeg atempo ONCE on natural 1.0x speech (never stacks!)
         const exactTargetSpeed = Number(speedInfo.numericSpeed || 1.0);
         if (Math.abs(exactTargetSpeed - 1.0) > 0.001) {
           const exactRes = await applyExactAudioSpeed(outputPath, exactTargetSpeed);
           finalDuration = exactRes.finalDuration;
+          originalDuration = exactRes.finalDuration;
           appliedSpeed = exactRes.appliedSpeed;
         } else {
           finalDuration = naturalDuration;
+          originalDuration = naturalDuration;
           appliedSpeed = 1.0;
         }
         console.log(`[TTS] Segment #${segment.id || 'N/A'} explicit user speed (natural=${naturalDuration.toFixed(3)}s -> final=${finalDuration.toFixed(3)}s, atempo=${appliedSpeed}x)`);
-      } else if (effectiveAutoStretch && fs.existsSync(outputPath)) {
+      } else if (voiceMatchesRequested && effectiveAutoStretch && fs.existsSync(outputPath)) {
         const MIN_COLLISION_SAFETY_MARGIN_SEC = 0.100;
         const safeSlotTarget = Math.max(0.20, parseFloat((availableSlotDuration - MIN_COLLISION_SAFETY_MARGIN_SEC).toFixed(3)));
 
@@ -1008,7 +1421,7 @@ async function generateSingleSegmentAudio(segment, uploadsDir, options = {}) {
               currentDuration: naturalDuration,
             });
             finalDuration = stretchResult.finalDuration;
-            originalDuration = stretchResult.originalDuration;
+            originalDuration = stretchResult.finalDuration;
             appliedSpeed = stretchResult.appliedSpeed;
           } catch (_) { }
         } else {
@@ -1016,18 +1429,40 @@ async function generateSingleSegmentAudio(segment, uploadsDir, options = {}) {
           originalDuration = naturalDuration;
           appliedSpeed = 1.0;
         }
-      } else {
+      } else if (voiceMatchesRequested) {
         finalDuration = naturalDuration;
         originalDuration = naturalDuration;
         appliedSpeed = 1.0;
       }
 
-      rawFilePath = natural1xPath;
-      rawFileName = path.basename(natural1xPath);
+      if (voiceMatchesRequested && fs.existsSync(outputPath)) {
+        writeAudioProvenance(outputPath, {
+          voiceId,
+          actualVoiceId,
+          rawVoiceId: actualVoiceId,
+          text: textToSpeak,
+          textHash,
+          pitch: pitchStr,
+          rate,
+          originalSpeed: requestedOrigSpeed,
+          appliedSpeed,
+          speedCacheMode,
+          deliveryType,
+          audioEffect,
+          effectConfigKey,
+          effectConfig,
+          audioSignature: computeSegmentAudioSignature(textToSpeak, voiceId, resolvedSpeedValueForSig(speedInfo, segment), pitchStr),
+          audioDurationSec: finalDuration,
+          naturalAudioDuration: naturalSpeechDuration,
+        });
+      }
+
+      rawFilePath = (voiceMatchesRequested && fs.existsSync(natural1xPath)) ? natural1xPath : null;
+      rawFileName = rawFilePath ? path.basename(rawFilePath) : null;
     }
 
-    // Verify final output audio
-    if (!fs.existsSync(outputPath) || fs.statSync(outputPath).size < 200) {
+    // Verify final output audio when requested voice succeeded
+    if (voiceMatchesRequested && (!fs.existsSync(outputPath) || fs.statSync(outputPath).size < 200)) {
       throw new Error(`Audio generation failed to produce valid audio file for segment #${segment.id || 'unknown'}`);
     }
   }
@@ -1058,10 +1493,30 @@ async function generateSingleSegmentAudio(segment, uploadsDir, options = {}) {
           (baseName.includes("_voice_") && isThought) ||
           (baseName.includes("_thought_") && !isThought)
         );
-        const isSpeedVariant = (
-          (baseName.includes("_voice_") && !isThought) ||
-          (baseName.includes("_thought_") && isThought)
-        );
+        let isVerifiedSpeedVariant = false;
+        if (
+          !options.forceRegen &&
+          ((baseName.includes("_voice_") && !isThought) || (baseName.includes("_thought_") && isThought))
+        ) {
+          try {
+            const priorSidecarPath = resolvedPrior.replace(/\.[^.]+$/, ".json");
+            if (fs.existsSync(priorSidecarPath)) {
+              const priorMeta = JSON.parse(fs.readFileSync(priorSidecarPath, "utf8"));
+              if (
+                priorMeta &&
+                Number(priorMeta.provenanceVersion || 0) >= PROVENANCE_VERSION &&
+                priorMeta.textHash === textHash &&
+                priorMeta.voiceId === voiceId &&
+                (priorMeta.actualVoiceId || priorMeta.voiceId) === voiceId &&
+                (priorMeta.deliveryType || "out_loud") === deliveryType &&
+                (priorMeta.effectConfigKey || "clean") === effectConfigKey &&
+                String(priorMeta.pitch || "+0Hz") === String(pitchStr || "+0Hz")
+              ) {
+                isVerifiedSpeedVariant = true;
+              }
+            }
+          } catch (_) { }
+        }
         const isBase1xFile = baseName.includes("_base1x_");
         if (
           (baseName.startsWith(expectedPrefix) || (!epPrefix && baseName.startsWith(`seg_${cleanId}_`))) &&
@@ -1070,9 +1525,13 @@ async function generateSingleSegmentAudio(segment, uploadsDir, options = {}) {
           !isBase1xFile &&
           !isOtherVoiceVariant &&
           !isOtherDeliveryVariant &&
-          !isSpeedVariant
+          !isVerifiedSpeedVariant
         ) {
           fs.unlinkSync(resolvedPrior);
+          const staleSidecarPath = resolvedPrior.replace(/\.[^.]+$/, ".json");
+          if (fs.existsSync(staleSidecarPath)) {
+            try { fs.unlinkSync(staleSidecarPath); } catch (_) { }
+          }
         }
       } catch (_) { }
     }
@@ -1082,18 +1541,24 @@ async function generateSingleSegmentAudio(segment, uploadsDir, options = {}) {
   const uploadsRoot = path.resolve(__dirname, "..", "uploads");
   const relPath = path.relative(uploadsRoot, outputPath).replace(/\\/g, "/");
   const cacheBustTime = Date.now();
-  const calculatedAudioUrl = `/uploads/${relPath}?t=${cacheBustTime}`;
+  const calculatedAudioUrl = voiceMatchesRequested ? `/uploads/${relPath}?t=${cacheBustTime}` : null;
 
-  console.log(`[TTSService] 🎙️ Verified valid audio for segment #${segment.id || 'N/A'} [${deliveryType}]:`, {
-    file: fileName,
-    sizeBytes: fs.statSync(outputPath).size,
-    durationSec: finalDuration,
-    rate,
-    appliedSpeed,
-    userCustomSpeed: hasExplicitUserSpeed,
-    effect: audioEffect,
-    audioUrl: calculatedAudioUrl,
-  });
+  if (voiceMatchesRequested) {
+    console.log(`[TTSService] 🎙️ Verified valid audio for segment #${segment.id || 'N/A'} [${deliveryType}]:`, {
+      file: fileName,
+      sizeBytes: fs.existsSync(outputPath) ? fs.statSync(outputPath).size : 0,
+      durationSec: finalDuration,
+      rate,
+      appliedSpeed,
+      userCustomSpeed: hasExplicitUserSpeed,
+      effect: audioEffect,
+      voiceId,
+      actualVoiceId,
+      audioUrl: calculatedAudioUrl,
+    });
+  } else {
+    console.error(`[TTSService] ❌ Voice mismatch for segment #${segment.id || 'N/A'}: requested=${voiceId}, actual=${actualVoiceId}`);
+  }
 
   const incomingGender = segment.voiceGender || segment.gender;
   const isUnknown = incomingGender === "unknown" || incomingGender === "UNKNOWN";
@@ -1102,11 +1567,6 @@ async function generateSingleSegmentAudio(segment, uploadsDir, options = {}) {
     ? (typeof segment.genderConfidence === "number" ? segment.genderConfidence : null)
     : (typeof segment.genderConfidence === "number" ? segment.genderConfidence : 1.0);
   const resolvedKhmer = segment.khmer || segment.khmerText || segment.khmerTranslatedText || textToSpeak;
-  const resolvedSpeedValue = (speedInfo.valid && speedInfo.provided)
-    ? (typeof speedInfo.requested === "string" && speedInfo.requested.trim().toLowerCase() === "normal"
-      ? "normal"
-      : (speedInfo.numericSpeed ?? 1.0))
-    : (segment.speed ?? "normal");
 
   const existingVariants = (segment.voiceAudioVariants && typeof segment.voiceAudioVariants === "object")
     ? { ...segment.voiceAudioVariants }
@@ -1114,35 +1574,72 @@ async function generateSingleSegmentAudio(segment, uploadsDir, options = {}) {
   const otherVoice = voiceId.includes("Piseth") ? "km-KH-SreymomNeural" : "km-KH-PisethNeural";
   const updatedVariants = {
     ...existingVariants,
-    [voiceId]: {
-      voiceId: voiceId,
-      audioUrl: calculatedAudioUrl,
-      audioFile: fileName,
-      audioPath: outputPath,
-      audioDurationSec: finalDuration,
-      speed: resolvedSpeedValue,
-      text: resolvedKhmer,
-      timestamp: Date.now(),
-    },
+    ...(voiceMatchesRequested && calculatedAudioUrl ? {
+      [voiceId]: {
+        voiceId: voiceId,
+        actualVoiceId: actualVoiceId,
+        audioUrl: calculatedAudioUrl,
+        audioFile: fileName,
+        audioPath: outputPath,
+        audioDurationSec: finalDuration,
+        speed: resolvedSpeedValue,
+        pitch: pitchStr,
+        deliveryType,
+        audioEffect,
+        effectConfig: isThought ? effectConfig : null,
+        effectConfigKey,
+        text: resolvedKhmer,
+        textHash,
+        provenanceVerified: true,
+        timestamp: Date.now(),
+      },
+    } : {}),
   };
 
-  // Auto-discover if the other voice variant already exists in uploadsDir
-  if (!updatedVariants[otherVoice] && uploadsDir && fs.existsSync(uploadsDir)) {
+  // Auto-discover the other voice variant ONLY if its provenance sidecar passes strict verification
+  if (!updatedVariants[otherVoice]?.provenanceVerified && uploadsDir && fs.existsSync(uploadsDir)) {
     try {
       const prefix = `${epPrefix}seg_${cleanId}_${otherVoice}_`;
       const files = fs.readdirSync(uploadsDir);
-      const match = files.find((f) => f.startsWith(prefix) && f.endsWith(".mp3") && !f.includes("_raw_"));
-      if (match) {
+      for (const match of files) {
+        if (!match.startsWith(prefix) || !match.endsWith(".mp3") || match.includes("_raw_") || match.includes("_base1x_")) continue;
         const otherPath = path.join(uploadsDir, match);
-        const otherRel = path.relative(uploadsRoot, otherPath).replace(/\\/g, "/");
-        updatedVariants[otherVoice] = {
-          voiceId: otherVoice,
-          audioUrl: `/uploads/${otherRel}`,
-          audioFile: match,
-          audioPath: otherPath,
-          text: resolvedKhmer,
-          timestamp: Date.now(),
-        };
+        const otherProv = verifyAudioFileProvenance(
+          otherPath,
+          {
+            voiceId: otherVoice,
+            textHash,
+            pitch: pitchStr,
+            rate,
+            originalSpeed: requestedOrigSpeed,
+            speedCacheMode,
+            deliveryType,
+            effectConfigKey,
+          },
+          { uploadsDir }
+        );
+        if (otherProv.valid) {
+          const otherRel = path.relative(uploadsRoot, otherPath).replace(/\\/g, "/");
+          updatedVariants[otherVoice] = {
+            voiceId: otherVoice,
+            actualVoiceId: otherProv.meta.actualVoiceId || otherVoice,
+            audioUrl: `/uploads/${otherRel}`,
+            audioFile: match,
+            audioPath: otherPath,
+            audioDurationSec: otherProv.meta.audioDurationSec || null,
+            speed: resolvedSpeedValue,
+            pitch: pitchStr,
+            deliveryType,
+            audioEffect,
+            effectConfig: isThought ? effectConfig : null,
+            effectConfigKey,
+            text: resolvedKhmer,
+            textHash,
+            provenanceVerified: true,
+            timestamp: Date.now(),
+          };
+          break;
+        }
       }
     } catch (_) {}
   }
@@ -1154,45 +1651,84 @@ async function generateSingleSegmentAudio(segment, uploadsDir, options = {}) {
   const otherDelivery = isThought ? "out_loud" : "inner_thought";
   const updatedDeliveryVariants = {
     ...existingDeliveryVariants,
-    [deliveryType]: {
-      deliveryType,
-      audioEffect,
-      audioUrl: calculatedAudioUrl,
-      audioFile: fileName,
-      audioPath: outputPath,
-      audioDurationSec: finalDuration,
-      voiceId,
-      speed: resolvedSpeedValue,
-      text: resolvedKhmer,
-      timestamp: Date.now(),
-    },
+    ...(voiceMatchesRequested && calculatedAudioUrl ? {
+      [deliveryType]: {
+        deliveryType,
+        audioEffect,
+        effectConfig: isThought ? effectConfig : null,
+        effectConfigKey,
+        audioUrl: calculatedAudioUrl,
+        audioFile: fileName,
+        audioPath: outputPath,
+        audioDurationSec: finalDuration,
+        voiceId,
+        actualVoiceId,
+        speed: resolvedSpeedValue,
+        pitch: pitchStr,
+        text: resolvedKhmer,
+        textHash,
+        provenanceVerified: true,
+        timestamp: Date.now(),
+      },
+    } : {}),
   };
 
-  // Auto-discover if the other delivery variant already exists on disk
-  if (!updatedDeliveryVariants[otherDelivery] && uploadsDir && fs.existsSync(uploadsDir)) {
+  // Auto-discover the other delivery variant ONLY if its provenance sidecar passes strict verification
+  if (!updatedDeliveryVariants[otherDelivery]?.provenanceVerified && uploadsDir && fs.existsSync(uploadsDir)) {
     try {
       const otherTag = isThought ? "voice" : "thought";
+      const otherEffect = otherDelivery === "inner_thought" ? "inner_thought_reverb" : "none";
+      const otherEffectKey = buildEffectConfigKey(otherDelivery, otherEffect, otherDelivery === "inner_thought" ? effectConfig : null);
       const prefix = `${epPrefix}seg_${cleanId}_${voiceId}_${otherTag}_`;
       const files = fs.readdirSync(uploadsDir);
-      const match = files.find((f) => f.startsWith(prefix) && f.endsWith(".mp3") && !f.includes("_raw_"));
-      if (match) {
+      for (const match of files) {
+        if (!match.startsWith(prefix) || !match.endsWith(".mp3") || match.includes("_raw_") || match.includes("_base1x_")) continue;
         const otherPath = path.join(uploadsDir, match);
-        const otherRel = path.relative(uploadsRoot, otherPath).replace(/\\/g, "/");
-        const otherDur = (await getMediaDuration(otherPath)) || finalDuration;
-        updatedDeliveryVariants[otherDelivery] = {
-          deliveryType: otherDelivery,
-          audioEffect: otherDelivery === "inner_thought" ? "inner_thought_reverb" : "none",
-          audioUrl: `/uploads/${otherRel}`,
-          audioFile: match,
-          audioPath: otherPath,
-          audioDurationSec: otherDur,
-          voiceId,
-          text: resolvedKhmer,
-          timestamp: Date.now(),
-        };
+        const otherProv = verifyAudioFileProvenance(
+          otherPath,
+          {
+            voiceId,
+            textHash,
+            pitch: pitchStr,
+            rate,
+            originalSpeed: requestedOrigSpeed,
+            speedCacheMode,
+            deliveryType: otherDelivery,
+            effectConfigKey: otherEffectKey,
+          },
+          { uploadsDir }
+        );
+        if (otherProv.valid) {
+          const otherRel = path.relative(uploadsRoot, otherPath).replace(/\\/g, "/");
+          const otherDur = otherProv.meta.audioDurationSec || (await getMediaDuration(otherPath)) || finalDuration;
+          updatedDeliveryVariants[otherDelivery] = {
+            deliveryType: otherDelivery,
+            audioEffect: otherEffect,
+            effectConfigKey: otherEffectKey,
+            audioUrl: `/uploads/${otherRel}`,
+            audioFile: match,
+            audioPath: otherPath,
+            audioDurationSec: otherDur,
+            voiceId,
+            actualVoiceId,
+            speed: resolvedSpeedValue,
+            pitch: pitchStr,
+            text: resolvedKhmer,
+            textHash,
+            provenanceVerified: true,
+            timestamp: Date.now(),
+          };
+          break;
+        }
       }
     } catch (_) {}
   }
+
+  const preservedOffset = preserveTrimFields ? Number(segment.audioOffset || 0) : 0;
+  const preservedTrimmed = preserveTrimFields && Boolean(segment.audioTrimmed || segment.userTrimmed);
+  const preservedEndSec = (preservedTrimmed && typeof segment.audioEndSec === "number" && Number.isFinite(segment.audioEndSec))
+    ? segment.audioEndSec
+    : parseFloat((preservedShiftedStart + finalDuration).toFixed(2));
 
   return {
     ...segment,
@@ -1209,6 +1745,11 @@ async function generateSingleSegmentAudio(segment, uploadsDir, options = {}) {
     voice: voiceId,
     voiceId: voiceId,
     khmerVoiceId: voiceId,
+    actualVoiceId,
+    rawVoiceId: voiceMatchesRequested ? actualVoiceId : null,
+    voiceMismatch: !voiceMatchesRequested,
+    pitch: pitchStr,
+    textHash,
     gender: resolvedGender,
     speakerGender: resolvedGender.toUpperCase(),
     voiceGender: resolvedGender,
@@ -1222,29 +1763,34 @@ async function generateSingleSegmentAudio(segment, uploadsDir, options = {}) {
     deliveryReviewNeeded: false,
     audioEffect,
     effectConfig: isThought ? effectConfig : null,
-    rawAudioPath: rawFilePath,
-    rawAudioFile: rawFileName,
-    audioFileName: fileName,
-    audioFile: fileName,
-    audioPath: outputPath,
+    effectConfigKey,
+    rawAudioPath: voiceMatchesRequested ? rawFilePath : null,
+    rawAudioFile: voiceMatchesRequested ? rawFileName : null,
+    audioFileName: voiceMatchesRequested ? fileName : null,
+    audioFile: voiceMatchesRequested ? fileName : null,
+    audioPath: voiceMatchesRequested ? outputPath : null,
     audioUrl: calculatedAudioUrl,
+    naturalAudioDuration: naturalSpeechDuration,
     originalAudioDuration: originalDuration,
-    rawAudioDur: hasExplicitUserSpeed ? finalDuration : originalDuration,
+    rawAudioDur: finalDuration,
     sourceSpeechDuration: sourceSpeechDuration,
     availableSlotDuration: availableSlotDuration,
     finalAudioDuration: finalDuration,
     audioDuration: finalDuration,
     audioDurationSec: finalDuration,
-    audioStartSec: startSec,
-    audioEndSec: parseFloat((startSec + finalDuration).toFixed(2)),
+    audioStartSec: preservedShiftedStart,
+    audioEndSec: preservedEndSec,
     speed: resolvedSpeedValue,
     userCustomSpeed: hasExplicitUserSpeed,
     ttsRate: rate,
     appliedSpeed: appliedSpeed,
     ...(speedInfo.speedApplyFailed ? { speedWarning: `unapplied:${speedInfo.requested}` } : {}),
-    audioOffset: 0,
-    audioTrimmed: false,
-    userTrimmed: false,
+    audioOffset: preservedOffset,
+    audioTrimmed: preservedTrimmed,
+    userTrimmed: preservedTrimmed,
+    ...(preserveTrimFields && segment.audioTrimStartSec !== undefined ? { audioTrimStartSec: segment.audioTrimStartSec } : {}),
+    ...(preserveTrimFields && segment.audioTrimEndSec !== undefined ? { audioTrimEndSec: segment.audioTrimEndSec } : {}),
+    userShifted: preserveTrimFields ? Boolean(segment.userShifted) : false,
     safetyMarginSec: parseFloat((availableSlotDuration - finalDuration).toFixed(3)),
     overlapPreventionStatus: (availableSlotDuration - finalDuration) >= 0.080 ? "SAFE" : ((availableSlotDuration - finalDuration) >= 0 ? "MARGIN_WARNING" : "COLLISION"),
     overlapRisk: (availableSlotDuration - finalDuration) >= 0.080 ? "SAFE" : "HIGH",
@@ -1252,13 +1798,14 @@ async function generateSingleSegmentAudio(segment, uploadsDir, options = {}) {
     lipSyncStatus: Math.abs(finalDuration - sourceSpeechDuration) <= 0.150 ? "EXACT_MATCH" : (Math.abs(finalDuration - sourceSpeechDuration) <= 0.500 ? "ACCEPTABLE_PACING" : "LIP_SYNC_MISMATCH"),
     syncWarning: (availableSlotDuration - finalDuration) < 0 ? "exceeds_slot_at_max_tempo" : ((availableSlotDuration - finalDuration) < 0.080 ? "safety_margin_under_80ms" : null),
     overflowSec: finalDuration > availableSlotDuration ? parseFloat((finalDuration - availableSlotDuration).toFixed(3)) : 0,
-    audioOutdated: false,
-    audioSignature: computeSegmentAudioSignature(resolvedKhmer, voiceId, resolvedSpeedValue, segment.pitch),
-    ttsStatus: "ready",
-    status: "audio_ready",
+    audioOutdated: !voiceMatchesRequested,
+    audioSignature: computeSegmentAudioSignature(resolvedKhmer, voiceId, resolvedSpeedValue, pitchStr),
+    ttsStatus: voiceMatchesRequested ? "ready" : "voice_mismatch",
+    status: voiceMatchesRequested ? "audio_ready" : "tts_voice_mismatch",
+    ...(voiceMatchesRequested ? {} : { error: `Requested voice ${voiceId} fell back to mismatched voice ${actualVoiceId}` }),
     voiceAudioVariants: updatedVariants,
     deliveryVariants: updatedDeliveryVariants,
-    _wasNewlySynthesized: !usedCache,
+    _wasNewlySynthesized: voiceMatchesRequested && !usedCache,
   };
 }
 
@@ -1606,6 +2153,11 @@ module.exports = {
   validateTtsAudioFile,
   computeSegmentAudioSignature,
   computeMasterAudioSignature,
+  PROVENANCE_VERSION,
+  computeTextSha256,
+  buildEffectConfigKey,
+  writeAudioProvenance,
+  verifyAudioFileProvenance,
   atomicCommitFile,
   cleanupTempFile,
   synthesizeWithEdgeNeural,

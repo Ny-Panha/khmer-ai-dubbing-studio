@@ -12,6 +12,13 @@ import { getSpeakerId, detectSpeakerGender } from '../utils/speakerUtils';
 import { formatTimecode, parseTimeToSeconds } from '../utils/timestampUtils';
 import { splitKhmerTextIntoHalves } from '../utils/khmerTextSplitter';
 import { cleanKhmerText } from '../utils/khmerTextSplitter';
+import {
+  normalizeVoiceSpeedKey,
+  normalizeEffectConfigKey,
+  isFilenameCompatibleWithVoice,
+  isVerifiedVoiceVariantHit,
+  isVerifiedSegmentAudioForVoice,
+} from '../utils/voiceCacheUtils';
 
 const isCustomClipSpeed = (spd) => {
   if (spd === undefined || spd === null || spd === '') return false;
@@ -265,33 +272,45 @@ const FALLBACK_VOICE_CATALOG = {
       // Extract existing variants and perform Client-side cache lookup
       const currentVoice = seg.voiceId || seg.khmerVoiceId || seg.voice || 'km-KH-PisethNeural';
       const currentSegText = (seg.khmer || seg.khmerText || seg.khmerTranslatedText || '').trim();
+      const segDelivery = seg.deliveryType || 'out_loud';
+      const segEffect = seg.audioEffect || (segDelivery === 'inner_thought' ? 'inner_thought_reverb' : 'none');
       const currentVariants = {
         ...(seg.voiceAudioVariants || {}),
-        ...(seg.audioUrl ? {
+        ...(isVerifiedSegmentAudioForVoice(seg, currentVoice) ? {
           [currentVoice]: {
             voiceId: currentVoice,
+            actualVoiceId: seg.actualVoiceId || currentVoice,
             audioUrl: seg.audioUrl,
             audioFile: seg.audioFile,
             audioPath: seg.audioPath,
             audioDurationSec: seg.audioDurationSec,
             speed: seg.speed || activeSpeed,
+            pitch: seg.pitch || '+0Hz',
+            deliveryType: segDelivery,
+            audioEffect: segEffect,
+            effectConfig: seg.effectConfig || null,
+            effectConfigKey: normalizeEffectConfigKey(segDelivery, segEffect, seg.effectConfig || null),
             text: currentSegText,
+            provenanceVerified: Boolean(seg.actualVoiceId === currentVoice || seg.voiceAudioVariants?.[currentVoice]?.provenanceVerified),
             timestamp: Date.now(),
           }
         } : {})
       };
 
       const cachedVariant = currentVariants[newVoiceId];
-      const isLocalCacheHit = Boolean(
-        cachedVariant &&
-        cachedVariant.audioUrl &&
-        (!cachedVariant.text || cachedVariant.text === currentSegText)
-      );
+      const isLocalCacheHit = isVerifiedVoiceVariantHit(cachedVariant, {
+        targetVoiceId: newVoiceId,
+        currentText: currentSegText,
+        speed: activeSpeed,
+        pitch: seg.pitch || '+0Hz',
+        deliveryType: seg.deliveryType || 'out_loud',
+        audioEffect: seg.audioEffect || (seg.deliveryType === 'inner_thought' ? 'inner_thought_reverb' : 'none'),
+        effectConfig: seg.effectConfig || null,
+      });
 
-      // Safe reuse: if segment already has valid audio for this exact voiceId and is not outdated, or local cache hit
+      // Safe reuse: if segment already has valid verified audio for this exact voiceId and is not outdated, or local cache hit
       const hasValidAudioForTarget = ((currentVoice === newVoiceId) &&
-        Boolean(seg.audioUrl || seg.audioFile || seg.audioPath) &&
-        !seg.audioOutdated) || isLocalCacheHit;
+        isVerifiedSegmentAudioForVoice(seg, newVoiceId)) || isLocalCacheHit;
 
       // Preserve previous audio references so waveforms remain visible and playback works during generation
       const previousAudioUrl = isLocalCacheHit ? cachedVariant.audioUrl : (seg.audioUrl || seg.previousAudioUrl || null);
@@ -413,17 +432,22 @@ const FALLBACK_VOICE_CATALOG = {
           const seg = segmentsToRegen[nextIndex++];
           try {
             const activeSpeed = seg.userCustomSpeed && seg.speed ? seg.speed : newSpeed;
+            const rawMatchesSpeakerTarget = (seg.rawVoiceId === newVoiceId) && isFilenameCompatibleWithVoice(seg.rawAudioPath, newVoiceId);
             const res = await generateSingleSegmentAudio(
               {
                 ...seg,
                 voiceId: newVoiceId,
                 textStatus: 'ready',
+                rawAudioPath: rawMatchesSpeakerTarget ? seg.rawAudioPath : null,
+                rawAudioFile: rawMatchesSpeakerTarget ? seg.rawAudioFile : null,
+                rawVoiceId: rawMatchesSpeakerTarget ? seg.rawVoiceId : null,
               },
               {
                 speed: activeSpeed,
                 userCustomSpeed: Boolean(seg.userCustomSpeed),
                 voiceId: newVoiceId,
                 forceRegen: false,
+                preserveTrim: true,
                 projectName: dramaName,
                 videoId: videoId,
                 episodeId: episodeAtStart,
@@ -436,6 +460,11 @@ const FALLBACK_VOICE_CATALOG = {
               return;
             }
 
+            const returnedSpeakerVoice = res?.actualVoiceId || res?.voiceId || res?.khmerVoiceId;
+            if (!res || res.voiceMismatch || res.ttsStatus !== 'ready' || returnedSpeakerVoice !== newVoiceId) {
+              throw new Error(res?.error || `Generated voice (${returnedSpeakerVoice || 'unknown'}) did not match requested voice (${newVoiceId})`);
+            }
+
             // Progressive Commit: Commit each successful segment immediately
             const cacheBustedUrl = res?.audioUrl
               ? (res.audioUrl.includes('?t=') ? res.audioUrl : `${res.audioUrl}?t=${Date.now()}`)
@@ -445,18 +474,28 @@ const FALLBACK_VOICE_CATALOG = {
               if (!prev?.segments) return prev;
               const nextSegs = prev.segments.map((s) => {
                 if (String(s.id) !== String(seg.id)) return s;
+                const segDelivery = s.deliveryType || 'out_loud';
+                const segEffect = s.audioEffect || (segDelivery === 'inner_thought' ? 'inner_thought_reverb' : 'none');
                 const segVariants = {
                   ...(s.voiceAudioVariants || {}),
                   ...(res?.voiceAudioVariants || {}),
                   ...(res?.audioUrl ? {
                     [newVoiceId]: {
                       voiceId: newVoiceId,
+                      actualVoiceId: returnedSpeakerVoice,
                       audioUrl: cacheBustedUrl || res.audioUrl,
                       audioFile: res.audioFile,
                       audioPath: res.audioPath,
                       audioDurationSec: res.audioDurationSec || res.audioDuration,
                       speed: activeSpeed,
+                      pitch: res.pitch || s.pitch || '+0Hz',
+                      deliveryType: segDelivery,
+                      audioEffect: segEffect,
+                      effectConfig: s.effectConfig || null,
+                      effectConfigKey: normalizeEffectConfigKey(segDelivery, segEffect, s.effectConfig || null),
                       text: res.khmer || res.khmerText || s.khmer || s.khmerText || '',
+                      textHash: res.textHash || null,
+                      provenanceVerified: true,
                       timestamp: Date.now(),
                     }
                   } : {})
@@ -661,39 +700,59 @@ const FALLBACK_VOICE_CATALOG = {
 
     if (autoRegen && currentKhmerText) {
       try {
-        const regenerated = await generateSingleSegmentAudio(updatedSeg, {
-          speed: normalizedSpeed,
-          userCustomSpeed: customFlag,
+      const rawMatchesTarget = (targetSeg.rawVoiceId === targetVoiceId) && isFilenameCompatibleWithVoice(targetSeg.rawAudioPath, targetVoiceId);
+      const regenerated = await generateSingleSegmentAudio({
+        ...updatedSeg,
+        rawAudioPath: rawMatchesTarget ? targetSeg.rawAudioPath : null,
+        rawAudioFile: rawMatchesTarget ? targetSeg.rawAudioFile : null,
+        rawVoiceId: rawMatchesTarget ? targetSeg.rawVoiceId : null,
+      }, {
+        speed: normalizedSpeed,
+        userCustomSpeed: customFlag,
+        voiceId: targetVoiceId,
+        deliveryType: preservedDeliveryType,
+        audioEffect: preservedEffect,
+        forceRegen: false, // Reuses natural 1.0x audio cache of the SAME voice via FFmpeg atempo!
+        preserveTrim: true,
+        projectName: getProjectName(),
+        videoId: getVideoId(),
+        episodeId,
+        seriesId,
+      });
+
+      if (segmentRegenSeqRef.current[segKey] !== currentSeq) {
+        return null; // Discard stale in-flight response
+      }
+
+      const returnedVoice = regenerated?.actualVoiceId || regenerated?.voiceId || regenerated?.khmerVoiceId;
+      if (!regenerated || regenerated.voiceMismatch || regenerated.ttsStatus !== 'ready' || returnedVoice !== targetVoiceId) {
+        throw new Error(regenerated?.error || `Generated voice (${returnedVoice || 'unknown'}) did not match requested voice (${targetVoiceId})`);
+      }
+
+      // Preserve all existing verified voiceAudioVariants (only update active voice entry with new speed)
+      const mergedVoiceVariants = {
+        ...(targetSeg.voiceAudioVariants || {}),
+        ...(regenerated.voiceAudioVariants || {}),
+        [targetVoiceId]: {
+          ...(targetSeg.voiceAudioVariants?.[targetVoiceId] || {}),
           voiceId: targetVoiceId,
+          actualVoiceId: returnedVoice,
+          audioUrl: regenerated.audioUrl,
+          audioFile: regenerated.audioFile,
+          audioPath: regenerated.audioPath,
+          audioDurationSec: regenerated.audioDurationSec || regenerated.audioDuration,
+          speed: normalizedSpeed,
+          pitch: regenerated.pitch || targetSeg.pitch || '+0Hz',
           deliveryType: preservedDeliveryType,
           audioEffect: preservedEffect,
-          forceRegen: false, // Reuses natural 1.0x audio cache via FFmpeg atempo! Zero Edge TTS!
-          projectName: getProjectName(),
-          videoId: getVideoId(),
-          episodeId,
-          seriesId,
-        });
-
-        if (segmentRegenSeqRef.current[segKey] !== currentSeq) {
-          return null; // Discard stale in-flight response
-        }
-
-        // Preserve all existing voiceAudioVariants and deliveryVariants
-        const mergedVoiceVariants = {
-          ...(targetSeg.voiceAudioVariants || {}),
-          ...(regenerated.voiceAudioVariants || {}),
-          [targetVoiceId]: {
-            ...(targetSeg.voiceAudioVariants?.[targetVoiceId] || {}),
-            voiceId: targetVoiceId,
-            audioUrl: regenerated.audioUrl,
-            audioFile: regenerated.audioFile,
-            audioPath: regenerated.audioPath,
-            audioDurationSec: regenerated.audioDurationSec || regenerated.audioDuration,
-            speed: normalizedSpeed,
-            text: currentKhmerText,
-            timestamp: Date.now(),
-          },
-        };
+          effectConfig: targetSeg.effectConfig || null,
+          effectConfigKey: normalizeEffectConfigKey(preservedDeliveryType, preservedEffect, targetSeg.effectConfig || null),
+          text: currentKhmerText,
+          textHash: regenerated.textHash || null,
+          provenanceVerified: true,
+          timestamp: Date.now(),
+        },
+      };
 
         const mergedDeliveryVariants = {
           ...(targetSeg.deliveryVariants || {}),
@@ -789,11 +848,10 @@ const FALLBACK_VOICE_CATALOG = {
     const segDisplayNum = targetSeg.id ?? (segIdx + 1);
     const segKey = String(targetSeg?.id ?? segIdx);
 
-    // Fast return: if segment already has this exact voice assigned, has valid audio, and is ready, no-op
+    // Fast return: only short-circuit if active voice AND audio provenance match without mismatch/contamination
     const currentVoice = targetSeg.voiceOverride || targetSeg.khmerVoiceId || targetSeg.voiceId || targetSeg.voice;
     const isSameVoice = currentVoice === newVoiceId;
-    const isAlreadyReady = Boolean(targetSeg.audioUrl || targetSeg.audioPath || targetSeg.audioFile) &&
-      !targetSeg.audioOutdated &&
+    const isAlreadyReady = isVerifiedSegmentAudioForVoice(targetSeg, newVoiceId) &&
       (targetSeg.textStatus === 'ready' || targetSeg.textStatus === 'voice_updated');
     if (isSameVoice && isAlreadyReady) {
       return targetSeg;
@@ -876,46 +934,80 @@ const FALLBACK_VOICE_CATALOG = {
       previousAudioPath,
     };
 
-    // 0. Extract & normalize existing variants
+    // 0. Extract & normalize existing variants (only snapshot current audio if verified compatible with currentVoiceKey)
     const currentVoiceKey = targetSeg.voiceOverride || targetSeg.khmerVoiceId || targetSeg.voiceId || targetSeg.voice || 'km-KH-PisethNeural';
+    const currentDelivery = targetSeg.deliveryType || 'out_loud';
+    const currentEffect = targetSeg.audioEffect || (currentDelivery === 'inner_thought' ? 'inner_thought_reverb' : 'none');
     const existingVariants = {
       ...(targetSeg.voiceAudioVariants || {}),
-      ...(targetSeg.audioUrl ? {
+      ...(isVerifiedSegmentAudioForVoice(targetSeg, currentVoiceKey) ? {
         [currentVoiceKey]: {
           voiceId: currentVoiceKey,
+          actualVoiceId: targetSeg.actualVoiceId || currentVoiceKey,
           audioUrl: targetSeg.audioUrl,
           audioFile: targetSeg.audioFile,
           audioPath: targetSeg.audioPath,
           audioDurationSec: targetSeg.audioDurationSec,
           speed: activeSpeed,
-          deliveryType: targetSeg.deliveryType || 'out_loud',
-          audioEffect: targetSeg.audioEffect || 'none',
+          pitch: targetSeg.pitch || '+0Hz',
+          deliveryType: currentDelivery,
+          audioEffect: currentEffect,
+          effectConfig: targetSeg.effectConfig || null,
+          effectConfigKey: normalizeEffectConfigKey(currentDelivery, currentEffect, targetSeg.effectConfig || null),
           text: currentKhmerText,
+          provenanceVerified: Boolean(targetSeg.actualVoiceId === currentVoiceKey || targetSeg.voiceAudioVariants?.[currentVoiceKey]?.provenanceVerified),
           timestamp: Date.now(),
         }
       } : {})
     };
 
-    // Client-side cache lookup before calling backend: Click -> Local Cache -> Play
+    // Client-side cache lookup before calling backend: Click -> Verified Local Cache -> Play
     const cachedVariant = existingVariants[newVoiceId];
-    const isLocalCacheHit = Boolean(
-      cachedVariant &&
-      cachedVariant.audioUrl &&
-      (!cachedVariant.text || cachedVariant.text === currentKhmerText) &&
-      (!cachedVariant.speed || cachedVariant.speed === activeSpeed) &&
-      (!cachedVariant.deliveryType || cachedVariant.deliveryType === (targetSeg.deliveryType || 'out_loud')) &&
-      (!cachedVariant.audioEffect || cachedVariant.audioEffect === (targetSeg.audioEffect || 'none'))
-    );
+    const isLocalCacheHit = isVerifiedVoiceVariantHit(cachedVariant, {
+      targetVoiceId: newVoiceId,
+      currentText: currentKhmerText,
+      speed: activeSpeed,
+      pitch: targetSeg.pitch || '+0Hz',
+      deliveryType: currentDelivery,
+      audioEffect: currentEffect,
+      effectConfig: targetSeg.effectConfig || null,
+    });
+
+    const preservedOffset = targetSeg.audioOffset || 0;
+    const preservedTrimmed = Boolean(targetSeg.audioTrimmed || targetSeg.userTrimmed);
+    const preservedAudioStartSec = (typeof targetSeg.audioStartSec === 'number' && !isNaN(targetSeg.audioStartSec))
+      ? targetSeg.audioStartSec
+      : (targetSeg.startSec ?? 0);
 
     if (isLocalCacheHit) {
-      console.log(`[useAudioDubbing] ⚡ Client-side instant voice switch cache hit for seg #${segDisplayNum} (${newVoiceId})`);
+      console.log(`[useAudioDubbing] ⚡ Client-side instant verified voice switch cache hit for seg #${segDisplayNum} (${newVoiceId})`);
+      const hitDur = cachedVariant.audioDurationSec || targetSeg.audioDurationSec || 2.5;
       const instantSeg = {
         ...targetSeg,
         ...assignedFields,
         audioUrl: cachedVariant.audioUrl,
         audioFile: cachedVariant.audioFile || targetSeg.audioFile,
         audioPath: cachedVariant.audioPath || targetSeg.audioPath,
-        audioDurationSec: cachedVariant.audioDurationSec || targetSeg.audioDurationSec,
+        rawAudioPath: null,
+        rawAudioFile: null,
+        rawVoiceId: newVoiceId,
+        actualVoiceId: newVoiceId,
+        audioSignature: null,
+        audioDurationSec: hitDur,
+        audioDuration: hitDur,
+        finalAudioDuration: hitDur,
+        audioStartSec: preservedAudioStartSec,
+        audioEndSec: preservedTrimmed && typeof targetSeg.audioEndSec === 'number'
+          ? targetSeg.audioEndSec
+          : parseFloat((preservedAudioStartSec + hitDur).toFixed(2)),
+        audioOffset: preservedOffset,
+        audioTrimmed: preservedTrimmed,
+        userTrimmed: preservedTrimmed,
+        audioTrimStartSec: targetSeg.audioTrimStartSec,
+        audioTrimEndSec: targetSeg.audioTrimEndSec,
+        userShifted: Boolean(targetSeg.userShifted),
+        trackRow: targetSeg.trackRow,
+        trackId: targetSeg.trackId,
         audioOutdated: false,
         textStatus: 'ready',
         isVoiceSwitching: false,
@@ -1027,7 +1119,7 @@ const FALLBACK_VOICE_CATALOG = {
       return updatedSeg;
     }
 
-    // 3. Async TTS generation (non-blocking UI; backend TTS cache reused if matching audio exists)
+    // 3. Async TTS generation (non-blocking UI; backend TTS cache reused only if provenance-verified)
     const sharedAudioFiles = [];
     const targetRef = targetSeg.audioPath || targetSeg.audioFile || (targetSeg.audioUrl ? targetSeg.audioUrl.split('?')[0] : null);
     if (targetRef) {
@@ -1044,18 +1136,23 @@ const FALLBACK_VOICE_CATALOG = {
     }
 
     try {
+      const rawMatchesTarget = (targetSeg.rawVoiceId === newVoiceId) && isFilenameCompatibleWithVoice(targetSeg.rawAudioPath, newVoiceId);
       const regenerated = await generateSingleSegmentAudio(
         {
           ...updatedSeg,
           textStatus: 'ready',
           audioFile: prevSegSnapshot.audioFile,
           audioPath: prevSegSnapshot.audioPath,
+          rawAudioPath: rawMatchesTarget ? targetSeg.rawAudioPath : null,
+          rawAudioFile: rawMatchesTarget ? targetSeg.rawAudioFile : null,
+          rawVoiceId: rawMatchesTarget ? targetSeg.rawVoiceId : null,
         },
         {
           speed: activeSpeed,
           userCustomSpeed: Boolean(targetSeg.userCustomSpeed),
           voiceId: newVoiceId,
           forceRegen: false,
+          preserveTrim: true,
           projectName: getProjectName(),
           videoId: getVideoId(),
           episodeId,
@@ -1074,25 +1171,67 @@ const FALLBACK_VOICE_CATALOG = {
         return null;
       }
 
+      const returnedActualVoice = regenerated?.actualVoiceId || regenerated?.voiceId || regenerated?.khmerVoiceId;
+      if (
+        !regenerated ||
+        regenerated.voiceMismatch ||
+        regenerated.ttsStatus !== 'ready' ||
+        returnedActualVoice !== newVoiceId ||
+        !isFilenameCompatibleWithVoice(regenerated.audioFile || regenerated.audioPath || regenerated.audioUrl, newVoiceId)
+      ) {
+        throw new Error(regenerated?.error || `Generated voice (${returnedActualVoice || 'unknown'}) did not match requested voice (${newVoiceId})`);
+      }
+
       suppressNextBackendSync(2500);
       const committedVariants = {
         ...existingVariants,
         ...(regenerated.voiceAudioVariants || {}),
         [newVoiceId]: {
           voiceId: newVoiceId,
+          actualVoiceId: returnedActualVoice,
           audioUrl: regenerated.audioUrl,
           audioFile: regenerated.audioFile,
           audioPath: regenerated.audioPath,
           audioDurationSec: regenerated.audioDurationSec || regenerated.audioDuration,
-          speed: regenerated.speed || activeSpeed,
+          speed: activeSpeed,
+          pitch: regenerated.pitch || targetSeg.pitch || '+0Hz',
+          deliveryType: currentDelivery,
+          audioEffect: currentEffect,
+          effectConfig: targetSeg.effectConfig || null,
+          effectConfigKey: normalizeEffectConfigKey(currentDelivery, currentEffect, targetSeg.effectConfig || null),
           text: currentKhmerText,
+          textHash: regenerated.textHash || null,
+          provenanceVerified: true,
           timestamp: Date.now(),
         },
       };
 
+      const committedDur = regenerated.audioDurationSec || regenerated.audioDuration || targetSeg.audioDurationSec || 2.5;
       const committedSeg = {
         ...regenerated,
         ...assignedFields,
+        audioUrl: regenerated.audioUrl,
+        audioFile: regenerated.audioFile,
+        audioPath: regenerated.audioPath,
+        rawAudioPath: regenerated.rawAudioPath,
+        rawAudioFile: regenerated.rawAudioFile,
+        rawVoiceId: regenerated.rawVoiceId || returnedActualVoice,
+        actualVoiceId: returnedActualVoice,
+        audioDurationSec: committedDur,
+        audioDuration: committedDur,
+        finalAudioDuration: regenerated.finalAudioDuration || committedDur,
+        audioStartSec: preservedAudioStartSec,
+        audioEndSec: preservedTrimmed && typeof targetSeg.audioEndSec === 'number'
+          ? targetSeg.audioEndSec
+          : parseFloat((preservedAudioStartSec + committedDur).toFixed(2)),
+        audioOffset: preservedOffset,
+        audioTrimmed: preservedTrimmed,
+        userTrimmed: preservedTrimmed,
+        audioTrimStartSec: targetSeg.audioTrimStartSec,
+        audioTrimEndSec: targetSeg.audioTrimEndSec,
+        userShifted: Boolean(targetSeg.userShifted),
+        trackRow: targetSeg.trackRow,
+        trackId: targetSeg.trackId,
         audioOutdated: false,
         textStatus: 'ready',
         isVoiceSwitching: false,
@@ -1206,28 +1345,40 @@ const FALLBACK_VOICE_CATALOG = {
       ? { ...targetSeg.deliveryVariants }
       : {};
 
-    // Record current audio into existingDeliveryVariants if not already cached
-    if (targetSeg.audioUrl && (!existingDeliveryVariants[currentDelivery] || existingDeliveryVariants[currentDelivery]?.text !== currentKhmerText)) {
+    // Record current audio into existingDeliveryVariants only if verified compatible with activeVoiceId
+    if (isVerifiedSegmentAudioForVoice(targetSeg, activeVoiceId) && (!existingDeliveryVariants[currentDelivery] || existingDeliveryVariants[currentDelivery]?.text !== currentKhmerText)) {
+      const curEff = targetSeg.audioEffect || (currentDelivery === 'inner_thought' ? 'inner_thought_reverb' : 'none');
       existingDeliveryVariants[currentDelivery] = {
         deliveryType: currentDelivery,
-        audioEffect: targetSeg.audioEffect || (currentDelivery === 'inner_thought' ? 'inner_thought_reverb' : 'none'),
+        audioEffect: curEff,
+        effectConfig: targetSeg.effectConfig || null,
+        effectConfigKey: normalizeEffectConfigKey(currentDelivery, curEff, targetSeg.effectConfig || null),
         audioUrl: targetSeg.audioUrl,
         audioFile: targetSeg.audioFile,
         audioPath: targetSeg.audioPath,
         audioDurationSec: targetSeg.audioDurationSec || targetSeg.audioDuration,
         voiceId: activeVoiceId,
+        actualVoiceId: targetSeg.actualVoiceId || activeVoiceId,
         speed: activeSpeed,
+        pitch: targetSeg.pitch || '+0Hz',
         text: currentKhmerText,
+        provenanceVerified: Boolean(targetSeg.actualVoiceId === activeVoiceId || targetSeg.deliveryVariants?.[currentDelivery]?.provenanceVerified),
         timestamp: Date.now(),
       };
     }
 
-    // Check client delivery cache
+    // Check client delivery cache (require exact voice, speed, pitch, text, effectConfig, and verified provenance)
     const cachedTargetVariant = existingDeliveryVariants[nextDelivery];
     const isLocalDeliveryHit = Boolean(
       cachedTargetVariant?.audioUrl &&
-      (!cachedTargetVariant.text || cachedTargetVariant.text === currentKhmerText) &&
-      (!cachedTargetVariant.voiceId || cachedTargetVariant.voiceId === activeVoiceId)
+      cachedTargetVariant.provenanceVerified === true &&
+      String(cachedTargetVariant.text || '').trim() === currentKhmerText &&
+      cachedTargetVariant.voiceId === activeVoiceId &&
+      (!cachedTargetVariant.actualVoiceId || cachedTargetVariant.actualVoiceId === activeVoiceId) &&
+      isFilenameCompatibleWithVoice(cachedTargetVariant.audioFile || cachedTargetVariant.audioPath || cachedTargetVariant.audioUrl, activeVoiceId) &&
+      normalizeVoiceSpeedKey(cachedTargetVariant.speed) === normalizeVoiceSpeedKey(activeSpeed) &&
+      String(cachedTargetVariant.pitch || '+0Hz') === String(targetSeg.pitch || '+0Hz') &&
+      (cachedTargetVariant.effectConfigKey || normalizeEffectConfigKey(nextDelivery, audioEffect, cachedTargetVariant.effectConfig || null)) === normalizeEffectConfigKey(nextDelivery, audioEffect, targetSeg.effectConfig || null)
     );
 
     const segKey = String(targetSeg._uid || targetSeg.id || segIdx);
@@ -1316,13 +1467,20 @@ const FALLBACK_VOICE_CATALOG = {
 
     if (autoRegen && currentKhmerText) {
       try {
-        const regenerated = await generateSingleSegmentAudio(updatedSeg, {
+        const rawMatchesDelivVoice = (updatedSeg.rawVoiceId === activeVoiceId) && isFilenameCompatibleWithVoice(updatedSeg.rawAudioPath, activeVoiceId);
+        const regenerated = await generateSingleSegmentAudio({
+          ...updatedSeg,
+          rawAudioPath: rawMatchesDelivVoice ? updatedSeg.rawAudioPath : null,
+          rawAudioFile: rawMatchesDelivVoice ? updatedSeg.rawAudioFile : null,
+          rawVoiceId: rawMatchesDelivVoice ? updatedSeg.rawVoiceId : null,
+        }, {
           speed: activeSpeed,
           voiceId: activeVoiceId,
           deliveryType: nextDelivery,
           audioEffect,
           deliveryOverride: true,
-          forceRegen: false, // Reuses cache or clean speech!
+          forceRegen: false, // Reuses provenance-verified clean speech of the same voice!
+          preserveTrim: true,
           projectName: getProjectName(),
           videoId: getVideoId(),
           episodeId,
@@ -1333,19 +1491,30 @@ const FALLBACK_VOICE_CATALOG = {
           return null;
         }
 
+        const returnedDelivVoice = regenerated?.actualVoiceId || regenerated?.voiceId || regenerated?.khmerVoiceId;
+        if (!regenerated || regenerated.voiceMismatch || regenerated.ttsStatus !== 'ready' || returnedDelivVoice !== activeVoiceId) {
+          throw new Error(regenerated?.error || `Generated voice (${returnedDelivVoice || 'unknown'}) did not match requested voice (${activeVoiceId})`);
+        }
+
         const mergedDeliveryVariants = {
           ...existingDeliveryVariants,
           ...(regenerated.deliveryVariants || {}),
           [nextDelivery]: {
             deliveryType: nextDelivery,
             audioEffect,
+            effectConfig: regenerated.effectConfig || targetSeg.effectConfig || null,
+            effectConfigKey: normalizeEffectConfigKey(nextDelivery, audioEffect, regenerated.effectConfig || targetSeg.effectConfig || null),
             audioUrl: regenerated.audioUrl,
             audioFile: regenerated.audioFile,
             audioPath: regenerated.audioPath,
             audioDurationSec: regenerated.audioDurationSec || regenerated.audioDuration,
             voiceId: activeVoiceId,
+            actualVoiceId: returnedDelivVoice,
             speed: activeSpeed,
+            pitch: regenerated.pitch || targetSeg.pitch || '+0Hz',
             text: currentKhmerText,
+            textHash: regenerated.textHash || null,
+            provenanceVerified: true,
             timestamp: Date.now(),
           },
         };
@@ -1507,17 +1676,26 @@ const FALLBACK_VOICE_CATALOG = {
         const currentItem = (scriptData?.segments && scriptData.segments[segIdx]) || targetSeg;
         const isTextStillCurrent = (currentItem?.khmer || '').trim() === cleanText;
 
+        const curDeliv = currentItem?.deliveryType || 'out_loud';
+        const curEff = currentItem?.audioEffect || (curDeliv === 'inner_thought' ? 'inner_thought_reverb' : 'none');
         const textVariants = {
-          ...(currentItem?.voiceAudioVariants || {}),
           ...(regenerated?.voiceAudioVariants || {}),
           [targetVoiceId]: {
             voiceId: targetVoiceId,
+            actualVoiceId: regenerated?.actualVoiceId || targetVoiceId,
             audioUrl: cacheBustedUrl,
             audioFile: regenerated.audioFile,
             audioPath: regenerated.audioPath,
             audioDurationSec: effAudioDur,
             speed: activeSpeed,
+            pitch: regenerated?.pitch || currentItem?.pitch || '+0Hz',
+            deliveryType: curDeliv,
+            audioEffect: curEff,
+            effectConfig: currentItem?.effectConfig || null,
+            effectConfigKey: normalizeEffectConfigKey(curDeliv, curEff, currentItem?.effectConfig || null),
             text: newText,
+            textHash: regenerated?.textHash || null,
+            provenanceVerified: true,
             timestamp: Date.now(),
           },
         };
@@ -1953,18 +2131,30 @@ const FALLBACK_VOICE_CATALOG = {
             const updated = updatedMap.get(String(s.id));
             if (!updated) return s;
             const segVoiceId = updated.voiceId || updated.khmerVoiceId || s.voiceId || s.khmerVoiceId || activeVoiceId;
+            const segDelivery = updated.deliveryType || s.deliveryType || 'out_loud';
+            const segEffect = updated.audioEffect || s.audioEffect || (segDelivery === 'inner_thought' ? 'inner_thought_reverb' : 'none');
+            const returnedVoice = updated.actualVoiceId || segVoiceId;
+            const isVerifiedBatchVoice = !updated.voiceMismatch && updated.ttsStatus === 'ready' && returnedVoice === segVoiceId;
             const updatedVariants = {
               ...(s.voiceAudioVariants || {}),
               ...(updated.voiceAudioVariants || {}),
-              ...(updated.audioUrl ? {
+              ...(updated.audioUrl && isVerifiedBatchVoice ? {
                 [segVoiceId]: {
                   voiceId: segVoiceId,
+                  actualVoiceId: returnedVoice,
                   audioUrl: updated.audioUrl,
                   audioFile: updated.audioFile,
                   audioPath: updated.audioPath,
                   audioDurationSec: updated.audioDurationSec || updated.audioDuration,
                   speed: updated.speed || s.speed,
+                  pitch: updated.pitch || s.pitch || '+0Hz',
+                  deliveryType: segDelivery,
+                  audioEffect: segEffect,
+                  effectConfig: updated.effectConfig || s.effectConfig || null,
+                  effectConfigKey: normalizeEffectConfigKey(segDelivery, segEffect, updated.effectConfig || s.effectConfig || null),
                   text: updated.khmer || updated.khmerText || s.khmer || s.khmerText || '',
+                  textHash: updated.textHash || null,
+                  provenanceVerified: true,
                   timestamp: Date.now(),
                 },
               } : {}),
@@ -2093,20 +2283,33 @@ const FALLBACK_VOICE_CATALOG = {
         : null;
 
       const currentItem = (scriptData?.segments && scriptData.segments[segIdx]) || baseSeg || targetSeg;
-      const currentItemVariants = (currentItem?.voiceAudioVariants && typeof currentItem.voiceAudioVariants === 'object')
-        ? currentItem.voiceAudioVariants
-        : (targetSeg.voiceAudioVariants || {});
+      const curDeliv = updatedSeg?.deliveryType || currentItem?.deliveryType || 'out_loud';
+      const curEff = updatedSeg?.audioEffect || currentItem?.audioEffect || (curDeliv === 'inner_thought' ? 'inner_thought_reverb' : 'none');
+      const prevTxt = (baseSeg.khmer || baseSeg.khmerText || baseSeg.khmerTranslatedText || '').trim();
+      const currentItemVariants = (prevTxt === textToUse)
+        ? ((currentItem?.voiceAudioVariants && typeof currentItem.voiceAudioVariants === 'object')
+          ? currentItem.voiceAudioVariants
+          : (targetSeg.voiceAudioVariants || {}))
+        : {};
       const updatedVariants = {
         ...currentItemVariants,
         ...(updatedSeg?.voiceAudioVariants || {}),
         [targetVoiceId]: {
           voiceId: targetVoiceId,
+          actualVoiceId: updatedSeg?.actualVoiceId || targetVoiceId,
           audioUrl: cacheBustedUrl,
           audioFile: updatedSeg.audioFile,
           audioPath: updatedSeg.audioPath,
           audioDurationSec: effAudioDur,
           speed: activeSpeed,
+          pitch: updatedSeg?.pitch || currentItem?.pitch || '+0Hz',
+          deliveryType: curDeliv,
+          audioEffect: curEff,
+          effectConfig: updatedSeg?.effectConfig || currentItem?.effectConfig || null,
+          effectConfigKey: normalizeEffectConfigKey(curDeliv, curEff, updatedSeg?.effectConfig || currentItem?.effectConfig || null),
           text: textToUse,
+          textHash: updatedSeg?.textHash || null,
+          provenanceVerified: true,
           timestamp: Date.now(),
         },
       };

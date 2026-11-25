@@ -7,6 +7,7 @@ import {
   Copy, Check, User, UserCheck, Play, Film, MessageSquare
 } from 'lucide-react';
 import { retranslateSegmentApi } from '../../services/api';
+import { isVerifiedVoiceVariantHit } from '../../utils/voiceCacheUtils';
 
 export default function ClipInspectorPanel({
   isOpen,
@@ -1064,10 +1065,15 @@ export default function ClipInspectorPanel({
             data-testid="voice-switch-male-btn"
             onClick={async () => {
               if (isPisethActive) return;
-              const isCached = Boolean(
-                selectedSegment?.voiceAudioVariants?.['km-KH-PisethNeural']?.audioUrl &&
-                (!selectedSegment?.voiceAudioVariants?.['km-KH-PisethNeural']?.text || selectedSegment.voiceAudioVariants['km-KH-PisethNeural'].text === (selectedSegment.khmer || selectedSegment.khmerText || '').trim())
-              );
+              const isCached = isVerifiedVoiceVariantHit(selectedSegment?.voiceAudioVariants?.['km-KH-PisethNeural'], {
+                targetVoiceId: 'km-KH-PisethNeural',
+                currentText: (selectedSegment.khmer || selectedSegment.khmerText || selectedSegment.khmerTranslatedText || '').trim(),
+                speed: selectedSegment.userCustomSpeed ? selectedSegment.speed : (settings?.speed || 'normal'),
+                pitch: selectedSegment.pitch || '+0Hz',
+                deliveryType: selectedSegment.deliveryType || 'out_loud',
+                audioEffect: selectedSegment.audioEffect || (selectedSegment.deliveryType === 'inner_thought' ? 'inner_thought_reverb' : 'none'),
+                effectConfig: selectedSegment.effectConfig || null,
+              });
               if (!isCached) {
                 setSwitchingVoiceTarget('MALE');
               }
@@ -1106,10 +1112,15 @@ export default function ClipInspectorPanel({
             data-testid="voice-switch-female-btn"
             onClick={async () => {
               if (isSreymomActive) return;
-              const isCached = Boolean(
-                selectedSegment?.voiceAudioVariants?.['km-KH-SreymomNeural']?.audioUrl &&
-                (!selectedSegment?.voiceAudioVariants?.['km-KH-SreymomNeural']?.text || selectedSegment.voiceAudioVariants['km-KH-SreymomNeural'].text === (selectedSegment.khmer || selectedSegment.khmerText || '').trim())
-              );
+              const isCached = isVerifiedVoiceVariantHit(selectedSegment?.voiceAudioVariants?.['km-KH-SreymomNeural'], {
+                targetVoiceId: 'km-KH-SreymomNeural',
+                currentText: (selectedSegment.khmer || selectedSegment.khmerText || selectedSegment.khmerTranslatedText || '').trim(),
+                speed: selectedSegment.userCustomSpeed ? selectedSegment.speed : (settings?.speed || 'normal'),
+                pitch: selectedSegment.pitch || '+0Hz',
+                deliveryType: selectedSegment.deliveryType || 'out_loud',
+                audioEffect: selectedSegment.audioEffect || (selectedSegment.deliveryType === 'inner_thought' ? 'inner_thought_reverb' : 'none'),
+                effectConfig: selectedSegment.effectConfig || null,
+              });
               if (!isCached) {
                 setSwitchingVoiceTarget('FEMALE');
               }

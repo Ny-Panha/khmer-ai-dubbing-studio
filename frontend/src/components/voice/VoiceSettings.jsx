@@ -5,6 +5,7 @@ import { resolveSegmentAtTime } from '../../utils/timelineUtils';
 import { subscribeDraftPreview } from '../../utils/sliderDraftPreview';
 
 import ClipInspectorPanel from './ClipInspectorPanel';
+import { isVerifiedVoiceVariantHit } from '../../utils/voiceCacheUtils';
 import AudioDuckingPanel from './AudioDuckingPanel';
 import ExportSettingsPanel from './ExportSettingsPanel';
 import { DubbingStepButton } from '../../features/dubbing-runner';
@@ -407,9 +408,18 @@ export default function VoiceSettings({
         setPlayingSegmentId(null);
       }
       const seg = scriptData?.segments?.[effectiveIndex];
+      const activeSpeed = seg?.userCustomSpeed ? seg.speed : (settings?.speed || 'normal');
       const isCached = Boolean(
-        seg?.voiceAudioVariants?.[newVoiceId]?.audioUrl &&
-        (!seg?.voiceAudioVariants?.[newVoiceId]?.text || seg.voiceAudioVariants[newVoiceId].text === (seg.khmer || seg.khmerText || '').trim())
+        seg &&
+        isVerifiedVoiceVariantHit(seg?.voiceAudioVariants?.[newVoiceId], {
+          targetVoiceId: newVoiceId,
+          currentText: (seg.khmer || seg.khmerText || seg.khmerTranslatedText || '').trim(),
+          speed: activeSpeed,
+          pitch: seg.pitch || '+0Hz',
+          deliveryType: seg.deliveryType || 'out_loud',
+          audioEffect: seg.audioEffect || (seg.deliveryType === 'inner_thought' ? 'inner_thought_reverb' : 'none'),
+          effectConfig: seg.effectConfig || null,
+        })
       );
       if (!isCached) {
         setRegeneratingId(segIdOrIndex);

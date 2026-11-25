@@ -121,6 +121,7 @@ export async function generateSingleSegmentAudio(segment, options = {}) {
   const deliveryOverride = isObj && options.deliveryOverride !== undefined ? options.deliveryOverride : Boolean(segment.deliveryOverride);
   const effectConfig = isObj ? (options.effectConfig || segment.effectConfig) : segment.effectConfig;
   const forceRegen = isObj && options.forceRegen !== undefined ? Boolean(options.forceRegen) : false;
+  const preserveTrim = isObj && options.preserveTrim !== undefined ? Boolean(options.preserveTrim) : undefined;
   const timeoutMs = isObj && typeof options.timeoutMs === 'number' ? options.timeoutMs : 30000;
   const maxAttempts = isObj && typeof options.maxAttempts === 'number' ? options.maxAttempts : 2;
   const skipPeerDiskScan = isObj ? Boolean(options.skipPeerDiskScan) : false;
@@ -144,6 +145,7 @@ export async function generateSingleSegmentAudio(segment, options = {}) {
     ...(speed !== undefined ? { speed } : {}),
     ...(userCustomSpeed !== undefined ? { userCustomSpeed } : {}),
     ...(skipPeerDiskScan ? { skipPeerDiskScan: true } : {}),
+    ...(preserveTrim !== undefined ? { preserveTrim } : {}),
     ...(sharedAudioFiles ? { sharedAudioFiles } : {}),
     ...(speakerUpdate ? { speakerUpdate } : {}),
     voiceId,

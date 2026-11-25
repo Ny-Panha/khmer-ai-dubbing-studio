@@ -16,6 +16,7 @@ const {
   renderDubbedVideoWithDucking,
   splitVideoIntoEpisodes,
 } = require("../services/ffmpegService");
+const { computeMasterAudioSignature } = require("../services/ttsService");
 const {
   getSeriesMetadata,
   saveSeriesMetadata,
@@ -192,7 +193,14 @@ router.post("/render-video", async (req, res) => {
       const epNarration = isEpisode ? `${cleanEpisode}_narration_khmer.mp3` : `${cleanName}_narration_khmer.mp3`;
       const candidateNarration = path.join(audioDir, epNarration);
       if (fs.existsSync(candidateNarration)) {
-        resolvedMasterAudio = candidateNarration;
+        const expectedMasterSig = computeMasterAudioSignature(preparedSegments);
+        const sigPath = `${candidateNarration}.sig`;
+        const recordedMasterSig = fs.existsSync(sigPath) ? fs.readFileSync(sigPath, "utf8").trim() : null;
+        if (expectedMasterSig && recordedMasterSig && expectedMasterSig === recordedMasterSig) {
+          resolvedMasterAudio = candidateNarration;
+        } else {
+          console.log(`[Render] 🔄 Skipping stale disk master narration ${epNarration} (segment audio/voice/speed changed); rebuilding from live segments.`);
+        }
       }
     }
 

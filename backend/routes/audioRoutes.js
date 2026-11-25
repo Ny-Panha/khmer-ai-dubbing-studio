@@ -24,6 +24,11 @@ const {
   generateVoicePreview,
   computeSegmentAudioSignature,
   computeMasterAudioSignature,
+  PROVENANCE_VERSION,
+  computeTextSha256,
+  buildEffectConfigKey,
+  writeAudioProvenance,
+  verifyAudioFileProvenance,
 } = require("../services/ttsService");
 const { detectSpeakerGender } = require("../models/speakerRegistry");
 const { createSynchronizedNarrationAudio, parseTimeToSec, autoStretchTtsAudio, getMediaDuration } = require("../services/ffmpegService");
@@ -87,32 +92,67 @@ function doesSegmentNeedTts(seg, audioDir, batchSpeedInfo = null, batchExplicitC
   // Smart TTS Cache v2: verify content signature
   const targetVoice = seg.voiceId || seg.khmerVoiceId || "km-KH-PisethNeural";
   const currentSig = computeSegmentAudioSignature(raw, targetVoice, seg.speed ?? seg.rate, seg.pitch);
+  if (seg.rawVoiceId && seg.rawVoiceId !== targetVoice) {
+    return true;
+  }
+  if (seg.actualVoiceId && seg.actualVoiceId !== targetVoice) {
+    return true;
+  }
+  const deliveryType = seg.deliveryType || "out_loud";
+  const audioEffect = seg.audioEffect || (deliveryType === "inner_thought" ? "inner_thought_reverb" : "none");
+  const effectConfigKey = buildEffectConfigKey(deliveryType, audioEffect, seg.effectConfig || null);
+  const textHash = computeTextSha256(raw);
+  const ownSpeedInfo = speedToEdgeRate(seg.speed ?? seg.rate);
+  const expectedOrigSpeed = Number(ownSpeedInfo.numericSpeed ?? 1.0);
+
   if (seg.audioSignature) {
     if (seg.audioSignature !== currentSig) {
       return true;
     }
-  } else {
-    // Missing signature: a segment without audioSignature MUST NOT be trusted on file existence alone
-    // unless verified against a trusted ledger/metadata file that recorded the exact text and voice.
-    let metaMatches = false;
-    const metaPath = existingPath.replace(/\.[^.]+$/, '.json');
-    if (fs.existsSync(metaPath)) {
-      try {
-        const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
-        if (
-          meta &&
-          meta.text &&
-          cleanTextForTts(meta.text) === cleanTextForTts(raw) &&
-          (meta.voiceId === targetVoice || meta.voice === targetVoice) &&
-          (!meta.audioSignature || meta.audioSignature === currentSig)
-        ) {
-          metaMatches = true;
-          seg.audioSignature = currentSig;
+    // Even if signature matches on segment object, verify sidecar provenance if a sidecar exists (or is legacy contaminated)
+    const sidecarPath = existingPath.replace(/\.[^.]+$/, ".json");
+    if (fs.existsSync(sidecarPath)) {
+      const prov = verifyAudioFileProvenance(
+        existingPath,
+        {
+          voiceId: targetVoice,
+          textHash,
+          pitch: String(seg.pitch || "+0Hz"),
+          deliveryType,
+          effectConfigKey,
+          originalSpeed: expectedOrigSpeed,
+        },
+        { uploadsDir: typeof audioDir === "string" ? audioDir : undefined }
+      );
+      if (!prov.valid && !prov.isLegacy) {
+        return true;
+      }
+      if (prov.isLegacy) {
+        try {
+          const legacyMeta = JSON.parse(fs.readFileSync(sidecarPath, "utf8"));
+          if (legacyMeta?.voiceId && legacyMeta.voiceId !== targetVoice) return true;
+        } catch (_) {
+          return true;
         }
-      } catch (_) {}
+      }
     }
-    if (!metaMatches) {
-      return true; // Missing signature and no verified metadata proves match -> MUST re-synthesize!
+  } else {
+    const prov = verifyAudioFileProvenance(
+      existingPath,
+      {
+        voiceId: targetVoice,
+        textHash,
+        pitch: String(seg.pitch || "+0Hz"),
+        deliveryType,
+        effectConfigKey,
+        originalSpeed: expectedOrigSpeed,
+      },
+      { uploadsDir: typeof audioDir === "string" ? audioDir : undefined }
+    );
+    if (prov.valid) {
+      seg.audioSignature = currentSig;
+    } else {
+      return true; // Missing signature and no verified provenance -> MUST re-synthesize!
     }
   }
 
@@ -550,6 +590,7 @@ router.post("/generate-audio", async (req, res) => {
           deliveryOverride,
           effectConfig,
           forceRegen: Boolean(forceRegen),
+          ...(req.body.preserveTrim !== undefined ? { preserveTrim: Boolean(req.body.preserveTrim) } : {}),
           episodeId: cleanEpisode,
           sharedAudioPaths: singleSharedAudioPaths,
           ...(speedInfo.provided && !speedInfo.valid ? { _suppressInvalidSpeedLog: true } : {}),
@@ -560,16 +601,51 @@ router.post("/generate-audio", async (req, res) => {
       const singleSig = computeSegmentAudioSignature(rawSingleTxt, targetVoice, updatedSegment.speed ?? updatedSegment.rate, updatedSegment.pitch);
       updatedSegment.audioSignature = singleSig;
 
+      if (
+        updatedSegment.voiceMismatch ||
+        updatedSegment.ttsStatus !== "ready" ||
+        (updatedSegment.actualVoiceId && updatedSegment.actualVoiceId !== targetVoice)
+      ) {
+        return res.status(502).json({
+          success: false,
+          code: "VOICE_MISMATCH",
+          voiceMismatch: true,
+          requestedVoiceId: targetVoice,
+          actualVoiceId: updatedSegment.actualVoiceId || null,
+          error: updatedSegment.error || `Generated audio voice (${updatedSegment.actualVoiceId || "unknown"}) did not match requested voice (${targetVoice})`,
+        });
+      }
+
       if (updatedSegment.audioPath && fs.existsSync(updatedSegment.audioPath)) {
         try {
-          const sidecarMeta = updatedSegment.audioPath.replace(/\.[^.]+$/, '.json');
-          fs.writeFileSync(sidecarMeta, JSON.stringify({
-            text: rawSingleTxt,
-            voiceId: targetVoice,
-            audioSignature: singleSig,
-            audioDurationSec: updatedSegment.audioDurationSec || updatedSegment.duration,
-            timestamp: Date.now(),
-          }, null, 2), 'utf8');
+          const provCheck = verifyAudioFileProvenance(
+            updatedSegment.audioPath,
+            {
+              voiceId: targetVoice,
+              textHash: updatedSegment.textHash || computeTextSha256(rawSingleTxt),
+              pitch: String(updatedSegment.pitch || "+0Hz"),
+            },
+            { uploadsDir: audioDir }
+          );
+          if (!provCheck.valid) {
+            writeAudioProvenance(updatedSegment.audioPath, {
+              voiceId: targetVoice,
+              actualVoiceId: updatedSegment.actualVoiceId || targetVoice,
+              rawVoiceId: updatedSegment.rawVoiceId || targetVoice,
+              text: rawSingleTxt,
+              textHash: updatedSegment.textHash || computeTextSha256(rawSingleTxt),
+              pitch: String(updatedSegment.pitch || "+0Hz"),
+              rate: updatedSegment.ttsRate || resolvedRate || "+0%",
+              originalSpeed: Number(speedInfo.numericSpeed ?? 1.0),
+              appliedSpeed: Number(updatedSegment.appliedSpeed ?? 1.0),
+              speedCacheMode: hasExplicitUserSpeed ? "custom" : (autoStretch ? "fit" : "raw"),
+              deliveryType,
+              audioEffect,
+              effectConfig,
+              audioSignature: singleSig,
+              audioDurationSec: updatedSegment.audioDurationSec || updatedSegment.duration,
+            });
+          }
         } catch (_) {}
       }
 
@@ -608,15 +684,19 @@ router.post("/generate-audio", async (req, res) => {
               }
               const segIdx = targetEp.scriptData.segments.findIndex((s) => String(s.id) === String(updatedSegment.id));
               if (segIdx !== -1) {
+                const existingSeg = targetEp.scriptData.segments[segIdx] || {};
+                const preservedTrimmed = Boolean(updatedSegment.audioTrimmed || updatedSegment.userTrimmed);
                 targetEp.scriptData.segments[segIdx] = {
-                  ...targetEp.scriptData.segments[segIdx],
+                  ...existingSeg,
                   ...updatedSegment,
                   ...resolvedVoiceMeta,
                   audioOutdated: false,
                   textStatus: "ready",
-                  audioOffset: 0,
-                  audioTrimmed: false,
-                  userTrimmed: false,
+                  audioOffset: updatedSegment.audioOffset ?? existingSeg.audioOffset ?? 0,
+                  audioTrimmed: preservedTrimmed,
+                  userTrimmed: preservedTrimmed,
+                  audioTrimStartSec: updatedSegment.audioTrimStartSec ?? existingSeg.audioTrimStartSec,
+                  audioTrimEndSec: updatedSegment.audioTrimEndSec ?? existingSeg.audioTrimEndSec,
                 };
               }
               if (req.body.speakerUpdate && req.body.speakerUpdate.key && req.body.speakerUpdate.entry) {
