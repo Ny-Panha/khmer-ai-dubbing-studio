@@ -494,7 +494,8 @@ function getSeriesMetadata(seriesId, options = {}) {
         sanitized.episodes = [];
       }
 
-      // Safe episode discovery: if episode directories exist on disk but are missing from series.json
+      // Safe episode discovery & disk hydration (skipped when caller only mutates single-segment metadata)
+      if (!options.skipHydration) {
       const epBaseDir = path.join(seriesDir, 'episodes');
       if (fs.existsSync(epBaseDir)) {
         try {
@@ -539,6 +540,7 @@ function getSeriesMetadata(seriesId, options = {}) {
             needsSave = true;
           }
         }
+      }
       }
 
       if (needsSave && !seriesCreationLocks.has(lockKey)) {
@@ -655,7 +657,7 @@ function saveSeriesMetadata(series, options = {}) {
   const seriesDir = path.join(projectsDir, cleanSeries);
   if (!fs.existsSync(seriesDir)) fs.mkdirSync(seriesDir, { recursive: true });
 
-  const sanitized = sanitizeSeriesEpisodes(series);
+  const sanitized = options.skipSanitize ? series : sanitizeSeriesEpisodes(series);
   const metaPath = path.join(seriesDir, 'series.json');
   atomicWriteSeriesJson(metaPath, sanitized);
   try {
@@ -688,7 +690,7 @@ function saveSeriesMetadata(series, options = {}) {
 function updateSeriesMetadata(seriesId, mutatorFn, options = {}) {
   if (!seriesId || typeof mutatorFn !== 'function') return false;
   const cleanSeries = sanitizeProjectName(seriesId);
-  const freshSeries = getSeriesMetadata(cleanSeries, { ...options, forceDisk: true });
+  const freshSeries = getSeriesMetadata(cleanSeries, { ...options, forceDisk: !options.useStatCache });
   if (!freshSeries) return false;
 
   const outcome = mutatorFn(freshSeries);

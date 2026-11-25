@@ -23,13 +23,32 @@ const {
 } = require('../../models/speakerRegistry');
 const { enrichCuesWithAcousticPitch } = require('./stages/stage4_analyzeDialogueAudio');
 
+const AUDIO_MULTIMODAL_FALLBACK_MODELS = [
+  'gemini-3.8-flash',
+  'gemini-3.5-flash',
+  'gemini-3.6-flash',
+  'gemini-3.7-flash',
+  'gemini-3-flash-preview',
+  'gemini-flash-latest',
+  'gemini-3.5-flash-lite',
+];
+
 const SYSTEM_CUE_PATTERN =
   /^(?:恭喜(?:龙国)?(?:玩家|宿主)|检测(?:宿主|异常|完毕)|获得(?:SSS?|SS|[ABCDE])?级?天赋|免疫.*伤害|冷却时间\d+|通关奖励结算|国运规则怪谈.*现在开始|规则[一二三四五六七八九十百\d]+(?:$|[：:，,\s]))/;
+
+const BROADCAST_OR_SYSTEM_TEXT_PATTERN =
+  /(?:恭喜|宿主|玩家|天赋|规则|系统|冷却时间|免疫.*伤害|祝福已生效|通关|奖励|陨落|诡异入侵|降临.*全境|副本.*开始|检测到|警告|提示|结算)/;
 
 function isDeterministicSystemCue(text = '') {
   const clean = String(text || '').trim();
   if (!clean) return false;
   return SYSTEM_CUE_PATTERN.test(clean);
+}
+
+function isSystemOrBroadcastLikeText(text = '') {
+  const clean = String(text || '').trim();
+  if (!clean) return false;
+  return SYSTEM_CUE_PATTERN.test(clean) || BROADCAST_OR_SYSTEM_TEXT_PATTERN.test(clean);
 }
 
 function normalizeCharacterAliasKey(name = '') {
@@ -180,6 +199,9 @@ async function buildBatchMontageAndAudio({
   workDir,
   batchIndex,
   startOffsetSec = 0,
+  padBeforeSec = 0.5,
+  padAfterSec = 0.5,
+  audioBitrate = '48k',
   signal = null,
 }) {
   const batchDir = path.join(workDir, `batch_${batchIndex}`);
@@ -188,8 +210,8 @@ async function buildBatchMontageAndAudio({
   const montageOut = path.join(batchDir, 'frames_grid.jpg');
   const audioOut = path.join(batchDir, 'scene_audio.mp3');
 
-  const minStart = Math.max(0, Math.min(...batchItems.map((it) => Number(it.cue.startSec || 0))) - 0.5);
-  const maxEnd = Math.max(minStart + 1.0, Math.max(...batchItems.map((it) => Number(it.cue.endSec || it.cue.startSec + 1.5))) + 0.5);
+  const minStart = Math.max(0, Math.min(...batchItems.map((it) => Number(it.cue.startSec || 0))) - padBeforeSec);
+  const maxEnd = Math.max(minStart + 1.0, Math.max(...batchItems.map((it) => Number(it.cue.endSec || it.cue.startSec + 1.5))) + padAfterSec);
   const sliceDur = Math.max(1.0, Math.min(95.0, maxEnd - minStart));
   const localSeek = startOffsetSec > 0 && mediaSourcePath && String(mediaSourcePath).includes('chunk_')
     ? Math.max(0, minStart - startOffsetSec)
@@ -236,7 +258,7 @@ async function buildBatchMontageAndAudio({
           '-ac', '1',
           '-ar', '16000',
           '-c:a', 'libmp3lame',
-          '-b:a', '24k',
+          '-b:a', audioBitrate,
           audioOut,
         ],
         { timeoutMs: 30000, signal }
@@ -297,6 +319,18 @@ function findCastMatch(index, candidateNames = []) {
   return null;
 }
 
+function formatAuxAudioHint(cue = {}) {
+  const f0 = Number(cue.pitchHz || 0);
+  const vr = Number(cue.voicedRatio || 0);
+  const iqr = Number(cue.pitchIqr || 0);
+  const acG = String(cue.acousticGender || 'unknown').toLowerCase();
+  const acC = Number(cue.acousticConfidence || 0);
+  if (cue.bgmSuspected || f0 <= 0 || vr < 0.3) return 'noisy_or_mixed';
+  if (acG === 'female' && acC >= 0.72 && iqr < 68) return `clean_high_timbre(f0~${f0}Hz)`;
+  if (acG === 'male' && acC >= 0.72 && iqr < 65) return `clean_low_timbre(f0~${f0}Hz)`;
+  return 'ambiguous_timbre';
+}
+
 function buildVerificationPrompt({ batchItems, sliceStartSec, contextBefore, contextAfter, knownCastList }) {
   const castLines = knownCastList.length > 0
     ? knownCastList
@@ -309,7 +343,7 @@ function buildVerificationPrompt({ batchItems, sliceStartSec, contextBefore, con
     .map((c) => `  [prev ${Number(c.startSec || 0).toFixed(1)}s | speaker="${c.speakerName || '?'}" (${c.speakerGender || 'UNKNOWN'})]: ${c.chineseText}`)
     .join('\n');
   const afterText = (contextAfter || [])
-    .map((c) => `  [next ${Number(c.startSec || 0).toFixed(1)}s]: ${c.chineseText}`)
+    .map((c) => `  [next ${Number(c.startSec || 0).toFixed(1)}s${c.speakerName ? ` | speaker="${c.speakerName}" (${c.speakerGender || 'UNKNOWN'})` : ''}]: ${c.chineseText}`)
     .join('\n');
 
   const cueLines = batchItems
@@ -319,12 +353,14 @@ function buildVerificationPrompt({ batchItems, sliceStartSec, contextBefore, con
       const relEnd = Math.max(0, Number(c.endSec || c.startSec + 1) - sliceStartSec).toFixed(2);
       const durSec = Math.max(0.2, Number(c.endSec || c.startSec + 1) - Number(c.startSec || 0)).toFixed(2);
       const vis = it.visual;
-      return `${slotIdx + 1}. sourceCueId="${c.sourceCueId}" | sceneTime=${relStart}s-${relEnd}s (dur=${durSec}s) | frameCell=#${slotIdx + 1} | faces=${vis ? vis.faceCount : '?'} | shotCut=${vis?.sceneCutFromPrev ? 'YES' : 'no'} | voiceCluster=${c.acousticClusterId || 'none'} | bgmHeavy=${Boolean(c.bgmSuspected)} | zh="${c.chineseText}"`;
+      const clusterTag = (!c.bgmSuspected && c.acousticClusterId) ? c.acousticClusterId : 'none';
+      const audioHint = formatAuxAudioHint(c);
+      return `${slotIdx + 1}. sourceCueId="${c.sourceCueId}" | sceneTime=${relStart}s-${relEnd}s (dur=${durSec}s) | frameCell=#${slotIdx + 1} | faces=${vis ? vis.faceCount : '?'} | shotCut=${vis?.sceneCutFromPrev ? 'YES' : 'no'} | audioHint=${audioHint} | voiceCluster=${clusterTag} | zh="${c.chineseText}"`;
     })
     .join('\n');
 
   return `You are a Multimodal Speaker Verification Specialist for Chinese-to-Khmer drama dubbing.
-Analyze BOTH the attached audio clip (scene_audio.mp3 starting at 0.00s) AND the numbered keyframe contact sheet (frames_grid.jpg where cell #N corresponds to cue #N) together with the dialogue lines below.
+Analyze BOTH the attached audio clip (scene_audio.mp3 starting at 0.00s) AND the numbered keyframe contact sheet (frames_grid.jpg where cell #N corresponds to cue #N) together with the dialogue lines and surrounding turns below.
 
 KNOWN VERIFIED RECURRING CAST (REUSE EXACT KHMER NAME & GENDER ONLY WHEN THIS SAME CHARACTER ACTUALLY SPEAKS):
 ${castLines}
@@ -335,14 +371,16 @@ ${cueLines}
 ${afterText ? `\nFOLLOWING CONTEXT:\n${afterText}` : ''}
 
 STRICT VERIFICATION RULES:
-1. Listen carefully to the ACTUAL human voice at sceneTime in scene_audio.mp3 AND inspect cell #N of frames_grid.jpg together.
-2. Distinguish the ACTUAL SPEAKER from silent characters/listeners shown on screen, off-screen speakers, commentators, or UI system announcements.
-3. NEVER confuse panicked, crying, screaming, or excited young/adult men with FEMALE. Judge real vocal timbre & chest/throat resonance in scene_audio.mp3 plus character identity — never guess gender from pitch height or emotion alone.
-4. Cartoon animals, spirits, or children should match the ACTUAL voice actor timbre heard in scene_audio.mp3 at sceneTime.
-5. Reserve "ប្រព័ន្ធ" (System, FEMALE) STRICTLY when the voice ACTUALLY HEARD in scene_audio.mp3 sounds like a calm female/robotic UI prompt ("恭喜...", "规则...", "检测...", "天赋..."). If a world/invasion/player-death broadcast is spoken by a MALE announcer/commentator voice in scene_audio.mp3, label it "អ្នកអត្ថាធិប្បាយ" with "MALE", NEVER force it to "ប្រព័ន្ធ". Never label cheering spectators, commentators, or officials as "ប្រព័ន្ធ".
-6. Keep grammatical mid-sentence continuations under the same speaker unless a clear voice switch occurs in scene_audio.mp3.
-7. If a line talks ABOUT another character (e.g. calling "苏铭" or "妈妈"), identify WHO IS SPEAKING, not the person mentioned.
-8. Name recurring scene speakers cleanly by role or name (e.g. "ស៊ូ មីង", "ម្តាយ", "យាយចាស់", "នាយក", "ជំនួយការ", "មន្ត្រីជប៉ុន", "អ្នកទស្សនា", "អ្នកទស្សនាស្រី", "បិសាចសក់ស", "ក្មេងស្រី", "យូម៉ា") — NEVER invent numbered placeholders like "ស្ត្រីទី១/២/៣" or "បុរសទី១/២/៣" and NEVER use English "UNKNOWN" as speakerName. If evidence is genuinely ambiguous, set "speakerName": "តួអង្គ", "speakerGender": "UNKNOWN", "isAmbiguous": true, "confidence": 0.45.
+1. Listen carefully to the ACTUAL human voice at sceneTime in scene_audio.mp3 AND inspect cell #N of frames_grid.jpg together. Treat audioHint/voiceCluster as auxiliary clues only — ALWAYS trust your direct listening of vocal timbre + visual + conversational turn context, NEVER raw pitch alone.
+2. OFF-SCREEN CALLERS vs SILENT LISTENERS: Distinguish the ACTUAL SPEAKER from silent characters/listeners shown on screen! If a short line calls a character's name while frame #N shows that character's close-up face freezing/listening (mouth closed) and the following lines react ("她/他知道我的名字..."), the shown face is the LISTENER — identify the off-screen speaker from scene_audio.mp3 and surrounding turns.
+3. SCREAMING/PANICKED MEN vs WOMEN: Never confuse panicked, crying, screaming, or excited young/adult men with FEMALE. Judge real vocal timbre & chest/throat resonance in scene_audio.mp3 plus character identity — never guess gender from pitch height or emotion alone.
+4. CHILDREN, SPIRITS & CARTOON CREATURES (VOICE-ACTOR TIMBRE): In animated/3D dramas, young children (including young boys!), small spirits, and cute animals are very often voiced by adult FEMALE voice actresses (light/bright female timbre), while other child scenes use a deeper male/boy actor. Set "speakerGender" to match the ACTUAL voice actor's vocal gender heard in scene_audio.mp3 at sceneTime ("FEMALE" when voiced by a female/high-child actress so Khmer female voice matches; "MALE" when voiced by a deeper male/boy actor) — do NOT force "MALE" just because the child on screen looks like a boy.
+5. DISTORTED / ECHOEY GHOSTS & MONSTERS: Never assume a scary ghost, spirit, or monster is "MALE" because of frightening visuals or echo/reverb/chorus distortion. Listen underneath the audio effect in scene_audio.mp3 to identify whether the underlying voice actor is FEMALE (ghostly female hiss/wail/voice → "FEMALE") or MALE (deep male growl/voice → "MALE").
+6. CROWD, DANMAKU (SCROLLING COMMENTS) & GROUP REACTIONS: On scrolling-comment screens (faces=0) or multi-person crowd shots, speakers frequently switch between MALE and FEMALE viewers across consecutive lines! Listen carefully to EACH individual line at sceneTime for voice switches (male viewer ↔ female viewer), and in crowd shots check who is actively gesturing/shouting (even off-center) rather than assuming the center man or previous commentator keeps speaking. Use distinct role labels like "អ្នកទស្សនា" (MALE) vs "អ្នកទស្សនាស្រី" (FEMALE).
+7. SYSTEM UI PROMPTS vs WORLD BROADCASTS vs HUMAN DIALOGUE:
+   - Reserve "ប្រព័ន្ធ" (System) STRICTLY for automated UI/game/rule prompts — NEVER assign "ប្រព័ន្ធ" to ordinary human dialogue, human inner thoughts, or a character shouting a skill/move/spell name after a system prompt ends!
+   - For ANY system or world broadcast (including player-death / invasion / rule announcements), ALWAYS verify the ACTUAL voice heard in THIS scene's scene_audio.mp3 at sceneTime: if spoken by a FEMALE voice → "ប្រព័ន្ធ" ("FEMALE"); if spoken by a MALE announcer voice → "អ្នកអត្ថាធិប្បាយ" ("MALE"). Never blindly carry over a broadcast gender from another scene!
+8. Keep grammatical mid-sentence continuations under the same speaker unless a clear voice switch occurs in scene_audio.mp3. Never invent numbered placeholders ("ស្ត្រីទី១/២/៣", "បុរសទី១/២/៣") or English "UNKNOWN" as speakerName. If evidence is genuinely unresolvable even from audio + visual + turns, set "speakerName": "តួអង្គ", "speakerGender": "UNKNOWN", "isAmbiguous": true, "confidence": 0.45.
 9. Preserve 1:1 exact "sourceCueId" for EVERY listed cue (do not skip or merge any cue). If ONE cue contains 2 distinct speakers talking inside the same line, keep ONE entry for that sourceCueId and populate "internalTurns": [{ "textZh": "...", "speakerName": "...", "speakerGender": "MALE|FEMALE|UNKNOWN" }].
 
 Return ONLY valid JSON:
@@ -362,6 +400,192 @@ Return ONLY valid JSON:
     }
   ]
 }`;
+}
+
+function buildFocusedRecheckPrompt({ batchItems, sliceStartSec, contextBefore, contextAfter, knownCastList, reasonsByCueId, pass1ByCueId }) {
+  const castLines = knownCastList.length > 0
+    ? knownCastList
+        .slice(0, 20)
+        .map((c) => `- "${c.name}" (gender=${c.gender})`)
+        .join('\n')
+    : '- (Use concise consistent Khmer role/character names)';
+
+  const beforeText = (contextBefore || [])
+    .map((c) => `  [prev ${Number(c.startSec || 0).toFixed(1)}s | speaker="${c.speakerName || '?'}" (${c.speakerGender || 'UNKNOWN'})]: ${c.chineseText}`)
+    .join('\n');
+  const afterText = (contextAfter || [])
+    .map((c) => `  [next ${Number(c.startSec || 0).toFixed(1)}s | speaker="${c.speakerName || '?'}" (${c.speakerGender || 'UNKNOWN'})]: ${c.chineseText}`)
+    .join('\n');
+
+  const cueLines = batchItems
+    .map((it, slotIdx) => {
+      const c = it.cue;
+      const relStart = Math.max(0, Number(c.startSec || 0) - sliceStartSec).toFixed(2);
+      const relEnd = Math.max(0, Number(c.endSec || c.startSec + 1) - sliceStartSec).toFixed(2);
+      const p1 = pass1ByCueId.get(c.sourceCueId);
+      const p1Desc = p1 ? `pass1="${p1.speakerName}"(${p1.speakerGender}, conf=${p1.confidence})` : 'pass1=MISSING';
+      const flagReason = reasonsByCueId.get(c.sourceCueId) || 'recheck';
+      return `${slotIdx + 1}. sourceCueId="${c.sourceCueId}" | sceneTime=${relStart}s-${relEnd}s | frameCell=#${slotIdx + 1} | ${p1Desc} | flag="${flagReason}" | audioHint=${formatAuxAudioHint(c)} | zh="${c.chineseText}"`;
+    })
+    .join('\n');
+
+  return `FOCUSED SECOND-OPINION SPEAKER VERIFICATION (TARGETED AUDIT).
+Re-listen VERY CAREFULLY to the crisp audio clip (scene_audio.mp3 starting at 0.00s) and inspect frames_grid.jpg together with the surrounding turns below to resolve ONLY these flagged cues.
+
+KNOWN CAST:
+${castLines}
+
+${beforeText ? `PRECEDING TURNS:\n${beforeText}\n` : ''}
+FLAGGED CUES TO RE-VERIFY:
+${cueLines}
+${afterText ? `\nFOLLOWING TURNS:\n${afterText}` : ''}
+
+ADJUDICATION INSTRUCTIONS:
+1. Focus strictly on the exact voice heard at sceneTime in scene_audio.mp3 combined with visual + surrounding turns.
+2. Check specifically for common Pass-1 errors:
+   - Female voice actress voicing a child/boy → "FEMALE" (match actual heard voice timbre, not cartoon boy appearance).
+   - Distorted/echoey ghostly female voice stereotyped as male → listen beneath reverb/chorus for true female vs male timbre.
+   - Off-screen caller calling an on-screen silent listener's name (check next-turn reaction like "她/他...") → identify the actual off-screen speaker.
+   - Male↔female viewer switches in scrolling danmaku or crowd reactions (do NOT lump all viewers into one male voice).
+   - Broadcast / system voice gender mismatch or "ប្រព័ន្ធ" mistakenly applied to human dialogue, inner thoughts, or skill shouts.
+   - High-pitched panicked/screaming man → if you clearly hear a panicked male actor (not a woman/child-actress/female ghost), KEEP "MALE" with high confidence (>=0.80) and explain why!
+3. Do NOT guess randomly. If audio+visual+turns make the speaker clear, resolve with confidence >= 0.75 and "isAmbiguous": false. Only leave "UNKNOWN" / "isAmbiguous": true if genuinely impossible to tell.
+4. Preserve exact 1:1 "sourceCueId" for every listed cue.
+
+Return ONLY valid JSON:
+{
+  "cues": [
+    {
+      "sourceCueId": "cue_1",
+      "speakerName": "...",
+      "chineseAlias": "",
+      "speakerGender": "MALE",
+      "confidence": 0.9,
+      "deliveryType": "out_loud",
+      "speakerLocation": "on_screen",
+      "isAmbiguous": false,
+      "evidence": "Clear vocal timbre + turn context explanation",
+      "internalTurns": []
+    }
+  ]
+}`;
+}
+
+function findSuspectCuesForFocusedRecheck(preliminary = [], mmResults = new Map()) {
+  const reasonsByCueId = new Map();
+  const flaggedIndices = new Set();
+
+  for (let i = 0; i < preliminary.length; i++) {
+    const item = preliminary[i];
+    if (!item.needsMm || !item.cue.chineseText) continue;
+    const c = item.cue;
+    const mm = mmResults.get(c.sourceCueId);
+
+    if (!mm || mm.isAmbiguous || mm.speakerGender === 'UNKNOWN' || mm.confidence < 0.65) {
+      flaggedIndices.add(i);
+      reasonsByCueId.set(c.sourceCueId, !mm ? 'missing_pass1' : `unresolved_or_low_conf(${mm.speakerGender},${mm.confidence})`);
+      continue;
+    }
+
+    const f0 = Number(c.pitchHz || 0);
+    const vr = Number(c.voicedRatio || 0);
+    const iqr = Number(c.pitchIqr || 0);
+    const acC = Number(c.acousticConfidence || 0);
+    const p25 = Number(c.pitchP25 || 0);
+    const p75 = Number(c.pitchP75 || 0);
+
+    // 1. High-precision clean-audio vs Pass-1 multimodal disagreement (triggers focused multimodal re-listen, NEVER flips by F0 alone)
+    const strongFemaleConflict = Boolean(
+      mm.speakerGender === 'MALE' &&
+      !c.bgmSuspected &&
+      c.acousticGender === 'female' &&
+      vr >= 0.45 &&
+      iqr < 55 &&
+      acC >= 0.80 &&
+      p25 >= 180
+    );
+    const strongMaleConflict = Boolean(
+      mm.speakerGender === 'FEMALE' &&
+      !c.bgmSuspected &&
+      c.acousticGender === 'male' &&
+      vr >= 0.35 &&
+      iqr < 55 &&
+      acC >= 0.74 &&
+      p75 > 0 &&
+      p75 <= 158
+    );
+    if (strongFemaleConflict) {
+      flaggedIndices.add(i);
+      reasonsByCueId.set(c.sourceCueId, `audio_conflict_pass1_MALE_vs_clean_high_voice(f0=${f0}Hz,p25=${p25}Hz,iqr=${iqr},acC=${acC})`);
+      continue;
+    }
+    if (strongMaleConflict) {
+      flaggedIndices.add(i);
+      reasonsByCueId.set(c.sourceCueId, `audio_conflict_pass1_FEMALE_vs_clean_low_voice(f0=${f0}Hz,p75=${p75}Hz,iqr=${iqr},acC=${acC})`);
+      continue;
+    }
+
+    // 2. Suspicious System ("ប្រព័ន្ធ") label on non-system dialogue or inner thought
+    if (
+      mm.speakerName === 'ប្រព័ន្ធ' &&
+      !isSystemOrBroadcastLikeText(c.chineseText) &&
+      (mm.deliveryType === 'inner_thought' || (f0 > 0 && f0 <= 135))
+    ) {
+      flaggedIndices.add(i);
+      reasonsByCueId.set(c.sourceCueId, `suspicious_system_on_non_system_text(delivery=${mm.deliveryType},f0=${f0}Hz)`);
+      continue;
+    }
+  }
+
+  // 2b. Multi-cue consecutive female-band acoustic conflict (2+ adjacent cues with clean female voice where Pass 1 said MALE)
+  for (let i = 0; i < preliminary.length - 1; i++) {
+    const a = preliminary[i];
+    const b = preliminary[i + 1];
+    if (!a.needsMm || !b.needsMm) continue;
+    const mmA = mmResults.get(a.cue.sourceCueId);
+    const mmB = mmResults.get(b.cue.sourceCueId);
+    if (!mmA || !mmB || mmA.speakerGender !== 'MALE' || mmB.speakerGender !== 'MALE') continue;
+    const gap = Math.abs(Number(b.cue.startSec || 0) - Number(a.cue.endSec || 0));
+    const isCleanFem = (c) => !c.bgmSuspected && c.acousticGender === 'female' && Number(c.acousticConfidence || 0) >= 0.74 && Number(c.pitchP25 || 0) >= 175 && Number(c.pitchIqr || 0) < 68;
+    if (gap <= 3.0 && isCleanFem(a.cue) && isCleanFem(b.cue)) {
+      for (const idx of [i, i + 1]) {
+        if (!flaggedIndices.has(idx)) {
+          flaggedIndices.add(idx);
+          reasonsByCueId.set(preliminary[idx].cue.sourceCueId, `multi_cue_audio_conflict_pass1_MALE_vs_clean_female(f0=${preliminary[idx].cue.pitchHz}Hz)`);
+        }
+      }
+    }
+  }
+
+  // Expand ±1 immediate same-turn neighbor within 2.0s when the neighbor had noisy/BGM audio and shared the same Pass-1 speaker
+  // so Gemini hears the complete uninterrupted turn in the SAME focused clip (0 extra calls).
+  const initialFlagged = Array.from(flaggedIndices);
+  for (const idx of initialFlagged) {
+    const curItem = preliminary[idx];
+    const curMm = mmResults.get(curItem.cue.sourceCueId);
+    if (!curMm) continue;
+    for (const delta of [-1, 1]) {
+      const ni = idx + delta;
+      if (ni < 0 || ni >= preliminary.length || flaggedIndices.has(ni)) continue;
+      const nb = preliminary[ni];
+      if (!nb.needsMm || !nb.cue.chineseText) continue;
+      const nbMm = mmResults.get(nb.cue.sourceCueId);
+      if (!nbMm) continue;
+      const gap = delta < 0
+        ? Math.abs(Number(curItem.cue.startSec || 0) - Number(nb.cue.endSec || 0))
+        : Math.abs(Number(nb.cue.startSec || 0) - Number(curItem.cue.endSec || 0));
+      if (gap <= 2.0 && nbMm.speakerName === curMm.speakerName && nbMm.speakerGender === curMm.speakerGender && Boolean(nb.cue.bgmSuspected)) {
+        flaggedIndices.add(ni);
+        reasonsByCueId.set(nb.cue.sourceCueId, `same_turn_neighbor_of_${curItem.cue.sourceCueId}`);
+      }
+    }
+  }
+
+  const sortedItems = Array.from(flaggedIndices)
+    .sort((a, b) => a - b)
+    .map((i) => preliminary[i]);
+
+  return { suspectItems: sortedItems, reasonsByCueId };
 }
 
 function buildCueGroupsForVerification(indexedItems = [], maxBatchSize = 18, maxSpanSec = 70) {
@@ -521,7 +745,7 @@ async function identifySpeakersForCues({
 
       log(`Verifying ${itemsToVerify.length}/${workingCues.length} uncertain cues in ${batches.length} multimodal scene batch(es) (model=${activeModel})`);
 
-      const ingestReturnedCues = (returnedCues = [], targetIds = null) => {
+      const ingestReturnedCues = (returnedCues = [], targetIds = null, { isRecheck = false } = {}) => {
         for (const rc of returnedCues) {
           const cid = String(rc?.sourceCueId || '').trim();
           if (!cid || (targetIds && !targetIds.has(cid))) continue;
@@ -543,6 +767,7 @@ async function identifySpeakersForCues({
             isAmbiguous: Boolean(rc.isAmbiguous || mmGender === 'UNKNOWN' || isLowConfGeneric),
             evidence: String(rc.evidence || 'Multimodal audio + visual verification').trim(),
             internalTurns: Array.isArray(rc.internalTurns) ? rc.internalTurns : [],
+            rechecked: Boolean(isRecheck),
           });
 
           // Promote ONLY non-numbered/non-crowd verified characters into running episode cast index
@@ -567,13 +792,17 @@ async function identifySpeakersForCues({
         }
       };
 
-      const callGeminiVerification = async (promptParts, targetBatch, tagSuffix) => {
+      const callGeminiVerification = async (promptParts, targetBatch, tagSuffix, { preferStrongAudio = false } = {}) => {
         geminiCallsCount++;
+        const primaryForCall = preferStrongAudio ? 'gemini-3.8-flash' : activeModel;
+        const modelsForCall = preferStrongAudio
+          ? AUDIO_MULTIMODAL_FALLBACK_MODELS
+          : [activeModel, ...AUDIO_MULTIMODAL_FALLBACK_MODELS.filter((m) => m !== activeModel)];
         const geminiRes = geminiGenerateFn
-          ? await geminiGenerateFn({ client, model: activeModel, parts: promptParts, batch: targetBatch, signal })
+          ? await geminiGenerateFn({ client, model: primaryForCall, parts: promptParts, batch: targetBatch, signal })
           : await generateContentWithModelFallback(
               client,
-              activeModel,
+              primaryForCall,
               () => ({
                 contents: [{ role: 'user', parts: promptParts }],
                 config: {
@@ -582,6 +811,7 @@ async function identifySpeakersForCues({
                 },
               }),
               {
+                models: modelsForCall,
                 logTag: `speakerId_${tagSuffix}`,
                 timeoutMs: 45000,
               }
@@ -604,7 +834,7 @@ async function identifySpeakersForCues({
         const firstIdx = batch[0].idx;
         const lastIdx = batch[batch.length - 1].idx;
         const contextBefore = [];
-        for (let p = Math.max(0, firstIdx - 2); p < firstIdx; p++) {
+        for (let p = Math.max(0, firstIdx - 3); p < firstIdx; p++) {
           const prevMm = mmResults.get(workingCues[p].sourceCueId) || preliminary[p].localMatch;
           contextBefore.push({
             startSec: workingCues[p].startSec,
@@ -613,7 +843,7 @@ async function identifySpeakersForCues({
             speakerGender: prevMm?.speakerGender || workingCues[p].speakerGender,
           });
         }
-        const contextAfter = workingCues.slice(lastIdx + 1, lastIdx + 2).map((c) => ({
+        const contextAfter = workingCues.slice(lastIdx + 1, lastIdx + 4).map((c) => ({
           startSec: c.startSec,
           chineseText: c.chineseText,
         }));
@@ -675,6 +905,90 @@ async function identifySpeakersForCues({
         } catch (batchErr) {
           if (batchErr?.name === 'AbortError' || signal?.aborted) throw batchErr;
           console.warn(`[SpeakerID] Batch ${bIdx + 1} Gemini fallback notice:`, batchErr.message);
+        }
+      }
+
+      // 3b. Targeted Selective Micro-Verification ONLY for unresolved / acoustic-conflicted / suspicious-system cues
+      const { suspectItems, reasonsByCueId } = findSuspectCuesForFocusedRecheck(preliminary, mmResults);
+      if (suspectItems.length > 0) {
+        const recheckGroups = buildCueGroupsForVerification(suspectItems, 6, 22).slice(0, 4);
+        log(`Focused re-check on ${suspectItems.length} flagged cue(s) in ${recheckGroups.length} compact group(s)`);
+        const pass1Snapshot = new Map(mmResults);
+
+        for (let rIdx = 0; rIdx < recheckGroups.length; rIdx++) {
+          if (signal?.aborted) throw createAbortError('Speaker identification aborted');
+          const rGroup = recheckGroups[rIdx];
+          const firstIdx = rGroup[0].idx;
+          const lastIdx = rGroup[rGroup.length - 1].idx;
+
+          const contextBefore = [];
+          for (let p = Math.max(0, firstIdx - 3); p < firstIdx; p++) {
+            const prevMm = mmResults.get(workingCues[p].sourceCueId) || preliminary[p].localMatch;
+            contextBefore.push({
+              startSec: workingCues[p].startSec,
+              chineseText: workingCues[p].chineseText,
+              speakerName: prevMm?.speakerName || workingCues[p].speaker,
+              speakerGender: prevMm?.speakerGender || workingCues[p].speakerGender,
+            });
+          }
+          const contextAfter = [];
+          for (let n = lastIdx + 1; n < Math.min(workingCues.length, lastIdx + 4); n++) {
+            const nextMm = mmResults.get(workingCues[n].sourceCueId) || preliminary[n].localMatch;
+            contextAfter.push({
+              startSec: workingCues[n].startSec,
+              chineseText: workingCues[n].chineseText,
+              speakerName: nextMm?.speakerName || workingCues[n].speaker,
+              speakerGender: nextMm?.speakerGender || workingCues[n].speakerGender,
+            });
+          }
+
+          const { montagePath, audioPath: sliceAudioPath, sliceStartSec } = await buildBatchMontageAndAudio({
+            batchItems: rGroup,
+            mediaSourcePath: (audioPath && fs.existsSync(audioPath)) ? audioPath : videoPath,
+            workDir,
+            batchIndex: `recheck_${rIdx + 1}`,
+            startOffsetSec,
+            padBeforeSec: 2.0,
+            padAfterSec: 2.0,
+            audioBitrate: '64k',
+            signal,
+          });
+
+          const recheckPrompt = buildFocusedRecheckPrompt({
+            batchItems: rGroup,
+            sliceStartSec,
+            contextBefore,
+            contextAfter,
+            knownCastList: Array.from(new Map(Array.from(castIndex.values()).map((c) => [c.speakerId, c])).values()),
+            reasonsByCueId,
+            pass1ByCueId: pass1Snapshot,
+          });
+
+          try {
+            const mediaParts = [];
+            if (sliceAudioPath && fs.existsSync(sliceAudioPath)) {
+              mediaParts.push({
+                inlineData: {
+                  mimeType: 'audio/mp3',
+                  data: fs.readFileSync(sliceAudioPath).toString('base64'),
+                },
+              });
+            }
+            if (montagePath && fs.existsSync(montagePath)) {
+              mediaParts.push({
+                inlineData: {
+                  mimeType: 'image/jpeg',
+                  data: fs.readFileSync(montagePath).toString('base64'),
+                },
+              });
+            }
+            const targetIds = new Set(rGroup.map((it) => it.cue.sourceCueId));
+            const returned = await callGeminiVerification([...mediaParts, { text: recheckPrompt }], rGroup, `recheck_${rIdx + 1}`, { preferStrongAudio: true });
+            ingestReturnedCues(returned, targetIds, { isRecheck: true });
+          } catch (recheckErr) {
+            if (recheckErr?.name === 'AbortError' || signal?.aborted) throw recheckErr;
+            console.warn(`[SpeakerID] Focused recheck ${rIdx + 1} notice:`, recheckErr.message);
+          }
         }
       }
     }
@@ -744,9 +1058,10 @@ async function identifySpeakersForCues({
         resolvedSource = localMatch.source;
         reason = localMatch.evidence;
       } else if (mm && !mm.isAmbiguous && mm.speakerGender !== 'UNKNOWN' && mm.confidence >= 0.62) {
-        // Check severe clean-voice contradiction only when audio has low IQR & high periodicity (no scream/BGM confusion)
+        // Check severe clean-voice contradiction only when NOT already adjudicated by focused multimodal re-listening
         const pitch = Number(cue.pitchHz || 0);
         const cleanAudioContradiction = Boolean(
+          !(mm.rechecked && mm.confidence >= 0.72) &&
           !cue.bgmSuspected &&
           Number(cue.voicedRatio || 0) >= 0.45 &&
           Number(cue.pitchIqr || 0) < 42 &&
@@ -789,10 +1104,16 @@ async function identifySpeakersForCues({
       const speakerName = normalizeSpeakerName(candidateName || 'តួអង្គ', voiceGender);
       const isGeneric = isGenericSpeakerName(speakerName);
 
-      // Mint distinct, consistent speakerId (same character -> same ID; generic/unknown -> isolated ID)
+      // Mint distinct, consistent speakerId:
+      // - Named recurring characters -> canonical series/character ID (e.g. spk_ស៊ូ_មីង, spk_ប្រព័ន្ធ)
+      // - Episodic/crowd roles (e.g. អ្នកទស្សនា, បិសាច, ក្មេងប្រុសវិញ្ញាណ) -> gender-qualified ID so male/female crowd speakers never collide
+      // - Generic/unknown -> isolated ID
       let speakerId;
       if (seriesMatch && !isGeneric && isVerified && seriesMatch.gender === finalGender) {
         speakerId = seriesMatch.speakerId;
+      } else if (!isGeneric && isVerified && isEpisodicRoleSpeakerName(speakerName)) {
+        const baseRole = getSpeakerId(speakerName).replace(/^spk_/, '');
+        speakerId = `spk_${voiceGender}_${baseRole}`;
       } else if (!isGeneric && isVerified) {
         speakerId = getSpeakerId(speakerName, voiceGender);
       } else if (cue.acousticClusterId) {
@@ -950,4 +1271,6 @@ module.exports = {
   buildVerifiedSeriesSpeakerMapPatch,
   normalizeCharacterAliasKey,
   isDeterministicSystemCue,
+  isSystemOrBroadcastLikeText,
+  findSuspectCuesForFocusedRecheck,
 };

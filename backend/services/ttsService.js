@@ -2138,6 +2138,61 @@ async function generateVoicePreview(voiceId = "km-KH-PisethNeural", customText =
 }
 
 /**
+ * Fast read-only provenance cache check for single-segment voice switching.
+ * Returns true if the exact requested voice/text/speed/effect MP3 already exists on disk
+ * with valid v2 provenance so routes can avoid redundant pre-TTS series.json writes.
+ */
+function hasProvenanceVerifiedSegmentCache(segment, uploadsDir, options = {}) {
+  try {
+    if (!segment || !uploadsDir || options.forceRegen) return false;
+    const rawText = segment.khmer || segment.khmerText || segment.khmerTranslatedText || segment.text || "";
+    const textToSpeak = cleanTextForTts(rawText);
+    if (!textToSpeak || isPlaceholderOrEmptyTtsText(rawText)) return false;
+
+    const speedInfo = resolveSegmentSpeed(segment, options);
+    const rate = speedInfo.rate;
+    const hasExplicitUserSpeed = speedInfo.hasExplicitUserSpeed;
+    const effectiveAutoStretch = Boolean(options.autoStretch ?? true) && !hasExplicitUserSpeed;
+    const voiceId = resolveKhmerVoice(options.voiceId || segment.voiceId || segment.khmerVoiceId || segment.voice, segment.voiceGender || segment.gender || "male");
+    const cleanId = String(segment.id || "").replace(/[^a-zA-Z0-9_-]/g, "_");
+    if (!cleanId) return false;
+    const epRaw = options.episodeId || segment.episodeId || "";
+    const epPrefix = epRaw ? `ep_${String(epRaw).replace(/[^a-zA-Z0-9_-]/g, "_")}_` : "";
+    const deliveryType = options.deliveryType || segment.deliveryType || "out_loud";
+    const isThought = deliveryType === "inner_thought";
+    const audioEffect = options.audioEffect || segment.audioEffect || (isThought ? "inner_thought_reverb" : "none");
+    const effectConfig = options.effectConfig || segment.effectConfig || { inGain: 0.85, outGain: 0.75, delays: "40|90", decays: "0.3|0.15" };
+    const pitchStr = String(options.pitch || "+0Hz");
+    const pitchCacheTag = pitchStr !== "+0Hz" ? `__${pitchStr}` : "";
+    const effectConfigKey = buildEffectConfigKey(deliveryType, audioEffect, effectConfig);
+    const speedCacheMode = hasExplicitUserSpeed ? "custom" : (effectiveAutoStretch ? "fit" : "raw");
+    const cacheKey = `${textToSpeak}__${voiceId}__${deliveryType}__${effectConfigKey}__${rate}__${speedCacheMode}__lt1${pitchCacheTag}`;
+    const cacheHash = crypto.createHash("md5").update(cacheKey).digest("hex").substring(0, 8);
+    const typeTag = isThought ? "thought" : "voice";
+    const outputPath = path.join(uploadsDir, `${epPrefix}seg_${cleanId}_${voiceId}_${typeTag}_${cacheHash}.mp3`);
+    if (!fs.existsSync(outputPath)) return false;
+
+    const prov = verifyAudioFileProvenance(
+      outputPath,
+      {
+        voiceId,
+        textHash: computeTextSha256(textToSpeak),
+        pitch: pitchStr,
+        rate,
+        originalSpeed: Number(speedInfo.numericSpeed ?? 1.0),
+        speedCacheMode,
+        deliveryType,
+        effectConfigKey,
+      },
+      { uploadsDir }
+    );
+    return Boolean(prov.valid);
+  } catch (_) {
+    return false;
+  }
+}
+
+/**
  * Backward compatibility aliases
  */
 async function generateSingleSegmentSpeech(segment, outputDir, options = {}) {
@@ -2164,6 +2219,7 @@ module.exports = {
   buildEffectConfigKey,
   writeAudioProvenance,
   verifyAudioFileProvenance,
+  hasProvenanceVerifiedSegmentCache,
   atomicCommitFile,
   cleanupTempFile,
   synthesizeWithEdgeNeural,

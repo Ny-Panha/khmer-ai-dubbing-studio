@@ -29,11 +29,12 @@ const {
   buildEffectConfigKey,
   writeAudioProvenance,
   verifyAudioFileProvenance,
+  hasProvenanceVerifiedSegmentCache,
 } = require("../services/ttsService");
 const { detectSpeakerGender } = require("../models/speakerRegistry");
 const { createSynchronizedNarrationAudio, parseTimeToSec, autoStretchTtsAudio, getMediaDuration } = require("../services/ffmpegService");
 const audioSeparationService = require("../services/audioSeparationService");
-const { withSeriesMetadataLock, updateSeriesMetadata } = require("../services/episodeService");
+const { getSeriesMetadata, withSeriesMetadataLock, updateSeriesMetadata } = require("../services/episodeService");
 const { getGeminiClient } = require("../services/geminiService");
 const {
   findOverflowShortenCandidates,
@@ -496,12 +497,9 @@ router.post("/generate-audio", async (req, res) => {
         } else {
           let peerSegments = Array.isArray(req.body.allSegments) ? req.body.allSegments : null;
           if (!peerSegments && isEpisode && cleanSeries && cleanEpisode) {
-            const metaPath = path.join(uploadsDir, "projects", cleanSeries, "series.json");
-            if (fs.existsSync(metaPath)) {
-              const meta = JSON.parse(await fs.promises.readFile(metaPath, "utf8"));
-              const ep = (meta.episodes || []).find((e) => String(e.id) === String(cleanEpisode));
-              if (Array.isArray(ep?.scriptData?.segments)) peerSegments = ep.scriptData.segments;
-            }
+            const meta = getSeriesMetadata(cleanSeries);
+            const ep = (meta?.episodes || []).find((e) => String(e.id) === String(cleanEpisode));
+            if (Array.isArray(ep?.scriptData?.segments)) peerSegments = ep.scriptData.segments;
           }
           if (peerSegments) {
             for (const peer of peerSegments) {
@@ -533,10 +531,35 @@ router.post("/generate-audio", async (req, res) => {
         reviewNeeded: isUnknownVoice || Boolean(segment.reviewNeeded),
       };
 
-      // Persist manual voice assignment immediately in parallel with Edge TTS so a mid-generation
-      // reload preserves the chosen voice without adding any latency to TTS synthesis!
+      // Persist manual voice assignment immediately in parallel with Edge TTS ONLY on cache miss
+      // so a mid-generation reload preserves the chosen voice without double-writing series.json on instant cache hits.
+      const hasCachedTargetVoice = !forceRegen && hasProvenanceVerifiedSegmentCache(
+        {
+          ...segment,
+          ...resolvedVoiceMeta,
+          deliveryType,
+          audioEffect,
+          effectConfig,
+          speed: resolvedSegSpeed,
+          userCustomSpeed: hasExplicitUserSpeed,
+          episodeId: cleanEpisode,
+        },
+        audioDir,
+        {
+          autoStretch,
+          rate: speedInfo.valid ? resolvedRate : undefined,
+          speed: speedInfo.provided ? requestedSpeedRaw : undefined,
+          userCustomSpeed: hasExplicitUserSpeed,
+          voiceId: targetVoice,
+          deliveryType,
+          audioEffect,
+          effectConfig,
+          forceRegen: Boolean(forceRegen),
+          episodeId: cleanEpisode,
+        }
+      );
       let prePersistPromise = Promise.resolve();
-      if (isEpisode && cleanSeries && cleanEpisode && isManual) {
+      if (isEpisode && cleanSeries && cleanEpisode && isManual && !hasCachedTargetVoice) {
         const metaPathPre = path.join(uploadsDir, "projects", cleanSeries, "series.json");
         prePersistPromise = withSeriesMetadataLock(cleanSeries, () => {
           if (!fs.existsSync(metaPathPre)) return;
@@ -565,7 +588,7 @@ router.post("/generate-audio", async (req, res) => {
             }
             targetEp.scriptData.updatedAt = Date.now();
             return true;
-          });
+          }, { skipHydration: true, useStatCache: true, skipSanitize: true });
         }).catch(() => {});
       }
 
@@ -737,7 +760,7 @@ router.post("/generate-audio", async (req, res) => {
               targetEp.audioGenerated = true;
               targetEp.hasAudio = true;
               return true;
-            });
+            }, { skipHydration: true, useStatCache: true, skipSanitize: true });
           });
         } catch (_) {}
       }

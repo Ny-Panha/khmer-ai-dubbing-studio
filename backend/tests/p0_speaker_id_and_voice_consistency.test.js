@@ -7,7 +7,8 @@ const path = require('node:path');
 const { detectSpeakerGender, syncSegmentsWithSpeakerRegistry } = require('../models/speakerRegistry');
 const { createSegment } = require('../models/segmentModel');
 const { computeAcousticCueFeatures, clusterCueSpeakers } = require('../services/audioClassifierService');
-const { identifySpeakersForCues, buildVerifiedSeriesSpeakerMapPatch } = require('../services/pipeline/speakerIdentificationService');
+const { identifySpeakersForCues, buildVerifiedSeriesSpeakerMapPatch, findSuspectCuesForFocusedRecheck } = require('../services/pipeline/speakerIdentificationService');
+const { hasProvenanceVerifiedSegmentCache, writeAudioProvenance, computeTextSha256 } = require('../services/ttsService');
 const { applyTranslatedSegmentResult, enforceEpisodeCharacterConsistency } = require('../services/pipeline/stages/stage6PromptAndConsistency');
 const { generateSegmentTTS } = require('../services/pipeline/stages/stage9_generateSegmentTTS');
 const { persistEpisodeScriptData, getSeriesMetadata, saveSeriesMetadata } = require('../services/episodeService');
@@ -283,4 +284,121 @@ test('P0-6: Local acoustic clustering groups same-speaker cues while separating 
   clusterCueSpeakers(cues);
   assert.equal(cues[0].acousticClusterId, cues[2].acousticClusterId, 'Same male voice belongs to same cluster');
   assert.notEqual(cues[0].acousticClusterId, cues[1].acousticClusterId, 'Male and female voices belong to distinct clusters');
+});
+
+test('P0-7: Episodic crowd/ghost roles preserve separate male and female speakerIds without majority-vote collapse', async () => {
+  const cues = [
+    { id: 1, sourceCueId: 'c1', startSec: 0, endSec: 2, chineseText: '太强了', acousticGender: 'male', pitchHz: 125, acousticConfidence: 0.82, voicedRatio: 0.6 },
+    { id: 2, sourceCueId: 'c2', startSec: 2, endSec: 4, chineseText: '真的假的', acousticGender: 'male', pitchHz: 130, acousticConfidence: 0.82, voicedRatio: 0.6 },
+    { id: 3, sourceCueId: 'c3', startSec: 4, endSec: 6, chineseText: '剧情越来越烧脑了', acousticGender: 'female', pitchHz: 255, acousticConfidence: 0.82, voicedRatio: 0.8 },
+  ];
+  const res = await identifySpeakersForCues({
+    cues,
+    apiKey: 'mock-key',
+    visualProbeFn: async () => new Map(),
+    geminiGenerateFn: async () => ({
+      cues: [
+        { sourceCueId: 'c1', speakerName: 'អ្នកទស្សនា', speakerGender: 'MALE', confidence: 0.9, evidence: 'Male viewer' },
+        { sourceCueId: 'c2', speakerName: 'អ្នកទស្សនា', speakerGender: 'MALE', confidence: 0.9, evidence: 'Male viewer' },
+        { sourceCueId: 'c3', speakerName: 'អ្នកទស្សនា', speakerGender: 'FEMALE', confidence: 0.9, evidence: 'Female viewer' },
+      ],
+    }),
+  });
+
+  assert.notEqual(res.cues[0].speakerId, res.cues[2].speakerId, 'Male and female episodic spectators must have distinct speakerIds');
+  const synced = syncSegmentsWithSpeakerRegistry(res.cues, {});
+  assert.equal(synced.segments[0].voiceId, 'km-KH-PisethNeural');
+  assert.equal(synced.segments[1].voiceId, 'km-KH-PisethNeural');
+  assert.equal(synced.segments[2].voiceId, 'km-KH-SreymomNeural', 'Female spectator must NOT be collapsed to male by majority vote');
+});
+
+test('P0-8: Focused re-check targets ONLY affected cues (unresolved, conflict, suspicious system) and never forces raw F0 alone', async () => {
+  const cues = [
+    // Clean verified male -> should NOT be rechecked
+    { id: 1, sourceCueId: 'c_ok', startSec: 0, endSec: 2, chineseText: '走吧', acousticGender: 'male', pitchHz: 120, pitchP75: 135, pitchIqr: 20, acousticConfidence: 0.85, voicedRatio: 0.7, bgmSuspected: false },
+    // Pass 1 unresolved -> MUST be rechecked
+    { id: 2, sourceCueId: 'c_unres', startSec: 3, endSec: 4.5, chineseText: '滚', acousticGender: 'unknown', pitchHz: 0, acousticConfidence: 0, voicedRatio: 0, bgmSuspected: true },
+    // Pass 1 wrongly guessed MALE on clean high-pitched off-screen female -> MUST be rechecked and corrected
+    { id: 3, sourceCueId: 'c_off', startSec: 6, endSec: 7.2, chineseText: '苏铭', acousticGender: 'female', pitchHz: 208, pitchP25: 200, pitchP75: 214, pitchIqr: 14, acousticConfidence: 0.82, voicedRatio: 0.5, bgmSuspected: false },
+    // Panicked screaming male (high F0=260Hz) -> rechecked, Gemini confirms panicked MALE -> MUST remain MALE (never overridden by raw F0!)
+    { id: 4, sourceCueId: 'c_scream', startSec: 9, endSec: 10.5, chineseText: '不要过来', acousticGender: 'female', pitchHz: 260, pitchP25: 240, pitchP75: 270, pitchIqr: 30, acousticConfidence: 0.88, voicedRatio: 0.6, bgmSuspected: false },
+    // Suspicious System label on non-system inner thought -> MUST be rechecked
+    { id: 5, sourceCueId: 'c_sys', startSec: 12, endSec: 14, chineseText: '差点忘了最重要的事情', acousticGender: 'unknown', pitchHz: 111, pitchIqr: 115, acousticConfidence: 0.5, voicedRatio: 0.66, bgmSuspected: true },
+  ];
+
+  const batchesSeen = [];
+  const res = await identifySpeakersForCues({
+    cues,
+    apiKey: 'mock-key',
+    visualProbeFn: async () => new Map(),
+    geminiGenerateFn: async ({ batch }) => {
+      const ids = batch.map((it) => it.cue.sourceCueId);
+      batchesSeen.push(ids);
+      if (batchesSeen.length === 1) {
+        return {
+          cues: [
+            { sourceCueId: 'c_ok', speakerName: 'ស៊ូ មីង', speakerGender: 'MALE', confidence: 0.95 },
+            { sourceCueId: 'c_unres', speakerName: 'តួអង្គ', speakerGender: 'UNKNOWN', isAmbiguous: true, confidence: 0.45 },
+            { sourceCueId: 'c_off', speakerName: 'ស៊ូ មីង', speakerGender: 'MALE', confidence: 0.82 },
+            { sourceCueId: 'c_scream', speakerName: 'យូម៉ា', speakerGender: 'MALE', confidence: 0.85 },
+            { sourceCueId: 'c_sys', speakerName: 'ប្រព័ន្ធ', speakerGender: 'FEMALE', deliveryType: 'inner_thought', confidence: 0.8 },
+          ],
+        };
+      }
+      // Focused re-check call
+      return {
+        cues: [
+          { sourceCueId: 'c_unres', speakerName: 'ស៊ូ មីង', speakerGender: 'MALE', confidence: 0.9, evidence: 'Deep growl confirmed male' },
+          { sourceCueId: 'c_off', speakerName: 'ម្តាយ', speakerGender: 'FEMALE', confidence: 0.92, speakerLocation: 'off_screen', evidence: 'Off-screen mother calling name' },
+          { sourceCueId: 'c_scream', speakerName: 'យូម៉ា', speakerGender: 'MALE', confidence: 0.91, evidence: 'Panicked screaming male actor confirmed' },
+          { sourceCueId: 'c_sys', speakerName: 'ស៊ូ មីង', speakerGender: 'MALE', deliveryType: 'inner_thought', confidence: 0.93, evidence: 'Male protagonist inner thought, not system' },
+        ],
+      };
+    },
+  });
+
+  assert.equal(batchesSeen.length, 2, 'Should run 1 main pass + 1 compact focused re-check');
+  assert.ok(!batchesSeen[1].includes('c_ok'), 'Unaffected verified cue c_ok must NOT be reprocessed');
+  assert.deepEqual(batchesSeen[1], ['c_unres', 'c_off', 'c_scream', 'c_sys']);
+  assert.equal(res.cues.find((c) => c.sourceCueId === 'c_unres').speakerGender, 'MALE');
+  assert.equal(res.cues.find((c) => c.sourceCueId === 'c_off').speakerGender, 'FEMALE');
+  assert.equal(res.cues.find((c) => c.sourceCueId === 'c_scream').speakerGender, 'MALE', 'Confirmed screaming male must stay MALE even with high F0');
+  assert.equal(res.cues.find((c) => c.sourceCueId === 'c_sys').speakerGender, 'MALE');
+  assert.equal(res.stats.reviewNeededCount, 0);
+});
+
+test('P0-9: hasProvenanceVerifiedSegmentCache verifies exact provenance and rejects mismatched voice or forceRegen', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'p0_cache_chk_'));
+  try {
+    const seg = { id: 9, khmer: 'សួស្តី', voiceId: 'km-KH-PisethNeural', speed: 'normal', episodeId: 'ep_2' };
+    assert.equal(hasProvenanceVerifiedSegmentCache(seg, tmpDir, { voiceId: 'km-KH-PisethNeural', episodeId: 'ep_2' }), false);
+
+    // Build exact expected filename via crypto matching ttsService
+    const crypto = require('crypto');
+    const hash = crypto.createHash('md5').update('សួស្តី__km-KH-PisethNeural__out_loud__clean__+0%__fit__lt1').digest('hex').substring(0, 8);
+    const mp3Path = path.join(tmpDir, `ep_ep_2_seg_9_km-KH-PisethNeural_voice_${hash}.mp3`);
+    fs.writeFileSync(mp3Path, Buffer.alloc(600, 1));
+    writeAudioProvenance(mp3Path, {
+      voiceId: 'km-KH-PisethNeural',
+      actualVoiceId: 'km-KH-PisethNeural',
+      rawVoiceId: 'km-KH-PisethNeural',
+      text: 'សួស្តី',
+      textHash: computeTextSha256('សួស្តី'),
+      pitch: '+0Hz',
+      rate: '+0%',
+      originalSpeed: 1.0,
+      appliedSpeed: 1.0,
+      speedCacheMode: 'fit',
+      deliveryType: 'out_loud',
+      audioEffect: 'none',
+      effectConfigKey: 'clean',
+      audioDurationSec: 1.0,
+    });
+
+    assert.equal(hasProvenanceVerifiedSegmentCache(seg, tmpDir, { voiceId: 'km-KH-PisethNeural', episodeId: 'ep_2' }), true);
+    assert.equal(hasProvenanceVerifiedSegmentCache(seg, tmpDir, { voiceId: 'km-KH-SreymomNeural', episodeId: 'ep_2' }), false);
+    assert.equal(hasProvenanceVerifiedSegmentCache(seg, tmpDir, { voiceId: 'km-KH-PisethNeural', episodeId: 'ep_2', forceRegen: true }), false);
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
 });

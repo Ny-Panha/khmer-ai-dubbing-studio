@@ -357,6 +357,9 @@ function syncSegmentsWithSpeakerRegistry(segments = [], customSpeakerVoiceMap = 
     let spkKey;
     if (explicitId && !['spk_1', 'spk_តួអង្គ', 'spk_default', 'spk'].includes(String(explicitId).trim())) {
       spkKey = String(explicitId).trim();
+    } else if (!isGenericRaw && isEpisodicRoleSpeakerName(rawSpeaker) && (perCueGender === 'female' || perCueGender === 'male')) {
+      const baseRoleId = getSpeakerId(rawSpeaker).replace(/^spk_/, '');
+      spkKey = `spk_${perCueGender}_${baseRoleId}`;
     } else if (!isGenericRaw) {
       spkKey = getSpeakerId(rawSpeaker);
     } else if (seg.acousticClusterId) {
@@ -506,9 +509,10 @@ function syncSegmentsWithSpeakerRegistry(segments = [], customSpeakerVoiceMap = 
   });
 
   // Unify non-manual votes across split speakerIds sharing the same non-generic named character
+  // Never collapse distinct episodic/crowd roles (e.g. male vs female spectators, villagers, ghosts, announcers)
   const namedScoreTotals = new Map();
   for (const [, stats] of speakerStatsMap.entries()) {
-    const isGeneric = !stats.name || stats.name === "តួអង្គ" || stats.name.toLowerCase() === "speaker";
+    const isGeneric = !stats.name || stats.name === "តួអង្គ" || stats.name.toLowerCase() === "speaker" || isEpisodicRoleSpeakerName(stats.name);
     if (isGeneric || stats.isManual || stats.assignmentSource === "series_glossary") continue;
     if (!namedScoreTotals.has(stats.name)) {
       namedScoreTotals.set(stats.name, { femaleScore: 0, maleScore: 0 });
@@ -525,7 +529,7 @@ function syncSegmentsWithSpeakerRegistry(segments = [], customSpeakerVoiceMap = 
     let resolvedGender = "unknown";
     let genderConfidence = 0.5;
 
-    const isGeneric = !stats.name || stats.name === "តួអង្គ" || stats.name.toLowerCase() === "speaker";
+    const isGeneric = !stats.name || stats.name === "តួអង្គ" || stats.name.toLowerCase() === "speaker" || isEpisodicRoleSpeakerName(stats.name);
     const unified = (!isGeneric && !stats.isManual && stats.assignmentSource !== "series_glossary")
       ? namedScoreTotals.get(stats.name)
       : null;
@@ -639,6 +643,9 @@ function syncSegmentsWithSpeakerRegistry(segments = [], customSpeakerVoiceMap = 
     let spkKey;
     if (explicitId && !['spk_1', 'spk_តួអង្គ', 'spk_default', 'spk'].includes(String(explicitId).trim())) {
       spkKey = String(explicitId).trim();
+    } else if (!isGenericRaw && isEpisodicRoleSpeakerName(rawSpeaker) && (perCueGender === 'female' || perCueGender === 'male')) {
+      const baseRoleId = getSpeakerId(rawSpeaker).replace(/^spk_/, '');
+      spkKey = `spk_${perCueGender}_${baseRoleId}`;
     } else if (!isGenericRaw) {
       spkKey = getSpeakerId(rawSpeaker);
     } else {
