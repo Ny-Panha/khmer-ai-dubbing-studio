@@ -13,7 +13,9 @@ const {
   renameSeries,
   resolveUniqueSeriesFolderId,
   resetEpisodeState,
+  applyScopedVideoEditSettings,
 } = require("../services/episodeService");
+const { readGlobalVideoEditSettings } = require("../services/globalLogoSettingsService");
 
 const router = express.Router();
 const episodeEtags = new WeakMap();
@@ -129,6 +131,25 @@ router.patch("/:seriesId/rename", async (req, res) => {
     res.json(result);
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.post("/:seriesId/video-edit-settings", async (req, res) => {
+  try {
+    const { seriesId } = req.params;
+    const body = req.body && typeof req.body === "object" ? req.body : {};
+    const scope = body.scope || "folder";
+    const episodeId = body.episodeId || null;
+    const settings = body.settings || body.videoEditSettings || body;
+    const updatedAt = Number(body.updatedAt) || Date.now();
+    const result = await applyScopedVideoEditSettings(seriesId, episodeId, settings, {
+      scope,
+      updatedAt,
+    });
+    res.json(result);
+  } catch (err) {
+    const status = /not found|required/i.test(err.message) ? 400 : 500;
+    res.status(status).json({ success: false, error: err.message });
   }
 });
 

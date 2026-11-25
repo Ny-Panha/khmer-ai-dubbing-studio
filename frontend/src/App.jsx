@@ -106,6 +106,7 @@ const MemoVoiceSettings = React.memo(VoiceSettings, (prev, next) => {
   if (prev.seriesId !== next.seriesId || prev.episodeId !== next.episodeId) return false;
   if (prev.batchRender !== next.batchRender) return false;
   if (prev.duration !== next.duration) return false;
+  if (prev.videoEditScope !== next.videoEditScope) return false;
   return true;
 });
 import TimelineEditor from './components/timeline/TimelineEditor';
@@ -118,8 +119,16 @@ import {
   saveEpisodeState,
   resolveDefaultAspectRatio,
   isRenderedRatioMismatch,
+  isRenderedYoutubeTransformMismatch,
   sanitizeAspectRatio,
+  VIDEO_EDIT_SETTING_KEYS,
+  normalizeVideoEditSettings,
+  loadPreferredVideoEditScope,
+  savePreferredVideoEditScope,
+  loadGlobalVideoEditSettingsRecord,
+  saveGlobalVideoEditSettings,
 } from './utils/projectStorage';
+import { fetchGlobalVideoEditSettingsApi } from './services/api';
 import {
   DEFAULT_GLOBAL_LOGO_SETTINGS,
   DEFAULT_GLOBAL_CUSTOMIZE_SETTINGS,
@@ -381,6 +390,14 @@ export default function App() {
   scriptDataRef.current = scriptData;
   const voiceSettingsRef = useRef(voiceSettings);
   voiceSettingsRef.current = voiceSettings;
+  const [videoEditScope, setVideoEditScopeState] = useState(loadPreferredVideoEditScope);
+  const videoEditScopeRef = useRef(videoEditScope);
+  videoEditScopeRef.current = videoEditScope;
+  const handleChangeVideoEditScope = useCallback((nextScope) => {
+    const saved = savePreferredVideoEditScope(nextScope);
+    videoEditScopeRef.current = saved;
+    setVideoEditScopeState(saved);
+  }, []);
   const globalLogoSettingsRef = useRef(globalLogoSettings);
   globalLogoSettingsRef.current = globalLogoSettings;
   const userEditedLogoRef = useRef(false);
@@ -452,10 +469,31 @@ export default function App() {
     }
 
     syncOrMigrateGlobalCustomize();
+
+    async function syncGlobalVideoEditFromServer() {
+      const localVe = loadGlobalVideoEditSettingsRecord();
+      const serverVe = await fetchGlobalVideoEditSettingsApi();
+      if (cancelled) return;
+      if (serverVe && serverVe.initialized && serverVe.settings) {
+        if (!localVe.initialized || serverVe.updatedAt > localVe.updatedAt) {
+          saveGlobalVideoEditSettings(serverVe.settings, { updatedAt: serverVe.updatedAt || Date.now() });
+          const curSeries = seriesRef.current?.activeSeries;
+          const curEp = seriesRef.current?.activeEpisode;
+          const folderAt = Number(curSeries?.videoEditSettings?.updatedAt || 0);
+          const epAt = curEp?.videoEditSettings?.scope === 'episode' ? Number(curEp?.videoEditSettings?.updatedAt || 0) : 0;
+          if (serverVe.updatedAt > Math.max(folderAt, epAt)) {
+            const norm = normalizeVideoEditSettings(serverVe.settings);
+            setVoiceSettings((prev) => ({ ...(prev || {}), ...norm }));
+          }
+        }
+      }
+    }
+    syncGlobalVideoEditFromServer();
+
     return () => {
       cancelled = true;
     };
-  }, [setGlobalLogoSettings]);
+  }, [setGlobalLogoSettings, setVoiceSettings]);
 
   // Stable ref-delegated callbacks (prevents infinite render loops & unnecessary effect runs)
   const handleSetDuration = useCallback((dur) => playbackRef.current.setDuration?.(dur), []);
@@ -575,10 +613,9 @@ export default function App() {
     videoUrl: media.selectedVideo?.videoUrl,
     active: !isHomeRoute,
   });
-  const playbackEffectiveRenderedVideo = isRenderedRatioMismatch(
-    prevRawRendered,
-    currentAspectRatio,
-    { width: srcW, height: srcH }
+  const playbackEffectiveRenderedVideo = (
+    isRenderedRatioMismatch(prevRawRendered, currentAspectRatio, { width: srcW, height: srcH }) ||
+    isRenderedYoutubeTransformMismatch(prevRawRendered, voiceSettings)
   )
     ? null
     : prevRawRendered;
@@ -896,6 +933,20 @@ export default function App() {
         (key) => readNormalizedSettingVal(prevSettings, key) !== readNormalizedSettingVal(nonCustomizeSettings, key)
       )
     );
+    const videoEditChanged = Boolean(
+      nonCustomizeSettings &&
+      typeof nonCustomizeSettings === 'object' &&
+      VIDEO_EDIT_SETTING_KEYS.some(
+        (key) => readNormalizedSettingVal(prevSettings, key) !== readNormalizedSettingVal(nonCustomizeSettings, key)
+      )
+    );
+    const otherRenderChanged = Boolean(
+      nonCustomizeSettings &&
+      typeof nonCustomizeSettings === 'object' &&
+      RENDER_INVALIDATING_SETTING_KEYS
+        .filter((key) => !VIDEO_EDIT_SETTING_KEYS.includes(key))
+        .some((key) => readNormalizedSettingVal(prevSettings, key) !== readNormalizedSettingVal(nonCustomizeSettings, key))
+    );
     const clearedRenderedForEdit = hasNonCustomizeRenderChange || customizeChanged;
     const hasSubtitleVisualChange = Boolean(
       nonCustomizeSettings &&
@@ -911,6 +962,14 @@ export default function App() {
       audioRef.current.handleUpdateVoiceSettings?.(nonCustomizeSettings);
     }
 
+    if (videoEditChanged) {
+      seriesRef.current.applyVideoEditSettingsToScope?.({
+        scope: videoEditScopeRef.current || 'folder',
+        settings: nonCustomizeSettings,
+        syncServer: true,
+      });
+    }
+
     const sId = seriesRef.current.seriesId;
     const eId = seriesRef.current.episodeId;
     const ratioChanged = Boolean(nonCustomizeSettings?.aspectRatio && nonCustomizeSettings.aspectRatio !== prevRatio);
@@ -919,13 +978,15 @@ export default function App() {
       if (renderRef.current.setRenderedVideo) {
         renderRef.current.setRenderedVideo(null);
       }
-      const patch = { renderedVideo: null, renderInvalidatedAt: Date.now() };
-      if (hasNonCustomizeChange || ratioChanged) patch.voiceSettings = nonCustomizeSettings;
-      if (sId && eId) {
-        saveEpisodeState(sId, eId, patch);
-      }
-      if (eId && seriesRef.current.handleSaveEpisodeBackground) {
-        seriesRef.current.handleSaveEpisodeBackground(eId, patch);
+      if (!videoEditChanged || otherRenderChanged || customizeChanged || ratioChanged) {
+        const patch = { renderedVideo: null, renderInvalidatedAt: Date.now() };
+        if (hasNonCustomizeChange || ratioChanged) patch.voiceSettings = nonCustomizeSettings;
+        if (sId && eId) {
+          saveEpisodeState(sId, eId, patch);
+        }
+        if (eId && seriesRef.current.handleSaveEpisodeBackground) {
+          seriesRef.current.handleSaveEpisodeBackground(eId, patch);
+        }
       }
     }
 
@@ -1108,10 +1169,19 @@ export default function App() {
     [voiceSettings, globalLogoSettings]
   );
 
-  const effectiveRenderedVideo = isRenderedRatioMismatch(
-    render.renderedVideo,
-    currentAspectRatio,
-    { width: srcW, height: srcH }
+  const handleApplyVideoEditScope = useCallback(async ({ scope = null, settings = null } = {}) => {
+    const targetScope = scope || videoEditScopeRef.current || 'folder';
+    const targetSettings = settings || voiceSettingsRef.current || EMPTY_OBJECT;
+    return await seriesRef.current.applyVideoEditSettingsToScope?.({
+      scope: targetScope,
+      settings: targetSettings,
+      syncServer: true,
+    });
+  }, []);
+
+  const effectiveRenderedVideo = (
+    isRenderedRatioMismatch(render.renderedVideo, currentAspectRatio, { width: srcW, height: srcH }) ||
+    isRenderedYoutubeTransformMismatch(render.renderedVideo, studioSettings)
   )
     ? null
     : render.renderedVideo;
@@ -1442,6 +1512,9 @@ export default function App() {
                   activeSeries={series.activeSeries}
                   seriesId={series.seriesId}
                   episodeId={series.episodeId}
+                  videoEditScope={videoEditScope}
+                  onChangeVideoEditScope={handleChangeVideoEditScope}
+                  onApplyVideoEditSettings={handleApplyVideoEditScope}
                   batchRender={render.batchRender}
                   duration={playback.duration}
                   currentTime={playback.currentTime}

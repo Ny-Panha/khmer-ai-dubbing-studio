@@ -120,6 +120,7 @@ export function useVideoRender({
           savedToDownloads: Boolean(matched.savedToDownloads),
           downloadsPath: matched.downloadsPath || null,
           aspectRatio: resolvedMatchedRatio,
+          youtubeTransform: matched.youtubeTransform || job.exportSettings?.youtubeTransform || null,
         });
       }
     }
@@ -555,6 +556,7 @@ export function useVideoRender({
       setRenderedVideo({
         ...result,
         aspectRatio: effectiveAspectRatio,
+        youtubeTransform: result?.youtubeTransform || youtubeTransformOptions,
         renderedAt: Date.now(),
       });
       if (videoRef?.current) {

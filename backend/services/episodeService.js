@@ -10,7 +10,14 @@ const {
 } = require('../models/episodeModel');
 
 const { uploadsDir: UPLOADS_DIR } = require('../utils/pathUtils');
-const { stripLogoSettingsFromObject } = require('./globalLogoSettingsService');
+const {
+  stripLogoSettingsFromObject,
+  VIDEO_EDIT_SETTING_KEYS,
+  normalizeVideoEditSettings,
+  areVideoEditSettingsEqual,
+  readGlobalVideoEditSettings,
+  writeGlobalVideoEditSettings,
+} = require('./globalLogoSettingsService');
 const PROJECTS_DIR = path.join(UPLOADS_DIR, 'projects');
 
 // In-memory concurrency locks per series to serialize all read-modify-write operations on series.json
@@ -1079,6 +1086,17 @@ async function syncSeriesMetadataSafely(seriesId, incomingSeries, options = {}) 
           else delete voiceSettings[key];
         }
       }
+      const incVe = incEp.videoEditSettings && typeof incEp.videoEditSettings === 'object' ? incEp.videoEditSettings : null;
+      const diskVe = diskEp.videoEditSettings && typeof diskEp.videoEditSettings === 'object' ? diskEp.videoEditSettings : null;
+      const incVeAt = Number(incVe?.updatedAt || 0);
+      const diskVeAt = Number(diskVe?.updatedAt || 0);
+      const resolvedVideoEditSettings = (incVe || diskVe)
+        ? (incVeAt >= diskVeAt && incVe ? incVe : (diskVe || incVe))
+        : null;
+      if (resolvedVideoEditSettings && diskVeAt > incVeAt && voiceSettings && typeof voiceSettings === 'object') {
+        const normDiskVe = normalizeVideoEditSettings(resolvedVideoEditSettings);
+        Object.assign(voiceSettings, normDiskVe);
+      }
       let finalStatus = resolvedStatus || diskEp.status;
       if (finalStatus === 'completed' && !resolvedRenderedVideo) {
         finalStatus = (preserveDiskAudioInvalidation ? false : Boolean(incEp.audioGenerated || diskEp.audioGenerated))
@@ -1146,6 +1164,7 @@ async function syncSeriesMetadataSafely(seriesId, incomingSeries, options = {}) 
         hasDemucs: Boolean(incEp.hasDemucs || diskEp.hasDemucs),
         renderedVideo: resolvedRenderedVideo,
         ...(renderInvalidatedAt > 0 && { renderInvalidatedAt }),
+        ...(resolvedVideoEditSettings ? { videoEditSettings: resolvedVideoEditSettings } : {}),
         voiceSettings,
       };
     });
@@ -1159,12 +1178,25 @@ async function syncSeriesMetadataSafely(seriesId, incomingSeries, options = {}) 
       }
     }
 
+    const incSeriesVe = incomingWithId.videoEditSettings && typeof incomingWithId.videoEditSettings === 'object'
+      ? incomingWithId.videoEditSettings
+      : null;
+    const diskSeriesVe = diskSeries?.videoEditSettings && typeof diskSeries.videoEditSettings === 'object'
+      ? diskSeries.videoEditSettings
+      : null;
+    const resolvedSeriesVideoEditSettings = (incSeriesVe || diskSeriesVe)
+      ? (Number(incSeriesVe?.updatedAt || 0) >= Number(diskSeriesVe?.updatedAt || 0) && incSeriesVe
+          ? incSeriesVe
+          : (diskSeriesVe || incSeriesVe))
+      : null;
+
     const mergedSeries = {
       ...diskSeries,
       ...incomingWithId,
       id: cleanSeries,
       genre: incomingWithId.genre || diskSeries?.genre,
       detectedGenre: incomingWithId.detectedGenre || diskSeries?.detectedGenre,
+      ...(resolvedSeriesVideoEditSettings ? { videoEditSettings: resolvedSeriesVideoEditSettings } : {}),
       episodes: mergedEpisodes,
     };
     delete mergedSeries._allowRemoveEpisodes;
@@ -1367,6 +1399,25 @@ async function createNewEpisode(seriesId, options = {}) {
       title: options.customTitle || `ភាគទី ${nextNum} (EP${nextNum})`,
       existingEpisodes: existing,
     });
+
+    // Inherit folder-level (or global) video-edit defaults for newly created episodes
+    const inheritedVe = getInheritedVideoEditSettings(cleanSeries, null, {
+      series,
+      projectsDir: options.projectsDir,
+      videoEditStoragePath: options.videoEditStoragePath,
+    });
+    if (inheritedVe && (series?.videoEditSettings || readGlobalVideoEditSettings(options.videoEditStoragePath).initialized)) {
+      const inheritedStamp = Number(series?.videoEditSettings?.updatedAt || Date.now());
+      newEp.videoEditSettings = {
+        ...normalizeVideoEditSettings(inheritedVe),
+        updatedAt: inheritedStamp,
+        scope: series?.videoEditSettings ? 'folder' : 'global',
+      };
+      newEp.voiceSettings = {
+        ...(newEp.voiceSettings && typeof newEp.voiceSettings === 'object' ? newEp.voiceSettings : {}),
+        ...normalizeVideoEditSettings(inheritedVe),
+      };
+    }
 
     // Ensure completely isolated filesystem directories exist
     ensureEpisodeDirectories(cleanSeries, newEp.id);
@@ -2009,6 +2060,218 @@ async function resetEpisodeState(seriesId, episodeId, options = {}) {
   });
 }
 
+/**
+ * Resolves the effective video-edit settings for an episode by comparing timestamps
+ * across episode override (`scope === 'episode'`), folder default (`series.videoEditSettings`),
+ * and global store (`global_video_edit_settings.json`).
+ *
+ * @param {string} seriesId
+ * @param {string|null} episodeId
+ * @param {Object} [options]
+ * @returns {{ enableMirrorFlip: boolean, zoomScale: number, enableColorGrade: boolean, youtubeSafeAudio: boolean }}
+ */
+function getInheritedVideoEditSettings(seriesId, episodeId = null, options = {}) {
+  const projectsDir = options.projectsDir || PROJECTS_DIR;
+  const globalState = readGlobalVideoEditSettings(options.videoEditStoragePath);
+  const globalVe = globalState.initialized && globalState.settings ? globalState.settings : null;
+  const globalAt = Number(globalState.updatedAt || 0);
+
+  let series = options.series || null;
+  if (!series && seriesId) {
+    try {
+      series = getSeriesMetadata(seriesId, { projectsDir, useStatCache: true });
+    } catch (_) {}
+  }
+
+  const folderVe = series?.videoEditSettings && typeof series.videoEditSettings === 'object'
+    ? series.videoEditSettings
+    : null;
+  const folderAt = Number(folderVe?.updatedAt || 0);
+
+  let ep = null;
+  if (episodeId && Array.isArray(series?.episodes)) {
+    const cleanEp = sanitizeEpisodeId(episodeId);
+    ep = series.episodes.find(
+      (e) => sanitizeEpisodeId(e.id) === cleanEp || String(e.id) === String(episodeId)
+    ) || null;
+  }
+  const epVe = ep?.videoEditSettings && typeof ep.videoEditSettings === 'object'
+    ? ep.videoEditSettings
+    : null;
+  const epAt = Number(epVe?.updatedAt || 0);
+
+  if (epVe && epVe.scope === 'episode' && epAt >= folderAt && epAt >= globalAt) {
+    return normalizeVideoEditSettings(epVe);
+  }
+  if (folderVe && folderAt >= globalAt) {
+    return normalizeVideoEditSettings(folderVe);
+  }
+  if (globalVe) {
+    return normalizeVideoEditSettings(globalVe);
+  }
+  if (epVe) {
+    return normalizeVideoEditSettings(epVe);
+  }
+  return normalizeVideoEditSettings(null);
+}
+
+function applyVideoEditPatchToEpisode(ep, normalizedEdit, scopeName, updatedAt) {
+  if (!ep || typeof ep !== 'object') return false;
+  const prevEffective = ep.videoEditSettings
+    ? normalizeVideoEditSettings(ep.videoEditSettings)
+    : (ep.voiceSettings ? normalizeVideoEditSettings(ep.voiceSettings) : normalizeVideoEditSettings(null));
+  const changed = !areVideoEditSettingsEqual(prevEffective, normalizedEdit);
+
+  ep.videoEditSettings = {
+    ...normalizedEdit,
+    updatedAt,
+    scope: scopeName,
+  };
+  const nextVoice = stripLogoSettingsFromObject(
+    ep.voiceSettings && typeof ep.voiceSettings === 'object' && !Array.isArray(ep.voiceSettings)
+      ? { ...ep.voiceSettings }
+      : {}
+  );
+  for (const key of VIDEO_EDIT_SETTING_KEYS) {
+    nextVoice[key] = normalizedEdit[key];
+  }
+  ep.voiceSettings = nextVoice;
+
+  const rvTransformMismatch = Boolean(
+    ep.renderedVideo &&
+    (!ep.renderedVideo.youtubeTransform || !areVideoEditSettingsEqual(ep.renderedVideo.youtubeTransform, normalizedEdit))
+  );
+  if (changed || rvTransformMismatch) {
+    const prevRenderedAt = Number(ep.renderedVideo?.renderedAt || 0);
+    ep.renderedVideo = null;
+    ep.renderInvalidatedAt = Math.max(
+      updatedAt,
+      Number(ep.renderInvalidatedAt || 0) + 1,
+      prevRenderedAt > 0 ? prevRenderedAt + 1 : 0
+    );
+    if (ep.status === 'completed') {
+      ep.status = ep.audioGenerated ? 'voicing' : ((ep.scriptData?.segments?.length > 0) ? 'translated' : (ep.video ? 'uploaded' : 'idle'));
+    }
+  }
+  ep.lastModified = Math.max(updatedAt, Number(ep.lastModified || 0) + 1);
+  return true;
+}
+
+/**
+ * Persist video-edit settings ONLY (Mirror Flip, Zoom, Color Grade, Mute Original OST)
+ * at the requested explicit scope:
+ * - 'episode': updates only the target episode in seriesId (leaves sibling episodes & folders untouched)
+ * - 'folder' | 'series': updates seriesId.videoEditSettings and all episodes in seriesId (leaves other folders untouched)
+ * - 'global': updates global_video_edit_settings.json AND all project folders & episodes
+ *
+ * Strictly preserves scriptData, audio references, timeline edits, and unrelated settings.
+ */
+async function applyScopedVideoEditSettings(seriesId, episodeId, settings, options = {}) {
+  const rawScope = String(options.scope || 'folder').toLowerCase();
+  const scope = rawScope === 'series' ? 'folder' : (['episode', 'folder', 'global'].includes(rawScope) ? rawScope : 'folder');
+  const projectsDir = options.projectsDir || PROJECTS_DIR;
+  const updatedAt = Math.max(Date.now(), Number(options.updatedAt) || 0);
+  const normalizedEdit = normalizeVideoEditSettings(settings);
+  const scopedRecord = { ...normalizedEdit, updatedAt };
+
+  const updatedSeriesIds = [];
+  let updatedEpisodeCount = 0;
+  let primarySeries = null;
+
+  if (scope === 'global') {
+    writeGlobalVideoEditSettings(normalizedEdit, {
+      updatedAt,
+      storagePath: options.videoEditStoragePath,
+    });
+
+    if (fs.existsSync(projectsDir)) {
+      const entries = fs.readdirSync(projectsDir, { withFileTypes: true }).filter((e) => e.isDirectory());
+      for (const ent of entries) {
+        const sId = ent.name;
+        const metaPath = path.join(projectsDir, sId, 'series.json');
+        if (!fs.existsSync(metaPath)) continue;
+        const saved = await withSeriesMetadataLock(sId, () => {
+          return updateSeriesMetadata(sId, (freshSeries) => {
+            if (!freshSeries) return false;
+            freshSeries.videoEditSettings = { ...scopedRecord };
+            if (Array.isArray(freshSeries.episodes)) {
+              for (const ep of freshSeries.episodes) {
+                if (applyVideoEditPatchToEpisode(ep, normalizedEdit, 'global', updatedAt)) {
+                  updatedEpisodeCount++;
+                }
+              }
+            }
+            return true;
+          }, { projectsDir, skipHydration: true });
+        }, { projectsDir });
+        if (saved) {
+          updatedSeriesIds.push(saved.id || sId);
+          if (seriesId && sanitizeProjectName(seriesId) === sanitizeProjectName(sId)) {
+            primarySeries = saved;
+          }
+        }
+      }
+    }
+
+    return {
+      success: true,
+      scope: 'global',
+      settings: normalizedEdit,
+      updatedAt,
+      updatedSeriesIds,
+      updatedEpisodeCount,
+      series: primarySeries,
+    };
+  }
+
+  if (!seriesId) {
+    throw new Error('seriesId is required for folder or episode video-edit scope');
+  }
+
+  const cleanSeries = sanitizeProjectName(seriesId);
+  const savedSeries = await withSeriesMetadataLock(cleanSeries, () => {
+    return updateSeriesMetadata(cleanSeries, (freshSeries) => {
+      if (!freshSeries) return false;
+      if (scope === 'folder') {
+        freshSeries.videoEditSettings = { ...scopedRecord };
+        if (Array.isArray(freshSeries.episodes)) {
+          for (const ep of freshSeries.episodes) {
+            if (applyVideoEditPatchToEpisode(ep, normalizedEdit, 'folder', updatedAt)) {
+              updatedEpisodeCount++;
+            }
+          }
+        }
+        return true;
+      }
+
+      // scope === 'episode'
+      const cleanEp = episodeId ? sanitizeEpisodeId(episodeId) : null;
+      const targetEp = Array.isArray(freshSeries.episodes)
+        ? freshSeries.episodes.find((e) => (cleanEp && sanitizeEpisodeId(e.id) === cleanEp) || String(e.id) === String(episodeId))
+        : null;
+      if (!targetEp) return false;
+      if (applyVideoEditPatchToEpisode(targetEp, normalizedEdit, 'episode', updatedAt)) {
+        updatedEpisodeCount++;
+      }
+      return true;
+    }, { projectsDir, skipHydration: true });
+  }, { projectsDir });
+
+  if (!savedSeries) {
+    throw new Error(`Series "${cleanSeries}" or episode "${episodeId}" not found`);
+  }
+
+  return {
+    success: true,
+    scope,
+    settings: normalizedEdit,
+    updatedAt,
+    updatedSeriesIds: [cleanSeries],
+    updatedEpisodeCount,
+    series: savedSeries,
+  };
+}
+
 module.exports = {
   getNextAvailableEpisodeNumber,
   generateUniqueEpisodeId,
@@ -2032,4 +2295,6 @@ module.exports = {
   sanitizeSeriesFolderBaseName,
   rewriteSeriesIdReferences,
   resetEpisodeState,
+  getInheritedVideoEditSettings,
+  applyScopedVideoEditSettings,
 };

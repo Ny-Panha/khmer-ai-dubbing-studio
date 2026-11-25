@@ -85,6 +85,8 @@ export function usePlayerAudioSync({
   scriptData,
   renderedVideo,
   proxyStatus,
+  isVisualBaked = null,
+  isAudioBaked = null,
   videoRef,
   currentTime,
   isPlaying,
@@ -163,16 +165,52 @@ export function usePlayerAudioSync({
   // When proxy preview is rendering or queued (not yet fresh), automatically fall back to live segment audio so user always hears sound!
   // Master narration audio is only a fallback when no individual segment audio clips exist.
   const isFreshProxy = Boolean(renderedVideo?.isProxyPreview && proxyStatus?.state === 'fresh');
+  const effectiveAudioBaked = typeof isAudioBaked === 'boolean'
+    ? isAudioBaked
+    : Boolean(renderedVideo && (!renderedVideo.isProxyPreview || isFreshProxy));
+  const effectiveVisualBaked = typeof isVisualBaked === 'boolean'
+    ? isVisualBaked
+    : Boolean(renderedVideo && !renderedVideo.isProxyPreview);
   const hasSegmentAudios = Boolean(
-    (!renderedVideo || (renderedVideo?.isProxyPreview && !isFreshProxy)) &&
+    !effectiveAudioBaked &&
     scriptData?.segments?.some(s => s.audioUrl || s.audioFile || s.audioPath)
   );
 
   // Refs to hold latest values for RAF / preload loops without re-triggering effects
-  const segAudioConfigRef = useRef({ voiceSettings, videoClips, scriptData, hasSegmentAudios, renderedVideo, cleanBgAudioUrl, isFreshProxy });
+  const segAudioConfigRef = useRef({
+    voiceSettings,
+    videoClips,
+    scriptData,
+    hasSegmentAudios,
+    renderedVideo,
+    cleanBgAudioUrl,
+    isFreshProxy,
+    isAudioBaked: effectiveAudioBaked,
+    isVisualBaked: effectiveVisualBaked,
+  });
   useEffect(() => {
-    segAudioConfigRef.current = { voiceSettings, videoClips, scriptData, hasSegmentAudios, renderedVideo, cleanBgAudioUrl, isFreshProxy };
-  }, [voiceSettings, videoClips, scriptData, hasSegmentAudios, renderedVideo, cleanBgAudioUrl, isFreshProxy]);
+    segAudioConfigRef.current = {
+      voiceSettings,
+      videoClips,
+      scriptData,
+      hasSegmentAudios,
+      renderedVideo,
+      cleanBgAudioUrl,
+      isFreshProxy,
+      isAudioBaked: effectiveAudioBaked,
+      isVisualBaked: effectiveVisualBaked,
+    };
+  }, [
+    voiceSettings,
+    videoClips,
+    scriptData,
+    hasSegmentAudios,
+    renderedVideo,
+    cleanBgAudioUrl,
+    isFreshProxy,
+    effectiveAudioBaked,
+    effectiveVisualBaked,
+  ]);
 
   const stopAllSegmentAudios = useCallback(() => {
     if (webAudioSchedulerRef.current) {
@@ -525,8 +563,8 @@ export function usePlayerAudioSync({
       return;
     }
 
-    const { voiceSettings: vs, scriptData: sd, hasSegmentAudios: hsa, renderedVideo: rv, isFreshProxy: ifp } = segAudioConfigRef.current;
-    if ((rv && (!rv.isProxyPreview || ifp)) || !hsa) {
+    const { voiceSettings: vs, scriptData: sd, hasSegmentAudios: hsa, isAudioBaked: ab } = segAudioConfigRef.current;
+    if (ab || !hsa) {
       stopAllSegmentAudios();
       return;
     }
@@ -811,9 +849,9 @@ export function usePlayerAudioSync({
       return;
     }
 
-    const { hasSegmentAudios: hsa, renderedVideo: rv, voiceSettings: vs0, cleanBgAudioUrl: bgUrl0 } = segAudioConfigRef.current;
+    const { hasSegmentAudios: hsa, isAudioBaked: ab, voiceSettings: vs0, cleanBgAudioUrl: bgUrl0 } = segAudioConfigRef.current;
     const hasExtBg0 = Boolean((vs0?.enableCustomBgm && vs0?.customBgmUrl) || (vs0?.enableDemucs && bgUrl0));
-    if (rv || (!hsa && !hasExtBg0)) {
+    if (ab || (!hsa && !hasExtBg0)) {
       stopAllSegmentAudios();
       return;
     }
@@ -931,7 +969,7 @@ export function usePlayerAudioSync({
 
   // Synchronize Khmer AI Voice & Clean Demucs BGM Playback with Canonical Timeline Playhead
   useEffect(() => {
-    if (renderedVideo) {
+    if (effectiveAudioBaked) {
       if (narrationAudioRef.current && !narrationAudioRef.current.paused) {
         narrationAudioRef.current.pause();
       }
@@ -991,7 +1029,7 @@ export function usePlayerAudioSync({
       }
       a.playbackRate = v?.playbackRate || 1.0;
     }
-  }, [isPlaying, renderedVideo, audioGenerated, fullAudioUrl, hasSegmentAudios, videoClips, videoRef, cleanBgAudioUrl, voiceSettings?.enableDemucs]);
+  }, [isPlaying, effectiveAudioBaked, audioGenerated, fullAudioUrl, hasSegmentAudios, videoClips, videoRef, cleanBgAudioUrl, voiceSettings?.enableDemucs]);
 
   // Sync event hooks on video element (Robust 3-Tier Sync: 0-40ms lock, 40-450ms hysteresis nudge, >450ms seek)
   useEffect(() => {
@@ -1012,15 +1050,15 @@ export function usePlayerAudioSync({
 
     const handleSync = () => {
       // Clean Demucs BGM / Custom Loop BGM play resumption; authoritative seeking is delegated to syncLoop
-      const { voiceSettings: vs, cleanBgAudioUrl: bgUrl } = segAudioConfigRef.current;
+      const { voiceSettings: vs, cleanBgAudioUrl: bgUrl, isAudioBaked: ab } = segAudioConfigRef.current;
       const bg = cleanBgAudioRef.current;
       const hasExtBg = Boolean((vs?.enableCustomBgm && vs?.customBgmUrl) || (vs?.enableDemucs && bgUrl));
-      if (bg && !renderedVideo && hasExtBg && !v.paused && !v.seeking) {
+      if (bg && !ab && hasExtBg && !v.paused && !v.seeking) {
         if (bg.paused) bg.play().catch(() => {});
       }
 
       const a = narrationAudioRef.current;
-      if (!a || renderedVideo || !audioGenerated || !fullAudioUrl || hasSegmentAudios) return;
+      if (!a || ab || !audioGenerated || !fullAudioUrl || hasSegmentAudios) return;
 
       const targetTime = getTargetTimelineTime();
 
@@ -1073,11 +1111,11 @@ export function usePlayerAudioSync({
         return;
       }
 
-      const { voiceSettings: vs, cleanBgAudioUrl: bgUrl } = segAudioConfigRef.current;
+      const { voiceSettings: vs, cleanBgAudioUrl: bgUrl, isAudioBaked: ab } = segAudioConfigRef.current;
       const bg = cleanBgAudioRef.current;
       const isLoopBgm = Boolean(vs?.enableCustomBgm && vs?.customBgmUrl);
       const hasExtBg = isLoopBgm || Boolean(vs?.enableDemucs && bgUrl);
-      if (bg && !renderedVideo && hasExtBg) {
+      if (bg && !ab && hasExtBg) {
         if (Number.isFinite(v.currentTime)) {
           bg.currentTime = (isLoopBgm && Number.isFinite(bg.duration) && bg.duration > 0)
             ? (v.currentTime % bg.duration)
@@ -1086,7 +1124,7 @@ export function usePlayerAudioSync({
         bg.play().catch(() => {});
       }
 
-      if (hasSegmentAudios && !renderedVideo) {
+      if (hasSegmentAudios && !ab) {
         const tlNow = getTargetTimelineTime();
         preloadSegmentsAroundTime(tlNow);
         const scheduler = webAudioSchedulerRef.current;
@@ -1097,7 +1135,7 @@ export function usePlayerAudioSync({
       }
 
       const a = narrationAudioRef.current;
-      if (!a || renderedVideo || !audioGenerated || !fullAudioUrl || hasSegmentAudios) return;
+      if (!a || ab || !audioGenerated || !fullAudioUrl || hasSegmentAudios) return;
       playStartTimeRef.current = performance.now();
       const targetTime = getTargetTimelineTime();
       if (a.readyState >= 1 && Number.isFinite(targetTime)) {
@@ -1138,11 +1176,11 @@ export function usePlayerAudioSync({
     };
 
     const handleSeeked = () => {
-      const { voiceSettings: vs, cleanBgAudioUrl: bgUrl } = segAudioConfigRef.current;
+      const { voiceSettings: vs, cleanBgAudioUrl: bgUrl, isAudioBaked: ab } = segAudioConfigRef.current;
       const bg = cleanBgAudioRef.current;
       const isLoopBgm = Boolean(vs?.enableCustomBgm && vs?.customBgmUrl);
       const hasExtBg = isLoopBgm || Boolean(vs?.enableDemucs && bgUrl);
-      if (bg && !renderedVideo && hasExtBg && !v.paused) {
+      if (bg && !ab && hasExtBg && !v.paused) {
         if (Number.isFinite(v.currentTime)) {
           bg.currentTime = (isLoopBgm && Number.isFinite(bg.duration) && bg.duration > 0)
             ? (v.currentTime % bg.duration)
@@ -1151,7 +1189,7 @@ export function usePlayerAudioSync({
         bg.play().catch(() => {});
       }
 
-      if (hasSegmentAudios && !renderedVideo) {
+      if (hasSegmentAudios && !ab) {
         const tlNow = getTargetTimelineTime();
         preloadSegmentsAroundTime(tlNow);
         const scheduler = webAudioSchedulerRef.current;
@@ -1162,7 +1200,7 @@ export function usePlayerAudioSync({
       }
 
       const a = narrationAudioRef.current;
-      if (!a || renderedVideo || !audioGenerated || !fullAudioUrl || hasSegmentAudios || v.paused) return;
+      if (!a || ab || !audioGenerated || !fullAudioUrl || hasSegmentAudios || v.paused) return;
       a.playbackRate = v.playbackRate || 1.0;
 
       const targetTime = getTargetTimelineTime();
@@ -1181,7 +1219,8 @@ export function usePlayerAudioSync({
 
     const handleVisibilityChange = () => {
       const a = narrationAudioRef.current;
-      if (!a || renderedVideo || !audioGenerated || !fullAudioUrl || hasSegmentAudios) return;
+      const { isAudioBaked: ab } = segAudioConfigRef.current;
+      if (!a || ab || !audioGenerated || !fullAudioUrl || hasSegmentAudios) return;
       const targetTime = getTargetTimelineTime();
       if (document.visibilityState === 'visible' && !v.paused) {
         if (a.duration && Number.isFinite(a.duration) && targetTime >= a.duration) {
@@ -1233,7 +1272,7 @@ export function usePlayerAudioSync({
         narrationAudioRef.current.playbackRate = 1.0;
       }
     };
-  }, [videoRef, renderedVideo, audioGenerated, fullAudioUrl, hasSegmentAudios, videoClips, preloadSegmentsAroundTime, syncSegmentAudiosAtTime, stopAllSegmentAudios]);
+  }, [videoRef, effectiveAudioBaked, audioGenerated, fullAudioUrl, hasSegmentAudios, videoClips, preloadSegmentsAroundTime, syncSegmentAudiosAtTime, stopAllSegmentAudios]);
 
 
   // Real-time Live Smart Ducking during Video Preview (O(log N) optimized)
@@ -1241,7 +1280,10 @@ export function usePlayerAudioSync({
     const v = videoRef?.current;
     if (!v) return;
 
-    if (renderedVideo) {
+    // When audio is baked into the final MP4, restore video element to full volume
+    // and let the baked mix handle everything. For un-fresh proxy previews that have
+    // live narration, the <video> stays muted so live audio takes priority.
+    if (effectiveAudioBaked) {
       if (v.muted) v.muted = false;
       if (v.volume !== 1.0) v.volume = 1.0;
       return;
@@ -1329,7 +1371,7 @@ export function usePlayerAudioSync({
         narrationAudioRef.current.volume = targetKhmer;
       }
     }
-  }, [currentTime, audioGenerated, audioOutdated, fullAudioUrl, renderedVideo, scriptData, voiceSettings, videoClips, videoRef]);
+  }, [currentTime, audioGenerated, audioOutdated, fullAudioUrl, effectiveAudioBaked, scriptData, voiceSettings, videoClips, videoRef, cleanBgAudioUrl]);
 
   return {
     narrationAudioRef,

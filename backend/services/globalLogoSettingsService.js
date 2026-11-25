@@ -710,26 +710,157 @@ function computeVisualFingerprint(options = {}) {
     .slice(0, 16);
 }
 
+const VIDEO_EDIT_SETTING_KEYS = Object.freeze([
+  "enableMirrorFlip",
+  "zoomScale",
+  "enableColorGrade",
+  "youtubeSafeAudio",
+]);
+
+const DEFAULT_GLOBAL_VIDEO_EDIT_SETTINGS = Object.freeze({
+  enableMirrorFlip: false,
+  zoomScale: 1.0,
+  enableColorGrade: false,
+  youtubeSafeAudio: false,
+});
+
+function getDefaultVideoEditStoragePath() {
+  return path.join(uploadsDir, "cache", "global_video_edit_settings.json");
+}
+
+function normalizeVideoEditSettings(input, fallback = DEFAULT_GLOBAL_VIDEO_EDIT_SETTINGS) {
+  const base = fallback && typeof fallback === "object" ? fallback : DEFAULT_GLOBAL_VIDEO_EDIT_SETTINGS;
+  const src = input && typeof input === "object" && !Array.isArray(input) ? input : {};
+  const rawZoom = src.zoomScale !== undefined ? src.zoomScale : (src.zoom !== undefined ? src.zoom : base.zoomScale);
+  const parsedZoom = Number(rawZoom);
+  const zoomScale = Number.isFinite(parsedZoom)
+    ? Math.max(1.0, Math.min(1.15, Math.round(parsedZoom * 100) / 100))
+    : (Number.isFinite(Number(base.zoomScale)) ? Math.max(1.0, Math.min(1.15, Math.round(Number(base.zoomScale) * 100) / 100)) : 1.0);
+
+  return {
+    enableMirrorFlip: src.enableMirrorFlip !== undefined ? Boolean(src.enableMirrorFlip) : Boolean(base.enableMirrorFlip),
+    zoomScale,
+    enableColorGrade: src.enableColorGrade !== undefined ? Boolean(src.enableColorGrade) : Boolean(base.enableColorGrade),
+    youtubeSafeAudio: src.youtubeSafeAudio !== undefined ? Boolean(src.youtubeSafeAudio) : Boolean(base.youtubeSafeAudio),
+  };
+}
+
+function areVideoEditSettingsEqual(a, b) {
+  const normA = normalizeVideoEditSettings(a);
+  const normB = normalizeVideoEditSettings(b);
+  return (
+    normA.enableMirrorFlip === normB.enableMirrorFlip &&
+    Math.abs(normA.zoomScale - normB.zoomScale) < 0.001 &&
+    normA.enableColorGrade === normB.enableColorGrade &&
+    normA.youtubeSafeAudio === normB.youtubeSafeAudio
+  );
+}
+
+function extractVideoEditSettings(obj) {
+  if (!obj || typeof obj !== "object" || Array.isArray(obj)) return {};
+  const out = {};
+  for (const key of VIDEO_EDIT_SETTING_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(obj, key) && obj[key] !== undefined) {
+      out[key] = obj[key];
+    }
+  }
+  return out;
+}
+
+function readGlobalVideoEditSettings(storagePath = getDefaultVideoEditStoragePath()) {
+  try {
+    if (!fs.existsSync(storagePath)) {
+      return {
+        initialized: false,
+        settings: null,
+        updatedAt: 0,
+      };
+    }
+    const raw = fs.readFileSync(storagePath, "utf8");
+    const parsed = JSON.parse(raw);
+    const payload = parsed?.settings || parsed;
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+      return {
+        initialized: false,
+        settings: null,
+        updatedAt: 0,
+      };
+    }
+    return {
+      initialized: true,
+      settings: normalizeVideoEditSettings(payload),
+      updatedAt: Number(parsed?.updatedAt) || 0,
+    };
+  } catch (_) {
+    return {
+      initialized: false,
+      settings: null,
+      updatedAt: 0,
+    };
+  }
+}
+
+function writeGlobalVideoEditSettings(input, options = {}) {
+  const storagePath = options.storagePath || getDefaultVideoEditStoragePath();
+  const existing = readGlobalVideoEditSettings(storagePath);
+  const normalized = normalizeVideoEditSettings(input, existing.settings || DEFAULT_GLOBAL_VIDEO_EDIT_SETTINGS);
+  const incomingUpdatedAt = Number(options.updatedAt) || Date.now();
+  if (existing.initialized && existing.updatedAt > incomingUpdatedAt) {
+    return existing;
+  }
+  const updatedAt = incomingUpdatedAt;
+  const dir = path.dirname(storagePath);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  const envelope = {
+    version: 1,
+    updatedAt,
+    settings: normalized,
+  };
+  const tmpPath = `${storagePath}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(tmpPath, JSON.stringify(envelope, null, 2), "utf8");
+  try {
+    fs.renameSync(tmpPath, storagePath);
+  } catch (_) {
+    fs.copyFileSync(tmpPath, storagePath);
+    try { fs.unlinkSync(tmpPath); } catch {}
+  }
+  return {
+    initialized: true,
+    settings: normalized,
+    updatedAt,
+  };
+}
+
 module.exports = {
   LOGO_SETTING_KEYS,
   MASK_SETTING_KEYS,
   BANNER_SETTING_KEYS,
   CUSTOMIZE_SETTING_KEYS,
+  VIDEO_EDIT_SETTING_KEYS,
   DEFAULT_GLOBAL_LOGO_SETTINGS,
   DEFAULT_GLOBAL_MASK_SETTINGS,
   DEFAULT_GLOBAL_BANNER_SETTINGS,
   DEFAULT_GLOBAL_CUSTOMIZE_SETTINGS,
+  DEFAULT_GLOBAL_VIDEO_EDIT_SETTINGS,
   getDefaultStoragePath,
+  getDefaultVideoEditStoragePath,
   normalizeGlobalLogoSettings,
   normalizeGlobalMaskSettings,
   normalizeGlobalBannerSettings,
   normalizeGlobalCustomizeSettings,
+  normalizeVideoEditSettings,
+  areVideoEditSettingsEqual,
+  extractVideoEditSettings,
   stripLogoSettingsFromObject,
   stripCustomizeSettingsFromObject,
   readGlobalLogoSettings,
   readGlobalCustomizeSettings,
+  readGlobalVideoEditSettings,
   writeGlobalLogoSettings,
   writeGlobalCustomizeSettings,
+  writeGlobalVideoEditSettings,
   formatGlobalLogoSettingsForExport,
   formatGlobalCornerMaskForExport,
   formatGlobalAntiTheftForExport,

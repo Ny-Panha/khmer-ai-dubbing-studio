@@ -360,4 +360,48 @@ export async function resetEpisodeStateApi({ seriesId, episodeId, resetType = 's
   return await parseResponseJson(res, `Failed to reset episode ${resetType}`);
 }
 
+export async function fetchGlobalVideoEditSettingsApi() {
+  try {
+    const res = await fetch('/api/video-edit-settings');
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!data?.success) return null;
+    return {
+      initialized: Boolean(data.initialized && data.settings),
+      settings: data.settings || null,
+      updatedAt: Number(data.updatedAt) || 0,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export async function saveGlobalVideoEditSettingsApi(settings, updatedAt = Date.now()) {
+  const res = await fetch('/api/video-edit-settings', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ settings, updatedAt }),
+  });
+  return await parseResponseJson(res, 'Failed to save global video edit settings');
+}
+
+export async function applyScopedVideoEditSettingsApi({
+  seriesId,
+  episodeId = null,
+  scope = 'folder',
+  settings,
+  updatedAt = Date.now(),
+}) {
+  if (scope === 'global' && !seriesId) {
+    return saveGlobalVideoEditSettingsApi(settings, updatedAt);
+  }
+  const targetSeriesId = seriesId || '_global';
+  const res = await fetch(`/api/series/${encodeURIComponent(targetSeriesId)}/video-edit-settings`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ episodeId, scope, settings, updatedAt }),
+  });
+  return await parseResponseJson(res, 'Failed to apply video edit settings');
+}
+
 

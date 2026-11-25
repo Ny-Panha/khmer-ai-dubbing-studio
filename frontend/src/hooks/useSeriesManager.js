@@ -20,13 +20,18 @@ import {
   loadSavedVoiceSettings,
   resolveStickyVoiceSettings,
   sanitizeRenderedVideo,
+  isRenderedYoutubeTransformMismatch,
+  normalizeVideoEditSettings,
+  resolveEffectiveVideoEditSettings,
+  applyVideoEditSettingsToSeriesList,
+  saveGlobalVideoEditSettings,
   sanitizeAndHealSeriesList,
   flushAllPendingTimelinePersists,
   restorePendingEpisodeSyncs,
 } from '../utils/projectStorage';
 import { stripLogoSettings } from '../utils/logoSettingsStorage';
 import { generateVideoThumbnails } from '../utils/thumbnailUtils';
-import { fetchVideoThumbnails, deleteSeriesApi, renameSeriesApi } from '../services/api';
+import { fetchVideoThumbnails, deleteSeriesApi, renameSeriesApi, applyScopedVideoEditSettingsApi } from '../services/api';
 import { normalizeClips, sanitizeScriptData } from '../utils/timelineUtils';
 import { loadEpisodeTimelineViewState } from '../utils/timelineViewState';
 import { applySpeakerVoiceToSegments } from '../utils/speakerUtils';
@@ -186,6 +191,7 @@ export function useSeriesManager({
   const latestScriptDataRef = useRef(scriptData);
   latestScriptDataRef.current = scriptData;
   const switchSeriesSeqRef = useRef(0);
+  const lastVideoEditMutationAtRef = useRef(0);
 
   const episodeRequest = useRef(null);
   const compactEpisodes = useRef(new WeakSet());
@@ -271,11 +277,14 @@ export function useSeriesManager({
         if (cb.setLeftTab) cb.setLeftTab('media');
       }
       if (cb.setVoiceSettings) {
+        const emptySeries = latestSeriesListRef.current.find((s) => s.id === resolvedSeriesId);
+        const resolvedVe = resolveEffectiveVideoEditSettings({ episode: ep, series: emptySeries });
         cb.setVoiceSettings((prev) =>
           resolveStickyVoiceSettings({
             prevSettings: prev,
             savedGlobalSettings: loadSavedVoiceSettings(),
             episodeVoiceSettings: null,
+            resolvedVideoEditSettings: resolvedVe,
           })
         );
       }
@@ -348,8 +357,12 @@ export function useSeriesManager({
     if (cb.setSelectedSegmentId) {
       cb.setSelectedSegmentId(ep.selectedSegmentId || null);
     }
+    const resolvedVe = resolveEffectiveVideoEditSettings({ episode: ep, series });
     if (cb.setRenderedVideo) {
-      cb.setRenderedVideo(sanitizeRenderedVideo(ep.renderedVideo));
+      const cleanRv = sanitizeRenderedVideo(ep.renderedVideo);
+      cb.setRenderedVideo(
+        cleanRv && isRenderedYoutubeTransformMismatch(cleanRv, resolvedVe) ? null : cleanRv
+      );
     }
     if (cb.setVoiceSettings) {
       cb.setVoiceSettings((prev) =>
@@ -357,6 +370,7 @@ export function useSeriesManager({
           prevSettings: prev,
           savedGlobalSettings: loadSavedVoiceSettings(),
           episodeVoiceSettings: ep.voiceSettings || null,
+          resolvedVideoEditSettings: resolvedVe,
         })
       );
     }
@@ -671,18 +685,38 @@ export function useSeriesManager({
         const cached = prepared.episode;
         if (prepared.complete && (Number(cached.lastModified || 0) > Number(ep.lastModified || 0) ||
             Number(cached.scriptData?.updatedAt || 0) > Number(ep.scriptData?.updatedAt || 0))) return;
+        // Preserve newer local scoped video-edit settings if user switched rapidly before server sync landed
+        const localSeriesNow = (latestSeriesListRef.current || []).find((s) => s.id === series.id);
+        const localEpNow = (localSeriesNow?.episodes || []).find((e) => e.id === target.id);
+        const localVeAt = Math.max(
+          Number(localEpNow?.videoEditSettings?.updatedAt || 0),
+          Number(localSeriesNow?.videoEditSettings?.updatedAt || 0),
+          lastVideoEditMutationAtRef.current
+        );
+        const serverVeAt = Number(ep?.videoEditSettings?.updatedAt || 0);
+        let mergedEpFromServer = ep;
+        if (localVeAt > serverVeAt) {
+          const localResolvedVe = resolveEffectiveVideoEditSettings({ episode: localEpNow || cached, series: localSeriesNow || series });
+          mergedEpFromServer = {
+            ...ep,
+            videoEditSettings: localEpNow?.videoEditSettings || { ...localResolvedVe, updatedAt: localVeAt },
+            voiceSettings: { ...(ep.voiceSettings || {}), ...localResolvedVe },
+            renderedVideo: localEpNow?.renderedVideo !== undefined ? localEpNow.renderedVideo : ep.renderedVideo,
+            renderInvalidatedAt: Math.max(Number(ep.renderInvalidatedAt || 0), Number(localEpNow?.renderInvalidatedAt || 0)),
+          };
+        }
         // Initial series hydration already supplied full data. Only compare fields used by the workspace.
         const fields = ['scriptData', 'video', 'metadata', 'duration', 'videoClips', 'videoClipsUpdatedAt',
           'fullAudioUrl', 'fullAudioPath', 'audioGenerated', 'audioOutdated', 'speakerRegistry',
-          'voiceSettings', 'renderedVideo', 'bgmAudioUrl', 'videoFile', 'sourceVideoPath'];
-        if (prepared.complete && fields.every((key) => JSON.stringify(ep[key]) === JSON.stringify(cached[key]))) {
+          'voiceSettings', 'videoEditSettings', 'renderedVideo', 'bgmAudioUrl', 'videoFile', 'sourceVideoPath'];
+        if (prepared.complete && fields.every((key) => JSON.stringify(mergedEpFromServer[key]) === JSON.stringify(cached[key]))) {
           if (episodeEtags.has(ep)) episodeEtags.set(cached, episodeEtags.get(ep));
           return;
         }
-        const full = readWorkspace(series, target, ep);
-        applyEpisodeToWorkspace(ep, series.id, { preserveTab: true, prepared: full });
+        const full = readWorkspace(series, target, mergedEpFromServer);
+        applyEpisodeToWorkspace(mergedEpFromServer, series.id, { preserveTab: true, prepared: full });
         setSeriesList((list) => list.map((s) => s.id === series.id ? {
-          ...s, episodes: s.episodes.map((item) => item === target ? ep : item),
+          ...s, episodes: s.episodes.map((item) => item === target ? mergedEpFromServer : item),
         } : s));
       } catch (err) {
         if (!controller.signal.aborted) console.warn('[SeriesManager] Episode load failed:', err.message);
@@ -1201,6 +1235,70 @@ export function useSeriesManager({
   // Get series glossary (characters and terms from EP1 or entire series)
   const seriesGlossary = activeSeries?.glossary || { characters: [], terms: [] };
 
+  // Apply only the 4 Video Edit Settings (Mirror Flip, Zoom, Color Grade, Mute Original OST)
+  // to the explicit target scope ('episode' | 'folder' | 'global') without touching scripts, audio, or timeline.
+  const applyVideoEditSettingsToScope = useCallback(async ({
+    scope = 'folder',
+    settings = null,
+    updatedAt = Date.now(),
+    syncServer = true,
+  } = {}) => {
+    const targetSeriesId = activeSeriesIdRef.current;
+    const targetEpisodeId = activeEpisodeIdRef.current;
+    const normScope = scope === 'episode' || scope === 'global' ? scope : 'folder';
+    const ts = Math.max(Date.now(), Number(updatedAt) || 0, lastVideoEditMutationAtRef.current + 1);
+    lastVideoEditMutationAtRef.current = ts;
+
+    const normalizedEdit = normalizeVideoEditSettings(settings);
+    if (normScope === 'global') {
+      saveGlobalVideoEditSettings(normalizedEdit, { updatedAt: ts });
+    }
+
+    setSeriesList((prevList) => {
+      const nextList = applyVideoEditSettingsToSeriesList(prevList, {
+        scope: normScope,
+        seriesId: targetSeriesId,
+        episodeId: targetEpisodeId,
+        settings: normalizedEdit,
+        updatedAt: ts,
+      });
+      try { saveSeriesList(nextList); } catch (_) {}
+      return nextList;
+    });
+
+    if (callbacksRef.current.setVoiceSettings) {
+      callbacksRef.current.setVoiceSettings((prev) => ({
+        ...(prev || {}),
+        ...normalizedEdit,
+      }));
+    }
+
+    if (callbacksRef.current.setRenderedVideo) {
+      callbacksRef.current.setRenderedVideo((prevRv) => {
+        if (!prevRv) return prevRv;
+        return isRenderedYoutubeTransformMismatch(prevRv, normalizedEdit) ? null : prevRv;
+      });
+    }
+
+    if (!syncServer) {
+      return { success: true, scope: normScope, settings: normalizedEdit, updatedAt: ts };
+    }
+
+    try {
+      const res = await applyScopedVideoEditSettingsApi({
+        seriesId: targetSeriesId,
+        episodeId: targetEpisodeId,
+        scope: normScope,
+        settings: normalizedEdit,
+        updatedAt: ts,
+      });
+      return res;
+    } catch (err) {
+      console.warn('[useSeriesManager] Failed to persist scoped video edit settings:', err?.message || err);
+      return { success: false, error: err?.message || 'Persist failed' };
+    }
+  }, []);
+
   return {
     seriesList,
     activeSeries,
@@ -1220,5 +1318,6 @@ export function useSeriesManager({
     handleDeleteSeries,
     handleSaveEpisodeBackground,
     getCurrentWorkspaceSnapshot,
+    applyVideoEditSettingsToScope,
   };
 }

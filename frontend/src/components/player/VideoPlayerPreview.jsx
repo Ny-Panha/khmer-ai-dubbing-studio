@@ -175,6 +175,8 @@ function VideoPlayerPreview({
     scriptData,
     renderedVideo,
     proxyStatus,
+    isVisualBaked: Boolean(renderedVideo && !renderedVideo.isProxyPreview),
+    isAudioBaked: Boolean(renderedVideo && (!renderedVideo.isProxyPreview || (renderedVideo.isProxyPreview && proxyStatus?.state === 'fresh'))),
     videoRef,
     currentTime,
     isPlaying,
@@ -241,7 +243,8 @@ function VideoPlayerPreview({
   useEffect(() => {
     return subscribeDraftPreview(['duckingVolume', 'khmerVolume', 'zoomScale'], ({ key, value, cleared }) => {
       const cfg = segAudioConfigRef.current || {};
-      if (cfg.renderedVideo && !cfg.renderedVideo.isProxyPreview) return;
+      // Allow zoom preview on live & proxy-preview (unbaked visual); skip only on final baked MP4
+      if (cfg.isVisualBaked) return;
 
       if (key === 'zoomScale') {
         if (!videoRef?.current) return;
@@ -260,15 +263,19 @@ function VideoPlayerPreview({
       }
 
       if (cleared || !Number.isFinite(value)) return;
-      if (cfg.renderedVideo) return;
+      // Skip volume preview on baked audio (final render or fresh proxy)
+      if (cfg.isAudioBaked) return;
 
       if (key === 'duckingVolume') {
-        if (cfg.voiceSettings?.youtubeSafeAudio) {
+        const isCustomBgmActive = Boolean(cfg.voiceSettings?.enableCustomBgm && cfg.voiceSettings?.customBgmUrl);
+        const isYoutubeSafeAudio = Boolean(cfg.voiceSettings?.youtubeSafeAudio && !isCustomBgmActive);
+        if (isYoutubeSafeAudio) {
           if (videoRef?.current) {
             videoRef.current.muted = true;
             videoRef.current.volume = 0;
           }
-          if (cleanBgAudioRef.current) {
+          // Only mute cleanBgAudio if it's not Custom BGM (Custom BGM should keep playing)
+          if (cleanBgAudioRef.current && !isCustomBgmActive) {
             cleanBgAudioRef.current.muted = true;
             cleanBgAudioRef.current.volume = 0;
           }

@@ -17,6 +17,10 @@ function ExportSettingsPanel({
   selectedVideo,
   videoMetadata = null,
   activeEpisode = null,
+  activeSeries = null,
+  videoEditScope = 'folder',
+  onChangeVideoEditScope = null,
+  onApplyVideoEditSettings = null,
 }) {
   const [internalProgress, setInternalProgress] = useState(0);
   const [internalStage, setInternalStage] = useState('');
@@ -24,6 +28,7 @@ function ExportSettingsPanel({
   const [sponsorUploadError, setSponsorUploadError] = useState(null);
   const [draftSliders, setDraftSliders] = useState({});
   const [isYoutubeSafeOpen, setIsYoutubeSafeOpen] = useState(false);
+  const [applyStatus, setApplyStatus] = useState(null); // 'applying' | 'done' | null
 
   const setSliderDraft = (key, val) => {
     setDraftSliders((prev) => {
@@ -1546,15 +1551,16 @@ function ExportSettingsPanel({
                   data-testid="btn-youtube-safe-preset"
                   onClick={() => {
                     if (isYoutubePresetActive) {
+                      // OFF: reset only the preset-controlled keys; keep user's Mirror & custom Zoom
                       onSettingChange({
-                        enableMirrorFlip: false,
                         zoomScale: 1.0,
                         enableColorGrade: false,
                         youtubeSafeAudio: false,
                       });
                     } else {
+                      // ON: only set preset keys; never override manually set Mirror
                       onSettingChange({
-                        zoomScale: 1.06,
+                        zoomScale: ytZoomVal >= 1.055 ? ytZoomVal : 1.06,
                         enableColorGrade: true,
                         youtubeSafeAudio: true,
                       });
@@ -1665,6 +1671,102 @@ function ExportSettingsPanel({
               </div>
             )}
           </div>
+
+          {/* Apply Settings To — 3-scope radio + Copy Settings */}
+          {(onApplyVideoEditSettings || onChangeVideoEditScope) && (
+            <div
+              style={{
+                marginTop: 10,
+                marginBottom: 2,
+                borderTop: '1px solid var(--border-subtle)',
+                paddingTop: 10,
+              }}
+            >
+              <div style={{ fontSize: '0.74rem', fontWeight: 700, color: 'var(--text-primary)', marginBottom: 7 }}>
+                Apply Settings To
+              </div>
+              {/* scope: episode */}
+              {[
+                { value: 'episode', label: 'Current Episode Only' },
+                {
+                  value: 'folder',
+                  label: (() => {
+                    const name = activeSeries?.folderName || activeSeries?.title || 'Current Folder';
+                    const count = Array.isArray(activeSeries?.episodes) ? activeSeries.episodes.length : 0;
+                    return `All Episodes in ${name}${count > 0 ? ` (${count})` : ''}`;
+                  })(),
+                },
+                { value: 'global', label: 'All Project Folders' },
+              ].map(({ value, label }) => (
+                <label
+                  key={value}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 7,
+                    marginBottom: 5,
+                    cursor: 'pointer',
+                    fontSize: '0.73rem',
+                    color: videoEditScope === value ? 'var(--text-primary)' : 'var(--text-secondary)',
+                    fontWeight: videoEditScope === value ? 600 : 400,
+                  }}
+                >
+                  <input
+                    type="radio"
+                    name="video-edit-scope"
+                    value={value}
+                    checked={videoEditScope === value}
+                    onChange={() => onChangeVideoEditScope?.(value)}
+                    style={{ accentColor: '#10b981', margin: 0 }}
+                  />
+                  {label}
+                  {value === 'folder' && (
+                    <span style={{ fontSize: '0.60rem', padding: '1px 5px', borderRadius: 3, background: 'rgba(16,185,129,0.15)', color: '#6ee7b7', fontWeight: 700 }}>
+                      Default
+                    </span>
+                  )}
+                </label>
+              ))}
+              <button
+                type="button"
+                disabled={applyStatus === 'applying'}
+                onClick={async () => {
+                  if (!onApplyVideoEditSettings) return;
+                  setApplyStatus('applying');
+                  try {
+                    await onApplyVideoEditSettings(videoEditScope);
+                    setApplyStatus('done');
+                    setTimeout(() => setApplyStatus(null), 2000);
+                  } catch (_) {
+                    setApplyStatus(null);
+                  }
+                }}
+                style={{
+                  marginTop: 6,
+                  width: '100%',
+                  padding: '7px 10px',
+                  borderRadius: 6,
+                  fontSize: '0.73rem',
+                  fontWeight: 600,
+                  cursor: applyStatus === 'applying' ? 'not-allowed' : 'pointer',
+                  border: applyStatus === 'done'
+                    ? '1px solid rgba(16, 185, 129, 0.5)'
+                    : '1px solid rgba(16, 185, 129, 0.35)',
+                  background: applyStatus === 'done'
+                    ? 'rgba(16, 185, 129, 0.18)'
+                    : 'rgba(16, 185, 129, 0.10)',
+                  color: '#6ee7b7',
+                  opacity: applyStatus === 'applying' ? 0.6 : 1,
+                }}
+              >
+                {applyStatus === 'applying'
+                  ? '⏳ កំពុង Apply...'
+                  : applyStatus === 'done'
+                    ? '✓ Applied រួចរាល់!'
+                    : '📋 Copy Settings'}
+              </button>
+            </div>
+          )}
 
           {/* Dynamic 0% - 100% Export Progress Monitor Card */}
           {(isRendering || displayProgress > 0) && (

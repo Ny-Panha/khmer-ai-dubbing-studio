@@ -7,6 +7,24 @@ export const STORAGE_ACTIVE_SERIES_ID_KEY = 'KHMER_AI_ACTIVE_SERIES_ID';
 export const STORAGE_ACTIVE_EPISODE_ID_KEY = 'KHMER_AI_ACTIVE_EPISODE_ID';
 export const STORAGE_ACTIVE_PROJECT_KEY = 'KHMER_AI_ACTIVE_PROJECT_V3';
 export const STORAGE_VOICE_SETTINGS_KEY = 'KHMER_AI_DUBBING_VOICE_SETTINGS';
+export const STORAGE_GLOBAL_VIDEO_EDIT_SETTINGS_KEY = 'KHMER_AI_GLOBAL_VIDEO_EDIT_SETTINGS_V1';
+export const STORAGE_VIDEO_EDIT_SCOPE_KEY = 'KHMER_AI_VIDEO_EDIT_SCOPE_V1';
+
+export const VIDEO_EDIT_SETTING_KEYS = Object.freeze([
+  'enableMirrorFlip',
+  'zoomScale',
+  'enableColorGrade',
+  'youtubeSafeAudio',
+]);
+
+export const VALID_VIDEO_EDIT_SCOPES = Object.freeze(['episode', 'folder', 'global']);
+
+export const DEFAULT_VIDEO_EDIT_SETTINGS = Object.freeze({
+  enableMirrorFlip: false,
+  zoomScale: 1.0,
+  enableColorGrade: false,
+  youtubeSafeAudio: false,
+});
 
 export const DEFAULT_VOICE_SETTINGS = {
   voiceId: 'km-KH-PisethNeural',
@@ -56,6 +74,8 @@ export const DEFAULT_VOICE_SETTINGS = {
 // The floating Customize toolbar controls are shared across all episodes.
 // Logo settings live in their dedicated global store; these non-logo visual keys
 // inherit the last explicitly saved workspace settings instead of stale episode data.
+// Note: Video Edit Settings (enableMirrorFlip, zoomScale, enableColorGrade, youtubeSafeAudio)
+// are managed by the explicit 3-scope resolver (Current Episode / Current Folder / All Folders).
 export const STICKY_CUSTOMIZE_SETTING_KEYS = Object.freeze([
   'enableCornerMask', 'cornerMaskText', 'cornerMaskStyle', 'cornerMaskPosition',
   'cornerMaskWidth', 'cornerMaskHeight', 'cornerMaskOpacity', 'cornerMaskBlur',
@@ -63,9 +83,206 @@ export const STICKY_CUSTOMIZE_SETTING_KEYS = Object.freeze([
   'enableAntiTheft', 'marqueeText', 'marqueeSpeed', 'marqueePosition',
   'marqueeTextColor', 'antiTheftSize', 'antiTheftHeight', 'antiTheftBottomPercent', 'antiTheftBgStyle', 'antiTheftBlur',
   'enableWatermark', 'watermarkText', 'watermarkPosition', 'watermarkColor',
-  'enableMirrorFlip', 'zoomScale', 'enableColorGrade', 'youtubeSafeAudio',
   'enableCustomBgm', 'customBgmUrl', 'customBgmPath', 'customBgmName', 'customBgmDuration',
 ]);
+
+export function normalizeVideoEditSettings(input, fallback = DEFAULT_VIDEO_EDIT_SETTINGS) {
+  const base = fallback && typeof fallback === 'object' ? fallback : DEFAULT_VIDEO_EDIT_SETTINGS;
+  const src = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
+  const rawZoom = src.zoomScale !== undefined ? src.zoomScale : (src.zoom !== undefined ? src.zoom : base.zoomScale);
+  const parsedZoom = Number(rawZoom);
+  const baseZoom = Number(base.zoomScale);
+  const zoomScale = Number.isFinite(parsedZoom)
+    ? Math.max(1.0, Math.min(1.15, Math.round(parsedZoom * 100) / 100))
+    : (Number.isFinite(baseZoom) ? Math.max(1.0, Math.min(1.15, Math.round(baseZoom * 100) / 100)) : 1.0);
+
+  return {
+    enableMirrorFlip: src.enableMirrorFlip !== undefined ? Boolean(src.enableMirrorFlip) : Boolean(base.enableMirrorFlip),
+    zoomScale,
+    enableColorGrade: src.enableColorGrade !== undefined ? Boolean(src.enableColorGrade) : Boolean(base.enableColorGrade),
+    youtubeSafeAudio: src.youtubeSafeAudio !== undefined ? Boolean(src.youtubeSafeAudio) : Boolean(base.youtubeSafeAudio),
+  };
+}
+
+export function areVideoEditSettingsEqual(a, b) {
+  const normA = normalizeVideoEditSettings(a);
+  const normB = normalizeVideoEditSettings(b);
+  return (
+    normA.enableMirrorFlip === normB.enableMirrorFlip &&
+    Math.abs(normA.zoomScale - normB.zoomScale) < 0.001 &&
+    normA.enableColorGrade === normB.enableColorGrade &&
+    normA.youtubeSafeAudio === normB.youtubeSafeAudio
+  );
+}
+
+export function isRenderedYoutubeTransformMismatch(renderedVideo, activeSettings = null) {
+  if (!renderedVideo || typeof renderedVideo !== 'object' || renderedVideo.isProxyPreview) return false;
+  if (!renderedVideo.youtubeTransform || typeof renderedVideo.youtubeTransform !== 'object') return false;
+  return !areVideoEditSettingsEqual(renderedVideo.youtubeTransform, activeSettings);
+}
+
+export function loadPreferredVideoEditScope() {
+  try {
+    if (typeof localStorage === 'undefined') return 'folder';
+    const raw = localStorage.getItem(STORAGE_VIDEO_EDIT_SCOPE_KEY);
+    return VALID_VIDEO_EDIT_SCOPES.includes(raw) ? raw : 'folder';
+  } catch {
+    return 'folder';
+  }
+}
+
+export function savePreferredVideoEditScope(scope) {
+  const normalized = VALID_VIDEO_EDIT_SCOPES.includes(scope) ? scope : 'folder';
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(STORAGE_VIDEO_EDIT_SCOPE_KEY, normalized);
+    }
+  } catch {}
+  return normalized;
+}
+
+export function loadGlobalVideoEditSettingsRecord() {
+  try {
+    if (typeof localStorage === 'undefined') {
+      return { initialized: false, settings: { ...DEFAULT_VIDEO_EDIT_SETTINGS }, updatedAt: 0 };
+    }
+    const raw = localStorage.getItem(STORAGE_GLOBAL_VIDEO_EDIT_SETTINGS_KEY);
+    if (!raw) {
+      return { initialized: false, settings: { ...DEFAULT_VIDEO_EDIT_SETTINGS }, updatedAt: 0 };
+    }
+    const parsed = JSON.parse(raw);
+    const payload = parsed?.settings || parsed;
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+      return { initialized: false, settings: { ...DEFAULT_VIDEO_EDIT_SETTINGS }, updatedAt: 0 };
+    }
+    return {
+      initialized: true,
+      settings: normalizeVideoEditSettings(payload),
+      updatedAt: Number(parsed?.updatedAt) || 0,
+    };
+  } catch {
+    return { initialized: false, settings: { ...DEFAULT_VIDEO_EDIT_SETTINGS }, updatedAt: 0 };
+  }
+}
+
+export function saveGlobalVideoEditSettings(settings, { updatedAt = Date.now() } = {}) {
+  const existing = loadGlobalVideoEditSettingsRecord();
+  const normalized = normalizeVideoEditSettings(settings, existing.settings);
+  const ts = Math.max(Number(updatedAt) || Date.now(), Number(existing.updatedAt || 0));
+  try {
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(
+        STORAGE_GLOBAL_VIDEO_EDIT_SETTINGS_KEY,
+        JSON.stringify({ version: 1, updatedAt: ts, settings: normalized })
+      );
+    }
+  } catch {}
+  return { initialized: true, settings: normalized, updatedAt: ts };
+}
+
+export function resolveEffectiveVideoEditSettings({
+  episode = null,
+  series = null,
+  globalRecord = null,
+} = {}) {
+  const glob = globalRecord || loadGlobalVideoEditSettingsRecord();
+  const globVe = glob?.initialized && glob?.settings ? glob.settings : null;
+  const globAt = Number(glob?.updatedAt || 0);
+
+  const folderVe = series?.videoEditSettings && typeof series.videoEditSettings === 'object'
+    ? series.videoEditSettings
+    : null;
+  const folderAt = Number(folderVe?.updatedAt || 0);
+
+  const epVe = episode?.videoEditSettings && typeof episode.videoEditSettings === 'object'
+    ? episode.videoEditSettings
+    : null;
+  const epAt = Number(epVe?.updatedAt || 0);
+
+  if (epVe && epVe.scope === 'episode' && epAt >= folderAt && epAt >= globAt) {
+    return normalizeVideoEditSettings(epVe);
+  }
+  if (folderVe && folderAt >= globAt) {
+    return normalizeVideoEditSettings(folderVe);
+  }
+  if (globVe) {
+    return normalizeVideoEditSettings(globVe);
+  }
+  if (epVe) {
+    return normalizeVideoEditSettings(epVe);
+  }
+  return { ...DEFAULT_VIDEO_EDIT_SETTINGS };
+}
+
+export function applyVideoEditSettingsToSeriesList(seriesList, {
+  scope = 'folder',
+  seriesId = null,
+  episodeId = null,
+  settings = null,
+  updatedAt = Date.now(),
+} = {}) {
+  if (!Array.isArray(seriesList)) return [];
+  const normScope = VALID_VIDEO_EDIT_SCOPES.includes(scope) ? scope : 'folder';
+  const normalizedEdit = normalizeVideoEditSettings(settings);
+  const ts = Number(updatedAt) || Date.now();
+  const scopedRecord = { ...normalizedEdit, updatedAt: ts };
+
+  const patchEpisode = (ep, epScope) => {
+    const prevEffective = ep.videoEditSettings
+      ? normalizeVideoEditSettings(ep.videoEditSettings)
+      : (ep.voiceSettings ? normalizeVideoEditSettings(ep.voiceSettings) : { ...DEFAULT_VIDEO_EDIT_SETTINGS });
+    const changed = !areVideoEditSettingsEqual(prevEffective, normalizedEdit);
+    const rvMismatch = isRenderedYoutubeTransformMismatch(ep.renderedVideo, normalizedEdit);
+    const invalidateRender = changed || rvMismatch;
+    const prevRenderedAt = Number(ep.renderedVideo?.renderedAt || 0);
+    const nextVoice = stripLogoSettings({
+      ...(ep.voiceSettings && typeof ep.voiceSettings === 'object' ? ep.voiceSettings : {}),
+      ...normalizedEdit,
+    });
+    const nextEp = {
+      ...ep,
+      videoEditSettings: { ...normalizedEdit, updatedAt: ts, scope: epScope },
+      voiceSettings: nextVoice,
+      lastModified: Math.max(ts, Number(ep.lastModified || 0) + 1),
+    };
+    if (invalidateRender) {
+      nextEp.renderedVideo = null;
+      nextEp.renderInvalidatedAt = Math.max(ts, Number(ep.renderInvalidatedAt || 0) + 1, prevRenderedAt > 0 ? prevRenderedAt + 1 : 0);
+      if (nextEp.status === 'completed') {
+        nextEp.status = nextEp.audioGenerated ? 'voicing' : ((nextEp.scriptData?.segments?.length > 0) ? 'translated' : (nextEp.video ? 'uploaded' : 'idle'));
+      }
+    }
+    return nextEp;
+  };
+
+  return seriesList.map((series) => {
+    if (!series) return series;
+    if (normScope === 'global') {
+      return {
+        ...series,
+        videoEditSettings: { ...scopedRecord },
+        episodes: (series.episodes || []).map((ep) => patchEpisode(ep, 'global')),
+      };
+    }
+    if (String(series.id) !== String(seriesId)) {
+      return series;
+    }
+    if (normScope === 'folder') {
+      return {
+        ...series,
+        videoEditSettings: { ...scopedRecord },
+        episodes: (series.episodes || []).map((ep) => patchEpisode(ep, 'folder')),
+      };
+    }
+    // normScope === 'episode'
+    return {
+      ...series,
+      episodes: (series.episodes || []).map((ep) =>
+        String(ep.id) === String(episodeId) ? patchEpisode(ep, 'episode') : ep
+      ),
+    };
+  });
+}
 
 export const VALID_ASPECT_RATIOS = Object.freeze(['16:9', '9:16', '1:1']);
 
@@ -158,6 +375,7 @@ export function resolveStickyVoiceSettings({
   prevSettings = null,
   savedGlobalSettings = null,
   episodeVoiceSettings = null,
+  resolvedVideoEditSettings = null,
 } = {}) {
   const safePrev = prevSettings && typeof prevSettings === 'object' && !Array.isArray(prevSettings)
     ? prevSettings
@@ -185,10 +403,14 @@ export function resolveStickyVoiceSettings({
       stickyCustomize[key] = safeGlobal[key];
     }
   }
+  const effectiveVideoEdit = resolvedVideoEditSettings
+    ? normalizeVideoEditSettings(resolvedVideoEditSettings)
+    : {};
   return {
     ...base,
     ...epClean,
     ...stickyCustomize,
+    ...effectiveVideoEdit,
     aspectRatio: stickyRatio,
   };
 }
@@ -711,12 +933,16 @@ function createStorageOptimizedSeriesList(seriesList) {
       glossary: series.glossary || { characters: [], terms: [] },
       genre: series.genre || 'auto',
       detectedGenre: series.detectedGenre || 'modern',
+      ...(series.videoEditSettings ? { videoEditSettings: series.videoEditSettings } : {}),
       episodes: (series.episodes || []).map((ep) => {
         const hasSegments = Array.isArray(ep.scriptData?.segments) && ep.scriptData.segments.length > 0;
         const totalCount = ep.scriptData?.segments?.length || ep.scriptData?.totalSegments || 0;
         const resolvedAudioOutdated = Boolean(ep.audioOutdated);
         const resolvedAudioGenerated = Boolean(ep.audioGenerated || (!resolvedAudioOutdated && ep.fullAudioUrl));
         const resolvedHasAudio = Boolean(ep.hasAudio || resolvedAudioGenerated);
+        const cleanVoiceSettings = ep.voiceSettings && typeof ep.voiceSettings === 'object' && !Array.isArray(ep.voiceSettings)
+          ? stripLogoSettings(ep.voiceSettings)
+          : null;
 
         // For the active episode currently open, keep slimmed essential segment data in localStorage
         if (ep.id === activeEpId && hasSegments) {
@@ -737,6 +963,9 @@ function createStorageOptimizedSeriesList(seriesList) {
             fullAudioUrl: ep.fullAudioUrl || null,
             fullAudioPath: ep.fullAudioPath || null,
             renderedVideo: sanitizeRenderedVideo(ep.renderedVideo),
+            ...(ep.renderInvalidatedAt ? { renderInvalidatedAt: ep.renderInvalidatedAt } : {}),
+            ...(ep.videoEditSettings ? { videoEditSettings: ep.videoEditSettings } : {}),
+            ...(cleanVoiceSettings ? { voiceSettings: cleanVoiceSettings } : {}),
             generationMode: ep.generationMode || ep.scriptData?.generationMode,
             lastModified: ep.lastModified,
             updatedAt: ep.updatedAt,
@@ -771,6 +1000,9 @@ function createStorageOptimizedSeriesList(seriesList) {
             fullAudioUrl: ep.fullAudioUrl || null,
             fullAudioPath: ep.fullAudioPath || null,
             renderedVideo: sanitizeRenderedVideo(ep.renderedVideo),
+            ...(ep.renderInvalidatedAt ? { renderInvalidatedAt: ep.renderInvalidatedAt } : {}),
+            ...(ep.videoEditSettings ? { videoEditSettings: ep.videoEditSettings } : {}),
+            ...(cleanVoiceSettings ? { voiceSettings: cleanVoiceSettings } : {}),
             generationMode: ep.generationMode || ep.scriptData?.generationMode,
             lastModified: ep.lastModified,
             updatedAt: ep.updatedAt,
@@ -798,6 +1030,9 @@ function createStorageOptimizedSeriesList(seriesList) {
           sourceVideoPath: ep.sourceVideoPath || null,
           originalFilename: ep.originalFilename || null,
           renderedVideo: sanitizeRenderedVideo(ep.renderedVideo),
+          ...(ep.renderInvalidatedAt ? { renderInvalidatedAt: ep.renderInvalidatedAt } : {}),
+          ...(ep.videoEditSettings ? { videoEditSettings: ep.videoEditSettings } : {}),
+          ...(cleanVoiceSettings ? { voiceSettings: cleanVoiceSettings } : {}),
         };
       }),
     };
@@ -1490,12 +1725,21 @@ export function saveEpisodeState(seriesId, episodeId, stateData, options = {}) {
       ? null
       : rawMergedRenderedVideo;
 
+    const prevVeAt = Number(prevEp.videoEditSettings?.updatedAt || 0);
+    const incVeAt = Number(stateData.videoEditSettings?.updatedAt || 0);
+    const mergedVideoEditSettings = (stateData.videoEditSettings && incVeAt >= prevVeAt)
+      ? stateData.videoEditSettings
+      : (prevEp.videoEditSettings || stateData.videoEditSettings || null);
+
     const rawVoiceSettings = stateData.voiceSettings !== undefined
       ? stateData.voiceSettings
       : prevEp.voiceSettings;
     const sanitizedVoiceSettings = rawVoiceSettings && typeof rawVoiceSettings === 'object' && !Array.isArray(rawVoiceSettings)
       ? stripLogoSettings({ ...rawVoiceSettings, aspectRatio: sanitizeAspectRatio(rawVoiceSettings.aspectRatio) })
       : (rawVoiceSettings === null ? null : stripLogoSettings(prevEp.voiceSettings) || null);
+    if (mergedVideoEditSettings && prevVeAt > incVeAt && sanitizedVoiceSettings && typeof sanitizedVoiceSettings === 'object') {
+      Object.assign(sanitizedVoiceSettings, normalizeVideoEditSettings(mergedVideoEditSettings));
+    }
 
     const updatedEp = {
       ...prevEp,
@@ -1509,6 +1753,7 @@ export function saveEpisodeState(seriesId, episodeId, stateData, options = {}) {
       fullAudioUrl: mergedFullAudioUrl,
       renderedVideo: mergedRenderedVideo,
       ...(mergedRenderInvalidatedAt > 0 ? { renderInvalidatedAt: mergedRenderInvalidatedAt } : {}),
+      ...(mergedVideoEditSettings ? { videoEditSettings: mergedVideoEditSettings } : {}),
       videoClips: mergedVideoClips,
       videoClipsUpdatedAt: staleVideoClipsSnapshot
         ? previousVideoClipsUpdatedAt
@@ -1630,6 +1875,17 @@ export function addNewEpisodeToSeries(seriesId, customTitle = null) {
   const nextNum = getNextAvailableEpisodeNumber(existing);
   const safeTitle = (typeof customTitle === 'string' && customTitle.trim()) ? customTitle.trim() : null;
   const newEp = createDefaultEpisode(nextNum, safeTitle || `ភាគទី ${nextNum} (EP${nextNum})`, null, existing);
+  const inheritedVe = series.videoEditSettings || resolveEffectiveVideoEditSettings({ series });
+  if (series.videoEditSettings || loadGlobalVideoEditSettingsRecord().initialized) {
+    newEp.videoEditSettings = {
+      ...normalizeVideoEditSettings(inheritedVe),
+      updatedAt: Number(series.videoEditSettings?.updatedAt || loadGlobalVideoEditSettingsRecord().updatedAt || Date.now()),
+      scope: series.videoEditSettings ? 'folder' : 'global',
+    };
+    newEp.voiceSettings = {
+      ...normalizeVideoEditSettings(inheritedVe),
+    };
+  }
 
   series.episodes = [...existing, newEp];
   list[sIdx] = series;

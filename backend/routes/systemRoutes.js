@@ -30,6 +30,8 @@ const {
   writeGlobalLogoSettings,
   readGlobalCustomizeSettings,
   writeGlobalCustomizeSettings,
+  readGlobalVideoEditSettings,
+  writeGlobalVideoEditSettings,
 } = require("../services/globalLogoSettingsService");
 
 const router = express.Router();
@@ -458,6 +460,31 @@ router.post("/logo-settings", (req, res) => {
       success: true,
       ...state,
     });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * Global video-edit settings (mirror flip, zoom, color grade, youtube-safe audio).
+ * Single source of truth — no per-episode overrides for MVP.
+ */
+router.get("/video-edit-settings", (req, res) => {
+  try {
+    const state = readGlobalVideoEditSettings();
+    res.json({ success: true, ...state });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.put("/video-edit-settings", (req, res) => {
+  try {
+    const body = req.body && typeof req.body === "object" ? req.body : {};
+    const incoming = body.settings || body.videoEditSettings || body;
+    const updatedAt = Number(body.updatedAt) || Date.now();
+    const state = writeGlobalVideoEditSettings(incoming, { updatedAt });
+    res.json({ success: true, ...state });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }

@@ -14,6 +14,7 @@ const {
   updateSeriesMetadata,
   withSeriesMetadataLock,
   ensureEpisodeDirectories,
+  getInheritedVideoEditSettings,
 } = require("./episodeService");
 const {
   renderDubbedVideoWithDucking,
@@ -21,6 +22,7 @@ const {
   getVideoMetadata,
   getMediaDuration,
   cancelJobRenderProcess,
+  normalizeYoutubeTransform,
 } = require("./ffmpegService");
 const {
   getEffectiveGlobalLogoSettingsForExport,
@@ -616,12 +618,14 @@ async function runBatchExportWorker({
   const enableDemucs = Boolean(exportSettings.enableDemucs);
   const antiTheft = exportSettings.antiTheft || effectiveGlobalCustomize.antiTheft || null;
   const cornerMask = exportSettings.cornerMask || null || effectiveGlobalCustomize.cornerMask;
-  const youtubeTransform = exportSettings.youtubeTransform || null;
-  const youtubeSafeAudio = Boolean(youtubeTransform?.youtubeSafeAudio);
+  const youtubeTransform = normalizeYoutubeTransform(
+    exportSettings.youtubeTransform || getInheritedVideoEditSettings(cleanSeries, null)
+  );
+  const youtubeSafeAudio = Boolean(youtubeTransform.youtubeSafeAudio);
   // Visual presets are batch-wide. Never reuse an output rendered with older
-  // logo/mask/banner/youtubeTransform/customBgm options, even when subtitles have not changed.
+  // logo/mask/banner/youtubeTransform/customBgm/audioMix options, even when subtitles have not changed.
   const batchVisualSignature = JSON.stringify({
-    renderParityVersion: "v3_font64_margin81_parity",
+    renderParityVersion: "v4_yt_transform_audio_parity",
     rawLogo,
     cornerMask,
     antiTheft,
@@ -629,6 +633,12 @@ async function runBatchExportWorker({
     youtubeTransform,
     enableCustomBgm: Boolean(resolvedCustomBgmPath),
     customBgmPath: resolvedCustomBgmPath,
+    soundMode,
+    effectiveBgVolume,
+    effectiveKhmerVolume,
+    enableDemucs,
+    burnSubtitles,
+    verticalStyle,
   });
 
   const renderedFilePathsByIdx = new Array(totalCount).fill(null);
@@ -707,11 +717,18 @@ async function runBatchExportWorker({
       verticalStyle,
     });
 
+    const renderInvalidatedAt = Number(epPlan.rawEpisode.renderInvalidatedAt || 0);
     let previous = epPlan.rawEpisode.renderedVideo || null;
     if (!previous && fs.existsSync(sidecarMetaPath)) {
       try {
-        previous = JSON.parse(fs.readFileSync(sidecarMetaPath, "utf8"));
+        const sidecarMeta = JSON.parse(fs.readFileSync(sidecarMetaPath, "utf8"));
+        if (!renderInvalidatedAt || Number(sidecarMeta?.renderedAt || 0) > renderInvalidatedAt) {
+          previous = sidecarMeta;
+        }
       } catch (_) {}
+    }
+    if (previous && renderInvalidatedAt > 0 && Number(previous.renderedAt || 0) <= renderInvalidatedAt) {
+      previous = null;
     }
 
     // Named episode outputs can be overwritten. Only reuse a known matching burn.
@@ -825,6 +842,7 @@ async function runBatchExportWorker({
       renderedAt,
       burnedSubtitleOptions,
       batchVisualSignature,
+      youtubeTransform,
       usedOriginalAudio: epPlan.useOriginalAudio,
       aspectRatio: epAspectRatio,
       verticalStyle,
@@ -883,6 +901,7 @@ async function runBatchExportWorker({
       renderTimeSeconds: renderRes?.renderTimeSeconds || 0,
       aspectRatio: epAspectRatio,
       verticalStyle,
+      youtubeTransform,
     };
 
     // Keep job.outputs strictly ordered by episode index 0..i as episodes finish

@@ -90,6 +90,9 @@ export default function VoiceSettings({
   videoClips = [],
   onToggleDeliveryType = null,
   duration = 0,
+  videoEditScope = 'folder',
+  onChangeVideoEditScope = null,
+  onApplyVideoEditSettings = null,
 }) {
   const [isPlayingTest, setIsPlayingTest] = useState(false);
   const [playingSegmentId, setPlayingSegmentId] = useState(null);
@@ -1053,12 +1056,16 @@ export default function VoiceSettings({
             selectedVideo={selectedVideo}
             videoMetadata={videoMetadata}
             activeEpisode={activeEpisode}
+            activeSeries={activeSeries}
             batchRender={batchRender}
             audioGenerated={audioGenerated}
             previewAudioUrl={previewAudioUrl}
             renderedVideo={renderedVideo}
             onCopyCaption={handleCopyCaption}
             copiedCaption={copiedCaption}
+            videoEditScope={videoEditScope}
+            onChangeVideoEditScope={onChangeVideoEditScope}
+            onApplyVideoEditSettings={onApplyVideoEditSettings}
           />
         )}
       </div>

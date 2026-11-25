@@ -468,6 +468,56 @@ export default function BatchExportStudioModal({
                 />
                 <span>ប្រើសំឡេងដើមបើគ្មានសំឡេង AI</span>
               </label>
+
+              {/* (c2) Video Edit Settings Snapshot — read-only summary for batch */}
+              {(() => {
+                const vs = voiceSettings || {};
+                const mirrorOn = Boolean(vs.enableMirrorFlip);
+                const zoomRaw = Number(vs.zoomScale);
+                const zoomOn = Number.isFinite(zoomRaw) && zoomRaw > 1.005;
+                const colorOn = Boolean(vs.enableColorGrade);
+                const muteOn = Boolean(vs.youtubeSafeAudio);
+                const pills = [
+                  mirrorOn && { label: 'Mirror Flip', color: '#38bdf8' },
+                  zoomOn && { label: `Zoom ${Math.round(zoomRaw * 100)}%`, color: '#34d399' },
+                  colorOn && { label: 'Color Grade', color: '#a78bfa' },
+                  muteOn && { label: 'Mute OST', color: '#fb923c' },
+                ].filter(Boolean);
+                if (pills.length === 0) return null;
+                return (
+                  <div
+                    style={{
+                      padding: '8px 10px',
+                      borderRadius: 'var(--radius-sm)',
+                      background: 'rgba(16,185,129,0.07)',
+                      border: '1px solid rgba(16,185,129,0.25)',
+                    }}
+                  >
+                    <div style={{ fontSize: '0.68rem', color: 'var(--text-secondary)', marginBottom: 5, fontWeight: 600 }}>
+                      🎞 Video Edit Settings ({pills.length} ON) — applied to all episodes
+                    </div>
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5 }}>
+                      {pills.map((p) => (
+                        <span
+                          key={p.label}
+                          style={{
+                            fontSize: '0.65rem',
+                            fontWeight: 700,
+                            padding: '2px 7px',
+                            borderRadius: 4,
+                            background: 'rgba(0,0,0,0.25)',
+                            color: p.color,
+                            border: `1px solid ${p.color}55`,
+                            fontFamily: 'var(--font-mono)',
+                          }}
+                        >
+                          {p.label}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
             </section>
 
             {/* (d) Primary Export Actions */}

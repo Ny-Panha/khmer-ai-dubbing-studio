@@ -15,6 +15,7 @@ const {
   getOrCreateVideoThumbnails,
   renderDubbedVideoWithDucking,
   splitVideoIntoEpisodes,
+  normalizeYoutubeTransform,
 } = require("../services/ffmpegService");
 const { computeMasterAudioSignature } = require("../services/ttsService");
 const {
@@ -22,6 +23,7 @@ const {
   saveSeriesMetadata,
   withSeriesMetadataLock,
   ensureEpisodeDirectories,
+  getInheritedVideoEditSettings,
 } = require("../services/episodeService");
 const {
   startBatchExportJob,
@@ -356,7 +358,7 @@ router.post("/render-video", async (req, res) => {
       else if (candidate3 && fs.existsSync(candidate3) && isSafeUploadPath(candidate3, uploadsDir)) resolvedCustomBgmPath = candidate3;
     }
 
-    const effectiveYoutubeTransform = youtubeTransform || req.body?.voiceSettings?.youtubeTransform || (
+    const rawYoutubeTransform = youtubeTransform || req.body?.voiceSettings?.youtubeTransform || (
       req.body?.voiceSettings && (
         req.body.voiceSettings.enableMirrorFlip !== undefined ||
         req.body.voiceSettings.zoomScale !== undefined ||
@@ -369,8 +371,9 @@ router.post("/render-video", async (req, res) => {
             enableColorGrade: Boolean(req.body.voiceSettings.enableColorGrade),
             youtubeSafeAudio: Boolean(req.body.voiceSettings.youtubeSafeAudio),
           }
-        : null
+        : (isEpisode ? getInheritedVideoEditSettings(cleanSeries, cleanEpisode) : null)
     );
+    const effectiveYoutubeTransform = normalizeYoutubeTransform(rawYoutubeTransform);
 
     let renderResult;
     try {
@@ -441,6 +444,7 @@ router.post("/render-video", async (req, res) => {
       downloadsPath: downloadsExportPath,
       aspectRatio: targetAspectRatio,
       verticalStyle,
+      youtubeTransform: effectiveYoutubeTransform,
     });
   } catch (err) {
     console.error("Render Error:", err);
@@ -720,6 +724,8 @@ router.post("/split-video-episodes", async (req, res) => {
       const keptEpisodes = [...keptBefore, ...keptAfter];
       const occupiedIds = new Set(keptEpisodes.map((e) => String(e.id).toLowerCase()));
       const usedChunkIds = new Set();
+      const folderInheritedVe = currentSeries.videoEditSettings || getInheritedVideoEditSettings(cleanSeries, null);
+      const hasInheritedVe = Boolean(currentSeries.videoEditSettings || folderInheritedVe);
 
       const builtEpisodes = [];
 
@@ -802,6 +808,22 @@ router.post("/split-video-episodes", async (req, res) => {
           videoClips: [],
           activeClipId: null,
           selectedSegmentId: null,
+          ...(hasInheritedVe && folderInheritedVe ? {
+            videoEditSettings: {
+              enableMirrorFlip: Boolean(folderInheritedVe.enableMirrorFlip),
+              zoomScale: Number(folderInheritedVe.zoomScale) || 1.0,
+              enableColorGrade: Boolean(folderInheritedVe.enableColorGrade),
+              youtubeSafeAudio: Boolean(folderInheritedVe.youtubeSafeAudio),
+              updatedAt: Number(folderInheritedVe.updatedAt) || Date.now(),
+              scope: currentSeries.videoEditSettings ? "folder" : "global",
+            },
+            voiceSettings: {
+              enableMirrorFlip: Boolean(folderInheritedVe.enableMirrorFlip),
+              zoomScale: Number(folderInheritedVe.zoomScale) || 1.0,
+              enableColorGrade: Boolean(folderInheritedVe.enableColorGrade),
+              youtubeSafeAudio: Boolean(folderInheritedVe.youtubeSafeAudio),
+            },
+          } : {}),
         };
 
         builtEpisodes.push(epObj);
