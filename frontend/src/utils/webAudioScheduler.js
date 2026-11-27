@@ -299,6 +299,7 @@ export class AudioBufferLRUCache {
     this.maxBuffers = maxBuffers;
     this.cache = new Map(); // url -> { buffer, lastUsedMs, leadSkipSec }
     this.inflight = new Map();
+    this.failedAt = new Map(); // url -> timestamp ms for short failure backoff
     this.controller = new AbortController();
   }
 
@@ -346,10 +347,15 @@ export class AudioBufferLRUCache {
       return this.inflight.get(url);
     }
 
+    const lastFail = this.failedAt.get(url);
+    if (lastFail && (performance.now() - lastFail) < 2000) {
+      return null;
+    }
+
     const { signal } = this.controller;
     const promise = (async () => {
       try {
-        const response = await fetch(url, { cache: 'force-cache', signal });
+        const response = await fetch(url, { cache: 'default', signal });
         if (!response.ok) {
           throw new Error(`HTTP ${response.status} loading ${url}`);
         }
@@ -365,9 +371,16 @@ export class AudioBufferLRUCache {
         }
         const leadSkipSec = findLeadingSilenceFromChannels(channels, audioBuffer.sampleRate);
 
+        this.failedAt.delete(url);
         this.set(url, audioBuffer, leadSkipSec);
         return this.get(url);
       } catch (err) {
+        if (!signal.aborted) {
+          this.failedAt.set(url, performance.now());
+          if (err?.name !== 'AbortError') {
+            console.warn('[WebAudioScheduler] loadAndDecode failed:', url, err?.message || err);
+          }
+        }
         return null;
       } finally {
         if (!signal.aborted) this.inflight.delete(url);
@@ -382,6 +395,7 @@ export class AudioBufferLRUCache {
     this.controller.abort();
     this.controller = new AbortController();
     this.inflight.clear();
+    this.failedAt.clear();
   }
 
   clear() {
@@ -408,6 +422,16 @@ export class WebAudioScheduler {
     this.lastVideoTime = 0;
     this.lastPlaybackRate = 1.0;
     this.lastAudioDriftMs = 0;
+    this.suspendedSinceMs = null;
+  }
+
+  isBlockedBySuspendedContext() {
+    return Boolean(
+      this.ctx &&
+      this.ctx.state === 'suspended' &&
+      this.suspendedSinceMs !== null &&
+      (performance.now() - this.suspendedSinceMs) >= 450
+    );
   }
 
   isSupported() {
@@ -456,6 +480,7 @@ export class WebAudioScheduler {
       } catch (_) {}
     }
     this.scheduledNodes.clear();
+    this.suspendedSinceMs = null;
   }
 
   /**
@@ -522,6 +547,19 @@ export class WebAudioScheduler {
   } = {}) {
     const ctx = this.ensureContext();
     if (!ctx) return;
+
+    // Guard against suspended AudioContext (e.g. autoplay policy / device suspend):
+    // Do NOT schedule BufferSourceNodes while ctx.currentTime is frozen at 0 (which causes
+    // a silent 90ms drift-destroy thrash loop). Keep pre-decoding upcoming clips and wait for resume.
+    if (ctx.state === 'suspended') {
+      if (this.suspendedSinceMs === null) {
+        this.suspendedSinceMs = performance.now();
+      }
+      ctx.resume?.()?.catch?.(() => {});
+      this.preloadUpcoming(segments, timelineNow, lookaheadSec);
+      return;
+    }
+    this.suspendedSinceMs = null;
 
     this.lastVideoTime = timelineNow;
     const effectiveRate = Number.isFinite(playbackRate) && playbackRate > 0 ? playbackRate : 1.0;

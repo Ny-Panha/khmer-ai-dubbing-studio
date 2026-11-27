@@ -1,6 +1,29 @@
 # .agents/STATE.md
 
 ## Last Session
+IDE (Live Preview Audio Reliability Fix) — 2026-11-27T17:38:00+07:00
+
+## Summary
+Diagnosed and fixed Live Preview silent-audio edge cases reported on Wild Buddha EP10 (`ot lue slg`):
+- **`frontend/src/utils/webAudioScheduler.js`**: Guarded `syncAtTimelineTime()` against suspended `AudioContext` (stops silent 90ms drift-destroy thrash loop while `ctx.currentTime === 0`, tracks `suspendedSinceMs`, and exposes `isBlockedBySuspendedContext()` after 450ms); switched `AudioBufferLRUCache.loadAndDecode()` from `cache: 'force-cache'` to `cache: 'default'` with a 2s failure backoff (`failedAt`) and visible non-abort warning log.
+- **`frontend/src/components/player/usePlayerAudioSync.js`**: Unlocked `AudioContext` and preloaded buffers immediately on `<video>` `play` (`forcePlaying: true` so `handlePlay` no longer bails while `isPlayingRef.current` is still false); added automatic fallback to `HTMLAudio` pool (`syncSegmentAudiosAtTime(..., { allowFallbackFromWebAudio: true })`) whenever `WebAudioScheduler` stays blocked by a suspended `AudioContext`; added `effectiveAudioBaked` to the RAF sync `useEffect` dependency array; exported `unlockAudioContext`.
+- **`frontend/src/components/player/VideoPlayerPreview.jsx`**: Wrapped Play button and video-click `onPlayPause` with `handlePlayPauseWithAudioUnlock` so `AudioContext` unlocks synchronously inside the user click gesture.
+- **`frontend/src/hooks/useVideoPlayback.js`**: Added `selectedVideo?.videoUrl, renderedVideo, episodeKey, playRequestTick` to the native `<video>` `play`/`pause`/`seeked` listener `useEffect` so navigating `Home`/`Batch` → `Studio` always attaches play/pause sync listeners to the newly mounted `<video>` element.
+- **Verification**:
+  - `node --test backend/tests/concat_playback_and_timeline.test.js backend/tests/playback_sync_and_deferred_source_regression.test.js backend/tests/audio_crossfade_overlap.test.js backend/tests/voice_switch_fast_path.test.js`: **23/23 PASS** (including new test #7 for suspended `AudioContext` fallback).
+  - `cd frontend; npm run build`: **PASS** (`2053 modules`, `1.39s`).
+  - Live Brave Playwright test (`Batch → Studio → EP10 → Live Preview → Spacebar Play & Clip Listen`): **PASS** (`AudioContext: running`, `masterGain: 2`, `±6ms` drift, `no_vocals.wav` synced, `0` console errors).
+
+## Active Environment
+- Branch: `chore/full-project-cleanup`
+- Backend dev port: `5000`, Frontend dev port: `5173` (live via `start.bat`)
+
+## Next Steps
+- Press `F5` (refresh) on `http://localhost:5173` in Brave so Vite serves the updated player audio fixes.
+
+---
+
+## Previous Session
 IDE (P0 Complete 10-Stage Pipeline Accuracy & Reliability Audit) — 2026-11-27T16:20:00+07:00
 
 ## Summary

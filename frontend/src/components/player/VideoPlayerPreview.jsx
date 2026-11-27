@@ -168,6 +168,7 @@ function VideoPlayerPreview({
     segAudioConfigRef,
     stopAllSegmentAudios,
     safePlayNarration,
+    unlockAudioContext,
   } = usePlayerAudioSync({
     selectedVideo,
     seriesId,
@@ -963,6 +964,13 @@ function VideoPlayerPreview({
     }
   }, [is916Crop, effectiveCropX, videoRef, handleUpdateActiveCrop]);
 
+  const handlePlayPauseWithAudioUnlock = useCallback(() => {
+    unlockAudioContext?.();
+    if (onPlayPause) {
+      onPlayPause();
+    }
+  }, [unlockAudioContext, onPlayPause]);
+
   const handleVideoClick = useCallback((e) => {
     if (hasDraggedRef.current) {
       hasDraggedRef.current = false;
@@ -970,10 +978,8 @@ function VideoPlayerPreview({
       e.stopPropagation();
       return;
     }
-    if (onPlayPause) {
-      onPlayPause();
-    }
-  }, [onPlayPause]);
+    handlePlayPauseWithAudioUnlock();
+  }, [handlePlayPauseWithAudioUnlock]);
 
   const handleAnalyzeFraming = useCallback(async () => {
     if (!seriesId || !episodeId || isAnalyzingFraming) return;
@@ -1524,7 +1530,7 @@ function VideoPlayerPreview({
         onSeek={onSeek}
         currentVideoSrc={currentVideoSrc}
         isPlaying={isPlaying}
-        onPlayPause={onPlayPause}
+        onPlayPause={handlePlayPauseWithAudioUnlock}
         voiceSettings={voiceSettings}
         onUpdateVoiceSettings={onUpdateVoiceSettings}
         onAspectRatioChange={onAspectRatioChange}

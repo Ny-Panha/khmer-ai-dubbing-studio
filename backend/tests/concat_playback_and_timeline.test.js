@@ -313,3 +313,60 @@ test('ConCaT Architecture: 6. WebAudioScheduler stops same-lane clip when next a
   assert.equal(scheduler.scheduledNodes.has('seg_1'), false, 'seg_1 must be removed when timeline reaches seg_2 start');
   assert.equal(stoppedCount, 1, 'seg_1 must be stopped at seg_2 start to prevent audio collision');
 });
+
+test('ConCaT Architecture: 7. Suspended AudioContext avoids silent drift-thrash loop and signals HTMLAudio fallback', async () => {
+  const { WebAudioScheduler } = await import('../../frontend/src/utils/webAudioScheduler.js');
+  const scheduler = new WebAudioScheduler({ maxCachedBuffers: 50 });
+
+  let resumeCalls = 0;
+  let createBufferSourceCalls = 0;
+  const mockCtx = {
+    state: 'suspended',
+    currentTime: 0,
+    resume: () => {
+      resumeCalls += 1;
+      return Promise.resolve();
+    },
+    createBufferSource: () => {
+      createBufferSourceCalls += 1;
+      return {
+        buffer: null,
+        playbackRate: { setValueAtTime: () => {} },
+        connect: () => {},
+        start: () => {},
+        stop: () => {},
+        disconnect: () => {},
+      };
+    },
+    createGain: () => ({
+      gain: { setValueAtTime: () => {}, cancelScheduledValues: () => {} },
+      connect: () => {},
+      disconnect: () => {},
+    }),
+  };
+
+  scheduler.ctx = mockCtx;
+  scheduler.masterGain = { gain: { value: 1, setValueAtTime: () => {} } };
+  scheduler.lruCache.set('/audio/seg1.mp3', { duration: 2.0 }, 0);
+
+  const segments = [
+    { id: 'seg_1', audioStartSec: 1.0, audioEndSec: 3.0, audioDurationSec: 2.0, audioUrl: '/audio/seg1.mp3' },
+  ];
+
+  // While suspended, syncAtTimelineTime must request resume without scheduling nodes at frozen ctx.currentTime=0
+  scheduler.syncAtTimelineTime({ timelineNow: 1.2, segments });
+  assert.ok(resumeCalls >= 1, 'Must attempt ctx.resume() when suspended');
+  assert.equal(createBufferSourceCalls, 0, 'Must not schedule/thrash BufferSourceNode while AudioContext is suspended');
+  assert.equal(scheduler.isBlockedBySuspendedContext(), false, 'Should allow brief grace period before HTMLAudio fallback');
+
+  // Simulate staying suspended > 450ms -> signals fallback to HTMLAudio pool
+  scheduler.suspendedSinceMs = performance.now() - 500;
+  assert.equal(scheduler.isBlockedBySuspendedContext(), true, 'Must signal HTMLAudio fallback after 450ms suspended');
+
+  // Once browser resumes AudioContext to running, fallback clears and WebAudio schedules normally
+  mockCtx.state = 'running';
+  mockCtx.currentTime = 5.0;
+  scheduler.syncAtTimelineTime({ timelineNow: 1.2, segments });
+  assert.equal(scheduler.isBlockedBySuspendedContext(), false, 'Fallback flag must clear once AudioContext runs');
+  assert.equal(createBufferSourceCalls, 1, 'BufferSourceNode must schedule immediately once AudioContext runs');
+});

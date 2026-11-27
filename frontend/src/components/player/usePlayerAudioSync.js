@@ -347,7 +347,14 @@ export function usePlayerAudioSync({
     }
   }, []);
 
-  const preloadSegmentsAroundTime = useCallback((centerTime) => {
+  const unlockAudioContext = useCallback(() => {
+    const scheduler = webAudioSchedulerRef.current;
+    if (effectiveUseWebAudioRef.current && scheduler?.isSupported()) {
+      scheduler.ensureContext();
+    }
+  }, []);
+
+  const preloadSegmentsAroundTime = useCallback((centerTime, { forcePlaying = false } = {}) => {
     const { hasSegmentAudios: hsa, scriptData: sd } = segAudioConfigRef.current;
     if (!hsa || !sd?.segments || sd.segments.length === 0) return;
 
@@ -356,7 +363,7 @@ export function usePlayerAudioSync({
 
     // Audio preloading is ONLY needed during active playback.
     // While paused, video frame decoding has 100% exclusive priority on HTTP/1.1 sockets!
-    if (!isPlayingRef.current) return;
+    if (!forcePlaying && !isPlayingRef.current) return;
 
     // Keep preload window compact & bounded so segment audio fetches never saturate the 6-connection HTTP/1.1 pool
     const activeVideo = videoRef?.current;
@@ -555,10 +562,10 @@ export function usePlayerAudioSync({
   }, [fullAudioUrl]);
 
   // Core segment audio sync logic (extracted for 60Hz RAF loop precision)
-  const syncSegmentAudiosAtTime = useCallback((now) => {
+  const syncSegmentAudiosAtTime = useCallback((now, { allowFallbackFromWebAudio = false } = {}) => {
     const scheduler = webAudioSchedulerRef.current;
     const useWebAudio = effectiveUseWebAudioRef.current && scheduler?.isSupported();
-    if (useWebAudio) {
+    if (useWebAudio && !allowFallbackFromWebAudio) {
       stopAllSegmentAudios();
       return;
     }
@@ -888,6 +895,10 @@ export function usePlayerAudioSync({
               isKhmerMuted,
               lookaheadSec: 2.2,
             });
+            if (scheduler.isBlockedBySuspendedContext?.()) {
+              // Auto-fallback to HTMLAudio pool when browser keeps AudioContext suspended during active playback
+              syncSegmentAudiosAtTime(tlNow, { allowFallbackFromWebAudio: true });
+            }
             const diag = scheduler.getDiagnostics();
             if (diag && Number.isFinite(diag.lastDriftMs)) {
               setAudioDriftMs(diag.lastDriftMs);
@@ -943,7 +954,7 @@ export function usePlayerAudioSync({
     };
     animId = requestAnimationFrame(syncLoop);
     return () => cancelAnimationFrame(animId);
-  }, [isPlaying, syncSegmentAudiosAtTime, stopAllSegmentAudios, videoRef, hasSegmentAudios, cleanBgAudioUrl, voiceSettings?.enableDemucs]);
+  }, [isPlaying, effectiveAudioBaked, syncSegmentAudiosAtTime, stopAllSegmentAudios, videoRef, hasSegmentAudios, cleanBgAudioUrl, voiceSettings?.enableDemucs]);
 
   // Helper: Idempotent audio play to prevent promise rejection warnings & duplicate starts
   const safePlayNarration = (a) => {
@@ -1126,9 +1137,12 @@ export function usePlayerAudioSync({
 
       if (hasSegmentAudios && !ab) {
         const tlNow = getTargetTimelineTime();
-        preloadSegmentsAroundTime(tlNow);
         const scheduler = webAudioSchedulerRef.current;
         const useWebAudio = effectiveUseWebAudioRef.current && scheduler?.isSupported();
+        if (useWebAudio) {
+          scheduler.ensureContext();
+        }
+        preloadSegmentsAroundTime(tlNow, { forcePlaying: true });
         if (!useWebAudio) {
           syncSegmentAudiosAtTime(tlNow);
         }
@@ -1392,5 +1406,6 @@ export function usePlayerAudioSync({
     segAudioConfigRef,
     stopAllSegmentAudios,
     safePlayNarration,
+    unlockAudioContext,
   };
 }

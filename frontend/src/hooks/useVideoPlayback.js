@@ -539,7 +539,7 @@ export function useVideoPlayback({
       v.removeEventListener('pause', onNativePause);
       v.removeEventListener('seeked', drainNextSeek);
     };
-  }, [videoRef]);
+  }, [videoRef, selectedVideo?.videoUrl, renderedVideo, episodeKey, playRequestTick]);
 
   const handleSeek = useCallback((time, options = {}) => {
     const { skipStateCommit = false } = options || {};
