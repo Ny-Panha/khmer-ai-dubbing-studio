@@ -48,7 +48,7 @@ def parse_args():
     parser.add_argument("--persistent", action="store_true", help="Run in persistent JSON-lines streaming mode over stdin/stdout")
     parser.add_argument("--input_json", default="", help="Path to input JSON file containing frames to process")
     parser.add_argument("--output_json", default="", help="Path to write output JSON results")
-    parser.add_argument("--det_limit_side_len", type=int, default=480, help="Max detection side length (default 480 for accuracy & speed balance)")
+    parser.add_argument("--det_limit_side_len", type=int, default=320, help="Max detection side length (default 320 for accuracy & speed balance)")
     parser.add_argument("--roi_ymin", type=float, default=0.72, help="Normalized Y min for subtitle safe zone")
     parser.add_argument("--roi_ymax", type=float, default=0.98, help="Normalized Y max for subtitle safe zone")
     parser.add_argument("--roi_xmin", type=float, default=0.10, help="Normalized X min for subtitle safe zone")
@@ -98,14 +98,14 @@ def check_engine():
 
 
 WATERMARK_TEXT_RE = re.compile(
-    r"(?:bilibili|抖音|快手|小红书|西瓜视频|小饼漫播|偷了.*的视频|^@[A-Za-z0-9_.-]+$)",
+    r"(?:bilibili|抖音|快手|小红书|西瓜视频|小饼漫播|偷了.*的视频|^@[A-Za-z0-9_.-]+$|纯虚构故事|本故事纯属虚构|请勿迷信模仿|未成年人慎看|仅供娱乐|如有雷同)",
     re.IGNORECASE,
 )
 CORNER_ID_WATERMARK_RE = re.compile(r"^[\u4e00-\u9fa5A-Za-z_-]{1,8}\d{3,}$")
 
 
 def is_corner_watermark_item(it: dict) -> bool:
-    """Reject platform watermarks, pure-numeric HUD counters, and extreme-corner creator IDs."""
+    """Reject platform watermarks, pure-numeric HUD counters, and extreme-corner props/creator IDs."""
     txt = it.get("text", "")
     if not txt:
         return True
@@ -118,6 +118,10 @@ def is_corner_watermark_item(it: dict) -> bool:
     # Reject low-confidence 1-char noise or off-center 1-char non-Hanzi artifacts,
     # while preserving confident single-character Chinese dialogue replies (e.g. 一, 嗯, 谁).
     if len(txt) == 1 and (it.get("conf", 0.0) < 0.80 or (not has_hanzi and not it.get("is_centered"))):
+        return True
+    # Reject isolated far-right-edge background signs/monitors/stamps completely outside center subtitle band
+    # (Chinese subtitles are centered or left-aligned, never isolated in the far-right 22% corner like security monitors)
+    if it["x_min"] >= 0.78 and not it.get("is_centered"):
         return True
     in_extreme_x_corner = it["x_min"] >= 0.78 or it["x_max"] <= 0.22
     in_extreme_y_corner = it["y_min"] >= 0.72 or it["y_max"] <= 0.22
@@ -222,10 +226,11 @@ def filter_dialogue_ocr_results(ocr_res, roi_w: int, roi_h: int):
     return items
 
 
-def detect_top_center_subtitle(img, engine):
+def detect_top_center_subtitle(img, engine, top_empty_cache=None):
     """
-    Fast pre-checked fallback for top-center subtitles / scene title cards (y=0.06..0.28, x=0.20..0.80)
-    when bottom ROI is empty. Runs RapidOCR only if bright centered stroke density is present (<0.5ms skip).
+    Fast pre-checked fallback for top-center subtitles / scene title cards (y=0.08..0.28, x=0.20..0.80)
+    when bottom ROI is empty. Runs RapidOCR only if bright centered stroke density is present (<0.5ms skip)
+    and skips repeating identical static top-banner frames (e.g. persistent disclaimers).
     """
     import cv2
     if img is None or not hasattr(img, "shape"):
@@ -233,7 +238,7 @@ def detect_top_center_subtitle(img, engine):
     h, w = img.shape[:2]
     if h < 80 or w < 160:
         return None
-    ty0, ty1 = int(h * 0.06), int(h * 0.28)
+    ty0, ty1 = int(h * 0.08), int(h * 0.28)
     tx0, tx1 = int(w * 0.20), int(w * 0.80)
     top_roi = img[ty0:ty1, tx0:tx1]
     if top_roi.size == 0:
@@ -246,8 +251,15 @@ def detect_top_center_subtitle(img, engine):
     edge_ratio = float(edges.mean()) / 255.0
     if edge_ratio < 0.015:
         return None
+    # Skip repeated static top-banner frames that already evaluated empty/watermark
+    small_sig = cv2.resize(gray, (48, 12), interpolation=cv2.INTER_AREA)
+    if top_empty_cache is not None and top_empty_cache.get("sig") is not None:
+        if float(abs(small_sig.astype("float32") - top_empty_cache["sig"].astype("float32")).mean()) < 4.0:
+            return None
     ocr_res, _ = engine(top_roi, use_det=True, use_cls=False, use_rec=True)
     if not ocr_res:
+        if top_empty_cache is not None:
+            top_empty_cache["sig"] = small_sig
         return None
     th, tw = top_roi.shape[:2]
     items = filter_dialogue_ocr_results(ocr_res, tw, th)
@@ -257,6 +269,8 @@ def detect_top_center_subtitle(img, engine):
         if it["is_centered"] and len(re.findall(r"[\u4e00-\u9fa5]", it["text"])) >= 2 and it["conf"] >= 0.70
     ]
     if not centered_cn:
+        if top_empty_cache is not None:
+            top_empty_cache["sig"] = small_sig
         return None
     text = "\n".join(it["text"] for it in centered_cn) if len(centered_cn) > 1 else centered_cn[0]["text"]
     avg_conf = sum(it["conf"] for it in centered_cn) / len(centered_cn)
@@ -348,6 +362,7 @@ def process_frames_batch(frames, engine, args, roi_ymin, roi_ymax, roi_xmin, roi
     prev_res = None
     prev_cue_idx = None
     prev_ts = None
+    top_empty_cache = {}
 
     for idx, item in enumerate(frames):
         file_path = item.get("filePath", "")
@@ -442,7 +457,11 @@ def process_frames_batch(frames, engine, args, roi_ymin, roi_ymax, roi_xmin, roi
                     inference_sec += time.perf_counter() - infer_start
                 ocr_out = read_ocr_result(roi, ocr_res)
                 if not ocr_out["hasText"] and roi_ymin >= 0.50:
-                    top_hit = detect_top_center_subtitle(img, engine)
+                    top_infer_start = time.perf_counter()
+                    try:
+                        top_hit = detect_top_center_subtitle(img, engine, top_empty_cache=top_empty_cache)
+                    finally:
+                        inference_sec += time.perf_counter() - top_infer_start
                     if top_hit:
                         ocr_out = top_hit
                 ocr_out_clean = {

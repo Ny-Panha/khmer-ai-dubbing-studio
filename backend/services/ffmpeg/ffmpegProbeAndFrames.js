@@ -743,6 +743,7 @@ function extractSubtitleDifferenceGrid(inputVideoPath, startSec = 0, durationSec
         let bgSum = 0;
         let bgPixels = 0;
         let strokePixels = 0;
+        let brightChangePixels = 0;
 
         for (let r = 0; r < scaleH; r++) {
           for (let c = 0; c < scaleW; c++) {
@@ -756,6 +757,9 @@ function extractSubtitleDifferenceGrid(inputVideoPath, startSec = 0, durationSec
               if (d >= 35 || fCurr[p] >= 200 || fPrev[p] >= 200) {
                 strokePixels++;
               }
+              if (d >= 35 && (fCurr[p] >= 180 || fPrev[p] >= 180)) {
+                brightChangePixels++;
+              }
             } else {
               bgSum += d;
               bgPixels++;
@@ -767,6 +771,7 @@ function extractSubtitleDifferenceGrid(inputVideoPath, startSec = 0, durationSec
         const bgAvg = bgPixels > 0 ? bgSum / bgPixels : avg;
         const netSubDiff = Math.max(0, subAvg - (bgAvg * 0.5));
         const strokeRatio = strokePixels / (subPixels || 1);
+        const brightChangeRatio = brightChangePixels / (subPixels || 1);
 
         diffs.push({
           timestampSec: t,
@@ -775,7 +780,8 @@ function extractSubtitleDifferenceGrid(inputVideoPath, startSec = 0, durationSec
           bgDiff: parseFloat(bgAvg.toFixed(2)),
           netSubDiff: parseFloat(netSubDiff.toFixed(2)),
           strokeDiff: parseFloat(strokeRatio.toFixed(3)),
-          isChange: subAvg >= 11.5 || avg >= 14.0 || netSubDiff >= 7.0 || strokeRatio >= 0.08,
+          brightChangeRatio: parseFloat(brightChangeRatio.toFixed(4)),
+          isChange: subAvg >= 11.5 || avg >= 14.0 || netSubDiff >= 7.0 || strokeRatio >= 0.08 || brightChangeRatio >= 0.0035,
         });
       }
       resolve(diffs);
@@ -824,8 +830,13 @@ async function detectSubtitleChangePoints(inputVideoPath, startSec = 0, duration
     const isPeak = (curr >= 10.0 && curr >= prev && curr >= next);
     const isSharpRise = (curr >= 13.5 && curr > prev * 1.25);
     const isProminentLocal = (curr >= 8.5 && curr >= prev + 2.0 && curr >= next + 2.0);
+    const bcr = diffs[i].brightChangeRatio || 0;
+    const prevBcr = diffs[i - 1].brightChangeRatio || 0;
+    const nextBcr = diffs[i + 1].brightChangeRatio || 0;
+    // Catch short 1-3 char subtitles (e.g. 没人接, 好, 嗯, 啊) appearing on dark scenes where full-box subDiff is diluted
+    const isBrightTextTransition = (bcr >= 0.0035 && bcr >= prevBcr && bcr >= nextBcr);
 
-    if (isPeak || isSharpRise || isProminentLocal) {
+    if (isPeak || isSharpRise || isProminentLocal || isBrightTextTransition) {
       const last = changePoints[changePoints.length - 1];
       if (!last || (diffs[i].timestampSec - last.timestampSec) >= minPeakDist) {
         changePoints.push(diffs[i]);

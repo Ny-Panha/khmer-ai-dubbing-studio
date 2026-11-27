@@ -20,7 +20,7 @@ import {
   isSegmentVoiceBroken,
   scanEpisodeBrokenSegments,
 } from '../../utils/translationQuality';
-import { resolveVoiceMeta } from '../../utils/voiceCatalog';
+import { resolveVoiceMeta, resolveSegmentGender } from '../../utils/voiceCatalog';
 
 function DebouncedScriptTextarea({ value, onChange, onBlur, placeholder, className, style, rows = 2 }) {
   const [localVal, setLocalVal] = React.useState(value || '');
@@ -469,8 +469,9 @@ function ScriptReviewTab({
     [episodeId, scriptData]
   );
 
-  // Reset status banner when switching episodes
+  // Reset status banner & filter mode when switching episodes so stale filters never hide valid cues
   React.useEffect(() => {
+    setFilterMode('all');
     setRepairStatusBanner(null);
     setRepairJobId(null);
     setIsRepairingEpisode(false);
@@ -653,15 +654,39 @@ function ScriptReviewTab({
 
   const missingTextCount = brokenScan.totalBrokenCount;
 
-  // One pass: resolve voice gender per visible segment for filter pills + counts
+  // Separate episode-level script completeness counts (Total / Translated / Untranslated / Review-Needed)
+  const scriptCounts = React.useMemo(() => {
+    const total = totalSegments.length;
+    const untranslated = brokenScan.textBrokenCount;
+    const translated = Math.max(0, total - untranslated);
+    let reviewNeeded = 0;
+    for (const seg of totalSegments) {
+      if (
+        seg?.reviewNeeded ||
+        seg?.speakerReviewNeeded ||
+        seg?.uncertainOcr ||
+        seg?.ocrDisagreement ||
+        seg?.translationStatus === 'review_needed' ||
+        isSegmentTextBroken(seg, repeatedJunkSet)
+      ) {
+        reviewNeeded += 1;
+      }
+    }
+    return { total, translated, untranslated, reviewNeeded };
+  }, [totalSegments, brokenScan.textBrokenCount, repeatedJunkSet]);
+
+  // One pass: resolve true gender per visible segment (NEVER count unknown gender as male)
   const voiceGenderCounts = React.useMemo(() => {
     let male = 0;
     let female = 0;
+    let unknown = 0;
     for (const seg of filteredSegments) {
-      if (resolveVoiceMeta(seg).gender === 'FEMALE') female += 1;
-      else male += 1;
+      const g = resolveSegmentGender(seg);
+      if (g === 'FEMALE') female += 1;
+      else if (g === 'MALE') male += 1;
+      else unknown += 1;
     }
-    return { male, female };
+    return { male, female, unknown };
   }, [filteredSegments]);
 
   const displayedSegments = React.useMemo(() => {
@@ -672,9 +697,22 @@ function ScriptReviewTab({
           isSegmentVoiceBroken(seg, { repeatedJunkSet })
       );
     }
-    if (filterMode === 'male' || filterMode === 'female') {
-      const wanted = filterMode === 'female' ? 'FEMALE' : 'MALE';
-      return filteredSegments.filter((seg) => resolveVoiceMeta(seg).gender === wanted);
+    if (filterMode === 'review') {
+      return filteredSegments.filter(
+        (seg) =>
+          Boolean(
+            seg?.reviewNeeded ||
+            seg?.speakerReviewNeeded ||
+            seg?.uncertainOcr ||
+            seg?.ocrDisagreement ||
+            seg?.translationStatus === 'review_needed' ||
+            isSegmentTextBroken(seg, repeatedJunkSet)
+          )
+      );
+    }
+    if (filterMode === 'male' || filterMode === 'female' || filterMode === 'unknown') {
+      const wanted = filterMode === 'female' ? 'FEMALE' : (filterMode === 'male' ? 'MALE' : 'UNKNOWN');
+      return filteredSegments.filter((seg) => resolveSegmentGender(seg) === wanted);
     }
     return filteredSegments;
   }, [filteredSegments, filterMode, repeatedJunkSet]);
@@ -835,10 +873,48 @@ function ScriptReviewTab({
         </div>
       )}
 
+      {/* ── Row 0: Honest Total / Visible / Translated / Untranslated / Review-Needed Summary ── */}
+      {totalSegments.length > 0 && (
+        <div
+          data-testid="script-counts-summary"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            flexWrap: 'wrap',
+            gap: '6px 10px',
+            padding: '5px 8px',
+            marginBottom: 6,
+            borderRadius: 'var(--radius-sm)',
+            background: 'var(--bg-secondary-panel)',
+            border: '1px solid var(--border-subtle)',
+            fontSize: '11px',
+            color: 'var(--text-secondary)',
+            flexShrink: 0,
+          }}
+        >
+          <span data-testid="script-count-total">
+            សរុប <strong style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-primary)' }}>{scriptCounts.total}</strong>
+          </span>
+          <span data-testid="script-count-visible">
+            បង្ហាញ <strong style={{ fontFamily: 'var(--font-mono)', color: 'var(--primary-accent)' }}>{displayedSegments.length}</strong>
+          </span>
+          <span data-testid="script-count-translated">
+            បកប្រែរួច <strong style={{ fontFamily: 'var(--font-mono)', color: '#4ADE80' }}>{scriptCounts.translated}</strong>
+          </span>
+          <span data-testid="script-count-untranslated">
+            ខ្វះបកប្រែ <strong style={{ fontFamily: 'var(--font-mono)', color: scriptCounts.untranslated > 0 ? '#FCA5A5' : 'var(--text-dim)' }}>{scriptCounts.untranslated}</strong>
+          </span>
+          <span data-testid="script-count-review">
+            ពិនិត្យ <strong style={{ fontFamily: 'var(--font-mono)', color: scriptCounts.reviewNeeded > 0 ? '#FCD34D' : 'var(--text-dim)' }}>{scriptCounts.reviewNeeded}</strong>
+          </span>
+        </div>
+      )}
+
       {/* ── Row 1: Filter Pills (Clean Single-Row Darkroom Bar) ── */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexWrap: 'wrap', marginBottom: 8, flexShrink: 0 }}>
         <button
           type="button"
+          data-testid="script-filter-all"
           onClick={() => setFilterMode('all')}
           style={{
             height: 28,
@@ -863,6 +939,9 @@ function ScriptReviewTab({
         {[
           { mode: 'male', icon: <User size={11} strokeWidth={2.4} />, label: 'ប្រុស', count: voiceGenderCounts.male, tone: '56, 189, 248', text: '#7DD3FC' },
           { mode: 'female', icon: <UserCheck size={11} strokeWidth={2.4} />, label: 'ស្រី', count: voiceGenderCounts.female, tone: '244, 114, 182', text: '#F472B6' },
+          ...(voiceGenderCounts.unknown > 0
+            ? [{ mode: 'unknown', icon: <AlertTriangle size={11} strokeWidth={2.4} />, label: 'មិនស្គាល់', count: voiceGenderCounts.unknown, tone: '148, 163, 184', text: '#CBD5E1' }]
+            : []),
         ].map((pill) => {
           const active = filterMode === pill.mode;
           return (
@@ -1097,9 +1176,9 @@ function ScriptReviewTab({
               គ្រប់ឃ្លាទាំងអស់មានអត្ថបទខ្មែររួចរាល់ហើយ! (All segments have Khmer text)
             </p>
           </div>
-        ) : (filterMode === 'male' || filterMode === 'female') ? (
+        ) : (filterMode === 'male' || filterMode === 'female' || filterMode === 'unknown') ? (
           <div style={{ textAlign: 'center', padding: '24px 15px', color: 'var(--text-dim)', fontSize: '0.78rem', border: '1px dashed var(--border-subtle)', borderRadius: 'var(--radius-sm)' }}>
-            គ្មានឃ្លាសំឡេង{filterMode === 'female' ? 'ស្រី' : 'ប្រុស'}ទេ
+            គ្មានឃ្លា{filterMode === 'female' ? 'សំឡេងស្រី' : (filterMode === 'male' ? 'សំឡេងប្រុស' : 'ភេទមិនស្គាល់')}ទេ
           </div>
         ) : (
           <div style={{ textAlign: 'center', padding: '30px 15px', color: 'var(--text-muted)', border: '1px dashed var(--border-subtle)', borderRadius: 'var(--radius-sm)' }}>

@@ -1,6 +1,13 @@
 /**
  * Canonical Types, Constants, and Schema Definitions for Khmer AI Dubbing Pipeline
  */
+const {
+  stripPunctuationForSpeech,
+  isExplicitFillerKhmer,
+  containsForeignScriptLeak,
+  isExpressiveVocalizationSource,
+  isPureDescriptiveSoundLabel,
+} = require('../../utils/translationQuality');
 
 const PIPELINE_STAGES = Object.freeze([
   'ingestEpisode',
@@ -185,6 +192,7 @@ function validateStrictSourceCueMapping(sourceCues = [], outputSegments = []) {
   const unexpectedSourceCueIds = [];
   const invalidTranslationCueIds = [];
   const missingChineseCueIds = [];
+  const invalidTimingCueIds = [];
 
   for (let i = 0; i < outList.length; i++) {
     const seg = outList[i] || {};
@@ -206,8 +214,26 @@ function validateStrictSourceCueMapping(sourceCues = [], outputSegments = []) {
     if (!cn && srcList[i] && String(srcList[i].originalChineseText || srcList[i].chineseText || srcList[i].textZh || '').trim()) {
       missingChineseCueIds.push(refId);
     }
-    if (cn && (!kh || seg.translationStatus === 'review_needed')) {
+    const isKhmerInvalid = Boolean(
+      cn && (
+        !kh ||
+        seg.translationStatus === 'review_needed' ||
+        isExplicitFillerKhmer(kh) ||
+        !stripPunctuationForSpeech(kh) ||
+        containsForeignScriptLeak(kh) ||
+        (isExpressiveVocalizationSource(cn) && isPureDescriptiveSoundLabel(kh))
+      )
+    );
+    if (isKhmerInvalid) {
       invalidTranslationCueIds.push(refId);
+    }
+    const hasTimingFields = seg.startSec !== undefined || seg.endSec !== undefined;
+    if (hasTimingFields) {
+      const sVal = Number(seg.startSec);
+      const eVal = Number(seg.endSec);
+      if (!Number.isFinite(sVal) || sVal < 0 || !Number.isFinite(eVal) || eVal <= sVal) {
+        invalidTimingCueIds.push(refId);
+      }
     }
   }
 
@@ -244,7 +270,8 @@ function validateStrictSourceCueMapping(sourceCues = [], outputSegments = []) {
     exactCueIdSetMatch &&
     mismatchedOrderCueIds.length === 0 &&
     invalidTranslationCueIds.length === 0 &&
-    missingChineseCueIds.length === 0;
+    missingChineseCueIds.length === 0 &&
+    invalidTimingCueIds.length === 0;
 
   return {
     valid,
@@ -257,6 +284,7 @@ function validateStrictSourceCueMapping(sourceCues = [], outputSegments = []) {
     mismatchedOrderCueIds,
     invalidTranslationCueIds,
     missingChineseCueIds,
+    invalidTimingCueIds,
   };
 }
 
@@ -312,6 +340,7 @@ function computePipelineCompletenessReport({
     unexpectedCueIds: strictMapping ? strictMapping.unexpectedSourceCueIds : [],
     mismatchedCueIds: strictMapping ? strictMapping.mismatchedOrderCueIds : [],
     invalidTranslationCueIds: strictMapping ? strictMapping.invalidTranslationCueIds : [],
+    invalidTimingCueIds: strictMapping ? strictMapping.invalidTimingCueIds : [],
     translationCompletenessPct,
     ocrFrameCompletenessPct,
     ocrUnresolvedFramesCount: ocrUnresolvedFrames,

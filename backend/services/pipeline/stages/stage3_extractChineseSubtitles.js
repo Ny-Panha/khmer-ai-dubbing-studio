@@ -144,7 +144,7 @@ async function extractChineseSubtitles({
     throw new Error('[Stage 3 Extract Subtitles] Gemini AI client is required');
   }
 
-  const cachePath = getOcrCachePath(videoPath, startOffsetSec, durationSec, effectiveModel, cacheDir);
+  const cachePath = getOcrCachePath(videoPath, startOffsetSec, durationSec, effectiveModel, cacheDir, ocrEngineMode);
   if (force && cachePath && fs.existsSync(cachePath)) {
     try { fs.unlinkSync(cachePath); } catch (_) {}
   }
@@ -366,21 +366,25 @@ async function extractChineseSubtitles({
           (m, d) => Math.max(m, typeof d?.subDiff === 'number' ? d.subDiff : (typeof d?.diff === 'number' ? d.diff : 0)),
           0
         );
+        const maxNearBrightChange = nearDiffs.reduce(
+          (m, d) => Math.max(m, typeof d?.brightChangeRatio === 'number' ? d.brightChangeRatio : 0),
+          0
+        );
 
-        if (maxNearDiff >= 8.0 || frameDiffs.length === 0) {
+        if (maxNearDiff >= 8.0 || maxNearBrightChange >= 0.0035 || frameDiffs.length === 0) {
           trySchedule(rounded, 'baseline_active', 0.20);
-        } else if (maxNearDiff >= 4.0) {
-          // Adaptive local rescan for faint/low-contrast subtitles at <= 0.45s resolution
+        } else if (maxNearDiff >= 4.0 || maxNearBrightChange >= 0.0020) {
+          // Adaptive local rescan for faint/low-contrast or short 1-3 char subtitles at <= 0.45s resolution
           const peakDiff = nearDiffs.reduce((best, d) => {
-            const val = typeof d?.subDiff === 'number' ? d.subDiff : 0;
+            const val = (typeof d?.subDiff === 'number' ? d.subDiff : 0) + (typeof d?.brightChangeRatio === 'number' ? d.brightChangeRatio * 500 : 0);
             return val > (best?.val || 0) ? { val, timestampSec: d.timestampSec } : best;
           }, null);
           trySchedule(peakDiff?.timestampSec ?? rounded, 'baseline_subtle_rescan', 0.20);
         } else if (!scheduleMidpointOnly) {
-          // Static scene: drop frame count! Sparse anchor only if gap >= 4.0s
+          // Static scene: keep sparse anchor at most every 2.0s (prevents silent 1.3s-4.0s gaps swallowing short cues)
           let hasRecentAnchor = false;
           for (const ex of scheduled) {
-            if (Math.abs(ex - rounded) < 4.0) {
+            if (Math.abs(ex - rounded) < 2.0) {
               hasRecentAnchor = true;
               break;
             }
@@ -794,14 +798,17 @@ async function extractChineseSubtitles({
     }
 
     // 3. Adaptive Batch Scheduler with Per-Batch Checkpointing & Concurrency Backoff
-    console.log(`[Stage 3 Extract Subtitles] Running Gemini Vision OCR on ${framesToAnalyze.length} pending candidate frames (${completedMap.size} already verified)...`);
     const INITIAL_BATCH_SIZE = fastOcrActive ? 10 : 15;
 
-    // Filter candidate frames against completed observations from checkpoint
+    // Filter candidate frames against completed observations from checkpoint / local OCR
     const pendingFrames = framesToAnalyze.filter((f) => {
       const t = parseFloat(f.timestampSec.toFixed(2));
       return !completedMap.has(t);
     });
+    const pendingGeminiFramesCount = pendingFrames.length;
+    console.log(
+      `[Stage 3 Extract Subtitles] Running Gemini Vision OCR on ${pendingGeminiFramesCount} pending Gemini frames (${completedMap.size}/${totalCandidateFrames} total candidate frames already verified)...`
+    );
 
     const batchQueue = [];
     for (let i = 0; i < pendingFrames.length; i += INITIAL_BATCH_SIZE) {
@@ -1804,6 +1811,7 @@ async function extractChineseSubtitles({
     retrySleepMs: telemetry.retrySleepMs,
     tieBreakMs,
     candidateFramesCount: totalCandidateFrames,
+    pendingGeminiFramesCount,
     localCheckpointReusedFramesCount: sortedTimes.filter(t => localOnResume.has(t) && !verifiedOnResume.has(t)).length,
     checkpointReusedFramesCount: sortedTimes.filter(t => verifiedOnResume.has(t)).length,
     localAvailabilityMs,

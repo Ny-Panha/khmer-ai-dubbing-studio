@@ -1483,10 +1483,11 @@ async function retranslateBatchDialogues(segments, customApiKey = null, options 
   const ai = options.aiClient || getGeminiClient(customApiKey);
   const modelToUse = resolveValidModelName(options.modelName);
 
-  const BATCH_SIZE = 25;
+  const BATCH_SIZE = Number.isInteger(options.batchSize) && options.batchSize > 0 ? options.batchSize : 25;
   const updatedSegments = segments.map((s) => ({ ...s }));
   const translationStyle = options.style || options.translationStyle || 'compact';
   const isCompact = translationStyle === 'compact';
+  const completedIds = new Set();
 
   for (let i = 0; i < segments.length; i += BATCH_SIZE) {
     const batch = segments.slice(i, i + BATCH_SIZE);
@@ -1539,50 +1540,61 @@ Return a JSON Array with the exact same ${inputLines.length} items, preserving e
   }
 ]`;
 
-    const { response: res } = await generateContentWithModelFallback(
-      ai,
-      modelToUse,
-      () => ({
-        contents: [batchPrompt],
-        config: {
-          systemInstruction: isCompact ? COMPACT_DUBBING_PROMPT_HEADER : KHMER_DUBBING_BASE_SYSTEM_PROMPT,
-          temperature: 0.2,
-          responseMimeType: "application/json",
-        },
-      }),
-      {
-        models: options.fallbackModels || DEFAULT_MODELS,
-        logTag: "retranslateBatchDialogues",
-        timeoutMs: options.timeoutMs ?? 45000,
-      }
-    );
+    try {
+      const { response: res } = await generateContentWithModelFallback(
+        ai,
+        modelToUse,
+        () => ({
+          contents: [batchPrompt],
+          config: {
+            systemInstruction: isCompact ? COMPACT_DUBBING_PROMPT_HEADER : KHMER_DUBBING_BASE_SYSTEM_PROMPT,
+            temperature: 0.2,
+            responseMimeType: "application/json",
+          },
+        }),
+        {
+          models: options.fallbackModels || DEFAULT_MODELS,
+          logTag: "retranslateBatchDialogues",
+          timeoutMs: options.timeoutMs ?? 45000,
+        }
+      );
 
-    const rawText = typeof res?.text === "function" ? res.text() : (res?.text || "");
-    const parsed = safeParseOrRepairJson(rawText);
-    const validatedById = validateCompactBatchOutput(inputLines, parsed);
+      const rawText = typeof res?.text === "function" ? res.text() : (res?.text || "");
+      const parsed = safeParseOrRepairJson(rawText);
+      const validatedById = validateCompactBatchOutput(inputLines, parsed);
 
-    for (const inputItem of inputLines) {
-      const idKey = String(inputItem.id);
-      const cleanKhmer = validatedById.get(idKey);
-      const matchIdx = updatedSegments.findIndex((s) => String(s.id) === idKey);
-      if (matchIdx !== -1 && cleanKhmer) {
-        const prevSeg = updatedSegments[matchIdx];
-        const preservedOriginalKhmer = prevSeg.originalKhmerText
-          || prevSeg.khmerTranslatedText
-          || prevSeg.khmerText
-          || prevSeg.khmer
-          || "";
-        updatedSegments[matchIdx] = {
-          ...prevSeg,
-          ...(preservedOriginalKhmer ? { originalKhmerText: preservedOriginalKhmer } : {}),
-          khmerTranslatedText: cleanKhmer,
-          khmerText: cleanKhmer,
-          khmer: cleanKhmer,
-          translationStyle,
-          textStatus: "retranslated",
-          audioOutdated: true,
-        };
+      for (const inputItem of inputLines) {
+        const idKey = String(inputItem.id);
+        const cleanKhmer = validatedById.get(idKey);
+        const matchIdx = updatedSegments.findIndex((s) => String(s.id) === idKey);
+        if (matchIdx !== -1 && cleanKhmer) {
+          const prevSeg = updatedSegments[matchIdx];
+          const preservedOriginalKhmer = prevSeg.originalKhmerText
+            || prevSeg.khmerTranslatedText
+            || prevSeg.khmerText
+            || prevSeg.khmer
+            || "";
+          updatedSegments[matchIdx] = {
+            ...prevSeg,
+            ...(preservedOriginalKhmer ? { originalKhmerText: preservedOriginalKhmer } : {}),
+            khmerTranslatedText: cleanKhmer,
+            khmerText: cleanKhmer,
+            khmer: cleanKhmer,
+            translationStyle,
+            textStatus: "retranslated",
+            audioOutdated: true,
+          };
+          completedIds.add(idKey);
+        }
       }
+    } catch (batchErr) {
+      if (completedIds.size > 0 && batchErr && typeof batchErr === "object") {
+        batchErr.partialSegments = updatedSegments;
+        batchErr.completedIds = Array.from(completedIds);
+        batchErr.completedCount = completedIds.size;
+        batchErr.failedBatchIndex = Math.floor(i / BATCH_SIZE);
+      }
+      throw batchErr;
     }
   }
 

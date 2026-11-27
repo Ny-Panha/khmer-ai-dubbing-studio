@@ -204,10 +204,20 @@ async function runDubbingPipeline({
   let inputSegmentsForScript = [];
   let reconciliation = null;
 
-  if (mode === GENERATION_MODES.FAST_OCR) {
+  const hasUnresolvedOcr = Boolean(
+    ocrResult?.hasUnresolvedFrames ||
+    ocrResult?.ocrMeta?.hasUnresolvedFrames ||
+    ocrResult?.isComplete === false ||
+    ocrResult?.ocrMeta?.isComplete === false ||
+    (ocrResult?.ocrMeta?.unresolvedFramesCount > 0)
+  );
+  const detectedCuesCount = Array.isArray(ocrResult?.visualSegments) ? ocrResult.visualSegments.length : 0;
+  const needsSelectiveAsrFallback = mode === GENERATION_MODES.FAST_OCR && (detectedCuesCount === 0 || hasUnresolvedOcr);
+
+  if (mode === GENERATION_MODES.FAST_OCR && !needsSelectiveAsrFallback) {
     // ==========================================
     // ⚡ FAST OCR BYPASS: SKIP STAGES 4 & 5
-    // Direct Vision Subtitle to Translation Pipeline
+    // Direct Vision Subtitle to Translation Pipeline (clean OCR with 0 unresolved frames)
     // ==========================================
     console.log(`[Pipeline] ⚡ Fast OCR Mode activated: Bypassing Stage 4 (ASR) & Stage 5 (Reconciliation) for Episode ${ingestResult.episodeId}`);
     report('analyzeDialogueAudio', 50, '⚡ Fast OCR: រំលង Stage 4 Audio Diarization (Skipped - CPU Saved)');
@@ -222,7 +232,6 @@ async function runDubbingPipeline({
       });
     }
 
-    const detectedCuesCount = Array.isArray(ocrResult?.visualSegments) ? ocrResult.visualSegments.length : 0;
     inputSegmentsForScript = deduplicateFastOcrCues(ocrResult.visualSegments || [], narratorGender);
     const storedSegmentsCount = inputSegmentsForScript.length;
 
@@ -267,6 +276,9 @@ async function runDubbingPipeline({
       console.warn(`[Pipeline] ⚠️ WARNING: Fast OCR 1:1 rule mismatch! cues detected: ${detectedCuesCount} -> segments stored: ${storedSegmentsCount} (${detectedCuesCount} != ${storedSegmentsCount})`);
     }
   } else {
+    if (needsSelectiveAsrFallback) {
+      console.warn(`[Pipeline] 🎙️ Fast OCR selective ASR fallback triggered (visualCues=${detectedCuesCount}, unresolvedFrames=${ocrResult?.ocrMeta?.unresolvedFramesCount || 0}). Running Stage 4-5 to prevent missed dialogue.`);
+    }
     // Stage 4: Analyze Dialogue Audio & Diarization
     report('analyzeDialogueAudio', 50, 'កំពុងស្រង់ & វិភាគសំឡេងសន្ទនាចិនដើម និងភេទសំឡេង (Audio Diarization)...');
     const audioAnalysis = await analyzeDialogueAudio({
@@ -406,13 +418,12 @@ async function runDubbingPipeline({
 
   let finalizedSegments = timingRes.timedSegments;
 
-  // Build / synchronize speaker registry for the episode
-  const initialRegistry = buildSpeakerRegistry(finalizedSegments, {});
+  // Build / synchronize single canonical speaker registry for the episode (no duplicate registry)
   const syncResult = syncSegmentsWithSpeakerRegistry(finalizedSegments, {
     seriesSpeakerMap: seriesGlossary?.seriesSpeakerMap || {},
   });
   finalizedSegments = syncResult.segments || finalizedSegments;
-  const speakerRegistry = syncResult.speakerRegistry || initialRegistry;
+  const speakerRegistry = syncResult.speakerRegistry || {};
   const speakers = syncResult.speakers || [];
   const updatedSeriesSpeakerMap = buildVerifiedSeriesSpeakerMapPatch(
     finalizedSegments,
@@ -423,6 +434,7 @@ async function runDubbingPipeline({
   checkAbort();
 
   // Stage 9: Generate Segment TTS (Optional initial pass)
+  let ttsReport = null;
   if (generateAudio && finalizedSegments.length > 0) {
     report('generateSegmentTTS', 96, 'កំពុងបង្កើតសំឡេងខ្មែរ Neural TTS សម្រាប់ឃ្លានីមួយៗ...');
     const ttsRes = await generateSegmentTTS({
@@ -435,6 +447,7 @@ async function runDubbingPipeline({
       modelName: chosenModel,
     });
     finalizedSegments = ttsRes.segmentsWithAudio;
+    ttsReport = ttsRes.ttsReport || null;
   }
 
   checkAbort();
@@ -481,9 +494,10 @@ async function runDubbingPipeline({
     usage: combinedUsage,
   });
 
-  const isPipelineComplete = mode === GENERATION_MODES.MODE_B_RECAP
+  const ttsHasFailures = Boolean(ttsReport && (ttsReport.failedCount > 0 || ttsReport.isComplete === false));
+  const isPipelineComplete = (mode === GENERATION_MODES.MODE_B_RECAP
     ? ((coverageReport.ocrUnresolvedFramesCount || 0) === 0 && finalizedSegments.length > 0)
-    : Boolean(coverageReport.oneToOneMappingValid);
+    : Boolean(coverageReport.oneToOneMappingValid)) && !ttsHasFailures;
   const pipelineFinalStatus = isPipelineComplete ? 'completed' : 'review_needed';
 
   const resultPayload = {
@@ -523,6 +537,8 @@ async function runDubbingPipeline({
       srtSubtitlePath: exportPrep.srtSubtitlePath,
       ...(scriptResult.translationReport ? { translationReport: scriptResult.translationReport } : {}),
       ...(validationRes?.validationReport ? { validationReport: validationRes.validationReport } : {}),
+      ...(ttsReport ? { ttsReport } : {}),
+      ...(exportPrep?.reviewWarnings?.length ? { exportReviewWarnings: exportPrep.reviewWarnings } : {}),
     },
   };
 

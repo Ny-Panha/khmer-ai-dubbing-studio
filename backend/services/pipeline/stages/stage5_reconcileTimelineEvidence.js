@@ -169,6 +169,7 @@ async function reconcileTimelineEvidence({
       const resolution = resolveDialogueChinese({ audioSpeech, ocrText, position: vSeg.position });
 
       merged.push({
+        ...(vSeg.sourceCueId ? { sourceCueId: vSeg.sourceCueId } : {}),
         startSec: part.speechStartSec,
         endSec: part.speechEndSec,
         duration: part.speechDuration,
@@ -182,7 +183,12 @@ async function reconcileTimelineEvidence({
         spokenAudioText: audioSpeech,
         ocrSubtitleText: ocrText,
         position: vSeg.position || 'bottom_subtitle',
-        speakerId: aSeg.speakerId || 'spk_1',
+        speakerId: vSeg.userOverridden && vSeg.speakerId ? vSeg.speakerId : (aSeg.speakerId || vSeg.speakerId || 'spk_1'),
+        ...(vSeg.characterId ? { characterId: vSeg.characterId } : {}),
+        ...(vSeg.userOverridden ? { userOverridden: true } : {}),
+        ...(vSeg.manualCharacterOverridden ? { manualCharacterOverridden: true } : {}),
+        ...(vSeg.voiceOverride ? { voiceOverride: vSeg.voiceOverride } : {}),
+        ...(vSeg.voiceAssignmentSource === 'manual' ? { voiceAssignmentSource: 'manual' } : {}),
         voiceGender: aSeg.audioGender || aSeg.acousticGender || 'unknown',
         genderConfidence: typeof aSeg.acousticConfidence === 'number' ? aSeg.acousticConfidence : null,
         pitchHz: aSeg.acousticF0 || null,
@@ -214,6 +220,7 @@ async function reconcileTimelineEvidence({
     // Do not merge title cards / on-screen graphics into spoken dialogue
     if (vSeg.position === 'title_card') {
       merged.push({
+        ...(vSeg.sourceCueId ? { sourceCueId: vSeg.sourceCueId } : {}),
         startSec: vSeg.startSec,
         endSec: vSeg.endSec,
         duration: vSeg.duration,
@@ -291,6 +298,7 @@ async function reconcileTimelineEvidence({
       const resolution = resolveDialogueChinese({ audioSpeech, ocrText, position: vSeg.position });
 
       merged.push({
+        ...(vSeg.sourceCueId ? { sourceCueId: vSeg.sourceCueId } : {}),
         startSec: parseFloat(sStart.toFixed(2)),
         endSec: parseFloat((sStart + dur).toFixed(2)),
         duration: dur,
@@ -304,7 +312,12 @@ async function reconcileTimelineEvidence({
         spokenAudioText: audioSpeech,
         ocrSubtitleText: ocrText,
         position: vSeg.position || 'bottom_subtitle',
-        speakerId: matchedAudio.speakerId || 'spk_1',
+        speakerId: vSeg.userOverridden && vSeg.speakerId ? vSeg.speakerId : (matchedAudio.speakerId || vSeg.speakerId || 'spk_1'),
+        ...(vSeg.characterId ? { characterId: vSeg.characterId } : {}),
+        ...(vSeg.userOverridden ? { userOverridden: true } : {}),
+        ...(vSeg.manualCharacterOverridden ? { manualCharacterOverridden: true } : {}),
+        ...(vSeg.voiceOverride ? { voiceOverride: vSeg.voiceOverride } : {}),
+        ...(vSeg.voiceAssignmentSource === 'manual' ? { voiceAssignmentSource: 'manual' } : {}),
         voiceGender: matchedAudio.audioGender || matchedAudio.acousticGender || 'unknown',
         genderConfidence: typeof matchedAudio.acousticConfidence === 'number' ? matchedAudio.acousticConfidence : null,
         pitchHz: matchedAudio.acousticF0 || null,
@@ -332,6 +345,7 @@ async function reconcileTimelineEvidence({
       // Only genuine title_cards are muted from TTS; dialogue subtitles are voiced
       const isTitle = vSeg.position === 'title_card';
       merged.push({
+        ...(vSeg.sourceCueId ? { sourceCueId: vSeg.sourceCueId } : {}),
         startSec: vSeg.startSec,
         endSec: vSeg.endSec,
         duration: vSeg.duration,
@@ -345,8 +359,13 @@ async function reconcileTimelineEvidence({
         spokenAudioText: '',
         ocrSubtitleText: vSeg.originalChineseText,
         position: vSeg.position || 'bottom_subtitle',
-        speakerId: 'spk_narrator',
-        voiceGender: 'unknown',
+        speakerId: vSeg.speakerId || 'spk_narrator',
+        ...(vSeg.characterId ? { characterId: vSeg.characterId } : {}),
+        ...(vSeg.userOverridden ? { userOverridden: true } : {}),
+        ...(vSeg.manualCharacterOverridden ? { manualCharacterOverridden: true } : {}),
+        ...(vSeg.voiceOverride ? { voiceOverride: vSeg.voiceOverride } : {}),
+        ...(vSeg.voiceAssignmentSource === 'manual' ? { voiceAssignmentSource: 'manual' } : {}),
+        voiceGender: vSeg.voiceGender || 'unknown',
         genderConfidence: null,
         evidenceSource: 'visual_ocr',
         evidenceType: 'visual_only',
@@ -454,6 +473,7 @@ async function reconcileTimelineEvidence({
         }
 
         merged.push({
+          sourceCueId: aSeg.sourceCueId || `cue_asr_${Math.round((aSeg.startSec || 0) * 100)}_${aIdx + 1}`,
           startSec: aSeg.startSec,
           endSec: aSeg.endSec,
           duration: aSeg.duration,
@@ -577,7 +597,12 @@ async function reconcileTimelineEvidence({
     );
 
     if (shouldMerge) {
-      // Merge into single continuous segment
+      // Merge into single continuous segment (preserve immutable visual sourceCueId when present)
+      if (!prev.sourceCueId && seg.sourceCueId) {
+        prev.sourceCueId = seg.sourceCueId;
+      } else if (prev.sourceCueId && String(prev.sourceCueId).startsWith('cue_asr_') && seg.sourceCueId && !String(seg.sourceCueId).startsWith('cue_asr_')) {
+        prev.sourceCueId = seg.sourceCueId;
+      }
       const mergedStart = Math.min(prev.startSec, seg.startSec);
       const mergedEnd = Math.max(prev.endSec, seg.endSec);
       prev.startSec = parseFloat(mergedStart.toFixed(2));

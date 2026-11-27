@@ -4,6 +4,7 @@ import { parseTimeToSeconds } from '../../utils/timestampUtils';
 import { resolveSegmentAtTime } from '../../utils/timelineUtils';
 import { subscribeDraftPreview } from '../../utils/sliderDraftPreview';
 
+import { resolveSegmentGender } from '../../utils/voiceCatalog';
 import ClipInspectorPanel from './ClipInspectorPanel';
 import { isVerifiedVoiceVariantHit } from '../../utils/voiceCacheUtils';
 import AudioDuckingPanel from './AudioDuckingPanel';
@@ -321,9 +322,20 @@ export default function VoiceSettings({
 
       const currentVoice = firstSeg.voiceOverride || reg.voiceId || reg.khmerVoiceId || firstSeg.khmerVoiceId || firstSeg.voiceId || settings?.voiceId || 'km-KH-PisethNeural';
       const isVoiceFemale = String(currentVoice).toLowerCase().includes('sreymom');
-      const isCharacterFemale = String(reg.gender || reg.speakerGender || firstSeg.voiceGender || firstSeg.speakerGender || '').toLowerCase() === 'female';
+      const resolvedCharGender = resolveSegmentGender({
+        voiceGender: reg.voiceGender || firstSeg.voiceGender,
+        speakerGender: reg.speakerGender || firstSeg.speakerGender,
+        gender: reg.gender || firstSeg.gender,
+        voiceId: currentVoice,
+        voiceOverride: firstSeg.voiceOverride,
+        voiceAssignmentSource: reg.voiceAssignmentSource || firstSeg.voiceAssignmentSource,
+        isFallback: reg.isFallback || firstSeg.isFallback,
+        speakerStatus: firstSeg.speakerStatus,
+      });
+      const isCharacterFemale = resolvedCharGender === 'FEMALE';
+      const isCharacterUnknown = resolvedCharGender === 'UNKNOWN';
       const anyReviewNeeded = segs.some((s) => Boolean(s.speakerReviewNeeded || s.unverifiedSpeaker || s.speakerStatus === 'review_needed' || s.isFallback));
-      const isUnresolved = placeholder || (anyReviewNeeded && isPositionalId(groupKey));
+      const isUnresolved = placeholder || isCharacterUnknown || (anyReviewNeeded && isPositionalId(groupKey));
       const shortId = String(bucket.characterId || groupKey || '').replace(/^char_|^spk_/i, '');
       const displayLabel = !placeholder
         ? rawName
@@ -341,7 +353,9 @@ export default function VoiceSettings({
         voiceId: currentVoice,
         isVoiceFemale,
         isFemale: isVoiceFemale,
+        characterGender: resolvedCharGender,
         isCharacterFemale,
+        isCharacterUnknown,
         userOverridden: Boolean(reg.userOverridden || reg.manualCharacterOverridden || segs.some((s) => s.userOverridden)),
       });
     }
@@ -1083,7 +1097,7 @@ export default function VoiceSettings({
                                 </form>
                               ) : (
                                 <>
-                                  <span className={`inspector-speaker-name ${spk.isCharacterFemale ? 'is-female' : 'is-male'}`}>
+                                  <span className={`inspector-speaker-name ${spk.isCharacterFemale ? 'is-female' : (spk.isCharacterUnknown ? 'is-unknown' : 'is-male')}`}>
                                     {spk.name} {spk.count > 0 && <span style={{ fontSize: '0.68rem', opacity: 0.6 }}>({spk.count} ឃ្លា)</span>}
                                   </span>
                                   <div className="inspector-speaker-badges">

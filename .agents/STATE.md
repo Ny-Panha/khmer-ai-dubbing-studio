@@ -1,6 +1,57 @@
 # .agents/STATE.md
 
 ## Last Session
+IDE (P0 Complete 10-Stage Pipeline Accuracy & Reliability Audit) — 2026-11-27T16:20:00+07:00
+
+## Summary
+Completed Phases 1–10 of the end-to-end DragonDub AI pipeline accuracy & reliability audit on branch `chore/full-project-cleanup` (starting from baseline `368f3569281f95ee82f798b36f49843c4e365eec`) using minimal-change discipline without overwriting any production media or manual translations.
+
+### Key Fixes by Phase
+- **Phase 1 (Reproduce Wild Buddha EP10 on scratch copy):** Created independent 3fps verified ground-truth Chinese SRT (`83` true cues, `00:00:07.67–00:04:34.33`) and local SenseVoice ASR cross-check (`31` speech segments). Confirmed old EP10 baseline was `82/83` Recall (`98.80%`, missed `没人接` at `198.33–199.33s`) and `82/83` Precision (`98.80%`, false positive `滨江小区` blue computer monitor at `212.0s`), with `582.2s` Local OCR (`det_limit_side_len=480` + repeated top-disclaimer scans). Traced EP10 disk/API/UI 83-vs-44 discrepancy (`verified_chinese_cues.json` had 83 cues vs `series.json` having 27 earlier cues + 17 manual cues = 44; UI lumped 9 unknown-gender cues into male).
+- **Phase 2 (Confirmed Runtime Errors):** Fixed missing `isModelOverloadOrUnavailable` import in `backend/routes/scriptRoutes.js`; extended timeout/504 detection in `backend/services/geminiKeyManager.js`; added structured 401/429/503/504/timeout/500 responses without unhandled rejections; preserved completed earlier batches on later failure in `backend/services/geminiService.js` + `scriptRoutes.js`.
+- **Phase 3 (Stage 1–3 Chinese OCR Accuracy & Speed):** Added `brightChangeRatio` transition detection in `backend/services/ffmpeg/ffmpegProbeAndFrames.js` (recovers `没人接` at `198.2–199.4s`); added drama disclaimer regex, far-right-edge prop/monitor filter (`x_min >= 0.78 && !is_centered`, rejects `滨江小区` monitor), static top-band skip cache, and `det_limit_side_len=320` in `backend/workers/local_chinese_ocr_worker.py` & `backend/services/ocr/localChineseOcrService.js` (3.0x faster Local OCR); separated `hybrid`/`gemini_only` OCR cache keys in `stage3VisionBatchRunner.js` & `stage3_extractChineseSubtitles.js`; fixed misleading OCR telemetry (`pendingGeminiFramesCount` vs total candidate frames).
+- **Phase 4 (Stage 4–5 Audio, Reconciliation & Speakers):** Preserved immutable `sourceCueId` and manual speaker fields across all branches of `stage5_reconcileTimelineEvidence.js` (with deterministic `cue_asr_*` IDs for audio-only cues); added selective Stage 4–5 ASR/reconciliation fallback in `dubbingPipeline.js` & `chunkOrchestrator.js` when Fast OCR yields 0 cues or unresolved frames; removed redundant duplicate `buildSpeakerRegistry` pass and fixed `chosenModel` ReferenceError in `chunkOrchestrator.js:797`; added `resolvedOcrMode` to `chunkHash`; fixed standalone `"មីង"` female detection in `speakerRegistry.js` without misclassifying Chinese names like `"ស៊ូ មីង"`.
+- **Phase 5 (Stage 6 Khmer Translation & Override Separation):** Separated automatic speaker verification (`autoVerifiedSpeakerCount`), manual character/voice override (`manualOverrideCount`), manual text override (`hasManualTextOverride`), and `reviewNeededSpeakerCount` in `stage6PromptAndConsistency.js` & `stage6_generateModeSpecificScript.js` (fixing misleading `83 userOverridden untouched` log and ensuring speaker/voice overrides never block missing translations); added `呢呢呢` & `呀啊` context-aware vocalization rules to both `backend/utils/translationQuality.js` and `frontend/src/utils/translationQuality.js`.
+- **Phase 6 (Stage 7–8 Strict Validation):** Enforced strict validation in `stage7_translateAndValidateKhmer.js`, `stage8_validateSubtitleTiming.js`, and `pipelineTypes.js` (`validateStrictSourceCueMapping` / `computePipelineCompletenessReport`) for exact `sourceCueId` equality, zero duplicates/missing, Chinese/Thai/Lao/foreign script leak rejection, expressive vocalization descriptive-label rejection, and valid start/end timing (`invalidTimingCueIds`).
+- **Phase 7 (Disk / API / UI Consistency):** Added `resolveSegmentGender()` in `frontend/src/utils/voiceCatalog.js` so `UNKNOWN` gender is never counted as `MALE`; updated `ScriptReviewTab.jsx` to display separate `Total / Visible / Translated / Untranslated / Review` counts, add an explicit `មិនស្គាល់` (`unknown`) filter pill, and reset `filterMode` on episode switch; updated `VoiceSettings.jsx` Cast Voices unknown-gender handling; hardened `useSeriesManager.js` so stale `lastModified` never blocks newer server `scriptData.updatedAt`.
+- **Phase 8 (Stage 9 TTS Reliability):** Probed optional `edge-tts` CLI availability once (`isEdgeTtsCliAvailable()`, eliminating repeated `ENOENT` spawns); added shared 429 cooldown backoff and immediate concurrency throttling to 1 on 429 in `backend/services/ttsService.js`; ensured failed TTS batches/segments never report completed (`status: 'incomplete' | 'review_needed'`) across `ttsService.js`, `stage9_generateSegmentTTS.js`, `dubbingPipeline.js`, and `chunkOrchestrator.js`.
+- **Phase 9 (Stage 10 Preview & Export):** Added `buildExportReadinessReport()` in `stage10_previewAndExport.js` and wired explicit `reviewNeeded`/`reviewWarnings`/`exportReadiness` into `videoRoutes.js` `POST /api/render-video` (blocking 100% untranslated silent-dialogue export with HTTP 400 `EXPORT_REVIEW_NEEDED` unless explicitly allowed) while preserving source-video collision protection and cross-series isolation.
+
+### Phase 10 Benchmark Results (Scratch Copies, `gemini-3.5-flash-lite`, 7-key pool)
+| Dataset / Engine | Duration | Cues (Ref) | Recall | Precision | CER | Start/End MAE | Total OCR | Local OCR | Gemini Calls / Tokens | Unresolved |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Wild Buddha EP10 — Baseline (`368f356`) | 300.0s | 83 (83) | 98.80% | 98.80% | — | ~0.56–1.53s drift | 675.9s | 582.2s | — | 0 |
+| **Wild Buddha EP10 — Hybrid RapidOCR+Gemini (Fixed)** | **300.0s** | **83 (83)** | **100.00%** | **100.00%** | **0.00%** | **0.101s / 0.112s** | **255.6s** | **193.9s** | **15 / 197,263** | **0** |
+| Wild Buddha EP10 — Hybrid Cache Reuse | 300.0s | 83 (83) | 100.00% | 100.00% | 0.00% | 0.101s / 0.112s | **0.01s** | 0s | 0 new | 0 |
+| Wild Buddha EP10 — Gemini-Only OCR | 300.0s | 89 (83) | 98.80% | 92.13% | 0.17% | 0.239s / 0.195s | 118.1s | 0s | 39 / 492,535 | 0 |
+| Wild Buddha EP3 — Hybrid RapidOCR+Gemini | 300.0s | 93 | — | — | — | — | 305.9s | 224.8s | 18 / 220,729 | 2 (cache skipped) |
+| Unseen `《黑女倾心》` EP13 — Hybrid RapidOCR+Gemini | 260.1s | 150 | — | — | — | — | 185.3s | 136.7s | 11 / 136,228 | 0 |
+| Unseen `《黑女倾心》` EP14 — Hybrid RapidOCR+Gemini | 264.2s | 131 | — | — | — | — | 255.7s | 176.7s | 20 / 251,191 | 0 |
+
+- **EP10 Stage 6–10 E2E (Scratch):** Stage 6 translated `83/83` (`100%`) in `12.8s` (`3` calls, `44,499` tokens, `exactCueIdSetMatch: true`, `oneToOneMappingValid: true`, `manualOverrideCount: 0`, `6` named characters); Stage 9 TTS synthesized `10/10` (`100%`, `0` failed, `0` ENOENT, live 429 recovered); Stage 10 rendered 25s scratch clip verified via `ffmpeg-skill/scripts/probe.py` (`h264 1920x1080`, `aac 44100Hz`, `25.0s`, `5,623,180` bytes, `valid: true`, explicit `reviewWarnings` emitted).
+- **Automated Verification:**
+  - `backend/tests/p0_pipeline_accuracy_audit.test.js` + `retranslate_fallback.test.js` + `render_source_collision_guard.test.js`: **21/21 PASS**
+  - Stage 3–8 & Speaker suites (`stage3_persistent_rapidocr`, `step1_completeness_and_mapping`, `stage5_reconciliation_and_recovery`, `p0_persistent_character_recognition`, `bugfix_speaker_assignment_preservation`, `fast_multimodal_gemini_prompt`, `expressive_vocalization_translation`, `stage6_khmer_translation_quality_rules`, `phase1_translation_boundary`): **58/58 PASS** (`4 skipped` missing external fixture)
+  - 15-suite regression sweep (`audio_crossfade_overlap`, `voice_provenance_cache_isolation`, `tts_smart_skip_and_progress`, `stage9_tts_findings`, `episode_state_isolation`, `series_persist_and_sync`, `stage3_*`, `stage6_translation_fallback_and_tts_guard`, `thai_script_sanitization`, `gemini_key_pool_and_504_retry`, `youtube_safe_transform`, `job_queue_and_shutdown`): **126/126 PASS**
+  - `cd frontend; npm run build`: **2053 modules, 0 errors** (`707ms`).
+  - **Real Playwright UI Verification (`http://localhost:5173`, Wild Buddha EP10):** **PASS (0 console errors)** — API `44` == UI `សរុប 44 / បង្ហាញ 44 / បកប្រែរួច 44 / ខ្វះបកប្រែ 0 / ពិនិត្យ 0`; Gender pills `ប្រុស 15 / ស្រី 20 / មិនស្គាល់ 9` (`sum=44`, unknown not counted as male); clicking `មិនស្គាល់` filtered `Visible` to `9`; Cast Voices rendered `28` speaker rows.
+
+### Remaining Limitations
+- Local RapidOCR CPU runtime is now ~137–225s per 4.5–5 min episode (3x faster than baseline `582.2s`), still CPU-bound on Windows ONNX Runtime; further speedups would require GPU/DirectML execution provider or multi-worker frame sharding.
+- Free-tier Gemini RPM (`15 RPM/key`) can still cause occasional unresolved frames under heavy bursts (e.g., 2 unresolved frames on `wb_ep3` during concurrent benchmark load); those are now honestly flagged `review_needed` and skip disk cache write rather than silently completing.
+- Pre-existing unrelated legacy tests (`fast_ocr_mode.test.js`, `fast_ocr_timing_and_accuracy.test.js`, `male_female_speaker_detection_batch.test.js`) still assert legacy `unknown -> male` fallback behavior and were intentionally left untouched outside P0 scope.
+
+## Active Environment
+- Branch: `chore/full-project-cleanup`
+- Backend dev port: `5000`, Frontend dev port: `5173` (both live with updated code)
+- Production Wild Buddha EP10 untouched on disk (`44` segments preserved)
+
+## Next Steps
+- Nha can refresh `http://localhost:5173` and re-run Wild Buddha **EP10** cleanly using the updated Hybrid RapidOCR + Gemini Mode A pipeline, then verify TTS and Export.
+
+---
+
+## Previous Session
 IDE (Git Commit & Push) — 2026-11-27T15:12:45+07:00
 
 ## Summary

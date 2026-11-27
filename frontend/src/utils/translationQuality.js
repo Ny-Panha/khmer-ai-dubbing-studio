@@ -13,20 +13,23 @@ export const EXPLICIT_FILLER_KHMERS = Object.freeze([
 ]);
 
 export const EXPRESSIVE_KHMER_DUBBING_RULES = `EXPRESSIVE SOUNDS, INTERJECTIONS & NATURAL DUBBING RULES:
-- Understand the original audio emotion, speaker tone, and surrounding dialogue before translating.
-- Translate ALL spoken dialogue, interjections, repeated sounds, hesitation, laughter, coughing, crying, screaming, sighing, stuttering, and emotional vocalizations into natural, pronounceable Khmer phonetic expressions suitable for Edge TTS.
+- Understand the original audio emotion, speaker tone, character relationship, and surrounding dialogue before translating.
+- Choose EXACTLY ONE final, natural, concise Khmer line per sourceCueId (balancing natural spoken dialogue, lip-sync pacing, and emotional delivery — never output multiple alternatives).
+- Translate ALL spoken dialogue, interjections, repeated sounds, hesitation, laughter, coughing, crying, screaming, sighing, stuttering, and emotional vocalizations into context-aware, pronounceable Khmer phonetic expressions suitable for Edge TTS (adapt to actual emotion/context, NOT rigid fixed replacements).
 - Preserve meaningful repetitions, hesitation, and emotional intensity (NEVER skip short vocalizations or interjections merely because they contain few characters).
 - NEVER translate audible sounds into descriptive words like "សើច", "យំ", "ក្អក", or "ស្រែក" unless those words are actually spoken as dialogue.
-- Examples (illustrative voice-acting expressions, adapt to emotion & context):
-  * 哈哈哈 / hahaha -> ហាហាហាហា!
-  * 呵呵 / hehehe -> ហេហេហេ...
+- Context-aware examples (adapt tone & intensity to scene):
+  * 哈哈哈 / hahaha -> ហាហាហា! / ហាហាហាហា!
+  * 呵呵 / hehehe -> ហេហេហេ... / ហ៊ីហ៊ី...
+  * 呢呢呢 -> អឹ... អឺ... / នែ... នែ... (តាមបរិបទស្ទាក់ស្ទើរ/អង្វរ)
+  * 啊 / 呀啊 -> អា៎! / យ៉ា៎! / អូយ! (តាមអារម្មណ៍ភ្ញាក់ផ្អើល ឬឈឺចាប់)
   * 啊啊啊 -> អា៎! អា៎! អា៎!
   * 啊呃啊 -> អា៎... អឺ... អា៎!
   * 咳咳咳 -> ខក់! ខក់! ខក់!
   * 嗯嗯嗯 -> អ៊ឹម... អ៊ឹម...
   * 哼 -> ហ៊ឹស!
   * 唉 -> ហ៊ឺ...
-- Do NOT leave untranslated Chinese or English vocalizations (e.g. hahaha, hehehe, hmm, 哼, 唉).
+- Do NOT leave untranslated Chinese, Thai, Lao, or English vocalizations (e.g. hahaha, hehehe, hmm, 哼, 唉).
 - Preserve strict 1:1 sourceCueId mapping, character identity, and assigned voice; match original cue duration closely.`;
 
 const EXPLICIT_FILLER_SET = new Set(EXPLICIT_FILLER_KHMERS);
@@ -34,7 +37,7 @@ const EXPLICIT_FILLER_REGEX = /^សូមរង់(?:ចា(?:ំ)?)?[\s.…។!
 const CHINESE_HANZI_REGEX = /[\u3400-\u4dbf\u4e00-\u9fa5]/;
 const FOREIGN_SCRIPT_LEAK_REGEX = /[\u3400-\u4dbf\u4e00-\u9fff\u0590-\u06FF\u0900-\u0DFF\u0E00-\u0EFF\u1000-\u109F\u0400-\u04FF\u3040-\u30FF\uAC00-\uD7AF\u1E00-\u1EFF]/;
 const EXPRESSIVE_CHINESE_VOCALIZATION_REGEX =
-  /^[\s啊哦嗯哈呵呀哇哎咦哼咳嘘嘿嘎呜唉呃唔呐嘛嗨哟喂嗷嘶哧咻嗚]+[!！?？.。…~～、，,\-—\s]*$/u;
+  /^(?:[\s啊哦嗯哈呵呀哇哎咦哼咳嘘嘿嘎呜唉呃唔呐嘛嗨哟喂嗷嘶哧咻嗚]+|[\s呢]{2,})[啊哦嗯哈呵呀哇哎咦哼咳嘘嘿嘎呜唉呃唔呐嘛嗨哟喂嗷嘶哧咻嗚呢\s!！?？.。…~～、，,\-—]*$/u;
 const EXPRESSIVE_LATIN_VOCALIZATION_REGEX =
   /^(?:(?:ha){2,}|(?:he){2,}|(?:hi){2,}|(?:ho){2,}|h+m{2,}|u+m{2,}|u+h{2,}|a+h{2,}|e+h{2,}|o+h{2,}|sh{2,}|pfft+|tsk+|ahem+|argh+|ouch+|sigh+|haha+|hehe+)(?:[\s,!?.…~\-—]+(?:(?:ha){2,}|(?:he){2,}|(?:hi){2,}|(?:ho){2,}|h+m+|u+m+|u+h+|a+h+|e+h+|o+h+|e+r+|sh+|pfft+|tsk+|ahem+|argh+|ouch+|sigh+|haha+|hehe+))*[\s!?.…~\-—]*$|^(?:uh|ah|oh|eh|hm|um)+[\s,!?.…~\-—]+(?:uh|ah|oh|eh|hm|um)+[\s!?.…~\-—]*$/i;
 const DESCRIPTIVE_SOUND_LABELS = new Set([

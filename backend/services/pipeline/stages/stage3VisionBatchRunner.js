@@ -27,7 +27,7 @@ function sleepOrAbort(ms, signal) {
 
 const defaultCacheDir = path.resolve(__dirname, '../../../uploads/cache');
 
-function getOcrCachePath(videoPath, startOffsetSec = 0, durationSec = 0, modelName = '', cacheDir = defaultCacheDir) {
+function getOcrCachePath(videoPath, startOffsetSec = 0, durationSec = 0, modelName = '', cacheDir = defaultCacheDir, ocrEngineMode = '') {
   try {
     // កែពី ../../../../uploads/cache មកជា ../../../uploads/cache ឱ្យត្រូវជាមួយ Stage 1, 4 និង 9
     if (!fs.existsSync(cacheDir)) {
@@ -36,7 +36,8 @@ function getOcrCachePath(videoPath, startOffsetSec = 0, durationSec = 0, modelNa
     const stat = fs.statSync(videoPath);
     const safeBase = path.basename(videoPath).replace(/[^a-zA-Z0-9_-]/g, '_');
     const signature = `${stat.size}_${Math.round(stat.mtimeMs)}`;
-    return path.join(cacheDir, `ocr_${safeBase}_${signature}_${Math.round(startOffsetSec)}_${Math.round(durationSec)}_${modelName}.json`);
+    const modeTag = ocrEngineMode ? `_${String(ocrEngineMode).replace(/[^a-zA-Z0-9_-]/g, '_')}` : '';
+    return path.join(cacheDir, `ocr_${safeBase}_${signature}_${Math.round(startOffsetSec)}_${Math.round(durationSec)}_${modelName}${modeTag}.json`);
   } catch (_) {
     return null;
   }

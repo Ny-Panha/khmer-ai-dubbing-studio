@@ -270,7 +270,7 @@ async function runChunkedDubbingPipeline({
     } catch (_) {}
 
     const chunkHash = crypto.createHash('md5')
-      .update(`${videoPath}${videoSignature}_${chunk.startSec}_${chunk.endSec}_${effectiveModelName}_${mode}`)
+      .update(`${videoPath}${videoSignature}_${chunk.startSec}_${chunk.endSec}_${effectiveModelName}_${mode}_${resolvedOcrMode}`)
       .digest('hex');
     const chunkFile = path.join(chunkCacheDir, `chunk_${chunkHash}.json`);
 
@@ -407,8 +407,9 @@ async function runChunkedDubbingPipeline({
 
         const ocrCuesCount = Array.isArray(ocrResult?.visualSegments) ? ocrResult.visualSegments.length : 0;
         const chunkHasUnresolvedOcr = hasUnresolvedOcr;
+        const needsSelectiveAsrFallback = mode === GENERATION_MODES.FAST_OCR && (ocrCuesCount === 0 || chunkHasUnresolvedOcr);
 
-        if (mode === GENERATION_MODES.FAST_OCR) {
+        if (mode === GENERATION_MODES.FAST_OCR && !needsSelectiveAsrFallback) {
           console.log(`[ChunkOrchestrator] ⚡ Fast OCR Mode: Skipping Stage 4 (ASR) & Stage 5 (Reconcile) for Chunk ${cIdx + 1}`);
           chunkSegments = deduplicateFastOcrCues(ocrResult.visualSegments || [], narratorGender);
           visualOnlyCount = chunkSegments.length;
@@ -469,6 +470,9 @@ async function runChunkedDubbingPipeline({
             console.warn(`[ChunkOrchestrator] ⚠️ WARNING: Fast OCR 1:1 rule mismatch! cues detected: ${ocrCuesCount} -> segments stored: ${chunkSegments.length} (${ocrCuesCount} != ${chunkSegments.length})`);
           }
         } else {
+          if (needsSelectiveAsrFallback) {
+            console.warn(`[ChunkOrchestrator] 🎙️ Fast OCR selective ASR fallback triggered for Chunk ${cIdx + 1} (visualCues=${ocrCuesCount}, unresolvedFrames=${ocrResult?.ocrMeta?.unresolvedFramesCount || 0}).`);
+          }
           // 2. Stage 4 Audio Diarization for this chunk
           report(
             'chunkASR',
@@ -764,17 +768,16 @@ async function runChunkedDubbingPipeline({
 
   let finalizedSegments = timingRes.timedSegments;
 
-  // Speaker Registry Sync (merge series memory + in-run chunk discoveries)
+  // Speaker Registry Sync — single canonical pass (merge series memory + in-run chunk discoveries)
   const effectiveSeriesMapForSync = {
     ...(seriesGlossary?.seriesSpeakerMap || {}),
     ...(runningSeriesSpeakerMap || {}),
   };
-  const initialRegistry = buildSpeakerRegistry(finalizedSegments, {});
   const syncResult = syncSegmentsWithSpeakerRegistry(finalizedSegments, {
     seriesSpeakerMap: effectiveSeriesMapForSync,
   });
   finalizedSegments = syncResult.segments || finalizedSegments;
-  const speakerRegistry = syncResult.speakerRegistry || initialRegistry;
+  const speakerRegistry = syncResult.speakerRegistry || {};
   const speakers = syncResult.speakers || [];
   const updatedSeriesSpeakerMap = buildVerifiedSeriesSpeakerMapPatch(
     finalizedSegments,
@@ -785,6 +788,7 @@ async function runChunkedDubbingPipeline({
   checkAbort();
 
   // 8. Stage 9: Generate Segment TTS (Optional initial pass)
+  let ttsReport = null;
   if (generateAudio && finalizedSegments.length > 0) {
     report('generateSegmentTTS', 96, 'កំពុងបង្កើតសំឡេងខ្មែរ Neural TTS សម្រាប់ឃ្លានីមួយៗ...');
     const ttsRes = await generateSegmentTTS({
@@ -794,9 +798,10 @@ async function runChunkedDubbingPipeline({
       forceRegen: false,
       signal,
       aiClient,
-      modelName: chosenModel,
+      modelName: effectiveModelName,
     });
     finalizedSegments = ttsRes.segmentsWithAudio;
+    ttsReport = ttsRes.ttsReport || null;
   }
 
   checkAbort();
@@ -868,9 +873,10 @@ async function runChunkedDubbingPipeline({
     usage: combinedUsage,
   });
 
-  const isPipelineComplete = mode === GENERATION_MODES.MODE_B_RECAP
+  const ttsHasFailures = Boolean(ttsReport && (ttsReport.failedCount > 0 || ttsReport.isComplete === false));
+  const isPipelineComplete = (mode === GENERATION_MODES.MODE_B_RECAP
     ? ((coverageReport.ocrUnresolvedFramesCount || 0) === 0 && finalizedSegments.length > 0)
-    : Boolean(coverageReport.oneToOneMappingValid);
+    : Boolean(coverageReport.oneToOneMappingValid)) && !ttsHasFailures;
   const pipelineFinalStatus = isPipelineComplete ? 'completed' : 'review_needed';
 
   const finalOutput = {
@@ -919,6 +925,8 @@ async function runChunkedDubbingPipeline({
       },
       ...(scriptResult.translationReport ? { translationReport: scriptResult.translationReport } : {}),
       ...(validationRes?.validationReport ? { validationReport: validationRes.validationReport } : {}),
+      ...(ttsReport ? { ttsReport } : {}),
+      ...(exportPrep?.reviewWarnings?.length ? { exportReviewWarnings: exportPrep.reviewWarnings } : {}),
     },
   };
 

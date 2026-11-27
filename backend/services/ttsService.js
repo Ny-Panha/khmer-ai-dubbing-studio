@@ -1,7 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const https = require("https");
-const { spawn } = require("child_process");
+const { spawn, spawnSync } = require("child_process");
 const { MsEdgeTTS, OUTPUT_FORMAT } = require("msedge-tts");
 const crypto = require("crypto");
 const { autoStretchTtsAudio, applyExactAudioSpeed, trimTtsSilence, getMediaDuration, applyInnerThoughtAudioEffect } = require("./ffmpegService");
@@ -543,11 +543,48 @@ function resolveSegmentSpeed(segment = {}, options = {}) {
   };
 }
 
+let cachedEdgeTtsCliAvailable = null;
+let edgeTtsRateLimitCooldownUntil = 0;
+
+function isEdgeTtsCliAvailable() {
+  if (cachedEdgeTtsCliAvailable !== null) {
+    return cachedEdgeTtsCliAvailable;
+  }
+  try {
+    const cmd = process.platform === "win32" ? "where" : "which";
+    const probe = spawnSync(cmd, ["edge-tts"], { windowsHide: true, stdio: "ignore", timeout: 2000 });
+    cachedEdgeTtsCliAvailable = Boolean(probe && probe.status === 0);
+  } catch (_) {
+    cachedEdgeTtsCliAvailable = false;
+  }
+  if (!cachedEdgeTtsCliAvailable) {
+    console.log("[TTSService] ℹ️ Optional 'edge-tts' Python CLI not installed on PATH — skipping CLI fallback layer to avoid ENOENT spawns.");
+  }
+  return cachedEdgeTtsCliAvailable;
+}
+
+function getAvailableTtsProviders() {
+  return {
+    nodeEdgeTts: Boolean(EdgeTTS),
+    msEdgeTts: Boolean(MsEdgeTTS),
+    edgeTtsCli: isEdgeTtsCliAvailable(),
+    googleFallback: true,
+  };
+}
+
+function isRateLimit429Error(err) {
+  if (!err) return false;
+  const status = Number(err.status || err.statusCode || err.code || 0);
+  if (status === 429) return true;
+  const msg = String(err.message || err || "").toLowerCase();
+  return msg.includes("429") || msg.includes("too many requests") || msg.includes("rate limit") || msg.includes("throttl");
+}
+
 /**
  * 1. បង្កើតសំឡេងតាមរយៈ Microsoft Edge Neural TTS
  * ស្រទាប់ទី 1: node-edge-tts (verified & stable)
  * ស្រទាប់ទី 2: msedge-tts stream
- * ស្រទាប់ទី 3: edge-tts CLI
+ * ស្រទាប់ទី 3: edge-tts CLI (only if installed on PATH — probed once)
  * ស្រទាប់ទី 4: Google Translate TTS Fallback
  */
 async function synthesizeWithEdgeNeural(text, voiceId, outputPath, rate = "+0%", pitch = "+0Hz", options = {}) {
@@ -565,6 +602,12 @@ async function synthesizeWithEdgeNeural(text, voiceId, outputPath, rate = "+0%",
   let lastError = null;
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    // Respect shared Edge TTS 429 cooldown across concurrent workers
+    const waitMs = edgeTtsRateLimitCooldownUntil - Date.now();
+    if (waitMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, Math.min(waitMs, 6000)));
+    }
+
     const randTag = crypto.randomBytes(4).toString("hex");
     const tempFileName = `.tmp_tts_${Date.now()}_${randTag}.mp3`;
     const tempPath = path.join(outDir, tempFileName);
@@ -591,6 +634,10 @@ async function synthesizeWithEdgeNeural(text, voiceId, outputPath, rate = "+0%",
       cleanupTempFile(tempPath);
       attemptErrors.push(err1);
       lastError = err1;
+      if (isRateLimit429Error(err1)) {
+        const cooldownMs = Math.min(6000, 1500 * (attempt + 1) + Math.floor(Math.random() * 500));
+        edgeTtsRateLimitCooldownUntil = Math.max(edgeTtsRateLimitCooldownUntil, Date.now() + cooldownMs);
+      }
       console.warn(`[TTSService] ⚠️ node-edge-tts warning (${err1.message}), attempt ${attempt + 1}/${maxRetries + 1}...`);
     }
 
@@ -621,14 +668,18 @@ async function synthesizeWithEdgeNeural(text, voiceId, outputPath, rate = "+0%",
         cleanupTempFile(tempPath);
         attemptErrors.push(err2);
         lastError = err2;
+        if (isRateLimit429Error(err2)) {
+          const cooldownMs = Math.min(6000, 1800 * (attempt + 1) + Math.floor(Math.random() * 500));
+          edgeTtsRateLimitCooldownUntil = Math.max(edgeTtsRateLimitCooldownUntil, Date.now() + cooldownMs);
+        }
         console.warn(`[TTSService] ⚠️ msedge-tts warning (${err2.message}), attempt ${attempt + 1}/${maxRetries + 1}...`);
       } finally {
         try { tts?.close?.(); } catch (_) { }
       }
     }
 
-    // Layer 3: edge-tts CLI (បើមានក្នុងម៉ាស៊ីន)
-    if (!succeeded) {
+    // Layer 3: edge-tts CLI (only spawn when probed available on PATH — never repeatedly spawn ENOENT)
+    if (!succeeded && isEdgeTtsCliAvailable()) {
       try {
         await new Promise((resolve, reject) => {
           const args = [
@@ -659,6 +710,9 @@ async function synthesizeWithEdgeNeural(text, voiceId, outputPath, rate = "+0%",
       } catch (err3) {
         cleanupTempFile(tempPath);
         attemptErrors.push(err3);
+        if (err3.code === "ENOENT") {
+          cachedEdgeTtsCliAvailable = false;
+        }
         // Preserve upstream transient/network error instead of clobbering it with missing optional CLI ENOENT
         if (err3.code !== "ENOENT" || !lastError) {
           lastError = err3;
@@ -2034,8 +2088,13 @@ async function generateBatchSegmentsAudio(segments = [], uploadsDir, options = {
       } catch (err) {
         consecutiveErrors++;
         consecutiveSuccesses = 0;
-        // Adaptive backoff on network/server errors (e.g. 429)
-        if (consecutiveErrors >= 2 && activeConcurrency > 2) {
+        const is429 = isRateLimit429Error(err);
+        // Adaptive bounded concurrency backoff on 429 / network errors
+        if (is429 && activeConcurrency > 1) {
+          console.warn(`[TTSService] ⚠️ Edge TTS 429 rate limit detected — throttling concurrency to 1 with backoff`);
+          activeConcurrency = 1;
+          edgeTtsRateLimitCooldownUntil = Math.max(edgeTtsRateLimitCooldownUntil, Date.now() + 2500);
+        } else if (consecutiveErrors >= 2 && activeConcurrency > 2) {
           console.warn(`[TTSService] ⚠️ Network pressure detected (${consecutiveErrors} consecutive errors) — backing off concurrency to 2`);
           activeConcurrency = 2;
         }
@@ -2047,8 +2106,8 @@ async function generateBatchSegmentsAudio(segments = [], uploadsDir, options = {
         } else {
           console.error(`[TTSService] ❌ បរាជ័យឃ្លា #${seg.id || idx + 1}:`, err.message);
           jobState.failed++;
-          // Brief pause after error before next attempt
-          await new Promise((resolve) => setTimeout(resolve, 300));
+          // Pause after error before next attempt (longer on 429)
+          await new Promise((resolve) => setTimeout(resolve, is429 ? 1200 : 300));
         }
         jobState.completed++;
         results[idx] = {
@@ -2079,13 +2138,16 @@ async function generateBatchSegmentsAudio(segments = [], uploadsDir, options = {
     activeTtsJobs.delete(jobKey);
   }
 
-  const succeededCount = results.filter((r) => r && r.audioUrl).length;
-  const failedCount = results.filter((r) => r && r.error).length;
+  const succeededCount = results.filter((r) => r && r.audioUrl && r.ttsStatus !== "error" && r.ttsStatus !== "voice_mismatch").length;
+  const failedCount = results.filter((r) => r && (r.error || r._failed || r.ttsStatus === "error" || r.ttsStatus === "voice_mismatch")).length;
   const newlySynthesizedCount = results.filter((r) => r && r._wasNewlySynthesized).length;
   const reusedCount = results.filter((r) => r && r.audioGenerated && !r._wasNewlySynthesized).length;
   const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+  const isComplete = failedCount === 0 && jobState.skippedEmpty === 0;
 
   results.telemetry = {
+    status: failedCount > 0 ? "incomplete" : "completed",
+    isComplete,
     totalDurationMs: Date.now() - startTime,
     totalSegments: segments.length,
     pendingSegments: pendingIndices.length,
@@ -2095,11 +2157,18 @@ async function generateBatchSegmentsAudio(segments = [], uploadsDir, options = {
     reusedCount,
     skippedEmptyCount: jobState.skippedEmpty,
     activeConcurrency: baseConcurrency,
+    availableProviders: getAvailableTtsProviders(),
   };
 
-  console.log(
-    `[TTSService] ✅ បង្កើតសំឡេងទាំង ${segments.length} ឃ្លារួចរាល់ក្នុង ${elapsed}s (បង្កើតថ្មី: ${newlySynthesizedCount}, ប្រើឡើងវិញ: ${reusedCount}, ជោគជ័យ: ${succeededCount}, បរាជ័យ: ${failedCount})!`
-  );
+  if (failedCount > 0) {
+    console.warn(
+      `[TTSService] ⚠️ បង្កើតសំឡេងមិនពេញលេញក្នុង ${elapsed}s (បង្កើតថ្មី: ${newlySynthesizedCount}, ប្រើឡើងវិញ: ${reusedCount}, ជោគជ័យ: ${succeededCount}/${segments.length}, បរាជ័យ: ${failedCount}) — review_needed!`
+    );
+  } else {
+    console.log(
+      `[TTSService] ✅ បង្កើតសំឡេងទាំង ${segments.length} ឃ្លារួចរាល់ក្នុង ${elapsed}s (បង្កើតថ្មី: ${newlySynthesizedCount}, ប្រើឡើងវិញ: ${reusedCount}, ជោគជ័យ: ${succeededCount}, បរាជ័យ: ${failedCount})!`
+    );
+  }
 
   return results;
 }
@@ -2209,6 +2278,9 @@ module.exports = {
   speedToEdgeRate,
   resolveSegmentSpeed,
   isTransientTtsError,
+  isRateLimit429Error,
+  isEdgeTtsCliAvailable,
+  getAvailableTtsProviders,
   pickAttemptRetryError,
   sleepWithJitter,
   validateTtsAudioFile,

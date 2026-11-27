@@ -18,6 +18,7 @@ const {
   normalizeYoutubeTransform,
 } = require("../services/ffmpegService");
 const { computeMasterAudioSignature } = require("../services/ttsService");
+const { buildExportReadinessReport } = require("../services/pipeline/stages/stage10_previewAndExport");
 const {
   getSeriesMetadata,
   saveSeriesMetadata,
@@ -383,6 +384,29 @@ router.post("/render-video", async (req, res) => {
     );
     const effectiveYoutubeTransform = normalizeYoutubeTransform(rawYoutubeTransform);
 
+    const exportReadiness = buildExportReadinessReport(preparedSegments, {
+      checkAudioOnDisk: true,
+      hasMasterAudio: Boolean(resolvedMasterAudio && fs.existsSync(resolvedMasterAudio)),
+    });
+    if (exportReadiness.reviewWarnings.length > 0) {
+      console.warn(`[Render] ⚠️ Export readiness warnings for ${cleanSeries}/${cleanEpisode || cleanName}: ${exportReadiness.reviewWarnings.join(" | ")}`);
+    }
+    if (
+      preparedSegments.length > 0 &&
+      exportReadiness.untranslatedCount === preparedSegments.length &&
+      !(resolvedMasterAudio && fs.existsSync(resolvedMasterAudio)) &&
+      req.body?.allowIncompleteDialogue !== true
+    ) {
+      return res.status(400).json({
+        success: false,
+        code: "EXPORT_REVIEW_NEEDED",
+        error: `មិនអាច Export វីដេអូដែលបាត់អត្ថបទបកប្រែទាំងអស់បានទេ (${exportReadiness.untranslatedCount}/${preparedSegments.length} ឃ្លាខ្វះបកប្រែ) — សូមបកប្រែ និងបង្កើតសំឡេងជាមុនសិន។`,
+        reviewNeeded: true,
+        reviewWarnings: exportReadiness.reviewWarnings,
+        exportReadiness,
+      });
+    }
+
     let renderResult;
     try {
       renderResult = await renderDubbedVideoWithDucking({
@@ -453,6 +477,9 @@ router.post("/render-video", async (req, res) => {
       aspectRatio: targetAspectRatio,
       verticalStyle,
       youtubeTransform: effectiveYoutubeTransform,
+      reviewNeeded: exportReadiness.reviewNeeded,
+      reviewWarnings: exportReadiness.reviewWarnings,
+      exportReadiness,
     });
   } catch (err) {
     console.error("Render Error:", err);

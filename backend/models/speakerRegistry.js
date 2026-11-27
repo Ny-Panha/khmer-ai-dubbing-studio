@@ -6,7 +6,7 @@
 const FEMALE_KEYWORDS = [
   // ភាសាខ្មែរ (ងារ, តួនាទី, សាច់ញាតិ)
   "ស្រី", "នារី", "ស្ត្រី", "កញ្ញា", "អ្នកនាង", "អ្នកនាងតូច", "អ្នកស្រី", "លោកស្រី", "ជំទាវ",
-  "ម្តាយ", "ម្ដាយ", "ម៉ែ", "ម៉ាក់", "យាយ", "លោកយាយ", "អ្នកមីង", "លោកមីង", "មីងតូច", "អ៊ំស្រី",
+  "ម្តាយ", "ម្ដាយ", "ម៉ែ", "ម៉ាក់", "យាយ", "លោកយាយ", "អ្នកមីង", "លោកមីង", "មីងតូច", "មីង", "អ៊ំស្រី",
   "បងស្រី", "ប្អូនស្រី", "កូនស្រី", "ក្មួយស្រី", "ចៅស្រី", "ប្រពន្ធ", "ភរិយា",
   "ព្រះមហេសី", "មហេសី", "ព្រះនាង", "ម្ចាស់ក្សត្រី", "ម្ចាស់បងស្រី", "សិស្សប្អូនស្រី", "សិស្សច្បងស្រី", "ស្នំ", "អ្នកម្នាង",
   "តួស្រី", "តួឯកស្រី", "តួរងស្រី", "មិត្តស្រី", "សង្សារស្រី", "លេខាស្រី", "គិលានុបដ្ឋាយិកា",
@@ -76,6 +76,7 @@ const VOICE_PROFILES = {
 };
 
 const AMBIGUOUS_SHORT_KHMER_MALE_TOKENS = new Set(["មា", "តា", "ពូ"]);
+const AMBIGUOUS_PREFIX_KHMER_FEMALE_TOKENS = new Set(["មីង"]);
 
 /**
  * Detect if a speaker name is a generic/broadcast identity that should NOT
@@ -165,6 +166,11 @@ function matchesSpeakerKeyword(lowerName = "", kw = "") {
   if (AMBIGUOUS_SHORT_KHMER_MALE_TOKENS.has(k)) {
     const escaped = k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     return new RegExp(`(?:^|[\\s_\\-(\u200b])${escaped}(?=$|[\\s_\\-)0-9\u200b])`, "u").test(lowerName);
+  }
+  if (AMBIGUOUS_PREFIX_KHMER_FEMALE_TOKENS.has(k)) {
+    const escaped = k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    // Match standalone/prefix aunt title ("មីង", "មីង ២") without false-matching Chinese given names like "ស៊ូ មីង" (Su Ming)
+    return new RegExp(`^${escaped}(?=$|[\\s_\\-)0-9\u200b])`, "u").test(lowerName);
   }
   return lowerName.includes(k);
 }

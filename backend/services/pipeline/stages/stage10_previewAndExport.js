@@ -9,6 +9,52 @@ const {
   getMediaDuration,
 } = require('../../ffmpegService');
 const { saveCheckpoint } = require('../checkpointManager');
+const { scanEpisodeBrokenSegments } = require('../../../utils/translationQuality');
+
+function buildExportReadinessReport(segments = [], { checkAudioOnDisk = false, hasMasterAudio = false } = {}) {
+  const safeSegs = Array.isArray(segments) ? segments : [];
+  const checkAudioFileFn = checkAudioOnDisk
+    ? (seg) => {
+        if (hasMasterAudio) return true;
+        const p = seg?.audioPath;
+        return Boolean(p && typeof p === 'string' && fs.existsSync(p) && fs.statSync(p).size > 200);
+      }
+    : null;
+  const scan = scanEpisodeBrokenSegments({ scriptData: { segments: safeSegs } }, { checkAudioFileFn });
+  const reviewNeededSegmentIds = safeSegs
+    .filter((s) => Boolean(s?.reviewNeeded || s?.translationStatus === 'review_needed' || s?.ttsStatus === 'error' || s?.ttsStatus === 'failed'))
+    .map((s, idx) => s.sourceCueId || s.segmentId || s.id || idx + 1);
+
+  const reviewWarnings = [];
+  if (scan.textBrokenCount > 0) {
+    reviewWarnings.push(
+      `មានឃ្លា ${scan.textBrokenCount}/${safeSegs.length} មិនទាន់មានអត្ថបទខ្មែរត្រឹមត្រូវ (IDs: ${scan.textBrokenSegmentIds.slice(0, 10).join(', ')})`
+    );
+  }
+  if (checkAudioOnDisk && !hasMasterAudio && scan.voiceBrokenCount > 0) {
+    reviewWarnings.push(
+      `មានឃ្លា ${scan.voiceBrokenCount}/${safeSegs.length} ខ្វះ ឬបរាជ័យសំឡេង TTS (IDs: ${scan.voiceBrokenSegmentIds.slice(0, 10).join(', ')})`
+    );
+  }
+  if (reviewNeededSegmentIds.length > 0 && reviewWarnings.length === 0) {
+    reviewWarnings.push(
+      `មានឃ្លា ${reviewNeededSegmentIds.length}/${safeSegs.length} ត្រូវការផ្ទៀងផ្ទាត់មុន Export (review_needed)`
+    );
+  }
+
+  return {
+    totalSegments: safeSegs.length,
+    untranslatedCount: scan.textBrokenCount,
+    untranslatedSegmentIds: scan.textBrokenSegmentIds,
+    missingOrFailedAudioCount: scan.voiceBrokenCount,
+    missingOrFailedAudioSegmentIds: scan.voiceBrokenSegmentIds,
+    reviewNeededCount: reviewNeededSegmentIds.length,
+    reviewNeededSegmentIds,
+    hasIncompleteDialogue: scan.textBrokenCount > 0 || (checkAudioOnDisk && !hasMasterAudio && scan.voiceBrokenCount > 0),
+    reviewNeeded: reviewWarnings.length > 0,
+    reviewWarnings,
+  };
+}
 
 /**
  * Stage 10: Preview and Export
@@ -91,6 +137,21 @@ async function previewAndExport({
   const assExists = fs.existsSync(assPath) && fs.statSync(assPath).size > 20;
   const srtExists = fs.existsSync(srtPath) && fs.statSync(srtPath).size > 10;
 
+  const exportReadiness = buildExportReadinessReport(segments, {
+    checkAudioOnDisk: Boolean(exportOptions.renderVideo),
+    hasMasterAudio: Boolean(exportOptions.masterAudioPath && fs.existsSync(exportOptions.masterAudioPath)),
+  });
+  if (exportReadiness.reviewWarnings.length > 0) {
+    console.warn(`[Stage 10 Export] ⚠️ Review warning(s): ${exportReadiness.reviewWarnings.join(' | ')}`);
+  }
+  if (exportOptions.renderVideo && exportOptions.blockOnIncomplete && exportReadiness.hasIncompleteDialogue) {
+    const err = new Error(`Export blocked: ${exportReadiness.reviewWarnings.join('; ')}`);
+    err.code = 'EXPORT_REVIEW_NEEDED';
+    err.statusCode = 400;
+    err.exportReadiness = exportReadiness;
+    throw err;
+  }
+
   // 2. Video Rendering if requested
   let outputVideoPath = null;
   let validationResult = { valid: true };
@@ -151,12 +212,13 @@ async function previewAndExport({
         episodeId,
         stage: 'stage10_previewAndExport',
         stageIndex: 10,
-        stageStatus: 'completed',
+        stageStatus: exportReadiness.reviewNeeded ? 'review_needed' : 'completed',
         data: {
           assSubtitlePath: assExists ? assPath : null,
           srtSubtitlePath: srtExists ? srtPath : null,
           outputVideoPath,
           validationResult,
+          exportReadiness,
         },
         baseUploadsDir,
       });
@@ -168,10 +230,14 @@ async function previewAndExport({
     srtSubtitlePath: srtExists ? srtPath : null,
     outputVideoPath,
     validationResult,
+    reviewNeeded: exportReadiness.reviewNeeded,
+    reviewWarnings: exportReadiness.reviewWarnings,
+    exportReadiness,
     exportedAt: Date.now(),
   };
 }
 
 module.exports = {
   previewAndExport,
+  buildExportReadinessReport,
 };

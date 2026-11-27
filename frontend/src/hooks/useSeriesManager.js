@@ -703,8 +703,13 @@ export function useSeriesManager({
         const ep = await fetchEpisode(series.id, target.id, controller.signal, prepared.complete ? 'low' : 'high', prepared.episode);
         if (!stillCurrent() || !ep || edited()) return;
         const cached = prepared.episode;
-        if (prepared.complete && (Number(cached.lastModified || 0) > Number(ep.lastModified || 0) ||
-            Number(cached.scriptData?.updatedAt || 0) > Number(ep.scriptData?.updatedAt || 0))) return;
+        const cachedScriptAt = Number(cached.scriptData?.updatedAt || 0);
+        const serverScriptAt = Number(ep.scriptData?.updatedAt || 0);
+        const cachedSegCount = Array.isArray(cached.scriptData?.segments) ? cached.scriptData.segments.length : 0;
+        const serverSegCount = Array.isArray(ep.scriptData?.segments) ? ep.scriptData.segments.length : 0;
+        const serverHasNewerScript = serverScriptAt > cachedScriptAt || (serverScriptAt === cachedScriptAt && serverSegCount > cachedSegCount);
+        if (prepared.complete && !serverHasNewerScript && (Number(cached.lastModified || 0) > Number(ep.lastModified || 0) ||
+            cachedScriptAt > serverScriptAt)) return;
         // Preserve newer local scoped video-edit settings if user switched rapidly before server sync landed
         const localSeriesNow = (latestSeriesListRef.current || []).find((s) => s.id === series.id);
         const localEpNow = (localSeriesNow?.episodes || []).find((e) => e.id === target.id);

@@ -112,7 +112,7 @@ class PersistentChineseOcrWorker {
     const args = [
       this.workerPath,
       '--persistent',
-      '--det_limit_side_len', String(this.options.detLimitSideLen || Number(process.env.RAPIDOCR_DET_LIMIT_SIDE_LEN) || 480),
+      '--det_limit_side_len', String(this.options.detLimitSideLen || Number(process.env.RAPIDOCR_DET_LIMIT_SIDE_LEN) || 320),
       '--roi_ymin', String(this.options.roiYMin ?? 0.72),
       '--roi_ymax', String(this.options.roiYMax ?? 0.98),
       '--roi_xmin', String(this.options.roiXMin ?? 0.10),
@@ -520,7 +520,7 @@ async function runLocalChineseOcr({
   const roiXMax = typeof options.roiXMax === 'number' ? options.roiXMax : 0.90;
   const detLimitSideLen = typeof options.detLimitSideLen === 'number'
     ? options.detLimitSideLen
-    : (Number(process.env.RAPIDOCR_DET_LIMIT_SIDE_LEN) || 480);
+    : (Number(process.env.RAPIDOCR_DET_LIMIT_SIDE_LEN) || 320);
   const BATCH_SIZE = Math.min(100, Math.max(10, options.batchSize || 60));
 
   const allResults = [];

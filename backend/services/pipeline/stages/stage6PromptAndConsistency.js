@@ -564,6 +564,9 @@ function createCanonicalSegment(raw = {}, index = 0, mode = 'dialogue') {
         }
       : (raw.speakerSource ? { speakerSource: raw.speakerSource } : {})),
     ...(isUserOverridden ? { userOverridden: true } : {}),
+    ...(raw.manualCharacterOverridden ? { manualCharacterOverridden: true } : {}),
+    ...(raw.manualTextOverridden ? { manualTextOverridden: true } : {}),
+    ...(raw.translationSource ? { translationSource: raw.translationSource } : {}),
     ...(raw.voiceOverride ? { voiceOverride: raw.voiceOverride } : {}),
     ...(typeof raw.pitchHz === 'number' ? { pitchHz: raw.pitchHz } : {}),
     ...(typeof raw.pitchIqr === 'number' ? { pitchIqr: raw.pitchIqr } : {}),
@@ -615,7 +618,35 @@ function createCanonicalSegment(raw = {}, index = 0, mode = 'dialogue') {
   };
 }
 
-function applyTranslatedSegmentResult(targetSeg, t, maxWords, segIdx, { isFastOcrMode = false, castRegistry = [] } = {}) {
+function hasManualTextOverride(seg) {
+  if (!seg || typeof seg !== 'object') return false;
+  if (seg.manualTextOverridden === true || seg.translationSource === 'manual') return true;
+  // Backward compatibility: legacy userOverridden WITHOUT speaker/voice-only markers,
+  // only when a real non-placeholder Khmer translation already exists.
+  const isSpeakerOrVoiceOnlyOverride = Boolean(
+    seg.manualCharacterOverridden ||
+    seg.voiceOverride ||
+    seg.voiceAssignmentSource === 'manual'
+  );
+  return Boolean(
+    seg.userOverridden &&
+    !isSpeakerOrVoiceOnlyOverride &&
+    seg.khmerTranslatedText &&
+    !isPlaceholderTranslationText(seg.khmerTranslatedText)
+  );
+}
+
+function hasManualSpeakerOrVoiceOverride(seg) {
+  if (!seg || typeof seg !== 'object') return false;
+  return Boolean(
+    seg.manualCharacterOverridden ||
+    seg.voiceOverride ||
+    seg.voiceAssignmentSource === 'manual' ||
+    seg.userOverridden
+  );
+}
+
+function applyTranslatedSegmentResult(targetSeg, t, maxWords, segIdx, { isFastOcrMode = false, castRegistry = [], forceRetranslate = false } = {}) {
   if (!targetSeg || !t) return false;
 
   const candidateKhmerRaw = t.khmerText || t.khmerTranslatedText || t.khmer || t.khmer_dialogue || '';
@@ -626,13 +657,17 @@ function applyTranslatedSegmentResult(targetSeg, t, maxWords, segIdx, { isFastOc
     ? condensed
     : (!isPlaceholderTranslationText(usableTranslated) ? usableTranslated : '');
 
-  if (targetSeg.userOverridden || targetSeg.voiceAssignmentSource === 'manual' || targetSeg.voiceOverride) {
-    // User-overridden/manual segment keeps its manual speaker/gender/voice untouched; only populate missing translation
-    if (isPlaceholderTranslationText(targetSeg.khmerTranslatedText)) {
+  if (hasManualSpeakerOrVoiceOverride(targetSeg)) {
+    // Manual speaker/character/voice override keeps speaker/gender/voice untouched,
+    // while still populating missing translations or allowing non-manual-text retranslation.
+    const textLocked = hasManualTextOverride(targetSeg) && !forceRetranslate;
+    if (!textLocked || isPlaceholderTranslationText(targetSeg.khmerTranslatedText)) {
       if (finalTranslated) {
         targetSeg.khmerTranslatedText = finalTranslated;
+        targetSeg.khmerText = finalTranslated;
+        targetSeg.khmer = finalTranslated;
         targetSeg.translationStatus = 'translated';
-      } else {
+      } else if (isPlaceholderTranslationText(targetSeg.khmerTranslatedText)) {
         targetSeg.khmerTranslatedText = '';
         targetSeg.reviewNeeded = true;
         targetSeg.translationStatus = 'review_needed';
@@ -825,7 +860,9 @@ function enforceEpisodeCharacterConsistency(segments = [], { defaultGender = 'ma
 
   const groups = new Map();
   const genericIndices = [];
-  let overriddenCount = 0;
+  let manualOverrideCount = 0;
+  let autoVerifiedSpeakerCount = 0;
+  let reviewNeededSpeakerCount = 0;
 
   for (let idx = 0; idx < updated.length; idx++) {
     const seg = updated[idx];
@@ -836,16 +873,24 @@ function enforceEpisodeCharacterConsistency(segments = [], { defaultGender = 'ma
       seg.voiceAssignmentSource === 'series_glossary'
     );
     const isStep1ReviewNeeded = Boolean(seg.speakerStatus === 'review_needed' || seg.speakerReviewNeeded === true);
+    const isManualSpeakerOrVoice = Boolean(
+      seg.userOverridden ||
+      seg.manualCharacterOverridden ||
+      seg.voiceAssignmentSource === 'manual' ||
+      seg.voiceOverride
+    );
     const isOcrSeg = !hasVerifiedStep1 && (isFastOcrMode || seg.speakerSource === 'ocr_only');
 
-    if (
-      seg.userOverridden ||
-      seg.voiceAssignmentSource === 'manual' ||
-      seg.voiceOverride ||
-      isStep1ReviewNeeded ||
-      (hasVerifiedStep1 && (seg.voiceGender === 'female' || seg.voiceGender === 'male'))
-    ) {
-      overriddenCount++;
+    if (isManualSpeakerOrVoice) {
+      manualOverrideCount++;
+      continue;
+    }
+    if (isStep1ReviewNeeded) {
+      reviewNeededSpeakerCount++;
+      continue;
+    }
+    if (hasVerifiedStep1 && (seg.voiceGender === 'female' || seg.voiceGender === 'male')) {
+      autoVerifiedSpeakerCount++;
       continue;
     }
 
@@ -1003,10 +1048,11 @@ function enforceEpisodeCharacterConsistency(segments = [], { defaultGender = 'ma
     });
   }
 
-  if (characterSummary.length > 0 || genericIndices.length > 0 || overriddenCount > 0) {
+  const totalUntouchedCount = manualOverrideCount + autoVerifiedSpeakerCount + reviewNeededSpeakerCount;
+  if (characterSummary.length > 0 || genericIndices.length > 0 || totalUntouchedCount > 0) {
     const modeTag = isFastOcrMode ? 'Fast OCR Consistency' : 'Episode Consistency';
     console.log(
-      `[Stage 6 ${modeTag}] 📊 Episode pass: ${characterSummary.length} named character(s) found (${genericIndices.length} generic 'តួអង្គ', ${overriddenCount} userOverridden untouched), ${genderCorrectedCount} minority segment(s) corrected, ${staleVoiceFixedCount} stale voiceId fixed.`
+      `[Stage 6 ${modeTag}] 📊 Episode pass: ${characterSummary.length} named character(s) found (${genericIndices.length} generic 'តួអង្គ', ${autoVerifiedSpeakerCount} autoVerifiedSpeaker, ${manualOverrideCount} manualOverride, ${reviewNeededSpeakerCount} speakerReviewNeeded), ${genderCorrectedCount} minority segment(s) corrected, ${staleVoiceFixedCount} stale voiceId fixed.`
     );
     for (const ch of characterSummary) {
       console.log(
@@ -1021,7 +1067,10 @@ function enforceEpisodeCharacterConsistency(segments = [], { defaultGender = 'ma
       namedCharactersCount: characterSummary.length,
       characters: characterSummary,
       genericCount: genericIndices.length,
-      overriddenCount,
+      overriddenCount: manualOverrideCount,
+      manualOverrideCount,
+      autoVerifiedSpeakerCount,
+      reviewNeededSpeakerCount,
       correctedCount: genderCorrectedCount,
       staleVoiceFixedCount,
     },
@@ -1592,6 +1641,8 @@ module.exports = {
   deriveVoiceFromGender,
   buildSafeSpeakerId,
   createCanonicalSegment,
+  hasManualTextOverride,
+  hasManualSpeakerOrVoiceOverride,
   applyTranslatedSegmentResult,
   enforceEpisodeCharacterConsistency,
   enforceFastOcrCharacterConsistency,

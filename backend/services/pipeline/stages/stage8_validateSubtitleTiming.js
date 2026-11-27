@@ -250,6 +250,16 @@ async function validateSubtitleTiming({ segments = [], sourceCues = null, durati
     ? validateStrictSourceCueMapping(mappingBaseline, timedSegments)
     : null;
 
+  const invalidTimingCount = timedSegments.filter((s) => !(
+    typeof s.startSec === 'number' &&
+    Number.isFinite(s.startSec) &&
+    s.startSec >= 0 &&
+    typeof s.endSec === 'number' &&
+    Number.isFinite(s.endSec) &&
+    s.endSec > s.startSec &&
+    (durationSec <= 0 || s.endSec <= durationSec + 0.05)
+  )).length;
+
   return {
     timedSegments,
     timingReport: {
@@ -257,9 +267,11 @@ async function validateSubtitleTiming({ segments = [], sourceCues = null, durati
       microDurationsCorrected,
       overlapsResolved,
       duplicatesRemoved,
+      invalidTimingCount,
+      timingValid: invalidTimingCount === 0,
       durationSec,
       ...(strictMapping ? {
-        oneToOneMappingValid: strictMapping.valid,
+        oneToOneMappingValid: strictMapping.valid && invalidTimingCount === 0,
         exactCueIdSetMatch: strictMapping.exactCueIdSetMatch,
         missingCueIds: strictMapping.missingSourceCueIds,
         duplicateCueIds: strictMapping.duplicateSourceCueIds,

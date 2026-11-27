@@ -460,4 +460,65 @@ test('Retranslate Model Fallback & Route Error Mapping Suite', async (t) => {
       );
     }
   });
+
+  await t.test('11. Phase 2: formatRetranslateRouteError handles 401, 429, 503, 504, timeout, and unexpected errors without ReferenceError', () => {
+    const cases = [
+      { err: Object.assign(new Error('API key invalid'), { status: 401 }), expectedStatus: 401, expectedCode: 'INVALID_API_KEY' },
+      { err: Object.assign(new Error('Quota exceeded'), { status: 429 }), expectedStatus: 429, expectedCode: 'QUOTA_EXCEEDED' },
+      { err: Object.assign(new Error('Model overloaded'), { status: 503 }), expectedStatus: 503, expectedCode: 'UPSTREAM_UNAVAILABLE' },
+      { err: Object.assign(new Error('Gateway Timeout'), { status: 504 }), expectedStatus: 504, expectedCode: 'UPSTREAM_TIMEOUT' },
+      { err: Object.assign(new Error('Request timed out'), { name: 'TimeoutError', code: 'ETIMEDOUT' }), expectedStatus: 504, expectedCode: 'UPSTREAM_TIMEOUT' },
+      { err: new Error('Unexpected JSON parser failure'), expectedStatus: 500, expectedCode: 'RETRANSLATE_FAILED' },
+    ];
+    for (const tc of cases) {
+      const formatted = scriptRoutes.formatRetranslateRouteError(tc.err);
+      assert.equal(formatted.statusCode, tc.expectedStatus, `Expected ${tc.expectedStatus} for ${tc.err.message}`);
+      assert.equal(formatted.code, tc.expectedCode, `Expected ${tc.expectedCode} for ${tc.err.message}`);
+      assert.equal(typeof formatted.error, 'string');
+      assert.ok(formatted.error.length > 0);
+    }
+  });
+
+  await t.test('12. Phase 2: retranslateBatchDialogues preserves batch 1 translations when batch 2 fails', async () => {
+    const cues = [
+      { id: 1, sourceCueId: 'cue_1', originalChineseText: '我没事', khmerTranslatedText: 'ខ្ញុំមិនមានបញ្ហាទេ', startSec: 0, endSec: 1.5 },
+      { id: 2, sourceCueId: 'cue_2', originalChineseText: '结束了', khmerTranslatedText: 'វាបានបញ្ចប់ហើយ', startSec: 2, endSec: 3.5 },
+    ];
+    let callNum = 0;
+    const mockAi = {
+      models: {
+        generateContent: async () => {
+          callNum++;
+          if (callNum === 1) {
+            return { text: JSON.stringify([{ id: 1, sourceCueId: 'cue_1', khmerText: 'ខ្ញុំមិនអីទេ។' }]) };
+          }
+          const err = new Error('This model is currently experiencing high demand');
+          err.status = 503;
+          throw err;
+        },
+      },
+    };
+
+    let caughtErr = null;
+    try {
+      await retranslateBatchDialogues(cues, null, {
+        aiClient: mockAi,
+        batchSize: 1,
+        fallbackModels: ['gemini-3.5-flash-lite'],
+        style: 'compact',
+        timeoutMs: 2000,
+      });
+    } catch (err) {
+      caughtErr = err;
+    }
+
+    assert.ok(caughtErr, 'Expected batch 2 failure to throw');
+    assert.equal(caughtErr.completedCount, 1);
+    assert.deepEqual(caughtErr.completedIds, ['1']);
+    assert.ok(Array.isArray(caughtErr.partialSegments));
+    assert.equal(caughtErr.partialSegments[0].khmerText, 'ខ្ញុំមិនអីទេ។');
+    assert.equal(caughtErr.partialSegments[0].originalKhmerText, 'ខ្ញុំមិនមានបញ្ហាទេ');
+    assert.equal(caughtErr.partialSegments[1].khmerText, undefined);
+    assert.equal(caughtErr.partialSegments[1].khmerTranslatedText, 'វាបានបញ្ចប់ហើយ');
+  });
 });

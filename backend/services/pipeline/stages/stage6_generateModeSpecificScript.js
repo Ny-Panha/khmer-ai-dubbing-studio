@@ -36,6 +36,7 @@ const {
   deriveVoiceFromGender,
   buildSafeSpeakerId,
   createCanonicalSegment,
+  hasManualTextOverride,
   applyTranslatedSegmentResult,
   enforceEpisodeCharacterConsistency,
   enforceFastOcrCharacterConsistency,
@@ -195,7 +196,7 @@ async function generateModeSpecificScript({
           if (epCkpt && epCkpt.entries && typeof epCkpt.entries === 'object') {
             let epResumedCount = 0;
             dialogueList.forEach((s, idx) => {
-              if (s.userOverridden || s.translationSource === 'manual') return;
+              if (hasManualTextOverride(s)) return;
               if (s.khmerTranslatedText && !isPlaceholderTranslationText(s.khmerTranslatedText)) return;
               const entry = epCkpt.entries[getCueIdentityKey(s, idx)];
               if (entry && entry.khmerText && !isPlaceholderTranslationText(entry.khmerText)) {
@@ -244,7 +245,7 @@ async function generateModeSpecificScript({
     if (canUseCache) {
       for (let i = 0; i < dialogueList.length; i++) {
         const s = dialogueList[i];
-        if (s.userOverridden || s.translationSource === 'manual') continue; // User manual edits are strictly protected!
+        if (hasManualTextOverride(s)) continue; // User manual text edits are strictly protected (manual voice/speaker overrides still translate missing text)
         const targetChinese = String(s.originalChineseText || s.chineseText || s.originalText || '').trim();
         if (!targetChinese) continue;
 
@@ -305,9 +306,11 @@ async function generateModeSpecificScript({
         throw createStage6AbortError(`Stage 6 Mode A aborted before batch ${batchNum}/${totalBatches}`);
       }
 
-      // If all segments in this batch are already validly translated (from cache, prior pass, or manual edit), skip Gemini call
+      // If all segments in this batch are already validly translated (from cache, prior pass, or manual text edit), skip Gemini call.
+      // Never let automatic speaker verification or voice/character-only overrides block missing translations!
       const batchNeedsTranslation = batchSlice.some((s) =>
-        !s.userOverridden && (!s.khmerTranslatedText || isPlaceholderTranslationText(s.khmerTranslatedText))
+        (!s.khmerTranslatedText || isPlaceholderTranslationText(s.khmerTranslatedText)) ||
+        (isForce && !hasManualTextOverride(s))
       );
       if (!batchNeedsTranslation) {
         console.log(`[Stage 6 Mode A] ⚡ Batch ${batchNum}/${totalBatches} already 100% translated (Reusing verified cache).`);

@@ -723,6 +723,10 @@ async function generateSegmentTTS({
         failedCount++;
         console.warn(`[Stage 9 TTS] Audio generation failed for segment #${seg.id || idx + 1}:`, ttsErr.message);
         seg.ttsStatus = 'error';
+        seg.audioGenerated = false;
+        seg.audioOutdated = true;
+        seg.reviewNeeded = true;
+        seg.ttsError = ttsErr.message;
       }
 
       results[idx] = seg;
@@ -760,13 +764,21 @@ async function generateSegmentTTS({
     }
   }
 
+  const failedSegmentIds = finalSegments
+    .filter((s) => s && (s.ttsStatus === 'error' || s.ttsStatus === 'failed' || s.ttsStatus === 'voice_mismatch'))
+    .map((s) => s.sourceCueId || s.segmentId || s.id);
+  const ttsComplete = failedCount === 0 && failedSegmentIds.length === 0;
+
   return {
     segmentsWithAudio: finalSegments,
     ttsReport: {
+      status: ttsComplete ? 'completed' : 'review_needed',
+      isComplete: ttsComplete,
       totalSegments: segments.length,
       generatedCount,
       reusedCount,
       failedCount,
+      failedSegmentIds,
       skippedEmptyCount,
       autoShortenedCount,
       autoShortenedIds,

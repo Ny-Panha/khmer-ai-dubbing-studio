@@ -6,6 +6,7 @@ const {
   extractAllGeminiKeys,
   isAuthOrInvalidKeyError,
   isQuotaOrRateLimitError,
+  isModelOverloadOrUnavailable,
 } = require("../services/geminiKeyManager");
 const {
   generateStorytellingScript,
@@ -300,14 +301,31 @@ function formatRetranslateRouteError(err) {
     };
   }
 
+  const isTimeout =
+    status === 504 ||
+    err?.name === "TimeoutError" ||
+    err?.code === "ETIMEDOUT" ||
+    lowerMsg.includes("504") ||
+    lowerMsg.includes("deadline_exceeded") ||
+    lowerMsg.includes("deadline exceeded") ||
+    lowerMsg.includes("deadline expired") ||
+    lowerMsg.includes("gateway timeout") ||
+    lowerMsg.includes("timed out") ||
+    lowerMsg.includes("timeout");
+
+  if (isTimeout) {
+    return {
+      statusCode: 504,
+      code: "UPSTREAM_TIMEOUT",
+      error: "Google Gemini AI ឆ្លើយតបយឺតហួសពេលកំណត់ (Timeout / 504)។ សូមចុច 'សាកម្តងទៀត' បន្តិចទៀត!",
+    };
+  }
+
   const isOverloadOrUnavailable =
     status === 503 ||
-    status === 504 ||
     lowerMsg.includes("503") ||
-    lowerMsg.includes("504") ||
     lowerMsg.includes("high demand") ||
     lowerMsg.includes("unavailable") ||
-    lowerMsg.includes("deadline_exceeded") ||
     isModelOverloadOrUnavailable(err) ||
     isQuotaOrRateLimitError(err);
 
@@ -455,11 +473,74 @@ router.post("/dubbing/retranslate-all", async (req, res) => {
     res.json({ success: true, segments: updated, count: updated.length });
   } catch (err) {
     const formatted = formatRetranslateRouteError(err);
+    let partialSaved = false;
+    let savedCount = 0;
+    const partialSegments = Array.isArray(err?.partialSegments) ? err.partialSegments : null;
+    const completedIdSet = new Set(Array.isArray(err?.completedIds) ? err.completedIds.map(String) : []);
+    const { seriesId, episodeId, options = {} } = req.body || {};
+
+    if (partialSegments && completedIdSet.size > 0 && seriesId && episodeId) {
+      try {
+        await withSeriesMetadataLock(seriesId, () =>
+          updateSeriesMetadata(seriesId, (freshSeries) => {
+            const freshTargetEp = (freshSeries?.episodes || []).find((e) => String(e.id) === String(episodeId));
+            if (!freshTargetEp || !freshTargetEp.scriptData) return false;
+
+            const segmentMap = new Map();
+            partialSegments.forEach((s) => {
+              const key = String(s.id ?? s.index ?? "");
+              if (completedIdSet.has(key)) segmentMap.set(key, s);
+            });
+
+            freshTargetEp.scriptData.segments = (freshTargetEp.scriptData.segments || []).map((orig) => {
+              const match = segmentMap.get(String(orig.id ?? orig.index ?? ""));
+              if (!match) return orig;
+              const preservedOriginalKhmer = orig.originalKhmerText
+                || orig.khmerTranslatedText
+                || orig.khmerText
+                || orig.khmer
+                || "";
+              savedCount++;
+              return {
+                ...orig,
+                ...(preservedOriginalKhmer ? { originalKhmerText: preservedOriginalKhmer } : {}),
+                khmerTranslatedText: match.khmerTranslatedText,
+                khmerText: match.khmerText,
+                khmer: match.khmer,
+                translationStyle: match.translationStyle || options.style || "compact",
+                textStatus: match.textStatus || "retranslated",
+                audioOutdated: true,
+                id: orig.id,
+                ...(orig.sourceCueId ? { sourceCueId: orig.sourceCueId } : {}),
+                startSec: orig.startSec,
+                endSec: orig.endSec,
+                ...(orig.startTime !== undefined ? { startTime: orig.startTime } : {}),
+                ...(orig.endTime !== undefined ? { endTime: orig.endTime } : {}),
+              };
+            });
+            freshTargetEp.scriptData.updatedAt = Date.now();
+            return true;
+          })
+        );
+        partialSaved = savedCount > 0;
+      } catch (persistErr) {
+        console.warn("[API] /api/dubbing/retranslate-all partial save warning:", persistErr.message);
+      }
+    }
+
     console.error(`[API] /api/dubbing/retranslate-all error (${formatted.statusCode}):`, formatted.error);
     res.status(formatted.statusCode).json({
       success: false,
       code: formatted.code,
       error: formatted.error,
+      ...(partialSegments && completedIdSet.size > 0
+        ? {
+            partialSaved,
+            savedCount: partialSaved ? savedCount : completedIdSet.size,
+            completedCount: completedIdSet.size,
+            segments: partialSegments,
+          }
+        : {}),
     });
   }
 });

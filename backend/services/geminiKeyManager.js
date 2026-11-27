@@ -185,6 +185,8 @@ function isModelOverloadOrUnavailable(err) {
   return (
     status === 503 ||
     status === 504 ||
+    err.name === 'TimeoutError' ||
+    err.code === 'ETIMEDOUT' ||
     msg.includes('503') ||
     msg.includes('504') ||
     msg.includes('high demand') ||
@@ -193,6 +195,8 @@ function isModelOverloadOrUnavailable(err) {
     msg.includes('deadline_exceeded') ||
     msg.includes('deadline expired') ||
     msg.includes('gateway timeout') ||
+    msg.includes('timed out') ||
+    msg.includes('timeout') ||
     msg.includes('etimedout') ||
     msg.includes('overloaded') ||
     msg.includes('service unavailable')
