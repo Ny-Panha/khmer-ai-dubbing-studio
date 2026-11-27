@@ -1561,7 +1561,99 @@ Return a JSON Array with the exact same ${inputLines.length} items, preserving e
 
       const rawText = typeof res?.text === "function" ? res.text() : (res?.text || "");
       const parsed = safeParseOrRepairJson(rawText);
-      const validatedById = validateCompactBatchOutput(inputLines, parsed);
+
+      let validatedById;
+      try {
+        validatedById = validateCompactBatchOutput(inputLines, parsed);
+      } catch (valErr) {
+        const isRecoverableScriptLeak =
+          Array.isArray(parsed) &&
+          parsed.length === inputLines.length &&
+          /non-Khmer script detected|empty khmerText/i.test(String(valErr?.message || ""));
+
+        if (!isRecoverableScriptLeak) {
+          throw valErr;
+        }
+
+        // Isolate only the offending cue(s) and perform ONE strict pure-Khmer retry while preserving valid cues
+        const parsedById = new Map();
+        for (const item of parsed) {
+          if (item && item.id !== undefined && item.id !== null) {
+            parsedById.set(String(item.id), item);
+          }
+        }
+        const validMap = new Map();
+        const offendingInputs = [];
+        for (const inp of inputLines) {
+          const idKey = String(inp.id);
+          const outItem = parsedById.get(idKey);
+          const kh = typeof outItem?.khmerText === "string" ? outItem.khmerText.trim() : "";
+          if (
+            outItem &&
+            kh &&
+            !FORBIDDEN_DIALOGUE_SCRIPT_RE.test(kh) &&
+            (!inp.sourceCueId || outItem.sourceCueId === undefined || outItem.sourceCueId === null || String(outItem.sourceCueId) === String(inp.sourceCueId))
+          ) {
+            validMap.set(idKey, kh);
+          } else {
+            offendingInputs.push({ ...inp, _rejectedAttempt: kh });
+          }
+        }
+
+        if (offendingInputs.length === 0) {
+          throw valErr;
+        }
+
+        console.warn(
+          `[GeminiService] ⚠️ Compact batch had ${offendingInputs.length}/${inputLines.length} cue(s) with non-Khmer/empty output (${offendingInputs.map((x) => `#${x.id}="${String(x._rejectedAttempt || "").slice(0, 40)}"`).join(", ")}). Retrying offending cue(s) in strict Khmer-only mode...`
+        );
+
+        const rescueLines = offendingInputs.map(({ _rejectedAttempt, ...rest }) => rest);
+        const rescuePrompt = `${isCompact ? COMPACT_DUBBING_PROMPT_HEADER : KHMER_DUBBING_BASE_SYSTEM_PROMPT}
+
+## STRICT CORRECTION REQUIRED
+Your previous translation contained forbidden Chinese, English/Latin, Thai, or Lao characters.
+You MUST rewrite EVERY cue below using 100% PURE KHMER SCRIPT ONLY (Unicode U+1780–U+17FF + punctuation/digits).
+- Transliterate ALL place names, character names, and terms into Khmer script (e.g. 滨江 -> ប៊ីនជាំង, 地下停车场 -> ចំណតឡានក្រោមដី, B1 -> ជាន់ក្រោមទី១).
+- ZERO Chinese characters, ZERO English/Latin letters (A-Z, a-z), ZERO Thai/Lao characters.
+
+## Input Cues to Fix (${rescueLines.length} cue(s))
+${JSON.stringify(rescueLines, null, 2)}
+
+Return ONLY a JSON Array with the exact same ${rescueLines.length} item(s), preserving each "id" and "sourceCueId" (if present):
+[
+  {
+    "id": ${JSON.stringify(rescueLines[0].id)},${rescueLines[0].sourceCueId ? `\n    "sourceCueId": ${JSON.stringify(rescueLines[0].sourceCueId)},` : ""}
+    "khmerText": "អត្ថបទខ្មែរសុទ្ធ ១០០%"
+  }
+]`;
+
+        const { response: rescueRes } = await generateContentWithModelFallback(
+          ai,
+          modelToUse,
+          () => ({
+            contents: [rescuePrompt],
+            config: {
+              systemInstruction: isCompact ? COMPACT_DUBBING_PROMPT_HEADER : KHMER_DUBBING_BASE_SYSTEM_PROMPT,
+              temperature: 0.1,
+              responseMimeType: "application/json",
+            },
+          }),
+          {
+            models: options.fallbackModels || DEFAULT_MODELS,
+            logTag: "retranslateBatchDialogues:khmerRescue",
+            timeoutMs: options.timeoutMs ?? 45000,
+          }
+        );
+
+        const rescueRaw = typeof rescueRes?.text === "function" ? rescueRes.text() : (rescueRes?.text || "");
+        const rescueParsed = safeParseOrRepairJson(rescueRaw);
+        const rescuedMap = validateCompactBatchOutput(rescueLines, rescueParsed);
+        for (const [k, v] of rescuedMap.entries()) {
+          validMap.set(k, v);
+        }
+        validatedById = validMap;
+      }
 
       for (const inputItem of inputLines) {
         const idKey = String(inputItem.id);

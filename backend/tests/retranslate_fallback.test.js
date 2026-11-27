@@ -521,4 +521,41 @@ test('Retranslate Model Fallback & Route Error Mapping Suite', async (t) => {
     assert.equal(caughtErr.partialSegments[1].khmerText, undefined);
     assert.equal(caughtErr.partialSegments[1].khmerTranslatedText, 'វាបានបញ្ចប់ហើយ');
   });
+
+  await t.test('13. retranslateBatchDialogues rescues isolated non-Khmer script leak via targeted strict Khmer-only retry', async () => {
+    const cues = [
+      { id: 20, sourceCueId: 'cue_20', originalChineseText: '滨江小区可能有邪教组织', khmerTranslatedText: 'មានក្រុមបក្សពួកខុសច្បាប់', startSec: 10, endSec: 12 },
+      { id: 21, sourceCueId: 'cue_21', originalChineseText: '刚刚很多居民都往地下停车场走', khmerTranslatedText: 'ប្រជាជននាំគ្នាទៅចំណតឡាន', startSec: 12, endSec: 14 },
+    ];
+    let calls = 0;
+    const mockAi = {
+      models: {
+        generateContent: async () => {
+          calls++;
+          if (calls === 1) {
+            return {
+              text: JSON.stringify([
+                { id: 20, sourceCueId: 'cue_20', khmerText: 'នៅ 滨江 មានក្រុមខុសច្បាប់' },
+                { id: 21, sourceCueId: 'cue_21', khmerText: 'អ្នកភូមិសម្រុកទៅចំណតក្រោមដី' },
+              ]),
+            };
+          }
+          return {
+            text: JSON.stringify([
+              { id: 20, sourceCueId: 'cue_20', khmerText: 'នៅប៊ីនជាំងមានក្រុមអាថ៌កំបាំង' },
+            ]),
+          };
+        },
+      },
+    };
+
+    const result = await retranslateBatchDialogues(cues, null, {
+      aiClient: mockAi,
+      style: 'compact',
+      timeoutMs: 2000,
+    });
+    assert.equal(calls, 2);
+    assert.equal(result[0].khmerText, 'នៅប៊ីនជាំងមានក្រុមអាថ៌កំបាំង');
+    assert.equal(result[1].khmerText, 'អ្នកភូមិសម្រុកទៅចំណតក្រោមដី');
+  });
 });

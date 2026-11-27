@@ -17,6 +17,8 @@ Completed Phases 1–10 of the end-to-end DragonDub AI pipeline accuracy & relia
 - **Phase 8 (Stage 9 TTS Reliability):** Probed optional `edge-tts` CLI availability once (`isEdgeTtsCliAvailable()`, eliminating repeated `ENOENT` spawns); added shared 429 cooldown backoff and immediate concurrency throttling to 1 on 429 in `backend/services/ttsService.js`; ensured failed TTS batches/segments never report completed (`status: 'incomplete' | 'review_needed'`) across `ttsService.js`, `stage9_generateSegmentTTS.js`, `dubbingPipeline.js`, and `chunkOrchestrator.js`.
 - **Phase 9 (Stage 10 Preview & Export):** Added `buildExportReadinessReport()` in `stage10_previewAndExport.js` and wired explicit `reviewNeeded`/`reviewWarnings`/`exportReadiness` into `videoRoutes.js` `POST /api/render-video` (blocking 100% untranslated silent-dialogue export with HTTP 400 `EXPORT_REVIEW_NEEDED` unless explicitly allowed) while preserving source-video collision protection and cross-series isolation.
 
+- **Auto-Compact Non-Khmer Script Rescue (`geminiService.js`):** Added targeted strict Khmer-only retry for isolated offending cues in `retranslateBatchDialogues` when Gemini leaks a stray Thai/Chinese/Latin token (e.g. `ยอม`) inside a 25-cue compact batch; verified live on Wild Buddha EP10 Batch 1 (`25/25 PASS`, rescued `#4` cleanly) and `retranslate_fallback.test.js` (`14/14 PASS`).
+
 ### Phase 10 Benchmark Results (Scratch Copies, `gemini-3.5-flash-lite`, 7-key pool)
 | Dataset / Engine | Duration | Cues (Ref) | Recall | Precision | CER | Start/End MAE | Total OCR | Local OCR | Gemini Calls / Tokens | Unresolved |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
