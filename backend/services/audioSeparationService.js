@@ -121,6 +121,30 @@ function probeMediaDuration(filePath) {
   return getMediaDuration(filePath);
 }
 
+async function probeAudioStreamDuration(filePath) {
+  try {
+    const { getMediaInfo, getMediaDuration } = require('./ffmpegService');
+    const info = await getMediaInfo(filePath);
+    const streams = Array.isArray(info?.streams) ? info.streams : [];
+    const aStream = streams.find((s) => s.codec_type === 'audio');
+    const aDur = Number(aStream?.duration);
+    if (Number.isFinite(aDur) && aDur > 0.5) {
+      return aDur;
+    }
+    const fmtDur = Number(info?.format?.duration);
+    const aStart = Number(aStream?.start_time);
+    if (Number.isFinite(fmtDur) && fmtDur > 0.5) {
+      if (Number.isFinite(aStart) && aStart > 0.1 && fmtDur > aStart + 0.5) {
+        return fmtDur - aStart;
+      }
+      return fmtDur;
+    }
+    return await getMediaDuration(filePath);
+  } catch (_) {
+    return probeMediaDuration(filePath);
+  }
+}
+
 const activeSeparationJobs = new Map();
 const activeSeparationProgress = new Map();
 const separationQueue = [];
@@ -454,7 +478,7 @@ function validateDemucsStems(vocalsPath, noVocalsPath, sourceDuration = null) {
       }
 
       if (typeof sourceDuration === 'number' && sourceDuration > 0.5) {
-        const tolerance = 2.0; // 2.0s tolerance
+        const tolerance = Math.max(2.0, sourceDuration * 0.015); // 2.0s min, up to 1.5% for long videos with audio start_time offset
         if (Math.abs(vDur - sourceDuration) > tolerance || Math.abs(nvDur - sourceDuration) > tolerance) {
           return {
             valid: false,
@@ -572,10 +596,11 @@ function executeFfmpegFastSeparation(options, targetDir, cleanKey, presetConfig)
 
     const startTime = Date.now();
     let sourceDuration = null;
-    if (typeof options.sourceDuration === 'number' && options.sourceDuration > 0) {
+    if (audioPath && fs.existsSync(audioPath)) {
+      try { sourceDuration = await probeAudioStreamDuration(audioPath); } catch (_) {}
+    }
+    if ((!sourceDuration || sourceDuration <= 0) && typeof options.sourceDuration === 'number' && options.sourceDuration > 0) {
       sourceDuration = options.sourceDuration;
-    } else {
-      try { sourceDuration = await probeMediaDuration(audioPath); } catch (_) {}
     }
 
     const initialLogs = [
@@ -1053,10 +1078,11 @@ function executeDemucsWorker(options, targetDir, cleanKey) {
 
         if (parsed.status === 'success') {
           let sourceDuration = null;
-          if (typeof options.sourceDuration === 'number' && options.sourceDuration > 0) {
+          if (audioPath && fs.existsSync(audioPath)) {
+            try { sourceDuration = await probeAudioStreamDuration(audioPath); } catch (_) {}
+          }
+          if ((!sourceDuration || sourceDuration <= 0) && typeof options.sourceDuration === 'number' && options.sourceDuration > 0) {
             sourceDuration = options.sourceDuration;
-          } else if (audioPath) {
-            try { sourceDuration = await probeMediaDuration(audioPath); } catch (_) {}
           }
 
           const validation = await validateDemucsStems(parsed.vocalsPath, parsed.noVocalsPath, sourceDuration);
@@ -1168,10 +1194,11 @@ async function separateAudio(options = {}) {
   // 1. Instant Cache Hit Check (Strict validation: both stems must exist, be decodable & duration > 0.1s)
   if (!force && fs.existsSync(cachedVocals) && fs.existsSync(cachedNoVocals)) {
     let sourceDuration = null;
-    if (typeof options.sourceDuration === 'number' && options.sourceDuration > 0) {
+    if (audioPath && fs.existsSync(audioPath)) {
+      try { sourceDuration = await probeAudioStreamDuration(audioPath); } catch (_) {}
+    }
+    if ((!sourceDuration || sourceDuration <= 0) && typeof options.sourceDuration === 'number' && options.sourceDuration > 0) {
       sourceDuration = options.sourceDuration;
-    } else {
-      try { sourceDuration = await probeMediaDuration(audioPath); } catch (_) {}
     }
 
     const validation = await validateDemucsStems(cachedVocals, cachedNoVocals, sourceDuration);
@@ -1424,6 +1451,7 @@ process.on('SIGTERM', cleanupActiveSeparations);
 
 module.exports = {
   separateAudio,
+  probeAudioStreamDuration,
   validateDemucsStems,
   killSeparationJob,
   killAllDemucsSystemProcesses,

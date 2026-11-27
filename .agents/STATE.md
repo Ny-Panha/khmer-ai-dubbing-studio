@@ -1,6 +1,24 @@
 # .agents/STATE.md
 
 ## Last Session
+IDE (Fix Demucs STEMS_DURATION_MISMATCH_SOURCE on Audio Stream Offset) — 2026-11-28T06:42:00+07:00
+
+## Summary
+Fixed `STEMS_DURATION_MISMATCH_SOURCE` on `ss2` EP1 (`ss2_ep_1_source.mp4`):
+- **Root Cause:** `ss2_ep_1_source.mp4` has container/video duration `302.033s`, while its AAC audio stream starts at `2.021s` (`audio.duration = 300.025s`). Demucs extracted/separated the `300.025s` audio stream cleanly, but `validateDemucsStems` compared it against `format.duration` (`302.033s`) with a strict `2.0s` tolerance (`diff = 2.008s > 2.0s`).
+- **Fix (`backend/services/audioSeparationService.js`):** Added `probeAudioStreamDuration(filePath)` (reads `audio` stream duration / `format.duration - audio.start_time`) for Demucs stem validation and set `validateDemucsStems` tolerance to `Math.max(2.0, sourceDuration * 0.015)`.
+- **Verification:** `probeAudioStreamDuration('ss2_ep_1_source.mp4')` = `300.025034s`; `backend/tests/smart_pipeline_all3.test.js` **25/25 PASS**.
+
+## Active Environment
+- Branch: `chore/full-project-cleanup`
+- Backend dev port: `5000`, Frontend dev port: `5175`
+
+## Next Steps
+- Restart `start.bat` (`Ctrl+C`, then open `start.bat`) so Backend `:5000` picks up the updated `audioSeparationService.js`, then re-run Clean BGM on `ss2` EP1.
+
+---
+
+## Previous Session
 IDE (Full-Screen Sponsor Video Insertion + Port 5175) — 2026-11-27T19:33:00+07:00
 
 ## Summary
