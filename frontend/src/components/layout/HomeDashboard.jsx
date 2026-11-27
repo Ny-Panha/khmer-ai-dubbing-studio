@@ -17,10 +17,12 @@ import {
   Folder,
   FolderOpen,
   FolderPlus,
+  Upload,
   Edit2,
   Trash2,
   X,
 } from 'lucide-react';
+import { uploadVideoFile } from '../../services/api';
 import { isCorruptedOrMojibakeTitle } from '../../utils/projectStorage';
 import { formatTimecode } from '../../utils/timestampUtils';
 import {
@@ -191,6 +193,9 @@ export default function HomeDashboard({
   const [tempFolderTitle, setTempFolderTitle] = useState('');
   const [deleteTargetFolder, setDeleteTargetFolder] = useState(null);
   const [isDeletingFolder, setIsDeletingFolder] = useState(false);
+  const [isUploadingFolder, setIsUploadingFolder] = useState(false);
+  const [folderUploadProgress, setFolderUploadProgress] = useState(null);
+  const folderUploadInputRef = useRef(null);
 
   // Always synchronize full series list from server truth on mount so folders created on disk (e.g. ss2) appear immediately
   useEffect(() => {
@@ -369,6 +374,175 @@ export default function HomeDashboard({
       setCreateFolderError(err?.message || 'មិនអាចបង្កើត Folder រឿងបានទេ');
     } finally {
       setIsCreatingFolder(false);
+    }
+  };
+
+  const handleUploadVideoFolder = async (e) => {
+    const rawFiles = Array.from(e?.target?.files || []);
+    if (e?.target) {
+      e.target.value = '';
+    }
+    if (rawFiles.length === 0) return;
+
+    const validExtensions = ['.mp4', '.mov', '.mkv', '.webm', '.avi', '.m4v', '.ts', '.flv', '.wmv'];
+    const videoFiles = rawFiles.filter((file) => {
+      const name = String(file?.name || '').toLowerCase();
+      const dotIdx = name.lastIndexOf('.');
+      const ext = dotIdx >= 0 ? name.slice(dotIdx) : '';
+      return file?.type?.startsWith('video/') || validExtensions.includes(ext);
+    });
+
+    if (videoFiles.length === 0) {
+      setCreateFolderError('Folder ដែលបានជ្រើសរើសមិនមាន file វីដេអូទេ! (គាំទ្រ MP4, MOV, MKV, WEBM, AVI)');
+      return;
+    }
+
+    const firstRel = String(videoFiles[0]?.webkitRelativePath || '');
+    const folderName = (firstRel.includes('/') ? firstRel.split('/')[0] : '').trim() || 'រឿងភាគថ្មី';
+
+    const exists = allSeriesFolders.some(
+      (f) =>
+        f.displayTitle.toLowerCase() === folderName.toLowerCase() ||
+        String(f.id).toLowerCase() === folderName.toLowerCase()
+    );
+    if (exists) {
+      setCreateFolderError(`Folder "${folderName}" មានរួចហើយ! សូមដូរឈ្មោះ Folder ឬលុប Folder ចាស់សិន។`);
+      return;
+    }
+
+    const sortedVideos = [...videoFiles].sort((a, b) =>
+      String(a.name || '').localeCompare(String(b.name || ''), undefined, {
+        numeric: true,
+        sensitivity: 'base',
+      })
+    );
+
+    let createdSeriesId = null;
+    let createdSeriesObj = null;
+    const uploadedEpisodes = [];
+
+    try {
+      setIsUploadingFolder(true);
+      setCreateFolderError(null);
+      setFolderUploadProgress({
+        current: 0,
+        total: sortedVideos.length,
+        folderName,
+        fileName: 'កំពុងបង្កើត Folder រឿង...',
+      });
+
+      const createRes = await fetch('/api/series', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          series: {
+            title: folderName,
+            createdAt: Date.now(),
+            episodes: [],
+            glossary: { characters: [], terms: [] },
+            cast: [],
+          },
+        }),
+      });
+      const createData = await createRes.json();
+      if (!createData?.success || !createData?.series?.id) {
+        throw new Error(createData?.error || 'មិនអាចបង្កើត Folder រឿងបានទេ');
+      }
+
+      createdSeriesObj = createData.series;
+      createdSeriesId = createData.series.id;
+      const encodedSeriesId = encodeURIComponent(createdSeriesId);
+
+      for (let i = 0; i < sortedVideos.length; i++) {
+        const file = sortedVideos[i];
+        const epNum = i + 1;
+        const epTitle = `ភាគទី ${epNum} (EP${epNum})`;
+
+        setFolderUploadProgress({
+          current: epNum,
+          total: sortedVideos.length,
+          folderName,
+          fileName: file.name,
+        });
+
+        const epRes = await fetch(`/api/series/${encodedSeriesId}/episodes`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            customTitle: epTitle,
+            requestedNumber: epNum,
+          }),
+        });
+        const epData = await epRes.json();
+        if (!epRes.ok || !epData?.success) {
+          throw new Error(epData?.error || `មិនអាចបង្កើតភាគទី ${epNum} បានទេ`);
+        }
+
+        const createdEp = epData?.episode || {
+          id: `ep_${epNum}`,
+          episodeNumber: epNum,
+          title: epTitle,
+        };
+
+        const vidObj = await uploadVideoFile(file, {
+          seriesId: createdSeriesId,
+          episodeId: createdEp.id,
+          projectName: createdSeriesId,
+          displayTitle: epTitle,
+        });
+
+        uploadedEpisodes.push({
+          ...createdEp,
+          video: vidObj,
+          videoFile: vidObj.videoId || vidObj.videoPath,
+          duration: vidObj.durationSec || 0,
+          status: 'uploaded',
+        });
+      }
+
+      await fetch(`/api/series/${encodedSeriesId}/sync`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          series: {
+            ...createdSeriesObj,
+            id: createdSeriesId,
+            title: createdSeriesObj.title || folderName,
+            episodes: uploadedEpisodes,
+          },
+        }),
+      });
+
+      if (typeof onSwitchSeries === 'function') {
+        await onSwitchSeries(createdSeriesId);
+      } else if (typeof onRefreshSeries === 'function') {
+        await onRefreshSeries();
+      }
+      setOpenedFolderId(createdSeriesId);
+    } catch (err) {
+      if (createdSeriesId && uploadedEpisodes.length > 0) {
+        try {
+          await fetch(`/api/series/${encodeURIComponent(createdSeriesId)}/sync`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              series: {
+                ...(createdSeriesObj || {}),
+                id: createdSeriesId,
+                title: createdSeriesObj?.title || folderName,
+                episodes: uploadedEpisodes,
+              },
+            }),
+          });
+          if (typeof onRefreshSeries === 'function') {
+            await onRefreshSeries();
+          }
+        } catch (_) {}
+      }
+      setCreateFolderError(err?.message || 'មានបញ្ហាក្នុងការ Upload Folder វីដេអូ');
+    } finally {
+      setIsUploadingFolder(false);
+      setFolderUploadProgress(null);
     }
   };
 
@@ -591,8 +765,51 @@ export default function HomeDashboard({
                     <FolderPlus size={14} />
                     <span>+ បង្កើត Folder រឿងថ្មី</span>
                   </button>
+                  <button
+                    type="button"
+                    data-testid="btn-home-upload-folder"
+                    disabled={isUploadingFolder}
+                    onClick={() => {
+                      setCreateFolderError(null);
+                      folderUploadInputRef.current?.click();
+                    }}
+                    className="home-btn-upload-folder"
+                    title="ជ្រើសរើស Folder ពីកុំព្យូទ័រដែលមានវីដេអូភាគស្រាប់"
+                  >
+                    <Upload size={14} />
+                    <span>{isUploadingFolder ? 'កំពុង Upload...' : 'Upload Folder វីដេអូ'}</span>
+                  </button>
+                  <input
+                    ref={folderUploadInputRef}
+                    type="file"
+                    webkitdirectory=""
+                    directory=""
+                    multiple
+                    accept="video/*,.mp4,.mov,.mkv,.webm,.avi,.m4v,.ts,.flv,.wmv"
+                    style={{ display: 'none' }}
+                    onChange={handleUploadVideoFolder}
+                  />
                 </div>
               </div>
+
+              {folderUploadProgress && (
+                <div className="home-upload-folder-progress" data-testid="home-upload-folder-progress">
+                  <div className="home-upload-folder-progress-top">
+                    <span>
+                      កំពុង Upload Folder <strong>{folderUploadProgress.folderName}</strong> ({folderUploadProgress.current}/{folderUploadProgress.total} ភាគ)
+                    </span>
+                    <span className="home-upload-folder-filename">{folderUploadProgress.fileName}</span>
+                  </div>
+                  <div className="home-upload-folder-bar">
+                    <div
+                      className="home-upload-folder-bar-fill"
+                      style={{
+                        width: `${Math.round((folderUploadProgress.current / Math.max(1, folderUploadProgress.total)) * 100)}%`,
+                      }}
+                    />
+                  </div>
+                </div>
+              )}
 
               {/* Inline Create New Series Folder Bar */}
               {showNewFolderForm && (

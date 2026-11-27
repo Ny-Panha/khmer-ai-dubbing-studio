@@ -119,6 +119,7 @@ function createPipelineWorkerHandler(queue = productionJobQueue, deps = {}) {
       genre: cfg.genre || 'auto',
       jobId: job.jobId,
       force: Boolean(cfg.force || job.force || cfg.forceRegen),
+      ocrMode: cfg.ocrMode || job.ocrMode || null,
       signal: abortSignal,
     });
 

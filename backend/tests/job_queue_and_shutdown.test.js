@@ -116,3 +116,66 @@ test('ttsService pickAttemptRetryError preserves transient 429 when optional CLI
   const pickedPerm = pickAttemptRetryError([permanent, errEnoent]);
   assert.equal(pickedPerm, permanent, 'Real Edge error must be preserved over ENOENT when no transient error occurred');
 });
+
+test('processQueue avoids head-of-line deadlock when duplicate queued jobs share an episode', async () => {
+  const os = require('node:os');
+  const { ProductionJobQueue, JOB_STATUS } = require('../services/pipeline/productionJobQueue');
+  const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'dd_queue_hol_'));
+  const queue = new ProductionJobQueue({ maxConcurrency: 2, baseUploadsDir: tmpRoot });
+  const started = [];
+  let releaseWorker;
+  const gate = new Promise((resolve) => {
+    releaseWorker = resolve;
+  });
+
+  try {
+    queue.registerWorkerHandler(async (job) => {
+      started.push(`${job.seriesId}/${job.episodeId}`);
+      await gate;
+      return { success: true };
+    });
+
+    // Two duplicate queued jobs for series_A/ep_1 plus a queued job for series_B/ep_1
+    queue.inMemoryJobs.set('dup_1', {
+      jobId: 'dup_1',
+      seriesId: 'series_A',
+      episodeId: 'ep_1',
+      status: JOB_STATUS.QUEUED,
+      priority: 5,
+      createdAt: 1000,
+    });
+    queue.inMemoryJobs.set('dup_2', {
+      jobId: 'dup_2',
+      seriesId: 'series_A',
+      episodeId: 'ep_1',
+      status: JOB_STATUS.QUEUED,
+      priority: 5,
+      createdAt: 1001,
+    });
+    queue.inMemoryJobs.set('other_1', {
+      jobId: 'other_1',
+      seriesId: 'series_B',
+      episodeId: 'ep_1',
+      status: JOB_STATUS.QUEUED,
+      priority: 5,
+      createdAt: 1002,
+    });
+
+    queue.processQueue();
+    await new Promise((r) => setTimeout(r, 40));
+
+    assert.deepEqual(
+      started.sort(),
+      ['series_A/ep_1', 'series_B/ep_1'],
+      'Both available worker slots must run distinct episodes without deadlocking on dup_1/dup_2'
+    );
+    assert.equal(queue.getJob('dup_2').status, JOB_STATUS.QUEUED, 'Second job for same episode stays safely queued');
+
+    releaseWorker();
+    await new Promise((r) => setTimeout(r, 40));
+    assert.equal(queue.getJob('dup_2').status, JOB_STATUS.COMPLETED);
+  } finally {
+    queue.clearMemoryForTesting();
+    try { fs.rmSync(tmpRoot, { recursive: true, force: true }); } catch (_) {}
+  }
+});

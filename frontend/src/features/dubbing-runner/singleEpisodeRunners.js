@@ -956,6 +956,7 @@ export async function runSingleAutoCompact(ep, options = {}, signal = null, ctx 
   const BATCH_CHUNK = 25;
   const count = segments.length;
   let failedBatches = 0;
+  let lastBatchError = null;
 
   try {
     for (let i = 0; i < count; i += BATCH_CHUNK) {
@@ -992,7 +993,26 @@ export async function runSingleAutoCompact(ep, options = {}, signal = null, ctx 
         }
         console.warn(`[AutoCompact] Batch ${i}-${i + BATCH_CHUNK} failed for EP${epId}:`, sliceErr.message);
         failedBatches++;
+        lastBatchError = sliceErr.message;
       }
+    }
+
+    if (failedBatches > 0) {
+      setRunnerLiveStats?.((prev) => ({
+        ...prev,
+        compact: {
+          ...(prev?.compact || {}),
+          [epId]: {
+            percent: 0,
+            stageMessage: `បរាជ័យការផ្ទៀងផ្ទាត់ (${failedBatches} batch): ${lastBatchError || 'Invalid output'}`,
+          },
+        },
+      }));
+      return createStepResult({
+        status: STEP_STATUS.FAILED,
+        error: lastBatchError || 'Compact validation or persistence failed',
+        failedBatches,
+      });
     }
 
     setRunnerLiveStats?.((prev) => ({
@@ -1010,7 +1030,7 @@ export async function runSingleAutoCompact(ep, options = {}, signal = null, ctx 
       ep.scriptData.autoCompacted = true;
       if (Array.isArray(ep.scriptData.segments)) {
         ep.scriptData.segments.forEach((s) => {
-          if (!s.translationStyle) s.translationStyle = 'compact';
+          s.translationStyle = 'compact';
         });
       }
     }
@@ -1022,8 +1042,8 @@ export async function runSingleAutoCompact(ep, options = {}, signal = null, ctx 
     }
 
     return createStepResult({
-      status: failedBatches === 0 ? STEP_STATUS.COMPLETED : STEP_STATUS.COMPLETED,
-      failedBatches,
+      status: STEP_STATUS.COMPLETED,
+      failedBatches: 0,
     });
   } catch (err) {
     if (signal?.aborted) return createStepResult({ status: STEP_STATUS.CANCELLED, reason: 'aborted' });

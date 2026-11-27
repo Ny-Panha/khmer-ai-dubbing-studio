@@ -366,4 +366,98 @@ test('Retranslate Model Fallback & Route Error Mapping Suite', async (t) => {
     };
     assert.equal(checkEpisodeHasCompactReady(epIncompleteMock), false, '50% compacted should return false');
   });
+
+  await t.test('10. Compact Khmer Dubbing enforces Option #2 prompt, 1:1 cue/sourceCueId/timestamp preservation, and rejects foreign script/mismatch', async () => {
+    const inputCues = [
+      {
+        id: 'seg_1',
+        sourceCueId: 'cue_001',
+        originalChineseText: '我没事',
+        khmerTranslatedText: 'ខ្ញុំមិនមានបញ្ហាអ្វីទេ',
+        startSec: 1.0,
+        endSec: 2.5,
+      },
+      {
+        id: 'seg_2',
+        sourceCueId: 'cue_002',
+        originalChineseText: '你体内的那个家伙很危险',
+        khmerTranslatedText: 'អ្នកដែលនៅក្នុងរាងកាយរបស់អ្នកនោះគឺគ្រោះថ្នាក់ណាស់',
+        startSec: 2.6,
+        endSec: 5.0,
+      },
+    ];
+
+    let capturedPrompt = '';
+    const validMockAi = {
+      models: {
+        generateContent: async ({ contents }) => {
+          capturedPrompt = contents[0];
+          return {
+            text: JSON.stringify([
+              { id: 'seg_1', sourceCueId: 'cue_001', khmerText: 'ខ្ញុំមិនអីទេ។' },
+              { id: 'seg_2', sourceCueId: 'cue_002', khmerText: 'អាដែលនៅក្នុងខ្លួនកូននោះ គ្រោះថ្នាក់ណាស់។' },
+            ]),
+          };
+        },
+      },
+    };
+
+    const result = await retranslateBatchDialogues(inputCues, null, {
+      aiClient: validMockAi,
+      style: 'compact',
+      timeoutMs: 2000,
+    });
+
+    assert.ok(capturedPrompt.includes('Compact Dubbing approach (📝 ខ្លីចំអត្ថន័យ)'));
+    assert.ok(capturedPrompt.includes('Do not generate three options'));
+    assert.ok(capturedPrompt.includes('prevDialogueContextOnly'));
+    assert.ok(capturedPrompt.includes('nextDialogueContextOnly'));
+    assert.equal(result.length, 2);
+    assert.equal(result[0].id, 'seg_1');
+    assert.equal(result[0].sourceCueId, 'cue_001');
+    assert.equal(result[0].startSec, 1.0);
+    assert.equal(result[0].endSec, 2.5);
+    assert.equal(result[0].originalKhmerText, 'ខ្ញុំមិនមានបញ្ហាអ្វីទេ');
+    assert.equal(result[0].khmerText, 'ខ្ញុំមិនអីទេ។');
+    assert.equal(result[1].id, 'seg_2');
+    assert.equal(result[1].sourceCueId, 'cue_002');
+    assert.equal(result[1].startSec, 2.6);
+    assert.equal(result[1].endSec, 5.0);
+    assert.equal(result[1].originalKhmerText, 'អ្នកដែលនៅក្នុងរាងកាយរបស់អ្នកនោះគឺគ្រោះថ្នាក់ណាស់');
+    assert.equal(result[1].khmerText, 'អាដែលនៅក្នុងខ្លួនកូននោះ គ្រោះថ្នាក់ណាស់។');
+
+    // Reject mismatched cue count
+    await assert.rejects(
+      () => retranslateBatchDialogues(inputCues, null, {
+        aiClient: {
+          models: {
+            generateContent: async () => ({
+              text: JSON.stringify([{ id: 'seg_1', sourceCueId: 'cue_001', khmerText: 'ខ្ញុំមិនអីទេ។' }]),
+            }),
+          },
+        },
+        style: 'compact',
+        timeoutMs: 2000,
+      }),
+      /expected 2 cues, got 1/i
+    );
+
+    // Reject Chinese, English, Thai, or Lao characters in khmerText
+    for (const badText of ['ខ្ញុំមិនអីទេ 我没事', 'ខ្ញុំមិនអីទេ OK', 'ខ្ញុំមិនអីទេ สบายดี', 'ខ្ញុំមិនអីទេ ສະບາຍດີ']) {
+      await assert.rejects(
+        () => retranslateBatchDialogues([inputCues[0]], null, {
+          aiClient: {
+            models: {
+              generateContent: async () => ({
+                text: JSON.stringify([{ id: 'seg_1', sourceCueId: 'cue_001', khmerText: badText }]),
+              }),
+            },
+          },
+          style: 'compact',
+          timeoutMs: 2000,
+        }),
+        /non-Khmer script detected/i
+      );
+    }
+  });
 });

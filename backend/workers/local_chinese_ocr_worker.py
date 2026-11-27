@@ -36,7 +36,8 @@ def clean_chinese_text(text: str) -> str:
     cleaned = re.sub(r"^《第[0-9一二三四五六七八九十百千万]+[集话章]》$", "", cleaned)
     # Strip decorative outer brackets 【...】
     cleaned = re.sub(r"^[【〖『\[]([^】〗』\]]+)[】〗』\]]$", r"\1", cleaned)
-    # Strip whitespace inside Chinese text if desired, but keep punctuation
+    # Strip trailing/leading HUD bullet/dash artifacts (e.g. "魔都空旷街区·")
+    cleaned = re.sub(r"^[·•・\-—\s]+|[·•・\-—\s]+$", "", cleaned)
     cleaned = cleaned.strip()
     return cleaned
 
@@ -47,7 +48,7 @@ def parse_args():
     parser.add_argument("--persistent", action="store_true", help="Run in persistent JSON-lines streaming mode over stdin/stdout")
     parser.add_argument("--input_json", default="", help="Path to input JSON file containing frames to process")
     parser.add_argument("--output_json", default="", help="Path to write output JSON results")
-    parser.add_argument("--det_limit_side_len", type=int, default=360, help="Max detection side length (default 360 for high speed)")
+    parser.add_argument("--det_limit_side_len", type=int, default=480, help="Max detection side length (default 480 for accuracy & speed balance)")
     parser.add_argument("--roi_ymin", type=float, default=0.72, help="Normalized Y min for subtitle safe zone")
     parser.add_argument("--roi_ymax", type=float, default=0.98, help="Normalized Y max for subtitle safe zone")
     parser.add_argument("--roi_xmin", type=float, default=0.10, help="Normalized X min for subtitle safe zone")
@@ -82,7 +83,7 @@ def peak_rss_mb():
 def check_engine():
     try:
         from rapidocr_onnxruntime import RapidOCR
-        create_engine(RapidOCR, 360)
+        create_engine(RapidOCR, 480)
         return {
             "available": True,
             "engine": "rapidocr-onnxruntime",
@@ -111,15 +112,17 @@ def is_corner_watermark_item(it: dict) -> bool:
     if WATERMARK_TEXT_RE.search(txt):
         return True
     # Pure numbers/decimal HUD counters (e.g. "587.46") are never Chinese dialogue
-    if re.match(r"^[\d.,:%+\-/\s]+$", txt):
+    if re.match(r"^[\d.,:%+\-/\s|]+$", txt):
         return True
-    # Single-character noise outside the centered subtitle zone or at low confidence
-    if len(txt) == 1 and (not it.get("is_centered") or it.get("conf", 0.0) < 0.80):
+    has_hanzi = bool(re.search(r"[\u3400-\u4dbf\u4e00-\u9fa5]", txt))
+    # Reject low-confidence 1-char noise or off-center 1-char non-Hanzi artifacts,
+    # while preserving confident single-character Chinese dialogue replies (e.g. 一, 嗯, 谁).
+    if len(txt) == 1 and (it.get("conf", 0.0) < 0.80 or (not has_hanzi and not it.get("is_centered"))):
         return True
     in_extreme_x_corner = it["x_min"] >= 0.78 or it["x_max"] <= 0.22
     in_extreme_y_corner = it["y_min"] >= 0.72 or it["y_max"] <= 0.22
     if in_extreme_x_corner and in_extreme_y_corner:
-        if CORNER_ID_WATERMARK_RE.match(txt) or re.search(r"[A-Za-z0-9@]", txt) or len(txt) <= 6:
+        if CORNER_ID_WATERMARK_RE.match(txt) or re.search(r"[A-Za-z0-9@]", txt):
             return True
     return False
 
@@ -174,28 +177,41 @@ def filter_dialogue_ocr_results(ocr_res, roi_w: int, roi_h: int):
     if len(items) >= 2:
         centered_horiz = [it for it in items if it["is_centered"] and not it["is_vertical"]]
         if centered_horiz:
-            anchor = max(centered_horiz, key=lambda it: it["y_center"])
+            max_centered_h = max(it["box_h"] for it in centered_horiz)
+            anchor = max(
+                centered_horiz,
+                key=lambda it: (it["box_h"] >= max_centered_h * 0.75, it["y_center"], it["box_h"]),
+            )
+            anchor_h = max(1e-6, anchor["box_h"])
             kept = []
             for it in items:
                 if it["is_vertical"]:
+                    continue
+                # Drop smaller overlaid HUD/stat rows sitting behind or around the main dialogue anchor
+                height_ratio = it["box_h"] / anchor_h
+                if height_ratio < 0.65:
                     continue
                 # Preserve off-center horizontal dialogue at same subtitle band, drop side corner stamps
                 in_side_corner = (it["x_min"] >= 0.76 or it["x_max"] <= 0.24) and abs(it["y_center"] - anchor["y_center"]) > 0.12
                 if in_side_corner:
                     continue
                 # Drop upper HUD/badge lines separated vertically above the main subtitle anchor
-                # while keeping stacked 2-line centered dialogue subtitles of similar font height
+                # while keeping stacked 2-line centered dialogue subtitles of matching font height
                 y_gap = anchor["y_min"] - it["y_max"]
                 is_stacked_dialogue = (
                     it["is_centered"]
                     and abs(it["x_center"] - anchor["x_center"]) <= 0.12
                     and y_gap <= 0.10
-                    and abs(it["box_h"] - anchor["box_h"]) <= 0.08
+                    and 0.68 <= height_ratio <= 1.45
                 )
                 if y_gap > 0.08 and not is_stacked_dialogue:
                     continue
-                # Drop non-centered side labels sitting far from anchor
-                if not it["is_centered"] and abs(it["x_center"] - anchor["x_center"]) > 0.28 and y_gap > 0.06:
+                # Drop pure non-Hanzi prop words (e.g. LISTENING) when main Hanzi dialogue anchor exists
+                if re.search(r"[\u4e00-\u9fa5]", anchor["text"]) and not re.search(r"[\u4e00-\u9fa50-9]", it["text"]):
+                    continue
+                # Drop non-centered wall/side labels not on the same horizontal text row as the centered anchor
+                same_horizontal_row = abs(it["y_center"] - anchor["y_center"]) <= anchor_h * 0.45
+                if not it["is_centered"] and not same_horizontal_row and abs(it["x_center"] - anchor["x_center"]) > 0.24:
                     continue
                 kept.append(it)
             if kept:

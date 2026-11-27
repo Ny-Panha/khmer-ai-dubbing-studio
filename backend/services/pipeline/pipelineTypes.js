@@ -37,6 +37,25 @@ const GENERATION_MODES = Object.freeze({
   FAST_OCR: 'fast_ocr',
 });
 
+const OCR_ENGINE_MODES = Object.freeze({
+  HYBRID: 'hybrid',
+  GEMINI_ONLY: 'gemini_only',
+});
+
+function resolveOcrEngineMode({ ocrMode, ocrEngineMode, enableLocalOcr, env = process.env } = {}) {
+  const raw = String(ocrMode || ocrEngineMode || env?.OCR_ENGINE_MODE || '').trim().toLowerCase();
+  if (
+    raw === 'gemini_only' ||
+    raw === 'gemini' ||
+    enableLocalOcr === false ||
+    env?.SKIP_LOCAL_OCR === 'true' ||
+    env?.ENABLE_LOCAL_CHINESE_OCR === 'false'
+  ) {
+    return OCR_ENGINE_MODES.GEMINI_ONLY;
+  }
+  return OCR_ENGINE_MODES.HYBRID;
+}
+
 /**
  * Format float seconds into MM:SS.ms format (e.g. 00:03.50)
  */
@@ -153,6 +172,94 @@ function createCanonicalSegment(raw = {}, index = 0, defaultMode = GENERATION_MO
   };
 }
 
+function validateStrictSourceCueMapping(sourceCues = [], outputSegments = []) {
+  const srcList = Array.isArray(sourceCues) ? sourceCues : [];
+  const outList = Array.isArray(outputSegments) ? outputSegments : [];
+
+  const srcIds = srcList.map((c, idx) => String(c?.sourceCueId || '').trim() || `__missing_src_${idx + 1}`);
+  const srcIdSet = new Set(srcList.map((c) => String(c?.sourceCueId || '').trim()).filter(Boolean));
+  const outIds = outList.map((s) => String(s?.sourceCueId || '').trim());
+
+  const seenOut = new Map();
+  const duplicateSourceCueIds = [];
+  const unexpectedSourceCueIds = [];
+  const invalidTranslationCueIds = [];
+  const missingChineseCueIds = [];
+
+  for (let i = 0; i < outList.length; i++) {
+    const seg = outList[i] || {};
+    const cid = outIds[i];
+    if (!cid) {
+      unexpectedSourceCueIds.push(`__missing_out_id_${i + 1}`);
+    } else {
+      const prevCount = seenOut.get(cid) || 0;
+      seenOut.set(cid, prevCount + 1);
+      if (prevCount === 1) duplicateSourceCueIds.push(cid);
+      if (srcIdSet.size > 0 && !srcIdSet.has(cid)) {
+        unexpectedSourceCueIds.push(cid);
+      }
+    }
+
+    const cn = String(seg.originalChineseText || seg.chineseText || seg.textZh || '').trim();
+    const kh = String(seg.khmerTranslatedText || seg.khmerText || seg.khmer || '').trim();
+    const refId = cid || `seg_${i + 1}`;
+    if (!cn && srcList[i] && String(srcList[i].originalChineseText || srcList[i].chineseText || srcList[i].textZh || '').trim()) {
+      missingChineseCueIds.push(refId);
+    }
+    if (cn && (!kh || seg.translationStatus === 'review_needed')) {
+      invalidTranslationCueIds.push(refId);
+    }
+  }
+
+  const outIdSet = new Set(outIds.filter(Boolean));
+  const missingSourceCueIds = [];
+  for (let i = 0; i < srcList.length; i++) {
+    const scId = String(srcList[i]?.sourceCueId || '').trim();
+    if (!scId) {
+      missingSourceCueIds.push(srcIds[i]);
+    } else if (!outIdSet.has(scId)) {
+      missingSourceCueIds.push(scId);
+    }
+  }
+
+  const mismatchedOrderCueIds = [];
+  const minLen = Math.min(srcList.length, outList.length);
+  for (let i = 0; i < minLen; i++) {
+    const scId = String(srcList[i]?.sourceCueId || '').trim();
+    const ocId = outIds[i];
+    if (scId && ocId && scId !== ocId) {
+      mismatchedOrderCueIds.push(`${scId}!=${ocId}`);
+    }
+  }
+
+  const exactCueIdSetMatch =
+    srcList.length > 0 &&
+    outList.length === srcList.length &&
+    missingSourceCueIds.length === 0 &&
+    duplicateSourceCueIds.length === 0 &&
+    unexpectedSourceCueIds.length === 0 &&
+    srcIdSet.size === srcList.length;
+
+  const valid =
+    exactCueIdSetMatch &&
+    mismatchedOrderCueIds.length === 0 &&
+    invalidTranslationCueIds.length === 0 &&
+    missingChineseCueIds.length === 0;
+
+  return {
+    valid,
+    exactCueIdSetMatch,
+    sourceCount: srcList.length,
+    outputCount: outList.length,
+    missingSourceCueIds,
+    duplicateSourceCueIds,
+    unexpectedSourceCueIds,
+    mismatchedOrderCueIds,
+    invalidTranslationCueIds,
+    missingChineseCueIds,
+  };
+}
+
 function computePipelineCompletenessReport({
   durationSec = 0,
   verifiedSourceCuesCount = 0,
@@ -160,20 +267,34 @@ function computePipelineCompletenessReport({
   ocrVerifiedFrames = 0,
   ocrUnresolvedFrames = 0,
   finalizedSegments = [],
+  sourceCues = null,
+  ocrEngineMode = null,
+  usage = null,
 } = {}) {
   const segs = Array.isArray(finalizedSegments) ? finalizedSegments : [];
+  const hasSourceCues = Array.isArray(sourceCues) && sourceCues.length > 0;
+  const strictMapping = hasSourceCues ? validateStrictSourceCueMapping(sourceCues, segs) : null;
+
   const extractedChineseCuesCount = segs.filter((s) => Boolean(String(s?.originalChineseText || s?.chineseText || '').trim())).length;
   const translatedKhmerCuesCount = segs.filter((s) => Boolean(String(s?.khmerTranslatedText || s?.khmerText || '').trim()) && s?.translationStatus !== 'review_needed').length;
-  const effectiveSourceCount = verifiedSourceCuesCount > 0 ? verifiedSourceCuesCount : segs.length;
-  const missingSubtitlesCount = Math.max(0, effectiveSourceCount - extractedChineseCuesCount);
-  const missingTranslationsCount = Math.max(0, effectiveSourceCount - translatedKhmerCuesCount);
+  const effectiveSourceCount = hasSourceCues
+    ? sourceCues.length
+    : (verifiedSourceCuesCount > 0 ? verifiedSourceCuesCount : segs.length);
+  const missingSubtitlesCount = hasSourceCues
+    ? Math.max(0, strictMapping.missingSourceCueIds.length, strictMapping.missingChineseCueIds.length, effectiveSourceCount - extractedChineseCuesCount)
+    : Math.max(0, effectiveSourceCount - extractedChineseCuesCount);
+  const missingTranslationsCount = hasSourceCues
+    ? Math.max(0, strictMapping.invalidTranslationCueIds.length, strictMapping.missingSourceCueIds.length, effectiveSourceCount - translatedKhmerCuesCount)
+    : Math.max(0, effectiveSourceCount - translatedKhmerCuesCount);
   const translationCompletenessPct = effectiveSourceCount > 0
-    ? parseFloat(((translatedKhmerCuesCount / effectiveSourceCount) * 100).toFixed(2))
+    ? parseFloat(((Math.min(translatedKhmerCuesCount, effectiveSourceCount) / effectiveSourceCount) * 100).toFixed(2))
     : 0;
   const ocrFrameCompletenessPct = ocrTotalFrames > 0
     ? parseFloat(((ocrVerifiedFrames / ocrTotalFrames) * 100).toFixed(2))
     : (ocrUnresolvedFrames === 0 ? 100 : 0);
-  const oneToOneMappingValid = effectiveSourceCount > 0 && missingSubtitlesCount === 0 && missingTranslationsCount === 0 && ocrUnresolvedFrames === 0;
+  const oneToOneMappingValid = hasSourceCues
+    ? Boolean(strictMapping.valid && ocrUnresolvedFrames === 0 && missingSubtitlesCount === 0 && missingTranslationsCount === 0)
+    : Boolean(effectiveSourceCount > 0 && missingSubtitlesCount === 0 && missingTranslationsCount === 0 && ocrUnresolvedFrames === 0);
 
   return {
     status: oneToOneMappingValid ? 'complete' : 'incomplete',
@@ -185,10 +306,18 @@ function computePipelineCompletenessReport({
     missingSubtitlesCount,
     missingTranslationsCount,
     oneToOneMappingValid,
+    exactCueIdSetMatch: strictMapping ? strictMapping.exactCueIdSetMatch : null,
+    missingCueIds: strictMapping ? strictMapping.missingSourceCueIds : [],
+    duplicateCueIds: strictMapping ? strictMapping.duplicateSourceCueIds : [],
+    unexpectedCueIds: strictMapping ? strictMapping.unexpectedSourceCueIds : [],
+    mismatchedCueIds: strictMapping ? strictMapping.mismatchedOrderCueIds : [],
+    invalidTranslationCueIds: strictMapping ? strictMapping.invalidTranslationCueIds : [],
     translationCompletenessPct,
     ocrFrameCompletenessPct,
     ocrUnresolvedFramesCount: ocrUnresolvedFrames,
     coveragePercentage: translationCompletenessPct,
+    ...(ocrEngineMode ? { ocrEngineMode } : {}),
+    ...(usage ? { usage } : {}),
   };
 }
 
@@ -196,6 +325,9 @@ module.exports = {
   PIPELINE_STAGES,
   PIPELINE_STATUS,
   GENERATION_MODES,
+  OCR_ENGINE_MODES,
+  resolveOcrEngineMode,
+  validateStrictSourceCueMapping,
   formatSecondsToTimecode,
   parseTimeToSeconds,
   createCanonicalSegment,

@@ -1,4 +1,4 @@
-const { formatSecondsToTimecode } = require('../pipelineTypes');
+const { formatSecondsToTimecode, validateStrictSourceCueMapping } = require('../pipelineTypes');
 
 /**
  * Stage 8: Validate Subtitle Timing
@@ -9,12 +9,22 @@ const { formatSecondsToTimecode } = require('../pipelineTypes');
  * 
  * @param {object} params
  * @param {Array} params.segments
+ * @param {Array|null} [params.sourceCues=null]
  * @param {number} params.durationSec - Total video duration
  * @returns {Promise<{ timedSegments: Array, timingReport: object }>}
  */
-async function validateSubtitleTiming({ segments = [], durationSec = 0 }) {
+async function validateSubtitleTiming({ segments = [], sourceCues = null, durationSec = 0 }) {
   if (!Array.isArray(segments) || segments.length === 0) {
-    return { timedSegments: [], timingReport: { totalSegments: 0, microDurationsCorrected: 0, duplicatesRemoved: 0, overlapsResolved: 0 } };
+    return {
+      timedSegments: [],
+      timingReport: {
+        totalSegments: 0,
+        microDurationsCorrected: 0,
+        overlapsResolved: 0,
+        duplicatesRemoved: 0,
+        oneToOneMappingValid: !Array.isArray(sourceCues) || sourceCues.length === 0,
+      },
+    };
   }
 
   // Pre-sort by start time
@@ -212,6 +222,7 @@ async function validateSubtitleTiming({ segments = [], durationSec = 0 }) {
 
     timedSegments.push({
       ...raw,
+      ...(raw.sourceCueId ? { sourceCueId: raw.sourceCueId } : {}),
       id: idx + 1,
       segmentId: raw.segmentId || idx + 1,
       startSec: parseFloat(startSec.toFixed(2)),
@@ -232,6 +243,13 @@ async function validateSubtitleTiming({ segments = [], durationSec = 0 }) {
     });
   }
 
+  const mappingBaseline = (Array.isArray(sourceCues) && sourceCues.length > 0)
+    ? sourceCues
+    : (segments.some((s) => Boolean(s?.sourceCueId)) ? segments : null);
+  const strictMapping = mappingBaseline
+    ? validateStrictSourceCueMapping(mappingBaseline, timedSegments)
+    : null;
+
   return {
     timedSegments,
     timingReport: {
@@ -240,6 +258,14 @@ async function validateSubtitleTiming({ segments = [], durationSec = 0 }) {
       overlapsResolved,
       duplicatesRemoved,
       durationSec,
+      ...(strictMapping ? {
+        oneToOneMappingValid: strictMapping.valid,
+        exactCueIdSetMatch: strictMapping.exactCueIdSetMatch,
+        missingCueIds: strictMapping.missingSourceCueIds,
+        duplicateCueIds: strictMapping.duplicateSourceCueIds,
+        unexpectedCueIds: strictMapping.unexpectedSourceCueIds,
+        mismatchedCueIds: strictMapping.mismatchedOrderCueIds,
+      } : {}),
     },
   };
 }

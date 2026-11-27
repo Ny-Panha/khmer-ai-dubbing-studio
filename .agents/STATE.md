@@ -1,6 +1,21 @@
 # .agents/STATE.md
 
 ## Last Session
+IDE (Git Commit & Push) — 2026-11-27T15:12:45+07:00
+
+## Summary
+Committed all pending working-tree changes (Folder Video Upload on HomeDashboard, Compact Khmer Dubbing route/runner updates, ProductionJobQueue deadlock fix, OCR/Stage 7/8 pipeline & test updates, and spec/script cleanup) and pushed branch `chore/full-project-cleanup` (including `7fdfa85` expressive vocalization translation) to `origin`.
+
+## Active Environment
+- Branch: `chore/full-project-cleanup` (synced with `origin/chore/full-project-cleanup`)
+- Backend dev port: `5000`, Frontend dev port: `5173`
+
+## Next Steps
+- Restart backend server if currently running so live Step 1 / Repair / Auto-Compact picks up updated translation prompts and queue fixes.
+
+---
+
+## Previous Session
 IDE (Expressive Sounds & Natural Dubbing Translation) — 2026-11-27T13:47:00+07:00
 
 ## Summary

@@ -366,6 +366,41 @@ router.post("/dubbing/retranslate-all", async (req, res) => {
     };
     const updated = await retranslateBatchDialogues(segments, req.body?.apiKey, targetOptions);
 
+    // Validate 1:1 cue count, identifiers, timestamps, and order before persistence
+    if (!Array.isArray(updated) || updated.length !== segments.length) {
+      return res.status(422).json({
+        success: false,
+        code: "COMPACT_VALIDATION_FAILED",
+        error: `1:1 cue validation failed: expected ${segments.length} cues, got ${Array.isArray(updated) ? updated.length : 0}`,
+      });
+    }
+
+    for (let i = 0; i < segments.length; i++) {
+      const orig = segments[i];
+      const next = updated[i];
+      if (!next || String(next.id) !== String(orig.id)) {
+        return res.status(422).json({
+          success: false,
+          code: "COMPACT_VALIDATION_FAILED",
+          error: `Cue order or id mismatch at index ${i}`,
+        });
+      }
+      if (orig.sourceCueId && String(next.sourceCueId || "") !== String(orig.sourceCueId)) {
+        return res.status(422).json({
+          success: false,
+          code: "COMPACT_VALIDATION_FAILED",
+          error: `sourceCueId mismatch for cue "${orig.id}"`,
+        });
+      }
+      if (orig.startSec !== next.startSec || orig.endSec !== next.endSec) {
+        return res.status(422).json({
+          success: false,
+          code: "COMPACT_VALIDATION_FAILED",
+          error: `Timestamp modified for cue "${orig.id}"`,
+        });
+      }
+    }
+
     // If seriesId and episodeId provided, atomically update series.json on disk
     if (seriesId && episodeId) {
       await withSeriesMetadataLock(seriesId, () =>
@@ -378,10 +413,38 @@ router.post("/dubbing/retranslate-all", async (req, res) => {
 
           freshTargetEp.scriptData.segments = (freshTargetEp.scriptData.segments || []).map((orig) => {
             const match = segmentMap.get(String(orig.id || orig.index));
-            return match ? { ...orig, ...match } : orig;
+            if (!match) return orig;
+            const preservedOriginalKhmer = orig.originalKhmerText
+              || orig.khmerTranslatedText
+              || orig.khmerText
+              || orig.khmer
+              || "";
+            return {
+              ...orig,
+              ...(preservedOriginalKhmer ? { originalKhmerText: preservedOriginalKhmer } : {}),
+              khmerTranslatedText: match.khmerTranslatedText,
+              khmerText: match.khmerText,
+              khmer: match.khmer,
+              translationStyle: match.translationStyle || targetOptions.style,
+              textStatus: match.textStatus || "retranslated",
+              audioOutdated: true,
+              // Preserve original identifiers and timestamps strictly
+              id: orig.id,
+              ...(orig.sourceCueId ? { sourceCueId: orig.sourceCueId } : {}),
+              startSec: orig.startSec,
+              endSec: orig.endSec,
+              ...(orig.startTime !== undefined ? { startTime: orig.startTime } : {}),
+              ...(orig.endTime !== undefined ? { endTime: orig.endTime } : {}),
+            };
           });
           if (targetOptions.style === 'compact') {
-            freshTargetEp.scriptData.autoCompacted = true;
+            const allCompacted = freshTargetEp.scriptData.segments.every((seg) => {
+              const hasSource = Boolean(String(seg.originalChineseText || seg.chineseText || seg.originalText || seg.spokenAudioText || '').trim());
+              return !hasSource || seg.translationStyle === 'compact';
+            });
+            if (allCompacted) {
+              freshTargetEp.scriptData.autoCompacted = true;
+            }
           }
           freshTargetEp.scriptData.updatedAt = Date.now();
           return true;

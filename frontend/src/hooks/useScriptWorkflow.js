@@ -171,15 +171,23 @@ export function useScriptWorkflow({
                 setScriptLogs(jobStatus.logs);
               }
 
-              if (jobStatus.status === 'completed') {
-                response = {
-                  success: true,
-                  data: jobStatus.finalResult,
-                  jobId: activeJobId,
-                  videoId: targetVideoId,
-                  episodeId: targetEpisodeId,
-                };
-                break;
+              if (jobStatus.status === 'completed' || jobStatus.status === 'review_needed' || jobStatus.status === 'partial') {
+                if (jobStatus.finalResult) {
+                  response = {
+                    success: jobStatus.status === 'completed',
+                    status: jobStatus.status,
+                    reviewNeeded: jobStatus.status === 'review_needed',
+                    message: jobStatus.stageMessage,
+                    data: jobStatus.finalResult,
+                    jobId: activeJobId,
+                    videoId: targetVideoId,
+                    episodeId: targetEpisodeId,
+                  };
+                  break;
+                }
+                if (jobStatus.status === 'review_needed' || jobStatus.status === 'partial') {
+                  throw new Error(jobStatus.error || jobStatus.stageMessage || 'OCR or translation requires manual review');
+                }
               }
 
               if (jobStatus.status === 'failed') {
@@ -231,15 +239,23 @@ export function useScriptWorkflow({
                   setScriptLogs(jobStatus.logs);
                 }
 
-                if (jobStatus.status === 'completed') {
-                  response = {
-                    success: true,
-                    data: jobStatus.finalResult,
-                    jobId: activeJobId,
-                    videoId: targetVideoId,
-                    episodeId: targetEpisodeId,
-                  };
-                  break;
+                if (jobStatus.status === 'completed' || jobStatus.status === 'review_needed' || jobStatus.status === 'partial') {
+                  if (jobStatus.finalResult) {
+                    response = {
+                      success: jobStatus.status === 'completed',
+                      status: jobStatus.status,
+                      reviewNeeded: jobStatus.status === 'review_needed',
+                      message: jobStatus.stageMessage,
+                      data: jobStatus.finalResult,
+                      jobId: activeJobId,
+                      videoId: targetVideoId,
+                      episodeId: targetEpisodeId,
+                    };
+                    break;
+                  }
+                  if (jobStatus.status === 'review_needed' || jobStatus.status === 'partial') {
+                    throw new Error(jobStatus.error || jobStatus.stageMessage || 'OCR or translation requires manual review');
+                  }
                 }
 
                 if (jobStatus.status === 'failed') {
@@ -333,11 +349,22 @@ export function useScriptWorkflow({
         return;
       }
 
-      setScriptProgress(100);
-      setScriptStage('✅ បង្កើត Script ជោគជ័យ 100%!');
+      const returnedData = response.data;
+      const isIncompleteReview = Boolean(
+        response.reviewNeeded ||
+        returnedData?.status === 'review_needed' ||
+        returnedData?.coverage?.oneToOneMappingValid === false
+      );
+      if (isIncompleteReview) {
+        setScriptProgress(99);
+        setScriptStage(response.message || '⚠️ ត្រូវការផ្ទៀងផ្ទាត់ (Review needed before TTS/Export)');
+        setScriptError(response.message || 'ការស្កេន OCR ឬបកប្រែនៅមានបន្ទាត់មិនទាន់ពេញលេញ (Review Needed)');
+      } else {
+        setScriptProgress(100);
+        setScriptStage('✅ បង្កើត Script ជោគជ័យ 100%!');
+      }
       await new Promise((r) => setTimeout(r, 400));
 
-      const returnedData = response.data;
       const rawSegments = returnedData?.segments || [];
 
       // 3. Build speaker registry, preserving confirmed series memory and manual user corrections

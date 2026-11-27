@@ -322,11 +322,7 @@ class ProductionJobQueue {
     return this.activeEpisodeLocks.delete(lockKey);
   }
 
-  /**
-   * Checks if an active job or execution lock already exists for the given series and episode.
-   * Active statuses: queued, running, recovering, or activeExecutions worker running.
-   */
-  hasActiveJobForEpisode(seriesId, episodeId, excludeJobId = null) {
+  _hasEpisodeConflict(seriesId, episodeId, excludeJobId = null, includeQueued = true) {
     const cleanSeries = sanitizeIdentifier(seriesId, 'series_default');
     const cleanEpisode = sanitizeIdentifier(episodeId, 'ep_1');
     const lockKey = `${cleanSeries}/${cleanEpisode}`;
@@ -344,15 +340,30 @@ class ProductionJobQueue {
 
     for (const job of this.inMemoryJobs.values()) {
       if (excludeJobId && job.jobId === excludeJobId) continue;
-      if (
-        job.seriesId === cleanSeries &&
-        job.episodeId === cleanEpisode &&
-        ACTIVE_STATUSES.has(job.status)
-      ) {
+      const matchesStatus = includeQueued
+        ? ACTIVE_STATUSES.has(job.status)
+        : (job.status === JOB_STATUS.RUNNING || job.status === JOB_STATUS.RECOVERING);
+      if (job.seriesId === cleanSeries && job.episodeId === cleanEpisode && matchesStatus) {
         return true;
       }
     }
     return false;
+  }
+
+  /**
+   * Checks if an active job or execution lock already exists for the given series and episode.
+   * Active statuses: queued, running, recovering, or activeExecutions worker running.
+   */
+  hasActiveJobForEpisode(seriesId, episodeId, excludeJobId = null) {
+    return this._hasEpisodeConflict(seriesId, episodeId, excludeJobId, true);
+  }
+
+  /**
+   * Checks whether an episode currently has a running/recovering worker or execution lock
+   * (excluding merely queued jobs so duplicate queued entries cannot deadlock processQueue).
+   */
+  hasRunningOrLockedWorkerForEpisode(seriesId, episodeId, excludeJobId = null) {
+    return this._hasEpisodeConflict(seriesId, episodeId, excludeJobId, false);
   }
 
   /**
@@ -890,13 +901,18 @@ class ProductionJobQueue {
         return a.createdAt - b.createdAt;
       });
 
-      const jobsToStart = queuedJobs.slice(0, availableSlots);
+      let startedCount = 0;
 
-      for (const job of jobsToStart) {
-        // Strict Episode Isolation: Do not start a job if another worker is already active or stopping for this episode
-        if (this.hasActiveJobForEpisode(job.seriesId, job.episodeId, job.jobId)) {
+      for (const job of queuedJobs) {
+        if (startedCount >= availableSlots) {
+          break;
+        }
+        // Strict Episode Isolation: Do not start a job if another worker is already running/recovering/locked for this episode.
+        // Do not slice before filtering so blocked head-of-line episodes cannot starve later queued episodes.
+        if (this.hasRunningOrLockedWorkerForEpisode(job.seriesId, job.episodeId, job.jobId)) {
           continue;
         }
+        startedCount += 1;
 
         if (!this.activeAbortControllers.has(job.jobId)) {
           this.activeAbortControllers.set(job.jobId, new AbortController());
@@ -938,13 +954,22 @@ class ProductionJobQueue {
               }
               if (job.status === JOB_STATUS.RUNNING) {
                 const isPartial = result && typeof result === 'object' && result.status === JOB_STATUS.PARTIAL;
+                const isReviewNeeded =
+                  result &&
+                  typeof result === 'object' &&
+                  (result.status === JOB_STATUS.REVIEW_NEEDED || result.coverage?.oneToOneMappingValid === false);
+                const resolvedStatus = isReviewNeeded
+                  ? JOB_STATUS.REVIEW_NEEDED
+                  : (isPartial ? JOB_STATUS.PARTIAL : JOB_STATUS.COMPLETED);
                 this.updateJob(job.jobId, {
-                  status: isPartial ? JOB_STATUS.PARTIAL : JOB_STATUS.COMPLETED,
-                  progress: 100,
-                  currentStage: isPartial ? 'partial' : 'completed',
+                  status: resolvedStatus,
+                  progress: resolvedStatus === JOB_STATUS.COMPLETED ? 100 : 99,
+                  currentStage: resolvedStatus,
                   stageMessage:
-                    (result && typeof result === 'object' && result.message) ||
-                    'ការបង្កើតបានបញ្ចប់ដោយជោគជ័យ!',
+                    (result && typeof result === 'object' && (result.message || result.stageMessage)) ||
+                    (isReviewNeeded
+                      ? 'ត្រូវការផ្ទៀងផ្ទាត់ (Review needed: 1:1 subtitle mapping or OCR unresolved)'
+                      : 'ការបង្កើតបានបញ្ចប់ដោយជោគជ័យ!'),
                   ...(result !== undefined ? { finalResult: result } : {}),
                 });
               }

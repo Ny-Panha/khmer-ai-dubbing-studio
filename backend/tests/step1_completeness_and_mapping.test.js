@@ -223,3 +223,178 @@ test('6. Direct Studio and Batch Step 1 job worker both enforce 1:1 cue mapping 
     fs.rmSync(queueDir, { recursive: true, force: true });
   }
 });
+
+test('7. OCR engine mode defaults to hybrid even in fast_ocr and supports configurable gemini_only', async () => {
+  const { OCR_ENGINE_MODES, resolveOcrEngineMode } = require('../services/pipeline/pipelineTypes');
+  assert.equal(resolveOcrEngineMode({}), OCR_ENGINE_MODES.HYBRID);
+  assert.equal(resolveOcrEngineMode({ ocrMode: 'hybrid' }), OCR_ENGINE_MODES.HYBRID);
+  assert.equal(resolveOcrEngineMode({ ocrMode: 'gemini_only' }), OCR_ENGINE_MODES.GEMINI_ONLY);
+  assert.equal(resolveOcrEngineMode({ enableLocalOcr: false }), OCR_ENGINE_MODES.GEMINI_ONLY);
+});
+
+test('8. Deduplication & chunk stitching protect distinct sourceCueIds while deduping cross-chunk boundary overlaps', async () => {
+  const { deduplicateFastOcrCues } = require('../services/pipeline/stages/stage3VisionBatchRunner');
+  const { stitchAndDeduplicateSegments } = require('../services/pipeline/chunkOrchestrator');
+  const { saveVerifiedChineseSrt } = require('../services/pipeline/stages/stage3_extractChineseSubtitles');
+
+  const sameChunkDistinct = [
+    { sourceCueId: 'cue_0_1000_1', startSec: 1.0, endSec: 2.0, originalChineseText: '怎么了' },
+    { sourceCueId: 'cue_0_2050_2', startSec: 2.05, endSec: 2.8, originalChineseText: '怎么了' },
+  ];
+  const dedupedSame = deduplicateFastOcrCues(sameChunkDistinct, 'male');
+  assert.equal(dedupedSame.length, 2, 'Same-chunk distinct sourceCueIds must never merge');
+
+  const crossChunkOverlap = [
+    { sourceCueId: 'cue_0_29850_45', startSec: 298.5, endSec: 300.2, originalChineseText: '我们走吧' },
+    { sourceCueId: 'cue_30000_29855_1', startSec: 298.55, endSec: 300.3, originalChineseText: '我们走吧' },
+  ];
+  const dedupedCross = deduplicateFastOcrCues(crossChunkOverlap, 'male');
+  assert.equal(dedupedCross.length, 1, 'Cross-chunk boundary repeat must deduplicate cleanly');
+
+  const stitchedShortIds = stitchAndDeduplicateSegments([
+    { sourceCueId: 'cue_1', startSec: 1.0, endSec: 1.6, originalChineseText: '不好' },
+    { sourceCueId: 'cue_2', startSec: 1.65, endSec: 2.2, originalChineseText: '不好' },
+  ]);
+  assert.equal(stitchedShortIds.length, 2, 'Short test cue_1/cue_2 IDs must not falsely collide via split("_")[1]');
+
+  const srtDir = fs.mkdtempSync(path.join(os.tmpdir(), 'step1_srt_'));
+  try {
+    const srtPath = path.join(srtDir, 'verified_chinese.srt');
+    saveVerifiedChineseSrt(sameChunkDistinct, srtPath);
+    const content = fs.readFileSync(srtPath, 'utf8');
+    assert.ok(content.includes('00:00:01,000 --> 00:00:02,000'));
+    assert.ok(content.includes('怎么了'));
+  } finally {
+    fs.rmSync(srtDir, { recursive: true, force: true });
+  }
+});
+
+test('9. Strict sourceCueId set mapping rejects dropped, duplicate, swapped, or placeholder cues across Stage 6-8', async () => {
+  const { validateStrictSourceCueMapping } = require('../services/pipeline/pipelineTypes');
+  const { generateModeSpecificScript } = require('../services/pipeline/stages/stage6_generateModeSpecificScript');
+  const { translateAndValidateKhmer } = require('../services/pipeline/stages/stage7_translateAndValidateKhmer');
+  const { validateSubtitleTiming } = require('../services/pipeline/stages/stage8_validateSubtitleTiming');
+
+  const sourceCues = [
+    { sourceCueId: 'cue_0_100_1', startSec: 1, endSec: 2, originalChineseText: '你好' },
+    { sourceCueId: 'cue_0_250_2', startSec: 2.5, endSec: 3.5, originalChineseText: '快走' },
+  ];
+
+  // Swapped/duplicate ID with matching count 2 === 2 must fail strict check
+  const badReport = computePipelineCompletenessReport({
+    durationSec: 10,
+    verifiedSourceCuesCount: 2,
+    sourceCues,
+    finalizedSegments: [
+      { sourceCueId: 'cue_0_100_1', originalChineseText: '你好', khmerTranslatedText: 'សួស្តី', translationStatus: 'translated' },
+      { sourceCueId: 'cue_0_100_1', originalChineseText: '你好', khmerTranslatedText: 'សួស្តី', translationStatus: 'translated' },
+    ],
+  });
+  assert.equal(badReport.oneToOneMappingValid, false);
+  assert.equal(badReport.exactCueIdSetMatch, false);
+  assert.deepEqual(badReport.missingCueIds, ['cue_0_250_2']);
+  assert.deepEqual(badReport.duplicateCueIds, ['cue_0_100_1']);
+
+  const strictMismatch = validateStrictSourceCueMapping(sourceCues, [
+    { sourceCueId: 'cue_0_250_2', originalChineseText: '快走', khmerTranslatedText: 'ទៅ', translationStatus: 'translated' },
+    { sourceCueId: 'cue_0_100_1', originalChineseText: '你好', khmerTranslatedText: 'សួស្តី', translationStatus: 'translated' },
+  ]);
+  assert.equal(strictMismatch.valid, false);
+  assert.ok(strictMismatch.mismatchedOrderCueIds.length > 0);
+
+  // Stage 6 tracks Gemini token usage, skips already-translated batches, and enforces 1:1 IDs
+  let calls = 0;
+  const mockAi = {
+    models: {
+      generateContent: async () => {
+        calls++;
+        if (calls === 1) {
+          // Omit segment 2 cleanly -> triggers targeted retry only for segment 2
+          return {
+            text: JSON.stringify({
+              segments: [{ index: 1, segmentId: 1, sourceCueId: 'cue_0_100_1', speaker: 'តួប្រុស', gender: 'male', khmerText: 'សួស្តី' }],
+            }),
+            usageMetadata: { promptTokenCount: 100, candidatesTokenCount: 30, totalTokenCount: 130 },
+          };
+        }
+        return {
+          text: JSON.stringify({
+            segments: [{ index: 2, segmentId: 2, sourceCueId: 'cue_0_250_2', speaker: 'តួប្រុស', gender: 'male', khmerText: 'ទៅឱ្យលឿន!' }],
+          }),
+          usageMetadata: { promptTokenCount: 50, candidatesTokenCount: 20, totalTokenCount: 70 },
+        };
+      },
+    },
+  };
+
+  const s6 = await generateModeSpecificScript({
+    mode: 'dialogue',
+    generationMode: 'fast_ocr',
+    reconciledSegments: sourceCues,
+    durationSec: 10,
+    aiClient: mockAi,
+    retryDelayMs: 0,
+    useTranslationCache: false,
+  });
+  assert.equal(calls, 2);
+  assert.equal(s6.translationReport.oneToOneMappingValid, true);
+  assert.equal(s6.translationReport.exactCueIdSetMatch, true);
+  assert.equal(s6.usage.promptTokens, 150);
+  assert.equal(s6.usage.outputTokens, 50);
+  assert.equal(s6.usage.totalTokens, 200);
+
+  const s7 = await translateAndValidateKhmer({ scriptSegments: s6.scriptSegments, sourceCues, mode: 'dialogue' });
+  assert.equal(s7.validationReport.oneToOneMappingValid, true);
+
+  const s8 = await validateSubtitleTiming({ segments: s7.validatedSegments, sourceCues, durationSec: 10 });
+  assert.equal(s8.timingReport.oneToOneMappingValid, true);
+  assert.deepEqual(s8.timedSegments.map((x) => x.sourceCueId), ['cue_0_100_1', 'cue_0_250_2']);
+});
+
+test('10. Stage 3 typo-split guard routes minor variants to tie-break, rejects ASCII props, and filters isolated 1-char noise', async () => {
+  const { extractChineseSubtitles } = require('../services/pipeline/stages/stage3_extractChineseSubtitles');
+  const stage3RunnerSrc = fs.readFileSync(path.join(__dirname, '../services/pipeline/stages/stage3_extractChineseSubtitles.js'), 'utf8');
+
+  assert.ok(stage3RunnerSrc.includes('looksLikeGenuineRapidSplit'), 'Typo-split guard must exist in Stage 3');
+  assert.ok(stage3RunnerSrc.includes('disagreedTimestamps'), 'Conflicting local OCR pairs must block self-certification');
+  assert.ok(stage3RunnerSrc.includes('hasChineseHanzi'), 'Non-Hanzi ASCII props must be excluded from Chinese dialogue');
+  assert.ok(!stage3RunnerSrc.includes('const skipLocalOcr = fastOcrActive'), 'Fast OCR must not hard-disable RapidOCR');
+
+  // Also test parseVisionResponseFrames drops ASCII-only strings like "NOH"
+  const { parseVisionResponseFrames } = require('../services/pipeline/stages/stage3VisionBatchRunner');
+  const obs = parseVisionResponseFrames(
+    { text: JSON.stringify({ frames: [{ timestampSec: 1.0, hasText: true, textZh: 'NOH', chineseText: 'NOH' }] }) },
+    [{ timestampSec: 1.0 }]
+  );
+  assert.equal(obs[0].hasText, false, 'Pure ASCII prop NOH must not be accepted as Chinese dialogue');
+  assert.equal(typeof extractChineseSubtitles, 'function');
+});
+
+test('11. ProductionJobQueue preserves review_needed status when 1:1 mapping or OCR completeness fails', async () => {
+  const { ProductionJobQueue, JOB_STATUS } = require('../services/pipeline/productionJobQueue');
+  const qDir = fs.mkdtempSync(path.join(os.tmpdir(), 'step1_review_q_'));
+  const epVid = path.join(qDir, 'v.mp4');
+  fs.writeFileSync(epVid, 'x');
+  try {
+    const queue = new ProductionJobQueue({ baseDir: qDir, concurrency: 1 });
+    queue.registerWorkerHandler(async () => ({
+      success: false,
+      status: JOB_STATUS.REVIEW_NEEDED,
+      totalSegments: 2,
+      coverage: { oneToOneMappingValid: false, ocrUnresolvedFramesCount: 1 },
+      stageMessage: '1 unresolved frame requires review',
+    }));
+    const { jobData } = queue.enqueueJob({
+      seriesId: 's_rev',
+      episodeId: 'ep_1',
+      videoPath: epVid,
+      mode: 'fast_ocr',
+      config: { mode: 'fast_ocr' },
+    });
+    await queue.waitForWorkerSettlement(jobData.jobId, 3000);
+    const settled = queue.getJob(jobData.jobId, 's_rev', 'ep_1');
+    assert.equal(settled.status, JOB_STATUS.REVIEW_NEEDED, 'Incomplete job must transition to review_needed, never completed');
+  } finally {
+    fs.rmSync(qDir, { recursive: true, force: true });
+  }
+});
