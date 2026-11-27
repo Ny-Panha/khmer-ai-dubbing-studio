@@ -2,7 +2,7 @@
 # ==============================================================================
 # Khmer AI Dubbing Studio - Full Stack Windows Dev Orchestrator
 # Same architecture & robust process management as Koupreng dev.ps1
-# Runs: Backend (:5000) + Frontend Studio (:5173)
+# Runs: Backend (:5000) + Frontend Studio (:5175)
 # ==============================================================================
 
 param (
@@ -136,7 +136,7 @@ function Cleanup {
     }
 
     Free-Port 5000
-    Free-Port 5173
+    Free-Port 5175
     Write-Host "[OK] All services stopped cleanly.`n" -ForegroundColor Green
 }
 
@@ -211,7 +211,7 @@ function Wait-ForBackend {
 
 function Wait-ForFrontend {
     param(
-        [int]$Port = 5173,
+        [int]$Port = 5175,
         [System.Diagnostics.Process]$Process = $null
     )
     $baseUrl = "http://127.0.0.1:$Port"
@@ -240,9 +240,9 @@ function Wait-ForFrontend {
 
 try {
     # 1. Clean existing processes
-    Write-Host "`n[1/3] Checking and clearing ports 5000 & 5173..." -ForegroundColor White
+    Write-Host "`n[1/3] Checking and clearing ports 5000 & 5175..." -ForegroundColor White
     Free-Port 5000
-    Free-Port 5173
+    Free-Port 5175
 
     # 2. Launch Backend
     Write-Host "`n[2/3] Starting Backend API (Port 5000)..." -ForegroundColor White
@@ -259,24 +259,24 @@ try {
     Wait-ForBackend -Port 5000 -Process $backendProc
 
     # 3. Launch Frontend
-    Write-Host "`n[3/3] Starting Frontend Studio (Port 5173)..." -ForegroundColor White
+    Write-Host "`n[3/3] Starting Frontend Studio (Port 5175)..." -ForegroundColor White
     $frontendDir = Join-Path $RootDir "frontend"
     Ensure-Dependencies -WorkingDir $frontendDir -Name "Frontend"
     $frontendCmd = "npm.cmd run dev"
     $frontendProc = Start-DevProcess -Title "[Khmer AI Dubbing] Frontend Studio" -WorkingDir $frontendDir -Command $frontendCmd
-    Wait-ForFrontend -Port 5173 -Process $frontendProc
+    Wait-ForFrontend -Port 5175 -Process $frontendProc
 
     # 4. Open Browser
     if (-not $NoBrowser) {
-        Write-Host "`n[*] Opening Web Studio in browser: http://localhost:5173" -ForegroundColor Yellow
-        Start-Process "http://localhost:5173"
+        Write-Host "`n[*] Opening Web Studio in browser: http://localhost:5175" -ForegroundColor Yellow
+        Start-Process "http://localhost:5175"
     }
 
     # Status Banner
     Write-Host "`n======================================================" -ForegroundColor Green
     Write-Host "   ALL SERVICES RUNNING SUCCESSFULLY!" -ForegroundColor Green
     Write-Host "======================================================" -ForegroundColor Green
-    Write-Host "  - Frontend Studio: http://localhost:5173" -ForegroundColor Cyan
+    Write-Host "  - Frontend Studio: http://localhost:5175" -ForegroundColor Cyan
     Write-Host "  - Backend API:     http://localhost:5000" -ForegroundColor Cyan
     Write-Host "  - Health Check:    http://localhost:5000/api/health" -ForegroundColor Cyan
     if ($EnableWatchBackend) {

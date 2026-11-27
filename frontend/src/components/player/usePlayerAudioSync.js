@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import { parseTimeToSeconds } from '../../utils/timestampUtils';
 import { mapSourceToTimelineTime } from '../../utils/timelineUtils';
+import { isAdClip } from '../../utils/timelineOps';
 import { findLeadingSilenceFromChannels, computeSegmentAudioSyncTarget } from '../../utils/audioSyncUtils';
 import { createAudioRecoveryManager } from '../../utils/audioAutoRecovery';
 import {
@@ -881,12 +882,13 @@ export function usePlayerAudioSync({
           const tlNow = (v && Array.isArray(vc) && vc.length > 0)
             ? (mapSourceToTimelineTime(v.currentTime || 0, vc) ?? currentTimeRef.current)
             : (v?.currentTime ?? currentTimeRef.current);
+          const isAdAtTl = Array.isArray(vc) && vc.some((c) => isAdClip(c) && tlNow >= (c.start ?? 0) - 0.02 && tlNow < (c.end ?? 0));
 
           const scheduler = webAudioSchedulerRef.current;
           const useWebAudio = effectiveUseWebAudioRef.current && scheduler?.isSupported();
           if (useWebAudio) {
             const khmerVal = vs?.khmerVolume !== undefined ? Number(vs.khmerVolume) : 1.0;
-            const isKhmerMuted = khmerVal <= 0.01;
+            const isKhmerMuted = khmerVal <= 0.01 || isAdAtTl;
             scheduler.syncAtTimelineTime({
               timelineNow: tlNow,
               playbackRate: v?.playbackRate || 1.0,
@@ -1307,6 +1309,29 @@ export function usePlayerAudioSync({
     const khmerVal = voiceSettings.khmerVolume !== undefined ? Number(voiceSettings.khmerVolume) : 1.0;
 
     const isSpeaking = findIntervalAtTime(speakingIntervals, currentTime);
+
+    const activeAdClip = Array.isArray(videoClips)
+      ? videoClips.find((c) => isAdClip(c) && currentTime >= ((c.start ?? 0) - 0.02) && currentTime < (c.end ?? 0))
+      : null;
+
+    if (activeAdClip) {
+      const rawAdVol = Number.isFinite(Number(voiceSettings?.videoAdVolume))
+        ? Number(voiceSettings.videoAdVolume)
+        : (Number.isFinite(Number(activeAdClip.adVolume)) ? Number(activeAdClip.adVolume) : 1.0);
+      const adMuted = Boolean(activeAdClip.isMuted || rawAdVol <= 0.001);
+      const clampedAdVol = adMuted ? 0 : Math.min(1.0, Math.max(0, rawAdVol));
+      if (v.muted !== adMuted) v.muted = adMuted;
+      if (Math.abs(v.volume - clampedAdVol) > 0.001) v.volume = clampedAdVol;
+      if (cleanBgAudioRef.current) {
+        if (!cleanBgAudioRef.current.muted) cleanBgAudioRef.current.muted = true;
+        if (cleanBgAudioRef.current.volume !== 0) cleanBgAudioRef.current.volume = 0;
+      }
+      if (narrationAudioRef.current) {
+        if (!narrationAudioRef.current.muted) narrationAudioRef.current.muted = true;
+        if (narrationAudioRef.current.volume !== 0) narrationAudioRef.current.volume = 0;
+      }
+      return;
+    }
 
     // Live Mute for muted video clips (Mute Original Audio per-clip)
     const isCurrentVideoClipMuted = Array.isArray(videoClips) && videoClips.some((c) => {

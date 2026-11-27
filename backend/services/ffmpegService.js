@@ -4,6 +4,12 @@ const path = require("path");
 const fs = require("fs");
 const audioSeparationService = require("./audioSeparationService");
 const {
+  isAdClip,
+  resolveAdMediaPath,
+  applyPlacementAdToTimeline,
+  buildStoryAndAdAssemblyPlan,
+} = require("./ffmpeg/ffmpegVideoAdsHelper");
+const {
   FFMPEG_PATH,
   FFPROBE_PATH,
   attachAbortKill,
@@ -167,6 +173,18 @@ function detectActualCustomCuts(validClips = [], totalDuration = 0) {
 }
 
 function renderDubbedVideoWithDucking(options = {}) {
+  if (!options.__bypassVideoAds) {
+    const rawClips = Array.isArray(options.videoClips) ? options.videoClips : [];
+    const hasExistingAds = rawClips.some((c) => isAdClip(c));
+    const hasPlacementAd = Boolean(
+      options.videoAdSettings?.enabled &&
+      (options.videoAdSettings.placement === "preroll" || options.videoAdSettings.placement === "postroll")
+    );
+    if (hasExistingAds || hasPlacementAd) {
+      return renderDubbedVideoWithAdsAssembly(options);
+    }
+  }
+
   const inputVideoPath = options.inputVideoPath || options.videoPath;
   const masterAudioPath = options.masterAudioPath || null;
   const fullAudioPath = options.fullAudioPath || null;
@@ -1479,6 +1497,145 @@ async function mergeVideosConcat({
   }
 }
 
+
+async function renderDubbedVideoWithAdsAssembly(options = {}) {
+  const inputVideoPath = options.inputVideoPath || options.videoPath;
+  const outputVideoPath = options.outputVideoPath || options.outputPath;
+  const outDir = outputVideoPath ? path.dirname(outputVideoPath) : os.tmpdir();
+  if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
+
+  let storyDur = Number(options.expectedDurationSec) || 0;
+  if (!storyDur && inputVideoPath && fs.existsSync(inputVideoPath)) {
+    try { storyDur = await getMediaDuration(inputVideoPath); } catch (_) {}
+  }
+
+  const { videoClips: effectiveClips, segments: effectiveSegments } = applyPlacementAdToTimeline({
+    videoClips: options.videoClips || [],
+    segments: options.segments || [],
+    videoAdSettings: options.videoAdSettings || null,
+    storyDurationSec: storyDur,
+  });
+
+  const plan = buildStoryAndAdAssemblyPlan(effectiveClips, effectiveSegments);
+  if (!plan.hasAds) {
+    return renderDubbedVideoWithDucking({
+      ...options,
+      videoClips: effectiveClips,
+      segments: effectiveSegments,
+      __bypassVideoAds: true,
+    });
+  }
+
+  const startTime = Date.now();
+  const stamp = `${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+  const tempFiles = [];
+  const tmpStoryPath = path.join(outDir, `.tmp_story_ads_${stamp}.mp4`);
+  tempFiles.push(tmpStoryPath);
+
+  const runSimpleFfmpeg = (ffArgs, targetPath) =>
+    new Promise((res, rej) => {
+      const child = spawn(FFMPEG_PATH, ["-nostdin", "-hide_banner", "-loglevel", "error", "-y", ...ffArgs, targetPath], {
+        windowsHide: true,
+      });
+      if (options.signal) attachAbortKill(child, options.signal);
+      let stderr = "";
+      child.stderr.on("data", (d) => { stderr = (stderr + d).slice(-1500); });
+      child.once("error", rej);
+      child.once("close", (code) => (code === 0 ? res(targetPath) : rej(new Error(stderr || `FFmpeg exited ${code}`))));
+    });
+
+  try {
+    // 1. Render dubbed story timeline (without ads)
+    await renderDubbedVideoWithDucking({
+      ...options,
+      outputVideoPath: tmpStoryPath,
+      videoClips: plan.storyClips,
+      segments: plan.storySegments,
+      expectedDurationSec: plan.storyDurationSec || storyDur,
+      __bypassVideoAds: true,
+    });
+
+    // 2. Inspect rendered story dimensions & fps so ads match 1:1
+    const storyInfo = await getMediaInfo(tmpStoryPath);
+    const vStream = (storyInfo.streams || []).find((s) => s.codec_type === "video") || {};
+    const targetW = Number(vStream.width) || 1920;
+    const targetH = Number(vStream.height) || 1080;
+    let targetFps = 30;
+    if (vStream.r_frame_rate) {
+      const p = String(vStream.r_frame_rate).split("/");
+      if (p.length === 2 && Number(p[1]) > 0) targetFps = Math.round((Number(p[0]) / Number(p[1])) * 100) / 100 || 30;
+    }
+
+    const piecePaths = [];
+    for (let i = 0; i < plan.assembly.length; i++) {
+      const item = plan.assembly[i];
+      const piecePath = path.join(outDir, `.tmp_piece_${stamp}_${i}.mp4`);
+      tempFiles.push(piecePath);
+
+      if (item.type === "story") {
+        const dur = Math.max(0.05, Number(item.storyEnd) - Number(item.storyStart));
+        await runSimpleFfmpeg([
+          "-ss", Number(item.storyStart).toFixed(3),
+          "-i", getSafeCliPath(tmpStoryPath),
+          "-t", dur.toFixed(3),
+          "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p",
+          "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2",
+          "-movflags", "+faststart",
+        ], piecePath);
+        piecePaths.push(piecePath);
+      } else if (item.type === "ad") {
+        const adMeta = await getMediaInfo(item.adPath).catch(() => ({ streams: [] }));
+        const adHasAudio = Boolean((adMeta.streams || []).some((s) => s.codec_type === "audio"));
+        const adVol = item.isMuted ? 0 : Math.max(0, Math.min(2.0, Number(item.adVolume ?? 1.0)));
+        const durStr = Math.max(0.05, Number(item.duration)).toFixed(3);
+        const vf = `scale=${targetW}:${targetH}:force_original_aspect_ratio=decrease,pad=${targetW}:${targetH}:(ow-iw)/2:(oh-ih)/2:color=black,setsar=1,fps=${targetFps},format=yuv420p`;
+
+        const ffArgs = ["-ss", Number(item.sourceStart || 0).toFixed(3), "-i", getSafeCliPath(item.adPath)];
+        if (!adHasAudio || adVol <= 0.001) {
+          ffArgs.push(
+            "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo",
+            "-map", "0:v:0", "-map", "1:a:0",
+            "-t", durStr,
+            "-vf", vf,
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2",
+            "-shortest"
+          );
+        } else {
+          ffArgs.push(
+            "-map", "0:v:0", "-map", "0:a:0",
+            "-t", durStr,
+            "-vf", vf,
+            "-af", `aformat=sample_rates=44100:channel_layouts=stereo,volume=${adVol.toFixed(3)},apad`,
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p",
+            "-c:a", "aac", "-b:a", "192k", "-ar", "44100", "-ac", "2"
+          );
+        }
+        await runSimpleFfmpeg(ffArgs, piecePath);
+        piecePaths.push(piecePath);
+      }
+    }
+
+    await mergeVideosConcat({
+      inputVideoPaths: piecePaths,
+      outputVideoPath,
+      targetResolution: { width: targetW, height: targetH },
+      jobId: options.jobId,
+      signal: options.signal,
+    });
+
+    return {
+      success: true,
+      outputVideoPath,
+      hasVideoAds: true,
+      renderTimeSeconds: Number(((Date.now() - startTime) / 1000).toFixed(1)),
+    };
+  } finally {
+    for (const f of tempFiles) {
+      try { if (f && fs.existsSync(f)) fs.unlinkSync(f); } catch (_) {}
+    }
+  }
+}
 
 module.exports = {
   FFMPEG_PATH,

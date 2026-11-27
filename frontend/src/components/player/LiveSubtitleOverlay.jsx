@@ -6,12 +6,13 @@ export default function LiveSubtitleOverlay({
   activeSegment,
   voiceSettings = {},
   renderedVideo = null,
+  isAdActive = false,
   currentTime = 0,
   aspectRatio = 'auto',
   verticalStyle = 'pad',
   videoMeta = null,
 }) {
-  if (!activeSegment || voiceSettings.burnSubtitles === false || renderedVideo) {
+  if (!activeSegment || voiceSettings.burnSubtitles === false || renderedVideo || isAdActive) {
     return null;
   }
 

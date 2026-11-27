@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect, useLayoutEffect, useCallback } from
 import { Video, Upload, Loader2, AlertCircle, Activity } from 'lucide-react';
 import { parseTimeToSeconds } from '../../utils/timestampUtils';
 import { mapSourceToTimelineTime, mapTimelineToSourceTime } from '../../utils/timelineUtils';
+import { isAdClip } from '../../utils/timelineOps';
 import { uploadVideoFile } from '../../services/api';
 import { resolveDefaultAspectRatio, inferRenderedAspectRatio, sanitizeAspectRatio } from '../../utils/projectStorage';
 import { subscribeDraftPreview } from '../../utils/sliderDraftPreview';
@@ -316,25 +317,37 @@ function VideoPlayerPreview({
   const pendingSrcSwitchSeekRef = useRef(null);
   const fallbackLiveUrl = selectedVideo?.videoUrl || selectedVideo?.videoFile || (selectedVideo?.videoId ? (selectedVideo.videoId.startsWith('/') ? selectedVideo.videoId : `/uploads/${selectedVideo.videoId}`) : null);
   const effectiveLiveVideoUrl = (sourceProxy?.isReady && sourceProxy?.url) ? sourceProxy.url : fallbackLiveUrl;
-  const rawVideoSrc = (typeof renderedVideo === 'string' ? renderedVideo : renderedVideo?.outputVideoUrl) || effectiveLiveVideoUrl;
-  const targetVideoSrc = rawVideoSrc && renderedVideo && typeof renderedVideo === 'object' && renderedVideo.renderedAt
+
+  const activeTimelineClip = (!renderedVideo && Array.isArray(videoClips) && videoClips.length > 0)
+    ? videoClips.find((c) => c && (currentTime >= ((c.start ?? 0) - 0.02)) && (currentTime < ((c.end ?? 0) - 0.001)))
+    : null;
+  const isPlayingAdClip = Boolean(activeTimelineClip && isAdClip(activeTimelineClip) && activeTimelineClip.videoUrl);
+
+  const rawVideoSrc = isPlayingAdClip
+    ? activeTimelineClip.videoUrl
+    : ((typeof renderedVideo === 'string' ? renderedVideo : renderedVideo?.outputVideoUrl) || effectiveLiveVideoUrl);
+  const targetVideoSrc = rawVideoSrc && renderedVideo && typeof renderedVideo === 'object' && renderedVideo.renderedAt && !isPlayingAdClip
     ? `${rawVideoSrc}${rawVideoSrc.includes('?') ? '&' : '?'}v=${renderedVideo.renderedAt}`
     : rawVideoSrc;
 
   const prevPreviewModeRef = useRef(previewMode);
   const deferredVideoSrcRef = useRef(null);
   const prevVideoSrcRef = useRef(targetVideoSrc);
+  const prevIsAdClipRef = useRef(isPlayingAdClip);
 
   const isExplicitModeSwitch = prevPreviewModeRef.current !== previewMode;
+  const isAdSourceTransition = prevIsAdClipRef.current !== isPlayingAdClip;
   prevPreviewModeRef.current = previewMode;
+  prevIsAdClipRef.current = isPlayingAdClip;
 
   const isActivelyPlaying = Boolean(isPlayingRef.current || (videoRef?.current && !videoRef.current.paused));
 
   // Safety Condition 1: Defer background proxy src hot-swapping during active playback to prevent buffer drops
+  // (Never defer when transitioning to/from an inserted full-screen Sponsor Ad clip)
   const episodeChanged = prevEpisodeSourceKeyRef.current !== episodeSourceKey;
-  if (!episodeChanged && isActivelyPlaying && !isExplicitModeSwitch && prevVideoSrcRef.current && prevVideoSrcRef.current !== targetVideoSrc) {
+  if (!episodeChanged && isActivelyPlaying && !isExplicitModeSwitch && !isAdSourceTransition && prevVideoSrcRef.current && prevVideoSrcRef.current !== targetVideoSrc) {
     deferredVideoSrcRef.current = targetVideoSrc;
-  } else if (episodeChanged || !isActivelyPlaying || isExplicitModeSwitch) {
+  } else if (episodeChanged || !isActivelyPlaying || isExplicitModeSwitch || isAdSourceTransition) {
     deferredVideoSrcRef.current = null;
   }
 
@@ -1397,11 +1410,12 @@ function VideoPlayerPreview({
                 onUpdateVoiceSettings={onUpdateVoiceSettings}
               />
 
-              {/* Subtitle Overlay (z-index: 20 - sits on top of anti-theft banner) */}
+              {/* Subtitle Overlay (z-index: 20 - hidden during full-screen Sponsor Ad clips) */}
               <LiveSubtitleOverlay
                 activeSegment={activeSegment}
                 voiceSettings={voiceSettings}
                 renderedVideo={overlayRender}
+                isAdActive={isPlayingAdClip}
                 currentTime={effectiveTimelineTime}
                 aspectRatio={aspectRatio}
                 verticalStyle={verticalStyle}

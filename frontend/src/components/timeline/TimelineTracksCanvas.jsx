@@ -2,7 +2,7 @@ import React from 'react';
 import { Upload, Volume2, VolumeX, Film } from 'lucide-react';
 import { formatTimecode, parseTimeToSeconds, formatMinSec } from '../../utils/timestampUtils';
 import { findAssociatedSegmentIndices, resolveSegmentIsFemale, doesClipMatchSegment } from '../../utils/timelineUtils';
-import { isGapClip } from '../../utils/timelineOps';
+import { isGapClip, isAdClip } from '../../utils/timelineOps';
 import { uploadVideoFile } from '../../services/api';
 import { decodedPeaks, waveformKey, storedPeaks, ensureWaveformPeaks } from '../../utils/waveformCache';
 
@@ -934,10 +934,12 @@ function TimelineTracksCanvas({
       !isSelected && (selectedClipKind === 'voice' || selectedClipKind === 'subtitle') && isAssociatedWithSeg
     );
 
+    const isAd = isAdClip(clip);
+    const clipDurSec = Math.max(0, endSec - startSec);
     const isSliver = clipWidth < 5;
     const canRenderLabel = clipWidth >= 22;
     const isCompactClip = clipWidth < 52;
-    const rawCleanName = (clip.name || 'Video Clip')
+    const rawCleanName = (clip.name || (isAd ? 'Sponsor Ad' : 'Video Clip'))
       .replace(/\s*\(\d+(\.\d+)?s\)/g, '')
       .trim();
 
@@ -945,9 +947,9 @@ function TimelineTracksCanvas({
     // Narrow clips (< 52px): `#10` (clean centered badge, no truncated overflow text)
     // Medium clips (52px - 90px): Clean gender `#10 ស្រី` or `#10 ប្រុស`
     // Wide clips (>= 90px): Full clean name (normalized to canonical segmentId when present)
-    let videoClipLabel = rawCleanName;
+    let videoClipLabel = isAd ? `🎬 ${rawCleanName} (${clipDurSec.toFixed(1)}s)` : rawCleanName;
     const clipDisplayNumber = clip.segmentId ?? clip.segmentIndex;
-    if (clip.isDialogue && clipDisplayNumber) {
+    if (!isAd && clip.isDialogue && clipDisplayNumber) {
       const normalizedCleanName = rawCleanName.replace(/^#\d+\b/, `#${clipDisplayNumber}`);
       if (isCompactClip) {
         videoClipLabel = `#${clipDisplayNumber}`;
@@ -1003,7 +1005,7 @@ function TimelineTracksCanvas({
               if (onSelectSegment) onSelectSegment(null);
             }
           }}
-          className={`video-clip-block ${isSelected ? 'selected' : ''} ${isLinked ? 'is-linked-clip' : ''} ${isDragging ? 'is-dragging' : ''} ${isSliver ? 'clip-sliver' : ''} ${clip.isMuted ? 'is-clip-muted' : ''}`}
+          className={`video-clip-block ${isAd ? 'is-sponsor-ad' : ''} ${isSelected ? 'selected' : ''} ${isLinked ? 'is-linked-clip' : ''} ${isDragging ? 'is-dragging' : ''} ${isSliver ? 'clip-sliver' : ''} ${clip.isMuted ? 'is-clip-muted' : ''}`}
           style={{
             cursor: isDragging ? 'grabbing' : 'grab',
             left: clipLeft,
@@ -1046,9 +1048,23 @@ function TimelineTracksCanvas({
                 )}
               </div>
 
-              {/* Row 2: Content row (filmstrip tiles: tile, never stretch) */}
-              <div className="clip-content-row filmstrip-content-row">
-                {videoThumbnails && videoThumbnails.length > 0 ? (
+              {/* Row 2: Content row (gold ad waveform OR story filmstrip tiles) */}
+              <div className={`clip-content-row ${isAd ? 'ad-waveform-content-row' : 'filmstrip-content-row'}`}>
+                {isAd ? (
+                  clip.hasAudio === false || clip.isMuted ? (
+                    <div className="ad-no-audio-strip">🔇 {clip.isMuted ? 'Ad Muted' : 'No Audio'}</div>
+                  ) : (
+                    <div className="ad-gold-waveform" aria-hidden="true">
+                      {Array.from({ length: Math.max(8, Math.min(72, Math.floor(clipWidth / 4))) }).map((_, wIdx) => {
+                        const peaks = Array.isArray(clip.waveformPeaks) && clip.waveformPeaks.length > 0 ? clip.waveformPeaks : null;
+                        const hPct = peaks
+                          ? Math.max(18, Math.min(95, peaks[wIdx % peaks.length]))
+                          : Math.round(28 + 56 * Math.abs(Math.sin((wIdx + 1) * 0.72) * Math.cos((wIdx + 2) * 0.31)));
+                        return <span key={wIdx} className="ad-wave-bar" style={{ height: `${hPct}%` }} />;
+                      })}
+                    </div>
+                  )
+                ) : videoThumbnails && videoThumbnails.length > 0 ? (
                   (() => {
                     const getThumbUrl = (item) => (item ? (typeof item === 'string' ? item : item.url) : null);
                     const clipSrcStart = typeof clip.sourceStart === 'number' ? clip.sourceStart : startSec;

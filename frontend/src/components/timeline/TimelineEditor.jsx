@@ -52,6 +52,7 @@ function TimelineEditor({
   onSelectClip,
   onUpdateClips,
   onSplitClip,
+  onInsertVideoAd = null,
   onDeleteClip,
   onDeleteSegment = null,
   scriptSegments = [],
@@ -2356,6 +2357,7 @@ function TimelineEditor({
             : (selectedClipKind === 'voice' || selectedClipKind === 'subtitle' ? selectedSegKey : null);
           if (onSplitClip) onSplitClip(time, activeSplitTarget);
         }}
+        onInsertVideoAd={onInsertVideoAd}
         currentTime={currentTime}
         isPlaying={isPlaying}
         playheadTimeRef={playheadTimeRef}

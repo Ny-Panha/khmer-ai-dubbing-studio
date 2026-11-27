@@ -7,30 +7,41 @@ const {
   FFMPEG_PATH, getMediaInfo, buildDynamicDuckingFilter,
   createSynchronizedNarrationAudio, resolveSegmentStartSec,
 } = require('./ffmpegService');
+const { isAdClip, resolveAdMediaPath } = require('./ffmpeg/ffmpegVideoAdsHelper');
 
 // Sample the same first-covering-clip rule as timeline scrubbing. A clip named
 // Gap contains actual source footage. Only uncovered timeline space is black.
 function planRanges(clips, sourceDuration) {
   if (!clips.length) return [{ start: 0, end: sourceDuration, source: 0 }];
-  const spans = clips.map(c => {
+  const ranges = [];
+  const sorted = [...clips].filter(c => c && Number(c.end) > Number(c.start)).sort((a, b) => Number(a.start) - Number(b.start));
+  for (const c of sorted) {
+    if (isAdClip(c)) {
+      const dur = Number(c.end) - Number(c.start);
+      ranges.push({
+        start: Number(c.start),
+        end: Number(c.end),
+        source: Math.max(0, Number(c.sourceStart) || 0),
+        isAd: true,
+        adPath: resolveAdMediaPath(c),
+        adVolume: Number.isFinite(Number(c.adVolume)) ? Number(c.adVolume) : 1.0,
+        isMuted: Boolean(c.isMuted),
+        dur,
+      });
+      continue;
+    }
     const source = c.sourceStart ?? c.start;
     const available = Math.min(c.sourceEnd ?? sourceDuration, sourceDuration) - source;
     const end = Math.min(c.end, c.start + Math.max(0, available));
-    return { start: c.start, end: Math.round(end * 1e6) / 1e6, source };
-  });
-  const points = [...new Set([0, ...clips.map(c => c.end), ...spans.flatMap(c => [c.start, c.end])])].sort((a, b) => a - b);
-  const ranges = [];
-  for (let i = 1; i < points.length; i++) {
-    const start = points[i - 1], end = points[i];
-    const clip = spans.find(c => c.start <= start && c.end > start);
-    const source = clip ? clip.source + start - clip.start : null;
+    if (end <= c.start) continue;
     const prev = ranges.at(-1);
-    const contiguous = prev && (source === null ? prev.source === null :
-      prev.source !== null && Math.abs(prev.source + start - prev.start - source) < 0.0001);
-    if (contiguous) prev.end = end;
-    else ranges.push({ start, end, source });
+    const contiguous = prev && !prev.isAd && prev.source !== null &&
+      Math.abs(prev.source + Number(c.start) - prev.start - source) < 0.0001 &&
+      Math.abs(prev.end - Number(c.start)) < 0.001;
+    if (contiguous) prev.end = Math.round(end * 1e6) / 1e6;
+    else ranges.push({ start: Number(c.start), end: Math.round(end * 1e6) / 1e6, source, isAd: false });
   }
-  return ranges;
+  return ranges.length > 0 ? ranges : [{ start: 0, end: sourceDuration, source: 0 }];
 }
 
 function encode(args, jobId) {
@@ -79,7 +90,18 @@ async function renderProxy(input, dir, jobId, onProgress = null) {
     const args = [];
     let audio = '0:a:0';
     const silence = ['-f', 'lavfi', '-i', 'anullsrc=r=44100:cl=stereo'];
-    if (range.source === null) {
+    if (range.isAd && range.adPath) {
+      const adInfo = await getMediaInfo(range.adPath).catch(() => ({ streams: [] }));
+      const adHasAudio = Boolean((adInfo.streams || []).some(s => s.codec_type === 'audio'));
+      const adVol = range.isMuted ? 0 : Math.max(0, Math.min(2, Number(range.adVolume ?? 1)));
+      args.push('-ss', range.source.toFixed(6), '-i', range.adPath);
+      if (!adHasAudio || adVol <= 0.001) {
+        args.push(...silence);
+        audio = '1:a:0';
+      } else {
+        audio = '0:a:0';
+      }
+    } else if (range.source === null) {
       args.push('-f', 'lavfi', '-i', `color=black:s=${w}x${h}:r=30`, ...silence);
       audio = '1:a:0';
     } else {

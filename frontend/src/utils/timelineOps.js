@@ -24,9 +24,15 @@ import {
 
 // ─── Helpers ────────────────────────────────────────────────────────
 
+/** Check if a clip is a full-screen Sponsor Video Ad */
+export function isAdClip(clip) {
+  if (!clip || typeof clip !== 'object') return false;
+  return Boolean(clip.isAd || clip.clipType === 'sponsor_ad');
+}
+
 /** Check if a clip is a Gap */
 export function isGapClip(clip) {
-  if (!clip) return false;
+  if (!clip || isAdClip(clip)) return false;
   if (clip.isDialogue === false && (!clip.name || clip.name === 'Gap')) return true;
   return /^Gap(?: \(Part \d+\))?$/i.test(clip.name || '') || (clip.id && String(clip.id).startsWith('clip-gap'));
 }
@@ -177,6 +183,11 @@ export function deleteVideoClip(state, { clipId, totalDuration }) {
   }
 
   const target = videoClips[targetIdx];
+
+  // Full-screen Sponsor Ad clips ripple-left on delete so story duration closes cleanly
+  if (isAdClip(target)) {
+    return deleteVideoAd(state, { clipId });
+  }
 
   // Guard: this op is for dialogue clips only. Use deleteGap for Gaps.
   if (isGapClip(target)) {
@@ -726,6 +737,9 @@ export function trimClip(state, { clipId, edge, newTime, maxSourceDuration = Inf
   const videoIndex = Array.isArray(videoClips) ? videoClips.findIndex((c) => c.id === clipId) : -1;
   if (videoIndex !== -1) {
     const clip = ensureClipNums(videoClips[videoIndex]);
+    const effectiveMaxSource = isAdClip(clip)
+      ? Math.min(maxSourceDuration, Number(clip.duration) > 0 ? Number(clip.duration) : Infinity)
+      : maxSourceDuration;
     const targetRow = typeof clip.trackRow === 'number' ? clip.trackRow : 0;
 
     if (isStart) {
@@ -762,7 +776,7 @@ export function trimClip(state, { clipId, edge, newTime, maxSourceDuration = Inf
       const proposedSourceEnd = clip.sourceEnd + delta;
 
       if (proposedEnd < clip.start + MIN_CLIP_DURATION) return noop(state, 'Trim would make clip too short');
-      if (isFinite(maxSourceDuration) && proposedSourceEnd > maxSourceDuration + 0.05) return noop(state, 'Exceeds source duration');
+      if (isFinite(effectiveMaxSource) && proposedSourceEnd > effectiveMaxSource + 0.05) return noop(state, 'Exceeds source duration');
       if (proposedSourceEnd < clip.sourceStart + MIN_CLIP_DURATION) return noop(state, 'Source range too narrow');
 
       // Check overlap with next clips on same track
@@ -1382,4 +1396,280 @@ export function releaseSegmentFromManual(state, { segKey }) {
     clipNumber,
     canonicalStart,
   };
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  Full-Screen Sponsor Video Ad Operations (Atomic Ripple Insert/Delete)
+// ═══════════════════════════════════════════════════════════════════
+
+function shiftTimelineSegmentsByDelta(segments, fromTime, deltaSec) {
+  const segs = Array.isArray(segments) ? segments : [];
+  return segs.map((seg) => {
+    const segStart = typeof seg.startSec === 'number' && !isNaN(seg.startSec)
+      ? seg.startSec
+      : (typeof seg.audioStartSec === 'number' && !isNaN(seg.audioStartSec)
+        ? seg.audioStartSec
+        : (typeof seg.start === 'string' ? parseTimeToSeconds(seg.start, 0) : 0));
+
+    if (segStart < fromTime - 0.001) {
+      return deepClone(seg);
+    }
+
+    const updated = deepClone(seg);
+    if (typeof seg.startSec === 'number' && !isNaN(seg.startSec)) {
+      updated.startSec = Math.max(0, r3(seg.startSec + deltaSec));
+    }
+    if (typeof seg.endSec === 'number' && !isNaN(seg.endSec)) {
+      updated.endSec = Math.max(0, r3(seg.endSec + deltaSec));
+    }
+    if (typeof seg.audioStartSec === 'number' && !isNaN(seg.audioStartSec)) {
+      updated.audioStartSec = Math.max(0, r3(seg.audioStartSec + deltaSec));
+    }
+    if (typeof seg.audioEndSec === 'number' && !isNaN(seg.audioEndSec)) {
+      updated.audioEndSec = Math.max(0, r3(seg.audioEndSec + deltaSec));
+    }
+    if (typeof updated.startSec === 'number') {
+      const fStart = formatMinSec(updated.startSec);
+      updated.start = fStart;
+      updated.startTime = fStart;
+    }
+    if (typeof updated.endSec === 'number') {
+      const fEnd = formatMinSec(updated.endSec);
+      updated.end = fEnd;
+      updated.endTime = fEnd;
+    }
+    if (typeof updated.audioStartSec === 'number') {
+      updated.audioStart = formatMinSec(updated.audioStartSec);
+    }
+    if (typeof updated.audioEndSec === 'number') {
+      updated.audioEnd = formatMinSec(updated.audioEndSec);
+    }
+    // Preserve immutable sourceCueId & original source timestamps
+    if (seg.sourceCueId !== undefined) updated.sourceCueId = seg.sourceCueId;
+    if (seg.sourceStartSec !== undefined) updated.sourceStartSec = seg.sourceStartSec;
+    if (seg.sourceEndSec !== undefined) updated.sourceEndSec = seg.sourceEndSec;
+    return updated;
+  });
+}
+
+function shiftFramingDataByDelta(framingKeyframes, framingOverrides, fromTime, deltaSec) {
+  const nextKeyframes = Array.isArray(framingKeyframes)
+    ? framingKeyframes.map((k) => (k && Number.isFinite(k.time) && k.time >= fromTime - 0.001
+        ? { ...k, time: Math.max(0, r2(k.time + deltaSec)) }
+        : k))
+    : undefined;
+  const nextOverrides = Array.isArray(framingOverrides)
+    ? framingOverrides.map((o) => (o && Number.isFinite(o.startSec) && o.startSec >= fromTime - 0.001
+        ? {
+            ...o,
+            startSec: Math.max(0, r2(o.startSec + deltaSec)),
+            endSec: Number.isFinite(o.endSec) ? Math.max(0, r2(o.endSec + deltaSec)) : o.endSec,
+          }
+        : o))
+    : undefined;
+  return { nextKeyframes, nextOverrides };
+}
+
+export function insertVideoAd(state, {
+  adClip,
+  insertTime = 0,
+  activeClipId = null,
+  totalDuration = 0,
+  placement = 'manual',
+  dedupePlacement = false,
+  clipDefaults = {},
+} = {}) {
+  const { videoClips, segments, framingKeyframes, framingOverrides } = state || {};
+  const adUrl = adClip?.videoUrl || adClip?.url || null;
+  const adPath = adClip?.videoPath || adClip?.path || null;
+  if (!adUrl && !adPath) {
+    return noop(state, 'Missing sponsor video URL or path');
+  }
+
+  const rawAdDur = Number(adClip?.duration ?? adClip?.durationSec ?? 0);
+  const adDur = Number.isFinite(rawAdDur) && rawAdDur > 0.05 ? r3(rawAdDur) : 0;
+  if (adDur <= 0.05) {
+    return noop(state, 'Sponsor video duration must be greater than 0.05s');
+  }
+
+  let workingClips = Array.isArray(videoClips) ? deepClone(videoClips) : [];
+  const isVirtualOrEmpty = workingClips.length === 0 || (
+    workingClips.length === 1 && (!workingClips[0].end || workingClips[0].end <= workingClips[0].start)
+  );
+  if (isVirtualOrEmpty) {
+    const baseDur = totalDuration > 0 ? r3(totalDuration) : Math.max(30, r3(insertTime) + 10);
+    workingClips = [{
+      id: uid('clip'),
+      start: 0,
+      end: baseDur,
+      sourceStart: 0,
+      sourceEnd: baseDur,
+      duration: baseDur,
+      name: clipDefaults.name || 'Video 1',
+      trackRow: 0,
+      trackId: 'video-1',
+      ...clipDefaults,
+    }];
+  }
+
+  workingClips = workingClips.map(ensureClipNums).sort((a, b) => a.start - b.start);
+  const maxEnd = workingClips.reduce((m, c) => Math.max(m, Number(c.end) || 0), 0);
+
+  if (dedupePlacement && (placement === 'preroll' || placement === 'postroll')) {
+    const alreadyHas = workingClips.some((c) => {
+      if (!isAdClip(c)) return false;
+      if (c.adPlacement && c.adPlacement === placement) return true;
+      if (placement === 'preroll' && c.start <= 0.05 && ((adUrl && c.videoUrl === adUrl) || (adPath && c.videoPath === adPath))) return true;
+      if (placement === 'postroll' && c.end >= maxEnd - 0.05 && ((adUrl && c.videoUrl === adUrl) || (adPath && c.videoPath === adPath))) return true;
+      return false;
+    });
+    if (alreadyHas) {
+      return noop(state, `Duplicate ${placement} ad prevented`);
+    }
+  }
+
+  let insertAt = 0;
+  if (placement === 'preroll') {
+    insertAt = 0;
+  } else if (placement === 'postroll') {
+    insertAt = r3(maxEnd);
+  } else {
+    const safeInsert = Number.isFinite(Number(insertTime)) ? Math.max(0, r3(Number(insertTime))) : 0;
+    const spanningIdx = workingClips.findIndex((c) => {
+      if (activeClipId && c.id !== activeClipId && safeInsert > c.start && safeInsert < c.end) return false;
+      return safeInsert > c.start + 0.05 && safeInsert < c.end - 0.05;
+    });
+    const fallbackSpanIdx = spanningIdx !== -1
+      ? spanningIdx
+      : workingClips.findIndex((c) => safeInsert > c.start + 0.05 && safeInsert < c.end - 0.05);
+
+    if (fallbackSpanIdx !== -1) {
+      const spanClip = workingClips[fallbackSpanIdx];
+      if ((safeInsert - spanClip.start) >= 0.3 && (spanClip.end - safeInsert) >= 0.3) {
+        const splitRes = splitClip({ videoClips: workingClips, segments }, {
+          splitTime: safeInsert,
+          activeClipId: spanClip.id,
+          totalDuration: maxEnd,
+          clipDefaults,
+        });
+        if (splitRes.applied) {
+          workingClips = splitRes.state.videoClips;
+          insertAt = safeInsert;
+        } else {
+          insertAt = Math.abs(safeInsert - spanClip.start) <= Math.abs(spanClip.end - safeInsert)
+            ? r3(spanClip.start)
+            : r3(spanClip.end);
+        }
+      } else {
+        insertAt = Math.abs(safeInsert - spanClip.start) <= Math.abs(spanClip.end - safeInsert)
+          ? r3(spanClip.start)
+          : r3(spanClip.end);
+      }
+    } else if (safeInsert >= maxEnd - 0.05) {
+      insertAt = r3(maxEnd);
+    } else {
+      const nearBoundary = workingClips.find((c) => Math.abs(c.start - safeInsert) <= 0.1 || Math.abs(c.end - safeInsert) <= 0.1);
+      if (nearBoundary) {
+        insertAt = Math.abs(nearBoundary.start - safeInsert) <= Math.abs(nearBoundary.end - safeInsert)
+          ? r3(nearBoundary.start)
+          : r3(nearBoundary.end);
+      } else {
+        insertAt = safeInsert;
+      }
+    }
+  }
+
+  // Ripple-shift all clips at or after insertAt right by +adDur (keeping sourceStart/sourceEnd intact)
+  const shiftedClips = workingClips.map((c) => {
+    if (c.start < insertAt - 0.001) return c;
+    return {
+      ...c,
+      start: r3(c.start + adDur),
+      end: r3(c.end + adDur),
+    };
+  });
+
+  const adSrcStart = Number.isFinite(Number(adClip?.sourceStart)) ? Math.max(0, r3(Number(adClip.sourceStart))) : 0;
+  const newAdClip = {
+    id: adClip?.id || uid('clip-ad'),
+    trackRow: 0,
+    trackId: 'video-1',
+    start: r3(insertAt),
+    end: r3(insertAt + adDur),
+    sourceStart: adSrcStart,
+    sourceEnd: r3(adSrcStart + adDur),
+    duration: r3(Number(adClip?.duration) > 0 ? Number(adClip.duration) : adDur),
+    name: adClip?.name || adClip?.originalName || 'Sponsor Ad',
+    videoUrl: adUrl,
+    videoPath: adPath,
+    isAd: true,
+    clipType: 'sponsor_ad',
+    isDialogue: false,
+    isMuted: Boolean(adClip?.isMuted),
+    adVolume: Number.isFinite(Number(adClip?.adVolume)) ? Math.max(0, Math.min(2, Number(adClip.adVolume))) : 1.0,
+    hasAudio: adClip?.hasAudio !== false,
+    waveformPeaks: Array.isArray(adClip?.waveformPeaks) ? adClip.waveformPeaks : null,
+    adPlacement: placement,
+  };
+
+  const nextVideoClips = [...shiftedClips, newAdClip].sort((a, b) => a.start - b.start);
+  const nextSegments = shiftTimelineSegmentsByDelta(segments, insertAt, adDur);
+  const { nextKeyframes, nextOverrides } = shiftFramingDataByDelta(framingKeyframes, framingOverrides, insertAt, adDur);
+
+  return {
+    ...ok({
+      videoClips: nextVideoClips,
+      segments: nextSegments,
+      ...(nextKeyframes !== undefined ? { framingKeyframes: nextKeyframes } : {}),
+      ...(nextOverrides !== undefined ? { framingOverrides: nextOverrides } : {}),
+    }),
+    activeClipId: newAdClip.id,
+    insertedAt: insertAt,
+    adDuration: adDur,
+  };
+}
+
+export function deleteVideoAd(state, { clipId } = {}) {
+  const { videoClips, segments, framingKeyframes, framingOverrides } = state || {};
+  if (!Array.isArray(videoClips) || videoClips.length === 0) {
+    return noop(state, 'No video clips');
+  }
+
+  const targetIdx = videoClips.findIndex((c) => c.id === clipId);
+  if (targetIdx === -1) {
+    return noop(state, `Sponsor ad clip not found: ${clipId}`);
+  }
+
+  const target = videoClips[targetIdx];
+  if (!isAdClip(target)) {
+    return noop(state, 'Clip is not a sponsor ad');
+  }
+
+  const adStart = r3(target.start ?? 0);
+  const adEnd = r3(target.end ?? adStart);
+  const dur = r3(Math.max(0, adEnd - adStart));
+
+  const shiftedClips = videoClips
+    .filter((c) => c.id !== clipId)
+    .map((clip) => {
+      if (clip.start < adEnd - 0.001) return { ...clip };
+      const newStart = Math.max(0, r3(clip.start - dur));
+      const newEnd = r3(newStart + (clip.end - clip.start));
+      return {
+        ...clip,
+        start: newStart,
+        end: newEnd,
+      };
+    })
+    .sort((a, b) => a.start - b.start);
+
+  const nextSegments = shiftTimelineSegmentsByDelta(segments, adEnd, -dur);
+  const { nextKeyframes, nextOverrides } = shiftFramingDataByDelta(framingKeyframes, framingOverrides, adEnd, -dur);
+
+  return ok({
+    videoClips: shiftedClips,
+    segments: nextSegments,
+    ...(nextKeyframes !== undefined ? { framingKeyframes: nextKeyframes } : {}),
+    ...(nextOverrides !== undefined ? { framingOverrides: nextOverrides } : {}),
+  });
 }

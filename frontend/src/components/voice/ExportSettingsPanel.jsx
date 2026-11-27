@@ -21,14 +21,65 @@ function ExportSettingsPanel({
   videoEditScope = 'folder',
   onChangeVideoEditScope = null,
   onApplyVideoEditSettings = null,
+  onInsertVideoAd = null,
+  currentTime = 0,
 }) {
   const [internalProgress, setInternalProgress] = useState(0);
   const [internalStage, setInternalStage] = useState('');
   const [isUploadingSponsor, setIsUploadingSponsor] = useState(false);
   const [sponsorUploadError, setSponsorUploadError] = useState(null);
+  const [videoAdLibrary, setVideoAdLibrary] = useState([]);
+  const [isUploadingVideoAd, setIsUploadingVideoAd] = useState(false);
+  const [videoAdError, setVideoAdError] = useState(null);
+  const [videoAdAppliedMsg, setVideoAdAppliedMsg] = useState(null);
   const [draftSliders, setDraftSliders] = useState({});
   const [isYoutubeSafeOpen, setIsYoutubeSafeOpen] = useState(false);
   const [applyStatus, setApplyStatus] = useState(null); // 'applying' | 'done' | null
+
+  const fetchVideoAdLibrary = async () => {
+    try {
+      const res = await fetch('/api/sponsor-videos');
+      const data = await res.json();
+      if (data?.success && Array.isArray(data.videos)) {
+        setVideoAdLibrary(data.videos);
+      }
+    } catch (_) {}
+  };
+
+  useEffect(() => {
+    if (isOpen && settings?.enableVideoAds) {
+      fetchVideoAdLibrary();
+    }
+  }, [isOpen, settings?.enableVideoAds]);
+
+  const handleVideoAdUpload = async (file) => {
+    if (!file) return;
+    setIsUploadingVideoAd(true);
+    setVideoAdError(null);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const res = await fetch('/api/upload-sponsor-video', { method: 'POST', body: formData });
+      const data = await res.json();
+      if (res.ok && data?.success && data.videoUrl) {
+        onSettingChange({
+          enableVideoAds: true,
+          videoAdUrl: data.videoUrl,
+          videoAdPath: data.videoPath,
+          videoAdName: data.originalName || data.filename,
+          videoAdDuration: Number(data.durationSec) || 0,
+          videoAdHasAudio: Boolean(data.hasAudio),
+        });
+        await fetchVideoAdLibrary();
+      } else {
+        setVideoAdError(data?.error || 'Upload failed');
+      }
+    } catch (err) {
+      setVideoAdError(err.message || 'Network error');
+    } finally {
+      setIsUploadingVideoAd(false);
+    }
+  };
 
   const setSliderDraft = (key, val) => {
     setDraftSliders((prev) => {
@@ -1043,6 +1094,258 @@ function ExportSettingsPanel({
                     </label>
                   </div>
                 </div>
+              </div>
+            )}
+          </div>
+
+          {/* Full-Screen Video Ads / Sponsor Insertion (CapCut-style, separate from Green Screen overlay) */}
+          <div style={{ marginTop: 10, marginBottom: 12, borderTop: '1px solid var(--border-subtle)', paddingTop: 10 }} data-testid="export-video-ads-section">
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: settings?.enableVideoAds ? 10 : 6 }}>
+              <label className="checkbox-container" style={{ marginBottom: 0 }}>
+                <input
+                  type="checkbox"
+                  data-testid="toggle-video-ads"
+                  checked={Boolean(settings?.enableVideoAds)}
+                  onChange={(e) => onSettingChange('enableVideoAds', e.target.checked)}
+                />
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <Clapperboard size={14} color="#FBBF24" />
+                  <span style={{ fontSize: '0.8rem', color: '#FDE68A', fontWeight: 600 }}>
+                    Video Ads / Sponsor (ពេញអេក្រង់)
+                  </span>
+                </div>
+              </label>
+              <span style={{
+                fontSize: '0.64rem',
+                padding: '2px 7px',
+                borderRadius: 999,
+                fontWeight: 700,
+                background: settings?.enableVideoAds ? 'rgba(245, 158, 11, 0.22)' : 'rgba(255,255,255,0.06)',
+                color: settings?.enableVideoAds ? '#FDE68A' : 'var(--text-dim)',
+                border: settings?.enableVideoAds ? '1px solid rgba(251, 191, 36, 0.5)' : '1px solid rgba(255,255,255,0.1)',
+              }}>
+                {settings?.enableVideoAds ? 'ON' : 'OFF'}
+              </span>
+            </div>
+
+            {settings?.enableVideoAds && (
+              <div style={{
+                background: 'var(--bg-secondary-panel)',
+                border: '1px solid rgba(245, 158, 11, 0.3)',
+                borderRadius: 'var(--radius-sm)',
+                padding: '10px',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 10,
+              }}>
+                {/* Selected Ad Asset + Upload + Library */}
+                <div style={{
+                  border: '1px solid rgba(245, 158, 11, 0.35)',
+                  background: 'rgba(245, 158, 11, 0.08)',
+                  borderRadius: 8,
+                  padding: '8px 10px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 6,
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <div style={{ fontSize: '0.74rem', fontWeight: 700, color: '#FEF3C7', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {settings?.videoAdName || (settings?.videoAdUrl ? settings.videoAdUrl.split('/').pop() : 'មិនទាន់ជ្រើសរើស Video Ads')}
+                      </div>
+                      <div style={{ fontSize: '0.66rem', color: '#D1D5DB', marginTop: 1 }}>
+                        {Number(settings?.videoAdDuration) > 0
+                          ? `${Number(settings.videoAdDuration).toFixed(1)}s · ${settings?.videoAdHasAudio === false ? '🔇 គ្មានសំឡេង' : '🔊 មានសំឡេង'}`
+                          : 'សូមបង្ហោះ ឬជ្រើសរើសវីដេអូពីបណ្ណាល័យ'}
+                      </div>
+                    </div>
+                    <label style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 4,
+                      background: 'rgba(245, 158, 11, 0.22)',
+                      border: '1px solid rgba(251, 191, 36, 0.45)',
+                      color: '#FDE68A',
+                      padding: '4px 8px',
+                      borderRadius: 6,
+                      fontSize: '0.68rem',
+                      fontWeight: 700,
+                      cursor: isUploadingVideoAd ? 'not-allowed' : 'pointer',
+                      flexShrink: 0,
+                    }}>
+                      {isUploadingVideoAd ? <Loader2 size={11} className="animate-spin" /> : <Upload size={11} />}
+                      <span>{isUploadingVideoAd ? 'កំពុង...' : 'បង្ហោះ'}</span>
+                      <input
+                        type="file"
+                        accept="video/mp4,video/quicktime,video/webm"
+                        style={{ display: 'none' }}
+                        disabled={isUploadingVideoAd}
+                        onChange={(e) => {
+                          const f = e.target.files?.[0];
+                          e.target.value = '';
+                          if (f) handleVideoAdUpload(f);
+                        }}
+                      />
+                    </label>
+                  </div>
+
+                  {videoAdLibrary.length > 0 && (
+                    <select
+                      aria-label="Sponsor video library"
+                      value={settings?.videoAdUrl || ''}
+                      onChange={(e) => {
+                        const chosen = videoAdLibrary.find((v) => v.videoUrl === e.target.value);
+                        if (chosen) {
+                          onSettingChange({
+                            enableVideoAds: true,
+                            videoAdUrl: chosen.videoUrl,
+                            videoAdPath: chosen.videoPath,
+                            videoAdName: chosen.originalName || chosen.filename,
+                            videoAdDuration: Number(chosen.durationSec) || 0,
+                            videoAdHasAudio: Boolean(chosen.hasAudio),
+                          });
+                        }
+                      }}
+                      style={{
+                        width: '100%',
+                        padding: '4px 6px',
+                        fontSize: '0.70rem',
+                        borderRadius: 5,
+                        background: 'var(--bg-desktop)',
+                        border: '1px solid var(--border-subtle)',
+                        color: 'var(--text-primary)',
+                      }}
+                    >
+                      <option value="">-- ជ្រើសពី Sponsor Library ({videoAdLibrary.length}) --</option>
+                      {videoAdLibrary.map((v) => (
+                        <option key={v.filename} value={v.videoUrl}>
+                          {(v.originalName || v.filename)} ({Number(v.durationSec || 0).toFixed(1)}s)
+                        </option>
+                      ))}
+                    </select>
+                  )}
+
+                  {videoAdError && (
+                    <span style={{ fontSize: '0.65rem', color: '#F87171' }}>{videoAdError}</span>
+                  )}
+                </div>
+
+                {/* Ads Placement */}
+                <div>
+                  <div style={{ fontSize: '0.68rem', color: 'var(--text-secondary)', fontWeight: 600, marginBottom: 5 }}>
+                    Ads Placement
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    {[
+                      { id: 'manual', label: 'Insert at Split / Playhead' },
+                      { id: 'preroll', label: 'Before Episode (Pre-roll)' },
+                      { id: 'postroll', label: 'After Episode (Post-roll)' },
+                    ].map((opt) => (
+                      <label key={opt.id} style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: '0.72rem', color: 'var(--text-primary)', cursor: 'pointer' }}>
+                        <input
+                          type="radio"
+                          name="videoAdPlacement"
+                          checked={(settings?.videoAdPlacement || 'manual') === opt.id}
+                          onChange={() => onSettingChange('videoAdPlacement', opt.id)}
+                          style={{ accentColor: '#F59E0B' }}
+                        />
+                        <span>{opt.label}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Ads Volume */}
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                    <span style={{ fontSize: '0.68rem', color: 'var(--text-secondary)', fontWeight: 600 }}>Ads Volume</span>
+                    <span style={{ fontSize: '0.70rem', fontWeight: 700, color: '#FDE68A' }}>
+                      {Math.round(Number(getSliderDisplay('videoAdVolume', settings?.videoAdVolume ?? 1.0)) * 100)}%
+                    </span>
+                  </div>
+                  <SmoothRangeSlider
+                    min={0}
+                    max={1.5}
+                    step={0.05}
+                    value={Number.isFinite(Number(settings?.videoAdVolume)) ? Number(settings.videoAdVolume) : 1.0}
+                    onDraftChange={(v) => setSliderDraft('videoAdVolume', v)}
+                    onCommit={(v) => onSettingChange('videoAdVolume', v)}
+                    data-testid="slider-video-ad-volume"
+                    style={{ width: '100%', accentColor: '#F59E0B' }}
+                  />
+                </div>
+
+                {/* Apply To */}
+                <div>
+                  <div style={{ fontSize: '0.68rem', color: 'var(--text-secondary)', fontWeight: 600, marginBottom: 5 }}>
+                    Apply To
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    {[
+                      { id: 'current', label: 'Current Episode' },
+                      { id: 'folder', label: 'All Episodes in Folder' },
+                      { id: 'merged', label: 'Full Merged Video' },
+                    ].map((opt) => (
+                      <label key={opt.id} style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: '0.72rem', color: 'var(--text-primary)', cursor: 'pointer' }}>
+                        <input
+                          type="radio"
+                          name="videoAdApplyTo"
+                          checked={(settings?.videoAdApplyTo || 'current') === opt.id}
+                          onChange={() => onSettingChange('videoAdApplyTo', opt.id)}
+                          style={{ accentColor: '#F59E0B' }}
+                        />
+                        <span>{opt.label}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Action Button: Insert / Apply Ads Settings */}
+                <button
+                  type="button"
+                  data-testid="btn-apply-video-ads"
+                  disabled={!settings?.videoAdUrl || Number(settings?.videoAdDuration) <= 0.05}
+                  onClick={async () => {
+                    const placement = settings?.videoAdPlacement || 'manual';
+                    const applyTo = settings?.videoAdApplyTo || 'current';
+                    if (onInsertVideoAd && (applyTo === 'current' || placement === 'manual')) {
+                      const res = await onInsertVideoAd({
+                        videoUrl: settings.videoAdUrl,
+                        videoPath: settings.videoAdPath,
+                        name: settings.videoAdName || 'Sponsor Ad',
+                        duration: Number(settings.videoAdDuration),
+                        hasAudio: settings.videoAdHasAudio !== false,
+                        adVolume: Number.isFinite(Number(settings.videoAdVolume)) ? Number(settings.videoAdVolume) : 1.0,
+                      }, {
+                        insertTime: currentTime,
+                        placement,
+                        dedupePlacement: placement !== 'manual',
+                      });
+                      setVideoAdAppliedMsg(res?.applied ? '✅ បានបញ្ចូល Ads លើ Timeline' : (res?.reason || 'Already applied'));
+                      setTimeout(() => setVideoAdAppliedMsg(null), 2500);
+                    } else if (applyTo === 'folder' && typeof onApplyVideoEditSettings === 'function') {
+                      await onApplyVideoEditSettings();
+                      setVideoAdAppliedMsg('✅ បានរក្សាទុក Ads Settings សម្រាប់ Folder ទាំងមូល');
+                      setTimeout(() => setVideoAdAppliedMsg(null), 2500);
+                    } else {
+                      setVideoAdAppliedMsg('✅ បានរក្សាទុក Ads Settings');
+                      setTimeout(() => setVideoAdAppliedMsg(null), 2500);
+                    }
+                  }}
+                  style={{
+                    width: '100%',
+                    padding: '7px 10px',
+                    borderRadius: 6,
+                    fontSize: '0.73rem',
+                    fontWeight: 700,
+                    cursor: (!settings?.videoAdUrl || Number(settings?.videoAdDuration) <= 0.05) ? 'not-allowed' : 'pointer',
+                    background: 'linear-gradient(135deg, rgba(245, 158, 11, 0.25), rgba(217, 119, 6, 0.18))',
+                    border: '1px solid rgba(251, 191, 36, 0.5)',
+                    color: '#FEF3C7',
+                  }}
+                >
+                  {videoAdAppliedMsg || ((settings?.videoAdPlacement || 'manual') === 'manual' ? '+ បញ្ចូល Video Ads ត្រង់ Playhead' : 'Apply Ads Settings')}
+                </button>
               </div>
             )}
           </div>

@@ -62,6 +62,7 @@ export default function VoiceSettings({
   selectedClip = null,
   selectedClipKind = null,
   onSplitClip,
+  onInsertVideoAd = null,
   onDeleteClip,
   currentTime = 0,
   subscribePlayhead = null,
@@ -1189,6 +1190,8 @@ export default function VoiceSettings({
             videoEditScope={videoEditScope}
             onChangeVideoEditScope={onChangeVideoEditScope}
             onApplyVideoEditSettings={onApplyVideoEditSettings}
+            onInsertVideoAd={onInsertVideoAd}
+            currentTime={currentTime}
           />
         )}
       </div>

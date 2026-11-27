@@ -870,6 +870,7 @@ export default function App() {
   const handleSelectClip = useCallback((...args) => clipsRef.current.handleSelectClip?.(...args), []);
   const handleUpdateClips = useCallback((...args) => clipsRef.current.handleUpdateClips?.(...args), []);
   const handleSplitClip = useCallback((...args) => clipsRef.current.handleSplitClip?.(...args), []);
+  const handleInsertVideoAd = useCallback((...args) => clipsRef.current.handleInsertVideoAd?.(...args), []);
   const handleDeleteClip = useCallback((...args) => clipsRef.current.handleDeleteClip?.(...args), []);
   const handleDeleteSegment = useCallback((...args) => clipsRef.current.handleDeleteSegment?.(...args), []);
   const handleUpdateTimelineSegments = useCallback((...args) => clipsRef.current.handleUpdateTimelineSegments?.(...args), []);
@@ -1544,6 +1545,7 @@ export default function App() {
                   selectedClipKind={media.selectedClipKind}
                   selectedClip={media.selectedClip}
                   onSplitClip={handleSplitClip}
+                  onInsertVideoAd={handleInsertVideoAd}
                   onDeleteClip={handleDeleteClip}
                   onDeleteSegment={handleDeleteSegment}
                   onUpdateSegments={handleUpdateTimelineSegments}
@@ -1591,6 +1593,7 @@ export default function App() {
                 onSelectClip={handleSelectClip}
                 onUpdateClips={handleUpdateClips}
                 onSplitClip={handleSplitClip}
+                onInsertVideoAd={handleInsertVideoAd}
                 onDeleteClip={handleDeleteClip}
                 onDeleteSegment={handleDeleteSegment}
                 scriptSegments={scriptData?.segments || EMPTY_SEGMENTS}

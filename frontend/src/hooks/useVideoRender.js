@@ -277,6 +277,21 @@ export function useVideoRender({
     };
   }, [getLatestVoiceSettings]);
 
+  const buildVideoAdOptions = useCallback(() => {
+    const activeSettings = getLatestVoiceSettings();
+    return {
+      enabled: Boolean(activeSettings?.enableVideoAds),
+      videoUrl: activeSettings?.videoAdUrl || null,
+      videoPath: activeSettings?.videoAdPath || null,
+      name: activeSettings?.videoAdName || null,
+      durationSec: Number(activeSettings?.videoAdDuration) || 0,
+      hasAudio: activeSettings?.videoAdHasAudio !== false,
+      placement: activeSettings?.videoAdPlacement || 'manual',
+      volume: Number.isFinite(Number(activeSettings?.videoAdVolume)) ? Number(activeSettings.videoAdVolume) : 1.0,
+      applyTo: activeSettings?.videoAdApplyTo || 'current',
+    };
+  }, [getLatestVoiceSettings]);
+
   const buildYoutubeTransformOptions = useCallback(() => {
     const activeSettings = getLatestVoiceSettings();
     const rawZoom = Number(activeSettings?.zoomScale);
@@ -332,6 +347,7 @@ export function useVideoRender({
         logoSettings: buildLogoOptions(),
         cornerMask: buildCornerMaskOptions(),
         sponsorSettings: buildSponsorOptions(),
+        videoAdSettings: buildVideoAdOptions(),
         youtubeTransform: buildYoutubeTransformOptions(),
       };
 
@@ -386,6 +402,7 @@ export function useVideoRender({
     buildLogoOptions,
     buildCornerMaskOptions,
     buildSponsorOptions,
+    buildVideoAdOptions,
     buildYoutubeTransformOptions,
     startBatchPolling,
   ]);
@@ -496,6 +513,7 @@ export function useVideoRender({
       const logoOptions = buildLogoOptions();
       const cornerMaskOptions = buildCornerMaskOptions();
       const sponsorOptions = buildSponsorOptions();
+      const videoAdOptions = buildVideoAdOptions();
       const youtubeTransformOptions = buildYoutubeTransformOptions();
 
       // Resolve effective export aspect ratio:
@@ -545,6 +563,7 @@ export function useVideoRender({
         logoSettings: logoOptions,
         cornerMask: cornerMaskOptions,
         sponsorSettings: sponsorOptions,
+        videoAdSettings: videoAdOptions,
         youtubeTransform: youtubeTransformOptions,
       });
 

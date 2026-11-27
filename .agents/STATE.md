@@ -1,6 +1,46 @@
 # .agents/STATE.md
 
 ## Last Session
+IDE (Full-Screen Sponsor Video Insertion + Port 5175) — 2026-11-27T19:33:00+07:00
+
+## Summary
+Implemented CapCut-style full-screen Sponsor Video Insertion across Timeline, Live Preview, Proxy Preview, and FFmpeg Single/Batch/Merged Export (separate from Green-Screen Sponsor Overlay):
+- **Atomic Ripple Timeline Ops (`frontend/src/utils/timelineOps.js`, `frontend/src/hooks/useClipOperations.js`):** Added `isAdClip`, `insertVideoAd` (splits spanning story clip if needed, inserts gold ad clip, ripple-shifts subsequent video clips, segments, and framing data while preserving immutable `sourceCueId` and `sourceStartSec`/`sourceEndSec` without regenerating TTS), `deleteVideoAd` (ripple-left on delete), and ad-aware `trimClip` / `moveClip` / `splitClip`.
+- **Sponsor Library & Upload Metadata (`backend/routes/systemRoutes.js`):** Enhanced `POST /api/upload-sponsor-video` to probe `durationSec`, `hasAudio`, `width`, `height` via `getVideoMetadata` and persist `.meta.json` sidecars; added `GET /api/sponsor-videos` (`/api/sponsor/list`) library endpoint.
+- **Timeline & Export UI (`TimelineToolbar.jsx`, `TimelineTracksCanvas.jsx`, `TimelineEditor.css`, `ExportSettingsPanel.jsx`, `VoiceSettings.jsx`, `App.jsx`):** Added gold `+ Video Ads` button next to Split Clip with library/upload/placement picker modal; rendered gold ad clips (`.video-clip-block.is-sponsor-ad`) with filename, duration, and gold waveform (or `No Audio` strip); added dedicated `Video Ads / Sponsor (ពេញអេក្រង់)` section in `ExportSettingsPanel.jsx` (library, upload, Manual/Pre-roll/Post-roll placement, volume slider, Current Episode / All Episodes in Folder / Full Merged Video scope).
+- **Multi-Source Live Preview & Audio Isolation (`VideoPlayerPreview.jsx`, `useVideoPlayback.js`, `usePlaybackEngine.js`, `usePlayerAudioSync.js`, `LiveSubtitleOverlay.jsx`):** Added seamless story-to-ad-to-story source switching, ad-volume playback, and automatic muting/hiding of story narration, story BGM, and story subtitles during full-screen ads.
+- **FFmpeg Single, Batch & Merged Export (`backend/services/ffmpeg/ffmpegVideoAdsHelper.js`, `ffmpegService.js`, `proxyPreviewRenderer.js`, `batchExportService.js`, `videoRoutes.js`, `useVideoRender.js`):** Added piecewise story+ad rendering & normalization (matching resolution, aspect ratio, FPS, `yuv420p`, `44100Hz` stereo AAC / silent `anullsrc` fallback for video-only ads), duplicate-ad placement guard (`applyPlacementAdToTimeline`), folder per-episode pre/post-roll, and once-per-merged-video ad insertion.
+- **Verification:**
+  - `timeline_video_ads_ops.test.js` + `timeline_pure_ops_r1_r4.test.js` + `concat_playback_and_timeline.test.js` + `playback_sync_and_deferred_source_regression.test.js` + `audio_crossfade_overlap.test.js` + `render_source_collision_guard.test.js`: **41/41 PASS**.
+  - `ffmpeg_video_ads_render.test.js` (real FFmpeg render with 1280x720 story + 720x1280 ad with audio + 640x360 silent video-only ad + duplicate post-roll guard): **PASS** (`17.0s`, `1280x720`, `aac 44100Hz`).
+  - `cd frontend; npm run build`: **PASS** (`2053 modules`, `1.09s`, `0` errors).
+  - Live Playwright browser verification (`http://localhost:5175`): **PASS** (`+ Video Ads` visible, 15s ad upload & insert `03:12 -> 03:27`, gold clip + 72 waveform bars rendered, Undo `03:27 -> 03:12`, Redo `03:12 -> 03:27`, Delete `03:27 -> 03:12`, `ExportSettingsPanel` Video Ads section verified).
+
+## Active Environment
+- Branch: `chore/full-project-cleanup`
+- Backend dev port: `5000`, Frontend dev port: `5175` (`http://localhost:5175`)
+
+## Next Steps
+- Restart `start.bat` (`Ctrl+C` on old terminal, then open `start.bat`) so Backend `:5000` loads the new `/api/sponsor-videos` & FFmpeg Video Ads routes.
+
+---
+
+## Previous Session
+IDE (Change Frontend Dev Port to 5175) — 2026-11-27T18:53:00+07:00
+
+## Summary
+Updated `start.bat` launcher orchestrator (`dev.ps1`) and Vite config (`frontend/vite.config.js`) from frontend port `5173` to `5175` (backend remains `5000`).
+
+## Active Environment
+- Branch: `chore/full-project-cleanup`
+- Backend dev port: `5000`, Frontend dev port: `5175` (`http://localhost:5175`)
+
+## Next Steps
+- Restart `start.bat` (`Ctrl+C` on old terminal if still running, then run `start.bat`) so Frontend launches on `http://localhost:5175`.
+
+---
+
+## Previous Session
 IDE (Live Preview Audio Reliability Fix) — 2026-11-27T17:38:00+07:00
 
 ## Summary
@@ -16,7 +56,7 @@ Diagnosed and fixed Live Preview silent-audio edge cases reported on Wild Buddha
 
 ## Active Environment
 - Branch: `chore/full-project-cleanup`
-- Backend dev port: `5000`, Frontend dev port: `5173` (live via `start.bat`)
+- Backend dev port: `5000`, Frontend dev port: `5173` (live via `start.bat` before port switch to `5175`)
 
 ## Next Steps
 - Press `F5` (refresh) on `http://localhost:5173` in Brave so Vite serves the updated player audio fixes.

@@ -61,10 +61,15 @@ export function usePlaybackEngine(params) {
         let nextTimelineTime = rawMediaTime;
         const clips = videoClipsRef.current;
         if (!renderedVideoRef.current && Array.isArray(clips) && clips.length > 0) {
-          const mapped = mapSourceToTimelineTime(rawMediaTime, clips, lastMappedIdxRef.current);
+          const curIdx = lastMappedIdxRef.current >= 0 && lastMappedIdxRef.current < clips.length
+            ? lastMappedIdxRef.current
+            : 0;
+          const mapped = mapSourceToTimelineTime(rawMediaTime, clips, curIdx);
           if (typeof mapped === 'number' && Number.isFinite(mapped)) {
             nextTimelineTime = Math.max(lastMappedTlTimeRef.current || 0, mapped);
             lastMappedTlTimeRef.current = nextTimelineTime;
+            const nextIdx = clips.findIndex((c) => c && nextTimelineTime >= (c.start ?? 0) - 0.01 && nextTimelineTime < (c.end ?? 0));
+            if (nextIdx !== -1) lastMappedIdxRef.current = nextIdx;
           }
         }
         notifySubscribers(nextTimelineTime);

@@ -562,6 +562,10 @@ async function runBatchExportWorker({
   const { logoPath: resolvedLogoPath, tempLogoFile } = resolveLogoInputForBatch(rawLogo, exportsDir);
   const rawSponsor = exportSettings.sponsorSettings || null;
   const resolvedSponsorPath = resolveSponsorInputForBatch(rawSponsor);
+  const rawVideoAd = exportSettings.videoAdSettings || null;
+  const videoAdApplyTo = rawVideoAd?.applyTo || "current";
+  const applyAdPerEpisode = Boolean(rawVideoAd?.enabled && videoAdApplyTo === "folder");
+  const applyAdToMerged = Boolean(rawVideoAd?.enabled && isMergeMode && videoAdApplyTo === "merged");
 
   let resolvedCustomBgmPath = null;
   const rawEnableCustomBgm = Boolean(exportSettings.enableCustomBgm);
@@ -800,6 +804,7 @@ async function runBatchExportWorker({
           cornerMask,
           logoSettings: resolvedLogoPath ? { ...rawLogo, logoPath: resolvedLogoPath } : null,
           sponsorSettings: resolvedSponsorPath ? { ...rawSponsor, sponsorPath: resolvedSponsorPath } : null,
+          videoAdSettings: applyAdPerEpisode ? rawVideoAd : null,
           youtubeTransform,
           enableCustomBgm: Boolean(resolvedCustomBgmPath),
           customBgmPath: resolvedCustomBgmPath,
@@ -964,8 +969,27 @@ async function runBatchExportWorker({
       job.stage = `🎞️ កំពុងផ្គុំ (Merge) ${renderedFilePaths.length} ភាគ បញ្ចូលគ្នាជា ១ វីដេអូពេញ (0%)...`;
       job.updatedAt = Date.now();
 
+      let finalMergeInputs = renderedFilePaths;
+      if (applyAdToMerged && rawVideoAd) {
+        const { resolveAdMediaPath } = require("./ffmpeg/ffmpegVideoAdsHelper");
+        const adPath = resolveAdMediaPath(rawVideoAd);
+        const adPlacement = rawVideoAd.placement || "preroll";
+        if (adPath && fs.existsSync(adPath)) {
+          if (adPlacement === "preroll") {
+            finalMergeInputs = [adPath, ...renderedFilePaths];
+          } else if (adPlacement === "postroll") {
+            finalMergeInputs = [...renderedFilePaths, adPath];
+          } else if (renderedFilePaths.length >= 2) {
+            const mid = Math.floor(renderedFilePaths.length / 2);
+            finalMergeInputs = [...renderedFilePaths.slice(0, mid), adPath, ...renderedFilePaths.slice(mid)];
+          } else {
+            finalMergeInputs = [adPath, ...renderedFilePaths];
+          }
+        }
+      }
+
       const mergeRes = await mergeVideosConcat({
-        inputVideoPaths: renderedFilePaths,
+        inputVideoPaths: finalMergeInputs,
         outputVideoPath: mergedOutputPath,
         targetResolution: mergeTargetDimensions,
         jobId: job.jobId,

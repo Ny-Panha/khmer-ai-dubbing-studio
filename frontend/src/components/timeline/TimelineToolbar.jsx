@@ -1,7 +1,8 @@
-import React, { useRef, useEffect } from 'react';
+import React, { useRef, useEffect, useState } from 'react';
 import {
   Plus, Undo2, Redo2, Scissors, Trash2, Film, Sparkles,
-  ZoomOut, ZoomIn, Maximize2, LocateFixed, Magnet, MessageSquare
+  ZoomOut, ZoomIn, Maximize2, LocateFixed, Magnet, MessageSquare,
+  Clapperboard, Upload, Loader2, X, Volume2, VolumeX
 } from 'lucide-react';
 import { formatMinSec } from '../../utils/timestampUtils';
 
@@ -13,6 +14,7 @@ function TimelineToolbar({
   canRedo,
   onRedo,
   onSplitClip,
+  onInsertVideoAd = null,
   canSplit = true,
   currentTime = 0,
   isPlaying = false,
@@ -45,6 +47,101 @@ function TimelineToolbar({
   onAddTrack = null,
 }) {
   const isAutoCutMode = Array.isArray(videoClips) && videoClips.length > 1;
+  const [showAdPicker, setShowAdPicker] = useState(false);
+  const [adLibrary, setAdLibrary] = useState([]);
+  const [isLoadingAds, setIsLoadingAds] = useState(false);
+  const [isUploadingAd, setIsUploadingAd] = useState(false);
+  const [adError, setAdError] = useState(null);
+  const [adPlacement, setAdPlacement] = useState('manual'); // 'manual' | 'preroll' | 'postroll'
+
+  const loadSponsorLibrary = async () => {
+    setIsLoadingAds(true);
+    setAdError(null);
+    try {
+      const res = await fetch('/api/sponsor-videos');
+      const data = await res.json();
+      if (data?.success && Array.isArray(data.videos)) {
+        setAdLibrary(data.videos);
+      }
+    } catch (err) {
+      setAdError(err.message || 'មិនអាចទាញបញ្ជីវីដេអូពាណិជ្ជកម្មបានទេ');
+    } finally {
+      setIsLoadingAds(false);
+    }
+  };
+
+  const handleOpenAdPicker = () => {
+    setShowAdPicker(true);
+    loadSponsorLibrary();
+  };
+
+  const probeBrowserVideoDuration = (url) => new Promise((resolve) => {
+    try {
+      const v = document.createElement('video');
+      v.preload = 'metadata';
+      v.onloadedmetadata = () => resolve(Number.isFinite(v.duration) ? v.duration : 0);
+      v.onerror = () => resolve(0);
+      v.src = url;
+    } catch (_) {
+      resolve(0);
+    }
+  });
+
+  const handleUploadAndInsertAd = async (file) => {
+    if (!file) return;
+    setIsUploadingAd(true);
+    setAdError(null);
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const res = await fetch('/api/upload-sponsor-video', { method: 'POST', body: formData });
+      const data = await res.json();
+      if (!res.ok || !data?.success || !data.videoUrl) {
+        throw new Error(data?.error || 'Upload failed');
+      }
+      let dur = Number(data.durationSec) || 0;
+      if (dur <= 0.05) {
+        dur = await probeBrowserVideoDuration(data.videoUrl);
+      }
+      const adItem = {
+        videoUrl: data.videoUrl,
+        videoPath: data.videoPath,
+        name: data.originalName || data.filename,
+        originalName: data.originalName || data.filename,
+        duration: dur,
+        hasAudio: data.hasAudio !== undefined ? Boolean(data.hasAudio) : true,
+        adVolume: Number.isFinite(Number(voiceSettings?.videoAdVolume)) ? Number(voiceSettings.videoAdVolume) : 1.0,
+      };
+      if (onInsertVideoAd && adItem.duration > 0.05) {
+        await onInsertVideoAd(adItem, { insertTime: getActiveTime(), placement: adPlacement });
+        setShowAdPicker(false);
+      } else {
+        await loadSponsorLibrary();
+      }
+    } catch (err) {
+      setAdError(err.message || 'Upload failed');
+    } finally {
+      setIsUploadingAd(false);
+    }
+  };
+
+  const handlePickExistingAd = async (item) => {
+    if (!onInsertVideoAd || !item?.videoUrl) return;
+    const dur = Number(item.durationSec) || 0;
+    if (dur <= 0.05) {
+      setAdError('វីដេអូពាណិជ្ជកម្មនេះមិនមាន duration ត្រឹមត្រូវទេ');
+      return;
+    }
+    await onInsertVideoAd({
+      videoUrl: item.videoUrl,
+      videoPath: item.videoPath,
+      name: item.originalName || item.filename,
+      duration: dur,
+      hasAudio: Boolean(item.hasAudio),
+      adVolume: Number.isFinite(Number(voiceSettings?.videoAdVolume)) ? Number(voiceSettings.videoAdVolume) : 1.0,
+    }, { insertTime: getActiveTime(), placement: adPlacement });
+    setShowAdPicker(false);
+  };
 
   const timecodeSpanRef = useRef(null);
 
@@ -104,6 +201,19 @@ function TimelineToolbar({
           >
             <Scissors size={13} />
           </button>
+          {onInsertVideoAd && (
+            <button
+              type="button"
+              data-testid="btn-insert-video-ad"
+              onClick={handleOpenAdPicker}
+              disabled={!selectedVideo}
+              className={`timeline-pill-tool tool-video-ads ${!selectedVideo ? 'disabled' : ''}`}
+              title="បញ្ចូលវីដេអូពាណិជ្ជកម្មពេញអេក្រង់ (+ Video Ads) នៅត្រង់ Playhead"
+            >
+              <Clapperboard size={12} />
+              <span>+ Video Ads</span>
+            </button>
+          )}
           <button
             type="button"
             onClick={handleDeleteSelected}
@@ -277,6 +387,180 @@ function TimelineToolbar({
           )}
         </div>
       </div>
+
+      {showAdPicker && (
+        <div
+          className="video-ads-picker-backdrop"
+          data-testid="video-ads-picker-modal"
+          onClick={() => setShowAdPicker(false)}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            background: 'rgba(0, 0, 0, 0.6)',
+            zIndex: 9999,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: 'min(460px, 92vw)',
+              background: '#111827',
+              border: '1px solid rgba(245, 158, 11, 0.5)',
+              borderRadius: 12,
+              padding: 16,
+              color: '#F9FAFB',
+              boxShadow: '0 20px 50px rgba(0,0,0,0.65)',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 12,
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <Clapperboard size={16} color="#FBBF24" />
+                <span style={{ fontWeight: 700, fontSize: '0.92rem', color: '#FDE68A' }}>
+                  បញ្ចូលវីដេអូពាណិជ្ជកម្ម (+ Video Ads)
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowAdPicker(false)}
+                style={{ background: 'transparent', border: 'none', color: '#9CA3AF', cursor: 'pointer' }}
+              >
+                <X size={16} />
+              </button>
+            </div>
+
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              {[
+                { id: 'manual', label: `ត្រង់ Playhead (${formatMinSec(getActiveTime())})` },
+                { id: 'preroll', label: 'Pre-roll (00:00)' },
+                { id: 'postroll', label: 'Post-roll (ចុងភាគ)' },
+              ].map((opt) => (
+                <button
+                  key={opt.id}
+                  type="button"
+                  onClick={() => setAdPlacement(opt.id)}
+                  style={{
+                    flex: 1,
+                    padding: '6px 8px',
+                    fontSize: '0.72rem',
+                    fontWeight: 600,
+                    borderRadius: 6,
+                    cursor: 'pointer',
+                    border: adPlacement === opt.id ? '1px solid #F59E0B' : '1px solid rgba(255,255,255,0.12)',
+                    background: adPlacement === opt.id ? 'rgba(245, 158, 11, 0.2)' : 'rgba(255,255,255,0.04)',
+                    color: adPlacement === opt.id ? '#FDE68A' : '#D1D5DB',
+                  }}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+
+            <label
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 8,
+                padding: '9px 12px',
+                borderRadius: 8,
+                background: 'linear-gradient(135deg, rgba(245, 158, 11, 0.22), rgba(217, 119, 6, 0.14))',
+                border: '1px dashed rgba(251, 191, 36, 0.55)',
+                color: '#FDE68A',
+                fontSize: '0.78rem',
+                fontWeight: 700,
+                cursor: isUploadingAd ? 'not-allowed' : 'pointer',
+              }}
+            >
+              {isUploadingAd ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
+              <span>{isUploadingAd ? 'កំពុងបង្ហោះ និងបញ្ចូល...' : 'បង្ហោះវីដេអូ Ads ថ្មី (MP4 / MOV / WebM)'}</span>
+              <input
+                type="file"
+                accept="video/mp4,video/quicktime,video/webm"
+                style={{ display: 'none' }}
+                disabled={isUploadingAd}
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  e.target.value = '';
+                  if (file) handleUploadAndInsertAd(file);
+                }}
+              />
+            </label>
+
+            {adError && (
+              <div style={{ fontSize: '0.73rem', color: '#FCA5A5', background: 'rgba(239,68,68,0.14)', padding: '6px 8px', borderRadius: 6 }}>
+                {adError}
+              </div>
+            )}
+
+            <div style={{ fontSize: '0.72rem', color: '#9CA3AF', fontWeight: 600 }}>
+              បណ្ណាល័យ Sponsor Ads ({adLibrary.length})
+            </div>
+
+            <div style={{ maxHeight: 210, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
+              {isLoadingAds ? (
+                <div style={{ padding: 16, textAlign: 'center', color: '#9CA3AF', fontSize: '0.75rem' }}>
+                  កំពុងទាញបញ្ជី...
+                </div>
+              ) : adLibrary.length === 0 ? (
+                <div style={{ padding: 16, textAlign: 'center', color: '#6B7280', fontSize: '0.75rem' }}>
+                  មិនទាន់មានវីដេអូ Sponsor Ads ទេ — សូមបង្ហោះខាងលើ
+                </div>
+              ) : (
+                adLibrary.map((item) => (
+                  <button
+                    key={item.filename}
+                    type="button"
+                    onClick={() => handlePickExistingAd(item)}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: 10,
+                      padding: '8px 10px',
+                      borderRadius: 8,
+                      background: 'rgba(255,255,255,0.04)',
+                      border: '1px solid rgba(255,255,255,0.09)',
+                      color: '#F3F4F6',
+                      cursor: 'pointer',
+                      textAlign: 'left',
+                    }}
+                  >
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <div style={{ fontSize: '0.76rem', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {item.originalName || item.filename}
+                      </div>
+                      <div style={{ fontSize: '0.68rem', color: '#9CA3AF', display: 'flex', alignItems: 'center', gap: 8, marginTop: 2 }}>
+                        <span>{Number(item.durationSec || 0).toFixed(1)}s</span>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                          {item.hasAudio ? <Volume2 size={11} color="#FBBF24" /> : <VolumeX size={11} color="#9CA3AF" />}
+                          {item.hasAudio ? 'មានសំឡេង' : 'គ្មានសំឡេង'}
+                        </span>
+                      </div>
+                    </div>
+                    <span style={{
+                      fontSize: '0.70rem',
+                      fontWeight: 700,
+                      padding: '4px 8px',
+                      borderRadius: 5,
+                      background: 'rgba(245, 158, 11, 0.2)',
+                      color: '#FDE68A',
+                      border: '1px solid rgba(245, 158, 11, 0.45)',
+                    }}>
+                      + Insert
+                    </span>
+                  </button>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

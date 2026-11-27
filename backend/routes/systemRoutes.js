@@ -563,10 +563,87 @@ router.post("/upload", (req, res) => {
 });
 
 /**
- * Sponsor Video Upload (Green Screen MP4/MOV/WebM)
+ * Helper: Probe sponsor video metadata and persist sidecar .meta.json
+ */
+async function probeAndSaveSponsorMeta(filePath, originalName = null, size = null) {
+  const metaPath = `${filePath}.meta.json`;
+  const stat = fs.existsSync(filePath) ? fs.statSync(filePath) : null;
+  let meta = {
+    originalName: originalName || path.basename(filePath),
+    durationSec: 0,
+    hasAudio: false,
+    width: 0,
+    height: 0,
+    size: size ?? stat?.size ?? 0,
+    uploadedAt: stat?.mtimeMs || Date.now(),
+  };
+  try {
+    const { getVideoMetadata } = require("../services/ffmpegService");
+    const probed = await getVideoMetadata(filePath);
+    if (probed) {
+      meta.durationSec = Number(probed.durationSec) || 0;
+      meta.hasAudio = Boolean(probed.hasAudio);
+      meta.width = Number(probed.width) || 0;
+      meta.height = Number(probed.height) || 0;
+    }
+  } catch (_) {}
+  try {
+    fs.writeFileSync(metaPath, JSON.stringify(meta), "utf8");
+  } catch (_) {}
+  return meta;
+}
+
+/**
+ * List uploaded Sponsor Videos Library (for Full-Screen Video Ads & Green Screen Sponsor)
+ */
+router.get(["/sponsor-videos", "/sponsor/list"], async (req, res) => {
+  try {
+    const sponsorDir = path.join(uploadsDir, "sponsor");
+    if (!fs.existsSync(sponsorDir)) {
+      return res.json({ success: true, videos: [] });
+    }
+    const videoExts = new Set([".mp4", ".mov", ".webm", ".mkv", ".m4v"]);
+    const entries = fs.readdirSync(sponsorDir, { withFileTypes: true })
+      .filter((d) => d.isFile() && videoExts.has(path.extname(d.name).toLowerCase()));
+
+    const videos = [];
+    for (const entry of entries) {
+      const filePath = path.join(sponsorDir, entry.name);
+      const metaPath = `${filePath}.meta.json`;
+      let meta = null;
+      if (fs.existsSync(metaPath)) {
+        try {
+          meta = JSON.parse(fs.readFileSync(metaPath, "utf8"));
+        } catch (_) {}
+      }
+      if (!meta || !Number.isFinite(meta.durationSec) || meta.durationSec <= 0) {
+        meta = await probeAndSaveSponsorMeta(filePath, meta?.originalName || entry.name);
+      }
+      videos.push({
+        filename: entry.name,
+        originalName: meta.originalName || entry.name,
+        videoUrl: `/uploads/sponsor/${entry.name}`,
+        videoPath: filePath,
+        durationSec: Number(meta.durationSec) || 0,
+        hasAudio: Boolean(meta.hasAudio),
+        width: Number(meta.width) || 0,
+        height: Number(meta.height) || 0,
+        size: Number(meta.size) || 0,
+        uploadedAt: Number(meta.uploadedAt) || 0,
+      });
+    }
+    videos.sort((a, b) => (b.uploadedAt || 0) - (a.uploadedAt || 0));
+    res.json({ success: true, videos });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message, videos: [] });
+  }
+});
+
+/**
+ * Sponsor Video Upload (Full-Screen Video Ads & Green Screen MP4/MOV/WebM)
  */
 router.post(["/upload-sponsor-video", "/sponsor/upload"], (req, res) => {
-  upload.single("file")(req, res, (err) => {
+  upload.single("file")(req, res, async (err) => {
     if (err) {
       return res.status(400).json({ success: false, error: err.message });
     }
@@ -580,7 +657,8 @@ router.post(["/upload-sponsor-video", "/sponsor/upload"], (req, res) => {
         fs.mkdirSync(sponsorDir, { recursive: true });
       }
 
-      const ext = path.extname(req.file.originalname).toLowerCase() || ".mp4";
+      const decodedOriginalName = decodeMultipartFilename(req.file.originalname || "sponsor_ad.mp4").trim();
+      const ext = path.extname(decodedOriginalName).toLowerCase() || ".mp4";
       const targetFileName = `sponsor_${Date.now()}_${uuidv4().substring(0, 8)}${ext}`;
       const targetFilePath = path.join(sponsorDir, targetFileName);
 
@@ -591,13 +669,18 @@ router.post(["/upload-sponsor-video", "/sponsor/upload"], (req, res) => {
         try { fs.unlinkSync(req.file.path); } catch {}
       }
 
+      const meta = await probeAndSaveSponsorMeta(targetFilePath, decodedOriginalName, req.file.size);
       const videoUrl = `/uploads/sponsor/${targetFileName}`;
       res.json({
         success: true,
         videoUrl,
         videoPath: targetFilePath,
         filename: targetFileName,
-        originalName: req.file.originalname,
+        originalName: decodedOriginalName,
+        durationSec: meta.durationSec,
+        hasAudio: meta.hasAudio,
+        width: meta.width,
+        height: meta.height,
         size: req.file.size,
       });
     } catch (saveErr) {

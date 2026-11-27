@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { mapTimelineToSourceTime, mapSourceToTimelineTime, resolveForwardPlaybackTransition } from '../utils/timelineUtils';
+import { isAdClip } from '../utils/timelineOps';
 
 function getUnfreezeTime(curT, maxDur) {
   const safeCur = Number.isFinite(curT) ? curT : 0;
@@ -295,6 +296,20 @@ export function useVideoPlayback({
         const nextClip = nextClipIdx < videoClips.length ? videoClips[nextClipIdx] : null;
 
         if (nextClip) {
+          const isSourceSwitch = isAdClip(c) !== isAdClip(nextClip) ||
+            (isAdClip(c) && isAdClip(nextClip) && c.videoUrl !== nextClip.videoUrl);
+
+          if (isSourceSwitch) {
+            const targetTl = Number.isFinite(nextClip.start) ? nextClip.start : cEnd;
+            activeClipIdxRef.current = nextClipIdx;
+            hasSeekedRef.current = true;
+            lastMappedTimelineTimeRef.current = targetTl;
+            pendingSeekTargetRef.current = Number.isFinite(nextClip.sourceStart) ? nextClip.sourceStart : 0;
+            pendingSeekStartedMsRef.current = performance.now();
+            setCurrentTime(parseFloat(targetTl.toFixed(2)));
+            return;
+          }
+
           const trans = resolveForwardPlaybackTransition(videoClips, currentClipIdx, srcNow, realDur);
           const nextSrcStart = Number.isFinite(trans.targetSrc)
             ? trans.targetSrc

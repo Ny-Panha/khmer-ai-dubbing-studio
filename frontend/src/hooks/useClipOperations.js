@@ -13,7 +13,9 @@ import {
   splitSegment as splitSegmentOp,
   autoAlign as autoAlignOp,
   releaseSegmentFromManual as releaseSegmentFromManualOp,
+  insertVideoAd as insertVideoAdOp,
   isGapClip,
+  isAdClip,
 } from '../utils/timelineOps';
 import { parseTimeToSeconds, formatTimecode, formatMinSec, getSegmentAudioDuration } from '../utils/timestampUtils';
 import { splitSegmentIntoNaturalSentences } from '../utils/khmerTextSplitter';
@@ -726,8 +728,14 @@ export function useClipOperations({
       segments: updatedSegments,
     });
     setVideoClips(updated);
-    if (isTargetGap && updatedSegments && setScriptData) {
-      setScriptData(prev => prev ? ({ ...prev, segments: updatedSegments, updatedAt: Date.now() }) : null);
+    if ((isTargetGap || isAdClip(targetClip)) && updatedSegments && setScriptData) {
+      setScriptData(prev => prev ? ({
+        ...prev,
+        segments: updatedSegments,
+        ...(opResult.state.framingKeyframes !== undefined ? { framingKeyframes: opResult.state.framingKeyframes } : {}),
+        ...(opResult.state.framingOverrides !== undefined ? { framingOverrides: opResult.state.framingOverrides } : {}),
+        updatedAt: Date.now(),
+      }) : null);
     }
     if (localSave?.videoClipsUpdatedAt && setVideoClipsUpdatedAt) {
       setVideoClipsUpdatedAt(localSave.videoClipsUpdatedAt);
@@ -1158,8 +1166,107 @@ export function useClipOperations({
     }
   };
 
+  // Insert full-screen Sponsor Video Ad with atomic ripple shift
+  const handleInsertVideoAd = async (adClip, options = {}) => {
+    const totalDur = Number(
+      duration ||
+      videoRef?.current?.duration ||
+      selectedVideo?.durationSec ||
+      selectedVideo?.duration ||
+      videoMetadata?.durationSec ||
+      videoMetadata?.duration ||
+      0
+    );
+    const currentClips = videoClips || [];
+    const currentSegs = scriptData?.segments || [];
+    const insertTime = typeof options.insertTime === 'number' && Number.isFinite(options.insertTime)
+      ? options.insertTime
+      : (typeof currentTime === 'number' ? currentTime : 0);
+
+    const clipDefaults = {
+      name: selectedVideo?.originalFilename || selectedVideo?.fileName || 'Video 1',
+      videoUrl: selectedVideo?.videoUrl || null,
+      videoId: selectedVideo?.videoId || null,
+    };
+
+    const opResult = insertVideoAdOp({
+      videoClips: currentClips,
+      segments: currentSegs,
+      framingKeyframes: scriptData?.framingKeyframes,
+      framingOverrides: scriptData?.framingOverrides,
+    }, {
+      adClip,
+      insertTime,
+      activeClipId,
+      totalDuration: totalDur,
+      placement: options.placement || 'manual',
+      dedupePlacement: Boolean(options.dedupePlacement),
+      clipDefaults,
+    });
+
+    if (!opResult.applied) {
+      if (opResult.reason && !options.silent) {
+        showInAppToast(opResult.reason);
+      }
+      return { applied: false, reason: opResult.reason };
+    }
+
+    pushUndoSnapshot(currentClips, currentSegs);
+    invalidateRendered();
+
+    const nextClips = opResult.state.videoClips;
+    const nextSegments = opResult.state.segments;
+    const localSave = saveTimelineOperationToLocalStorage({
+      seriesId,
+      episodeId,
+      operation: 'insert-ad',
+      track: 'videoClips',
+      items: nextClips,
+      segments: nextSegments,
+    });
+
+    setVideoClips(nextClips);
+    if (localSave?.videoClipsUpdatedAt && setVideoClipsUpdatedAt) {
+      setVideoClipsUpdatedAt(localSave.videoClipsUpdatedAt);
+    }
+    if (setScriptData) {
+      setScriptData((prev) => prev ? ({
+        ...prev,
+        segments: nextSegments,
+        ...(opResult.state.framingKeyframes !== undefined ? { framingKeyframes: opResult.state.framingKeyframes } : {}),
+        ...(opResult.state.framingOverrides !== undefined ? { framingOverrides: opResult.state.framingOverrides } : {}),
+        updatedAt: Date.now(),
+      }) : null);
+    }
+    if (opResult.activeClipId) {
+      setActiveClipId(opResult.activeClipId);
+    }
+    if (typeof setSelectedClipKind === 'function') {
+      setSelectedClipKind('video');
+    }
+
+    try {
+      await persistTimelineOperationApi({
+        seriesId,
+        episodeId,
+        operation: 'insert-ad',
+        track: 'videoClips',
+        items: nextClips,
+        segments: nextSegments,
+      });
+    } catch (err) {
+      console.warn('[useClipOperations] Could not immediately persist inserted video ad:', err.message);
+    }
+
+    if (!options.silent) {
+      showInAppToast(`✅ បានបញ្ចូល Video Ads (${Number(opResult.adDuration || 0).toFixed(1)}s) ត្រង់ ${formatMinSec(opResult.insertedAt || 0)}`);
+    }
+    return opResult;
+  };
+
   return {
     handleSplitClip,
+    handleInsertVideoAd,
     handleAutoSplitSegment,
     handleAutoSplitVideo,
     handleResetFullVideo,

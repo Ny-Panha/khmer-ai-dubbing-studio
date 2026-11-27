@@ -437,6 +437,7 @@ router.post("/render-video", async (req, res) => {
           ...rawSponsor,
           sponsorPath: resolvedSponsorPath,
         } : null,
+        videoAdSettings: req.body?.videoAdSettings || null,
         youtubeTransform: effectiveYoutubeTransform,
         enableCustomBgm: Boolean(resolvedCustomBgmPath),
         customBgmPath: resolvedCustomBgmPath,
