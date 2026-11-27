@@ -75,6 +75,7 @@ export default function VoiceSettings({
   onTranslateSegment = null,
   speakerRegistry = {},
   onUpdateSpeakerVoice = null,
+  onUpdateSpeakerIdentity = null,
   onUpdateSegmentVoice = null,
   onUpdateSegmentSpeed = null,
   selectedSegmentId = null,
@@ -238,57 +239,110 @@ export default function VoiceSettings({
   const [autoplayBlockedId, setAutoplayBlockedId] = useState(null);
   const [playbackErrorMap, setPlaybackErrorMap] = useState({});
 
+  const [editingSpeakerKey, setEditingSpeakerKey] = useState(null);
+  const [editingSpeakerName, setEditingSpeakerName] = useState('');
+
   // Active characters that actually speak in the current episode script
   const activeEpisodeSpeakers = useMemo(() => {
     const segments = scriptData?.segments || [];
+    const isPlaceholderName = (raw) => {
+      const s = String(raw || '').trim().toLowerCase();
+      return !s || s === 'unknown' || s === 'តួអង្គ' || s === 'តួ' || s === 'speaker' || /^speaker[\s_-]*\d+$/i.test(s);
+    };
+    const isPositionalId = (sid) => /^(?:spk_ocr_\d+|spk_\d+|spk_1|spk_default|spk)$/i.test(String(sid || '').trim());
+
     if (!segments.length) {
       if (Array.isArray(activeSeries?.glossary?.characters) && activeSeries.glossary.characters.length > 0) {
-        return activeSeries.glossary.characters.map((ch) => {
-          const currentVoice = ch.voiceId || ch.khmerVoiceId || settings?.voiceId || 'km-KH-PisethNeural';
-          const isVoiceFemale = String(currentVoice).toLowerCase().includes('sreymom');
-          const isCharacterFemale = (ch.gender === 'female' || ch.gender === 'FEMALE');
-          return {
-            key: ch.id || ch.name,
-            name: ch.khmerName || ch.name,
-            count: 0,
-            voiceId: currentVoice,
-            isVoiceFemale,
-            isFemale: isVoiceFemale,
-            isCharacterFemale,
-          };
-        });
+        return activeSeries.glossary.characters
+          .filter((ch) => ch && !isPlaceholderName(ch.khmerName || ch.name))
+          .map((ch) => {
+            const currentVoice = ch.voiceId || ch.khmerVoiceId || settings?.voiceId || 'km-KH-PisethNeural';
+            const isVoiceFemale = String(currentVoice).toLowerCase().includes('sreymom');
+            const isCharacterFemale = (ch.gender === 'female' || ch.gender === 'FEMALE');
+            return {
+              key: ch.speakerId || ch.id || ch.name,
+              characterId: ch.characterId || ch.id || null,
+              name: ch.khmerName || ch.name,
+              rawName: ch.name || ch.khmerName,
+              isUnresolved: false,
+              reviewNeeded: false,
+              count: 0,
+              voiceId: currentVoice,
+              isVoiceFemale,
+              isFemale: isVoiceFemale,
+              isCharacterFemale,
+              userOverridden: Boolean(ch.userOverridden || ch.manualCharacterOverridden),
+            };
+          });
       }
       return [];
     }
 
-    const speakerCounts = new Map();
-    segments.forEach((seg) => {
-      const name = (seg.speaker || seg.speakerName || 'តួអង្គ').trim();
-      if (name && name !== 'Unknown') {
-        speakerCounts.set(name, (speakerCounts.get(name) || 0) + 1);
+    const speakerBuckets = new Map();
+    segments.forEach((seg, idx) => {
+      const rawName = (seg.speaker || seg.speakerName || 'តួអង្គ').trim();
+      const placeholder = isPlaceholderName(rawName);
+      const explicitSpkId = seg.speakerId && String(seg.speakerId).trim();
+      // Group strictly by character/speaker identity (never collapse different unresolved or distinct characters together)
+      const groupKey = explicitSpkId || seg.characterId || (placeholder ? `spk_unresolved_${seg.id ?? idx + 1}` : rawName);
+
+      if (!speakerBuckets.has(groupKey)) {
+        speakerBuckets.set(groupKey, {
+          groupKey,
+          rawName,
+          characterId: seg.characterId || null,
+          count: 0,
+          segs: [],
+        });
+      }
+      const bucket = speakerBuckets.get(groupKey);
+      bucket.count += 1;
+      bucket.segs.push(seg);
+      if (!placeholder && isPlaceholderName(bucket.rawName)) {
+        bucket.rawName = rawName;
       }
     });
 
     const list = [];
-    for (const [name, count] of speakerCounts.entries()) {
+    for (const bucket of speakerBuckets.values()) {
+      const { groupKey, rawName, count, segs } = bucket;
+      const firstSeg = segs[0] || {};
+      const placeholder = isPlaceholderName(rawName);
       const reg = (speakerRegistry && (
-        speakerRegistry[name] ||
-        Object.values(speakerRegistry).find((r) => r && (r.name === name || r.speakerName === name || r.id === name))
+        speakerRegistry[groupKey] ||
+        (!placeholder ? speakerRegistry[rawName] : null) ||
+        Object.values(speakerRegistry).find((r) => r && (
+          r.speakerId === groupKey ||
+          r.id === groupKey ||
+          (bucket.characterId && r.characterId === bucket.characterId) ||
+          (!placeholder && (r.name === rawName || r.speakerName === rawName))
+        ))
       )) || {};
 
-      const currentVoice = reg.voiceId || reg.khmerVoiceId || settings?.voiceId || 'km-KH-PisethNeural';
+      const currentVoice = firstSeg.voiceOverride || reg.voiceId || reg.khmerVoiceId || firstSeg.khmerVoiceId || firstSeg.voiceId || settings?.voiceId || 'km-KH-PisethNeural';
       const isVoiceFemale = String(currentVoice).toLowerCase().includes('sreymom');
-      const isCharacterFemale = String(reg.gender || reg.speakerGender || '').toLowerCase() === 'female';
+      const isCharacterFemale = String(reg.gender || reg.speakerGender || firstSeg.voiceGender || firstSeg.speakerGender || '').toLowerCase() === 'female';
+      const anyReviewNeeded = segs.some((s) => Boolean(s.speakerReviewNeeded || s.unverifiedSpeaker || s.speakerStatus === 'review_needed' || s.isFallback));
+      const isUnresolved = placeholder || (anyReviewNeeded && isPositionalId(groupKey));
+      const shortId = String(bucket.characterId || groupKey || '').replace(/^char_|^spk_/i, '');
+      const displayLabel = !placeholder
+        ? rawName
+        : `មិនស្គាល់ (${shortId.length > 12 ? shortId.slice(-10) : shortId})`;
 
       list.push({
-        key: reg.id || name,
-        name,
+        key: reg.speakerId || reg.id || groupKey,
+        characterId: bucket.characterId || reg.characterId || null,
+        name: displayLabel,
+        rawName: placeholder ? '' : rawName,
+        isUnresolved,
+        reviewNeeded: Boolean(placeholder || anyReviewNeeded || reg.reviewNeeded),
+        recognitionConfidence: firstSeg.recognitionConfidence ?? firstSeg.speakerConfidence ?? reg.recognitionConfidence ?? reg.genderConfidence ?? null,
         count,
         voiceId: currentVoice,
         isVoiceFemale,
         isFemale: isVoiceFemale,
         isCharacterFemale,
-        userOverridden: Boolean(reg.userOverridden || reg.voiceAssignmentSource === 'manual'),
+        userOverridden: Boolean(reg.userOverridden || reg.manualCharacterOverridden || segs.some((s) => s.userOverridden)),
       });
     }
 
@@ -1000,11 +1054,66 @@ export default function VoiceSettings({
                   {activeEpisodeSpeakers.length > 0 ? (
                     <div className="inspector-speaker-list">
                       {activeEpisodeSpeakers.map((spk) => {
+                        const isEditingThisSpeaker = editingSpeakerKey === (spk.key || spk.name);
                         return (
-                          <div key={spk.key || spk.name} className="inspector-speaker-row">
-                            <span className={`inspector-speaker-name ${spk.isCharacterFemale ? 'is-female' : 'is-male'}`}>
-                              {spk.name} {spk.count > 0 && <span style={{ fontSize: '0.68rem', opacity: 0.6 }}>({spk.count} ឃ្លា)</span>}
-                            </span>
+                          <div key={spk.key || spk.name} className="inspector-speaker-row" data-speaker-key={spk.key || spk.name} data-review-needed={spk.reviewNeeded ? 'true' : 'false'}>
+                            <div className="inspector-speaker-meta">
+                              {isEditingThisSpeaker ? (
+                                <form
+                                  className="inspector-speaker-edit-form"
+                                  onSubmit={(e) => {
+                                    e.preventDefault();
+                                    const clean = editingSpeakerName.trim();
+                                    if (clean && onUpdateSpeakerIdentity) {
+                                      onUpdateSpeakerIdentity(spk.key, { name: clean, voiceId: spk.voiceId, applyAcrossSeries: true });
+                                    }
+                                    setEditingSpeakerKey(null);
+                                  }}
+                                >
+                                  <input
+                                    type="text"
+                                    value={editingSpeakerName}
+                                    onChange={(e) => setEditingSpeakerName(e.target.value)}
+                                    placeholder="បញ្ចូលឈ្មោះតួអង្គ..."
+                                    className="inspector-speaker-edit-input"
+                                    autoFocus
+                                  />
+                                  <button type="submit" className="inspector-speaker-edit-save" title="រក្សាទុកឈ្មោះតួអង្គ">✓</button>
+                                  <button type="button" onClick={() => setEditingSpeakerKey(null)} className="inspector-speaker-edit-cancel" title="បោះបង់">✕</button>
+                                </form>
+                              ) : (
+                                <>
+                                  <span className={`inspector-speaker-name ${spk.isCharacterFemale ? 'is-female' : 'is-male'}`}>
+                                    {spk.name} {spk.count > 0 && <span style={{ fontSize: '0.68rem', opacity: 0.6 }}>({spk.count} ឃ្លា)</span>}
+                                  </span>
+                                  <div className="inspector-speaker-badges">
+                                    {spk.reviewNeeded && (
+                                      <span className="inspector-speaker-review-badge" title="អត្តសញ្ញាណមិនទាន់ច្បាស់លាស់ — សូមពិនិត្យឬកែឈ្មោះ">
+                                        ⚠️ ត្រូវពិនិត្យ
+                                      </span>
+                                    )}
+                                    {spk.userOverridden && (
+                                      <span className="inspector-speaker-manual-badge" title="កែដោយដៃ">
+                                        ✓ កែដៃ
+                                      </span>
+                                    )}
+                                    {onUpdateSpeakerIdentity && (
+                                      <button
+                                        type="button"
+                                        className="inspector-speaker-rename-btn"
+                                        onClick={() => {
+                                          setEditingSpeakerKey(spk.key || spk.name);
+                                          setEditingSpeakerName(spk.rawName || (spk.isUnresolved ? '' : spk.name));
+                                        }}
+                                        title="កែឈ្មោះតួអង្គសម្រាប់ឃ្លាទាំងអស់របស់តួនេះ"
+                                      >
+                                        កែឈ្មោះ
+                                      </button>
+                                    )}
+                                  </div>
+                                </>
+                              )}
+                            </div>
                             <button
                               type="button"
                               onClick={() =>

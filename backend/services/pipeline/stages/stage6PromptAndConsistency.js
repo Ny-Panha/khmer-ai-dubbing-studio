@@ -667,6 +667,12 @@ function applyTranslatedSegmentResult(targetSeg, t, maxWords, segIdx, { isFastOc
   const visGender = String(targetSeg.visualGender || '').toLowerCase();
 
   if (!isOcrSeg) {
+    const hasVerifiedStep1 = Boolean(
+      targetSeg.speakerStatus === 'verified' ||
+      targetSeg.speakerVerified === true ||
+      targetSeg.voiceAssignmentSource === 'multimodal_verified' ||
+      targetSeg.voiceAssignmentSource === 'series_glossary'
+    );
     if (isStep1ReviewNeeded) {
       targetSeg.voiceGender = 'unknown';
       targetSeg.speakerGender = 'UNKNOWN';

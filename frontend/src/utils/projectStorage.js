@@ -2007,18 +2007,30 @@ export function extractGlossaryFromEpisode(scriptData, speakerRegistry) {
     return fallback || 'unknown';
   };
 
+  const isIgnoredPlaceholderOrPositional = (name, id) => {
+    const nm = String(name || '').trim().toLowerCase();
+    const sid = String(id || '').trim();
+    if (!nm || nm === 'unknown' || nm === 'តួអង្គ' || nm === 'តួ' || nm === 'speaker' || /^speaker[\s_-]*\d+$/i.test(nm)) return true;
+    if (/^spk_(?:ocr|review|generic|unknown)_\d+$/i.test(sid) || /^spk_\d+$/i.test(sid)) return true;
+    return false;
+  };
+
   Object.values(registry).forEach((spk) => {
     const spkName = (spk.name || spk.speakerName || '').trim();
-    if (spkName && spkName !== 'Unknown' && !characters.some((c) => c.name === spkName)) {
+    const spkId = spk.id || spk.speakerId || spkName;
+    if (!isIgnoredPlaceholderOrPositional(spkName, spkId) && !characters.some((c) => c.name === spkName)) {
       // If episode has segments, do not include phantom characters from old/other series
       if (segSpeakerNames.size > 0 && !segSpeakerNames.has(spkName) && !segSpeakerNames.has(spk.id)) {
         return;
       }
       const isManual = Boolean(spk.userOverridden || spk.voiceAssignmentSource === 'manual');
       characters.push({
-        id: spk.id || spk.speakerId || spkName,
+        id: spkId,
+        speakerId: spkId,
+        characterId: spk.characterId || null,
         name: spkName,
         khmerName: spk.khmerName || spkName,
+        aliases: Array.isArray(spk.aliases) ? spk.aliases : [spkName],
         gender: detectGender(spk, spkName, 'unknown'),
         voiceId: spk.voiceId || spk.khmerVoiceId || null,
         khmerVoiceId: spk.khmerVoiceId || spk.voiceId || null,
@@ -2030,12 +2042,16 @@ export function extractGlossaryFromEpisode(scriptData, speakerRegistry) {
 
   segments.forEach((seg) => {
     const rawSpeaker = (seg.speaker || seg.speakerName || '').trim();
-    if (rawSpeaker && rawSpeaker !== 'Unknown' && !characters.some((c) => c.name === rawSpeaker)) {
+    const segSpkId = seg.speakerId || rawSpeaker;
+    if (!isIgnoredPlaceholderOrPositional(rawSpeaker, segSpkId) && !characters.some((c) => c.name === rawSpeaker)) {
       const isManual = Boolean(seg.userOverridden || seg.voiceAssignmentSource === 'manual' || seg.voiceOverride);
       characters.push({
-        id: seg.speakerId || rawSpeaker,
+        id: segSpkId,
+        speakerId: segSpkId,
+        characterId: seg.characterId || null,
         name: rawSpeaker,
         khmerName: rawSpeaker,
+        aliases: Array.isArray(seg.aliases) ? seg.aliases : [rawSpeaker],
         gender: detectGender(seg, rawSpeaker, 'unknown'),
         voiceId: isManual ? (seg.voiceOverride || seg.voiceId || seg.khmerVoiceId || null) : (seg.voiceId || seg.khmerVoiceId || null),
         khmerVoiceId: isManual ? (seg.voiceOverride || seg.khmerVoiceId || seg.voiceId || null) : (seg.khmerVoiceId || seg.voiceId || null),

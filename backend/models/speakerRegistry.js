@@ -378,6 +378,26 @@ function getVoiceProfile(gender = "male", overrideVoiceId = null) {
  * function defined earlier (line 91) which handles Bug Condition 1 generic broadcast identities.
  * This function is kept for backward compatibility but is now an alias to isPlaceholderSpeakerName.
  */
+function isPositionalSpeakerId(spkId = "") {
+  const s = String(spkId || "").trim();
+  if (!s) return true;
+  return /^(?:spk_ocr_\d+|spk_\d+|spk_1|spk_default|spk|spk_generic(?:_.*)?|spk_review(?:_.*)?|spk_unknown(?:_.*)?|spk_តួអង្គ)$/i.test(s);
+}
+
+function buildCharacterId(speakerName = "", speakerId = "", { isGeneric = false, isEpisodic = false } = {}) {
+  const cleanName = String(speakerName || "").trim();
+  const isUnresolved = !cleanName || isPlaceholderSpeakerName(cleanName);
+  if (!isUnresolved && !isGeneric && !isEpisodic) {
+    const safeSlug = cleanName
+      .replace(/[^\p{L}\p{M}\p{N}]+/gu, "_")
+      .replace(/^_+|_+$/g, "")
+      .toLowerCase();
+    if (safeSlug) return `char_${safeSlug}`;
+  }
+  const cleanSpk = String(speakerId || "").trim().replace(/^spk_/, "");
+  return cleanSpk ? `char_${cleanSpk}` : "char_unidentified";
+}
+
 function isPlaceholderSpeakerName(str = "") {
   if (!str) return true;
   const s = String(str).trim().toLowerCase();
@@ -404,8 +424,8 @@ function isPlaceholderSpeakerName(str = "") {
  * Generic/episodic crowd or numbered descriptors that must NEVER pollute cross-episode seriesSpeakerMap.
  */
 function isEpisodicRoleSpeakerName(str = "") {
-  if (isGenericSpeakerName(str)) return true;
-  const s = String(str).trim().toLowerCase();
+  const s = String(str || "").trim().toLowerCase();
+  if (!s) return false;
   return (
     /^(?:ស្ត្រី|នារី|បុរស|ក្មេង|តួ|តួអង្គ)(?:ទី)?\s*[\d១២៣៤៥៦៧៨៩០]+$/u.test(s) ||
     /^(?:អ្នកទស្សនា|អ្នកគាំទ្រ|អ្នកភូមិ|ជំនួយការ|មន្ត្រី|អ្នកលេង|អ្នកអត្ថាធិប្បាយ|អ្នករៀបរាប់|បុរសចំណាស់|យាយចាស់|តាចាស់|ខ្មោច|បិសាច|ឆ្កែ|មនុស្សប្រុស|មនុស្សស្រី|នារី|បុរស|ក្មេងប្រុស|ក្មេងស្រី)/u.test(s) ||
@@ -502,15 +522,26 @@ function syncSegmentsWithSpeakerRegistry(segments = [], customSpeakerVoiceMap = 
       // isPlaceholderSpeakerName: "Speaker 1", "Unknown", etc. - generic placeholder names
       // isGenericSpeakerName: "ប្រព័ន្ធ", "系统", "旁白" - transient broadcast identities
       const isGenericName = !speakerName || isPlaceholderSpeakerName(speakerName) || isGenericSpeakerName(speakerName);
+      const isPlaceholderRaw = !speakerName || isPlaceholderSpeakerName(speakerName);
+      const isPositionalId = isPositionalSpeakerId(spkKey);
       
-      // BUGFIX: Generic identities (ប្រព័ន្ធ, narrators, system announcements) should NOT inherit from series map
-      // They are transient broadcast identities that change voice actors between episodes/scenes
-      // Only recurring character names should use series map for consistency
+      // Generic/broadcast identities (ប្រព័ន្ធ, narrators, system announcements) & placeholders ('តួអង្គ', spk_ocr_*)
+      // must NOT inherit gender/voice blindly from bare-name or positional series map entries.
       const compactSpeakerName = speakerName.replace(/\s+/g, "").toLowerCase();
       const compactRawName = rawSpeaker.replace(/\s+/g, "").toLowerCase();
-      const seriesAliasMatch = !isGenericName
+      const segCharId = String(seg.characterId || "").trim();
+      const isValidSeriesEntry = (entry) => {
+        if (!entry || typeof entry !== "object") return false;
+        const entryName = String(entry.name || entry.speakerName || entry.khmerName || "").trim();
+        if (!entryName || isPlaceholderSpeakerName(entryName)) return false;
+        if (isPositionalSpeakerId(entry.speakerId || entry.id)) return false;
+        return Boolean(entry.khmerVoiceId || entry.voiceId);
+      };
+      const seriesAliasMatch = (!isGenericName && !isPlaceholderRaw)
         ? Object.values(seriesMap || {}).find((entry) => {
-            if (!entry || typeof entry !== "object") return false;
+            if (!isValidSeriesEntry(entry)) return false;
+            if (isGenericSpeakerName(entry.name || entry.speakerName)) return false;
+            if (segCharId && entry.characterId && entry.characterId === segCharId) return true;
             const candidates = [entry.name, entry.speakerName, entry.khmerName, ...(Array.isArray(entry.aliases) ? entry.aliases : [])]
               .filter(Boolean)
               .map((v) => String(v).replace(/\s+/g, "").toLowerCase());
@@ -518,10 +549,18 @@ function syncSegmentsWithSpeakerRegistry(segments = [], customSpeakerVoiceMap = 
           })
         : null;
       
-      // For generic identities, skip series map lookup entirely - classify per-scene instead
-      const seriesEntry = isGenericName 
-        ? null 
-        : (seriesMap[spkKey] || seriesMap[speakerName] || seriesMap[rawSpeaker] || seriesAliasMatch);
+      // Only match explicit gender-qualified generic IDs (e.g. spk_female_ប្រព័ន្ធ), never bare 'ប្រព័ន្ធ' or positional spk_ocr_*
+      const isGenderQualifiedGenericId = isGenericSpeakerName(speakerName) && /^spk_(?:female|male)_/i.test(spkKey);
+      let seriesEntry = null;
+      if (!isPlaceholderRaw && !isPositionalId) {
+        if (!isGenericName) {
+          const directCand = seriesMap[spkKey] || seriesMap[speakerName] || seriesMap[rawSpeaker] || seriesAliasMatch;
+          seriesEntry = isValidSeriesEntry(directCand) ? directCand : null;
+        } else if (isGenderQualifiedGenericId) {
+          const qualifiedCand = seriesMap[spkKey];
+          seriesEntry = isValidSeriesEntry(qualifiedCand) ? qualifiedCand : null;
+        }
+      }
       
       const isSeriesSource = Boolean(seriesEntry && (seriesEntry.khmerVoiceId || seriesEntry.voiceId));
       const customVoice =
@@ -544,12 +583,29 @@ function syncSegmentsWithSpeakerRegistry(segments = [], customSpeakerVoiceMap = 
       
       const resolvedStatId = (isSeriesSource && seriesEntry.speakerId && !isGenericName) ? seriesEntry.speakerId : spkKey;
       const resolvedStatName = (isSeriesSource && seriesEntry.name && !isGenericName) ? seriesEntry.name : speakerName;
+      const resolvedCharId = (isSeriesSource && seriesEntry.characterId && !isGenericName)
+        ? seriesEntry.characterId
+        : (seg.characterId || buildCharacterId(resolvedStatName, resolvedStatId, {
+            isGeneric: isGenericName,
+            isEpisodic: isEpisodicRoleSpeakerName(resolvedStatName),
+          }));
+      const mergedAliases = Array.from(new Set([
+        ...(Array.isArray(seriesEntry?.aliases) ? seriesEntry.aliases : []),
+        ...(Array.isArray(seg.aliases) ? seg.aliases : []),
+        ...(resolvedStatName && !isPlaceholderSpeakerName(resolvedStatName) ? [resolvedStatName] : []),
+        ...(rawSpeaker && !isPlaceholderSpeakerName(rawSpeaker) ? [rawSpeaker] : []),
+      ].filter(Boolean)));
 
       speakerStatsMap.set(spkKey, {
         id: resolvedStatId,
         speakerId: resolvedStatId,
+        characterId: resolvedCharId,
         name: resolvedStatName,
         rawName: rawSpeaker,
+        aliases: mergedAliases,
+        characterGender: String(seg.characterGender || seriesEntry?.characterGender || "").toUpperCase() || null,
+        voiceActorTimbre: String(seg.voiceActorTimbre || seriesEntry?.voiceActorTimbre || "").toUpperCase() || null,
+        recognitionEvidence: seg.recognitionEvidence || seg.speakerEvidence || seriesEntry?.recognitionEvidence || null,
         maleScore: 0,
         femaleScore: 0,
         unknownCount: 0,
@@ -558,6 +614,7 @@ function syncSegmentsWithSpeakerRegistry(segments = [], customSpeakerVoiceMap = 
         customVoice: customVoice || null,
         seriesGender,
         isManual,
+        manualCharacterOverridden: Boolean(seg.manualCharacterOverridden || seriesEntry?.manualCharacterOverridden),
         assignmentSource,
       });
     }
@@ -660,7 +717,7 @@ function syncSegmentsWithSpeakerRegistry(segments = [], customSpeakerVoiceMap = 
   // Never collapse distinct episodic/crowd roles (e.g. male vs female spectators, villagers, ghosts, announcers)
   const namedScoreTotals = new Map();
   for (const [, stats] of speakerStatsMap.entries()) {
-    const isGeneric = !stats.name || stats.name === "តួអង្គ" || stats.name.toLowerCase() === "speaker" || isEpisodicRoleSpeakerName(stats.name);
+    const isGeneric = !stats.name || stats.name === "តួអង្គ" || stats.name.toLowerCase() === "speaker" || isGenericSpeakerName(stats.name) || isEpisodicRoleSpeakerName(stats.name);
     if (isGeneric || stats.isManual || stats.assignmentSource === "series_glossary") continue;
     if (!namedScoreTotals.has(stats.name)) {
       namedScoreTotals.set(stats.name, { femaleScore: 0, maleScore: 0 });
@@ -678,7 +735,7 @@ function syncSegmentsWithSpeakerRegistry(segments = [], customSpeakerVoiceMap = 
     let genderConfidence = 0.5;
 
     const isGeneric = !stats.name || stats.name === "តួអង្គ" || stats.name.toLowerCase() === "speaker" || isEpisodicRoleSpeakerName(stats.name);
-    const unified = (!isGeneric && !stats.isManual && stats.assignmentSource !== "series_glossary")
+    const unified = (!isGeneric && !isGenericSpeakerName(stats.name) && !stats.isManual && stats.assignmentSource !== "series_glossary")
       ? namedScoreTotals.get(stats.name)
       : null;
     const fScore = unified ? unified.femaleScore : stats.femaleScore;
@@ -722,17 +779,24 @@ function syncSegmentsWithSpeakerRegistry(segments = [], customSpeakerVoiceMap = 
     const speakerRecord = {
       id: spkKey,
       speakerId: spkKey,
+      characterId: stats.characterId || buildCharacterId(stats.name, spkKey, { isGeneric: isGenericSpeakerName(stats.name), isEpisodic: isEpisodicRoleSpeakerName(stats.name) }),
       name: stats.name,
       speaker: stats.name,
+      aliases: Array.isArray(stats.aliases) ? stats.aliases : [],
       voiceGender: resolvedGender,
       gender: effectiveGender,
       speakerGender: resolvedGender === "female" ? "FEMALE" : (resolvedGender === "male" ? "MALE" : "UNKNOWN"),
+      characterGender: stats.characterGender || (resolvedGender === "female" ? "FEMALE" : (resolvedGender === "male" ? "MALE" : "UNKNOWN")),
+      voiceActorTimbre: stats.voiceActorTimbre || (resolvedGender === "female" ? "FEMALE" : (resolvedGender === "male" ? "MALE" : "UNKNOWN")),
       genderConfidence,
+      recognitionConfidence: genderConfidence,
+      recognitionEvidence: stats.recognitionEvidence || null,
       khmerVoiceId: assignedVoice,
       voiceId: assignedVoice,
       voice: assignedVoice,
       voiceAssignmentSource: finalSource,
       userOverridden: isManual,
+      manualCharacterOverridden: Boolean(stats.manualCharacterOverridden),
       voiceLabel: (isUnknown && !isManual && !isSeries) ? "ពិសិដ្ឋ (Piseth - Fallback)" : profile.voiceLabel,
       avatar: (isUnknown && !isManual && !isSeries) ? "👤" : profile.avatar,
       badgeColor: (isUnknown && !isManual && !isSeries) ? "#64748b" : profile.badgeColor,
@@ -742,7 +806,8 @@ function syncSegmentsWithSpeakerRegistry(segments = [], customSpeakerVoiceMap = 
     };
 
     finalizedRegistry[spkKey] = speakerRecord;
-    if (!isGeneric) {
+    const isPlaceholderOrPositional = isPlaceholderSpeakerName(stats.name) || isPositionalSpeakerId(spkKey);
+    if (!isGeneric && !isPlaceholderOrPositional) {
       const existingNamed = finalizedRegistry[stats.name];
       if (
         !existingNamed ||
@@ -893,15 +958,24 @@ function syncSegmentsWithSpeakerRegistry(segments = [], customSpeakerVoiceMap = 
       khmerText: khmerTrans,
       khmer: khmerTrans,
       speakerId: isUserOverridden && seg.speakerId ? seg.speakerId : (reg.speakerId || safeSpkKey),
+      characterId: isUserOverridden && seg.characterId ? seg.characterId : (reg.characterId || seg.characterId || buildCharacterId(isUserOverridden ? (seg.speaker || reg.speaker) : reg.speaker, reg.speakerId || safeSpkKey, { isGeneric: isGenericOrPlaceholder, isEpisodic: isEpisodicRoleSpeakerName(reg.speaker) })),
       speaker: isUserOverridden ? (seg.speaker || reg.speaker) : reg.speaker,
       speakerName: isUserOverridden ? (seg.speakerName || seg.speaker || reg.speaker) : reg.speaker,
+      aliases: Array.isArray(seg.aliases) && seg.aliases.length > 0 ? seg.aliases : (Array.isArray(reg.aliases) ? reg.aliases : []),
       voiceGender: resolvedGender,
       gender: resolvedGender,
       speakerGender: resolvedSpeakerGender,
+      characterGender: seg.characterGender || reg.characterGender || resolvedSpeakerGender,
+      voiceActorTimbre: seg.voiceActorTimbre || reg.voiceActorTimbre || resolvedSpeakerGender,
       speakerConfidence: typeof seg.speakerConfidence === "number"
         ? seg.speakerConfidence
         : (isUserOverridden ? (seg.genderConfidence ?? 0.5) : (reg.genderConfidence ?? (resolvedGender === "unknown" ? 0.45 : 0.85))),
+      recognitionConfidence: typeof seg.recognitionConfidence === "number"
+        ? seg.recognitionConfidence
+        : (typeof seg.speakerConfidence === "number" ? seg.speakerConfidence : (reg.recognitionConfidence ?? reg.genderConfidence ?? (resolvedGender === "unknown" ? 0.45 : 0.85))),
+      recognitionEvidence: seg.recognitionEvidence || seg.speakerEvidence || reg.recognitionEvidence || null,
       genderConfidence: isUserOverridden ? (seg.genderConfidence ?? null) : reg.genderConfidence,
+      manualCharacterOverridden: Boolean(seg.manualCharacterOverridden || reg.manualCharacterOverridden),
       speakerStatus: seg.speakerStatus || (isUnknownVoice ? "review_needed" : "verified"),
       speakerReviewNeeded: Boolean(seg.speakerReviewNeeded || isUnknownVoice),
       unverifiedSpeaker: Boolean(seg.unverifiedSpeaker || isUnknownVoice),
@@ -969,16 +1043,23 @@ function buildSpeakerRegistry(segments = [], existingRegistry = {}) {
       ...existing,
       id,
       speakerId: id,
+      characterId: spk.characterId || existing.characterId || buildCharacterId(spk.speaker, id, { isGeneric: isGenericSpeakerName(spk.speaker), isEpisodic: isEpisodicRoleSpeakerName(spk.speaker) }),
       name: spk.speaker,
       speaker: spk.speaker,
+      aliases: Array.isArray(spk.aliases) && spk.aliases.length > 0 ? spk.aliases : (existing.aliases || []),
       voiceGender: spk.voiceGender || existing.voiceGender || "unknown",
       gender: spk.gender || existing.gender || "unknown",
       speakerGender: spk.speakerGender || existing.speakerGender || "UNKNOWN",
+      characterGender: spk.characterGender || existing.characterGender || spk.speakerGender || "UNKNOWN",
+      voiceActorTimbre: spk.voiceActorTimbre || existing.voiceActorTimbre || spk.speakerGender || "UNKNOWN",
       genderConfidence: spk.genderConfidence || existing.genderConfidence || 0.8,
+      recognitionConfidence: spk.recognitionConfidence ?? spk.genderConfidence ?? existing.recognitionConfidence ?? 0.8,
+      recognitionEvidence: spk.recognitionEvidence || existing.recognitionEvidence || null,
       khmerVoiceId: isManual ? (existing.khmerVoiceId || existing.voiceId || spk.khmerVoiceId || spk.voiceId) : (spk.khmerVoiceId || spk.voiceId),
       voiceId: isManual ? (existing.voiceId || existing.khmerVoiceId || spk.voiceId || spk.khmerVoiceId) : (spk.voiceId || spk.khmerVoiceId),
       voiceAssignmentSource: isManual ? "manual" : (existing.voiceAssignmentSource || spk.voiceAssignmentSource || "automatic"),
       userOverridden: isManual,
+      manualCharacterOverridden: Boolean(existing.manualCharacterOverridden || spk.manualCharacterOverridden),
       speed: existing.speed || "normal",
       segmentCount: spk.lineCount,
       count: spk.lineCount,
@@ -1032,6 +1113,9 @@ module.exports = {
   MALE_MARKERS: MALE_KEYWORDS,
   VOICE_PROFILES,
   isGenericSpeakerName,
+  isPlaceholderSpeakerName,
+  isPositionalSpeakerId,
+  buildCharacterId,
   detectSpeakerGender,
   detectGender,
   normalizeSpeakerName,

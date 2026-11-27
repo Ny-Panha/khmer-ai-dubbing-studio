@@ -389,7 +389,8 @@ async function generateSegmentTTS({
         seg.speakerStatus === 'verified' ||
         seg.speakerVerified === true ||
         seg.voiceAssignmentSource === 'multimodal_verified' ||
-        seg.voiceAssignmentSource === 'series_glossary'
+        seg.voiceAssignmentSource === 'series_glossary' ||
+        seg.manualCharacterOverridden === true
       );
       if (!knownSegGender && !hasVerifiedStep1 && !segHasManual && !regIsManual) {
         // Step 2 never guesses gender from translated Khmer text
@@ -423,17 +424,22 @@ async function generateSegmentTTS({
       seg.voice = chosenVoiceId;
 
       const isManualChoice = Boolean(segHasManual || regIsManual);
-      const isFallbackChoice = !isManualChoice && !genderDerivedVoice && !registryVoice;
+      const isFallbackChoice = !isManualChoice && !hasVerifiedStep1 && !genderDerivedVoice && !registryVoice;
 
-      // Preserve character identity metadata without defaulting unknown to male
+      // Preserve Step 1 character identity & voice metadata strictly without reclassifying
+      if (regEntry?.characterId && !seg.characterId) {
+        seg.characterId = regEntry.characterId;
+      }
       const resolvedGender = knownSegGender || (regEntry?.voiceGender || seg.voiceGender || 'unknown');
       seg.voiceGender = resolvedGender;
       seg.gender = resolvedGender;
       seg.speakerGender = resolvedGender === 'female' ? 'FEMALE' : (resolvedGender === 'male' ? 'MALE' : 'UNKNOWN');
       seg.isFallback = isFallbackChoice;
-      if (isFallbackChoice) {
+      if (isFallbackChoice || seg.speakerStatus === 'review_needed' || seg.speakerReviewNeeded) {
         seg.reviewNeeded = true;
-        seg.voiceAssignmentSource = 'fallback';
+        if (isFallbackChoice) {
+          seg.voiceAssignmentSource = 'fallback';
+        }
       }
 
       const segKey = String(seg.id || `seg_${idx + 1}`);
@@ -656,11 +662,18 @@ async function generateSegmentTTS({
         seg.audioSignature = audioSignature;
         seg.actualVoiceId = result.actualVoiceId || chosenVoiceId;
 
-        // Persist sidecar metadata next to audio file
+        // Persist sidecar metadata next to audio file while preserving PROVENANCE_VERSION metadata written by ttsService
         if (result.audioPath && fs.existsSync(result.audioPath)) {
           try {
             const sidecarMeta = result.audioPath.replace(/\.[^.]+$/, '.json');
+            let existingSidecar = {};
+            if (fs.existsSync(sidecarMeta)) {
+              try {
+                existingSidecar = JSON.parse(fs.readFileSync(sidecarMeta, 'utf8')) || {};
+              } catch (_) {}
+            }
             fs.writeFileSync(sidecarMeta, JSON.stringify({
+              ...existingSidecar,
               text: khmerText,
               voiceId: chosenVoiceId,
               actualVoiceId: seg.actualVoiceId,

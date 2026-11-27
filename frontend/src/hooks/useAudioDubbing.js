@@ -197,8 +197,12 @@ const FALLBACK_VOICE_CATALOG = {
     const avatar = isFemale ? '👩' : '👨';
     const badgeColor = isFemale ? '#ec4899' : '#38bdf8';
 
-    const existing = (speakerRegistry && speakerRegistry[speakerId]) || {};
-    const targetName = (existing.speakerName || existing.name || (typeof speakerId === 'string' && !speakerId.startsWith('spk_') ? speakerId : '')).trim();
+    const existing = (speakerRegistry && (
+      speakerRegistry[speakerId] ||
+      Object.values(speakerRegistry).find((r) => r && (r.speakerId === speakerId || r.id === speakerId || r.characterId === speakerId))
+    )) || {};
+    const targetName = (existing.speakerName || existing.name || (typeof speakerId === 'string' && !speakerId.startsWith('spk_') && !speakerId.startsWith('char_') ? speakerId : '')).trim();
+    const isPlaceholderOrGenericTarget = !targetName || targetName === 'តួអង្គ' || targetName === 'Unknown' || targetName.toLowerCase() === 'speaker' || targetName === 'ប្រព័ន្ធ';
 
     // Preserve existing detected gender identity - manual voice selection must not change character gender!
     const preservedGender = existing.gender || 'UNKNOWN';
@@ -208,6 +212,7 @@ const FALLBACK_VOICE_CATALOG = {
       ...existing,
       id: speakerId,
       speakerId: speakerId,
+      ...(existing.characterId ? { characterId: existing.characterId } : {}),
       speakerName: targetName || existing.speakerName || speakerId,
       name: targetName || existing.name || speakerId,
       gender: preservedGender,
@@ -228,7 +233,7 @@ const FALLBACK_VOICE_CATALOG = {
       ...(speakerRegistry || {}),
       [speakerId]: updatedSpk,
     };
-    if (targetName && targetName !== speakerId) {
+    if (targetName && targetName !== speakerId && !isPlaceholderOrGenericTarget) {
       newReg[targetName] = {
         ...updatedSpk,
         speakerName: targetName,
@@ -241,12 +246,13 @@ const FALLBACK_VOICE_CATALOG = {
     const isMatchingSegment = (seg) => {
       if (!seg) return false;
       const rawName = (seg.speaker || seg.speakerName || '').trim();
+      const nameCanMatch = Boolean(!isPlaceholderOrGenericTarget && targetName && (rawName === targetName || seg.speakerName === targetName));
       return (
         seg.speakerId === speakerId ||
-        (targetName && (rawName === targetName || seg.speakerName === targetName)) ||
+        (seg.characterId && seg.characterId === speakerId) ||
         (existing.id && seg.speakerId === existing.id) ||
-        (typeof speakerId === 'string' && rawName && rawName.length >= 2 && (speakerId === rawName || speakerId.includes(rawName))) ||
-        (typeof speakerId === 'string' && seg.speakerId && seg.speakerId === speakerId)
+        (existing.speakerId && seg.speakerId === existing.speakerId) ||
+        nameCanMatch
       );
     };
 
@@ -635,6 +641,128 @@ const FALLBACK_VOICE_CATALOG = {
       console.warn('[CastVoiceSwitch] Auto-regen queue error:', batchErr);
       return updatedSegments;
     }
+  };
+
+  // Manual correction of a character's identity (name, characterId/speakerId, and optional voice) across matching cues
+  const handleUpdateSpeakerIdentity = async (targetKey, { name: rawNewName = '', voiceId: newVoiceId = null, applyAcrossSeries = true } = {}) => {
+    const cleanNewName = String(rawNewName || '').trim();
+    if (!targetKey || (!cleanNewName && !newVoiceId)) return null;
+
+    const currentSegments = scriptDataRef.current?.segments || scriptData?.segments || [];
+    const existingRegEntry = (speakerRegistry && (
+      speakerRegistry[targetKey] ||
+      Object.values(speakerRegistry).find((r) => r && (r.speakerId === targetKey || r.id === targetKey || r.characterId === targetKey))
+    )) || {};
+
+    const cleanSlug = cleanNewName
+      .replace(/[^\p{L}\p{M}\p{N}]+/gu, '_')
+      .replace(/^_+|_+$/g, '')
+      .toLowerCase();
+    const nextSpeakerId = cleanNewName ? (cleanSlug ? `spk_${cleanSlug}` : targetKey) : targetKey;
+    const nextCharacterId = cleanNewName ? (cleanSlug ? `char_${cleanSlug}` : `char_${nextSpeakerId.replace(/^spk_/, '')}`) : (existingRegEntry.characterId || targetKey);
+
+    const updatedSegments = currentSegments.map((seg) => {
+      const matches = String(seg.speakerId || '') === String(targetKey) ||
+        (existingRegEntry.characterId && String(seg.characterId || '') === String(existingRegEntry.characterId)) ||
+        (!targetKey.startsWith('spk_') && !targetKey.startsWith('char_') && String(seg.speaker || seg.speakerName || '') === String(targetKey));
+      if (!matches) return seg;
+
+      const resolvedVoice = newVoiceId || seg.khmerVoiceId || seg.voiceId || seg.voice || 'km-KH-PisethNeural';
+      const isFemVoice = String(resolvedVoice).toLowerCase().includes('sreymom');
+      const finalName = cleanNewName || seg.speakerName || seg.speaker || 'តួអង្គ';
+      return {
+        ...seg,
+        speaker: finalName,
+        speakerName: finalName,
+        speakerId: nextSpeakerId,
+        characterId: nextCharacterId,
+        aliases: Array.from(new Set([...(Array.isArray(seg.aliases) ? seg.aliases : []), finalName].filter(Boolean))),
+        voiceId: resolvedVoice,
+        khmerVoiceId: resolvedVoice,
+        voice: resolvedVoice,
+        voiceLabel: isFemVoice ? 'ស្រីមុំ (Sreymom)' : 'ពិសិដ្ឋ (Piseth)',
+        avatar: isFemVoice ? '👩' : '👨',
+        badgeColor: isFemVoice ? '#ec4899' : '#38bdf8',
+        speakerStatus: 'verified',
+        speakerVerified: true,
+        speakerReviewNeeded: false,
+        reviewNeeded: false,
+        unverifiedSpeaker: false,
+        userOverridden: true,
+        manualCharacterOverridden: true,
+        voiceAssignmentSource: 'manual',
+      };
+    });
+
+    const nextReg = { ...(speakerRegistry || {}) };
+    if (String(targetKey) !== String(nextSpeakerId)) {
+      delete nextReg[targetKey];
+    }
+    const baseVoice = newVoiceId || existingRegEntry.voiceId || existingRegEntry.khmerVoiceId || 'km-KH-PisethNeural';
+    const isFem = String(baseVoice).toLowerCase().includes('sreymom');
+    nextReg[nextSpeakerId] = {
+      ...existingRegEntry,
+      id: nextSpeakerId,
+      speakerId: nextSpeakerId,
+      characterId: nextCharacterId,
+      name: cleanNewName || existingRegEntry.name || nextSpeakerId,
+      speakerName: cleanNewName || existingRegEntry.speakerName || nextSpeakerId,
+      voiceId: baseVoice,
+      khmerVoiceId: baseVoice,
+      voice: baseVoice,
+      gender: existingRegEntry.gender || (isFem ? 'female' : 'male'),
+      voiceGender: existingRegEntry.voiceGender || (isFem ? 'female' : 'male'),
+      speakerGender: existingRegEntry.speakerGender || (isFem ? 'FEMALE' : 'MALE'),
+      userOverridden: true,
+      manualCharacterOverridden: true,
+      voiceAssignmentSource: 'manual',
+      reviewNeeded: false,
+    };
+
+    setSpeakerRegistry(nextReg);
+    if (scriptDataRef.current) {
+      scriptDataRef.current = {
+        ...scriptDataRef.current,
+        segments: updatedSegments,
+        updatedAt: Date.now(),
+      };
+    }
+    setScriptData((prev) => (prev ? {
+      ...prev,
+      segments: updatedSegments,
+      updatedAt: Date.now(),
+    } : prev));
+
+    if (seriesId && episodeId) {
+      try {
+        saveTimelineOperationToLocalStorage(seriesId, episodeId, {
+          segments: updatedSegments,
+          updatedAt: Date.now(),
+        });
+      } catch (_) {}
+
+      try {
+        await fetch(`/api/series/${encodeURIComponent(seriesId)}/speaker-identity`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            episodeId,
+            targetKey,
+            targetCharacterId: existingRegEntry.characterId || null,
+            newName: cleanNewName || undefined,
+            newVoiceId: newVoiceId || undefined,
+            applyAcrossSeries,
+          }),
+        });
+      } catch (err) {
+        console.warn('[SpeakerIdentity] Persist identity warning:', err?.message || err);
+      }
+    }
+
+    if (newVoiceId) {
+      await handleUpdateSpeakerVoice(nextSpeakerId, newVoiceId);
+    }
+    return updatedSegments;
   };
 
   // Override an individual segment's speaking rate and auto-regenerate its speech audio
@@ -2561,6 +2689,7 @@ const FALLBACK_VOICE_CATALOG = {
     handleTranslateSingleSegment,
     handleSplitSegment,
     handleUpdateSpeakerVoice,
+    handleUpdateSpeakerIdentity,
     handleToggleDeliveryType,
   };
 }

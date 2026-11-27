@@ -1,6 +1,45 @@
 # .agents/STATE.md
 
 ## Last Session
+IDE (Compact Khmer Dubbing Pipeline Fix) — 2026-11-27T09:16:30+07:00
+
+## Summary
+Updated the **✨ ខ្លីចំអត្ថន័យ** (Compact Khmer Dubbing) pipeline used by Episode Queue (`runSingleAutoCompact` -> `/api/dubbing/retranslate-all` -> `retranslateBatchDialogues`) to enforce Option #2 (`📝 ខ្លីចំអត្ថន័យ`) movie dubbing rules, strict 1:1 cue validation, and safe episode persistence.
+
+- `backend/services/geminiService.js` — Replaced `retranslateBatchDialogues` prompt with `COMPACT_DUBBING_PROMPT_HEADER` (Option #2 `📝 ខ្លីចំអត្ថន័យ` natural spoken Khmer, context-aware pronouns, examples, no 3-option output), passed `prevDialogueContextOnly`/`nextDialogueContextOnly` without merging, preserved `originalKhmerText` separately, and added `validateCompactBatchOutput()` enforcing 1:1 cue count, `id`/`sourceCueId` preservation, and zero Chinese/English/Thai/Lao characters.
+- `backend/routes/scriptRoutes.js` — Added 1:1 count/order/`id`/`sourceCueId`/timestamp validation in `POST /dubbing/retranslate-all` before disk write, preserved `originalKhmerText`, and only sets `autoCompacted = true` when all dialogue segments in the episode are compacted.
+- `frontend/src/features/dubbing-runner/singleEpisodeRunners.js` — Fixed `runSingleAutoCompact` so failed batches return `STEP_STATUS.FAILED` instead of falsely setting `percent: 100` and `autoCompacted = true`.
+- `backend/tests/retranslate_fallback.test.js` — Added Test 10 verifying Option #2 prompt, neighboring context, 1:1 `sourceCueId`/timestamp/`originalKhmerText` preservation, and rejection of mismatched counts or Chinese/English/Thai/Lao output.
+- Verified `node --test backend/tests/retranslate_fallback.test.js backend/tests/phase1_translation_boundary.test.js backend/tests/smart_pipeline_all3.test.js` (`43/43 PASS`) and `cd frontend; npm run build` (`2053 modules`, `0 errors`).
+
+---
+
+## Previous Session (Folder Video Upload)
+IDE (Folder Video Upload) — 2026-11-26T23:56:40+07:00
+
+## Summary
+Added direct folder-with-videos upload support on Home Dashboard (`Upload Folder វីដេអូ`) so users can select a local folder (e.g. `《墨女倾心》ពេញ 44 ភាគ`) and auto-create the series + upload all sorted video files as episodes `ep_1..ep_N`.
+
+- `frontend/src/components/layout/HomeDashboard.jsx` — Added `btn-home-upload-folder` button, hidden `webkitdirectory` file input (`folderUploadInputRef`), `handleUploadVideoFolder` (filters video extensions, natural numeric filename sorting, duplicate folder check, `POST /api/series`, sequential `POST /api/series/:seriesId/episodes` + `uploadVideoFile` + `POST /api/series/:seriesId/sync` with partial-upload sync on mid-run error), and `home-upload-folder-progress` progress bar UI.
+- `frontend/src/components/layout/HomeDashboard.css` — Added `.home-btn-upload-folder` and `.home-upload-folder-progress` styles.
+- Verified `cd frontend; npm run build` (`2053 modules`, `0 errors`, `1.97s`), `sanitizeProjectName('《墨女倾心》ពេញ 44 ភាគ') -> '《墨女倾心》ពេញ_44_ភាគ'`, and `node --test backend/tests/job_queue_and_shutdown.test.js` (`4/4 PASS`).
+
+---
+
+## Previous Session (Queue Deadlock Fix)
+IDE (Queue Deadlock Fix) — 2026-11-26T19:51:00+07:00
+
+## Summary
+Fixed `ProductionJobQueue.processQueue()` head-of-line deadlock that caused new jobs (`野佛_(Wild_Buddha)/ep_1`) to stay stuck at `0%` (`Job queued in production queue...`) when duplicate `queued` jobs existed in the queue.
+
+- `backend/services/pipeline/productionJobQueue.js` — Added `hasRunningOrLockedWorkerForEpisode()` (via shared `_hasEpisodeConflict(..., includeQueued=false)`) so `processQueue()` only skips episodes that actually have a `running`/`recovering` worker or `activeEpisodeLocks` entry (not merely another `queued` job), and iterates past blocked episodes until `startedCount >= availableSlots` instead of slicing before filtering.
+- `backend/tests/job_queue_and_shutdown.test.js` — Added regression test `processQueue avoids head-of-line deadlock when duplicate queued jobs share an episode`.
+- Verified `30/30` tests pass across `job_queue_and_shutdown.test.js`, `kill_button_and_cancellation.test.js`, and `queue_dispatch_and_payload.test.js`.
+- Cancelled 28 stale `queued` `series_route_test` test jobs on `http://localhost:5000` (`queuedCount: 29 -> 1`) and removed `backend/uploads/projects/series_route_test/`. Backend restart required so PID `12436` loads the updated `productionJobQueue.js`.
+
+---
+
+## Previous Session
 IDE (Final Data Integrity & Release Audit) — 2026-11-25T21:40:00+07:00
 
 ## Summary
@@ -176,4 +215,20 @@ Final Verification completed on baseline `97b657ebbd4425d14204cc895d7815bc802b2d
 - Commit BC1 fixes
 - Full 320-cue benchmark validation on Episodes 1, 4, 5, 20 needed to quantify real-world impact
 - Implement BC2-5 fixes (Tasks 3.8-3.13) only if benchmark shows specific gaps
+
+## Session: 2026-11-27T13:25+07:00 (Antigravity IDE — P0 Persistent Character Recognition & Cross-Episode Voice Memory)
+
+- **Last Session:** Antigravity IDE (`2026-11-27T13:25+07:00`)
+- **Summary:**
+  - Completed persistent character identity (`characterId`, `speakerId`, `aliases`, `characterGender`, `voiceActorTimbre`, `recognitionConfidence`, `recognitionEvidence`, `manualCharacterOverridden`) across Step 1, Step 2 (`Stage 6`, `Stage 9`), `episodeService`, `chunkOrchestrator`, `stage3VisionBatchRunner`, and UI (`VoiceSettings.jsx`, `TimelineTracksCanvas.jsx`, `speakerUtils.js`, `projectStorage.js`, `useAudioDubbing.js`).
+  - Added/fixed `PATCH /api/series/:seriesId/speaker-identity` in `backend/routes/seriesRoutes.js` (fixed missing `updateSeriesMetadata` import) for atomic manual identity & voice override synced to `seriesSpeakerMap` and episode `speakerRegistry`.
+  - Fixed Stage 3 `deduplicateFastOcrCues` overwrite of Step 1 characters, fixed Stage 9 `stage9_generateSegmentTTS.js` sidecar overwrite of `PROVENANCE_VERSION=2` metadata, fixed `BC3-1` continuity-bias conflict handling and recheck fallback cascade (`gemini-3.8-flash` -> `gemini-3.5-flash-lite` 20s timeout) in `speakerIdentificationService.js`, and isolated `namedScoreTotals` pooling on generic system names (`ប្រព័ន្ធ`) in `backend/models/speakerRegistry.js`.
+  - Added `backend/tests/p0_persistent_character_recognition.test.js` (`6/6 PASS`).
+  - Verified 30 regression suites (`216/216 PASS`), `frontend` production build (`2053` modules, `0` errors), Playwright live browser Cast Voices/Timeline/reload/restart persistence, and real 9-episode multimodal verification on `ss1` (`EP1, EP3, EP4, EP5, EP20, EP7, EP12` — `559` cues) and `野佛_(Wild_Buddha)` (`EP1, reported EP3` — `164` cues) plus Stage 9 Edge TTS MP3 provenance (`8/8` match).
+- **Active Environment:**
+  - Branch `chore/full-project-cleanup`; backend (`:5000`) / frontend dev (`:5173`) observed listening on Windows; `frontend/dist` freshly built.
+- **Next Steps:**
+  - Review and align 2 pre-existing outdated test assertions vs newer requirements (`fast_multimodal_gemini_prompt.test.js:51`, `fast_ocr_timing_and_accuracy.test.js:95`) and `male_female_speaker_detection_batch.test.js:102` (404 vs 400).
+  - Optionally add gender qualification to recurring generic occupational role names like `បុគ្គលិកពេទ្យ` when different-gender characters share the same role title across episodes.
+  - Coordinate/commit remaining unrelated OCR/queue/HomeDashboard WIP changes in the working tree separately.
 

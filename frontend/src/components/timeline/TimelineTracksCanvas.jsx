@@ -580,6 +580,10 @@ function TimelineTracksCanvas({
     const speakerName = (seg.speaker || seg.speakerName || '').trim();
     const isFemale = resolveSegmentIsFemale(seg, speakerRegistry, voiceSettings?.voiceId);
     const isGeneratingVoice = seg.textStatus === 'generating';
+    const isPlaceholderName = !speakerName || speakerName === 'តួអង្គ' || speakerName.toLowerCase() === 'unknown' || speakerName.toLowerCase() === 'speaker';
+    const isReviewNeeded = Boolean(seg.speakerReviewNeeded || seg.unverifiedSpeaker || seg.speakerStatus === 'review_needed' || isPlaceholderName);
+    const rawUnknownId = String(seg.characterId || seg.speakerId || `seg_${segmentNumber}`).replace(/^char_|^spk_/i, '');
+    const shortUnknownId = rawUnknownId.length > 10 ? rawUnknownId.slice(-8) : rawUnknownId;
 
     // STEP 3: OVER truthfulness. overSec = realAudioDuration - (slotEnd - slotStart)
     const overSec = hasAudio ? parseFloat((realAudioDuration - slotDur).toFixed(2)) : 0;
@@ -591,18 +595,23 @@ function TimelineTracksCanvas({
     const pendingMarker = isGeneratingVoice ? ' • ⏳ កំពុងបង្កើត...' : (!hasAudio ? ' • គ្មានសំឡេង' : '');
     const khmerPreview = (seg.khmer || seg.khmerText || seg.khmerTranslatedText || seg.text || '').trim();
     const speakerGenderLabel = isFemale ? 'ស្រី' : 'ប្រុស';
-    const speakerTooltipLabel = speakerName || speakerGenderLabel;
+    const clipSpeakerLabel = !isPlaceholderName
+      ? `${speakerName} (${speakerGenderLabel})${isReviewNeeded ? ' ⚠' : ''}`
+      : `មិនស្គាល់:${shortUnknownId} (${speakerGenderLabel}) ⚠`;
+    const speakerTooltipLabel = !isPlaceholderName
+      ? `${speakerName}${isReviewNeeded ? ' ⚠️ ត្រូវការពិនិត្យ' : ''}`
+      : `មិនស្គាល់ [${seg.characterId || seg.speakerId || shortUnknownId}] (${speakerGenderLabel})`;
 
     // Responsive Clip Label Rendering based on calculated clip pixel width (clipWidthPx = audioWidth):
-    // - clipWidthPx < 48px: compact badge "#6" centered, hiding "ប្រុស/ស្រី" so it never cuts off as "#..."
-    // - 48px <= clipWidthPx < 95px: "#6 ប្រុស" cleanly
-    // - clipWidthPx >= 95px: "#6 ប្រុស" on top + 1-line preview of Khmer dialogue text in Kantumruy Pro (11px)
+    // - clipWidthPx < 48px: compact badge "#6" centered, hiding speaker details so it never clips awkwardly
+    // - 48px <= clipWidthPx < 95px: "#6 ស៊ូ មីង (ប្រុស)" cleanly
+    // - clipWidthPx >= 95px: "#6 ស៊ូ មីង (ប្រុស)" on top + 1-line preview of Khmer dialogue text
     const clipWidthPx = audioWidth;
     const isCompactClip = clipWidthPx < 48;
     const isWideClip = clipWidthPx >= 95;
-    const compactIdLabel = `#${segmentNumber}${isOverrun ? '⚠️' : ''}`;
-    const mediumVoiceLabel = `#${segmentNumber} ${speakerGenderLabel}${overMarker}${trimMarker}`;
-    const fullVoiceLabel = `#${segmentNumber} ${speakerGenderLabel}${overMarker}${trimMarker}${pendingMarker}`;
+    const compactIdLabel = `#${segmentNumber}${isOverrun || isReviewNeeded ? '⚠' : ''}`;
+    const mediumVoiceLabel = `#${segmentNumber} ${clipSpeakerLabel}${overMarker}${trimMarker}`;
+    const fullVoiceLabel = `#${segmentNumber} ${clipSpeakerLabel}${overMarker}${trimMarker}${pendingMarker}`;
     const voiceLabel = isCompactClip ? compactIdLabel : (isWideClip ? fullVoiceLabel : mediumVoiceLabel);
 
     const isSliver = clipWidthPx < 5;
@@ -639,6 +648,9 @@ function TimelineTracksCanvas({
           data-segment-id={seg.id ?? idx}
           data-voice-gender={isFemale ? 'female' : 'male'}
           data-voice-generating={isGeneratingVoice ? 'true' : 'false'}
+          data-speaker-id={seg.speakerId || ''}
+          data-character-id={seg.characterId || ''}
+          data-speaker-review-needed={isReviewNeeded ? 'true' : 'false'}
           className={`voice-segment-block ${isFemale ? 'voice-female' : 'voice-male'} ${!hasAudio ? 'is-pending-audio' : ''} ${isGeneratingVoice ? 'is-generating-voice' : ''} ${isSelected ? 'selected' : ''} ${isLinked ? 'is-linked-clip' : ''} ${isDragging ? 'is-dragging' : ''} ${isSliver ? 'clip-sliver' : ''} ${isCompactClip ? 'is-compact-clip' : ''} ${isOverrun ? 'has-audio-overrun' : ''}`}
           style={{
             cursor: isDragging ? 'grabbing' : 'grab',

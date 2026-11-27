@@ -4,6 +4,7 @@ const path = require("path");
 const { uploadsDir, sanitizeProjectName, sanitizeEpisodeId, isSafeUploadPath } = require("../utils/pathUtils");
 const {
   getSeriesMetadata,
+  updateSeriesMetadata,
   withSeriesMetadataLock,
   syncSeriesMetadataSafely,
   persistEpisodeTimelineOperation,
@@ -112,6 +113,160 @@ router.post("/", async (req, res) => {
       title: rawTitle || targetId,
     });
     res.json({ success: true, series: saved });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.patch("/:seriesId/speaker-identity", async (req, res) => {
+  try {
+    const { seriesId } = req.params;
+    const {
+      episodeId,
+      targetKey,
+      targetCharacterId,
+      newName,
+      newVoiceId,
+      newGender,
+      applyAcrossSeries = true,
+    } = req.body || {};
+
+    const cleanSeries = sanitizeProjectName(seriesId);
+    const cleanNewName = typeof newName === "string" ? newName.trim() : "";
+    if (!targetKey && !targetCharacterId) {
+      return res.status(400).json({ success: false, error: "targetKey or targetCharacterId is required" });
+    }
+    if (!cleanNewName && !newVoiceId) {
+      return res.status(400).json({ success: false, error: "newName or newVoiceId is required" });
+    }
+
+    const {
+      getSpeakerId,
+      buildCharacterId,
+      isPlaceholderSpeakerName,
+      isGenericSpeakerName,
+      isEpisodicRoleSpeakerName,
+      buildSpeakerRegistry,
+    } = require("../models/speakerRegistry");
+    const { buildVerifiedSeriesSpeakerMapPatch } = require("../services/pipeline/speakerIdentificationService");
+
+    let updatedSegments = null;
+    let updatedRegistry = null;
+    let updatedSeriesMap = null;
+    let updatedCount = 0;
+
+    await withSeriesMetadataLock(cleanSeries, () =>
+      updateSeriesMetadata(cleanSeries, (freshSeries) => {
+        if (!freshSeries) return false;
+        const targetEp = episodeId
+          ? (freshSeries.episodes || []).find((e) => String(e.id) === String(episodeId))
+          : null;
+        if (episodeId && !targetEp) return false;
+
+        const targetEpisodes = targetEp ? [targetEp] : (freshSeries.episodes || []);
+        const inferredVoiceGender = newVoiceId
+          ? (String(newVoiceId).toLowerCase().includes("sreymom") ? "female" : "male")
+          : (String(newGender || "").toLowerCase() === "female"
+              ? "female"
+              : (String(newGender || "").toLowerCase() === "male" ? "male" : null));
+
+        const nextSpeakerId = cleanNewName && !isPlaceholderSpeakerName(cleanNewName)
+          ? getSpeakerId(cleanNewName, inferredVoiceGender || "unknown")
+          : String(targetKey);
+        const nextCharacterId = cleanNewName && !isPlaceholderSpeakerName(cleanNewName)
+          ? buildCharacterId(cleanNewName, nextSpeakerId, {
+              isGeneric: isGenericSpeakerName(cleanNewName),
+              isEpisodic: isEpisodicRoleSpeakerName(cleanNewName),
+            })
+          : (targetCharacterId || `char_${nextSpeakerId.replace(/^spk_/, "")}`);
+
+        const matchesCue = (seg) => {
+          if (!seg) return false;
+          if (targetKey && String(seg.speakerId || "") === String(targetKey)) return true;
+          if (targetCharacterId && String(seg.characterId || "") === String(targetCharacterId)) return true;
+          return false;
+        };
+
+        for (const ep of targetEpisodes) {
+          if (!ep?.scriptData?.segments || !Array.isArray(ep.scriptData.segments)) continue;
+          let epChanged = false;
+          const nextSegs = ep.scriptData.segments.map((seg) => {
+            if (!matchesCue(seg)) return seg;
+            epChanged = true;
+            if (targetEp && String(ep.id) === String(targetEp.id)) updatedCount++;
+
+            const resolvedVoice = newVoiceId || seg.khmerVoiceId || seg.voiceId || seg.voice || "km-KH-PisethNeural";
+            const isFemVoice = String(resolvedVoice).toLowerCase().includes("sreymom");
+            const effectiveGender = inferredVoiceGender || (seg.voiceGender === "female" || seg.voiceGender === "male" ? seg.voiceGender : (isFemVoice ? "female" : "male"));
+            const effectiveSpkGender = effectiveGender === "female" ? "FEMALE" : "MALE";
+            const finalName = cleanNewName || seg.speakerName || seg.speaker || "តួអង្គ";
+            const finalSpkId = cleanNewName ? nextSpeakerId : (seg.speakerId || nextSpeakerId);
+            const finalCharId = cleanNewName ? nextCharacterId : (seg.characterId || nextCharacterId);
+
+            return {
+              ...seg,
+              speaker: finalName,
+              speakerName: finalName,
+              speakerId: finalSpkId,
+              characterId: finalCharId,
+              aliases: Array.from(new Set([...(Array.isArray(seg.aliases) ? seg.aliases : []), finalName].filter((a) => a && !isPlaceholderSpeakerName(a)))),
+              voiceId: resolvedVoice,
+              khmerVoiceId: resolvedVoice,
+              voice: resolvedVoice,
+              voiceOverride: resolvedVoice,
+              voiceGender: effectiveGender,
+              gender: effectiveGender,
+              speakerGender: effectiveSpkGender,
+              voiceLabel: isFemVoice ? "ស្រីមុំ (Sreymom)" : "ពិសិដ្ឋ (Piseth)",
+              avatar: isFemVoice ? "👩" : "👨",
+              badgeColor: isFemVoice ? "#ec4899" : "#38bdf8",
+              speakerStatus: "verified",
+              speakerVerified: true,
+              speakerReviewNeeded: false,
+              reviewNeeded: false,
+              unverifiedSpeaker: false,
+              userOverridden: true,
+              manualCharacterOverridden: true,
+              voiceAssignmentSource: "manual",
+              audioOutdated: newVoiceId && seg.voiceId !== resolvedVoice ? true : Boolean(seg.audioOutdated),
+            };
+          });
+
+          if (epChanged) {
+            ep.scriptData.segments = nextSegs;
+            ep.scriptData.updatedAt = Date.now();
+            const rebuilt = buildSpeakerRegistry(nextSegs, ep.speakerRegistry || {});
+            // Clean superseded positional key when renamed cleanly
+            if (cleanNewName && targetKey && String(targetKey) !== nextSpeakerId && rebuilt[targetKey]) {
+              const anyStillUsingOld = nextSegs.some((s) => String(s.speakerId || "") === String(targetKey));
+              if (!anyStillUsingOld) delete rebuilt[targetKey];
+            }
+            ep.speakerRegistry = rebuilt;
+            ep.lastModified = Date.now();
+            if (targetEp && String(ep.id) === String(targetEp.id)) {
+              updatedSegments = nextSegs;
+              updatedRegistry = rebuilt;
+            }
+          }
+        }
+
+        if (applyAcrossSeries && cleanNewName && !isPlaceholderSpeakerName(cleanNewName)) {
+          const patchSourceSegs = updatedSegments || [];
+          const patchReg = updatedRegistry || {};
+          updatedSeriesMap = buildVerifiedSeriesSpeakerMapPatch(patchSourceSegs, patchReg, freshSeries.seriesSpeakerMap || {});
+          freshSeries.seriesSpeakerMap = updatedSeriesMap;
+        }
+        return true;
+      })
+    );
+
+    res.json({
+      success: true,
+      updatedCount,
+      segments: updatedSegments,
+      speakerRegistry: updatedRegistry,
+      seriesSpeakerMap: updatedSeriesMap,
+    });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }

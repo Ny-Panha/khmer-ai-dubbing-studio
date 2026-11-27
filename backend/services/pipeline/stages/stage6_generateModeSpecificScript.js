@@ -201,8 +201,9 @@ async function generateModeSpecificScript({
                 s.khmerTranslatedText = entry.khmerText;
                 s.khmerText = entry.khmerText;
                 s.khmer = entry.khmerText;
-                if (entry.speaker && (!s.speaker || s.speaker === 'តួអង្គ')) s.speaker = entry.speaker;
-                if (entry.voiceGender && (!s.voiceGender || s.voiceGender === 'unknown')) s.voiceGender = entry.voiceGender;
+                const hasStep1State = Boolean(s.speakerStatus === 'verified' || s.speakerStatus === 'review_needed' || s.speakerVerified || s.voiceAssignmentSource === 'multimodal_verified' || s.voiceAssignmentSource === 'series_glossary');
+                if (!hasStep1State && entry.speaker && (!s.speaker || s.speaker === 'តួអង្គ')) s.speaker = entry.speaker;
+                if (!hasStep1State && entry.voiceGender && (!s.voiceGender || s.voiceGender === 'unknown')) s.voiceGender = entry.voiceGender;
                 s.translationStatus = 'translated';
                 s.isTranslationCached = true;
                 epResumedCount++;
@@ -259,8 +260,9 @@ async function generateModeSpecificScript({
           });
           if (cached && cached.khmerText && !isPlaceholderTranslationText(cached.khmerText)) {
             s.khmerTranslatedText = cached.khmerText;
-            if (cached.speaker && (!s.speaker || s.speaker === 'តួអង្គ')) s.speaker = cached.speaker;
-            if (cached.voiceGender && (!s.voiceGender || s.voiceGender === 'unknown')) s.voiceGender = cached.voiceGender;
+            const hasStep1State = Boolean(s.speakerStatus === 'verified' || s.speakerStatus === 'review_needed' || s.speakerVerified || s.voiceAssignmentSource === 'multimodal_verified' || s.voiceAssignmentSource === 'series_glossary');
+            if (!hasStep1State && cached.speaker && (!s.speaker || s.speaker === 'តួអង្គ')) s.speaker = cached.speaker;
+            if (!hasStep1State && cached.voiceGender && (!s.voiceGender || s.voiceGender === 'unknown')) s.voiceGender = cached.voiceGender;
             s.translationStatus = 'translated';
             s.isTranslationCached = true;
             cachedHitsCount++;

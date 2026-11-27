@@ -1024,6 +1024,7 @@ export default function App() {
   const handleTranslateSingleSegment = useCallback((...args) => audioRef.current.handleTranslateSingleSegment?.(...args), []);
   const handleUpdateSegmentText = useCallback((...args) => audioRef.current.handleUpdateSegmentText?.(...args), []);
   const handleUpdateSpeakerVoice = useCallback((...args) => audioRef.current.handleUpdateSpeakerVoice?.(...args), []);
+  const handleUpdateSpeakerIdentity = useCallback((...args) => audioRef.current.handleUpdateSpeakerIdentity?.(...args), []);
   const handleUpdateSegmentVoice = useCallback((...args) => audioRef.current.handleUpdateSegmentVoice?.(...args), []);
 
   // Playback callbacks
@@ -1399,6 +1400,7 @@ export default function App() {
                   onUpdateSegmentText={handleUpdateSegmentText}
                   speakerRegistry={speakerRegistry || EMPTY_OBJECT}
                   onUpdateSpeakerVoice={handleUpdateSpeakerVoice}
+                  onUpdateSpeakerIdentity={handleUpdateSpeakerIdentity}
                   onUpdateSegmentVoice={handleUpdateSegmentVoice}
                   onToggleDeliveryType={handleToggleDeliveryType}
                   selectedSegmentId={media.selectedSegmentId}
@@ -1530,6 +1532,7 @@ export default function App() {
                   onTranslateSegment={handleTranslateSingleSegment}
                   speakerRegistry={speakerRegistry || EMPTY_OBJECT}
                   onUpdateSpeakerVoice={handleUpdateSpeakerVoice}
+                  onUpdateSpeakerIdentity={handleUpdateSpeakerIdentity}
                   onUpdateSegmentVoice={handleUpdateSegmentVoice}
                   onUpdateSegmentText={handleUpdateSegmentText}
                   onUpdateSegmentSpeed={audio.handleUpdateSegmentSpeed}

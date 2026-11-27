@@ -864,35 +864,61 @@ async function persistEpisodeScriptData({
       );
       if (Object.keys(mergedSpeakerMap).length > 0) {
         freshSeries.seriesSpeakerMap = mergedSpeakerMap;
-        const existingChars = Array.isArray(freshSeries.glossary?.characters) ? [...freshSeries.glossary.characters] : [];
+        const { isPlaceholderSpeakerName, isPositionalSpeakerId } = require('../models/speakerRegistry');
+        const existingChars = Array.isArray(freshSeries.glossary?.characters)
+          ? freshSeries.glossary.characters.filter((c) => {
+              if (!c) return false;
+              const nm = String(c.name || c.khmerName || '').trim();
+              if (!nm || isPlaceholderSpeakerName(nm)) return false;
+              if (isPositionalSpeakerId(c.id || c.speakerId) && !c.manualCharacterOverridden) return false;
+              return true;
+            })
+          : [];
         const uniqueVerified = new Map();
         for (const entry of Object.values(mergedSpeakerMap)) {
-          if (entry && entry.speakerId && entry.name && !uniqueVerified.has(entry.speakerId)) {
+          if (entry && entry.speakerId && entry.name && !isPlaceholderSpeakerName(entry.name) && !uniqueVerified.has(entry.speakerId)) {
             uniqueVerified.set(entry.speakerId, entry);
           }
         }
         for (const entry of uniqueVerified.values()) {
           const idx = existingChars.findIndex(
-            (c) => c && (c.id === entry.speakerId || String(c.name || '').trim() === entry.name)
+            (c) => c && (c.id === entry.speakerId || (entry.characterId && c.characterId === entry.characterId) || String(c.name || '').trim() === entry.name)
           );
           if (idx === -1) {
             existingChars.push({
               id: entry.speakerId,
+              speakerId: entry.speakerId,
+              characterId: entry.characterId || null,
               name: entry.name,
               khmerName: entry.name,
+              aliases: Array.isArray(entry.aliases) ? entry.aliases : [entry.name],
               gender: entry.gender,
+              characterGender: entry.characterGender || entry.speakerGender || entry.gender,
+              voiceActorTimbre: entry.voiceActorTimbre || entry.speakerGender || entry.gender,
               voiceId: entry.voiceId,
               khmerVoiceId: entry.khmerVoiceId,
+              recognitionConfidence: entry.recognitionConfidence ?? null,
+              visualAppearance: entry.visualAppearance || null,
+              voiceTimbreDesc: entry.voiceTimbreDesc || null,
               voiceAssignmentSource: entry.voiceAssignmentSource,
               userOverridden: Boolean(entry.userOverridden),
+              manualCharacterOverridden: Boolean(entry.manualCharacterOverridden),
             });
-          } else if (!existingChars[idx].userOverridden) {
+          } else if (!existingChars[idx].userOverridden && !existingChars[idx].manualCharacterOverridden) {
             existingChars[idx] = {
               ...existingChars[idx],
               id: entry.speakerId,
+              speakerId: entry.speakerId,
+              characterId: entry.characterId || existingChars[idx].characterId || null,
+              aliases: Array.from(new Set([...(existingChars[idx].aliases || []), ...(entry.aliases || [])])),
               gender: entry.gender,
+              characterGender: entry.characterGender || existingChars[idx].characterGender || entry.gender,
+              voiceActorTimbre: entry.voiceActorTimbre || existingChars[idx].voiceActorTimbre || entry.gender,
               voiceId: entry.voiceId,
               khmerVoiceId: entry.khmerVoiceId,
+              recognitionConfidence: entry.recognitionConfidence ?? existingChars[idx].recognitionConfidence ?? null,
+              visualAppearance: entry.visualAppearance || existingChars[idx].visualAppearance || null,
+              voiceTimbreDesc: entry.voiceTimbreDesc || existingChars[idx].voiceTimbreDesc || null,
               voiceAssignmentSource: entry.voiceAssignmentSource,
             };
           }

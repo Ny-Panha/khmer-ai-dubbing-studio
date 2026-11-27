@@ -1022,16 +1022,30 @@ function deduplicateFastOcrCues(rawCues = [], defaultGender = 'male') {
   const cleanedDeduped = stripRepeatedLeadingTimeCardPrefix(deduped);
 
   return cleanedDeduped.map((seg, idx) => {
-    const isUserOverridden = Boolean(seg.userOverridden);
+    const isUserOverridden = Boolean(seg.userOverridden || seg.manualCharacterOverridden);
+    const hasStep1IdentifiedSpeaker = Boolean(
+      isUserOverridden ||
+      seg.voiceAssignmentSource === 'manual' ||
+      seg.voiceAssignmentSource === 'multimodal_verified' ||
+      seg.voiceAssignmentSource === 'series_glossary' ||
+      seg.voiceAssignmentSource === 'local_system_rule' ||
+      seg.voiceAssignmentSource === 'local_acoustic_visual' ||
+      seg.speakerStatus === 'verified' ||
+      seg.speakerStatus === 'review_needed' ||
+      seg.speakerVerified === true ||
+      Boolean(seg.speakerEvidence && seg.speakerEvidence.source)
+    );
     let resolvedGender;
     let resolvedVoice;
     let voiceMeta;
 
-    if (isUserOverridden) {
+    if (hasStep1IdentifiedSpeaker) {
       const existingVoice = seg.voiceId || seg.khmerVoiceId || seg.voice || '';
       const rawGender = String(seg.voiceGender || '').toLowerCase();
       if (rawGender === 'female' || rawGender === 'male') {
         resolvedGender = rawGender;
+      } else if (seg.speakerStatus === 'review_needed' || seg.speakerGender === 'UNKNOWN') {
+        resolvedGender = 'unknown';
       } else if (existingVoice.includes('Sreymom')) {
         resolvedGender = 'female';
       } else if (existingVoice.includes('Piseth')) {
@@ -1041,10 +1055,12 @@ function deduplicateFastOcrCues(rawCues = [], defaultGender = 'male') {
       }
       voiceMeta = buildVoiceMeta(resolvedGender);
       resolvedVoice = existingVoice || voiceMeta.voiceId;
-      if (resolvedVoice.includes('Sreymom')) {
-        voiceMeta = buildVoiceMeta('female');
-      } else if (resolvedVoice.includes('Piseth')) {
-        voiceMeta = buildVoiceMeta('male');
+      if (resolvedGender !== 'unknown') {
+        if (resolvedVoice.includes('Sreymom')) {
+          voiceMeta = buildVoiceMeta('female');
+        } else if (resolvedVoice.includes('Piseth')) {
+          voiceMeta = buildVoiceMeta('male');
+        }
       }
     } else {
       // Rule 1: Non-overridden Fast OCR defaults ALWAYS re-derive voiceId/khmerVoiceId/voice from final voiceGender
@@ -1058,10 +1074,10 @@ function deduplicateFastOcrCues(rawCues = [], defaultGender = 'male') {
       resolvedVoice = voiceMeta.voiceId;
     }
 
-    const resolvedSpeaker = isUserOverridden ? (seg.speaker || seg.speakerName || 'តួអង្គ') : 'តួអង្គ';
-    const resolvedSpeakerId = isUserOverridden ? (seg.speakerId || `spk_ocr_${idx + 1}`) : `spk_ocr_${idx + 1}`;
-    const resolvedUnverified = isUserOverridden
-      ? (seg.unverifiedSpeaker !== undefined ? Boolean(seg.unverifiedSpeaker) : (resolvedSpeaker === 'តួអង្គ'))
+    const resolvedSpeaker = hasStep1IdentifiedSpeaker ? (seg.speaker || seg.speakerName || 'តួអង្គ') : 'តួអង្គ';
+    const resolvedSpeakerId = hasStep1IdentifiedSpeaker ? (seg.speakerId || `spk_review_${seg.sourceCueId || idx + 1}`) : `spk_ocr_${idx + 1}`;
+    const resolvedUnverified = hasStep1IdentifiedSpeaker
+      ? (seg.unverifiedSpeaker !== undefined ? Boolean(seg.unverifiedSpeaker) : (seg.speakerStatus === 'review_needed' || resolvedSpeaker === 'តួអង្គ'))
       : true;
 
     return {
@@ -1089,16 +1105,25 @@ function deduplicateFastOcrCues(rawCues = [], defaultGender = 'male') {
       ocrDisagreement: Boolean(seg.ocrDisagreement),
       uncertainOcr: Boolean(seg.uncertainOcr || seg.ocrConfidence === 'low'),
 
-      // STEP 3: Speaker/gender WITHOUT ASR
-      speakerSource: 'ocr_only',
+      // STEP 3: Speaker/gender (preserve Step 1 multimodal identification if already run)
+      speakerSource: hasStep1IdentifiedSpeaker ? (seg.speakerSource || seg.voiceAssignmentSource || 'multimodal_verified') : 'ocr_only',
       unverifiedSpeaker: resolvedUnverified,
-      genderConfidence: isUserOverridden ? (seg.genderConfidence ?? null) : null,
+      genderConfidence: hasStep1IdentifiedSpeaker ? (seg.genderConfidence ?? null) : null,
       voiceGender: resolvedGender,
       gender: resolvedGender,
-      speakerGender: resolvedGender.toUpperCase(),
+      speakerGender: resolvedGender === 'unknown' ? 'UNKNOWN' : resolvedGender.toUpperCase(),
       speaker: resolvedSpeaker,
       speakerName: resolvedSpeaker,
       speakerId: resolvedSpeakerId,
+      ...(seg.characterId ? { characterId: seg.characterId } : {}),
+      ...(seg.voiceAssignmentSource ? { voiceAssignmentSource: seg.voiceAssignmentSource } : {}),
+      ...(seg.speakerStatus ? { speakerStatus: seg.speakerStatus } : {}),
+      ...(seg.speakerReviewNeeded !== undefined ? { speakerReviewNeeded: Boolean(seg.speakerReviewNeeded) } : {}),
+      ...(seg.speakerEvidence ? { speakerEvidence: seg.speakerEvidence } : {}),
+      ...(seg.recognitionConfidence !== undefined ? { recognitionConfidence: seg.recognitionConfidence } : {}),
+      ...(seg.recognitionEvidence ? { recognitionEvidence: seg.recognitionEvidence } : {}),
+      ...(seg.characterGender ? { characterGender: seg.characterGender } : {}),
+      ...(seg.voiceActorTimbre ? { voiceActorTimbre: seg.voiceActorTimbre } : {}),
       voiceId: resolvedVoice,
       khmerVoiceId: resolvedVoice,
       voice: resolvedVoice,

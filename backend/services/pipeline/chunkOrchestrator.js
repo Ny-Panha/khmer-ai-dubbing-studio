@@ -764,10 +764,14 @@ async function runChunkedDubbingPipeline({
 
   let finalizedSegments = timingRes.timedSegments;
 
-  // Speaker Registry Sync
+  // Speaker Registry Sync (merge series memory + in-run chunk discoveries)
+  const effectiveSeriesMapForSync = {
+    ...(seriesGlossary?.seriesSpeakerMap || {}),
+    ...(runningSeriesSpeakerMap || {}),
+  };
   const initialRegistry = buildSpeakerRegistry(finalizedSegments, {});
   const syncResult = syncSegmentsWithSpeakerRegistry(finalizedSegments, {
-    seriesSpeakerMap: seriesGlossary?.seriesSpeakerMap || {},
+    seriesSpeakerMap: effectiveSeriesMapForSync,
   });
   finalizedSegments = syncResult.segments || finalizedSegments;
   const speakerRegistry = syncResult.speakerRegistry || initialRegistry;
@@ -775,7 +779,7 @@ async function runChunkedDubbingPipeline({
   const updatedSeriesSpeakerMap = buildVerifiedSeriesSpeakerMapPatch(
     finalizedSegments,
     speakerRegistry,
-    seriesGlossary?.seriesSpeakerMap || {}
+    effectiveSeriesMapForSync
   );
 
   checkAbort();
@@ -948,6 +952,7 @@ async function runChunkedDubbingPipeline({
     status: isPipelineComplete ? 'translated' : 'review_needed',
     seriesGenre: scriptResult.genre || genre,
     seriesDetectedGenre: scriptResult.detectedGenre || scriptResult.genre || genre,
+    seriesSpeakerMap: updatedSeriesSpeakerMap,
     jobId: jobId || ingestResult?.jobId,
   });
   console.log(`[ChunkOrchestrator] ✅ Persisted ${persistRes.savedCount} script segments atomically to series.json for ${persistRes.episodeId} (status=${pipelineFinalStatus})`);

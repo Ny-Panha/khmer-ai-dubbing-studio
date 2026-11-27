@@ -40,23 +40,43 @@ import { prefetchSourceProxyStatus } from './useSourceProxy';
 
 function prepareEpisode(ep, targetSeries) {
   const seriesSpeakerMap = {};
+  const isIgnoredEntry = (name, id) => {
+    const nm = String(name || '').trim().toLowerCase();
+    const sid = String(id || '').trim();
+    if (!nm || nm === 'តួអង្គ' || nm === 'unknown' || nm === 'speaker' || /^speaker[\s_-]*\d+$/i.test(nm)) return true;
+    if (/^spk_(?:ocr|review|generic|unknown)_\d+$/i.test(sid) || /^spk_\d+$/i.test(sid)) return true;
+    return false;
+  };
+  if (targetSeries?.seriesSpeakerMap && typeof targetSeries.seriesSpeakerMap === 'object') {
+    Object.values(targetSeries.seriesSpeakerMap).forEach((c) => {
+      if (!c) return;
+      const key = c.speakerId || c.id || c.name;
+      const cName = c.khmerName || c.name || c.speakerName || '';
+      if (key && !isIgnoredEntry(cName, key) && (c.voiceId || c.khmerVoiceId)) {
+        seriesSpeakerMap[key] = c;
+      }
+    });
+  }
   if (Array.isArray(targetSeries?.glossary?.characters)) {
     targetSeries.glossary.characters.forEach((c) => {
       const key = c.id || c.speakerId || c.name;
-      if (key && (c.voiceId || c.khmerVoiceId)) {
+      const cName = c.khmerName || c.name || '';
+      if (key && !isIgnoredEntry(cName, key) && (c.voiceId || c.khmerVoiceId) && !seriesSpeakerMap[key]) {
         const isFemale = (c.gender === 'female' || c.gender === 'FEMALE');
         const isMale = (c.gender === 'male' || c.gender === 'MALE');
         seriesSpeakerMap[key] = {
           id: key,
           speakerId: key,
-          speakerName: c.khmerName || c.name || key,
-          name: c.khmerName || c.name || key,
+          characterId: c.characterId || null,
+          speakerName: cName || key,
+          name: cName || key,
           gender: isFemale ? 'FEMALE' : (isMale ? 'MALE' : 'UNKNOWN'),
           voiceGender: isFemale ? 'female' : (isMale ? 'male' : 'unknown'),
           voiceId: c.voiceId || c.khmerVoiceId,
           khmerVoiceId: c.khmerVoiceId || c.voiceId,
           voiceAssignmentSource: c.voiceAssignmentSource || 'series_glossary',
           userOverridden: Boolean(c.userOverridden),
+          manualCharacterOverridden: Boolean(c.manualCharacterOverridden),
         };
       }
     });
