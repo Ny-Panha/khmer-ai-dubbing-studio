@@ -19,6 +19,59 @@ const EXPLICIT_FILLER_KHMERS = Object.freeze([
   'សន្ទនា',
 ]);
 
+const EXPRESSIVE_KHMER_DUBBING_RULES = `EXPRESSIVE SOUNDS, INTERJECTIONS & NATURAL DUBBING RULES:
+- Understand the original audio emotion, speaker tone, and surrounding dialogue before translating.
+- Translate ALL spoken dialogue, interjections, repeated sounds, hesitation, laughter, coughing, crying, screaming, sighing, stuttering, and emotional vocalizations into natural, pronounceable Khmer phonetic expressions suitable for Edge TTS.
+- Preserve meaningful repetitions, hesitation, and emotional intensity (NEVER skip short vocalizations or interjections merely because they contain few characters).
+- NEVER translate audible sounds into descriptive words like "សើច", "យំ", "ក្អក", or "ស្រែក" unless those words are actually spoken as dialogue.
+- Examples (illustrative voice-acting expressions, adapt to emotion & context):
+  * 哈哈哈 / hahaha -> ហាហាហាហា!
+  * 呵呵 / hehehe -> ហេហេហេ...
+  * 啊啊啊 -> អា៎! អា៎! អា៎!
+  * 啊呃啊 -> អា៎... អឺ... អា៎!
+  * 咳咳咳 -> ខក់! ខក់! ខក់!
+  * 嗯嗯嗯 -> អ៊ឹម... អ៊ឹម...
+  * 哼 -> ហ៊ឹស!
+  * 唉 -> ហ៊ឺ...
+- Do NOT leave untranslated Chinese or English vocalizations (e.g. hahaha, hehehe, hmm, 哼, 唉).
+- Preserve strict 1:1 sourceCueId mapping, character identity, and assigned voice; match original cue duration closely.`;
+
+const EXPRESSIVE_CHINESE_VOCALIZATION_REGEX =
+  /^[\s啊哦嗯哈呵呀哇哎咦哼咳嘘嘿嘎呜唉呃唔呐嘛嗨哟喂嗷嘶哧咻嗚]+[!！?？.。…~～、，,\-—\s]*$/u;
+const EXPRESSIVE_LATIN_VOCALIZATION_REGEX =
+  /^(?:(?:ha){2,}|(?:he){2,}|(?:hi){2,}|(?:ho){2,}|h+m{2,}|u+m{2,}|u+h{2,}|a+h{2,}|e+h{2,}|o+h{2,}|sh{2,}|pfft+|tsk+|ahem+|argh+|ouch+|sigh+|haha+|hehe+)(?:[\s,!?.…~\-—]+(?:(?:ha){2,}|(?:he){2,}|(?:hi){2,}|(?:ho){2,}|h+m+|u+m+|u+h+|a+h+|e+h+|o+h+|e+r+|sh+|pfft+|tsk+|ahem+|argh+|ouch+|sigh+|haha+|hehe+))*[\s!?.…~\-—]*$|^(?:uh|ah|oh|eh|hm|um)+[\s,!?.…~\-—]+(?:uh|ah|oh|eh|hm|um)+[\s!?.…~\-—]*$/i;
+const DESCRIPTIVE_SOUND_LABELS = new Set([
+  'សើច',
+  'សំឡេងសើច',
+  'យំ',
+  'សំឡេងយំ',
+  'ក្អក',
+  'សំឡេងក្អក',
+  'ស្រែក',
+  'សំឡេងស្រែក',
+  'ដកដង្ហើមធំ',
+  'ថ្ងូរ',
+]);
+
+function isExpressiveVocalizationSource(text = '') {
+  const norm = String(text || '').normalize('NFC').trim();
+  if (!norm) return false;
+  return (
+    EXPRESSIVE_CHINESE_VOCALIZATION_REGEX.test(norm) ||
+    EXPRESSIVE_LATIN_VOCALIZATION_REGEX.test(norm)
+  );
+}
+
+function isPureDescriptiveSoundLabel(khmerText = '') {
+  const norm = String(khmerText || '')
+    .normalize('NFC')
+    .replace(/^[\[\(（【]+|[\]\)）】]+$/g, '')
+    .replace(/[\s.…។!?,:;~'"«»\-–—]+$/gu, '')
+    .trim();
+  if (!norm) return false;
+  return DESCRIPTIVE_SOUND_LABELS.has(norm);
+}
+
 const EXPLICIT_FILLER_SET = new Set(EXPLICIT_FILLER_KHMERS);
 const EXPLICIT_FILLER_REGEX = /^សូមរង់(?:ចា(?:ំ)?)?[\s.…។!?,:;~'"«»()\-–—]*$/u;
 const CHINESE_HANZI_REGEX = /[\u3400-\u4dbf\u4e00-\u9fa5]/;
@@ -85,6 +138,9 @@ function findRepeatedJunkKhmerSet(segments = [], { maxLen = 40, minCount = 5 } =
     const km = getSegmentKhmerText(seg);
     if (!km || km.length > maxLen) continue;
     const cn = getSegmentChineseText(seg);
+    // Expressive interjections/vocalizations (e.g. "哈哈哈" / "哈哈" -> "ហាហាហាហា!")
+    // naturally share the same phonetic Khmer expression across cues and are NOT junk.
+    if (cn && isExpressiveVocalizationSource(cn)) continue;
     let entry = statsByKhmer.get(km);
     if (!entry) {
       entry = { count: 0, distinctChinese: new Set() };
@@ -128,6 +184,7 @@ function isNonChineseAsrHallucination(seg) {
     getSegmentChineseText(seg) ||
     String(seg.spokenAudioText || seg.spokenChineseText || '').trim();
   if (!sourceText) return false;
+  if (isExpressiveVocalizationSource(sourceText)) return false;
 
   return !containsChineseHanzi(sourceText);
 }
@@ -142,6 +199,10 @@ function isSegmentTextBroken(seg, repeatedJunkSet = null) {
   if (!stripPunctuationForSpeech(km)) return true;
   if (isExplicitFillerKhmer(km)) return true;
   if (containsForeignScriptLeak(km)) return true;
+  const cn = getSegmentChineseText(seg);
+  if (cn && isExpressiveVocalizationSource(cn) && isPureDescriptiveSoundLabel(km)) {
+    return true;
+  }
   if (repeatedJunkSet && repeatedJunkSet.has(km)) return true;
   return false;
 }
@@ -271,6 +332,9 @@ function scanSeriesBrokenSegments(episodes = [], { checkAudioFileFn = null } = {
 
 module.exports = {
   EXPLICIT_FILLER_KHMERS,
+  EXPRESSIVE_KHMER_DUBBING_RULES,
+  isExpressiveVocalizationSource,
+  isPureDescriptiveSoundLabel,
   containsChineseHanzi,
   containsForeignScriptLeak,
   isNonChineseAsrHallucination,

@@ -1,6 +1,34 @@
 # .agents/STATE.md
 
 ## Last Session
+IDE (Expressive Sounds & Natural Dubbing Translation) — 2026-11-27T13:47:00+07:00
+
+## Summary
+Upgraded the Chinese-to-Khmer translation, repair, auto-compact, and Edge TTS pipeline so expressive sounds, interjections, repeated sounds, hesitation, laughter, coughing, crying, screaming, sighing, and stuttering are preserved 1:1 and translated into natural, pronounceable Khmer phonetic expressions instead of being skipped or converted into descriptive words (`"សើច"`, `"យំ"`, `"ក្អក"`, `"ស្រែក"`).
+
+- `backend/utils/translationQuality.js` & `frontend/src/utils/translationQuality.js` — Added shared `EXPRESSIVE_KHMER_DUBBING_RULES`, `isExpressiveVocalizationSource()`, and `isPureDescriptiveSoundLabel()` (preserving backend/frontend parity); exempted expressive vocalizations from `findRepeatedJunkKhmerSet()` and `isNonChineseAsrHallucination()` (allowing genuine Latin vocalizations like `hahaha`/`hehehe` while still dropping SenseVoice artifacts like `The.`, `Yeah.`, `Oh.`); flagged pure descriptive labels on vocalization sources as broken text.
+- `backend/services/pipeline/stages/stage4_analyzeDialogueAudio.js` — Updated `filterValidChineseAsrSegments()` to retain genuine expressive vocalizations alongside Chinese Hanzi segments.
+- `backend/services/pipeline/stages/stage5_reconcileTimelineEvidence.js` — Stopped skipping short exclamations/interjections (`啊`, `嗯`, `哼`, `唉`, `咳`, etc.) in `isExclamationOrFiller()` so 1:1 cue mapping preserves emotional vocalizations.
+- `backend/services/pipeline/stages/stage6PromptAndConsistency.js` — Updated `isPlaceholderTranslationText()` / `getCachedTranslation()` to invalidate cached descriptive labels when source is an expressive vocalization.
+- `backend/services/pipeline/stages/stage6_generateModeSpecificScript.js` — Injected `EXPRESSIVE_KHMER_DUBBING_RULES` into Mode A, Retry, Single Rescue, and Mode B prompts.
+- `backend/services/geminiService.js` & `backend/services/repairBrokenService.js` — Added `EXPRESSIVE_KHMER_DUBBING_RULES` to `KHMER_DUBBING_BASE_SYSTEM_PROMPT`, `systemPrompt` (`FAST_EXECUTION_SYSTEM_PROMPT`), `retranslateSingleDialogue`, `COMPACT_DUBBING_PROMPT_HEADER` (Auto-Compact safe rule + illustrative examples), `retranslateBatchDialogues`, `buildBatchTranslationPrompt`, and `buildSingleLineRepairPrompt`.
+- `backend/services/pipeline/stages/stage9_generateSegmentTTS.js` — Added `EXPRESSIVE SOUNDS PROTECTION (AUTO-COMPACT)` rule to `autoShortenOverflowingSegments` so meaningful emotional sounds are preserved and never rewritten as descriptive nouns.
+- `backend/tests/expressive_vocalization_translation.test.js` — New test suite covering `translationQuality` parity, Stage 4/5 preservation, Stage 6 cache guard & Mode A, `geminiService` normal/compact/single prompts, Stage 9 Auto-Shorten protection, and Edge TTS speakability checks.
+- **Verification Results:**
+  - `node --test` across `expressive_vocalization_translation.test.js` + `stage5_reconciliation_and_recovery.test.js` + `stage6_khmer_translation_quality_rules.test.js` + `phase1_translation_boundary.test.js` + `retranslate_fallback.test.js` + `repair_broken_segments.test.js` + `p0_persistent_character_recognition.test.js` + `step1_completeness_and_mapping.test.js`: **59/59 ran PASS** (`4 skipped` in `stage5` due to missing local `series_1793272088927` fixture). Note: pre-existing `fast_multimodal_gemini_prompt.test.js` still has 1 unrelated failure (`'មីង'` -> `'male'` in `speakerRegistry.js`).
+  - `cd frontend && npm run build`: **2053 modules, 0 errors** (`1.95s`).
+  - Live Gemini (`generateModeSpecificScript` + `retranslateBatchDialogues` compact + `retranslateSingleDialogue`) + live Edge TTS on all 9 expressive cues (`哈哈哈`, `呵呵`, `啊啊啊`, `啊呃啊`, `咳咳咳`, `嗯嗯嗯`, `哼`, `唉`, `别动！哼，找死！`): all returned phonetic Khmer (`desc: false`, `hanzi: false`) and synthesized valid MP3 audio (`0.35s–1.92s`, `3356–12812` bytes).
+
+## Active Environment
+- Branch: `chore/full-project-cleanup`
+- Backend dev port: `5000`, Frontend dev port: `5173` (may need backend restart to load updated backend prompts/modules)
+
+## Next Steps
+- Restart backend server if currently running so live Step 1 / Repair / Auto-Compact picks up updated translation prompts and filters.
+
+---
+
+## Previous Session
 IDE (Compact Khmer Dubbing Pipeline Fix) — 2026-11-27T09:16:30+07:00
 
 ## Summary

@@ -11,6 +11,8 @@ const {
   isExplicitFillerKhmer,
   containsChineseHanzi,
   containsForeignScriptLeak,
+  isExpressiveVocalizationSource,
+  isPureDescriptiveSoundLabel,
 } = require('../../../utils/translationQuality');
 
 // Smart Segment-Level Translation Cache (Persists verified Chinese -> Khmer segment translations)
@@ -56,7 +58,12 @@ function getCachedTranslation(chineseSource, options = {}) {
   try {
     const data = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
     const expectedSchema = options.schemaVersion || 'v3_ctx';
-    if (data && data.schemaVersion === expectedSchema && data.khmerText && !isPlaceholderTranslationText(data.khmerText)) {
+    if (
+      data &&
+      data.schemaVersion === expectedSchema &&
+      data.khmerText &&
+      !isPlaceholderTranslationText(data.khmerText, chineseSource)
+    ) {
       return data;
     }
   } catch (_) {}
@@ -131,12 +138,15 @@ function createStage6AbortError(message = 'Stage 6 translation aborted by user s
   return abortErr;
 }
 
-function isPlaceholderTranslationText(text = '') {
+function isPlaceholderTranslationText(text = '', chineseSource = '') {
   const cleaned = String(text || '').trim();
   if (!cleaned) return true;
   if (isExplicitFillerKhmer(cleaned)) return true;
   if (!stripPunctuationForSpeech(cleaned)) return true;
   if (containsForeignScriptLeak(cleaned)) return true;
+  if (chineseSource && isExpressiveVocalizationSource(chineseSource) && isPureDescriptiveSoundLabel(cleaned)) {
+    return true;
+  }
   return false;
 }
 

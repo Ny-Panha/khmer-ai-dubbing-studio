@@ -7,13 +7,10 @@ const {
   isFuzzyClauseMatch,
 } = require('../../vadAlignmentService');
 
-// ១. បន្ថែម Helper ពិនិត្យពាក្យឧទាន/សម្រែកសាមញ្ញ (啊, 哦, 嗯, 哎, 哇...)
-const EXCLAMATION_REGEX = /^[啊哦嗯哈呀哇哎咦哼咳嘘嘿嘎呜\s!！?？.。,，、~～]+$/;
-function isExclamationOrFiller(text = '') {
-  const norm = normalizeChineseChars(text);
-  if (!norm) return false;
-  // ប្រសិនបើជាពាក្យសម្រែក/ឧទានសុទ្ធ ក្រោម 4 តួអក្សរ មិនបាច់បង្កើត Segment ទេ
-  return EXCLAMATION_REGEX.test(norm) && norm.length <= 4;
+// Preserve short expressive interjections/vocalizations (啊, 哦, 嗯, 哼, 唉, 咳...) 1:1
+// so downstream Step 1 translates them into natural Khmer phonetic expressions for TTS.
+function isExclamationOrFiller() {
+  return false;
 }
 
 /**

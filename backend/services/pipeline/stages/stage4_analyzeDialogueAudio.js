@@ -12,6 +12,7 @@ const {
 } = require('../../audioClassifierService');
 const { senseVoiceSemaphore, createAbortError } = require('../../../utils/asyncSemaphore');
 const { resolvePythonBinary } = require('../../audioSeparationService');
+const { isExpressiveVocalizationSource } = require('../../../utils/translationQuality');
 
 function sleepOrAbortStage4(ms, signal) {
   if (!signal) {
@@ -169,9 +170,10 @@ function containsChineseCharacters(text = '') {
 
 function filterValidChineseAsrSegments(segments = []) {
   if (!Array.isArray(segments)) return [];
-  return segments.filter((s) =>
-    containsChineseCharacters(s?.spokenChineseText || s?.chineseText || s?.text || '')
-  );
+  return segments.filter((s) => {
+    const txt = s?.spokenChineseText || s?.spokenAudioText || s?.chineseText || s?.text || '';
+    return containsChineseCharacters(txt) || isExpressiveVocalizationSource(txt);
+  });
 }
 
 function safelyParseSpeechSegments(rawText) {

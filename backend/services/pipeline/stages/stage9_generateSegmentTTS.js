@@ -134,6 +134,7 @@ async function autoShortenOverflowingSegments({
 - ហាមមានតួអក្សរចិន (汉字) ឬតួអក្សរថៃ នៅក្នុង "khmerText" ដាច់ខាត (100% Khmer Script Only)!
 - ត្រូវខ្លីជាង "currentKhmer" ជានិច្ច (ឧ. slot 0.6s "再快一点" ➜ "លឿនឡើង!", slot 1.2s "再晚就没座位了" ➜ "យឺតអស់កន្លែងហើយ!")។
 - រក្សា index និង segmentId ដូច Input ទាំងអស់។
+- EXPRESSIVE SOUNDS PROTECTION (AUTO-COMPACT): ហាមលុបចោល ឬកាត់បន្ថយសំឡេងអារម្មណ៍មានន័យ ការសើច ការយំ ការក្អក ការដកដង្ហើមធំ ការស្ទាក់ស្ទើរ ឬពាក្យឧទានខ្លីៗ (ដូចជា ហាហាហាហា!, ហេហេហេ..., អា៎! អា៎!, ខក់! ខក់!, អ៊ឹម..., ហ៊ឹស!, ហ៊ឺ...) ហើយហាមប្តូរសំឡេងទាំងនោះទៅជាពាក្យពណ៌នា "សើច", "យំ", "ក្អក", ឬ "ស្រែក" ជាដាច់ខាត!
 
 OVERFLOWING SEGMENTS TO CONDENSE:
 ${JSON.stringify(payload, null, 2)}

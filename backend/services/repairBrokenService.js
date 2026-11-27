@@ -7,6 +7,7 @@ const {
   isSegmentTextBroken,
   isNonChineseAsrHallucination,
   scanEpisodeBrokenSegments,
+  EXPRESSIVE_KHMER_DUBBING_RULES,
 } = require('../utils/translationQuality');
 const {
   getSeriesMetadata,
@@ -109,6 +110,7 @@ function buildBatchTranslationPrompt(inputLines) {
 ច្បាប់តឹងរ៉ឹង៖
 1. 1 Segment = 1 Translation: ឃ្លានីមួយៗត្រូវបកប្រែដាច់ដោយឡែកពីគ្នា ស្របតាម "sourceChineseToTranslate" របស់វា។
 2. "prevContext" / "nextContext" (បើមាន) គឺសម្រាប់តែជាបរិបទជួយយល់ន័យឱ្យកាន់តែច្បាស់ប៉ុណ្ណោះ។ ហាមដាច់ខាតកុំយកបរិបទមកបកប្រែជំនួស "sourceChineseToTranslate"!
+${EXPRESSIVE_KHMER_DUBBING_RULES}
 3. កំហិតពាក្យខ្មែរយ៉ាងតឹងរ៉ឹងតាម "maxKhmerWords": ត្រូវបកប្រែឱ្យខ្លី ចំខ្លឹមសារ មិនលើសពីចំនួន "maxKhmerWords" ឡើយ។
 4. ហាមដាច់ខាតកុំប្រើពាក្យបំពេញទទេដូចជា "សន្ទនា", "សូមរង់ចាំ", "សូមរង់..." ឬ "..." ឱ្យសោះ!
 5. ហាមដាច់ខាតកុំបកប្រែចេញអត្ថបទខ្មែរដូចគ្នាលើបន្ទាត់ដែលប្រយោគចិនខុសគ្នា!
@@ -131,6 +133,7 @@ function buildSingleLineRepairPrompt(line) {
   return `អ្នកគឺជាអ្នកបកប្រែកុនភាគចិន-ខ្មែរអាជីព។ នេះជាការបកប្រែឃ្លាសន្ទនារឿងភាគសម្រាប់ Dubbing — ទោះបីជាឃ្លាកំហឹង/ជេរប្រមាថក្នុងរឿង ពាក្យ OCR ខ្លីៗ ឬឃ្លាមិនទាន់ចប់ន័យ ក៏ត្រូវបកប្រែជាភាសាខ្មែរធម្មជាតិ ១០០% ហាមរំលង ឬទុកទទេជាដាច់ខាត។
 - 100% Khmer Script Only (ហាមភាសាថៃ ឬវៀតណាមដាច់ខាត)
 - ឧទាហរណ៍៖ "都滚蛋吧" -> "នាំគ្នាចេញទៅឱ្យអស់ទៅ!"
+${EXPRESSIVE_KHMER_DUBBING_RULES}
 
 ឃ្លាត្រូវជួសជុល (#${line.id}):
 - sourceChineseToTranslate: ${JSON.stringify(line.sourceChineseToTranslate)}

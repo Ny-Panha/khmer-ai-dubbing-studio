@@ -28,10 +28,12 @@ const {
 } = require("../models/speakerRegistry");
 const { parseTimeToSec, formatTime } = require("../models/timestampUtils");
 const { createSegment, normalizeSegmentList } = require("../models/segmentModel");
+const { EXPRESSIVE_KHMER_DUBBING_RULES } = require("../utils/translationQuality");
 
 const KHMER_DUBBING_BASE_SYSTEM_PROMPT = `
 អ្នកគឺជាអ្នកដឹកនាំការបញ្ចូលសំឡេងកុន អ្នកជំនាញបកប្រែភាសាចិន-ខ្មែរ អ្នកវិភាគវីដេអូ និងជាអ្នកសម្រាយរឿងកុនខ្មែរអាជីព។
 ភារកិច្ចរបស់អ្នកគឺវិភាគវីដេអូ សំឡេង និងអក្សរក្នុងវីដេអូដែលបានផ្តល់ឱ្យ រួចបង្កើតជាអត្ថបទសន្ទនា ឬអត្ថបទសម្រាយសាច់រឿងជាភាសាខ្មែរឱ្យបានត្រឹមត្រូវ ធម្មជាតិ និងរស់រវើកតាមទម្រង់ JSON ដែលបានកំណត់។
+${EXPRESSIVE_KHMER_DUBBING_RULES}
 `;
 
 /**
@@ -50,6 +52,7 @@ const systemPrompt = `
    - ប្រសិនបើអ្នកនិយាយជាមនុស្សប្រុស ត្រូវដាក់ឈ្មោះថា "តួប្រុស"។
    - ប្រសិនបើអ្នកនិយាយជាមនុស្សស្រី ត្រូវដាក់ឈ្មោះថា "តួស្រី"។
    - ហាមដាក់ឈ្មោះមិនច្បាស់លាស់ (ឧ. "មនុស្សម្នាក់", "សំឡេងអនាមិក")។
+5. ${EXPRESSIVE_KHMER_DUBBING_RULES}
 
 ត្រូវផ្តល់លទ្ធផលជាទម្រង់ JSON Array សុទ្ធសាធ:
 [
@@ -1163,6 +1166,7 @@ CRITICAL LANGUAGE MANDATES:
 - ហាមដាច់ខាត ១០០% កុំបញ្ចេញតួអក្សរថៃ (Thai Script \\u0E00-\\u0E7F) ឬឡាវសូម្បី ១ តួអក្សរ! ត្រូវប្រើអក្សរខ្មែរសុទ្ធ ១០០%!
 - ត្រូវគោរពចំនួនលេខឱ្យត្រឹមត្រូវ ១០០% (ឧ. 三 = ៣ ហាមបកជា ២)!
 - ពាក្យជេរ/ហៅ (ឧ. 臭猴子) ➜ ខ្មែរសុទ្ធ (អាស្វាស្អុយ, អាស្វាចង្រៃ) និងពាក្យបញ្ជា (ឧ. 滚出来) ➜ ខ្មែរសុទ្ធ (ចេញមក!, ឆាប់ចេញមក!)។
+${EXPRESSIVE_KHMER_DUBBING_RULES}
 
 Return EXACTLY 3 distinctive options in this exact order + a short 1-sentence note in JSON:
 {
@@ -1353,6 +1357,123 @@ function detectDuplicateTranslations(segments = []) {
   return segments;
 }
 
+const FORBIDDEN_DIALOGUE_SCRIPT_RE = /[\u4E00-\u9FFF\u3400-\u4DBFA-Za-z\u0E00-\u0E7F\u0E80-\u0EFF]/;
+
+const COMPACT_DUBBING_PROMPT_HEADER = `You are an expert Chinese-to-Khmer movie dubbing and subtitle translator.
+
+Your task is to generate natural, punchy, accurate spoken Khmer dialogue using the Compact Dubbing approach (📝 ខ្លីចំអត្ថន័យ).
+
+## Translation Rules
+
+1. Analyze the original Chinese dialogue, existing Khmer translation, surrounding dialogue, character relationships, tone, and scene context.
+2. Preserve 100% of the original core meaning.
+3. Use natural spoken Khmer, similar to professionally dubbed Chinese movies.
+4. Make dialogue short, clear, expressive, and suitable for lip-sync.
+5. Remove unnecessary filler words without losing meaning.
+6. Never translate mechanically or word-for-word.
+7. Preserve character names, numbers, titles, relationships, emotions, and important terminology.
+8. Use appropriate pronouns based on context:
+   - Family: ម៉ាក់, ប៉ា, កូន, បង, អូន
+   - Friends: ខ្ញុំ, ឯង, បង
+   - Enemies: អញ, ឯង, ហ្អែង
+   - Formal: ខ្ញុំ, លោក, អ្នក
+9. Output Khmer dialogue only. Preserve required identifiers and JSON structure outside the dialogue fields.
+10. Never include Chinese, English, Thai, or Lao characters inside Khmer dialogue.
+11. Never add information that does not exist in the original Chinese dialogue.
+12. Do not shorten dialogue unnecessarily when it is already natural and compact.
+13. Expressive Sounds & Emotional Vocalizations (AUTO-COMPACT SAFE):
+   - NEVER skip short vocalizations or interjections merely because they contain few characters, and NEVER strip meaningful emotional sounds during compact dubbing.
+   - Translate ALL interjections, repeated sounds, hesitation, laughter, coughing, crying, screaming, sighing, stuttering, and emotional vocalizations into natural, pronounceable Khmer phonetic expressions suitable for Edge TTS.
+   - NEVER output descriptive sound words like "សើច", "យំ", "ក្អក", or "ស្រែក" unless those exact words are actually spoken as dialogue.
+   - Match the original cue duration as closely as possible and never leave untranslated Chinese or English vocalizations.
+
+## Translation Examples
+
+- 我没事 → ខ្ញុំមិនអីទេ។
+- 结束了 → ចប់ហើយ។
+- 如果我说不呢 → ចុះបើខ្ញុំមិនព្រមវិញ?
+- 给我十分钟时间 → ឱ្យពេលខ្ញុំ ១០ នាទី។
+- 过家家游戏 → ល្បែងបាយឡុកបាយឡ។
+- 你体内的那个家伙很危险 → អាដែលនៅក្នុងខ្លួនកូននោះ គ្រោះថ្នាក់ណាស់។ (Parent-to-child context)
+- 老子好端端在角落里面待着 → អញនៅកៀនជ្រុងសុខៗសោះ។
+- 哈哈哈 / hahaha → ហាហាហាហា!
+- 呵呵 / hehehe → ហេហេហេ...
+- 啊啊啊 → អា៎! អា៎! អា៎!
+- 啊呃啊 → អា៎... អឺ... អា៎!
+- 咳咳咳 → ខក់! ខក់! ខក់!
+- 嗯嗯嗯 → អ៊ឹម... អ៊ឹម...
+- 哼 → ហ៊ឹស!
+- 唉 → ហ៊ឺ...
+
+## Strict Output
+
+Return only the final compact Khmer dialogue equivalent to Option 2 (📝 ខ្លីចំអត្ថន័យ).
+
+Do not generate three options, explanations, headings, or alternative translations.`;
+
+/**
+ * Validate 1:1 cue mapping, identifiers, and pure Khmer script for batch retranslation.
+ */
+function validateCompactBatchOutput(inputLines, parsed) {
+  if (!Array.isArray(parsed)) {
+    throw new Error("Invalid compact dubbing output: expected JSON array");
+  }
+  if (parsed.length !== inputLines.length) {
+    throw new Error(`Invalid compact dubbing output: expected ${inputLines.length} cues, got ${parsed.length}`);
+  }
+
+  const expectedById = new Map();
+  inputLines.forEach((item) => {
+    expectedById.set(String(item.id), item);
+  });
+
+  const seenIds = new Set();
+  const seenSourceCueIds = new Set();
+  const validatedById = new Map();
+
+  for (const outItem of parsed) {
+    if (!outItem || typeof outItem !== "object") {
+      throw new Error("Invalid compact dubbing output: cue item must be an object");
+    }
+    const idKey = outItem.id !== undefined && outItem.id !== null ? String(outItem.id) : "";
+    if (!idKey || !expectedById.has(idKey)) {
+      throw new Error(`Invalid compact dubbing output: unknown or missing cue id "${idKey}"`);
+    }
+    if (seenIds.has(idKey)) {
+      throw new Error(`Invalid compact dubbing output: duplicate cue id "${idKey}"`);
+    }
+    seenIds.add(idKey);
+
+    const expected = expectedById.get(idKey);
+    if (expected.sourceCueId) {
+      if (outItem.sourceCueId !== undefined && outItem.sourceCueId !== null && String(outItem.sourceCueId) !== String(expected.sourceCueId)) {
+        throw new Error(`Invalid compact dubbing output: sourceCueId mismatch for id "${idKey}"`);
+      }
+      const cueKey = String(expected.sourceCueId);
+      if (seenSourceCueIds.has(cueKey)) {
+        throw new Error(`Invalid compact dubbing output: duplicate sourceCueId "${cueKey}"`);
+      }
+      seenSourceCueIds.add(cueKey);
+    }
+
+    const rawKhmer = typeof outItem.khmerText === "string" ? outItem.khmerText.trim() : "";
+    if (!rawKhmer) {
+      throw new Error(`Invalid compact dubbing output: empty khmerText for cue id "${idKey}"`);
+    }
+    if (FORBIDDEN_DIALOGUE_SCRIPT_RE.test(rawKhmer)) {
+      throw new Error(`Invalid compact dubbing output: non-Khmer script detected in cue id "${idKey}"`);
+    }
+
+    validatedById.set(idKey, rawKhmer);
+  }
+
+  if (seenIds.size !== inputLines.length) {
+    throw new Error(`Invalid compact dubbing output: missing cue identifiers (${seenIds.size}/${inputLines.length})`);
+  }
+
+  return validatedById;
+}
+
 /**
  * ✨ Batch AI Re-Translation for All Segments (Cinema Drama Mode)
  */
@@ -1363,13 +1484,16 @@ async function retranslateBatchDialogues(segments, customApiKey = null, options 
   const modelToUse = resolveValidModelName(options.modelName);
 
   const BATCH_SIZE = 25;
-  const updatedSegments = [...segments];
+  const updatedSegments = segments.map((s) => ({ ...s }));
   const translationStyle = options.style || options.translationStyle || 'compact';
   const isCompact = translationStyle === 'compact';
 
   for (let i = 0; i < segments.length; i += BATCH_SIZE) {
     const batch = segments.slice(i, i + BATCH_SIZE);
     const inputLines = batch.map((s, idx) => {
+      const globalIdx = i + idx;
+      const prevSeg = globalIdx > 0 ? segments[globalIdx - 1] : null;
+      const nextSeg = globalIdx + 1 < segments.length ? segments[globalIdx + 1] : null;
       const rawDur = typeof s.duration === 'number' && s.duration > 0
         ? s.duration
         : parseFloat(Math.max(0.6, (s.endSec || 0) - (s.startSec || 0)).toFixed(2));
@@ -1377,95 +1501,88 @@ async function retranslateBatchDialogues(segments, customApiKey = null, options 
         ? s.speechDuration
         : null;
       const effectiveDur = reliableSpeechDur || Math.min(rawDur, 4.5);
-      const maxWords = Math.min(16, Math.max(3, Math.ceil(effectiveDur * 3.2)));
 
       const segmentChinese = String(s.originalChineseText || s.chineseText || s.originalText || s.original || '').trim();
       const audioTranscript = String(s.spokenAudioText || '').trim();
       const targetToTranslate = segmentChinese || audioTranscript;
-      const audioContext = (audioTranscript && audioTranscript !== targetToTranslate) ? audioTranscript : null;
+
+      const prevChinese = prevSeg ? String(prevSeg.originalChineseText || prevSeg.chineseText || prevSeg.originalText || prevSeg.spokenAudioText || '').trim() : '';
+      const nextChinese = nextSeg ? String(nextSeg.originalChineseText || nextSeg.chineseText || nextSeg.originalText || nextSeg.spokenAudioText || '').trim() : '';
 
       return {
-        index: i + idx + 1,
         id: s.id,
-        sourceChineseToTranslate: targetToTranslate,
-        surroundingAudioContext: audioContext,
-        currentKhmer: s.khmerTranslatedText || s.khmerText || s.khmer || "",
+        ...(s.sourceCueId ? { sourceCueId: s.sourceCueId } : {}),
+        sourceChinese: targetToTranslate,
+        existingKhmer: s.khmerTranslatedText || s.khmerText || s.khmer || "",
         speaker: s.speaker || s.speakerName || "តួអង្គ",
+        ...(s.gender ? { gender: s.gender } : {}),
         durationSec: parseFloat(effectiveDur.toFixed(2)),
-        maxKhmerWords: maxWords,
+        ...(prevChinese ? { prevDialogueContextOnly: prevChinese } : {}),
+        ...(nextChinese ? { nextDialogueContextOnly: nextChinese } : {}),
       };
-    }).filter(item => Boolean(item.sourceChineseToTranslate.trim()));
+    }).filter(item => Boolean(item.sourceChinese.trim()));
 
     if (inputLines.length === 0) continue;
 
-    const batchPrompt = `អ្នកគឺជាអ្នកដឹកនាំការបញ្ចូលសំឡេង និងជាអ្នកជំនាញបកប្រែកុនភាគចិន-ខ្មែរអាជីព។
-${isCompact ? `ស្ទីលបកប្រែជាកំហិត៖ 📝 ខ្លីចំអត្ថន័យ (COMPACT & DIRECT DUBBING SUBTITLE STYLE)
-- ត្រូវបកប្រែជាភាសាខ្មែរ «ខ្លីបំផុត ចំខ្លឹមសារ ងាយយល់ ១០០%» (បែប Subtitle កុនចិន/ហុងកុង ទំនើប)។
-- ហាមដាច់ខាតកុំបកប្រែវែងអន្លាយ ឬបន្ថែមពាក្យអូសបន្លាយឥតប្រយោជន៍ (ឧ. "每种50分" ➜ ត្រូវបកត្រឹម "មួយប្រភេទ ៥០ពិន្ទុ" ហាមបកវែង "ប្រភេទនីមួយៗបាន ៥០ពិន្ទុ")។
-- ត្រូវកាត់ពាក្យឱ្យខ្លីបំផុតតែរក្សាន័យដើមពេញលេញ ដើម្បីឱ្យសំឡេងនិយាយរលូន ត្រូវនឹងមាត់តួអង្គ (Lip-sync) មិនហៀរជាន់គ្នា និងមិនបង្ខំល្បឿន atempo!
-- គោរពកំហិតពាក្យ "maxKhmerWords" យ៉ាងតឹងរ៉ឹងបំផុត។` : ''}
-សូមបកប្រែប្រយោគចិនទាំងអស់ខាងក្រោមនេះជាភាសាខ្មែរសម្រាប់បញ្ចូលសំឡេងកុនភាគ (Cinema Drama Spoken Khmer) ឱ្យបានត្រឹមត្រូវន័យដើម ១០០% (ហាមបកខុសចំនួនលេខ, ហាមច្រឡំអត្ថន័យ) ស្របតាមបរិបទជាក់ស្តែងនៃសាច់រឿង (ទាំងរឿងសម័យ រឿងបុរាណ Action ឬមនោសញ្ចេតនា)។
+    const batchPrompt = `${isCompact ? COMPACT_DUBBING_PROMPT_HEADER : `You are an expert Chinese-to-Khmer movie dubbing and subtitle translator. Translate the following Chinese dialogue into natural spoken Khmer.\n\n${EXPRESSIVE_KHMER_DUBBING_RULES}`}
 
-ច្បាប់តឹងរ៉ឹង៖
-1. 1 Segment = 1 Translation: ឃ្លានីមួយៗត្រូវបកប្រែដាច់ដោយឡែកពីគ្នា ស្របតាម "sourceChineseToTranslate" របស់វា។
-2. "surroundingAudioContext" (បើមាន) គឺសម្រាប់តែជាបរិបទជួយយល់ន័យឱ្យកាន់តែច្បាស់ប៉ុណ្ណោះ។ ហាមដាច់ខាតកុំយក "surroundingAudioContext" ទាំងមូលមកបកប្រែជំនួស "sourceChineseToTranslate"!
-3. ប្រសិនបើឃ្លាចិនដើមជាឃ្លាមិនទាន់ចប់ន័យ (Incomplete Clause, ឧ. បញ្ចប់ដោយសញ្ញាក្បៀស ，) ត្រូវបកប្រែត្រឹមឃ្លានោះ (Incomplete Clause) ដោយរក្សាភាពស៊ីសង្វាក់ជាមួយឃ្លាបន្ទាប់ ហាមខ្ចីន័យ ឬប្រយោគពីឃ្លាបន្ទាប់មកបញ្ចប់ប្រយោគដោយខ្លួនឯងជាដាច់ខាត!
-4. កំហិតពាក្យខ្មែរយ៉ាងតឹងរ៉ឹងតាម "maxKhmerWords": ត្រូវបកប្រែឱ្យខ្លី ចំខ្លឹមសារ មិនលើសពីចំនួន "maxKhmerWords" ឡើយ។
-5. ហាមដាច់ខាតកុំបកប្រែចេញអត្ថបទខ្មែរដូចគ្នា ២ បន្ទាត់ជាប់គ្នា លុះត្រាតែប្រយោគចិនដើមនៃបន្ទាត់ទាំងពីរជាពាក្យដដែលៗពិតប្រាកដ (ឧ. "对对对", "快走快走")។ បើប្រយោគចិនខុសគ្នា អត្ថបទខ្មែរត្រូវតែខុសគ្នា!
-6. ហាមដាច់ខាតកុំឱ្យសល់តួអក្សរចិន (Chinese Hanzi \u4E00-\u9FFF) នៅក្នុង "khmerText" ដាច់ខាត (100% Khmer Script Only)! រាល់ពាក្យកម្រិតថាមពល (ឧ. 金丹 ➜ ជីនតាន, 化神 ➜ ហ្វាស៊ិន, 元神 ➜ យានស៊ិន) ត្រូវតែសរសេរជាសូរសព្ទអក្សរខ្មែរ!
-7. ហាមមានតួអក្សរថៃ 100%!
-
-បញ្ជីប្រយោគចិនត្រូវបកប្រែ៖
+## Input Cues (Context fields are for reference only — never merge neighboring dialogue into a cue)
 ${JSON.stringify(inputLines, null, 2)}
 
-សូមបញ្ចេញលទ្ធផលជា JSON Array នៃវត្ថុដែលមានទម្រង់៖
+## Required JSON Output Format
+Return a JSON Array with the exact same ${inputLines.length} items, preserving each "id" and "sourceCueId" (if present) 1:1 in the same order:
 [
   {
     "id": 1,
-    "khmerText": "អត្ថបទខ្មែរដែលបានកែសម្រួលរួច"
+    "sourceCueId": "cue_1",
+    "khmerText": "អត្ថបទខ្មែរ"
   }
 ]`;
 
-    try {
-      const { response: res } = await generateContentWithModelFallback(
-        ai,
-        modelToUse,
-        () => ({
-          contents: [batchPrompt],
-          config: {
-            systemInstruction: KHMER_DUBBING_BASE_SYSTEM_PROMPT,
-            temperature: 0.25,
-            responseMimeType: "application/json",
-          },
-        }),
-        {
-          models: options.fallbackModels || DEFAULT_MODELS,
-          logTag: "retranslateBatchDialogues",
-          timeoutMs: options.timeoutMs ?? 45000,
-        }
-      );
-
-      const rawText = typeof res?.text === "function" ? res.text() : (res?.text || "");
-      const parsed = safeParseOrRepairJson(rawText);
-      if (Array.isArray(parsed)) {
-        parsed.forEach((item) => {
-          const matchIdx = updatedSegments.findIndex((s) => s.id === item.id || String(s.id) === String(item.id));
-          if (matchIdx !== -1 && item.khmerText) {
-            const cleanKhmer = sanitizeKhmerDialogue(item.khmerText.trim(), updatedSegments[matchIdx].originalChineseText || "");
-            updatedSegments[matchIdx] = {
-              ...updatedSegments[matchIdx],
-              khmerTranslatedText: cleanKhmer,
-              khmerText: cleanKhmer,
-              khmer: cleanKhmer,
-              translationStyle,
-              textStatus: "retranslated",
-              audioOutdated: true,
-            };
-          }
-        });
+    const { response: res } = await generateContentWithModelFallback(
+      ai,
+      modelToUse,
+      () => ({
+        contents: [batchPrompt],
+        config: {
+          systemInstruction: isCompact ? COMPACT_DUBBING_PROMPT_HEADER : KHMER_DUBBING_BASE_SYSTEM_PROMPT,
+          temperature: 0.2,
+          responseMimeType: "application/json",
+        },
+      }),
+      {
+        models: options.fallbackModels || DEFAULT_MODELS,
+        logTag: "retranslateBatchDialogues",
+        timeoutMs: options.timeoutMs ?? 45000,
       }
-    } catch (batchErr) {
-      console.warn(`[GeminiService] Batch retranslation failed for slice ${i}-${i + BATCH_SIZE}:`, batchErr.message);
+    );
+
+    const rawText = typeof res?.text === "function" ? res.text() : (res?.text || "");
+    const parsed = safeParseOrRepairJson(rawText);
+    const validatedById = validateCompactBatchOutput(inputLines, parsed);
+
+    for (const inputItem of inputLines) {
+      const idKey = String(inputItem.id);
+      const cleanKhmer = validatedById.get(idKey);
+      const matchIdx = updatedSegments.findIndex((s) => String(s.id) === idKey);
+      if (matchIdx !== -1 && cleanKhmer) {
+        const prevSeg = updatedSegments[matchIdx];
+        const preservedOriginalKhmer = prevSeg.originalKhmerText
+          || prevSeg.khmerTranslatedText
+          || prevSeg.khmerText
+          || prevSeg.khmer
+          || "";
+        updatedSegments[matchIdx] = {
+          ...prevSeg,
+          ...(preservedOriginalKhmer ? { originalKhmerText: preservedOriginalKhmer } : {}),
+          khmerTranslatedText: cleanKhmer,
+          khmerText: cleanKhmer,
+          khmer: cleanKhmer,
+          translationStyle,
+          textStatus: "retranslated",
+          audioOutdated: true,
+        };
+      }
     }
   }
 

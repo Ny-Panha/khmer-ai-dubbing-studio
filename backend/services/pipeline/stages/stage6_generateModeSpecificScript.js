@@ -11,6 +11,7 @@ const { isAuthOrInvalidKeyError, isQuotaOrRateLimitError } = require('../../gemi
 const { geminiQuotaTracker } = require('../../geminiQuotaTracker');
 const {
   stripPunctuationForSpeech,
+  EXPRESSIVE_KHMER_DUBBING_RULES,
 } = require('../../../utils/translationQuality');
 const {
   normalizeGenre,
@@ -494,6 +495,7 @@ ${userDirection ? `User Custom Direction: ${userDirection}` : ''}
 - RULE 1 — រក្សាពាក្យកម្រិត និងបរិមាណ (KEEP DEGREE WORDS): ហាមដាច់ខាតកាត់ពាក្យកម្រិត/បរិមាណចោលដើម្បីឱ្យចុះ "maxKhmerWords"! ពាក្យកម្រិតដូចជា 一点/有点 (បន្តិច / ល្មមៗ / គ្រាន់បើបន្តិច), 很/非常 (ខ្លាំង / ណាស់ / មែនទែន), 更 (កាន់តែ), 太 (ពេក), 只/才 (ត្រឹមតែ / ទើបតែ) ត្រូវតែរក្សាទុកក្នុងអត្ថបទខ្មែរជានិច្ច។ បើប្រយោគលើសចំនួនពាក្យ ត្រូវបង្រួមពាក្យអូសបន្លាយកន្លែងផ្សេងជំនួស ហាមកាត់ពាក្យកម្រិតចោលឡើយ! (ឧ. "好一点的人" ➜ "មនុស្សគ្រាន់បើបន្តិច" ឬ "មនុស្សល្មមៗ" — ហាមកាត់ "បន្តិច/ល្មមៗ" ចោល!)
 - RULE 2 — បញ្ជាក់ប្រធានឱ្យច្បាស់ (EXPLICIT SUBJECT): ពេលការលុបប្រធាន (Subject) ចោលធ្វើឱ្យវិលន័យ ឬច្រឡំថា «អ្នកណា» ជាអ្នកធ្វើអំពើ (ឧ. 舍不得 = បក្ស/គេ/ពួកគេ «មិនដាច់ចិត្តចំណាយ/លះបង់» នរណាម្នាក់ — ហាមបក 舍不得 ថា «មិនស្ដាយ» ព្រោះវាផ្ទុយន័យទាំងស្រុង!) ប្រយោគខ្មែរត្រូវតែបញ្ចេញឈ្មោះប្រធានឱ្យច្បាស់តាមបរិបទ (គេ / បក្ស / ពួកគេ / គាត់ / ខ្ញុំ / ឯង...)។ (ឧ. "连好一点的都舍不得" ➜ "សូម្បីរបស់ល្អបន្តិច ក៏គេមិនដាច់ចិត្តចំណាយដែរ" — ហាមសរសេរ "ក៏មិនស្ដាយ"!)
 - RULE 3 — សំណួរភាសាខ្មែរធម្មជាតិ (NATURAL KHMER QUESTIONS — ONE MARKER ONLY): សំណួរបញ្ច្រាសចិន (难道...吗 / 难道...不是... / 不是...吗) ត្រូវបកជាភាសាខ្មែរនិយាយធម្មជាតិដោយ**រក្សាពាក្យបដិសេធ "មិនមែន" (不是)** និងប្រើពាក្យសួរខ្មែរ**តែមួយគត់** (ដូចជា "...ទេឬ?" ឬ "...មែនទេ?") — ហាមដាច់ខាតលុប "មិនមែន" ចោល, ហាមដាក់ពាក្យសួរជាន់គ្នា ២ ដង (ដូច "ឬមួយ..." នៅខាងដើម ហើយបូក "...ទេឬក៏អ្វី?" / "...ឬក៏អ្វី?" / "...ទេហ្ដេស?" / "...ទេឬ?" នៅខាងចុង), និងហាមចម្លងរចនាសម្ព័ន្ធប្រយោគចិនពាក្យតាមពាក្យ! (ឧ. "难道你不是来找我的" ➜ ត្រូវបក "ឯងមិនមែនមករកខ្ញុំទេឬ?" ឬ "ឯងមិនមែនមករកខ្ញុំមែនទេ?" — ហាមដាច់ខាត "ឬមួយឯងមិនមែនមករកខ្ញុំទេឬក៏អ្វី?" ឬកាត់ "មិនមែន" ចោល!)
+${EXPRESSIVE_KHMER_DUBBING_RULES}
 
 SURROUNDING NARRATIVE CONTEXT:
 [Previous Lines]:
@@ -822,6 +824,7 @@ Return JSON ONLY matching this schema:
 - ហាមដាច់ខាតកុំឱ្យ "khmerText" ទទេ, មានតែសញ្ញាវណ្ណយុត្តិ (ដូចជា "។", "!", "?") ឬប្រើពាក្យជំនួស ("សន្ទនា", "សូមរង់ចាំ", "...")!
 - ហាមមានតួអក្សរចិន ឬតួអក្សរថៃ នៅក្នុង "khmerText" ដាច់ខាត។
 - រក្សាពាក្យកម្រិត (一点/有点 ➜ បន្តិច/ល្មមៗ, 很/非常 ➜ ខ្លាំង/ណាស់, 更 ➜ កាន់តែ) ហាមកាត់ចោលដើម្បីឱ្យចុះ maxKhmerWords; បញ្ជាក់ប្រធាន (គេ/បក្ស/គាត់/ខ្ញុំ/ឯង) ឱ្យច្បាស់បើការកាត់ប្រធានធ្វើឱ្យវិលន័យ (ដូច 舍不得 = គេមិនដាច់ចិត្តចំណាយ/លះបង់); សំណួរបញ្ច្រាសចិន (难道/不是...吗) ប្រើសញ្ញាសំណួរខ្មែរតែមួយគត់ (ទេឬ? / មែនទេ?) ហាមដាក់ "ឬមួយ..." ជាន់ជាមួយ "...ឬក៏អ្វី?" ឬ "...ទេហ្ដេស?"!
+- ${EXPRESSIVE_KHMER_DUBBING_RULES}
 
 RECOVER MISSING OR BROKEN KHMER DIALOGUE SEGMENTS (Retry Batch ${rBatchNum}/${rTotalBatches}):
 ${JSON.stringify(retryPayload, null, 2)}
@@ -938,6 +941,7 @@ Return JSON ONLY matching this schema:
           const singlePrompt = `
 អ្នកគឺជាអ្នកបកប្រែកុនភាគចិន-ខ្មែរអាជីព។ នេះជាការបកប្រែឃ្លាសន្ទនារឿងភាគសម្រាប់ Dubbing — ទោះបីជាឃ្លាកំហឹង/ជេរប្រមាថក្នុងសាច់រឿង ពាក្យ OCR ខ្លីៗ (ឧ. ឈ្មោះទីតាំង/ជំនាញ/មុំមើល) ឬឃ្លាមិនទាន់ចប់ន័យ ក៏ត្រូវបកប្រែជាភាសាខ្មែរធម្មជាតិ ១០០% ហាមរំលង ឬទុកទទេជាដាច់ខាត។
 ច្បាប់គុណភាព៖ រក្សាពាក្យកម្រិត (一点/有点 ➜ បន្តិច/ល្មមៗ, 很/非常 ➜ ខ្លាំង/ណាស់, 更 ➜ កាន់តែ) ហាមកាត់ចោល; ដាក់ប្រធានច្បាស់ (គេ/បក្ស/គាត់/ខ្ញុំ/ឯង) បើបាត់ប្រធានធ្វើឱ្យវិលន័យ (ដូច 舍不得 = គេមិនដាច់ចិត្តចំណាយ/លះបង់); សំណួរបញ្ច្រាសចិន (难道/不是...吗) ប្រើពាក្យសួរខ្មែរតែមួយគត់ (ទេឬ? / មែនទេ?) ហាមដាក់ "ឬមួយ..." ជាន់ជាមួយ "...ឬក៏អ្វី?" / "...ទេហ្ដេស?"!
+${EXPRESSIVE_KHMER_DUBBING_RULES}
 
 RECOVER SINGLE MISSING KHMER LINE (#${payloadItem.index}):
 - sourceChineseToTranslate: ${JSON.stringify(payloadItem.sourceChineseToTranslate)}
@@ -1133,6 +1137,7 @@ RULES:
 6. KEEP DEGREE WORDS: Never drop degree/quantity modifiers from Chinese context (一点/有点 -> បន្តិច/ល្មមៗ, 很/非常 -> ខ្លាំង/ណាស់, 更 -> កាន់តែ). Compress filler elsewhere instead of dropping degree words.
 7. EXPLICIT SUBJECT: Always name the subject clearly (គេ/បក្ស/គាត់/តួឯក...) whenever omitting the subject would flip or blur WHO performs the action (e.g. 舍不得 = the sect/they unwilling to part with someone).
 8. NATURAL KHMER QUESTIONS: Render rhetorical questions (难道...吗 / 不是...吗) in natural spoken Khmer with ONE question marker only (ទេឬ? / មែនទេ?) — never stack "ឬមួយ..." at the start with "...ឬក៏អ្វី?" / "...ទេហ្ដេស?" at the end, and never copy Chinese sentence skeletons word-for-word.
+${EXPRESSIVE_KHMER_DUBBING_RULES}
 
 Return JSON ONLY:
 {
