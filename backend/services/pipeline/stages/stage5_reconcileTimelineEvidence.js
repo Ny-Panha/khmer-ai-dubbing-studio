@@ -6,6 +6,15 @@ const {
   normalizeChineseWithDigits,
   isFuzzyClauseMatch,
 } = require('../../vadAlignmentService');
+const {
+  classifyTextEvent,
+  isIntroductionCategory,
+  isNonSpokenMetadataCategory,
+  consolidateContinuousIntroductionCues,
+  computeChineseCharSimilarity,
+  NARRATOR_SPEAKER_LABEL,
+  NARRATOR_SPEAKER_ID,
+} = require('../../../utils/textEventClassifier');
 
 // Preserve short expressive interjections/vocalizations (啊, 哦, 嗯, 哼, 唉, 咳...) 1:1
 // so downstream Step 1 translates them into natural Khmer phonetic expressions for TTS.
@@ -145,15 +154,23 @@ async function reconcileTimelineEvidence({
   const merged = [];
   const usedAudioIndices = new Set();
 
+  // Consolidate continuous introduction/title events (vertical fragments, OCR blur variants)
+  // while keeping simultaneous dialogue and distinct spoken dialogue lines intact.
+  const consolidatedVisuals = consolidateContinuousIntroductionCues(visualSegments, {
+    rawObservations,
+    maxGapSec: 0.75,
+    dropNonSpokenMetadata: true,
+  });
+
   // Phase 2: Detect compound ASR sentences partitioned across multiple visual subtitle cards
-  const { partitionMap, matchedAudioIndices } = findCompoundAsrPartitions(visualSegments, audioSegments);
+  const { partitionMap, matchedAudioIndices } = findCompoundAsrPartitions(consolidatedVisuals, audioSegments);
   for (const aIdx of matchedAudioIndices) {
     usedAudioIndices.add(aIdx);
   }
 
   // 1. Correlate Visual Segments with Audio Speech Segments
-  for (let vIdx = 0; vIdx < visualSegments.length; vIdx++) {
-    const vSeg = visualSegments[vIdx];
+  for (let vIdx = 0; vIdx < consolidatedVisuals.length; vIdx++) {
+    const vSeg = consolidatedVisuals[vIdx];
 
     // Skip pure exclamations / interjections (啊, 哦, 嗯, etc.) — keep original audio
     if (isExclamationOrFiller(vSeg.originalChineseText)) {
@@ -217,8 +234,101 @@ async function reconcileTimelineEvidence({
     let matchedAudio = null;
     let bestAudioIdx = -1;
 
-    // Do not merge title cards / on-screen graphics into spoken dialogue
-    if (vSeg.position === 'title_card') {
+    const vCategory = classifyTextEvent({
+      text: vSeg.originalChineseText,
+      textCategory: vSeg.textCategory,
+      position: vSeg.position,
+      orientation: vSeg.orientation,
+      textRegion: vSeg.textRegion,
+      deliveryType: vSeg.deliveryType,
+    });
+
+    if (isNonSpokenMetadataCategory(vCategory)) {
+      continue;
+    }
+
+    // Meaningful introductions / lore / title cards:
+    // - If original audio ALREADY narrates the introduction, reconcile into ONE fused narration cue (no duplicate TTS)
+    // - Otherwise emit ONE active narration cue (consistent narrator voice) for meaningful intros/lore
+    // - Pure decorative / tiny unspoken time cards remain subtitle-only muted overlays
+    if (vSeg.position === 'title_card' || isIntroductionCategory(vCategory)) {
+      let matchingNarrationIdx = -1;
+      let matchingNarrationSeg = null;
+      let bestScore = 0;
+      for (let aIdx = 0; aIdx < audioSegments.length; aIdx++) {
+        if (usedAudioIndices.has(aIdx)) continue;
+        const aSeg = audioSegments[aIdx];
+        if (!aSeg || aSeg.startSec > vSeg.endSec + 0.85 || aSeg.endSec < vSeg.startSec - 0.85) continue;
+        const aTxt = String(aSeg.spokenChineseText || '').trim();
+        if (!aTxt) continue;
+        const vTxt = String(vSeg.originalChineseText || '').trim();
+        const sim = computeChineseCharSimilarity(vTxt, aTxt);
+        const isNarrationMatch =
+          areChineseTextsEquivalent(vTxt, aTxt) ||
+          isFuzzyClauseMatch(vTxt, aTxt) ||
+          sim >= 0.55;
+        if (isNarrationMatch && sim >= bestScore) {
+          bestScore = sim;
+          matchingNarrationIdx = aIdx;
+          matchingNarrationSeg = aSeg;
+        }
+      }
+
+      if (matchingNarrationSeg) {
+        usedAudioIndices.add(matchingNarrationIdx);
+        const resolution = resolveDialogueChinese({
+          audioSpeech: matchingNarrationSeg.spokenChineseText,
+          ocrText: vSeg.originalChineseText,
+          position: 'title_card',
+        });
+        const mergedStart = parseFloat(Math.min(vSeg.startSec, matchingNarrationSeg.startSec).toFixed(2));
+        const mergedEnd = parseFloat(Math.max(vSeg.endSec, matchingNarrationSeg.endSec).toFixed(2));
+        merged.push({
+          ...(vSeg.sourceCueId ? { sourceCueId: vSeg.sourceCueId } : {}),
+          startSec: mergedStart,
+          endSec: mergedEnd,
+          duration: parseFloat(Math.max(0.35, mergedEnd - mergedStart).toFixed(2)),
+          sourceStartSec: mergedStart,
+          sourceEndSec: mergedEnd,
+          speechStartSec: matchingNarrationSeg.startSec,
+          speechEndSec: matchingNarrationSeg.endSec,
+          speechDuration: parseFloat((matchingNarrationSeg.endSec - matchingNarrationSeg.startSec).toFixed(2)),
+          visualHangoverSec: parseFloat(Math.max(0, vSeg.endSec - matchingNarrationSeg.endSec).toFixed(2)),
+          originalChineseText: resolution.resolvedText,
+          spokenAudioText: matchingNarrationSeg.spokenChineseText,
+          ocrSubtitleText: vSeg.originalChineseText,
+          position: 'title_card',
+          textCategory: vCategory,
+          orientation: vSeg.orientation || 'vertical',
+          textRegion: vSeg.textRegion || '',
+          deliveryType: 'narration',
+          speaker: NARRATOR_SPEAKER_LABEL,
+          speakerName: NARRATOR_SPEAKER_LABEL,
+          speakerId: NARRATOR_SPEAKER_ID,
+          characterId: NARRATOR_SPEAKER_ID,
+          voiceGender: matchingNarrationSeg.audioGender || matchingNarrationSeg.acousticGender || 'unknown',
+          genderConfidence: typeof matchingNarrationSeg.acousticConfidence === 'number' ? matchingNarrationSeg.acousticConfidence : null,
+          pitchHz: matchingNarrationSeg.acousticF0 || null,
+          acousticF0: matchingNarrationSeg.acousticF0 || null,
+          acousticGender: matchingNarrationSeg.acousticGender || null,
+          acousticConfidence: typeof matchingNarrationSeg.acousticConfidence === 'number' ? matchingNarrationSeg.acousticConfidence : null,
+          evidenceSource: 'audio_and_ocr',
+          evidenceType: 'fused_visual_audio',
+          resolutionSource: resolution.resolutionSource,
+          confidence: 0.94,
+          reviewNeeded: false,
+          uncertainTiming: false,
+          verifiedBoundary: true,
+          skipTts: false,
+          subtitleOnly: false,
+          isMuted: false,
+          isSilentScene: false,
+          userTtsOverride: false,
+        });
+        continue;
+      }
+
+      const narrateIntro = isIntroductionCategory(vCategory);
       merged.push({
         ...(vSeg.sourceCueId ? { sourceCueId: vSeg.sourceCueId } : {}),
         startSec: vSeg.startSec,
@@ -234,19 +344,26 @@ async function reconcileTimelineEvidence({
         spokenAudioText: '',
         ocrSubtitleText: vSeg.originalChineseText,
         position: 'title_card',
-        speakerId: 'spk_narrator',
+        textCategory: vCategory,
+        orientation: vSeg.orientation || 'vertical',
+        textRegion: vSeg.textRegion || '',
+        deliveryType: narrateIntro ? 'narration' : (vSeg.deliveryType || 'dialogue'),
+        speaker: NARRATOR_SPEAKER_LABEL,
+        speakerName: NARRATOR_SPEAKER_LABEL,
+        speakerId: NARRATOR_SPEAKER_ID,
+        characterId: NARRATOR_SPEAKER_ID,
         voiceGender: 'unknown',
         genderConfidence: null,
         evidenceSource: 'visual_ocr',
         evidenceType: 'visual_only',
-        confidence: 0.75,
-        reviewNeeded: true,
+        confidence: narrateIntro ? 0.9 : 0.75,
+        reviewNeeded: narrateIntro ? false : true,
         uncertainTiming: !vSeg.verifiedDisappearance,
         verifiedBoundary: Boolean(vSeg.verifiedDisappearance),
-        skipTts: true,
-        subtitleOnly: true,
-        isMuted: true,
-        isSilentScene: true,
+        skipTts: !narrateIntro,
+        subtitleOnly: !narrateIntro,
+        isMuted: !narrateIntro,
+        isSilentScene: !narrateIntro,
         userTtsOverride: false,
       });
       continue;
@@ -586,8 +703,12 @@ async function reconcileTimelineEvidence({
       (prevSrc === 'audio_and_ocr' && curSrc === 'visual_ocr')
     );
 
-    // Merge ONLY when corroborated by TRUE mathematical intersection, same speaker, and text equivalence:
-    const shouldMerge = (
+    const prevIntro = isIntroductionCategory(prev.textCategory) || prev.position === 'title_card';
+    const curIntro = isIntroductionCategory(seg.textCategory) || seg.position === 'title_card';
+    const compatibleKind = (prevIntro === curIntro) || isCrossSensor;
+
+    // Merge ONLY when corroborated by TRUE mathematical intersection, same speaker, compatible text category, and text equivalence:
+    const shouldMerge = compatibleKind && (
       (isSameSpeaker && hasTrueIntersection && (
         (isCrossSensor && (isEquivalent || isSub || sNorm.length === 0 || pNorm.length === 0)) ||
         isEquivalent ||

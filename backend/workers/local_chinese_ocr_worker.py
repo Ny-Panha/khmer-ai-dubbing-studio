@@ -128,7 +128,40 @@ def is_corner_watermark_item(it: dict) -> bool:
     if in_extreme_x_corner and in_extreme_y_corner:
         if CORNER_ID_WATERMARK_RE.match(txt) or re.search(r"[A-Za-z0-9@]", txt):
             return True
+    # Reject isolated low-ROI side-edge overhang fragments (1-2 chars belonging to a vertical side card
+    # protruding slightly into the bottom dialogue crop without any horizontal dialogue context)
+    if len(txt) <= 2 and (it["x_max"] <= 0.25 or it["x_min"] >= 0.75) and not it.get("is_centered"):
+        it["is_side_fragment_candidate"] = True
     return False
+
+
+def reconstruct_vertical_columns(items: list) -> str:
+    """Reconstruct vertical Chinese card text top-to-bottom per column, columns right-to-left."""
+    if not items:
+        return ""
+    columns = []
+    for it in items:
+        it_w = max(0.005, it["x_max"] - it["x_min"])
+        target_col = None
+        for col in columns:
+            tol = max(col["avg_w"], it_w) * 0.95
+            if abs(it["x_center"] - col["avg_x"]) <= tol:
+                target_col = col
+                break
+        if target_col is None:
+            columns.append({"items": [it], "avg_x": it["x_center"], "avg_w": it_w})
+        else:
+            target_col["items"].append(it)
+            n = len(target_col["items"])
+            target_col["avg_x"] = sum(x["x_center"] for x in target_col["items"]) / n
+            target_col["avg_w"] = sum(max(0.005, x["x_max"] - x["x_min"]) for x in target_col["items"]) / n
+    # Traditional vertical Chinese reading order: columns right-to-left, glyphs top-to-bottom
+    columns.sort(key=lambda c: -c["avg_x"])
+    col_strings = []
+    for col in columns:
+        col["items"].sort(key=lambda it: it["y_center"])
+        col_strings.append("".join(it["text"] for it in col["items"]))
+    return " ".join(s for s in col_strings if s).strip()
 
 
 def filter_dialogue_ocr_results(ocr_res, roi_w: int, roi_h: int):
@@ -177,6 +210,22 @@ def filter_dialogue_ocr_results(ocr_res, roi_w: int, roi_h: int):
         if is_corner_watermark_item(it):
             continue
         items.append(it)
+
+    # Drop isolated 1-2 char edge-overhang fragments when no horizontal center-band neighbor shares the row
+    non_fragment_items = []
+    for it in items:
+        if it.get("is_side_fragment_candidate"):
+            has_same_row_center_neighbor = any(
+                other is not it
+                and not other.get("is_side_fragment_candidate")
+                and (other.get("is_centered") or (0.25 < other["x_center"] < 0.75))
+                and abs(other["y_center"] - it["y_center"]) <= max(0.08, it["box_h"] * 0.65)
+                for other in items
+            )
+            if not has_same_row_center_neighbor:
+                continue
+        non_fragment_items.append(it)
+    items = non_fragment_items
 
     if len(items) >= 2:
         centered_horiz = [it for it in items if it["is_centered"] and not it["is_vertical"]]
@@ -281,8 +330,137 @@ def detect_top_center_subtitle(img, engine, top_empty_cache=None):
         "confidence": round(avg_conf, 4),
         "isSharp": avg_conf >= 0.70,
         "position": "title_card",
+        "orientation": "horizontal",
+        "textRegion": "top_center",
         "ocrStatus": "verified_text",
         "bboxes": [it["box"] for it in centered_cn],
+    }
+
+
+def detect_vertical_side_card(img, engine, side_empty_cache=None):
+    """
+    Fast pre-checked full-frame fallback for vertical columns, side nameplates, or multi-line
+    story/lore cards anywhere on screen when bottom dialogue and top-center bands are empty.
+    Uses dynamic bounding-box geometry (zero fixed screen position assumptions) and fast frame
+    signature caching so unchanged or empty scenes skip in <0.5ms.
+    """
+    import cv2
+    if img is None or not hasattr(img, "shape"):
+        return None
+    h, w = img.shape[:2]
+    if h < 120 or w < 240:
+        return None
+    if side_empty_cache is None:
+        side_empty_cache = {}
+
+    sx0, sx1 = int(w * 0.02), int(w * 0.98)
+    sy0, sy1 = int(h * 0.08), int(h * 0.92)
+    frame_roi = img[sy0:sy1, sx0:sx1]
+    if frame_roi.size == 0:
+        return None
+
+    gray = cv2.cvtColor(frame_roi, cv2.COLOR_BGR2GRAY) if len(frame_roi.shape) == 3 else frame_roi
+    bright_ratio = float((gray >= 210).mean())
+    if bright_ratio < 0.002 or bright_ratio > 0.60:
+        return None
+    edges = cv2.Canny(gray, 80, 180)
+    if float(edges.mean()) / 255.0 < 0.012:
+        return None
+
+    small_sig = cv2.resize(gray, (32, 24), interpolation=cv2.INTER_AREA)
+    cached_sig = side_empty_cache.get("full_frame")
+    if cached_sig is not None:
+        if float(abs(small_sig.astype("float32") - cached_sig.astype("float32")).mean()) < 3.0:
+            return None
+
+    ocr_res, _ = engine(frame_roi, use_det=True, use_cls=False, use_rec=True)
+    if not ocr_res:
+        side_empty_cache["full_frame"] = small_sig
+        return None
+
+    sh, sw = frame_roi.shape[:2]
+    raw_items = []
+    for box, raw_text, conf in ocr_res:
+        cleaned = clean_chinese_text(raw_text)
+        if not cleaned or float(conf) < 0.58:
+            continue
+        if WATERMARK_TEXT_RE.search(cleaned):
+            continue
+        xs = [pt[0] for pt in box] if box else [0.0]
+        ys = [pt[1] for pt in box] if box else [0.0]
+        bx_min = min(xs) / max(1.0, float(sw))
+        bx_max = max(xs) / max(1.0, float(sw))
+        by_min = min(ys) / max(1.0, float(sh))
+        by_max = max(ys) / max(1.0, float(sh))
+        x_ctr = (bx_min + bx_max) / 2.0
+        y_ctr = (by_min + by_max) / 2.0
+        box_w = max(0.001, bx_max - bx_min)
+        box_h = max(0.001, by_max - by_min)
+        in_extreme_corner = (bx_max <= 0.24 or bx_min >= 0.76) and (by_max <= 0.15 or by_min >= 0.85)
+        if in_extreme_corner and (re.search(r"[A-Za-z0-9@]", cleaned) or CORNER_ID_WATERMARK_RE.match(cleaned) or by_max <= 0.14):
+            continue
+        raw_items.append({
+            "box": box,
+            "text": cleaned,
+            "conf": float(conf),
+            "x_min": bx_min,
+            "x_max": bx_max,
+            "y_min": by_min,
+            "y_max": by_max,
+            "x_center": x_ctr,
+            "y_center": y_ctr,
+            "box_h": box_h,
+            "box_w": box_w,
+            "is_vertical": box_h > box_w * 1.35,
+            "is_centered": 0.30 <= x_ctr <= 0.70,
+        })
+
+    hanzi_items = [it for it in raw_items if re.search(r"[\u3400-\u4dbf\u4e00-\u9fa5]", it["text"])]
+    if not hanzi_items:
+        side_empty_cache["full_frame"] = small_sig
+        return None
+
+    # Determine orientation dynamically from actual boxes rather than fixed x-coordinates
+    has_vertical_shape = any(it["is_vertical"] for it in hanzi_items)
+    has_stacked_column = False
+    if len(hanzi_items) >= 2 and not has_vertical_shape:
+        # Stacked single/few-char boxes aligned on x with distinct y positions indicate vertical column
+        mean_x = sum(it["x_center"] for it in hanzi_items) / len(hanzi_items)
+        max_w = max(it["box_w"] for it in hanzi_items)
+        aligned = all(abs(it["x_center"] - mean_x) <= max_w * 1.1 for it in hanzi_items)
+        y_span = max(it["y_center"] for it in hanzi_items) - min(it["y_center"] for it in hanzi_items)
+        if aligned and y_span > max_w * 1.1:
+            has_stacked_column = True
+
+    is_vertical_layout = has_vertical_shape or has_stacked_column
+    if is_vertical_layout:
+        reconstructed = reconstruct_vertical_columns(hanzi_items)
+    else:
+        hanzi_items.sort(key=lambda it: (round(it["y_min"], 2), it["x_min"]))
+        reconstructed = "\n".join(it["text"] for it in hanzi_items) if len(hanzi_items) > 1 else hanzi_items[0]["text"]
+
+    hanzi_count = len(re.findall(r"[\u3400-\u4dbf\u4e00-\u9fa5]", reconstructed))
+    if hanzi_count < 2:
+        return None
+
+    avg_conf = sum(it["conf"] for it in hanzi_items) / len(hanzi_items)
+    avg_x = sum(it["x_center"] for it in hanzi_items) / len(hanzi_items)
+    if is_vertical_layout:
+        region_tag = "left_vertical" if avg_x < 0.36 else ("right_vertical" if avg_x > 0.64 else "center_vertical")
+    else:
+        region_tag = "full_center"
+
+    return {
+        "hasText": True,
+        "textZh": reconstructed,
+        "chineseText": reconstructed,
+        "confidence": round(avg_conf, 4),
+        "isSharp": avg_conf >= 0.68,
+        "position": "title_card",
+        "orientation": "vertical" if is_vertical_layout else "horizontal",
+        "textRegion": region_tag,
+        "ocrStatus": "verified_text",
+        "bboxes": [it["box"] for it in hanzi_items],
     }
 
 
@@ -363,6 +541,7 @@ def process_frames_batch(frames, engine, args, roi_ymin, roi_ymax, roi_xmin, roi
     prev_cue_idx = None
     prev_ts = None
     top_empty_cache = {}
+    side_empty_cache = {}
 
     for idx, item in enumerate(frames):
         file_path = item.get("filePath", "")
@@ -460,6 +639,8 @@ def process_frames_batch(frames, engine, args, roi_ymin, roi_ymax, roi_xmin, roi
                     top_infer_start = time.perf_counter()
                     try:
                         top_hit = detect_top_center_subtitle(img, engine, top_empty_cache=top_empty_cache)
+                        if not top_hit:
+                            top_hit = detect_vertical_side_card(img, engine, side_empty_cache=side_empty_cache)
                     finally:
                         inference_sec += time.perf_counter() - top_infer_start
                     if top_hit:
@@ -473,6 +654,8 @@ def process_frames_batch(frames, engine, args, roi_ymin, roi_ymax, roi_xmin, roi
                     "confidence": ocr_out["confidence"],
                     "isSharp": ocr_out["isSharp"],
                     "position": ocr_out.get("position", "bottom_subtitle"),
+                    "orientation": ocr_out.get("orientation", "horizontal"),
+                    "textRegion": ocr_out.get("textRegion", "center_bottom"),
                     "ocrStatus": ocr_out["ocrStatus"],
                     "bboxes": ocr_out.get("bboxes", []),
                     "isDeduped": False,

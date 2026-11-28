@@ -7,6 +7,11 @@ const {
   isPureDescriptiveSoundLabel,
 } = require('../../../utils/translationQuality');
 const { validateStrictSourceCueMapping } = require('../pipelineTypes');
+const {
+  classifyTextEvent,
+  isIntroductionCategory,
+  areContinuousIntroductionEvents,
+} = require('../../../utils/textEventClassifier');
 
 /**
  * Stage 7: Translate and Validate Khmer
@@ -144,10 +149,10 @@ async function translateAndValidateKhmer({ scriptSegments = [], sourceCues = nul
       errors.push(`Timing មិនត្រឹមត្រូវ (startSec=${seg.startSec}, endSec=${seg.endSec})`);
     }
 
-    // Flag uncertain OCR source
-    if (seg.uncertainOcr) {
+    // Flag uncertain OCR source or delivery ambiguity
+    if (seg.uncertainOcr || seg.ocrDisagreement || seg.deliveryReviewNeeded) {
       seg.reviewNeeded = true;
-      errors.push('អក្សរចិនដើមមិនសូវច្បាស់ ឬព្រិល (Uncertain OCR)');
+      errors.push('អក្សរចិនដើម ឬប្រភេទសំឡេងមិនសូវច្បាស់ (Uncertain OCR / Ambiguous Cue)');
     }
 
     seg.reviewNeeded = Boolean(seg.reviewNeeded);
@@ -157,6 +162,42 @@ async function translateAndValidateKhmer({ scriptSegments = [], sourceCues = nul
 
     seg.validationErrors = [...(seg.validationErrors || []), ...errors];
     validatedSegments.push(seg);
+  }
+
+  // Detect any un-consolidated duplicate continuous introduction events before script persistence
+  const duplicateIntroductionCueIds = [];
+  for (let i = 1; i < validatedSegments.length; i++) {
+    const prevSeg = validatedSegments[i - 1];
+    const curSeg = validatedSegments[i];
+    const prevCat = classifyTextEvent({
+      text: prevSeg.originalChineseText,
+      textCategory: prevSeg.textCategory,
+      position: prevSeg.position,
+      orientation: prevSeg.orientation,
+      textRegion: prevSeg.textRegion,
+      deliveryType: prevSeg.deliveryType,
+    });
+    const curCat = classifyTextEvent({
+      text: curSeg.originalChineseText,
+      textCategory: curSeg.textCategory,
+      position: curSeg.position,
+      orientation: curSeg.orientation,
+      textRegion: curSeg.textRegion,
+      deliveryType: curSeg.deliveryType,
+    });
+    if ((isIntroductionCategory(prevCat) || isIntroductionCategory(curCat)) &&
+        areContinuousIntroductionEvents(prevSeg, curSeg, { maxGapSec: 0.75 })) {
+      duplicateIntroductionCueIds.push(curSeg.sourceCueId || curSeg.segmentId || i + 1);
+      if (!curSeg.reviewNeeded) {
+        reviewNeededCount++;
+      }
+      curSeg.reviewNeeded = true;
+      curSeg.duplicateIntroductionDetected = true;
+      curSeg.validationErrors = [
+        ...(curSeg.validationErrors || []),
+        'រកឃើញផ្ទាំងណែនាំស្ទួនលើព្រឹត្តិការណ៍តែមួយ (Duplicate Introduction Event Detected)',
+      ];
+    }
   }
 
   const totalSegs = validatedSegments.length;
@@ -182,6 +223,8 @@ async function translateAndValidateKhmer({ scriptSegments = [], sourceCues = nul
       unexpectedCueIds: strictMapping ? strictMapping.unexpectedSourceCueIds : [],
       mismatchedCueIds: strictMapping ? strictMapping.mismatchedOrderCueIds : [],
       invalidTimingCueIds,
+      duplicateIntroductionCount: duplicateIntroductionCueIds.length,
+      duplicateIntroductionCueIds,
       exactCueIdSetMatch: strictMapping ? strictMapping.exactCueIdSetMatch : null,
       translationCompletenessPct,
       oneToOneMappingValid,

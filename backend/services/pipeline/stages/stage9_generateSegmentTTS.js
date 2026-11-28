@@ -16,6 +16,7 @@ const {
 } = require('../segmentLedger');
 const { detectSpeakerGender } = require('../../../models/speakerRegistry');
 const { containsChineseHanzi } = require('../../../utils/translationQuality');
+const { isIntroductionCategory, NARRATOR_SPEAKER_LABEL, NARRATOR_SPEAKER_ID } = require('../../../utils/textEventClassifier');
 const { DUBBING_CASCADE_MODELS } = require('../../geminiModelCatalog');
 const {
   isPlaceholderTranslationText,
@@ -384,8 +385,13 @@ async function generateSegmentTTS({
       // 5. Existing valid voice assignment
       // 6. Default fallback (Piseth)
       const segSpkName = String(seg.speaker || seg.speakerName || '').trim();
+      const isNarratorOrIntro = Boolean(
+        seg.speakerId === NARRATOR_SPEAKER_ID ||
+        segSpkName === NARRATOR_SPEAKER_LABEL ||
+        isIntroductionCategory(seg.textCategory)
+      );
       const isGenericSegSpk = !segSpkName || segSpkName === 'តួអង្គ' || segSpkName.toLowerCase() === 'speaker';
-      const localReg = speakerRegistry || seg.speakerRegistry || {};
+      const localReg = isNarratorOrIntro ? {} : (speakerRegistry || seg.speakerRegistry || {});
       const regEntry =
         (seg.speakerId && localReg[seg.speakerId]) ||
         (!isGenericSegSpk && localReg[segSpkName]) ||

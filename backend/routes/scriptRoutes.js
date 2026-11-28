@@ -966,5 +966,108 @@ router.post(["/dubbing/rescan-characters", "/rescan-characters"], async (req, re
   }
 });
 
+/**
+ * Targeted Duplicate Introduction Repair for an Existing Saved Episode.
+ * Consolidates repeated/fragmented introduction cues (vertical cards, OCR fluctuations,
+ * bottom-ROI overhang tails) into ONE narration cue without regenerating the entire episode.
+ * Strictly preserves manual edits, immutable non-fragment sourceCueIds, dialogue, and unaffected audio MP3s.
+ */
+router.post(["/dubbing/repair-introductions", "/repair-introductions"], async (req, res) => {
+  try {
+    const {
+      seriesId,
+      episodeId,
+      synthesizeMissingAudio = true,
+      narratorGender = null,
+    } = req.body || {};
+
+    if (!seriesId || !episodeId) {
+      return res.status(400).json({ success: false, error: "seriesId and episodeId are required" });
+    }
+
+    const seriesMeta = getSeriesMetadata(seriesId);
+    if (!seriesMeta) {
+      return res.status(404).json({ success: false, error: `Series not found: ${seriesId}` });
+    }
+    const targetEp = (seriesMeta.episodes || []).find((e) => String(e.id) === String(episodeId));
+    if (!targetEp) {
+      return res.status(404).json({ success: false, error: `Episode not found: ${episodeId}` });
+    }
+
+    const { repairEpisodeIntroductions } = require("../services/pipeline/introductionRepairService");
+    const { generateSegmentTTS } = require("../services/pipeline/stages/stage9_generateSegmentTTS");
+
+    const sampleWithAudio = (targetEp.scriptData?.segments || targetEp.scriptSegments || []).find((s) => s?.audioPath);
+    const segAudioDir = sampleWithAudio?.audioPath
+      ? path.dirname(sampleWithAudio.audioPath)
+      : path.join(uploadsDir, "projects", String(seriesId), "episodes", String(episodeId), "audio", "segments");
+
+    const synthesizeSingleSegmentFn = synthesizeMissingAudio
+      ? async ({ segment }) => {
+          const singleRes = await generateSegmentTTS({
+            segments: [segment],
+            speakerRegistry: targetEp.speakerRegistry || {},
+            audioDir: segAudioDir,
+            baseUploadsDir: uploadsDir,
+            seriesId: String(seriesId),
+            episodeId: String(episodeId),
+            defaultVoiceId: segment.voiceId || segment.khmerVoiceId || "km-KH-PisethNeural",
+            forceRegen: true,
+          });
+          return Array.isArray(singleRes?.segmentsWithAudio) && singleRes.segmentsWithAudio[0]
+            ? singleRes.segmentsWithAudio[0]
+            : null;
+        }
+      : null;
+
+    const repairRes = await repairEpisodeIntroductions({
+      seriesMeta,
+      episode: targetEp,
+      narratorGender: narratorGender || targetEp.narratorGender || seriesMeta.narratorGender || "male",
+      synthesizeSingleSegmentFn,
+      uploadsRoot: uploadsDir,
+    });
+
+    if (repairRes.changed) {
+      await withSeriesMetadataLock(seriesId, () =>
+        updateSeriesMetadata(seriesId, (freshSeries) => {
+          if (!freshSeries) return false;
+          const ep = (freshSeries.episodes || []).find((e) => String(e.id) === String(episodeId));
+          if (!ep) return false;
+          if (!ep.scriptData) ep.scriptData = {};
+          ep.scriptData.segments = repairRes.segments;
+          ep.scriptData.updatedAt = Date.now();
+          ep.scriptSegments = repairRes.segments;
+          ep.speakerRegistry = repairRes.speakerRegistry;
+          ep.fullAudioPath = null;
+          ep.fullAudioUrl = null;
+          ep.masterAudioSignature = null;
+          ep.audioOutdated = true;
+          ep.isAudioOutdated = true;
+          ep.updatedAt = Date.now();
+          return true;
+        })
+      );
+    }
+
+    res.json({
+      success: true,
+      seriesId,
+      episodeId,
+      changed: repairRes.changed,
+      consolidatedGroupsCount: repairRes.consolidatedGroupsCount,
+      removedDuplicatesCount: repairRes.removedDuplicatesCount,
+      synthesizedCount: repairRes.synthesizedCount,
+      preservedAudioCount: repairRes.preservedAudioCount,
+      segmentsCount: repairRes.segments.length,
+      segments: repairRes.segments,
+      speakerRegistry: repairRes.speakerRegistry,
+    });
+  } catch (err) {
+    console.error("[RepairIntroductions] Error:", err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 module.exports = router;
 

@@ -46,6 +46,14 @@ const {
   executeSingleVisionBatch: runSingleVisionBatch,
   deduplicateFastOcrCues,
 } = require('./stage3VisionBatchRunner');
+const {
+  classifyTextEvent,
+  consolidateContinuousIntroductionCues,
+  isIntroductionCategory,
+  isNonSpokenMetadataCategory,
+  areContinuousIntroductionEvents,
+  scoreIntroTextCandidate,
+} = require('../../../utils/textEventClassifier');
 
 function computeNormalizedTextSimilarity(a = '', b = '') {
   const s1 = normalizeChineseChars(stripDecorativeSubtitleNoise(a));
@@ -159,6 +167,23 @@ async function extractChineseSubtitles({
         (Array.isArray(cached.rawObservations) && cached.rawObservations.some((o) => o.ocrFailed || o.isVerified === false || o.ocrStatus === 'failed' || o.ocrStatus === 'missing'))
       );
       if (!hasUnresolved && cached.ocrMeta?.independentSamples && Array.isArray(cached.visualSegments) && Array.isArray(cached.rawObservations) && cached.visualSegments.length > 0) {
+        if (!cached.ocrMeta?.introConsolidationVersion) {
+          const upgradedSegs = consolidateContinuousIntroductionCues(cached.visualSegments, {
+            rawObservations: cached.rawObservations,
+            maxGapSec: 0.75,
+            dropNonSpokenMetadata: true,
+          }).map((s, idx) => ({ ...s, id: idx + 1, segmentId: idx + 1 }));
+          console.log(`[Stage 3 OCR] ⚡ Cache Hit + Intro Consolidation: ${cached.visualSegments.length} -> ${upgradedSegs.length} segments (${path.basename(cachePath)})`);
+          return {
+            ...cached,
+            visualSegments: upgradedSegs,
+            ocrMeta: {
+              ...(cached.ocrMeta || {}),
+              introConsolidationVersion: 2,
+              detectedSegmentsCount: upgradedSegs.length,
+            },
+          };
+        }
         console.log(`[Stage 3 OCR] ⚡ Cache Hit: Reusing ${cached.visualSegments.length} visual segments from disk cache (${path.basename(cachePath)})`);
         return cached;
       } else if (hasUnresolved) {
@@ -626,7 +651,7 @@ async function extractChineseSubtitles({
                   });
                   localVerifiedCount++;
                 }
-              } else if (hasHanziA && hasHanziB && sameSubtitleText(textA, textB) && confA >= 0.70 && confB >= 0.70) {
+              } else if (hasHanziA && hasHanziB && sameSubtitleText(textA, textB) && confA >= 0.70 && confB >= 0.70 && rA.orientation !== 'vertical' && rB.orientation !== 'vertical') {
                 const resolvedText = textA.length >= textB.length ? textA : textB;
                 const normResolvedLen = normalizeChineseChars(resolvedText).length;
                 if (normResolvedLen <= 1 && (confA < 0.85 || confB < 0.85)) {
@@ -634,6 +659,22 @@ async function extractChineseSubtitles({
                   disagreedTimestamps.add(tB);
                   continue;
                 }
+                const resolvedPosA = rA.position || 'bottom_subtitle';
+                const resolvedCatA = classifyTextEvent({
+                  text: resolvedText,
+                  textCategory: rA.textCategory,
+                  position: resolvedPosA,
+                  orientation: rA.orientation,
+                  textRegion: rA.textRegion,
+                  deliveryType: rA.deliveryType,
+                });
+                if (isNonSpokenMetadataCategory(resolvedCatA)) {
+                  disagreedTimestamps.add(tA);
+                  disagreedTimestamps.add(tB);
+                  continue;
+                }
+                const resolvedDelivA = isIntroductionCategory(resolvedCatA) ? 'narration' : 'dialogue';
+                const effectivePosA = isIntroductionCategory(resolvedCatA) ? 'title_card' : resolvedPosA;
                 if (!completedMap.has(tA)) {
                   completedMap.set(tA, {
                     timestampSec: tA,
@@ -643,11 +684,14 @@ async function extractChineseSubtitles({
                     chineseText: resolvedText,
                     confidence: confA,
                     isSharp: confA >= 0.70,
-                    position: rA.position || 'bottom_subtitle',
+                    position: effectivePosA,
+                    textCategory: resolvedCatA,
+                    orientation: rA.orientation || (effectivePosA === 'title_card' ? 'vertical' : 'horizontal'),
+                    textRegion: rA.textRegion || (effectivePosA === 'title_card' ? 'full_center' : 'center_bottom'),
                     visualGender: 'unknown',
                     speakerGender: 'UNKNOWN',
                     speakerVisualHint: '',
-                    deliveryType: 'dialogue',
+                    deliveryType: resolvedDelivA,
                     genderConfidence: 0.5,
                     ocrStatus: 'verified_text',
                     isVerified: true,
@@ -668,11 +712,14 @@ async function extractChineseSubtitles({
                     chineseText: resolvedText,
                     confidence: confB,
                     isSharp: confB >= 0.70,
-                    position: rB.position || 'bottom_subtitle',
+                    position: effectivePosA,
+                    textCategory: resolvedCatA,
+                    orientation: rB.orientation || rA.orientation || (effectivePosA === 'title_card' ? 'vertical' : 'horizontal'),
+                    textRegion: rB.textRegion || rA.textRegion || (effectivePosA === 'title_card' ? 'full_center' : 'center_bottom'),
                     visualGender: 'unknown',
                     speakerGender: 'UNKNOWN',
                     speakerVisualHint: '',
-                    deliveryType: 'dialogue',
+                    deliveryType: resolvedDelivA,
                     genderConfidence: 0.5,
                     ocrStatus: 'verified_text',
                     isVerified: true,
@@ -707,7 +754,20 @@ async function extractChineseSubtitles({
               (other) => other !== loc && other.hasText && Math.abs((other.timestampSec || 0) - t) <= 1.1 && sameSubtitleText(rawLocText, other.chineseText || other.textZh || '')
             );
 
-            if (locHasHanzi && isSingleCharConfirmed && (loc.confidence || 0) >= 0.85) {
+            const isLocVerticalCard = loc.orientation === 'vertical';
+            if (locHasHanzi && isSingleCharConfirmed && (loc.confidence || 0) >= 0.85 && !isLocVerticalCard) {
+              const locPos = loc.position || 'bottom_subtitle';
+              const locCat = classifyTextEvent({
+                text: rawLocText,
+                textCategory: loc.textCategory,
+                position: locPos,
+                orientation: loc.orientation,
+                textRegion: loc.textRegion,
+                deliveryType: loc.deliveryType,
+              });
+              if (isNonSpokenMetadataCategory(locCat)) continue;
+              const effLocPos = isIntroductionCategory(locCat) ? 'title_card' : locPos;
+              const effLocDelivery = isIntroductionCategory(locCat) ? 'narration' : 'dialogue';
               // High-confidence local text continues without Gemini
               completedMap.set(t, {
                 timestampSec: t,
@@ -717,11 +777,14 @@ async function extractChineseSubtitles({
                 chineseText: rawLocText,
                 confidence: loc.confidence,
                 isSharp: loc.confidence >= 0.70,
-                position: loc.position || 'bottom_subtitle',
+                position: effLocPos,
+                textCategory: locCat,
+                orientation: loc.orientation || (effLocPos === 'title_card' ? 'vertical' : 'horizontal'),
+                textRegion: loc.textRegion || (effLocPos === 'title_card' ? 'full_center' : 'center_bottom'),
                 visualGender: 'unknown',
                 speakerGender: 'UNKNOWN',
                 speakerVisualHint: '',
-                deliveryType: 'dialogue',
+                deliveryType: effLocDelivery,
                 genderConfidence: 0.5,
                 ocrStatus: 'verified_text',
                 isVerified: true,
@@ -1509,17 +1572,97 @@ async function extractChineseSubtitles({
   }
 
   // STEP 2B: Recover valid rawObservations with text that were not covered in evaluatedCueStates
+  // Also preserve simultaneous secondary introduction cards alongside dialogue & consolidate
+  // fluctuating/fragmented observations of an existing continuous introduction event BEFORE minting sourceCueId.
   if (Array.isArray(rawObservations) && rawObservations.length > 0) {
-    const uncapturedObservations = rawObservations.filter((obs) => {
-      if (!obs.hasText || !obs.chineseText || !hasChineseHanzi(obs.chineseText) || normalizeChineseChars(obs.chineseText).length === 0) {
-        return false;
+    const expandedObservations = [];
+    for (const obs of rawObservations) {
+      if (obs && obs.hasText && obs.chineseText && hasChineseHanzi(obs.chineseText) && normalizeChineseChars(obs.chineseText).length > 0) {
+        const obsCat = classifyTextEvent({
+          text: obs.chineseText,
+          textCategory: obs.textCategory,
+          position: obs.position,
+          orientation: obs.orientation,
+          textRegion: obs.textRegion,
+          deliveryType: obs.deliveryType,
+        });
+        if (!isNonSpokenMetadataCategory(obsCat)) {
+          expandedObservations.push({
+            ...obs,
+            textCategory: obsCat,
+          });
+        }
       }
-      const isCovered = evaluatedCueStates.some((c) => {
+      if (obs && obs.secondaryCard && obs.secondaryCard.chineseText && hasChineseHanzi(obs.secondaryCard.chineseText)) {
+        const secCat = classifyTextEvent({
+          text: obs.secondaryCard.chineseText,
+          textCategory: obs.secondaryCard.textCategory,
+          position: 'title_card',
+          orientation: obs.secondaryCard.orientation || 'vertical',
+          textRegion: obs.secondaryCard.textRegion || 'left_vertical',
+          deliveryType: 'narration',
+        });
+        if (!isNonSpokenMetadataCategory(secCat) && secCat !== 'dialogue') {
+          expandedObservations.push({
+            timestampSec: obs.timestampSec,
+            hasText: true,
+            chineseText: obs.secondaryCard.chineseText,
+            textZh: obs.secondaryCard.chineseText,
+            position: 'title_card',
+            textCategory: secCat,
+            orientation: obs.secondaryCard.orientation || 'vertical',
+            textRegion: obs.secondaryCard.textRegion || 'left_vertical',
+            isSharp: obs.isSharp !== false,
+            visualGender: 'unknown',
+            speakerVisualHint: 'narrator_card',
+            deliveryType: 'narration',
+            ocrEngine: obs.ocrEngine || 'gemini-vision',
+          });
+        }
+      }
+    }
+
+    const uncapturedObservations = [];
+    for (const obs of expandedObservations) {
+      const exactCovered = evaluatedCueStates.some((c) => {
         return (c.startSec - 0.25 <= obs.timestampSec && obs.timestampSec <= c.endSec + 0.25) &&
           sameSubtitleText(c.originalChineseText, obs.chineseText);
       });
-      return !isCovered;
-    });
+      if (exactCovered) continue;
+
+      const matchingIntroState = evaluatedCueStates.find((c) =>
+        areContinuousIntroductionEvents(c, {
+          ...obs,
+          startSec: obs.timestampSec,
+          endSec: obs.timestampSec + 0.6,
+        }, { maxGapSec: 0.75, rawObservations })
+      );
+      if (matchingIntroState) {
+        // Refine/extend existing continuous introduction event instead of spawning duplicate overlapping cue
+        matchingIntroState.endSec = parseFloat(Math.max(matchingIntroState.endSec, obs.timestampSec + 0.35).toFixed(2));
+        matchingIntroState.duration = parseFloat(Math.max(0.35, matchingIntroState.endSec - matchingIntroState.startSec).toFixed(2));
+        if (scoreIntroTextCandidate(obs) > scoreIntroTextCandidate(matchingIntroState)) {
+          matchingIntroState.textZh = obs.chineseText;
+          matchingIntroState.originalChineseText = obs.chineseText;
+          matchingIntroState.chineseText = obs.chineseText;
+          matchingIntroState.textCategory = classifyTextEvent({ ...obs, text: obs.chineseText });
+          if (obs.position === 'title_card' || isIntroductionCategory(matchingIntroState.textCategory)) {
+            matchingIntroState.position = 'title_card';
+            matchingIntroState.deliveryType = 'narration';
+          }
+          if (obs.orientation) matchingIntroState.orientation = obs.orientation;
+          if (obs.textRegion) matchingIntroState.textRegion = obs.textRegion;
+          if (obs.isSharp) {
+            matchingIntroState.ocrConfidence = 'high';
+            matchingIntroState.uncertainOcr = false;
+            matchingIntroState.reviewNeeded = false;
+          }
+        }
+        continue;
+      }
+
+      uncapturedObservations.push(obs);
+    }
 
     if (uncapturedObservations.length > 0) {
       console.log(`[Stage 3 OCR] Recovering ${uncapturedObservations.length} valid subtitle observation(s) outside primary cue states...`);
@@ -1530,6 +1673,29 @@ async function extractChineseSubtitles({
       let prevRecoveredEnd = safeStartSec;
       for (const obs of sortedUncaptured) {
         const t = obs.timestampSec;
+        const obsCat = obs.textCategory || classifyTextEvent({ ...obs, text: obs.chineseText });
+        const obsIsIntro = isIntroductionCategory(obsCat) || obs.position === 'title_card';
+
+        // Re-check against previously recovered intro cue states so sequential uncaptured frames consolidate immediately
+        const prevIntroMatch = obsIsIntro ? evaluatedCueStates.find((c) =>
+          areContinuousIntroductionEvents(c, {
+            ...obs,
+            startSec: t,
+            endSec: t + 0.6,
+          }, { maxGapSec: 0.75, rawObservations })
+        ) : null;
+        if (prevIntroMatch) {
+          prevIntroMatch.endSec = parseFloat(Math.max(prevIntroMatch.endSec, t + 0.45).toFixed(2));
+          prevIntroMatch.duration = parseFloat(Math.max(0.35, prevIntroMatch.endSec - prevIntroMatch.startSec).toFixed(2));
+          if (scoreIntroTextCandidate(obs) > scoreIntroTextCandidate(prevIntroMatch)) {
+            prevIntroMatch.textZh = obs.chineseText;
+            prevIntroMatch.originalChineseText = obs.chineseText;
+            prevIntroMatch.chineseText = obs.chineseText;
+            prevIntroMatch.textCategory = obsCat;
+          }
+          continue;
+        }
+
         const tIdx = Math.round((t - safeStartSec) / stepDiff);
         let onset = Math.max(safeStartSec, t - 0.5);
         for (let k = tIdx; k >= Math.max(0, tIdx - 10); k--) {
@@ -1571,14 +1737,18 @@ async function extractChineseSubtitles({
           textZh: obs.chineseText,
           originalChineseText: obs.chineseText,
           chineseText: obs.chineseText,
-          position: obs.position || 'bottom_subtitle',
+          position: isIntroductionCategory(obsCat) ? 'title_card' : (obs.position || 'bottom_subtitle'),
+          textCategory: obsCat,
+          orientation: obs.orientation || (obs.position === 'title_card' ? 'vertical' : 'horizontal'),
+          textRegion: obs.textRegion || '',
           ocrConfidence: obs.isSharp ? 'high' : 'medium',
           reviewNeeded: !obs.isSharp,
           ocrDisagreement: false,
           uncertainOcr: !obs.isSharp,
-          visualGender: obs.visualGender || 'unknown',
+          visualGender: isIntroductionCategory(obsCat) ? 'unknown' : (obs.visualGender || 'unknown'),
           speakerVisualHint: obs.speakerVisualHint || '',
-          deliveryType: obs.deliveryType || 'dialogue',
+          deliveryType: isIntroductionCategory(obsCat) ? 'narration' : (obs.deliveryType || 'dialogue'),
+          ocrEngine: obs.ocrEngine || 'gemini-vision',
           genderVotes: { [obs.visualGender || 'unknown']: 1 },
         });
       }
@@ -1764,18 +1934,39 @@ async function extractChineseSubtitles({
     }
   }
 
+  // Consolidate continuous on-screen introduction/title events (vertical fragments, OCR blur fluctuations)
+  // BEFORE assigning immutable sourceCueId values, while keeping repeated spoken dialogue completely intact.
+  const consolidatedVisualSegments = consolidateContinuousIntroductionCues(visualSegments, {
+    rawObservations,
+    maxGapSec: 0.75,
+    dropNonSpokenMetadata: true,
+  });
+
   // Finalize segments with immutable sourceCueId, timecodes, gender resolution, and minimum duration 0.35s
   const chunkOffsetTag = Math.round(Math.max(0, Number(startOffsetSec) || 0) * 100);
-  const finalizedVisualSegments = stripRepeatedLeadingTimeCardPrefix(visualSegments.map((s, idx) => {
+  const finalizedVisualSegments = stripRepeatedLeadingTimeCardPrefix(consolidatedVisualSegments.map((s, idx) => {
     const rawDur = parseFloat((s.endSec - s.startSec).toFixed(2));
     const dur = Math.max(0.35, rawDur);
     const endSec = parseFloat((s.startSec + dur).toFixed(2));
     const genderData = resolveGenderFromVotes(s.genderVotes, s.visualGender);
     const resolvedChinese = s.originalChineseText || s.chineseText || s.textZh || '';
+    const resolvedCategory = classifyTextEvent({
+      text: resolvedChinese,
+      textCategory: s.textCategory,
+      position: s.position,
+      orientation: s.orientation,
+      textRegion: s.textRegion,
+      deliveryType: s.deliveryType,
+    });
+    const isIntro = isIntroductionCategory(resolvedCategory);
+    const effectiveGenderData = isIntro
+      ? { visualGender: 'unknown', speakerGender: 'UNKNOWN', genderConfidence: 0.5 }
+      : genderData;
     const sourceCueId = s.sourceCueId || `cue_${chunkOffsetTag}_${Math.round(s.startSec * 100)}_${idx + 1}`;
 
     return {
       ...s,
+      ...effectiveGenderData,
       id: idx + 1,
       segmentId: idx + 1,
       sourceCueId,
@@ -1786,16 +1977,18 @@ async function extractChineseSubtitles({
       textZh: resolvedChinese,
       originalChineseText: resolvedChinese,
       chineseText: resolvedChinese,
-      position: s.position || 'bottom_subtitle',
-      visualGender: genderData.visualGender || s.visualGender || 'unknown',
+      position: isIntro ? 'title_card' : (s.position || 'bottom_subtitle'),
+      textCategory: resolvedCategory,
+      orientation: s.orientation || (isIntro ? 'vertical' : 'horizontal'),
+      textRegion: s.textRegion || '',
+      visualGender: isIntro ? 'unknown' : (effectiveGenderData.visualGender || s.visualGender || 'unknown'),
       speakerVisualHint: s.speakerVisualHint || '',
-      deliveryType: s.deliveryType || 'dialogue',
+      deliveryType: isIntro ? 'narration' : (s.deliveryType || 'dialogue'),
       ocrConfidence: s.ocrConfidence || 'high',
       reviewNeeded: Boolean(s.reviewNeeded),
       ocrDisagreement: Boolean(s.ocrDisagreement),
       uncertainOcr: Boolean(s.uncertainOcr || s.ocrConfidence === 'low'),
       source: 'visual_ocr',
-      ...genderData,
     };
   }));
 
@@ -1854,6 +2047,7 @@ async function extractChineseSubtitles({
     unresolvedFrames: Array.from(unresolvedMap.values()),
     ocrMeta: {
       independentSamples: true,
+      introConsolidationVersion: 2,
       ocrEngineMode,
       usage: performance.geminiUsage,
       totalFramesSampled: rawObservations.length,

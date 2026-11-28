@@ -943,7 +943,7 @@ function syncSegmentsWithSpeakerRegistry(segments = [], customSpeakerVoiceMap = 
       : (reg.voiceGender || "unknown");
     const resolvedSpeakerGender = resolvedGender === "female" ? "FEMALE" : (resolvedGender === "male" ? "MALE" : "UNKNOWN");
     const activeProfile = getVoiceProfile(resolvedGender, activeVoice);
-    const isNarrator = rawSpeaker.toLowerCase().includes("narrator") || rawSpeaker.includes("អ្នកសម្រាយរឿង") || rawSpeaker.includes("旁白");
+    const isNarrator = rawSpeaker.toLowerCase().includes("narrator") || rawSpeaker.includes("អ្នកសម្រាយរឿង") || rawSpeaker.includes("អ្នករៀបរាប់") || rawSpeaker.includes("旁白");
     const safeSpkKey = isNarrator ? "spk_narrator" : (reg.speakerId || spkKey);
     const isSeriesGlossary = reg.voiceAssignmentSource === "series_glossary";
     const isUnknownVoice = resolvedGender === "unknown" && !isManualOverride && !isSeriesGlossary;
@@ -1020,7 +1020,7 @@ function syncSegmentsWithSpeakerRegistry(segments = [], customSpeakerVoiceMap = 
  */
 function getSpeakerId(speakerName = "") {
   const clean = String(speakerName || "Speaker").trim();
-  if (clean === "អ្នកសម្រាយរឿង" || clean.toLowerCase() === "narrator" || clean === "旁白") {
+  if (clean === "អ្នកសម្រាយរឿង" || clean === "អ្នករៀបរាប់" || clean.toLowerCase() === "narrator" || clean === "旁白") {
     return "spk_narrator";
   }
   const safe = clean

@@ -14,6 +14,12 @@ const {
   isExpressiveVocalizationSource,
   isPureDescriptiveSoundLabel,
 } = require('../../../utils/translationQuality');
+const {
+  classifyTextEvent,
+  isIntroductionCategory,
+  NARRATOR_SPEAKER_LABEL,
+  NARRATOR_SPEAKER_ID,
+} = require('../../../utils/textEventClassifier');
 
 // Smart Segment-Level Translation Cache (Persists verified Chinese -> Khmer segment translations)
 function getTranslationCacheDir() {
@@ -541,6 +547,10 @@ function createCanonicalSegment(raw = {}, index = 0, mode = 'dialogue') {
     original: origChinese,
     spokenAudioText: raw.spokenAudioText || '',
     ocrSubtitleText: raw.ocrSubtitleText || '',
+    ...(raw.position ? { position: raw.position } : {}),
+    ...(raw.textCategory ? { textCategory: raw.textCategory } : {}),
+    ...(raw.orientation ? { orientation: raw.orientation } : {}),
+    ...(raw.textRegion ? { textRegion: raw.textRegion } : {}),
     khmerTranslatedText: khmerText,
     khmerText: khmerText,
     khmer: khmerText,
@@ -693,6 +703,26 @@ function applyTranslatedSegmentResult(targetSeg, t, maxWords, segIdx, { isFastOc
     targetSeg.speakerStatus === 'review_needed' ||
     targetSeg.speakerReviewNeeded === true
   );
+  const resolvedSegCat = classifyTextEvent({
+    text: targetSeg.originalChineseText || targetSeg.chineseText || '',
+    textCategory: targetSeg.textCategory,
+    position: targetSeg.position,
+    orientation: targetSeg.orientation,
+    textRegion: targetSeg.textRegion,
+    deliveryType: targetSeg.deliveryType,
+  });
+  const isNarratedIntroSeg = isIntroductionCategory(resolvedSegCat);
+  if (isNarratedIntroSeg) {
+    targetSeg.textCategory = resolvedSegCat;
+    targetSeg.deliveryType = 'narration';
+    targetSeg.position = 'title_card';
+    targetSeg.speaker = NARRATOR_SPEAKER_LABEL;
+    targetSeg.speakerName = NARRATOR_SPEAKER_LABEL;
+    targetSeg.speakerId = NARRATOR_SPEAKER_ID;
+    targetSeg.characterId = NARRATOR_SPEAKER_ID;
+    return !isPlaceholderTranslationText(targetSeg.khmerTranslatedText);
+  }
+
   const cleanSpk = ((hasLockedStep1Speaker || isStep1ReviewNeeded) && targetSeg.speaker)
     ? cleanKhmerSpokenText(targetSeg.speaker)
     : (cleanKhmerSpokenText(t.speaker) || cleanKhmerSpokenText(targetSeg.speaker) || 'តួអង្គ');
@@ -883,6 +913,36 @@ function enforceEpisodeCharacterConsistency(segments = [], { defaultGender = 'ma
 
     if (isManualSpeakerOrVoice) {
       manualOverrideCount++;
+      continue;
+    }
+    const segCat = classifyTextEvent({
+      text: seg.originalChineseText || seg.chineseText || '',
+      textCategory: seg.textCategory,
+      position: seg.position,
+      orientation: seg.orientation,
+      textRegion: seg.textRegion,
+      deliveryType: seg.deliveryType,
+    });
+    if (isIntroductionCategory(segCat) || seg.speakerId === NARRATOR_SPEAKER_ID || seg.speaker === NARRATOR_SPEAKER_LABEL) {
+      const navMeta = deriveVoiceFromGender(normDefault);
+      seg.textCategory = segCat;
+      seg.speaker = NARRATOR_SPEAKER_LABEL;
+      seg.speakerName = NARRATOR_SPEAKER_LABEL;
+      seg.speakerId = NARRATOR_SPEAKER_ID;
+      seg.characterId = NARRATOR_SPEAKER_ID;
+      seg.deliveryType = isIntroductionCategory(segCat) ? 'narration' : (seg.deliveryType || 'narration');
+      seg.voiceGender = normDefault;
+      seg.gender = navMeta.gender;
+      seg.speakerGender = navMeta.speakerGender;
+      seg.voiceId = navMeta.voiceId;
+      seg.khmerVoiceId = navMeta.khmerVoiceId;
+      seg.voice = navMeta.voice;
+      seg.voiceLabel = navMeta.voiceLabel;
+      seg.avatar = navMeta.avatar;
+      seg.badgeColor = navMeta.badgeColor;
+      seg.unverifiedSpeaker = false;
+      seg.speakerStatus = 'verified';
+      autoVerifiedSpeakerCount++;
       continue;
     }
     if (isStep1ReviewNeeded) {

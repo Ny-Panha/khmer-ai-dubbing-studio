@@ -4,6 +4,12 @@ const { formatSecondsToTimecode } = require('../pipelineTypes');
 const { createAbortError } = require('../../../utils/asyncSemaphore');
 const { VISION_CASCADE_MODELS } = require('../../geminiModelCatalog');
 const { geminiQuotaTracker } = require('../../geminiQuotaTracker');
+const {
+  classifyTextEvent,
+  consolidateContinuousIntroductionCues,
+  isIntroductionCategory,
+  isNonSpokenMetadataCategory,
+} = require('../../../utils/textEventClassifier');
 
 function sleepOrAbort(ms, signal) {
   if (!signal) {
@@ -687,21 +693,66 @@ function parseVisionResponseFrames(resp, batchFrames = [], _options = {}) {
         ? Math.min(1.0, Math.max(0.0, f.genderConfidence))
         : (validGender === 'unknown' ? 0.5 : 0.85);
       const speakerVisualHint = String(f.speakerVisualHint || '').trim();
-      const rawDelivery = String(f.deliveryType || 'dialogue').toLowerCase();
-      const validDelivery = ['dialogue', 'inner_thought', 'narration'].includes(rawDelivery)
-        ? rawDelivery
+      const rawOrientation = String(f.orientation || (f.position === 'title_card' ? 'vertical' : 'horizontal')).toLowerCase();
+      const validOrientation = rawOrientation === 'vertical' ? 'vertical' : 'horizontal';
+      const validTextRegion = String(f.textRegion || (f.position === 'title_card' ? 'full_center' : 'center_bottom')).trim();
+      const classifiedCategory = hasCleanText
+        ? classifyTextEvent({
+            text: cText,
+            textCategory: f.textCategory,
+            position: f.position || 'bottom_subtitle',
+            orientation: validOrientation,
+            textRegion: validTextRegion,
+            deliveryType: f.deliveryType || 'dialogue',
+          })
         : 'dialogue';
+      const isNonSpokenMeta = hasCleanText && isNonSpokenMetadataCategory(classifiedCategory);
+      const effectiveHasText = hasCleanText && !isNonSpokenMeta;
+      const effectivePos = (isIntroductionCategory(classifiedCategory) || ['time_card', 'story_lore'].includes(classifiedCategory))
+        ? 'title_card'
+        : (f.position || 'bottom_subtitle');
+      const rawDelivery = String(f.deliveryType || (isIntroductionCategory(classifiedCategory) ? 'narration' : 'dialogue')).toLowerCase();
+      const validDelivery = isIntroductionCategory(classifiedCategory)
+        ? 'narration'
+        : (['dialogue', 'inner_thought', 'narration'].includes(rawDelivery) ? rawDelivery : 'dialogue');
 
-      const ocrStatus = hasCleanText ? 'verified_text' : (isVerifiedEmpty ? 'verified_empty' : (hasExplicitHasText ? 'verified_empty' : 'missing'));
+      const ocrStatus = effectiveHasText ? 'verified_text' : (isVerifiedEmpty || isNonSpokenMeta ? 'verified_empty' : (hasExplicitHasText ? 'verified_empty' : 'missing'));
       const isVerified = ocrStatus === 'verified_text' || ocrStatus === 'verified_empty';
+
+      const secondaryCardRaw = f.secondaryCard && typeof f.secondaryCard === 'object' ? f.secondaryCard : null;
+      const secText = secondaryCardRaw ? stripDecorativeSubtitleNoise(secondaryCardRaw.chineseText || secondaryCardRaw.textZh || '') : '';
+      const secCat = secText
+        ? classifyTextEvent({
+            text: secText,
+            textCategory: secondaryCardRaw.textCategory,
+            position: 'title_card',
+            orientation: secondaryCardRaw.orientation || 'vertical',
+            textRegion: secondaryCardRaw.textRegion || 'left_vertical',
+          })
+        : null;
+      const validSecondaryCard = (secText && secCat && !isNonSpokenMetadataCategory(secCat) && secCat !== 'dialogue')
+        ? {
+            chineseText: secText,
+            textZh: secText,
+            textCategory: secCat,
+            orientation: secondaryCardRaw.orientation || 'vertical',
+            textRegion: secondaryCardRaw.textRegion || 'left_vertical',
+            position: 'title_card',
+            deliveryType: 'narration',
+          }
+        : null;
 
       batchObservations.push({
         timestampSec: targetTime,
         reportedSec: tSec,
-        hasText: hasCleanText,
-        textZh: hasCleanText ? cText : '',
-        chineseText: hasCleanText ? cText : '',
-        position: f.position || 'bottom_subtitle',
+        hasText: effectiveHasText,
+        textZh: effectiveHasText ? cText : '',
+        chineseText: effectiveHasText ? cText : '',
+        position: effectiveHasText ? effectivePos : 'bottom_subtitle',
+        textCategory: effectiveHasText ? classifiedCategory : 'dialogue',
+        orientation: effectiveHasText ? validOrientation : 'horizontal',
+        textRegion: effectiveHasText ? validTextRegion : 'center_bottom',
+        ...(validSecondaryCard ? { secondaryCard: validSecondaryCard } : {}),
         isSharp: f.isSharp !== false,
         visualGender: validGender,
         speakerGender: validGender,
@@ -808,21 +859,31 @@ function buildVisionBatchContents(batch) {
 Analyze these ${batch.length} sequential video frames at the specified timestamps.
 
 TASK:
-Detect all burned-in Chinese dialogue subtitles in the center-bottom safe zone of each frame AND inspect the visible speaking character on screen.
+Detect all burned-in Chinese text in each frame — BOTH center-bottom spoken dialogue subtitles AND meaningful on-screen introduction/lore cards — while classifying text type, orientation, and region accurately.
 
 RULES:
-1. Examine the center-bottom subtitle area of each frame for burned-in Chinese dialogue text.
-2. If dialogue subtitle text is clearly present, set "hasText": true and return the exact Chinese characters in both "textZh" and "chineseText" (strip decorative brackets like 【...】, music notes ♪, or watermarks).
-3. If no dialogue subtitle text is present (e.g. background scenery, action without speaking, character reaction with no text), set "hasText": false, "textZh": "", and "chineseText": "".
-4. "position": "bottom_subtitle" (for actor dialogue) or "title_card" (for standalone full-screen scene titles when NO bottom dialogue exists).
-5. STRICT DIALOGUE-ONLY ISOLATION: When a centered bottom dialogue subtitle is present, extract ONLY that centered spoken dialogue line. NEVER concatenate side/corner yellow time-jump cards (e.g. '几个月前', '三天后', '一年前', '片刻后'), vertical character nameplates (e.g. '<角色名> <身份>'), or vertical location banners (e.g. '<场景地名>') onto the dialogue text!
-6. "isSharp": true if readable, false if blurry or motion-faded.
-7. "visualGender" (and "speakerGender"): Inspect the visible speaking character's face, hair, costume, and open mouth to determine gender: "male", "female", or "unknown" if offscreen/ambiguous.
-8. "speakerVisualHint": Short visual archetype tag for the speaker on screen (e.g. "male_lead_ancient", "female_lead_white_robe", "emperor", "maid", "ceo_suit", "offscreen_narrator").
-9. "deliveryType": "dialogue" (speaking out loud with mouth moving), "inner_thought" (mouth closed with echoing/internal monologue or parenthetical subtitle), or "narration" (offscreen narrator / story recap).
-10. "genderConfidence": Number between 0.0 and 1.0 indicating confidence in visualGender.
-11. EXCLUDE WATERMARKS: Do NOT output creator watermarks, channel handles, or anti-theft stamps (e.g. '偷了...的视频', '抖音', '快手', account IDs). Only output genuine actor dialogue lines and standalone scene titles.
-12. Preserve exact recognized Chinese characters across all video genres (Ancient/Xianxia, Modern CEO, Romance, Action, Comedy). Do NOT invent or summarize dialogue.
+1. Examine center-bottom dialogue area AND side/top/full-screen calligraphy or title cards in each frame.
+2. VERTICAL TEXT READING ORDER: When Chinese text is arranged vertically (top-to-bottom calligraphy columns), read EVERY character in top-to-bottom order within each column (and right-to-left across multiple vertical columns) as ONE complete phrase! Do NOT emit only a clipped bottom character or red seal stamp.
+3. Classify "textCategory" accurately into ONE of:
+   - "dialogue": spoken or inner-thought actor subtitle in the center-bottom zone
+   - "character_introduction": character nameplate, title, sect, or rank card
+   - "monster_introduction": creature, beast, spirit, or boss rank/name card
+   - "location_introduction": place, sect, realm, city, or map banner
+   - "time_card": temporal transition card (relative duration / date)
+   - "story_lore": world-building, history, power-system, or legend explanation block
+   - "system_announcement": game/system/broadcast overlay banner
+   - "watermark" or "decorative": channel handles, creator watermarks, corner seals/stamps, props
+4. "orientation": "horizontal" or "vertical".
+5. "textRegion": "center_bottom" | "left_vertical" | "right_vertical" | "top_center" | "full_center" | "corner".
+6. "position": "bottom_subtitle" (for spoken dialogue) or "title_card" (for introduction/monster/location/lore/time/system cards).
+7. STRICT DIALOGUE-ONLY ISOLATION (SIMULTANEOUS DIALOGUE + INTRODUCTION PRESERVATION): When BOTH centered spoken bottom dialogue AND a side/corner introduction/time card appear in the same frame, NEVER concatenate the card onto the spoken line! Put the spoken dialogue in the main fields ("textCategory": "dialogue", "position": "bottom_subtitle") and optionally put any meaningful unspoken intro card into "secondaryCard": {"chineseText": "...", "textCategory": "...", "orientation": "...", "textRegion": "..."}.
+8. Exclude watermarks/channel handles/red stamps completely ("hasText": false if ONLY watermark/decorative logo is visible).
+9. "isSharp": true if crisply readable, false if motion-blurred or mid-fade.
+10. "visualGender" (and "speakerGender"): Inspect the visible speaking character's face/hair/costume/mouth for dialogue ("male" | "female" | "unknown"). For unspoken introduction/lore cards set "deliveryType": "narration" and "visualGender": "unknown".
+11. "speakerVisualHint": Short visual archetype tag for spoken lines (or "narrator_card" for introductions).
+12. "deliveryType": "dialogue" | "inner_thought" | "narration".
+13. "genderConfidence": Number between 0.0 and 1.0.
+14. Preserve exact recognized Chinese characters across all genres. Never invent text or skip real spoken dialogue or meaningful lore/monster/character introductions.
 
 Return JSON ONLY matching this schema:
 {
@@ -833,6 +894,9 @@ Return JSON ONLY matching this schema:
   "textZh": "我们今天必须完成这项工作",
   "chineseText": "我们今天必须完成这项工作",
   "position": "bottom_subtitle",
+  "textCategory": "dialogue",
+  "orientation": "horizontal",
+  "textRegion": "center_bottom",
   "isSharp": true,
   "visualGender": "female",
   "speakerGender": "female",
@@ -891,7 +955,13 @@ async function executeSingleVisionBatch(batchFrames, {
 function deduplicateFastOcrCues(rawCues = [], defaultGender = 'male') {
   if (!Array.isArray(rawCues) || rawCues.length === 0) return [];
 
-  const sorted = [...rawCues].sort((a, b) => (a.startSec || 0) - (b.startSec || 0));
+  // Consolidate continuous non-dialogue introduction/title events (including OCR fluctuations & edge fragments)
+  // BEFORE boundary deduplication while strictly preserving genuine repeated dialogue.
+  const preConsolidated = consolidateContinuousIntroductionCues(rawCues, {
+    maxGapSec: 0.75,
+    dropNonSpokenMetadata: true,
+  });
+  const sorted = [...preConsolidated].sort((a, b) => (a.startSec || 0) - (b.startSec || 0));
   const deduped = [];
 
   const defGen = (defaultGender || 'male').toLowerCase() === 'female' ? 'female' : 'male';

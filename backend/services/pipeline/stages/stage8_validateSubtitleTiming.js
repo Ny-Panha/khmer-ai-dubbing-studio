@@ -1,4 +1,9 @@
 const { formatSecondsToTimecode, validateStrictSourceCueMapping } = require('../pipelineTypes');
+const {
+  classifyTextEvent,
+  isIntroductionCategory,
+  areContinuousIntroductionEvents,
+} = require('../../../utils/textEventClassifier');
 
 /**
  * Stage 8: Validate Subtitle Timing
@@ -30,11 +35,14 @@ async function validateSubtitleTiming({ segments = [], sourceCues = null, durati
   // Pre-sort by start time
   const sorted = [...segments].sort((a, b) => a.startSec - b.startSec);
   
-  // 1. Remove duplicate segments sharing the same start timestamp (<0.35s) and overlapping/identical text
+  // 1. Remove duplicate segments sharing the same start timestamp (<0.35s) and overlapping/identical text,
+  // and detect/flag any residual duplicate continuous introduction events without breaking 1:1 sourceCueId mapping.
   const cleanList = [];
   let duplicatesRemoved = 0;
+  const duplicateIntroductionCueIds = [];
+  const hasBaselineSourceCues = Array.isArray(sourceCues) && sourceCues.length > 0 && sourceCues.some((c) => Boolean(c?.sourceCueId));
   for (let i = 0; i < sorted.length; i++) {
-    const cur = sorted[i];
+    const cur = { ...sorted[i] };
     if (cleanList.length > 0) {
       const prev = cleanList[cleanList.length - 1];
       const sameTime = Math.abs((cur.startSec || 0) - (prev.startSec || 0)) < 0.35;
@@ -43,21 +51,53 @@ async function validateSubtitleTiming({ segments = [], sourceCues = null, durati
       const hasDistinctSourceCueIds = Boolean(cur.sourceCueId && prev.sourceCueId && cur.sourceCueId !== prev.sourceCueId);
       const textMatches = !hasDistinctSourceCueIds && curText.length > 0 && curText === prevText;
 
-      if (sameTime && textMatches) {
+      const prevCat = classifyTextEvent({
+        text: prev.originalChineseText,
+        textCategory: prev.textCategory,
+        position: prev.position,
+        orientation: prev.orientation,
+        textRegion: prev.textRegion,
+        deliveryType: prev.deliveryType,
+      });
+      const curCat = classifyTextEvent({
+        text: cur.originalChineseText,
+        textCategory: cur.textCategory,
+        position: cur.position,
+        orientation: cur.orientation,
+        textRegion: cur.textRegion,
+        deliveryType: cur.deliveryType,
+      });
+      const isDupIntroPair = (isIntroductionCategory(prevCat) || isIntroductionCategory(curCat)) &&
+        areContinuousIntroductionEvents(prev, cur, { maxGapSec: 0.75 });
+
+      if ((sameTime && textMatches) || (isDupIntroPair && (!hasBaselineSourceCues || !hasDistinctSourceCueIds))) {
         duplicatesRemoved++;
+        if (isDupIntroPair) {
+          duplicateIntroductionCueIds.push(cur.sourceCueId || cur.segmentId || i + 1);
+        }
         // Keep the one with longer/more complete duration and text
         if ((cur.endSec || 0) > (prev.endSec || 0)) {
           prev.endSec = cur.endSec;
           prev.duration = parseFloat((prev.endSec - prev.startSec).toFixed(2));
           prev.sourceEndSec = cur.sourceEndSec || cur.endSec;
         }
-        if (curText.length > prevText.length) {
+        if ((cur.originalChineseText || '').length > (prev.originalChineseText || '').length) {
           prev.originalChineseText = cur.originalChineseText || prev.originalChineseText;
           prev.khmerTranslatedText = cur.khmerTranslatedText || prev.khmerTranslatedText;
           prev.khmerText = prev.khmerTranslatedText;
           prev.khmer = prev.khmerTranslatedText;
         }
         continue;
+      }
+
+      if (isDupIntroPair && hasBaselineSourceCues && hasDistinctSourceCueIds) {
+        duplicateIntroductionCueIds.push(cur.sourceCueId || cur.segmentId || i + 1);
+        cur.reviewNeeded = true;
+        cur.duplicateIntroductionDetected = true;
+        cur.validationErrors = [
+          ...(cur.validationErrors || []),
+          'រកឃើញផ្ទាំងណែនាំស្ទួន (Duplicate Introduction Event Requires Review)',
+        ];
       }
     }
     cleanList.push(cur);
@@ -267,6 +307,8 @@ async function validateSubtitleTiming({ segments = [], sourceCues = null, durati
       microDurationsCorrected,
       overlapsResolved,
       duplicatesRemoved,
+      duplicateIntroductionCount: duplicateIntroductionCueIds.length,
+      duplicateIntroductionCueIds,
       invalidTimingCount,
       timingValid: invalidTimingCount === 0,
       durationSec,

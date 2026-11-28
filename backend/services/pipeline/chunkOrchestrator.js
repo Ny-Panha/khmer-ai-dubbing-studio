@@ -34,6 +34,7 @@ const { isNonChineseAsrHallucination } = require('../../utils/translationQuality
 const { DUBBING_CASCADE_MODELS, isUsableDubbingModel } = require('../geminiModelCatalog');
 const { geminiQuotaTracker } = require('../geminiQuotaTracker');
 const { extractAllGeminiKeys } = require('../geminiKeyManager');
+const { consolidateContinuousIntroductionCues } = require('../../utils/textEventClassifier');
 
 /**
  * Generate logical chunk plan for long videos.
@@ -85,9 +86,13 @@ function generateChunkPlan(totalDurationSec, chunkSizeSec = 300, overlapSec = 2)
  * @returns {Array<object>}
  */
 function stitchAndDeduplicateSegments(allChunkSegments = []) {
-  const validSegments = Array.isArray(allChunkSegments)
+  const validSegmentsRaw = Array.isArray(allChunkSegments)
     ? allChunkSegments.filter((seg) => !isNonChineseAsrHallucination(seg))
     : [];
+  const validSegments = consolidateContinuousIntroductionCues(validSegmentsRaw, {
+    maxGapSec: 0.75,
+    dropNonSpokenMetadata: true,
+  });
   if (validSegments.length === 0) return [];
 
   // Sort globally by startSec

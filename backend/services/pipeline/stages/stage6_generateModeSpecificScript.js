@@ -52,6 +52,12 @@ const {
   clearRescuedSegmentFailureState,
   extractSingleLineRescueCandidate,
 } = require('./stage6PromptAndConsistency');
+const {
+  classifyTextEvent,
+  isIntroductionCategory,
+  areContinuousIntroductionEvents,
+  computeChineseCharSimilarity,
+} = require('../../../utils/textEventClassifier');
 
 async function generateModeSpecificScript({
   mode = GENERATION_MODES.MODE_A_DIALOGUE,
@@ -122,7 +128,16 @@ async function generateModeSpecificScript({
     // ==========================================
     let dialogueList = [];
     for (const seg of reconciledSegments) {
-      if (isFastOcrMode || seg?.sourceCueId) {
+      const segCat = classifyTextEvent({
+        text: seg?.originalChineseText || seg?.chineseText || '',
+        textCategory: seg?.textCategory,
+        position: seg?.position,
+        orientation: seg?.orientation,
+        textRegion: seg?.textRegion,
+        deliveryType: seg?.deliveryType,
+      });
+      const isIntroSeg = isIntroductionCategory(segCat);
+      if (isFastOcrMode || seg?.sourceCueId || isIntroSeg) {
         dialogueList.push(seg);
       } else {
         const pieces = splitLongDialogueSegment(seg);
@@ -130,8 +145,37 @@ async function generateModeSpecificScript({
       }
     }
 
-    // Re-index strictly sequential IDs across all split dialogue items
-    dialogueList = dialogueList.map((seg, idx) => ({
+    // Reconcile un-locked spoken ASR narration vs equivalent on-screen introduction pair
+    // (only when NOT protected by distinct Stage 3 visual sourceCueIds so 1:1 cue mapping stays intact)
+    const dedupedDialogueList = [];
+    for (const item of dialogueList) {
+      const prev = dedupedDialogueList[dedupedDialogueList.length - 1];
+      if (prev) {
+        const curCat = classifyTextEvent({ ...item, text: item?.originalChineseText || item?.chineseText || '' });
+        const prevCat = classifyTextEvent({ ...prev, text: prev?.originalChineseText || prev?.chineseText || '' });
+        const hasIntro = isIntroductionCategory(curCat) || isIntroductionCategory(prevCat);
+        const curIsAsr = String(item?.evidenceSource || '').includes('asr') || String(item?.sourceCueId || '').startsWith('cue_asr_');
+        const prevIsAsr = String(prev?.evidenceSource || '').includes('asr') || String(prev?.sourceCueId || '').startsWith('cue_asr_');
+        const distinctVisualIds = Boolean(prev.sourceCueId && item.sourceCueId && prev.sourceCueId !== item.sourceCueId && !curIsAsr && !prevIsAsr);
+        const sim = computeChineseCharSimilarity(prev.originalChineseText || '', item.originalChineseText || '');
+        const overlapsOrAdjacent = Number(item.startSec ?? 0) <= Number(prev.endSec ?? 0) + 0.75;
+        if (hasIntro && !distinctVisualIds && overlapsOrAdjacent && (sim >= 0.58 || areContinuousIntroductionEvents(prev, item, { maxGapSec: 0.75 }))) {
+          prev.endSec = parseFloat(Math.max(Number(prev.endSec || 0), Number(item.endSec || 0)).toFixed(2));
+          prev.duration = parseFloat(Math.max(0.35, prev.endSec - Number(prev.startSec || 0)).toFixed(2));
+          prev.deliveryType = 'narration';
+          prev.textCategory = isIntroductionCategory(curCat) ? curCat : prevCat;
+          if ((item.originalChineseText || '').length > (prev.originalChineseText || '').length) {
+            prev.originalChineseText = item.originalChineseText;
+            prev.chineseText = item.originalChineseText;
+          }
+          continue;
+        }
+      }
+      dedupedDialogueList.push(item);
+    }
+
+    // Re-index strictly sequential IDs across all dialogue items
+    dialogueList = dedupedDialogueList.map((seg, idx) => ({
       ...seg,
       id: idx + 1,
       segmentId: idx + 1,
@@ -373,6 +417,8 @@ async function generateModeSpecificScript({
           visualGender: s.visualGender || 'unknown',
           speakerVisualHint: s.speakerVisualHint || '',
           deliveryType: s.deliveryType || 'out_loud',
+          ...(s.textCategory ? { textCategory: s.textCategory } : {}),
+          ...(s.orientation ? { orientation: s.orientation } : {}),
           ...(s.speakerStatus === 'verified' ? {
             verifiedSpeakerLocked: true,
             verifiedSpeakerName: s.speakerName || s.speaker || '',
@@ -467,6 +513,8 @@ ${customGlossaryPrompt}
 6. អ្វីដែលត្រូវជៀសវាង (STRICT AVOIDANCE RULES):
 - ហាមដាច់ខាតបកប្រែពាក្យតាមពាក្យ (Literal / robotic Google Translate)។
 - ហាមដាច់ខាតកុំឱ្យសល់តួអក្សរចិន (Chinese Characters / Hanzi 汉字) នៅក្នុង "khmerText" ដាច់ខាត (100% Khmer Script Only)! រាល់ពាក្យកម្រិតថាមពល (ឧ. 金丹 ➜ ជីនតាន, 化神 ➜ ហ្វាស៊ិន, 元神 ➜ យានស៊ិន, 灵根 ➜ ឫសវិញ្ញាណ) ត្រូវតែសរសេរជាសូរសព្ទអក្សរខ្មែរ ហាមទុកតួអក្សរចិន!
+- សម្រាប់ផ្ទាំងណែនាំ និងប្រវត្តិសាច់រឿង ("textCategory": "monster_introduction" / "character_introduction" / "location_introduction" / "story_lore"): ត្រូវបកប្រែឱ្យចេញជាសំឡេងនិទានរឿងខ្មែរធម្មជាតិ (Natural Khmer Narration) ដោយរក្សាកម្រិតថាមពល ឋានៈ ឈ្មោះទីកន្លែង ឬប្រវត្តិសាច់រឿងឱ្យត្រឹមត្រូវ ១០០% ប្រើ "speaker": "អ្នករៀបរាប់" និង "speakerId": "spk_narrator" (ហាមចាត់ទុកផ្ទាំងណែនាំជាតួអង្គនិយាយ ឬប្រឌិតឈ្មោះតួអង្គក្រៅពីភស្តុតាង)!
+- សម្រាប់ពាក្យសន្ទនា ("dialogue"): រក្សាអារម្មណ៍ពិត ការសើច ការភ្ញាក់ផ្អើល ការស្ទាក់ស្ទើរ និងការស្រែកឱ្យរស់រវើកតាមបរិបទតួអង្គពិតៗ!
 - ហាមដាច់ខាតកុំឱ្យមានតួអក្សរថៃ (Thai characters) ឬពាក្យថៃណាមួយ 100%!
 - កុំបន្ថែមឈ្មោះ Channel ឬ Watermark ក្រៅពី Input តែគ្រប់ index នៅក្នុង INPUT SEGMENTS ត្រូវតែបកប្រែ ១០០% (រួមទាំងឃ្លា OCR ខ្លីៗ ឈ្មោះជំនាញ/ទិដ្ឋភាព ឬឃ្លាជេរ/កំហឹងក្នុងសាច់រឿង) — ហាមរំលង index ណាមួយឡើយ!
 - កុំប្ដូរឈ្មោះតួអង្គ ឬសំឡេងរបស់ Speaker ដោយគ្មានភស្តុតាង។

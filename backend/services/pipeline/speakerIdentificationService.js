@@ -26,6 +26,13 @@ const {
   buildCharacterId,
 } = require('../../models/speakerRegistry');
 const { enrichCuesWithAcousticPitch } = require('./stages/stage4_analyzeDialogueAudio');
+const {
+  classifyTextEvent,
+  isIntroductionCategory,
+  buildNarratorMetadataForIntro,
+  NARRATOR_SPEAKER_LABEL,
+  NARRATOR_SPEAKER_ID,
+} = require('../../utils/textEventClassifier');
 
 const AUDIO_MULTIMODAL_FALLBACK_MODELS = [
   'gemini-3.8-flash',
@@ -880,7 +887,33 @@ async function identifySpeakersForCues({
       let localMatch = null;
       let needsMm = true;
 
+      const cueCategory = classifyTextEvent({
+        text: cue.chineseText,
+        textCategory: cue.textCategory,
+        position: cue.position,
+        orientation: cue.orientation,
+        textRegion: cue.textRegion,
+        deliveryType: cue.deliveryType,
+      });
+      cue.textCategory = cueCategory;
+      const isIntroNarrationCue = isIntroductionCategory(cueCategory) ||
+        (cue.position === 'title_card' && cue.deliveryType === 'narration');
+
       if (isManual) {
+        needsMm = false;
+      } else if (isIntroNarrationCue) {
+        const nav = buildNarratorMetadataForIntro(narratorGender);
+        localMatch = {
+          speakerName: nav.speakerName,
+          speakerId: nav.speakerId,
+          characterId: nav.characterId,
+          speakerGender: nav.speakerGender,
+          confidence: 0.96,
+          deliveryType: 'narration',
+          speakerLocation: 'narrator',
+          source: 'local_narrator_card',
+          evidence: `Introduction/lore (${cueCategory}) uses consistent narrator voice`,
+        };
         needsMm = false;
       } else if (isDeterministicSystemCue(cue.chineseText) && cue.acousticGender !== 'male') {
         const sysCast = findCastMatch(castIndex, ['ប្រព័ន្ធ', 'System', '系统']);
@@ -1481,7 +1514,12 @@ async function identifySpeakersForCues({
 
       let speakerId;
       let characterId;
-      if (seriesMatch && !isGeneric && !isPlaceholder && isVerified && seriesMatch.gender === finalGender) {
+      const isNarratorIntro = localMatch?.source === 'local_narrator_card' || isIntroductionCategory(cue.textCategory);
+      if (isNarratorIntro) {
+        speakerId = NARRATOR_SPEAKER_ID;
+        characterId = NARRATOR_SPEAKER_ID;
+        deliveryType = 'narration';
+      } else if (seriesMatch && !isGeneric && !isPlaceholder && isVerified && seriesMatch.gender === finalGender) {
         speakerId = seriesMatch.speakerId;
         characterId = seriesMatch.characterId || buildCharacterId(seriesMatch.name, speakerId, { isGeneric: false, isEpisodic: false });
       } else if (isGeneric && isVerified) {
@@ -1566,7 +1604,8 @@ async function identifySpeakersForCues({
 
       if (isVerified) {
         resolvedCount++;
-        if (!isGeneric && !isPlaceholder && hasVerifiedName && !isUnnamedCharacterId(characterId) && !outCastMap.has(speakerId)) {
+        const isNarratorEntry = speakerId === NARRATOR_SPEAKER_ID || speakerName === NARRATOR_SPEAKER_LABEL || isIntroductionCategory(cue.textCategory);
+        if (!isNarratorEntry && !isGeneric && !isPlaceholder && hasVerifiedName && !isUnnamedCharacterId(characterId) && !outCastMap.has(speakerId)) {
           outCastMap.set(speakerId, {
             id: speakerId,
             speakerId,
@@ -1699,6 +1738,7 @@ function buildVerifiedSeriesSpeakerMapPatch(segments = [], speakerRegistry = {},
     if (!rawName || isPlaceholderSpeakerName(rawName) || isEpisodicRoleSpeakerName(rawName)) return;
     const spkIdRaw = String(entry.speakerId || entry.id || '').trim();
     const charIdRaw = String(entry.characterId || '').trim();
+    if (!isManual && (spkIdRaw === NARRATOR_SPEAKER_ID || rawName === NARRATOR_SPEAKER_LABEL || isIntroductionCategory(entry.textCategory))) return;
     if (!entry.manualCharacterOverridden && isPositionalSpeakerId(spkIdRaw)) return;
     if (!isManual && (spkIdRaw.startsWith('spk_unknown_') || isUnnamedCharacterId(spkIdRaw) || isUnnamedCharacterId(charIdRaw))) return;
     if (!isManual && (entry.hasVerifiedName === false || (typeof entry.characterNameConfidence === 'number' && entry.characterNameConfidence < 0.72))) return;
