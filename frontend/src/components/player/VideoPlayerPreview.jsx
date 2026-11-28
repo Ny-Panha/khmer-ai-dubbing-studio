@@ -1439,6 +1439,7 @@ function VideoPlayerPreview({
                 aspectRatio={aspectRatio}
                 verticalStyle={verticalStyle}
                 videoMeta={videoMeta}
+                onUpdateVoiceSettings={onUpdateVoiceSettings}
               />
 
               {/* Sponsor Ads Live Overlay (Green Screen Video) */}

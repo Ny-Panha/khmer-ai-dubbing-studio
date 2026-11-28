@@ -795,5 +795,176 @@ router.post("/rescan-episode-gender", async (req, res) => {
   }
 });
 
+/**
+ * Fresh Character Rescan for an Episode or Entire Series.
+ * Re-discovers characters from current source video + dialogue + acoustic pitch WITHOUT touching:
+ * - Stage 3 OCR caches
+ * - Original Chinese subtitles, Khmer translations, immutable sourceCueId, or timeline positions
+ * - Manual character/voice overrides
+ * - Existing TTS MP3s wherever voiceId did not change
+ */
+router.post(["/dubbing/rescan-characters", "/rescan-characters"], async (req, res) => {
+  if (req.socket) {
+    req.socket.setTimeout(0);
+    if (typeof req.socket.setKeepAlive === "function") {
+      req.socket.setKeepAlive(true, 10000);
+    }
+  }
+  if (typeof res.setTimeout === "function") {
+    res.setTimeout(0);
+  }
+  try {
+    const {
+      seriesId,
+      episodeId = null,
+      scope = "episode",
+      clearStaleRegistry = true,
+      apiKey: bodyApiKey = null,
+      modelName = null,
+    } = req.body || {};
+
+    if (!seriesId) {
+      return res.status(400).json({ success: false, error: "seriesId is required" });
+    }
+    if (String(scope || "episode").toLowerCase() !== "series" && !episodeId) {
+      return res.status(400).json({ success: false, error: "episodeId is required for episode scope" });
+    }
+
+    const seriesMeta = getSeriesMetadata(seriesId);
+    if (!seriesMeta) {
+      return res.status(404).json({ success: false, error: `Series not found: ${seriesId}` });
+    }
+
+    const { rescanEpisodeOrSeriesCharacters, isUnnamedCharacterId } = require("../services/pipeline/speakerIdentificationService");
+    const { isPlaceholderSpeakerName, isPositionalSpeakerId } = require("../models/speakerRegistry");
+
+    const keys = extractAllGeminiKeys(bodyApiKey);
+    const effectiveApiKey = bodyApiKey || keys[0] || process.env.GEMINI_API_KEY || null;
+
+    const scanResult = await rescanEpisodeOrSeriesCharacters({
+      seriesMeta,
+      episodeId,
+      scope,
+      clearStaleRegistry: clearStaleRegistry !== false,
+      resolveVideoPath: (rawRef, ep) => {
+        const direct = rawRef ? resolveMediaFile(rawRef) : null;
+        if (direct && fs.existsSync(direct)) return direct;
+        return null;
+      },
+      apiKey: effectiveApiKey,
+      modelName,
+    });
+
+    let updatedGlossaryCharacters = [];
+    let finalSeriesSpeakerMap = scanResult.seriesSpeakerMap || {};
+
+    await withSeriesMetadataLock(seriesId, () =>
+      updateSeriesMetadata(seriesId, (freshSeries) => {
+        if (!freshSeries) return false;
+        const resultByEpId = new Map(
+          scanResult.episodeResults.map((r) => [String(r.episodeId), r])
+        );
+        for (const ep of freshSeries.episodes || []) {
+          const epRes = resultByEpId.get(String(ep.id));
+          if (!epRes) continue;
+          if (!ep.scriptData) ep.scriptData = {};
+          ep.scriptData.segments = epRes.segments;
+          ep.scriptData.updatedAt = Date.now();
+          ep.scriptSegments = epRes.segments;
+          ep.speakerRegistry = epRes.speakerRegistry;
+          if (epRes.hasAudioOutdated) {
+            ep.isAudioOutdated = true;
+            ep.audioOutdated = true;
+          }
+          ep.updatedAt = Date.now();
+        }
+
+        freshSeries.seriesSpeakerMap = finalSeriesSpeakerMap;
+
+        const baseChars = clearStaleRegistry !== false
+          ? (Array.isArray(freshSeries.glossary?.characters)
+              ? freshSeries.glossary.characters.filter((c) => c && c.manualCharacterOverridden === true)
+              : [])
+          : (Array.isArray(freshSeries.glossary?.characters)
+              ? freshSeries.glossary.characters.filter((c) => c && !isPlaceholderSpeakerName(c.name || c.khmerName) && !isPositionalSpeakerId(c.id || c.speakerId) && !isUnnamedCharacterId(c.characterId || c.id))
+              : []);
+
+        const mergedChars = [...baseChars];
+        const uniqueMapEntries = new Map();
+        for (const entry of Object.values(finalSeriesSpeakerMap)) {
+          if (entry && entry.speakerId && entry.name && !isPlaceholderSpeakerName(entry.name) && !isUnnamedCharacterId(entry.characterId || entry.speakerId) && !uniqueMapEntries.has(entry.speakerId)) {
+            uniqueMapEntries.set(entry.speakerId, entry);
+          }
+        }
+        for (const entry of uniqueMapEntries.values()) {
+          const idx = mergedChars.findIndex(
+            (c) => c && (c.id === entry.speakerId || (entry.characterId && c.characterId === entry.characterId) || String(c.name || "").trim() === entry.name)
+          );
+          if (idx === -1) {
+            mergedChars.push({
+              id: entry.speakerId,
+              speakerId: entry.speakerId,
+              characterId: entry.characterId || null,
+              seriesId: freshSeries.id,
+              name: entry.name,
+              khmerName: entry.name,
+              aliases: Array.isArray(entry.aliases) ? entry.aliases : [entry.name],
+              gender: entry.gender,
+              characterGender: entry.characterGender || entry.speakerGender || entry.gender,
+              voiceActorTimbre: entry.voiceActorTimbre || entry.speakerGender || entry.gender,
+              voiceId: entry.voiceId,
+              khmerVoiceId: entry.khmerVoiceId,
+              recognitionConfidence: entry.recognitionConfidence ?? null,
+              characterNameConfidence: entry.characterNameConfidence ?? null,
+              hasVerifiedName: entry.hasVerifiedName !== false,
+              visualAppearance: entry.visualAppearance || null,
+              voiceTimbreDesc: entry.voiceTimbreDesc || null,
+              voiceAssignmentSource: entry.voiceAssignmentSource,
+              userOverridden: Boolean(entry.userOverridden),
+              manualCharacterOverridden: Boolean(entry.manualCharacterOverridden),
+            });
+          }
+        }
+        updatedGlossaryCharacters = mergedChars;
+        freshSeries.glossary = {
+          ...(freshSeries.glossary || {}),
+          characters: mergedChars,
+        };
+        return true;
+      })
+    );
+
+    const activeEpResult = episodeId
+      ? scanResult.episodeResults.find((r) => String(r.episodeId) === String(episodeId))
+      : scanResult.episodeResults[0];
+    const totalChangedVoiceCues = scanResult.episodeResults.reduce((acc, r) => acc + (r.changedVoiceCuesCount || 0), 0);
+    const totalPreservedAudioCues = scanResult.episodeResults.reduce((acc, r) => acc + (r.preservedAudioCount || 0), 0);
+
+    res.json({
+      success: true,
+      scope: scanResult.scope,
+      seriesId,
+      episodeId: activeEpResult?.episodeId || episodeId || null,
+      episodesScanned: scanResult.episodeResults.length,
+      changedVoiceCuesCount: totalChangedVoiceCues,
+      preservedAudioCount: totalPreservedAudioCues,
+      segments: activeEpResult?.segments || null,
+      speakerRegistry: activeEpResult?.speakerRegistry || null,
+      seriesSpeakerMap: finalSeriesSpeakerMap,
+      glossaryCharacters: updatedGlossaryCharacters,
+      episodeResults: scanResult.episodeResults.map((r) => ({
+        episodeId: r.episodeId,
+        changedVoiceCuesCount: r.changedVoiceCuesCount,
+        preservedAudioCount: r.preservedAudioCount,
+        castCount: r.castCount,
+        geminiCallsCount: r.geminiCallsCount,
+      })),
+    });
+  } catch (err) {
+    console.error("[RescanCharacters] Error:", err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 module.exports = router;
 

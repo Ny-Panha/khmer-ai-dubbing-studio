@@ -647,6 +647,7 @@ function getSeriesMetadata(seriesId, options = {}) {
     title: 'រឿងភាគ (Series 1)',
     createdAt: Date.now(),
     glossary: { characters: [], terms: [] },
+    seriesSpeakerMap: {},
     episodes: discoveredEpisodes.length > 0 ? discoveredEpisodes : [createEpisode({ episodeNumber: 1 })],
   };
   seriesMetadataCache.set(cacheKey, { data: fallbackData, mtimeMs: 0, size: 0, lastCheckTime: Date.now() });
@@ -853,14 +854,15 @@ async function persistEpisodeScriptData({
 
     // Cross-episode character voice persistence: merge verified speakers into seriesSpeakerMap
     try {
-      const { buildVerifiedSeriesSpeakerMapPatch } = require('./pipeline/speakerIdentificationService');
+      const { buildVerifiedSeriesSpeakerMapPatch, isUnnamedCharacterId } = require('./pipeline/speakerIdentificationService');
       const incomingMap = (seriesSpeakerMap && typeof seriesSpeakerMap === 'object')
         ? seriesSpeakerMap
         : (restScriptData.seriesSpeakerMap && typeof restScriptData.seriesSpeakerMap === 'object' ? restScriptData.seriesSpeakerMap : {});
       const mergedSpeakerMap = buildVerifiedSeriesSpeakerMapPatch(
         incomingSegments,
         restScriptData.speakerRegistry || {},
-        { ...(freshSeries.seriesSpeakerMap || {}), ...incomingMap }
+        { ...(freshSeries.seriesSpeakerMap || {}), ...incomingMap },
+        { seriesId: cleanSeries }
       );
       if (Object.keys(mergedSpeakerMap).length > 0) {
         freshSeries.seriesSpeakerMap = mergedSpeakerMap;
@@ -868,8 +870,11 @@ async function persistEpisodeScriptData({
         const existingChars = Array.isArray(freshSeries.glossary?.characters)
           ? freshSeries.glossary.characters.filter((c) => {
               if (!c) return false;
+              const isManual = Boolean(c.userOverridden || c.manualCharacterOverridden);
               const nm = String(c.name || c.khmerName || '').trim();
               if (!nm || isPlaceholderSpeakerName(nm)) return false;
+              if (!isManual && (isUnnamedCharacterId(c.id || c.speakerId) || isUnnamedCharacterId(c.characterId))) return false;
+              if (!isManual && (c.hasVerifiedName === false || (typeof c.characterNameConfidence === 'number' && c.characterNameConfidence < 0.72))) return false;
               if (isPositionalSpeakerId(c.id || c.speakerId) && !c.manualCharacterOverridden) return false;
               return true;
             })

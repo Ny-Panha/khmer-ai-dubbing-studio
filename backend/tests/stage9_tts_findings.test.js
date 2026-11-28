@@ -222,3 +222,64 @@ test('Test 4: Static audit of stage9_generateSegmentTTS.js for duration semantic
   );
 });
 
+test('Test 5: autoShortenOverflowingSegments preserves valid fallback MP3 when rewritten text is not shorter', async () => {
+  const { autoShortenOverflowingSegments } = require('../services/pipeline/stages/stage9_generateSegmentTTS');
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'stage9_shorten_preserve_'));
+  const origAudioPath = path.join(tmpDir, 'ep_20_seg_31_orig.mp3');
+  const rejectedAudioPath = path.join(tmpDir, 'ep_20_seg_31_retry.mp3');
+  fs.writeFileSync(origAudioPath, Buffer.alloc(1024, 1));
+
+  const mockAiClient = {
+    models: {
+      generateContent: async () => ({
+        text: JSON.stringify({
+          segments: [{ index: 1, segmentId: 31, khmerText: 'ក្បែរទីលាន' }],
+        }),
+      }),
+    },
+  };
+
+  let receivedOpts = null;
+  let receivedSeg = null;
+  const res = await autoShortenOverflowingSegments({
+    segments: [
+      {
+        id: 31,
+        segmentId: 31,
+        startSec: 65.4,
+        endSec: 65.8,
+        availableSlotDuration: 0.4,
+        khmerText: 'ក្បែរទីលាន!',
+        voiceId: 'km-KH-PisethNeural',
+        audioDurationSec: 0.611,
+        finalAudioDuration: 0.611,
+        overflowSec: 0.211,
+        audioPath: origAudioPath,
+        ttsStatus: 'ready',
+      },
+    ],
+    audioDir: tmpDir,
+    aiClient: mockAiClient,
+    generateSingleFn: async (seg, _dir, opts) => {
+      receivedSeg = seg;
+      receivedOpts = opts;
+      fs.writeFileSync(rejectedAudioPath, Buffer.alloc(1024, 2));
+      return {
+        ...seg,
+        audioPath: rejectedAudioPath,
+        finalAudioDuration: 0.62, // Not shorter than 0.611 -> rejected
+        audioDurationSec: 0.62,
+      };
+    },
+  });
+
+  assert.strictEqual(res.shortenedCount, 0);
+  assert.strictEqual(receivedOpts?.preservePriorAudioOnDisk, true, 'Must preserve prior valid MP3 during speculative re-TTS');
+  assert.strictEqual(receivedSeg?.audioPath, null, 'Must strip prior audioPath on speculative draft segment');
+  assert.strictEqual(fs.existsSync(origAudioPath), true, 'Original valid MP3 on disk must remain intact');
+  assert.strictEqual(res.segments[0].audioPath, origAudioPath, 'Segment must retain original valid audioPath');
+  assert.strictEqual(fs.existsSync(rejectedAudioPath), false, 'Rejected speculative MP3 should be cleaned up');
+
+  fs.rmSync(tmpDir, { recursive: true, force: true });
+});
+

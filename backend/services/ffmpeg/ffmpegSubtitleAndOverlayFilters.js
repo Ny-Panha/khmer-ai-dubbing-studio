@@ -321,11 +321,20 @@ Style: AntiTheftWatermark,${fontName},${watermarkFontSize},${watermarkAssColor},
     const maskText = cornerMask.text ?? "«រឿងប្រឌិតសុទ្ធសាធ • ហាមចម្លង»";
     const is916Letterbox = aspectRatio === "9:16" && verticalStyle !== "crop";
     const letterboxTopY = Math.round(playResY * 0.342);
+    const hasCustomCoords =
+      maskPos === "custom" &&
+      Number.isFinite(Number(cornerMask.cornerMaskXPercent ?? cornerMask.xPercent)) &&
+      Number.isFinite(Number(cornerMask.cornerMaskYPercent ?? cornerMask.yPercent));
 
     let maskX = Math.max(0, playResX - maskW - offX);
     let maskY = is916Letterbox ? (letterboxTopY + offY) : offY;
 
-    if (maskPos === "top-left") {
+    if (hasCustomCoords) {
+      const xPct = Math.max(0, Math.min(100, Number(cornerMask.cornerMaskXPercent ?? cornerMask.xPercent))) / 100;
+      const yPct = Math.max(0, Math.min(100, Number(cornerMask.cornerMaskYPercent ?? cornerMask.yPercent))) / 100;
+      maskX = Math.round(Math.max(0, playResX - maskW) * xPct);
+      maskY = Math.round(Math.max(0, playResY - maskH) * yPct);
+    } else if (maskPos === "top-left") {
       maskX = offX;
       maskY = is916Letterbox ? (letterboxTopY + offY) : offY;
     } else if (maskPos === "bottom-right") {
@@ -532,6 +541,10 @@ function buildCornerBlurVideoFilterChain({
   const blurSigma = Math.max(18, Math.min(64, Math.round(rawBlurNum * 2.6)));
   const pos = String(cornerMask?.position || "top-right");
   const is916Letterbox = aspectRatio === "9:16" && verticalStyle !== "crop";
+  const hasCustomCoords =
+    pos === "custom" &&
+    Number.isFinite(Number(cornerMask?.cornerMaskXPercent ?? cornerMask?.xPercent)) &&
+    Number.isFinite(Number(cornerMask?.cornerMaskYPercent ?? cornerMask?.yPercent));
 
   // Match Live Preview CSS pixel proportions (~750px wide 16:9 Studio preview canvas -> 1920/750 = 2.56x)
   const previewRefW = 750;
@@ -540,12 +553,21 @@ function buildCornerBlurVideoFilterChain({
   const offXFrac = (baseOffX / previewRefW).toFixed(4);
   const offYFrac = (baseOffY / previewRefW).toFixed(4);
 
-  const buildX = (W, w) =>
-    pos === "top-left" || pos === "bottom-left"
+  const buildX = (W, w) => {
+    if (hasCustomCoords) {
+      const xRatio = (Math.max(0, Math.min(100, Number(cornerMask?.cornerMaskXPercent ?? cornerMask?.xPercent))) / 100).toFixed(4);
+      return `max(0,min(${W}-${w},trunc((${W}-${w})*${xRatio}/2)*2))`;
+    }
+    return pos === "top-left" || pos === "bottom-left"
       ? `max(0,min(${W}-${w},trunc(${W}*${offXFrac}/2)*2))`
       : `max(0,min(${W}-${w},${W}-${w}-trunc(${W}*${offXFrac}/2)*2))`;
+  };
 
   const buildY = (W, H, h) => {
+    if (hasCustomCoords) {
+      const yRatio = (Math.max(0, Math.min(100, Number(cornerMask?.cornerMaskYPercent ?? cornerMask?.yPercent))) / 100).toFixed(4);
+      return `max(0,min(${H}-${h},trunc((${H}-${h})*${yRatio}/2)*2))`;
+    }
     if (pos === "bottom-left" || pos === "bottom-right") {
       return is916Letterbox
         ? `max(0,min(${H}-${h},trunc(${H}*0.658-${h}-${W}*${offYFrac})))`

@@ -78,6 +78,9 @@ export default function VoiceSettings({
   speakerRegistry = {},
   onUpdateSpeakerVoice = null,
   onUpdateSpeakerIdentity = null,
+  onRescanCharacters = null,
+  isRescanningCharacters = false,
+  rescanCharactersFeedback = null,
   onUpdateSegmentVoice = null,
   onUpdateSegmentSpeed = null,
   selectedSegmentId = null,
@@ -255,14 +258,18 @@ export default function VoiceSettings({
 
     if (!segments.length) {
       if (Array.isArray(activeSeries?.glossary?.characters) && activeSeries.glossary.characters.length > 0) {
+        const seenGlossaryKeys = new Set();
         return activeSeries.glossary.characters
           .filter((ch) => ch && !isPlaceholderName(ch.khmerName || ch.name))
-          .map((ch) => {
+          .map((ch, gIdx) => {
             const currentVoice = ch.voiceId || ch.khmerVoiceId || settings?.voiceId || 'km-KH-PisethNeural';
             const isVoiceFemale = String(currentVoice).toLowerCase().includes('sreymom');
             const isCharacterFemale = (ch.gender === 'female' || ch.gender === 'FEMALE');
+            const baseKey = ch.speakerId || ch.id || ch.name || `glossary_${gIdx}`;
+            const uniqueKey = seenGlossaryKeys.has(baseKey) ? `${baseKey}__${gIdx}` : baseKey;
+            seenGlossaryKeys.add(uniqueKey);
             return {
-              key: ch.speakerId || ch.id || ch.name,
+              key: uniqueKey,
               characterId: ch.characterId || ch.id || null,
               name: ch.khmerName || ch.name,
               rawName: ch.name || ch.khmerName,
@@ -343,7 +350,7 @@ export default function VoiceSettings({
         : `មិនស្គាល់ (${shortId.length > 12 ? shortId.slice(-10) : shortId})`;
 
       list.push({
-        key: reg.speakerId || reg.id || groupKey,
+        key: groupKey || reg.speakerId || reg.id,
         characterId: bucket.characterId || reg.characterId || null,
         name: displayLabel,
         rawName: placeholder ? '' : rawName,
@@ -1066,6 +1073,75 @@ export default function VoiceSettings({
                   >
                     {renderVoiceOptions()}
                   </select>
+                  {onRescanCharacters && (
+                    <div
+                      data-testid="cast-rescan-controls"
+                      style={{
+                        display: 'flex',
+                        flexWrap: 'wrap',
+                        gap: '6px',
+                        marginTop: '8px',
+                        marginBottom: '6px',
+                      }}
+                    >
+                      <button
+                        type="button"
+                        data-testid="btn-rescan-episode-characters"
+                        disabled={isRescanningCharacters || !(scriptData?.segments?.length > 0)}
+                        onClick={() => onRescanCharacters('episode')}
+                        title="វិភាគតួអង្គឡើងវិញពីវីដេអូដើម (រក្សា Subtitle, ការបកប្រែ និង Timing)"
+                        style={{
+                          flex: '1 1 auto',
+                          padding: '5px 8px',
+                          fontSize: '0.73rem',
+                          fontWeight: 600,
+                          borderRadius: '6px',
+                          border: '1px solid rgba(56, 189, 248, 0.45)',
+                          background: 'rgba(56, 189, 248, 0.12)',
+                          color: '#7dd3fc',
+                          cursor: isRescanningCharacters ? 'wait' : 'pointer',
+                          opacity: isRescanningCharacters || !(scriptData?.segments?.length > 0) ? 0.55 : 1,
+                        }}
+                      >
+                        {isRescanningCharacters ? '⏳ កំពុងស្កេន...' : '🔍 ស្កេនតួអង្គឡើងវិញ (ភាគនេះ)'}
+                      </button>
+                      <button
+                        type="button"
+                        data-testid="btn-rescan-series-characters"
+                        disabled={isRescanningCharacters || !(activeSeries?.episodes?.length > 0)}
+                        onClick={() => onRescanCharacters('series')}
+                        title="ស្កេនតួអង្គឡើងវិញសម្រាប់រឿងភាគទាំងមូល"
+                        style={{
+                          padding: '5px 8px',
+                          fontSize: '0.73rem',
+                          fontWeight: 600,
+                          borderRadius: '6px',
+                          border: '1px solid rgba(251, 191, 36, 0.4)',
+                          background: 'rgba(251, 191, 36, 0.1)',
+                          color: '#fcd34d',
+                          cursor: isRescanningCharacters ? 'wait' : 'pointer',
+                          opacity: isRescanningCharacters || !(activeSeries?.episodes?.length > 0) ? 0.55 : 1,
+                        }}
+                      >
+                        ស្កេនរឿងទាំងមូល
+                      </button>
+                      {rescanCharactersFeedback?.message && (
+                        <div
+                          data-testid="rescan-characters-feedback"
+                          style={{
+                            width: '100%',
+                            fontSize: '0.71rem',
+                            padding: '4px 6px',
+                            borderRadius: '5px',
+                            color: rescanCharactersFeedback.type === 'error' ? '#fca5a5' : '#86efac',
+                            background: rescanCharactersFeedback.type === 'error' ? 'rgba(239, 68, 68, 0.12)' : 'rgba(34, 197, 94, 0.12)',
+                          }}
+                        >
+                          {rescanCharactersFeedback.message}
+                        </div>
+                      )}
+                    </div>
+                  )}
                   {activeEpisodeSpeakers.length > 0 ? (
                     <div className="inspector-speaker-list">
                       {activeEpisodeSpeakers.map((spk) => {

@@ -247,6 +247,8 @@ async function runDubbingPipeline({
             aiClient,
             modelName: chosenModel,
             mode,
+            seriesId: ingestResult.seriesId,
+            episodeId: ingestResult.episodeId,
             seriesSpeakerMap: seriesGlossary?.seriesSpeakerMap || {},
             castRegistry: seriesGlossary?.characters || [],
             narratorGender,
@@ -322,6 +324,8 @@ async function runDubbingPipeline({
           aiClient,
           modelName: chosenModel,
           mode,
+          seriesId: ingestResult.seriesId,
+          episodeId: ingestResult.episodeId,
           seriesSpeakerMap: seriesGlossary?.seriesSpeakerMap || {},
           castRegistry: seriesGlossary?.characters || [],
           narratorGender,
@@ -428,7 +432,8 @@ async function runDubbingPipeline({
   const updatedSeriesSpeakerMap = buildVerifiedSeriesSpeakerMapPatch(
     finalizedSegments,
     speakerRegistry,
-    seriesGlossary?.seriesSpeakerMap || {}
+    seriesGlossary?.seriesSpeakerMap || {},
+    { seriesId: ingestResult.seriesId }
   );
 
   checkAbort();

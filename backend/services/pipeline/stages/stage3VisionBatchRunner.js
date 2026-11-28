@@ -151,7 +151,7 @@ function stripDecorativeSubtitleNoise(str = '') {
 /**
  * Removes persistent on-screen time-card overlay prefixes (e.g. "几个月前") that OCR
  * accidentally glued onto 2+ consecutive spoken dialogue cues (e.g. "几个月前再快一点"
- * followed by "几个月前李天维首座正在讲道呢").
+ * followed by "几个月前那位首座正在讲道呢").
  * Never strips single-cue spoken dialogue, preserving natural speech like "一年前我见过他".
  */
 function stripRepeatedLeadingTimeCardPrefix(cues = []) {
@@ -815,7 +815,7 @@ RULES:
 2. If dialogue subtitle text is clearly present, set "hasText": true and return the exact Chinese characters in both "textZh" and "chineseText" (strip decorative brackets like 【...】, music notes ♪, or watermarks).
 3. If no dialogue subtitle text is present (e.g. background scenery, action without speaking, character reaction with no text), set "hasText": false, "textZh": "", and "chineseText": "".
 4. "position": "bottom_subtitle" (for actor dialogue) or "title_card" (for standalone full-screen scene titles when NO bottom dialogue exists).
-5. STRICT DIALOGUE-ONLY ISOLATION: When a centered bottom dialogue subtitle is present, extract ONLY that centered spoken dialogue line. NEVER concatenate side/corner yellow time-jump cards (e.g. '几个月前', '三天后', '一年前', '片刻后'), vertical character nameplates (e.g. '李天维 男主'), or vertical location banners (e.g. '灵虚圣地主峰讲坛') onto the dialogue text!
+5. STRICT DIALOGUE-ONLY ISOLATION: When a centered bottom dialogue subtitle is present, extract ONLY that centered spoken dialogue line. NEVER concatenate side/corner yellow time-jump cards (e.g. '几个月前', '三天后', '一年前', '片刻后'), vertical character nameplates (e.g. '<角色名> <身份>'), or vertical location banners (e.g. '<场景地名>') onto the dialogue text!
 6. "isSharp": true if readable, false if blurry or motion-faded.
 7. "visualGender" (and "speakerGender"): Inspect the visible speaking character's face, hair, costume, and open mouth to determine gender: "male", "female", or "unknown" if offscreen/ambiguous.
 8. "speakerVisualHint": Short visual archetype tag for the speaker on screen (e.g. "male_lead_ancient", "female_lead_white_robe", "emperor", "maid", "ceo_suit", "offscreen_narrator").

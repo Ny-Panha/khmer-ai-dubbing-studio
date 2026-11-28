@@ -24,6 +24,8 @@ export const MASK_SETTING_KEYS = Object.freeze([
   'cornerMaskBlur',
   'cornerMaskOffsetX',
   'cornerMaskOffsetY',
+  'cornerMaskXPercent',
+  'cornerMaskYPercent',
 ]);
 
 export const BANNER_SETTING_KEYS = Object.freeze([
@@ -66,6 +68,7 @@ const VALID_MASK_POSITIONS = new Set([
   'top-left',
   'bottom-right',
   'bottom-left',
+  'custom',
 ]);
 
 const VALID_MASK_STYLES = new Set(['badge', 'blur', 'solid']);
@@ -97,6 +100,8 @@ export const DEFAULT_GLOBAL_MASK_SETTINGS = Object.freeze({
   cornerMaskBlur: 18,
   cornerMaskOffsetX: 14,
   cornerMaskOffsetY: 14,
+  cornerMaskXPercent: null,
+  cornerMaskYPercent: null,
 });
 
 export const DEFAULT_GLOBAL_BANNER_SETTINGS = Object.freeze({
@@ -309,6 +314,17 @@ export function normalizeGlobalMaskSettings(input, fallback = DEFAULT_GLOBAL_MAS
     )
   );
 
+  const rawMaskXPct = src.cornerMaskXPercent !== undefined ? src.cornerMaskXPercent : src.xPercent;
+  const rawMaskYPct = src.cornerMaskYPercent !== undefined ? src.cornerMaskYPercent : src.yPercent;
+  let cornerMaskXPercent = null;
+  let cornerMaskYPercent = null;
+  if (cornerMaskPosition === 'custom') {
+    const fbX = typeof base.cornerMaskXPercent === 'number' && Number.isFinite(base.cornerMaskXPercent) ? base.cornerMaskXPercent : 50;
+    const fbY = typeof base.cornerMaskYPercent === 'number' && Number.isFinite(base.cornerMaskYPercent) ? base.cornerMaskYPercent : 50;
+    cornerMaskXPercent = Math.round(clampNumber(rawMaskXPct, 0, 100, fbX) * 10) / 10;
+    cornerMaskYPercent = Math.round(clampNumber(rawMaskYPct, 0, 100, fbY) * 10) / 10;
+  }
+
   return {
     enableCornerMask,
     cornerMaskText,
@@ -320,6 +336,8 @@ export function normalizeGlobalMaskSettings(input, fallback = DEFAULT_GLOBAL_MAS
     cornerMaskBlur,
     cornerMaskOffsetX,
     cornerMaskOffsetY,
+    cornerMaskXPercent,
+    cornerMaskYPercent,
   };
 }
 
@@ -836,6 +854,7 @@ export function buildLogoExportPayload(logoSettings = null) {
 
 export function buildCornerMaskExportPayload(maskSettings = null) {
   const normalized = normalizeGlobalMaskSettings(maskSettings || loadGlobalCustomizeSettings());
+  const isCustomPos = normalized.cornerMaskPosition === 'custom';
   return {
     enabled: Boolean(normalized.enableCornerMask),
     text: normalized.cornerMaskText ?? '«រឿងប្រឌិតសុទ្ធសាធ • ហាមចម្លង»',
@@ -847,6 +866,12 @@ export function buildCornerMaskExportPayload(maskSettings = null) {
     blurStrength: Number.isFinite(Number(normalized.cornerMaskBlur)) ? Number(normalized.cornerMaskBlur) : 18,
     offsetX: Number.isFinite(Number(normalized.cornerMaskOffsetX)) ? Number(normalized.cornerMaskOffsetX) : 14,
     offsetY: Number.isFinite(Number(normalized.cornerMaskOffsetY)) ? Number(normalized.cornerMaskOffsetY) : 14,
+    ...(isCustomPos && typeof normalized.cornerMaskXPercent === 'number' && typeof normalized.cornerMaskYPercent === 'number'
+      ? {
+          cornerMaskXPercent: normalized.cornerMaskXPercent,
+          cornerMaskYPercent: normalized.cornerMaskYPercent,
+        }
+      : {}),
   };
 }
 

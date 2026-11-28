@@ -89,6 +89,8 @@ function TimelineEditor({
   onVideoSelected = null,
   seriesId = null,
   episodeId = null,
+  bgmAudioUrl = null,
+  isDemucsDone = false,
 }) {
   const [zoom, setZoom] = useState(() => {
     const saved = loadEpisodeTimelineViewState(seriesId, episodeId);
@@ -2478,6 +2480,8 @@ function TimelineEditor({
           onVideoSelected={onVideoSelected}
           seriesId={seriesId}
           episodeId={episodeId}
+          bgmAudioUrl={bgmAudioUrl}
+          isDemucsDone={isDemucsDone}
         />
       </div>
     </div>
@@ -2502,7 +2506,9 @@ export default React.memo(TimelineEditor, (prev, next) => {
       prev.voiceSettings === next.voiceSettings &&
       prev.speakerRegistry === next.speakerRegistry &&
       prev.timelineFocusRequest === next.timelineFocusRequest &&
-      prev.framingKeyframes === next.framingKeyframes
+      prev.framingKeyframes === next.framingKeyframes &&
+      prev.bgmAudioUrl === next.bgmAudioUrl &&
+      prev.isDemucsDone === next.isDemucsDone
     );
   }
   return false;

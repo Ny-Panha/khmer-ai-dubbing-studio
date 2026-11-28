@@ -107,6 +107,8 @@ const MemoVoiceSettings = React.memo(VoiceSettings, (prev, next) => {
   if (prev.batchRender !== next.batchRender) return false;
   if (prev.duration !== next.duration) return false;
   if (prev.videoEditScope !== next.videoEditScope) return false;
+  if (prev.isRescanningCharacters !== next.isRescanningCharacters) return false;
+  if (prev.rescanCharactersFeedback !== next.rescanCharactersFeedback) return false;
   return true;
 });
 import TimelineEditor from './components/timeline/TimelineEditor';
@@ -184,6 +186,8 @@ const VISUAL_SETTING_DEFAULTS = {
   cornerMaskBlur: 18,
   cornerMaskOffsetX: 14,
   cornerMaskOffsetY: 14,
+  cornerMaskXPercent: null,
+  cornerMaskYPercent: null,
   enableSponsor: false,
   sponsorVideoUrl: null,
   sponsorVideoPath: null,
@@ -716,6 +720,7 @@ export default function App() {
     fullAudioUrl,
     setFullAudioUrl,
     onInvalidateRenderedPreview: invalidateRenderedPreview,
+    onRefreshSeriesFromServer: series.refreshSeriesFromServer,
   });
   audioRef.current = audio;
 
@@ -1026,6 +1031,7 @@ export default function App() {
   const handleUpdateSegmentText = useCallback((...args) => audioRef.current.handleUpdateSegmentText?.(...args), []);
   const handleUpdateSpeakerVoice = useCallback((...args) => audioRef.current.handleUpdateSpeakerVoice?.(...args), []);
   const handleUpdateSpeakerIdentity = useCallback((...args) => audioRef.current.handleUpdateSpeakerIdentity?.(...args), []);
+  const handleRescanCharacters = useCallback((...args) => audioRef.current.handleRescanCharacters?.(...args), []);
   const handleUpdateSegmentVoice = useCallback((...args) => audioRef.current.handleUpdateSegmentVoice?.(...args), []);
 
   // Playback callbacks
@@ -1402,6 +1408,9 @@ export default function App() {
                   speakerRegistry={speakerRegistry || EMPTY_OBJECT}
                   onUpdateSpeakerVoice={handleUpdateSpeakerVoice}
                   onUpdateSpeakerIdentity={handleUpdateSpeakerIdentity}
+                  onRescanCharacters={handleRescanCharacters}
+                  isRescanningCharacters={audio.isRescanningCharacters}
+                  rescanCharactersFeedback={audio.rescanCharactersFeedback}
                   onUpdateSegmentVoice={handleUpdateSegmentVoice}
                   onToggleDeliveryType={handleToggleDeliveryType}
                   selectedSegmentId={media.selectedSegmentId}
@@ -1534,6 +1543,9 @@ export default function App() {
                   speakerRegistry={speakerRegistry || EMPTY_OBJECT}
                   onUpdateSpeakerVoice={handleUpdateSpeakerVoice}
                   onUpdateSpeakerIdentity={handleUpdateSpeakerIdentity}
+                  onRescanCharacters={handleRescanCharacters}
+                  isRescanningCharacters={audio.isRescanningCharacters}
+                  rescanCharactersFeedback={audio.rescanCharactersFeedback}
                   onUpdateSegmentVoice={handleUpdateSegmentVoice}
                   onUpdateSegmentText={handleUpdateSegmentText}
                   onUpdateSegmentSpeed={audio.handleUpdateSegmentSpeed}
@@ -1630,6 +1642,8 @@ export default function App() {
                 onVideoSelected={handleVideoSelected}
                 seriesId={series.seriesId}
                 episodeId={series.episodeId}
+                bgmAudioUrl={series.activeEpisode?.bgmAudioUrl || series.activeEpisode?.cleanBgmUrl || null}
+                isDemucsDone={Boolean(series.activeEpisode?.isDemucsDone || series.activeEpisode?.hasDemucs || series.activeEpisode?.bgmAudioUrl)}
               />
             </ErrorBoundary>
           </div>

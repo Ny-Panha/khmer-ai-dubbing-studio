@@ -1041,12 +1041,37 @@
   border-color: oklch(0.38 0.02 290);
 }
 
-/* 4. Clean BGM Clip: 4px vertical inset in 40px row (height 32px), bg oklch(0.22 0.02 302) */
+/* 4. Clean BGM Clip: 4px vertical inset in 40px row (height 32px) */
 .clean-bgm-block {
   top: 4px;
   height: 32px;
   background: linear-gradient(180deg, oklch(0.24 0.02 302) 0%, oklch(0.20 0.02 302) 100%);
   cursor: default;
+  overflow: visible;
+}
+
+.clean-bgm-block.is-clean-bgm-ready {
+  background: linear-gradient(180deg, rgba(16, 185, 129, 0.20) 0%, rgba(6, 78, 59, 0.28) 100%);
+  border-color: rgba(52, 211, 153, 0.45);
+}
+
+.clean-bgm-block.is-custom-bgm {
+  background: linear-gradient(180deg, rgba(139, 92, 246, 0.22) 0%, rgba(76, 29, 149, 0.28) 100%);
+  border-color: rgba(167, 139, 250, 0.45);
+}
+
+.clean-bgm-block.is-clean-bgm-pending {
+  background: linear-gradient(180deg, rgba(51, 65, 85, 0.25) 0%, rgba(15, 23, 42, 0.35) 100%);
+  border-style: dashed;
+  border-color: rgba(148, 163, 184, 0.3);
+}
+
+.clean-bgm-label-sticky {
+  position: sticky;
+  left: 4px;
+  width: max-content;
+  max-width: 100%;
+  z-index: 2;
 }
 
 /* ONE SIGNAL COLOUR: Selection = 2px solid accent outline (inset) */
@@ -1221,11 +1246,34 @@
   opacity: 0.45;
 }
 
-/* Clean BGM flat content row */
+/* Clean BGM flat & waveform content row */
 .clean-bgm-content-row {
   height: 16px;
-  background: oklch(0.18 0.01 302);
-  opacity: 0.55;
+  padding: 0 2px;
+  background: rgba(15, 23, 42, 0.25);
+  overflow: hidden;
+  border-radius: 0 0 5px 5px;
+}
+
+.clean-bgm-waveform-bars {
+  display: block;
+  width: 100%;
+  height: 100%;
+  fill: rgba(148, 163, 184, 0.55);
+}
+
+.is-clean-bgm-ready .clean-bgm-waveform-bars {
+  fill: #34d399;
+}
+
+.is-custom-bgm .clean-bgm-waveform-bars {
+  fill: #a78bfa;
+}
+
+.clean-bgm-baseline {
+  width: 100%;
+  height: 1px;
+  background: rgba(148, 163, 184, 0.25);
 }
 
 .filmstrip-thumb-cell {

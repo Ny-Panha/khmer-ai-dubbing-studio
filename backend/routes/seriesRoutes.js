@@ -253,7 +253,12 @@ router.patch("/:seriesId/speaker-identity", async (req, res) => {
         if (applyAcrossSeries && cleanNewName && !isPlaceholderSpeakerName(cleanNewName)) {
           const patchSourceSegs = updatedSegments || [];
           const patchReg = updatedRegistry || {};
-          updatedSeriesMap = buildVerifiedSeriesSpeakerMapPatch(patchSourceSegs, patchReg, freshSeries.seriesSpeakerMap || {});
+          updatedSeriesMap = buildVerifiedSeriesSpeakerMapPatch(
+            patchSourceSegs,
+            patchReg,
+            freshSeries.seriesSpeakerMap || {},
+            { seriesId: cleanSeries }
+          );
           freshSeries.seriesSpeakerMap = updatedSeriesMap;
         }
         return true;

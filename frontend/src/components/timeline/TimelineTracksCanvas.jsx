@@ -4,7 +4,7 @@ import { formatTimecode, parseTimeToSeconds, formatMinSec } from '../../utils/ti
 import { findAssociatedSegmentIndices, resolveSegmentIsFemale, doesClipMatchSegment } from '../../utils/timelineUtils';
 import { isGapClip, isAdClip } from '../../utils/timelineOps';
 import { uploadVideoFile } from '../../services/api';
-import { decodedPeaks, waveformKey, storedPeaks, ensureWaveformPeaks } from '../../utils/waveformCache';
+import { decodedPeaks, waveformKey, storedPeaks, ensureWaveformPeaks, ensureAudioUrlPeaks } from '../../utils/waveformCache';
 
 // In-memory UI-only cache for audio file durations probed from segment audioUrl
 // (used for legacy episodes whose segments lack stored duration metadata; never persisted).
@@ -156,6 +156,8 @@ function TimelineTracksCanvas({
   framingKeyframes = [],
   seriesId = null,
   episodeId = null,
+  bgmAudioUrl = null,
+  isDemucsDone = false,
 }) {
   const rootRef = React.useRef(null);
   const videoFileInputRef = React.useRef(null);
@@ -211,6 +213,23 @@ function TimelineTracksCanvas({
   }, []);
 
   const [, refreshPeaks] = React.useReducer(tick => tick + 1, 0);
+  const isCustomBgmActive = Boolean(voiceSettings?.enableCustomBgm && voiceSettings?.customBgmUrl);
+  const activeBgmAudioUrl = isCustomBgmActive ? voiceSettings.customBgmUrl : (bgmAudioUrl || null);
+  const activeBgmPeaksKey = activeBgmAudioUrl ? `bgm::${seriesId || ''}::${episodeId || ''}::${activeBgmAudioUrl}` : null;
+
+  React.useEffect(() => {
+    if (isPlaying || !activeBgmAudioUrl || !activeBgmPeaksKey) return;
+    if (decodedPeaks.has(activeBgmPeaksKey)) return;
+    const controller = new AbortController();
+    void ensureAudioUrlPeaks({
+      key: activeBgmPeaksKey,
+      url: activeBgmAudioUrl,
+      binCount: 240,
+      signal: controller.signal,
+      onReady: refreshPeaks,
+    });
+    return () => controller.abort();
+  }, [isPlaying, activeBgmAudioUrl, activeBgmPeaksKey]);
   React.useEffect(() => {
     if (isPlaying || !seriesId || !episodeId || !scriptSegments?.length) return;
     const controller = new AbortController();
@@ -1605,6 +1624,18 @@ function TimelineTracksCanvas({
         const isBgmMuted = Boolean(
           mutedTracks?.cleanBgm || (voiceSettings && typeof voiceSettings.duckingVolume === 'number' && voiceSettings.duckingVolume === 0)
         );
+        const isCleanBgmReady = Boolean(!isCustomBgmActive && (isDemucsDone || bgmAudioUrl));
+        const bgmPeaks = activeBgmPeaksKey ? decodedPeaks.get(activeBgmPeaksKey) : null;
+        const bgmStatusLabel = isCustomBgmActive
+          ? `🎵 CUSTOM BGM${voiceSettings?.customBgmName ? ` (${voiceSettings.customBgmName})` : ''}`
+          : (isCleanBgmReady
+              ? '🔇 CLEAN BGM • ✓ គ្មានសំឡេងចិន'
+              : '🎬 ORIGINAL BGM (មិនទាន់បំបែក)');
+        const bgmClass = isCustomBgmActive
+          ? 'clean-bgm-block is-custom-bgm'
+          : (isCleanBgmReady ? 'clean-bgm-block is-clean-bgm-ready' : 'clean-bgm-block is-clean-bgm-pending');
+        const bgmBarCount = Array.isArray(bgmPeaks) ? bgmPeaks.length : 0;
+
         return (
           <div 
             className={`track-lane clean-bgm-lane ${isBgmMuted ? 'is-track-muted' : ''}`}
@@ -1623,21 +1654,43 @@ function TimelineTracksCanvas({
             )}
             {selectedVideo && totalDuration > 0 ? (
               <div
-                className="clean-bgm-block"
+                className={bgmClass}
                 style={{
                   left: 0,
                   width: Math.max(2, totalDuration * pps - 2),
                   top: 4,
                   height: 32,
                 }}
-                title={`CLEAN BGM [0.0s - ${totalDuration.toFixed(1)}s]`}
+                title={`${bgmStatusLabel} [0.0s - ${totalDuration.toFixed(1)}s]`}
               >
                 {totalDuration * pps >= 32 && (
-                  <div className="clip-label-line">
-                    <span className="clip-label-text">CLEAN BGM</span>
+                  <div className="clip-label-line clean-bgm-label-sticky">
+                    <span className="clip-label-text">{bgmStatusLabel}</span>
                   </div>
                 )}
-                <div className="clip-content-row clean-bgm-content-row" />
+                <div className="clip-content-row clean-bgm-content-row">
+                  {bgmBarCount > 0 ? (
+                    <svg
+                      className="clean-bgm-waveform-bars"
+                      aria-hidden="true"
+                      width="100%"
+                      height="100%"
+                      viewBox={`0 0 ${bgmBarCount * 4} 100`}
+                      preserveAspectRatio="none"
+                    >
+                      <path
+                        className="waveform-bar"
+                        d={bgmPeaks.map((peakVal, i) => {
+                          const p = Number(peakVal) || 0;
+                          const h = Math.min(100, Math.max(8, p <= 1 ? p * 100 : p));
+                          return `M${4 * i},${(100 - h) / 2}h2v${h}h-2z`;
+                        }).join(' ')}
+                      />
+                    </svg>
+                  ) : (
+                    <div className="clean-bgm-baseline" />
+                  )}
+                </div>
               </div>
             ) : (
               <span className="empty-lane-placeholder-text">CLEAN BGM (Background Music & SFX Track)</span>
@@ -1682,6 +1735,7 @@ function areTimelineTracksCanvasPropsEqual(prev, next) {
   if (prev.framingKeyframes !== next.framingKeyframes) return false;
   if (prev.selectedVideo !== next.selectedVideo) return false;
   if (prev.seriesId !== next.seriesId || prev.episodeId !== next.episodeId) return false;
+  if (prev.bgmAudioUrl !== next.bgmAudioUrl || prev.isDemucsDone !== next.isDemucsDone) return false;
 
   return true;
 }

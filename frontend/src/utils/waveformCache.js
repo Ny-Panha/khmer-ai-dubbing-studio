@@ -29,8 +29,8 @@ function setBoundedPeak(key, peaks) {
   decodedPeaks.set(key, peaks);
 }
 
-export function measurePeaks(buffer) {
-  const len = Math.max(1, Math.min(128, buffer.length));
+export function measurePeaks(buffer, maxBins = 128) {
+  const len = Math.max(1, Math.min(maxBins, buffer.length));
   const bins = new Array(len).fill(0);
   for (let ch = 0; ch < buffer.numberOfChannels; ch++) {
     const samples = buffer.getChannelData(ch);
@@ -197,6 +197,32 @@ export async function ensureWaveformPeaks({
   if (newlyDecoded.size > 0 && !signal?.aborted) {
     void persistEpisodeWaveformPeaks(seriesId, episodeId, newlyDecoded);
   }
+}
+
+export async function ensureAudioUrlPeaks({
+  key,
+  url,
+  binCount = 240,
+  signal,
+  onReady = null,
+}) {
+  if (!key || !url || signal?.aborted) return;
+  if (decodedPeaks.has(key)) return;
+  const ctx = getDecodeContext();
+  if (!ctx) return;
+
+  try {
+    if (typeof window !== 'undefined' && window.__timelineIsPlaying) return;
+    const res = await fetch(url, { signal, cache: 'force-cache', priority: 'low' });
+    if (!res.ok || signal?.aborted) return;
+    const bytes = await res.arrayBuffer();
+    if (signal?.aborted) return;
+    const buffer = await ctx.decodeAudioData(bytes);
+    if (signal?.aborted) return;
+    const peaks = measurePeaks(buffer, binCount);
+    setBoundedPeak(key, peaks);
+    onReady?.();
+  } catch (_) {}
 }
 
 export async function prefetchEpisodeWaveformPeaks(seriesId, episodeId, segments, signal) {

@@ -22,7 +22,12 @@ const { validateSubtitleTiming } = require('./stages/stage8_validateSubtitleTimi
 const { generateSegmentTTS } = require('./stages/stage9_generateSegmentTTS');
 const { previewAndExport } = require('./stages/stage10_previewAndExport');
 const { buildSpeakerRegistry, syncSegmentsWithSpeakerRegistry } = require('../../models/speakerRegistry');
-const { identifySpeakersForCues, buildVerifiedSeriesSpeakerMapPatch } = require('./speakerIdentificationService');
+const {
+  identifySpeakersForCues,
+  buildVerifiedSeriesSpeakerMapPatch,
+  CHARACTER_RECOGNITION_VERSION,
+  computeSeriesRegistryRevision,
+} = require('./speakerIdentificationService');
 const { updateChunk, updateJob, productionJobQueue } = require('./jobManager');
 const { createAbortError } = require('../../utils/asyncSemaphore');
 const { isNonChineseAsrHallucination } = require('../../utils/translationQuality');
@@ -220,6 +225,8 @@ async function runChunkedDubbingPipeline({
   }
 
   const allChunkSegments = [];
+  const effectiveSeriesId = ingestResult?.seriesId || seriesId || 'series_default';
+  const effectiveEpisodeId = ingestResult?.episodeId || episodeId || 'ep_1';
   let runningSeriesSpeakerMap = { ...(seriesGlossary?.seriesSpeakerMap || {}) };
   let speakerIdentificationCalls = 0;
   let speakerIdentificationStats = null;
@@ -269,8 +276,12 @@ async function runChunkedDubbingPipeline({
       }
     } catch (_) {}
 
+    const chunkRegistryRevision = computeSeriesRegistryRevision(
+      { ...(seriesGlossary?.seriesSpeakerMap || {}), ...runningSeriesSpeakerMap },
+      seriesGlossary?.characters || []
+    );
     const chunkHash = crypto.createHash('md5')
-      .update(`${videoPath}${videoSignature}_${chunk.startSec}_${chunk.endSec}_${effectiveModelName}_${mode}_${resolvedOcrMode}`)
+      .update(`${effectiveSeriesId}::${effectiveEpisodeId}::${videoPath}${videoSignature}_${chunk.startSec}_${chunk.endSec}_${effectiveModelName}_${mode}_${resolvedOcrMode}_${CHARACTER_RECOGNITION_VERSION}_${chunkRegistryRevision}`)
       .digest('hex');
     const chunkFile = path.join(chunkCacheDir, `chunk_${chunkHash}.json`);
 
@@ -296,7 +307,14 @@ async function runChunkedDubbingPipeline({
           cachedChunk.isComplete === false ||
           cachedChunk.status === 'review_needed'
         );
-        if (!hasUnresolved && Array.isArray(cachedChunk.segments) && cachedChunk.segments.length > 0) {
+        const cacheMetadataMatches = Boolean(
+          cachedChunk.seriesId === effectiveSeriesId &&
+          cachedChunk.episodeId === effectiveEpisodeId &&
+          cachedChunk.videoSignature === videoSignature &&
+          cachedChunk.characterRecognitionVersion === CHARACTER_RECOGNITION_VERSION &&
+          cachedChunk.registryRevision === chunkRegistryRevision
+        );
+        if (!hasUnresolved && cacheMetadataMatches && Array.isArray(cachedChunk.segments) && cachedChunk.segments.length > 0) {
           const beforeCacheCount = cachedChunk.segments.length;
           chunkSegments = cachedChunk.segments.filter((seg) => !isNonChineseAsrHallucination(seg));
           const droppedCacheJunk = beforeCacheCount - chunkSegments.length;
@@ -309,6 +327,8 @@ async function runChunkedDubbingPipeline({
           );
         } else if (hasUnresolved) {
           console.warn(`[ChunkOrchestrator] ⚠️ Chunk cache at ${path.basename(chunkFile)} contains unresolved frames or was not completed. Re-running chunk.`);
+        } else if (!cacheMetadataMatches) {
+          console.warn(`[ChunkOrchestrator] ⚠️ Chunk cache at ${path.basename(chunkFile)} failed series/episode/recognition/registry validation. Re-running chunk.`);
         }
       } catch (_) {}
     }
@@ -433,6 +453,9 @@ async function runChunkedDubbingPipeline({
                   aiClient,
                   modelName: effectiveModelName,
                   mode,
+                  seriesId: effectiveSeriesId,
+                  episodeId: effectiveEpisodeId,
+                  sourceMediaFingerprint: videoSignature,
                   seriesSpeakerMap: {
                     ...(seriesGlossary?.seriesSpeakerMap || {}),
                     ...runningSeriesSpeakerMap,
@@ -448,7 +471,8 @@ async function runChunkedDubbingPipeline({
                   runningSeriesSpeakerMap = buildVerifiedSeriesSpeakerMapPatch(
                     chunkSegments,
                     null,
-                    runningSeriesSpeakerMap
+                    runningSeriesSpeakerMap,
+                    { seriesId: effectiveSeriesId }
                   );
                 }
               }
@@ -536,6 +560,9 @@ async function runChunkedDubbingPipeline({
                 aiClient,
                 modelName: effectiveModelName,
                 mode,
+                seriesId: effectiveSeriesId,
+                episodeId: effectiveEpisodeId,
+                sourceMediaFingerprint: videoSignature,
                 seriesSpeakerMap: {
                   ...(seriesGlossary?.seriesSpeakerMap || {}),
                   ...runningSeriesSpeakerMap,
@@ -551,7 +578,8 @@ async function runChunkedDubbingPipeline({
                 runningSeriesSpeakerMap = buildVerifiedSeriesSpeakerMapPatch(
                   chunkSegments,
                   null,
-                  runningSeriesSpeakerMap
+                  runningSeriesSpeakerMap,
+                  { seriesId: effectiveSeriesId }
                 );
               }
             } catch (spkErr) {
@@ -568,6 +596,10 @@ async function runChunkedDubbingPipeline({
             chunkIndex: chunk.chunkIndex,
             startSec: chunk.startSec,
             endSec: chunk.endSec,
+            seriesId: effectiveSeriesId,
+            episodeId: effectiveEpisodeId,
+            characterRecognitionVersion: CHARACTER_RECOGNITION_VERSION,
+            registryRevision: chunkRegistryRevision,
             segments: chunkSegments,
             visualOnlyCount,
             fusedCount,
@@ -782,7 +814,8 @@ async function runChunkedDubbingPipeline({
   const updatedSeriesSpeakerMap = buildVerifiedSeriesSpeakerMapPatch(
     finalizedSegments,
     speakerRegistry,
-    effectiveSeriesMapForSync
+    effectiveSeriesMapForSync,
+    { seriesId: effectiveSeriesId }
   );
 
   checkAbort();

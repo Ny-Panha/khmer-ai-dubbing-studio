@@ -60,6 +60,8 @@ export const DEFAULT_VOICE_SETTINGS = {
   cornerMaskBlur: 18,
   cornerMaskOffsetX: 14,
   cornerMaskOffsetY: 14,
+  cornerMaskXPercent: null,
+  cornerMaskYPercent: null,
   enableMirrorFlip: false,
   zoomScale: 1.0,
   enableColorGrade: false,
@@ -79,7 +81,7 @@ export const DEFAULT_VOICE_SETTINGS = {
 export const STICKY_CUSTOMIZE_SETTING_KEYS = Object.freeze([
   'enableCornerMask', 'cornerMaskText', 'cornerMaskStyle', 'cornerMaskPosition',
   'cornerMaskWidth', 'cornerMaskHeight', 'cornerMaskOpacity', 'cornerMaskBlur',
-  'cornerMaskOffsetX', 'cornerMaskOffsetY',
+  'cornerMaskOffsetX', 'cornerMaskOffsetY', 'cornerMaskXPercent', 'cornerMaskYPercent',
   'enableAntiTheft', 'marqueeText', 'marqueeSpeed', 'marqueePosition',
   'marqueeTextColor', 'antiTheftSize', 'antiTheftHeight', 'antiTheftBottomPercent', 'antiTheftBgStyle', 'antiTheftBlur',
   'enableWatermark', 'watermarkText', 'watermarkPosition', 'watermarkColor',
@@ -2007,18 +2009,22 @@ export function extractGlossaryFromEpisode(scriptData, speakerRegistry) {
     return fallback || 'unknown';
   };
 
-  const isIgnoredPlaceholderOrPositional = (name, id) => {
+  const isIgnoredPlaceholderOrPositional = (name, id, entry = null) => {
+    const isManual = Boolean(entry?.userOverridden || entry?.manualCharacterOverridden);
     const nm = String(name || '').trim().toLowerCase();
     const sid = String(id || '').trim();
+    const cid = String(entry?.characterId || '').trim();
     if (!nm || nm === 'unknown' || nm === 'តួអង្គ' || nm === 'តួ' || nm === 'speaker' || /^speaker[\s_-]*\d+$/i.test(nm)) return true;
     if (/^spk_(?:ocr|review|generic|unknown)_\d+$/i.test(sid) || /^spk_\d+$/i.test(sid)) return true;
+    if (!isManual && (/^(?:spk|char)_unnamed_/i.test(sid) || /^(?:spk|char)_unnamed_/i.test(cid))) return true;
+    if (!isManual && (entry?.hasVerifiedName === false || (typeof entry?.characterNameConfidence === 'number' && entry.characterNameConfidence < 0.72))) return true;
     return false;
   };
 
   Object.values(registry).forEach((spk) => {
     const spkName = (spk.name || spk.speakerName || '').trim();
     const spkId = spk.id || spk.speakerId || spkName;
-    if (!isIgnoredPlaceholderOrPositional(spkName, spkId) && !characters.some((c) => c.name === spkName)) {
+    if (!isIgnoredPlaceholderOrPositional(spkName, spkId, spk) && !characters.some((c) => c.name === spkName)) {
       // If episode has segments, do not include phantom characters from old/other series
       if (segSpeakerNames.size > 0 && !segSpeakerNames.has(spkName) && !segSpeakerNames.has(spk.id)) {
         return;
@@ -2043,7 +2049,7 @@ export function extractGlossaryFromEpisode(scriptData, speakerRegistry) {
   segments.forEach((seg) => {
     const rawSpeaker = (seg.speaker || seg.speakerName || '').trim();
     const segSpkId = seg.speakerId || rawSpeaker;
-    if (!isIgnoredPlaceholderOrPositional(rawSpeaker, segSpkId) && !characters.some((c) => c.name === rawSpeaker)) {
+    if (!isIgnoredPlaceholderOrPositional(rawSpeaker, segSpkId, seg) && !characters.some((c) => c.name === rawSpeaker)) {
       const isManual = Boolean(seg.userOverridden || seg.voiceAssignmentSource === 'manual' || seg.voiceOverride);
       characters.push({
         id: segSpkId,

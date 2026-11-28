@@ -1528,7 +1528,7 @@ async function generateSingleSegmentAudio(segment, uploadsDir, options = {}) {
   }
 
   // Preserve prior audio file until new file has succeeded; never delete raw base audio, split-shared files, or unrelated segments
-  const priorAudioPath = resolvePriorSegmentAudioPath(segment, uploadsDir);
+  const priorAudioPath = options.preservePriorAudioOnDisk ? null : resolvePriorSegmentAudioPath(segment, uploadsDir);
   if (priorAudioPath) {
     const resolvedPrior = path.resolve(priorAudioPath);
     const resolvedUploadsDir = path.resolve(uploadsDir);
@@ -1858,6 +1858,7 @@ async function generateSingleSegmentAudio(segment, uploadsDir, options = {}) {
     lipSyncStatus: Math.abs(finalDuration - sourceSpeechDuration) <= 0.150 ? "EXACT_MATCH" : (Math.abs(finalDuration - sourceSpeechDuration) <= 0.500 ? "ACCEPTABLE_PACING" : "LIP_SYNC_MISMATCH"),
     syncWarning: (availableSlotDuration - finalDuration) < 0 ? "exceeds_slot_at_max_tempo" : ((availableSlotDuration - finalDuration) < 0.080 ? "safety_margin_under_80ms" : null),
     overflowSec: finalDuration > availableSlotDuration ? parseFloat((finalDuration - availableSlotDuration).toFixed(3)) : 0,
+    audioGenerated: Boolean(voiceMatchesRequested && calculatedAudioUrl),
     audioOutdated: !voiceMatchesRequested,
     audioSignature: computeSegmentAudioSignature(resolvedKhmer, voiceId, resolvedSpeedValue, pitchStr),
     ttsStatus: voiceMatchesRequested ? "ready" : "voice_mismatch",

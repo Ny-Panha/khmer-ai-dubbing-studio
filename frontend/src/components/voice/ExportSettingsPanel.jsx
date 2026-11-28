@@ -547,7 +547,15 @@ function ExportSettingsPanel({
                 </span>
                 {settings?.enableCornerMask && (
                   <span style={{ fontSize: '0.65rem', background: 'rgba(56, 189, 248, 0.14)', color: 'var(--primary-accent)', padding: '1px 6px', borderRadius: 4, fontWeight: 600 }}>
-                    {settings?.cornerMaskPosition === 'top-left' ? 'ឆ្វេងលើ' : 'ស្តាំលើ'}
+                    {settings?.cornerMaskPosition === 'custom'
+                      ? `អូសផ្ទាល់ (${Math.round(settings?.cornerMaskXPercent ?? 50)}% · ${Math.round(settings?.cornerMaskYPercent ?? 50)}%)`
+                      : settings?.cornerMaskPosition === 'top-left'
+                        ? 'ឆ្វេងលើ'
+                        : settings?.cornerMaskPosition === 'bottom-left'
+                          ? 'ឆ្វេងក្រោម'
+                          : settings?.cornerMaskPosition === 'bottom-right'
+                            ? 'ស្តាំក្រោម'
+                            : 'ស្តាំលើ'}
                   </span>
                 )}
               </div>
@@ -596,7 +604,18 @@ function ExportSettingsPanel({
                     </span>
                     <select
                       value={settings?.cornerMaskPosition || 'top-right'}
-                      onChange={(e) => onSettingChange('cornerMaskPosition', e.target.value)}
+                      onChange={(e) => {
+                        const pos = e.target.value;
+                        if (pos === 'custom') {
+                          onSettingChange('cornerMaskPosition', 'custom');
+                        } else {
+                          onSettingChange({
+                            cornerMaskPosition: pos,
+                            cornerMaskXPercent: null,
+                            cornerMaskYPercent: null,
+                          });
+                        }
+                      }}
                       className="inspector-select"
                       style={{ width: '100%', padding: '4px 6px', fontSize: '0.72rem' }}
                     >
@@ -604,6 +623,7 @@ function ExportSettingsPanel({
                       <option value="top-left">ជ្រុងលើឆ្វេង (Top Left)</option>
                       <option value="bottom-right">ជ្រុងក្រោមស្តាំ (Bottom Right)</option>
                       <option value="bottom-left">ជ្រុងក្រោមឆ្វេង (Bottom Left)</option>
+                      <option value="custom">អូសដាក់ផ្ទាល់ (Free Move)</option>
                     </select>
                   </div>
 

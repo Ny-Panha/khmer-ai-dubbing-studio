@@ -200,6 +200,7 @@ Return JSON ONLY matching this schema:
     if (!rewritten) continue;
     if (!c.hasHanzi && rewritten.length >= c.currentKhmer.length) continue;
 
+    const priorAudioPath = updated[c.idx]?.audioPath || null;
     const draftSeg = {
       ...updated[c.idx],
       khmer: rewritten,
@@ -207,6 +208,11 @@ Return JSON ONLY matching this schema:
       khmerTranslatedText: rewritten,
       availableSlotDuration: c.slotSec,
       slotDuration: c.slotSec,
+      // Strip prior file references during speculative re-TTS so generateSingleSegmentAudio never unlinks the working fallback MP3 before we know reTts is shorter
+      audioPath: null,
+      audioFile: null,
+      audioFileName: null,
+      audioUrl: null,
     };
 
     try {
@@ -219,10 +225,12 @@ Return JSON ONLY matching this schema:
         maxSpeed: 1.50,
         forceRegen: true,
         userCustomSpeed: false,
+        preservePriorAudioOnDisk: true,
       });
 
       const newDur = Number(reTts?.finalAudioDuration || reTts?.audioDurationSec || reTts?.audioDuration || 0);
-      if (reTts && (c.hasHanzi || (newDur > 0 && newDur < c.actualDur))) {
+      const isAccepted = Boolean(reTts && reTts.audioPath && fs.existsSync(reTts.audioPath) && (c.hasHanzi || (newDur > 0 && newDur < c.actualDur)));
+      if (isAccepted) {
         const newSig = computeSegmentAudioSignature(rewritten, voiceId, draftSeg.speed ?? draftSeg.rate, draftSeg.pitch);
         updated[c.idx] = {
           ...draftSeg,
@@ -232,11 +240,18 @@ Return JSON ONLY matching this schema:
           khmerTranslatedText: rewritten,
           autoShortenedFrom: c.currentKhmer,
           audioSignature: newSig,
+          audioGenerated: true,
           ttsStatus: 'ready',
           audioOutdated: false,
         };
         shortenedCount++;
         shortenedIds.push(segId);
+      } else if (reTts?.audioPath && path.resolve(reTts.audioPath) !== (priorAudioPath ? path.resolve(priorAudioPath) : '')) {
+        try { if (fs.existsSync(reTts.audioPath)) fs.unlinkSync(reTts.audioPath); } catch (_) {}
+        try {
+          const rejSidecar = reTts.audioPath.replace(/\.[^.]+$/, '.json');
+          if (fs.existsSync(rejSidecar)) fs.unlinkSync(rejSidecar);
+        } catch (_) {}
       }
     } catch (reTtsErr) {
       console.warn(`[Stage 9 Auto-Shorten] Re-TTS failed for segment #${segId}: ${reTtsErr?.message || reTtsErr}`);

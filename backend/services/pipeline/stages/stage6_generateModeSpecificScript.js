@@ -517,11 +517,11 @@ Return JSON ONLY matching this schema:
   "castRegistry": [
     {
       "speakerId": "spk_male_lead",
-      "speakerLabelKh": "តួឯកប្រុស (ព្រះអង្គម្ចាស់)",
+      "speakerLabelKh": "តួឯកប្រុស",
       "voiceGender": "male",
-      "roleArchetype": "royal_male_lead",
-      "selfPronounKh": "យើង / ទូលបង្គំ",
-      "addressPronounKh": "នាង / ម្ចាស់អូន"
+      "roleArchetype": "male_lead",
+      "selfPronounKh": "ខ្ញុំ / បង",
+      "addressPronounKh": "អ្នក / នាង"
     }
   ],
   "segments": [

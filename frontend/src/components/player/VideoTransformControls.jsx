@@ -214,22 +214,44 @@ export default function VideoTransformControls({
                 </div>
 
                 <div className="popup-section">
-                  <span className="popup-section-title">ទីតាំង</span>
+                  <span className="popup-section-title">ទីតាំង (អូសលើវីដេអូបាន)</span>
                   <div className="position-grid two-col">
                     <button
                       type="button"
+                      className={`pos-chip ${currentMaskPos === 'top-left' ? 'active' : ''}`}
+                      onClick={() => onUpdateVoiceSettings?.({ ...voiceSettings, cornerMaskPosition: 'top-left', cornerMaskXPercent: null, cornerMaskYPercent: null, enableCornerMask: true })}
+                    >
+                      ឆ្វេងលើ
+                    </button>
+                    <button
+                      type="button"
                       className={`pos-chip ${currentMaskPos === 'top-right' ? 'active' : ''}`}
-                      onClick={() => onUpdateVoiceSettings?.({ ...voiceSettings, cornerMaskPosition: 'top-right', enableCornerMask: true })}
+                      onClick={() => onUpdateVoiceSettings?.({ ...voiceSettings, cornerMaskPosition: 'top-right', cornerMaskXPercent: null, cornerMaskYPercent: null, enableCornerMask: true })}
                     >
                       ស្តាំលើ
                     </button>
                     <button
                       type="button"
-                      className={`pos-chip ${currentMaskPos === 'top-left' ? 'active' : ''}`}
-                      onClick={() => onUpdateVoiceSettings?.({ ...voiceSettings, cornerMaskPosition: 'top-left', enableCornerMask: true })}
+                      className={`pos-chip ${currentMaskPos === 'bottom-left' ? 'active' : ''}`}
+                      onClick={() => onUpdateVoiceSettings?.({ ...voiceSettings, cornerMaskPosition: 'bottom-left', cornerMaskXPercent: null, cornerMaskYPercent: null, enableCornerMask: true })}
                     >
-                      ឆ្វេងលើ
+                      ឆ្វេងក្រោម
                     </button>
+                    <button
+                      type="button"
+                      className={`pos-chip ${currentMaskPos === 'bottom-right' ? 'active' : ''}`}
+                      onClick={() => onUpdateVoiceSettings?.({ ...voiceSettings, cornerMaskPosition: 'bottom-right', cornerMaskXPercent: null, cornerMaskYPercent: null, enableCornerMask: true })}
+                    >
+                      ស្តាំក្រោម
+                    </button>
+                  </div>
+                  {currentMaskPos === 'custom' && (
+                    <div style={{ fontSize: '10.5px', color: '#38BDF8', marginTop: 4 }}>
+                      ទីតាំងផ្ទាល់: X {Math.round(voiceSettings?.cornerMaskXPercent ?? 50)}% · Y {Math.round(voiceSettings?.cornerMaskYPercent ?? 50)}%
+                    </div>
+                  )}
+                  <div style={{ fontSize: '10px', color: 'var(--text-dim)', marginTop: 4 }}>
+                    💡 អូសប្រអប់ Mask លើវីដេអូដាក់កន្លែងណាក៏បាន
                   </div>
                 </div>
 

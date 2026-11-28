@@ -121,6 +121,35 @@ export async function retranslateAllSegmentsApi({
 }
 
 /**
+ * Rescan characters directly from current episode or current series source videos,
+ * preserving Chinese subtitles, Khmer translations, immutable sourceCueId, timeline timestamps,
+ * manual overrides, and unchanged-voice TTS audio files.
+ */
+export async function rescanCharactersApi({
+  seriesId,
+  episodeId = null,
+  scope = 'episode',
+  clearStaleRegistry = true,
+  apiKey = null,
+  signal = null,
+} = {}) {
+  const effectiveApiKey = apiKey || localStorage.getItem('GEMINI_API_KEY') || '';
+  const res = await fetch('/api/dubbing/rescan-characters', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    signal,
+    body: JSON.stringify({
+      seriesId,
+      episodeId,
+      scope,
+      clearStaleRegistry,
+      apiKey: effectiveApiKey,
+    }),
+  });
+  return await parseResponseJson(res, 'Failed to rescan characters');
+}
+
+/**
  * Fetch realtime Gemini API keys status and quota health
  * @param {{ probe?: 'models' | 'live' | 'matrix' | 'stats', model?: string, allModels?: boolean, signal?: AbortSignal }} [options]
  */

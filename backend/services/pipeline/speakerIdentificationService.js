@@ -1,6 +1,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const crypto = require('crypto');
 const { spawn } = require('child_process');
 const ffmpegInstaller = require('@ffmpeg-installer/ffmpeg');
 const { resolvePythonBinary } = require('../audioSeparationService');
@@ -279,13 +280,83 @@ async function buildBatchMontageAndAudio({
   };
 }
 
-function buildKnownCastIndex(seriesSpeakerMap = {}, castRegistry = []) {
+const CHARACTER_RECOGNITION_VERSION = 'v3_dynamic_uncontaminated';
+
+function isUnnamedCharacterId(id = '') {
+  const s = String(id || '').trim().toLowerCase();
+  return s.startsWith('char_unnamed_') || s.startsWith('spk_unnamed_');
+}
+
+function buildStableUnnamedIds({
+  gender = 'UNKNOWN',
+  unnamedEntityKey = null,
+  visualAppearance = null,
+  voiceTimbreDesc = null,
+  acousticClusterId = null,
+  sourceCueId = 'cue_0',
+} = {}) {
+  const gLower = gender === 'FEMALE' ? 'female' : (gender === 'MALE' ? 'male' : 'unknown');
+  // Prefer stable acoustic diarization cluster or consistent model entity key over per-shot appearance prose
+  const primarySeed = acousticClusterId
+    ? `cl:${String(acousticClusterId).trim().toLowerCase()}`
+    : (unnamedEntityKey
+        ? `ent:${String(unnamedEntityKey).trim().toLowerCase()}`
+        : [
+            visualAppearance ? `vis:${String(visualAppearance).trim().toLowerCase().slice(0, 48)}` : '',
+            voiceTimbreDesc ? `tim:${String(voiceTimbreDesc).trim().toLowerCase().slice(0, 48)}` : '',
+          ].filter(Boolean).join('|'));
+  const stableSlug = primarySeed
+    ? crypto.createHash('md5').update(`${gLower}|${primarySeed}`).digest('hex').slice(0, 8)
+    : String(sourceCueId || 'cue').replace(/[^a-zA-Z0-9_]/g, '').slice(-8);
+  const speakerId = `spk_unnamed_${gLower}_${stableSlug}`;
+  const characterId = `char_unnamed_${gLower}_${stableSlug}`;
+  return { speakerId, characterId };
+}
+
+function computeSeriesRegistryRevision(seriesSpeakerMap = {}, castRegistry = []) {
+  const spkRows = Object.entries(seriesSpeakerMap || {})
+    .filter(([, v]) => v && typeof v === 'object')
+    .map(([k, v]) => [
+      k,
+      v.speakerId || v.id || '',
+      v.characterId || '',
+      v.name || v.speakerName || '',
+      v.voiceId || v.khmerVoiceId || '',
+      Boolean(v.userOverridden || v.manualCharacterOverridden),
+    ])
+    .sort((a, b) => String(a[0]).localeCompare(String(b[0])));
+  const castRows = Array.isArray(castRegistry)
+    ? castRegistry
+        .filter((c) => c && typeof c === 'object')
+        .map((c) => [
+          c.id || c.speakerId || '',
+          c.characterId || '',
+          c.name || c.khmerName || '',
+          c.voiceId || c.khmerVoiceId || '',
+          Boolean(c.userOverridden || c.manualCharacterOverridden),
+        ])
+        .sort((a, b) => String(a[0]).localeCompare(String(b[0])))
+    : [];
+  return crypto
+    .createHash('md5')
+    .update(JSON.stringify({ v: CHARACTER_RECOGNITION_VERSION, spkRows, castRows }))
+    .digest('hex')
+    .slice(0, 12);
+}
+
+function buildKnownCastIndex(seriesSpeakerMap = {}, castRegistry = [], { seriesId = null } = {}) {
   const index = new Map();
   const addEntry = (entry) => {
     if (!entry || typeof entry !== 'object') return;
+    if (seriesId && entry.seriesId && String(entry.seriesId) !== String(seriesId)) return;
+    const isManual = Boolean(entry.userOverridden || entry.manualCharacterOverridden || entry.voiceAssignmentSource === 'manual');
     const rawName = String(entry.speakerName || entry.name || entry.khmerName || '').trim();
     if (!rawName || isPlaceholderSpeakerName(rawName) || isGenericSpeakerName(rawName) || isEpisodicRoleSpeakerName(rawName)) return;
     const rawId = entry.speakerId || entry.id || '';
+    const rawCharId = entry.characterId || '';
+    if (!isManual && (isUnnamedCharacterId(rawId) || isUnnamedCharacterId(rawCharId))) return;
+    if (!isManual && (entry.speakerReviewNeeded || entry.unverifiedSpeaker || entry.speakerStatus === 'review_needed')) return;
+    if (!isManual && (entry.hasVerifiedName === false || (typeof entry.characterNameConfidence === 'number' && entry.characterNameConfidence < 0.72))) return;
     if (rawId && isPositionalSpeakerId(rawId) && !entry.manualCharacterOverridden) return;
     const gender = normalizeGenderToken(entry.speakerGender || entry.voiceActorTimbre || entry.voiceGender || entry.gender);
     if (gender === 'UNKNOWN') return;
@@ -294,6 +365,7 @@ function buildKnownCastIndex(seriesSpeakerMap = {}, castRegistry = []) {
     const canonical = {
       characterId: charId,
       speakerId: spkId,
+      seriesId: entry.seriesId || seriesId || null,
       name: normalizeSpeakerName(rawName, gender.toLowerCase()),
       gender,
       characterGender: normalizeGenderToken(entry.characterGender || gender),
@@ -302,6 +374,7 @@ function buildKnownCastIndex(seriesSpeakerMap = {}, castRegistry = []) {
       source: entry.voiceAssignmentSource || 'series_glossary',
       userOverridden: Boolean(entry.userOverridden),
       manualCharacterOverridden: Boolean(entry.manualCharacterOverridden),
+      characterNameConfidence: typeof entry.characterNameConfidence === 'number' ? entry.characterNameConfidence : null,
       visualAppearance: entry.visualAppearance || null,
       voiceTimbreDesc: entry.voiceTimbreDesc || null,
       aliases: Array.from(new Set([rawName, entry.khmerName, entry.chineseAlias, ...(entry.aliases || [])].filter((a) => a && !isPlaceholderSpeakerName(a)))),
@@ -368,7 +441,7 @@ function buildVerificationPrompt({ batchItems, sliceStartSec, contextBefore, con
         .slice(0, 30)
         .map((c) => `- "${c.name}" (characterId=${c.characterId || c.speakerId}, speakerId=${c.speakerId}, gender=${c.gender}, voiceTimbre=${c.voiceActorTimbre || c.gender}, voiceId=${c.voiceId}${c.visualAppearance ? `, visual="${c.visualAppearance}"` : ''}${c.voiceTimbreDesc ? `, timbre="${c.voiceTimbreDesc}"` : ''}, aliases=${c.aliases.slice(0, 4).join('/')})`)
         .join('\n')
-    : '- (No prior verified cast yet — assign distinct, consistent Khmer character names for every recurring individual)';
+    : '- (No verified recurring cast yet for this series — discover characters strictly from THIS video\'s audio, visual frames, and dialogue)';
 
   const beforeText = (contextBefore || [])
     .map((c) => `  [prev ${Number(c.startSec || 0).toFixed(1)}s | speaker="${c.speakerName || '?'}" (${c.speakerGender || 'UNKNOWN'})]: ${c.chineseText}`)
@@ -402,11 +475,13 @@ ${cueLines}
 ${afterText ? `\nFOLLOWING CONTEXT:\n${afterText}` : ''}
 
 STRICT CHARACTER & VOICE VERIFICATION RULES:
-1. **PERSISTENT CHARACTER IDENTITY ACROSS EPISODES & SCENES**:
-   - Compare face features, hair/build, voice timbre in scene_audio.mp3, dialogue style, and relationship context against KNOWN VERIFIED RECURRING CAST above.
-   - Recognize returning characters EVEN when clothing, camera angle, lighting, expression, or scene changes, and reuse their EXACT Khmer "speakerName" and "characterId".
-   - Register genuinely new characters with a clear, distinct Khmer character name/title (e.g. "លីន ហ្វាង", "មេឃុំ", "ម្តាយ ស៊ូ", "លោកគ្រូពេទ្យ ចាង") — NEVER merge two different men or two different women merely because they share gender, similar pitch, or a generic label like "តួអង្គ".
-   - If you are genuinely uncertain who is speaking, set "speakerName": "តួអង្គ", "speakerGender": "UNKNOWN", "isAmbiguous": true, "confidence": 0.45 so the cue is marked review_needed rather than inventing a character name.
+1. **DISCOVER ONLY FROM THIS VIDEO — NEVER INVENT PERSONAL NAMES FROM VOICE GENDER**:
+   - Compare face features, hair/build, voice timbre in scene_audio.mp3, dialogue style, and relationship context ONLY against verified cast in KNOWN VERIFIED RECURRING CAST above and the current video itself.
+   - Recognize returning characters EVEN when clothing, camera angle, lighting, or scene changes, and reuse their EXACT Khmer "speakerName" and "characterId".
+   - ONLY assign a specific personal "speakerName" and set "hasVerifiedName": true + "characterNameConfidence" >= 0.80 when the character's name is explicitly spoken/addressed in THIS video's Chinese dialogue, shown on screen, or present in KNOWN VERIFIED RECURRING CAST above (cite exact source in "nameEvidence").
+   - NEVER fabricate or hallucinate a personal character name just because you hear a male or female voice! If a speaker's actual name is NOT established in THIS video, set "speakerName": "តួអង្គ", "chineseAlias": "", "hasVerifiedName": false, "characterNameConfidence": 0.0, "nameEvidence": "none", and assign a consistent "unnamedEntityKey" (e.g. "entity_male_1", "entity_female_1") so repeated appearances of that same unnamed voice stay grouped distinctly without merging different speakers.
+   - Separate the three confidences clearly: "voiceGenderConfidence" (0..1 acoustic vocal gender), "characterIdentityConfidence" (0..1 which speaker/body/voice instance is speaking), and "characterNameConfidence" (0..1 evidence for their actual personal name).
+   - If you are genuinely uncertain who is speaking or their voice gender, set "speakerName": "តួអង្គ", "speakerGender": "UNKNOWN", "voiceGenderConfidence": 0.45, "characterIdentityConfidence": 0.4, "characterNameConfidence": 0.0, "hasVerifiedName": false, "isAmbiguous": true, "confidence": 0.45.
 2. Listen carefully to the ACTUAL human voice at sceneTime in scene_audio.mp3 AND inspect cell #N of frames_grid.jpg together. Treat audioHint/voiceCluster as auxiliary clues only — NEVER blindly inherit the previous speaker's identity or gender across speaker turns.
 3. OFF-SCREEN CALLERS vs SILENT LISTENERS & PHONE/INTERCOM: Distinguish the ACTUAL SPEAKER from silent characters/listeners shown on screen! On phone/intercom/off-screen audio, check formant timbre and conversational turns rather than attributing the voice to a silent listener face.
 4. SCREAMING/PANICKED/SHORT CUES: Never confuse panicked/crying/screaming men (180-220Hz) with FEMALE, and never confuse high female screams (~250-320Hz) with MALE. For short clips (<1.5s), use surrounding turn context + vocal timbre carefully.
@@ -421,18 +496,24 @@ Return ONLY valid JSON:
   "cues": [
     {
       "sourceCueId": "cue_1",
-      "characterId": "char_ស៊ូ_មីង",
-      "speakerName": "ស៊ូ មីង",
-      "chineseAlias": "苏铭",
+      "characterId": "",
+      "speakerName": "តួអង្គ",
+      "chineseAlias": "",
       "speakerGender": "MALE",
       "characterGender": "MALE",
-      "confidence": 0.95,
+      "voiceGenderConfidence": 0.92,
+      "characterIdentityConfidence": 0.88,
+      "characterNameConfidence": 0.0,
+      "hasVerifiedName": false,
+      "nameEvidence": "none",
+      "unnamedEntityKey": "entity_male_1",
+      "confidence": 0.92,
       "deliveryType": "out_loud",
       "speakerLocation": "on_screen",
-      "visualAppearance": "young man, short dark hair",
-      "voiceTimbreDesc": "steady mid-low young male voice",
+      "visualAppearance": "<visual description of speaker in frame>",
+      "voiceTimbreDesc": "<vocal timbre heard in audio>",
       "isAmbiguous": false,
-      "evidence": "Matched recurring lead face and young male vocal timbre on screen",
+      "evidence": "<audio + visual evidence from this scene>",
       "internalTurns": []
     }
   ]
@@ -487,7 +568,7 @@ ADJUDICATION INSTRUCTIONS:
    - Male↔female viewer switches in scrolling danmaku or crowd reactions (do NOT lump all viewers into one male voice).
    - Broadcast / system voice gender mismatch or "ប្រព័ន្ធ" mistakenly applied to human dialogue, inner thoughts, or skill shouts.
    - High-pitched panicked/screaming man -> if you clearly hear a panicked male actor (not a woman/child-actress/female ghost), KEEP "MALE" with high confidence (>=0.80) and explain why!
-3. Do NOT guess randomly or invent a name if uncertain. If audio+visual+turns make the speaker clear, resolve with confidence >= 0.75 and "isAmbiguous": false. Only leave "UNKNOWN" / "isAmbiguous": true if genuinely impossible to tell.
+3. Do NOT guess randomly or invent a personal name if not proven by dialogue, on-screen text, or known series cast! If voice gender is clear but personal name is unverified, keep "speakerName": "តួអង្គ", "hasVerifiedName": false, "characterNameConfidence": 0.0, "unnamedEntityKey": "entity_..." and resolve "speakerGender" with "voiceGenderConfidence" >= 0.75. Only leave "UNKNOWN" / "isAmbiguous": true if voice gender itself is genuinely impossible to tell.
 4. Preserve exact 1:1 "sourceCueId" for every listed cue.
 
 Return ONLY valid JSON:
@@ -495,11 +576,17 @@ Return ONLY valid JSON:
   "cues": [
     {
       "sourceCueId": "cue_1",
-      "characterId": "...",
-      "speakerName": "...",
+      "characterId": "",
+      "speakerName": "តួអង្គ",
       "chineseAlias": "",
       "speakerGender": "MALE",
       "characterGender": "MALE",
+      "voiceGenderConfidence": 0.9,
+      "characterIdentityConfidence": 0.85,
+      "characterNameConfidence": 0.0,
+      "hasVerifiedName": false,
+      "nameEvidence": "none",
+      "unnamedEntityKey": "entity_male_1",
       "confidence": 0.9,
       "deliveryType": "out_loud",
       "speakerLocation": "on_screen",
@@ -698,6 +785,9 @@ async function identifySpeakersForCues({
   apiKey = null,
   modelName = null,
   mode = 'dialogue',
+  seriesId = null,
+  episodeId = null,
+  sourceMediaFingerprint = null,
   seriesSpeakerMap = {},
   castRegistry = [],
   narratorGender = 'male',
@@ -780,7 +870,7 @@ async function identifySpeakersForCues({
       ? await visualProbeFn({ videoPath, cues: workingCues, workDir, signal })
       : await runCueVisualProbe({ videoPath, cues: workingCues, workDir, signal });
 
-    const castIndex = buildKnownCastIndex(seriesSpeakerMap, castRegistry);
+    const castIndex = buildKnownCastIndex(seriesSpeakerMap, castRegistry, { seriesId });
     const clusterVerifiedCounts = new Map();
     const mmResults = new Map();
     const preliminary = workingCues.map((cue, idx) => {
@@ -828,21 +918,67 @@ async function identifySpeakersForCues({
           const mmGender = normalizeGenderToken(rc.speakerGender || rc.gender);
           const mmCharGender = normalizeGenderToken(rc.characterGender || rc.speakerGender || rc.gender);
           const mmConf = typeof rc.confidence === 'number' ? Math.max(0, Math.min(1, rc.confidence)) : (mmGender === 'UNKNOWN' ? 0.45 : 0.85);
+          const voiceGenderConfidence = typeof rc.voiceGenderConfidence === 'number'
+            ? Math.max(0, Math.min(1, rc.voiceGenderConfidence))
+            : mmConf;
+          const characterIdentityConfidence = typeof rc.characterIdentityConfidence === 'number'
+            ? Math.max(0, Math.min(1, rc.characterIdentityConfidence))
+            : mmConf;
+          const hasExplicitNameConf = typeof rc.characterNameConfidence === 'number';
+          const parsedNameConf = hasExplicitNameConf ? Math.max(0, Math.min(1, rc.characterNameConfidence)) : null;
+
           const rawName = String(rc.speakerName || '').trim();
           const cleanedName = isPlaceholderSpeakerName(rawName) ? 'តួអង្គ' : normalizeSpeakerName(rawName, mmGender.toLowerCase());
           const existingCast = findCastMatch(castIndex, [cleanedName, rawName, rc.chineseAlias], rc.characterId);
-          const resolvedName = existingCast?.name || cleanedName;
-          const isLowConfGeneric = (isPlaceholderSpeakerName(resolvedName) || isGenericSpeakerName(resolvedName)) && mmConf < 0.78;
+          const rawNameEvidence = String(rc.nameEvidence || '').trim().toLowerCase();
+          const isRoleOrGeneric = isGenericSpeakerName(cleanedName) || isEpisodicRoleSpeakerName(cleanedName);
+          const nameRejectedAsUnverified = !existingCast && !isRoleOrGeneric && (
+            rc.hasVerifiedName === false ||
+            rc.hasVerifiedName === 'false' ||
+            (hasExplicitNameConf && parsedNameConf < 0.72) ||
+            rawNameEvidence === 'none' ||
+            rawNameEvidence === 'guessed' ||
+            rawNameEvidence === 'invented'
+          );
+
+          const effectiveRawName = nameRejectedAsUnverified ? 'តួអង្គ' : cleanedName;
+          const resolvedName = existingCast?.name || effectiveRawName;
+          const isNamedPersonal = Boolean(
+            resolvedName &&
+            !isPlaceholderSpeakerName(resolvedName) &&
+            !isGenericSpeakerName(resolvedName) &&
+            !isEpisodicRoleSpeakerName(resolvedName) &&
+            !nameRejectedAsUnverified
+          );
+          const hasVerifiedName = Boolean(
+            existingCast
+              ? true
+              : (isNamedPersonal && rc.hasVerifiedName !== false && (!hasExplicitNameConf || parsedNameConf >= 0.72))
+          );
+          const characterNameConfidence = hasVerifiedName
+            ? (parsedNameConf !== null ? parsedNameConf : mmConf)
+            : (parsedNameConf !== null ? parsedNameConf : 0);
+
+          const isLowConfGeneric = (isPlaceholderSpeakerName(resolvedName) || isGenericSpeakerName(resolvedName)) && voiceGenderConfidence < 0.78 && mmConf < 0.78;
           const visualDesc = typeof rc.visualAppearance === 'string' && rc.visualAppearance.trim() ? rc.visualAppearance.trim() : (existingCast?.visualAppearance || null);
           const timbreDesc = typeof rc.voiceTimbreDesc === 'string' && rc.voiceTimbreDesc.trim() ? rc.voiceTimbreDesc.trim() : (existingCast?.voiceTimbreDesc || null);
+          const unnamedEntityKey = typeof rc.unnamedEntityKey === 'string' && rc.unnamedEntityKey.trim()
+            ? rc.unnamedEntityKey.trim()
+            : null;
 
           mmResults.set(cid, {
-            characterId: rc.characterId || existingCast?.characterId || null,
+            characterId: hasVerifiedName ? (rc.characterId || existingCast?.characterId || null) : null,
             speakerName: resolvedName,
-            chineseAlias: rc.chineseAlias || null,
+            chineseAlias: hasVerifiedName ? (rc.chineseAlias || null) : null,
             speakerGender: isLowConfGeneric ? 'UNKNOWN' : mmGender,
             characterGender: mmCharGender,
             confidence: isLowConfGeneric ? Math.min(mmConf, 0.5) : mmConf,
+            voiceGenderConfidence: isLowConfGeneric ? Math.min(voiceGenderConfidence, 0.5) : voiceGenderConfidence,
+            characterIdentityConfidence,
+            characterNameConfidence,
+            hasVerifiedName,
+            nameEvidence: rc.nameEvidence || (existingCast ? 'series_cast' : (hasVerifiedName ? 'dialogue_or_visual' : 'none')),
+            unnamedEntityKey,
             deliveryType: ['out_loud', 'inner_thought', 'narration'].includes(rc.deliveryType) ? rc.deliveryType : 'out_loud',
             speakerLocation: rc.speakerLocation || 'on_screen',
             visualAppearance: visualDesc,
@@ -853,9 +989,11 @@ async function identifySpeakersForCues({
             rechecked: Boolean(isRecheck),
           });
 
-          // Promote ONLY non-placeholder/non-generic/non-crowd verified characters into running episode cast index
+          // Promote ONLY genuinely named, name-verified, non-placeholder/non-generic/non-crowd characters into running episode cast index
           if (
             resolvedName &&
+            hasVerifiedName &&
+            characterNameConfidence >= 0.72 &&
             !isPlaceholderSpeakerName(resolvedName) &&
             !isGenericSpeakerName(resolvedName) &&
             !isEpisodicRoleSpeakerName(resolvedName) &&
@@ -870,11 +1008,14 @@ async function identifySpeakersForCues({
               const entry = {
                 characterId: charId,
                 speakerId: spkId,
+                seriesId: seriesId || null,
                 name: resolvedName,
                 gender: mmGender,
                 characterGender: mmCharGender !== 'UNKNOWN' ? mmCharGender : mmGender,
                 voiceActorTimbre: mmGender,
                 voiceId: voiceForGender(mmGender),
+                characterNameConfidence,
+                hasVerifiedName: true,
                 source: 'multimodal_verified',
                 visualAppearance: visualDesc,
                 voiceTimbreDesc: timbreDesc,
@@ -1314,9 +1455,30 @@ async function identifySpeakersForCues({
       }
 
       // Mint distinct, consistent speakerId & characterId:
-      // - Named recurring characters -> canonical series/character ID (e.g. spk_ស៊ូ_មីង / char_ស៊ូ_មីង)
+      // - Named recurring characters -> canonical series/character ID
       // - Generic broadcasts / episodic / crowd roles -> gender-qualified isolated ID so male/female instances never collide
+      // - Unnamed voice-verified entities -> stable unnamed ID (`char_unnamed_<gender>_<hash>`) without inventing names
       // - Unresolved / ambiguous placeholders -> isolated spk_review_<cluster_or_cue> (NEVER merged by gender/pitch!)
+      const voiceGenderConfidence = Number(
+        (mm?.voiceGenderConfidence !== undefined
+          ? mm.voiceGenderConfidence
+          : (isVerified ? confidence : Math.min(confidence, 0.55))).toFixed(2)
+      );
+      const characterIdentityConfidence = Number(
+        (mm?.characterIdentityConfidence !== undefined
+          ? mm.characterIdentityConfidence
+          : (seriesMatch ? Math.max(confidence, 0.85) : confidence)).toFixed(2)
+      );
+      const hasVerifiedName = Boolean(
+        !isPlaceholder &&
+        (seriesMatch || isGeneric || isEpisodic || (mm ? mm.hasVerifiedName !== false : Boolean(candidateName)))
+      );
+      const characterNameConfidence = Number(
+        (hasVerifiedName
+          ? (mm?.characterNameConfidence !== undefined ? mm.characterNameConfidence : (seriesMatch ? 0.92 : confidence))
+          : (mm?.characterNameConfidence !== undefined ? Math.min(mm.characterNameConfidence, 0.5) : 0)).toFixed(2)
+      );
+
       let speakerId;
       let characterId;
       if (seriesMatch && !isGeneric && !isPlaceholder && isVerified && seriesMatch.gender === finalGender) {
@@ -1330,14 +1492,22 @@ async function identifySpeakersForCues({
         const baseRole = getSpeakerId(speakerName).replace(/^spk_/, '');
         speakerId = `spk_${voiceGender}_${baseRole}`;
         characterId = buildCharacterId(speakerName, speakerId, { isGeneric: false, isEpisodic: true });
-      } else if (!isGeneric && !isPlaceholder && isVerified) {
+      } else if (!isGeneric && !isPlaceholder && hasVerifiedName && characterNameConfidence >= 0.72 && isVerified) {
         speakerId = getSpeakerId(speakerName, voiceGender);
         characterId = buildCharacterId(speakerName, speakerId, { isGeneric: false, isEpisodic: false });
-      } else if (cue.acousticClusterId) {
-        speakerId = isVerified ? `spk_${voiceGender}_${cue.acousticClusterId}` : `spk_review_${cue.acousticClusterId}`;
-        characterId = buildCharacterId(speakerName, speakerId, { isGeneric: true, isEpisodic: true });
       } else if (isVerified) {
-        speakerId = `spk_${voiceGender}_${cue.sourceCueId}`;
+        const unnamedIds = buildStableUnnamedIds({
+          gender: finalGender,
+          unnamedEntityKey: mm?.unnamedEntityKey || cue.unnamedEntityKey || null,
+          visualAppearance: mm?.visualAppearance || null,
+          voiceTimbreDesc: mm?.voiceTimbreDesc || null,
+          acousticClusterId: cue.acousticClusterId || null,
+          sourceCueId: cue.sourceCueId,
+        });
+        speakerId = unnamedIds.speakerId;
+        characterId = unnamedIds.characterId;
+      } else if (cue.acousticClusterId) {
+        speakerId = `spk_review_${cue.acousticClusterId}`;
         characterId = buildCharacterId(speakerName, speakerId, { isGeneric: true, isEpisodic: true });
       } else {
         speakerId = `spk_review_${cue.sourceCueId}`;
@@ -1396,11 +1566,12 @@ async function identifySpeakersForCues({
 
       if (isVerified) {
         resolvedCount++;
-        if (!isGeneric && !isPlaceholder && !outCastMap.has(speakerId)) {
+        if (!isGeneric && !isPlaceholder && hasVerifiedName && !isUnnamedCharacterId(characterId) && !outCastMap.has(speakerId)) {
           outCastMap.set(speakerId, {
             id: speakerId,
             speakerId,
             characterId,
+            seriesId: seriesId || null,
             name: speakerName,
             gender: voiceGender,
             speakerGender: finalGender,
@@ -1410,6 +1581,10 @@ async function identifySpeakersForCues({
             khmerVoiceId: voiceId,
             voiceAssignmentSource: resolvedSource,
             recognitionConfidence: Number(confidence.toFixed(2)),
+            voiceGenderConfidence,
+            characterIdentityConfidence,
+            characterNameConfidence,
+            hasVerifiedName: true,
             recognitionEvidence: evidenceObj,
             visualAppearance,
             voiceTimbreDesc,
@@ -1429,6 +1604,7 @@ async function identifySpeakersForCues({
         speaker: speakerName,
         speakerName,
         speakerId,
+        seriesId: seriesId || cue.seriesId || null,
         aliases,
         speakerGender: finalGender,
         characterGender,
@@ -1439,7 +1615,13 @@ async function identifySpeakersForCues({
         confidence: Number(confidence.toFixed(2)),
         speakerConfidence: Number(confidence.toFixed(2)),
         recognitionConfidence: Number(confidence.toFixed(2)),
-        genderConfidence: isVerified ? Number(confidence.toFixed(2)) : null,
+        genderConfidence: isVerified ? voiceGenderConfidence : null,
+        voiceGenderConfidence,
+        characterIdentityConfidence,
+        characterNameConfidence,
+        hasVerifiedName,
+        ...(mm?.unnamedEntityKey ? { unnamedEntityKey: mm.unnamedEntityKey } : {}),
+        ...(mm?.nameEvidence ? { nameEvidence: mm.nameEvidence } : {}),
         voiceId,
         khmerVoiceId: voiceId,
         voice: voiceId,
@@ -1492,34 +1674,47 @@ async function identifySpeakersForCues({
  * Strictly excludes placeholders ('តួអង្គ'), positional IDs ('spk_ocr_*'), and episodic crowd roles,
  * while keeping generic system IDs isolated under explicit gender-qualified speakerId keys only.
  */
-function buildVerifiedSeriesSpeakerMapPatch(segments = [], speakerRegistry = {}, existingSeriesMap = {}) {
+function buildVerifiedSeriesSpeakerMapPatch(segments = [], speakerRegistry = {}, existingSeriesMap = {}, { seriesId = null } = {}) {
   const nextMap = {};
   for (const [k, v] of Object.entries(existingSeriesMap || {})) {
     if (!v || typeof v !== 'object') continue;
+    const isExistingManual = Boolean(v.userOverridden || v.manualCharacterOverridden || v.voiceAssignmentSource === 'manual');
+    if (seriesId && v.seriesId && String(v.seriesId) !== String(seriesId)) continue;
     const vName = String(v.speakerName || v.name || v.speaker || '').trim();
     const vId = String(v.speakerId || v.id || k || '').trim();
+    const vCharId = String(v.characterId || '').trim();
     if (!vName || isPlaceholderSpeakerName(vName)) continue;
+    if (!isExistingManual && (isUnnamedCharacterId(vId) || isUnnamedCharacterId(vCharId))) continue;
+    if (!isExistingManual && (v.hasVerifiedName === false || (typeof v.characterNameConfidence === 'number' && v.characterNameConfidence < 0.72))) continue;
     if (isPositionalSpeakerId(vId) && !v.manualCharacterOverridden) continue;
     if (isGenericSpeakerName(vName) && !/^spk_(?:male|female)_/i.test(k) && !v.userOverridden) continue;
-    nextMap[k] = v;
+    nextMap[k] = seriesId && !v.seriesId ? { ...v, seriesId } : v;
   }
 
   const addVerified = (entry) => {
     if (!entry || typeof entry !== 'object') return;
+    const isManual = Boolean(entry.userOverridden || entry.manualCharacterOverridden || entry.voiceAssignmentSource === 'manual' || entry.voiceOverride);
+    if (seriesId && entry.seriesId && String(entry.seriesId) !== String(seriesId) && !isManual) return;
     const rawName = String(entry.speakerName || entry.name || entry.speaker || '').trim();
     if (!rawName || isPlaceholderSpeakerName(rawName) || isEpisodicRoleSpeakerName(rawName)) return;
-    const isManual = Boolean(entry.userOverridden || entry.manualCharacterOverridden || entry.voiceAssignmentSource === 'manual' || entry.voiceOverride);
     const spkIdRaw = String(entry.speakerId || entry.id || '').trim();
+    const charIdRaw = String(entry.characterId || '').trim();
     if (!entry.manualCharacterOverridden && isPositionalSpeakerId(spkIdRaw)) return;
-    if (!isManual && spkIdRaw.startsWith('spk_unknown_')) return;
+    if (!isManual && (spkIdRaw.startsWith('spk_unknown_') || isUnnamedCharacterId(spkIdRaw) || isUnnamedCharacterId(charIdRaw))) return;
+    if (!isManual && (entry.hasVerifiedName === false || (typeof entry.characterNameConfidence === 'number' && entry.characterNameConfidence < 0.72))) return;
 
     const gender = normalizeGenderToken(entry.speakerGender || entry.voiceActorTimbre || entry.voiceGender || entry.gender);
+    const hasVerifiedStatus = entry.speakerVerified === true || entry.speakerStatus === 'verified';
+    const rawConf = entry.speakerConfidence ?? entry.recognitionConfidence ?? entry.voiceGenderConfidence ?? entry.genderConfidence;
+    const effectiveConf = rawConf !== undefined && rawConf !== null
+      ? Number(rawConf)
+      : (hasVerifiedStatus ? 0.85 : 0);
     const isVerified = isManual || (
       gender !== 'UNKNOWN' &&
       !entry.speakerReviewNeeded &&
       !entry.unverifiedSpeaker &&
       entry.speakerStatus !== 'review_needed' &&
-      Number(entry.speakerConfidence ?? entry.recognitionConfidence ?? entry.genderConfidence ?? 0.85) >= 0.68
+      effectiveConf >= 0.68
     );
     if (!isVerified) return;
 
@@ -1543,6 +1738,7 @@ function buildVerifiedSeriesSpeakerMapPatch(segments = [], speakerRegistry = {},
       id: spkId,
       speakerId: spkId,
       characterId: charId,
+      ...(seriesId ? { seriesId } : (existing.seriesId ? { seriesId: existing.seriesId } : {})),
       name: cleanName,
       speakerName: cleanName,
       khmerName: cleanName,
@@ -1553,7 +1749,11 @@ function buildVerifiedSeriesSpeakerMapPatch(segments = [], speakerRegistry = {},
       voiceGender: gender.toLowerCase(),
       voiceId,
       khmerVoiceId: voiceId,
-      recognitionConfidence: entry.recognitionConfidence ?? entry.speakerConfidence ?? existing.recognitionConfidence ?? 0.85,
+      recognitionConfidence: entry.recognitionConfidence ?? entry.speakerConfidence ?? existing.recognitionConfidence ?? (isManual ? 1.0 : effectiveConf),
+      voiceGenderConfidence: entry.voiceGenderConfidence ?? existing.voiceGenderConfidence ?? null,
+      characterIdentityConfidence: entry.characterIdentityConfidence ?? existing.characterIdentityConfidence ?? null,
+      characterNameConfidence: isManual ? 1.0 : (entry.characterNameConfidence ?? existing.characterNameConfidence ?? null),
+      hasVerifiedName: isManual || entry.hasVerifiedName !== false,
       recognitionEvidence: entry.recognitionEvidence || entry.speakerEvidence || existing.recognitionEvidence || null,
       visualAppearance: entry.visualAppearance || existing.visualAppearance || null,
       voiceTimbreDesc: entry.voiceTimbreDesc || existing.voiceTimbreDesc || null,
@@ -1574,11 +1774,244 @@ function buildVerifiedSeriesSpeakerMapPatch(segments = [], speakerRegistry = {},
   return nextMap;
 }
 
+/**
+ * Rescan characters on an existing episode or series while preserving:
+ * - originalChineseText / chineseText
+ * - khmerText / khmer translations
+ * - immutable sourceCueId
+ * - timeline positions (startSec, endSec, start, end, audioStartSec, audioEndSec)
+ * - manual overrides (userOverridden / manualCharacterOverridden)
+ * - existing TTS audio files whenever assigned voiceId remains unchanged
+ */
+async function rescanEpisodeOrSeriesCharacters({
+  seriesMeta,
+  episodeId = null,
+  scope = 'episode',
+  clearStaleRegistry = true,
+  resolveVideoPath = null,
+  apiKey = null,
+  modelName = null,
+  geminiGenerateFn = null,
+  visualProbeFn = null,
+  signal = null,
+  onLog = null,
+} = {}) {
+  if (!seriesMeta || typeof seriesMeta !== 'object') {
+    throw new Error('seriesMeta is required');
+  }
+  const seriesId = seriesMeta.id;
+  const allEpisodes = Array.isArray(seriesMeta.episodes) ? seriesMeta.episodes : [];
+  const normScope = String(scope || 'episode').toLowerCase() === 'series' ? 'series' : 'episode';
+
+  const targetEpisodes = normScope === 'series'
+    ? allEpisodes.filter((e) => Array.isArray(e?.scriptData?.segments || e?.scriptSegments) && (e?.scriptData?.segments || e?.scriptSegments).length > 0)
+    : allEpisodes.filter((e) => String(e?.id) === String(episodeId));
+
+  if (targetEpisodes.length === 0) {
+    throw new Error(normScope === 'series' ? 'No episodes with segments to rescan' : `Episode not found or has no segments: ${episodeId}`);
+  }
+
+  // Keep ONLY explicit manual character-identity overrides in starting map when clearing stale auto-discovered memory
+  let runningSeriesMap = {};
+  if (clearStaleRegistry) {
+    for (const [k, v] of Object.entries(seriesMeta.seriesSpeakerMap || {})) {
+      if (v && typeof v === 'object' && v.manualCharacterOverridden === true) {
+        runningSeriesMap[k] = { ...v, seriesId };
+      }
+    }
+  } else {
+    runningSeriesMap = { ...(seriesMeta.seriesSpeakerMap || {}) };
+  }
+
+  const manualGlossaryChars = Array.isArray(seriesMeta.glossary?.characters)
+    ? seriesMeta.glossary.characters.filter((c) => c && c.manualCharacterOverridden === true)
+    : [];
+
+  const episodeResults = [];
+
+  for (const ep of targetEpisodes) {
+    const origSegments = ep.scriptData?.segments || ep.scriptSegments || [];
+    if (origSegments.length === 0) continue;
+
+    const rawVideoRef = ep.video?.videoPath || ep.sourceVideoPath || ep.videoPath || ep.videoFile || ep.videoFileName || '';
+    const resolvedVideoPath = typeof resolveVideoPath === 'function' ? resolveVideoPath(rawVideoRef, ep) : rawVideoRef;
+
+    const cleanInputCues = origSegments.map((seg, idx) => {
+      const isManualChar = Boolean(seg.manualCharacterOverridden);
+      const sourceCueId = String(seg.sourceCueId || `cue_${seg.id ?? idx + 1}`).trim();
+      const chineseText = String(seg.originalChineseText || seg.chineseText || seg.textZh || seg.originalText || seg.original || seg.text || '').trim();
+      if (isManualChar) {
+        return {
+          ...seg,
+          sourceCueId,
+          originalChineseText: chineseText,
+          chineseText,
+        };
+      }
+      // Strip prior auto-assigned speaker identity (and voice-only manual flags during rescan)
+      // so stale character names never bypass fresh character discovery
+      const {
+        speaker: _oldSpk,
+        speakerName: _oldSpkName,
+        speakerId: _oldSpkId,
+        characterId: _oldCharId,
+        aliases: _oldAliases,
+        speakerStatus: _oldStatus,
+        voiceAssignmentSource: _oldSrc,
+        userOverridden: _oldUserOvr,
+        voiceOverride: _oldVoiceOvr,
+        ...rest
+      } = seg;
+      return {
+        ...rest,
+        sourceCueId,
+        originalChineseText: chineseText,
+        chineseText,
+        speaker: 'តួអង្គ',
+        speakerName: 'តួអង្គ',
+      };
+    });
+
+    if (resolvedVideoPath && fs.existsSync(resolvedVideoPath)) {
+      await enrichCuesWithAcousticPitch(resolvedVideoPath, cleanInputCues, { signal });
+    }
+
+    const spkRes = await identifySpeakersForCues({
+      cues: cleanInputCues,
+      videoPath: resolvedVideoPath && fs.existsSync(resolvedVideoPath) ? resolvedVideoPath : null,
+      apiKey,
+      modelName,
+      mode: ep.generationMode || ep.scriptData?.mode || 'dialogue',
+      seriesId,
+      episodeId: ep.id,
+      seriesSpeakerMap: runningSeriesMap,
+      castRegistry: clearStaleRegistry ? manualGlossaryChars : (seriesMeta.glossary?.characters || []),
+      signal,
+      geminiGenerateFn,
+      visualProbeFn,
+      onLog,
+    });
+
+    const scannedCues = Array.isArray(spkRes?.cues) && spkRes.cues.length === origSegments.length
+      ? spkRes.cues
+      : cleanInputCues;
+
+    let changedVoiceCuesCount = 0;
+    let preservedAudioCount = 0;
+
+    const mergedSegments = origSegments.map((origSeg, idx) => {
+      const freshCue = scannedCues[idx] || {};
+      const isManualChar = Boolean(origSeg.manualCharacterOverridden);
+      if (isManualChar) {
+        if (origSeg.audioUrl || origSeg.audioPath) preservedAudioCount++;
+        return origSeg;
+      }
+
+      const oldVoice = String(origSeg.voiceOverride || origSeg.khmerVoiceId || origSeg.voiceId || origSeg.voice || '').trim();
+      const discoveredVoice = String(freshCue.khmerVoiceId || freshCue.voiceId || oldVoice || getDefaultVoiceForGender(freshCue.speakerGender)).trim();
+      const nextVoice = origSeg.voiceOverride ? String(origSeg.voiceOverride).trim() : discoveredVoice;
+      const voiceChanged = Boolean(oldVoice && nextVoice && oldVoice !== nextVoice);
+
+      if (voiceChanged) {
+        changedVoiceCuesCount++;
+      } else if (origSeg.audioUrl || origSeg.audioPath) {
+        preservedAudioCount++;
+      }
+
+      return {
+        ...origSeg,
+        sourceCueId: origSeg.sourceCueId || freshCue.sourceCueId,
+        characterId: freshCue.characterId,
+        speaker: freshCue.speaker || freshCue.speakerName || 'តួអង្គ',
+        speakerName: freshCue.speakerName || freshCue.speaker || 'តួអង្គ',
+        speakerId: freshCue.speakerId,
+        seriesId,
+        aliases: Array.isArray(freshCue.aliases) ? freshCue.aliases : [],
+        speakerGender: freshCue.speakerGender,
+        characterGender: freshCue.characterGender,
+        voiceActorTimbre: freshCue.voiceActorTimbre || freshCue.speakerGender,
+        voiceGender: freshCue.voiceGender,
+        gender: freshCue.gender || freshCue.voiceGender,
+        voiceId: nextVoice,
+        khmerVoiceId: nextVoice,
+        voice: nextVoice,
+        confidence: freshCue.confidence,
+        speakerConfidence: freshCue.speakerConfidence,
+        recognitionConfidence: freshCue.recognitionConfidence,
+        genderConfidence: freshCue.genderConfidence,
+        voiceGenderConfidence: freshCue.voiceGenderConfidence,
+        characterIdentityConfidence: freshCue.characterIdentityConfidence,
+        characterNameConfidence: freshCue.characterNameConfidence,
+        hasVerifiedName: freshCue.hasVerifiedName,
+        ...(freshCue.unnamedEntityKey ? { unnamedEntityKey: freshCue.unnamedEntityKey } : {}),
+        ...(freshCue.nameEvidence ? { nameEvidence: freshCue.nameEvidence } : {}),
+        speakerVerified: freshCue.speakerVerified,
+        speakerStatus: freshCue.speakerStatus,
+        speakerReviewNeeded: freshCue.speakerReviewNeeded,
+        reviewNeeded: freshCue.reviewNeeded,
+        unverifiedSpeaker: freshCue.unverifiedSpeaker,
+        voiceAssignmentSource: origSeg.voiceOverride ? 'manual' : freshCue.voiceAssignmentSource,
+        userOverridden: Boolean(origSeg.voiceOverride && origSeg.userOverridden),
+        manualCharacterOverridden: false,
+        visualAppearance: freshCue.visualAppearance || null,
+        voiceTimbreDesc: freshCue.voiceTimbreDesc || null,
+        speakerEvidence: freshCue.speakerEvidence || null,
+        recognitionEvidence: freshCue.recognitionEvidence || null,
+        // Preserve subtitle & timeline fields strictly
+        originalChineseText: origSeg.originalChineseText ?? origSeg.chineseText ?? origSeg.originalText,
+        chineseText: origSeg.chineseText ?? origSeg.originalChineseText ?? origSeg.originalText,
+        khmerText: origSeg.khmerText ?? origSeg.khmer,
+        khmer: origSeg.khmer ?? origSeg.khmerText,
+        startSec: origSeg.startSec,
+        endSec: origSeg.endSec,
+        start: origSeg.start,
+        end: origSeg.end,
+        duration: origSeg.duration,
+        audioStartSec: origSeg.audioStartSec,
+        audioEndSec: origSeg.audioEndSec,
+        // Keep existing audio if voice did NOT change; invalidate ONLY when voice changed
+        audioUrl: voiceChanged ? null : origSeg.audioUrl,
+        audioPath: voiceChanged ? null : origSeg.audioPath,
+        audioDurationSec: voiceChanged ? null : origSeg.audioDurationSec,
+        audioOutdated: voiceChanged ? true : Boolean(origSeg.audioOutdated),
+        ttsStatus: voiceChanged ? 'outdated' : origSeg.ttsStatus,
+      };
+    });
+
+    const { buildSpeakerRegistry } = require('../../models/speakerRegistry');
+    const updatedRegistry = buildSpeakerRegistry(mergedSegments, {});
+    runningSeriesMap = buildVerifiedSeriesSpeakerMapPatch(mergedSegments, updatedRegistry, runningSeriesMap, { seriesId });
+
+    episodeResults.push({
+      episodeId: ep.id,
+      segments: mergedSegments,
+      speakerRegistry: updatedRegistry,
+      changedVoiceCuesCount,
+      preservedAudioCount,
+      hasAudioOutdated: changedVoiceCuesCount > 0,
+      stats: spkRes?.stats || null,
+      castCount: Object.keys(updatedRegistry).length,
+      geminiCallsCount: Number(spkRes?.geminiCallsCount || 0),
+    });
+  }
+
+  return {
+    scope: normScope,
+    seriesId,
+    episodeResults,
+    seriesSpeakerMap: runningSeriesMap,
+  };
+}
+
 module.exports = {
   identifySpeakersForCues,
   buildVerifiedSeriesSpeakerMapPatch,
+  rescanEpisodeOrSeriesCharacters,
   normalizeCharacterAliasKey,
   isDeterministicSystemCue,
   isSystemOrBroadcastLikeText,
   findSuspectCuesForFocusedRecheck,
+  CHARACTER_RECOGNITION_VERSION,
+  computeSeriesRegistryRevision,
+  isUnnamedCharacterId,
 };

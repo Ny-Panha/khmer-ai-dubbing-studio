@@ -102,3 +102,61 @@ test('3. Frontend Preview & Render Payload wire real transparent blur, 100% opaq
   assert.match(renderHook, /offsetX:/, 'Render payload must forward offsetX');
   assert.match(renderHook, /offsetY:/, 'Render payload must forward offsetY');
 });
+
+test('4. Custom free-move cornerMaskPosition supports arbitrary X/Y% in both Live Preview and FFmpeg blur + ASS export', () => {
+  const customChain = buildCornerBlurVideoFilterChain({
+    inputLabel: '[0:v:0]',
+    outputLabel: '[v_out]',
+    cornerMask: {
+      position: 'custom',
+      cornerMaskXPercent: 42.5,
+      cornerMaskYPercent: 60,
+      width: 200,
+      height: 50,
+      blurStrength: 18,
+    },
+    aspectRatio: '16:9',
+  });
+  assert.equal(customChain.length, 3);
+  assert.match(customChain[1], /0\.4250/, 'Crop X expression must honour custom X%');
+  assert.match(customChain[1], /0\.6000/, 'Crop Y expression must honour custom Y%');
+  execFileSync(
+    'ffmpeg',
+    [
+      '-hide_banner',
+      '-loglevel', 'error',
+      '-f', 'lavfi',
+      '-i', 'testsrc=duration=0.1:size=640x360:rate=10',
+      '-filter_complex', customChain.join(';'),
+      '-map', '[v_out]',
+      '-f', 'null',
+      '-',
+    ],
+    { stdio: 'pipe' }
+  );
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'corner_mask_custom_'));
+  try {
+    const assPath = path.join(tmpDir, 'custom.ass');
+    generateKhmerAssSubtitleFile({
+      segments: [],
+      outputPath: assPath,
+      aspectRatio: '16:9',
+      cornerMask: {
+        enabled: true,
+        style: 'solid',
+        position: 'custom',
+        cornerMaskXPercent: 50,
+        cornerMaskYPercent: 50,
+        width: 200,
+        height: 50,
+        text: '',
+      },
+    });
+    const assContent = fs.readFileSync(assPath, 'utf8');
+    // playRes 1920x1080: maskW=384, maskH=96 -> center at 50%/50% = (768, 492)
+    assert.match(assContent, /\\pos\(768,492\)/, 'Custom 50%/50% ASS box must center exactly at (768,492)');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});

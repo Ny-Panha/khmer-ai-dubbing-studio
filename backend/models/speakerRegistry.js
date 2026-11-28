@@ -84,7 +84,7 @@ const AMBIGUOUS_PREFIX_KHMER_FEMALE_TOKENS = new Set(["មីង"]);
  * voice actors between episodes or scenes.
  * 
  * Generic identities: system announcements, narrators, world broadcasts
- * Non-generic: recurring character names (ស៊ូ មីង, នាង្ ស៊ូ, etc.)
+ * Non-generic: recurring named characters discovered from the current video
  * 
  * @param {string} speakerName - The speaker name to check
  * @returns {boolean} - True if generic identity, false if recurring character
@@ -169,7 +169,7 @@ function matchesSpeakerKeyword(lowerName = "", kw = "") {
   }
   if (AMBIGUOUS_PREFIX_KHMER_FEMALE_TOKENS.has(k)) {
     const escaped = k.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    // Match standalone/prefix aunt title ("មីង", "មីង ២") without false-matching Chinese given names like "ស៊ូ មីង" (Su Ming)
+    // Match standalone/prefix aunt title ("មីង", "មីង ២") without false-matching personal given names ending in "មីង"
     return new RegExp(`^${escaped}(?=$|[\\s_\\-)0-9\u200b])`, "u").test(lowerName);
   }
   return lowerName.includes(k);

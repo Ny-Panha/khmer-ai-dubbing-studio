@@ -6,6 +6,7 @@ import {
   persistTimelineOperationApi,
   fetchTtsVoices,
   retranslateSegmentApi,
+  rescanCharactersApi,
 } from '../services/api';
 import { saveTimelineOperationToLocalStorage, suppressNextBackendSync } from '../utils/projectStorage';
 import { getSpeakerId, detectSpeakerGender } from '../utils/speakerUtils';
@@ -62,6 +63,7 @@ export function useAudioDubbing({
   fullAudioUrl: propFullAudioUrl,
   setFullAudioUrl: propSetFullAudioUrl,
   onInvalidateRenderedPreview = null,
+  onRefreshSeriesFromServer = null,
 }) {
   const invalidateRendered = (targetEpId = null) => {
     if (typeof onInvalidateRenderedPreview === 'function') {
@@ -73,6 +75,8 @@ export function useAudioDubbing({
   const [audioProgress, setAudioProgress] = useState(0);
   const [audioStage, setAudioStage] = useState('');
   const [voiceSwitchError, setVoiceSwitchError] = useState(null);
+  const [isRescanningCharacters, setIsRescanningCharacters] = useState(false);
+  const [rescanCharactersFeedback, setRescanCharactersFeedback] = useState(null);
   const voiceSwitchErrorTimerRef = useRef(null);
   const clearVoiceSwitchError = () => {
     if (voiceSwitchErrorTimerRef.current) {
@@ -763,6 +767,77 @@ const FALLBACK_VOICE_CATALOG = {
       await handleUpdateSpeakerVoice(nextSpeakerId, newVoiceId);
     }
     return updatedSegments;
+  };
+
+  /**
+   * Rescan characters inside Cast Voices for the current episode or current series.
+   * Preserves original Chinese subtitles, Khmer translations, immutable sourceCueId,
+   * timeline timestamps, manual overrides, and unchanged-voice TTS audio files.
+   */
+  const handleRescanCharacters = async (scope = 'episode') => {
+    if (!seriesId || isRescanningCharacters) return null;
+    const normScope = scope === 'series' ? 'series' : 'episode';
+    if (normScope === 'episode' && !episodeId) return null;
+
+    setIsRescanningCharacters(true);
+    setRescanCharactersFeedback(null);
+    try {
+      const res = await rescanCharactersApi({
+        seriesId,
+        episodeId,
+        scope: normScope,
+        clearStaleRegistry: true,
+      });
+      if (Array.isArray(res?.segments) && res.segments.length > 0) {
+        const nextUpdatedAt = Date.now();
+        if (scriptDataRef.current) {
+          scriptDataRef.current = {
+            ...scriptDataRef.current,
+            segments: res.segments,
+            updatedAt: nextUpdatedAt,
+          };
+        }
+        setScriptData((prev) => (prev ? {
+          ...prev,
+          segments: res.segments,
+          updatedAt: nextUpdatedAt,
+        } : prev));
+        if (res.speakerRegistry && setSpeakerRegistry) {
+          setSpeakerRegistry(res.speakerRegistry);
+        }
+        if ((res.changedVoiceCuesCount || 0) > 0) {
+          setAudioOutdated(true);
+          invalidateRendered(episodeId);
+        }
+        try {
+          saveTimelineOperationToLocalStorage(seriesId, episodeId, {
+            segments: res.segments,
+            updatedAt: nextUpdatedAt,
+          });
+        } catch (_) {}
+      }
+
+      if (typeof onRefreshSeriesFromServer === 'function') {
+        await onRefreshSeriesFromServer(seriesId, { forceDisk: true });
+      }
+
+      const castCount = Object.keys(res?.speakerRegistry || {}).length;
+      const changedCount = Number(res?.changedVoiceCuesCount || 0);
+      const keptAudioCount = Number(res?.preservedAudioCount || 0);
+      setRescanCharactersFeedback({
+        type: 'success',
+        message: `ស្កេនរួចរាល់ (${res?.episodesScanned || 1} ភាគ): រកឃើញ ${castCount} តួអង្គ · រក្សាសំឡេងដើម ${keptAudioCount} ឃ្លា${changedCount > 0 ? ` · ប្តូរសំឡេង ${changedCount} ឃ្លា` : ''}`,
+      });
+      return res;
+    } catch (err) {
+      setRescanCharactersFeedback({
+        type: 'error',
+        message: `ស្កេនតួអង្គបរាជ័យ: ${err?.message || 'Unknown error'}`,
+      });
+      return null;
+    } finally {
+      setIsRescanningCharacters(false);
+    }
   };
 
   // Override an individual segment's speaking rate and auto-regenerate its speech audio
@@ -2690,6 +2765,9 @@ const FALLBACK_VOICE_CATALOG = {
     handleSplitSegment,
     handleUpdateSpeakerVoice,
     handleUpdateSpeakerIdentity,
+    handleRescanCharacters,
+    isRescanningCharacters,
+    rescanCharactersFeedback,
     handleToggleDeliveryType,
   };
 }
