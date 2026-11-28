@@ -4,6 +4,11 @@
 - **Active Branch**: `chore/full-project-cleanup`
 
 ## Summary
+- **Added Player Playback Speed `1x / 2x / 3x / 4x` (`2026-11-28`)**:
+  - Updated [useVideoPlayback.js](file:///e:/khmer_ai_dubbing_studio/frontend/src/hooks/useVideoPlayback.js), [App.jsx](file:///e:/khmer_ai_dubbing_studio/frontend/src/App.jsx), [VideoPlayerPreview.jsx](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/player/VideoPlayerPreview.jsx), and [PlayerControls.jsx](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/player/PlayerControls.jsx) with persisted `1x / 2x / 3x / 4x` speed buttons right beside the `Auto` toggle, preserved across episode switches & Auto-Next EP (`usePlayerAudioSync.js` + `webAudioScheduler.js` follow `v.playbackRate` in sync).
+- **Added Auto-Next Episode Playback (`2026-11-28`)**:
+  - Updated [useVideoPlayback.js](file:///e:/khmer_ai_dubbing_studio/frontend/src/hooks/useVideoPlayback.js) with `finishPlaybackAtEnd`, `onEpisodeEnded`, and `armAutoPlayNextEpisode` across physical media end, multi-clip end, and native `<video onEnded>`.
+  - Wired persisted `autoNextEpisode` (`kads_auto_next_episode`, default `true`) + `handleEpisodePlaybackEnded` in [App.jsx](file:///e:/khmer_ai_dubbing_studio/frontend/src/App.jsx), [VideoPlayerPreview.jsx](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/player/VideoPlayerPreview.jsx), and [PlayerControls.jsx](file:///e:/khmer_ai_dubbing_studio/frontend/src/components/player/PlayerControls.jsx) (`Auto` toggle next to Play/Pause).
 - **Completed P0 — Remove Hardcoded Character Data & Prevent Stale Character Memory**:
   - Removed all story-specific character names/IDs/aliases (`ស៊ូ មីង`, `លីន ហ្វាង`, `មេឃុំ`, `ម្តាយ ស៊ូ`, `លោកគ្រូពេទ្យ ចាង`, `char_ស៊ូ_មីង`, `苏铭`, `李天维 男主`, `灵虚圣地主峰讲坛`, etc.) from production prompts and files (`speakerIdentificationService.js`, `stage3VisionBatchRunner.js`, `stage6_generateModeSpecificScript.js`, `speakerRegistry.js`).
   - Separated `voiceGenderConfidence`, `characterIdentityConfidence`, `characterNameConfidence`, and `hasVerifiedName` in `speakerIdentificationService.js`; prevented fabricating personal character names from male/female voice detection alone; minted stable unnamed IDs (`char_unnamed_<gender>_<hash>`, `spk_unnamed_<gender>_<hash>`) via `buildStableUnnamedIds` without polluting `seriesSpeakerMap` or `glossary.characters`.

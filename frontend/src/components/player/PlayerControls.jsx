@@ -2,7 +2,7 @@ import React, { useRef, useEffect } from 'react';
 import {
   Maximize2, Minimize2, Clock, SkipBack, Play, Pause,
   SkipForward, VolumeX, Volume2, Diamond, ChevronLeft, ChevronRight,
-  Sparkles, Loader2
+  Sparkles, Loader2, ListVideo
 } from 'lucide-react';
 import { formatTimecode } from '../../utils/timestampUtils';
 
@@ -128,6 +128,10 @@ export function PlayerBottomBar({
   framingKeyframes = [],
   onToggleKeyframe = null,
   onSeekToKeyframe = null,
+  autoNextEpisode = true,
+  onToggleAutoNextEpisode = null,
+  playbackRate = 1,
+  onChangePlaybackRate = null,
 }) {
   const currentTimeSpanRef = useRef(null);
 
@@ -198,6 +202,86 @@ export function PlayerBottomBar({
         >
           <SkipForward size={13} />
         </button>
+
+        {onToggleAutoNextEpisode && (
+          <button
+            type="button"
+            data-testid="btn-toggle-auto-next"
+            onClick={onToggleAutoNextEpisode}
+            className="player-control-btn"
+            title={
+              autoNextEpisode
+                ? 'បន្តលេងភាគបន្ទាប់ស្វ័យប្រវត្តិ (Auto-Next EP: ON — ចុចដើម្បីបិទ)'
+                : 'ឈប់ពេលចប់ភាគ (Auto-Next EP: OFF — ចុចដើម្បីបើក)'
+            }
+            style={{
+              height: 24,
+              padding: '0 7px',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 4,
+              borderRadius: 6,
+              fontSize: '0.68rem',
+              fontWeight: 600,
+              cursor: 'pointer',
+              border: autoNextEpisode
+                ? '1px solid rgba(56, 189, 248, 0.5)'
+                : '1px solid rgba(255, 255, 255, 0.14)',
+              background: autoNextEpisode
+                ? 'rgba(56, 189, 248, 0.16)'
+                : 'rgba(15, 23, 42, 0.55)',
+              color: autoNextEpisode ? '#38bdf8' : 'var(--text-dim)',
+            }}
+          >
+            <ListVideo size={12} />
+            <span>Auto</span>
+          </button>
+        )}
+
+        {onChangePlaybackRate && (
+          <div
+            data-testid="player-speed-group"
+            role="group"
+            aria-label="ល្បឿនលេងវីដេអូ (Playback Speed)"
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 2,
+              background: 'rgba(15, 23, 42, 0.72)',
+              border: '1px solid rgba(255, 255, 255, 0.12)',
+              borderRadius: 6,
+              padding: 2,
+            }}
+          >
+            {[1, 2, 3, 4].map((spd) => {
+              const isActive = Math.abs((playbackRate || 1) - spd) < 0.01;
+              return (
+                <button
+                  key={spd}
+                  type="button"
+                  data-testid={`btn-speed-${spd}`}
+                  onClick={() => onChangePlaybackRate(spd)}
+                  title={`លេងល្បឿន ${spd}x`}
+                  style={{
+                    height: 20,
+                    minWidth: 26,
+                    padding: '0 5px',
+                    border: 'none',
+                    borderRadius: 4,
+                    fontSize: '0.67rem',
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                    background: isActive ? 'rgba(56, 189, 248, 0.24)' : 'transparent',
+                    color: isActive ? '#38bdf8' : 'var(--text-dim)',
+                    transition: 'background 0.12s ease, color 0.12s ease',
+                  }}
+                >
+                  {spd}x
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* 9:16 Framing Control (Smooth Slider / CapCut Keyframes / AI Auto) + Live Audio Ducking dB Meter + Fullscreen */}

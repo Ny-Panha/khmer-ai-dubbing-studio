@@ -394,6 +394,37 @@ export default function App() {
   scriptDataRef.current = scriptData;
   const voiceSettingsRef = useRef(voiceSettings);
   voiceSettingsRef.current = voiceSettings;
+  const [autoNextEpisode, setAutoNextEpisode] = useState(() => {
+    try {
+      const saved = localStorage.getItem('kads_auto_next_episode');
+      return saved === null ? true : saved === 'true';
+    } catch {
+      return true;
+    }
+  });
+  const autoNextEpisodeRef = useRef(autoNextEpisode);
+  autoNextEpisodeRef.current = autoNextEpisode;
+  const handleToggleAutoNextEpisode = useCallback(() => {
+    setAutoNextEpisode((prev) => {
+      const next = !prev;
+      try { localStorage.setItem('kads_auto_next_episode', String(next)); } catch (_) {}
+      return next;
+    });
+  }, []);
+  const handleEpisodePlaybackEnded = useCallback(() => {
+    if (!autoNextEpisodeRef.current) return;
+    const activeSer = seriesRef.current?.activeSeries;
+    const curEpId = seriesRef.current?.episodeId;
+    const eps = Array.isArray(activeSer?.episodes) ? activeSer.episodes : [];
+    const curIdx = eps.findIndex((e) => e && String(e.id) === String(curEpId));
+    if (curIdx < 0 || curIdx + 1 >= eps.length) return;
+    const nextEp =
+      eps.slice(curIdx + 1).find((e) => e && (e.video || e.videoFile || e.sourceVideoPath)) ||
+      eps[curIdx + 1];
+    if (!nextEp?.id) return;
+    playbackRef.current?.armAutoPlayNextEpisode?.();
+    seriesRef.current?.handleSwitchEpisode?.(nextEp.id);
+  }, []);
   const [videoEditScope, setVideoEditScopeState] = useState(loadPreferredVideoEditScope);
   const videoEditScopeRef = useRef(videoEditScope);
   videoEditScopeRef.current = videoEditScope;
@@ -689,6 +720,7 @@ export default function App() {
     setActiveClipId: media.setActiveClipId,
     setSelectedSegmentId: media.setSelectedSegmentId,
     scriptData,
+    onEpisodeEnded: handleEpisodePlaybackEnded,
   });
   playbackRef.current = playback;
 
@@ -1483,6 +1515,10 @@ export default function App() {
                   onImportClick={handleImportClick}
                   onVideoSelected={handleVideoSelected}
                   videoClips={media.videoClips || EMPTY_CLIPS}
+                  autoNextEpisode={autoNextEpisode}
+                  onToggleAutoNextEpisode={handleToggleAutoNextEpisode}
+                  playbackRate={playback.playbackRate}
+                  onChangePlaybackRate={playback.setPlaybackRate}
                 />
               </ErrorBoundary>
             </div>

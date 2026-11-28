@@ -21,10 +21,39 @@ export function useVideoPlayback({
   renderedVideo,
   selectedVideo,
   episodeKey = null,
+  onEpisodeEnded = null,
 }) {
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [playbackRate, setPlaybackRateState] = useState(() => {
+    try {
+      const saved = Number(localStorage.getItem('kads_player_playback_rate'));
+      return [1, 2, 3, 4].includes(saved) ? saved : 1;
+    } catch {
+      return 1;
+    }
+  });
+  const playbackRateRef = useRef(playbackRate);
+  playbackRateRef.current = playbackRate;
+  const setPlaybackRate = useCallback((nextRate) => {
+    const parsed = Number(nextRate);
+    const valid = [1, 2, 3, 4].includes(parsed) ? parsed : 1;
+    playbackRateRef.current = valid;
+    setPlaybackRateState(valid);
+    try { localStorage.setItem('kads_player_playback_rate', String(valid)); } catch (_) {}
+    const v = videoRef?.current;
+    if (v) {
+      try { v.playbackRate = valid; } catch (_) {}
+    }
+  }, [videoRef]);
+
+  useEffect(() => {
+    const v = videoRef?.current;
+    if (v && Math.abs((v.playbackRate || 1) - playbackRate) > 0.005) {
+      try { v.playbackRate = playbackRate; } catch (_) {}
+    }
+  }, [playbackRate, episodeKey, renderedVideo, selectedVideo?.videoUrl, videoRef]);
   const currentTimeRef = useRef(0);
   currentTimeRef.current = currentTime;
   const lastMappedTimelineTimeRef = useRef(0);
@@ -43,11 +72,21 @@ export function useVideoPlayback({
   const isSeekInFlightRef = useRef(false);
   const [playRequestTick, setPlayRequestTick] = useState(0);
   const prevEpisodeKeyRef = useRef(episodeKey);
+  const pendingAutoPlayEpisodeRef = useRef(false);
+  const endDispatchedForKeyRef = useRef(null);
+  const onEpisodeEndedRef = useRef(onEpisodeEnded);
+  onEpisodeEndedRef.current = onEpisodeEnded;
+
+  const armAutoPlayNextEpisode = useCallback(() => {
+    pendingAutoPlayEpisodeRef.current = true;
+    endDispatchedForKeyRef.current = null;
+  }, []);
 
   // Cleanly reset playback state on episode change so active playback or seek state never leaks across episodes
   useEffect(() => {
     if (prevEpisodeKeyRef.current === episodeKey) return;
     prevEpisodeKeyRef.current = episodeKey;
+    endDispatchedForKeyRef.current = null;
     intendedPlayingRef.current = false;
     hasSeekedRef.current = false;
     pendingSeekTargetRef.current = null;
@@ -63,6 +102,10 @@ export function useVideoPlayback({
       try { v.pause(); } catch (_) {}
     }
     setIsPlaying(false);
+    if (pendingAutoPlayEpisodeRef.current) {
+      currentTimeRef.current = 0;
+      setCurrentTime(0);
+    }
   }, [episodeKey, videoRef]);
 
   // Duration follows the timeline (R7): when videoClips has been edited, duration equals the end of the last video clip
@@ -80,6 +123,10 @@ export function useVideoPlayback({
   const handleLoadedMetadata = () => {
     if (videoRef?.current) {
       const v = videoRef.current;
+      const targetRate = playbackRateRef.current || 1;
+      if (Math.abs((v.playbackRate || 1) - targetRate) > 0.005) {
+        try { v.playbackRate = targetRate; } catch (_) {}
+      }
       const dur = v.duration || 0;
       if (dur > 0) {
         setDuration((prevDur) => {
@@ -88,26 +135,70 @@ export function useVideoPlayback({
           }
           return prevDur;
         });
-        // If a per-episode playhead time was restored while paused before metadata loaded,
-        // cue the <video> frame directly to that restored timestamp without auto-playing.
-        const desiredTlTime = Number.isFinite(currentTimeRef.current) ? currentTimeRef.current : 0;
-        if (!isPlaying && desiredTlTime > 0.05) {
-          let targetSrc = Math.min(dur, desiredTlTime);
+        const shouldAutoPlayNext = pendingAutoPlayEpisodeRef.current;
+        if (shouldAutoPlayNext) {
+          pendingAutoPlayEpisodeRef.current = false;
+          endDispatchedForKeyRef.current = null;
+          let startSrc = 0;
           if (!renderedVideo && Array.isArray(videoClips) && videoClips.length > 0) {
-            const mapping = mapTimelineToSourceTime(desiredTlTime, videoClips);
-            if (mapping.inClip && Number.isFinite(mapping.sourceTime)) {
-              targetSrc = Math.min(dur, Math.max(0, mapping.sourceTime));
-              const targetIdx = videoClips.findIndex((c) => c.id === mapping.clip?.id);
-              if (targetIdx !== -1) activeClipIdxRef.current = targetIdx;
-            } else if (mapping.isGap && mapping.nextClip && Number.isFinite(mapping.nextClip.sourceStart)) {
-              targetSrc = Math.min(dur, Math.max(0, mapping.nextClip.sourceStart));
+            const firstPlayableIdx = videoClips.findIndex((c) => c && !c.isGap);
+            const targetIdx = firstPlayableIdx >= 0 ? firstPlayableIdx : 0;
+            activeClipIdxRef.current = targetIdx;
+            const firstClip = videoClips[targetIdx];
+            if (firstClip && Number.isFinite(firstClip.sourceStart)) {
+              startSrc = Math.min(dur, Math.max(0, firstClip.sourceStart));
             }
           }
-          if (Number.isFinite(targetSrc) && Math.abs((v.currentTime || 0) - targetSrc) > 0.1) {
+          currentTimeRef.current = 0;
+          lastMappedTimelineTimeRef.current = 0;
+          setCurrentTime(0);
+          if (Math.abs((v.currentTime || 0) - startSrc) > 0.08) {
             hasSeekedRef.current = true;
-            try {
-              v.currentTime = targetSrc;
-            } catch (_) {}
+            try { v.currentTime = startSrc; } catch (_) {}
+          }
+          intendedPlayingRef.current = true;
+          setPlayRequestTick((t) => t + 1);
+          const attemptStart = () => {
+            if (!intendedPlayingRef.current || !v) return;
+            v.play()
+              .then(() => {
+                if (intendedPlayingRef.current) setIsPlaying(true);
+              })
+              .catch(() => {
+                const retryOnCanPlay = () => {
+                  v.removeEventListener('canplay', retryOnCanPlay);
+                  if (!intendedPlayingRef.current) return;
+                  v.play().then(() => { if (intendedPlayingRef.current) setIsPlaying(true); }).catch(() => {
+                    intendedPlayingRef.current = false;
+                    setIsPlaying(false);
+                  });
+                };
+                v.addEventListener('canplay', retryOnCanPlay, { once: true });
+              });
+          };
+          attemptStart();
+        } else {
+          // If a per-episode playhead time was restored while paused before metadata loaded,
+          // cue the <video> frame directly to that restored timestamp without auto-playing.
+          const desiredTlTime = Number.isFinite(currentTimeRef.current) ? currentTimeRef.current : 0;
+          if (!isPlaying && desiredTlTime > 0.05) {
+            let targetSrc = Math.min(dur, desiredTlTime);
+            if (!renderedVideo && Array.isArray(videoClips) && videoClips.length > 0) {
+              const mapping = mapTimelineToSourceTime(desiredTlTime, videoClips);
+              if (mapping.inClip && Number.isFinite(mapping.sourceTime)) {
+                targetSrc = Math.min(dur, Math.max(0, mapping.sourceTime));
+                const targetIdx = videoClips.findIndex((c) => c.id === mapping.clip?.id);
+                if (targetIdx !== -1) activeClipIdxRef.current = targetIdx;
+              } else if (mapping.isGap && mapping.nextClip && Number.isFinite(mapping.nextClip.sourceStart)) {
+                targetSrc = Math.min(dur, Math.max(0, mapping.nextClip.sourceStart));
+              }
+            }
+            if (Number.isFinite(targetSrc) && Math.abs((v.currentTime || 0) - targetSrc) > 0.1) {
+              hasSeekedRef.current = true;
+              try {
+                v.currentTime = targetSrc;
+              } catch (_) {}
+            }
           }
         }
         if (setVideoClips) {
@@ -186,10 +277,7 @@ export function useVideoPlayback({
 
     // Check if HTML5 video has reached the physical end of file
     if (v.ended || (realDur > 0 && currentMediaTime >= realDur - 0.15)) {
-      intendedPlayingRef.current = false;
-      v.pause();
-      setIsPlaying(false);
-      setCurrentTime(duration > 0 ? duration : realDur);
+      finishPlaybackAtEnd(duration > 0 ? duration : realDur);
       return;
     }
 
@@ -336,17 +424,12 @@ export function useVideoPlayback({
             activeClipIdxRef.current = nextClipIdx;
           }
         } else {
-          // Last clip reached -> STOP at the end, never loop back
+          // Last clip reached -> STOP at the end, never loop back (and trigger Auto-Next EP if enabled)
           const trueMaxDur = Math.max(v.duration || 0, duration || 0, realDur || 0);
           if (videoClips.length === 1 && trueMaxDur > sEnd + 0.5) {
             setCurrentTime(srcNow);
           } else {
-            intendedPlayingRef.current = false;
-            v.pause();
-            setIsPlaying(false);
-            if (Number.isFinite(cEnd)) {
-              setCurrentTime(cEnd);
-            }
+            finishPlaybackAtEnd(Number.isFinite(cEnd) ? cEnd : null);
           }
         }
       }
@@ -749,11 +832,31 @@ export function useVideoPlayback({
     }
   }, [currentTime, duration, timelineDuration, renderedVideo, videoClips, handleSeek, videoRef]);
 
-  const handleVideoEnded = useCallback(() => {
+  const finishPlaybackAtEnd = useCallback((endTlTime = null) => {
     intendedPlayingRef.current = false;
     pendingSeekTargetRef.current = null;
+    const v = videoRef?.current;
+    if (v && !v.paused) {
+      try { v.pause(); } catch (_) {}
+    }
     setIsPlaying(false);
-  }, []);
+    if (typeof endTlTime === 'number' && Number.isFinite(endTlTime)) {
+      setCurrentTime(endTlTime);
+      currentTimeRef.current = endTlTime;
+      lastMappedTimelineTimeRef.current = endTlTime;
+    }
+    const curKey = episodeKey || '__single__';
+    if (endDispatchedForKeyRef.current !== curKey) {
+      endDispatchedForKeyRef.current = curKey;
+      if (typeof onEpisodeEndedRef.current === 'function') {
+        onEpisodeEndedRef.current();
+      }
+    }
+  }, [episodeKey, videoRef]);
+
+  const handleVideoEnded = useCallback(() => {
+    finishPlaybackAtEnd();
+  }, [finishPlaybackAtEnd]);
 
   return {
     currentTime,
@@ -763,10 +866,13 @@ export function useVideoPlayback({
     setDuration,
     isPlaying,
     setIsPlaying,
+    playbackRate,
+    setPlaybackRate,
     handleLoadedMetadata,
     handleTimeUpdate,
     handleSeek,
     handlePlayPause,
     handleVideoEnded,
+    armAutoPlayNextEpisode,
   };
 }

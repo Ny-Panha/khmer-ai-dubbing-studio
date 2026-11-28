@@ -76,6 +76,10 @@ function VideoPlayerPreview({
   onImportClick,
   onVideoSelected,
   videoClips = [],
+  autoNextEpisode = true,
+  onToggleAutoNextEpisode = null,
+  playbackRate = 1,
+  onChangePlaybackRate = null,
 }) {
   const [videoMeta, setVideoMeta] = useState({ width: 0, height: 0, ratio: 1 });
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -1561,6 +1565,10 @@ function VideoPlayerPreview({
         framingKeyframes={scriptData?.framingKeyframes || []}
         onToggleKeyframe={handleToggleKeyframe}
         onSeekToKeyframe={handleSeekToKeyframe}
+        autoNextEpisode={autoNextEpisode}
+        onToggleAutoNextEpisode={onToggleAutoNextEpisode}
+        playbackRate={playbackRate}
+        onChangePlaybackRate={onChangePlaybackRate}
       />
     </div>
   );
